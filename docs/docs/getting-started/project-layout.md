@@ -5,18 +5,18 @@ everything else is optional and resolves relative to that directory.
 
 ```text
 my-app/
-├── main.lmn        # required — markup root
-├── main.css        # optional — styling
-├── main.rhai       # optional — scripting
-├── lumen.toml      # optional — per-app config
-├── icons/          # optional — image assets, resolved relative to main.lmn
-└── assets/         # any extra dirs listed in [asset_roots]
+|-- main.lmn        # required - markup root
+|-- main.css        # optional - styling
+|-- main.rhai       # optional - scripting
+|-- lumen.toml      # optional - per-app config
+|-- icons/          # optional - image assets, resolved relative to main.lmn
+`-- assets/         # any extra dirs listed in [asset_roots]
 ```
 
 The compiler reads:
 
 1. `lumen.toml` if it exists (otherwise defaults).
-2. The entry markup file — `[app] entry = "main.lmn"` by default.
+2. The entry markup file - `[app] entry = "main.lmn"` by default.
 3. Any `<script src="...rhai" />` referenced from markup, plus
    `main.rhai` if present.
 4. `<link rel="stylesheet" href="..." />` is not yet supported;
@@ -93,7 +93,7 @@ next launch.
 
 ## Asset resolution
 
-Image `src="…"`, `set_src(id, path)`, and CSS `bg: url(...)` (deferred)
+Image `src="..."`, `set_src(id, path)`, and CSS `bg: url(...)` (deferred)
 all resolve relative paths through the same lookup:
 
 1. The app directory itself.
@@ -112,5 +112,5 @@ Currently *outside* the per-app directory:
 - Multi-window is on the roadmap (entity-subgraph-per-window). Today an
   app is one window.
 
-When those land they layer on top of this directory shape — no
+When those land they layer on top of this directory shape - no
 incompatible changes planned.

@@ -1,8 +1,8 @@
 # Rhai builtins
 
 Scripts opt in by writing `main.rhai` next to `main.lmn` (or pulling in
-additional files via `<script src="…rhai" />`). The host injects a
-fixed set of builtins on top of Rhai's standard library — they're the
+additional files via `<script src="...rhai" />`). The host injects a
+fixed set of builtins on top of Rhai's standard library - they're the
 bridge between scripts and the ECS world.
 
 The authoritative list is `register_fn(...)` calls in
@@ -16,7 +16,7 @@ a one-line description, and a sample.
 
 ## Lifecycle callbacks
 
-These aren't builtins — they're **functions you write** that the
+These aren't builtins - they're **functions you write** that the
 runtime calls by convention.
 
 | Function | When called |
@@ -26,7 +26,7 @@ runtime calls by convention.
 | `on_text_input(id, text)` | IME commit on `<input>` / `<textarea>`. `text` is the committed substring. |
 | `on_toggle(id, checked)` | Toggle state change. |
 | `on_slider(id, value)` | Slider drag commit. `value` is f64. |
-| `on_file_dropped(id, path)` | Dropped onto a `<… drop="true">` target. |
+| `on_file_dropped(id, path)` | Dropped onto a `<... drop="true">` target. |
 | `on_file_picked(tag, path)` / `on_files_picked(tag, paths_joined_by_pipe)` / `on_folder_picked(tag, path)` | File dialog results. Empty path = cancelled. |
 | `on_fetch(tag, body)` / `on_fetch_error(tag, message)` | `fetch(url, tag)` result. |
 | `on_timer(name)` | `set_timeout` / `set_interval` fired. |
@@ -39,7 +39,7 @@ below.
 
 ## Signals (reactive state)
 
-### `signal(name, default) → Signal`
+### `signal(name, default) -> Signal`
 
 Return a handle to a named scalar signal. Auto-initialises the
 host-local mirror with `default` if the signal is unset. Subsequent
@@ -56,7 +56,7 @@ c.value = c.value + 1;
 The `Signal` type has `.get()`, `.set(v)`, and the `.value` get/set
 property.
 
-### `signal_array(name) → ArraySignal`
+### `signal_array(name) -> ArraySignal`
 
 Return a handle to a named reactive array. Backs `<for each="name">`
 markup.
@@ -69,7 +69,7 @@ todos.set([
 ]);
 todos.push(#{ id: "3", label: "Task C" });
 let n = todos.len();
-let row = todos.get(0);     // → the first map, or () if empty
+let row = todos.get(0);     // -> the first map, or () if empty
 ```
 
 Methods: `.set(arr)`, `.push(item)`, `.len()`, `.get(i)`, `.all()`. The
@@ -78,7 +78,7 @@ return `()` / `0`.
 
 `.all()` returns a snapshot of the whole backing array as a Rhai array
 of maps. The snapshot is owned by the caller, so mutating it does not
-propagate back — follow up with `.set(...)` to write changes:
+propagate back - follow up with `.set(...)` to write changes:
 
 ```rhai
 let todos = signal_array("todos");
@@ -87,7 +87,7 @@ rows.retain(|r| r.status != "done");
 todos.set(rows);                  // write the filtered list back
 ```
 
-### `derive(name, deps, fn) → Signal`
+### `derive(name, deps, fn) -> Signal`
 
 Register a computed signal. `deps` is either an array of `Signal`
 handles or an array of strings naming signals. The closure runs
@@ -159,8 +159,8 @@ named function is called with the entity id instead of the global
 on("click", "save",   "handle_save");
 on("click", "cancel", "handle_cancel");
 
-fn handle_save(_id)   { /* … */ }
-fn handle_cancel(_id) { /* … */ }
+fn handle_save(_id)   { /* ... */ }
+fn handle_cancel(_id) { /* ... */ }
 ```
 
 Templates auto-namespace inner ids. A handler registered for
@@ -173,12 +173,12 @@ on("click", "save", "handle_save");
 
 Pass the qualified id (`"user-card:save"`) for per-instance routing.
 
-### `local_id(source, suffix) → string`
+### `local_id(source, suffix) -> string`
 
 Return a sibling id within the same template instance. If `source` is
 `"user-card:btn"`, `local_id(source, "label")` returns
 `"user-card:label"`. Source without a colon returns `suffix` unchanged.
-Multi-level prefixes (`"a:b:btn"`) stack — result is `"a:b:label"`.
+Multi-level prefixes (`"a:b:btn"`) stack - result is `"a:b:label"`.
 
 ```rhai
 fn handle_save(id) {
@@ -234,7 +234,7 @@ fn on_fetch_error(tag, msg) {
 }
 ```
 
-### `parse_json(body) → Dynamic`
+### `parse_json(body) -> Dynamic`
 
 Parse a JSON string into a Rhai Map / Array / scalar for ergonomic
 field access. Returns `()` on parse failure.
@@ -263,7 +263,7 @@ fn on_file_picked(tag, path) {
 ### `pick_file_filtered(tag, spec)`
 
 `pick_file` plus a filter list. The spec is pipe-separated
-`<label>:<ext1>,<ext2>,…` groups; bare `*` means "no filter".
+`<label>:<ext1>,<ext2>,...` groups; bare `*` means "no filter".
 
 ```rhai
 pick_file_filtered("open-img", "Images:png,jpg,jpeg|All:*");
@@ -302,7 +302,7 @@ register_hotkey("save", "CommandOrControl+S");
 register_hotkey("toggle", "Alt+Space");
 
 fn on_hotkey(name) {
-    if name == "save" { /* … */ }
+    if name == "save" { /* ... */ }
 }
 ```
 
@@ -315,7 +315,7 @@ System tray icon (macOS / Windows; Linux logs a warning). Click fires
 tray_icon("main", "icons/tray.png", "Lumen");
 
 fn on_tray(id) {
-    if id == "main" { /* … */ }
+    if id == "main" { /* ... */ }
 }
 ```
 
@@ -332,7 +332,7 @@ save_clipboard_image("pasted.png");
 
 ### `open_menu(id)` / `close_menu(id)`
 
-Flip the `__menu_open:<id>` signal driving a `<menu id="…">` popup.
+Flip the `__menu_open:<id>` signal driving a `<menu id="...">` popup.
 Equivalent to `signal("__menu_open:<id>", "false").set("true")`
 but reads as the intended verb.
 
@@ -346,11 +346,11 @@ fn open_actions(_id) { open_menu("actions"); }
 ### `add_clicks(n)`
 
 Legacy host-interpreted token. The runtime emits the token but doesn't
-have semantics around it — kept for back-compat with early-α apps.
+have semantics around it - kept for back-compat with early-alpha apps.
 
 ### `set_string(key, value)`
 
-Free-form key/value setter — host emits the token without semantics.
+Free-form key/value setter - host emits the token without semantics.
 Useful only with custom host extensions.
 
 ### `print(...)`
@@ -411,9 +411,9 @@ fn on_file_picked(tag, path) {
 }
 ```
 
-This pattern — `on_start` registers handlers + derivations, per-id
+This pattern - `on_start` registers handlers + derivations, per-id
 handlers do the actual work, lifecycle callbacks (`on_hotkey`,
-`on_file_picked`) handle async results — is the canonical Lumen Rhai
+`on_file_picked`) handle async results - is the canonical Lumen Rhai
 shape. The widget-garden
 [`main.rhai`](https://github.com/lumen-ui/lumen/blob/main/apps/widget-garden/main.rhai)
 exercises it at scale.

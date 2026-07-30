@@ -3,10 +3,10 @@
 Lumen ships a small but composable animation surface. Three layers
 stack:
 
-1. **CSS `transition:`** — declarative, ties to class flips.
-2. **`Transition<T>` primitive** — programmatic, generic over
+1. **CSS `transition:`** - declarative, ties to class flips.
+2. **`Transition<T>` primitive** - programmatic, generic over
    any `Lerp`-able type. Cargo crate authors compose against this.
-3. **Bespoke hover / press tweens** — `HoverTint` / `PressTween` keep
+3. **Bespoke hover / press tweens** - `HoverTint` / `PressTween` keep
    their own state machines because bidirectional snap-on-state-flip
    doesn't fit a one-shot transition.
 
@@ -45,7 +45,7 @@ fn fade_in(id) { set_class(id, "card visible"); }
 ```
 
 > **Only `opacity` is wired.** Other property names parse successfully
-> but get silently dropped — drivers for `bg`, `color`, and
+> but get silently dropped - drivers for `bg`, `color`, and
 > `border-radius` are not yet wired. Until then, treat the CSS path as
 > opacity-only.
 
@@ -65,7 +65,7 @@ easing     := "linear" | "ease" | "ease-in" | "ease-out"
 Defaults:
 
 - `easing` defaults to `ease-out` when omitted. CSS' real default is
-  `ease` (≈ `cubic-bezier(0.25, 0.1, 0.25, 1)`); `ease-out` is the
+  `ease` (~ `cubic-bezier(0.25, 0.1, 0.25, 1)`); `ease-out` is the
   closest named curve and avoids the bezier sample for the common case.
 
 ### Stacked transitions
@@ -108,7 +108,7 @@ Or via `From<(T, T, Duration)>` for the common linear case:
 
 ```rust
 let t: Transition<f32> = (0.0, 10.0, Duration::from_millis(100)).into();
-// → Easing::Linear
+// -> Easing::Linear
 ```
 
 ### Plugging into the ECS
@@ -152,8 +152,8 @@ The five `Easing` variants:
 | Variant | Curve | When to use |
 |---|---|---|
 | `Linear` | `f(t) = t` | Tests; rare in UI. |
-| `EaseIn` | `f(t) = t³` | Slow start; departures from rest. |
-| `EaseOut` | `f(t) = 1 - (1 - t)³` | **Default.** Fast start, soft settle. Matches Cocoa AppKit / Material 3 short-transition feel. |
+| `EaseIn` | `f(t) = t^3` | Slow start; departures from rest. |
+| `EaseOut` | `f(t) = 1 - (1 - t)^3` | **Default.** Fast start, soft settle. Matches Cocoa AppKit / Material 3 short-transition feel. |
 | `EaseInOut` | symmetric S-curve | Both endpoints feel slow; useful for back-and-forth motion. |
 | `CubicBezier(p1x, p1y, p2x, p2y)` | CSS `cubic-bezier(...)` | Custom curves; anchors are implicit `(0, 0)` and `(1, 1)`. |
 
@@ -162,8 +162,8 @@ Sampled values at `t = 0.5`:
 | Easing | `f(0.5)` | Visual feel |
 |---|---|---|
 | `Linear` | 0.500 | constant speed |
-| `EaseIn` | 0.125 | back-loaded — most travel in second half |
-| `EaseOut` | 0.875 | front-loaded — most travel in first half |
+| `EaseIn` | 0.125 | back-loaded - most travel in second half |
+| `EaseOut` | 0.875 | front-loaded - most travel in first half |
 | `EaseInOut` | 0.500 | slow ends, fast middle |
 | `cubic-bezier(0.25, 0.1, 0.25, 1)` (CSS `ease`) | ~0.802 | front-loaded, soft-out |
 
@@ -182,9 +182,9 @@ well-conditioned by construction).
 
 `Interaction.hover_tint` and `Interaction.press_tint` keep their
 `HoverTween` / `PressTween` state machines (not `Transition<T>`)
-because their bidirectional snap-on-state-flip semantics — start
+because their bidirectional snap-on-state-flip semantics - start
 tweening into the hover color, then snap back to base on hover-out
-mid-tween — don't fit the one-shot lifecycle of a `Transition`.
+mid-tween - don't fit the one-shot lifecycle of a `Transition`.
 
 Authoring still uses the simple shorthand:
 
@@ -202,16 +202,16 @@ button:hover  { bg: #3344ff; }
 button:active { bg: #1122dd; }
 ```
 
-The pseudo-class apply pass routes `:hover` → `hover-bg`, `:active` →
+The pseudo-class apply pass routes `:hover` -> `hover-bg`, `:active` ->
 `press-bg`. The tween durations are baked into the `HoverTween` /
 `PressTween` impl; they're not authorable via CSS today.
 
 > **HoverTint over gradients.** The hover tween path only animates
-> solid fills. Gradient `bg:` skips the tween — the gradient pops to
+> solid fills. Gradient `bg:` skips the tween - the gradient pops to
 > its hover counterpart instantly. Tracked in TODO ("HoverTint over
 > gradients").
 
-## A worked example — fade-in on appear
+## A worked example - fade-in on appear
 
 ```css
 .toast {
@@ -246,7 +246,7 @@ fn show_toast(_id) {
 
 fn on_timer(name) {
     if name == "hide-toast" {
-        set_class("toast", "toast");        // .visible removed → fade-out
+        set_class("toast", "toast");        // .visible removed -> fade-out
     }
 }
 ```

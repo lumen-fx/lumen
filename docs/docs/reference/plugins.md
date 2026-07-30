@@ -48,14 +48,14 @@ impl Plugin for MyPlugin {
 }
 
 #[derive(Resource, Default)]
-struct MyConfig { /* … */ }
+struct MyConfig { /* ... */ }
 
 fn my_tick_system(/* ECS params */) {
-    // …
+    // ...
 }
 
 fn extract_my_things(main: &mut World, render: &mut World) {
-    // Copy data from main → render world.
+    // Copy data from main -> render world.
 }
 ```
 
@@ -74,16 +74,16 @@ stage boundaries.**
 
 | Stage | Purpose | Examples shipped here |
 |---|---|---|
-| `Input` | Ingest OS events → typed messages. Window backend writes here. | `pointer_move_to_messages`, IME input, file drops |
+| `Input` | Ingest OS events -> typed messages. Window backend writes here. | `pointer_move_to_messages`, IME input, file drops |
 | `CommandDrain` | Drain the bounded `CommandQueue`. Deferred mutations are applied here. | `apply_script_commands` |
 | `Systems` | App tick logic: animations, state mutations, script callbacks, validation. | `step_opacity_transitions`, `apply_tooltip_dwell`, `apply_validation` |
 | `LayoutSync` | Taffy compute + Transform sync. | `compute_layout`, `update_transforms` |
 | `A11ySync` | AccessKit tree diff + push. | `diff_a11y_tree`, `roll_up_frame_dirty` |
 
-Render happens **after** the main schedule completes (not a TickStage —
+Render happens **after** the main schedule completes (not a TickStage -
 runs in a separate world):
 
-1. Extract fns copy main → render world (per-fn, in registration order).
+1. Extract fns copy main -> render world (per-fn, in registration order).
 2. The `Render` schedule runs in the render world.
 
 ## RenderStages
@@ -105,9 +105,9 @@ app.add_extract_fn(|main, render| {
 
 Extract fns run sequentially. They're the **only** API for crossing
 the world boundary. Don't try to share components or entities
-directly — the worlds intentionally have independent IDs.
+directly - the worlds intentionally have independent IDs.
 
-## Worked example 1 — `TooltipPlugin`
+## Worked example 1 - `TooltipPlugin`
 
 The shipped tooltip primitive is the simplest stateful widget.
 Source: [`lumen/primitives/src/tooltip.rs`](https://github.com/lumen-ui/lumen/blob/main/lumen/primitives/src/tooltip.rs).
@@ -131,26 +131,26 @@ impl Plugin for TooltipPlugin {
 
 Three systems, all in `TickStage::Systems`:
 
-1. **`stamp_hover_started_at`** — on `Added<Hovered>`, record the
+1. **`stamp_hover_started_at`** - on `Added<Hovered>`, record the
    instant.
-2. **`spawn_tooltip_popup_when_dwell_exceeds_delay`** — for each
+2. **`spawn_tooltip_popup_when_dwell_exceeds_delay`** - for each
    trigger entity with a `TooltipSource` + `HoverStartedAt`, if the
    dwell exceeds `delay_ms`, spawn a `<overlay>`-shaped entity with
    the tooltip text.
-3. **`despawn_tooltip_popup_on_hover_out`** — when `Hovered` is
+3. **`despawn_tooltip_popup_on_hover_out`** - when `Hovered` is
    removed, despawn the popup entity.
 
-No extract fn — the popup is just an entity with `Visuals` +
+No extract fn - the popup is just an entity with `Visuals` +
 `TextContent`, so the standard rect/text extract handles it.
 
 The markup parser strips the `<tooltip>` wrapper and attaches
 `TooltipSource` to the inner child, so the plugin sees an ECS
-component rather than a raw parse tree node. That separation —
-**parser collapses to ECS, plugin operates on ECS** — is the canonical
+component rather than a raw parse tree node. That separation -
+**parser collapses to ECS, plugin operates on ECS** - is the canonical
 shape for any widget that wants markup ergonomics + author-side
 declarative API.
 
-## Worked example 2 — `DragPlugin`
+## Worked example 2 - `DragPlugin`
 
 Drag is event-driven and needs to compose with the input pipeline.
 Source: [`lumen/primitives/src/drag.rs`](https://github.com/lumen-ui/lumen/blob/main/lumen/primitives/src/drag.rs).
@@ -189,9 +189,9 @@ Highlights:
   `MessageReader`. Skipping it makes Rust's type system happy but
   panics at runtime on first send.
 - **Systems chain.** All four systems live in `TickStage::Systems`.
-  Within a stage, order is set by `.chain()` or scheduling labels —
+  Within a stage, order is set by `.chain()` or scheduling labels -
   read the per-system docstrings before parallelizing.
-- **No render-world touch.** Drag is pure input → component mutation.
+- **No render-world touch.** Drag is pure input -> component mutation.
   The render path picks up the `Transform` deltas via the standard
   extract.
 
@@ -219,7 +219,7 @@ parallelism, bump the request:
 app.request_threads_at_least(6);
 ```
 
-Monotonic max — multiple plugins compete and the highest wins. The
+Monotonic max - multiple plugins compete and the highest wins. The
 `LUMEN_THREADS` env var overrides everything.
 
 Effective at first `App::tick`; subsequent bumps no-op (the pool is
@@ -242,9 +242,9 @@ shader effect, a debug overlay), the shape is:
 2. Push an extract fn that scans the main world and inserts those
    `Extracted*`s into the render world.
 3. Register a render-side system that consumes them (via
-   `add_render_systems(RenderStage::…)`) and emits draws.
+   `add_render_systems(RenderStage::...)`) and emits draws.
 
-The shipped image / SVG / scene-fragment plugins do exactly this —
+The shipped image / SVG / scene-fragment plugins do exactly this -
 see `lumen/render-wgpu/src/` for the live shape.
 
 ## Things to avoid
@@ -264,10 +264,10 @@ see `lumen/render-wgpu/src/` for the live shape.
 
 The public plugin trait is settled. Open questions still on the list:
 
-- **Plugin registry / `lumenc add foo`** — index file mapping
-  `name → git URL`. Post-v1.
-- **Plugin manifest / capability declaration** — let apps opt out of
+- **Plugin registry / `lumenc add foo`** - index file mapping
+  `name -> git URL`. Post-v1.
+- **Plugin manifest / capability declaration** - let apps opt out of
   specific plugin powers (network, files).
-- **Hot-reload-friendly plugins** — currently a plugin's systems
+- **Hot-reload-friendly plugins** - currently a plugin's systems
   persist across `replace_ast`; full re-add semantics need a clean
   shutdown hook.

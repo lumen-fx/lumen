@@ -1,6 +1,6 @@
 # Templates + slots
 
-`<template name="…">` defines a reusable markup body. Slots, id
+`<template name="...">` defines a reusable markup body. Slots, id
 auto-namespacing, and default attribute values are collectively enough
 to refactor any repeated block out of a `.lmn` file and keep
 per-instance state isolated.
@@ -62,7 +62,7 @@ first two `<card>`s that didn't override it).
 
 ## Defining a template
 
-`<template name="X" {default-attrs}>…body…</template>` defines a
+`<template name="X" {default-attrs}>...body...</template>` defines a
 reusable subtree. Defaults are key="value" pairs on the `<template>`
 tag itself.
 
@@ -74,10 +74,10 @@ tag itself.
 </template>
 ```
 
-- `name="card"` — the use-site tag name.
-- `variant="primary"` and `size="md"` — defaults. Use-sites that omit
+- `name="card"` - the use-site tag name.
+- `variant="primary"` and `size="md"` - defaults. Use-sites that omit
   them inherit; use-sites that pass `variant="danger"` override.
-- `{variant}` and `{size}` inside the body — textual placeholders.
+- `{variant}` and `{size}` inside the body - textual placeholders.
   At expand-time the parser substitutes the resolved value (use-site
   override > template default).
 
@@ -95,7 +95,7 @@ Two equivalent forms:
   <label text="Heads up" />
 </card>
 
-<!-- Explicit form — useful when the template name shadows something. -->
+<!-- Explicit form - useful when the template name shadows something. -->
 <use template="card" variant="danger">
   <label text="Heads up" />
 </use>
@@ -117,7 +117,7 @@ Pair with a default for graceful empty:
 </template>
 ```
 
-`<slot default="…">` falls back to the literal text when the use-site
+`<slot default="...">` falls back to the literal text when the use-site
 provides no child elements.
 
 ## Id auto-namespacing
@@ -146,7 +146,7 @@ The matching Rhai routing handles both shapes:
 // Fires for BOTH user-card:save AND team-card:save via suffix fallback.
 on("click", "save", "do_save");
 
-// Per-instance routing — only fires for the user-card instance.
+// Per-instance routing - only fires for the user-card instance.
 on("click", "user-card:save", "do_user_save");
 
 fn do_save(id) {
@@ -157,7 +157,7 @@ fn do_save(id) {
 ```
 
 `local_id(source, suffix)` returns a sibling id within the same
-template instance. Multi-level prefixes (`a:b:save`) stack — the result
+template instance. Multi-level prefixes (`a:b:save`) stack - the result
 is `a:b:status`. Source ids without a colon (top-level entities)
 return `suffix` unchanged.
 
@@ -167,7 +167,7 @@ return `suffix` unchanged.
 <template name="banner" tone="info" closable="false">
   <row class="banner banner-{tone}">
     <label grow="1" text="{message}" />
-    <button id="close" text="×" />
+    <button id="close" text="x" />
   </row>
 </template>
 
@@ -181,7 +181,7 @@ Three rules:
 1. **Use-site wins.** `<banner tone="danger">` overrides the
    `tone="info"` default for that one instance.
 2. **Missing default = empty.** `message` has no default, so the
-   first `<banner>` would render `text=""` — that's a parse choice,
+   first `<banner>` would render `text=""` - that's a parse choice,
    not a parse error. Author defensively.
 3. **Defaults stack with placeholders.** `class="banner banner-{tone}"`
    resolves with the chosen `tone` per-instance.
@@ -211,10 +211,10 @@ inner element tree slots in where `<slot/>` lives.
 ```
 
 The two children of `<dialog>` land where `<slot/>` was. There's only
-**one slot per template** today — named slots (`<slot name="header"/>`)
+**one slot per template** today - named slots (`<slot name="header"/>`)
 are on the deferred list.
 
-## A bigger refactor — list items
+## A bigger refactor - list items
 
 Before:
 
@@ -224,7 +224,7 @@ Before:
     <label width="32" text="{row.idx}" />
     <label grow="1" text="{row.label}" />
     <label class="pill" text="{row.status}" />
-    <button id="dismiss-{row.id}" text="×" />
+    <button id="dismiss-{row.id}" text="x" />
   </row>
 </for>
 ```
@@ -237,7 +237,7 @@ After:
     <label width="32" text="{idx}" />
     <label grow="1" text="{label}" />
     <label class="pill" text="{status}" />
-    <button id="dismiss" text="×" />
+    <button id="dismiss" text="x" />
   </row>
 </template>
 
@@ -247,13 +247,13 @@ After:
 ```
 
 ```rhai
-// Auto-namespacing: dismiss button ids are row-1:dismiss, row-2:dismiss, …
+// Auto-namespacing: dismiss button ids are row-1:dismiss, row-2:dismiss, ...
 on("click", "dismiss", "handle_dismiss");
 
 fn handle_dismiss(id) {
     // local_id(id, "label") = row-3:label etc.
     let row_id = id.split(":")[0];   // e.g. "row-3"
-    // … remove the row from todos signal_array …
+    // ... remove the row from todos signal_array ...
 }
 ```
 
@@ -272,9 +272,9 @@ the template expansion runs on the substituted use-site tag.
 These are not shipped yet:
 
 - **Named slots** (`<slot name="header"/>` and
-  `<header slot="header">…</header>` at the use-site) for multi-slot
+  `<header slot="header">...</header>` at the use-site) for multi-slot
   layouts like cards with separate title + body + footer sections.
-- **Scoped signals** — today `signal("count")` is global. Per-instance
+- **Scoped signals** - today `signal("count")` is global. Per-instance
   signals scoped to a template instance would let two `<counter />`
   uses keep independent state without the author writing
   `signal("count-" + instance_id)` manually.

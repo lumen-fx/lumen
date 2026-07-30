@@ -15,17 +15,17 @@ cargo run -p lumenc -- run my-counter
 
 ```text
 my-counter/
-├── main.lmn    # markup tree (required)
-├── main.css    # styling (optional)
-├── main.rhai   # script logic (optional)
-└── lumen.toml  # per-app config (optional)
+|-- main.lmn    # markup tree (required)
+|-- main.css    # styling (optional)
+|-- main.rhai   # script logic (optional)
+`-- lumen.toml  # per-app config (optional)
 ```
 
-You should see a large `0` with two buttons below it — `+1` and
+You should see a large `0` with two buttons below it - `+1` and
 `reset`. Clicking `+1` increments the counter; the label re-renders
 from a `clicks` signal. `reset` sets it back to zero.
 
-## Walkthrough — `main.lmn`
+## Walkthrough - `main.lmn`
 
 ```xml
 <root bg="#0c1c30" padding="32" gap="20" align="center" justify="center">
@@ -47,7 +47,7 @@ from a `clicks` signal. `reset` sets it back to zero.
   `bind-text="clicks"` attribute pushes the value of the `clicks` signal
   into the label whenever it changes, so the initial `text="0"` is just
   the value shown before the script runs.
-- `<row>` is a horizontal flex container — children sit left-to-right
+- `<row>` is a horizontal flex container - children sit left-to-right
   with a 14 px gap.
 - `<button>` is a focusable tile with click dispatch wired in. Each has
   an `id` (`bump`, `reset`) so the script can route clicks to it.
@@ -57,7 +57,7 @@ from a `clicks` signal. `reset` sets it back to zero.
 See the [tag reference](../authoring/tags.md) for every tag and its
 attribute surface.
 
-## Walkthrough — `main.rhai`
+## Walkthrough - `main.rhai`
 
 ```rhai
 fn on_start() {
@@ -80,19 +80,19 @@ fn handle_reset(id) {
   Rhai builtin.
 - `on("click", "bump", "handle_bump")` routes the click on entity
   `bump` to `handle_bump(id)` instead of the global `on_click(id)`
-  fallback. This replaces the `if id == "bump" { … }` chain you'd
+  fallback. This replaces the `if id == "bump" { ... }` chain you'd
   otherwise write inside a single `on_click`.
 - `signal("clicks", 0)` returns a handle into the host-local reactive
   store, auto-initialising the entry to `0` if no other call has
   touched it. The handle has `.get()` / `.set(v)` methods; you can
   also use `.value` (Vue-style accessor sugar).
 - Because the `<label>` carries `bind-text="clicks"`, every `.set` on
-  the `clicks` signal re-renders the label automatically — no explicit
+  the `clicks` signal re-renders the label automatically - no explicit
   redraw call.
 
 The full builtin surface is in [Rhai builtins](../authoring/rhai-builtins.md).
 
-## Walkthrough — `main.css`
+## Walkthrough - `main.css`
 
 The scaffold ships styling too:
 
@@ -120,16 +120,16 @@ The scaffold ships styling too:
 .primary:focus { outline: 2 var(--color-accent); }
 ```
 
-- `:root { --foo: x; }` declares CSS custom properties — Lumen resolves
+- `:root { --foo: x; }` declares CSS custom properties - Lumen resolves
   `var(--foo)` against the nearest `:root` declaration.
 - `.display` and `.primary` are class selectors matched against the
   `class` attribute in the markup. Inline markup attributes still win
   over CSS, so anything you wrote inline stays put.
-- `.primary:focus` styles the focused state — the `:focus` pseudo-class
+- `.primary:focus` styles the focused state - the `:focus` pseudo-class
   routes to the focus outline.
 
 Save the file while the app is running and it picks up the change on
-save — no restart, no flicker. See the [CSS subset](../authoring/css.md)
+save - no restart, no flicker. See the [CSS subset](../authoring/css.md)
 for the property list.
 
 ## Hot reload demo
@@ -152,7 +152,7 @@ With the app still running:
 
    Save. The button now adds 5 per click. Note that
    `signal("clicks", 0)` after the reload still resolves to the same
-   live value — `RhaiHost::replace_ast` keeps the persistent `Scope`
+   live value - `RhaiHost::replace_ast` keeps the persistent `Scope`
    and signal map across reloads, so the running count doesn't blink
    back to zero on every save.
 
@@ -170,7 +170,7 @@ These are the three hot-reload paths:
 
 The runner checks the modification time of `main.lmn`, `main.css`, and
 any referenced `.rhai` files each tick; when a timestamp changes it
-reloads only the affected path. `lumen.toml` is read once at startup —
+reloads only the affected path. `lumen.toml` is read once at startup -
 restart `lumenc run` to pick up config changes.
 
 ## What about signals, exactly?
@@ -178,10 +178,10 @@ restart `lumenc run` to pick up config changes.
 A *signal* is a named entry in the host-local reactive store. Three
 operations matter:
 
-- `.get()` — read the current string value (or `()` if unset).
-- `.set(v)` — write a new value; tags the signal name in the
+- `.get()` - read the current string value (or `()` if unset).
+- `.set(v)` - write a new value; tags the signal name in the
   per-tick dirty set.
-- `derive(name, deps, fn)` — register a closure that re-runs whenever
+- `derive(name, deps, fn)` - register a closure that re-runs whenever
   any dep is in the dirty set. The return value is stringified into
   signal `name`.
 
@@ -191,15 +191,15 @@ or `<toggle bind-checked="name">` or `<slider bind-value="name">`
 pushes the user's edits back into the signal. This is the closed loop
 that lets you write declarative markup without a custom view-model.
 
-Signals are strings on the wire — that keeps the Rhai surface tiny and
+Signals are strings on the wire - that keeps the Rhai surface tiny and
 lets the same primitive drive text content, checkbox state, and
 slider values without per-type plumbing. The CSS layer reads them too
 (`<if signal="foo" mode="hide">` for conditional subtrees).
 
 ## Next
 
-- [Project layout](./project-layout.md) — what files belong where.
-- [Markup tag reference](../authoring/tags.md) — every shipped tag.
-- [Rhai builtins](../authoring/rhai-builtins.md) — every shipped fn.
+- [Project layout](./project-layout.md) - what files belong where.
+- [Markup tag reference](../authoring/tags.md) - every shipped tag.
+- [Rhai builtins](../authoring/rhai-builtins.md) - every shipped fn.
 - The full [widget-garden](https://github.com/lumen-ui/lumen/tree/main/apps/widget-garden)
   app uses everything in one file.

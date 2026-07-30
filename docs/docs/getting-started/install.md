@@ -41,11 +41,11 @@ libraries.
 | Platform | Dependency | Required for | Install |
 |---|---|---|---|
 | Linux | GTK 3 + pkg-config | `rfd`'s GTK3 file dialog | `sudo apt install libgtk-3-dev pkg-config` (Debian / Ubuntu) <br> `sudo dnf install gtk3-devel pkgconf-pkg-config` (Fedora) <br> `sudo pacman -S gtk3 pkgconf` (Arch) |
-| Linux | libxdo-dev | Native menu bars via `muda` (optional — Lumen builds without it on Linux; only macOS / Windows get menu bars) | `sudo apt install libxdo-dev` |
+| Linux | libxdo-dev | Native menu bars via `muda` (optional - Lumen builds without it on Linux; only macOS / Windows get menu bars) | `sudo apt install libxdo-dev` |
 | Linux | libnotify | `notify(...)` Rhai builtin (most desktops bundle a notification daemon already) | `sudo apt install libnotify-bin` |
 | Linux | Vulkan loader + ICD | wgpu device init | `sudo apt install libvulkan1 mesa-vulkan-drivers` |
 | macOS | Xcode command-line tools | linker + Metal headers | `xcode-select --install` |
-| Windows | Visual Studio Build Tools 2022 (or full VS), C++ workload | MSVC linker | <https://visualstudio.microsoft.com/downloads/> → "Build Tools for Visual Studio" |
+| Windows | Visual Studio Build Tools 2022 (or full VS), C++ workload | MSVC linker | <https://visualstudio.microsoft.com/downloads/> -> "Build Tools for Visual Studio" |
 | Windows | DirectX 12 | wgpu DX12 backend (Vulkan also works if installed) | ships with Windows 10/11 |
 
 > **Linux file dialog note.** Lumen pins `rfd` to its GTK3 feature.
@@ -109,9 +109,9 @@ the capability table.
 
 ```bash
 lumenc new hello hello-test
-lumenc check hello-test       # parse-only — should exit 0
-lumenc run hello-test         # opens a 960×720 window
+lumenc check hello-test       # parse-only - should exit 0
+lumenc run hello-test         # opens a 960x720 window
 ```
 
-If `lumenc check` fails on the scaffold, file an issue — the templates
+If `lumenc check` fails on the scaffold, file an issue - the templates
 are CI-tested against every shipped tag.

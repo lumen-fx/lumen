@@ -2,7 +2,7 @@
 
 Lumen is a markup-first UI framework for native desktop apps. You author
 a `.lmn` markup tree (XML-shaped, fixed tag vocabulary), an optional
-`.css` subset stylesheet, and an optional `.rhai` script — the
+`.css` subset stylesheet, and an optional `.rhai` script - the
 `lumenc` compiler parses all three to a layout IR, spawns ECS entities
 across a two-world bevy_ecs core (main + render), and renders the
 result through vello + wgpu with cosmic-text shaping and taffy flexbox.
@@ -23,8 +23,8 @@ on("click", "bump", "bump");
 fn bump(_id) { let c = signal("clicks", 0); c.set(c.get() + 1); }
 ```
 
-> **Status.** Alpha. The author-facing surface — markup tags, the CSS
-> subset, and the Rhai builtins — is stable and documented in this book.
+> **Status.** Alpha. The author-facing surface - markup tags, the CSS
+> subset, and the Rhai builtins - is stable and documented in these docs.
 > FFI and multi-window are not yet wired; they have their own designs
 > and land later.
 
@@ -55,31 +55,31 @@ fn bump(_id) { let c = signal("clicks", 0); c.set(c.get() + 1); }
 - Performance: frame-dirty roll-up, retained extract, and a sub-scene
   cache.
 - Tooling: an LSP with completion / hover / diagnostics, `fmt --check`,
-  criterion benches, and this mdBook.
+  criterion benches, and these docs.
 
 **In progress**
 
-- Virtualized `<for>` lists — the row-pool shape works but scroll-window
+- Virtualized `<for>` lists - the row-pool shape works but scroll-window
   math is still hardcoded.
 - `pattern` validation matches a literal substring; a full regex backend
   is not yet wired.
 - Transition drivers beyond `opacity` (`bg`, `color`, `radius`).
-- C-ABI FFI surface — stub-only today (`lumen/ffi` is a status enum).
-- Multi-window — an app is one window for now.
+- C-ABI FFI surface - stub-only today (`lumen/ffi` is a status enum).
+- Multi-window - an app is one window for now.
 
 The widget garden app at [`apps/widget-garden`](https://github.com/lumen-ui/lumen/tree/main/apps/widget-garden)
 exercises every shipped tag, attribute, and OS-integration builtin in a
 single file. Use it as the canonical reference when something in the
 docs is ambiguous.
 
-## How to read this book
+## How to read these docs
 
-- **Getting started** — install, run your first app, what a project
+- **Getting started** - install, run your first app, what a project
   directory looks like.
-- **Authoring** — exhaustive references for the markup tag set, the
+- **Authoring** - exhaustive references for the markup tag set, the
   CSS subset, the Rhai builtins, templates / slots, animations, and
   per-app config.
-- **Reference** — links to the root [SDD](https://github.com/lumen-ui/lumen/blob/main/docs/SDD.md)
+- **Reference** - links to the root [SDD](https://github.com/lumen-ui/lumen/blob/main/docs/SDD.md)
   + UI API plan plus author guides for plugins and the C-ABI.
 
 ## CLI surface
@@ -87,7 +87,7 @@ docs is ambiguous.
 | Command | What it does |
 |---|---|
 | `lumenc run <dir>` | Launch the app in `<dir>/main.lmn`. Watches for file changes; hot-reloads markup, CSS, and Rhai. |
-| `lumenc check <dir>` | Parse without spawning a window. CI gate — exits non-zero on any parse error. |
+| `lumenc check <dir>` | Parse without spawning a window. CI gate - exits non-zero on any parse error. |
 | `lumenc fmt <file>` | Reformat a `.lmn` file in place. `--check` exits non-zero on any diff (CI gate). |
 | `lumenc new <template> <name>` | Scaffold from `hello`, `counter`, or `form`. |
 
@@ -95,11 +95,11 @@ docs is ambiguous.
 
 Repo: <https://github.com/lumen-ui/lumen>. MPL-2.0 licensed.
 
-## Build this book
+## Build these docs
 
 ```bash
 cd docs
-mdbook serve --open
+uv run zensical serve
 ```
 
-`mdbook build` writes static HTML to `docs/book/`.
+`uv run zensical build` writes static HTML to `docs/site/`.
