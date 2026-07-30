@@ -1,8 +1,8 @@
 # Headless mode (automation / CI)
 
-`lumenc run <dir> --headless` runs the **full** app pipeline — layout,
+`lumenc run <dir> --headless` runs the **full** app pipeline - layout,
 real GPU rendering, the MCP introspection server, input simulation,
-screenshots, and hot reload — with **zero windows**. No winit event loop
+screenshots, and hot reload - with **zero windows**. No winit event loop
 is created and the compositor is never contacted, so automated
 verification (AI agents, CI jobs, golden-image checks) never disturbs
 the desktop the developer is working on.
@@ -17,13 +17,13 @@ lumenc run apps/counter --headless --ticks 120   # bounded CI run
 
 | Flag | Meaning |
 |------|---------|
-| `--size WxH` | Logical viewport size. Defaults to `lumen.toml [window] size`, else 960x720 — the same resolution order as the windowed run. |
+| `--size WxH` | Logical viewport size. Defaults to `lumen.toml [window] size`, else 960x720 - the same resolution order as the windowed run. |
 | `--dpr N` | Device pixel ratio of the offscreen target. Screenshots come out at `logical x dpr` physical pixels, matching a windowed run on an equivalent display. Default `1.0`. |
 | `--ticks N` | Run exactly `N` ticks back-to-back, fire the close path, and exit. For bounded CI validation runs. |
 
 ## What is identical to a windowed run
 
-* The tick schedule, plugin stack, scripts, bindings, and reconcilers —
+* The tick schedule, plugin stack, scripts, bindings, and reconcilers -
   headless reuses the exact app construction the windowed path uses.
 * Rendering: the same offscreen wgpu + vello renderer and retained-scene
   walker as the windowed backend (adapter requested without a surface;
@@ -31,7 +31,7 @@ lumenc run apps/counter --headless --ticks 120   # bounded CI run
   dpr scaling and the cosmic-text shaper.
 * The MCP server on the usual port (`lumen.toml [mcp]`), so
   `lumenc snapshot`, `lumenc click` / `type` / `key` / `scroll` (with
-  `[mcp] simulate = true`), and `lumenc screenshot` all work unchanged —
+  `[mcp] simulate = true`), and `lumenc screenshot` all work unchanged -
   `lumenc screenshot` returns real rendered PNGs.
 * Frame pacing semantics: tick + render when work is pending (a simulate
   event, dirty state, an active animation, a screenshot request), idle
@@ -57,7 +57,7 @@ close-observing systems fire, and exit with status 0.
   makes `lumen.simulate`'s completion wait deterministic.
 * **Close vetoes are not honoured on signals.** A signalled automation
   run must terminate; the close tick still runs so cleanup hooks fire.
-* **Window-state persistence (`[window] remember_state`) is skipped** —
+* **Window-state persistence (`[window] remember_state`) is skipped** -
   there is no window geometry to save, and clobbering the real window's
   saved state would be wrong.
 * **Idle hot-reload polling.** When hot reload is active the parked loop

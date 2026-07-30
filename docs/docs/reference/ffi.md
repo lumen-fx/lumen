@@ -13,7 +13,7 @@
 > base_dir)`: build an app from prebuilt LMNA artifact bytes with NO parser, so a
 > thin launcher can compile source in-process and hand the bytes across the ABI
 > to a dlopen'd liblumen instead of static-linking the runtime. See
-> [`docs/design/link-not-embed.md`](../../design/link-not-embed.md).
+> `docs/design/link-not-embed.md`.
 
 ## Today
 
@@ -55,7 +55,7 @@ bridges follow the same shape:
    targets (per the FFI-soundness plan).
 
 4. **Strings are `*const c_char` UTF-8.** Lumen does not transit
-   wide-char / UTF-16 — the C-ABI matches Rust's internal UTF-8
+   wide-char / UTF-16 - the C-ABI matches Rust's internal UTF-8
    `&str` model. NUL terminator is required.
 
 5. **Ownership is explicit.** Every allocator-returning function is
@@ -66,10 +66,10 @@ bridges follow the same shape:
 The plan calls out four core operations every binding needs:
 
 ```c
-/* Entity creation — returns an opaque handle. */
+/* Entity creation - returns an opaque handle. */
 LumenStatus lumen_entity_create(LumenApp *app, LumenEntity *out);
 
-/* Component / style mutation — flat key/value setters keyed on
+/* Component / style mutation - flat key/value setters keyed on
    property name. Mirrors apply_attribute / apply_declaration in
    lumenc/src/parser_{html,css}.rs. */
 LumenStatus lumen_style_set(
@@ -79,14 +79,14 @@ LumenStatus lumen_style_set(
     const char *value
 );
 
-/* Author-side command queueing — same shape as ScriptCommand from
+/* Author-side command queueing - same shape as ScriptCommand from
    the Rhai host, just in C-callable form. */
 LumenStatus lumen_queue_command(
     LumenApp *app,
     const LumenCommand *cmd
 );
 
-/* Dirty mask — bitfield reflecting which subsystems need redraw.
+/* Dirty mask - bitfield reflecting which subsystems need redraw.
    Used by hosts that drive their own tick loop and want to skip work
    when nothing changed. Matches FrameDirty roll-up semantics. */
 LumenStatus lumen_dirty_mask(
@@ -102,7 +102,7 @@ skip-work optimization the in-process tick loop has.
 ## cbindgen workflow
 
 Once the Rust signatures are stable, `cbindgen` produces a
-`lumen.h` header from them — no manual header maintenance.
+`lumen.h` header from them - no manual header maintenance.
 
 ```bash
 # (planned)
@@ -124,7 +124,7 @@ Each binding wraps the raw FFI in idiomatic ergonomics. The plan:
 | Python | `lumen-py` (PyO3) | Python classes wrapping `LumenApp` / `LumenEntity` handles. `__del__` calls `lumen_*_free`. |
 | Node / TypeScript | `lumen-node` (napi-rs) | Same pattern, async wrappers for any blocking calls. |
 | Go | `lumen-go` (cgo) | Thin Go interfaces over C; channels for the dirty mask poll. |
-| Lua | `lumen-script-lua` via `mlua` | Implements the in-process `ScriptHost` trait (parallel to `lumen-script-rhai`) — not the FFI per se. |
+| Lua | `lumen-script-lua` via `mlua` | Implements the in-process `ScriptHost` trait (parallel to `lumen-script-rhai`) - not the FFI per se. |
 
 Bindings ride on top of the C-ABI; they don't depend on each other and
 they don't depend on Cargo (a downstream Python project just needs
@@ -147,8 +147,8 @@ options are:
    a Rust embedding story (uniffi, neon, etc.), use that as the
    bridge until the C-ABI ships.
 3. **Wait.** The FFI work is on the active roadmap; the lift is
-   well-scoped (the in-process API exposes everything the C-ABI needs
-   — there's no architecture work, just careful API design).
+   well-scoped (the in-process API exposes everything the C-ABI needs;
+   there's no architecture work, just careful API design).
 
 ## Why not finish FFI first?
 
@@ -170,6 +170,6 @@ function table, struct layouts, and worked C / Python / Node samples.
 
 ## Tracking
 
-- Design: § 6 "Multi-language story" in
+- Design: section 6 "Multi-language story" in
   [`docs/SDD.md`](https://github.com/lumen-ui/lumen/blob/main/docs/SDD.md).
 - Code: `lumen/ffi/src/lib.rs` (stub).

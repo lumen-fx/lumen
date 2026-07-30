@@ -8,7 +8,7 @@ this page tracks every entry.
 
 This page groups tags by family. For attribute semantics that work on
 *every* tag (`id`, `class`, `width`, `padding`, `bg`, etc.) see the
-[CSS subset](./css.md) — the same names work as inline markup attrs.
+[CSS subset](./css.md) - the same names work as inline markup attrs.
 
 ## Common attribute families
 
@@ -22,7 +22,7 @@ only when a tag interprets them in a non-default way.
 | **Text** | `text`, `text-color`, `font-size`, `text-align`, `wrap`, `max-lines`, `style` (named typography role) |
 | **Interaction** | `hover-bg`, `press-bg`, `focus-outline`, `tab-index`, `draggable`, `drop` |
 | **Bindings** | `bind-text`, `bind-checked`, `bind-value`, `bind-scroll` |
-| **Reactivity** | `each`, `key`, `signal`, `mode`, `eq` (per-tag — see `<for>` / `<if>`) |
+| **Reactivity** | `each`, `key`, `signal`, `mode`, `eq` (per-tag - see `<for>` / `<if>`) |
 
 Value grammar (lengths, edges, colors) lives in
 [`lumenc/src/values.rs`](https://github.com/lumen-ui/lumen/blob/main/lumenc/src/values.rs).
@@ -47,7 +47,7 @@ embedded user-agent stylesheet, `frameless` removes window decorations.
 
 | Attr | Type | Notes |
 |---|---|---|
-| `skin` | identifier | e.g. `skin="default"` — opt into the embedded user-agent stylesheet. Equivalent to `[skin] name` in `lumen.toml`. |
+| `skin` | identifier | e.g. `skin="default"` - opt into the embedded user-agent stylesheet. Equivalent to `[skin] name` in `lumen.toml`. |
 | `frameless` | bool | `frameless="true"` removes the title bar / window chrome. Pair with `<title-bar drag="true">` to keep window dragging. |
 | `class` | identifier list | Same `class` semantics as elsewhere; CSS rules can target the root. |
 
@@ -149,14 +149,14 @@ focused text input keeps its own arrow handling instead of scrolling.
 
 `bind-scroll="signal"` makes the offset reactive without any per-frame
 script hook: writing the signal (f32, logical pixels) scrolls the
-container on that tick — out-of-range values clamp to the content
-extent, exactly like user scrolling — and cancels any in-flight fling.
+container on that tick - out-of-range values clamp to the content
+extent, exactly like user scrolling - and cancels any in-flight fling.
 The other direction is throttled: user scrolling writes the offset back
 into the signal once, when the scroll *settles* (offset stopped moving
 and the fling slept), never on every frame.
 
 ```xml
-<scroll height="320" bind-scroll="feed_pos"> … </scroll>
+<scroll height="320" bind-scroll="feed_pos"> ... </scroll>
 <button text="Back to top" on-click="scroll_top" />
 <script>
   fn scroll_top(id) { signal("feed_pos", 0.0).set(0.0); }
@@ -171,7 +171,7 @@ and the fling slept), never on every frame.
 
 Floats out of normal flow. Defaults: `position="absolute"`,
 `inset="0 0 0 0"`, so it covers its nearest positioned ancestor
-(typically the root). Use for modal backdrops, dropdowns, tooltips —
+(typically the root). Use for modal backdrops, dropdowns, tooltips -
 anything that should paint above its siblings.
 
 ```xml
@@ -211,7 +211,7 @@ Text leaf. Renders `text` through cosmic-text; respects `font-size`,
 ```
 
 > **Width / height defaults.** taffy doesn't measure text. `<label>`
-> seeds `height=24` (≈ one line at 16px font) and `min-width=80` so
+> seeds `height=24` (~ one line at 16px font) and `min-width=80` so
 > a bare `<label text="Hi" />` is visible without explicit sizing.
 
 ---
@@ -228,15 +228,15 @@ multiline (Enter inserts `\n`, Shift+Enter commits).
 | `placeholder` | string | Shown when content is empty. |
 | `bind-text` | signal name | Two-way: typing writes back to the signal. |
 | `multiline` | bool | Explicit override. `<textarea>` defaults to true; `<input>` defaults to false. |
-| `disabled` | bool | Marks the field disabled — the runtime `Disabled` marker gates input, and CSS `:disabled` routes its fill. |
-| `required` | bool | Validation flag — empty content fails. |
-| `pattern` | string | Validation — content must contain this **literal substring** (not a regex; full regex not yet wired). |
+| `disabled` | bool | Marks the field disabled - the runtime `Disabled` marker gates input, and CSS `:disabled` routes its fill. |
+| `required` | bool | Validation flag - empty content fails. |
+| `pattern` | string | Validation - content must contain this **literal substring** (not a regex; full regex not yet wired). |
 | `min` / `max` | number | Numeric range when content parses as a number. |
 
 ```xml
-<input width="280" placeholder="Type something…" bind-text="who" />
+<input width="280" placeholder="Type something..." bind-text="who" />
 <textarea width="320" height="80"
-          placeholder="Multi-line — Shift+Enter to commit"
+          placeholder="Multi-line - Shift+Enter to commit"
           bind-text="note" />
 
 <!-- Validation. valid:<id> signal mirrors the result. -->
@@ -319,7 +319,7 @@ A focusable tile with click dispatch.
 ```
 
 Inner text content becomes the button label. Default size: 36 px tall,
-≥ 96 px wide (so a bare `<button text="…" />` is visible without
+>= 96 px wide (so a bare `<button text="..." />` is visible without
 explicit sizing).
 
 ### `<toggle>`
@@ -346,11 +346,11 @@ gate interaction, and CSS `:checked` / `:disabled` route its fill.
 
 `bind-value="signal"` is two-way. The dragged value is clamped to the
 [`min`, `max`] range (defaults: 0 and 1). A focused slider is also
-keyboard-driven: ←/→ (and ↑/↓) nudge by one step, `PageUp` / `PageDown`
+keyboard-driven: Left/Right (and Up/Down) nudge by one step, `PageUp` / `PageDown`
 by ten steps, and `Home` / `End` jump to `min` / `max`. The mouse wheel
 over a hovered slider nudges by one step per notch (and never scrolls an
 ancestor `<scroll>` container), and `Escape` mid-drag cancels the drag,
-restoring the pre-drag value. `step="…"` sets the keyboard / wheel
+restoring the pre-drag value. `step="..."` sets the keyboard / wheel
 increment; absent, it defaults to `(max - min) / 100`.
 
 ---
@@ -361,17 +361,17 @@ W5 form controls. All three desugar in the parser to real element
 subtrees, so every visual (indicator size, colors, radii, sweep timing)
 is CSS-reachable through the skins or app CSS.
 
-### `<checkbox label="…">`
+### `<checkbox label="...">`
 
 Box + label boolean control on the same machinery as `<toggle>`:
 `checked`, `bind-checked` (two-way), fires `on_toggle(id, checked)`.
-Clicking anywhere on the row — box, label, or gap — toggles, as does
+Clicking anywhere on the row - box, label, or gap - toggles, as does
 `Space` while focused. Desugar:
 
 ```
 checkbox (row, Toggleable)
-├─ .checkbox-box   — indicator tile; ✓ / – mark rendered as text
-└─ .checkbox-label — the caption
+|- .checkbox-box   - indicator tile; check / dash mark rendered as text
+`- .checkbox-label - the caption
 ```
 
 ```xml
@@ -383,15 +383,15 @@ checkbox (row, Toggleable)
 `indeterminate="true"` is the web/Qt tri-state: the box renders a dash
 (over the checked fill) regardless of `checked` until the FIRST user
 toggle clears it. Script `bind-checked` writes do not clear it. Style
-via `.checkbox-box { … }`, `checkbox:checked { bg: … }` (the box fill
-when on), `checkbox:focus { outline: … }`.
+via `.checkbox-box { ... }`, `checkbox:checked { bg: ... }` (the box fill
+when on), `checkbox:focus { outline: ... }`.
 
-### `<radio group="…" value="…" label="…">`
+### `<radio group="..." value="..." label="...">`
 
 Name-grouped exclusive choice (Qt auto-exclusive radio group / ARIA
 radiogroup). All `<radio>` elements sharing a `group` string form one
 group; the group's selected value lives in the PropertyStore signal of
-that name — read it from scripts like any signal, drive it to select
+that name - read it from scripts like any signal, drive it to select
 programmatically.
 
 ```xml
@@ -403,14 +403,14 @@ programmatically.
 - Exactly one selected per group: `checked="true"` seeds the signal;
   with none checked the first enabled member is auto-selected.
 - Click (row / dot / label) and `Space` select.
-- `←`/`→`/`↑`/`↓` move selection to the previous / next ENABLED member,
+- `Left`/`Right`/`Up`/`Down` move selection to the previous / next ENABLED member,
   wrapping at the ends and skipping disabled members; selection follows
   focus (Qt/GTK).
 - Roving tabindex: only the selected member sits in the Tab chain, so
   `Tab` enters and leaves the whole group as one stop.
 
-Style via `.radio-dot { … }`, `radio:selected { bg: … }` (dot fill),
-`radio:focus { outline: … }`.
+Style via `.radio-dot { ... }`, `radio:selected { bg: ... }` (dot fill),
+`radio:focus { outline: ... }`.
 
 ### `<progress value max>`
 
@@ -425,19 +425,19 @@ Non-interactive progress bar (never focusable, consumes no input).
 With `value` / `bind-value`, the `.progress-fill` child's width tracks
 `value / max`. Without either, the bar is INDETERMINATE: a 30 %-wide
 chunk bounces across the track; the sweep period comes from
-`duration="ms"` → CSS `progress-duration` → the
+`duration="ms"` -> CSS `progress-duration` -> the
 `--lumen-progress-period` token (skins default 1200 ms). A later
 `bind-value` write flips an indeterminate bar to determinate. Track
-styling on `progress { … }`, fill on `.progress-fill { … }`. Hidden
+styling on `progress { ... }`, fill on `.progress-fill { ... }`. Hidden
 bars (closed tab, hidden dialog) stop animating and requesting frames.
 
 ---
 
-## `<for each="…" key="…">`
+## `<for each="..." key="...">`
 
 Reactive iteration. Spawns one copy of its inline children per item in
 the named `ArraySignal`. Reference an item's fields inside the body with
-the `{row.field}` form — `{row.label}`, `{row.status}`, and so on — and
+the `{row.field}` form - `{row.label}`, `{row.status}`, and so on - and
 each row resolves it against its own item at reconcile time.
 
 > **Use `{row.field}`, not bare `{field}`.** A bare `{field}` inside a
@@ -468,7 +468,7 @@ each row resolves it against its own item at reconcile time.
 ```rhai
 let todos = signal_array("todos");
 todos.set([
-    #{ id: "1", idx: "1", label: "Layout — taffy", status: "done" },
+    #{ id: "1", idx: "1", label: "Layout - taffy", status: "done" },
     #{ id: "2", idx: "2", label: "Reactive signals", status: "done" },
 ]);
 todos.push(#{ id: "3", idx: "3", label: "New row", status: "todo" });
@@ -484,7 +484,7 @@ todos.push(#{ id: "3", idx: "3", label: "New row", status: "todo" });
 
 ---
 
-## `<if signal="…" mode="render|hide">`
+## `<if signal="..." mode="render|hide">`
 
 Conditional subtree. Mounts its inline children only when the named
 signal is truthy (non-empty AND not literal `"false"` / `"0"`).
@@ -517,32 +517,32 @@ saves the despawn / respawn ECS cycles for branches that don't.
 
 ---
 
-## `<dialog open="…">`
+## `<dialog open="...">`
 
 Modal overlay. Sugar for an absolute-positioned full-viewport container
 whose visibility is bound to a signal. Implements the Qt `QDialog`
 contract (W5):
 
-- **Focus trap** — Tab / Shift-Tab cycle only within the open dialog
+- **Focus trap** - Tab / Shift-Tab cycle only within the open dialog
   (`FocusBoundary`).
-- **Initial focus** — on open, focus moves to the first
+- **Initial focus** - on open, focus moves to the first
   `autofocus="true"` descendant; else the first focusable descendant in
   markup order; else the dialog panel itself.
-- **Focus restore** — on close, focus returns to whatever held it
+- **Focus restore** - on close, focus returns to whatever held it
   before the dialog opened.
-- **Default button** — `<button default="true">` (gains the `default`
+- **Default button** - `<button default="true">` (gains the `default`
   class for skin styling). `Enter` anywhere in the dialog activates it,
   except when focus sits on another button or a multiline textarea;
   single-line inputs fire the default alongside their own commit
   (Qt/web line-edit behaviour). With no explicit default, the first
   enabled button acts as the Enter target (Qt autoDefault).
-- **Exactly-once accepted / rejected** — every open→close cycle fires
+- **Exactly-once accepted / rejected** - every open->close cycle fires
   exactly one of `on_dialog_accepted(id)` / `on_dialog_rejected(id)`
   (per-id routers `on("dialog_accepted", id, fn)` /
   `on("dialog_rejected", id, fn)`). Accepted = the close went through
-  the default button (click or Enter-anywhere); everything else —
-  Escape, cancel buttons, script signal writes — is rejected. `id` is
-  the dialog's `id="…"`, falling back to its open-signal name.
+  the default button (click or Enter-anywhere); everything else -
+  Escape, cancel buttons, script signal writes - is rejected. `id` is
+  the dialog's `id="..."`, falling back to its open-signal name.
 
 **Attributes.**
 
@@ -592,7 +592,7 @@ moving the bar request a native `winit::Window::drag_window()`.
   <title-bar drag="true">
     <label text="My app" />
     <spacer />
-    <button id="close" text="×" />
+    <button id="close" text="x" />
   </title-bar>
   <column> ...body... </column>
 </root>
@@ -600,7 +600,7 @@ moving the bar request a native `winit::Window::drag_window()`.
 
 ---
 
-## `<tooltip text="…" delay="…">`
+## `<tooltip text="..." delay="...">`
 
 Hover-delay popup. Wraps **exactly one** trigger child; the parser
 collapses the `<tooltip>` wrapper and attaches a `TooltipSource` to
@@ -618,8 +618,8 @@ window.
 | Attr | Type | Notes |
 |---|---|---|
 | `text` | string | Tooltip body. |
-| `delay` | int ms | Dwell time before show. Unset ⇒ the `--lumen-tooltip-delay` skin token (default 500; macOS skin 1000, Windows 400). |
-| `offset` | px | Cursor-to-popup gap. Unset ⇒ `--lumen-tooltip-offset` (default 12). |
+| `delay` | int ms | Dwell time before show. Unset => the `--lumen-tooltip-delay` skin token (default 500; macOS skin 1000, Windows 400). |
+| `offset` | px | Cursor-to-popup gap. Unset => `--lumen-tooltip-offset` (default 12). |
 
 ```xml
 <tooltip text="Save changes (Ctrl+S)" delay="300">
@@ -632,11 +632,11 @@ instead of silent first-child pickup.
 
 ---
 
-## `<tabs bind-value="…">` + `<tab name label>`
+## `<tabs bind-value="...">` + `<tab name label>`
 
-Tabbed container. Children must be `<tab name="…" label="…">…</tab>`.
+Tabbed container. Children must be `<tab name="..." label="...">...</tab>`.
 The parser flattens to a column with a button strip on top and per-tab
-`<if mode="hide" eq="…">` bodies, so switching tabs preserves
+`<if mode="hide" eq="...">` bodies, so switching tabs preserves
 descendant state.
 
 **`<tabs>` attributes.**
@@ -667,7 +667,7 @@ descendant state.
 
 ---
 
-## `<dropdown bind-value="…">` + `<option value label>`
+## `<dropdown bind-value="...">` + `<option value label>`
 
 Select widget. The parser collapses to a header button + an
 absolute-positioned options panel toggled via `__dropdown_open:<signal>`.
@@ -690,7 +690,7 @@ outside its bounds.
 | `label` | string | Optional. Visible text; falls back to `value`. |
 
 ```xml
-<dropdown bind-value="weight" placeholder="Select weight…">
+<dropdown bind-value="weight" placeholder="Select weight...">
   <option value="light"  label="Light" />
   <option value="medium" label="Medium" />
   <option value="heavy"  label="Heavy" />
@@ -701,7 +701,7 @@ outside its bounds.
 
 ---
 
-## `<menu id="…">` + `<menuitem id label accel>` + `<separator/>`
+## `<menu id="...">` + `<menuitem id label accel>` + `<separator/>`
 
 Popup / context menu. `<menu>` collapses to an absolute-positioned
 panel toggled via `__menu_open:<id>`. Use `open_menu(id)` /
@@ -721,7 +721,7 @@ dismisses on `Escape` or an outside press.
 |---|---|---|
 | `id` | string | Required. Passed to `on_menu(id)` / a per-id handler. |
 | `label` | string | Optional. Visible text; falls back to `id`. |
-| `accel` | string | Optional (menu-bar only — see below). Accelerator hint. |
+| `accel` | string | Optional (menu-bar only - see below). Accelerator hint. |
 
 ```xml
 <menu id="actions">
@@ -760,7 +760,7 @@ native menu chain. Click dispatch fires `on_menu(id)`.
   <menubar>
     <menu label="File">
       <menuitem id="new"  label="New"     accel="Cmd+N" />
-      <menuitem id="open" label="Open…"   accel="Cmd+O" />
+      <menuitem id="open" label="Open..."   accel="Cmd+O" />
       <separator />
       <menuitem id="quit" label="Quit"    accel="Cmd+Q" />
     </menu>
@@ -776,7 +776,7 @@ Duplicate `<menubar>` blocks under one `<root>` are a parse error.
 
 ---
 
-## `<date-picker bind-value="…">` / `<time-picker bind-value="…">`
+## `<date-picker bind-value="...">` / `<time-picker bind-value="...">`
 
 Validated text inputs. Today they collapse to an `<input>` with a
 built-in `pattern` substring matcher and an `id` so the `valid:<id>`
@@ -800,7 +800,7 @@ requires `:`. The placeholder hints at the full shape.
 
 ---
 
-## `<template name="…" {defaults}>`
+## `<template name="..." {defaults}>`
 
 Reusable markup body with `<slot/>`, id auto-namespacing, and default
 attribute values. Detailed in [Templates + slots](./templates.md).
@@ -818,9 +818,9 @@ attribute values. Detailed in [Templates + slots](./templates.md).
 
 ---
 
-## `<script>` / `<script src="…rhai" />`
+## `<script>` / `<script src="...rhai" />`
 
-Not a layout node — captured at parse time into `LayoutIR.script_source`.
+Not a layout node - captured at parse time into `LayoutIR.script_source`.
 
 ```xml
 <script src="main.rhai" />
@@ -840,11 +840,11 @@ Multiple `<script>` blocks concatenate in source order.
 
 ---
 
-## `<include src="…lmn" />`
+## `<include src="...lmn" />`
 
 Splits markup across files. At parse time the referenced `.lmn` file is
 loaded and its **top-level elements splice in place** of the `<include>`
-tag — as if you had pasted the file's contents there. Not a layout node;
+tag - as if you had pasted the file's contents there. Not a layout node;
 nothing survives in the tree but the included elements.
 
 ```xml
@@ -859,8 +859,8 @@ nothing survives in the tree but the included elements.
 Paths resolve **relative to the file that contains the `<include>`**, so
 a nested include inside `parts/header.lmn` resolves against `parts/`.
 
-**Templates register globally.** A `<template name="…">` defined in an
-included file is usable from *any* file — the parser collects every
+**Templates register globally.** A `<template name="...">` defined in an
+included file is usable from *any* file - the parser collects every
 template across the whole include graph before expanding use-sites, so
 inclusion order doesn't matter:
 
@@ -881,11 +881,11 @@ Rules and limits:
 - **Cycles are rejected** with an error naming the full chain
   (`include cycle detected: main.lmn -> a.lmn -> b.lmn -> a.lmn`).
 - A **missing file** is an error carrying the include-site position
-  (`include "parts/x.lmn" not found (from main.lmn:3:5): …`).
+  (`include "parts/x.lmn" not found (from main.lmn:3:5): ...`).
 - Editing any included file **hot-reloads** the app, exactly like editing
   `main.lmn`.
-- Both `<include src="…"/>` (self-closing) and
-  `<include src="…"></include>` (any body ignored) are accepted.
+- Both `<include src="..."/>` (self-closing) and
+  `<include src="..."></include>` (any body ignored) are accepted.
 
 Includes are resolved by the runtime and `lumenc check`. Tooling that
 parses raw strings without a file loader (e.g. the LSP when a document
@@ -902,11 +902,11 @@ visible without sizing:
 
 | Tag | Default `height` | Default `min-width` |
 |---|---|---|
-| `<root>` | 100% | — |
-| `<title-bar>` | 32 px | — |
-| `<label>` / `<input>` | 24 px (font_size × 1.5) | 80 / 160 px |
+| `<root>` | 100% | - |
+| `<title-bar>` | 32 px | - |
+| `<label>` / `<input>` | 24 px (font_size x 1.5) | 80 / 160 px |
 | `<button>` / `<toggle>` / `<slider>` | 36 px | 96 / 96 / 160 px |
-| `<spacer>` | — | — (carries `grow=1`) |
+| `<spacer>` | - | - (carries `grow=1`) |
 
 Override per-instance with explicit attributes. CSS rules can also set
 them, but inline attributes always win.
@@ -920,7 +920,7 @@ them, but inline attributes always win.
 | `<tabs>` | `bind-value` | Required. |
 | `<dropdown>` | `bind-value`, `placeholder` | `placeholder` only here. |
 | `<menu>` | `id` | Required for popup menus. |
-| `<menubar>` | — | Only valid directly inside `<root>`. |
+| `<menubar>` | - | Only valid directly inside `<root>`. |
 | `<title-bar>` | `drag` | Frameless-window drag region. |
 | `<root>` | `skin`, `frameless` | Window-level metadata. |
 | `<image>` | `src`, `fit` | Asset path + sizing. |

@@ -1,4 +1,4 @@
-# Devtools — the browser inspector
+# Devtools - the browser inspector
 
 Every Lumen app that runs with the MCP plugin installed (the default
 `lumenc run` stack, windowed **and** `--headless`) serves a browser-based
@@ -16,7 +16,7 @@ xdg-open http://127.0.0.1:7878/
 
 The port is the MCP port (`lumen.toml [mcp] port`, default `7878`;
 `port = 0` disables the server and the inspector with it). The page is
-served by the app itself — vanilla HTML + JS, no CDN, works offline.
+served by the app itself - vanilla HTML + JS, no CDN, works offline.
 Because the inspector talks to the same snapshot the MCP tools use, it
 works identically against a headless instance: you can drive a windowless
 CI app from a browser tab.
@@ -26,11 +26,11 @@ CI app from a browser tab.
 | Panel | What it shows |
 |---|---|
 | **Elements** (left) | Live element tree, polled at 1 Hz from `lumen.snapshot_tree`. Each row shows the markup tag, `#id`, `.classes`, text label, and state flags (`H`overed, `F`ocused, `P`ressed, `T`ab-stop). Rows flash green when anything about the node changed since the last poll. The filter box narrows by tag, `#id`, `.class`, or text. |
-| **Screenshot** (middle) | On-demand capture via `lumen.screenshot` (press `r` or the Refresh button; enable *auto* to capture every poll). The selected tree node's on-screen rect is drawn as a magenta overlay — scroll-corrected, dpr-independent. |
+| **Screenshot** (middle) | On-demand capture via `lumen.screenshot` (press `r` or the Refresh button; enable *auto* to capture every poll). The selected tree node's on-screen rect is drawn as a magenta overlay - scroll-corrected, dpr-independent. |
 | **Inspect** (right, top) | Full component dump of the selected node from `lumen.inspect_entity`: transform, style, visuals, text style, bindings, tab index, scroll state, interaction tints. |
-| **Signals** (right, middle) | Every global reactive signal from the PropertyStore: name, value, stored kind, and the frame it last changed (`@N`). Rows flash on change. Click a row to load it into the write boxes; **Set** (or Enter) writes the value back through `lumen.set_signal` — the same external-property bus `Signals::set` uses, so ordering semantics against script writes hold. |
-| **Events** (right, bottom) | Tail of one message ring (`ClickEvent`, `KeyPressed`, `MouseWheel`, …) via `lumen.recent_messages`. Newest first. |
-| **Perf strip** (top bar) | Frame counter, last tick duration in µs, and a sparkline of the last ~70 samples. |
+| **Signals** (right, middle) | Every global reactive signal from the PropertyStore: name, value, stored kind, and the frame it last changed (`@N`). Rows flash on change. Click a row to load it into the write boxes; **Set** (or Enter) writes the value back through `lumen.set_signal` - the same external-property bus `Signals::set` uses, so ordering semantics against script writes hold. |
+| **Events** (right, bottom) | Tail of one message ring (`ClickEvent`, `KeyPressed`, `MouseWheel`, ...) via `lumen.recent_messages`. Newest first. |
+| **Perf strip** (top bar) | Frame counter, last tick duration in us, and a sparkline of the last ~70 samples. |
 
 ## Keyboard
 
@@ -39,8 +39,8 @@ The inspector is keyboard-first:
 | Key | Action |
 |---|---|
 | `/` | Focus the tree filter |
-| `↑` / `↓` | Move the tree selection |
-| `←` / `→` | Collapse / expand the selected node |
+| `Up` / `Down` | Move the tree selection |
+| `Left` / `Right` | Collapse / expand the selected node |
 | `r` | Take a screenshot |
 | `s` | Focus the signal-write box |
 | `Escape` | Leave any text field |
