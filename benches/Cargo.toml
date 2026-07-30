@@ -1,0 +1,33 @@
+[package]
+name = "lumen-benches"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "criterion bench harness for Lumen runtime hot paths."
+
+[lib]
+name = "lumen_benches"
+path = "src/lib.rs"
+
+[dev-dependencies]
+criterion.workspace = true
+lumen-text-cosmic = { path = "../lumen/text-cosmic" }
+lumen-text = { path = "../lumen/text" }
+lumen-primitives = { path = "../lumen/primitives" }
+lumen-core = { path = "../lumen/core" }
+lumen-layout-taffy = { path = "../lumen/layout-taffy" }
+bevy_ecs.workspace = true
+glam.workspace = true
+
+[[bench]]
+name = "shape_cache"
+harness = false
+
+[[bench]]
+name = "transition_sample"
+harness = false
+
+[[bench]]
+name = "idle_tick"
+harness = false

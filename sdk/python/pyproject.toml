@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lumen-ui"
+version = "0.1.0.dev0"
+description = "Python SDK for the Lumen UI framework, over its C ABI via ctypes"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MPL-2.0" }
+authors = [{ name = "Lumen contributors" }]
+keywords = ["lumen", "ui", "gui", "ctypes", "ffi"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: User Interfaces",
+]
+
+# Deliberately empty: this is a pure ctypes wrapper over a shared
+# library you build with `cargo build -p lumen-ffi`. No cffi, no
+# setuptools-rust, no compiled extension of its own -- stdlib only.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/lumen-ui/lumen"
+Repository = "https://github.com/lumen-ui/lumen"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lumen"]
+# Ship the PEP 561 marker so type checkers honour the inline annotations
+# when the wheel is installed.
+artifacts = ["lumen/py.typed"]
+
+# Optional dev tooling - install with `pip install -e sdk/python[dev]`.
+# The library itself stays dependency-free (pure stdlib ctypes).
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.5", "mypy>=1.8"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

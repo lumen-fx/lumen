@@ -1,0 +1,16 @@
+[app]
+entry = "main.lmn"
+id    = "com.example.lumen-sysmon"
+
+[window]
+title = "Lumen System Monitor"
+size  = [1280, 800]
+
+[skin]
+name = "default"
+
+[mcp]
+port = 7879
+
+[profile]
+mode = "off"

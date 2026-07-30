@@ -1,0 +1,21 @@
+// on_ready lifecycle proof. One prelude import pulls in the whole host surface.
+import "lumen.cdl";
+
+// on_start runs at load, before the first tick publishes the DOM index, so the
+// #playlist container is not queryable yet: node_get_by_id returns 0.
+fn on_start() {
+    let n = lumen::node_get_by_id("playlist");
+    let s = str(n);
+    lumen::signal_set("start_saw", s);
+}
+
+// on_ready runs on the first tick, after the DOM index is published, so the
+// query resolves the mounted container to a nonzero id. The app can build its
+// initial DOM here without the set_timeout("boot", 0) workaround.
+fn on_ready() {
+    let n = lumen::node_get_by_id("playlist");
+    let s = str(n);
+    lumen::signal_set("ready_saw", s);
+}
+
+fn main() {}

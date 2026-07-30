@@ -1,0 +1,81 @@
+/*
+ * Weather demo - design tokens declared as CSS custom properties and
+ * reusable class rules covering the styled tile / card / hero patterns.
+ *
+ * Authors override individual props via inline markup attrs when needed;
+ * the typical case is `<tile class="chip">` with no inline style at all.
+ */
+
+:root {
+  --color-bg-deep:     #0d2545;
+  --color-bg-mid:      #163459;
+  --color-panel:       #1a3a66;
+  --color-tile:        #26538e;
+  --color-tile-hover:  #3268a8;
+  --color-tile-press:  #1e4377;
+  --color-card-top:    #3577b8;
+  --color-card-bot:    #23507f;
+  --color-card-hover:  #4889cc;
+  --color-card-press:  #1d456f;
+  --color-accent:      #5fd9e0;
+  --color-on-bg:       #ffffff;
+  --color-on-bg-soft:  #dde9f4;
+  --color-on-bg-mute:  #bbd2ea;
+  --color-on-bg-dim:   #8eaecf;
+  --shadow-soft:       0 1 3 #00000022;
+  --shadow-card:       0 2 5 #00000033;
+  --radius-md:         16;
+  --radius-lg:         22;
+}
+
+.chip {
+  bg:            var(--color-tile);
+  hover-bg:      var(--color-tile-hover);
+  press-bg:      var(--color-tile-press);
+  text-color:    var(--color-on-bg);
+  shadow:        var(--shadow-soft);
+  radius:        var(--radius-lg);
+}
+
+.chip:focus { outline: 2 var(--color-accent); }
+
+.day {
+  bg:            var(--color-card-top);
+  hover-bg:      var(--color-card-hover);
+  press-bg:      var(--color-card-press);
+  text-color:    var(--color-on-bg);
+  shadow:        var(--shadow-card);
+  radius:        var(--radius-md);
+  padding:       12 0;
+  gap:           4;
+  align:         center;
+  justify:       between;
+}
+
+.day:focus { outline: 2 var(--color-accent); }
+
+.day-name { text-color: var(--color-on-bg-mute); text-align: center; font-size: 13; }
+.day-temp { text-color: var(--color-on-bg);      text-align: center; font-size: 26; }
+
+.title    { text-color: var(--color-on-bg);      font-size: 64; }
+.subtitle { text-color: var(--color-on-bg-soft); font-size: 22; }
+.metric   { text-color: var(--color-on-bg);      font-size: 96; }
+.metric-sub { text-color: var(--color-on-bg-soft); font-size: 22; }
+.metric-sub-mute { text-color: var(--color-on-bg-mute); font-size: 22; }
+
+.caption  { text-color: var(--color-on-bg-dim);  font-size: 13; text-align: end; }
+
+.footer   { bg: var(--color-bg-mid); }
+
+.dropzone {
+  bg:         var(--color-tile);
+  hover-bg:   var(--color-tile-hover);
+  text-color: var(--color-on-bg-dim);
+  shadow:     var(--shadow-soft);
+  radius:     var(--radius-md);
+  font-size:  13;
+}
+
+.forecast-strip {
+  bg: linear-gradient(180deg, var(--color-panel), var(--color-bg-mid));
+}

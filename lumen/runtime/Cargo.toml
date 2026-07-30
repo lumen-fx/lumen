@@ -1,0 +1,148 @@
+[package]
+name = "lumen-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen runtime core: winit/ECS run loop, default plugin stack, hot reload, file-based pages, and app loaders. Parser-free (injected via SourceParser)."
+
+[lib]
+name = "lumen_runtime"
+path = "src/lib.rs"
+
+[dependencies]
+lumen-core = { path = "../core" }
+# Runtime-shared IR (LayoutIR, CSS AST + Cascade-5 application, value parsers,
+# `var()` resolver, AOT artifact). The runtime consumes it directly; the
+# markup/CSS front-end that PRODUCES it stays in `lumenc` and is injected via
+# `SourceParser`.
+lumen-ir = { path = "../ir" }
+lumen-primitives = { path = "../primitives" }
+lumen-assets = { path = "../assets" }
+bevy_ecs.workspace = true
+glam.workspace = true
+thiserror.workspace = true
+
+# Default plugin stack + OS surface crates the run loop wires.
+lumen-input = { path = "../input" }
+lumen-os-clipboard = { path = "../os-clipboard" }
+lumen-os-dnd = { path = "../os-dnd" }
+lumen-os-filedialog = { path = "../os-filedialog" }
+lumen-os-tray = { path = "../os-tray" }
+lumen-os-notify = { path = "../os-notify" }
+lumen-os-hotkey = { path = "../os-hotkey" }
+# Async spawn/timer bridge (tokio rt-multi-thread). Part B tree-shaking:
+# OPTIONAL behind the `async` feature. The default runtime stack never
+# installs `AsyncTokioPlugin` itself -- it only *opportunistically reads*
+# `TokioRuntime`/`AsyncCommandQueue` in `apply_script_commands` when an
+# embedder (SDK) supplied them, so a trimmed bundle drops the crate entirely
+# and falls back to the blocking file-dialog path.
+lumen-async-tokio = { path = "../async-tokio", optional = true }
+# Audio (rodio + cpal + symphonia). Part B: OPTIONAL behind `audio`.
+lumen-audio = { path = "../audio", optional = true }
+lumen-layout-taffy = { path = "../layout-taffy" }
+
+# Script hosts. default-features off so the single `http-fetch` knob below
+# controls the scripts' HTTP `fetch()` builtin. Rhai is the always-compiled
+# default host; the alternate hosts (lua / candela) are Part B tree-shaking
+# knobs -- OPTIONAL behind `host-lua` / `host-candela`.
+lumen-script = { path = "../script", default-features = false }
+lumen-script-rhai = { path = "../script-rhai", default-features = false }
+rhai.workspace = true
+lumen-script-lua = { path = "../script-lua", default-features = false, optional = true }
+lumen-script-candela = { path = "../script-candela", default-features = false, optional = true }
+mlua = { workspace = true, optional = true }
+
+lumen-text-cosmic = { path = "../text-cosmic" }
+lumen-text = { path = "../text" }
+lumen-window-winit = { path = "../window-winit" }
+# `run --headless`: offscreen wgpu/vello renderer driven by the same Node-IR
+# walker as the windowed backend.
+lumen-render-wgpu = { path = "../render-wgpu" }
+# MCP introspection server (tokio + serde_json + http). Part B: OPTIONAL
+# behind `mcp`. Dev-only -- lumenc never infers it into a release bundle.
+lumen-mcp = { path = "../mcp", optional = true }
+# Dev-only in-window devtools overlay. Optional + gated behind the off-by-
+# default `devtools` feature.
+lumen-devtools = { path = "../devtools", optional = true }
+
+# Hot-reload file watching (inotify / FSEvents / ReadDirectoryChangesW).
+notify.workspace = true
+
+# Per-app config (lumen.toml) + app-kind detection.
+toml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# Clipboard image decode (script `image` clipboard commands).
+image.workspace = true
+
+tracing.workspace = true
+# Dev-mode profiler stack (see [features]).
+tracing-subscriber = { workspace = true, features = ["env-filter"], optional = true }
+tracing-chrome = { workspace = true, optional = true }
+tracing-tracy = { version = "0.11", optional = true, features = [
+    "manual-lifetime",
+    "delayed-init",
+] }
+
+# Headless mode graceful shutdown (SIGINT/SIGTERM). Unix-only.
+[target.'cfg(unix)'.dependencies]
+signal-hook.workspace = true
+
+# Windows: Ctrl+C / console-close -> headless exit flag.
+[target.'cfg(windows)'.dependencies]
+ctrlc.workspace = true
+
+[features]
+# The DEFAULT set is FULL: the shared dlopen'd `liblumen_ffi` cdylib and the
+# dev `lumenc run` path build with every subsystem so one shared library serves
+# every app. Per-app trimming happens ONLY on the static `--bundle` path, where
+# lumenc selects `--no-default-features --features "<resolved capabilities>"`.
+default = [
+    "http-fetch",
+    "runtime-parse",
+    "audio",
+    "mcp",
+    "async",
+    "host-lua",
+    "host-candela",
+]
+# Audio subsystem (rodio/cpal/symphonia). Part B tree-shaking knob.
+audio = ["dep:lumen-audio"]
+# MCP introspection server. Part B tree-shaking knob (dev-only capability).
+mcp = ["dep:lumen-mcp"]
+# Async spawn/timer (tokio) bridge. Part B tree-shaking knob.
+async = ["dep:lumen-async-tokio"]
+# Alternate script hosts. Rhai is always compiled; these ADD a host so a
+# lua/candela app can be bundled with exactly the one host it uses.
+host-lua = ["dep:lumen-script-lua", "dep:mlua"]
+host-candela = ["dep:lumen-script-candela"]
+# Dev-only in-window devtools overlay (F12). OFF by default.
+devtools = ["dep:lumen-devtools"]
+# Scripts' HTTP `fetch(url, tag)` builtin. On by default; a packager size knob.
+# The alternate-host forwards use the weak `?/` form so enabling `http-fetch`
+# never drags the optional lua/candela hosts back into a trimmed build.
+http-fetch = [
+    "lumen-script/http-fetch",
+    "lumen-script-rhai/http-fetch",
+    "lumen-script-lua?/http-fetch",
+    "lumen-script-candela?/http-fetch",
+]
+# Compile the from-source load path (dev source-load + hot reload). ON by
+# default. Unlike the old lumenc feature this carries NO parser dependency -
+# the parser is injected via `SourceParser` - it only gates the load-from-
+# source CODE so a runtime that only loads precompiled AOT artifacts can drop
+# it (`--no-default-features`).
+runtime-parse = []
+# `--profile chrome|stderr` support.
+profiling = [
+    "dep:tracing-subscriber",
+    "dep:tracing-chrome",
+    "bevy_ecs/trace",
+    "bevy_ecs/debug",
+]
+# `--profile tracy` on top of `profiling`.
+profiling-tracy = ["profiling", "dep:tracing-tracy"]

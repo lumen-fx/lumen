@@ -1,0 +1,161 @@
+// Streak - candela weekly habit tracker.
+//
+// 4 habits x 7 days of <toggle> cells, each two-way bound to an h{n}_d{n}
+// bool signal in main.lmn. There is no dynamic list here: the whole grid is
+// static markup, so this port is a language translation of the handlers plus
+// event wiring. on_toggle recomputes the week stats (total checks, longest run
+// of "perfect" days, completion %), which derive()d labels format. A settings
+// dialog holds the weekly goal slider + a clear-week action, and Cmd/Ctrl+,
+// opens it via a registered global hotkey.
+//
+// One import pulls in the whole Lumen host surface: scalar signals, on, derive,
+// set_class, register_hotkey, and the DOM read/write sides (unused here).
+import "lumen.cdl";
+
+fn cell_name(h, d) {
+    return "h" + str(h) + "_d" + str(d);
+}
+
+fn set_cell(h, d, v) {
+    let name = cell_name(h, d);
+    lumen::signal_set_bool(name, v);
+}
+
+fn is_on(h, d) {
+    let name = cell_name(h, d);
+    return lumen::signal_get_bool(name);
+}
+
+fn habit_checks(h) {
+    let d = 0;
+    let n = 0;
+    while d < 7 {
+        if is_on(h, d) { n += 1; }
+        d += 1;
+    }
+    return n;
+}
+
+fn day_all_done(d) {
+    let h = 0;
+    while h < 4 {
+        if is_on(h, d) { } else { return false; }
+        h += 1;
+    }
+    return true;
+}
+
+fn recompute_stats() {
+    let total = 0;
+    let h = 0;
+    while h < 4 {
+        total += habit_checks(h);
+        h += 1;
+    }
+
+    let best = 0;
+    let run = 0;
+    let d = 0;
+    while d < 7 {
+        if day_all_done(d) { run += 1; } else { run = 0; }
+        if run > best { best = run; }
+        d += 1;
+    }
+
+    let pct = 0;
+    if total > 0 { pct = (total * 100) / 28; }
+
+    let total_str = str(total);
+    let best_str = str(best);
+    let pct_str = str(pct);
+    lumen::signal_set("stat_total", total_str);
+    lumen::signal_set("stat_streak", best_str);
+    lumen::signal_set("stat_pct", pct_str);
+
+    let gf = lumen::signal_get_float("goal");
+    let goal = int(gf);
+    let goal_str = str(goal);
+    lumen::signal_set("goal_num", goal_str);
+
+    if total >= goal {
+        lumen::signal_set("goal_status", "Goal reached - nice.");
+    } else {
+        let left = goal - total;
+        let left_str = str(left);
+        let msg = left_str + " checks to your goal";
+        lumen::signal_set("goal_status", msg);
+    }
+}
+
+fn clear_habit(h) {
+    let d = 0;
+    while d < 7 {
+        set_cell(h, d, false);
+        d += 1;
+    }
+}
+
+fn seed_week() {
+    // A believable partial week: a 3-day perfect streak, then gaps.
+    set_cell(0, 0, true); set_cell(0, 1, true); set_cell(0, 2, true); set_cell(0, 4, true); set_cell(0, 5, true);
+    set_cell(1, 0, true); set_cell(1, 1, true); set_cell(1, 2, true); set_cell(1, 3, true);
+    set_cell(2, 0, true); set_cell(2, 1, true); set_cell(2, 2, true); set_cell(2, 5, true);
+    set_cell(3, 0, true); set_cell(3, 1, true); set_cell(3, 2, true); set_cell(3, 6, true);
+}
+
+// Derived display signals. The recompute body is referenced by function name;
+// its parameter arrives as the current string value of the declared dep signal.
+fn calc_total_label(n) { return n + " checks logged this week"; }
+fn calc_pct_label(n) { return n + "%"; }
+fn calc_goal_label(n) { return n + " / 28"; }
+
+fn on_start() {
+    lumen::signal_set("settings_open", "");
+    lumen::signal_set_int("goal", 20);
+    lumen::signal_set("goal_num", "20");
+
+    lumen::derive("total_label", ["stat_total"], "calc_total_label");
+    lumen::derive("pct_label", ["stat_pct"], "calc_pct_label");
+    lumen::derive("goal_label", ["goal_num"], "calc_goal_label");
+
+    seed_week();
+    recompute_stats();
+
+    lumen::on("click", "open-settings", "open_settings");
+    lumen::on("click", "settings-close", "close_settings");
+    lumen::on("click", "reset-week", "reset_week");
+
+    lumen::register_hotkey("open-settings", "CommandOrControl+,");
+}
+
+fn open_settings(id) { lumen::signal_set("settings_open", "1"); }
+fn close_settings(id) { lumen::signal_set("settings_open", ""); }
+
+fn reset_week(id) {
+    let h = 0;
+    while h < 4 {
+        clear_habit(h);
+        h += 1;
+    }
+    recompute_stats();
+}
+
+fn on_toggle(id, checked) {
+    recompute_stats();
+}
+
+fn on_slider(id, value) {
+    if id == "goal" {
+        let goal = int(value);
+        lumen::signal_set_int("goal", goal);
+        recompute_stats();
+    }
+}
+
+fn on_hotkey(name) {
+    if name == "open-settings" {
+        lumen::signal_set("settings_open", "1");
+    }
+}
+
+fn main() {}

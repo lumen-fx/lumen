@@ -1,0 +1,71 @@
+<root class="app" skin="default">
+  <row class="frame" grow="1">
+
+    <!-- Playlist sidebar -->
+    <column class="sidebar" width="232px">
+      <label class="side-brand" text="Waveform" />
+      <label class="side-label" text="Library" />
+      <column class="playlists" gap="2">
+        <button id="pl|tones"  class="pl pl-active" text="Test Tones" />
+        <button id="pl|pure"   class="pl" text="Pure Tones" />
+        <button id="pl|moving" class="pl" text="Moving Tones" />
+      </column>
+      <spacer />
+      <column class="side-foot" gap="2">
+        <label class="side-stat" bind-text="lib_count" />
+        <label class="side-hint" text="Click a track to play" />
+      </column>
+    </column>
+
+    <!-- Library table -->
+    <column class="main" grow="1">
+      <row class="lib-head" align="center">
+        <label class="lh-title" grow="1" bind-text="now_playlist" />
+        <label class="lh-meta" bind-text="lib_count" />
+      </row>
+
+      <row class="col-head" align="center" gap="12">
+        <label class="ch num" text="#" />
+        <label class="ch grow" grow="1" text="Title" />
+        <label class="ch artist" text="Artist" />
+        <label class="ch album" text="Album" />
+        <label class="ch dur" text="Time" />
+      </row>
+
+      <scroll class="lib-body" grow="1">
+        <!-- Empty container the candela script fills imperatively via the
+             DOM API (node_set_inner_markup); rows carry id "tr|<track>". -->
+        <column id="playlist" gap="2" />
+      </scroll>
+    </column>
+  </row>
+
+  <!-- Now-playing bar -->
+  <row class="nowbar" align="center" gap="16">
+    <tile class="art" />
+    <column class="np-meta" width="200px" gap="2">
+      <label class="np-title" wrap="none" max-lines="1" bind-text="now_title" />
+      <label class="np-artist" wrap="none" max-lines="1" bind-text="now_artist" />
+    </column>
+
+    <column class="transport" grow="1" gap="6" align="center">
+      <row class="tbtns" gap="10" align="center" justify="center">
+        <button id="prev" class="tbtn" text="Prev" />
+        <button id="playpause" class="tbtn play" bind-text="play_glyph" />
+        <button id="next" class="tbtn" text="Next" />
+      </row>
+      <row class="seek" align="center" gap="10" width="100%">
+        <label class="time" bind-text="elapsed" />
+        <slider id="seek" class="seek-bar" grow="1" min="0" max="100" value="0" bind-value="position" />
+        <label class="time" bind-text="total" />
+      </row>
+    </column>
+
+    <row class="vol" align="center" gap="8" width="170px">
+      <label class="vol-icon" text="Vol" />
+      <slider id="volume" class="vol-bar" grow="1" min="0" max="100" value="70" bind-value="volume" />
+    </row>
+  </row>
+
+  <script src="main.cdl" />
+</root>

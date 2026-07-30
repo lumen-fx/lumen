@@ -1,0 +1,39 @@
+[package]
+name = "lumen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen UI framework Rust SDK: the single dependency for building and embedding Lumen apps in Rust."
+
+[dependencies]
+# The runtime core: `RunOptions` / `run_app` / the ~30-system default plugin
+# stack + hot reload. Carved out of `lumenc`; the SDK boots against it directly
+# so it no longer reaches the runtime *through* the compiler.
+lumen-runtime = { path = "../../lumen/runtime" }
+# The compiler front-end, kept solely to inject its markup/CSS parser
+# (`default_parser()`) into `RunOptions` for dev source-load + hot reload -
+# `lumen-runtime` links no parser itself.
+lumenc = { path = "../../lumenc" }
+# App / Plugin / components / PropertyStore / typed Property handles.
+lumen-core = { path = "../../lumen/core" }
+# The host-neutral dynamic DOM surface (query / traversal / mutation /
+# introspection / events) the `dom` module wraps into safe Rust handles. This
+# is the same surface the C-ABI binds; the Rust SDK reaches it directly rather
+# than round-tripping through C.
+lumen-script = { path = "../../lumen/script" }
+# Widget trait + Attributes bag, and the #[derive(Widget)] macro.
+lumen-widget = { path = "../../lumen/widget" }
+lumen-widget-macros = { path = "../../lumen/widget-macros" }
+# ECS surface for the native handler-dispatch systems (Resource derive,
+# MessageReader, Query, World).
+bevy_ecs.workspace = true
+# Only for the `AppBuilder::rhai_extension` passthrough (parity with the
+# C ABI's `lumen_app_expose`).
+rhai.workspace = true
+
+[dev-dependencies]
+# Tests construct `ClickEvent { position: Vec2, .. }` directly.
+glam.workspace = true

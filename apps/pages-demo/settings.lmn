@@ -1,0 +1,8 @@
+<root>
+  <use template="layout">
+    <column gap="8">
+      <label class="title" font-size="24" text="Settings"/>
+      <label text="This is the settings page. The nav bar above comes from the shared layout template."/>
+    </column>
+  </use>
+</root>

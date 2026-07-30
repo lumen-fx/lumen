@@ -1,0 +1,40 @@
+/* Fixture markup for sdk/python/examples/counter.py. Kept intentionally
+ * small -- this app exists to exercise the Python SDK, not to show off
+ * styling. */
+
+.shell {
+    width: 100%;
+    height: 100%;
+}
+
+.h1 {
+    text-color: #f2f2f7;
+}
+
+.count {
+    text-color: #7aa2f7;
+    padding: 12 0 12 0;
+}
+
+.hint {
+    text-color: #8c8c99;
+}
+
+.btn {
+    width: 96px;
+    height: 44px;
+    radius: 10;
+    margin: 0 8 0 0;
+    text-color: #0d0d14;
+    bg: #7aa2f7;
+    hover-bg: #a6c1ff;
+}
+
+.btn-danger {
+    width: 96px;
+    height: 44px;
+    radius: 10;
+    text-color: #0d0d14;
+    bg: #f7768e;
+    hover-bg: #ff9fb1;
+}

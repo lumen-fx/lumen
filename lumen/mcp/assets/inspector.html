@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Lumen inspector</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c0d10;
+      --bg-panel: #101218;
+      --bg-hover: #1a1d24;
+      --bg-selected: #2a3140;
+      --border: #21262d;
+      --fg: #e6e8eb;
+      --fg-dim: #7d8895;
+      --fg-faint: #4d5661;
+      --accent: #6ea7ff;
+      --accent-2: #5fd9e0;
+      --warn: #e0af5f;
+      --err: #ff7070;
+      --changed: #3d5a2e;
+      --overlay: #ff00c8;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--mono);
+      background: var(--bg);
+      color: var(--fg);
+      font-size: 12px;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .layout {
+      display: grid;
+      grid-template-rows: 34px 1fr 22px;
+      grid-template-columns: minmax(280px, 24%) 1fr minmax(320px, 30%);
+      grid-template-areas:
+        "topbar topbar topbar"
+        "tree   shot   side"
+        "status status status";
+      height: 100vh;
+    }
+
+    /* -- top bar ------------------------------------------- */
+    .topbar {
+      grid-area: topbar;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-panel);
+      white-space: nowrap;
+    }
+    .topbar .title { color: var(--fg-dim); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; font-size: 11px; }
+    .topbar .metric { color: var(--fg-dim); font-size: 11px; }
+    .topbar .metric b { color: var(--fg); font-weight: 600; }
+    #perf-spark { background: var(--bg); border: 1px solid var(--border); border-radius: 3px; }
+    .topbar .keys { margin-left: auto; color: var(--fg-faint); font-size: 10px; }
+    .topbar .keys kbd {
+      border: 1px solid var(--border); border-radius: 3px; padding: 0 4px;
+      color: var(--fg-dim); font-family: inherit; font-size: 10px;
+    }
+
+    /* -- panels -------------------------------------------- */
+    .pane { overflow: auto; background: var(--bg); }
+    .pane h2 {
+      font-size: 10px; margin: 0; padding: 6px 10px 4px;
+      color: var(--fg-dim); font-weight: 600; letter-spacing: 0.08em;
+      text-transform: uppercase;
+      position: sticky; top: 0; background: inherit; z-index: 1;
+    }
+
+    /* tree */
+    .tree-pane {
+      grid-area: tree;
+      border-right: 1px solid var(--border);
+      background: var(--bg-panel);
+      display: flex; flex-direction: column;
+      min-height: 0;
+    }
+    .tree-filter {
+      margin: 6px 8px; padding: 4px 8px;
+      background: var(--bg); color: var(--fg);
+      border: 1px solid var(--border); border-radius: 4px;
+      font-family: inherit; font-size: 12px; outline: none;
+    }
+    .tree-filter:focus { border-color: var(--accent); }
+    #tree { flex: 1; overflow: auto; padding: 0 4px 8px; }
+    .node {
+      display: flex; align-items: center; gap: 4px;
+      padding: 1px 6px; border-radius: 3px; cursor: pointer;
+      white-space: nowrap; line-height: 18px;
+    }
+    .node:hover { background: var(--bg-hover); }
+    .node.selected { background: var(--bg-selected); }
+    .node.changed { animation: flash 1.2s ease-out; }
+    @keyframes flash { 0% { background: var(--changed); } 100% { background: transparent; } }
+    .node .twist { width: 12px; color: var(--fg-faint); text-align: center; flex: none; user-select: none; }
+    .node .tag { color: #c9a5ff; }
+    .node .lid { color: var(--accent); }
+    .node .cls { color: var(--fg-dim); }
+    .node .lbl { color: var(--fg-faint); overflow: hidden; text-overflow: ellipsis; }
+    .node .flags { margin-left: auto; color: var(--accent-2); font-size: 10px; }
+
+    /* screenshot */
+    .shot-pane { grid-area: shot; display: flex; flex-direction: column; min-height: 0; }
+    .shot-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; }
+    .shot-toolbar button, .side button, .sig-write button {
+      background: var(--bg-panel); color: var(--fg);
+      border: 1px solid var(--border); border-radius: 4px;
+      font-family: inherit; font-size: 11px; padding: 3px 10px; cursor: pointer;
+    }
+    .shot-toolbar button:hover, .side button:hover, .sig-write button:hover { border-color: var(--accent); }
+    .shot-toolbar label { color: var(--fg-dim); font-size: 11px; display: flex; align-items: center; gap: 4px; }
+    #shot-wrap {
+      position: relative; margin: 0 10px 10px; overflow: auto; flex: 1;
+      border: 1px solid var(--border); border-radius: 4px; background: var(--bg-panel);
+    }
+    #shot-img { display: block; max-width: 100%; height: auto; }
+    #shot-overlay {
+      position: absolute; border: 2px solid var(--overlay);
+      box-shadow: 0 0 0 1px #ffffffaa inset; pointer-events: none;
+      display: none;
+    }
+    #shot-empty { color: var(--fg-faint); padding: 18px; }
+
+    /* side column: detail / signals / events */
+    .side {
+      grid-area: side; border-left: 1px solid var(--border);
+      display: grid; grid-template-rows: minmax(120px, 1.2fr) minmax(120px, 1fr) minmax(90px, 0.8fr);
+      min-height: 0;
+    }
+    .side section { overflow: auto; border-bottom: 1px solid var(--border); background: var(--bg-panel); min-height: 0; }
+    .side section:last-child { border-bottom: none; }
+    .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px; padding: 1px 10px; }
+    .kv .k { color: var(--fg-dim); }
+    .kv .v { color: var(--fg); white-space: pre-wrap; word-break: break-word; }
+    .empty { color: var(--fg-faint); padding: 4px 10px; }
+
+    table.sig { width: 100%; border-collapse: collapse; }
+    table.sig td {
+      padding: 1px 10px; border-bottom: 1px solid #171b22;
+      max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    table.sig tr { cursor: pointer; }
+    table.sig tr:hover td { background: var(--bg-hover); }
+    table.sig tr.changed td { animation: flash 1.2s ease-out; }
+    .sig-name { color: var(--accent-2); }
+    .sig-kind { color: var(--fg-faint); }
+    .sig-tick { color: var(--fg-faint); text-align: right; }
+    .sig-write { display: flex; gap: 6px; padding: 6px 10px; position: sticky; bottom: 0; background: inherit; }
+    .sig-write input {
+      background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+      border-radius: 4px; font-family: inherit; font-size: 11px; padding: 3px 6px;
+      min-width: 0; outline: none;
+    }
+    .sig-write input:focus { border-color: var(--accent); }
+    .sig-write .sw-name { flex: 1; }
+    .sig-write .sw-value { flex: 1.4; }
+
+    .ev-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px 2px; position: sticky; top: 0; background: inherit; z-index: 1; }
+    .ev-head h2 { padding: 0; position: static; }
+    .ev-head select {
+      background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+      border-radius: 4px; font-family: inherit; font-size: 11px; padding: 2px 4px;
+    }
+    .ev-row { padding: 1px 10px; color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ev-row b { color: var(--fg); font-weight: 600; }
+
+    /* status */
+    .statusbar {
+      grid-area: status; display: flex; align-items: center; gap: 12px;
+      padding: 0 12px; border-top: 1px solid var(--border);
+      background: var(--bg-panel); color: var(--fg-dim); font-size: 11px;
+    }
+    .statusbar.err { color: var(--err); }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <div class="topbar">
+      <span class="title">Lumen inspector</span>
+      <span class="metric">frame <b id="m-frame">-</b></span>
+      <span class="metric">tick <b id="m-tick">-</b> us</span>
+      <canvas id="perf-spark" width="140" height="22"></canvas>
+      <span class="keys">
+        <kbd>/</kbd> filter &nbsp; <kbd>&#8593;</kbd><kbd>&#8595;</kbd> select &nbsp;
+        <kbd><-</kbd><kbd>-></kbd> fold &nbsp; <kbd>r</kbd> shot &nbsp; <kbd>s</kbd> signal
+      </span>
+    </div>
+
+    <div class="pane tree-pane">
+      <h2>Elements</h2>
+      <input id="tree-filter" class="tree-filter" type="text"
+             placeholder="filter (tag, #id, .class, text)" spellcheck="false" />
+      <div id="tree" tabindex="0"></div>
+    </div>
+
+    <div class="pane shot-pane">
+      <h2>Screenshot</h2>
+      <div class="shot-toolbar">
+        <button id="shot-refresh">Refresh (r)</button>
+        <label><input id="shot-auto" type="checkbox" /> auto</label>
+        <span id="shot-meta" class="metric"></span>
+      </div>
+      <div id="shot-wrap">
+        <img id="shot-img" alt="" />
+        <div id="shot-overlay"></div>
+        <div id="shot-empty">No capture yet - press Refresh.</div>
+      </div>
+    </div>
+
+    <div class="side">
+      <section>
+        <h2 id="detail-title">Inspect</h2>
+        <div id="detail"><div class="empty">Select a node in the tree.</div></div>
+      </section>
+      <section>
+        <h2>Signals</h2>
+        <table class="sig"><tbody id="signals"></tbody></table>
+        <div class="sig-write">
+          <input id="sw-name" class="sw-name" type="text" placeholder="name" spellcheck="false" />
+          <input id="sw-value" class="sw-value" type="text" placeholder="value" spellcheck="false" />
+          <button id="sw-set">Set</button>
+        </div>
+      </section>
+      <section>
+        <div class="ev-head">
+          <h2>Events</h2>
+          <select id="ev-type">
+            <option>ClickEvent</option>
+            <option>PointerPressed</option>
+            <option>PointerReleased</option>
+            <option>PointerMoved</option>
+            <option>KeyPressed</option>
+            <option>KeyReleased</option>
+            <option>MouseWheel</option>
+            <option>FocusedKey</option>
+          </select>
+        </div>
+        <div id="events"><div class="empty">No events yet.</div></div>
+      </section>
+    </div>
+
+    <div class="statusbar" id="status">connecting...</div>
+  </div>
+  <script src="client.js"></script>
+</body>
+</html>

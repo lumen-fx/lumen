@@ -1,0 +1,16 @@
+<root>
+  <use template="layout">
+    <column gap="8">
+      <label class="title" font-size="24" text="Home"/>
+      <label id="home-body" text="Welcome to the file-based pages demo."/>
+      <!-- Programmatic navigation: page("settings") reaches the same
+           resolver the `<a href>` anchors do, via the shared command bus. -->
+      <button id="go-settings" text="Open Settings (script page())"
+              bg="#333a44" text-color="#ffffff" padding="8 14 8 14" radius="6"/>
+    </column>
+  </use>
+  <script>
+    fn goto_settings(id) { page("settings"); }
+    fn on_start() { on("click", "go-settings", "goto_settings"); }
+  </script>
+</root>

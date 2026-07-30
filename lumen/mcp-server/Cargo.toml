@@ -1,0 +1,19 @@
+[package]
+name = "lumen-mcp-server"
+description = "Standalone MCP server bridging Claude Code (stdio) to a running Lumen app's JSON-RPC TCP introspection port."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "lumen-mcp-server"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1.52", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "io-std"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

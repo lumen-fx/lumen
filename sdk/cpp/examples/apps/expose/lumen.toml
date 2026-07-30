@@ -1,0 +1,7 @@
+[app]
+entry = "main.lmn"
+id    = "dev.lumen.examples.cpp-expose"
+
+[window]
+title = "Lumen - C++ Host Builtin"
+size  = [460, 200]

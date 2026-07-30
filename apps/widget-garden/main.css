@@ -1,0 +1,281 @@
+:root {
+  --bg: #0c0d10;
+  --surface: #161922;
+  --surface-2: #1f2330;
+  --surface-3: #2a2f3e;
+  --border: #2a2f3e;
+  --text: #e6e9ef;
+  --text-dim: #9ba4b4;
+  --accent: #7aa2f7;
+  --accent-2: #bb9af7;
+  --success: #9ece6a;
+  --warn: #e0af68;
+  --danger: #f7768e;
+  --radius-sm: 6;
+  --radius: 10;
+  --radius-lg: 18;
+  /* Max dropdown-popup height before it scrolls internally (8 x 32 px
+     option rows + panel padding). */
+  --dropdown-max-height: 264;
+}
+
+.theme-light {
+  --bg: #f8f9fb;
+  --surface: #ffffff;
+  --surface-2: #eef0f5;
+  --surface-3: #dee2ec;
+  --border: #d0d4de;
+  --text: #1a1d23;
+  --text-dim: #525a6b;
+}
+
+.app {
+  bg: var(--bg);
+  text-color: var(--text);
+}
+
+.shell {
+  padding: 24;
+  gap: 18;
+}
+
+.h1 {
+  font-size: 28;
+  text-color: var(--text);
+}
+
+.h2 {
+  font-size: 18;
+  text-color: var(--accent);
+}
+
+.lead {
+  text-color: var(--text-dim);
+  font-size: 14;
+}
+
+.card {
+  bg: var(--surface);
+  radius: var(--radius);
+  padding: 18;
+  gap: 12;
+  shadow: 0 8 20 #0000007a;
+}
+
+.row-bar {
+  gap: 12;
+  align: center;
+}
+
+.pill {
+  bg: var(--surface-3);
+  radius: 999;
+  padding: 6 12;
+  text-color: var(--text-dim);
+  font-size: 12;
+}
+
+.btn-primary {
+  bg: var(--accent);
+  hover-bg: #99b4f7;
+  press-bg: #5e87e0;
+  text-color: #0b1020;
+  padding: 10 18;
+  radius: var(--radius-sm);
+  focus-outline: 2 var(--accent-2);
+}
+
+.btn-ghost {
+  bg: var(--surface-2);
+  hover-bg: var(--surface-3);
+  text-color: var(--text);
+  padding: 10 18;
+  radius: var(--radius-sm);
+}
+
+.btn-danger {
+  bg: var(--danger);
+  hover-bg: #ff8da3;
+  text-color: #2a0510;
+  padding: 10 18;
+  radius: var(--radius-sm);
+}
+
+.tile-demo {
+  bg: linear-gradient(135deg, var(--accent), var(--accent-2));
+  text-color: #0b1020;
+  padding: 18;
+  radius: var(--radius);
+  shadow: 0 4 14 #00000077;
+}
+
+.tab-strip {
+  gap: 6;
+  padding: 6;
+  bg: var(--surface-2);
+  radius: var(--radius-sm);
+}
+
+.tab-btn {
+  bg: #00000000;
+  hover-bg: var(--surface-3);
+  text-color: var(--text);
+  padding: 8 14;
+  radius: var(--radius-sm);
+}
+
+.tab-btn:disabled {
+  text-color: var(--text-dim);
+}
+
+.tooltip {
+  bg: #000000ee;
+  text-color: #ffffff;
+  radius: var(--radius-sm);
+  shadow: 0 6 18 #00000099;
+}
+
+.swatch {
+  width: 32px;
+  height: 32px;
+  radius: var(--radius-sm);
+}
+
+.scroll-demo {
+  bg: var(--surface-2);
+  radius: var(--radius);
+  padding: 12;
+}
+
+.list-row {
+  bg: var(--surface);
+  hover-bg: var(--surface-3);
+  padding: 10 14;
+  radius: var(--radius-sm);
+  text-color: var(--text);
+  align: center;
+  gap: 10;
+}
+
+/* Lists-tab row cells (built element-wise from main.cdl). */
+.li-idx { width: 32px; }
+.li-label { grow: 1; }
+
+.status {
+  text-color: var(--text-dim);
+  font-size: 12;
+}
+
+.kbd {
+  bg: var(--surface-3);
+  text-color: var(--text);
+  padding: 2 8;
+  radius: 4;
+  font-size: 12;
+}
+
+/* R4.1 dropdown styling - header is button-like, panel sits flush
+   beneath via the parser-supplied absolute inset (top: 40px). */
+.dropdown {
+  width: 240px;
+}
+
+.dropdown-button {
+  bg: var(--surface-2);
+  hover-bg: var(--surface-3);
+  text-color: var(--text);
+  radius: var(--radius-sm);
+}
+
+.dropdown-panel {
+  bg: var(--surface);
+  radius: var(--radius-sm);
+  shadow: 0 6 18 #00000088;
+  padding: 4 0;
+  /* Max-visible rows: taller option lists scroll internally; keyboard
+     highlight movement keeps the current row in view. */
+  max-height: var(--dropdown-max-height);
+  overflow-y: scroll;
+}
+
+/* `:hover` styles both the pointer highlight and the keyboard
+   highlight (focus routes through the same hover-tint path). */
+.dropdown-option {
+  bg: var(--surface);
+  hover-bg: var(--surface-3);
+  text-color: var(--text);
+  text-align: start;
+}
+
+.dropdown-option:disabled {
+  text-color: var(--text-dim);
+}
+
+/* R4.2 menu panel. Free-floating overlay; size by intrinsic content
+   via the option buttons. */
+.menu-panel {
+  bg: var(--surface);
+  radius: var(--radius-sm);
+  shadow: 0 6 18 #00000088;
+  padding: 4 0;
+  width: 200px;
+  inset: 48 -1 -1 24;
+}
+
+.menu-item {
+  bg: var(--surface);
+  hover-bg: var(--surface-3);
+  text-color: var(--text);
+  text-align: start;
+}
+
+.menu-item:disabled {
+  text-color: var(--text-dim);
+}
+
+.menu-separator {
+  bg: var(--border);
+  height: 1;
+  margin: 4 0;
+}
+
+/* W5: single-line elision demo (labels + button captions). */
+.ellipsis-demo {
+  text-overflow: ellipsis;
+}
+
+/* W5: form controls - checkbox / radio / progress, garden theme. */
+.checkbox-box {
+  width: 18;
+  height: 18;
+  radius: var(--radius-sm);
+  bg: var(--surface-2);
+  border: 1px solid var(--border);
+  text-color: #ffffff;
+  font-size: 14;
+  text-align: center;
+}
+.checkbox-label { text-color: var(--text); }
+checkbox:checked { bg: var(--accent); }
+checkbox:focus { outline: 2 var(--accent); }
+
+.radio-dot {
+  width: 18;
+  height: 18;
+  radius: 9;
+  bg: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.radio-label { text-color: var(--text); }
+radio:selected { bg: var(--accent); }
+radio:focus { outline: 2 var(--accent); }
+
+progress {
+  bg: var(--surface-3);
+  radius: 3;
+  height: 6;
+}
+.progress-fill { bg: var(--accent); radius: 3; }
+
+/* Default dialog button (Qt default-button ring). */
+button.default { border: 2px solid var(--accent-2); }

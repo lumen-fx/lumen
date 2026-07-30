@@ -1,0 +1,155 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Lumen Markup",
+  "scopeName": "text.lumen",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#script-self-closing" },
+    { "include": "#script-block" },
+    { "include": "#style-block" },
+    { "include": "#control-tag" },
+    { "include": "#tag" },
+    { "include": "#interpolation" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.block.lumen",
+      "begin": "<!--",
+      "end": "-->"
+    },
+    "interpolation": {
+      "comment": "Reactive text binding: {$name}, {$self.field}, {$parent.field}, or legacy {name}.",
+      "name": "meta.embedded.interpolation.lumen",
+      "begin": "\\{",
+      "end": "\\}",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.embedded.begin.lumen" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.section.embedded.end.lumen" }
+      },
+      "patterns": [
+        {
+          "match": "\\$?[a-zA-Z_][a-zA-Z0-9_.-]*",
+          "name": "variable.other.interpolation.lumen"
+        }
+      ]
+    },
+    "script-self-closing": {
+      "comment": "Self-closing <script src=\"...\" /> reference. Must come BEFORE script-block so the block pattern doesn't swallow the rest of the file looking for </script>.",
+      "begin": "(<)(script)\\b",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.lumen" },
+        "2": { "name": "entity.name.tag.lumen" }
+      },
+      "end": "(/>)",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.lumen" }
+      },
+      "patterns": [
+        { "include": "#attribute" }
+      ]
+    },
+    "script-block": {
+      "comment": "Inline <script>...</script> body highlighted as Rhai. The begin pattern excludes self-closing <script .../> via the negative lookbehind on `/`.",
+      "begin": "(<script\\b[^>]*(?<!/)>)",
+      "beginCaptures": {
+        "1": { "name": "meta.tag.script.lumen" }
+      },
+      "end": "(</script>)",
+      "endCaptures": {
+        "1": { "name": "meta.tag.script.lumen" }
+      },
+      "contentName": "source.rhai",
+      "patterns": [
+        { "include": "source.rhai" }
+      ]
+    },
+    "style-block": {
+      "comment": "Inline <style>...</style> body highlighted as Lumen CSS.",
+      "begin": "(<style\\b[^>]*(?<!/)>)",
+      "beginCaptures": {
+        "1": { "name": "meta.tag.style.lumen" }
+      },
+      "end": "(</style>)",
+      "endCaptures": {
+        "1": { "name": "meta.tag.style.lumen" }
+      },
+      "contentName": "source.css.lumen",
+      "patterns": [
+        { "include": "source.css.lumen" }
+      ]
+    },
+    "control-tag": {
+      "comment": "Control-flow elements <for ...>/<if ...>/<template ...> - highlighted as keywords, with their special attributes (each/key/signal/when/virtualized/row-height) marked.",
+      "begin": "(</?)(for|if|template)\\b",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.lumen" },
+        "2": { "name": "keyword.control.flow.lumen entity.name.tag.control.lumen" }
+      },
+      "end": "(/?>)",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.lumen" }
+      },
+      "patterns": [
+        {
+          "match": "\\b(each|key|signal|when|virtualized|row-height|name)\\b(?=\\s*=)",
+          "name": "keyword.control.attribute.lumen"
+        },
+        { "include": "#attribute" }
+      ]
+    },
+    "tag": {
+      "begin": "(</?)([a-zA-Z][a-zA-Z0-9-]*)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.lumen" },
+        "2": { "name": "entity.name.tag.lumen" }
+      },
+      "end": "(/?>)",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.lumen" }
+      },
+      "patterns": [
+        { "include": "#attribute" }
+      ]
+    },
+    "attribute": {
+      "patterns": [
+        {
+          "comment": "Reactive binding attributes: bind-text, bind-checked, bind-value, on-click, ...",
+          "match": "\\b(bind-[a-z-]+|on-[a-z-]+)\\b(?=\\s*=)",
+          "name": "entity.other.attribute-name.binding.lumen"
+        },
+        {
+          "match": "([a-zA-Z][a-zA-Z0-9-]*)\\s*=",
+          "captures": {
+            "1": { "name": "entity.other.attribute-name.lumen" }
+          }
+        },
+        {
+          "name": "string.quoted.double.lumen",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "match": "#[0-9a-fA-F]{6,8}\\b",
+              "name": "constant.other.color.lumen"
+            },
+            {
+              "match": "\\$[a-zA-Z_][a-zA-Z0-9_-]*",
+              "name": "variable.other.lumen"
+            },
+            {
+              "match": "\\bvar\\(--[a-zA-Z0-9_-]+\\)",
+              "name": "support.function.var.lumen"
+            },
+            {
+              "match": "\\b(linear-gradient|radial-gradient)\\b",
+              "name": "support.function.lumen"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
