@@ -79,7 +79,7 @@ Generate this exact app with `lumenc new counter <name>` (see below).
 - Rust 1.85+ (edition 2024), via [rustup](https://rustup.rs).
 - A working GPU/Vulkan (or Metal/DirectX) driver stack. Linux additionally
   needs GTK 3 for native file dialogs. See
-  [the install guide](docs/src/getting-started/install.md) for the full
+  [the install guide](docs/docs/getting-started/install.md) for the full
   per-platform dependency list.
 
 ### Build from source
@@ -100,7 +100,7 @@ Scaffold and run an app:
 ```
 
 `lumenc run` watches `my-app/` and hot-reloads markup, CSS, and script on
-save. See [Getting started](docs/src/getting-started) in the docs for a full
+save. See [Getting started](docs/docs/getting-started) in the docs for a full
 walkthrough.
 
 ## Status
@@ -112,11 +112,13 @@ there is no compatibility guarantee between commits.
 
 ## Documentation
 
-The full documentation is an mdBook under [`docs/`](docs). Build it locally:
+The full documentation lives under [`docs/`](docs) and is published at
+[docs.lumenfx.dev](https://docs.lumenfx.dev). Build it locally with
+[uv](https://docs.astral.sh/uv/):
 
 ```sh
 cd docs
-mdbook serve --open
+uv run zensical serve
 ```
 
 ## Contributing

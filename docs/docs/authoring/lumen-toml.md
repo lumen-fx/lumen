@@ -49,7 +49,7 @@ async      = false
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `entry` | string | `"main.lmn"` | Markup entry filename relative to the app dir. |
-| `id` | string | app dir name | Stable identifier — Reverse-DNS recommended (`"com.example.myapp"`). Used as the per-app state directory (window state, future plugin caches). |
+| `id` | string | app dir name | Stable identifier - Reverse-DNS recommended (`"com.example.myapp"`). Used as the per-app state directory (window state, future plugin caches). |
 
 ## `[window]`
 
@@ -71,11 +71,11 @@ State path resolution:
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `name` | string | none | Opt into an embedded user-agent stylesheet. Equivalent to `<root skin="…">` but lives in config so apps can avoid the markup attr (an explicit markup `skin=` wins when both are set). |
+| `name` | string | none | Opt into an embedded user-agent stylesheet. Equivalent to `<root skin="...">` but lives in config so apps can avoid the markup attr (an explicit markup `skin=` wins when both are set). |
 
 Shipped skins: `"default"`, `"macos"`, `"windows"`, `"linux"`, and
 `"auto"` (resolves from the running OS at startup; non-mac/non-windows
-resolves to `linux`). Forcing a concrete name works on any OS — that's
+resolves to `linux`). Forcing a concrete name works on any OS - that's
 the cross-platform preview path. Custom skins land once the public
 skin registration API is settled.
 
@@ -86,7 +86,7 @@ skin registration API is settled.
 | `port` | u16 | env `LUMEN_MCP_PORT` or off | TCP port for the introspection server. Set `0` to disable. |
 
 The MCP server exposes entity-tree snapshots, signal state, and the
-input message ring to external tools — used by the planned visual
+input message ring to external tools - used by the planned visual
 inspector.
 
 ## `[profile]`
@@ -98,7 +98,7 @@ inspector.
 | Mode | Output |
 |---|---|
 | `off` | No tracing. |
-| `chrome` | `lumen-trace.json` next to the binary — open in `chrome://tracing`. |
+| `chrome` | `lumen-trace.json` next to the binary - open in `chrome://tracing`. |
 | `tracy` | Tracy profiler protocol on localhost:8086. |
 | `stderr` | Span timings to stderr. |
 
@@ -106,8 +106,8 @@ inspector.
 
 All non-`off` modes require a lumenc built with the `profiling` cargo
 feature (`cargo build -p lumenc --features profiling`); `tracy` needs
-`profiling-tracy`. Default builds carry no span instrumentation — the
-per-system spans come from `bevy_ecs/trace`, which those features enable —
+`profiling-tracy`. Default builds carry no span instrumentation - the
+per-system spans come from `bevy_ecs/trace`, which those features enable -
 and exit with a rebuild hint when a profile mode is requested.
 
 ## `[perf]`
@@ -117,7 +117,7 @@ Per-cache memory caps. Each cap evicts in LRU order.
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `images_mb` | u32 | 64 | Decoded image cache (MB). Raise for image-heavy galleries. |
-| `shape_entries` | u32 | 512 | cosmic-text shape LRU (entries — not bytes). Raise when scrolling long lists with unique per-row text. |
+| `shape_entries` | u32 | 512 | cosmic-text shape LRU (entries - not bytes). Raise when scrolling long lists with unique per-row text. |
 | `scene_fragments` | u32 | 256 | vello sub-scene cache (entries). Raise for visually-rich UIs with many distinct rects / shadows / outlines. |
 
 Tuning notes:
@@ -125,7 +125,7 @@ Tuning notes:
 - `images_mb` caps the **decoded** image bytes-on-CPU. GPU texture
   upload is a separate budget governed by wgpu.
 - `shape_entries` is the most impactful for scroll-heavy apps; doubling
-  it from 512 → 1024 typically takes a list with 1k unique strings
+  it from 512 -> 1024 typically takes a list with 1k unique strings
   from 60% hit-rate to ~95%.
 - `scene_fragments` benefits from the empirical hit-rate logged by
   the criterion bench suite (`cargo bench -p lumen-benches`).
@@ -136,8 +136,8 @@ Tuning notes:
 |---|---|---|---|
 | `paths` | `[string]` | `[]` | Extra directories scanned for relative `src=`. Relative paths resolve against the app dir; absolute paths are used verbatim. |
 
-Resolution order: app dir → each path in `paths`, first hit wins. Apply
-to `<image src>`, `set_src(id, path)`, and `tray_icon(id, path, …)`.
+Resolution order: app dir -> each path in `paths`, first hit wins. Apply
+to `<image src>`, `set_src(id, path)`, and `tray_icon(id, path, ...)`.
 
 ```toml
 [asset_roots]
@@ -148,8 +148,8 @@ paths = ["icons", "../shared/icons", "/var/lib/myapp/themes"]
 
 Per-app **compile-time** subsystem trim toggles for the static
 `lumenc bundle --static` build (runtime tree-shaking, Part B). Unlike
-`[runtime]` — which gates *initialization* inside the always-full shared
-runtime — `[capabilities]` selects the cargo *feature set* the per-app static
+`[runtime]` - which gates *initialization* inside the always-full shared
+runtime - `[capabilities]` selects the cargo *feature set* the per-app static
 seam (`lumen-ffi`) is compiled with, so an unused subsystem's crate is dropped
 from the binary entirely.
 
@@ -167,11 +167,11 @@ subsystem, so a plain `lumenc run` ignores this section.
 Every field is optional. `None` lets `lumenc` **infer** the capability from a
 bounded source scan; an explicit value always wins. Inference is
 **conservative**: a subsystem is inferred OFF only on a reliable *unused*
-signal — anything ambiguous forces it ON.
+signal - anything ambiguous forces it ON.
 
 The single compiled script host is selected by `[script] engine` (or inferred
-from the app's script file extensions: a `.lua` file → the Lua host, a `.cdl`
-file → the candela host), not here. Rhai is the always-compiled default host,
+from the app's script file extensions: a `.lua` file -> the Lua host, a `.cdl`
+file -> the candela host), not here. Rhai is the always-compiled default host,
 so a Rhai app adds no host feature.
 
 ```toml
@@ -193,7 +193,7 @@ the most common:
 | `--profile <mode>` | `[profile] mode` |
 | `--mcp-port <port>` | `[mcp] port` |
 
-## Example — a weather app
+## Example - a weather app
 
 ```toml
 [app]
@@ -225,7 +225,7 @@ The `set_src("hero-icon", "icons/...")` Rhai call works because
 
 ## Reading config from script
 
-The current Rhai surface has no `cfg(...)` accessor — config is a
+The current Rhai surface has no `cfg(...)` accessor - config is a
 runtime concern, not an authoring concern. If your script needs a
 runtime knob, drive it through a signal and seed the signal in
 `on_start()`. For environment-specific config that genuinely needs

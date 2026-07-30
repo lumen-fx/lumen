@@ -21,3 +21,8 @@ apps/sysmon/build/
 __pycache__/
 *.pyc
 .claude/
+
+# Docs site build artifacts (Zensical)
+/docs/site/
+/docs/.venv/
+/docs/.cache/
