@@ -1,0 +1,11 @@
+/* Shared styling for every tile in the scroll list. */
+
+.tile {
+    width: 100%;
+    height: 80px;
+    margin: 8 8 4 4;
+    padding: 16 0 30 0;
+    radius: 16;
+    text-color: #0d0d14;
+    draggable: true;
+}

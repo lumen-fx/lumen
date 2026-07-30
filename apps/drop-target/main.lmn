@@ -1,0 +1,28 @@
+<root>
+  <label id="hint" width="100%" height="20%" padding="0 0 24 24"
+         text="Drop a file onto the box. Long-press resets." />
+  <tile id="drop-zone" drop="true" tab-index="0"
+        width="80%" height="40%"
+        margin="16" padding="20 0 24 20" radius="16"
+        bg="#1f2a44" hover-bg="#2e4070"
+        text="Drop zone" text-color="#f0f0f8" />
+  <label id="echo" width="100%" height="40%" padding="0 0 24 0"
+         text="(no file dropped yet)" />
+  <script>
+    fn on_start() {
+        set_text("echo", "(no file dropped yet)");
+    }
+
+    fn on_file_dropped(id, path) {
+        if id == "drop-zone" {
+            set_text("echo", "Dropped: " + path);
+        }
+    }
+
+    fn on_long_press(id) {
+        if id == "drop-zone" {
+            set_text("echo", "(no file dropped yet)");
+        }
+    }
+  </script>
+</root>

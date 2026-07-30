@@ -1,0 +1,33 @@
+[package]
+name = "lumen-assets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Async asset decode + GPU upload."
+
+[dependencies]
+lumen-core = { path = "../core" }
+bevy_ecs.workspace = true
+crossbeam-channel.workspace = true
+glam.workspace = true
+image.workspace = true
+usvg.workspace = true
+vello.workspace = true
+# `tracing::warn!` from the svg walker - flags unsupported SVG nodes
+# (Image, Text, Pattern) instead of dropping them silently.
+tracing.workspace = true
+# Bounded LRU caches for decoded images / SVGs / failure entries.
+# Replaces the previous hash-random `HashMap::keys().next()` eviction
+# with a true recency-ordered policy. Matches the version pinned by
+# lumen-text-cosmic and lumen-render-wgpu so the dep graph stays unified.
+lru.workspace = true
+# Filesystem watch - invalidates the asset cache on disk-change so a
+# hot-edited `icons/sun.png` re-decodes instead of returning the stale
+# cached `LoadedImage`. `RecommendedWatcher` picks inotify / FSEvents /
+# ReadDirectoryChangesW per platform.
+notify.workspace = true
+# Bundle (`.lpak`) error type derives `thiserror::Error`. Workspace-pinned.
+thiserror.workspace = true

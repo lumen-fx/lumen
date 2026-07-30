@@ -1,0 +1,26 @@
+[package]
+name = "lumen-script-candela"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "candela ScriptHost impl."
+
+[dependencies]
+lumen-script = { path = "../script", default-features = false }
+lumen-core = { path = "../core" }
+bevy_ecs.workspace = true
+# candela embedding API (Engine/Program) lives on the crate's `main` branch.
+# Structured host-fn marshalling (string/int/float/bool/null plus Array/Map);
+# see the crate docs for the remaining closure/heterogeneous-map gaps that keep
+# a few Rhai builtins from full parity.
+candela = { git = "https://github.com/lumen-fx/candela", branch = "main" }
+
+[features]
+# Mirrors `lumen-script-rhai`: `http-fetch` is on by default and forwards to
+# lumen-script so a plain build ships the `fetch(url, tag)` transport;
+# packagers can size-trim by turning default features off.
+default = ["http-fetch"]
+http-fetch = ["lumen-script/http-fetch"]

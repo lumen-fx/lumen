@@ -1,0 +1,12 @@
+[app]
+entry = "main.lmn"
+
+[script]
+engine = "lua"
+
+[window]
+title = "Lumen - Weather"
+size = [1280, 800]
+
+[asset_roots]
+paths = ["icons"]

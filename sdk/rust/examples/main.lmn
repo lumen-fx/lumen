@@ -1,0 +1,14 @@
+<root>
+  <scroll width="100%" height="70%" sensitivity="0.5" inertia="0.35">
+    <tile class="tile" tab-index="0" bg="#dc4548" hover-bg="#ff7372" text="Tile 1" />
+    <tile class="tile" tab-index="1" bg="#338cea" hover-bg="#72bfff" text="Tile 2" />
+    <tile class="tile" tab-index="2" bg="#48ca6b" hover-bg="#80ff99" text="Tile 3" />
+    <tile class="tile" tab-index="3" bg="#edb033" hover-bg="#ffd966" text="Tile 4" />
+    <tile class="tile" tab-index="4" bg="#b557d9" hover-bg="#e58cff" text="Tile 5" />
+    <tile class="tile" tab-index="5" bg="#33c7ce" hover-bg="#66f2ff" text="Tile 6" />
+    <tile class="tile" tab-index="6" bg="#e85e9c" hover-bg="#ff8ccc" text="Tile 7" />
+    <tile class="tile" tab-index="7" bg="#949433" hover-bg="#d9d966" text="Tile 8" />
+  </scroll>
+  <label id="counter-label" width="100%" height="30%" padding="30 0 24 0"
+         text="Lumen - click a tile to count" />
+</root>

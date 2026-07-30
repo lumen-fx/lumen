@@ -1,0 +1,295 @@
+// Waveform - candela player logic on the dynamic DOM API.
+//
+// The library list is built imperatively: main.lmn ships an empty
+// <column id="playlist"> and this script fills it with real elements
+// (node_spawn / node_append), then moves the now-playing highlight by
+// querying rows and toggling a class. Scalar UI state (track meta, transport
+// glyph, seek + volume) stays in signals with bind-* in the markup; only the
+// list is manipulated as DOM.
+//
+// Rows are built element by element, not with node_set_inner_markup, so the
+// list survives an AOT/precompiled build (the from-source markup parser is
+// dev-only; inner markup is a no-op on the bundled path).
+//
+// The transport is driven by lumen-audio through the audio_* builtins. The
+// host writes audio_position / audio_duration / audio_playing every woken
+// tick; the display signals below are DERIVED from those and never run a
+// clock, so a paused app goes idle.
+
+// One import pulls in the whole Lumen host surface: scalar signals, the DOM
+// read and write sides, audio, on, derive, set_class, and the lm_append helper.
+import "lumen.cdl";
+
+struct Track {
+    id: string,
+    idx: string,
+    title: string,
+    artist: string,
+    album: string,
+    dur: string,
+    file: string,
+}
+
+fn mk(id, idx, title, artist, album, dur, file) {
+    return Track {
+        id: id, idx: idx, title: title, artist: artist,
+        album: album, dur: dur, file: file,
+    };
+}
+
+// The three playlists, rebuilt from the current key on demand. No shared
+// mutable list state; cross-call state (the selected key, the now-playing
+// id) lives in signals, which persist across handler invocations.
+fn playlist_tracks(key) {
+    let l = [];
+    if key == "pure" {
+        l.push(mk("tone-a440", "1", "Reference Tone A", "440 Hz", "Test Signals", "0:03", "assets/tone-a440.wav"));
+        l.push(mk("low-pulse", "2", "Low Pulse", "110 Hz", "Test Signals", "0:03", "assets/low-pulse.wav"));
+        return l;
+    }
+    if key == "moving" {
+        l.push(mk("rising-sweep", "1", "Rising Sweep", "220-880", "Test Signals", "0:04", "assets/rising-sweep.wav"));
+        l.push(mk("major-triad", "2", "Major Triad", "C-E-G", "Test Signals", "0:03", "assets/major-triad.wav"));
+        return l;
+    }
+    l.push(mk("carefree", "1", "Carefree", "Kevin MacLeod", "CC BY 4.0", "3:25", "assets/carefree.ogg"));
+    l.push(mk("wallpaper", "2", "Wallpaper", "Kevin MacLeod", "CC BY 4.0", "3:40", "assets/wallpaper.ogg"));
+    l.push(mk("cipher", "3", "Cipher", "Kevin MacLeod", "CC BY 4.0", "3:51", "assets/cipher.ogg"));
+    return l;
+}
+
+fn current_raw() {
+    let key = lumen::signal_get("playlist_name");
+    return playlist_tracks(key);
+}
+
+fn find_idx(list, id) {
+    let i = 0;
+    while i < list.len() {
+        if list[i].id == id { return i; }
+        i += 1;
+    }
+    return -1;
+}
+
+fn file_for(id) {
+    let list = current_raw();
+    let idx = find_idx(list, id);
+    if idx < 0 { return ""; }
+    return list[idx].file;
+}
+
+fn fmt_time(sec_f) {
+    let sec = int(sec_f);
+    let m = sec / 60;
+    let s = sec % 60;
+    if s < 10 { return str(m) + ":0" + str(s); }
+    return str(m) + ":" + str(s);
+}
+
+fn pl_class(key, mine) {
+    if key == mine { return "pl pl-active"; }
+    return "pl";
+}
+
+// Spawn a <label class=cls> with text and append it under `row`. node_set_attr
+// splits the class string on whitespace (node_class_add would store the whole
+// string as a single class), so multi-class cells like "td num" resolve.
+fn add_cell(row, cls, text) {
+    let cell = lumen::node_spawn("label");
+    lumen::node_set_attr(cell, "class", cls);
+    lumen::node_set_text(cell, text);
+    lumen::node_append(row, cell);
+}
+
+// Append one library <row> under the container, built element by element. The
+// row's flex layout and each cell's width / grow / wrap come from CSS classes;
+// only class, id, and text are set from the script, which all apply cleanly on
+// a spawned node (unlike raw layout attributes).
+fn add_row(container, t, now_id) {
+    let cls = "track";
+    if t.id == now_id { cls = "track track-now"; }
+    let row = lumen::node_spawn("row");
+    lumen::node_set_attr(row, "class", cls);
+    let row_id = "tr|" + t.id;
+    lumen::node_set_attr(row, "id", row_id);
+    lumen::node_append(container, row);
+    add_cell(row, "td num", t.idx);
+    add_cell(row, "td grow", t.title);
+    add_cell(row, "td artist", t.artist);
+    add_cell(row, "td album", t.album);
+    add_cell(row, "td dur", t.dur);
+}
+
+// Build (or rebuild) the whole library into the #playlist container. Clears
+// the current rows, then spawns fresh ones. Runs from on_ready or a playlist
+// click, both of which are past the first tick, so #playlist is queryable.
+fn render_playlist() {
+    let container = lumen::node_get_by_id("playlist");
+    if container == 0 { return; }
+    let kids = lumen::node_children(container);
+    for k in kids {
+        lumen::node_remove(k);
+    }
+    let now_id = lumen::signal_get("now_id");
+    let list = current_raw();
+    for t in list {
+        add_row(container, t, now_id);
+    }
+    let count = str(list.len()) + " tracks";
+    lumen::signal_set("lib_count", count);
+}
+
+// Move the now-playing highlight without rebuilding the list: drop the class
+// from the previously highlighted row, add it to the new one. This is the
+// query + mutate update loop. Must run BEFORE now_id is overwritten.
+fn highlight_now(new_id) {
+    let old_id = lumen::signal_get("now_id");
+    if old_id != "" {
+        let old_sel = "tr|" + old_id;
+        let o = lumen::node_get_by_id(old_sel);
+        if o != 0 { lumen::node_class_remove(o, "track-now"); }
+    }
+    let new_sel = "tr|" + new_id;
+    let n = lumen::node_get_by_id(new_sel);
+    if n != 0 { lumen::node_class_add(n, "track-now"); }
+}
+
+fn set_meta(t) {
+    lumen::signal_set("now_id", t.id);
+    lumen::signal_set("now_title", t.title);
+    lumen::signal_set("now_artist", t.artist);
+    lumen::signal_set("now_album", t.album);
+}
+
+fn play_track(id) {
+    let file = file_for(id);
+    if file == "" { return; }
+    let list = current_raw();
+    let idx = find_idx(list, id);
+    let t = list[idx];
+    highlight_now(t.id);
+    set_meta(t);
+    lumen::signal_set_bool("started", true);
+    lumen::audio_play(file);
+}
+
+fn step_track(dir) {
+    let list = current_raw();
+    let now_id = lumen::signal_get("now_id");
+    let idx = find_idx(list, now_id);
+    if idx < 0 { idx = 0; } else { idx = idx + dir; }
+    if idx < 0 { idx = list.len() - 1; }
+    if idx >= list.len() { idx = 0; }
+    play_track(list[idx].id);
+}
+
+fn select_playlist(key, label) {
+    lumen::signal_set("playlist_name", key);
+    lumen::signal_set("now_playlist", label);
+    lumen::set_class("pl|tones", pl_class(key, "tones"));
+    lumen::set_class("pl|pure", pl_class(key, "pure"));
+    lumen::set_class("pl|moving", pl_class(key, "moving"));
+    render_playlist();
+}
+
+// Derived display signals. The recompute body is referenced by function name;
+// its parameters arrive as the current values of the declared dep signals.
+fn calc_position(p, d) {
+    if d > 0.5 { return (p / d) * 100.0; }
+    return 0.0;
+}
+fn calc_elapsed(p) { return fmt_time(p); }
+fn calc_total(d) { return fmt_time(d); }
+fn calc_glyph(playing) {
+    if playing == "true" { return "Pause"; }
+    return "Play";
+}
+
+fn on_start() {
+    lumen::signal_set("playlist_name", "tones");
+    lumen::signal_set("now_playlist", "Featured");
+    lumen::signal_set_bool("started", false);
+
+    // Host-written transport signals; seed each with its real type so the
+    // per-tick string writes parse back into the type the derives expect.
+    lumen::signal_set_float("audio_position", 0.0);
+    lumen::signal_set_float("audio_duration", 0.0);
+    lumen::signal_set("audio_playing", "false");
+    lumen::signal_set_int("volume", 70);
+
+    lumen::derive("position", ["audio_position", "audio_duration"], "calc_position");
+    lumen::derive("elapsed", ["audio_position"], "calc_elapsed");
+    lumen::derive("total", ["audio_duration"], "calc_total");
+    lumen::derive("play_glyph", ["audio_playing"], "calc_glyph");
+
+    // Seed the now-playing bar with the first track (paused, not loaded).
+    let list = playlist_tracks("tones");
+    set_meta(list[0]);
+    let count = str(list.len()) + " tracks";
+    lumen::signal_set("lib_count", count);
+
+    lumen::on("click", "playpause", "toggle_play");
+    lumen::on("click", "next", "handle_next");
+    lumen::on("click", "prev", "handle_prev");
+    lumen::on("click", "pl|tones", "sel_tones");
+    lumen::on("click", "pl|pure", "sel_pure");
+    lumen::on("click", "pl|moving", "sel_moving");
+
+    // Initial output volume from the slider default (70%).
+    lumen::audio_volume(0.7);
+}
+
+// on_ready fires on the first tick, after the DOM index is published, so the
+// #playlist container is queryable. The initial list build lives here, not in
+// on_start (where node_get_by_id would return 0).
+fn on_ready() {
+    render_playlist();
+}
+
+fn toggle_play(id) {
+    let playing = lumen::signal_get("audio_playing");
+    if playing == "true" {
+        lumen::audio_pause();
+    } else {
+        let started = lumen::signal_get_bool("started");
+        if started {
+            lumen::audio_resume();
+        } else {
+            let now_id = lumen::signal_get("now_id");
+            play_track(now_id);
+        }
+    }
+}
+
+fn handle_next(id) { step_track(1); }
+fn handle_prev(id) { step_track(-1); }
+fn sel_tones(id) { select_playlist("tones", "Featured"); }
+fn sel_pure(id) { select_playlist("pure", "Pure Tones"); }
+fn sel_moving(id) { select_playlist("moving", "Moving Tones"); }
+
+// Auto-advance: the host calls this when a track reaches its end.
+fn on_audio_end() { step_track(1); }
+
+// Manual seek + volume drags land here with the slider value as a float.
+fn on_slider(id, value) {
+    if id == "seek" {
+        let dur = lumen::signal_get_float("audio_duration");
+        let target = (value / 100.0) * dur;
+        lumen::audio_seek(target);
+    } else if id == "volume" {
+        let level = value / 100.0;
+        lumen::audio_volume(level);
+    }
+}
+
+// Clicks on library rows carry the row id "tr|<track>"; no per-id handler is
+// registered for them, so they fall through to on_click.
+fn on_click(id) {
+    if id.starts_with("tr|") {
+        let track_id = id[3..id.len()];
+        play_track(track_id);
+    }
+}
+
+fn main() {}

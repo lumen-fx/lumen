@@ -1,0 +1,19 @@
+[package]
+name = "lumen-text-cosmic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "cosmic-text TextShaper + FontDB impl."
+
+[dependencies]
+lumen-text = { path = "../text" }
+cosmic-text.workspace = true
+# Bounded LRU cache for shape results. Replaces a HashMap with a
+# catastrophic-clear-on-cap policy. Pure-Rust, ~200 LoC.
+lru = "0.18"
+# FxHasher for the font-id -> face-data dedup map (trusted keys; no need
+# for SipHash's DoS resistance).
+rustc-hash.workspace = true

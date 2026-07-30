@@ -1,0 +1,14 @@
+[app]
+id = "lumen.widget-garden"
+
+[script]
+engine = "candela"
+
+[window]
+title = "Lumen - Widget Garden"
+size = [1100, 800]
+remember_state = true
+
+[mcp]
+port = 7878
+simulate = true

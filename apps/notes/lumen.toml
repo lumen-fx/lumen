@@ -1,0 +1,10 @@
+[app]
+entry = "main.lmn"
+id    = "com.lumen.examples.notes"
+
+[script]
+engine = "candela"
+
+[window]
+title = "Margin - Notes"
+size  = [1000, 720]

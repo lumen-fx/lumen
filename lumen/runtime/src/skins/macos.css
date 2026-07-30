@@ -1,0 +1,310 @@
+/*
+ * lumen-skin-macos - macOS 14/15-era (pre-Tahoe) Aqua-flavoured skin.
+ *
+ * Activated via `<root skin="macos">` (or `[skin] name = "macos"` /
+ * `"auto"` on a Mac in lumen.toml). Light-first with a full dark
+ * override; the runtime re-resolves the @media block live on OS theme
+ * change. Values follow the native-skins spec (Apple HIG + WebKit
+ * AppKit control metrics; entries marked approx there are honest
+ * estimates).
+ *
+ * Signatures reproduced: 20px mini-bezel buttons with NO hover state
+ * (macOS buttons give hover feedback only via tooltips), flat accent
+ * default button, 38x22 pill switch with white knob, thin 5px slider
+ * track, accent-filled menu selection, soft 4px accent-alpha focus halo
+ * (keyboard-only on buttons via :focus-visible, always-on for fields),
+ * ~10px window-tier dialog radius.
+ *
+ * Known approximations (engine gaps): the focus halo is hard-edged (no
+ * feathered blur), menu/vibrancy blur is a solid fallback, the switch
+ * knob inset is runtime-fixed at 4px (authentic knob would be ~1px
+ * inset), the slider thumb diameter is runtime-fixed at 16px (spec 20).
+ */
+
+:root {
+  --lumen-accent: #007aff;
+  --lumen-accent-hover: #007aff; /* macOS: no hover shift on accent */
+  --lumen-accent-active: #0064d0;
+  --lumen-on-accent: #ffffff;
+
+  --lumen-window-bg: #ececec;
+  --lumen-surface: #ffffff;
+  --lumen-surface-hover: #ffffff; /* = resting: macOS has no button hover */
+  --lumen-surface-active: #f0f0f0;
+  --lumen-input-bg: #ffffff;
+
+  --lumen-panel: #f5f5f5;
+  --lumen-panel-hover: #e8e8e8;
+
+  --lumen-border: #0000001a;
+  --lumen-border-subtle: #00000026;
+  --lumen-border-strong: #00000040;
+
+  --lumen-text: #000000d9;
+  --lumen-text-muted: #00000080;
+  --lumen-text-disabled: #00000040;
+  --lumen-disabled-bg: #f5f5f5;
+
+  --lumen-track: #00000021;
+  --lumen-track-hover: #00000021;
+  --lumen-track-active: #0000002e;
+  --lumen-knob: #ffffff;
+
+  --lumen-focus-ring: #0067f480;
+  --lumen-focus-ring-width: 4;
+
+  --lumen-radius-sm: 5;
+  --lumen-radius: 6;
+  --lumen-radius-lg: 10;
+  --lumen-shadow-raised: 0 1 2 #00000026;
+  --lumen-shadow-panel: 0 6 18 #00000033;
+  --lumen-shadow-dialog: 0 14 40 #00000040;
+  --lumen-backdrop: #00000033;
+  --lumen-scrollbar-thumb: #00000059;
+  /* Tooltip dwell (ms) / cursor gap (px) - help tags appear slowly on macOS. */
+  --lumen-tooltip-delay: 1000;
+  --lumen-tooltip-offset: 12;
+
+  /* Indeterminate <progress> sweep period (ms). */
+  --lumen-progress-period: 1200;
+
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --lumen-accent: #0a84ff;
+    --lumen-accent-hover: #0a84ff;
+    --lumen-accent-active: #3395ff;
+    --lumen-on-accent: #ffffff;
+
+    --lumen-window-bg: #323232;
+    --lumen-surface: #5f5f5f;
+    --lumen-surface-hover: #5f5f5f;
+    --lumen-surface-active: #6e6e6e;
+    --lumen-input-bg: #1e1e1e;
+
+    --lumen-panel: #2e2e2e;
+    --lumen-panel-hover: #3a3a3a;
+
+    --lumen-border: #ffffff1a;
+    --lumen-border-subtle: #ffffff21;
+    --lumen-border-strong: #ffffff40;
+
+    --lumen-text: #ffffffd9;
+    --lumen-text-muted: #ffffff8c;
+    --lumen-text-disabled: #ffffff40;
+    --lumen-disabled-bg: #ffffff14;
+
+    --lumen-track: #ffffff24;
+    --lumen-track-hover: #ffffff24;
+    --lumen-track-active: #ffffff33;
+    --lumen-knob: #ffffff;
+
+    --lumen-focus-ring: #1aa9ff80;
+
+    --lumen-shadow-raised: 0 1 2 #00000059;
+    --lumen-shadow-panel: 0 6 18 #00000073;
+    --lumen-shadow-dialog: 0 14 40 #00000080;
+    --lumen-backdrop: #00000040;
+    --lumen-scrollbar-thumb: #ffffff59;
+  }
+}
+
+/* === Base ===
+ * SF stack; 13px is the macOS body/control size. -apple-system resolves
+ * on a Mac; elsewhere the chain falls through to the platform
+ * sans-serif, so cross-platform preview still lays out sanely.
+ */
+root {
+  bg: var(--lumen-window-bg);
+  text-color: var(--lumen-text);
+  font-family: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-size: 13;
+}
+
+/* === Buttons ===
+ * 20px bezel (padding 2 12 around 13px text), raised via a 1px soft
+ * shadow instead of a border ([WK ButtonMac]: no stroke). Explicit
+ * no-hover; press darkens the bezel ~6%. Focus halo is keyboard-only
+ * (full-keyboard-access semantics).
+ */
+button {
+  bg: var(--lumen-surface);
+  radius: var(--lumen-radius-sm);
+  padding: 2 12;
+  min-height: 20;
+  text-color: var(--lumen-text);
+  shadow: var(--lumen-shadow-raised);
+}
+button:hover { bg: var(--lumen-surface-hover); }
+button:active { bg: var(--lumen-surface-active); }
+button:focus-visible { outline: 4 var(--lumen-focus-ring); }
+button:disabled { bg: var(--lumen-disabled-bg); text-color: var(--lumen-text-disabled); }
+
+/* Default / primary button: flat accent fill + white text (one per view). */
+button.primary { bg: var(--lumen-accent); text-color: var(--lumen-on-accent); }
+button.primary:hover { bg: var(--lumen-accent-hover); }
+button.primary:active { bg: var(--lumen-accent-active); }
+button.primary:disabled { bg: var(--lumen-disabled-bg); text-color: var(--lumen-text-disabled); }
+
+/* === Text fields ===
+ * 22px Ventura-style rounded fields, white well, 1px hairline stroke.
+ * The halo is always-on for fields (macOS focuses text fields with a
+ * ring regardless of input source).
+ */
+input,
+textarea {
+  bg: var(--lumen-input-bg);
+  radius: var(--lumen-radius-sm);
+  padding: 2 5;
+  min-height: 22;
+  text-color: var(--lumen-text);
+  border: 1px solid var(--lumen-border-subtle);
+}
+input:hover, textarea:hover { bg: var(--lumen-input-bg); }
+input:focus, textarea:focus { outline: 4 var(--lumen-focus-ring); }
+input:disabled, textarea:disabled { bg: var(--lumen-disabled-bg); text-color: var(--lumen-text-disabled); }
+
+/* === Switch (toggle) ===
+ * 38x22 pill [WK SwitchMacUtilities], white knob, accent fill when on.
+ */
+toggle {
+  width: 38;
+  height: 22;
+  min-width: 38;
+  radius: 11;
+  bg: var(--lumen-track);
+  knob-color: var(--lumen-knob);
+}
+toggle:hover { bg: var(--lumen-track); }
+toggle:active { bg: var(--lumen-track-active); }
+toggle:checked { bg: var(--lumen-accent); }
+toggle:focus-visible { outline: 4 var(--lumen-focus-ring); }
+toggle:disabled { bg: var(--lumen-disabled-bg); }
+
+/* === Slider ===
+ * Thin 5px track (radius 2), round white thumb.
+ */
+slider {
+  height: 5;
+  min-width: 160;
+  radius: 2;
+  bg: var(--lumen-track);
+  knob-color: var(--lumen-knob);
+}
+slider:hover { bg: var(--lumen-track); }
+slider:focus-visible { outline: 4 var(--lumen-focus-ring); }
+slider:disabled { bg: var(--lumen-disabled-bg); }
+
+/* === Generic tiles === */
+tile:focus-visible { outline: 4 var(--lumen-focus-ring); }
+tile:disabled { bg: var(--lumen-disabled-bg); }
+
+/* === Pop-up button (dropdown header) === */
+.dropdown-button {
+  bg: var(--lumen-surface);
+  radius: var(--lumen-radius-sm);
+  padding: 2 10;
+  min-height: 21;
+  text-color: var(--lumen-text);
+  shadow: var(--lumen-shadow-raised);
+  text-overflow: ellipsis;
+}
+.dropdown-button:hover { bg: var(--lumen-surface); }
+.dropdown-button:active { bg: var(--lumen-surface-active); }
+.dropdown-button:focus-visible { outline: 4 var(--lumen-focus-ring); }
+
+.dropdown-panel {
+  transition: opacity 120ms ease;
+  bg: var(--lumen-panel);
+  radius: var(--lumen-radius);
+  shadow: var(--lumen-shadow-panel);
+  border: 1px solid var(--lumen-border);
+  padding: 5 0;
+}
+/* Menu-style selection: accent bar + white text (HIG color roles). */
+.dropdown-option { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius-sm); text-overflow: ellipsis; }
+.dropdown-option:hover { bg: var(--lumen-accent); text-color: var(--lumen-on-accent); }
+.dropdown-option:focus { outline: 2 var(--lumen-focus-ring); }
+
+/* === Menus === */
+.menu-panel {
+  transition: opacity 120ms ease;
+  bg: var(--lumen-panel);
+  radius: var(--lumen-radius);
+  shadow: var(--lumen-shadow-panel);
+  border: 1px solid var(--lumen-border);
+  padding: 5 0;
+}
+.menu-item { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius-sm); min-height: 22; }
+.menu-item:hover { bg: var(--lumen-accent); text-color: var(--lumen-on-accent); }
+.menu-item:focus { outline: 2 var(--lumen-focus-ring); }
+.menu-separator { bg: var(--lumen-border); height: 1; margin: 4 0; }
+
+/* === Dialogs ===
+ * Light scrim; the surface is a ~10px card with a hairline and a deep
+ * shadow (alert anatomy per HIG).
+ */
+dialog { bg: var(--lumen-backdrop); transition: opacity 150ms ease; }
+.dialog-surface {
+  bg: var(--lumen-panel);
+  radius: var(--lumen-radius-lg);
+  shadow: var(--lumen-shadow-dialog);
+  border: 1px solid var(--lumen-border);
+  padding: 20;
+}
+
+/* === Cards === */
+.card {
+  bg: var(--lumen-surface);
+  radius: var(--lumen-radius);
+  border: 1px solid var(--lumen-border-subtle);
+  padding: 16;
+}
+
+/* === Segmented control (tabs) ===
+ * Recessed well; the selected segment is a raised surface pill (not
+ * accent-filled) - the macOS segmented signature.
+ */
+.tab-strip { bg: var(--lumen-track); radius: var(--lumen-radius); padding: 1; gap: 1; }
+.tab-btn {
+  bg: #00000000;
+  radius: var(--lumen-radius-sm);
+  padding: 2 10;
+  min-height: 20;
+  text-color: var(--lumen-text);
+  text-overflow: ellipsis;
+}
+.tab-btn:hover { bg: #00000000; }
+.tab-btn:selected { bg: var(--lumen-surface); }
+.tab-btn:focus-visible { outline: 4 var(--lumen-focus-ring); }
+
+/* === Tooltip === */
+.tooltip {
+  bg: var(--lumen-panel);
+  text-color: var(--lumen-text);
+  radius: var(--lumen-radius-sm);
+  shadow: var(--lumen-shadow-panel);
+  border: 1px solid var(--lumen-border);
+  padding: 4 8;
+  font-size: 11;
+}
+
+/* === Scroll regions === */
+scroll { scrollbar-color: var(--lumen-scrollbar-thumb); }
+scroll:focus { outline: 3 var(--lumen-focus-ring); }
+
+/* === Checkbox / Radio / Progress (W5 form controls) === */
+checkbox:checked  { bg: var(--lumen-accent); }
+checkbox:focus-visible { outline: 2 var(--lumen-focus-ring); }
+.checkbox-box     { width: 16; height: 16; radius: 4; bg: var(--lumen-surface); border: 1px solid var(--lumen-border); text-color: var(--lumen-on-accent); font-size: 12; text-align: center; }
+.checkbox-label   { text-color: var(--lumen-text); }
+radio:selected    { bg: var(--lumen-accent); }
+radio:focus-visible { outline: 2 var(--lumen-focus-ring); }
+.radio-dot        { width: 16; height: 16; radius: 8; bg: var(--lumen-surface); border: 1px solid var(--lumen-border); }
+.radio-label      { text-color: var(--lumen-text); }
+progress          { bg: var(--lumen-surface); radius: 3; height: 6; progress-duration: var(--lumen-progress-period); }
+.progress-fill    { bg: var(--lumen-accent); radius: 3; }
+
+/* Dialog default button (Enter-anywhere target): accent ring. */
+button.default { border: 2px solid var(--lumen-accent); }

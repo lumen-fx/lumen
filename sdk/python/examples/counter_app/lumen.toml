@@ -1,0 +1,7 @@
+[app]
+entry = "main.lmn"
+id    = "dev.lumen.examples.python-counter"
+
+[window]
+title = "Lumen - Python Counter"
+size  = [480, 280]

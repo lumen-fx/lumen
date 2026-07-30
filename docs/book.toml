@@ -1,0 +1,22 @@
+[book]
+authors = ["Lumen contributors"]
+language = "en"
+multilingual = false
+src = "src"
+title = "Lumen"
+description = "Lumen — markup-first UI framework on bevy_ecs + vello"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/lumen-ui/lumen"
+edit-url-template = "https://github.com/lumen-ui/lumen/edit/main/docs/{path}"
+mathjax-support = false
+no-section-label = true
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.print]
+enable = true

@@ -1,0 +1,7 @@
+<root>
+  <label id="greeting-label" width="100%" height="100%" padding="30 0 24 0"
+         bind-text="greeting"
+         text="candela host - waiting" />
+  <button id="bump" text="bump" />
+  <script src="main.cdl" />
+</root>

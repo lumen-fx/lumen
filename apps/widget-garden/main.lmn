@@ -1,0 +1,235 @@
+<root class="app">
+  <scroll height="100%" sensitivity="0.6" inertia="0.4">
+    <column class="shell">
+
+      <row class="row-bar">
+        <label class="h1" text="Lumen Widget Garden" />
+        <spacer />
+        <tooltip text="Toggle OS-following theme override" delay="300">
+          <button id="theme-toggle" class="btn-ghost" text="Toggle theme" />
+        </tooltip>
+        <tooltip text="Hotkey: Ctrl+S" delay="300">
+          <button id="notify" class="btn-primary" text="Notify" />
+        </tooltip>
+      </row>
+      <label class="lead"
+        text="One markup file exercising every shipped tag, attribute family, and P-series feature. Doubles as a regression-test surface." />
+
+      <column class="card">
+        <label class="h2" text="Tabs - body state survives switches" />
+        <tabs bind-value="active_tab">
+          <tab name="primitives" label="Primitives">
+            <column gap="12">
+              <label class="lead" text="Layout primitives, tiles, gradients, shadows." />
+              <row gap="12">
+                <tile width="120px" height="80px" bg="#7aa2f7" radius="10" />
+                <tile width="120px" height="80px" bg="linear-gradient(90deg, #bb9af7, #f7768e)" radius="10" />
+                <tile width="120px" height="80px" bg="#9ece6a" radius="10" shadow="0 4 14 #00000077" />
+                <tile width="120px" height="80px" bg="#161922" radius="10" />
+              </row>
+              <row gap="8">
+                <tile class="swatch" bg="#7aa2f7" />
+                <tile class="swatch" bg="#bb9af7" />
+                <tile class="swatch" bg="#9ece6a" />
+                <tile class="swatch" bg="#e0af68" />
+                <tile class="swatch" bg="#f7768e" />
+              </row>
+            </column>
+          </tab>
+          <tab name="controls" label="Controls">
+            <column gap="14">
+              <row class="row-bar">
+                <label width="160px" text="Toggle:" />
+                <toggle id="dark-toggle" bind-checked="dark" />
+                <label bind-text="toggle_status" />
+              </row>
+              <row class="row-bar">
+                <label width="160px" text="Slider:" />
+                <slider id="volume" bind-value="volume" min="0" max="100" value="42" width="240px" />
+                <label class="kbd" bind-text="volume" />
+              </row>
+              <row class="row-bar">
+                <label width="160px" text="Input:" />
+                <input width="280px" placeholder="Type something..." bind-text="who" />
+                <label bind-text="greeting" />
+              </row>
+              <row class="row-bar">
+                <button id="bump" class="btn-primary" text="Click me" />
+                <button id="reset" class="btn-ghost" text="Reset" />
+                <button id="danger" class="btn-danger" text="Danger" />
+                <label class="pill" bind-text="click_label" />
+              </row>
+            </column>
+          </tab>
+          <tab name="forms" label="Forms">
+            <column gap="14">
+              <label class="lead"
+                text="W5 form controls - checkbox (incl. tri-state), radio group, progress, ellipsis." />
+              <row class="row-bar">
+                <label width="160px" text="Checkbox:" />
+                <checkbox id="cb-telemetry" label="Enable telemetry" bind-checked="telemetry" />
+                <label class="pill" bind-text="telemetry_status" />
+              </row>
+              <row class="row-bar">
+                <label width="160px" text="Tri-state:" />
+                <checkbox id="cb-partial" label="Partially synced" indeterminate="true" />
+                <checkbox id="cb-locked" label="Locked" disabled="true" />
+              </row>
+              <row class="row-bar" align="start">
+                <label width="160px" text="Radio group:" />
+                <column gap="6">
+                  <radio id="ship-air" group="ship" value="air" label="Air freight" checked="true" />
+                  <radio id="ship-sea" group="ship" value="sea" label="Sea freight" />
+                  <radio id="ship-rail" group="ship" value="rail" label="Rail (disabled)" disabled="true" />
+                  <radio id="ship-road" group="ship" value="road" label="Road" />
+                </column>
+                <label class="pill" bind-text="ship" />
+              </row>
+              <row class="row-bar">
+                <label width="160px" text="Progress (slider):" />
+                <progress id="dl-progress" bind-value="volume" max="100" width="240px" />
+                <label class="kbd" bind-text="volume" />
+              </row>
+              <row class="row-bar">
+                <label width="160px" text="Indeterminate:" />
+                <progress id="busy-progress" width="240px" />
+              </row>
+              <row class="row-bar">
+                <label width="160px" text="Ellipsis:" />
+                <label width="170px" class="ellipsis-demo"
+                  text="A very long single-line label that must elide with a trailing ellipsis" />
+                <button id="ellipsis-btn" width="150px" class="btn-ghost ellipsis-demo"
+                  text="A button caption far too long for its box" />
+              </row>
+            </column>
+          </tab>
+          <tab name="lists" label="Lists">
+            <column gap="8">
+              <label class="lead" text="Reactive &lt;for&gt; over an ArraySignal." />
+              <scroll class="scroll-demo" height="220px">
+                <column id="todos-list" gap="6" />
+              </scroll>
+              <row gap="8">
+                <button id="add-todo" class="btn-primary" text="Add row" />
+                <label class="status" bind-text="todo_count" />
+              </row>
+            </column>
+          </tab>
+          <tab name="dialog" label="Dialog">
+            <column gap="10">
+              <label class="lead" text="Modal overlay; preserves descendant state across show/hide." />
+              <button id="open-dialog" class="btn-primary" text="Open dialog" />
+            </column>
+          </tab>
+          <tab name="widgets" label="Widgets">
+            <column gap="14">
+              <label class="lead"
+                text="R4.x widgets - dropdown, menu, textarea, validation." />
+              <row class="row-bar">
+                <label width="160px" text="Dropdown:" />
+                <dropdown bind-value="weight" placeholder="Select...">
+                  <option value="light" label="Light" />
+                  <option value="medium" label="Medium" />
+                  <option value="heavy" label="Heavy" />
+                  <option value="ultra" label="Ultra" disabled="true" />
+                </dropdown>
+                <label class="pill" bind-text="weight" />
+              </row>
+              <row class="row-bar">
+                <label width="160px" text="Long dropdown:" />
+                <dropdown bind-value="fruit" placeholder="Pick a fruit...">
+                  <option value="apple" label="Apple" />
+                  <option value="banana" label="Banana" />
+                  <option value="cherry" label="Cherry" />
+                  <option value="date" label="Date" />
+                  <option value="elderberry" label="Elderberry" />
+                  <option value="fig" label="Fig" />
+                  <option value="grape" label="Grape" />
+                  <option value="kiwi" label="Kiwi" />
+                  <option value="lemon" label="Lemon" />
+                  <option value="mango" label="Mango" />
+                  <option value="orange" label="Orange" />
+                  <option value="peach" label="Peach" />
+                </dropdown>
+                <label class="pill" bind-text="fruit" />
+              </row>
+              <row class="row-bar">
+                <label width="160px" text="Menu:" />
+                <button id="open-actions-menu" class="btn-ghost" text="Open menu" />
+              </row>
+              <menu id="actions">
+                <menuitem id="rename" label="Rename" />
+                <menuitem id="duplicate" label="Duplicate" disabled="true" />
+                <separator />
+                <menuitem id="delete" label="Delete" />
+              </menu>
+              <row class="row-bar">
+                <label width="160px" text="Textarea:" />
+                <textarea width="320px" height="80px" placeholder="Multi-line input - Shift+Enter to commit" bind-text="note" />
+              </row>
+              <row class="row-bar">
+                <label width="160px" text="Email (required):" />
+                <input width="320px" placeholder="name@host" required="true" pattern="@" bind-text="email" />
+                <label class="pill" bind-text="email_valid" />
+              </row>
+              <row class="row-bar">
+                <label width="160px" text="Date:" />
+                <date-picker bind-value="meet_date" />
+                <label class="pill" bind-text="meet_date" />
+              </row>
+              <row class="row-bar">
+                <label width="160px" text="Time:" />
+                <time-picker bind-value="meet_time" />
+                <label class="pill" bind-text="meet_time" />
+              </row>
+            </column>
+          </tab>
+          <tab name="locked" label="Locked" disabled="true">
+            <column gap="10">
+              <label class="lead" text="This tab is disabled - unreachable by click or arrow nav." />
+            </column>
+          </tab>
+          <tab name="os" label="OS Integration">
+            <column gap="12">
+              <row class="row-bar">
+                <button id="pick" class="btn-primary" text="Pick a file..." />
+                <label class="lead" bind-text="picked" />
+              </row>
+              <row class="row-bar">
+                <button id="notify-2" class="btn-ghost" text="Send notification" />
+                <label class="status" text="Tauri/Electron-style desktop toast." />
+              </row>
+              <row class="row-bar">
+                <label class="kbd" text="Ctrl+Shift+L" />
+                <label class="lead" text="Global hotkey - fires regardless of window focus." />
+              </row>
+            </column>
+          </tab>
+        </tabs>
+      </column>
+
+      <row class="row-bar">
+        <label class="status" bind-text="theme_status" />
+        <spacer />
+        <label class="status" bind-text="hotkey_status" />
+      </row>
+    </column>
+  </scroll>
+
+  <dialog id="demo-dialog" open="dialog_open">
+    <column class="card" width="420px" gap="12">
+      <label class="h2" text="A native-feeling modal" />
+      <label class="lead"
+        text="Escape rejects, Enter (anywhere) fires the default Confirm button. Focus lands on the input on open and returns to the opener on close." />
+      <input placeholder="Try typing here, close + reopen" bind-text="dialog_text" width="100%" autofocus="true" />
+      <toggle bind-checked="dialog_check" />
+      <row gap="10">
+        <button id="dialog-close" class="btn-ghost" text="Cancel" />
+        <button id="dialog-confirm" class="btn-primary" text="Confirm" default="true" />
+      </row>
+      <label class="status" bind-text="dialog_verdict" />
+    </column>
+  </dialog>
+
+  <script src="main.cdl" />
+</root>

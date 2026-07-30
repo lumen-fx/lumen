@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e8e6114ed99aa5cda4dc8ceee6f0586794dfe8e890cb55ebd2107e1607f4faed # shrinks to (n, parents) = (2, [0]), mutations = []
+cc 7482324448577a57bea4855c5a9b75f3e3f963dd01d7a535435a8ea2b846c17c # shrinks to (n, parents, boundaries) = (5, [0, 0, 0, 2], [false, false, true, false, false]), mutations = [Mutation { target_index: 4, new_width_px: 10.0 }]
+cc 772194aaff7efa6850a13bda60f84eb042be96ef925e88a67b024430f4cf15fc # shrinks to (n, parents, boundaries) = (5, [0, 0, 0, 2], [false, false, true, false, false]), mutations = [Mutation { target_index: 1, new_width_px: 256.52792 }, Mutation { target_index: 4, new_width_px: 393.90512 }]

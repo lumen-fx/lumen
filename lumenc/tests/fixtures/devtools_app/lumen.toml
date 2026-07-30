@@ -1,0 +1,5 @@
+# Devtools mount test fixture. MCP port 0 disables the introspection TCP
+# server so the test stays hermetic (no port binding); the test injects a
+# snapshot directly to exercise the refresh path.
+[mcp]
+port = 0

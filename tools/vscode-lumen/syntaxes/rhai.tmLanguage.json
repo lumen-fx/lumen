@@ -1,0 +1,77 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Rhai",
+  "scopeName": "source.rhai",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#number" },
+    { "include": "#keyword" },
+    { "include": "#builtin" },
+    { "include": "#function-def" },
+    { "include": "#function-call" }
+  ],
+  "repository": {
+    "comment": {
+      "patterns": [
+        { "name": "comment.line.double-slash.rhai", "begin": "//", "end": "$" },
+        { "name": "comment.block.rhai", "begin": "/\\*", "end": "\\*/" }
+      ]
+    },
+    "string": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.rhai",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "name": "constant.character.escape.rhai", "match": "\\\\." }
+          ]
+        },
+        {
+          "name": "string.quoted.other.rhai",
+          "begin": "`",
+          "end": "`"
+        }
+      ]
+    },
+    "number": {
+      "name": "constant.numeric.rhai",
+      "match": "\\b(0x[0-9a-fA-F_]+|[0-9][0-9_]*(\\.[0-9_]+)?([eE][+-]?[0-9_]+)?)\\b"
+    },
+    "keyword": {
+      "patterns": [
+        {
+          "name": "keyword.control.rhai",
+          "match": "\\b(if|else|switch|while|loop|for|in|do|until|break|continue|return|throw|try|catch)\\b"
+        },
+        {
+          "name": "storage.type.rhai",
+          "match": "\\b(let|const|fn|private|global|import|export|as)\\b"
+        },
+        {
+          "name": "constant.language.rhai",
+          "match": "\\b(true|false|null|this)\\b"
+        }
+      ]
+    },
+    "builtin": {
+      "comment": "Lumen script builtins registered on the Rhai engine.",
+      "name": "support.function.builtin.rhai",
+      "match": "\\b(signal|signal_array|derive|on|is_valid|local_id|set_text|set_src|set_string|set_class|set_root_class|set_timeout|set_interval|cancel_timer|add_clicks|notify|fetch|parse_json|parse_markdown|read_file|write_file|copy_image|save_clipboard_image|tray_icon|unregister_tray|open_menu|close_menu|pick_file|pick_files|pick_folder|pick_file_filtered|save_file|register_hotkey|unregister_hotkey|signals)\\b"
+    },
+    "function-def": {
+      "match": "\\b(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.function.rhai" },
+        "2": { "name": "entity.name.function.rhai" }
+      }
+    },
+    "function-call": {
+      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.call.rhai" }
+      }
+    }
+  }
+}

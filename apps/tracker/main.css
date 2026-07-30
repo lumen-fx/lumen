@@ -1,0 +1,135 @@
+/* Streak - weekly habit grid.
+ * Calm graphite with a single vivid lime for "done".  The week is a real
+ * CSS grid; each cell is a <toggle> whose :checked fill is the lime. */
+:root {
+  --bg:      #14171a;
+  --surface: #1c2024;
+  --card:    #1c2024;
+  --line:    #262b2f;
+  --text:    #e6ebe4;
+  --muted:   #8a938a;
+  --lime:    #a3e635;
+
+  --lumen-track:        #2a3030;
+  --lumen-track-hover:  #333a39;
+  --lumen-accent:       #a3e635;
+  --lumen-surface:      #262b2f;
+  --lumen-surface-hover: #2f3539;
+  --lumen-panel:        #20252a;
+  --lumen-text:         #e6ebe4;
+  --lumen-text-muted:   #8a938a;
+  --lumen-radius:       8;
+}
+
+.app { bg: var(--bg); text-color: var(--text); }
+.shell { padding: 24; gap: 20; height: 100%; }
+
+/* --- Header + stats --- */
+.header { }
+.brand { font-size: 28; text-color: var(--text); }
+.brand-sub { font-size: 13; text-color: var(--muted); }
+
+.stats { }
+.stat {
+  bg: var(--surface);
+  radius: 12;
+  padding: 10 16;
+  gap: 2;
+  align: center;
+  min-width: 96px;
+}
+.stat-num { font-size: 24; text-color: var(--text); text-align: center; }
+.stat-num.accent { text-color: var(--lime); }
+.stat-sub { font-size: 11; text-color: var(--muted); text-align: center; }
+
+.gear {
+  bg: var(--surface);
+  hover-bg: var(--line);
+  text-color: var(--text);
+  radius: 8;
+  padding: 10 16;
+  gap: 8;
+  align: center;
+  justify: center;
+}
+.gear:focus { outline: 2 var(--lime); }
+
+/* --- Grid --- */
+.grid-card {
+  bg: var(--card);
+  radius: 16;
+  padding: 20;
+}
+.grid {
+  display: grid;
+  grid-template-columns: 150px 1fr 1fr 1fr 1fr 1fr 1fr 1fr;
+  row-gap: 10;
+  column-gap: 10;
+}
+.gh {
+  font-size: 12;
+  text-color: var(--muted);
+  text-align: center;
+  height: 24px;
+}
+.corner { text-align: start; }
+.hlabel {
+  font-size: 14;
+  text-color: var(--text);
+  height: 30px;
+}
+.cell {
+  width: 52px;
+  height: 28px;
+  justify-self: center;
+  align-self: center;
+  bg: #2a3030;
+  radius: 999;
+}
+.cell:checked { bg: var(--lime); }
+.cell:hover   { bg: #333a39; }
+.cell:focus   { outline: 2 var(--lime); }
+
+/* --- Footer --- */
+.footer { }
+.hint { font-size: 12; text-color: var(--muted); }
+
+/* --- Settings dialog --- */
+.sheet {
+  bg: #20252a;
+  radius: 16;
+  padding: 24;
+  gap: 18;
+  shadow: 0 24 60 #000000cc;
+}
+.sheet-title { font-size: 20; text-color: var(--text); }
+.field-label { font-size: 13; text-color: var(--text); }
+.field-val   { font-size: 13; text-color: var(--lime); }
+.field-note  { font-size: 12; text-color: var(--muted); }
+
+.btn-primary {
+  bg: var(--lime);
+  hover-bg: #b6f04f;
+  press-bg: #8fce2b;
+  text-color: #182005;
+  radius: 8;
+  padding: 10 18;
+}
+.btn-primary:focus { outline: 2 #cff58a; }
+.btn-ghost {
+  bg: #262b2f;
+  hover-bg: #2f3539;
+  text-color: var(--text);
+  radius: 8;
+  padding: 10 18;
+}
+.btn-ghost:focus { outline: 2 var(--lime); }
+
+/* Narrow layout: tighten the frame and shrink stat tiles. */
+@media (max-width: 760px) {
+  .shell { padding: 14; gap: 12; }
+  .stat { min-width: 68px; padding: 8 10; }
+  .stat-num { font-size: 19; }
+  .grid-card { padding: 12; }
+  .grid { grid-template-columns: 108px 1fr 1fr 1fr 1fr 1fr 1fr 1fr; }
+}

@@ -1,0 +1,19 @@
+[app]
+entry = "main.lmn"
+id    = "com.example.lumen-datagrid"
+
+[window]
+title = "Market Watch - Lumen Data Grid"
+size  = [1400, 900]
+
+[skin]
+name = "default"
+
+[mcp]
+port = 7878
+
+[profile]
+mode = "off"
+
+[perf]
+shape_entries = 4096

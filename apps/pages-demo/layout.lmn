@@ -1,0 +1,24 @@
+<root>
+  <!--
+    Shared layout. This `<template>` is collected into a GLOBAL preamble at
+    load time, so every page in this directory can `<use template="layout">`
+    it. The page's own content fills the `<slot/>`. `layout.lmn` itself has
+    no page content of its own - it only contributes the template.
+
+    The nav bar uses real `<a href>` anchors: on desktop a click switches the
+    active page; on the future web-transpile target each maps 1:1 onto a DOM
+    `<a href>` + real URL.
+  -->
+  <template name="layout">
+    <column padding="20" gap="16" width="100%" height="100%">
+      <row gap="12">
+        <a href="index"     text="Home"     bg="#2d6cdf" text-color="#ffffff" padding="6 12 6 12" radius="6"/>
+        <a href="settings"  text="Settings" bg="#2d6cdf" text-color="#ffffff" padding="6 12 6 12" radius="6"/>
+        <a href="user/42"   text="User 42"  bg="#2d6cdf" text-color="#ffffff" padding="6 12 6 12" radius="6"/>
+      </row>
+      <column gap="8">
+        <slot/>
+      </column>
+    </column>
+  </template>
+</root>

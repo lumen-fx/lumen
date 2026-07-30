@@ -1,0 +1,16 @@
+<root class="app">
+  <column gap="8" padding="24">
+    <label class="h1" text="A for-list driven from C++" />
+    <!--
+      `rows` is an array signal set from the host with
+      lumen::raw::set_array(...). Each row map becomes one <for> row;
+      bind-text reads the row fields by name.
+    -->
+    <for each="rows" key="id">
+      <row gap="16">
+        <label class="name" bind-text="name" text="" />
+        <label class="role" bind-text="role" text="" />
+      </row>
+    </for>
+  </column>
+</root>
