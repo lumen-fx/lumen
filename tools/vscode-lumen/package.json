@@ -1,0 +1,222 @@
+{
+  "name": "lumen-vscode",
+  "displayName": "Lumen",
+  "description": "First-class language support for Lumen: .lmn markup, Lumen CSS, and .rhai scripts - diagnostics, completion, hover, formatting, an in-editor headless live preview, and one-click run/check/build/scaffold via lumenc.",
+  "version": "0.4.0",
+  "publisher": "lumen-ui",
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lumen-ui/lumen"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters",
+    "Linters"
+  ],
+  "keywords": [
+    "lumen",
+    "lmn",
+    "ui",
+    "rhai",
+    "gui"
+  ],
+  "icon": "icons/lmn.png",
+  "activationEvents": [
+    "onLanguage:lumen-markup",
+    "onLanguage:lumen-css",
+    "onLanguage:lumen-rhai",
+    "workspaceContains:**/*.lmn",
+    "workspaceContains:**/lumen.toml"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "lumen-markup",
+        "aliases": ["Lumen Markup", "lumen", "lmn"],
+        "extensions": [".lmn"],
+        "configuration": "./language-configuration/lumen.json",
+        "icon": {
+          "light": "./icons/lmn.png",
+          "dark": "./icons/lmn.png"
+        }
+      },
+      {
+        "id": "lumen-css",
+        "aliases": ["Lumen CSS"],
+        "configuration": "./language-configuration/lumen-css.json",
+        "icon": {
+          "light": "./icons/lmn.png",
+          "dark": "./icons/lmn.png"
+        }
+      },
+      {
+        "id": "lumen-rhai",
+        "aliases": ["Lumen Script", "Rhai"],
+        "extensions": [".rhai"],
+        "configuration": "./language-configuration/rhai.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lumen-markup",
+        "scopeName": "text.lumen",
+        "path": "./syntaxes/lumen.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.rhai": "lumen-rhai",
+          "source.css.lumen": "lumen-css"
+        }
+      },
+      {
+        "language": "lumen-css",
+        "scopeName": "source.css.lumen",
+        "path": "./syntaxes/lumen-css.tmLanguage.json"
+      },
+      {
+        "language": "lumen-rhai",
+        "scopeName": "source.rhai",
+        "path": "./syntaxes/rhai.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "lumen.run",
+        "title": "Run App",
+        "category": "Lumen",
+        "icon": "$(play)"
+      },
+      {
+        "command": "lumen.check",
+        "title": "Check (parse gate)",
+        "category": "Lumen",
+        "icon": "$(check)"
+      },
+      {
+        "command": "lumen.format",
+        "title": "Format Markup File",
+        "category": "Lumen"
+      },
+      {
+        "command": "lumen.build",
+        "title": "Build AOT Artifact (.lmna)",
+        "category": "Lumen",
+        "icon": "$(package)"
+      },
+      {
+        "command": "lumen.newFromTemplate",
+        "title": "New App from Template",
+        "category": "Lumen",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "lumen.preview",
+        "title": "Open Live Preview",
+        "category": "Lumen",
+        "icon": "$(preview)"
+      },
+      {
+        "command": "lumen.restartServer",
+        "title": "Restart Language Server",
+        "category": "Lumen"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "lumen.preview",
+          "when": "resourceLangId == lumen-markup",
+          "group": "navigation@1"
+        },
+        {
+          "command": "lumen.run",
+          "when": "resourceLangId == lumen-markup",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "lumen.format",
+          "when": "resourceLangId == lumen-markup"
+        },
+        {
+          "command": "lumen.preview",
+          "when": "resourceLangId == lumen-markup || resourceLangId == lumen-css"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "lumen.preview",
+        "key": "ctrl+shift+v",
+        "mac": "cmd+shift+v",
+        "when": "resourceLangId == lumen-markup"
+      }
+    ],
+    "configuration": {
+      "title": "Lumen",
+      "properties": {
+        "lumen.serverPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to the `lumen-lsp` binary. If empty, the extension auto-discovers `target/{release,debug}/lumen-lsp` in the workspace (respecting `CARGO_TARGET_DIR`) and finally falls back to `lumen-lsp` on `$PATH`."
+        },
+        "lumen.lumencPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to the `lumenc` CLI. If empty, the extension auto-discovers `target/{release,debug}/lumenc` in the workspace (respecting `CARGO_TARGET_DIR`) and finally falls back to `lumenc` on `$PATH`."
+        },
+        "lumen.serverAutoDiscover": {
+          "type": "boolean",
+          "default": true,
+          "description": "Search the workspace's target/ directories for the lumen-lsp and lumenc binaries before falling back to $PATH."
+        },
+        "lumen.run.flags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "markdownDescription": "Extra flags appended to `lumenc run <dir>` (e.g. `--profile`, `chrome`)."
+        },
+        "lumen.run.headless": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Append `--headless` to `lumenc run`. Never opens a window; useful on headless hosts."
+        },
+        "lumen.preview.size": {
+          "type": "string",
+          "default": "960x720",
+          "markdownDescription": "Logical viewport `WxH` passed to the headless preview render (`--size`)."
+        },
+        "lumen.preview.dpr": {
+          "type": "number",
+          "default": 1,
+          "markdownDescription": "Device-pixel-ratio for the headless preview render (`--dpr`). Screenshot pixels = logical x dpr."
+        },
+        "lumen.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Trace LSP traffic between VS Code and lumen-lsp."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -p . -w",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.4.0"
+  }
+}

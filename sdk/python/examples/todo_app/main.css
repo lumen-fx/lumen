@@ -1,0 +1,18 @@
+.app { background: #12141c; }
+.shell { color: #e7e9ee; }
+.h1 { font-size: 22px; color: #f4f6fb; }
+.summary { font-size: 14px; color: #9aa3b2; }
+.btn {
+  padding: 8px 16px; border-radius: 10px;
+}
+.btn-danger {
+  padding: 8px 16px; border-radius: 10px;
+}
+.list-card {
+  background: #171a24; border-radius: 14px; padding: 8px;
+}
+.todo-row {
+  padding: 10px 12px; border-radius: 8px; background: #1e2230;
+}
+.todo-text { font-size: 15px; color: #dfe3ec; }
+.hint { font-size: 12px; color: #6b7382; }

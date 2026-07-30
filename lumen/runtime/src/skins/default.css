@@ -1,0 +1,338 @@
+/*
+ * lumen-skin-default - embedded user-agent stylesheet, opt-in.
+ *
+ * Activated by setting `<root skin="default">`. The bare framework still
+ * ships zero baked-in styling (SDD section 1.3 "Decoupled Rendering" - apps
+ * that don't opt in render visually blank). Override anything below in
+ * the app's own `main.css`; HTML inline attributes win over both.
+ *
+ * Design tokens used here are NOT design tokens in the `<theme>` sense;
+ * they're literal default values. Apps that want to retheme should
+ * either author their own skin, set explicit attrs / classes, or
+ * redeclare the `--lumen-*` custom properties below in their own
+ * `:root { }` block (the theme/media re-resolver merges skin + app
+ * custom properties into one cascade on every reapply, so a single
+ * app-side `:root` block can retint every widget covered here).
+ *
+ * Coverage: button, input, toggle, slider, tile (interactive surfaces),
+ * dropdown (R4.1), menu (R4.2), dialog (backdrop + opt-in
+ * `.dialog-surface`), tabs, tooltip, and a focus outline for
+ * keyboard-focusable `<scroll>` regions.
+ *
+ * Every rule below stays inside the CSS subset documented in
+ * docs/src/authoring/css.md - state pseudos (`:hover` / `:focus` /
+ * `:focus-visible` / `:active` / `:checked` / `:disabled` / `:selected`)
+ * only ever route `bg`, `border` (hover/focus), or `outline` under
+ * `:focus`; no other property
+ * is state-aware yet. `:selected` (`.tab-btn:selected` below) routes to
+ * `Attributes::selected_bg`, which `lumenc::spawn` hands to
+ * `lumen_primitives::tabs::TabButtonStyle`; the runtime swaps the fill as
+ * the `Selected` marker moves between tab-strip siblings.
+ */
+
+/* === Tokens ===
+ * One block to override for a full re-theme.
+ */
+:root {
+  /* Action-control fills: button, input, dropdown header, tab strip well */
+  --lumen-surface: #0a3358;
+  --lumen-surface-hover: #114570;
+  --lumen-surface-active: #073056;
+
+  /* Toggle / slider track (neutral groove, not an action color) */
+  --lumen-track: #3a3a3a;
+  --lumen-track-hover: #565656;
+  --lumen-track-active: #2e2e2e;
+
+  /* Elevated / floating surfaces: dropdown panel, menu panel, dialog
+     surface, tooltip. A touch darker + richer than the action fills so
+     popovers read as "above" the controls that open them. */
+  --lumen-panel: #0c2c4a;
+  --lumen-panel-hover: #163a5c;
+  /* Max dropdown-popup height before it scrolls internally: 9 x 32 px
+     option rows (Qt's maxVisibleItems ~ 10). `.dropdown-panel` pairs
+     this with `overflow-y: scroll`; keyboard highlight movement keeps
+     the current row scrolled into view. */
+  --lumen-dropdown-max-height: 288;
+  --lumen-border: #1c4666;
+  /* Subtle hairline for resting field / card chrome; --lumen-border is
+     the stronger tone reserved for elevated panels + separators. */
+  --lumen-border-subtle: #16395a;
+
+  /* Text */
+  --lumen-text: #ffffff;
+  --lumen-text-muted: #a9b8c9;
+  /* Text-selection highlight: the previous hardcoded look (text fill at
+     32 % alpha) kept as the default token value. */
+  --lumen-selection: #ffffff52;
+
+  /* Accent (focus rings, checked track, selected tab) */
+  --lumen-accent: #33c7ce;
+
+  /* Disabled fill: low-contrast, still readable as "off" */
+  --lumen-disabled-bg: #123047;
+
+  /* Chrome */
+  --lumen-radius-sm: 6;
+  --lumen-radius: 8;
+  --lumen-radius-lg: 14;
+  --lumen-shadow-panel: 0 6 18 #00000088;
+  --lumen-shadow-dialog: 0 12 32 #000000aa;
+  --lumen-backdrop: #00000099;
+
+  /* Overlay scrollbars (CSS Scrollbars Styling L1: scrollbar-color /
+     scrollbar-width). Thumb only - the default overlay convention shows
+     the translucent track on hover; declare a second color here to get
+     an always-painted track instead. */
+  --lumen-scrollbar-thumb: #a9b8c98c;
+
+  /* Tooltip: hover dwell (ms) before the popup appears and the gap (px)
+     between the cursor hotspot and the popup's top-left corner. Markup
+     `delay=` / `offset=` attrs override per-trigger. */
+  --lumen-tooltip-delay: 500;
+  --lumen-tooltip-offset: 12;
+
+  /* Indeterminate <progress> sweep period, ms per full bounce. */
+  --lumen-progress-period: 1200;
+}
+
+@media (prefers-color-scheme: dark) {
+  /* The palette above is already dark-first; OS dark mode just widens
+     contrast a little further instead of flipping hues. Apps that want
+     an actual light skin should override the whole token block above,
+     not this one. */
+  :root {
+    --lumen-panel: #091f34;
+    --lumen-text-muted: #bccbdb;
+    --lumen-backdrop: #000000b3;
+  }
+}
+
+/* === Buttons ===
+ * `transition: bg` routes the hover / press tint tween through the CSS
+ * timing (see lumen-primitives::hover) - 130 ms ease reads as crisp
+ * without feeling instant.
+ */
+button          { bg: var(--lumen-surface); radius: var(--lumen-radius); padding: 8 16; text-color: var(--lumen-text); transition: bg 130ms ease; }
+/* Dialog default button (`<button default="true">` gains the class at
+ * parse time): Qt's default-button ring - Enter anywhere in the open
+ * dialog activates it. */
+button.default  { border: 2px solid var(--lumen-accent); }
+button:hover    { bg: var(--lumen-surface-hover); }
+button:active   { bg: var(--lumen-surface-active); }
+button:focus    { outline: 2 var(--lumen-accent); }
+button:disabled { bg: var(--lumen-disabled-bg); }
+
+/* === Inputs ===
+ * Real borders (R-css-flex): a resting 1px hairline so fields read as
+ * fields without focus, the accent outline on focus (outline draws
+ * outside the box and never shifts layout - CSS outline semantics),
+ * and a brighter hover border. box-sizing defaults to border-box, so
+ * the 1px chrome never changes an authored width. `selection-color`
+ * feeds the text-edit selection highlight (--lumen-selection token).
+ */
+input          { bg: var(--lumen-surface); radius: var(--lumen-radius); padding: 8 12; text-color: var(--lumen-text); border: 1px solid var(--lumen-border-subtle); transition: bg 130ms ease; selection-color: var(--lumen-selection); }
+input:hover    { bg: var(--lumen-surface-hover); border: 1px solid var(--lumen-border); }
+input:focus    { outline: 2 var(--lumen-accent); }
+input:disabled { bg: var(--lumen-disabled-bg); }
+
+textarea          { bg: var(--lumen-surface); radius: var(--lumen-radius); padding: 8 12; text-color: var(--lumen-text); border: 1px solid var(--lumen-border-subtle); transition: bg 130ms ease; selection-color: var(--lumen-selection); }
+textarea:hover    { bg: var(--lumen-surface-hover); border: 1px solid var(--lumen-border); }
+textarea:focus    { outline: 2 var(--lumen-accent); }
+textarea:disabled { bg: var(--lumen-disabled-bg); }
+
+/* === Toggles ===
+ * Track + knob are both styled here: `knob-color` is the Lumen-native
+ * analog property for the knob child spawned by lumenc::spawn (the
+ * value below matches the runtime KNOB_FILL fallback used when no skin
+ * or author CSS supplies one). Knob geometry stays runtime-driven
+ * (sync_toggle_visuals).
+ */
+toggle          { bg: var(--lumen-track); radius: 12; knob-color: #ebebf0; transition: bg 130ms ease; }
+toggle:hover    { bg: var(--lumen-track-hover); }
+toggle:active   { bg: var(--lumen-track-active); }
+toggle:focus    { outline: 2 var(--lumen-accent); }
+toggle:checked  { bg: var(--lumen-accent); }
+toggle:disabled { bg: var(--lumen-disabled-bg); }
+
+/* === Sliders ===
+ * Same story as toggle: the thumb child (SliderThumb) takes the
+ * `knob-color` fill; its diameter stays runtime-fixed.
+ */
+slider          { bg: var(--lumen-track); radius: 4; knob-color: #ebebf0; }
+slider:hover    { bg: var(--lumen-track-hover); }
+slider:focus    { outline: 2 var(--lumen-accent); }
+slider:disabled { bg: var(--lumen-disabled-bg); }
+
+/* === Checkbox ===
+ * `<checkbox label="...">` desugars (lumenc::parser_html) to:
+ *   checkbox (row, carries Toggleable)
+ *     .checkbox-box   (tag=tile - the indicator; check / dash mark drawn as text)
+ *     .checkbox-label (tag=label)
+ * `:checked { bg }` routes to the box fill swap (runtime
+ * sync_checkbox_visuals); the resting box look lives on `.checkbox-box`.
+ */
+checkbox:checked  { bg: var(--lumen-accent); }
+checkbox:focus    { outline: 2 var(--lumen-accent); }
+.checkbox-box     { width: 18; height: 18; radius: 4; bg: var(--lumen-surface); border: 1px solid var(--lumen-border); text-color: #ffffff; font-size: 14; text-align: center; }
+.checkbox-label   { text-color: var(--lumen-text); }
+
+/* === Radio ===
+ * `<radio group="g" value="v" label="...">` desugars to:
+ *   radio (row, carries RadioButton)
+ *     .radio-dot   (tag=tile - round indicator)
+ *     .radio-label (tag=label)
+ * `:selected { bg }` routes to the dot fill swap (sync_radio_visuals).
+ */
+radio:selected    { bg: var(--lumen-accent); }
+radio:focus       { outline: 2 var(--lumen-accent); }
+.radio-dot        { width: 18; height: 18; radius: 9; bg: var(--lumen-surface); border: 1px solid var(--lumen-border); }
+.radio-label      { text-color: var(--lumen-text); }
+
+/* === Progress ===
+ * `<progress>` desugars to a track (tag=progress) + `.progress-fill`
+ * child whose width (determinate) / sweep offset (indeterminate) is
+ * runtime-driven; everything visual is declared here.
+ */
+progress          { bg: var(--lumen-track); radius: 3; height: 6; progress-duration: var(--lumen-progress-period); }
+.progress-fill    { bg: var(--lumen-accent); radius: 3; }
+
+/* === Generic tiles (interactive surfaces) === */
+tile:hover    { bg: var(--lumen-surface-hover); }
+tile:active   { bg: var(--lumen-surface-active); }
+tile:focus    { outline: 2 var(--lumen-accent); }
+tile:disabled { bg: var(--lumen-disabled-bg); }
+
+/* === Dropdown (R4.1) ===
+ * `<dropdown bind-value>` + `<option>` desugars (lumenc::parser_html) to:
+ *   .dropdown (column, positioning wrapper)
+ *     .dropdown-button   (tag=button - the header)
+ *     .dropdown-panel    (tag=column, absolute below the header)
+ *       .dropdown-option (tag=button, one per <option>)
+ */
+.dropdown-button         { bg: var(--lumen-surface); radius: var(--lumen-radius-sm); text-color: var(--lumen-text); text-overflow: ellipsis; }
+.dropdown-button:hover   { bg: var(--lumen-surface-hover); }
+.dropdown-button:active  { bg: var(--lumen-surface-active); }
+.dropdown-button:focus   { outline: 2 var(--lumen-accent); }
+
+.dropdown-panel {
+  transition: opacity 120ms ease;
+  bg: var(--lumen-panel);
+  radius: var(--lumen-radius-sm);
+  shadow: var(--lumen-shadow-panel);
+  border: 1px solid var(--lumen-border);
+  padding: 4 0;
+  /* Max-visible-rows: past this height the panel scrolls internally
+     (`overflow-y: scroll` promotes it to a live scroll container). */
+  max-height: var(--lumen-dropdown-max-height);
+  overflow-y: scroll;
+}
+
+/* The keyboard highlight IS the focus marker on the option row, and
+ * the hover-tint path treats focus like hover - so `:hover` here
+ * styles BOTH the pointer highlight and the keyboard highlight (one
+ * shared state, Qt-style); `:focus` adds the keyboard ring. */
+.dropdown-option        { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; transition: bg 130ms ease; text-overflow: ellipsis; }
+.dropdown-option:hover   { bg: var(--lumen-panel-hover); }
+.dropdown-option:focus   { outline: 2 var(--lumen-accent); }
+.dropdown-option:disabled { text-color: var(--lumen-text-muted); }
+
+/* === Menu (R4.2) ===
+ * A standalone `<menu id>` desugars to:
+ *   .menu-panel     (tag=overlay, absolute-positioned)
+ *     .menu-item      (tag=button, one per <menuitem>)
+ *     .menu-separator (tag=spacer, one per <separator>)
+ *
+ * `<menu>` nested inside `<menubar>` is native OS chrome - extracted by
+ * `extract_menubar` before the layout tree is built, so it never
+ * reaches this (or any) stylesheet. There is intentionally no
+ * `menubar` selector here.
+ */
+.menu-panel {
+  transition: opacity 120ms ease;
+  bg: var(--lumen-panel);
+  radius: var(--lumen-radius-sm);
+  shadow: var(--lumen-shadow-panel);
+  border: 1px solid var(--lumen-border);
+  padding: 4 0;
+}
+
+.menu-item        { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; transition: bg 130ms ease; }
+.menu-item:hover   { bg: var(--lumen-panel-hover); }
+.menu-item:focus   { outline: 2 var(--lumen-accent); }
+.menu-item:disabled { text-color: var(--lumen-text-muted); }
+
+.menu-separator { bg: var(--lumen-border); height: 1; margin: 4 0; }
+
+/* === Dialog ===
+ * `<dialog>` itself IS the full-screen absolute overlay (the parser
+ * seeds position:absolute + inset:0 on the tag), so it gets a dim
+ * scrim rather than a card look. `.dialog-surface` is an opt-in
+ * convention class an app can put on its actual modal content (in
+ * place of a bespoke `.card`-alike) to get a default-styled surface.
+ */
+/* Entering transition: the dialog overlay (scrim + surface via
+ * inherited opacity) fades in over 150 ms when its open signal flips.
+ * Mount-direction only - closing is instant (removal transitions need
+ * JS even on the web). */
+dialog { bg: var(--lumen-backdrop); transition: opacity 150ms ease; }
+
+.dialog-surface {
+  bg: var(--lumen-panel);
+  radius: var(--lumen-radius-lg);
+  shadow: var(--lumen-shadow-dialog);
+  border: 1px solid var(--lumen-border);
+  padding: 24;
+}
+
+/* === Cards ===
+ * `.card` is the opt-in convention class for a content tile - mirrors
+ * `.dialog-surface`. Resting chrome only; interactive `tile` states
+ * stay in the tile block above.
+ */
+.card {
+  bg: var(--lumen-panel);
+  radius: var(--lumen-radius);
+  border: 1px solid var(--lumen-border-subtle);
+  padding: 16;
+}
+
+
+/* === Tabs ===
+ * `<tabs bind-value>` desugars to:
+ *   .tabs (column)
+ *     .tab-strip (row)
+ *       .tab-btn (tag=button, one per <tab>)
+ *
+ * The active tab carries the `Selected` marker (kept in sync from the
+ * bound signal by lumen_primitives::tabs::sync_tab_selected);
+ * lumen_primitives::tabs::sync_tab_button_visuals paints the `:selected`
+ * bg rule below as the marker moves between siblings (see file header).
+ */
+.tab-strip { bg: var(--lumen-surface); radius: var(--lumen-radius-sm); padding: 4; gap: 4; }
+
+/* Qt QTabBar elide contract: overlong tab titles elide with `...`
+ * instead of widening the strip. */
+.tab-btn          { bg: #00000000; radius: var(--lumen-radius-sm); text-color: var(--lumen-text-muted); transition: bg 130ms ease; text-overflow: ellipsis; }
+.tab-btn:hover     { bg: var(--lumen-surface-hover); }
+.tab-btn:focus     { outline: 2 var(--lumen-accent); }
+.tab-btn:selected  { bg: var(--lumen-accent); }
+.tab-btn:disabled  { text-color: var(--lumen-text-muted); }
+
+/* === Tooltip ===
+ * `<tooltip text="...">` flattens onto its trigger child; the runtime
+ * spawns a popup entity classed `tooltip`
+ * (lumen_primitives::tooltip::spawn_tooltip_popups) that this rule
+ * targets directly.
+ */
+.tooltip { bg: #0b0e13ee; text-color: #ffffff; radius: var(--lumen-radius-sm); shadow: var(--lumen-shadow-panel); border: 1px solid var(--lumen-border); padding: 6 10; }
+
+/* === Scroll region ===
+ * `<scroll>` wraps arbitrary author content, so it otherwise stays
+ * unstyled here - a focus outline for the opt-in case where an author
+ * gives a scroll region `tab-index` for keyboard scrolling, plus the
+ * overlay-scrollbar thumb tint (the fade / hover behavior is the
+ * runtime's; only colors and width are CSS surface).
+ */
+scroll       { scrollbar-color: var(--lumen-scrollbar-thumb); }
+scroll:focus { outline: 2 var(--lumen-accent); }

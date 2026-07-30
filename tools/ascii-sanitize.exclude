@@ -1,0 +1,35 @@
+# Files exempt from the ASCII-only rule.
+#
+# Everything else in the tree must be pure ASCII: `-` instead of em/en dashes,
+# `->` instead of arrows, and any unicode that has to exist as data written as
+# a `\u{...}` escape so the source file itself stays ASCII.
+#
+# The entries below carry unicode that is the content, not typography. Rewriting
+# them would change what a user sees, and escaping it would either be impossible
+# (Rust raw strings, markup attributes) or destroy the readability that makes the
+# file useful.
+#
+# One path per line, relative to the repo root. Run the checker with:
+#   python3 ascii-sanitize.py . --exclude-file tools/ascii-sanitize.exclude
+
+# Example apps: glyphs are the UI. Sparkline bars, status dots, and icon-button
+# captions are what the app draws on screen.
+apps/datagrid/main.lmn
+apps/datagrid/main.rhai
+apps/kanban/main.lmn
+apps/kanban/main.rhai
+apps/kanban/README.md
+apps/sysmon/main.cpp
+apps/sysmon/main.lmn
+apps/tracker/main.lmn
+apps/weather/lumen.toml
+apps/weather/main.lmn
+apps/widget-garden/main.cdl
+
+# Localization fixture: German message catalog. The text is the test data.
+lumen/i18n/examples/hello/de-DE.ftl
+
+# Starter-app templates for `lumenc new`. The markup and script bodies live in
+# Rust raw strings, which cannot carry `\u{...}` escapes, and the glyphs are the
+# generated app's own UI.
+lumenc/src/scaffold.rs

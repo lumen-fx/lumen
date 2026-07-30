@@ -1,0 +1,24 @@
+[package]
+name = "lumen-os-filedialog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Native file-dialog host for Lumen - rfd 0.15 wrapper, MIME-typed filters, async via lumen-async-tokio (QFileDialog / GtkFileDialog analog)."
+
+[dependencies]
+lumen-core = { path = "../core" }
+lumen-os-mime = { path = "../os-mime" }
+lumen-async-tokio = { path = "../async-tokio" }
+bevy_ecs.workspace = true
+
+# Native file dialogs. Same crate Tauri ships under tauri-plugin-dialog.
+# Linux uses the XDG portal backend by default to avoid the GTK header
+# system dep. v1 ships a message-based wrapper around the blocking
+# `rfd::FileDialog`; real async via TokioRuntime is a follow-up under
+# W6.4's plan note.
+rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
+pollster = "0.4"
+tracing.workspace = true

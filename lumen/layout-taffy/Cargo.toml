@@ -1,0 +1,25 @@
+[package]
+name = "lumen-layout-taffy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "taffy-backed LayoutEngine impl."
+
+[dependencies]
+lumen-core = { path = "../core" }
+# W2.5: layout-taffy calls CosmicShaper::measure for intrinsic text
+# sizing during taffy's MeasureFunc callback. Adding the dep keeps the
+# wiring concrete (no extra trait indirection); long term, if a second
+# shaper backend lands, we can lift this behind a
+# `LayoutTextMeasurer` trait in `lumen-text`.
+lumen-text = { path = "../text" }
+lumen-text-cosmic = { path = "../text-cosmic" }
+bevy_ecs.workspace = true   # needed for #[derive(Resource)] macro expansion path
+glam.workspace = true
+taffy.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

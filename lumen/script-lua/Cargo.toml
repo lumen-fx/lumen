@@ -1,0 +1,31 @@
+[package]
+name = "lumen-script-lua"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lua (mlua / Lua 5.4) ScriptHost impl - selectable alternative to the Rhai host, same engine-function surface."
+
+[dependencies]
+lumen-script = { path = "../script", default-features = false }
+lumen-core = { path = "../core" }
+bevy_ecs.workspace = true
+# Lua 5.4, statically vendored, Send+Sync (see workspace dep comment).
+mlua.workspace = true
+serde_json.workspace = true
+# Non-poisoning, smaller-sizeof Mutex; matches the Rhai host's choice so
+# the two hosts stay behaviourally aligned. Already in the dep graph.
+parking_lot = "0.12"
+# markdown -> block list for the `parse_markdown` builtin (parity with
+# the Rhai host).
+pulldown-cmark.workspace = true
+tracing.workspace = true
+
+[features]
+# `http-fetch` on by default so a plain build behaves exactly like the
+# Rhai host; forwards to lumen-script where the `fetch()` / `http()`
+# transport lives. A size-trimmed packager can turn it off.
+default = ["http-fetch"]
+http-fetch = ["lumen-script/http-fetch"]

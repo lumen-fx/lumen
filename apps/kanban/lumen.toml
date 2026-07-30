@@ -1,0 +1,7 @@
+[app]
+entry = "main.lmn"
+id    = "com.lumen.examples.kanban"
+
+[window]
+title = "Lanes - Kanban"
+size  = [1040, 720]

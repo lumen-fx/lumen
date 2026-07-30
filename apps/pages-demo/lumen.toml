@@ -1,0 +1,18 @@
+# File-based pages demo. Every `.lmn` file in this directory is a page keyed
+# by its filename; `index.lmn` is the home page. `layout.lmn` holds a shared
+# `<template>` (global) that each page renders into via `<slot>`.
+#
+# Pages need no config: file-based routing is on by default whenever the app
+# directory holds more than one `.lmn` file. An optional `[pages]` block can
+# override the entry or list an explicit page set, but this app relies on the
+# zero-config default.
+
+[app]
+id = "com.lumen.examples.pages-demo"
+
+[window]
+title = "Lumen - File-based Pages"
+size  = [900, 640]
+
+[skin]
+name = "default"

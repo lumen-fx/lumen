@@ -1,0 +1,20 @@
+[package]
+name = "lumen-os-notify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Desktop-notification host for Lumen (notify-rust wrapper, Action-based buttons, NotificationActionInvoked message). QSystemTrayIcon::showMessage / GNotification analog."
+
+[dependencies]
+lumen-core = { path = "../core" }
+lumen-os-mime = { path = "../os-mime" }
+bevy_ecs.workspace = true
+
+# Cross-platform notifications: libnotify (Linux/BSD),
+# NSUserNotificationCenter (macOS), Toast (Windows). v1 keeps the
+# fire-and-forget shape; action handles + on_close callbacks land in a
+# follow-up alongside the per-platform app-id wiring.
+notify-rust = "4"

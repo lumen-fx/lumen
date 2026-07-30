@@ -1,0 +1,106 @@
+<root class="app">
+  <row class="window">
+
+    <column class="sidebar">
+      <column class="brand-card">
+        <label class="brand-eyebrow" text="Lumen Market" />
+        <label class="brand-title" text="My Portfolio" />
+        <row class="brand-values" gap="14">
+          <column gap="2">
+            <label class="kpi-value" bind-text="cap_label" text="—" />
+            <label class="kpi-label" text="market cap (top {n})" bind-text="cap_sub" />
+          </column>
+        </row>
+      </column>
+
+      <column class="sidebar-section">
+        <label class="section-eyebrow" text="VIEWS" />
+        <row class="sidebar-row active">
+          <label class="sidebar-dot dot-blue" text="●" />
+          <label class="sidebar-name" text="All coins" />
+          <spacer />
+          <label class="sidebar-count" bind-text="rows_label" text="0" />
+        </row>
+        <row class="sidebar-row">
+          <label class="sidebar-dot dot-green" text="●" />
+          <label class="sidebar-name" text="Top gainers" />
+          <spacer />
+          <label class="sidebar-count" bind-text="gainers_label" text="—" />
+        </row>
+        <row class="sidebar-row">
+          <label class="sidebar-dot dot-red" text="●" />
+          <label class="sidebar-name" text="Top losers" />
+          <spacer />
+          <label class="sidebar-count" bind-text="losers_label" text="—" />
+        </row>
+      </column>
+
+      <column class="sidebar-section">
+        <label class="section-eyebrow" text="STATUS" />
+        <column class="status-card">
+          <row gap="8" align="center">
+            <label class="status-dot" text="●" />
+            <label class="status-text" bind-text="feed_status" text="loading..." />
+          </row>
+          <label class="status-sub" bind-text="updated_label" text="idle" />
+          <label class="status-sub" bind-text="ticks_label" text="auto-refresh: 30s" />
+        </column>
+      </column>
+
+      <spacer />
+      <label class="sidebar-footnote" text="data · api.coingecko.com" />
+    </column>
+
+    <column class="content">
+      <row class="page-head">
+        <column class="page-title-group">
+          <label class="page-eyebrow" text="MARKETS / CRYPTO" />
+          <label class="page-title" text="Today's Market" />
+        </column>
+        <spacer />
+        <button id="refresh" class="btn-primary" text="Refresh" />
+        <button id="pause"   class="btn-ghost" bind-text="pause_label" text="Pause auto" />
+      </row>
+
+      <row class="search-bar">
+        <input id="search" class="search-input"
+               placeholder="Search symbol — BTC, ETH, SOL..." bind-text="filter" />
+      </row>
+
+      <column class="list-card">
+        <row class="list-head">
+          <label class="col-rank"  text="#" />
+          <label class="col-sym"   text="Asset" />
+          <label class="col-price" text="Price" />
+          <label class="col-chg"   text="24h" />
+          <label class="col-vol"   text="Volume" />
+          <label class="col-spark" text="7d trend" />
+        </row>
+        <scroll height="100%" class="list-scroll" sensitivity="0.7" inertia="0.32">
+          <for each="visible" key="id" virtualized="true" row-height="56">
+            <row class="list-row">
+              <label class="col-rank" text="{rank}" />
+              <column class="col-sym sym-cell" gap="2">
+                <label class="sym-ticker" text="{symbol}" />
+                <label class="sym-name" text="{name}" />
+              </column>
+              <label class="col-price" text="{price}" />
+              <label class="col-chg chg-{dir_class}" text="{change}" />
+              <label class="col-vol" text="{volume}" />
+              <label class="col-spark spark-{dir_class}" text="{spark}" />
+            </row>
+          </for>
+        </scroll>
+        <if signal="empty_visible">
+          <column class="empty">
+            <label class="empty-headline" text="No matching assets" />
+            <label class="empty-sub" text="Clear the filter to see the full list." />
+          </column>
+        </if>
+      </column>
+    </column>
+
+  </row>
+
+  <script src="main.rhai" />
+</root>

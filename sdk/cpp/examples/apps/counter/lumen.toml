@@ -1,0 +1,7 @@
+[app]
+entry = "main.lmn"
+id    = "dev.lumen.examples.cpp-counter"
+
+[window]
+title = "Lumen - C++ Counter"
+size  = [480, 280]

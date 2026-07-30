@@ -1,0 +1,107 @@
+<root class="app" skin="default">
+  <column class="shell">
+
+    <!-- Header + stats -->
+    <row class="header" align="center" gap="16">
+      <column gap="2">
+        <label class="brand" text="Streak" />
+        <label class="brand-sub" text="This week" />
+      </column>
+      <spacer />
+      <row class="stats" gap="10">
+        <column class="stat">
+          <label class="stat-num" bind-text="stat_total" />
+          <label class="stat-sub" text="checks" />
+        </column>
+        <column class="stat">
+          <label class="stat-num accent" bind-text="stat_streak" />
+          <label class="stat-sub" text="perfect days" />
+        </column>
+        <column class="stat">
+          <label class="stat-num" bind-text="pct_label" />
+          <label class="stat-sub" text="complete" />
+        </column>
+      </row>
+      <button id="open-settings" class="gear" text="⚙ Settings" />
+    </row>
+
+    <!-- Week grid -->
+    <column class="grid-card">
+      <column class="grid">
+        <label class="gh corner" text="Habit" />
+        <label class="gh" text="Mon" />
+        <label class="gh" text="Tue" />
+        <label class="gh" text="Wed" />
+        <label class="gh" text="Thu" />
+        <label class="gh" text="Fri" />
+        <label class="gh" text="Sat" />
+        <label class="gh" text="Sun" />
+
+        <label class="hlabel" text="Move 30 min" />
+        <toggle class="cell" bind-checked="h0_d0" />
+        <toggle class="cell" bind-checked="h0_d1" />
+        <toggle class="cell" bind-checked="h0_d2" />
+        <toggle class="cell" bind-checked="h0_d3" />
+        <toggle class="cell" bind-checked="h0_d4" />
+        <toggle class="cell" bind-checked="h0_d5" />
+        <toggle class="cell" bind-checked="h0_d6" />
+
+        <label class="hlabel" text="Read" />
+        <toggle class="cell" bind-checked="h1_d0" />
+        <toggle class="cell" bind-checked="h1_d1" />
+        <toggle class="cell" bind-checked="h1_d2" />
+        <toggle class="cell" bind-checked="h1_d3" />
+        <toggle class="cell" bind-checked="h1_d4" />
+        <toggle class="cell" bind-checked="h1_d5" />
+        <toggle class="cell" bind-checked="h1_d6" />
+
+        <label class="hlabel" text="Deep work" />
+        <toggle class="cell" bind-checked="h2_d0" />
+        <toggle class="cell" bind-checked="h2_d1" />
+        <toggle class="cell" bind-checked="h2_d2" />
+        <toggle class="cell" bind-checked="h2_d3" />
+        <toggle class="cell" bind-checked="h2_d4" />
+        <toggle class="cell" bind-checked="h2_d5" />
+        <toggle class="cell" bind-checked="h2_d6" />
+
+        <label class="hlabel" text="No doomscroll" />
+        <toggle class="cell" bind-checked="h3_d0" />
+        <toggle class="cell" bind-checked="h3_d1" />
+        <toggle class="cell" bind-checked="h3_d2" />
+        <toggle class="cell" bind-checked="h3_d3" />
+        <toggle class="cell" bind-checked="h3_d4" />
+        <toggle class="cell" bind-checked="h3_d5" />
+        <toggle class="cell" bind-checked="h3_d6" />
+      </column>
+    </column>
+
+    <row class="footer" align="center" gap="10">
+      <label class="hint" bind-text="total_label" />
+      <spacer />
+      <label class="hint" text="⌘, opens settings" />
+    </row>
+  </column>
+
+  <!-- Settings dialog -->
+  <dialog open="settings_open">
+    <column class="sheet" width="420px" gap="18">
+      <label class="sheet-title" text="Settings" />
+
+      <column gap="8">
+        <row align="center">
+          <label class="field-label" grow="1" text="Weekly goal" />
+          <label class="field-val" bind-text="goal_label" />
+        </row>
+        <slider id="goal" width="100%" min="0" max="28" value="20" bind-value="goal" />
+        <label class="field-note" bind-text="goal_status" />
+      </column>
+
+      <row gap="10" justify="end">
+        <button id="reset-week" class="btn-ghost" text="Clear week" />
+        <button id="settings-close" class="btn-primary" text="Done" />
+      </row>
+    </column>
+  </dialog>
+
+  <script src="main.cdl" />
+</root>

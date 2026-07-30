@@ -1,0 +1,28 @@
+<root>
+  <label id="counter-label" width="100%" height="100%" padding="30 0 24 0"
+         bind-text="counter_label"
+         text="Lua host - waiting" />
+  <script>
+    function bump(by)
+        local clicks = signal("clicks", 0)
+        clicks:set(clicks:get() + by)
+    end
+
+    function handle_reset_click(id)
+        signal("clicks", 0):set(0)
+    end
+
+    function on_start()
+        local clicks = signal("clicks", 0)
+        -- Computed signal: counter_label re-derives whenever clicks changes.
+        derive("counter_label", { clicks }, function(n)
+            return "Lua host - clicks: " .. n
+        end)
+        on("click", "reset", "handle_reset_click")
+    end
+
+    function on_click(id)
+        bump(1)
+    end
+  </script>
+</root>

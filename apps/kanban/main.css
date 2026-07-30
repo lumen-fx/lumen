@@ -1,0 +1,170 @@
+/* Lanes - a focused product board.
+ * Token-first: we retint the embedded skin by overriding its --lumen-*
+ * variables, then layer component classes on top. */
+:root {
+  --ink:        #0f1219;
+  --lane:       #171b26;
+  --card:       #1f2432;
+  --card-hover: #262c3d;
+  --line:       #2a3040;
+  --text:       #e7ebf3;
+  --muted:      #8b93a7;
+  --amber:      #f0a848;
+
+  --st-backlog: #6b7280;
+  --st-doing:   #4f9cf0;
+  --st-done:    #58c98a;
+
+  /* Drag-and-drop affordances (token-driven, no hardcoded visuals). */
+  --drag-elev:   0 12 30 #000000aa;  /* card lift while grabbed */
+  --drop-tint:   #222a3b;            /* lane fill while a drop is imminent */
+  --drop-ring:   0 0 16 var(--amber);/* lane glow marking the drop target */
+
+  /* Retint the default skin so dropdowns, dialog, and inputs match. */
+  --lumen-surface:       #1f2432;
+  --lumen-surface-hover: #262c3d;
+  --lumen-surface-active: #191d28;
+  --lumen-panel:         #1b2130;
+  --lumen-panel-hover:   #262c3d;
+  --lumen-border:        #2a3040;
+  --lumen-text:          #e7ebf3;
+  --lumen-text-muted:    #8b93a7;
+  --lumen-accent:        #f0a848;
+  --lumen-radius-sm:     8;
+  --lumen-radius:        10;
+}
+
+.app { bg: var(--ink); text-color: var(--text); }
+
+.shell { padding: 20; gap: 18; height: 100%; }
+
+/* --- Top bar --- */
+.topbar { }
+.brand { font-size: 26; text-color: var(--text); }
+.brand-sub { font-size: 13; text-color: var(--muted); }
+
+.search {
+  bg: #14171f;
+  text-color: var(--text);
+  radius: 8;
+  padding: 0 14;
+}
+.search:focus { outline: 2 var(--amber); }
+
+.btn-primary {
+  bg: var(--amber);
+  hover-bg: #f6bd6a;
+  press-bg: #d9902f;
+  text-color: #241704;
+  radius: 8;
+  padding: 10 18;
+}
+.btn-primary:focus { outline: 2 #ffd79a; }
+
+.btn-ghost {
+  bg: #232838;
+  hover-bg: #2c3244;
+  text-color: var(--text);
+  radius: 8;
+  padding: 10 18;
+}
+.btn-ghost:focus { outline: 2 var(--amber); }
+
+/* --- Board / lanes --- */
+.board { }
+.lane {
+  bg: var(--lane);
+  radius: 14;
+  padding: 14;
+  gap: 12;
+}
+/* Drop target under an in-app card drag (HTML5 `:drag-over` parity). */
+.lane:drag-over {
+  bg: var(--drop-tint);
+  shadow: var(--drop-ring);
+}
+
+.lane-head { }
+.dot { width: 10px; height: 10px; radius: 999; }
+.dot-backlog { bg: var(--st-backlog); }
+.dot-doing   { bg: var(--st-doing); }
+.dot-done    { bg: var(--st-done); }
+
+.lane-name { font-size: 15; text-color: var(--text); }
+.count {
+  bg: #14171f;
+  text-color: var(--muted);
+  font-size: 12;
+  radius: 999;
+  padding: 3 10;
+}
+
+.lane-body { padding: 2; }
+
+/* --- Cards --- */
+.card {
+  bg: var(--card);
+  hover-bg: var(--card-hover);
+  radius: 10;
+  padding: 12;
+  shadow: 0 2 8 #00000055;
+}
+/* Grab feedback: the card lifts + dims while pressed to start a drag. */
+.card:active {
+  opacity: 0.85;
+  shadow: var(--drag-elev);
+}
+.card-done { opacity: 0.72; }
+
+.card-title { font-size: 14; text-color: var(--text); }
+
+.tag {
+  radius: 999;
+  padding: 3 10;
+  font-size: 11;
+  text-color: #0d1017;
+}
+.tag-feature { bg: #7fb8ff; }
+.tag-bug     { bg: #ff8fa0; }
+.tag-design  { bg: #c6a4ff; }
+.tag-chore   { bg: #9aa4b8; }
+
+.icon-btn {
+  bg: #00000000;
+  hover-bg: #33202444;
+  text-color: var(--muted);
+  radius: 6;
+  padding: 2 8;
+  min-width: 24px;
+}
+.icon-btn:hover { bg: #3a2126; }
+.icon-btn:focus { outline: 2 #ff8fa0; }
+
+.move-btn {
+  bg: #171b26;
+  hover-bg: #2c3244;
+  text-color: var(--muted);
+  radius: 6;
+  padding: 4 10;
+  font-size: 12;
+  min-width: 34px;
+}
+.move-btn:focus { outline: 2 var(--amber); }
+
+/* --- Dialog sheet --- */
+.sheet {
+  bg: #1b2130;
+  radius: 16;
+  padding: 24;
+  gap: 16;
+  shadow: 0 24 60 #000000cc;
+}
+.sheet-title { font-size: 20; text-color: var(--text); }
+.field-label { font-size: 12; text-color: var(--muted); }
+.sheet-input {
+  bg: #14171f;
+  text-color: var(--text);
+  radius: 8;
+  padding: 0 14;
+}
+.sheet-input:focus { outline: 2 var(--amber); }

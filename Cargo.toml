@@ -1,0 +1,277 @@
+[workspace]
+resolver = "2"
+members = [
+    "lumen/core",
+    "lumen/ir",
+    "lumen/runtime",
+    "lumen/script",
+    "lumen/text",
+    "lumen/audio",
+    "lumen/render-wgpu",
+    "lumen/render-headless",
+    "lumen/layout-taffy",
+    "lumen/text-cosmic",
+    "lumen/window-winit",
+    "lumen/async-tokio",
+    "lumen/a11y-accesskit",
+    "lumen/script-rhai",
+    "lumen/script-lua",
+    "lumen/script-candela",
+    "lumen/input",
+    "lumen/primitives",
+    "lumen/widget",
+    "lumen/widget-macros",
+    "lumen/assets",
+    "lumen/ffi",
+    "lumen/os-mime",
+    "lumen/os-clipboard",
+    "lumen/os-dnd",
+    "lumen/os-menu",
+    "lumen/os-filedialog",
+    "lumen/os-tray",
+    "lumen/os-notify",
+    "lumen/os-hotkey",
+    "lumen/os-launcher",
+    "lumen/os-power",
+    "lumen/os-lifecycle",
+    "lumen/i18n",
+    "lumen/devtools",
+    "lumenc",
+    "sdk/rust",
+    "lumen/lsp",
+    "lumen/mcp",
+    "lumen/mcp-server",
+    "benches",
+]
+
+[workspace.package]
+version = "0.1.0-dev"
+edition = "2024"
+license = "MPL-2.0"
+authors = ["Lumen contributors"]
+repository = "https://github.com/lumen-fx/lumen"
+rust-version = "1.85"
+
+# Centralized dependency versions. Crates opt in by adding e.g.
+#     bevy_ecs.workspace = true
+# in their own Cargo.toml. Adding a line here pulls nothing on its own;
+# stub crates stay dep-free until they need it.
+[workspace.dependencies]
+# Core
+# Bevy 0.18 merged bevy_hierarchy into bevy_ecs::hierarchy. Parent -> ChildOf.
+# Do NOT add a separate bevy_hierarchy dep - it is stuck at 0.15 and would
+# create a duplicate-type graph.
+bevy_ecs = { version = "0.18", default-features = false, features = ["multi_threaded"] }
+bevy_tasks = { version = "0.18", default-features = false, features = ["multi_threaded"] }
+crossbeam-channel = "0.5"
+# glam version is locked by Bevy. Bevy 0.18 pins glam ^0.30. Bumping to 0.32
+# silently compiles but breaks Vec3/Mat4 boundary types.
+glam = "0.30"
+
+# Rendering
+# Pinned to wgpu 28 because vello 0.8 ships wgpu 28; mixing versions yields
+# duplicate-type errors at FFI boundaries. Use `vello::wgpu` re-export in
+# code so the version follows vello automatically.
+#
+# Part A (runtime-tree-shaking): `vello` drops default features and asks only
+# for `wgpu` -- that drops vello's `wgpu_default` alias which turned on
+# `wgpu/default` and with it ALL FOUR native backends (+ all four naga
+# shader-output generators) on every OS. `wgpu` itself is `default-features =
+# false` here as a shared anchor; `lumen-render-wgpu` adds ONE target-scoped
+# `wgpu` dep selecting exactly the current OS's backend (Vulkan/Metal/DX12),
+# so cargo feature unification resolves wgpu to a single backend per OS.
+wgpu = { version = "28", default-features = false }
+vello = { version = "0.8", default-features = false, features = ["wgpu"] }
+# SVG parser. vello_svg can't be used directly: its 0.8 release pins
+# vello 0.6 and its 0.9 release pins vello 0.7 - both conflict with
+# our pinned vello 0.8 + wgpu 28. So we pull `usvg` standalone, walk
+# the parsed tree on the asset worker, and emit kurbo paths into our
+# own vello::Scene. Keeps vello version control local and supports the
+# common SVG-icon subset (paths + solid fills/strokes).
+#
+# default-features = false drops usvg's `text` stack (rustybuzz + its
+# fontdb wiring) - a SECOND shaping engine next to cosmic-text's
+# harfrust, ~0.5 MiB of duplicate .text in release lumenc. No behavior
+# change: the usvg->vello walker in lumen-assets has always ignored
+# `Node::Text` (the enum variant exists regardless of the feature), so
+# SVG <text> was never rendered. If SVG text support ever lands,
+# prefer pre-flattening via cosmic-text over re-enabling usvg's
+# parallel shaper stack.
+usvg = { version = "0.46", default-features = false }
+
+# Layout
+taffy = "0.10"
+
+# Text
+cosmic-text = "0.19"
+
+# Windowing - 0.30 is current stable; 0.31 is still beta as of May 2026.
+winit = "0.30"
+
+# Async
+tokio = { version = "1.52", features = ["rt-multi-thread", "io-util", "fs", "net", "macros", "sync"] }
+
+# A11y
+accesskit = "0.24"
+accesskit_winit = "0.33"
+
+# Scripting. The `sync` feature swaps internal `Rc`s for `Arc`s so the
+# Engine + AST + Dynamic are Send + Sync, letting hosts move between
+# threads / sit in regular bevy Resources / parallelize naturally.
+rhai = { version = "1.24", features = ["sync"] }
+# Alternative script host (lumen-script-lua). `vendored` statically
+# builds Lua 5.4 (no system dependency, hermetic under the pinned
+# toolchain); `send` swaps mlua's internals so `Lua`, `Value`,
+# `Function` are `Send + Sync` - required so `LuaHost` can be a regular
+# bevy Resource + satisfy `ScriptHost: Send + Sync`, exactly as rhai's
+# `sync` feature does for `RhaiHost`.
+mlua = { version = "0.10", features = ["lua54", "vendored", "send"] }
+
+# Tooling
+cbindgen = "0.29"
+tower-lsp = "0.20"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = "0.3"
+# Chrome trace exporter - emits a JSON file readable by chrome://tracing
+# and Perfetto. Compiled only behind lumenc's `profiling` cargo feature
+# (which also flips bevy_ecs/trace on so spans exist); installed at
+# runtime by `lumenc run --profile chrome`.
+tracing-chrome = "0.7"
+
+# Errors
+thiserror = "2"
+
+# Unix signal -> flag bridge (lumenc --headless graceful SIGINT/SIGTERM).
+signal-hook = "0.3"
+# Windows console-control (Ctrl+C / Ctrl+Break / close) -> graceful close.
+# The Unix arm uses signal-hook directly; ctrlc wraps SetConsoleCtrlHandler
+# so the windows arms mirror the SIGINT/SIGTERM behavior.
+ctrlc = "3"
+
+# Serialization (used by lumen-mcp + lumen-mcp-server)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Compact binary codec for the AOT compiled-app artifact (`lumenc build`).
+# Chosen over RON/JSON because bincode drops all field-name/schema overhead;
+# the artifact is embedded/shipped, so on-disk size is the priority.
+bincode = "1.3"
+# TOML parser for lumen.toml per-app config.
+toml = { version = "0.9", default-features = false, features = ["parse", "serde", "display"] }
+
+# Image encoding (PNG for headless screenshots in lumen-mcp).
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Base64 encoding (for screenshot transport).
+base64 = "0.22"
+
+# Synchronous HTTP for scripts' `fetch(url, tag)` builtin. Spawned on a
+# dedicated thread per request, so the main loop stays unblocked.
+ureq = { version = "3", features = ["json"] }
+
+# OS clipboard for text-input copy/cut/paste. Cross-platform: Wayland, X11,
+# macOS, Windows. We instantiate one Clipboard per process at plugin init.
+arboard = { version = "3", default-features = false, features = ["image-data"] }
+
+# System info (CPU%, memory, processes) - exposed to Rhai as builtins
+# so apps can build system-monitor-style UIs. One cached
+# `sysinfo::System` lives on `RhaiHost`; refreshes throttle to >= 200 ms
+# to match sysinfo's CPU sampling minimum.
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+
+# Markdown parser - exposed as `parse_markdown(s)` Rhai builtin so apps
+# can render markdown blocks via `<for>`. Block-level only at the Rhai
+# layer; inline emphasis flattens to plain text.
+pulldown-cmark = { version = "0.12", default-features = false }
+
+# Bounded LRU cache. Pure-Rust, no_std-compatible; ~200 LoC. Used by
+# lumen-text-cosmic (shape result cache), lumen-render-wgpu (GPU upload
+# cache), and lumen-assets (image / SVG / failure caches). Pinning to one
+# version here keeps the dep graph unified across the workspace.
+lru = "0.18"
+
+# Fast, non-DoS-resistant hasher (Firefox's FxHash). Used for internal
+# render / shaping caches keyed on trusted data (font ids, fragment keys)
+# where the cryptographic strength of the std `DefaultHasher` (SipHash) is
+# wasted cycles. Pure-Rust, no_std-compatible.
+rustc-hash = "2"
+
+# Rope buffer for editable text (W3.1). O(log n) insert/delete + cheap
+# slicing - used by lumen-core's TextBuffer for editable inputs.
+ropey = "1"
+
+# Grapheme cluster / word boundary iteration (W3.1 + W3.4). Powers
+# double-click word selection and grapheme-level cursor movement.
+unicode-segmentation = "1"
+
+# Cross-platform filesystem watch - backs lumen-assets' disk-change
+# invalidation. Wraps inotify / FSEvents / ReadDirectoryChangesW.
+# `RecommendedWatcher` picks the best backend per platform at runtime.
+notify = "8"
+
+# Cross-platform URL / file opener. Backs `lumen-os-launcher`
+# (`open_url`, `open_path`, `reveal_in_file_manager`). Wraps
+# `xdg-open` / `start` / `open` per OS - same surface every desktop
+# app re-implements.
+opener = "0.7"
+
+# CSS tokenizer (W4.1). Provides W3C-spec-compliant component-value /
+# at-rule tokenization. We layer our own selector parser + matcher on
+# top because `selectors` (the Servo crate) requires implementing six
+# ECS-touching traits (`Element`, `SelectorImpl`, bloom filters ...) for
+# a feature surface (`@layer`, full attr selectors, namespaces) much
+# wider than W4.1-W4.4 needs. Keeping the matcher in-house buys
+# specificity + combinators + `:is/:where/:not` + structural pseudos
+# against `cssparser` tokens at much lower wire-up cost.
+cssparser = "0.37"
+
+# Internationalization (W5.7 / W5.8). Fluent for translation; ICU4X
+# umbrella for locale-aware number / date / currency / relative-time
+# formatting. The `experimental` feature pulls in `icu_experimental`
+# (currency formatter + relative-time formatter - round-7 upgrade);
+# the `sync` feature swaps internal Rcs for Arcs so baked-data
+# DataPayloads inside formatters become Send + Sync, which bevy_ecs
+# `Resource` requires. The `ryu` feature enables `Decimal::try_from_f64`.
+fluent = "0.17"
+fluent-bundle = "0.16"
+unic-langid = "0.9"
+icu = { version = "2", features = ["experimental", "sync"] }
+# Separate pin so the `ryu` feature on `fixed_decimal` is enabled -
+# the icu umbrella doesn't re-export it, and Decimal::try_from_f64 is
+# gated behind it. Both icu_decimal and this pin resolve to the same
+# fixed_decimal 0.7.x major.
+fixed_decimal = { version = "0.7", features = ["ryu"] }
+# Tiny inline ASCII strings - backs ICU4X's CurrencyCode (3-char ISO-4217).
+# Already a transitive dep via every icu_* crate; exposed at workspace
+# level so lumen-i18n can construct CurrencyCode directly.
+tinystr = "0.8"
+# System locale detection - already a transitive dep via cosmic-text.
+# Declaring it at workspace level so lumen-i18n can grab the same pin.
+sys-locale = "0.3"
+
+# Testing
+proptest = "1.11"
+criterion = "0.8"
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+# panic stays "unwind": lumen-ffi's C-ABI exports rely on catch_unwind to
+# convert panics into error codes; abort would kill the host process instead.
+#
+# opt-level "s": author's trade (2026-07-22) - measured 27.66 -> 19.98 MiB
+# stripped lumenc (-26%) for +1.5-3.3 ms startup and noise-level scroll
+# p95. Size is the headline priority; revisit if a hot path regresses.
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+debug = false
+strip = "symbols"
+
+# Speed up dev builds of heavy backend crates while keeping our own crates
+# fast to recompile.
+[profile.dev.package."*"]
+opt-level = 1

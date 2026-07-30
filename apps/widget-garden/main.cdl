@@ -1,0 +1,257 @@
+// Lumen Widget Garden - candela logic on the dynamic DOM API.
+//
+// Every static showcase widget stays declarative in main.lmn. Only the Lists
+// tab, which the Rhai version drove with signal_array + <for>, is built
+// imperatively: main.lmn ships an empty <column id="todos-list"> and this
+// script fills it with real elements (node_spawn / node_append). Adding a row
+// appends one more element; the per-row layout lives in CSS classes.
+//
+// Scalar UI state stays in signals with bind-* in the markup. Derived labels
+// recompute through derive(); the recompute body is referenced by function
+// name and its parameters arrive as the current dep-signal values.
+
+import "lumen.cdl";
+
+// ── Lists tab: element-wise row building ────────────────────────────────
+
+// Spawn a <label class=cls> with text under `row`. node_set_attr splits the
+// class on whitespace, so it also handles multi-class cells.
+fn add_cell(row, cls, text) {
+    let cell = lumen::node_spawn("label");
+    lumen::node_set_attr(cell, "class", cls);
+    lumen::node_set_text(cell, text);
+    lumen::node_append(row, cell);
+}
+
+// Append one list <row> built element by element. The row flex line and each
+// cell's width / grow come from CSS classes; only class and text are set here.
+fn add_todo_row(container, idx, label, status) {
+    let row = lumen::node_spawn("row");
+    lumen::node_set_attr(row, "class", "list-row");
+    lumen::node_append(container, row);
+    add_cell(row, "li-idx", idx);
+    add_cell(row, "li-label", label);
+    add_cell(row, "pill", status);
+}
+
+fn update_todo_count() {
+    let container = lumen::node_get_by_id("todos-list");
+    if container == 0 { return; }
+    let kids = lumen::node_children(container);
+    let n = kids.len();
+    let msg = str(n) + " rows (DOM-built)";
+    lumen::signal_set("todo_count", msg);
+}
+
+// Initial list build. Runs from on_ready, past the first tick, so #todos-list
+// is queryable.
+fn render_todos() {
+    let container = lumen::node_get_by_id("todos-list");
+    if container == 0 { return; }
+    add_todo_row(container, "1", "Layout — taffy", "done");
+    add_todo_row(container, "2", "Reactive signals", "done");
+    add_todo_row(container, "3", "Frameless windows", "done");
+    add_todo_row(container, "4", "OS theme detection", "done");
+    add_todo_row(container, "5", "Native menu bar", "partial");
+    add_todo_row(container, "6", "Multi-window", "todo");
+    update_todo_count();
+}
+
+// ── Derived display labels ──────────────────────────────────────────────
+
+fn calc_email_valid(s) {
+    if s.contains("@") { return "✓ valid"; }
+    return "needs @";
+}
+
+fn calc_telemetry_status(v) {
+    if v { return "on"; }
+    return "off";
+}
+
+fn calc_click_label(n) {
+    return "clicks: " + str(n);
+}
+
+fn calc_greeting(s) {
+    if s == "" { return "(nobody yet)"; }
+    return "hi, " + s + "!";
+}
+
+fn calc_toggle_status(v) {
+    if v { return "dark mode"; }
+    return "light mode";
+}
+
+// ── Lifecycle ───────────────────────────────────────────────────────────
+
+fn on_start() {
+    // Scalar state, seeded with real types so per-tick binding writes parse
+    // back into the type each derive expects.
+    lumen::signal_set_int("clicks", 0);
+    lumen::signal_set_int("volume", 42);
+    lumen::signal_set("who", "");
+    lumen::signal_set_bool("dark", true);
+    lumen::signal_set("dialog_open", "");
+    lumen::signal_set("weight", "medium");
+    lumen::signal_set("fruit", "grape");
+    lumen::signal_set("note", "");
+    lumen::signal_set("email", "");
+    lumen::signal_set("meet_date", "2026-05-20");
+    lumen::signal_set("meet_time", "14:30");
+    lumen::signal_set_bool("telemetry", false);
+    lumen::signal_set("dialog_verdict", "no verdict yet");
+
+    // Counters kept in signals because each handler is a separate program call.
+    lumen::signal_set_int("accept_count", 0);
+    lumen::signal_set_int("reject_count", 0);
+    lumen::signal_set_int("hotkey_count", 0);
+    lumen::signal_set_int("todo_next", 7);
+
+    lumen::signal_set("theme_status", "OS theme follows .theme-{light,dark} class on <root>");
+    lumen::signal_set("hotkey_status", "Ctrl+Shift+L bound (anywhere)");
+    lumen::signal_set("picked", "nothing picked yet");
+    lumen::signal_set("todo_count", "rows built via the DOM API");
+
+    // Computed labels drive the bound text declaratively.
+    lumen::derive("email_valid", ["email"], "calc_email_valid");
+    lumen::derive("telemetry_status", ["telemetry"], "calc_telemetry_status");
+    lumen::derive("click_label", ["clicks"], "calc_click_label");
+    lumen::derive("greeting", ["who"], "calc_greeting");
+    lumen::derive("toggle_status", ["dark"], "calc_toggle_status");
+
+    // Per-id click router. The OS-touching builtins live inside the handlers.
+    lumen::on("click", "bump", "handle_bump");
+    lumen::on("click", "reset", "handle_reset");
+    lumen::on("click", "danger", "handle_danger");
+    lumen::on("click", "notify", "handle_notify");
+    lumen::on("click", "notify-2", "handle_notify");
+    lumen::on("click", "theme-toggle", "handle_theme_toggle");
+    lumen::on("click", "add-todo", "handle_add_todo");
+    lumen::on("click", "open-dialog", "handle_open_dialog");
+    lumen::on("click", "dialog-close", "handle_dialog_close");
+    lumen::on("click", "dialog-confirm", "handle_dialog_close");
+    // Exactly-once dialog verdict hooks: one fires per open/close cycle.
+    lumen::on("dialog_accepted", "demo-dialog", "handle_dialog_accepted");
+    lumen::on("dialog_rejected", "demo-dialog", "handle_dialog_rejected");
+    lumen::on("click", "pick", "handle_pick");
+    lumen::on("click", "open-actions-menu", "handle_open_menu");
+    lumen::on("hotkey", "save", "handle_hotkey_save");
+    // <menu> item dispatch routes here for the actions-menu items.
+    lumen::on("menu", "rename", "handle_menu_action");
+    lumen::on("menu", "duplicate", "handle_menu_action");
+    lumen::on("menu", "delete", "handle_menu_action");
+
+    lumen::register_hotkey("save", "CommandOrControl+Shift+L");
+}
+
+// on_ready fires on the first tick, after the DOM index is published, so
+// #todos-list is queryable. The initial list build lives here.
+fn on_ready() {
+    render_todos();
+}
+
+// ── Handlers ────────────────────────────────────────────────────────────
+
+fn handle_bump(id) {
+    let n = lumen::signal_get_int("clicks");
+    let m = n + 1;
+    lumen::signal_set_int("clicks", m);
+}
+
+fn handle_reset(id) {
+    lumen::signal_set_int("clicks", 0);
+}
+
+fn handle_danger(id) {
+    lumen::notify("Lumen", "Pretend this was destructive.");
+}
+
+fn handle_notify(id) {
+    lumen::notify("Lumen Widget Garden", "Native toast via notify-rust.");
+}
+
+fn handle_theme_toggle(id) {
+    let now = lumen::signal_get_bool("dark");
+    if now {
+        lumen::signal_set_bool("dark", false);
+        lumen::set_root_class("app theme-light");
+        lumen::signal_set("theme_status", "override → light");
+    } else {
+        lumen::signal_set_bool("dark", true);
+        lumen::set_root_class("app theme-dark");
+        lumen::signal_set("theme_status", "override → dark");
+    }
+}
+
+fn handle_add_todo(id) {
+    let container = lumen::node_get_by_id("todos-list");
+    if container == 0 { return; }
+    let n = lumen::signal_get_int("todo_next");
+    let idx = str(n);
+    let label = "Row " + str(n);
+    add_todo_row(container, idx, label, "new");
+    let m = n + 1;
+    lumen::signal_set_int("todo_next", m);
+    update_todo_count();
+}
+
+fn handle_open_dialog(id) {
+    lumen::signal_set("dialog_open", "1");
+}
+
+fn handle_dialog_close(id) {
+    lumen::signal_set("dialog_open", "");
+}
+
+fn handle_dialog_accepted(id) {
+    let n = lumen::signal_get_int("accept_count");
+    let m = n + 1;
+    lumen::signal_set_int("accept_count", m);
+    let r = lumen::signal_get_int("reject_count");
+    let msg = "accepted ×" + str(m) + ", rejected ×" + str(r);
+    lumen::signal_set("dialog_verdict", msg);
+}
+
+fn handle_dialog_rejected(id) {
+    let n = lumen::signal_get_int("reject_count");
+    let m = n + 1;
+    lumen::signal_set_int("reject_count", m);
+    let a = lumen::signal_get_int("accept_count");
+    let msg = "accepted ×" + str(a) + ", rejected ×" + str(m);
+    lumen::signal_set("dialog_verdict", msg);
+}
+
+fn handle_pick(id) {
+    lumen::pick_file("garden-open");
+}
+
+fn on_file_picked(tag, path) {
+    if path == "" {
+        lumen::signal_set("picked", "(cancelled)");
+    } else {
+        let msg = "picked: " + path;
+        lumen::signal_set("picked", msg);
+    }
+}
+
+fn handle_open_menu(id) {
+    lumen::open_menu("actions");
+}
+
+fn handle_menu_action(id) {
+    let msg = "Menu item fired: " + id;
+    lumen::notify("Lumen Widget Garden", msg);
+}
+
+fn handle_hotkey_save(name) {
+    let fired = "Hotkey fired (" + name + ")";
+    lumen::notify("Lumen", fired);
+    let c = lumen::signal_get_int("hotkey_count");
+    let np = c + 1;
+    let status = "Ctrl+Shift+L pressed " + str(np) + "×";
+    lumen::signal_set("hotkey_status", status);
+    lumen::signal_set_int("hotkey_count", np);
+}
+
+fn main() {}

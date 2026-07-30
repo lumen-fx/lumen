@@ -1,0 +1,147 @@
+/*
+ * Sysmon - visual language of apps/weather, applied to a metrics app:
+ * deep-blue gradient canvas, chip pills in the top bar, two large
+ * metric panels for CPU and MEMORY, glass-card process list below.
+ */
+
+:root {
+  --color-bg-deep:     #0a1e3a;
+  --color-bg-mid:      #143a72;
+  --color-panel-top:   #1c4382;
+  --color-panel-bot:   #122d5c;
+  --color-glass:       #102849cc;
+  --color-tile:        #26538e;
+  --color-tile-hover:  #3268a8;
+  --color-tile-press:  #1e4377;
+  --color-row-hover:   #29548c80;
+  --color-accent-cool: #5fd9e0;
+  --color-accent-warm: #ffd166;
+  --color-accent-good: #6ee7b7;
+  --color-accent-live: #3fd97f;
+  --color-on-bg:       #ffffff;
+  --color-on-bg-soft:  #dde9f4;
+  --color-on-bg-mute:  #bbd2ea;
+  --color-on-bg-dim:   #8eaecf;
+  --shadow-soft:       0 1 3 #00000033;
+  --shadow-card:       0 6 18 #00000055;
+  --radius-md:         16;
+  --radius-lg:         22;
+}
+
+/* ---- top bar chips ---- */
+.chip {
+  bg:         var(--color-tile);
+  hover-bg:   var(--color-tile-hover);
+  press-bg:   var(--color-tile-press);
+  text-color: var(--color-on-bg);
+  shadow:     var(--shadow-soft);
+  radius:     var(--radius-lg);
+  align:      center;
+}
+.chip.live {
+  bg:         #143828;
+  hover-bg:   #1c4f3a;
+  text-color: var(--color-accent-live);
+}
+.chip:focus { outline: 2 var(--color-accent-cool); }
+
+.title-pill {
+  text-color: var(--color-on-bg);
+  font-size: 18;
+  align: center;
+}
+
+.caption  {
+  text-color: var(--color-on-bg-dim);
+  font-size: 13;
+  text-align: end;
+  align: center;
+}
+
+/* ---- hero metric panels (mirror weather's hero pattern) ---- */
+.metric-panel {
+  bg:       linear-gradient(180deg, var(--color-panel-top), var(--color-panel-bot));
+  radius:   var(--radius-lg);
+  border:   1px #ffffff1a;
+  shadow:   var(--shadow-card);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.hero-eyebrow {
+  font-size: 12;
+  text-color: var(--color-on-bg-dim);
+  height: 18px;
+}
+.hero-subeyebrow {
+  font-size: 12;
+  text-color: var(--color-on-bg-mute);
+  height: 18px;
+}
+
+.metric {
+  text-color: var(--color-on-bg);
+  font-size: 96;
+  height: 130px;
+}
+.metric.cpu { text-color: var(--color-accent-cool); }
+.metric.mem { text-color: var(--color-accent-good); }
+
+.histo-hero {
+  font-size: 44;
+  height: 56px;
+  width: 100%;
+}
+.histo-cpu { text-color: var(--color-accent-cool); }
+.histo-mem { text-color: var(--color-accent-good); }
+
+/* ---- process list (glass card) ---- */
+.list-shell {
+  bg:     var(--color-glass);
+  radius: var(--radius-lg);
+  border: 1px #ffffff1a;
+  shadow: var(--shadow-card);
+}
+
+.list-card {
+  bg: #00000000;
+  min-height: 0;
+  border: 1 0 0 0 #ffffff14;
+}
+
+.list-head {
+  height: 44px;
+  width: 100%;
+  padding: 0 28;
+  align: center;
+  gap: 18;
+}
+
+.list-cols {
+  height: 32px;
+  width: 100%;
+  padding: 0 28;
+  align: center;
+  gap: 18;
+  font-size: 11;
+  text-color: var(--color-on-bg-dim);
+}
+
+.list-scroll {
+  grow: 1;
+}
+
+.list-row {
+  height: 40px;
+  width: 100%;
+  padding: 0 28;
+  align: center;
+  gap: 18;
+  hover-bg: var(--color-row-hover);
+  border: 0 0 1 0 #ffffff0a;
+}
+
+.col-pid   { width: 110px; font-size: 14; text-color: var(--color-on-bg-mute); text-align: end; }
+.col-name  { grow: 1;      font-size: 15; text-color: var(--color-on-bg);      }
+.col-cpu   { width: 110px; font-size: 15; text-color: var(--color-accent-cool); text-align: end; }
+.col-mem   { width: 130px; font-size: 14; text-color: var(--color-on-bg-soft); text-align: end; }

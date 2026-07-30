@@ -1,0 +1,10 @@
+# Proof fixture for the post-mount `on_ready` lifecycle. `on_start` runs before
+# the first DOM index publish (a query there returns 0); `on_ready` runs after
+# it (the same query resolves the mounted node). The two bound labels below
+# capture what each callback saw.
+[script]
+engine = "candela"
+
+# No introspection server -- keeps `--headless` CI runs from binding a port.
+[mcp]
+port = 0

@@ -1,0 +1,10 @@
+[app]
+entry = "main.lmn"
+id    = "com.lumen.examples.tracker"
+
+[window]
+title = "Streak - Habit Tracker"
+size  = [920, 560]
+
+[script]
+engine = "candela"

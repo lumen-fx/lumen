@@ -1,0 +1,139 @@
+<root class="app" skin="default">
+  <column class="shell">
+
+    <!-- Top bar -->
+    <row class="topbar" align="center" gap="16">
+      <column gap="2">
+        <label class="brand" text="Lanes" />
+        <label class="brand-sub" bind-text="board_summary" />
+      </column>
+      <spacer />
+      <input id="search-input" class="search" width="260px"
+             placeholder="Filter cards…" bind-text="search" />
+      <button id="new-card" class="btn-primary" text="+ New card" />
+    </row>
+
+    <!-- Board -->
+    <row class="board" gap="16" grow="1">
+
+      <column class="lane" grow="1" id="lane-backlog" drop-target="true" accept="text/plain">
+        <row class="lane-head" align="center" gap="10">
+          <tile class="dot dot-backlog" />
+          <label class="lane-name" text="Backlog" />
+          <spacer />
+          <label class="count" bind-text="hdr_backlog" />
+        </row>
+        <scroll class="lane-body" grow="1">
+          <for each="view_backlog" key="id" gap="10">
+            <column class="card" gap="8" drag-payload="{row.id}">
+              <row align="center" gap="8">
+                <label class="card-title" grow="1" wrap="word" text="{row.title}" />
+                <button id="dl|{row.id}" class="icon-btn" text="✕" />
+              </row>
+              <row align="center" gap="8">
+                <label class="tag {row.tag_class}" text="{row.tag}" />
+                <spacer />
+                <button id="ml|{row.id}" class="move-btn" text="◀" />
+                <button id="ed|{row.id}" class="move-btn" text="Edit" />
+                <button id="mr|{row.id}" class="move-btn" text="▶" />
+              </row>
+            </column>
+          </for>
+        </scroll>
+      </column>
+
+      <column class="lane" grow="1" id="lane-doing" drop-target="true" accept="text/plain">
+        <row class="lane-head" align="center" gap="10">
+          <tile class="dot dot-doing" />
+          <label class="lane-name" text="In progress" />
+          <spacer />
+          <label class="count" bind-text="hdr_doing" />
+        </row>
+        <scroll class="lane-body" grow="1">
+          <for each="view_doing" key="id" gap="10">
+            <column class="card" gap="8" drag-payload="{row.id}">
+              <row align="center" gap="8">
+                <label class="card-title" grow="1" wrap="word" text="{row.title}" />
+                <button id="dl|{row.id}" class="icon-btn" text="✕" />
+              </row>
+              <row align="center" gap="8">
+                <label class="tag {row.tag_class}" text="{row.tag}" />
+                <spacer />
+                <button id="ml|{row.id}" class="move-btn" text="◀" />
+                <button id="ed|{row.id}" class="move-btn" text="Edit" />
+                <button id="mr|{row.id}" class="move-btn" text="▶" />
+              </row>
+            </column>
+          </for>
+        </scroll>
+      </column>
+
+      <column class="lane" grow="1" id="lane-done" drop-target="true" accept="text/plain">
+        <row class="lane-head" align="center" gap="10">
+          <tile class="dot dot-done" />
+          <label class="lane-name" text="Done" />
+          <spacer />
+          <label class="count" bind-text="hdr_done" />
+        </row>
+        <scroll class="lane-body" grow="1">
+          <for each="view_done" key="id" gap="10">
+            <column class="card card-done" gap="8" drag-payload="{row.id}">
+              <row align="center" gap="8">
+                <label class="card-title" grow="1" wrap="word" text="{row.title}" />
+                <button id="dl|{row.id}" class="icon-btn" text="✕" />
+              </row>
+              <row align="center" gap="8">
+                <label class="tag {row.tag_class}" text="{row.tag}" />
+                <spacer />
+                <button id="ml|{row.id}" class="move-btn" text="◀" />
+                <button id="ed|{row.id}" class="move-btn" text="Edit" />
+                <button id="mr|{row.id}" class="move-btn" text="▶" />
+              </row>
+            </column>
+          </for>
+        </scroll>
+      </column>
+
+    </row>
+  </column>
+
+  <!-- Add / edit dialog -->
+  <dialog open="editor_open">
+    <column class="sheet" width="460px" gap="16">
+      <label class="sheet-title" bind-text="editor_heading" />
+
+      <column gap="6">
+        <label class="field-label" text="Title" />
+        <input id="editor-title" class="sheet-input" width="100%"
+               placeholder="What needs doing?" bind-text="draft_title" />
+      </column>
+
+      <row gap="16">
+        <column gap="6" grow="1">
+          <label class="field-label" text="Tag" />
+          <dropdown bind-value="draft_tag" placeholder="Tag…">
+            <option value="feature" label="Feature" />
+            <option value="bug"     label="Bug" />
+            <option value="design"  label="Design" />
+            <option value="chore"   label="Chore" />
+          </dropdown>
+        </column>
+        <column gap="6" grow="1">
+          <label class="field-label" text="Column" />
+          <dropdown bind-value="draft_col" placeholder="Column…">
+            <option value="backlog" label="Backlog" />
+            <option value="doing"   label="In progress" />
+            <option value="done"    label="Done" />
+          </dropdown>
+        </column>
+      </row>
+
+      <row gap="10" justify="end">
+        <button id="editor-cancel" class="btn-ghost" text="Cancel" />
+        <button id="editor-save" class="btn-primary" text="Save card" />
+      </row>
+    </column>
+  </dialog>
+
+  <script src="main.rhai" />
+</root>

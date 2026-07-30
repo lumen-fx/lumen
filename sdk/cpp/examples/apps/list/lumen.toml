@@ -1,0 +1,7 @@
+[app]
+entry = "main.lmn"
+id    = "dev.lumen.examples.cpp-list"
+
+[window]
+title = "Lumen - C++ List"
+size  = [460, 320]

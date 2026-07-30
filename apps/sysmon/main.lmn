@@ -1,0 +1,74 @@
+<root bg="linear-gradient(160deg, #0a1e3a 0%, #14366a 35%, #1f4e90 65%, #143a72 100%)">
+
+  <!-- TOP BAR -->
+  <row width="100%" height="80px" padding="16 32" gap="12" align="center">
+    <tile class="chip" width="210px" height="44px" padding="0 18" text-align="center"
+          font-size="14" text="Lumen · System" />
+    <label class="title-pill" width="240px" height="44px" padding="0 16" text-align="start"
+           font-size="18" text="System Monitor" />
+    <spacer />
+    <label class="caption" width="220px" height="44px" padding="0 8"
+           bind-text="updated_label" text="—" />
+    <tile class="chip live" width="84px" height="44px" padding="0 14" text-align="center"
+          font-size="14" text="● live" />
+  </row>
+
+  <!-- HERO: two metric panels side-by-side -->
+  <row width="100%" height="280px" padding="8 32 12 32" gap="20" align="stretch">
+
+    <column class="metric-panel" grow="1" padding="22 28" gap="6">
+      <row align="center" gap="10">
+        <label class="hero-eyebrow" text="CPU" width="80px" />
+        <spacer />
+        <label class="hero-subeyebrow" bind-text="cpu_cores_label" text="—"
+               width="240px" height="18px" text-align="end" />
+      </row>
+      <label class="metric cpu" bind-text="cpu_label" height="130px" text="—%" />
+      <label class="histo-hero histo-cpu" bind-text="cpu_histo_text" height="56px" text="" />
+    </column>
+
+    <column class="metric-panel" grow="1" padding="22 28" gap="6">
+      <row align="center" gap="10">
+        <label class="hero-eyebrow" text="MEMORY" width="120px" />
+        <spacer />
+        <label class="hero-subeyebrow" bind-text="mem_sub_label" text="—"
+               width="320px" height="18px" text-align="end" />
+      </row>
+      <label class="metric mem" bind-text="mem_label" height="130px" text="—" />
+      <label class="histo-hero histo-mem" bind-text="mem_histo_text" height="56px" text="" />
+    </column>
+
+  </row>
+
+  <!-- PROCESS LIST -->
+  <column class="list-shell" grow="1" margin="0 32 24 32" min-height="0">
+    <!-- Header bands are SIBLINGS of the scroll container, not
+         children. That keeps the scroll's clip rect tight to the
+         scrollable area; the strict AABB cull then hides any row
+         that slips above the scroll's top edge instead of letting it
+         draw on top of the header band. -->
+    <row class="list-head" width="100%" height="44px" padding="0 28" align="center" gap="18">
+      <label class="hero-eyebrow" width="220px" text="TOP PROCESSES" />
+      <spacer />
+      <label class="caption" bind-text="proc_label" width="180px" text="—" />
+    </row>
+    <row class="list-cols" width="100%" height="32px" padding="0 28" align="center" gap="18">
+      <label class="col-pid"  text="PID" />
+      <label class="col-name" text="PROCESS" />
+      <label class="col-cpu"  text="CPU" />
+      <label class="col-mem"  text="MEMORY" />
+    </row>
+    <column class="list-card" grow="1" min-height="0" overflow="hidden">
+      <scroll class="list-scroll" sensitivity="0.7" inertia="0.32" grow="1" min-height="0">
+        <for each="procs" key="id" virtualized="true" row-height="40">
+          <row class="list-row">
+            <label class="col-pid"  text="{pid}" />
+            <label class="col-name" text="{name}" />
+            <label class="col-cpu"  text="{cpu_str}" />
+            <label class="col-mem"  text="{mem_str}" />
+          </row>
+        </for>
+      </scroll>
+    </column>
+  </column>
+</root>

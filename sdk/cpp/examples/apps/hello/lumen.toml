@@ -1,0 +1,7 @@
+[app]
+entry = "main.lmn"
+id    = "dev.lumen.examples.cpp-hello"
+
+[window]
+title = "Lumen - C++ Hello"
+size  = [420, 200]
