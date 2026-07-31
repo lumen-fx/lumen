@@ -29,6 +29,21 @@ pub struct CaretGeometry {
     pub line: usize,
 }
 
+/// One selection highlight rectangle, in run-local coords.
+///
+/// Selection spanning several lines yields one band per line rather than
+/// one merged span, so the painter can place each on its own baseline.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SelectionBand {
+    /// Baseline of the line this band sits on, measured from the first
+    /// line's baseline. Zero for the first line.
+    pub baseline_y: f32,
+    /// Visual left edge from the run origin.
+    pub x0: f32,
+    /// Visual right edge from the run origin.
+    pub x1: f32,
+}
+
 /// Per-cluster `(byte range, visual leading/trailing x, line baseline)`
 /// record in cosmic-text's visual order.
 #[derive(Debug, Clone, Copy)]
@@ -343,39 +358,57 @@ impl TextGeometry {
         nearest_edge_byte(&l.edges, x).unwrap_or(l.byte_lo as usize)
     }
 
-    /// Emit one selection rectangle per segment-portion the logical range
-    /// `[lo, hi)` intersects (one per maximal contiguous BiDi-level run).
-    /// Each rect is `(x0, x1)` in run-local coords.
-    pub fn selection_rects(&self, lo: usize, hi: usize) -> Vec<(f32, f32)> {
+    /// Emit one selection band per line-portion of each maximal
+    /// contiguous BiDi-level run the logical range `[lo, hi)` intersects.
+    ///
+    /// A segment is a maximal `(font, BiDi level)` run and keeps going
+    /// across a line break, so a single min/max over a whole segment would
+    /// merge two lines into one wide rectangle. Bucketing by baseline
+    /// keeps each line's highlight on its own line; `baseline_y` is the
+    /// offset from the first line's baseline, which is what the caret path
+    /// already uses.
+    pub fn selection_bands(&self, lo: usize, hi: usize) -> Vec<SelectionBand> {
         if hi <= lo {
             return Vec::new();
         }
         let lo = lo as u32;
         let hi = hi as u32;
-        let mut out = Vec::new();
+        let mut out: Vec<SelectionBand> = Vec::new();
         for seg in &self.segments {
             let seg_lo = lo.max(seg.byte_lo);
             let seg_hi = hi.min(seg.byte_hi);
             if seg_lo >= seg_hi {
                 continue;
             }
-            let mut min_x = f32::INFINITY;
-            let mut max_x = f32::NEG_INFINITY;
+            // (baseline_y, min_x, max_x) per line this segment touches.
+            let mut per_line: Vec<(f32, f32, f32)> = Vec::new();
             for c in &seg.clusters {
                 if c.byte_end <= seg_lo || c.byte_start >= seg_hi {
                     continue;
                 }
-                if c.leading_x < min_x {
-                    min_x = c.leading_x;
-                }
-                if c.trailing_x > max_x {
-                    max_x = c.trailing_x;
+                match per_line.iter_mut().find(|(y, _, _)| *y == c.baseline_y) {
+                    Some((_, min_x, max_x)) => {
+                        if c.leading_x < *min_x {
+                            *min_x = c.leading_x;
+                        }
+                        if c.trailing_x > *max_x {
+                            *max_x = c.trailing_x;
+                        }
+                    }
+                    None => per_line.push((c.baseline_y, c.leading_x, c.trailing_x)),
                 }
             }
-            if min_x.is_finite() && max_x.is_finite() && max_x > min_x {
-                out.push((seg.x_offset + min_x, seg.x_offset + max_x));
+            for (baseline_y, min_x, max_x) in per_line {
+                if max_x > min_x {
+                    out.push(SelectionBand {
+                        baseline_y,
+                        x0: seg.x_offset + min_x,
+                        x1: seg.x_offset + max_x,
+                    });
+                }
             }
         }
+        out.sort_by(|a, b| f32_cmp(a.baseline_y, b.baseline_y).then(f32_cmp(a.x0, b.x0)));
         out
     }
 }
@@ -680,10 +713,10 @@ mod tests {
             width: 90.0,
         };
         let g = TextGeometry::from(&run);
-        let one = g.selection_rects(0, 3);
+        let one = g.selection_bands(0, 3);
         assert_eq!(one.len(), 1);
-        assert_eq!(one[0], (0.0, 30.0));
-        let three = g.selection_rects(1, 8);
+        assert_eq!((one[0].x0, one[0].x1), (0.0, 30.0));
+        let three = g.selection_bands(1, 8);
         assert_eq!(three.len(), 3, "got {three:?}");
     }
 

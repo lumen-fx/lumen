@@ -65,3 +65,40 @@ fn the_notes_editor_is_top_aligned() {
         .expect("the shaping producer published an origin");
     assert_eq!(origin.top, 0.0);
 }
+
+/// A selection in the editor must be painted in a colour that is actually
+/// distinguishable from the field behind it. The skin routes
+/// `selection-color` through the `--lumen-selection` token; a token that
+/// resolved to transparent would leave the selection state correct and
+/// invisible.
+#[test]
+fn the_notes_editor_selection_colour_is_visible() {
+    use lumen_core::components::{Fill, TextStyle};
+    let mut app = notes_app();
+    let ed = editor_of(&mut app);
+    let sel = app
+        .world
+        .get::<TextStyle>(ed)
+        .and_then(|s| s.selection_color)
+        .expect("the skin gives the field a selection colour");
+    assert!(
+        sel.a > 0.05,
+        "selection highlight is effectively transparent: {sel:?}"
+    );
+    // And it has to differ from the field fill, or it paints invisibly.
+    if let Some(Fill::Solid(bg)) = app
+        .world
+        .get::<lumen_core::components::Visuals>(ed)
+        .and_then(|v| v.fill.clone())
+    {
+        let blended = |c: f32, b: f32| c * sel.a + b * (1.0 - sel.a);
+        let dr = (blended(sel.r, bg.r) - bg.r).abs();
+        let dg = (blended(sel.g, bg.g) - bg.g).abs();
+        let db = (blended(sel.b, bg.b) - bg.b).abs();
+        assert!(
+            dr + dg + db > 0.03,
+            "the selection tint is indistinguishable from the field: \
+             tint {sel:?} over {bg:?}"
+        );
+    }
+}
