@@ -1,4 +1,4 @@
-//! Headless pipeline tests — no speakers required.
+//! Headless pipeline tests - no speakers required.
 //!
 //! These prove the subsystem end-to-end without asserting audible output:
 //! we synthesize a WAV, decode it back (asserting sample count / duration),
@@ -10,6 +10,18 @@ use lumen_audio::synth;
 use lumen_audio::{AudioService, PlaybackState};
 use std::io::Read;
 use std::time::Duration;
+
+/// Device-less service for the suite.
+///
+/// Nothing here needs an output device: the assertions cover decoding,
+/// duration, transport state, and the clock, all of which run in null mode.
+/// Opening one is what makes the suite unportable, because a machine with no
+/// audio endpoint is not guaranteed to report that cleanly; on a Windows CI
+/// runner the WASAPI backend faults the process instead. [`AudioService::disabled`]
+/// is the same device-less shape [`AudioService::new`] falls back to.
+fn null_audio() -> AudioService {
+    AudioService::disabled()
+}
 
 /// Parse the 16-bit-PCM data-chunk length back out of a generated WAV and
 /// confirm it matches the synthesized sample count.
@@ -40,7 +52,7 @@ fn synth_wav_roundtrips_sample_count() {
 }
 
 /// A freshly generated WAV decodes and its measured duration matches the
-/// synthesized length — proving load/decode works via the real codec path.
+/// synthesized length - proving load/decode works via the real codec path.
 #[test]
 fn play_reports_expected_duration() {
     let dir = std::env::temp_dir().join(format!("lumen-audio-dur-{}", std::process::id()));
@@ -48,7 +60,7 @@ fn play_reports_expected_duration() {
     let path = dir.join("triad.wav");
     synth::write_wav(&path, &synth::chord(&[261.63, 329.63, 392.0], 2.0)).unwrap();
 
-    let mut audio = AudioService::new();
+    let mut audio = null_audio();
     audio.play(&path).expect("decode + load 2s wav");
     let dur = audio.duration_secs();
     assert!(
@@ -73,7 +85,7 @@ fn ogg_reports_nonzero_duration() {
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tone-1500ms.ogg");
 
-    let mut audio = AudioService::new();
+    let mut audio = null_audio();
     audio.play(&path).expect("decode + load ogg/vorbis");
     let dur = audio.duration_secs();
     assert!(
@@ -85,7 +97,7 @@ fn ogg_reports_nonzero_duration() {
 }
 
 /// With a correct non-zero Ogg duration, seeking to the app's "half-way"
-/// target lands near the midpoint — not snapped back to 0.
+/// target lands near the midpoint - not snapped back to 0.
 ///
 /// This mirrors `apps/music/main.rhai`'s seek math: the slider computes the
 /// target as `(fraction) * audio_duration`. When the duration was 0 (the
@@ -97,7 +109,7 @@ fn ogg_seek_to_midpoint_lands_mid_track() {
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tone-1500ms.ogg");
 
-    let mut audio = AudioService::new();
+    let mut audio = null_audio();
     audio.play(&path).expect("decode + load ogg/vorbis");
 
     // Pause before seeking so `position_secs()` reports the static seek
@@ -131,7 +143,7 @@ fn transport_state_machine_and_position() {
     let path = dir.join("sweep.wav");
     synth::write_wav(&path, &synth::sweep(220.0, 880.0, 5.0)).unwrap();
 
-    let mut audio = AudioService::new();
+    let mut audio = null_audio();
     assert_eq!(audio.state(), PlaybackState::Stopped, "nothing loaded yet");
 
     audio.play(&path).unwrap();
@@ -183,7 +195,7 @@ fn transport_state_machine_and_position() {
 /// Volume is clamped to `0.0..=1.0`.
 #[test]
 fn volume_clamps() {
-    let mut audio = AudioService::new();
+    let mut audio = null_audio();
     audio.set_volume(0.5);
     assert!((audio.volume() - 0.5).abs() < 1e-6);
     audio.set_volume(2.0);
@@ -203,7 +215,7 @@ fn natural_end_edge() {
     // 100 ms track.
     synth::write_wav(&path, &synth::sine(440.0, 0.1)).unwrap();
 
-    let mut audio = AudioService::new();
+    let mut audio = null_audio();
     audio.play(&path).unwrap();
     std::thread::sleep(Duration::from_millis(180));
 
@@ -218,7 +230,7 @@ fn natural_end_edge() {
 }
 
 /// After a track ends naturally (`refresh` cleared the sink), `resume()`
-/// must re-arm a real, playing transport from position 0 — not leave a
+/// must re-arm a real, playing transport from position 0 - not leave a
 /// phantom clock climbing over a silent/empty sink. Null-mode observable:
 /// the load path re-runs (duration re-decoded, position resets, state
 /// Playing), and the restarted track ends again.
@@ -230,7 +242,7 @@ fn resume_after_natural_end_replays() {
     // 100 ms track.
     synth::write_wav(&path, &synth::sine(440.0, 0.1)).unwrap();
 
-    let mut audio = AudioService::new();
+    let mut audio = null_audio();
     audio.play(&path).unwrap();
     let dur0 = audio.duration_secs();
     std::thread::sleep(Duration::from_millis(180));
@@ -283,12 +295,12 @@ fn resume_after_stop_replays() {
     let path = dir.join("tone.wav");
     synth::write_wav(&path, &synth::sine(440.0, 1.0)).unwrap();
 
-    let mut audio = AudioService::new();
+    let mut audio = null_audio();
     audio.play(&path).unwrap();
     let dur0 = audio.duration_secs();
 
     audio.stop();
-    // Preserved contract: stop keeps the track loaded → Paused, position 0.
+    // Preserved contract: stop keeps the track loaded -> Paused, position 0.
     assert_eq!(audio.state(), PlaybackState::Paused, "stop keeps loaded");
     assert!(audio.position_secs().abs() < 1e-6, "stop rewinds to 0");
 

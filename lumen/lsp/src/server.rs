@@ -3,11 +3,11 @@
 //! The server routes each request by document kind, derived from the
 //! file extension:
 //!
-//! - `.lmn` — Lumen markup: parse diagnostics + lint findings, tag/attr
+//! - `.lmn` - Lumen markup: parse diagnostics + lint findings, tag/attr
 //!   completion, hover, template goto-def, id references/rename, element
 //!   document symbols, and formatting.
-//! - `.css` — stylesheet: parse errors + apply-time warnings.
-//! - `.rhai` — script: builtin-aware diagnostics, completion, hover,
+//! - `.css` - stylesheet: parse errors + apply-time warnings.
+//! - `.rhai` - script: builtin-aware diagnostics, completion, hover,
 //!   signature help, function document symbols, and id
 //!   completion/goto-def/references/rename against the sibling markup.
 
@@ -43,20 +43,19 @@ pub enum DocKind {
     Css,
     /// `.rhai` script.
     Rhai,
-    /// Anything else — we hold the text but offer no intelligence.
+    /// Anything else - we hold the text but offer no intelligence.
     Other,
 }
 
 impl DocKind {
     /// Classify a document by its URI's file extension.
+    ///
+    /// Reads the extension off the URI path rather than a converted filesystem
+    /// path: `Url::to_file_path` rejects a URI that is not a valid local path
+    /// on the host (`file:///proj/main.rhai` has no drive letter on Windows),
+    /// which would classify a perfectly good document as [`DocKind::Other`].
     pub fn from_uri(uri: &Url) -> DocKind {
-        match uri
-            .to_file_path()
-            .ok()
-            .as_deref()
-            .and_then(Path::extension)
-            .and_then(|e| e.to_str())
-        {
+        match Path::new(uri.path()).extension().and_then(|e| e.to_str()) {
             Some("lmn") => DocKind::Markup,
             Some("css") => DocKind::Css,
             Some("rhai") => DocKind::Rhai,
@@ -156,7 +155,7 @@ impl Backend {
 
 /// Run `lumenc::parse_html` and convert the result into diagnostics.
 /// On a parse error, returns that single error. On success, surfaces
-/// every parse-time [`lumenc::LintFinding`] as its own diagnostic — so a
+/// every parse-time [`lumenc::LintFinding`] as its own diagnostic - so a
 /// clean-parsing document can still report multiple issues.
 pub fn compute_diagnostics(src: &str) -> Vec<Diagnostic> {
     compute_diagnostics_at(src, None)

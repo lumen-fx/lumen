@@ -1,6 +1,6 @@
-//! True headless run mode: the FULL app pipeline — layout, real GPU
+//! True headless run mode: the FULL app pipeline - layout, real GPU
 //! rendering (wgpu + vello via the shared Node-IR walker), the MCP
-//! server, input simulation, hot reload, and screenshots — with zero
+//! server, input simulation, hot reload, and screenshots - with zero
 //! windows. No winit event loop is created, so the desktop / compositor
 //! is never touched. This is the automation / CI mode behind
 //! `lumenc run <app> --headless`.
@@ -8,10 +8,10 @@
 //! ## How it differs from [`crate::run::run_app_headless`]
 //!
 //! The bare `run_app_headless` (kept as the FFI / SDK contract) only
-//! ticks the main-world schedule — no renderer, no pixels. This mode
+//! ticks the main-world schedule - no renderer, no pixels. This mode
 //! additionally installs [`lumen_render_wgpu::WgpuRendererPlugin`], the
 //! same offscreen renderer the golden-image tests use, driven by the
-//! same retained-scene walker the windowed backend runs — so extracted
+//! same retained-scene walker the windowed backend runs - so extracted
 //! geometry, dpr scaling, text shaping, and fragment caching behave
 //! identically to the windowed path.
 //!
@@ -24,7 +24,7 @@
 //!   request, via [`lumen_core::app::EventLoopWaker`]) runs a tick
 //!   immediately;
 //! * while work is pending (animations mid-flight, undrained external
-//!   property writes, dirty frame), ticks are paced at ~60 Hz — the
+//!   property writes, dirty frame), ticks are paced at ~60 Hz - the
 //!   stand-in for vsync;
 //! * otherwise the loop parks. With hot reload active it re-ticks every
 //!   ~250 ms so the source watcher polls; without it, the loop sleeps
@@ -37,7 +37,7 @@
 //! graceful-close path: a `CloseRequest { vetoed: false }` is written to
 //! the message bus and one final tick runs so close-observing systems
 //! fire, then the fn returns `Ok(())` (process exit code 0). Unlike the
-//! windowed close, a veto does not keep the app alive — a signalled CI
+//! windowed close, a veto does not keep the app alive - a signalled CI
 //! run must terminate.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -55,7 +55,7 @@ use crate::run::{RunError, RunOptions, build_headless_app};
 /// Wall-clock pacing for back-to-back work ticks (animations, pending
 /// writes). Stands in for vsync; 16.67 ms = 60 Hz. Deadlines are
 /// anchored (`deadline += interval`, park until deadline) rather than
-/// slept after the tick, so the frame period is exactly this — not
+/// slept after the tick, so the frame period is exactly this - not
 /// `tick work + sleep`, which drifted every frame's worth of work.
 const WORK_FRAME_INTERVAL: Duration = Duration::from_micros(16_667);
 
@@ -65,7 +65,7 @@ const IDLE_PARK_SLICE: Duration = Duration::from_millis(250);
 
 /// Opt-in boot-phase timing. Set `LUMEN_BOOT_TRACE=1` to print a
 /// phase-by-phase startup breakdown (build/parse/font-scan, GPU
-/// bring-up, shaper warmup, first frame) to stderr — the reproducible
+/// bring-up, shaper warmup, first frame) to stderr - the reproducible
 /// backing for the startup regression story. Off by default: the checks
 /// are a single `env::var_os` read plus a few `Instant::now()` calls on
 /// the cold path, so a normal run pays nothing measurable.
@@ -103,7 +103,7 @@ impl BootTrace {
             let s = lumen_text_cosmic::CosmicShaper::new();
             let dur = t.elapsed();
             std::hint::black_box(&s);
-            self.mark("  └ FontSystem::new (standalone)", dur);
+            self.mark("  |- FontSystem::new (standalone)", dur);
         }
     }
 
@@ -112,7 +112,7 @@ impl BootTrace {
         if !self.on {
             return;
         }
-        self.mark("TOTAL exec→first-frame", self.start.elapsed());
+        self.mark("TOTAL exec->first-frame", self.start.elapsed());
         #[cfg(target_os = "linux")]
         if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
             let field = |k: &str| {
@@ -135,8 +135,8 @@ impl BootTrace {
 #[derive(Debug, Clone, Copy)]
 pub struct HeadlessOptions {
     /// Device pixel ratio for the offscreen target. `Viewport.size` stays
-    /// logical (like the windowed path); the render texture — and thus
-    /// every screenshot — is `logical × dpr` physical pixels.
+    /// logical (like the windowed path); the render texture - and thus
+    /// every screenshot - is `logical x dpr` physical pixels.
     pub dpr: f32,
     /// `Some(n)`: run exactly `n` ticks back-to-back, then take the
     /// graceful-close path and return. `None`: run until SIGINT/SIGTERM.
@@ -173,7 +173,7 @@ impl Parker {
     }
 
     /// Park for at most `timeout`. Returns `true` when woken by
-    /// [`Self::wake`] (including a wake that arrived before parking —
+    /// [`Self::wake`] (including a wake that arrived before parking -
     /// no lost-wakeup window), `false` on timeout.
     fn park_timeout(&self, timeout: Duration) -> bool {
         let mut g = self
@@ -203,11 +203,11 @@ pub fn run_app_headless_rendered(
     // the hot-reload watcher via the `bounded` flag. See `build_app`.
     opts.bounded = true;
     // GPU bring-up (wgpu instance/adapter/device + vello pipeline
-    // compilation) costs ~30–35 ms and needs nothing from the app world,
+    // compilation) costs ~30-35 ms and needs nothing from the app world,
     // so it runs on a spawned thread OVERLAPPED with `build_headless_app`
     // (markup/CSS parse, system-font scan, ECS spawn). Sized from the
     // CLI size as a guess; if `lumen.toml [window] size` overrides it the
-    // offscreen target is re-allocated after the join — `resize` only
+    // offscreen target is re-allocated after the join - `resize` only
     // swaps the texture, every expensive init step is size-independent.
     let boot = BootTrace::new();
     let dpr = headless.dpr.max(0.01);
@@ -232,7 +232,7 @@ pub fn run_app_headless_rendered(
 
     // While the GPU thread finishes: pre-warm the shapers' cold path
     // (sans-serif face load + fallback-chain init inside cosmic-text,
-    // ~10–15 ms on first shape) so the first real layout/render tick
+    // ~10-15 ms on first shape) so the first real layout/render tick
     // doesn't pay it. The strings are throwaway; only the font-system
     // warmup matters, so a short ASCII pangram at the default UI sizes
     // and both common weights is enough.
@@ -290,7 +290,7 @@ pub fn run_app_headless_rendered(
     }
 
     // Offscreen GPU context: join the init thread spawned before
-    // `build_headless_app` (adapter requested WITHOUT a surface — falls
+    // `build_headless_app` (adapter requested WITHOUT a surface - falls
     // back to lavapipe/llvmpipe where no hardware GPU is reachable). The
     // renderer is pre-built here so init failure surfaces as an error
     // instead of the plugin's panic.
@@ -301,7 +301,7 @@ pub fn run_app_headless_rendered(
         .join()
         .map_err(|_| RunError::Headless("GPU init thread panicked".into()))?;
     boot.mark("gpu_join_wait (main blocked)", t_join.elapsed());
-    boot.mark("  └ gpu_init_wall (bg thread)", gpu_wall);
+    boot.mark("  |- gpu_init_wall (bg thread)", gpu_wall);
     let mut renderer =
         renderer_res.map_err(|e| RunError::Headless(format!("offscreen GPU init: {e}")))?;
     // No-op when lumen.toml didn't override the CLI size guess.
@@ -342,22 +342,37 @@ pub fn run_app_headless_rendered(
     }
 
     // SIGINT / SIGTERM (Unix) or Ctrl+C / Ctrl+Break / console-close
-    // (Windows) → flag; the loop notices within one park slice.
+    // (Windows) -> flag; the loop notices within one park slice.
+    //
+    // The Windows console handler is process-wide and ctrlc rejects a second
+    // registration, so it is installed once and its flag is shared by every
+    // headless run in the process. Registering per run would fail the second
+    // app a process starts.
+    #[cfg(windows)]
+    let exit_flag = {
+        static CTRL_C_FLAG: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
+        let flag = CTRL_C_FLAG.get_or_init(|| {
+            let flag = Arc::new(AtomicBool::new(false));
+            let handler_flag = Arc::clone(&flag);
+            if let Err(e) = ctrlc::set_handler(move || handler_flag.store(true, Ordering::SeqCst)) {
+                eprintln!("lumen: no console-ctrl handler ({e}); Ctrl+C will not exit cleanly");
+            }
+            flag
+        });
+        // Start from a clear flag: an earlier run in this process may have set it.
+        flag.store(false, Ordering::SeqCst);
+        Arc::clone(flag)
+    };
+    #[cfg(not(windows))]
     let exit_flag = Arc::new(AtomicBool::new(false));
     #[cfg(unix)]
     for sig in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
         signal_hook::flag::register(sig, Arc::clone(&exit_flag))
             .map_err(|e| RunError::Headless(format!("signal handler: {e}")))?;
     }
-    #[cfg(windows)]
-    {
-        let flag = Arc::clone(&exit_flag);
-        ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))
-            .map_err(|e| RunError::Headless(format!("console-ctrl handler: {e}")))?;
-    }
 
     eprintln!(
-        "lumenc: headless mode — no window; {}x{} logical @ dpr {dpr}{}",
+        "lumenc: headless mode - no window; {}x{} logical @ dpr {dpr}{}",
         winit_opts.size.0,
         winit_opts.size.1,
         match headless.ticks {
@@ -369,7 +384,7 @@ pub fn run_app_headless_rendered(
     let mut ticked: u64 = 0;
     // Deadline anchor for work-paced frames. `Some(d)` = the deadline the
     // frame we just ran was released at; the next frame is due at
-    // `d + WORK_FRAME_INTERVAL` regardless of how long the tick took —
+    // `d + WORK_FRAME_INTERVAL` regardless of how long the tick took -
     // deadline-anchored pacing with no per-frame work drift and no
     // accumulation error. Cleared on idle so the next burst re-anchors
     // to "now" instead of firing a catch-up run.
@@ -409,7 +424,7 @@ pub fn run_app_headless_rendered(
             break;
         }
 
-        // Pending-work sources — the same three the windowed
+        // Pending-work sources - the same three the windowed
         // `present_frame` re-arms the redraw on.
         let work_pending = lumen_core::property_store::external_properties_pending()
             || app
@@ -459,8 +474,8 @@ pub fn run_app_headless_rendered(
             }
         } else {
             next_frame_deadline = None;
-            // Idle-park until an MCP wake. Timeout slices keep signals —
-            // and, when hot reload is on, the source watcher — serviced.
+            // Idle-park until an MCP wake. Timeout slices keep signals -
+            // and, when hot reload is on, the source watcher - serviced.
             loop {
                 if exit_flag.load(Ordering::Relaxed) {
                     break;
@@ -468,7 +483,7 @@ pub fn run_app_headless_rendered(
                 let woken = parker.park_timeout(IDLE_PARK_SLICE);
                 // Tick on: an explicit wake (MCP, notify hot-reload
                 // watcher), or a poll slice when the mtime fallback is
-                // active. Otherwise stay parked — zero ticks at idle,
+                // active. Otherwise stay parked - zero ticks at idle,
                 // like the windowed scheduler.
                 if woken || hot_reload_poll {
                     break;

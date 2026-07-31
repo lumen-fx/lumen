@@ -1,15 +1,15 @@
 //! WGPU + vello smoke test on the render-world model.
 //!
-//! Skips itself if no wgpu adapter is available.
+//! Skips itself when the machine has no GPU: either no wgpu adapter at all, or
+//! only a software rasterizer.
 
 use lumen_core::prelude::*;
-use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin};
+use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin, gpu_unavailable_reason};
 
 #[test]
 fn render_one_rect_and_read_back() {
-    // Probe wgpu first; skip if adapter init fails.
-    if WgpuRenderer::new_offscreen(64, 64).is_err() {
-        eprintln!("skipping: no wgpu adapter available");
+    if let Some(why) = gpu_unavailable_reason() {
+        eprintln!("skipping: {why}");
         return;
     }
 
@@ -35,7 +35,7 @@ fn render_one_rect_and_read_back() {
         },
     ));
 
-    // Tick: extract → render-world render system runs.
+    // Tick: extract -> render-world render system runs.
     app.tick();
 
     let renderer = app
