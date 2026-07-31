@@ -68,6 +68,25 @@ pub enum WgpuRendererError {
     Render(String),
 }
 
+/// Why this machine cannot do GPU pixel work, or `None` when it can.
+///
+/// Probes for an adapter and reports back: no adapter at all, or one that is a
+/// software rasterizer. Callers that render and inspect pixels use it to bail
+/// out with a reason instead of running. Direct3D's WARP rasterizer faults the
+/// process partway through offscreen rendering, and lavapipe's output is close
+/// to but not interchangeable with a GPU's, so neither is a substrate for
+/// pixel-level checks.
+pub fn gpu_unavailable_reason() -> Option<String> {
+    match WgpuRenderer::new_offscreen(4, 4) {
+        Ok(r) if r.is_software_adapter() => Some(format!(
+            "adapter '{}' is a software rasterizer",
+            r.adapter_info().name
+        )),
+        Ok(_) => None,
+        Err(e) => Some(format!("no wgpu adapter available ({e})")),
+    }
+}
+
 /// Offscreen WGPU + vello renderer.
 ///
 /// Holds the device, queue, vello renderer, vello scene buffer, and the
@@ -85,9 +104,12 @@ pub struct WgpuRenderer {
     texture_view: wgpu::TextureView,
     /// Number of actual GPU encode+submit passes ([`render_current`]) since
     /// construction. Frames skipped by the empty-damage partial-repaint gate do
-    /// NOT increment it, so `render_count` measures real present work — a static
+    /// NOT increment it, so `render_count` measures real present work - a static
     /// UI redrawn on a false-positive dirty flag leaves it flat.
     render_count: u64,
+    /// Adapter this renderer bound to. Kept so callers can tell a GPU from a
+    /// software rasterizer without re-enumerating adapters.
+    adapter_info: wgpu::AdapterInfo,
 }
 
 impl WgpuRenderer {
@@ -141,6 +163,7 @@ impl WgpuRenderer {
                 }
             }
         };
+        let adapter_info = adapter.get_info();
         let limits = adapter.limits();
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -168,7 +191,21 @@ impl WgpuRenderer {
             texture,
             texture_view,
             render_count: 0,
+            adapter_info,
         })
+    }
+
+    /// Name, backend, and device type of the adapter this renderer bound to.
+    pub fn adapter_info(&self) -> &wgpu::AdapterInfo {
+        &self.adapter_info
+    }
+
+    /// Whether rendering runs on a software rasterizer (lavapipe, WARP,
+    /// SwiftShader) instead of a GPU. Pixel output from one is close to but not
+    /// interchangeable with a hardware render, so image comparisons need to know
+    /// which they got.
+    pub fn is_software_adapter(&self) -> bool {
+        self.adapter_info.device_type == wgpu::DeviceType::Cpu
     }
 
     /// Pixel size of the offscreen target.
@@ -189,7 +226,7 @@ impl WgpuRenderer {
     }
 
     /// Number of real GPU encode+submit passes since construction. Unchanged
-    /// across frames the empty-damage gate skipped — see [`Self::render_count`].
+    /// across frames the empty-damage gate skipped - see [`Self::render_count`].
     pub fn render_count(&self) -> u64 {
         self.render_count
     }
@@ -286,7 +323,7 @@ impl WgpuRenderer {
 impl lumen_core::traits::Renderer for WgpuRenderer {}
 
 /// Emit a single rect onto an already-reset scene. Callers manage scene
-/// lifecycle (reset, append, render) — the renderer interleaves rects /
+/// lifecycle (reset, append, render) - the renderer interleaves rects /
 /// text / outlines through this helper sorted by [`PaintOrder`].
 ///
 /// Origin is baked into the encoding. For cached, position-independent
@@ -297,7 +334,7 @@ pub fn emit_rect(vello_scene: &mut vello::Scene, cmd: &ExtractedRect) {
 
 /// Emit a rect *at the local origin* into a fresh scene fragment that
 /// can be cached and re-appended via [`scene_cache::append_translated`].
-/// Identical appearance ⇒ identical fragment ⇒ one encode amortised
+/// Identical appearance => identical fragment => one encode amortised
 /// across every position the rect ever takes.
 pub fn emit_rect_into_fragment(cmd: &ExtractedRect) -> vello::Scene {
     let mut frag = vello::Scene::new();
@@ -328,9 +365,9 @@ fn emit_rect_at(vello_scene: &mut vello::Scene, cmd: &ExtractedRect, ox: f64, oy
     let brush: peniko::Brush = match &cmd.brush {
         LumenBrush::Solid(c) => peniko::Brush::Solid(peniko_color(*c)),
         LumenBrush::Linear { angle_deg, stops } => {
-            // Convert CSS angle (0deg = left→right, increasing CCW) into
+            // Convert CSS angle (0deg = left->right, increasing CCW) into
             // start/end points on the bounding box. CSS defines 0deg as
-            // bottom-to-top — but we use the more common "0 = right" so
+            // bottom-to-top - but we use the more common "0 = right" so
             // authors can think in compass terms. Each stop is mapped
             // straight through to peniko::ColorStop.
             let cx = (x0 + x1) / 2.0;
@@ -516,7 +553,7 @@ pub fn emit_svg(vello_scene: &mut vello::Scene, cmd: &lumen_assets::ExtractedSvg
 }
 
 /// Emit a single drop shadow onto an already-reset scene. Uses vello's
-/// native `draw_blurred_rounded_rect` — one GPU primitive per shadow,
+/// native `draw_blurred_rounded_rect` - one GPU primitive per shadow,
 /// no stacked-clones approximation.
 pub fn emit_shadow(vello_scene: &mut vello::Scene, cmd: &ExtractedShadow) {
     emit_shadow_at(vello_scene, cmd, cmd.origin.x as f64, cmd.origin.y as f64);
@@ -533,7 +570,7 @@ pub fn emit_shadow_into_fragment(cmd: &ExtractedShadow) -> vello::Scene {
 fn emit_shadow_at(vello_scene: &mut vello::Scene, cmd: &ExtractedShadow, ox: f64, oy: f64) {
     // CSS spread: inflate (positive) / deflate (negative) the shadow
     // rect on every side before blurring; the corner radius grows /
-    // shrinks with it (CSS Backgrounds & Borders §7.1.1).
+    // shrinks with it (CSS Backgrounds & Borders section 7.1.1).
     let spread = cmd.spread as f64;
     let x1 = ox + cmd.size.x as f64;
     let y1 = oy + cmd.size.y as f64;
@@ -553,7 +590,7 @@ fn emit_shadow_at(vello_scene: &mut vello::Scene, cmd: &ExtractedShadow, ox: f64
     }
     // Inner (inset) shadow. Clip to the entity rect, then draw a
     // blurred rect at the *negated* offset so the dark edge lands on
-    // the inside rim. Grow the inner rect outward by ~3× blur so the
+    // the inside rim. Grow the inner rect outward by ~3x blur so the
     // gradient covers the whole interior; the clip hides the overflow.
     let rect_x0 = cmd.rect_origin.x as f64;
     let rect_y0 = cmd.rect_origin.y as f64;
@@ -663,7 +700,7 @@ pub fn emit_border(
     let x1 = x0 + cmd.size.x as f64;
     let y1 = y0 + cmd.size.y as f64;
     let r = cmd.radius.max(0.0) as f64;
-    // Per-corner outer radii `[tl, tr, br, bl]` — uniform `radius`
+    // Per-corner outer radii `[tl, tr, br, bl]` - uniform `radius`
     // when the entity has no per-corner override.
     let [rtl, rtr, rbr, rbl] = cmd
         .corner_radii
@@ -690,7 +727,7 @@ pub fn emit_border(
         path.extend(Rect::new(x0, y0, x1, y1).path_elements(tol));
     }
     if ix1 > ix0 && iy1 > iy0 {
-        // CSS: inner corner radius = max(0, outer radius − the two
+        // CSS: inner corner radius = max(0, outer radius - the two
         // adjacent border widths' relevant component). With one circular
         // radius per corner we take the max of the two adjacent widths.
         let radii = RoundedRectRadii::new(
@@ -721,7 +758,7 @@ pub fn emit_border(
     }
 
     // Per-side colors: clip to the ring, then fill one mitred trapezoid
-    // per side (outer edge → the matching inner-box corner), exactly the
+    // per side (outer edge -> the matching inner-box corner), exactly the
     // corner-diagonal split browsers paint. The clip keeps the rounded
     // corners correct.
     let side_colors = cmd.side_colors.unwrap_or([cmd.color; 4]);
@@ -779,8 +816,8 @@ pub fn emit_outline_cached(
 }
 
 /// Draw one [`ExtractedImage`] into `vello_scene` honouring [`ImageFit`].
-/// `blob` is the pre-built peniko Blob from [`lumen_assets::LoadedImage`]
-/// — cloned (cheap, Arc-internal) each frame so vello can key its GPU
+/// `blob` is the pre-built peniko Blob from [`lumen_assets::LoadedImage`],
+/// cloned (cheap, Arc-internal) each frame so vello can key its GPU
 /// upload cache off the stable Blob identity rather than re-uploading
 /// the texture every tick.
 pub fn draw_image_into_vello(
@@ -816,7 +853,7 @@ pub fn draw_image_into_vello(
     let transform = Affine::translate((cmd.origin.x as f64 + dx, cmd.origin.y as f64 + dy))
         * Affine::scale_non_uniform(sx, sy);
 
-    // Cover may overshoot the box — clip to the entity rect so the image
+    // Cover may overshoot the box - clip to the entity rect so the image
     // doesn't bleed onto sibling boxes. push_layer + pop_layer with a
     // simple Rect clip is cheap on vello 0.8. The same layer carries the
     // `Opacity` alpha so partially-transparent images fade as a whole.
@@ -850,13 +887,13 @@ thread_local! {
     /// hash so the same face reuses one `Blob` (hence one vello glyph-atlas
     /// entry) across frames. Rendering is single-threaded per surface, so a
     /// thread-local keeps the cache lock-free; a second render thread simply
-    /// warms its own copy. Fonts are few and long-lived — no eviction.
+    /// warms its own copy. Fonts are few and long-lived - no eviction.
     static FONT_BLOBS: std::cell::RefCell<rustc_hash::FxHashMap<u64, Blob<u8>>> =
         std::cell::RefCell::new(rustc_hash::FxHashMap::default());
 }
 
 /// Fetch (or mint + cache) the `Blob` for a font id. The clone returned is
-/// an `Arc` bump — the underlying face bytes are shared, not copied.
+/// an `Arc` bump - the underlying face bytes are shared, not copied.
 fn font_blob(font_id: u64, font_data: &std::sync::Arc<Vec<u8>>) -> Blob<u8> {
     FONT_BLOBS.with(|c| {
         c.borrow_mut()
@@ -874,7 +911,7 @@ fn font_blob(font_id: u64, font_data: &std::sync::Arc<Vec<u8>>) -> Blob<u8> {
 ///
 /// W3.6/W5.6: shapes the run ONCE per frame; caret + selection x
 /// positions come from the same shape via [`lumen_text::TextGeometry`].
-/// Multi-segment paths (Latin + Arabic + …) issue one `draw_glyphs`
+/// Multi-segment paths (Latin + Arabic + ...) issue one `draw_glyphs`
 /// call per segment so each font is bound to the right glyph slice;
 /// selection highlights emit one rectangle per maximal contiguous-
 /// level slice the range intersects (HTML / Qt / macOS convention).
@@ -928,7 +965,7 @@ pub fn draw_text_into_vello<S: lumen_text::TextShaper + ?Sized>(
     // fill below and the selected-glyph foreground over-paint further
     // down. BiDi-correct: [`lumen_text::TextGeometry::selection_rects`]
     // returns one `(x0, x1)` per maximal contiguous-level slice, in
-    // segment order — matches HTML / Qt / macOS selection visualisation.
+    // segment order - matches HTML / Qt / macOS selection visualisation.
     let sel_rects: Vec<(f32, f32)> = match (text.selection, &run_index) {
         (Some((s, e)), Some(idx)) if e > s => idx.selection_rects(s, e),
         _ => Vec::new(),
@@ -938,7 +975,7 @@ pub fn draw_text_into_vello<S: lumen_text::TextShaper + ?Sized>(
     // Selection highlight paints first so glyphs sit on top. Styleable
     // via `selection-color` (default skin: `--lumen-selection`); the
     // single built-in fallback is the platform highlight blue
-    // ([`DEFAULT_SELECTION_BG`]) — visible on any field color, unlike the
+    // ([`DEFAULT_SELECTION_BG`]) - visible on any field color, unlike the
     // old text-fill-at-32%-alpha fallback which vanished on light fields.
     if !sel_rects.is_empty() {
         let sel = folded(
@@ -971,7 +1008,7 @@ pub fn draw_text_into_vello<S: lumen_text::TextShaper + ?Sized>(
     // Selected-glyph foreground (Qt `QPalette::HighlightedText` / Slint
     // `selection-foreground-color`): re-paint the glyphs that fall inside
     // each selection rect in the override color, clipping to the rect so
-    // only the selected span inverts. Opt-in — the default translucent
+    // only the selected span inverts. Opt-in - the default translucent
     // highlight preserves unselected contrast, so most skins never set it.
     if let (Some(run), Some(fg)) = (&shaped, text.selection_foreground)
         && !sel_rects.is_empty()
@@ -996,7 +1033,7 @@ pub fn draw_text_into_vello<S: lumen_text::TextShaper + ?Sized>(
             vello_scene.pop_layer();
         }
     }
-    // Caret position computed from the SAME TextGeometry — no extra
+    // Caret position computed from the SAME TextGeometry - no extra
     // shape pass. `caret_xy` also yields the baseline offset of
     // the byte's line so multiline carets land on the right line.
     if let Some(byte_offset) = text.caret {
@@ -1004,7 +1041,7 @@ pub fn draw_text_into_vello<S: lumen_text::TextShaper + ?Sized>(
         let (caret_x, caret_y) =
             if byte_offset > 0 && text.text.as_bytes().get(byte_offset - 1) == Some(&b'\n') {
                 // Caret sits at the start of a (possibly empty) line right
-                // after a newline — newlines emit no glyph cluster, so
+                // after a newline - newlines emit no glyph cluster, so
                 // derive the line index from the text instead of the shape.
                 let line_idx = text.text[..byte_offset.min(text.text.len())]
                     .matches('\n')
@@ -1110,7 +1147,7 @@ pub struct WgpuRendererPlugin {
     /// instead of creating one, letting callers surface GPU-init failure
     /// as a `Result` (via [`WgpuRenderer::new_offscreen`]) rather than the
     /// panic `build` would otherwise raise. `width` / `height` are ignored
-    /// in that case — the renderer keeps its own target size.
+    /// in that case - the renderer keeps its own target size.
     renderer: Option<WgpuRenderer>,
 }
 
@@ -1144,7 +1181,7 @@ impl WgpuRendererPlugin {
 
     /// Attach an already-boxed text shaper (same effect as
     /// [`Self::with_text_shaper`]; avoids double-boxing when the caller
-    /// already holds a `Box<dyn TextShaper>` — e.g. the one built for
+    /// already holds a `Box<dyn TextShaper>` - e.g. the one built for
     /// `WinitOptions`).
     pub fn with_boxed_text_shaper(mut self, shaper: Box<dyn lumen_text::TextShaper>) -> Self {
         self.text_shaper = Some(shaper);
@@ -1188,7 +1225,7 @@ impl Plugin for WgpuRendererPlugin {
 ///
 /// Damage-driven partial repaint: the system calls [`crate::walker::diff_retained_scenes`] against the
 /// previous frame's root and skips the entire encode + submit when the diff is empty (the visual tree is
-/// unchanged), keeping the last-rendered target on screen. A non-empty diff re-encodes the whole scene —
+/// unchanged), keeping the last-rendered target on screen. A non-empty diff re-encodes the whole scene -
 /// bounding the encode to the damage rect is not pixel-safe while vello clears the whole target per call.
 #[allow(clippy::too_many_arguments)]
 fn wgpu_render_system(
@@ -1223,7 +1260,7 @@ fn wgpu_render_system(
     // Partial-repaint gate. The retained Node-IR diff tells us whether the
     // visual tree actually changed this frame. When it did NOT (empty damage)
     // and a previous frame already rendered into the target, skip the whole
-    // encode + submit — the offscreen texture still holds the pixel-identical
+    // encode + submit - the offscreen texture still holds the pixel-identical
     // last frame. Mirrors Qt `QWidget::update()` collapsing to no backing-store
     // flush when the computed dirty region is empty, and GTK's damage-region
     // coalescing.
@@ -1231,7 +1268,7 @@ fn wgpu_render_system(
     // When the tree DID change we re-encode the entire scene. A damage-bounded
     // scissor is deliberately NOT applied: `render_to_texture` clears the whole
     // target to `base_color` on every call, so clipping the encode to the
-    // damage rect would blank every untouched pixel — not pixel-identical.
+    // damage rect would blank every untouched pixel - not pixel-identical.
     // Pixel-safe partial *encode* needs a preserved backing store (deferred
     // slice; see `diff_retained_scenes` docs). `FrameDamage` is still populated
     // for consumers that only need the dirty-region *size*.

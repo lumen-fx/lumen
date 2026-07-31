@@ -5,15 +5,15 @@
 // of failing on the missing symbols.
 #![cfg(feature = "dev-run")]
 
-//! `run_app_headless_rendered` — the full-pipeline headless mode behind
+//! `run_app_headless_rendered` - the full-pipeline headless mode behind
 //! `lumenc run --headless`. Bounded (`--ticks`-style) runs must boot the
 //! offscreen GPU renderer, tick, render, and take the graceful-close
 //! path without ever creating a window.
 //!
-//! Skips itself when no wgpu adapter is available (same convention as
+//! Skips itself when the machine has no GPU (same convention as
 //! `lumen-render-wgpu/tests/smoke.rs`).
 
-use lumen_render_wgpu::WgpuRenderer;
+use lumen_render_wgpu::gpu_unavailable_reason;
 use lumenc::{HeadlessOptions, RunOptions, run_app_headless_rendered};
 
 const MARKUP: &str = r#"<root style="bg:#101018">
@@ -35,8 +35,8 @@ fn temp_app_dir(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn bounded_headless_run_renders_and_exits() {
-    if WgpuRenderer::new_offscreen(8, 8).is_err() {
-        eprintln!("skipping: no wgpu adapter available");
+    if let Some(why) = gpu_unavailable_reason() {
+        eprintln!("skipping: {why}");
         return;
     }
     let dir = temp_app_dir("bounded");
@@ -54,8 +54,8 @@ fn bounded_headless_run_renders_and_exits() {
 
 #[test]
 fn bounded_headless_run_at_fractional_dpr() {
-    if WgpuRenderer::new_offscreen(8, 8).is_err() {
-        eprintln!("skipping: no wgpu adapter available");
+    if let Some(why) = gpu_unavailable_reason() {
+        eprintln!("skipping: {why}");
         return;
     }
     let dir = temp_app_dir("dpr");

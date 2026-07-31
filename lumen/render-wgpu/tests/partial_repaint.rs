@@ -1,18 +1,18 @@
 //! End-to-end partial-repaint measurement on the real render pipeline.
 //!
-//! Drives the full main-world → extract → `transform_extracted_to_nodes`
-//! (Node IR, fresh `Arc`s every frame) → offscreen `wgpu_render_system` path
+//! Drives the full main-world -> extract -> `transform_extracted_to_nodes`
+//! (Node IR, fresh `Arc`s every frame) -> offscreen `wgpu_render_system` path
 //! and asserts that the damage-driven gate skips the GPU encode+submit when the
 //! visual tree is unchanged, while still repainting a localized change.
 //!
-//! Model mirrored: Qt `QWidget::update()` — a queued repaint whose accumulated
+//! Model mirrored: Qt `QWidget::update()` - a queued repaint whose accumulated
 //! dirty region is empty performs no backing-store flush; a small dirty region
 //! repaints without touching the rest.
 //!
 //! Skips itself when no wgpu adapter is available (headless CI without a GPU).
 
 use lumen_core::prelude::*;
-use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin};
+use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin, gpu_unavailable_reason};
 
 const W: u32 = 400;
 const H: u32 = 300;
@@ -44,8 +44,8 @@ fn spawn_grid(app: &mut App) -> Vec<bevy_ecs::entity::Entity> {
 
 #[test]
 fn empty_damage_skips_encode_localized_change_repaints() {
-    if WgpuRenderer::new_offscreen(W, H).is_err() {
-        eprintln!("skipping: no wgpu adapter available");
+    if let Some(why) = gpu_unavailable_reason() {
+        eprintln!("skipping: {why}");
         return;
     }
 
@@ -60,13 +60,13 @@ fn empty_damage_skips_encode_localized_change_repaints() {
     let ids = spawn_grid(&mut app);
     let widget_count = ids.len();
 
-    // Frame 1 — first paint. `PreviousScene` is empty, so the whole scene
+    // Frame 1 - first paint. `PreviousScene` is empty, so the whole scene
     // renders.
     app.tick();
     let after_first = render_count(&app);
     assert_eq!(after_first, 1, "first frame must render");
 
-    // Frame 2 — a false-positive dirty flag with NO visual change. The IR is
+    // Frame 2 - a false-positive dirty flag with NO visual change. The IR is
     // rebuilt (fresh Arcs for all {widget_count} widgets) but is content-
     // identical, so the diff yields an empty region and the GPU encode is
     // skipped entirely.
@@ -79,7 +79,7 @@ fn empty_damage_skips_encode_localized_change_repaints() {
          but render_count advanced {after_first} -> {after_noop}"
     );
 
-    // Frame 3 — flip a SINGLE widget's color among the {widget_count}. The diff
+    // Frame 3 - flip a SINGLE widget's color among the {widget_count}. The diff
     // finds one changed leaf, so the frame repaints.
     if let Some(mut v) = app.world.get_mut::<Visuals>(ids[widget_count / 2]) {
         v.fill = Some(Fill::Solid(Color::rgb(0.9, 0.1, 0.1)));
@@ -92,9 +92,9 @@ fn empty_damage_skips_encode_localized_change_repaints() {
         "a localized change must trigger exactly one repaint"
     );
 
-    // Pixel check: the repaint is correct — the changed widget (#100: row 5,
-    // col 0 → rect at x∈[1,19], y∈[141,167]) is now red, while its right
-    // neighbour (#101, x∈[21,39]) is still blue.
+    // Pixel check: the repaint is correct - the changed widget (#100: row 5,
+    // col 0 -> rect at x in [1,19], y in [141,167]) is now red, while its right
+    // neighbour (#101, x in [21,39]) is still blue.
     let frame_after_change = readback(&app);
     let px = |img: &[u8], x: u32, y: u32| {
         let i = ((y * W + x) * 4) as usize;
@@ -111,9 +111,9 @@ fn empty_damage_skips_encode_localized_change_repaints() {
         "neighbour widget should still be blue, got ({nr},{ng},{nb})"
     );
 
-    // Frame 4 — settle again with no change: skipped once more, and the
+    // Frame 4 - settle again with no change: skipped once more, and the
     // retained target must be byte-identical to the last painted frame (the
-    // skip preserves pixels exactly — no partial-repaint artefact).
+    // skip preserves pixels exactly - no partial-repaint artefact).
     force_dirty(&mut app);
     app.tick();
     let after_settle = render_count(&app);
@@ -128,7 +128,7 @@ fn empty_damage_skips_encode_localized_change_repaints() {
     );
 
     eprintln!(
-        "partial-repaint measurement: {widget_count} widgets — \
+        "partial-repaint measurement: {widget_count} widgets - \
          GPU encode/present passes across 4 ticks \
          (paint, no-op, 1-widget change, no-op) = [1, {after_noop}, {after_change}, {after_settle}]; \
          2 of 3 post-initial dirty frames did ZERO GPU work"
