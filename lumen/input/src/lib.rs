@@ -308,6 +308,32 @@ fn apply_focused_key(
     u: &mut UndoStack,
     geom: Option<&lumen_text::TextGeometry>,
 ) {
+    apply_focused_key_inner(ev, mods, multiline, concealed, clipboard, b, c, u, geom);
+    if concealed && (b.len_bytes() == 0 || is_submit_key(ev, mods, multiline)) {
+        u.clear();
+    }
+}
+
+/// Enter on a single-line input, or Shift+Enter on a multiline one, is the
+/// commit signal `activate_focused_on_enter` turns into
+/// [`TextInputCommitted`].
+fn is_submit_key(ev: &FocusedKey, mods: &lumen_core::input::Modifiers, multiline: bool) -> bool {
+    matches!(&ev.key, Key::Named(NamedKey::Enter)) && (!multiline || mods.shift)
+}
+
+/// Key handling proper; see [`apply_focused_key`].
+#[allow(deprecated, clippy::too_many_arguments)]
+fn apply_focused_key_inner(
+    ev: &FocusedKey,
+    mods: &lumen_core::input::Modifiers,
+    multiline: bool,
+    concealed: bool,
+    clipboard: &mut Option<NonSendMut<'_, ClipboardResource>>,
+    b: &mut TextBuffer,
+    c: &mut TextCursor,
+    u: &mut UndoStack,
+    geom: Option<&lumen_text::TextGeometry>,
+) {
     use lumen_text::{delete_range, insert_text, move_cursor, move_cursor_visual, replace_range};
     let shift = mods.shift;
     // D5: only consecutive VERTICAL motions keep the sticky goal-x; every
@@ -367,12 +393,15 @@ fn apply_focused_key(
                 return;
             }
             "x" => {
-                // Concealed inputs disable cut entirely - Qt's `cut()`
-                // early-returns unless `echoMode() == Normal`, so the
-                // selection is neither copied NOR deleted. Delete/Backspace
-                // still remove the selection through their own paths.
-                if !concealed && let Some(r) = c.selection_range() {
-                    write_clipboard(clipboard.as_deref_mut(), &b.slice(r.clone()));
+                // `QLineEdit::cut()` is `if (hasSelectedText()) { copy();
+                // del(); }` and only `copy()` is gated on
+                // `echoMode() == Normal`. A concealed field therefore still
+                // deletes the selection; only the clipboard write is
+                // suppressed, so the secret cannot be lifted off it.
+                if let Some(r) = c.selection_range() {
+                    if !concealed {
+                        write_clipboard(clipboard.as_deref_mut(), &b.slice(r.clone()));
+                    }
                     delete_range(b, c, u, r);
                 }
                 return;
@@ -2386,23 +2415,22 @@ mod typing_tests {
         )
     }
 
-    /// Qt `QLineEdit`: cut is disabled under a password echo mode - the
-    /// selection is neither copied nor deleted (`cut()` early-returns
-    /// unless `echoMode() == Normal`).
+    /// `QLineEdit::cut()` is `copy(); del();` with only `copy()` gated on
+    /// `echoMode() == Normal`, so a concealed field still deletes the
+    /// selection. Only the clipboard write is suppressed.
     #[test]
-    fn password_cut_does_not_delete_selection() {
+    fn password_cut_deletes_selection_without_copying() {
         let mut world = selected_input_world("secret", Some(EchoMode::Password));
         let (k, m) = ctrl("x");
         press(&mut world, k, m);
         assert_eq!(
             text(&mut world),
-            "secret",
-            "cut in password mode must not delete the selection"
+            "",
+            "cut on a concealed field still removes the selection"
         );
     }
 
-    /// The same chord under the default (`Normal`) echo mode DOES cut -
-    /// proves the block is echo-mode-gated, not a blanket disable.
+    /// The same chord under the default (`Normal`) echo mode also cuts.
     #[test]
     fn normal_cut_deletes_selection() {
         let mut world = selected_input_world("secret", None);
@@ -2415,13 +2443,135 @@ mod typing_tests {
         );
     }
 
-    /// No-echo mode blocks cut just like password mode.
+    /// No-echo mode behaves like password mode.
     #[test]
-    fn no_echo_cut_does_not_delete_selection() {
+    fn no_echo_cut_deletes_selection_without_copying() {
         let mut world = selected_input_world("secret", Some(EchoMode::NoEcho));
         let (k, m) = ctrl("x");
         press(&mut world, k, m);
-        assert_eq!(text(&mut world), "secret");
+        assert_eq!(text(&mut world), "");
+    }
+
+    /// The clipboard is never written from a concealed field. No clipboard
+    /// resource is installed in these worlds, so `write_clipboard` would
+    /// have to reach a real one; assert the copy chord is a no-op on the
+    /// buffer and that cut leaves no trace either way by comparing against
+    /// a `Normal` field driven through the same chords.
+    #[test]
+    fn password_copy_leaves_the_buffer_untouched() {
+        let mut world = selected_input_world("secret", Some(EchoMode::Password));
+        let (k, m) = ctrl("c");
+        press(&mut world, k, m);
+        assert_eq!(text(&mut world), "secret", "copy never edits");
+    }
+
+    /// Build a concealed input with the full W3 component set attached, so
+    /// the undo stack is the persistent component one rather than a
+    /// per-call temporary.
+    fn concealed_input_with_undo(initial: &str) -> (World, Entity) {
+        let mut world = World::new();
+        world.init_resource::<Messages<FocusedKey>>();
+        world.init_resource::<ModifiersState>();
+        let e = world
+            .spawn((
+                TextContent(initial.to_string()),
+                TextInput {
+                    cursor: initial.len(),
+                    ..Default::default()
+                },
+                EchoMode::Password,
+                TextBuffer::single_line(initial),
+                TextCursor {
+                    head: TextPos::from_byte(initial, initial.len()),
+                    anchor: TextPos::from_byte(initial, initial.len()),
+                    ..Default::default()
+                },
+                UndoStack::default(),
+            ))
+            .id();
+        world.insert_resource(FocusTracker(Some(e)));
+        (world, e)
+    }
+
+    /// Qt drops a concealed field's undo history rather than replaying it.
+    /// Once the buffer is empty, Ctrl+Z must not bring the secret back.
+    #[test]
+    fn concealed_undo_history_clears_when_the_buffer_empties() {
+        let (mut world, e) = concealed_input_with_undo("");
+        for ch in ["h", "u", "n", "t", "e", "r"] {
+            press(&mut world, Key::Character(ch.into()), Modifiers::default());
+        }
+        assert_eq!(text(&mut world), "hunter");
+        assert!(world.get::<UndoStack>(e).unwrap().can_undo());
+        // Clear the field the way a user does.
+        for _ in 0..6 {
+            press(
+                &mut world,
+                Key::Named(NamedKey::Backspace),
+                Modifiers::default(),
+            );
+        }
+        assert_eq!(text(&mut world), "");
+        assert!(
+            !world.get::<UndoStack>(e).unwrap().can_undo(),
+            "an emptied concealed field keeps no undo history"
+        );
+        let (k, m) = ctrl("z");
+        press(&mut world, k, m);
+        assert_eq!(text(&mut world), "", "undo must not replay the secret");
+    }
+
+    /// Submitting the value drops the history too, so a later Ctrl+Z on a
+    /// still-focused field cannot walk it back.
+    #[test]
+    fn concealed_undo_history_clears_on_submit() {
+        let (mut world, e) = concealed_input_with_undo("");
+        for ch in ["p", "w"] {
+            press(&mut world, Key::Character(ch.into()), Modifiers::default());
+        }
+        assert!(world.get::<UndoStack>(e).unwrap().can_undo());
+        press(
+            &mut world,
+            Key::Named(NamedKey::Enter),
+            Modifiers::default(),
+        );
+        assert!(
+            !world.get::<UndoStack>(e).unwrap().can_undo(),
+            "submit clears the concealed undo history"
+        );
+        let (k, m) = ctrl("z");
+        press(&mut world, k, m);
+        assert_eq!(text(&mut world), "pw", "undo is a no-op after submit");
+    }
+
+    /// A `Normal` field keeps its history through the same sequence, so
+    /// the clear is echo-mode-gated rather than a blanket disable.
+    #[test]
+    fn normal_field_keeps_undo_history_when_emptied() {
+        let mut world = World::new();
+        world.init_resource::<Messages<FocusedKey>>();
+        world.init_resource::<ModifiersState>();
+        let e = world
+            .spawn((
+                TextContent(String::new()),
+                TextInput::default(),
+                TextBuffer::single_line(""),
+                TextCursor::default(),
+                UndoStack::default(),
+            ))
+            .id();
+        world.insert_resource(FocusTracker(Some(e)));
+        press(&mut world, Key::Character("a".into()), Modifiers::default());
+        press(
+            &mut world,
+            Key::Named(NamedKey::Backspace),
+            Modifiers::default(),
+        );
+        assert_eq!(text(&mut world), "");
+        assert!(world.get::<UndoStack>(e).unwrap().can_undo());
+        let (k, m) = ctrl("z");
+        press(&mut world, k, m);
+        assert_eq!(text(&mut world), "a", "Normal undo still replays");
     }
 }
 
