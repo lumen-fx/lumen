@@ -15,9 +15,9 @@
 //! Each render-world entity represents one drawable. Adding a primitive consists of: one `Extracted*` component, one extract fn, and one render system.
 
 use crate::components::{
-    CaretBlink, Color, EchoMode, Fill, ImeState, Opacity, PASSWORD_MASK_CHAR, TextAlign,
-    TextContent, TextInput, TextInputPaint, TextInputScroll, TextStyle, Transform, Visible,
-    Visuals,
+    CaretBlink, Color, EchoMode, Fill, ImeState, Opacity, TextAlign, TextBlockOrigin, TextContent,
+    TextInput, TextInputPaint, TextInputScroll, TextStyle, Transform, Visible, Visuals,
+    text_baseline_in_line, text_block_top,
 };
 use crate::input::{Focused, ScrollOffset};
 use bevy_ecs::prelude::*;
@@ -2086,22 +2086,12 @@ impl SurfaceCapture {
     }
 }
 
-/// Byte offset into a masked run that corresponds to `plain_byte` in the
-/// plaintext `text`, where each scalar renders as one `mask` char.
-/// Snaps `plain_byte` down to a char boundary first, then counts scalars
-/// before it and scales by the mask char's UTF-8 width.
-fn masked_offset(text: &str, plain_byte: usize, mask: char) -> usize {
-    let mut b = plain_byte.min(text.len());
-    while b > 0 && !text.is_char_boundary(b) {
-        b -= 1;
-    }
-    text[..b].chars().count() * mask.len_utf8()
-}
-
 /// Rewrite a display run and its caret / selection byte offsets for a
-/// concealed [`EchoMode`]:
-/// - [`EchoMode::Password`] -> one [`PASSWORD_MASK_CHAR`] per scalar, with
-///   caret / selection remapped into the masked string.
+/// concealed [`EchoMode`], through the same mapping the shaping producer
+/// and the pointer hit test use ([`EchoMode::display_string`] /
+/// [`EchoMode::display_offset`]):
+/// - [`EchoMode::Password`] -> one [`crate::components::PASSWORD_MASK_CHAR`]
+///   per scalar, with caret / selection remapped into the masked string.
 /// - [`EchoMode::NoEcho`] -> empty run; caret collapses to the origin and
 ///   no selection is painted (there is nothing to highlight).
 ///
@@ -2112,19 +2102,13 @@ fn mask_echo(
     caret: Option<usize>,
     selection: Option<(usize, usize)>,
 ) -> (String, Option<usize>, Option<(usize, usize)>) {
-    match mode {
-        EchoMode::NoEcho => (String::new(), caret.map(|_| 0), None),
-        EchoMode::Password => {
-            let mask = PASSWORD_MASK_CHAR;
-            let scalars = text.chars().count();
-            let masked: String = mask.to_string().repeat(scalars);
-            let caret = caret.map(|c| masked_offset(text, c, mask));
-            let selection = selection
-                .map(|(s, e)| (masked_offset(text, s, mask), masked_offset(text, e, mask)));
-            (masked, caret, selection)
-        }
-        EchoMode::Normal => (text.to_string(), caret, selection),
-    }
+    let display = mode.display_string(text).into_owned();
+    let caret = caret.map(|c| mode.display_offset(text, c));
+    let selection = match mode {
+        EchoMode::NoEcho => None,
+        _ => selection.map(|(s, e)| (mode.display_offset(text, s), mode.display_offset(text, e))),
+    };
+    (display, caret, selection)
 }
 
 /// Default extract fn that emits one [`ExtractedText`] per entity with [`Transform`] and [`TextContent`].
@@ -2161,13 +2145,28 @@ pub fn extract_text(main: &mut World, render: &mut World) {
         Option<&'a TextInputScroll>,
         Option<&'a EchoMode>,
         Option<&'a TextInputPaint>,
+        Option<&'a TextBlockOrigin>,
     );
     let mut q = main.query::<RowFor>();
     let pairs: Vec<(Entity, ExtractedText)> = q
         .iter(main)
         .filter(|(e, ..)| !hidden.contains(e))
         .filter_map(
-            |(e, t, text, ts, ime, input, focused, style, opacity, edit_scroll, echo, paint)| {
+            |(
+                e,
+                t,
+                text,
+                ts,
+                ime,
+                input,
+                focused,
+                style,
+                opacity,
+                edit_scroll,
+                echo,
+                paint,
+                block_origin,
+            )| {
                 let ts = ts.cloned().unwrap_or_default();
                 let size_px = ts.size_px;
                 let preedit = ime.map(|i| i.preedit.as_str()).unwrap_or("");
@@ -2223,14 +2222,21 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                     }
                     _ => (combined, caret, selection),
                 };
-                // Center vertically inside `(box - padding_top - padding_bottom)` using `cap_height ~ 0.72 * size_px`.
+                // Vertical origin. `TextBlockOrigin` carries the producer's
+                // soft-wrap-aware answer; without it, fall back to the same
+                // rule over the logical line count so the drawn baseline
+                // still agrees with the pointer hit test.
                 let pad_left = style.map(|s| s.padding.left).unwrap_or(0.0);
                 let pad_right = style.map(|s| s.padding.right).unwrap_or(0.0);
                 let pad_top = style.map(|s| s.padding.top).unwrap_or(0.0);
                 let pad_bottom = style.map(|s| s.padding.bottom).unwrap_or(0.0);
                 let inner_h = (t.size.y - pad_top - pad_bottom).max(size_px);
-                let cap = size_px * 0.72;
-                let baseline_y = t.absolute.y + pad_top + (inner_h + cap) / 2.0;
+                let block_top = block_origin.map(|b| b.top).unwrap_or_else(|| {
+                    let stacked = input.is_some_and(|i| i.multiline) || combined.contains('\n');
+                    text_block_top(inner_h, size_px, stacked)
+                });
+                let baseline_y =
+                    t.absolute.y + pad_top + block_top + text_baseline_in_line(size_px);
                 let container_width = (t.size.x - pad_left - pad_right).max(0.0);
                 let alpha = effective_opacity(opacity, &inherited_alpha, e);
                 let off = scroll.get(&e).copied().unwrap_or(Vec2::ZERO);
@@ -2305,6 +2311,7 @@ mod echo_mask_tests {
     //! plaintext is untouched; only the display run + caret / selection
     //! offsets are rewritten against the mask glyphs.
     use super::*;
+    use crate::components::PASSWORD_MASK_CHAR;
 
     #[test]
     fn password_masks_each_scalar_and_remaps_caret() {
@@ -2336,7 +2343,21 @@ mod echo_mask_tests {
     #[test]
     fn masked_offset_snaps_mid_codepoint_down() {
         // byte 1 is mid-'\u{e9}' -> snap to 0 -> zero mask widths.
-        assert_eq!(masked_offset("\u{e9}", 1, PASSWORD_MASK_CHAR), 0);
+        assert_eq!(EchoMode::Password.display_offset("\u{e9}", 1), 0);
+    }
+
+    #[test]
+    fn masked_offset_round_trips_to_the_plaintext_byte() {
+        // The pointer hit test resolves a masked byte and maps it back;
+        // both directions must land on the same scalar edge.
+        let plain = "a\u{e9}bc";
+        for (i, _) in plain
+            .char_indices()
+            .chain(std::iter::once((plain.len(), 'x')))
+        {
+            let d = EchoMode::Password.display_offset(plain, i);
+            assert_eq!(EchoMode::Password.plain_offset(plain, d), i);
+        }
     }
 
     #[test]

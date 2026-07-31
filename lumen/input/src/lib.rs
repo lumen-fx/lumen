@@ -13,7 +13,7 @@ use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::NonSendMut;
 use glam::Vec2;
-use lumen_core::components::EchoMode;
+use lumen_core::components::{EchoMode, TextBlockOrigin, text_baseline_in_line, text_block_top};
 use lumen_core::input::{FocusTracker, FocusedKey, KeyPressed, PendingFileDrops};
 use lumen_core::prelude::*;
 use lumen_core::text_events::TextEditRequest;
@@ -217,7 +217,15 @@ pub fn type_into_focused(
     // D5/D6: the shaped geometry (produced last tick) drives visual-line
     // Up/Down + Home/End and seeds the sticky goal-x. Absent (no shaper) the
     // router falls back to the byte-only `\n` motions.
-    let geom = shaped.map(|s| &s.geometry);
+    //
+    // A concealed field's geometry describes the MASK run, whose bytes are
+    // not buffer bytes, so the visual resolver is skipped there. Concealed
+    // fields are single-line, where the byte motions are equivalent.
+    let geom = if concealed {
+        None
+    } else {
+        shaped.map(|s| &s.geometry)
+    };
     for ev in keys.read() {
         if ev.entity != entity {
             continue;
@@ -280,9 +288,14 @@ fn seed_cursor(text: &str, input: &TextInput) -> TextCursor {
     }
 }
 
-/// Apply one focused-key event against the canonical buffer model.
-/// Extracted from [`type_into_focused`] so the borrow of the temporaries
-/// vs. components stays in one place.
+/// Apply one focused-key event against the canonical buffer model, then
+/// enforce the concealed-field undo policy.
+///
+/// Qt treats a concealed field's undo history as secret-bearing:
+/// `QWidgetLineControl::undo()` under any non-`Normal` echo mode clears the
+/// field instead of replaying. Lumen drops the history the moment the
+/// buffer is empty or the value has been submitted, so Ctrl+Z can never
+/// walk a password back after the field looks cleared.
 #[allow(deprecated, clippy::too_many_arguments)]
 fn apply_focused_key(
     ev: &FocusedKey,
@@ -734,47 +747,72 @@ const IME_CARET_WIDTH_PX: f32 = 2.0;
 /// baseline / padding / edit-scroll math the renderer uses. Falls back to the
 /// whole-box rect when the geometry or cursor is missing (no shaper wired,
 /// e.g. a headless test that skipped the producer).
+///
+/// A concealed [`EchoMode`] keeps IME off entirely. Qt sets
+/// `Qt::ImhHiddenText` in `QLineEdit::setEchoMode` and
+/// `QInputMethodPrivate::objectAcceptsInputMethod()` disables input methods
+/// for it, so a password field gets no candidate window and no predictive
+/// text.
 #[allow(clippy::type_complexity)]
 pub fn update_ime_request(
     mut req: ResMut<ImeRequest>,
     tracker: Res<FocusTracker>,
-    inputs: Query<
-        (
-            &Transform,
-            Option<&TextCursor>,
-            Option<&lumen_text::ShapedText>,
-            Option<&TextStyle>,
-            Option<&lumen_core::components::Style>,
-            Option<&lumen_core::components::TextInputScroll>,
-        ),
-        With<TextInput>,
-    >,
+    inputs: Query<(
+        &Transform,
+        &TextInput,
+        Option<&TextCursor>,
+        Option<&lumen_text::ShapedText>,
+        Option<&TextStyle>,
+        Option<&lumen_core::components::Style>,
+        Option<&lumen_core::components::TextInputScroll>,
+        Option<&EchoMode>,
+        Option<&TextBlockOrigin>,
+        Option<&TextBuffer>,
+    )>,
 ) {
-    let focused = tracker.0.and_then(|e| inputs.get(e).ok());
-    req.allowed = focused.is_some();
-    req.cursor_area = focused.map(|(t, cursor, shaped, ts, style, escroll)| {
-        match (cursor, shaped) {
-            (Some(cur), Some(shaped)) => {
-                let size_px = ts.map(|s| s.size_px).unwrap_or(16.0);
-                let (pad_l, pad_t, pad_b) = style
-                    .map(|s| (s.padding.left, s.padding.top, s.padding.bottom))
-                    .unwrap_or((0.0, 0.0, 0.0));
-                let esc = escroll.map(|s| s.offset).unwrap_or(Vec2::ZERO);
-                // Baseline of visual line 1 in window coords -- same formula
-                // as `extract_text` so the IME rect and the drawn caret agree.
-                let inner_h = (t.size.y - pad_t - pad_b).max(size_px);
-                let cap = size_px * 0.72;
-                let baseline_y = t.absolute.y + pad_t + (inner_h + cap) / 2.0;
-                let caret = shaped.geometry.byte_to_caret(cur.head.byte);
-                let pos = Vec2::new(
-                    t.absolute.x + pad_l + caret.x - esc.x,
-                    baseline_y + caret.top - esc.y,
-                );
-                (pos, Vec2::new(IME_CARET_WIDTH_PX, caret.height))
-            }
-            // No geometry / cursor: keep the whole-box rect.
-            _ => (t.absolute, t.size),
+    let Some((t, input, cursor, shaped, ts, style, escroll, echo, block, buf)) =
+        tracker.0.and_then(|e| inputs.get(e).ok())
+    else {
+        req.allowed = false;
+        req.cursor_area = None;
+        return;
+    };
+    let echo = echo.copied().unwrap_or_default();
+    req.allowed = !echo.is_concealed();
+    req.cursor_area = Some(match (cursor, shaped) {
+        (Some(cur), Some(shaped)) => {
+            let size_px = ts.map(|s| s.size_px).unwrap_or(16.0);
+            let (pad_l, pad_t, pad_b) = style
+                .map(|s| (s.padding.left, s.padding.top, s.padding.bottom))
+                .unwrap_or((0.0, 0.0, 0.0));
+            let esc = escroll.map(|s| s.offset).unwrap_or(Vec2::ZERO);
+            // Same vertical origin as `extract_text` and the pointer hit
+            // test, so the IME rect and the drawn caret agree.
+            let plain = buf.map(|b| b.to_string()).unwrap_or_default();
+            let display = echo.display_string(&plain);
+            let geom = &shaped.geometry;
+            let block_top = block_top_of(
+                block,
+                Some(geom),
+                &display,
+                input.multiline,
+                t.size.y,
+                pad_t,
+                pad_b,
+                size_px,
+            );
+            let baseline_y = t.absolute.y + pad_t + block_top + text_baseline_in_line(size_px);
+            // The geometry describes the DISPLAYED run, so the caret byte
+            // crosses into display coordinates first.
+            let caret = geom.byte_to_caret(echo.display_offset(&plain, cur.head.byte));
+            let pos = Vec2::new(
+                t.absolute.x + pad_l + caret.x - esc.x,
+                baseline_y + caret.top - esc.y,
+            );
+            (pos, Vec2::new(IME_CARET_WIDTH_PX, caret.height))
         }
+        // No geometry / cursor: keep the whole-box rect.
+        _ => (t.absolute, t.size),
     });
 }
 
@@ -1606,9 +1644,14 @@ const MULTI_CLICK_RADIUS_PX: f32 = 4.0;
 /// (`Metrics::new(size, size * 1.2)`).
 const LINE_HEIGHT_FACTOR: f32 = 1.2;
 
-/// Map a pointer position to a byte offset inside `text` drawn at
-/// `origin` (box top-left) with `pad` insets, honoring the per-input
-/// caret-keep-visible scroll offset.
+/// Map a pointer position to a byte offset inside the plaintext `text`
+/// drawn at `origin` (box top-left) with `pad` insets and `block_top`
+/// vertical origin, honoring the per-input caret-keep-visible scroll offset.
+///
+/// The hit test runs against the DISPLAYED run, which is the mask glyphs
+/// under a concealed [`EchoMode`], and maps the result back to a plaintext
+/// byte. Bullet advances differ from letter advances, so resolving against
+/// the plaintext would land on the wrong character.
 ///
 /// D4: when the entity's main-world [`lumen_text::TextGeometry`] is present
 /// (the layout producer shaped it last tick), the byte comes from a real
@@ -1617,40 +1660,85 @@ const LINE_HEIGHT_FACTOR: f32 = 1.2;
 /// skipped the producer), it falls back (O4) to the uniform per-grapheme
 /// advance estimate (`avg_advance = size_px * 0.55`): multiline text resolves
 /// the logical line from the pointer's y first, then hit-tests x inside it.
+///
+/// `block_top` is the shared vertical origin (`TextBlockOrigin`); both the
+/// drawn baseline and this hit test measure from it, so a tall multiline
+/// box resolves the same line the user clicked on.
+#[allow(clippy::too_many_arguments)]
 fn pointer_to_byte(
     geom: Option<&lumen_text::TextGeometry>,
     text: &str,
+    echo: EchoMode,
     origin: Vec2,
     pad: Vec2,
+    block_top: f32,
     edit_scroll: Vec2,
     pointer: Vec2,
     size_px: f32,
 ) -> usize {
+    let display = echo.display_string(text);
     let content_x = pointer.x - (origin.x + pad.x) + edit_scroll.x;
+    let content_y = pointer.y - (origin.y + pad.y + block_top) + edit_scroll.y;
+    let display_byte = display_hit(geom, &display, content_x, content_y, size_px);
+    echo.plain_offset(text, display_byte)
+}
+
+/// Byte offset into the displayed run for a run-local `(x, y)`.
+fn display_hit(
+    geom: Option<&lumen_text::TextGeometry>,
+    display: &str,
+    content_x: f32,
+    content_y: f32,
+    size_px: f32,
+) -> usize {
     if let Some(g) = geom {
-        let content_y = pointer.y - (origin.y + pad.y) + edit_scroll.y;
         return g.x_to_byte(content_x, content_y);
     }
     let avg_advance = size_px * 0.55;
-    if !text.contains('\n') {
-        return hit_test_text(text, 0.0, content_x, avg_advance);
+    if !display.contains('\n') {
+        return hit_test_text(display, 0.0, content_x, avg_advance);
     }
     let line_height = size_px * LINE_HEIGHT_FACTOR;
-    let content_y = pointer.y - (origin.y + pad.y) + edit_scroll.y;
-    let line_count = text.split('\n').count();
+    let line_count = display.split('\n').count();
     let line_idx = if line_height > 0.0 {
         ((content_y / line_height).floor().max(0.0) as usize).min(line_count.saturating_sub(1))
     } else {
         0
     };
     let mut start = 0usize;
-    for (i, line) in text.split('\n').enumerate() {
+    for (i, line) in display.split('\n').enumerate() {
         if i == line_idx {
             return start + hit_test_text(line, 0.0, content_x, avg_advance);
         }
         start += line.len() + 1; // +1 for the '\n'
     }
-    text.len()
+    display.len()
+}
+
+/// Vertical origin of an entity's text block: the producer's published
+/// [`TextBlockOrigin`], or the same rule evaluated locally when the
+/// producer has not run.
+#[allow(clippy::too_many_arguments)]
+fn block_top_of(
+    block: Option<&TextBlockOrigin>,
+    geom: Option<&lumen_text::TextGeometry>,
+    display: &str,
+    multiline: bool,
+    box_h: f32,
+    pad_t: f32,
+    pad_b: f32,
+    size_px: f32,
+) -> f32 {
+    match block {
+        Some(b) => b.top,
+        None => {
+            let wrapped = geom
+                .map(|g| g.line_count() > 1)
+                .unwrap_or_else(|| display.contains('\n'));
+            let inner_h = (box_h - pad_t - pad_b).max(size_px);
+            text_block_top(inner_h, size_px, multiline || wrapped)
+        }
+    }
 }
 
 /// W3.4 / W2 Qt-polish: pointer press on a `TextEditable` entity emits
@@ -1681,6 +1769,8 @@ pub fn text_pointer_to_caret(
             Option<&lumen_core::components::Style>,
             Option<&lumen_core::components::TextInputScroll>,
             Option<&lumen_text::ShapedText>,
+            Option<&EchoMode>,
+            Option<&TextBlockOrigin>,
         ),
         With<TextEditable>,
     >,
@@ -1696,19 +1786,42 @@ pub fn text_pointer_to_caret(
         let Ok(entity) = hovered.single() else {
             continue;
         };
-        let Ok((t, buf, style, box_style, edit_scroll, shaped)) = editables.get(entity) else {
+        let Ok((t, buf, style, box_style, edit_scroll, shaped, echo, block)) =
+            editables.get(entity)
+        else {
             continue;
         };
         let off = ancestor_scroll(entity, &parents, &scrolls);
         let origin = t.absolute - off;
         let size_px = style.map(|s| s.size_px).unwrap_or(16.0);
-        let pad = box_style
-            .map(|s| Vec2::new(s.padding.left, s.padding.top))
-            .unwrap_or(Vec2::ZERO);
+        let (pad_b, pad) = box_style
+            .map(|s| (s.padding.bottom, Vec2::new(s.padding.left, s.padding.top)))
+            .unwrap_or((0.0, Vec2::ZERO));
         let escroll = edit_scroll.map(|s| s.offset).unwrap_or(Vec2::ZERO);
         let text = buf.to_string();
+        let echo = echo.copied().unwrap_or_default();
         let geom = shaped.map(|s| &s.geometry);
-        let byte = pointer_to_byte(geom, &text, origin, pad, escroll, press.position, size_px);
+        let block_top = block_top_of(
+            block,
+            geom,
+            &echo.display_string(&text),
+            !buf.is_single_line(),
+            t.size.y,
+            pad.y,
+            pad_b,
+            size_px,
+        );
+        let byte = pointer_to_byte(
+            geom,
+            &text,
+            echo,
+            origin,
+            pad,
+            block_top,
+            escroll,
+            press.position,
+            size_px,
+        );
 
         // Shift+press extends the current selection from its anchor and
         // never participates in double/triple coalescing.
@@ -1782,6 +1895,8 @@ pub fn text_pointer_drag_select(
         Option<&lumen_core::components::Style>,
         Option<&lumen_core::components::TextInputScroll>,
         Option<&lumen_text::ShapedText>,
+        Option<&EchoMode>,
+        Option<&TextBlockOrigin>,
     )>,
     parents: Query<&ChildOf>,
     scrolls: Query<&ScrollOffset>,
@@ -1799,23 +1914,38 @@ pub fn text_pointer_drag_select(
         moves.read().for_each(drop);
         return;
     };
-    let Ok((t, buf, cur, style, box_style, edit_scroll, shaped)) = editables.get(entity) else {
+    let Ok((t, buf, cur, style, box_style, edit_scroll, shaped, echo, block)) =
+        editables.get(entity)
+    else {
         moves.read().for_each(drop);
         return;
     };
     let off = ancestor_scroll(entity, &parents, &scrolls);
     let origin = t.absolute - off;
     let size_px = style.map(|s| s.size_px).unwrap_or(16.0);
-    let pad = box_style
-        .map(|s| Vec2::new(s.padding.left, s.padding.top))
-        .unwrap_or(Vec2::ZERO);
+    let (pad_b, pad) = box_style
+        .map(|s| (s.padding.bottom, Vec2::new(s.padding.left, s.padding.top)))
+        .unwrap_or((0.0, Vec2::ZERO));
     let escroll = edit_scroll.map(|s| s.offset).unwrap_or(Vec2::ZERO);
     let text = buf.to_string();
+    let echo = echo.copied().unwrap_or_default();
     let geom = shaped.map(|s| &s.geometry);
+    let block_top = block_top_of(
+        block,
+        geom,
+        &echo.display_string(&text),
+        !buf.is_single_line(),
+        t.size.y,
+        pad.y,
+        pad_b,
+        size_px,
+    );
     let Some(last_pos) = moves.read().last().map(|m| m.position) else {
         return;
     };
-    let head_byte = pointer_to_byte(geom, &text, origin, pad, escroll, last_pos, size_px);
+    let head_byte = pointer_to_byte(
+        geom, &text, echo, origin, pad, block_top, escroll, last_pos, size_px,
+    );
     if head_byte == cur.head.byte {
         return;
     }
@@ -2860,8 +2990,10 @@ mod shaped_geometry_tests {
         let byte = pointer_to_byte(
             Some(g),
             "Willi",
+            EchoMode::Normal,
             origin,
             Vec2::ZERO,
+            0.0,
             Vec2::ZERO,
             Vec2::new(x_past_w, 5.0),
             16.0,
@@ -2876,8 +3008,10 @@ mod shaped_geometry_tests {
             let geo = pointer_to_byte(
                 Some(g),
                 "Willi",
+                EchoMode::Normal,
                 origin,
                 Vec2::ZERO,
+                0.0,
                 Vec2::ZERO,
                 Vec2::new(px, 5.0),
                 16.0,
@@ -2885,8 +3019,10 @@ mod shaped_geometry_tests {
             let uni = pointer_to_byte(
                 None,
                 "Willi",
+                EchoMode::Normal,
                 origin,
                 Vec2::ZERO,
+                0.0,
                 Vec2::ZERO,
                 Vec2::new(px, 5.0),
                 16.0,
@@ -2953,5 +3089,267 @@ mod shaped_geometry_tests {
             pos1.x,
             pos2.x
         );
+    }
+
+    /// Spawn a focused single-line input carrying `text` and an optional
+    /// echo mode, with shaped geometry for whatever it displays.
+    fn ime_world(text: &str, echo: Option<EchoMode>) -> World {
+        let mode = echo.unwrap_or_default();
+        let mut shaper = CosmicShaper::new();
+        let st = build_shaped_text(
+            &mut shaper,
+            &mode.display_string(text),
+            16.0,
+            ShapeOptions::default(),
+            0,
+        )
+        .expect("shaped");
+        let mut world = World::new();
+        world.insert_resource(ImeRequest::default());
+        let mut ent = world.spawn((
+            Transform::new(Vec2::new(10.0, 20.0), Vec2::new(200.0, 30.0)),
+            TextInput {
+                cursor: text.len(),
+                ..Default::default()
+            },
+            TextStyle::default(),
+            Style::default(),
+            TextBuffer::single_line(text),
+            TextCursor {
+                head: TextPos::from_byte(text, text.len()),
+                anchor: TextPos::from_byte(text, text.len()),
+                ..Default::default()
+            },
+            st,
+        ));
+        if let Some(mode) = echo {
+            ent.insert(mode);
+        }
+        let e = ent.id();
+        world.insert_resource(FocusTracker(Some(e)));
+        world
+    }
+
+    /// Qt sets `Qt::ImhHiddenText` for a non-`Normal` echo mode and
+    /// `objectAcceptsInputMethod()` then disables input methods outright,
+    /// so a password field gets no candidate window or predictive text.
+    #[test]
+    fn ime_is_disabled_on_a_concealed_field() {
+        for mode in [EchoMode::Password, EchoMode::NoEcho] {
+            let mut world = ime_world("secret", Some(mode));
+            world.run_system_once(update_ime_request).unwrap();
+            assert!(
+                !world.resource::<ImeRequest>().allowed,
+                "IME must stay off under {mode:?}"
+            );
+        }
+    }
+
+    /// The same field under `Normal` still enables IME, so the gate is
+    /// echo-mode-driven rather than a blanket disable.
+    #[test]
+    fn ime_stays_enabled_on_a_normal_field() {
+        let mut world = ime_world("secret", None);
+        world.run_system_once(update_ime_request).unwrap();
+        assert!(world.resource::<ImeRequest>().allowed);
+    }
+
+    /// The hit test resolves against the DISPLAYED run. Mask glyphs are
+    /// much narrower than 'W', so resolving the same x against the
+    /// plaintext geometry lands on a different character.
+    #[test]
+    fn password_hit_test_resolves_against_the_mask_glyphs() {
+        use lumen_core::components::PASSWORD_MASK_CHAR;
+        let plain = "WWWWW";
+        let mut shaper = CosmicShaper::new();
+        let masked = EchoMode::Password.display_string(plain);
+        let masked_geom = build_shaped_text(&mut shaper, &masked, 16.0, ShapeOptions::default(), 0)
+            .expect("shaped")
+            .geometry;
+        let plain_geom = build_shaped_text(&mut shaper, plain, 16.0, ShapeOptions::default(), 1)
+            .expect("shaped")
+            .geometry;
+        // x of the caret after two mask glyphs.
+        let x = masked_geom.caret_xy(2 * PASSWORD_MASK_CHAR.len_utf8()).0;
+        let byte = pointer_to_byte(
+            Some(&masked_geom),
+            plain,
+            EchoMode::Password,
+            Vec2::ZERO,
+            Vec2::ZERO,
+            0.0,
+            Vec2::ZERO,
+            Vec2::new(x, 5.0),
+            16.0,
+        );
+        assert_eq!(byte, 2, "click past two mask glyphs lands after two chars");
+        assert_ne!(
+            plain_geom.x_to_byte(x, 5.0),
+            2,
+            "plaintext geometry would resolve the same x elsewhere"
+        );
+    }
+
+    /// Nothing is drawn under `NoEcho`, so every click collapses the
+    /// caret to the origin, as `QLineEdit` does with an empty display run.
+    #[test]
+    fn no_echo_hit_test_collapses_to_the_origin() {
+        let plain = "secret";
+        let mut shaper = CosmicShaper::new();
+        let geom = build_shaped_text(
+            &mut shaper,
+            &EchoMode::NoEcho.display_string(plain),
+            16.0,
+            ShapeOptions::default(),
+            0,
+        )
+        .expect("shaped")
+        .geometry;
+        let byte = pointer_to_byte(
+            Some(&geom),
+            plain,
+            EchoMode::NoEcho,
+            Vec2::ZERO,
+            Vec2::ZERO,
+            0.0,
+            Vec2::ZERO,
+            Vec2::new(200.0, 5.0),
+            16.0,
+        );
+        assert_eq!(byte, 0);
+    }
+}
+
+/// The vertical origin the drawn baseline and the pointer hit test share.
+///
+/// The older pointer tests run without the layout plugin, so no
+/// `ShapedText` exists and only the fallback path is exercised. These
+/// build the geometry the producer would publish for a tall multiline box
+/// and assert both directions agree on which visual line a pointer y is in.
+#[cfg(test)]
+mod text_block_origin_tests {
+    use super::*;
+    use glam::Vec2;
+    use lumen_text::{GlyphPosition, ShapedRun, ShapedSegment, TextGeometry};
+
+    const SIZE_PX: f32 = 16.0;
+    const LINE_H: f32 = SIZE_PX * 1.2;
+    const ADVANCE: f32 = 10.0;
+    /// Three logical lines, three bytes each plus the newline.
+    const TEXT: &str = "abc\ndef\nghi";
+    /// Tall pane, as a `grow="1"` textarea gets.
+    const BOX_H: f32 = 400.0;
+    const PAD: f32 = 8.0;
+
+    /// Geometry as the producer would shape `TEXT`: one glyph per byte,
+    /// uniform advance, line `i` on baseline `i * LINE_H`.
+    fn three_line_geometry() -> TextGeometry {
+        let mut glyphs = Vec::new();
+        for (line, s) in TEXT.split('\n').enumerate() {
+            let start = TEXT
+                .split('\n')
+                .take(line)
+                .map(|l| l.len() + 1)
+                .sum::<usize>();
+            for (i, _) in s.char_indices() {
+                let b = (start + i) as u32;
+                glyphs.push(GlyphPosition {
+                    id: 0,
+                    x: i as f32 * ADVANCE,
+                    y: line as f32 * LINE_H,
+                    advance: ADVANCE,
+                    byte_start: b,
+                    byte_end: b + 1,
+                });
+            }
+        }
+        let run = ShapedRun {
+            font_data: std::sync::Arc::new(Vec::new()),
+            font_index: 0,
+            glyphs: glyphs.clone(),
+            segments: vec![ShapedSegment {
+                font_id: 1,
+                font_data: std::sync::Arc::new(Vec::new()),
+                font_index: 0,
+                level: 0,
+                glyphs,
+                width: 3.0 * ADVANCE,
+            }],
+            width: 3.0 * ADVANCE,
+        };
+        TextGeometry::from(&run).with_size(SIZE_PX)
+    }
+
+    /// The origin the producer publishes for this box.
+    fn block_top() -> f32 {
+        let inner_h = (BOX_H - PAD - PAD).max(SIZE_PX);
+        text_block_top(inner_h, SIZE_PX, three_line_geometry().line_count() > 1)
+    }
+
+    /// Byte the hit test resolves for a pointer at the vertical center of
+    /// visual line `line`, one advance into it.
+    fn byte_at_line(line: usize) -> usize {
+        let y = PAD + block_top() + (line as f32 + 0.5) * LINE_H;
+        pointer_to_byte(
+            Some(&three_line_geometry()),
+            TEXT,
+            EchoMode::Normal,
+            Vec2::ZERO,
+            Vec2::splat(PAD),
+            block_top(),
+            Vec2::ZERO,
+            Vec2::new(ADVANCE * 1.5, y),
+            SIZE_PX,
+        )
+    }
+
+    #[test]
+    fn multiline_click_lands_on_the_clicked_line() {
+        let geom = three_line_geometry();
+        assert_eq!(geom.line_count(), 3);
+        for line in 0..3 {
+            let byte = byte_at_line(line);
+            assert_eq!(
+                geom.visual_line_of_byte(byte),
+                line,
+                "pointer on line {line} resolved to byte {byte}"
+            );
+        }
+    }
+
+    #[test]
+    fn multiline_click_resolves_the_byte_under_the_pointer() {
+        // Line 1 is "def" at bytes 4..7; x = 1.5 advances is inside 'e',
+        // whose nearest edge is byte 5.
+        assert_eq!(byte_at_line(1), 5);
+    }
+
+    /// The drawn baseline (what `extract_text` computes) and the hit test
+    /// read the same origin, so the first baseline falls inside line 0's
+    /// hit band. Before the fix `extract_text` centered the first baseline
+    /// in a 400px pane while the hit test measured from the padding top,
+    /// putting the drawn text many lines below where clicks resolved.
+    #[test]
+    fn drawn_baseline_sits_inside_the_hit_band_of_its_own_line() {
+        let top = block_top();
+        assert_eq!(top, 0.0, "a multiline block starts at the inner box top");
+        let baseline = top + text_baseline_in_line(SIZE_PX);
+        for line in 0..3 {
+            let line_baseline = baseline + line as f32 * LINE_H;
+            let band = ((line_baseline - top) / LINE_H).floor() as usize;
+            assert_eq!(band, line, "baseline of line {line} is in band {band}");
+        }
+    }
+
+    /// A single line still centers in its box, which is what `QLineEdit`
+    /// does, and the hit test measures from the same centered origin.
+    #[test]
+    fn single_line_stays_centered_in_a_tall_box() {
+        let inner_h = BOX_H - PAD - PAD;
+        let top = text_block_top(inner_h, SIZE_PX, false);
+        assert!(top > 0.0, "a lone line is pushed down to center");
+        let baseline = top + text_baseline_in_line(SIZE_PX);
+        // Same value the pre-existing extract formula produced.
+        assert!((baseline - (inner_h + SIZE_PX * 0.72) / 2.0).abs() < 1e-3);
     }
 }
