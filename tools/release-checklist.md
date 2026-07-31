@@ -2,8 +2,7 @@
 
 How to cut a lumenc release. CI (Gitea Actions, `.gitea/workflows/release.yml`)
 builds and publishes the Linux binaries; macOS and Windows are built by hand
-for now. Asset names are load-bearing — `tools/install.sh` downloads them by
-exact name:
+for now. Asset names are load-bearing, so keep them exact:
 
 | Asset                       | Built by                          |
 | --------------------------- | --------------------------------- |
@@ -47,7 +46,7 @@ exact name:
      Gitea API (`tools/release-assets.sh`).
 
    If the aarch64 step fails, the x86_64 asset is still uploaded and the run
-   is marked failed — fix, then rerun the workflow; re-uploads replace
+   is marked failed - fix, then rerun the workflow; re-uploads replace
    same-named assets, so reruns are safe.
 
 ## Manual binaries
@@ -56,7 +55,7 @@ Upload with `tools/release-assets.sh` (needs `curl` + `jq` and a personal
 access token with `write:repository`), or through the release page in the web
 UI.
 
-macOS — on any Apple Silicon Mac with rustup:
+macOS - on any Apple Silicon Mac with rustup:
 
 ```sh
 rustup target add x86_64-apple-darwin aarch64-apple-darwin
@@ -72,13 +71,84 @@ GITEA_REPO=lumen-fx/lumen \
   tools/release-assets.sh vX.Y.Z lumenc-macos-aarch64 lumenc-macos-x86_64
 ```
 
-Windows — on a Windows machine with rustup and the MSVC build tools:
+Windows - on a Windows machine with rustup and the MSVC build tools:
 
 ```powershell
 cargo build --release -p lumenc
 copy target\release\lumenc.exe lumenc-windows-x86_64.exe
 # upload via the release page, or release-assets.sh from Git Bash
 ```
+
+## Publishing to the install channel
+
+`curl -fsSL https://lumenfx.dev/install.sh | sh` is how people get the
+toolchain. The installer is a static file on the site (the `lumen-fx/site`
+repo, `apps/lumen/public/install.sh`); it reads a static manifest next to it
+and pulls archives from `https://dl.lumenfx.dev`, an R2 bucket. There is no
+server side to this: publishing a release means uploading objects and
+committing one JSON file.
+
+The manifest names two components. `lumen` is lumenc plus liblumen, installed
+by default. `candela` is the standalone candela toolchain, opt-in with
+`--components "add:candela"`. Each component ships one archive per target,
+holding the tree to install: executables in `bin/`, libraries in `lib/`.
+
+| Archive                         | Contents                            |
+| ------------------------------- | ----------------------------------- |
+| `lumen-X.Y.Z-<target>.tar.gz`   | `bin/lumenc`, `lib/liblumen.*`      |
+| `candela-X.Y.Z-<target>.tar.gz` | `bin/candela`, `bin/candela-vm`     |
+
+Targets are `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`,
+and `windows-x86_64`. Windows ships a `.zip`; the installer points Windows
+users at it rather than unpacking it.
+
+1. Pack one archive per component and target from the release binaries:
+
+   ```sh
+   mkdir -p stage/lumen/bin stage/lumen/lib
+   cp target/release/lumenc      stage/lumen/bin/
+   cp target/release/liblumen.so stage/lumen/lib/
+   tar -czf dist/lumen-X.Y.Z-linux-x86_64.tar.gz -C stage/lumen .
+   ```
+
+2. Upload the archives to R2 under `<component>/<version>/<file>`, which is the
+   path the manifest points at:
+
+   ```sh
+   for f in dist/*.tar.gz dist/*.zip; do
+     name="$(basename "$f")"
+     wrangler r2 object put "lumen-dl/${name%%-*}/X.Y.Z/$name" --file "$f"
+   done
+   ```
+
+3. Build the manifest from the same files, so the checksums describe what was
+   uploaded:
+
+   ```sh
+   tools/make-manifest.sh --version X.Y.Z --out manifest.json \
+     lumen:linux-x86_64:dist/lumen-X.Y.Z-linux-x86_64.tar.gz \
+     lumen:linux-aarch64:dist/lumen-X.Y.Z-linux-aarch64.tar.gz \
+     lumen:macos-x86_64:dist/lumen-X.Y.Z-macos-x86_64.tar.gz \
+     lumen:macos-aarch64:dist/lumen-X.Y.Z-macos-aarch64.tar.gz \
+     lumen:windows-x86_64:dist/lumen-X.Y.Z-windows-x86_64.zip \
+     candela:linux-x86_64:dist/candela-X.Y.Z-linux-x86_64.tar.gz
+   ```
+
+   Pass `--channel beta` or `--channel stable` when the release leaves alpha.
+   Components missing a target are fine: the installer says which targets a
+   component publishes and stops.
+
+4. Publish it in the site repo, keeping a pinned copy so `install.sh --version
+   X.Y.Z` keeps working after the next release:
+
+   ```sh
+   cp manifest.json site/apps/lumen/public/install/manifest.json
+   cp manifest.json site/apps/lumen/public/install/manifest-X.Y.Z.json
+   ```
+
+   Commit both. Cloudflare Pages serves them at
+   `https://lumenfx.dev/install/manifest.json` and
+   `https://lumenfx.dev/install/manifest-X.Y.Z.json`.
 
 ## Verify
 
@@ -90,12 +160,23 @@ copy target\release\lumenc.exe lumenc-windows-x86_64.exe
   chmod +x lumenc-linux-x86_64 && ./lumenc-linux-x86_64 --version
   ```
 
-- Note: `tools/install.sh` currently downloads from
-  `https://github.com/lumen-ui/lumen/releases`. Until that mirror carries the
-  release (or the installer is pointed at this host), `install.sh` will report
-  "no release asset for this platform yet" — it fails cleanly, but end users
-  won't get the new version through it. Mirroring the tag + assets to GitHub,
-  or repointing `REPO` in the installer, closes that gap.
+- The manifest is live and describes the new release:
+
+  ```sh
+  curl -fsSL https://lumenfx.dev/install/manifest.json
+  ```
+
+- The installer runs end to end against it, into a throwaway prefix:
+
+  ```sh
+  curl -fsSL https://lumenfx.dev/install.sh |
+    sh -s -- --prefix /tmp/lumen-check --no-confirm --components "add:candela"
+  /tmp/lumen-check/bin/lumenc --version
+  curl -fsSL https://lumenfx.dev/install.sh | sh -s -- --prefix /tmp/lumen-check --uninstall --no-confirm
+  ```
+
+  A checksum mismatch here means the bucket and the manifest disagree: rerun
+  step 3 against the uploaded files.
 
 ## Current limitations
 
