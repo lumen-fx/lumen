@@ -5,25 +5,25 @@
 //! Mirrors Qt `QLineEdit` / Slint `TextInput`: a selection background
 //! rect (`QPalette::Highlight` / `selection-background-color`) paints
 //! behind the selected glyphs and a solid caret bar marks the cursor.
-//! We drive the full headless pipeline (extract → node-IR → vello walker)
+//! We drive the full headless pipeline (extract -> node-IR -> vello walker)
 //! with distinctive token colors so the two visuals are unambiguous in
 //! the readback:
-//!   - selection background → pure green
-//!   - caret                → pure red
+//!   - selection background -> pure green
+//!   - caret                -> pure red
 //!
-//! Skips itself when no wgpu adapter is available (bare CI container).
+//! Skips itself when the machine has no GPU (bare CI container).
 
 use lumen_core::components::TextInputPaint;
 use lumen_core::prelude::*;
-use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin};
+use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin, gpu_unavailable_reason};
 use lumen_text_cosmic::CosmicShaper;
 
 const W: u32 = 220;
 const H: u32 = 60;
 
 fn render_selected_input() -> Option<Vec<u8>> {
-    if WgpuRenderer::new_offscreen(W, H).is_err() {
-        eprintln!("skipping: no wgpu adapter available");
+    if let Some(why) = gpu_unavailable_reason() {
+        eprintln!("skipping: {why}");
         return None;
     }
     let mut app = App::new();
@@ -95,7 +95,7 @@ fn selection_highlight_and_caret_are_visible() {
 
     // The selection highlight needs shaped geometry. If the sandbox has
     // no usable font the run shapes empty and there are no glyphs to
-    // select — detect that (no white glyph pixels) and skip only the
+    // select - detect that (no white glyph pixels) and skip only the
     // selection assertion, keeping the font-independent caret check
     // authoritative.
     let white = count(&pixels, |r, g, b| r > 180 && g > 180 && b > 180);

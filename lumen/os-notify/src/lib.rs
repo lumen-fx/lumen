@@ -7,13 +7,13 @@
 //!
 //! Extracted from `lumenc/src/run.rs:1377-1389` (the
 //! `ScriptCommand::Notify` branch) per W6.5. The v1 surface preserves
-//! the existing fire-and-forget behaviour — the actions list and
+//! the existing fire-and-forget behaviour - the actions list and
 //! [`NotificationActionInvoked`] reader-side wiring lay the
 //! follow-up's surface down.
 //!
 //! `Action`s come from [`lumen_os_mime::Action`] so one Action drives
 //! menu items, hotkeys, tray menus, and notification buttons (the
-//! shared abstraction described in audit §470 — equivalent to
+//! shared abstraction described in audit section 470 - equivalent to
 //! `GAction` driving every interaction surface in GIO).
 
 #![forbid(unsafe_code)]
@@ -74,7 +74,7 @@ pub struct Notification {
 }
 
 /// Stable handle returned by [`NotificationService::send`]. Today it
-/// just echoes the request id — a follow-up will hold the
+/// just echoes the request id - a follow-up will hold the
 /// `notify_rust::NotificationHandle` so apps can update / dismiss.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NotificationId(pub Arc<str>);
@@ -106,9 +106,9 @@ pub struct NotificationActionInvoked {
     pub action_id: String,
 }
 
-/// Notification-host resource. Stateless today — `send` is a pure
+/// Notification-host resource. Stateless today - `send` is a pure
 /// fire-and-forget call into notify-rust. A follow-up holds live
-/// `NotificationHandle`s here so `dismiss(id)` / `update(id, …)`
+/// `NotificationHandle`s here so `dismiss(id)` / `update(id, ...)`
 /// become possible.
 #[derive(Resource, Default, Clone)]
 pub struct NotificationService {
@@ -133,13 +133,17 @@ impl NotificationService {
 
     /// Fire a notification. Returns the id for routing the eventual
     /// [`NotificationActionInvoked`] back to the right handler.
-    /// Errors log to stderr — matches the previous behaviour exactly.
+    /// Errors log to stderr - matches the previous behaviour exactly.
     pub fn send(&self, n: &Notification) -> NotificationId {
         let mut builder = notify_rust::Notification::new();
         builder.summary(&n.title).body(&n.body);
         if let Some(icon) = &n.icon {
             builder.icon(icon);
         }
+        // XDG maps urgency to a hint and Windows maps it to a toast scenario.
+        // macOS has no equivalent, so notify-rust does not compile the setter
+        // there and the call has to be gated rather than the whole type.
+        #[cfg(not(target_os = "macos"))]
         builder.urgency(n.urgency.into());
         for a in &n.actions {
             // notify-rust's add action signature is (identifier, label).

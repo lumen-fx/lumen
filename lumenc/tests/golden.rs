@@ -8,13 +8,15 @@
 //!
 //! Each case builds a small markup+CSS app in a temp dir, runs the full
 //! headless pipeline in-process (same plugin stack as `lumenc run`, no
-//! window — see [`lumenc::build_headless_app`]), renders through the
+//! window - see [`lumenc::build_headless_app`]), renders through the
 //! offscreen wgpu+vello renderer, reads the framebuffer back, and
 //! compares against a checked-in PNG under `tests/goldens/`.
 //!
 //! - Update mode: `LUMEN_GOLDEN_UPDATE=1 cargo test -p lumenc --test golden`
 //!   rewrites the goldens instead of asserting. See `tests/goldens/README.md`.
-//! - No GPU adapter → every test skips with a message instead of failing.
+//! - No GPU adapter, only a software one, or a machine whose fonts are not the
+//!   baselines' -> every test skips with a message instead of failing. See
+//!   [`gpu_blocker`] and [`baseline_fonts`].
 //! - Determinism audit: every capture runs twice (two fully independent
 //!   app builds); the two frames must agree within [`SELF_TOLERANCE`]
 //!   before the golden comparison happens.
@@ -30,7 +32,7 @@ use lumen_core::prelude::{
     NamedKey, PointerButton, PointerMoved, PointerPressed, PointerState, PropertyStore,
     StyleManager, Transform, Viewport,
 };
-use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin};
+use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin, gpu_unavailable_reason};
 use lumen_text_cosmic::CosmicShaper;
 use lumenc::{RunOptions, build_headless_app};
 use std::path::PathBuf;
@@ -50,7 +52,7 @@ const VIEW_H: u32 = 300;
 ///   anti-aliasing coverage jitter while staying far below any visible
 ///   color change.
 /// - `max_diff_fraction`: fraction of pixels allowed to exceed the
-///   channel delta. 0.1 % of 400x300 = 120 px — enough for AA edges to
+///   channel delta. 0.1 % of 400x300 = 120 px - enough for AA edges to
 ///   drift by a sub-pixel after a driver update, small enough that any
 ///   real layout / color regression (which flips whole widget areas)
 ///   fails loudly. Caveat: regressions confined to < ~120 px (e.g. the
@@ -68,7 +70,7 @@ const GOLDEN_TOLERANCE: Tolerance = Tolerance {
 };
 
 /// Self-consistency (same process, same device, back-to-back builds)
-/// must be much tighter — any real nondeterminism should fail here, not
+/// must be much tighter - any real nondeterminism should fail here, not
 /// get silently absorbed by the golden tolerance.
 const SELF_TOLERANCE: Tolerance = Tolerance {
     max_channel_delta: 2,
@@ -83,17 +85,28 @@ const SETTLE_AFTER_INPUT_MS: u64 = 700;
 /// Settle window after app build (first layout, style reapply, seeds).
 const SETTLE_AFTER_BUILD_MS: u64 = 250;
 
-// ─── GPU probe / paths ──────────────────────────────────────────────────────
+// --- GPU probe / paths ------------------------------------------------------
 
-fn gpu_available() -> bool {
-    static PROBE: OnceLock<bool> = OnceLock::new();
-    *PROBE.get_or_init(|| match WgpuRenderer::new_offscreen(4, 4) {
-        Ok(_) => true,
-        Err(e) => {
-            eprintln!("golden: no wgpu adapter available ({e}); all cases skip");
-            false
-        }
-    })
+/// Probe the adapter once per test binary; `Some(reason)` means no pixel work
+/// here. The baselines are hardware renders, and Direct3D's WARP rasterizer
+/// faults the process partway through offscreen rendering.
+fn gpu_blocker() -> Option<&'static str> {
+    static PROBE: OnceLock<Option<String>> = OnceLock::new();
+    PROBE.get_or_init(gpu_unavailable_reason).as_deref()
+}
+
+/// Whether this machine can be compared against the checked-in baselines.
+///
+/// The baselines carry one machine's font set. Text is shaped with whatever the
+/// system resolves for the default sans-serif, so a machine that resolves a
+/// different face draws different glyphs and every case containing text lands
+/// far outside [`GOLDEN_TOLERANCE`] while the shape-only cases still pass. That
+/// is what CI runners do: Linux and macOS runners disagree with the baselines by
+/// nearly the same amount on the same cases even though their renderers share
+/// nothing, which points at the font rather than the rasterizer. Until the
+/// harness pins its own font file, these stay a local guard and skip on CI.
+fn baseline_fonts() -> bool {
+    std::env::var_os("CI").is_none()
 }
 
 fn goldens_dir() -> PathBuf {
@@ -115,14 +128,14 @@ fn update_mode() -> bool {
 }
 
 /// Captures run serialized: each builds its own wgpu device + font
-/// system, and the settle loops measure wall-clock time — parallel test
+/// system, and the settle loops measure wall-clock time - parallel test
 /// threads would add contention without adding coverage.
 fn capture_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-// ─── Harness ────────────────────────────────────────────────────────────────
+// --- Harness ----------------------------------------------------------------
 
 /// Build the full lumenc plugin stack headless, add the offscreen wgpu
 /// renderer, drive the case, and read back the framebuffer.
@@ -200,7 +213,7 @@ fn tick(app: &mut App) {
     app.tick();
 }
 
-// ─── Input drivers (same messages the winit backend / MCP simulate emit) ────
+// --- Input drivers (same messages the winit backend / MCP simulate emit) ----
 
 /// Center of the entity carrying `LumenId(id)`, post-layout.
 fn find_center(app: &mut App, id: &str) -> Vec2 {
@@ -227,7 +240,7 @@ fn pointer_move(app: &mut App, pos: Vec2) {
     tick(app);
 }
 
-/// Press without release — drives the `:active` / `Pressed` state.
+/// Press without release - drives the `:active` / `Pressed` state.
 fn pointer_press(app: &mut App, pos: Vec2) {
     set_pointer(app, pos);
     app.world.resource_mut::<PointerState>().primary_down = true;
@@ -271,7 +284,7 @@ fn wheel(app: &mut App, pos: Vec2, delta: Vec2) {
     tick(app);
 }
 
-/// Write a global string signal (what `<dialog open=…>`, `<if signal=…>`,
+/// Write a global string signal (what `<dialog open=...>`, `<if signal=...>`,
 /// and dropdown open-state read).
 fn set_signal(app: &mut App, name: &str, value: &str) {
     app.world
@@ -280,7 +293,7 @@ fn set_signal(app: &mut App, name: &str, value: &str) {
     tick(app);
 }
 
-// ─── Comparison ─────────────────────────────────────────────────────────────
+// --- Comparison -------------------------------------------------------------
 
 struct DiffStats {
     differing: usize,
@@ -332,11 +345,18 @@ fn diff_images(a: &RgbaImage, b: &RgbaImage, tol: &Tolerance) -> (DiffStats, Rgb
     )
 }
 
-// ─── Case runner ────────────────────────────────────────────────────────────
+// --- Case runner ------------------------------------------------------------
 
 fn run_case(name: &str, markup: &str, css: &str, drive: &dyn Fn(&mut App)) {
-    if !gpu_available() {
-        eprintln!("golden[{name}]: SKIP — no wgpu adapter in this environment");
+    if let Some(why) = gpu_blocker() {
+        eprintln!("golden[{name}]: SKIP - {why}");
+        return;
+    }
+    if !baseline_fonts() {
+        eprintln!(
+            "golden[{name}]: SKIP - CI runner; its default sans-serif is not the \
+             one the baselines were captured with"
+        );
         return;
     }
     let _guard = capture_lock().lock().unwrap_or_else(|p| p.into_inner());
@@ -347,7 +367,7 @@ fn run_case(name: &str, markup: &str, css: &str, drive: &dyn Fn(&mut App)) {
     let (self_stats, _) = diff_images(&first, &second, &SELF_TOLERANCE);
     assert!(
         self_stats.within(&SELF_TOLERANCE),
-        "golden[{name}]: NONDETERMINISTIC capture — two in-process runs differ by \
+        "golden[{name}]: NONDETERMINISTIC capture - two in-process runs differ by \
          {} px ({:.4}%), max channel delta {}. Fix the case (unfinished animation, \
          wall-clock leak) before comparing to a golden.",
         self_stats.differing,
@@ -382,7 +402,7 @@ fn run_case(name: &str, markup: &str, css: &str, drive: &dyn Fn(&mut App)) {
         first.save(&actual_path).expect("write actual");
         heat.save(&diff_path).expect("write diff heatmap");
         panic!(
-            "golden[{name}]: MISMATCH — {} px differ ({:.4}% > {:.4}%), max channel \
+            "golden[{name}]: MISMATCH - {} px differ ({:.4}% > {:.4}%), max channel \
              delta {}.\n  expected: {}\n  actual:   {}\n  diff:     {}\n  (intentional \
              change? re-baseline with LUMEN_GOLDEN_UPDATE=1)",
             stats.differing,
@@ -399,10 +419,10 @@ fn run_case(name: &str, markup: &str, css: &str, drive: &dyn Fn(&mut App)) {
 /// No-op driver for pure-markup cases.
 fn no_drive(_: &mut App) {}
 
-// ─── Cases ──────────────────────────────────────────────────────────────────
+// --- Cases ------------------------------------------------------------------
 
 /// Button state matrix: keyboard-focused (first in tab order), idle,
-/// pointer-hovered, and disabled — all in one frame. `:active` needs the
+/// pointer-hovered, and disabled - all in one frame. `:active` needs the
 /// same (single) pointer, so the pressed state is its own case below.
 #[test]
 fn golden_button_states() {
@@ -500,7 +520,7 @@ fn golden_slider_values() {
 
 /// Text input trio: placeholder (unfocused), signal-bound value
 /// (unfocused), and focused with typed text + caret + focus outline.
-/// The caret does not blink — it paints whenever focused — so the frame
+/// The caret does not blink - it paints whenever focused - so the frame
 /// is time-stable.
 #[test]
 fn golden_text_input() {
@@ -540,10 +560,15 @@ fn golden_dropdown_open() {
     });
 }
 
-const DROPDOWN_MARKUP: &str = r##"<root skin="default" bg="#11141b">
+// The placeholder ends in a horizontal ellipsis glyph. The checked-in goldens
+// were captured with it, so it is spelled as an escape rather than `...`.
+const DROPDOWN_MARKUP: &str = concat!(
+    r##"<root skin="default" bg="#11141b">
   <column padding="16" gap="8">
     <column width="240px">
-      <dropdown bind-value="choice" placeholder="Select…">
+      <dropdown bind-value="choice" placeholder="Select"##,
+    "\u{2026}",
+    r##"">
         <option value="a" label="Alpha" />
         <option value="b" label="Beta" />
         <option value="c" label="Gamma" />
@@ -552,7 +577,8 @@ const DROPDOWN_MARKUP: &str = r##"<root skin="default" bg="#11141b">
     <label text="Content below the dropdown" text-color="#a9b8c9" />
     <tile width="368px" height="80px" bg="#26466d" radius="8" />
   </column>
-</root>"##;
+</root>"##
+);
 
 /// Tabs: strip with the first tab selected (accent fill) and its body
 /// visible.
@@ -607,7 +633,7 @@ fn golden_dialog_open() {
 }
 
 /// Scroll container after a wheel scroll: content offset + clipped at
-/// the container bounds. `inertia="0"` applies the delta immediately —
+/// the container bounds. `inertia="0"` applies the delta immediately -
 /// no fling animation to race the capture.
 #[test]
 fn golden_scroll_offset() {
@@ -640,7 +666,7 @@ fn golden_scroll_offset() {
 ///
 /// NOTE: at baseline time the long line renders UNCLIPPED past its
 /// 180px box (no truncation reaches the draw path). The golden captures
-/// current behavior — when ellipsis lands, this golden shifts and must
+/// current behavior - when ellipsis lands, this golden shifts and must
 /// be re-baselined deliberately.
 #[test]
 fn golden_text_ellipsis() {
@@ -677,8 +703,8 @@ fn golden_decor_tiles() {
 /// Gradient fills: linear, radial, conic.
 ///
 /// NOTE: at baseline time the conic tile renders as a solid first-stop
-/// fill and `linear-gradient(90deg, …)` paints top→bottom rather than
-/// left→right; the golden captures current behavior.
+/// fill and `linear-gradient(90deg, ...)` paints top->bottom rather than
+/// left->right; the golden captures current behavior.
 #[test]
 fn golden_gradient_tiles() {
     run_case(
@@ -696,7 +722,7 @@ fn golden_gradient_tiles() {
 }
 
 /// Overlay stacking: an `<overlay>` child paints above earlier siblings
-/// (document-order z regression — Lumen has no z-index property).
+/// (document-order z regression - Lumen has no z-index property).
 #[test]
 fn golden_overlay_stacking() {
     run_case(

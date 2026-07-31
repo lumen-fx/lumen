@@ -1,0 +1,118 @@
+name: CI
+
+# Build and test the workspace on Linux, macOS, and Windows. The three-OS
+# matrix is also the alpha-release parity matrix: a red mac or windows leg is
+# a real portability gap, not a reason to drop the OS from the matrix.
+#
+# fmt and clippy run on Linux only. Both are repo law (CONTRIBUTING.md), and
+# neither is platform dependent.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # The merge queue runs these same jobs against the queued merge commit, and
+  # they are required checks on main. Without this trigger the workflow never
+  # reports a result there and queued pull requests wait forever.
+  merge_group:
+  # Manual trigger, for re-checking the platform matrix on demand.
+  workflow_dispatch:
+
+# One run per ref. A new push cancels the run it supersedes. Merge-queue refs
+# are unique per queued merge, so this never cancels a queue entry.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Keep incremental artifacts out of the cache; they are large and useless
+  # across runners.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # apps/music/*.ogg is the only LFS content in the repo. The audio test
+      # fixtures are stored as raw bytes on purpose (.gitattributes), so tests
+      # pass without an LFS fetch. Keep lfs off.
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Install pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Install pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+      - name: Install Linux system dependencies
+        run: .github/scripts/linux-deps.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Install pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: .github/scripts/linux-deps.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+      - run: cargo build --workspace
+      # Runners have no display and no GPU. Every test that needs one probes
+      # for an adapter and skips itself, so the suite runs unmodified; on
+      # Linux the mesa lavapipe ICD installed above gives wgpu a software
+      # Vulkan device, which covers the renderer end to end: device init,
+      # scene encode, submit, and framebuffer readback.
+      #
+      # Two things do not survive a runner and skip themselves with a printed
+      # reason rather than failing:
+      #
+      #   - Framebuffer readback on a software adapter. Direct3D's WARP
+      #     rasterizer faults the test process outright when a texture is read
+      #     back, so those tests want a real GPU.
+      #   - The screenshot goldens. They carry the font set of the machine that
+      #     captured them; a runner resolves a different default sans-serif and
+      #     every case containing text redraws with different glyphs. Linux and
+      #     macOS runners diverge from the baselines by nearly the same amount
+      #     on the same cases despite sharing no renderer, which is the font
+      #     talking, not the rasterizer. Pinning a font file into the harness
+      #     would make them portable; widening the tolerance would only stop
+      #     them catching real text regressions.
+      #
+      # --no-fail-fast so one red target does not hide the rest of the suite.
+      # This matrix doubles as the release parity check and a partial report
+      # per OS is worth much less than a complete one.
+      - run: cargo test --workspace --no-fail-fast
