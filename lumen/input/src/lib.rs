@@ -420,16 +420,20 @@ fn apply_focused_key(
         // Ctrl+Backspace / Ctrl+Delete: delete the previous / next word
         // instead of a single char. A live selection still takes
         // priority (same as the plain-char arms below).
+        //
+        // Plain Backspace peels ONE code point, not one grapheme cluster:
+        // Qt's `backspace()` and Slint's `PreviousCharacter` both do this
+        // so a combining mark can be removed from its base character.
+        // Left / Right / Delete step whole clusters instead.
         Key::Named(NamedKey::Backspace) => {
             if let Some(r) = c.selection_range() {
                 delete_range(b, c, u, r);
             } else if c.head.byte > 0 {
-                let motion = if cmd_or_ctrl {
-                    CursorMotion::WordLeft
+                let prev = if cmd_or_ctrl {
+                    move_cursor(b, c.head, CursorMotion::WordLeft).byte
                 } else {
-                    CursorMotion::CharLeft
+                    lumen_text::prev_code_point_boundary(&b.to_string(), c.head.byte)
                 };
-                let prev = move_cursor(b, c.head, motion).byte;
                 delete_range(b, c, u, prev..c.head.byte);
             }
         }

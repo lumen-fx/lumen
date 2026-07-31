@@ -28,7 +28,7 @@ use lumen_core::text_events::AppliedKind;
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::Instant;
-use unicode_segmentation::UnicodeSegmentation;
+use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 
 /// Query data for [`text_attach_buffer`]: `TextInput` entities that haven't
 /// yet had a `TextBuffer` attached. Factored out to keep clippy's
@@ -446,8 +446,8 @@ pub fn move_cursor(buf: &TextBuffer, from: TextPos, motion: CursorMotion) -> Tex
     let text = buf.rope.to_string();
     let byte = from.byte.min(text.len());
     let new_byte = match motion {
-        CursorMotion::CharLeft => prev_char_boundary(&text, byte),
-        CursorMotion::CharRight => next_char_boundary(&text, byte),
+        CursorMotion::CharLeft => prev_grapheme_boundary(&text, byte),
+        CursorMotion::CharRight => next_grapheme_boundary(&text, byte),
         CursorMotion::WordLeft => prev_word_boundary(&text, byte),
         CursorMotion::WordRight => next_word_boundary(&text, byte),
         CursorMotion::LineStart => line_start(&text, byte),
@@ -541,23 +541,49 @@ pub fn move_cursor_visual(
     }
 }
 
-fn prev_char_boundary(s: &str, from: usize) -> usize {
-    if from == 0 {
-        return 0;
-    }
-    let mut i = from - 1;
+/// Snap `from` down to the nearest UTF-8 code point boundary.
+fn snap_char_boundary(s: &str, from: usize) -> usize {
+    let mut i = from.min(s.len());
     while i > 0 && !s.is_char_boundary(i) {
         i -= 1;
     }
     i
 }
 
-fn next_char_boundary(s: &str, from: usize) -> usize {
-    let mut i = (from + 1).min(s.len());
-    while i < s.len() && !s.is_char_boundary(i) {
-        i += 1;
+/// Previous extended grapheme cluster boundary before `from`.
+///
+/// Drives [`CursorMotion::CharLeft`], so Left / Shift+Left / forward-word
+/// fallbacks all step whole clusters (Qt `previousCursorPosition`, Slint
+/// `GraphemeCursor::prev_boundary`). Backspace does NOT use this; see
+/// [`prev_code_point_boundary`].
+pub fn prev_grapheme_boundary(s: &str, from: usize) -> usize {
+    let from = snap_char_boundary(s, from);
+    let mut cursor = GraphemeCursor::new(from, s.len(), true);
+    cursor.prev_boundary(s, 0).ok().flatten().unwrap_or(0)
+}
+
+/// Next extended grapheme cluster boundary after `from`.
+///
+/// Drives [`CursorMotion::CharRight`], which forward Delete also resolves
+/// through, so Delete removes a whole cluster rather than one scalar.
+pub fn next_grapheme_boundary(s: &str, from: usize) -> usize {
+    let from = snap_char_boundary(s, from);
+    let mut cursor = GraphemeCursor::new(from, s.len(), true);
+    cursor.next_boundary(s, 0).ok().flatten().unwrap_or(s.len())
+}
+
+/// Previous code point boundary before `from`.
+///
+/// Backspace only. Qt's `backspace()` steps one code unit and Slint keeps a
+/// dedicated `PreviousCharacter` direction for the same reason: peeling a
+/// combining mark off the base character backwards is the expected editing
+/// behavior. Keep this asymmetry with [`prev_grapheme_boundary`].
+pub fn prev_code_point_boundary(s: &str, from: usize) -> usize {
+    let from = snap_char_boundary(s, from);
+    if from == 0 {
+        return 0;
     }
-    i
+    snap_char_boundary(s, from - 1)
 }
 
 fn prev_word_boundary(s: &str, from: usize) -> usize {
@@ -1251,5 +1277,135 @@ mod tests {
         );
         assert_eq!(g.visual_line_of_byte(up.byte), 0);
         assert_eq!(up.byte, 2);
+    }
+}
+
+#[cfg(test)]
+mod grapheme_motion_tests {
+    //! Arrow motion, selection extension, and forward Delete step one
+    //! extended grapheme cluster (Qt `previousCursorPosition` /
+    //! `nextCursorPosition`, Slint `GraphemeCursor`). Backspace keeps
+    //! stepping one code point, which both references also do; the
+    //! asymmetry is deliberate and pinned here.
+    use super::*;
+    use lumen_core::text_model::{TextBuffer, TextCursor, TextPos};
+
+    /// "e" + U+0301 COMBINING ACUTE ACCENT: 1 + 2 bytes, one cluster.
+    const COMBINING: &str = "e\u{0301}";
+    /// U+1F1E6 U+1F1E7 regional indicators: 4 + 4 bytes, one flag cluster.
+    const FLAG: &str = "\u{1F1E6}\u{1F1E7}";
+    /// Family emoji: five scalars joined by ZWJ, one cluster.
+    const ZWJ: &str = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+    /// Devanagari "ki": consonant + vowel sign, one cluster.
+    const DEVANAGARI: &str = "\u{0915}\u{093F}";
+
+    fn buf_of(s: &str) -> TextBuffer {
+        TextBuffer::from(s)
+    }
+
+    fn right(text: &str, from: usize) -> usize {
+        move_cursor(
+            &buf_of(text),
+            TextPos::from_byte(text, from),
+            CursorMotion::CharRight,
+        )
+        .byte
+    }
+
+    fn left(text: &str, from: usize) -> usize {
+        move_cursor(
+            &buf_of(text),
+            TextPos::from_byte(text, from),
+            CursorMotion::CharLeft,
+        )
+        .byte
+    }
+
+    #[test]
+    fn arrow_right_clears_a_whole_cluster() {
+        for s in [COMBINING, FLAG, ZWJ, DEVANAGARI] {
+            assert_eq!(right(s, 0), s.len(), "Right must cross all of {s:?}");
+        }
+    }
+
+    #[test]
+    fn arrow_left_clears_a_whole_cluster() {
+        for s in [COMBINING, FLAG, ZWJ, DEVANAGARI] {
+            assert_eq!(left(s, s.len()), 0, "Left must cross all of {s:?}");
+        }
+    }
+
+    #[test]
+    fn arrow_round_trip_returns_to_the_start_byte() {
+        for s in [COMBINING, FLAG, ZWJ, DEVANAGARI] {
+            let text = format!("a{s}b");
+            let after_a = 1;
+            let crossed = right(&text, after_a);
+            assert_eq!(crossed, 1 + s.len());
+            assert_eq!(left(&text, crossed), after_a);
+        }
+    }
+
+    #[test]
+    fn arrow_never_parks_inside_a_cluster() {
+        let text = format!("{ZWJ}x");
+        assert_eq!(right(&text, 0), ZWJ.len());
+        assert_eq!(right(&text, ZWJ.len()), text.len());
+    }
+
+    #[test]
+    fn forward_delete_removes_the_whole_cluster() {
+        for s in [COMBINING, FLAG, ZWJ, DEVANAGARI] {
+            let text = format!("{s}z");
+            let mut buf = buf_of(&text);
+            let mut cur = TextCursor::default();
+            let mut undo = UndoStack::default();
+            // Forward Delete resolves its range through CharRight.
+            let end = move_cursor(&buf, cur.head, CursorMotion::CharRight).byte;
+            delete_range(&mut buf, &mut cur, &mut undo, 0..end);
+            assert_eq!(buf.to_string(), "z", "Delete left a remnant of {s:?}");
+        }
+    }
+
+    #[test]
+    fn backspace_still_peels_one_code_point() {
+        // Deliberate asymmetry: Qt's `backspace()` and Slint's
+        // `PreviousCharacter` both step one code point so a combining
+        // mark can be removed from its base character.
+        assert_eq!(prev_code_point_boundary(COMBINING, COMBINING.len()), 1);
+        assert_eq!(prev_code_point_boundary(ZWJ, ZWJ.len()), ZWJ.len() - 4);
+        assert_eq!(prev_code_point_boundary(FLAG, FLAG.len()), 4);
+    }
+
+    #[test]
+    fn shift_arrow_extends_by_the_same_cluster_boundaries() {
+        let text = format!("{FLAG}{COMBINING}");
+        let buf = buf_of(&text);
+        let mut cur = TextCursor::default();
+        // Shift+Right twice: the head crosses the flag, then the
+        // combining pair, while the anchor stays at 0.
+        for expected in [FLAG.len(), text.len()] {
+            let p = move_cursor(&buf, cur.head, CursorMotion::CharRight);
+            cur.move_head(p, true);
+            assert_eq!(cur.head.byte, expected);
+            assert_eq!(cur.anchor.byte, 0);
+        }
+        assert_eq!(cur.selection_range(), Some(0..text.len()));
+        // Shift+Left walks the same boundaries back.
+        for expected in [FLAG.len(), 0] {
+            let p = move_cursor(&buf, cur.head, CursorMotion::CharLeft);
+            cur.move_head(p, true);
+            assert_eq!(cur.head.byte, expected);
+        }
+        assert_eq!(cur.selection_range(), None);
+    }
+
+    #[test]
+    fn motion_snaps_a_mid_cluster_start_byte() {
+        // A byte parked inside the ZWJ sequence still lands on a real
+        // cluster edge rather than splitting a scalar.
+        let b = next_grapheme_boundary(ZWJ, 4);
+        assert_eq!(b, ZWJ.len());
+        assert_eq!(prev_grapheme_boundary(ZWJ, 4), 0);
     }
 }
