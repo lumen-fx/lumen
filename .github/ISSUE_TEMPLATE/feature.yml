@@ -1,0 +1,25 @@
+name: feature request
+description: propose a change or addition to Lumen
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: problem
+      description: what you are trying to do and where Lumen gets in the way
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: proposed behavior
+      description: what Lumen should do instead, with markup or script if it helps
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: alternatives
+      description: other approaches you considered, and why they fall short

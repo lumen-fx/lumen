@@ -1,0 +1,65 @@
+name: bug report
+description: something in Lumen behaves incorrectly
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: what happened
+      description: what you saw, and what you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: minimal repro
+      description: >
+        the smallest .lmn markup, stylesheet, and script that shows the problem,
+        plus the command you ran
+      render: xml
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: lumenc version
+      description: output of `lumenc --version`
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: os and version
+      placeholder: Arch Linux (kernel 6.15), Windows 11 24H2, macOS 15.3
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: gpu and driver
+      placeholder: AMD RX 7800 XT, Mesa 25.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: headless
+    attributes:
+      label: reproduces with --headless
+      description: run the same app with `lumenc run --headless`
+      options:
+        - "yes"
+        - "no"
+        - not tried
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: logs
+      description: relevant output, backtraces, or `RUST_LOG=debug` lines
+      render: text
