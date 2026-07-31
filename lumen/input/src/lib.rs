@@ -143,6 +143,7 @@ pub fn type_into_focused(
     mods: Res<ModifiersState>,
     clipboard: Option<NonSendMut<ClipboardResource>>,
     mut keys: MessageReader<FocusedKey>,
+    mut applied: MessageWriter<lumen_core::text_events::TextEditApplied>,
     mut inputs: Query<(
         &mut TextContent,
         &mut TextInput,
@@ -226,6 +227,9 @@ pub fn type_into_focused(
     } else {
         shaped.map(|s| &s.geometry)
     };
+    // Snapshot for the post-edit notification below.
+    let before_text = b.to_string();
+    let before_byte = c.head.byte;
     for ev in keys.read() {
         if ev.entity != entity {
             continue;
@@ -241,6 +245,29 @@ pub fn type_into_focused(
             u,
             geom,
         );
+    }
+
+    // Announce a keyboard edit the same way `text_apply_edits` announces a
+    // requested one, so observers (script `on_text_input`, validators,
+    // bindings) see one signal for both paths instead of only the request
+    // path. Typing is the common case and it used to raise nothing at all,
+    // which left event-driven live previews stale until the field was
+    // submitted.
+    let after_text = b.to_string();
+    if after_text != before_text {
+        use lumen_core::text_events::{AppliedKind, TextEditApplied};
+        let kind = match after_text.len().cmp(&before_text.len()) {
+            std::cmp::Ordering::Greater => AppliedKind::Insert,
+            std::cmp::Ordering::Less => AppliedKind::Delete,
+            std::cmp::Ordering::Equal => AppliedKind::Replace,
+        };
+        applied.write(TextEditApplied {
+            entity,
+            version: b.version,
+            kind,
+            before_byte,
+            after_byte: c.head.byte,
+        });
     }
 
     // Lockstep mirror back into the legacy pair (single source of truth
@@ -959,6 +986,11 @@ impl Plugin for InputPlugin {
         app.world.init_resource::<LastTextClick>();
         app.world
             .init_resource::<bevy_ecs::message::Messages<TextEditRequest>>();
+        // `type_into_focused` announces keyboard edits on this queue, so it
+        // has to exist even in a build that leaves the text-edit plugin out.
+        app.world
+            .init_resource::<bevy_ecs::message::Messages<lumen_core::text_events::TextEditApplied>>(
+            );
         app.add_systems(
             TickStage::Systems,
             text_pointer_to_caret
@@ -2320,6 +2352,7 @@ mod typing_tests {
     fn input_world(initial: &str) -> World {
         let mut world = World::new();
         world.init_resource::<Messages<FocusedKey>>();
+        world.init_resource::<Messages<lumen_core::text_events::TextEditApplied>>();
         world.init_resource::<ModifiersState>();
         let e = world
             .spawn((
@@ -2388,6 +2421,7 @@ mod typing_tests {
     fn selected_input_world(initial: &str, echo: Option<EchoMode>) -> World {
         let mut world = World::new();
         world.init_resource::<Messages<FocusedKey>>();
+        world.init_resource::<Messages<lumen_core::text_events::TextEditApplied>>();
         world.init_resource::<ModifiersState>();
         let mut e = world.spawn((
             TextContent(initial.to_string()),
@@ -2471,6 +2505,7 @@ mod typing_tests {
     fn concealed_input_with_undo(initial: &str) -> (World, Entity) {
         let mut world = World::new();
         world.init_resource::<Messages<FocusedKey>>();
+        world.init_resource::<Messages<lumen_core::text_events::TextEditApplied>>();
         world.init_resource::<ModifiersState>();
         let e = world
             .spawn((
@@ -2550,6 +2585,7 @@ mod typing_tests {
     fn normal_field_keeps_undo_history_when_emptied() {
         let mut world = World::new();
         world.init_resource::<Messages<FocusedKey>>();
+        world.init_resource::<Messages<lumen_core::text_events::TextEditApplied>>();
         world.init_resource::<ModifiersState>();
         let e = world
             .spawn((
@@ -2605,6 +2641,7 @@ mod keyboard_activation_tests {
         fn new() -> Self {
             let mut world = World::new();
             world.init_resource::<Messages<FocusedKey>>();
+            world.init_resource::<Messages<lumen_core::text_events::TextEditApplied>>();
             world.init_resource::<Messages<KeyReleased>>();
             world.init_resource::<Messages<ClickEvent>>();
             world.init_resource::<Messages<TextInputCommitted>>();
