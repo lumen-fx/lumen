@@ -36,7 +36,11 @@ fn rec(
 #[test]
 fn c_abi_introspection_surface() {
     // ABI reports the bumped minor.
-    assert_eq!((lumen_abi_version() >> 8) & 0xFF, 11, "ABI minor is 11");
+    assert_eq!(
+        (lumen_abi_version() >> 8) & 0xFF,
+        lumen_ffi::LUMEN_ABI_MINOR,
+        "packed ABI minor matches the exported constant"
+    );
 
     let mut w = World::new();
     let root = w.spawn_empty().id();
