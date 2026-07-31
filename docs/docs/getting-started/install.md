@@ -1,7 +1,31 @@
 # Install
 
-Lumen ships as a Cargo workspace. While the project is pre-1.0 you build
-from source; published crates land once the API surface settles.
+## Prebuilt toolchain
+
+The installer fetches the prebuilt toolchain (`lumenc` and the `liblumen`
+runtime), verifies every download against a sha256 manifest, and installs
+under `~/.lumen`:
+
+```bash
+curl -fsSL https://lumenfx.dev/install.sh | sh
+```
+
+It prompts per component; useful flags:
+
+```bash
+# non-interactive, default components
+curl -fsSL https://lumenfx.dev/install.sh | sh -s -- --no-confirm
+
+# add the standalone candela toolchain
+curl -fsSL https://lumenfx.dev/install.sh | sh -s -- --components "add:candela"
+
+# pin a release, choose a prefix, remove an install
+install.sh --version 0.1.0 --prefix ~/tools/lumen
+install.sh --uninstall
+```
+
+Linux and macOS, x86_64 and aarch64. Prebuilt binaries ship with the first
+alpha release; until it is published, build from source below.
 
 ## Toolchain
 
@@ -14,7 +38,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ## From source
 
 ```bash
-git clone https://github.com/lumen-ui/lumen.git
+git clone https://github.com/lumen-fx/lumen.git
 cd lumen
 cargo run -p lumenc -- new hello my-app
 cargo run -p lumenc -- run my-app
