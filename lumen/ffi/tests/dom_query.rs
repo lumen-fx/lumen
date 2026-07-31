@@ -33,7 +33,7 @@ fn rec(
 fn c_abi_dom_query_surface() {
     // ABI reports the bumped minor.
     assert_eq!(lumen_abi_version(), LUMEN_ABI_VERSION);
-    assert_eq!((LUMEN_ABI_VERSION >> 8) & 0xFF, 11);
+    assert_eq!((LUMEN_ABI_VERSION >> 8) & 0xFF, u32::from(LUMEN_ABI_MINOR));
 
     // Publish: root#app > column.list > [save#save.row, cancel#cancel.row].
     let mut w = World::new();
@@ -198,5 +198,8 @@ fn c_abi_dom_mutation_round_trip() {
     );
 
     // The ABI advertises the write-side minor.
-    assert_eq!((lumen_abi_version() >> 8) & 0xFF, 11);
+    assert_eq!(
+        (lumen_abi_version() >> 8) & 0xFF,
+        u32::from(LUMEN_ABI_MINOR)
+    );
 }
