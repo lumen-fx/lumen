@@ -120,6 +120,10 @@ lumen-script-rhai = { path = "../lumen/script-rhai", default-features = false }
 lumen-script-lua = { path = "../lumen/script-lua", default-features = false }
 lumen-script-candela = { path = "../lumen/script-candela", default-features = false }
 lumen-text-cosmic = { path = "../lumen/text-cosmic" }
+# text_geometry_pipeline.rs asserts against the shaped run the layout
+# producer publishes (`ShapedText` / `TextGeometry`), so it has to be able
+# to name the crate that defines them.
+lumen-text = { path = "../lumen/text" }
 # devtools_mount.rs (compiled only under `--features devtools`) names these.
 lumen-mcp = { path = "../lumen/mcp" }
 lumen-devtools = { path = "../lumen/devtools" }

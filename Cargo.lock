@@ -3988,6 +3988,7 @@ dependencies = [
  "lumen-script-candela",
  "lumen-script-lua",
  "lumen-script-rhai",
+ "lumen-text",
  "lumen-text-cosmic",
  "lumen-widget",
  "lumen-window-winit",

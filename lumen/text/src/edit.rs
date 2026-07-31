@@ -1400,6 +1400,34 @@ mod grapheme_motion_tests {
         assert_eq!(cur.selection_range(), None);
     }
 
+    /// Plain ASCII must still step exactly one byte at a time. Cluster
+    /// segmentation is only supposed to change the answer where a cluster
+    /// spans more than one scalar; if it ever skipped ahead on ordinary
+    /// text the caret would jump over characters.
+    #[test]
+    fn ascii_steps_one_byte_at_a_time() {
+        let text = "hello world";
+        let mut at = 0usize;
+        for expected in 1..=text.len() {
+            at = right(text, at);
+            assert_eq!(at, expected, "Right over ASCII skipped a character");
+        }
+        for expected in (0..text.len()).rev() {
+            at = left(text, at);
+            assert_eq!(at, expected, "Left over ASCII skipped a character");
+        }
+    }
+
+    /// A newline is its own cluster, so crossing a line break is one step
+    /// and never swallows the first character of the next line.
+    #[test]
+    fn a_newline_is_one_step() {
+        let text = "ab\ncd";
+        assert_eq!(right(text, 2), 3, "Right at the line end skipped the \\n");
+        assert_eq!(right(text, 3), 4);
+        assert_eq!(left(text, 3), 2);
+    }
+
     #[test]
     fn motion_snaps_a_mid_cluster_start_byte() {
         // A byte parked inside the ZWJ sequence still lands on a real

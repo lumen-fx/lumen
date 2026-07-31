@@ -466,6 +466,25 @@ impl TextShaper for CosmicShaper {
         // pass below recomputes the LAST line's width after eliding, and
         // needs the others to keep `total_width` honest.
         let mut kept_line_ws: Vec<f32> = Vec::new();
+        // `LayoutGlyph::start` / `end` are offsets into the BUFFER LINE the
+        // glyph sits on, so every line after the first restarts at zero.
+        // Everything downstream (`TextGeometry`, caret, selection) reads
+        // them as offsets into the whole shaped string, so line two's bytes
+        // would alias onto line one's and a click on line two would land
+        // the caret on line one. Rebase each glyph onto its line's start.
+        // Soft-wrapped runs share a `line_i`, so they share one base.
+        let line_base: Vec<u32> = {
+            let mut acc = 0u32;
+            self.buffer
+                .lines
+                .iter()
+                .map(|l| {
+                    let base = acc;
+                    acc += (l.text().len() + l.ending().as_str().len()) as u32;
+                    base
+                })
+                .collect()
+        };
         for (line_idx, run) in self.buffer.layout_runs().enumerate() {
             if let Some(cap) = max_lines
                 && line_idx >= cap
@@ -476,6 +495,7 @@ impl TextShaper for CosmicShaper {
             kept_line_ws.push(run.line_w);
             total_width = total_width.max(run.line_w);
             let y_offset = (line_idx as f32) * line_height;
+            let base = line_base.get(run.line_i).copied().unwrap_or(0);
             for g in run.glyphs.iter() {
                 let level = g.level.number();
                 let gp = GlyphPosition {
@@ -483,8 +503,8 @@ impl TextShaper for CosmicShaper {
                     x: g.x,
                     y: g.y + y_offset,
                     advance: g.w,
-                    byte_start: g.start as u32,
-                    byte_end: g.end as u32,
+                    byte_start: g.start as u32 + base,
+                    byte_end: g.end as u32 + base,
                 };
                 // Append to the last segment when font_id + level match;
                 // otherwise start a new segment. Visual ordering inside
