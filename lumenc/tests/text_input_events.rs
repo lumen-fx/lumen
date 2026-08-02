@@ -29,7 +29,14 @@ fn build_and_tick(markup: &str, ticks: u32) -> App {
             .as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+    // The markup below carries an inline Rhai `<script>`, and the fixture
+    // directory holds no script file for host inference to read, so the host
+    // has to be named here rather than left to the default.
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
+    )
+    .unwrap();
     let opts = RunOptions::new(&dir)
         .with_parser(lumenc::default_parser())
         .with_markup(markup.to_string());
