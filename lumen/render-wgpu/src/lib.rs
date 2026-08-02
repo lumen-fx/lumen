@@ -961,37 +961,42 @@ pub fn draw_text_into_vello<S: lumen_text::TextShaper + ?Sized>(
     } else {
         None
     };
-    // Selection rectangles (visual x-spans), shared by the highlight
-    // fill below and the selected-glyph foreground over-paint further
-    // down. BiDi-correct: [`lumen_text::TextGeometry::selection_rects`]
-    // returns one `(x0, x1)` per maximal contiguous-level slice, in
-    // segment order - matches HTML / Qt / macOS selection visualisation.
-    let sel_rects: Vec<(f32, f32)> = match (text.selection, &run_index) {
-        (Some((s, e)), Some(idx)) if e > s => idx.selection_rects(s, e),
+    // Selection bands, shared by the highlight fill below and the
+    // selected-glyph foreground over-paint further down. BiDi-correct:
+    // [`lumen_text::TextGeometry::selection_bands`] returns one band per
+    // line-portion of each maximal contiguous-level slice - matches HTML /
+    // Qt / macOS selection visualisation. Each band carries its own
+    // baseline, so a selection running across a line break paints on both
+    // lines instead of collapsing onto the first one.
+    let sel_bands: Vec<lumen_text::SelectionBand> = match (text.selection, &run_index) {
+        (Some((s, e)), Some(idx)) if e > s => idx.selection_bands(s, e),
         _ => Vec::new(),
     };
-    let sel_y0 = origin.y as f64 - size_px as f64 * 0.9;
-    let sel_y1 = origin.y as f64 + size_px as f64 * 0.15;
+    let band_y = |b: &lumen_text::SelectionBand| {
+        let base = origin.y as f64 + b.baseline_y as f64;
+        (base - size_px as f64 * 0.9, base + size_px as f64 * 0.15)
+    };
     // Selection highlight paints first so glyphs sit on top. Styleable
     // via `selection-color` (default skin: `--lumen-selection`); the
     // single built-in fallback is the platform highlight blue
     // ([`DEFAULT_SELECTION_BG`]) - visible on any field color, unlike the
     // old text-fill-at-32%-alpha fallback which vanished on light fields.
-    if !sel_rects.is_empty() {
+    if !sel_bands.is_empty() {
         let sel = folded(
             text.selection_color.unwrap_or(DEFAULT_SELECTION_BG),
             opacity,
         );
         let brush = peniko_color(sel);
-        for (lo_x, hi_x) in &sel_rects {
-            let x0 = draw_x as f64 + *lo_x as f64;
-            let x1 = draw_x as f64 + *hi_x as f64;
+        for b in &sel_bands {
+            let (y0, y1) = band_y(b);
+            let x0 = draw_x as f64 + b.x0 as f64;
+            let x1 = draw_x as f64 + b.x1 as f64;
             vello_scene.fill(
                 Fill::NonZero,
                 Affine::IDENTITY,
                 brush,
                 None,
-                &Rect::new(x0, sel_y0, x1, sel_y1),
+                &Rect::new(x0, y0, x1, y1),
             );
         }
     }
@@ -1011,16 +1016,17 @@ pub fn draw_text_into_vello<S: lumen_text::TextShaper + ?Sized>(
     // only the selected span inverts. Opt-in - the default translucent
     // highlight preserves unselected contrast, so most skins never set it.
     if let (Some(run), Some(fg)) = (&shaped, text.selection_foreground)
-        && !sel_rects.is_empty()
+        && !sel_bands.is_empty()
     {
         let fg = folded(fg, opacity);
         let brush = peniko_color(fg);
-        for (lo_x, hi_x) in &sel_rects {
+        for b in &sel_bands {
+            let (y0, y1) = band_y(b);
             let clip = Rect::new(
-                draw_x as f64 + *lo_x as f64,
-                sel_y0,
-                draw_x as f64 + *hi_x as f64,
-                sel_y1,
+                draw_x as f64 + b.x0 as f64,
+                y0,
+                draw_x as f64 + b.x1 as f64,
+                y1,
             );
             vello_scene.push_layer(
                 Fill::NonZero,

@@ -660,6 +660,14 @@ fn apply_to_element(
     }
     units.sort_by_key(|(_, decl)| decl.important);
 
+    // Which origin last set the plain `bg`, and which last set a
+    // pointer-state `bg`. The two land in different `Attributes` slots, so
+    // the cascade sort above never gets to compare them; see the cleanup
+    // below the loop.
+    let mut plain_bg_origin: Option<Origin> = None;
+    let mut hover_bg_origin: Option<Origin> = None;
+    let mut press_bg_origin: Option<Origin> = None;
+
     // A bad declaration is skipped with a warning - never fatal.
     for (m, decl) in units {
         let ctx = describe_selector_for_error(&css.rules[m.rule_idx].selectors, m.selector_idx);
@@ -681,7 +689,18 @@ fn apply_to_element(
             &m.matched_pseudo,
             &mut el.attrs,
         ) {
-            Ok(true) => {}
+            Ok(true) => {
+                if canonical_property_name(&decl.name) == "bg" {
+                    let p = &m.matched_pseudo;
+                    if !p.any() {
+                        plain_bg_origin = Some(m.origin);
+                    } else if p.active {
+                        press_bg_origin = Some(m.origin);
+                    } else if !(p.checked || p.selected || p.disabled || p.drag_over) {
+                        hover_bg_origin = Some(m.origin);
+                    }
+                }
+            }
             Ok(false) => warnings.push(CssWarning {
                 selector: ctx.clone(),
                 property: decl.name.clone(),
@@ -698,6 +717,29 @@ fn apply_to_element(
     // Origin precedence: inline > CSS. Restore any field the inline
     // pass had populated.
     restore_inline_origin(&mut el.attrs, &inline_snapshot);
+
+    // An author background wins over a user-agent one, whatever state the
+    // skin attached its rule to. `bg` and `:hover { bg }` live in separate
+    // `Attributes` slots, so the cascade sort above compares neither
+    // against the other and both survive; the hover slot then repaints the
+    // element as soon as the pointer arrives. On a text field the pointer
+    // is over the element the whole time the user types, so the skin's
+    // fill, not the author's, is what gets seen.
+    //
+    // Only the transient pointer states yield. `:checked` / `:selected` /
+    // `:disabled` / `:drag-over` describe a different element state rather
+    // than a different rendering of the resting one, so the skin's default
+    // for those stands until the author names that state.
+    let authored_bg =
+        matches!(plain_bg_origin, Some(Origin::Author)) || inline_snapshot.bg.is_some();
+    if authored_bg {
+        if hover_bg_origin == Some(Origin::UserAgent) {
+            el.attrs.hover_bg = None;
+        }
+        if press_bg_origin == Some(Origin::UserAgent) {
+            el.attrs.press_bg = None;
+        }
+    }
 
     // Tooltip skin tokens: `<tooltip>` collapses onto its trigger at
     // parse time, so no selector can reach it - the dwell / cursor-gap

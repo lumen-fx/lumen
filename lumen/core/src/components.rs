@@ -733,10 +733,57 @@ pub enum EchoMode {
 }
 
 impl EchoMode {
-    /// `true` when the mode conceals the content - copy / cut must be
-    /// suppressed and the glyphs masked.
+    /// `true` when the mode conceals the content: copy must be suppressed
+    /// and the glyphs masked.
     pub fn is_concealed(self) -> bool {
         matches!(self, EchoMode::Password | EchoMode::NoEcho)
+    }
+
+    /// The run actually drawn for the plaintext `plain`.
+    ///
+    /// Measuring, hit-testing, and drawing must all agree on one string, so
+    /// this is what the shaping producer shapes for a concealed field.
+    pub fn display_string(self, plain: &str) -> std::borrow::Cow<'_, str> {
+        match self {
+            EchoMode::Normal => std::borrow::Cow::Borrowed(plain),
+            EchoMode::NoEcho => std::borrow::Cow::Borrowed(""),
+            EchoMode::Password => std::borrow::Cow::Owned(
+                PASSWORD_MASK_CHAR.to_string().repeat(plain.chars().count()),
+            ),
+        }
+    }
+
+    /// Byte offset into [`Self::display_string`] for a plaintext byte
+    /// offset. Snaps `plain_byte` down to a code point boundary first.
+    pub fn display_offset(self, plain: &str, plain_byte: usize) -> usize {
+        match self {
+            EchoMode::Normal => plain_byte,
+            EchoMode::NoEcho => 0,
+            EchoMode::Password => {
+                let mut b = plain_byte.min(plain.len());
+                while b > 0 && !plain.is_char_boundary(b) {
+                    b -= 1;
+                }
+                plain[..b].chars().count() * PASSWORD_MASK_CHAR.len_utf8()
+            }
+        }
+    }
+
+    /// Inverse of [`Self::display_offset`]: plaintext byte offset for a byte
+    /// offset into the displayed run.
+    pub fn plain_offset(self, plain: &str, display_byte: usize) -> usize {
+        match self {
+            EchoMode::Normal => display_byte,
+            EchoMode::NoEcho => 0,
+            EchoMode::Password => {
+                let scalars = display_byte / PASSWORD_MASK_CHAR.len_utf8();
+                plain
+                    .char_indices()
+                    .nth(scalars)
+                    .map(|(i, _)| i)
+                    .unwrap_or(plain.len())
+            }
+        }
     }
 }
 
@@ -745,6 +792,59 @@ impl EchoMode {
 /// This is the single Rust fallback; a future `password-character` CSS
 /// property can override it per skin.
 pub const PASSWORD_MASK_CHAR: char = '\u{2022}';
+
+/// Line height as a multiple of the font size. Matches the shaper metrics
+/// (`cosmic_text::Metrics::new(size, size * 1.2)`), so a shaped line `i`
+/// sits `i * line_height` below the first one.
+pub const TEXT_LINE_HEIGHT_FACTOR: f32 = 1.2;
+
+/// Cap height as a multiple of the font size, used to optically center a
+/// line inside its line box.
+const TEXT_CAP_HEIGHT_FACTOR: f32 = 0.72;
+
+/// Offset from the inner content box top to the top of the FIRST line box,
+/// in logical pixels.
+///
+/// A lone line centers in the inner box, which is what `QLineEdit` does
+/// with its `lineRect`. A stacked block starts at the top, as every
+/// multi-line editor does, so line `i` occupies
+/// `[top + i * line_h, top + (i + 1) * line_h)`; that is the band
+/// `TextGeometry::x_to_byte` resolves a pointer y against.
+///
+/// `stacked` is true for a text area (which stays top-aligned however
+/// little it holds, so the first newline does not make the content jump)
+/// and for any run that already occupies more than one line.
+///
+/// This is the single origin the drawn baseline and the hit test share; the
+/// layout producer evaluates it against the SHAPED (soft-wrap aware) line
+/// count and publishes the result as [`TextBlockOrigin`].
+pub fn text_block_top(inner_h: f32, size_px: f32, stacked: bool) -> f32 {
+    if stacked {
+        0.0
+    } else {
+        (inner_h - size_px * TEXT_LINE_HEIGHT_FACTOR) / 2.0
+    }
+}
+
+/// Baseline offset of a line from the top of its own line box, in logical
+/// pixels. Centers the cap height inside the line box.
+pub fn text_baseline_in_line(size_px: f32) -> f32 {
+    size_px * (TEXT_LINE_HEIGHT_FACTOR + TEXT_CAP_HEIGHT_FACTOR) / 2.0
+}
+
+/// Published vertical origin of an entity's text block (see
+/// [`text_block_top`]).
+///
+/// Written by the layout crate's shaping producer next to `ShapedText`, so
+/// it reflects the soft-wrapped line count rather than the `\n` count. Read
+/// by `extract_text` for the drawn baseline and by `lumen-input` for the
+/// pointer hit test; both fall back to [`text_block_top`] over the logical
+/// line count when the producer has not run.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct TextBlockOrigin {
+    /// Offset from the inner content box top to the first line box top.
+    pub top: f32,
+}
 
 /// Per-input content scroll offset that keeps the caret visible inside
 /// the field box (W2 text-editing core).

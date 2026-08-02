@@ -26,7 +26,7 @@ pub mod shaped;
 pub mod undo;
 
 pub use edit::*;
-pub use geometry::{CaretGeometry, TextGeometry};
+pub use geometry::{CaretGeometry, SelectionBand, TextGeometry};
 pub use hit_test::{hit_test_text, select_line_at_byte, select_word_at_byte};
 pub use shaped::{ShapedText, TextViewport, build_shaped_text};
 pub use undo::{UndoEntry, UndoKind, UndoStack};

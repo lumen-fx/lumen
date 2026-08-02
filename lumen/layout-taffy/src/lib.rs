@@ -37,10 +37,11 @@
 use bevy_ecs::system::NonSendMut;
 use glam::Vec2;
 use lumen_core::components::{
-    DirtyLayout, Edges as LumenEdges, FlexAlign as LumenAlign, FlexDirection as LumenFlexDir,
-    FlexJustify as LumenJustify, ImageComponent, LayoutDirection, Length as LumenLength,
-    Overflow as LumenOverflow, Position as LumenPosition, RelayoutBoundary, ResolvedDirection,
-    Style, TextContent, TextStyle, TextWrap, Transform,
+    DirtyLayout, EchoMode, Edges as LumenEdges, FlexAlign as LumenAlign,
+    FlexDirection as LumenFlexDir, FlexJustify as LumenJustify, ImageComponent, LayoutDirection,
+    Length as LumenLength, Overflow as LumenOverflow, Position as LumenPosition, RelayoutBoundary,
+    ResolvedDirection, Style, TextBlockOrigin, TextContent, TextStyle, TextWrap, Transform,
+    text_block_top,
 };
 use lumen_core::prelude::*;
 use lumen_text::WrapMode;
@@ -133,10 +134,15 @@ impl Plugin for TaffyLayoutPlugin {
 /// entity is skipped, and the `CosmicShaper` LRU makes any accidental
 /// reshape a hit.
 ///
-/// Scope note (D4a-e): this shapes the raw BUFFER text so the geometry maps
-/// EDIT-buffer bytes directly -- correct for pointer->byte, caret and IME on
-/// normal fields. Assembling the render DISPLAY string (preedit / placeholder
-/// / echo mask) and the display<->edit byte remap is deferred to D4-R.
+/// The shaped string is the DISPLAYED one: under a concealed
+/// [`EchoMode`] the mask glyphs are shaped, so measuring, hit-testing, and
+/// drawing agree on one run. Consumers map their edit-buffer bytes through
+/// [`EchoMode::display_offset`] / [`EchoMode::plain_offset`]. Splicing the
+/// IME preedit and the placeholder into the same run is deferred to D4-R.
+///
+/// The producer also publishes [`TextBlockOrigin`], the vertical origin the
+/// drawn baseline and the pointer hit test share, evaluated against the
+/// SHAPED (soft-wrap aware) line count.
 #[allow(clippy::type_complexity)]
 pub fn update_shaped_text(
     mut shaper: NonSendMut<CosmicShaper>,
@@ -147,11 +153,13 @@ pub fn update_shaped_text(
         &Transform,
         Option<&TextStyle>,
         Option<&Style>,
+        Option<&EchoMode>,
         Option<&lumen_text::ShapedText>,
     )>,
 ) {
     use lumen_text::{ShapeOptions, TextViewport, build_shaped_text};
-    for (e, buf, t, ts, style, existing) in &q {
+    for (e, buf, t, ts, style, echo, existing) in &q {
+        let echo = echo.copied().unwrap_or_default();
         let ts = ts.cloned().unwrap_or_default();
         let size_px = ts.size_px;
         let (pad_l, pad_r, pad_t, pad_b) = style
@@ -175,6 +183,7 @@ pub fn update_shaped_text(
             ts.wrap,
             ts.family.as_deref(),
             ts.weight,
+            echo,
         );
         // Skip entities whose shape inputs are unchanged.
         if existing.is_some_and(|s| s.shape_version == version) {
@@ -188,14 +197,18 @@ pub fn update_shaped_text(
             family: ts.family.clone(),
             weight: ts.weight,
         };
-        let display = buf.rope.to_string();
+        let plain = buf.rope.to_string();
+        let display = echo.display_string(&plain);
         if let Some(st) = build_shaped_text(&mut *shaper, &display, size_px, opts, version) {
+            let stacked = !buf.is_single_line() || st.geometry.line_count() > 1;
+            let top = text_block_top(inner_h, size_px, stacked);
             commands.entity(e).insert((
                 st,
                 TextViewport {
                     inner: Vec2::new(inner_w, inner_h),
                     line_h,
                 },
+                TextBlockOrigin { top },
             ));
         }
     }
@@ -204,7 +217,9 @@ pub fn update_shaped_text(
 /// Fold the [`lumen_core::text_model::TextBuffer`] content version with every
 /// shape input into a single scalar the producer compares to decide whether
 /// a reshape is needed. Busts on edit, resize, wrap toggle, and font / size /
-/// weight change -- exactly when the shaped output would differ.
+/// weight change -- exactly when the shaped output would differ. The echo
+/// mode is folded in too, since it selects which string gets shaped.
+#[allow(clippy::too_many_arguments)]
 fn shape_version_of(
     version: u64,
     size_px: f32,
@@ -213,6 +228,7 @@ fn shape_version_of(
     wrap: TextWrap,
     family: Option<&str>,
     weight: u16,
+    echo: EchoMode,
 ) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -223,6 +239,7 @@ fn shape_version_of(
     (wrap as u8).hash(&mut h);
     family.hash(&mut h);
     weight.hash(&mut h);
+    (echo as u8).hash(&mut h);
     h.finish()
 }
 
@@ -2196,5 +2213,103 @@ mod css_flex_wave_tests {
             .unwrap()
             .shape_version;
         assert_eq!(v1, v2);
+    }
+
+    /// Spawn one editable in a `size` box and run the producer over it.
+    fn shaped_world(
+        text: &str,
+        size: Vec2,
+        echo: Option<EchoMode>,
+        multiline: bool,
+    ) -> (World, Entity) {
+        use bevy_ecs::system::RunSystemOnce;
+        use lumen_core::text_model::TextBuffer;
+
+        let buf = if multiline {
+            TextBuffer::multi_line(text)
+        } else {
+            TextBuffer::single_line(text)
+        };
+        let mut world = World::new();
+        world.insert_non_send_resource(CosmicShaper::new());
+        let mut ent = world.spawn((
+            buf,
+            Transform::new(Vec2::ZERO, size),
+            TextStyle::default(),
+            Style::default(),
+        ));
+        if let Some(mode) = echo {
+            ent.insert(mode);
+        }
+        let e = ent.id();
+        world.run_system_once(update_shaped_text).unwrap();
+        (world, e)
+    }
+
+    /// The producer publishes the vertical origin the drawn baseline and
+    /// the pointer hit test share: a lone line in a single-line field
+    /// centers in the box, a stacked block starts at its top.
+    #[test]
+    fn update_shaped_text_publishes_the_block_origin() {
+        let tall = Vec2::new(200.0, 400.0);
+        let (world, e) = shaped_world("one line", tall, None, false);
+        let top = world.get::<TextBlockOrigin>(e).expect("origin").top;
+        assert!(
+            top > 100.0,
+            "a lone line centers in a 400px box (got {top})"
+        );
+
+        let (world, e) = shaped_world("first\nsecond\nthird", tall, None, true);
+        assert_eq!(
+            world
+                .get::<lumen_text::ShapedText>(e)
+                .unwrap()
+                .geometry
+                .line_count(),
+            3
+        );
+        assert_eq!(
+            world.get::<TextBlockOrigin>(e).expect("origin").top,
+            0.0,
+            "a stacked block starts at the inner box top"
+        );
+    }
+
+    /// A text area stays top-aligned however little it holds, so typing
+    /// the first newline does not make the content jump.
+    #[test]
+    fn a_text_area_stays_top_aligned_while_it_holds_one_line() {
+        let (world, e) = shaped_world("one line", Vec2::new(200.0, 400.0), None, true);
+        assert_eq!(world.get::<TextBlockOrigin>(e).expect("origin").top, 0.0);
+    }
+
+    /// A concealed field shapes its MASK glyphs, so measuring, hit-testing
+    /// and drawing all agree on one run.
+    #[test]
+    fn update_shaped_text_shapes_the_mask_for_a_concealed_field() {
+        let size = Vec2::new(200.0, 30.0);
+        let (plain_world, pe) = shaped_world("WWWWW", size, None, false);
+        let (masked_world, me) = shaped_world("WWWWW", size, Some(EchoMode::Password), false);
+        let plain_w = plain_world
+            .get::<lumen_text::ShapedText>(pe)
+            .unwrap()
+            .run
+            .width;
+        let masked_w = masked_world
+            .get::<lumen_text::ShapedText>(me)
+            .unwrap()
+            .run
+            .width;
+        assert!(
+            masked_w < plain_w,
+            "mask glyphs are narrower than 'W' ({masked_w} vs {plain_w})"
+        );
+
+        // `NoEcho` draws nothing at all.
+        let (world, e) = shaped_world("WWWWW", size, Some(EchoMode::NoEcho), false);
+        assert_eq!(
+            world.get::<lumen_text::ShapedText>(e).unwrap().run.width,
+            0.0
+        );
     }
 }
