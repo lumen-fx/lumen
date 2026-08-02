@@ -27,6 +27,11 @@ install.sh --uninstall
 Linux and macOS, x86_64 and aarch64. Prebuilt binaries ship with the first
 alpha release; until it is published, build from source below.
 
+The default components are enough to write and run candela apps: the
+candela engine is part of the Lumen runtime. The separate `candela`
+component is the standalone candela toolchain (`candela` and `candela-vm`),
+for running candela programs outside a Lumen app.
+
 ## Toolchain
 
 Rust 1.85 or newer (edition 2024). Install via [rustup](https://rustup.rs):
@@ -66,7 +71,7 @@ libraries.
 |---|---|---|---|
 | Linux | GTK 3 + pkg-config | `rfd`'s GTK3 file dialog | `sudo apt install libgtk-3-dev pkg-config` (Debian / Ubuntu) <br> `sudo dnf install gtk3-devel pkgconf-pkg-config` (Fedora) <br> `sudo pacman -S gtk3 pkgconf` (Arch) |
 | Linux | libxdo-dev | Native menu bars via `muda` (optional - Lumen builds without it on Linux; only macOS / Windows get menu bars) | `sudo apt install libxdo-dev` |
-| Linux | libnotify | `notify(...)` Rhai builtin (most desktops bundle a notification daemon already) | `sudo apt install libnotify-bin` |
+| Linux | libnotify | the `notify(...)` script builtin (most desktops bundle a notification daemon already) | `sudo apt install libnotify-bin` |
 | Linux | Vulkan loader + ICD | wgpu device init | `sudo apt install libvulkan1 mesa-vulkan-drivers` |
 | macOS | Xcode command-line tools | linker + Metal headers | `xcode-select --install` |
 | Windows | Visual Studio Build Tools 2022 (or full VS), C++ workload | MSVC linker | <https://visualstudio.microsoft.com/downloads/> -> "Build Tools for Visual Studio" |
@@ -80,7 +85,7 @@ libraries.
 
 ### GPU backend per OS
 
-A Lumen build compiles exactly ONE GPU backend for the host OS: Vulkan on
+A Lumen build compiles exactly one GPU backend for the host OS: Vulkan on
 Linux, Metal on macOS, DirectX 12 on Windows. The other backends and their
 shader translators are not built, which keeps the shipped runtime smaller. A
 Linux host therefore needs a Vulkan loader + ICD (`libvulkan1` +
@@ -105,9 +110,9 @@ lumenc bundle --static <app_dir> <out_dir>
 ```
 
 This resolves the app's `[capabilities]` (`lumen.toml`, plus a conservative
-source scan) and compiles the runtime seam with ONLY the subsystems that app
-uses -- dropping audio, MCP, the async bridge, unused script hosts, and
-`http-fetch` when they are not needed. The shared cdylib and `lumenc run` stay
+source scan) and compiles the runtime seam with only the subsystems that app
+uses; audio, MCP, the async bridge, unused script hosts, and `http-fetch` all
+drop out when they are not needed. The shared cdylib and `lumenc run` stay
 full-featured. See [`lumen.toml`](../authoring/lumen-toml.md#capabilities) for
 the capability table.
 

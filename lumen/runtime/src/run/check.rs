@@ -118,7 +118,7 @@ pub fn check_app(dir: &Path, parser: &dyn SourceParser) -> Result<CheckReport, R
         // not valid Rhai). A host the current build trimmed out falls back to
         // the always-present Rhai host, exactly as `build_app` remaps it.
         let uri = entry_path.display().to_string();
-        match cfg.script.engine_kind() {
+        match crate::config::infer_script_host(dir, &cfg) {
             #[cfg(feature = "host-candela")]
             crate::config::ScriptEngine::Candela => {
                 CandelaHost::new()

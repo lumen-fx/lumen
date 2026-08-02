@@ -134,7 +134,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
     // enables the selected host's feature for the bundle, so this only fires on
     // a hand-edited misconfig). The remap makes the trimmed match arms below
     // provably unreachable.
-    let engine = cfg.script.engine_kind();
+    let engine = crate::config::infer_script_host(&dir, &cfg);
     #[cfg(not(feature = "host-lua"))]
     let engine = if engine == crate::config::ScriptEngine::Lua {
         tracing::warn!(

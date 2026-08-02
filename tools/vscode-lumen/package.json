@@ -3,11 +3,11 @@
   "displayName": "Lumen",
   "description": "First-class language support for Lumen: .lmn markup, Lumen CSS, and .rhai scripts - diagnostics, completion, hover, formatting, an in-editor headless live preview, and one-click run/check/build/scaffold via lumenc.",
   "version": "0.4.0",
-  "publisher": "lumen-ui",
+  "publisher": "lumenui",
   "license": "MPL-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/lumen-ui/lumen"
+    "url": "https://github.com/lumen-fx/lumen"
   },
   "engines": {
     "vscode": "^1.85.0"

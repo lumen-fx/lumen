@@ -11,9 +11,9 @@ stack:
    doesn't fit a one-shot transition.
 
 The implementation lives in
-[`lumen/primitives/src/transition.rs`](https://github.com/lumen-ui/lumen/blob/main/lumen/primitives/src/transition.rs)
+[`lumen/primitives/src/transition.rs`](https://github.com/lumen-fx/lumen/blob/main/lumen/primitives/src/transition.rs)
 and the CSS apply pass in
-[`lumenc/src/parser_css.rs`](https://github.com/lumen-ui/lumen/blob/main/lumenc/src/parser_css.rs)
+[`lumenc/src/parser_css.rs`](https://github.com/lumen-fx/lumen/blob/main/lumenc/src/parser_css.rs)
 (`parse_transition`).
 
 ## CSS `transition:`
@@ -39,9 +39,15 @@ instead of snapping.
 </column>
 ```
 
-```rhai
-on("hover", "info-card", "fade_in");
-fn fade_in(id) { set_class(id, "card visible"); }
+```candela
+fn on_ready() {
+    let card = lumen::node_get_by_id("info-card");
+    lumen::event_on(card, "pointerenter", "fade_in");
+}
+
+fn fade_in(ev) {
+    lumen::node_class_add(lumen::event_target(ev), "visible");
+}
 ```
 
 > **Only `opacity` is wired.** Other property names parse successfully
@@ -236,17 +242,19 @@ The pseudo-class apply pass routes `:hover` -> `hover-bg`, `:active` ->
 </overlay>
 ```
 
-```rhai
-on("click", "save", "show_toast");
+```candela
+fn on_start() {
+    lumen::on("click", "save", "show_toast");
+}
 
-fn show_toast(_id) {
-    set_class("toast", "toast visible");
-    set_timeout("hide-toast", 2000);
+fn show_toast(id) {
+    lumen::set_class("toast", "toast visible");
+    lumen::set_timeout("hide-toast", 2000);
 }
 
 fn on_timer(name) {
     if name == "hide-toast" {
-        set_class("toast", "toast");        // .visible removed -> fade-out
+        lumen::set_class("toast", "toast");    // .visible removed -> fade-out
     }
 }
 ```

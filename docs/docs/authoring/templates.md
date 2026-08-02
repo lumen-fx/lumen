@@ -140,26 +140,29 @@ The first instance spawns buttons with ids `user-card:save` and
 `user-card:cancel`; the second instance produces `team-card:save` and
 `team-card:cancel`. The colon is the namespace delimiter.
 
-The matching Rhai routing handles both shapes:
+Handler routing works on either shape:
 
-```rhai
-// Fires for BOTH user-card:save AND team-card:save via suffix fallback.
-on("click", "save", "do_save");
+```candela
+fn on_start() {
+    // Fires for both user-card:save and team-card:save via suffix fallback.
+    lumen::on("click", "save", "do_save");
 
-// Per-instance routing - only fires for the user-card instance.
-on("click", "user-card:save", "do_user_save");
+    // Per-instance routing: only the user-card instance.
+    lumen::on("click", "user-card:save", "do_user_save");
+}
 
 fn do_save(id) {
-    // `id` is the fully-qualified id; use local_id to find siblings.
-    let label_id = local_id(id, "status");
-    set_text(label_id, "Saved!");
+    // `id` is the fully-qualified id, so a sibling is the same prefix
+    // with a different suffix.
+    let parts = id.split(":");
+    let status_id = parts[0] + ":status";
+    lumen::set_text(status_id, "Saved!");
 }
 ```
 
-`local_id(source, suffix)` returns a sibling id within the same
-template instance. Multi-level prefixes (`a:b:save`) stack - the result
-is `a:b:status`. Source ids without a colon (top-level entities)
-return `suffix` unchanged.
+A handler registered for the bare suffix matches every instance; register the
+qualified id (`"user-card:save"`) to target one. Multi-level prefixes
+(`a:b:save`) stack, and the suffix is whatever follows the last colon.
 
 ## Defaults vs use-site overrides
 
@@ -246,14 +249,16 @@ After:
 </for>
 ```
 
-```rhai
+```candela
 // Auto-namespacing: dismiss button ids are row-1:dismiss, row-2:dismiss, ...
-on("click", "dismiss", "handle_dismiss");
+fn on_start() {
+    lumen::on("click", "dismiss", "handle_dismiss");
+}
 
 fn handle_dismiss(id) {
-    // local_id(id, "label") = row-3:label etc.
-    let row_id = id.split(":")[0];   // e.g. "row-3"
-    // ... remove the row from todos signal_array ...
+    let parts = id.split(":");
+    let row_id = parts[0];           // e.g. "row-3"
+    // ... drop that row from the list ...
 }
 ```
 

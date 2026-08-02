@@ -16,3 +16,8 @@ size  = [900, 640]
 
 [skin]
 name = "default"
+
+# The scripts here are inline in the `.lmn` pages, so no file extension names
+# the language. Declare the Rhai host explicitly.
+[script]
+engine = "rhai"

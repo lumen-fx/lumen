@@ -1,175 +1,177 @@
-# FFI guide
+# C ABI
 
-> **Status (updated).** The C-ABI surface has since **shipped** and is at
-> **ABI 0.7** (`lumen_ffi::LUMEN_ABI_{MAJOR,MINOR,PATCH} = 0.7.0`, mirrored by
-> `LUMEN_API_VERSION` in `lumen/ffi/include/lumen.h`). The lifecycle
-> (`lumen_app_new`, `lumen_app_run`, `lumen_app_run_headless`, `lumen_app_free`),
-> the exposed-callback surface, signal mutators, navigation, and
-> `lumen_abi_version` are live; cbindgen generates `lumen_simple.h` and the
-> C++/Python SDKs load `liblumen_ffi`. The prose below this banner predates that
-> and is retained only for the design rationale.
->
-> **ABI 0.7 (link-not-embed).** Added `lumen_app_new_from_lmna(data, len,
-> base_dir)`: build an app from prebuilt LMNA artifact bytes with NO parser, so a
-> thin launcher can compile source in-process and hand the bytes across the ABI
-> to a dlopen'd liblumen instead of static-linking the runtime. See
-> `docs/design/link-not-embed.md`.
+Lumen ships a C ABI so a program written in another language can build, drive,
+and inspect a Lumen app: open the window, read and write signals, handle clicks
+and DOM events, and mutate the live element tree. The header is
+`lumen/ffi/include/lumen.h`, and the library it declares is `liblumen_ffi`
+(cdylib and staticlib, with a `lumen.pc` for pkg-config).
 
-## Today
+Reach for it when the app's logic lives outside Lumen: an existing C++ or Python
+program that wants a native UI, a language binding, or a tool that drives an app
+under test. If your logic can live in the app itself, a script is the shorter
+path; see [Scripting](../authoring/scripting.md).
 
-```rust
-// lumen/ffi/src/lib.rs
+## Quick start
 
-/// C-ABI status code returned by every `lumen_*` function.
-#[repr(u32)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum LumenStatus {
-    Ok = 0,
-    InternalError = 1,
+```c
+#include <lumen.h>
+#include <stdio.h>
+
+static void bump(const char *id, void *user_data) {
+    int64_t *count = user_data;
+    *count += 1;
+    lumen_signal_set_int64(NULL, "count", *count);
+}
+
+int main(void) {
+    /* Refuse a header / library mismatch in the major+minor pair. */
+    if ((lumen_abi_version() >> 8) != (LUMEN_API_VERSION >> 8)) {
+        fprintf(stderr, "lumen: ABI mismatch\n");
+        return 1;
+    }
+
+    LumenApp *app = lumen_app_new("./myapp");
+    if (!app) {
+        fprintf(stderr, "lumen: %s\n", lumen_last_error());
+        return 1;
+    }
+
+    int64_t count = 0;
+    lumen_app_on_click(app, "bump", bump, &count);
+
+    return lumen_app_run(app) == LUMEN_OK ? 0 : 1;   /* blocks; frees `app` */
 }
 ```
 
-That's the entire shipped surface. The status enum is the convention
-every function will use; no `lumen_*` entry points exist yet. There's
-no `cbindgen` invocation wired into the build, no generated `lumen.h`,
-and no `examples/c-client/` consumer (planned but blocked on the
-surface itself landing).
+`lumen_app_new(dir)` reads an app directory the way `lumenc run` does.
+`lumen_app_new_from_lmna(data, len, base_dir)` takes a precompiled artifact
+instead, for a launcher that compiles the source itself and hands over the
+bytes.
 
-## Invariants for the C-ABI
+`lumen_app_run_headless(app, ticks)` builds and ticks the app with no window and
+no GPU surface, which is how the SDK examples and tests exercise the ABI.
 
-When the surface ships, these are the contracts every `lumen_*` fn
-must obey. They're called out here so plugin authors writing FFI-style
-bridges follow the same shape:
+## What the ABI covers
 
-1. **No Rust panic may escape.** Every `lumen_*` fn wraps its body in
-   `std::panic::catch_unwind` (or equivalent) and returns
-   `LumenStatus::InternalError` on catch. Panics across the FFI
-   boundary are undefined behaviour in Rust.
+| Area | Entry points |
+|---|---|
+| Lifecycle | `lumen_app_new`, `lumen_app_new_from_lmna`, `lumen_app_set_title`, `lumen_app_set_size`, `lumen_app_run`, `lumen_app_run_headless`, `lumen_app_free` |
+| Signals | Typed setters and getters (`lumen_signal_set_int64` / `_float64` / `_bool` / `_color` and their `get` counterparts), `lumen_signal_set_string` / `lumen_signal_get_string`, array signals (`lumen_signal_set_array`, `lumen_signal_array_len`, `lumen_signal_array_get_field`), and `lumen_signal_clear` |
+| Change subscription | `lumen_signal_watch(name, cb, user_data)` fires once per tick in which the named signal's committed value changed |
+| Native handlers | `lumen_app_on_click(app, id, cb, user_data)` for an id-scoped click, `lumen_app_on_close(app, cb, user_data)` for a vetoable close request |
+| Exposed callbacks | `lumen_app_expose` / `lumen_app_expose_v2` publish a native function the app's script can call |
+| Navigation | `lumen_navigate`, `lumen_navigate_back`, `lumen_navigate_forward`, `lumen_current_page`, plus `lumen_window_set_href` / `_reload` / `_set_title` / `_set_size` / `_dpr` and `lumen_history_go` |
+| Dynamic DOM | Query, traversal, mutation, events, and introspection (below) |
+| Errors | `lumen_last_error`, `lumen_last_error_global`, `lumen_status_message` |
 
-2. **Errors return `LumenStatus`.** No exceptions, no out-of-band
-   error channels. Output values flow through `*mut`-out parameters
-   when the call also has a return code.
+## The dynamic DOM API from C
 
-3. **Structs are `#[repr(C)]`, not `#[repr(C, packed)]`.** Packed
-   structs interact badly with C compilers across alignment-strict
-   targets (per the FFI-soundness plan).
+The DOM API scripts use is the same one the ABI exposes, against the same live
+tree. A `LumenNode` is an opaque packed handle and `0` means "no node".
 
-4. **Strings are `*const c_char` UTF-8.** Lumen does not transit
-   wide-char / UTF-16 - the C-ABI matches Rust's internal UTF-8
-   `&str` model. NUL terminator is required.
+Find and traverse: `lumen_query`, `lumen_query_single`, `lumen_query_len`,
+`lumen_get_by_id`, `lumen_document`, `lumen_node_parent`,
+`lumen_node_first_child`, `lumen_node_last_child`, `lumen_node_next`,
+`lumen_node_prev`, `lumen_node_children`, `lumen_node_closest`,
+`lumen_node_valid`. The list-returning calls fill a `LumenNodeList` you index
+with `lumen_nodelist_get` and release with `lumen_nodelist_free`.
 
-5. **Ownership is explicit.** Every allocator-returning function is
-   paired with a `lumen_*_free`. Callers own released memory.
-
-## Planned surface
-
-The plan calls out four core operations every binding needs:
+Mutate: `lumen_node_spawn` and `lumen_node_clone` mint a handle valid for the
+rest of the tick; `lumen_node_append`, `lumen_node_insert_before`,
+`lumen_node_set_parent`, `lumen_node_replace_with`, and `lumen_node_remove`
+place it. Content and styling go through `lumen_node_set_attr`,
+`lumen_node_remove_attr`, `lumen_node_set_text`, `lumen_node_class_add` /
+`_remove` / `_toggle`, `lumen_node_set_style`, and `lumen_node_remove_style`.
+Mutations queue on a bus the runtime drains each tick, so they are safe to call
+from any thread.
 
 ```c
-/* Entity creation - returns an opaque handle. */
-LumenStatus lumen_entity_create(LumenApp *app, LumenEntity *out);
-
-/* Component / style mutation - flat key/value setters keyed on
-   property name. Mirrors apply_attribute / apply_declaration in
-   lumenc/src/parser_{html,css}.rs. */
-LumenStatus lumen_style_set(
-    LumenApp *app,
-    LumenEntity e,
-    const char *property,
-    const char *value
-);
-
-/* Author-side command queueing - same shape as ScriptCommand from
-   the Rhai host, just in C-callable form. */
-LumenStatus lumen_queue_command(
-    LumenApp *app,
-    const LumenCommand *cmd
-);
-
-/* Dirty mask - bitfield reflecting which subsystems need redraw.
-   Used by hosts that drive their own tick loop and want to skip work
-   when nothing changed. Matches FrameDirty roll-up semantics. */
-LumenStatus lumen_dirty_mask(
-    const LumenApp *app,
-    uint32_t *out_mask
-);
+LumenNode list, row;
+if (lumen_get_by_id("list", &list) == LUMEN_OK && list != 0) {
+    lumen_node_spawn("row", &row);
+    lumen_node_class_add(row, "item");
+    lumen_node_set_text(row, "hello");
+    lumen_node_append(list, row);
+}
 ```
 
-The dirty mask bits will mirror the per-stage dirty flags already
-maintained internally (layout, a11y, render). Bindings get the same
-skip-work optimization the in-process tick loop has.
+Bind events with `lumen_on(node, event_type, capture, callback, user_data)`,
+which returns a token you pass to `lumen_off`. The callback receives a
+`LumenEvent` with the scalar fields (target, current target, positions, wheel
+delta, button, modifiers); read the string fields with `lumen_event_type`,
+`lumen_event_key`, and `lumen_event_value`, and control propagation with
+`lumen_event_prevent_default`, `lumen_event_stop_propagation`, and
+`lumen_event_stop_immediate_propagation`. Propagation is the DOM contract:
+capture from the root to the target, then bubble back up.
 
-## cbindgen workflow
+Introspect: post-layout geometry (`lumen_node_rect`, `lumen_node_content_rect`,
+`lumen_node_scroll`), visibility and paint order (`lumen_node_is_visible`,
+`lumen_node_z_index`), computed style, attributes, inline style and components
+as key-value buffers (`lumen_node_computed_style`, `lumen_node_attrs`,
+`lumen_node_inline_style`, `lumen_node_component`), name lists
+(`lumen_node_classes`, `lumen_node_components`), markup
+(`lumen_node_outer_markup`, `lumen_node_inner_markup`, `lumen_dump_tree`), and
+global state (`lumen_pointer_state`, `lumen_frame_info`, `lumen_signals_all`).
+Release what they hand back with `lumen_kvlist_free`, `lumen_strlist_free`, or
+`lumen_string_free`.
 
-Once the Rust signatures are stable, `cbindgen` produces a
-`lumen.h` header from them - no manual header maintenance.
+`lumen_node_set_inner_markup` replaces a node's children from a markup fragment.
+It needs the markup parser, so it does nothing when the app runs from a
+precompiled artifact, and it must not be fed untrusted content.
 
-```bash
-# (planned)
-cargo install cbindgen
-cbindgen --crate lumen-ffi --output target/lumen.h
-```
+## Conventions
 
-The header lands in `target/` and gets vendored into each downstream
-binding crate (Python, Node, Go) so consumers don't depend on having
-cbindgen installed.
+**Status codes.** Every function returns `LumenStatus` (or `NULL` for a
+constructor). `LUMEN_OK` is 0. On any other value, `lumen_last_error()` returns
+a thread-local UTF-8 message, falling back to the global slot when the calling
+thread has none, and `lumen_status_message(status)` gives a static description
+without that round-trip.
 
-## Per-language bindings
+**No panic escapes.** Every entry point catches a Rust panic and reports
+`LUMEN_ERR_PANIC` rather than unwinding across the boundary.
 
-Each binding wraps the raw FFI in idiomatic ergonomics. The plan:
+**Strings are UTF-8, NUL-terminated.** There is no wide-char surface.
 
-| Language | Crate / library | Pattern |
-|---|---|---|
-| C | `examples/c-client/` | Direct FFI consumer; reference driver. |
-| Python | `lumen-py` (PyO3) | Python classes wrapping `LumenApp` / `LumenEntity` handles. `__del__` calls `lumen_*_free`. |
-| Node / TypeScript | `lumen-node` (napi-rs) | Same pattern, async wrappers for any blocking calls. |
-| Go | `lumen-go` (cgo) | Thin Go interfaces over C; channels for the dirty mask poll. |
-| Lua | `lumen-script-lua` via `mlua` | Implements the in-process `ScriptHost` trait (parallel to `lumen-script-rhai`) - not the FFI per se. |
+**String out-parameters size themselves.** Call once with a null or short
+buffer: nothing is written, `*out_len` receives the required capacity including
+the trailing NUL, and the call returns `LUMEN_ERR_BUFFER_TOO_SMALL`. Call again
+with a buffer that size.
 
-Bindings ride on top of the C-ABI; they don't depend on each other and
-they don't depend on Cargo (a downstream Python project just needs
-the `.so` / `.dylib` / `.dll` plus the header).
+**Ownership is explicit.** Anything the library allocates has a matching
+`lumen_*_free`. Pointers handed to a callback are borrowed for the duration of
+the call; copy what you keep.
 
-## When can I use this?
+**Threading.** Every `lumen_*` function is safe to call from any thread.
+Callbacks fire on the Lumen tick thread, which may not be your main thread, so
+the `user_data` you register must stay alive and be safe to read from there.
 
-Today: not yet. The surface is committed to in the SDD and the
-roadmap, but the FFI work comes after the multi-window story and is
-gated on the in-process API stabilizing.
+**Version check.** `LUMEN_API_VERSION` is the header's view of the ABI and
+`lumen_abi_version()` is the linked library's. Compare the major and minor pair
+at startup and refuse a mismatch; the patch component carries no API meaning.
 
-If you need to drive Lumen from another language today, the practical
-options are:
+## SDKs
 
-1. **Spawn `lumenc` as a subprocess.** Author your UI in `.lmn` +
-   `.rhai`, drive the script over the (planned) MCP introspection
-   port (`[mcp] port = 7878`). The MCP surface is more surface-stable
-   than the in-process API.
-2. **Embed `lumen` as a Rust dependency.** If the host language has
-   a Rust embedding story (uniffi, neon, etc.), use that as the
-   bridge until the C-ABI ships.
-3. **Wait.** The FFI work is on the active roadmap; the lift is
-   well-scoped (the in-process API exposes everything the C-ABI needs;
-   there's no architecture work, just careful API design).
+The SDKs wrap the ABI in something idiomatic, and are the recommended entry
+point over raw C:
 
-## Why not finish FFI first?
+| SDK | Shape |
+|---|---|
+| [C++](https://github.com/lumen-fx/lumen/tree/main/sdk/cpp) | Header-only C++17. Typed `lumen::Signal<T>` handles with natural operators, lambda click handlers, and a chainable `lumen::dom` namespace over the DOM API. |
+| [Python](https://github.com/lumen-fx/lumen/tree/main/sdk/python) | Stdlib `ctypes`, no compiled extension. A dataclass-style `lumen.Model` whose fields are signals, decorator handlers, and `lumen.dom`. |
+| [Rust](https://github.com/lumen-fx/lumen/tree/main/sdk/rust) | In-process embedding: build an app, add your own systems and plugins, and reach signals, events, and the DOM with Rust types. |
 
-Two reasons baked into the plan:
+Each SDK ships runnable examples covering signals, handlers, exposed callbacks,
+lists, and the DOM.
 
-1. **Surface stability matters more than reach.** A C-ABI is harder
-   to evolve than a Rust API; we want the in-process surface to
-   settle (which means the widget set, the CSS subset, and the
-   render pipeline all in their stable shape) before encoding it
-   into a fixed-vocabulary ABI.
+## Callbacks the script can call
 
-2. **The hard problems live in-process.** Multi-window, FFI safety,
-   and per-language bindings are downstream of having an
-   in-process model that's worth exposing. Premature ABI is a
-   reliability tax we'd pay forever.
+`lumen_app_expose(app, name, arg_count, func, user_data)` publishes a native
+function under `name` so the app's script can call it, and
+`lumen_app_expose_v2` is the same registration with an out-parameter callback
+signature, which suits bindings that cannot express an aggregate return
+(`ctypes`, libffi). Arguments and return values cross as `LumenValue`, a tagged
+union covering nil, bool, int, float, string, array, and map.
 
-When the surface ships, this page will be replaced with the actual
-function table, struct layouts, and worked C / Python / Node samples.
-
-## Tracking
-
-- Design: section 6 "Multi-language story" in
-  [`docs/SDD.md`](https://github.com/lumen-ui/lumen/blob/main/docs/SDD.md).
-- Code: `lumen/ffi/src/lib.rs` (stub).
+Exposed callbacks currently reach Rhai scripts. From a candela or Lua app, drive
+the native side through signals, `lumen_app_on_click`, and DOM event callbacks
+instead.
