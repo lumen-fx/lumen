@@ -153,6 +153,13 @@ impl<H: ScriptHost + Resource> Plugin for ScriptPlugin<H> {
             .init_resource::<bevy_ecs::message::Messages<lumen_os_dnd::DropAccepted>>();
         app.world
             .init_resource::<bevy_ecs::message::Messages<lumen_os_dnd::DragStarted>>();
+        // `dispatch_text_input_to_script` reads the keyboard-edit queue.
+        // `lumen-input::InputPlugin` registers it in production; self-register
+        // so a script host without the input layer still brings up a valid
+        // schedule.
+        app.world
+            .init_resource::<bevy_ecs::message::Messages<lumen_core::text_events::TextEditApplied>>(
+            );
         // Foundation property store: defensively init so bare tests that
         // skip `App::new()`'s standard resources still bring up a valid
         // schedule for the store consumers.
@@ -1305,25 +1312,51 @@ pub fn dispatch_file_picks_to_script<H: ScriptHost + Resource>(
     }
 }
 
-/// Forward [`TextInputCommitted`] as `on_text_input(id, text)`.
+/// Forward text changes as `on_text_input(id, text)`.
+///
+/// Fires on every edit that changes the text, which is what a live preview
+/// needs, and once more when the field is committed with Enter. An entity
+/// gets at most one call per tick: an IME commit both mutates the buffer
+/// and raises [`TextInputCommitted`], and the script should see that as one
+/// edit, not two.
 pub fn dispatch_text_input_to_script<H: ScriptHost + Resource>(
     mut host: ResMut<H>,
-    mut events: MessageReader<TextInputCommitted>,
+    mut edits: MessageReader<lumen_core::text_events::TextEditApplied>,
+    mut commits: MessageReader<TextInputCommitted>,
     ids: Query<&LumenId>,
+    buffers: Query<&lumen_core::text_model::TextBuffer>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
-    for ev in events.read() {
-        let id_str = ids.get(ev.entity).map(|i| i.0.as_str()).unwrap_or("");
-        if let Err(e) = route_event_two_args(
-            &mut *host,
-            "text_input",
-            "on_text_input",
-            id_str,
-            &ev.text,
-            &mut out,
-        ) {
-            eprintln!("{}: on_text_input failed: {e}", prefix(host.lang()));
+    use lumen_core::text_events::AppliedKind;
+
+    let mut fired: Vec<Entity> = Vec::new();
+    let fire =
+        |host: &mut H, out: &mut MessageWriter<ScriptCommandEvent>, e: Entity, text: &str| {
+            let id_str = ids.get(e).map(|i| i.0.as_str()).unwrap_or("");
+            if let Err(err) =
+                route_event_two_args(host, "text_input", "on_text_input", id_str, text, out)
+            {
+                eprintln!("{}: on_text_input failed: {err}", prefix(host.lang()));
+            }
+        };
+
+    for ev in edits.read() {
+        // A pure caret move is not a text change.
+        if matches!(ev.kind, AppliedKind::CursorMove) || fired.contains(&ev.entity) {
+            continue;
         }
+        let Ok(buf) = buffers.get(ev.entity) else {
+            continue;
+        };
+        fired.push(ev.entity);
+        fire(&mut host, &mut out, ev.entity, &buf.to_string());
+    }
+    for ev in commits.read() {
+        if fired.contains(&ev.entity) {
+            continue;
+        }
+        fired.push(ev.entity);
+        fire(&mut host, &mut out, ev.entity, &ev.text);
     }
 }
 

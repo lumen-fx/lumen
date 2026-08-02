@@ -61,9 +61,9 @@ pub enum Anchor {
 /// `GtkMovementStep`).
 #[derive(Clone, Copy, Debug)]
 pub enum CursorMotion {
-    /// One char left.
+    /// One extended grapheme cluster left.
     CharLeft,
-    /// One char right.
+    /// One extended grapheme cluster right.
     CharRight,
     /// Previous word boundary.
     WordLeft,
