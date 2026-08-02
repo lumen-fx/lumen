@@ -62,9 +62,13 @@
   /* Text */
   --lumen-text: #ffffff;
   --lumen-text-muted: #a9b8c9;
-  /* Text-selection highlight: the previous hardcoded look (text fill at
-     32 % alpha) kept as the default token value. */
-  --lumen-selection: #ffffff52;
+  /* Text-selection highlight. The fill is opaque so it reads on any
+     field colour an app authors, not just on this skin's own surface,
+     and the glyphs are redrawn in the paired foreground on top of it.
+     Both halves are needed: a tint alone disappears against a light
+     field, and an opaque fill alone swallows the text. */
+  --lumen-selection: var(--lumen-accent);
+  --lumen-selection-text: #062028;
 
   /* Accent (focus rings, checked track, selected tab) */
   --lumen-accent: #33c7ce;
@@ -131,12 +135,12 @@ button:disabled { bg: var(--lumen-disabled-bg); }
  * the 1px chrome never changes an authored width. `selection-color`
  * feeds the text-edit selection highlight (--lumen-selection token).
  */
-input          { bg: var(--lumen-surface); radius: var(--lumen-radius); padding: 8 12; text-color: var(--lumen-text); border: 1px solid var(--lumen-border-subtle); transition: bg 130ms ease; selection-color: var(--lumen-selection); }
+input          { bg: var(--lumen-surface); radius: var(--lumen-radius); padding: 8 12; text-color: var(--lumen-text); border: 1px solid var(--lumen-border-subtle); transition: bg 130ms ease; selection-color: var(--lumen-selection); selection-text-color: var(--lumen-selection-text); }
 input:hover    { bg: var(--lumen-surface-hover); border: 1px solid var(--lumen-border); }
 input:focus    { outline: 2 var(--lumen-accent); }
 input:disabled { bg: var(--lumen-disabled-bg); }
 
-textarea          { bg: var(--lumen-surface); radius: var(--lumen-radius); padding: 8 12; text-color: var(--lumen-text); border: 1px solid var(--lumen-border-subtle); transition: bg 130ms ease; selection-color: var(--lumen-selection); }
+textarea          { bg: var(--lumen-surface); radius: var(--lumen-radius); padding: 8 12; text-color: var(--lumen-text); border: 1px solid var(--lumen-border-subtle); transition: bg 130ms ease; selection-color: var(--lumen-selection); selection-text-color: var(--lumen-selection-text); }
 textarea:hover    { bg: var(--lumen-surface-hover); border: 1px solid var(--lumen-border); }
 textarea:focus    { outline: 2 var(--lumen-accent); }
 textarea:disabled { bg: var(--lumen-disabled-bg); }
