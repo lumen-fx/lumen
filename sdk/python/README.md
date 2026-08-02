@@ -183,7 +183,7 @@ driving a `<for>` block (array signals).
 pip install -e sdk/python
 ```
 
-Registers the `lumen` package (distribution name `lumen-ui`). It does
+Registers the `lumen` package (distribution name `lumenui`). It does
 **not** build or bundle `liblumen_ffi` - you still need
 `cargo build -p lumen-ffi` and a way for the loader to find it.
 

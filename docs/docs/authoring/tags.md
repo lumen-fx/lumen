@@ -3,7 +3,7 @@
 Lumen's authoring surface is a subset of XML-shaped markup with a fixed
 tag vocabulary. Unknown tags fail-fast at parse time with the byte
 offset. The live list is the `KNOWN_TAGS` array in
-[`lumenc/src/parser_html.rs`](https://github.com/lumen-ui/lumen/blob/main/lumenc/src/parser_html.rs);
+[`lumenc/src/parser_html.rs`](https://github.com/lumen-fx/lumen/blob/main/lumenc/src/parser_html.rs);
 this page tracks every entry.
 
 This page groups tags by family. For attribute semantics that work on
@@ -25,7 +25,7 @@ only when a tag interprets them in a non-default way.
 | **Reactivity** | `each`, `key`, `signal`, `mode`, `eq` (per-tag - see `<for>` / `<if>`) |
 
 Value grammar (lengths, edges, colors) lives in
-[`lumenc/src/values.rs`](https://github.com/lumen-ui/lumen/blob/main/lumenc/src/values.rs).
+[`lumenc/src/values.rs`](https://github.com/lumen-fx/lumen/blob/main/lumenc/src/values.rs).
 A condensed reminder:
 
 - Length: bare number is px (`24`), `Npx` (`24px`), `N%` (`50%`).
@@ -157,10 +157,12 @@ and the fling slept), never on every frame.
 
 ```xml
 <scroll height="320" bind-scroll="feed_pos"> ... </scroll>
-<button text="Back to top" on-click="scroll_top" />
-<script>
-  fn scroll_top(id) { signal("feed_pos", 0.0).set(0.0); }
-</script>
+<button id="to-top" text="Back to top" />
+```
+
+```candela
+fn on_start() { lumen::on("click", "to-top", "scroll_top"); }
+fn scroll_top(id) { lumen::signal_set_float("feed_pos", 0.0); }
 ```
 
 **Related.** `<for>`.
@@ -450,7 +452,7 @@ each row resolves it against its own item at reconcile time.
 
 | Attr | Type | Notes |
 |---|---|---|
-| `each` | signal name | Must reference an `ArraySignal` (via `signal_array(name)` in Rhai). |
+| `each` | signal name | Must reference an array signal. |
 | `key` | field name | Stable identity for reconciliation. The reconciler diffs by `key`. |
 | `virtualized` | bool | Recycle row entities for long lists (see the note below). |
 | `row-height` | number | Required when `virtualized="true"`. |
@@ -465,6 +467,9 @@ each row resolves it against its own item at reconcile time.
 </for>
 ```
 
+The rows come from an array signal. The Rhai and Lua hosts write one through
+`signal_array(name)`, and an embedder writes one over the C ABI:
+
 ```rhai
 let todos = signal_array("todos");
 todos.set([
@@ -473,6 +478,11 @@ todos.set([
 ]);
 todos.push(#{ id: "3", idx: "3", label: "New row", status: "todo" });
 ```
+
+A candela script builds lists a different way: ship an empty container in the
+markup and spawn the rows into it with the DOM API, which also covers reorder
+and per-row updates that `<for>` rebuilds wholesale. See
+[Scripting](./scripting.md#the-dynamic-dom-api).
 
 > **Reconciler.** Append-only + tail-trim fast paths preserve focus,
 > scroll position, and per-row signals. Mid-stream insert / reorder
@@ -564,16 +574,19 @@ contract (W5):
 </dialog>
 ```
 
-```rhai
-signal("dialog_open", "");           // initial: closed
-on("click", "dialog-close",   "close");
-on("click", "dialog-confirm", "close");
-on("dialog_accepted", "confirm-dialog", "on_ok");
-on("dialog_rejected", "confirm-dialog", "on_cancel");
-fn close(_id) { signal("dialog_open", "").set(""); }
-fn open(_id)  { signal("dialog_open", "").set("1"); }
-fn on_ok(_id)     { /* commit */ }
-fn on_cancel(_id) { /* discard */ }
+```candela
+fn on_start() {
+    lumen::signal_set("dialog_open", "");        // initial: closed
+    lumen::on("click", "dialog-close", "close");
+    lumen::on("click", "dialog-confirm", "close");
+    lumen::on("dialog_accepted", "confirm-dialog", "accepted");
+    lumen::on("dialog_rejected", "confirm-dialog", "rejected");
+}
+
+fn open(id) { lumen::signal_set("dialog_open", "1"); }
+fn close(id) { lumen::signal_set("dialog_open", ""); }
+fn accepted(id) { /* commit */ }
+fn rejected(id) { /* discard */ }
 ```
 
 The dialog descendants' state (input text, toggles) survives show/hide
@@ -704,8 +717,8 @@ outside its bounds.
 ## `<menu id="...">` + `<menuitem id label accel>` + `<separator/>`
 
 Popup / context menu. `<menu>` collapses to an absolute-positioned
-panel toggled via `__menu_open:<id>`. Use `open_menu(id)` /
-`close_menu(id)` from Rhai to flip the panel; item clicks fire
+panel toggled via `__menu_open:<id>`. Call `open_menu(id)` /
+`close_menu(id)` from a script to flip the panel; item clicks fire
 `on_menu(id)` and close the menu. Like the dropdown, the panel also
 dismisses on `Escape` or an outside press.
 
@@ -732,11 +745,14 @@ dismisses on `Escape` or an outside press.
 </menu>
 ```
 
-```rhai
-on("click", "open-actions", "open");
-on("menu", "delete", "do_delete");
-fn open(_id)       { open_menu("actions"); }
-fn do_delete(_id)  { /* ... */ }
+```candela
+fn on_start() {
+    lumen::on("click", "open-actions", "open");
+    lumen::on("menu", "delete", "do_delete");
+}
+
+fn open(id) { lumen::open_menu("actions"); }
+fn do_delete(id) { /* ... */ }
 ```
 
 `<menuitem>` or `<separator>` outside `<menu>` or `<menubar>` is a
@@ -818,25 +834,27 @@ attribute values. Detailed in [Templates + slots](./templates.md).
 
 ---
 
-## `<script>` / `<script src="...rhai" />`
+## `<script>` / `<script src="..." />`
 
-Not a layout node - captured at parse time into `LayoutIR.script_source`.
+Attaches the app's script. Not a layout node.
 
 ```xml
-<script src="main.rhai" />
+<script src="main.cdl" />
 ```
 
 Or inline (avoid XML-illegal characters):
 
 ```xml
 <script>
-  fn on_start() {
-      signal("ready", "yes");
-  }
+  import "lumen.cdl";
+  fn on_start() { lumen::signal_set("ready", "yes"); }
+  fn main() {}
 </script>
 ```
 
-Multiple `<script>` blocks concatenate in source order.
+Multiple `<script>` blocks concatenate in source order. The file extension
+picks nothing on its own: select the host with `[script] engine` in
+`lumen.toml`. See [Scripting](./scripting.md).
 
 ---
 

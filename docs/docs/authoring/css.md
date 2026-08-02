@@ -3,7 +3,7 @@
 Lumen parses a deliberately narrow CSS subset that maps 1:1 to the
 markup attribute surface. The grammar and the applicable property list
 live in
-[`lumenc/src/parser_css.rs`](https://github.com/lumen-ui/lumen/blob/main/lumenc/src/parser_css.rs).
+[`lumenc/src/parser_css.rs`](https://github.com/lumen-fx/lumen/blob/main/lumenc/src/parser_css.rs).
 Most properties have the same name as their markup attribute; a few
 are CSS-only (notably `transition:` and `box-shadow:` with comma lists).
 
@@ -456,10 +456,10 @@ root   { bg: var(--bg); text-color: var(--fg); }
 button { bg: var(--accent); hover-bg: var(--accent); }
 ```
 
-Then from Rhai:
+Then from a script:
 
-```rhai
-set_root_class("app theme-light");
+```candela
+lumen::set_root_class("app theme-light");
 ```
 
 The runtime detects `Changed<LumenClasses>` on the root and re-applies

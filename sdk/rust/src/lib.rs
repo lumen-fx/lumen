@@ -1,6 +1,6 @@
 //! # Lumen Rust SDK
 //!
-//! An ECS-first surface over the [Lumen](https://github.com/lumen-ui/lumen) UI
+//! An ECS-first surface over the [Lumen](https://github.com/lumen-fx/lumen) UI
 //! framework. Lumen runs on `bevy_ecs`; this crate exposes that power in
 //! bevy's own shape - plugin groups, real systems, typed resources - instead of
 //! hiding it behind builders and stringly-keyed callbacks.

@@ -110,7 +110,7 @@ directly - the worlds intentionally have independent IDs.
 ## Worked example 1 - `TooltipPlugin`
 
 The shipped tooltip primitive is the simplest stateful widget.
-Source: [`lumen/primitives/src/tooltip.rs`](https://github.com/lumen-ui/lumen/blob/main/lumen/primitives/src/tooltip.rs).
+Source: [`lumen/primitives/src/tooltip.rs`](https://github.com/lumen-fx/lumen/blob/main/lumen/primitives/src/tooltip.rs).
 
 ```rust
 pub struct TooltipPlugin;
@@ -153,7 +153,7 @@ declarative API.
 ## Worked example 2 - `DragPlugin`
 
 Drag is event-driven and needs to compose with the input pipeline.
-Source: [`lumen/primitives/src/drag.rs`](https://github.com/lumen-ui/lumen/blob/main/lumen/primitives/src/drag.rs).
+Source: [`lumen/primitives/src/drag.rs`](https://github.com/lumen-fx/lumen/blob/main/lumen/primitives/src/drag.rs).
 
 ```rust
 pub struct DragPlugin;

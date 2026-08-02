@@ -29,7 +29,11 @@ fn temp_app_dir(name: &str) -> std::path::PathBuf {
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).expect("create temp app dir");
-    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").expect("write lumen.toml");
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
+    )
+    .expect("write lumen.toml");
     dir
 }
 

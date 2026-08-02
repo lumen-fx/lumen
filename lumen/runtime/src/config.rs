@@ -162,43 +162,46 @@ pub struct AssetRootsCfg {
 }
 
 /// `[script]` block - selects which `ScriptHost` engine runs the app's
-/// scripts. Rhai is the default/compat host; `lua` selects the
-/// `lumen-script-lua` host (mlua / Lua 5.4), which exposes the same
-/// engine-function surface.
+/// scripts. candela is the default language; `rhai` and `lua` select the
+/// compat hosts (`lumen-script-rhai`, and `lumen-script-lua` on mlua /
+/// Lua 5.4), which expose the same engine-function surface.
+///
+/// When the key is absent the host is inferred from the app's script file
+/// extensions; see [`infer_script_host`].
 ///
 /// ```toml
 /// [script]
-/// engine = "lua"   # "rhai" (default) | "lua" | "candela"
+/// engine = "lua"   # "candela" (default) | "rhai" | "lua"
 /// ```
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ScriptCfg {
-    /// Engine name: `"rhai"` (default), `"lua"`, or `"candela"`. Unknown values
-    /// fall back to Rhai via [`ScriptCfg::engine_kind`].
+    /// Engine name: `"candela"` (default), `"rhai"`, or `"lua"`. Unknown values
+    /// fall back to candela via [`ScriptCfg::engine_kind`].
     pub engine: Option<String>,
 }
 
 /// The resolved script engine for an app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ScriptEngine {
-    /// Rhai (`lumen-script-rhai`) - the default/compat host.
-    #[default]
+    /// Rhai (`lumen-script-rhai`) - compat host.
     Rhai,
     /// Lua 5.4 (`lumen-script-lua`).
     Lua,
-    /// candela (`lumen-script-candela`) - the intended default Lumen language.
+    /// candela (`lumen-script-candela`), the default Lumen language.
+    #[default]
     Candela,
 }
 
 impl ScriptCfg {
-    /// Resolve the declared engine name, defaulting to [`ScriptEngine::Rhai`]
-    /// when absent or unrecognised (case-insensitive match on `rhai` /
-    /// `lua` / `candela`).
+    /// Resolve the declared engine name, defaulting to
+    /// [`ScriptEngine::Candela`] when absent or unrecognised
+    /// (case-insensitive match on `candela` / `rhai` / `lua`).
     pub fn engine_kind(&self) -> ScriptEngine {
         match self.engine.as_deref().map(str::trim) {
             Some(e) if e.eq_ignore_ascii_case("lua") => ScriptEngine::Lua,
-            Some(e) if e.eq_ignore_ascii_case("candela") => ScriptEngine::Candela,
-            _ => ScriptEngine::Rhai,
+            Some(e) if e.eq_ignore_ascii_case("rhai") => ScriptEngine::Rhai,
+            _ => ScriptEngine::Candela,
         }
     }
 }
@@ -381,24 +384,39 @@ impl BundleCapabilities {
     }
 }
 
-/// Select the single script host to compile into a bundle: explicit
-/// `[script] engine` wins; otherwise infer from the app's script file
-/// extensions (a `.lua` file -> Lua, a `.cdl` file -> Candela), defaulting to
-/// the always-compiled Rhai host.
-fn infer_script_host(dir: &Path, cfg: &LumenToml) -> ScriptEngine {
+/// Select the script host for an app directory: explicit `[script] engine`
+/// wins; otherwise infer from the app's script file extensions (a `.lua` file
+/// -> Lua, a `.rhai` file -> Rhai, a `.cdl` file -> Candela), defaulting to
+/// candela when the directory carries no script at all.
+///
+/// A directory holding more than one script language resolves by a fixed
+/// precedence - candela, then Lua, then Rhai - so the answer never depends on
+/// the order the filesystem happens to yield. Declare `[script] engine` when a
+/// mixed directory should run something other than the winner.
+///
+/// A script kept inline in the markup carries no extension to read, so an app
+/// written that way in a language other than candela declares its host.
+pub fn infer_script_host(dir: &Path, cfg: &LumenToml) -> ScriptEngine {
     if cfg.script.engine.is_some() {
         return cfg.script.engine_kind();
     }
+    let (mut cdl, mut lua, mut rhai) = (false, false, false);
     if let Ok(rd) = std::fs::read_dir(dir) {
         for entry in rd.flatten().take(512) {
             match entry.path().extension().and_then(|e| e.to_str()) {
-                Some("lua") => return ScriptEngine::Lua,
-                Some("cdl") => return ScriptEngine::Candela,
+                Some("cdl") => cdl = true,
+                Some("lua") => lua = true,
+                Some("rhai") => rhai = true,
                 _ => {}
             }
         }
     }
-    ScriptEngine::Rhai
+    match (cdl, lua, rhai) {
+        (true, _, _) => ScriptEngine::Candela,
+        (_, true, _) => ScriptEngine::Lua,
+        (_, _, true) => ScriptEngine::Rhai,
+        _ => ScriptEngine::default(),
+    }
 }
 
 /// `[signals]` table - typed signal schema for the `lumenc lint
@@ -668,9 +686,9 @@ mod tests {
 
     #[test]
     fn script_engine_selection() {
-        // Absent -> Rhai default.
+        // Absent -> candela default.
         let cfg: LumenToml = toml::from_str("").unwrap();
-        assert_eq!(cfg.script.engine_kind(), ScriptEngine::Rhai);
+        assert_eq!(cfg.script.engine_kind(), ScriptEngine::Candela);
 
         // Explicit lua.
         let cfg: LumenToml = toml::from_str("[script]\nengine = \"lua\"\n").unwrap();
@@ -686,9 +704,9 @@ mod tests {
         let cfg: LumenToml = toml::from_str("[script]\nengine = \"RHAI\"\n").unwrap();
         assert_eq!(cfg.script.engine_kind(), ScriptEngine::Rhai);
 
-        // Unknown -> falls back to Rhai.
+        // Unknown -> falls back to candela.
         let cfg: LumenToml = toml::from_str("[script]\nengine = \"python\"\n").unwrap();
-        assert_eq!(cfg.script.engine_kind(), ScriptEngine::Rhai);
+        assert_eq!(cfg.script.engine_kind(), ScriptEngine::Candela);
     }
 
     #[test]
@@ -704,7 +722,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         // Bare UI app: audio + http-fetch inferred OFF; mcp/async default OFF;
-        // Rhai host. Feature list is empty (all always-on or off).
+        // candela host (the default when no script file names a language), so
+        // the feature list carries only that host.
         std::fs::write(
             dir.join("main.lmn"),
             "<root><button on_click=\"inc\">+</button></root>",
@@ -713,8 +732,8 @@ mod tests {
         let cfg = LumenToml::default();
         let caps = BundleCapabilities::resolve(&dir, &cfg);
         assert!(!caps.audio && !caps.http_fetch && !caps.mcp && !caps.async_rt);
-        assert_eq!(caps.host, ScriptEngine::Rhai);
-        assert!(caps.to_features().is_empty());
+        assert_eq!(caps.host, ScriptEngine::Candela);
+        assert_eq!(caps.to_features(), vec!["host-candela".to_string()]);
 
         // Audio + fetch markers flip inference ON.
         std::fs::write(

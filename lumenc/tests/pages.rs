@@ -241,7 +241,11 @@ fn auto_scratch_dir() -> PathBuf {
     ));
     std::fs::create_dir_all(&dir).unwrap();
     // No `[pages]` block: routing is entirely default-driven.
-    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
+    )
+    .unwrap();
     std::fs::write(
         dir.join("layout.lmn"),
         r#"<root>

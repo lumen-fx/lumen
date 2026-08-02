@@ -7,21 +7,25 @@ everything else is optional and resolves relative to that directory.
 my-app/
 |-- main.lmn        # required - markup root
 |-- main.css        # optional - styling
-|-- main.rhai       # optional - scripting
+|-- main.cdl        # optional - candela script
 |-- lumen.toml      # optional - per-app config
 |-- icons/          # optional - image assets, resolved relative to main.lmn
 `-- assets/         # any extra dirs listed in [asset_roots]
 ```
 
+The script file is `.cdl` for candela, the language these docs use
+throughout. Rhai (`.rhai`) and Lua (`.lua`) scripts work the same way and
+expose the same builtins; `[script] engine` in `lumen.toml` picks which
+host runs them.
+
 The compiler reads:
 
 1. `lumen.toml` if it exists (otherwise defaults).
 2. The entry markup file - `[app] entry = "main.lmn"` by default.
-3. Any `<script src="...rhai" />` referenced from markup, plus
-   `main.rhai` if present.
-4. `<link rel="stylesheet" href="..." />` is not yet supported;
-   stylesheets are picked up implicitly: if `main.css` is next to
-   the entry file, it's applied.
+3. Any inline `<script>` body, then every file named by a
+   `<script src="..." />` tag, concatenated into one program.
+4. `main.css`, if it sits next to the entry file. Additional sheets come
+   in through `@import "..."` from that file.
 
 ## `lumen.toml`
 
@@ -29,6 +33,9 @@ The compiler reads:
 [app]
 entry = "main.lmn"
 id    = "com.example.myapp"
+
+[script]
+engine = "candela"
 
 [window]
 title          = "My app"
@@ -53,8 +60,9 @@ scene_fragments = 256
 paths = ["icons", "../shared"]
 ```
 
-Every key is optional. CLI flags override config values. The
-full surface is documented in [Per-app config](../authoring/lumen-toml.md).
+Every key is optional; an app that declares no `[script] engine` runs its
+scripts on the Rhai host. CLI flags override config values. The full
+surface is documented in [Per-app config](../authoring/lumen-toml.md).
 
 Unknown keys are rejected (`deny_unknown_fields`) so typos surface as
 parse errors rather than silent no-ops.
@@ -65,31 +73,34 @@ parse errors rather than silent no-ops.
 |---|---|
 | `main.lmn` | Re-parse + re-spawn, preserving stateful components by `LumenId`. Text input cursor, toggle / slider state, scroll position survive. |
 | `main.css` | Re-apply styling. A class-invalidation set fast-rejects no-op class flips. |
-| `main.rhai` | `RhaiHost::replace_ast` swaps the AST and keeps the live `Scope`, so signals + ArraySignals + handler registrations survive. |
+| `main.cdl` | Compile the new source, then swap it in. Signals and handler registrations survive; a source that fails to compile leaves the running script untouched. |
 | `lumen.toml` | Read once at startup. Restart `lumenc run` to pick up changes. |
 | Assets in `[asset_roots]` | Image cache invalidates on next decode pull; `set_src(id, path)` re-resolves through the configured roots. |
 
-`lumenc run` polls the modification time of the entry markup, its
-`main.css`, and every referenced `.rhai` file once per tick. When a
-timestamp changes it reloads only the affected path; unchanged ticks
-cost one `stat` per watched file and nothing else.
+`lumenc run` watches the entry markup, its `main.css`, every script it
+references, and every included or imported file. A change wakes the loop
+for one tick and reloads only the affected path. Set
+`LUMEN_HOT_RELOAD_POLL=1` to fall back to mtime polling where a
+file-system watcher is unavailable.
 
 ## Window-state persistence
 
 With `[window] remember_state = true`, Lumen saves
 `(position, size, maximized)` to
-`<state_dir>/<app-id>/window-state.toml` on close and restores it on
-next launch.
+`<state_dir>/lumen/<app-id>/window-state.toml` on close and restores it
+on next launch.
 
-`<state_dir>` resolves to the OS-standard local data dir:
+`<state_dir>` resolves to the OS-standard per-user state dir:
 
 | OS | Path |
 |---|---|
-| Linux | `~/.local/share/<app-id>/window-state.toml` |
-| macOS | `~/Library/Application Support/<app-id>/window-state.toml` |
-| Windows | `%APPDATA%\<app-id>\window-state.toml` |
+| Linux | `$XDG_STATE_HOME`, else `~/.local/state` |
+| macOS | `~/Library/Application Support` |
+| Windows | `%LOCALAPPDATA%` |
 
-`<app-id>` is `[app] id`, falling back to the app directory name.
+`<app-id>` is `[app] id`, falling back to the app directory name. When no
+per-user state dir is available (a container without `$HOME`, say),
+`remember_state` does nothing.
 
 ## Asset resolution
 
@@ -103,14 +114,8 @@ all resolve relative paths through the same lookup:
 Hits short-circuit, so an `icons/sun.png` in the app dir wins over a
 sibling file in `../shared/icons/sun.png`.
 
-## Where the FFI / multi-window stories land
+## What lives outside the app directory
 
-Currently *outside* the per-app directory:
-
-- The C-ABI lives in `lumen-ffi` (workspace member). See the
-  [FFI guide](../reference/ffi.md).
-- Multi-window is on the roadmap (entity-subgraph-per-window). Today an
-  app is one window.
-
-When those land they layer on top of this directory shape - no
-incompatible changes planned.
+- The C-ABI, for embedding Lumen in a C, C++, Python, or Rust host. See
+  the [FFI guide](../reference/ffi.md).
+- Multi-window is on the roadmap. Today an app is one window.

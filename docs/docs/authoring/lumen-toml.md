@@ -1,9 +1,7 @@
 # Per-app config (`lumen.toml`)
 
 The runtime reads `<app-dir>/lumen.toml` once at startup. Every key is
-optional and CLI flags override config. Parser:
-[`lumenc/src/config.rs`](https://github.com/lumen-ui/lumen/blob/main/lumenc/src/config.rs)
-(`LumenToml`).
+optional and CLI flags override config.
 
 Unknown keys are rejected (`deny_unknown_fields`) so typos surface as
 parse errors instead of silent no-ops.
@@ -15,10 +13,18 @@ parse errors instead of silent no-ops.
 entry = "main.lmn"
 id    = "com.example.myapp"
 
+[pages]
+entry   = "index"
+enabled = true
+include = ["index.lmn", "settings.lmn"]
+
 [window]
 title          = "My App"
 size           = [960, 720]
 remember_state = false
+
+[script]
+engine = "candela"
 
 [skin]
 name = "default"
@@ -37,11 +43,21 @@ scene_fragments = 256
 [asset_roots]
 paths = ["icons", "../shared"]
 
+[runtime]
+audio      = true
+mcp        = false
+hot_reload = false
+threads    = 2
+
 [capabilities]           # compile-time trim toggles for `bundle --static`
 audio      = false
 http-fetch = false
 mcp        = false
 async      = false
+
+[signals]                # typed schema for `lumenc lint --signals`
+count = "i64"
+theme = "string"
 ```
 
 ## `[app]`
@@ -50,6 +66,17 @@ async      = false
 |---|---|---|---|
 | `entry` | string | `"main.lmn"` | Markup entry filename relative to the app dir. |
 | `id` | string | app dir name | Stable identifier - Reverse-DNS recommended (`"com.example.myapp"`). Used as the per-app state directory (window state, future plugin caches). |
+
+## `[pages]`
+
+File-based navigation. Every `.lmn` file in the app dir is a page keyed by
+its filename stem; these keys pin the parts an app wants fixed.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `entry` | string | `"index"` | Home page key. Falls back to the `[app] entry` stem, then `main`. |
+| `enabled` | bool | auto | Force multi-page on or off. When absent, multi-page turns on as soon as more than one page file is present. |
+| `include` | `[string]` | auto | Explicit ordered page list. When set, only these files are pages. |
 
 ## `[window]`
 
@@ -66,6 +93,28 @@ State path resolution:
 | Linux | `~/.local/share/<app-id>/window-state.toml` |
 | macOS | `~/Library/Application Support/<app-id>/window-state.toml` |
 | Windows | `%APPDATA%\<app-id>\window-state.toml` |
+
+## `[script]`
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `engine` | string | `"rhai"` | Which script host runs the app's scripts: `"candela"`, `"rhai"`, or `"lua"`. Matched case-insensitively; an unrecognised value falls back to Rhai. |
+
+```toml
+[script]
+engine = "candela"
+```
+
+Declare the engine whenever the app scripts in candela or Lua. A run with no
+`[script]` block uses the Rhai host.
+
+`lumenc bundle --static` compiles exactly one host into the binary. It takes
+that host from `[script] engine` when the key is present, and otherwise infers
+it from the app's script files: a `.cdl` file selects candela, a `.lua` file
+selects Lua, and anything else leaves the always-compiled Rhai host. Setting the
+key explicitly is the way to be sure which host a bundle carries.
+
+See [Scripting](./scripting.md) for the surface each host exposes.
 
 ## `[skin]`
 
@@ -144,35 +193,43 @@ to `<image src>`, `set_src(id, path)`, and `tray_icon(id, path, ...)`.
 paths = ["icons", "../shared/icons", "/var/lib/myapp/themes"]
 ```
 
-## `[capabilities]`
+## `[runtime]`
 
-Per-app **compile-time** subsystem trim toggles for the static
-`lumenc bundle --static` build (runtime tree-shaking, Part B). Unlike
-`[runtime]` - which gates *initialization* inside the always-full shared
-runtime - `[capabilities]` selects the cargo *feature set* the per-app static
-seam (`lumen-ffi`) is compiled with, so an unused subsystem's crate is dropped
-from the binary entirely.
-
-These keys affect ONLY `lumenc bundle --static`. The shared, dlopen'd
-`liblumen_ffi` cdylib and the dev `lumenc run` path always ship every
-subsystem, so a plain `lumenc run` ignores this section.
+Startup overrides for the subsystems the runtime otherwise decides on its own.
+Every key is optional; leaving one out keeps the automatic behaviour.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `audio` | bool | inferred | Include the audio subsystem (rodio / cpal / symphonia). `None` = infer from `audio_*` builtins / audio-file references. |
-| `http-fetch` | bool | inferred | Include the scripts' HTTP `fetch()` builtin (ureq + rustls + ring). `None` = infer from a `fetch(` call. |
-| `mcp` | bool | `false` | Include the MCP introspection server. Dev-only; never inferred into a release bundle. |
-| `async` | bool | `false` | Include the async (tokio) bridge. The markup runtime never installs it itself. |
+| `audio` | bool | auto | Force the audio subsystem on or off. Auto-detects from app usage. |
+| `mcp` | bool | auto | Force the MCP introspection server on or off. Auto means on for an interactive run, off for a headless or bounded one. |
+| `hot_reload` | bool | auto | Force the source watcher on or off. Auto means on only for an interactive run from source. |
+| `threads` | usize | `min(cores, 4)` | Worker-thread budget. The `LUMEN_THREADS` env var wins over this value. |
 
-Every field is optional. `None` lets `lumenc` **infer** the capability from a
-bounded source scan; an explicit value always wins. Inference is
-**conservative**: a subsystem is inferred OFF only on a reliable *unused*
-signal - anything ambiguous forces it ON.
+These gate initialization inside the full runtime. To drop a subsystem from a
+binary entirely, use `[capabilities]` below.
 
-The single compiled script host is selected by `[script] engine` (or inferred
-from the app's script file extensions: a `.lua` file -> the Lua host, a `.cdl`
-file -> the candela host), not here. Rhai is the always-compiled default host,
-so a Rhai app adds no host feature.
+## `[capabilities]`
+
+Which subsystems a static `lumenc bundle --static` binary carries. A subsystem
+turned off here is left out of the binary rather than merely left uninitialised,
+which is how a bundled app stays small.
+
+These keys apply only to `lumenc bundle --static`. A plain `lumenc run` ships
+every subsystem and ignores this section.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `audio` | bool | inferred | Include the audio subsystem. Inferred from `audio_*` calls and audio-file references. |
+| `http-fetch` | bool | inferred | Include the scripts' HTTP `fetch()` builtin. Inferred from a `fetch(` call. |
+| `mcp` | bool | `false` | Include the MCP introspection server. A development capability, never inferred into a release bundle. |
+| `async` | bool | `false` | Include the async (tokio) bridge. |
+
+Every field is optional; leaving one out lets `lumenc` infer the capability from
+a bounded source scan, and an explicit value always wins. Inference is
+conservative: a subsystem drops out only on a reliable unused signal, and
+anything ambiguous keeps it in.
+
+The script host a bundle compiles is selected by `[script] engine`, not here.
 
 ```toml
 [capabilities]
@@ -180,6 +237,25 @@ audio      = false   # explicit wins over inference
 http-fetch = false
 mcp        = false
 async      = false
+```
+
+## `[signals]`
+
+An optional typed schema for your signals, read by `lumenc lint --signals` to
+flag untyped writes and type mismatches. Each entry names a signal and its
+expected type: `i64`, `f64`, `bool`, `string`, `color`, `vec2`, an inline table
+for a record, or an explicit array record. Signals you leave out are not errors;
+they just get a weaker lint.
+
+```toml
+[signals]
+count = "i64"
+theme = "string"
+user  = { name = "string", email = "string" }
+
+[signals.users]
+type   = "array"
+fields = { id = "i64", name = "string" }
 ```
 
 ## CLI overrides
@@ -200,6 +276,9 @@ the most common:
 entry = "main.lmn"
 id    = "com.example.lumen-weather"
 
+[script]
+engine = "candela"
+
 [window]
 title          = "Lumen Weather"
 size           = [800, 600]
@@ -207,9 +286,6 @@ remember_state = true
 
 [skin]
 name = "default"
-
-[profile]
-mode = "off"
 
 [perf]
 images_mb     = 32        # weather icons are small; trim cache
@@ -219,15 +295,12 @@ shape_entries = 1024      # forecast strings vary by hour
 paths = ["icons"]
 ```
 
-This is the actual config shipped by [`apps/weather`](https://github.com/lumen-ui/lumen/tree/main/apps/weather).
-The `set_src("hero-icon", "icons/...")` Rhai call works because
-`icons/` is a configured asset root.
+The `lumen::set_src("hero-icon", "icons/sun.png")` call in the script resolves
+because `icons/` is a configured asset root.
 
 ## Reading config from script
 
-The current Rhai surface has no `cfg(...)` accessor - config is a
-runtime concern, not an authoring concern. If your script needs a
-runtime knob, drive it through a signal and seed the signal in
-`on_start()`. For environment-specific config that genuinely needs
-to live outside the script, use OS env vars and read them from a
-plugin written in Rust.
+There is no `cfg(...)` accessor: config is a runtime concern, not an authoring
+concern. If your script needs a runtime knob, drive it through a signal and seed
+the signal in `on_start()`. For environment-specific values that have to live
+outside the script, read OS env vars from a plugin written in Rust.

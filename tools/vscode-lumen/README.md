@@ -1,6 +1,6 @@
 # Lumen - VS Code extension
 
-First-class editor support for the [Lumen](https://github.com/lumen-ui/lumen)
+First-class editor support for the [Lumen](https://github.com/lumen-fx/lumen)
 UI framework: `.lmn` markup, Lumen CSS, and `.rhai` scripts, plus one-click
 `lumenc` workflows and an in-editor **headless live preview**.
 
