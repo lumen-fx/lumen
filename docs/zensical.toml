@@ -33,7 +33,7 @@ nav = [
   {"Authoring" = [
      "authoring/tags.md",
      "authoring/css.md",
-     "authoring/rhai-builtins.md",
+     "authoring/scripting.md",
      "authoring/templates.md",
      "authoring/animations.md",
      "authoring/lumen-toml.md",
