@@ -345,16 +345,30 @@ impl TextGeometry {
     /// Visual hit-test: run-local pointer `(x, y)` -> logical byte. Picks the
     /// visual line by y, then the nearest cluster edge by x within that line
     /// (BiDi-correct). Past-end snaps to the line's trailing byte.
+    ///
+    /// A line that produced no glyphs - a blank line between two
+    /// paragraphs - has no entry in `lines`, so the entry cannot be
+    /// reached by `y / line_height`: that counts every visual line while
+    /// `lines` counts only the ones that drew something, and the two
+    /// diverge by the number of blank lines above the pointer. The line
+    /// is matched on its baseline instead. A `y` over a blank line
+    /// resolves to the end of the last line above it.
     pub fn x_to_byte(&self, x: f32, y: f32) -> usize {
         if self.lines.is_empty() {
             return 0;
         }
-        let line = if self.metrics.line_height > 0.0 {
-            ((y / self.metrics.line_height).floor().max(0.0) as usize).min(self.lines.len() - 1)
+        let l = if self.metrics.line_height > 0.0 {
+            // Baseline of the visual line the pointer is over, counting
+            // blank lines - which is what the glyph y offsets encode.
+            let want = (y / self.metrics.line_height).floor().max(0.0) * self.metrics.line_height;
+            self.lines
+                .iter()
+                .rev()
+                .find(|l| l.baseline_y <= want + 0.5)
+                .unwrap_or(&self.lines[0])
         } else {
-            0
+            &self.lines[0]
         };
-        let l = &self.lines[line];
         nearest_edge_byte(&l.edges, x).unwrap_or(l.byte_lo as usize)
     }
 
