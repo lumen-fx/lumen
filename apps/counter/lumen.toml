@@ -1,0 +1,5 @@
+# This app keeps its script inline in `main.lmn`, so no file extension names
+# the language. Declare the host: an app with no script file is read as
+# candela, and this script is Rhai.
+[script]
+engine = "rhai"

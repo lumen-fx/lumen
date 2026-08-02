@@ -55,7 +55,11 @@ mod pipeline_integration_tests {
         std::fs::create_dir_all(&dir).unwrap();
         // Disable the MCP server so the test doesn't spawn a thread that
         // binds a TCP port (parallel tests would collide on 7878).
-        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+        std::fs::write(
+            dir.join("lumen.toml"),
+            "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
+        )
+        .unwrap();
 
         let opts = RunOptions::new(&dir)
             .with_parser(lumenc::default_parser())
@@ -479,7 +483,11 @@ mod pipeline_integration_tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+        std::fs::write(
+            dir.join("lumen.toml"),
+            "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
+        )
+        .unwrap();
         std::fs::write(dir.join("main.lmn"), markup).unwrap();
         dir
     }
@@ -615,7 +623,11 @@ mod feel_wave_tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+        std::fs::write(
+            dir.join("lumen.toml"),
+            "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
+        )
+        .unwrap();
         let opts = RunOptions::new(&dir)
             .with_parser(lumenc::default_parser())
             .with_markup(markup.to_string())
@@ -766,7 +778,11 @@ mod virtualization_tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+        std::fs::write(
+            dir.join("lumen.toml"),
+            "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
+        )
+        .unwrap();
         let markup = r#"
 <root>
   <scroll height="600" width="800">
@@ -1093,7 +1109,11 @@ mod aot_roundtrip_tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         // MCP off so parallel tests don't collide on a TCP port.
-        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+        std::fs::write(
+            dir.join("lumen.toml"),
+            "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
+        )
+        .unwrap();
         std::fs::write(dir.join("main.lmn"), markup).unwrap();
         std::fs::write(dir.join("main.css"), css).unwrap();
         dir
