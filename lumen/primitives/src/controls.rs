@@ -25,11 +25,38 @@ pub const TOGGLE_CHECKED_BG: Color = Color::rgb(0.20, 0.66, 0.70);
 /// Fill for the toggle knob / slider thumb child tiles.
 pub const KNOB_FILL: Color = Color::rgb(0.92, 0.92, 0.94);
 
-/// Gap between the toggle knob and the track edge, in logical pixels.
+/// Fallback gap between the toggle knob and the track edge, in logical
+/// pixels, used when the entity carries no [`KnobGeometry`] (e.g. no CSS
+/// `knob-inset` authored).
 pub const KNOB_INSET: f32 = 4.0;
 
-/// Slider thumb diameter in logical pixels.
+/// Fallback slider thumb diameter in logical pixels, used when the
+/// entity carries no [`KnobGeometry`] (e.g. no CSS `thumb-size`
+/// authored).
 pub const THUMB_SIZE: f32 = 16.0;
+
+/// Knob and thumb geometry, resolved from CSS at spawn. Sits on the
+/// `<toggle>` / `<switch>` track entity (consulted via [`KnobGeometry::inset`])
+/// and on the `<slider>` track entity (consulted via
+/// [`KnobGeometry::thumb_size`]). An entity without this component uses
+/// [`KnobGeometry::default`], which reproduces today's hardcoded geometry
+/// exactly.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct KnobGeometry {
+    /// Gap between the knob and the track edge, in logical pixels.
+    pub inset: f32,
+    /// Slider thumb diameter, in logical pixels.
+    pub thumb_size: f32,
+}
+
+impl Default for KnobGeometry {
+    fn default() -> Self {
+        Self {
+            inset: KNOB_INSET,
+            thumb_size: THUMB_SIZE,
+        }
+    }
+}
 
 /// Per-toggle track fills, resolved at spawn from markup / CSS.
 /// [`sync_toggle_visuals`] swaps [`Visuals::fill`] between the two on
@@ -267,19 +294,22 @@ fn clamp_range(v: f32, lo: f32, hi: f32) -> f32 {
 
 /// Map a pointer x (window space) to a `[0, 1]` slider fraction using the
 /// SAME reduced range the thumb is drawn over. [`sync_slider_thumb`]
-/// places the thumb's left edge across `size.x - THUMB_SIZE`, so the
-/// thumb centre travels `[THUMB_SIZE/2, size.x - THUMB_SIZE/2]`. Mapping
+/// places the thumb's left edge across `size.x - thumb_size`, so the
+/// thumb centre travels `[thumb_size/2, size.x - thumb_size/2]`. Mapping
 /// the pointer through the full track width instead makes a press on the
-/// thumb jump the value by up to `THUMB_SIZE/2` worth of range (the
+/// thumb jump the value by up to `thumb_size/2` worth of range (the
 /// "volume slider jumps when you grab it" bug); the two only agreed at
 /// `frac = 0.5`. Subtracting the half-thumb and dividing by the reduced
-/// range keeps a stationary grab value-neutral.
-fn slider_frac(pointer_x: f32, absolute_x: f32, size_x: f32) -> f32 {
-    let track = size_x - THUMB_SIZE;
+/// range keeps a stationary grab value-neutral. `thumb_size` is the
+/// entity's resolved [`KnobGeometry::thumb_size`] (or [`THUMB_SIZE`] when
+/// the entity carries no component), so this stays in lockstep with
+/// wherever [`sync_slider_thumb`] actually draws the thumb.
+fn slider_frac(pointer_x: f32, absolute_x: f32, size_x: f32, thumb_size: f32) -> f32 {
+    let track = size_x - thumb_size;
     if track <= 0.0 {
         return 0.0;
     }
-    (((pointer_x - absolute_x) - THUMB_SIZE / 2.0) / track).clamp(0.0, 1.0)
+    (((pointer_x - absolute_x) - thumb_size / 2.0) / track).clamp(0.0, 1.0)
 }
 
 /// Click-anywhere-on-track: set [`SliderValue`] based on where in the
@@ -289,7 +319,7 @@ fn slider_frac(pointer_x: f32, absolute_x: f32, size_x: f32) -> f32 {
 /// from there.
 pub fn set_slider_on_click(
     mut clicks: MessageReader<ClickEvent>,
-    mut q: Query<(&mut SliderValue, &Transform)>,
+    mut q: Query<(&mut SliderValue, &Transform, Option<&KnobGeometry>)>,
     parents: Query<&ChildOf>,
     mut out: MessageWriter<SliderChanged>,
 ) {
@@ -297,8 +327,9 @@ pub fn set_slider_on_click(
         let Some(target) = resolve_control(click.entity, &parents, |e| q.contains(e)) else {
             continue;
         };
-        if let Ok((mut s, t)) = q.get_mut(target) {
-            let frac = slider_frac(click.position.x, t.absolute.x, t.size.x);
+        if let Ok((mut s, t, geo)) = q.get_mut(target) {
+            let thumb_size = geo.copied().unwrap_or_default().thumb_size;
+            let frac = slider_frac(click.position.x, t.absolute.x, t.size.x, thumb_size);
             let new = s.min + frac * (s.max - s.min);
             if new != s.value {
                 s.value = new;
@@ -375,7 +406,7 @@ pub fn move_slider_on_keys(
 /// resolve to the parent slider (see [`resolve_control`]).
 pub fn set_slider_on_drag(
     mut drags: MessageReader<DragMoveEvent>,
-    mut q: Query<(&mut SliderValue, &Transform)>,
+    mut q: Query<(&mut SliderValue, &Transform, Option<&KnobGeometry>)>,
     parents: Query<&ChildOf>,
     mut out: MessageWriter<SliderChanged>,
 ) {
@@ -383,8 +414,9 @@ pub fn set_slider_on_drag(
         let Some(target) = resolve_control(d.entity, &parents, |e| q.contains(e)) else {
             continue;
         };
-        if let Ok((mut s, t)) = q.get_mut(target) {
-            let frac = slider_frac(d.position.x, t.absolute.x, t.size.x);
+        if let Ok((mut s, t, geo)) = q.get_mut(target) {
+            let thumb_size = geo.copied().unwrap_or_default().thumb_size;
+            let frac = slider_frac(d.position.x, t.absolute.x, t.size.x, thumb_size);
             let new = s.min + frac * (s.max - s.min);
             if new != s.value {
                 s.value = new;
@@ -559,7 +591,7 @@ pub fn sync_toggle_visuals(
         ),
         (Changed<Toggleable>, Without<ToggleKnob>),
     >,
-    parents: Query<(&Toggleable, &Transform)>,
+    parents: Query<(&Toggleable, &Transform, Option<&KnobGeometry>)>,
     mut knobs: Query<
         (Entity, &ChildOf, &mut Style, &mut Visuals),
         (With<ToggleKnob>, Without<Toggleable>),
@@ -582,17 +614,18 @@ pub fn sync_toggle_visuals(
         }
     }
     for (knob_e, child_of, mut style, mut vis) in &mut knobs {
-        let Ok((t, tr)) = parents.get(child_of.parent()) else {
+        let Ok((t, tr, geo)) = parents.get(child_of.parent()) else {
             continue;
         };
         if tr.size.x <= 0.0 || tr.size.y <= 0.0 {
             continue;
         }
-        let knob = (tr.size.y - 2.0 * KNOB_INSET).max(2.0);
+        let inset = geo.copied().unwrap_or_default().inset;
+        let knob = (tr.size.y - 2.0 * inset).max(2.0);
         let left = if t.checked {
-            (tr.size.x - knob - KNOB_INSET).max(KNOB_INSET)
+            (tr.size.x - knob - inset).max(inset)
         } else {
-            KNOB_INSET
+            inset
         };
         let radius = knob / 2.0;
         if vis.radius != radius {
@@ -602,12 +635,12 @@ pub fn sync_toggle_visuals(
         if style.width != size
             || style.height != size
             || style.inset.left != left
-            || style.inset.top != KNOB_INSET
+            || style.inset.top != inset
         {
             style.width = size;
             style.height = size;
             style.inset.left = left;
-            style.inset.top = KNOB_INSET;
+            style.inset.top = inset;
             commands.entity(knob_e).insert(DirtyLayout);
         }
     }
@@ -620,24 +653,25 @@ pub fn sync_toggle_visuals(
 /// so change detection and relayout stay quiet on idle frames.
 pub fn sync_slider_thumb(
     mut commands: Commands,
-    parents: Query<(&SliderValue, &Transform)>,
+    parents: Query<(&SliderValue, &Transform, Option<&KnobGeometry>)>,
     mut thumbs: Query<(Entity, &ChildOf, &mut Style), With<SliderThumb>>,
 ) {
     for (thumb_e, child_of, mut style) in &mut thumbs {
-        let Ok((s, tr)) = parents.get(child_of.parent()) else {
+        let Ok((s, tr, geo)) = parents.get(child_of.parent()) else {
             continue;
         };
         if tr.size.x <= 0.0 {
             continue;
         }
+        let thumb_size = geo.copied().unwrap_or_default().thumb_size;
         let denom = s.max - s.min;
         let frac = if denom.abs() <= f32::EPSILON {
             0.0
         } else {
             ((s.value - s.min) / denom).clamp(0.0, 1.0)
         };
-        let left = frac * (tr.size.x - THUMB_SIZE).max(0.0);
-        let top = ((tr.size.y - THUMB_SIZE) / 2.0).max(0.0);
+        let left = frac * (tr.size.x - thumb_size).max(0.0);
+        let top = ((tr.size.y - thumb_size) / 2.0).max(0.0);
         if (style.inset.left - left).abs() > 0.25 || (style.inset.top - top).abs() > 0.25 {
             style.inset.left = left;
             style.inset.top = top;
@@ -776,7 +810,7 @@ mod slider_key_tests {
     }
 
     /// A legit descending slider (`<slider min="100" max="0">`) driven by
-    /// Arrow/Home/End keys must NOT panic - `f32::clamp` asserts
+    /// Arrow/Home/End keys must not panic - `f32::clamp` asserts
     /// `min <= max` - and the value must stay inside `[0, 100]`.
     #[test]
     fn inverted_range_keys_do_not_panic_and_clamp() {
@@ -851,6 +885,152 @@ mod slider_key_tests {
         assert!(
             v.is_finite() && (0.0..=100.0).contains(&v),
             "inverted-range wheel value escaped [0,100]: {v}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod knob_geometry_tests {
+    //! [`KnobGeometry`] plumbing: an entity with no component reproduces
+    //! today's hardcoded [`KNOB_INSET`] / [`THUMB_SIZE`] geometry exactly;
+    //! a CSS-supplied component (as the spawn agent would insert from
+    //! `knob-inset` / `thumb-size`) moves the knob / thumb instead.
+    use super::*;
+    use bevy_ecs::system::RunSystemOnce;
+    use glam::Vec2;
+
+    #[test]
+    fn slider_frac_uses_the_given_thumb_size() {
+        // Track 200 wide; default 16px thumb vs. a wider 40px thumb should
+        // map the same pointer x to different fractions.
+        let default = slider_frac(100.0, 0.0, 200.0, THUMB_SIZE);
+        let wider = slider_frac(100.0, 0.0, 200.0, 40.0);
+        assert!(
+            (default - 0.5).abs() < 1e-6,
+            "pointer at the track centre with the default thumb -> frac 0.5"
+        );
+        assert!(
+            (wider - 0.5).abs() < 1e-6,
+            "pointer at the track centre is still frac 0.5 regardless of \
+             thumb size (the reduced range stays centred)"
+        );
+        // Off-centre: the wider thumb's reduced range is smaller, so the
+        // same pointer x maps to a different fraction.
+        let default_off = slider_frac(60.0, 0.0, 200.0, THUMB_SIZE);
+        let wider_off = slider_frac(60.0, 0.0, 200.0, 40.0);
+        assert!(
+            (default_off - wider_off).abs() > 1e-3,
+            "a different thumb_size must change the mapping off-centre"
+        );
+    }
+
+    fn spawn_toggle(
+        world: &mut World,
+        checked: bool,
+        geo: Option<KnobGeometry>,
+    ) -> (Entity, Entity) {
+        let mut track = world.spawn((
+            Toggleable { checked },
+            Transform::new(Vec2::ZERO, Vec2::new(48.0, 24.0)),
+        ));
+        if let Some(geo) = geo {
+            track.insert(geo);
+        }
+        let track = track.id();
+        let knob = world
+            .spawn((
+                ToggleKnob,
+                Style::default(),
+                Visuals::default(),
+                ChildOf(track),
+            ))
+            .id();
+        (track, knob)
+    }
+
+    fn knob_inset_of(world: &World, knob: Entity) -> f32 {
+        world.get::<Style>(knob).unwrap().inset.left
+    }
+
+    #[test]
+    fn toggle_knob_with_no_geometry_uses_the_default_inset() {
+        let mut world = World::new();
+        let (_, knob) = spawn_toggle(&mut world, false, None);
+        world.run_system_once(sync_toggle_visuals).unwrap();
+        assert_eq!(
+            knob_inset_of(&world, knob),
+            KNOB_INSET,
+            "no KnobGeometry -> today's hardcoded inset"
+        );
+    }
+
+    #[test]
+    fn toggle_knob_with_custom_geometry_uses_the_authored_inset() {
+        let mut world = World::new();
+        let custom = KnobGeometry {
+            inset: 10.0,
+            thumb_size: THUMB_SIZE,
+        };
+        let (_, knob) = spawn_toggle(&mut world, false, Some(custom));
+        world.run_system_once(sync_toggle_visuals).unwrap();
+        assert_eq!(
+            knob_inset_of(&world, knob),
+            10.0,
+            "a CSS-supplied inset moves the knob off the default position"
+        );
+    }
+
+    fn spawn_slider_track(
+        world: &mut World,
+        value: f32,
+        geo: Option<KnobGeometry>,
+    ) -> (Entity, Entity) {
+        let mut track = world.spawn((
+            SliderValue {
+                value,
+                min: 0.0,
+                max: 100.0,
+                step: None,
+            },
+            Transform::new(Vec2::ZERO, Vec2::new(200.0, 24.0)),
+        ));
+        if let Some(geo) = geo {
+            track.insert(geo);
+        }
+        let track = track.id();
+        let thumb = world
+            .spawn((SliderThumb, Style::default(), ChildOf(track)))
+            .id();
+        (track, thumb)
+    }
+
+    fn thumb_left_of(world: &World, thumb: Entity) -> f32 {
+        world.get::<Style>(thumb).unwrap().inset.left
+    }
+
+    #[test]
+    fn slider_thumb_with_no_geometry_uses_the_default_size() {
+        let mut world = World::new();
+        let (_, thumb) = spawn_slider_track(&mut world, 100.0, None);
+        world.run_system_once(sync_slider_thumb).unwrap();
+        // value = max -> thumb pinned at the right edge: 200 - THUMB_SIZE.
+        assert_eq!(thumb_left_of(&world, thumb), 200.0 - THUMB_SIZE);
+    }
+
+    #[test]
+    fn slider_thumb_with_custom_geometry_uses_the_authored_size() {
+        let mut world = World::new();
+        let custom = KnobGeometry {
+            inset: KNOB_INSET,
+            thumb_size: 40.0,
+        };
+        let (_, thumb) = spawn_slider_track(&mut world, 100.0, Some(custom));
+        world.run_system_once(sync_slider_thumb).unwrap();
+        // value = max -> thumb pinned at the right edge: 200 - 40.
+        assert_eq!(
+            thumb_left_of(&world, thumb),
+            160.0,
+            "a CSS-supplied thumb_size changes the thumb's rest position"
         );
     }
 }

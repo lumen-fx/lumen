@@ -142,7 +142,7 @@ impl SimulateQueue {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SimulateKind {
     /// Move the OS-level pointer reading to a new logical-pixel coordinate.
-    /// Does NOT fire press/release - useful for hover-only tests.
+    /// Does not fire press/release - useful for hover-only tests.
     PointerMove {
         /// X in window coordinates.
         x: f32,

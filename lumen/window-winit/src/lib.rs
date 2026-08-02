@@ -162,7 +162,7 @@ impl Default for WinitOptions {
 /// `RedrawRequested` handler until the compositor's vsync, so by the time
 /// `about_to_wait` runs the deadline has already passed and the redraw is
 /// requested immediately - the pacing is a no-op and vsync stays the sole
-/// clock. It only bites when `present()` does NOT block: a headless /
+/// clock. It only bites when `present()` does not block: a headless /
 /// software / no-refresh compositor (e.g. `weston --backend=headless`),
 /// where the self-re-armed loop would otherwise spin at thousands of Hz
 /// pegging a core and producing meaningless sub-millisecond "frame"
@@ -218,7 +218,7 @@ pub struct RedrawScheduler {
     pub pending: bool,
     /// `true` when the window currently has keyboard focus. Updated by
     /// the `WindowEvent::Focused` arm. Tracked for the `WindowFocused`
-    /// message and the focus-return repaint; deliberately NOT part of the
+    /// message and the focus-return repaint; deliberately not part of the
     /// pump gate (see [`RedrawScheduler::compute_paused`]).
     pub focused: bool,
     /// `true` when the window is fully occluded (covered by another
@@ -254,7 +254,7 @@ impl RedrawScheduler {
     /// Pure pump-gate decision: should the redraw loop park?
     ///
     /// Only occlusion parks the loop. `focused` is intentionally accepted
-    /// and ignored: the decision deliberately does NOT consider focus, so
+    /// and ignored: the decision deliberately does not consider focus, so
     /// a visible-but-unfocused window (the tiling-WM common case) keeps
     /// animating. Extracted as a pure fn so the focus-vs-visibility policy
     /// is unit-testable without a live event loop.
@@ -287,10 +287,10 @@ impl Plugin for WinitPlugin {
     fn build(self, app: &mut App) {
         app.add_message::<WindowFocused>();
         app.add_message::<WindowOccluded>();
-        // NOTE: `CloseRequest` is deliberately NOT registered here.
+        // NOTE: `CloseRequest` is deliberately not registered here.
         // `lumen_core::App::new` already registers it (close hooks must
         // work headless too), and `MessageRegistry::register_message` is
-        // NOT idempotent: a second registration pushes a second update
+        // not idempotent: a second registration pushes a second update
         // entry, the buffer then cycles twice per tick, and any
         // `CloseRequest` written by the backend before the veto tick is
         // dropped before Systems-stage readers (script `on_close`,
@@ -467,7 +467,7 @@ pub fn run(mut app: App, opts: WinitOptions) -> Result<(), WinitError> {
 
     // Install backend-side messages and the redraw scheduler before any
     // other system can read them - unless the embedder already added the
-    // plugin. The guard matters: `add_message` re-registration is NOT
+    // plugin. The guard matters: `add_message` re-registration is not
     // idempotent (each call adds another per-tick buffer update, so a
     // double-registered message type cycles twice per tick and drops
     // pre-tick writes before Systems-stage readers run).
@@ -631,7 +631,7 @@ struct GpuState {
     /// Rgba8Unorm intermediate (storage-binding compatible). Vello writes
     /// here; TextureBlitter samples it via [`intermediate_view_srgb`] which
     /// re-interprets the bytes as sRGB-encoded, so a final blit into an sRGB
-    /// surface format does NOT double-encode.
+    /// surface format does not double-encode.
     intermediate: wgpu::Texture,
     /// Linear view used by vello as a storage write target.
     intermediate_view_linear: wgpu::TextureView,
@@ -1283,7 +1283,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
             }
             WindowEvent::Focused(focused) => {
                 // Emit a `WindowFocused` message and track focus state.
-                // Focus does NOT pause the redraw pump: a visible-but-
+                // Focus does not pause the redraw pump: a visible-but-
                 // unfocused window (tiling WMs) must keep animating so the
                 // audio position pump / tweens / inertia advance while
                 // unfocused. `recompute_paused` therefore leaves `paused`
@@ -1379,7 +1379,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
     ///    `event_loop.exit()`.
     /// 2. Forward `RedrawScheduler.pending` to `Window::request_redraw`
     ///    only when the window is not paused (i.e. not occluded). Focus is
-    ///    NOT a factor - a visible-but-unfocused window keeps animating.
+    ///    not a factor - a visible-but-unfocused window keeps animating.
     ///    Replaces the pre-W1.8 "request_redraw at end of every event"
     ///    spinner; see [`RedrawScheduler`] doc comment for the Qt/GTK
     ///    parallel.
@@ -2278,7 +2278,7 @@ fn render_frame(
     // path reads `gpu.vello_scene` for submission.
     //
     // Hi-DPI: the Node IR stays in LOGICAL pixels end-to-end
-    // (`transform_extracted_to_nodes` does NOT pre-scale). The walker
+    // (`transform_extracted_to_nodes` does not pre-scale). The walker
     // scales every leaf *and clip shape* by `ctx.dpr` at emit time
     // (`WalkContext::new_with_dpr` below), producing physical-pixel
     // vello geometry that matches the surface texture.
@@ -2597,7 +2597,7 @@ fn try_spawn_xdg_color_scheme_listener(world: &mut World) {
 mod tests {
     use super::RedrawScheduler;
 
-    /// The pump-gate policy: only occlusion parks the loop. Focus is NOT a
+    /// The pump-gate policy: only occlusion parks the loop. Focus is not a
     /// factor, so a visible-but-unfocused window (Hyprland/sway, where an
     /// unfocused window is still fully on-screen) keeps animating. This is
     /// the "audio slider freeze while unfocused on a tiling WM" fix.
@@ -2635,7 +2635,7 @@ mod tests {
         // Focused + pending: unchanged from before the fix.
         assert!(scheduler(true, true, false).should_forward_redraw());
         // Nothing pending (idle) while unfocused-visible: stay damage-driven,
-        // do NOT busy-repaint an unchanging frame.
+        // do not busy-repaint an unchanging frame.
         assert!(!scheduler(false, false, false).should_forward_redraw());
         // Occluded / minimized: park even with work pending (battery win).
         assert!(!scheduler(true, false, true).should_forward_redraw());

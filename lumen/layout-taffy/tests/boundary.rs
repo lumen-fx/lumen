@@ -81,7 +81,7 @@ fn boundary_keeps_position_after_leaf_only_dirt() {
     let t0 = *app.world.get::<Transform>(boundary).unwrap();
     assert_eq!(t0.absolute.y, 50.0, "boundary sits below the toolbar");
 
-    // Mutate ONLY the leaf; propagation stops at the boundary.
+    // Mutate only the leaf; propagation stops at the boundary.
     app.world.get_mut::<Style>(leaf).unwrap().width = Length::Px(80.0);
     app.tick();
 
@@ -318,7 +318,7 @@ fn explicit_size_beats_image_intrinsic() {
 }
 
 /// Wave-6 T2 regression: `width: 100%` + explicit px height + margin
-/// (the counter app's `.tile`) must NOT collapse to a zero-size rect.
+/// (the counter app's `.tile`) must not collapse to a zero-size rect.
 /// Repro shape: column root -> scroll container -> tile children.
 #[test]
 fn percent_width_with_fixed_height_and_margin_is_not_zero() {

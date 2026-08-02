@@ -1,0 +1,61 @@
+/*
+ * lumen-skin-ua - the always-on user-agent stylesheet.
+ *
+ * Unlike default.css / macos.css / windows.css / linux.css, this one is
+ * never selected by name and can't be opted out of: `load_ir` folds it
+ * into the cascade for every app, skinned or not, at the lowest
+ * precedence - below any `<root skin="...">` sheet and below the app's
+ * own main.css. It is the sizing floor a bare, skinless app still gets,
+ * the same role a browser's built-in stylesheet plays.
+ *
+ * Every property here is an ordinary UA-origin default: a skin or app
+ * rule for the same property on the same element always wins, because
+ * this sheet's rules are numbered first in the combined cascade (see
+ * `run::loading::load_ir`), so an equal-specificity skin/author rule
+ * always sorts after it.
+ *
+ * Two defaults could not be expressed as plain rules here and stay in
+ * `lumen_runtime::spawn::apply_ua_style_defaults` instead - see that
+ * function's doc comment for why:
+ *   - `<switch>`'s `min-width` applies only when `width` is ALSO unset,
+ *     a cross-property condition CSS has no syntax for.
+ *   - `<input>` / `<textarea>` default to `overflow: hidden` only when
+ *     neither the `overflow` shorthand nor `overflow-x` / `overflow-y`
+ *     was authored anywhere; a plain `overflow-x` rule here would win
+ *     over an author's shorthand-only override instead of losing to it.
+ */
+
+root      { width: 100%; height: 100%; }
+title-bar { width: 100%; height: 32; }
+
+/* Tap-size floor only; width and height come from the measured label +
+   author padding. */
+button { min-height: 36; }
+
+/* The text buffer starts empty (no measurable content), so a bare
+   `<input>` / `<textarea>` needs a usable floor. Minimums, not fixed
+   sizes: typed text and author padding still grow it. */
+input, textarea { min-height: 24; min-width: 160; }
+
+/* No text to measure - the track is a fixed theme metric. */
+toggle { height: 36; min-width: 96; }
+/* Compact pill track (iOS / Material switch proportions), narrower
+   than the `<toggle>` slab. `min-width` lives in Rust - see the header
+   comment above. */
+switch { height: 28; }
+slider { height: 36; min-width: 160; }
+
+/* Tap-size floor for the whole row; the indicator + label supply the
+   intrinsic size. */
+checkbox, radio { min-height: 24; }
+
+/* Track fills its container by default (Qt/web progress); slim groove
+   height. */
+progress { width: 100%; height: 6; }
+
+/* Synthetic part children (`.checkbox-box` / `.radio-dot` /
+   `.progress-fill`): UA floors beneath the skins so a skinless app
+   still shows a usable indicator. `.progress-fill` width stays
+   runtime-driven (`sync_progress_fill`). */
+.checkbox-box, .radio-dot { width: 18; height: 18; }
+.progress-fill { height: 100%; }

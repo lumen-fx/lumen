@@ -550,7 +550,7 @@ mod tests {
         assert_eq!(msg.paths.len(), 1);
     }
 
-    /// Smoke test for the async pipeline that does NOT pop a real
+    /// Smoke test for the async pipeline that does not pop a real
     /// dialog: we simulate the spawned task's behaviour by pushing
     /// a `FileDialogResultCommand` directly onto the
     /// `AsyncCommandQueue` from a worker thread, then run a tick and

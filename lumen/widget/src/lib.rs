@@ -84,7 +84,7 @@ static REGISTERED_WIDGET_TAGS: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock
 ///
 /// Called by `Widget` derive output (`<Type>::register()`) at app
 /// startup, BEFORE the parser runs. Subsequent calls with the same tag
-/// are no-ops (the set is a [`HashSet`]). The supplied string MUST live
+/// are no-ops (the set is a [`HashSet`]). The supplied string must live
 /// for the lifetime of the process - passing a `&'static` literal is
 /// the expected pattern (the derive does this).
 pub fn register_widget_tag(tag: &'static str) {

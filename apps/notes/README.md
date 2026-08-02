@@ -33,16 +33,23 @@ cargo run -p lumenc -- run apps/notes
 
 `md.c` is a self-contained, single-line markdown classifier: headings
 (`#`..`###`), unordered list items, thematic breaks, indented code, and
-paragraphs. Build it next to the app before running:
+paragraphs. candela resolves the bare name `md` to `libmd.so` (Linux),
+`libmd.dylib` (macOS), or `md.dll` (Windows - no `lib` prefix there) in the
+app directory.
+
+None of those are committed - they're build artifacts, not source.
+`lumen.toml` declares a `[[hooks]]` entry per OS that compiles the library
+from `md.c` before the app runs (`lumenc run` fires it automatically; pass
+`--no-hooks` to skip it):
 
 ```
-cc -shared -fPIC -O2 -o apps/notes/libmd.so apps/notes/md.c   # Linux
+cc -shared -fPIC -O2 -o apps/notes/libmd.so apps/notes/md.c    # Linux
 cc -shared -fPIC -O2 -o apps/notes/libmd.dylib apps/notes/md.c # macOS
+cc -shared -O2 -o apps/notes/md.dll apps/notes/md.c            # Windows
 ```
 
-candela resolves the bare name `md` to `libmd.so` / `libmd.dylib` in the app
-directory. `libmd.so` is committed so the app runs without a separate build
-step.
+The Windows line assumes a MinGW-flavored `cc` (MSYS2 or MinGW-w64) is on
+`PATH`; MSVC users should point `run` at `cl /LD` instead.
 
 ## Design
 

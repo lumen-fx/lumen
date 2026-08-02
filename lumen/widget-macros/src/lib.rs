@@ -60,11 +60,11 @@
 //!   own. The derive only emits the `Widget` impl in that case.
 //! - `#[widget(prop)]` on a field - parse from the attribute bag in
 //!   `Widget::spawn`. Field type must implement [`std::str::FromStr`]
-//!   OR be a `String` (special-cased: copied verbatim).
+//!   or be a `String` (special-cased: copied verbatim).
 //! - `#[widget(state)]` on a field - leave at the struct's `Default`
 //!   value; never read from the attribute bag. Marker.
 //!
-//! ## What's NOT covered in v1
+//! ## What's not covered in v1
 //!
 //! - Per-widget system registration. Authors still call
 //!   `app.add_systems(...)` next to `app.add_plugin(WidgetPlugin)`.

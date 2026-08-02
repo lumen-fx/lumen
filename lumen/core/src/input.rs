@@ -200,7 +200,7 @@ pub enum ScrollbarWidthMode {
 /// the stylesheet by `lumenc`; the skin defaults live in
 /// `skins/default.css` via the `--lumen-scrollbar-*` tokens.
 ///
-/// This component's [`Default`] is the ONLY place fallback visuals are
+/// This component's [`Default`] is the only place fallback visuals are
 /// defined (the blank-no-css contract): when no stylesheet rule matches,
 /// both the paint extract and the interaction FSM read these values.
 /// Fields without a real-CSS spelling today (minimum thumb length, fade
@@ -218,20 +218,43 @@ pub struct ScrollbarStyle {
     pub track: Option<crate::components::Color>,
     /// `scrollbar-width` keyword.
     pub width: ScrollbarWidthMode,
-    /// Thumb alpha multiplier while the bar is hovered / dragged.
+    /// Bar thickness in logical pixels at `scrollbar-width: auto`
+    /// (`scrollbar-thickness` CSS property).
+    pub thickness: f32,
+    /// Bar thickness in logical pixels at `scrollbar-width: thin`
+    /// (`scrollbar-thickness-thin` CSS property).
+    pub thickness_thin: f32,
+    /// Thumb alpha multiplier while the bar is hovered / dragged
+    /// (`scrollbar-hover-boost` CSS property).
     pub hover_boost: f32,
     /// Fallback hover-only track fill used when [`Self::track`] is
-    /// `None`.
+    /// `None` (`scrollbar-track-hover` CSS property).
     pub hover_track: crate::components::Color,
-    /// Minimum thumb length in logical pixels (theme minimum).
+    /// Minimum thumb length in logical pixels (theme minimum;
+    /// `scrollbar-min-thumb` CSS property).
     pub min_thumb: f32,
-    /// Inset from the viewport edges in logical pixels.
+    /// Inset from the viewport edges in logical pixels
+    /// (`scrollbar-margin` CSS property).
     pub margin: f32,
-    /// Seconds of inactivity before the bars start fading out.
+    /// Seconds of inactivity before the bars start fading out
+    /// (`scrollbar-fade-delay` CSS property).
     pub fade_delay_secs: f32,
-    /// Fade-out ramp length in seconds.
+    /// Fade-out ramp length in seconds (`scrollbar-fade-duration` CSS
+    /// property).
     pub fade_secs: f32,
 }
+
+/// Fallback thumb alpha multiplier while hovered / dragged.
+pub const SCROLLBAR_HOVER_BOOST: f32 = 1.6;
+/// Fallback hover-only track fill used when no `scrollbar-color` track
+/// value is authored.
+pub const SCROLLBAR_HOVER_TRACK: crate::components::Color =
+    crate::components::Color::rgba(0.5, 0.5, 0.5, 0.16);
+/// Fallback idle time, in seconds, before an overlay scrollbar starts
+/// fading out.
+pub const SCROLLBAR_FADE_DELAY_SECS: f32 = 1.0;
+/// Fallback fade-out ramp length, in seconds.
+pub const SCROLLBAR_FADE_SECS: f32 = 0.25;
 
 impl Default for ScrollbarStyle {
     fn default() -> Self {
@@ -241,12 +264,14 @@ impl Default for ScrollbarStyle {
             thumb: crate::components::Color::rgba(0.62, 0.67, 0.74, 0.55),
             track: None,
             width: ScrollbarWidthMode::Auto,
-            hover_boost: 1.6,
-            hover_track: crate::components::Color::rgba(0.5, 0.5, 0.5, 0.16),
+            thickness: SCROLLBAR_THICKNESS,
+            thickness_thin: SCROLLBAR_THICKNESS_THIN,
+            hover_boost: SCROLLBAR_HOVER_BOOST,
+            hover_track: SCROLLBAR_HOVER_TRACK,
             min_thumb: SCROLLBAR_MIN_THUMB,
             margin: SCROLLBAR_MARGIN,
-            fade_delay_secs: 1.0,
-            fade_secs: 0.25,
+            fade_delay_secs: SCROLLBAR_FADE_DELAY_SECS,
+            fade_secs: SCROLLBAR_FADE_SECS,
         }
     }
 }
@@ -256,8 +281,8 @@ impl ScrollbarStyle {
     /// (`scrollbar-width: none`).
     pub fn thickness(&self) -> Option<f32> {
         match self.width {
-            ScrollbarWidthMode::Auto => Some(SCROLLBAR_THICKNESS),
-            ScrollbarWidthMode::Thin => Some(SCROLLBAR_THICKNESS_THIN),
+            ScrollbarWidthMode::Auto => Some(self.thickness),
+            ScrollbarWidthMode::Thin => Some(self.thickness_thin),
             ScrollbarWidthMode::None => None,
         }
     }
@@ -270,6 +295,56 @@ impl ScrollbarStyle {
             margin: self.margin,
             min_thumb: self.min_thumb,
         })
+    }
+}
+
+#[cfg(test)]
+mod scrollbar_style_tests {
+    use super::*;
+
+    /// `ScrollbarStyle::default()` reproduces today's fixed thickness /
+    /// hover-boost / hover-track / fade timing constants exactly - the
+    /// no-CSS fallback must equal current behaviour.
+    #[test]
+    fn default_matches_the_fallback_constants() {
+        let sb = ScrollbarStyle::default();
+        assert_eq!(sb.thickness, SCROLLBAR_THICKNESS);
+        assert_eq!(sb.thickness_thin, SCROLLBAR_THICKNESS_THIN);
+        assert_eq!(sb.hover_boost, SCROLLBAR_HOVER_BOOST);
+        assert_eq!(sb.hover_track, SCROLLBAR_HOVER_TRACK);
+        assert_eq!(sb.min_thumb, SCROLLBAR_MIN_THUMB);
+        assert_eq!(sb.margin, SCROLLBAR_MARGIN);
+        assert_eq!(sb.fade_delay_secs, SCROLLBAR_FADE_DELAY_SECS);
+        assert_eq!(sb.fade_secs, SCROLLBAR_FADE_SECS);
+        assert_eq!(sb.thickness(), Some(SCROLLBAR_THICKNESS));
+    }
+
+    /// A `scrollbar-thickness` / `scrollbar-thickness-thin` override (as
+    /// the spawn / restyle path would set from CSS) changes the resolved
+    /// bar thickness for the matching `scrollbar-width` mode, without
+    /// touching the other mode's value.
+    #[test]
+    fn thickness_override_is_selected_by_width_mode() {
+        let sb = ScrollbarStyle {
+            thickness: 12.0,
+            thickness_thin: 3.0,
+            ..Default::default()
+        };
+        assert_eq!(sb.thickness(), Some(12.0));
+        let thin = ScrollbarStyle {
+            width: ScrollbarWidthMode::Thin,
+            ..sb
+        };
+        assert_eq!(thin.thickness(), Some(3.0));
+        let none = ScrollbarStyle {
+            width: ScrollbarWidthMode::None,
+            ..sb
+        };
+        assert_eq!(
+            none.thickness(),
+            None,
+            "scrollbar-width: none hides bars regardless of thickness"
+        );
     }
 }
 

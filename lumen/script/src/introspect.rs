@@ -279,7 +279,7 @@ pub fn node_inline_style(handle: u64) -> Vec<(String, String)> {
     dom_details_snapshot().inline_style_of(handle)
 }
 
-/// `n.attrs()`: the full attribute map -- `id` / `class` (from the index),
+/// `n.attrs()`: the full attribute map, `id` / `class` (from the index),
 /// `text`, then every generic attribute.
 pub fn node_attrs(handle: u64) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();

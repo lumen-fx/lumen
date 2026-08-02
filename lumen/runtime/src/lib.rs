@@ -22,6 +22,9 @@ pub mod app_kind;
 pub mod config;
 #[cfg(feature = "devtools")]
 pub mod devtools_mount;
+/// `[[hooks]]` runner - executes an app's declared `prebuild` / `prerun`
+/// build/setup commands. See [`config::HookCfg`] for the schema.
+pub mod hooks;
 /// File-based pages - multi-`.lmn` discovery, `<if>`-reconciler page mount,
 /// and the navigation resolver reachable from every embedding surface.
 pub mod pages;

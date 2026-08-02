@@ -36,6 +36,11 @@ struct ShapeParams {
     max_lines: Option<u32>,
     /// Bucketed container width as `f32::to_bits()`; `u32::MAX` => `None`.
     width_bits: u32,
+    /// `opts.line_height` as `f32::to_bits()`; `u32::MAX` => `None`
+    /// (backend default). Must participate in the cache key: a `None` ->
+    /// `Some` (or differing `Some`) transition changes the `Metrics`
+    /// handed to cosmic-text, hence the actual glyph y-positions.
+    line_height_bits: u32,
     /// Raw CSS `font-family` list (`None` = platform sans-serif). The
     /// raw string keys the cache; resolution to a concrete face happens
     /// once per distinct list via [`CosmicShaper::resolve_family`].
@@ -54,10 +59,22 @@ impl ShapeParams {
                 .width
                 .map(|w| ((w / WIDTH_BUCKET_PX).ceil() * WIDTH_BUCKET_PX).to_bits())
                 .unwrap_or(u32::MAX),
+            line_height_bits: opts.line_height.map(f32::to_bits).unwrap_or(u32::MAX),
             family: opts.family.clone(),
             weight: opts.weight,
         }
     }
+}
+
+/// Effective line-height in logical px for `size_px`: honours a
+/// caller-resolved [`ShapeOptions::line_height`] and otherwise falls back
+/// to CSS `line-height: normal`
+/// ([`lumen_text::DEFAULT_LINE_HEIGHT_MULTIPLIER`]). The single
+/// fallback-consumption point every shape / measure path in this crate
+/// routes through, rather than re-deriving `size_px * 1.2` locally.
+fn effective_line_height(opts: &ShapeOptions, size_px: f32) -> f32 {
+    opts.line_height
+        .unwrap_or(size_px * lumen_text::DEFAULT_LINE_HEIGHT_MULTIPLIER)
 }
 
 /// Owned cache key for [`CosmicShaper::cache`]. Captures every input that
@@ -308,10 +325,11 @@ impl CosmicShaper {
     ///
     /// The width is the maximum laid-out line width (taffy treats this as
     /// the intrinsic content size); the height is `line_count *
-    /// line_height` where `line_height = size_px * 1.2` (matches the
-    /// shape path's [`Metrics`]). Empty input returns `(0.0, 0.0)` so
-    /// taffy collapses the leaf as expected. The result flows through
-    /// the same LRU as [`Self::shape`].
+    /// line_height`, where `line_height` is `opts.line_height` (CSS
+    /// `line-height`) when the caller resolved one, else `size_px * 1.2`
+    /// (matches the shape path's [`Metrics`] - see [`effective_line_height`]).
+    /// Empty input returns `(0.0, 0.0)` so taffy collapses the leaf as
+    /// expected. The result flows through the same LRU as [`Self::shape`].
     ///
     /// W2.5: the taffy `MeasureFunc` callback in `lumen-layout-taffy`
     /// calls this to derive text-leaf sizes from cosmic-text shaping,
@@ -353,7 +371,7 @@ impl CosmicShaper {
             return (0.0, 0.0, 0.0);
         }
         let max_width = opts.width;
-        let line_height = (size_px * 1.2).max(1.0);
+        let line_height = effective_line_height(opts, size_px).max(1.0);
         match self.shape(text, size_px, opts.clone()) {
             Some(run) => {
                 let mut rows = 1u32;
@@ -409,7 +427,7 @@ impl TextShaper for CosmicShaper {
             return Some((**cached).clone());
         }
 
-        let metrics = Metrics::new(size_px, size_px * 1.2);
+        let metrics = Metrics::new(size_px, effective_line_height(&opts, size_px));
         if metrics != self.last_metrics {
             self.buffer.set_metrics(metrics);
             self.last_metrics = metrics;
@@ -818,6 +836,63 @@ mod tests {
         assert_ne!(
             k_104, k_105,
             "105 crosses the bucket boundary (rounds up to 108)"
+        );
+    }
+
+    /// A distinct `line_height` override must key a distinct cache entry -
+    /// it changes the `Metrics` handed to cosmic-text (hence real glyph
+    /// y-positions), so a stale hit under a different line-height would
+    /// silently paint the wrong spacing.
+    #[test]
+    fn line_height_participates_in_cache_key() {
+        let default_opts = ShapeOptions::default();
+        let overridden_opts = ShapeOptions {
+            line_height: Some(30.0),
+            ..ShapeOptions::default()
+        };
+        let same_override_opts = ShapeOptions {
+            line_height: Some(30.0),
+            ..ShapeOptions::default()
+        };
+        let k_default = ShapeParams::new(16.0, &default_opts);
+        let k_override = ShapeParams::new(16.0, &overridden_opts);
+        let k_same = ShapeParams::new(16.0, &same_override_opts);
+        assert_ne!(
+            k_default, k_override,
+            "an absent line_height must not collide with an explicit override"
+        );
+        assert_eq!(
+            k_override, k_same,
+            "identical line_height overrides key the same entry"
+        );
+    }
+
+    /// `measure_with_baseline` honours an explicit CSS `line-height`
+    /// (here 2x the default `size_px * 1.2`): a two-line wrap roughly
+    /// doubles in height versus the same text at the default line-height.
+    #[test]
+    fn measure_with_baseline_honours_line_height_override() {
+        let mut shaper = CosmicShaper::new();
+        // Narrow enough to force a two-line wrap for both calls.
+        let default_opts = ShapeOptions {
+            wrap: WrapMode::Word,
+            width: Some(40.0),
+            ..ShapeOptions::default()
+        };
+        let (_, h_default, _) = shaper.measure_with_baseline("hello world", 16.0, &default_opts);
+        let doubled_line_height = 16.0 * lumen_text::DEFAULT_LINE_HEIGHT_MULTIPLIER * 2.0;
+        let overridden_opts = ShapeOptions {
+            wrap: WrapMode::Word,
+            width: Some(40.0),
+            line_height: Some(doubled_line_height),
+            ..ShapeOptions::default()
+        };
+        let (_, h_overridden, _) =
+            shaper.measure_with_baseline("hello world", 16.0, &overridden_opts);
+        assert!(
+            (h_overridden - h_default * 2.0).abs() < 1.0,
+            "doubling line-height should roughly double the measured height \
+             (default={h_default}, overridden={h_overridden})"
         );
     }
 

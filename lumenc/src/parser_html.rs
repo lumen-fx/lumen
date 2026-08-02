@@ -29,10 +29,16 @@
 
 use crate::layout_ir::{
     Attributes, BindKind, BindSpec, Element, FlexAlign, FlexAxis, FlexJustify, ImageFitSpec,
-    InterpolationSlot, LayoutIR, LengthSpec, LintFinding, LintKind, LintSeverity, OutlineSpec,
-    OverflowSpec, ParseError, PositionSpec, ScrollAxisSpec, TextAlignSpec, TextWrapSpec,
+    InterpolationSlot, LayoutIR, LengthSpec, LineHeightSpec, LintFinding, LintKind, LintSeverity,
+    OutlineSpec, OverflowSpec, ParseError, PositionSpec, ScrollAxisSpec, TextAlignSpec,
+    TextWrapSpec,
 };
 use crate::values::{bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i32, parse_length};
+// `parse_duration_ms` lives on the CSS cascade side (`lumen_ir::css`)
+// because it's shared with `transition-duration`; reused here rather
+// than re-implementing the `Nms` / `Ns` unit handling for the inline
+// markup mirror of `caret-blink` / `scrollbar-fade-*`.
+use lumen_ir::css::parse_duration_ms;
 
 /// Recognized layout tag names. Unknown tags produce
 /// [`ParseError::UnknownTag`]. `script` is special-cased (collected into
@@ -1549,17 +1555,25 @@ fn build_element(
         },
         // Per-tag default sizing (root/title-bar dimensions, control
         // minimums) is a true user-agent layer now: it lives in
-        // `crate::spawn::apply_ua_style_defaults`, applied at spawn
-        // time only where author CSS and inline attrs left the field
-        // unset (D3 / task #29). The old parse-time width / height /
-        // min-width tables sat in these `Attributes` fields, which made
-        // them inline-origin - `restore_inline_origin` then re-applied
-        // them *over* author CSS after the cascade, so rules like
-        // `button { min-width: 40px }` could never win. The label /
-        // button height + min-width entries were dropped outright: the
-        // W2.5 `CosmicShaper::measure` wiring supplies real text
-        // intrinsic sizes, which those hardcoded defaults overrode
-        // unhelpfully (e.g. a 4-line label forced to 24px).
+        // `lumen_runtime::skins::UA` (`lumen/runtime/src/skins/ua.css`),
+        // an always-on stylesheet folded into the cascade beneath any
+        // skin and beneath author CSS - not in these parse-time
+        // `Attributes` fields, and not fully in Rust either. Two cases
+        // that don't fit a plain CSS rule (a `<switch>` `min-width` that
+        // only applies when `width` is also unset, and the `<input>` /
+        // `<textarea>` `overflow: hidden` default backing off a shorthand
+        // `overflow` authored anywhere) stay in
+        // `lumen_runtime::spawn::apply_ua_style_defaults`, applied at
+        // spawn time (D3 / task #29). The old parse-time width / height /
+        // min-width tables that used to sit in these `Attributes` fields
+        // are gone: they made the defaults inline-origin -
+        // `restore_inline_origin` then re-applied them *over* author CSS
+        // after the cascade, so rules like `button { min-width: 40px }`
+        // could never win. The label / button height + min-width entries
+        // were dropped outright: the W2.5 `CosmicShaper::measure` wiring
+        // supplies real text intrinsic sizes, which those hardcoded
+        // defaults overrode unhelpfully (e.g. a 4-line label forced to
+        // 24px).
         scroll: if tag == "scroll" {
             Some(ScrollAxisSpec::Y)
         } else {
@@ -1890,6 +1904,23 @@ fn apply_attribute(
         "selection-color" => attrs.selection_color = Some(parse_color(tag, name, value)?),
         "caret-color" => attrs.caret_color = Some(parse_color(tag, name, value)?),
         "selection-text-color" => attrs.selection_text_color = Some(parse_color(tag, name, value)?),
+        "caret-width" => attrs.caret_width = Some(parse_f32(tag, name, value)?),
+        "caret-blink" => attrs.caret_blink_ms = Some(parse_duration_ms(tag, name, value.trim())?),
+        "password-character" => {
+            let mut chars = value.chars();
+            let c = chars
+                .next()
+                .ok_or_else(|| bad(tag, name, value, "expected a single character".into()))?;
+            if chars.next().is_some() {
+                return Err(bad(
+                    tag,
+                    name,
+                    value,
+                    "expected exactly one character".into(),
+                ));
+            }
+            attrs.password_character = Some(c);
+        }
         "scroll" => {
             let axis = match value {
                 "y" => ScrollAxisSpec::Y,
@@ -1972,7 +2003,29 @@ fn apply_attribute(
         "font-weight" => {
             attrs.font_weight = Some(crate::values::parse_font_weight(tag, name, value)?);
         }
+        // See `lumen_ir::css`'s `line-height` arm for why the unitless
+        // and px forms are kept as distinct `LineHeightSpec` variants.
+        "line-height" => {
+            let v = value.trim();
+            attrs.line_height = Some(if let Some(rest) = v.strip_suffix("px") {
+                LineHeightSpec::Px(parse_f32(tag, name, rest)?)
+            } else {
+                let n = parse_f32(tag, name, v)?;
+                if n < 0.0 {
+                    return Err(bad(
+                        tag,
+                        name,
+                        value,
+                        "line-height must be \u{2265} 0".into(),
+                    ));
+                }
+                LineHeightSpec::Multiplier(n)
+            });
+        }
         "knob-color" => attrs.knob_color = Some(parse_color(tag, name, value)?),
+        "knob-inset" => attrs.knob_inset = Some(parse_f32(tag, name, value)?),
+        "thumb-size" => attrs.thumb_size = Some(parse_f32(tag, name, value)?),
+        "popup-gap" => attrs.popup_gap = Some(parse_f32(tag, name, value)?),
         "style" => {
             attrs.style_role = Some(value.to_string());
         }
@@ -2277,6 +2330,26 @@ fn apply_attribute(
                 _ => unreachable!(),
             }
         }
+        // Lumen-native overlay-scrollbar geometry/timing - markup mirror
+        // of the `lumen_ir::css` cascade arms of the same names.
+        "scrollbar-thickness" => attrs.scrollbar_thickness = Some(parse_f32(tag, name, value)?),
+        "scrollbar-thickness-thin" => {
+            attrs.scrollbar_thickness_thin = Some(parse_f32(tag, name, value)?);
+        }
+        "scrollbar-margin" => attrs.scrollbar_margin = Some(parse_f32(tag, name, value)?),
+        "scrollbar-min-thumb" => attrs.scrollbar_min_thumb = Some(parse_f32(tag, name, value)?),
+        "scrollbar-track-hover" => {
+            attrs.scrollbar_track_hover = Some(parse_color(tag, name, value)?);
+        }
+        "scrollbar-hover-boost" => {
+            attrs.scrollbar_hover_boost = Some(parse_f32(tag, name, value)?);
+        }
+        "scrollbar-fade-delay" => {
+            attrs.scrollbar_fade_delay_ms = Some(parse_duration_ms(tag, name, value.trim())?);
+        }
+        "scrollbar-fade-duration" => {
+            attrs.scrollbar_fade_duration_ms = Some(parse_duration_ms(tag, name, value.trim())?);
+        }
         // `<if signal="name">` - `signal` is a reserved attribute name
         // only on the `<if>` tag. On any other tag it's silently ignored
         // (unknown attrs are tolerated for forward-compat).
@@ -2345,6 +2418,20 @@ fn apply_attribute(
                 .map_err(|e: std::num::ParseIntError| bad(tag, name, value, e.to_string()))?;
             attrs.progress_duration = Some(n);
         }
+        // Markup mirror of CSS `progress-chunk` - short attribute name
+        // matches the existing `duration` convention above.
+        "chunk" if tag == "progress" => {
+            let v = parse_f32(tag, name, value)?;
+            if !(0.0..=1.0).contains(&v) {
+                return Err(bad(
+                    tag,
+                    name,
+                    value,
+                    "progress-chunk must be between 0.0 and 1.0".to_string(),
+                ));
+            }
+            attrs.progress_chunk = Some(v);
+        }
         "min" => attrs.min = Some(parse_f32(tag, name, value)?),
         "max" => attrs.max = Some(parse_f32(tag, name, value)?),
         "step" => attrs.step = Some(parse_f32(tag, name, value)?),
@@ -2365,6 +2452,13 @@ fn apply_attribute(
         }
         "disabled" => {
             attrs.disabled = matches!(value, "true" | "yes" | "");
+        }
+        // CSS-authored replacement for the runtime's generic `:disabled`
+        // dimming fallback - see `lumen_ir::css`'s arm for how this
+        // differs from an explicit `:disabled { opacity }` override.
+        "disabled-opacity" => {
+            let v = parse_f32(tag, name, value)?;
+            attrs.disabled_opacity_default = Some(v.clamp(0.0, 1.0));
         }
         "pattern" if !value.is_empty() => attrs.pattern = Some(value.to_string()),
         "multiline" => attrs.multiline = Some(matches!(value, "true" | "yes" | "")),

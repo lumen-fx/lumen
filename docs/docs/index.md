@@ -108,11 +108,12 @@ docs is ambiguous.
 
 | Command | What it does |
 |---|---|
-| `lumenc run <dir>` | Launch the app in `<dir>/main.lmn`. Watches for file changes; hot-reloads markup, CSS, and scripts. |
-| `lumenc check <dir>` | Parse and compile the script without spawning a window. CI gate - exits non-zero on any error. |
+| `lumenc run <dir>` | Run any `[[hooks]]` build commands the app declares, then launch it from `<dir>/main.lmn`. Watches for file changes; hot-reloads markup, CSS, and scripts. `--no-hooks` skips the hooks step. |
+| `lumenc check <dir>` | Parse and compile the script without spawning a window. CI gate - exits non-zero on any error. Never runs hooks. |
 | `lumenc fmt <file>` | Reformat a `.lmn` file in place. `--check` exits non-zero on any diff (CI gate). |
-| `lumenc new <template> <name>` | Scaffold from the template gallery. `lumenc new --list` prints it. |
-| `lumenc build <dir> <out.lmna>` | Compile an app ahead of time into a single artifact. |
+| `lumenc new <template> <name>` | Scaffold from the template gallery (`hello`, `counter`, `form`, ...). `lumenc new --list` prints it. |
+| `lumenc build <app_dir> <out.lmna>` | Ahead-of-time compile an app into a precompiled artifact. Runs `[[hooks]]` first. |
+| `lumenc bundle <app_dir> <out>` | Pack an app into a `.lpak` archive, or build a trimmed static runtime with `--static`. Runs `[[hooks]]` first. |
 
 ## Source code
 

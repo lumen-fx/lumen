@@ -13,10 +13,13 @@
  * Signatures reproduced: flat borderless controls filled with
  * currentColor-alpha overlays (rest ~10%, hover ~15%, active ~23%),
  * bold solid-accent suggested-action button, large 46x26 pill switch
- * with white knob, thin accent slider trough, 12px-radius popovers /
- * cards, the documented 50%-opacity disabled treatment (state-routed
- * `:disabled { opacity }`), and the single 2px accent-alpha focus ring,
- * the one platform focus style Lumen reproduces exactly.
+ * with white knob (both `<toggle>` and the dedicated `<switch>` element
+ * share this geometry - GNOME has one switch look), thin accent slider
+ * trough, 12px-radius popovers / cards, the documented 50%-opacity
+ * disabled treatment (state-routed `:disabled { opacity }`, and the
+ * `disabled-opacity` fallback below for controls with no `:disabled`
+ * rule of their own), and the single 2px accent-alpha focus ring, the
+ * one platform focus style Lumen reproduces exactly.
  */
 
 :root {
@@ -61,8 +64,41 @@
   --lumen-tooltip-delay: 500;
   --lumen-tooltip-offset: 12;
 
-  /* Indeterminate <progress> sweep period (ms). */
+  /* Indeterminate <progress> sweep period (ms) and moving-chunk width
+     as a fraction of the track. */
   --lumen-progress-period: 1200;
+  --lumen-progress-chunk: 0.3;
+
+  /* Toggle / switch knob inset (px) and the slider thumb diameter (px). */
+  --lumen-knob-inset: 4;
+  --lumen-thumb-size: 16;
+
+  /* Gap (px) between a dropdown/menu trigger and its floating panel. */
+  --lumen-popup-gap: 4;
+
+  /* Opacity for a disabled control with no `:disabled { opacity }` /
+     `:disabled { bg }` rule of its own (view-switcher tabs, popover
+     rows) - the same 50% adwaita uses everywhere else. */
+  --lumen-disabled-opacity: 0.5;
+
+  /* Text-input caret. */
+  --lumen-caret-width: 2;
+  --lumen-caret-blink: 530ms;
+
+  /* Line-height multiplier. */
+  --lumen-line-height: 1.2;
+
+  /* Overlay scrollbar geometry / hover feedback / fade timing - GTK's
+     overlay scrollbars use the same mechanics Lumen implements, so the
+     shared runtime defaults apply as-is. */
+  --lumen-scrollbar-thickness: 8;
+  --lumen-scrollbar-thickness-thin: 4;
+  --lumen-scrollbar-margin: 2;
+  --lumen-scrollbar-min-thumb: 24;
+  --lumen-scrollbar-track-hover: #80808029;
+  --lumen-scrollbar-hover-boost: 1.6;
+  --lumen-scrollbar-fade-delay: 1000ms;
+  --lumen-scrollbar-fade-duration: 250ms;
 
 }
 
@@ -113,6 +149,7 @@ root {
   text-color: var(--lumen-text);
   font-family: "Adwaita Sans", Inter, Cantarell, "DejaVu Sans", sans-serif;
   font-size: 15;
+  line-height: var(--lumen-line-height);
 }
 
 /* === Buttons ===
@@ -153,12 +190,14 @@ textarea {
   min-height: 34;
   min-width: 160;
   text-color: var(--lumen-text);
+  caret-width: var(--lumen-caret-width);
+  caret-blink: var(--lumen-caret-blink);
 }
 input:hover, textarea:hover { bg: var(--lumen-input-bg); }
 input:focus, textarea:focus { outline: 2 var(--lumen-focus-ring); }
 input:disabled, textarea:disabled { bg: var(--lumen-disabled-bg); opacity: 0.5; }
 
-/* === Switch ===
+/* === Switch (GtkSwitch) ===
  * Large 46x26 pill with a white knob.
  */
 toggle {
@@ -168,6 +207,7 @@ toggle {
   radius: 13;
   bg: var(--lumen-track);
   knob-color: var(--lumen-knob);
+  knob-inset: var(--lumen-knob-inset);
   transition: bg 150ms ease;
 }
 toggle:hover { bg: var(--lumen-track-hover); }
@@ -175,6 +215,29 @@ toggle:active { bg: var(--lumen-track-active); }
 toggle:checked { bg: var(--lumen-accent); }
 toggle:focus-visible { outline: 2 var(--lumen-focus-ring); }
 toggle:disabled { bg: var(--lumen-disabled-bg); opacity: 0.5; }
+
+/* === Switch ===
+ * `<switch>` is a separate element from `<toggle>`, but GNOME has only
+ * one switch look, so it gets the same 46x26 pill and colors. The
+ * `transition` here is not for a bg tween (adwaita switches don't tint
+ * on hover) - it sets the duration/easing the thumb-slide animation
+ * reuses, same TransitionSpecs lookup as the tint tweens above.
+ */
+switch {
+  width: 46;
+  height: 26;
+  min-width: 46;
+  radius: 13;
+  bg: var(--lumen-track);
+  knob-color: var(--lumen-knob);
+  knob-inset: var(--lumen-knob-inset);
+  transition: bg 140ms ease-out;
+}
+switch:hover { bg: var(--lumen-track-hover); }
+switch:active { bg: var(--lumen-track-active); }
+switch:checked { bg: var(--lumen-accent); }
+switch:focus-visible { outline: 2 var(--lumen-focus-ring); }
+switch:disabled { bg: var(--lumen-disabled-bg); opacity: 0.5; }
 
 /* === Slider (scale) ===
  * Thin trough, round white knob with a subtle shadow at runtime.
@@ -185,6 +248,7 @@ slider {
   radius: 3;
   bg: var(--lumen-track);
   knob-color: var(--lumen-knob);
+  thumb-size: var(--lumen-thumb-size);
 }
 slider:hover { bg: var(--lumen-track-hover); }
 slider:focus-visible { outline: 2 var(--lumen-focus-ring); }
@@ -215,8 +279,9 @@ tile:disabled { opacity: 0.5; }
   radius: var(--lumen-radius-lg);
   shadow: var(--lumen-shadow-panel);
   padding: 6;
+  popup-gap: var(--lumen-popup-gap);
 }
-.dropdown-option { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius); min-height: 32; padding: 0 10; transition: bg 150ms ease; text-overflow: ellipsis; }
+.dropdown-option { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius); min-height: 32; padding: 0 10; transition: bg 150ms ease; text-overflow: ellipsis; disabled-opacity: var(--lumen-disabled-opacity); }
 .dropdown-option:hover { bg: var(--lumen-panel-hover); }
 .dropdown-option:focus { outline: 2 var(--lumen-focus-ring); }
 
@@ -227,8 +292,9 @@ tile:disabled { opacity: 0.5; }
   radius: var(--lumen-radius-lg);
   shadow: var(--lumen-shadow-panel);
   padding: 6;
+  popup-gap: var(--lumen-popup-gap);
 }
-.menu-item { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius); min-height: 32; padding: 0 10; transition: bg 150ms ease; }
+.menu-item { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius); min-height: 32; padding: 0 10; transition: bg 150ms ease; disabled-opacity: var(--lumen-disabled-opacity); }
 .menu-item:hover { bg: var(--lumen-panel-hover); }
 .menu-item:focus { outline: 2 var(--lumen-focus-ring); }
 .menu-separator { bg: var(--lumen-border); height: 1; margin: 4 0; }
@@ -263,6 +329,7 @@ dialog { bg: var(--lumen-backdrop); transition: opacity 150ms ease; }
   text-color: var(--lumen-text-muted);
   transition: bg 150ms ease;
   text-overflow: ellipsis;
+  disabled-opacity: var(--lumen-disabled-opacity);
 }
 .tab-btn:hover { bg: var(--lumen-panel-hover); }
 .tab-btn:selected { bg: var(--lumen-surface-hover); }
@@ -281,19 +348,32 @@ dialog { bg: var(--lumen-backdrop); transition: opacity 150ms ease; }
 }
 
 /* === Scroll regions === */
-scroll { scrollbar-color: var(--lumen-scrollbar-thumb); scrollbar-width: thin; }
+scroll {
+  scrollbar-color: var(--lumen-scrollbar-thumb);
+  scrollbar-width: thin;
+  scrollbar-thickness: var(--lumen-scrollbar-thickness);
+  scrollbar-thickness-thin: var(--lumen-scrollbar-thickness-thin);
+  scrollbar-margin: var(--lumen-scrollbar-margin);
+  scrollbar-min-thumb: var(--lumen-scrollbar-min-thumb);
+  scrollbar-track-hover: var(--lumen-scrollbar-track-hover);
+  scrollbar-hover-boost: var(--lumen-scrollbar-hover-boost);
+  scrollbar-fade-delay: var(--lumen-scrollbar-fade-delay);
+  scrollbar-fade-duration: var(--lumen-scrollbar-fade-duration);
+}
 scroll:focus { outline: 2 var(--lumen-focus-ring); }
 
 /* === Checkbox / Radio / Progress (W5 form controls) === */
+checkbox          { disabled-opacity: var(--lumen-disabled-opacity); }
 checkbox:checked  { bg: var(--lumen-accent); }
 checkbox:focus-visible { outline: 2 var(--lumen-focus-ring); }
 .checkbox-box     { width: 18; height: 18; radius: 5; bg: var(--lumen-surface); border: 1px solid var(--lumen-border); text-color: var(--lumen-on-accent); font-size: 14; text-align: center; }
 .checkbox-label   { text-color: var(--lumen-text); }
+radio             { disabled-opacity: var(--lumen-disabled-opacity); }
 radio:selected    { bg: var(--lumen-accent); }
 radio:focus-visible { outline: 2 var(--lumen-focus-ring); }
 .radio-dot        { width: 18; height: 18; radius: 9; bg: var(--lumen-surface); border: 1px solid var(--lumen-border); }
 .radio-label      { text-color: var(--lumen-text); }
-progress          { bg: var(--lumen-surface); radius: 3; height: 6; progress-duration: var(--lumen-progress-period); }
+progress          { bg: var(--lumen-surface); radius: 3; height: 6; progress-duration: var(--lumen-progress-period); progress-chunk: var(--lumen-progress-chunk); }
 .progress-fill    { bg: var(--lumen-accent); radius: 3; }
 
 /* Dialog default button (Enter-anywhere target): accent ring. */

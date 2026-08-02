@@ -1420,25 +1420,69 @@ fn default_skin_applies_to_all_widgets_with_zero_warnings() {
 
 // ---------------------------------------------------------------------------
 // D3 (task #29) - UA-default origin: per-tag sizing defaults are a true
-// user-agent layer applied at spawn where author CSS / inline attrs left
-// the field unset. Author CSS must therefore beat them.
+// user-agent layer, folded into the cascade beneath any skin and beneath
+// author CSS. Author CSS must therefore beat them.
+//
+// Skin-tokens follow-up: the sizing floor moved out of Rust
+// (`apply_ua_style_defaults` used to set it unconditionally at spawn,
+// regardless of whether any cascade had run) and into
+// `lumen_runtime::skins::UA` (`ua.css`), which only a real cascade pass
+// applies. `parse_html` + `lumenc::apply_css` on a bare author sheet -
+// what both tests below used to do - never touches `ua.css`; only
+// `run::build_app` (what `lumenc run` / `lumenc build` / hot-reload all
+// funnel through, via `load_ir`) or `compile_app` / `compile_dir_to_lmna`
+// do. `parse_alone_leaves_ua_sizing_unset` below documents the old
+// (still-correct) parse-only behavior; these two now drive the real
+// pipeline so they prove what their names claim instead of coincidentally
+// passing - `author_css_min_width_beats_ua_default_task29`'s `min-height`
+// assertion, in particular, used to look like it proved "author beats UA"
+// while never actually letting UA into the cascade at all, since `button`
+// carries no UA `min-width` for the `min-width` half to contend with, and
+// bypassing `ua.css` entirely mooted the `min-height` half too.
 // ---------------------------------------------------------------------------
+
+/// Build a full app from inline markup (+ optional CSS) through the real
+/// `run::build_app` pipeline - the function `lumenc run` / `lumenc build`
+/// both funnel through (via `load_ir`), and the only path that folds
+/// `ua.css` into the cascade. No window plugin, no ticks: `Style` is
+/// resolved at spawn, before any system runs, so the tree is already
+/// final the instant `build_app` returns.
+fn build_ua_test_app(markup: &str, css: Option<&str>) -> lumen_core::app::App {
+    let dir = std::env::temp_dir().join(format!(
+        "lumenc_ua_defaults_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    // Same rationale as `run_pipeline.rs`'s helpers: disable the MCP
+    // server so parallel test threads don't collide on a shared port.
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").expect("write lumen.toml");
+    let mut opts = lumenc::RunOptions::new(&dir)
+        .with_parser(lumenc::default_parser())
+        .with_markup(markup.to_string());
+    if let Some(css) = css {
+        opts = opts.with_css(css.to_string());
+    }
+    let (app, _winit) = lumenc::run::build_app(opts).expect("build_app");
+    let _ = std::fs::remove_dir_all(&dir);
+    app
+}
 
 #[test]
 fn author_css_min_width_beats_ua_default_task29() {
-    use bevy_ecs::prelude::*;
-    let mut ir = parse_html(r##"<root><button text="Save"/></root>"##).expect("html");
-    let css = lumenc::parse_css("button { min-width: 40; min-height: 20; }").expect("css");
-    lumenc::apply_css(&mut ir, &css).expect("apply");
-    let mut world = World::new();
-    world.insert_resource(lumen_core::property_store::PropertyStore::default());
-    ir.spawn_into(&mut world);
-    let mut q = world.query::<(
+    let mut app = build_ua_test_app(
+        r##"<root><button text="Save"/></root>"##,
+        Some("button { min-width: 40; min-height: 20; }"),
+    );
+    let mut q = app.world.query::<(
         &lumen_core::components::Style,
         &lumen_core::components::TextContent,
     )>();
     let (style, _) = q
-        .iter(&world)
+        .iter(&app.world)
         .find(|(_, t)| t.0 == "Save")
         .expect("button entity");
     assert_eq!(
@@ -1456,16 +1500,14 @@ fn author_css_min_width_beats_ua_default_task29() {
 #[test]
 fn ua_defaults_fill_only_unset_fields() {
     use bevy_ecs::prelude::*;
-    let ir = parse_html(r##"<root><toggle/><button text="Go"/></root>"##).expect("html");
-    let mut world = World::new();
-    world.insert_resource(lumen_core::property_store::PropertyStore::default());
-    ir.spawn_into(&mut world);
+    let mut app = build_ua_test_app(r##"<root><toggle/><button text="Go"/></root>"##, None);
 
     // Toggle has no text to measure -> UA supplies concrete track dims.
-    let mut toggles = world
+    let mut toggles = app
+        .world
         .query_filtered::<&lumen_core::components::Style, With<lumen_core::components::Toggleable>>(
         );
-    let toggle_style = toggles.iter(&world).next().expect("toggle entity");
+    let toggle_style = toggles.iter(&app.world).next().expect("toggle entity");
     assert_eq!(
         toggle_style.height,
         lumen_core::components::Length::Px(36.0)
@@ -1477,12 +1519,12 @@ fn ua_defaults_fill_only_unset_fields() {
 
     // Button text is measured (W2.5): no fixed height, no min-width -
     // only the tap-size min-height floor.
-    let mut q = world.query::<(
+    let mut q = app.world.query::<(
         &lumen_core::components::Style,
         &lumen_core::components::TextContent,
     )>();
     let (style, _) = q
-        .iter(&world)
+        .iter(&app.world)
         .find(|(_, t)| t.0 == "Go")
         .expect("button entity");
     assert_eq!(
@@ -1496,6 +1538,20 @@ fn ua_defaults_fill_only_unset_fields() {
         "the old 96px UA min-width is gone (text measurement provides intrinsic size)"
     );
     assert_eq!(style.min_height, lumen_core::components::Length::Px(36.0));
+}
+
+/// What `parse_html` alone still does and does not do: it never touches
+/// `ua.css` (that only folds in via a real cascade pass - `build_app` /
+/// `compile_app` / `compile_dir_to_lmna`), so a bare parse leaves UA-only
+/// sizing fields unset. This is correct, current behavior, not a gap -
+/// see `ua_defaults_fill_only_unset_fields` above for proof the defaults
+/// apply once the real pipeline runs.
+#[test]
+fn parse_alone_leaves_ua_sizing_unset() {
+    let ir = parse_html(r##"<root><toggle/></root>"##).expect("html");
+    let toggle = &ir.root.children[0];
+    assert_eq!(toggle.attrs.height, None);
+    assert_eq!(toggle.attrs.min_width, None);
 }
 
 // ---------------------------------------------------------------------------

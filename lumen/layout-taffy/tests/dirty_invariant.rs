@@ -126,7 +126,7 @@ proptest! {
         let snap_a = snapshot(&app_a, &entities_a);
 
         // Phase B: incremental - build with all-default widths, tick to
-        // settle, then apply mutations one at a time, marking ONLY the
+        // settle, then apply mutations one at a time, marking only the
         // mutated entity dirty (the layout plugin's propagate_dirty_layout
         // system is responsible for marking ancestors).
         let empty: HashMap<usize, f32> = HashMap::new();

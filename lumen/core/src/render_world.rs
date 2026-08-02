@@ -15,8 +15,9 @@
 //! Each render-world entity represents one drawable. Adding a primitive consists of: one `Extracted*` component, one extract fn, and one render system.
 
 use crate::components::{
-    CaretBlink, Color, EchoMode, Fill, ImeState, Opacity, TextAlign, TextBlockOrigin, TextContent,
-    TextInput, TextInputPaint, TextInputScroll, TextStyle, Transform, Visible, Visuals,
+    CARET_WIDTH_PX, CaretBlink, CaretWidth, Color, EchoMode, Fill, ImeState, Opacity,
+    PASSWORD_MASK_CHAR, PasswordCharacter, TextAlign, TextBlockOrigin, TextContent, TextInput,
+    TextInputPaint, TextInputScroll, TextStyle, Transform, Visible, Visuals, resolve_line_height,
     text_baseline_in_line, text_block_top,
 };
 use crate::input::{Focused, ScrollOffset};
@@ -712,6 +713,13 @@ pub struct ExtractedText {
     pub family: Option<std::sync::Arc<str>>,
     /// CSS `font-weight` (1-1000; 400 = normal).
     pub weight: u16,
+    /// Resolved CSS `line-height` in logical pixels (already resolved
+    /// against [`Self::size_px`] via [`resolve_line_height`]). Drives
+    /// inter-line spacing in the shaper and the newline-caret math.
+    pub line_height_px: f32,
+    /// Resolved text-input caret stroke width in logical pixels (already
+    /// resolved against [`CARET_WIDTH_PX`] or a [`CaretWidth`] override).
+    pub caret_width_px: f32,
 }
 
 /// One rectangular clip region constraining descendant paints.
@@ -1468,10 +1476,10 @@ pub fn parent_scroll_clip_rects(
     out
 }
 
-/// Returns `true` when the rect at `(origin, size)` lies FULLY outside `clip = (corigin, csize)`;
+/// Returns `true` when the rect at `(origin, size)` lies fully outside `clip = (corigin, csize)`;
 /// the two AABBs share no area at all.
 ///
-/// Partially-visible content must NOT be culled here: the clip layer emitted by
+/// Partially-visible content must not be culled here: the clip layer emitted by
 /// [`extract_clips`] (vello push/pop) trims the overflowing part at paint time. The previous
 /// any-part-outside test made every child that overhangs its scroll container by even one
 /// pixel - e.g. `width: 100%` plus a horizontal margin, or a row straddling the container's
@@ -2086,12 +2094,23 @@ impl SurfaceCapture {
     }
 }
 
+/// Byte offset into a masked run that corresponds to `plain_byte` in the
+/// plaintext `text`, where each scalar renders as one `mask` char.
+/// Snaps `plain_byte` down to a char boundary first, then counts scalars
+/// before it and scales by the mask char's UTF-8 width.
+fn masked_offset(text: &str, plain_byte: usize, mask: char) -> usize {
+    let mut b = plain_byte.min(text.len());
+    while b > 0 && !text.is_char_boundary(b) {
+        b -= 1;
+    }
+    text[..b].chars().count() * mask.len_utf8()
+}
+
 /// Rewrite a display run and its caret / selection byte offsets for a
-/// concealed [`EchoMode`], through the same mapping the shaping producer
-/// and the pointer hit test use ([`EchoMode::display_string`] /
-/// [`EchoMode::display_offset`]):
-/// - [`EchoMode::Password`] -> one [`crate::components::PASSWORD_MASK_CHAR`]
-///   per scalar, with caret / selection remapped into the masked string.
+/// concealed [`EchoMode`]:
+/// - [`EchoMode::Password`] -> one `mask` glyph per scalar ([`PASSWORD_MASK_CHAR`]
+///   unless a [`PasswordCharacter`] override is present), with caret /
+///   selection remapped into the masked string.
 /// - [`EchoMode::NoEcho`] -> empty run; caret collapses to the origin and
 ///   no selection is painted (there is nothing to highlight).
 ///
@@ -2101,14 +2120,20 @@ fn mask_echo(
     text: &str,
     caret: Option<usize>,
     selection: Option<(usize, usize)>,
+    mask: char,
 ) -> (String, Option<usize>, Option<(usize, usize)>) {
-    let display = mode.display_string(text).into_owned();
-    let caret = caret.map(|c| mode.display_offset(text, c));
-    let selection = match mode {
-        EchoMode::NoEcho => None,
-        _ => selection.map(|(s, e)| (mode.display_offset(text, s), mode.display_offset(text, e))),
-    };
-    (display, caret, selection)
+    match mode {
+        EchoMode::NoEcho => (String::new(), caret.map(|_| 0), None),
+        EchoMode::Password => {
+            let scalars = text.chars().count();
+            let masked: String = mask.to_string().repeat(scalars);
+            let caret = caret.map(|c| masked_offset(text, c, mask));
+            let selection = selection
+                .map(|(s, e)| (masked_offset(text, s, mask), masked_offset(text, e, mask)));
+            (masked, caret, selection)
+        }
+        EchoMode::Normal => (text.to_string(), caret, selection),
+    }
 }
 
 /// Default extract fn that emits one [`ExtractedText`] per entity with [`Transform`] and [`TextContent`].
@@ -2146,6 +2171,8 @@ pub fn extract_text(main: &mut World, render: &mut World) {
         Option<&'a EchoMode>,
         Option<&'a TextInputPaint>,
         Option<&'a TextBlockOrigin>,
+        Option<&'a CaretWidth>,
+        Option<&'a PasswordCharacter>,
     );
     let mut q = main.query::<RowFor>();
     let pairs: Vec<(Entity, ExtractedText)> = q
@@ -2166,9 +2193,14 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                 echo,
                 paint,
                 block_origin,
+                caret_width,
+                password_char,
             )| {
                 let ts = ts.cloned().unwrap_or_default();
                 let size_px = ts.size_px;
+                let line_height_px = resolve_line_height(ts.line_height, size_px);
+                let caret_width_px = caret_width.map(|w| w.0).unwrap_or(CARET_WIDTH_PX);
+                let mask_char = password_char.map(|c| c.0).unwrap_or(PASSWORD_MASK_CHAR);
                 let preedit = ime.map(|i| i.preedit.as_str()).unwrap_or("");
                 // Show the placeholder while the input holds neither committed
                 // text nor preedit - focused or not (Qt shows the hint under a
@@ -2218,7 +2250,7 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                 // Qt, whose password display is also per-code-unit.
                 let (combined, caret, selection) = match echo {
                     Some(mode) if mode.is_concealed() && placeholder.is_empty() => {
-                        mask_echo(*mode, &combined, caret, selection)
+                        mask_echo(*mode, &combined, caret, selection, mask_char)
                     }
                     _ => (combined, caret, selection),
                 };
@@ -2233,10 +2265,12 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                 let inner_h = (t.size.y - pad_top - pad_bottom).max(size_px);
                 let block_top = block_origin.map(|b| b.top).unwrap_or_else(|| {
                     let stacked = input.is_some_and(|i| i.multiline) || combined.contains('\n');
-                    text_block_top(inner_h, size_px, stacked)
+                    text_block_top(inner_h, line_height_px, stacked)
                 });
-                let baseline_y =
-                    t.absolute.y + pad_top + block_top + text_baseline_in_line(size_px);
+                let baseline_y = t.absolute.y
+                    + pad_top
+                    + block_top
+                    + text_baseline_in_line(size_px, line_height_px);
                 let container_width = (t.size.x - pad_left - pad_right).max(0.0);
                 let alpha = effective_opacity(opacity, &inherited_alpha, e);
                 let off = scroll.get(&e).copied().unwrap_or(Vec2::ZERO);
@@ -2271,6 +2305,8 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                         max_lines: ts.max_lines,
                         family: ts.family.clone(),
                         weight: ts.weight,
+                        line_height_px,
+                        caret_width_px,
                         order: paint_order_of(e, &parents, &mut depth_cache),
                     },
                 ))
@@ -2311,13 +2347,13 @@ mod echo_mask_tests {
     //! plaintext is untouched; only the display run + caret / selection
     //! offsets are rewritten against the mask glyphs.
     use super::*;
-    use crate::components::PASSWORD_MASK_CHAR;
 
     #[test]
     fn password_masks_each_scalar_and_remaps_caret() {
         // "abc" caret after 'b' (byte 2). Masked = three [`PASSWORD_MASK_CHAR`]
         // bullets, 3 bytes each, so the caret lands after the second -> byte 6.
-        let (disp, caret, sel) = mask_echo(EchoMode::Password, "abc", Some(2), None);
+        let (disp, caret, sel) =
+            mask_echo(EchoMode::Password, "abc", Some(2), None, PASSWORD_MASK_CHAR);
         assert_eq!(disp.chars().count(), 3);
         assert!(disp.chars().all(|c| c == PASSWORD_MASK_CHAR));
         assert_eq!(caret, Some(6));
@@ -2327,7 +2363,13 @@ mod echo_mask_tests {
     #[test]
     fn password_remaps_selection_range() {
         // Select "bc" (bytes 1..3) in "abc" -> masked bytes 3..9.
-        let (_disp, _caret, sel) = mask_echo(EchoMode::Password, "abc", None, Some((1, 3)));
+        let (_disp, _caret, sel) = mask_echo(
+            EchoMode::Password,
+            "abc",
+            None,
+            Some((1, 3)),
+            PASSWORD_MASK_CHAR,
+        );
         assert_eq!(sel, Some((3, 9)));
     }
 
@@ -2335,9 +2377,26 @@ mod echo_mask_tests {
     fn password_scalar_count_not_byte_count() {
         // "\u{e9}" is one scalar (2 bytes) -> exactly one mask glyph, and a
         // caret at end (byte 2) maps to one mask width (3 bytes).
-        let (disp, caret, _) = mask_echo(EchoMode::Password, "\u{e9}", Some(2), None);
+        let (disp, caret, _) = mask_echo(
+            EchoMode::Password,
+            "\u{e9}",
+            Some(2),
+            None,
+            PASSWORD_MASK_CHAR,
+        );
         assert_eq!(disp.chars().count(), 1);
         assert_eq!(caret, Some(3));
+    }
+
+    /// A `password-character` override (here `*`, a 1-byte ASCII glyph vs
+    /// the 3-byte default bullet) reaches `mask_echo` as a plain `char`
+    /// parameter and both the display run and the remapped caret honour
+    /// the override's own byte width, not the default's.
+    #[test]
+    fn password_character_override_changes_mask_glyph_and_width() {
+        let (disp, caret, _) = mask_echo(EchoMode::Password, "abc", Some(2), None, '*');
+        assert_eq!(disp, "***");
+        assert_eq!(caret, Some(2), "1-byte mask -> caret byte == scalar count");
     }
 
     #[test]
@@ -2362,7 +2421,13 @@ mod echo_mask_tests {
 
     #[test]
     fn no_echo_hides_everything_and_collapses_caret() {
-        let (disp, caret, sel) = mask_echo(EchoMode::NoEcho, "secret", Some(4), Some((0, 6)));
+        let (disp, caret, sel) = mask_echo(
+            EchoMode::NoEcho,
+            "secret",
+            Some(4),
+            Some((0, 6)),
+            PASSWORD_MASK_CHAR,
+        );
         assert!(disp.is_empty());
         assert_eq!(caret, Some(0), "caret collapses to the origin");
         assert_eq!(sel, None, "nothing to highlight under no-echo");
@@ -2407,6 +2472,35 @@ mod echo_mask_tests {
         // Empty buffer -> the placeholder hint shows verbatim (a hint is
         // not the secret; Qt shows placeholder text under password mode).
         assert_eq!(masked_text_for("", "Password"), "Password");
+    }
+
+    /// A [`PasswordCharacter`] component (spawned from CSS
+    /// `password-character`) overrides [`PASSWORD_MASK_CHAR`] end-to-end
+    /// through `extract_text`; absent, the extract keeps using the
+    /// built-in bullet.
+    #[test]
+    fn extract_password_character_override_replaces_default_mask() {
+        use crate::components::{TextContent, TextInput, Transform};
+        use crate::input::Focused;
+
+        let mut main = World::new();
+        let mut render = World::new();
+        render.init_resource::<RenderEntityMap>();
+        main.spawn((
+            Transform::new(Vec2::ZERO, Vec2::new(120.0, 24.0)),
+            TextContent("hunter2".to_string()),
+            TextInput {
+                cursor: 7,
+                ..Default::default()
+            },
+            EchoMode::Password,
+            PasswordCharacter('*'),
+            Focused,
+        ));
+        extract_text(&mut main, &mut render);
+        let mut q = render.query::<&ExtractedText>();
+        let text = q.iter(&render).next().unwrap().text.clone();
+        assert_eq!(text, "*******");
     }
 }
 
@@ -3072,7 +3166,7 @@ mod tests {
         );
     }
 
-    /// An ancestor scroll/overflow clip must NOT stretch its bracket over an overlay subtree inside
+    /// An ancestor scroll/overflow clip must not stretch its bracket over an overlay subtree inside
     /// it - otherwise the pushed layer would clip all content ranked between the bracket ends.
     #[test]
     fn clip_ranges_exclude_overlay_subtrees() {
@@ -3214,5 +3308,112 @@ mod tests {
             !clips.contains_key(&panel) && !clips.contains_key(&opt),
             "overlay subtree escapes the ancestor clip rect"
         );
+    }
+
+    /// `ExtractedText::line_height_px` falls back to
+    /// `size_px * DEFAULT_LINE_HEIGHT_MULTIPLIER` when the entity's
+    /// `TextStyle::line_height` is absent (no `line-height` CSS reached
+    /// this element) - preserves today's `1.2` behaviour exactly.
+    #[test]
+    fn line_height_px_falls_back_to_default_multiplier() {
+        use crate::components::{
+            DEFAULT_LINE_HEIGHT_MULTIPLIER, TextContent, TextStyle, Transform,
+        };
+
+        let mut main = World::new();
+        let mut render = World::new();
+        render.init_resource::<RenderEntityMap>();
+        main.spawn((
+            Transform::new(Vec2::ZERO, Vec2::new(120.0, 24.0)),
+            TextContent("hi".to_string()),
+            TextStyle {
+                size_px: 20.0,
+                ..Default::default()
+            },
+        ));
+        extract_text(&mut main, &mut render);
+        let mut q = render.query::<&ExtractedText>();
+        let et = q.iter(&render).next().unwrap();
+        assert_eq!(et.line_height_px, 20.0 * DEFAULT_LINE_HEIGHT_MULTIPLIER);
+    }
+
+    /// A CSS `line-height` value (here an explicit multiplier) overrides
+    /// the default `1.2` ratio end-to-end through `extract_text`.
+    #[test]
+    fn line_height_px_honours_css_multiplier_override() {
+        use crate::components::{LineHeightSpec, TextContent, TextStyle, Transform};
+
+        let mut main = World::new();
+        let mut render = World::new();
+        render.init_resource::<RenderEntityMap>();
+        main.spawn((
+            Transform::new(Vec2::ZERO, Vec2::new(120.0, 24.0)),
+            TextContent("hi".to_string()),
+            TextStyle {
+                size_px: 20.0,
+                line_height: Some(LineHeightSpec::Multiplier(1.5)),
+                ..Default::default()
+            },
+        ));
+        extract_text(&mut main, &mut render);
+        let mut q = render.query::<&ExtractedText>();
+        let et = q.iter(&render).next().unwrap();
+        assert_eq!(et.line_height_px, 30.0);
+    }
+
+    /// A CSS `line-height` value expressed in absolute pixels
+    /// ([`LineHeightSpec::Px`]) does not scale with `size_px`.
+    #[test]
+    fn line_height_px_honours_css_absolute_override() {
+        use crate::components::{LineHeightSpec, TextContent, TextStyle, Transform};
+
+        let mut main = World::new();
+        let mut render = World::new();
+        render.init_resource::<RenderEntityMap>();
+        main.spawn((
+            Transform::new(Vec2::ZERO, Vec2::new(120.0, 24.0)),
+            TextContent("hi".to_string()),
+            TextStyle {
+                size_px: 20.0,
+                line_height: Some(LineHeightSpec::Px(19.0)),
+                ..Default::default()
+            },
+        ));
+        extract_text(&mut main, &mut render);
+        let mut q = render.query::<&ExtractedText>();
+        let et = q.iter(&render).next().unwrap();
+        assert_eq!(et.line_height_px, 19.0);
+    }
+
+    /// `ExtractedText::caret_width_px` falls back to [`CARET_WIDTH_PX`]
+    /// absent a [`CaretWidth`] override, and honours the override when
+    /// present - the same override/fallback shape as every other
+    /// CSS-supplied value.
+    #[test]
+    fn caret_width_px_falls_back_then_honours_override() {
+        use crate::components::{CaretWidth, TextContent, Transform};
+
+        let mut main = World::new();
+        let mut render = World::new();
+        render.init_resource::<RenderEntityMap>();
+        let plain = main
+            .spawn((
+                Transform::new(Vec2::ZERO, Vec2::new(120.0, 24.0)),
+                TextContent("a".to_string()),
+            ))
+            .id();
+        let overridden = main
+            .spawn((
+                Transform::new(Vec2::new(0.0, 40.0), Vec2::new(120.0, 24.0)),
+                TextContent("b".to_string()),
+                CaretWidth(4.0),
+            ))
+            .id();
+        extract_text(&mut main, &mut render);
+        let map = render.resource::<RenderEntityMap>().text.clone();
+        let plain_et = render.get::<ExtractedText>(map[&plain]).unwrap();
+        let overridden_et = render.get::<ExtractedText>(map[&overridden]).unwrap();
+        assert_eq!(plain_et.caret_width_px, CARET_WIDTH_PX);
+        assert_eq!(overridden_et.caret_width_px, 4.0);
     }
 }

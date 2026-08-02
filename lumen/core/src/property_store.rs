@@ -811,7 +811,7 @@ mod tests {
     fn external_bus_pending_reports_queued_writes() {
         use std::sync::Arc;
         // Resource-level guard for Fix 1's self-scheduling: a queued
-        // cross-thread / main-thread-script write MUST make
+        // cross-thread / main-thread-script write must make
         // `external_properties_pending()` read true, because that is the
         // condition the window backend uses to re-arm the redraw. If this
         // ever returned false with a write in the channel, the app would

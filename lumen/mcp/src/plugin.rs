@@ -42,7 +42,8 @@ use crate::snapshot::{
     VisualsView,
 };
 
-/// Selects between the TCP listener (default, lets the inspector and
+/// Selects between the TCP listener (default, lets the `lumenc` CLI
+/// (`lumenc snapshot`, `screenshot`, `click`, ...) and the
 /// `lumen-mcp-server` bridge connect) and the canonical MCP stdio
 /// transport (preferred for tools that launch lumen as a subprocess
 /// and pipe MCP over stdin/stdout).
@@ -917,8 +918,8 @@ fn snap_bindings(handle: Res<SnapshotHandle>, q: Query<(Entity, &BindText)>) {
 
 /// Markup identity sweep: tag name (`LumenTag`), stable string id
 /// (`LumenId`), and class list (`LumenClasses`). These power the
-/// inspector's element-tree labels and the `lumen.snapshot_tree` node
-/// shape (`tag` / `lumen_id` / `classes`).
+/// `lumen-devtools` overlay's Elements tab and the `lumen.snapshot_tree`
+/// node shape (`tag` / `lumen_id` / `classes`).
 fn snap_identity(
     handle: Res<SnapshotHandle>,
     tags: Query<(Entity, &LumenTag)>,

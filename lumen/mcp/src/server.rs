@@ -3,15 +3,11 @@
 //!
 //! Two transports:
 //!
-//! - **TCP** (default, port 7878): accepts connections on `127.0.0.1`.
-//!   Each connection MAY be:
-//!     * **Newline-delimited JSON-RPC** - what the bundled inspector
-//!       JS and the `lumen-mcp-server` bridge speak. Each line is a
-//!       request; replies are also newline-delimited.
-//!     * **HTTP** - serves the bundled inspector HTML / JS and a
-//!       `POST /rpc` proxy for clients that want to drive the same
-//!       JSON-RPC from a browser.
-//!       The transport is auto-selected from the first request line.
+//! - **TCP** (default, port 7878): accepts connections on `127.0.0.1` and
+//!   speaks newline-delimited JSON-RPC 2.0 - one request per line, one
+//!   reply per line. This is what the `lumen-mcp-server` stdio bridge and
+//!   the `lumenc` CLI (`snapshot`, `screenshot`, `click`, `type`, `key`,
+//!   `scroll`, ...) speak.
 //!
 //! - **stdio** - true MCP transport per the spec: newline-delimited
 //!   JSON-RPC on stdin/stdout (Anthropic's stdio variant; the spec
@@ -31,13 +27,6 @@ use tracing::{info, warn};
 use crate::mcp_protocol::{error_response as mcp_error, handle_mcp};
 use crate::simulate::{SimulateQueue, SimulateRequest};
 use crate::snapshot::Snapshot;
-
-/// Maximum HTTP POST body size accepted by the embedded server. 16
-/// MiB is far above any legitimate JSON-RPC request (snapshots fit in
-/// <1 MiB) and well below the per-process memory budget. Larger bodies
-/// are refused with HTTP 413 + connection close to defend against
-/// a hostile `Content-Length: 4000000000` DoS.
-pub const MAX_HTTP_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 /// Bundle of cross-thread handles the JSON-RPC handler needs.
 ///
@@ -82,7 +71,7 @@ pub fn serve_tcp(
 }
 
 /// Back-compat alias for [`serve_tcp`]. Kept for one minor version
-/// because the IDE inspector embedder may call it by name.
+/// because an external embedder may still call it by name.
 #[deprecated(note = "use serve_tcp; W6.11 added stdio transport and renamed for clarity")]
 #[allow(dead_code)]
 pub fn serve(
@@ -199,11 +188,6 @@ async fn run_tcp(port: u16, ctx: ServerCtx) {
     }
 }
 
-/// Static inspector assets, embedded via `include_str!` so no runtime path is required.
-/// The server peeks the first line of each connection: HTTP requests (`GET ` / `POST `) route to the inspector path; everything else stays on the line-delimited JSON-RPC protocol.
-const INSPECTOR_HTML: &str = include_str!("../assets/inspector.html");
-const INSPECTOR_JS: &str = include_str!("../assets/client.js");
-
 async fn handle_client(stream: tokio::net::TcpStream, ctx: ServerCtx) {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -218,16 +202,8 @@ async fn handle_client(stream: tokio::net::TcpStream, ctx: ServerCtx) {
     if first == 0 {
         return;
     }
-    // HTTP / inspector path. Recognised on the first request line so a
-    // single MCP port serves both protocols.
-    if line.starts_with("GET ") || line.starts_with("POST ") {
-        if let Err(e) = handle_http(line, &mut reader, &mut write_half, &ctx).await {
-            warn!("lumen-mcp: http error: {e}");
-        }
-        return;
-    }
-    // First line was JSON-RPC; process it then loop on subsequent
-    // newline-delimited messages from the same connection.
+    // Process the first line, then loop on subsequent newline-delimited
+    // JSON-RPC messages from the same connection.
     if let Err(e) = process_jsonrpc_line(&line, &ctx, &mut write_half).await {
         warn!("lumen-mcp: write error: {e}");
         return;
@@ -282,135 +258,6 @@ async fn process_jsonrpc_line(
     write_half.write_all(&bytes).await
 }
 
-/// Single-request HTTP handler. Speaks just enough of the protocol to
-/// serve the bundled inspector page (`GET /`, `GET /client.js`) and
-/// proxy JSON-RPC calls (`POST /rpc`). Connection: close after each
-/// response - the inspector polls, so keep-alive churn isn't worth
-/// the parser complexity.
-async fn handle_http(
-    request_line: String,
-    reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
-    write_half: &mut tokio::net::tcp::OwnedWriteHalf,
-    ctx: &ServerCtx,
-) -> std::io::Result<()> {
-    let request_line = request_line.trim().to_string();
-    let mut content_length: usize = 0;
-    // Drain headers until the blank line. Capture Content-Length for
-    // the optional POST body.
-    let mut header_buf = String::new();
-    loop {
-        header_buf.clear();
-        let n = reader.read_line(&mut header_buf).await?;
-        if n == 0 {
-            break;
-        }
-        if header_buf == "\r\n" || header_buf == "\n" {
-            break;
-        }
-        if let Some(rest) = header_buf
-            .to_ascii_lowercase()
-            .strip_prefix("content-length:")
-            && let Ok(v) = rest.trim().parse::<usize>()
-        {
-            content_length = v;
-        }
-    }
-    let parts: Vec<&str> = request_line.split_whitespace().collect();
-    let (method, path) = match parts.as_slice() {
-        [m, p, ..] => (*m, *p),
-        _ => {
-            return write_http_error(write_half, 400, "bad request").await;
-        }
-    };
-    if method == "GET" {
-        return match path {
-            "/" | "/index.html" => {
-                write_http_text(write_half, 200, "text/html; charset=utf-8", INSPECTOR_HTML).await
-            }
-            "/client.js" => {
-                write_http_text(
-                    write_half,
-                    200,
-                    "application/javascript; charset=utf-8",
-                    INSPECTOR_JS,
-                )
-                .await
-            }
-            "/state.json" => {
-                // Synthesises the same payload as `lumen.snapshot_text` so
-                // an AI agent can `WebFetch http://127.0.0.1:PORT/state.json`
-                // without going through the MCP stdio bridge. Cheap: one
-                // snapshot read-lock, no body parsing.
-                let request = json!({
-                    "jsonrpc": "2.0",
-                    "method": "lumen.snapshot_text",
-                    "id": 1,
-                });
-                let body_value = handle_request(&request.to_string(), ctx).await;
-                let body = serde_json::to_string(&body_value).unwrap_or_else(|_| "{}".into());
-                write_http_text(write_half, 200, "application/json; charset=utf-8", &body).await
-            }
-            _ => write_http_error(write_half, 404, "not found").await,
-        };
-    }
-    if method == "POST" && path == "/rpc" {
-        // Bound the POST body to defend against a hostile / careless
-        // `Content-Length: 4000000000` allocating multi-GB on every
-        // request. 16 MiB is wildly above any legitimate JSON-RPC
-        // payload (full snapshots fit in <1 MiB).
-        if content_length > MAX_HTTP_BODY_BYTES {
-            warn!(
-                "lumen-mcp: rejecting POST /rpc with content_length={content_length} > {MAX_HTTP_BODY_BYTES}"
-            );
-            return write_http_error(write_half, 413, "payload too large").await;
-        }
-        use tokio::io::AsyncReadExt;
-        let mut body = vec![0u8; content_length];
-        reader.read_exact(&mut body).await?;
-        let body_str = String::from_utf8_lossy(&body);
-        let response_value = handle_request(body_str.trim(), ctx).await;
-        let body = serde_json::to_string(&response_value).unwrap_or_else(|_| "{}".into());
-        return write_http_text(write_half, 200, "application/json; charset=utf-8", &body).await;
-    }
-    write_http_error(write_half, 404, "not found").await
-}
-
-async fn write_http_text(
-    write_half: &mut tokio::net::tcp::OwnedWriteHalf,
-    status: u16,
-    content_type: &str,
-    body: &str,
-) -> std::io::Result<()> {
-    let status_text = match status {
-        200 => "OK",
-        400 => "Bad Request",
-        404 => "Not Found",
-        413 => "Payload Too Large",
-        _ => "Status",
-    };
-    let header = format!(
-        "HTTP/1.1 {status} {status_text}\r\n\
-         Content-Type: {content_type}\r\n\
-         Content-Length: {len}\r\n\
-         Cache-Control: no-store\r\n\
-         Access-Control-Allow-Origin: *\r\n\
-         Connection: close\r\n\
-         \r\n",
-        len = body.len(),
-    );
-    write_half.write_all(header.as_bytes()).await?;
-    write_half.write_all(body.as_bytes()).await?;
-    Ok(())
-}
-
-async fn write_http_error(
-    write_half: &mut tokio::net::tcp::OwnedWriteHalf,
-    status: u16,
-    msg: &str,
-) -> std::io::Result<()> {
-    write_http_text(write_half, status, "text/plain; charset=utf-8", msg).await
-}
-
 /// Top-level request handler. Accepts a single JSON-RPC envelope (as
 /// a string slice) and returns the response value.
 ///
@@ -439,9 +286,8 @@ async fn handle_request(line: &str, ctx: &ServerCtx) -> Value {
     let params = request.get("params").cloned();
     // JSON-RPC notifications have no `id`. We still always return a
     // response value on the wire for non-notification calls. For true
-    // notifications (`id` absent), the response is discarded by the
-    // caller - line transports drop it, http always sends a body
-    // (cheap and matches existing inspector behaviour).
+    // notifications (`id` absent), the caller drops the response
+    // (`process_jsonrpc_line` / `run_stdio` skip writing on `Value::Null`).
     let is_notification = request.get("id").is_none();
 
     let Some(method) = method else {

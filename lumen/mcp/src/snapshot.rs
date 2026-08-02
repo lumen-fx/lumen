@@ -468,7 +468,9 @@ impl<T: Clone> MessageRing<T> {
 }
 
 /// One global signal cell sampled from `lumen_core::property_store::PropertyStore`.
-/// Surfaced by `lumen.signals` and the inspector's Signals panel.
+/// Surfaced by `lumen.signals` (MCP agent tooling, via the `lumen-mcp-server`
+/// bridge) and read in-process by the `lumen-devtools` overlay's Signals +
+/// Perf tab.
 #[derive(Serialize, Clone, Debug)]
 pub struct SignalView {
     /// Global property name (`PropertyKey::Global`).

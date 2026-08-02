@@ -101,8 +101,20 @@ pub fn anchored_popup_origin(
     }
 }
 
-/// Gap (px) between a dropdown panel and its trigger.
+/// Fallback gap (px) between a dropdown panel and its trigger, used when
+/// the trigger carries no [`PopupGap`] (e.g. no CSS `popup-gap` authored).
 const POPUP_GAP: f32 = 4.0;
+
+/// Gap between a popup panel and the control that opens it, in logical
+/// pixels. Sits on the trigger entity.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct PopupGap(pub f32);
+
+impl Default for PopupGap {
+    fn default() -> Self {
+        Self(POPUP_GAP)
+    }
+}
 
 /// Close any open [`PopupPanel`] when a primary press lands outside both
 /// the panel's own subtree and (for dropdowns) its trigger header.
@@ -188,7 +200,7 @@ fn press_hits_popup(
 pub fn flip_open_dropdown_panels(
     viewport: Option<Res<Viewport>>,
     store: Res<PropertyStore>,
-    headers: Query<(&DropdownButton, &Transform)>,
+    headers: Query<(&DropdownButton, &Transform, Option<&PopupGap>)>,
     parents: Query<&ChildOf>,
     transforms: Query<&Transform>,
     mut panels: Query<(Entity, &mut PopupPanel, &mut Style)>,
@@ -209,9 +221,9 @@ pub fn flip_open_dropdown_panels(
             continue;
         }
         // Anchor to the dropdown header bound to the same open signal.
-        let Some((_, header_t)) = headers
+        let Some((_, header_t, gap)) = headers
             .iter()
-            .find(|(h, _)| h.open_signal == panel.open_signal)
+            .find(|(h, _, _)| h.open_signal == panel.open_signal)
         else {
             continue;
         };
@@ -239,7 +251,7 @@ pub fn flip_open_dropdown_panels(
             header_t.size,
             panel_t.size,
             vp,
-            POPUP_GAP,
+            gap.copied().unwrap_or_default().0,
             PopupSide::Below,
         );
         let local_top = origin.y - cb_t.absolute.y;
@@ -397,8 +409,16 @@ mod tests {
 
     /// Build a dropdown (header + containing block + panel) whose header
     /// sits `header_y` px down a 500 px-tall viewport, then run the flip
-    /// system once and return the panel's resulting `inset.top`.
+    /// system once and return the panel's resulting `inset.top`. No
+    /// [`PopupGap`] on the header - the no-CSS-authored path.
     fn run_flip(header_y: f32) -> f32 {
+        run_flip_with_gap(header_y, None)
+    }
+
+    /// The component-based counterpart of [`run_flip`]: same shape, but
+    /// `gap` optionally inserts a [`PopupGap`] on the trigger header, to
+    /// prove a CSS-supplied gap changes the panel's anchored position.
+    fn run_flip_with_gap(header_y: f32, gap: Option<f32>) -> f32 {
         let mut world = World::new();
         world.insert_resource(Viewport {
             size: Vec2::new(500.0, 500.0),
@@ -409,10 +429,13 @@ mod tests {
             .resource_mut::<PropertyStore>()
             .set_global_bool("__dropdown_open:fruit", true);
 
-        world.spawn((
+        let mut header = world.spawn((
             DropdownButton::new("__dropdown_open:fruit"),
             Transform::new(Vec2::new(10.0, header_y), Vec2::new(100.0, 30.0)),
         ));
+        if let Some(gap) = gap {
+            header.insert(PopupGap(gap));
+        }
         // Containing block (`<if>` wrapper) sits just below the header.
         let cb = world
             .spawn(Transform::new(
@@ -446,6 +469,26 @@ mod tests {
         let top = run_flip(10.0);
         assert!(top > 0.0, "panel below the trigger, got top={top}");
         assert!((top - 4.0).abs() < 0.5, "4 px gap below the header");
+    }
+
+    /// No [`PopupGap`] on the trigger must keep today's 4 px gap - the
+    /// explicit no-component counterpart of
+    /// [`custom_popup_gap_moves_the_panel`].
+    #[test]
+    fn no_popup_gap_keeps_the_default_gap() {
+        let top = run_flip_with_gap(10.0, None);
+        assert!((top - 4.0).abs() < 0.5, "no PopupGap -> today's 4 px gap");
+    }
+
+    /// A CSS-supplied [`PopupGap`] on the trigger changes the panel's
+    /// anchored offset.
+    #[test]
+    fn custom_popup_gap_moves_the_panel() {
+        let top = run_flip_with_gap(10.0, Some(20.0));
+        assert!(
+            (top - 20.0).abs() < 0.5,
+            "a CSS-supplied popup-gap moves the panel off the 4 px default (got {top})"
+        );
     }
 
     #[test]

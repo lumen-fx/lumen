@@ -16,13 +16,20 @@
 //! name = "default"            # default: none (bare framework)
 //!
 //! [mcp]
-//! port = 7878                 # default: env LUMEN_MCP_PORT or off
+//! port = 7878                 # default when absent; 0 disables the server
 //!
 //! [profile]
 //! mode = "off"                # off | chrome | stderr
 //!
 //! [asset_roots]
 //! paths = ["icons", "../shared"]   # extra dirs scanned for relative src=
+//!
+//! [[hooks]]                        # project build/setup commands; see `crate::hooks`
+//! when    = "prebuild"             # "prebuild" | "prerun"
+//! os      = "linux"                # optional: "linux" | "macos" | "windows"
+//! run     = "cc -shared -fPIC -O2 -o libmd.so md.c"
+//! inputs  = ["md.c"]
+//! outputs = ["libmd.so"]
 //! ```
 //!
 //! Parse failures surface as [`ConfigError`]; the caller decides whether to abort or fall back to defaults.
@@ -59,6 +66,11 @@ pub struct LumenToml {
     /// `[capabilities]` section - per-app COMPILE-TIME subsystem trim toggles
     /// for the static `--bundle` build (Part B tree-shaking).
     pub capabilities: CapabilitiesCfg,
+    /// `[[hooks]]` array - project-declared build/setup commands, run at the
+    /// `prebuild` / `prerun` trigger points by `lumenc run` / `build` /
+    /// `bundle`. See [`crate::hooks`] for the execution semantics (ordering,
+    /// OS filtering, staleness skip) and [`HookCfg`] for the field reference.
+    pub hooks: Vec<HookCfg>,
     /// `[signals]` table - optional typed schema. Each key declares
     /// the expected `SignalType`. Used by `lumenc lint --signals`
     /// to flag untyped writes / schema mismatches. Schema entries
@@ -76,7 +88,7 @@ pub struct AppCfg {
     /// Stable identifier used for per-app state directories (window state, plugin caches). Falls back to the app directory name when absent.
     pub id: Option<String>,
     /// Optional app-kind override (`"markup"` | `"rust"` | `"cpp"` |
-    /// `"python"`). OPTIONAL and used ONLY to override auto-detection: when
+    /// `"python"`). Optional and used only to override auto-detection: when
     /// absent, `crate::app_kind::detect` inspects the directory; when present,
     /// it wins. Lets an ambiguous directory (e.g. a Rust workspace member that
     /// should still run as pure markup) pin its build/run route.
@@ -255,14 +267,14 @@ pub struct RuntimeCfg {
     pub threads: Option<usize>,
 }
 
-/// `[capabilities]` block -- per-app COMPILE-TIME subsystem trim toggles for
+/// `[capabilities]` block: per-app compile-time subsystem trim toggles for
 /// the static `--bundle` build (Part B tree-shaking). Unlike `[runtime]` (which
 /// gates *initialization* in the always-full shared runtime), these select the
-/// cargo FEATURE set lumenc compiles the per-app static seam with, so an unused
+/// cargo feature set lumenc compiles the per-app static seam with, so an unused
 /// subsystem's crate is dropped from the binary entirely.
 ///
-/// Every field is `Option<bool>`: `None` lets lumenc INFER the capability from a
-/// bounded source scan (err toward ON -- see [`BundleCapabilities::resolve`]);
+/// Every field is `Option<bool>`: `None` lets lumenc infer the capability from a
+/// bounded source scan (err toward on, see [`BundleCapabilities::resolve`]);
 /// `Some(v)` forces it. Ignored by the shared dlopen'd cdylib and the dev
 /// `lumenc run` path, which always ship every subsystem.
 ///
@@ -416,6 +428,140 @@ pub fn infer_script_host(dir: &Path, cfg: &LumenToml) -> ScriptEngine {
         (_, true, _) => ScriptEngine::Lua,
         (_, _, true) => ScriptEngine::Rhai,
         _ => ScriptEngine::default(),
+    }
+}
+
+/// One `[[hooks]]` entry: an app-declared build/setup command.
+///
+/// ```toml
+/// [[hooks]]
+/// when    = "prebuild"
+/// os      = "linux"
+/// run     = "cc -shared -fPIC -O2 -o libmd.so md.c"
+/// inputs  = ["md.c"]
+/// outputs = ["libmd.so"]
+/// ```
+///
+/// `when` and `run` are required; `os`, `inputs`, and `outputs` are optional
+/// and default empty/absent. Validated at parse time by the custom
+/// [`Deserialize`] impl below, so a bad `when` / `os` value or an empty `run`
+/// surfaces as a `lumen.toml` parse error naming the offending value and the
+/// accepted set, rather than failing later at hook-run time.
+///
+/// Hooks execute arbitrary shell commands read from a file inside the app
+/// directory - the same trust model as a Cargo build script. `lumenc run
+/// <dir>` on an app from an untrusted source runs that app's hooks; pass
+/// `--no-hooks` to skip them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookCfg {
+    /// Trigger point: `prebuild` or `prerun`.
+    pub when: HookWhen,
+    /// Restrict the hook to one OS. `None` runs on every platform.
+    pub os: Option<HookOs>,
+    /// The command line, run via `sh -c` (unix) or `cmd /C` (windows) with
+    /// the app directory as the child's cwd.
+    pub run: String,
+    /// Files the command reads, relative to the app directory unless
+    /// absolute. Used only for the staleness check; never passed to `run`.
+    pub inputs: Vec<String>,
+    /// Files the command produces, relative to the app directory unless
+    /// absolute. Used only for the staleness check.
+    pub outputs: Vec<String>,
+}
+
+/// `[[hooks]]` `when` value: the trigger point a hook fires at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookWhen {
+    /// Fires for `lumenc build`, `lumenc bundle`, and `lumenc run` (before
+    /// `prerun`). The place to produce native artifacts a build or run needs.
+    Prebuild,
+    /// Fires for `lumenc run` only, after every `prebuild` hook has run.
+    Prerun,
+}
+
+/// Bare-string `"prebuild"` / `"prerun"` decoder for [`HookWhen`].
+impl TryFrom<&str> for HookWhen {
+    type Error = String;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s {
+            "prebuild" => Ok(HookWhen::Prebuild),
+            "prerun" => Ok(HookWhen::Prerun),
+            other => Err(format!(
+                "unknown hook `when` value `{other}` (expected one of: prebuild, prerun)"
+            )),
+        }
+    }
+}
+
+/// `[[hooks]]` `os` value: restricts a hook to one platform, matched against
+/// [`std::env::consts::OS`] (`"linux"`, `"macos"`, `"windows"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookOs {
+    /// Matches `std::env::consts::OS == "linux"`.
+    Linux,
+    /// Matches `std::env::consts::OS == "macos"`.
+    Macos,
+    /// Matches `std::env::consts::OS == "windows"`.
+    Windows,
+}
+
+/// Bare-string `"linux"` / `"macos"` / `"windows"` decoder for [`HookOs`].
+impl TryFrom<&str> for HookOs {
+    type Error = String;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        match s {
+            "linux" => Ok(HookOs::Linux),
+            "macos" => Ok(HookOs::Macos),
+            "windows" => Ok(HookOs::Windows),
+            other => Err(format!(
+                "unknown hook `os` value `{other}` (expected one of: linux, macos, windows)"
+            )),
+        }
+    }
+}
+
+/// Raw `[[hooks]]` table shape, deserialized field-by-field so [`HookCfg`]
+/// can validate `when` / `os` / `run` and produce a clear error naming the
+/// offending value.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawHookCfg {
+    when: String,
+    os: Option<String>,
+    run: String,
+    #[serde(default)]
+    inputs: Vec<String>,
+    #[serde(default)]
+    outputs: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for HookCfg {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawHookCfg::deserialize(deserializer)?;
+        let when = HookWhen::try_from(raw.when.as_str()).map_err(serde::de::Error::custom)?;
+        let os = raw
+            .os
+            .as_deref()
+            .map(HookOs::try_from)
+            .transpose()
+            .map_err(serde::de::Error::custom)?;
+        if raw.run.trim().is_empty() {
+            return Err(serde::de::Error::custom(
+                "hooks: `run` must not be empty or whitespace-only",
+            ));
+        }
+        Ok(HookCfg {
+            when,
+            os,
+            run: raw.run,
+            inputs: raw.inputs,
+            outputs: raw.outputs,
+        })
     }
 }
 
@@ -783,6 +929,68 @@ mod tests {
         assert_eq!(cfg.capabilities.http_fetch, Some(true));
         assert_eq!(cfg.capabilities.mcp, Some(false));
         assert_eq!(cfg.capabilities.async_rt, Some(true));
+    }
+
+    #[test]
+    fn hooks_table_parses() {
+        let src = r#"
+            [[hooks]]
+            when    = "prebuild"
+            os      = "linux"
+            run     = "cc -shared -fPIC -O2 -o libmd.so md.c"
+            inputs  = ["md.c"]
+            outputs = ["libmd.so"]
+
+            [[hooks]]
+            when = "prerun"
+            run  = "echo starting"
+        "#;
+        let cfg: LumenToml = toml::from_str(src).unwrap();
+        assert_eq!(cfg.hooks.len(), 2);
+        let first = &cfg.hooks[0];
+        assert_eq!(first.when, HookWhen::Prebuild);
+        assert_eq!(first.os, Some(HookOs::Linux));
+        assert_eq!(first.run, "cc -shared -fPIC -O2 -o libmd.so md.c");
+        assert_eq!(first.inputs, vec!["md.c".to_string()]);
+        assert_eq!(first.outputs, vec!["libmd.so".to_string()]);
+        let second = &cfg.hooks[1];
+        assert_eq!(second.when, HookWhen::Prerun);
+        assert_eq!(second.os, None);
+        assert!(second.inputs.is_empty());
+        assert!(second.outputs.is_empty());
+    }
+
+    #[test]
+    fn hooks_reject_unknown_when() {
+        let src = r#"
+            [[hooks]]
+            when = "postbuild"
+            run  = "true"
+        "#;
+        let err = toml::from_str::<LumenToml>(src).unwrap_err();
+        assert!(err.to_string().contains("postbuild"));
+    }
+
+    #[test]
+    fn hooks_reject_unknown_os() {
+        let src = r#"
+            [[hooks]]
+            when = "prebuild"
+            os   = "plan9"
+            run  = "true"
+        "#;
+        let err = toml::from_str::<LumenToml>(src).unwrap_err();
+        assert!(err.to_string().contains("plan9"));
+    }
+
+    #[test]
+    fn hooks_reject_empty_run() {
+        let src = r#"
+            [[hooks]]
+            when = "prebuild"
+            run  = "   "
+        "#;
+        assert!(toml::from_str::<LumenToml>(src).is_err());
     }
 
     #[test]

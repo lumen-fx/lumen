@@ -35,8 +35,20 @@ use std::time::Instant;
 /// var(--lumen-progress-period)` over it and markup `duration=` wins.
 pub const PROGRESS_PERIOD_MS: u32 = 1200;
 
-/// Fraction of the track width the indeterminate chunk occupies.
+/// Fallback fraction of the track width the indeterminate chunk
+/// occupies, used when the track carries no [`ProgressChunk`] (e.g. no
+/// CSS `progress-chunk` authored).
 const INDETERMINATE_FILL_FRACTION: f32 = 0.3;
+
+/// Width of the indeterminate chunk as a fraction of the track.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct ProgressChunk(pub f32);
+
+impl Default for ProgressChunk {
+    fn default() -> Self {
+        Self(INDETERMINATE_FILL_FRACTION)
+    }
+}
 
 /// State for one `<progress>` element (the track entity).
 #[derive(Component, Clone, Debug)]
@@ -87,7 +99,7 @@ impl Plugin for ProgressPlugin {
 
 /// Pull `bind-value` signal writes into [`ProgressBar::value`]. Same
 /// dirty-gated shape as `lumen_core::signals::apply_value_bindings`
-/// (which targets sliders - progress deliberately does NOT carry a
+/// (which targets sliders - progress deliberately does not carry a
 /// `SliderValue`, or it would inherit wheel / click / drag mutation).
 pub fn apply_progress_bindings(
     store: Res<PropertyStore>,
@@ -138,7 +150,7 @@ fn bounce(t: f32) -> f32 {
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn sync_progress_fill(
     mut commands: Commands,
-    bars: Query<(&ProgressBar, &Transform)>,
+    bars: Query<(&ProgressBar, &Transform, Option<&ProgressChunk>)>,
     mut fills: Query<(Entity, &ChildOf, &mut Style), With<ProgressFill>>,
     parents: Query<&ChildOf>,
     visibles: Query<&Visible>,
@@ -154,7 +166,7 @@ pub fn sync_progress_fill(
     let mut any_indeterminate_visible = false;
     for (fill_e, child_of, mut style) in &mut fills {
         let parent = child_of.parent();
-        let Ok((bar, tr)) = bars.get(parent) else {
+        let Ok((bar, tr, chunk)) = bars.get(parent) else {
             continue;
         };
         match bar.value {
@@ -181,9 +193,10 @@ pub fn sync_progress_fill(
                 }
                 let period = bar.period_ms.max(1) as f32 / 1000.0;
                 let phase = (now - epoch).as_secs_f32() / period;
-                let fill_w = tr.size.x * INDETERMINATE_FILL_FRACTION;
+                let fraction = chunk.copied().unwrap_or_default().0;
+                let fill_w = tr.size.x * fraction;
                 let left = bounce(phase) * (tr.size.x - fill_w).max(0.0);
-                let target_w = Length::Percent(INDETERMINATE_FILL_FRACTION * 100.0);
+                let target_w = Length::Percent(fraction * 100.0);
                 if style.width != target_w || (style.inset.left - left).abs() > 0.25 {
                     style.width = target_w;
                     style.inset.left = left;
@@ -260,6 +273,8 @@ mod tests {
     fn indeterminate_bar_animates_and_requests_ticks() {
         let mut world = World::new();
         world.insert_resource(AnimationsActive::default());
+        // No `ProgressChunk` on the track - the no-CSS-authored path must
+        // reproduce today's hardcoded 30% chunk exactly.
         let (_, fill) = spawn_bar(&mut world, ProgressBar::default(), 200.0);
         world.run_system_once(sync_progress_fill).unwrap();
         let style = world.get::<Style>(fill).unwrap();
@@ -273,6 +288,25 @@ mod tests {
         assert!(
             world.resource::<AnimationsActive>().get(),
             "visible indeterminate bar keeps the frame loop awake"
+        );
+    }
+
+    /// A CSS-supplied [`ProgressChunk`] on the track changes the
+    /// indeterminate sweep's chunk width.
+    #[test]
+    fn custom_progress_chunk_changes_the_fill_width() {
+        let mut world = World::new();
+        world.insert_resource(AnimationsActive::default());
+        let (track, fill) = spawn_bar(&mut world, ProgressBar::default(), 200.0);
+        world.entity_mut(track).insert(ProgressChunk(0.6));
+        world.run_system_once(sync_progress_fill).unwrap();
+        let style = world.get::<Style>(fill).unwrap();
+        let Length::Percent(p) = style.width else {
+            panic!("fill width must be percent, got {:?}", style.width);
+        };
+        assert!(
+            (p - 60.0).abs() < 0.01,
+            "a CSS-supplied progress-chunk of 0.6 renders as ~60%, got {p}"
         );
     }
 

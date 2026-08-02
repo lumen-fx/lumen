@@ -6,7 +6,7 @@
 //! stays the default/compat host; this crate is purely additive.
 //!
 //! Like the Rhai host, this crate is engine + builtins + value
-//! conversion ONLY. All host-generic machinery - the event dispatch
+//! conversion only. All host-generic machinery - the event dispatch
 //! surface, the derivation fixed-point driver, the store->mirror sync
 //! driver, timers, fetch, the load-failure banner, and the tick wiring -
 //! lives in `lumen-script` as `ScriptPlugin<H: ScriptHost>`; the
@@ -585,7 +585,7 @@ impl UserData for Node {
                 text,
             }
         });
-        // Guarded markup injection (design 4.4). Do NOT feed untrusted content.
+        // Guarded markup injection (design 4.4). Do not feed untrusted content.
         mutate!("set_inner_markup", |this, markup: String| {
             ScriptCommand::SetInnerMarkup {
                 node: this.handle,
@@ -1824,7 +1824,7 @@ fn build_lua(
     // `ScriptCommand` construction stay inline at the call site (passed
     // as macro args, not hidden behind a helper), so a reviewer can diff
     // the three script hosts builtin-by-builtin. Args marshal through
-    // mlua's tuple `FromLuaMulti` -- a single-arg builtin is a 1-tuple
+    // mlua's tuple `FromLuaMulti`; a single-arg builtin is a 1-tuple
     // `(n,): (i64,)`.
     macro_rules! enqueue {
         ($name:literal, ($($arg:ident : $ty:ty),+ $(,)?), $build:expr $(,)?) => {{

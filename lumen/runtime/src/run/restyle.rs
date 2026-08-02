@@ -836,6 +836,18 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
         .as_deref()
         .and_then(crate::spawn::typography_role_to_px);
     let want_size = attrs.font_size.or(role_size);
+    // `lumen_ir::layout_ir::LineHeightSpec` -> `lumen_core::components::LineHeightSpec`,
+    // a 1:1 variant mapping. `lumen-core` cannot depend on `lumen-ir` (the
+    // dependency would cycle), so the two enums are separate types and this
+    // is the one place, at the IR/ECS boundary, that converts between them.
+    let want_line_height = attrs.line_height.map(|lh| match lh {
+        lumen_ir::layout_ir::LineHeightSpec::Multiplier(m) => {
+            lumen_core::components::LineHeightSpec::Multiplier(m)
+        }
+        lumen_ir::layout_ir::LineHeightSpec::Px(px) => {
+            lumen_core::components::LineHeightSpec::Px(px)
+        }
+    });
     if attrs.text_color.is_some()
         || want_size.is_some()
         || attrs.text_align.is_some()
@@ -844,6 +856,7 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
         || attrs.font_family.is_some()
         || attrs.font_weight.is_some()
         || attrs.selection_color.is_some()
+        || want_line_height.is_some()
     {
         let text_tween: Option<TextColorTransition> = match (
             attrs.text_color,
@@ -882,6 +895,9 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
             if attrs.selection_color.is_some() {
                 ts.selection_color = attrs.selection_color.map(Into::into);
             }
+            if want_line_height.is_some() {
+                ts.line_height = want_line_height;
+            }
         } else {
             let d = TextStyle::default();
             ent.insert(TextStyle {
@@ -896,6 +912,7 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
                     .map(std::sync::Arc::<str>::from),
                 weight: attrs.font_weight.unwrap_or(d.weight),
                 selection_color: attrs.selection_color.map(Into::into),
+                line_height: want_line_height.or(d.line_height),
             });
         }
         if let Some(t) = text_tween {
@@ -928,6 +945,22 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
         }
     }
 
+    // `caret-width` / `password-character` -> per-entity override
+    // components, split off from `TextInputPaint` rather than added to it
+    // so they never touch that component's existing struct literals
+    // elsewhere in the tree (same reasoning as `TextInputPaint`'s own doc
+    // comment - `lumen/runtime/src/spawn.rs` already constructs one
+    // exhaustively). Gated on `TextInput` for the same reason as the
+    // paint block above.
+    if ent.contains::<TextInput>() {
+        if let Some(w) = attrs.caret_width {
+            ent.insert(lumen_core::components::CaretWidth(w));
+        }
+        if let Some(c) = attrs.password_character {
+            ent.insert(lumen_core::components::PasswordCharacter(c));
+        }
+    }
+
     // Opacity - tweened when a `transition: opacity ...` declaration is
     // present and the entity already carries an Opacity to start from
     // (first-time application snaps; transitions animate CHANGES).
@@ -948,10 +981,17 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
         }
     }
 
-    // Overlay-scrollbar styling (CSS `scrollbar-color` /
-    // `scrollbar-width`) - re-resolved on theme / media flips so a dark
-    // skin can retint the bars.
-    if attrs.scrollbar_color.is_some() || attrs.scrollbar_width.is_some() {
+    // Overlay-scrollbar styling (CSS `scrollbar-color` / `scrollbar-width`
+    // / `scrollbar-track-hover` / `scrollbar-hover-boost`) - re-resolved on
+    // theme / media flips so a dark skin can retint the bars. Only these
+    // two of the newer scrollbar properties are whitelisted for live
+    // reapply (`copy_back_reapplied`); `scrollbar-thickness(-thin)`,
+    // `-margin`, `-min-thumb` and the fade timings are spawn-only.
+    if attrs.scrollbar_color.is_some()
+        || attrs.scrollbar_width.is_some()
+        || attrs.scrollbar_track_hover.is_some()
+        || attrs.scrollbar_hover_boost.is_some()
+    {
         let mut sb = ent
             .get::<lumen_core::input::ScrollbarStyle>()
             .copied()
@@ -962,6 +1002,12 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
         }
         if let Some(w) = attrs.scrollbar_width {
             sb.width = w.into();
+        }
+        if let Some(c) = attrs.scrollbar_track_hover {
+            sb.hover_track = c.into();
+        }
+        if let Some(b) = attrs.scrollbar_hover_boost {
+            sb.hover_boost = b;
         }
         ent.insert(sb);
     }
@@ -1101,7 +1147,10 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
                 text_color: attrs.disabled_text_color.map(Into::into),
                 opacity: attrs.disabled_opacity.or({
                     if attrs.disabled_bg.is_none() && attrs.opacity.is_none() {
-                        Some(0.5)
+                        // `disabled-opacity` is the CSS-authored version of
+                        // this fallback; `0.5` remains the last-resort
+                        // constant when no CSS supplies it either.
+                        Some(attrs.disabled_opacity_default.unwrap_or(0.5))
                     } else {
                         None
                     }
@@ -1153,6 +1202,18 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
     // Entity borrow ends here; the trailing passes go through `world`.
     let _ = ent;
 
+    // `caret-blink` -> the global `CaretBlink` resource. There is no
+    // per-entity blink state (one shared phase drives every focused
+    // input's caret), so a CSS override only has one place to land; gate
+    // on the entity actually being the kind `caret-blink` targets so an
+    // unrelated element's cascade never repaints the shared period.
+    if let Some(ms) = attrs.caret_blink_ms
+        && world.get::<TextInput>(entity).is_some()
+        && let Some(mut blink) = world.get_resource_mut::<lumen_core::components::CaretBlink>()
+    {
+        blink.period = std::time::Duration::from_millis(ms as u64);
+    }
+
     // Knob / thumb child fill (`knob-color`): the knob entities carry no
     // tag of their own, so the flip re-resolves the parent's knob-color
     // and pushes it onto the child here.
@@ -1176,5 +1237,151 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
         && let Some(anim) = world.get_resource::<lumen_core::render_world::AnimationsActive>()
     {
         anim.request();
+    }
+}
+
+#[cfg(test)]
+mod apply_reapplied_attrs_tests {
+    //! `apply_reapplied_attrs` is the live-reapply half of the seven
+    //! Phase-2 properties Phase 1 whitelisted in `copy_back_reapplied`
+    //! but could not finish wiring (no component field existed yet):
+    //! `line_height`, `caret_width`, `caret_blink_ms`,
+    //! `password_character`, `scrollbar_track_hover` and
+    //! `scrollbar_hover_boost` (`disabled_opacity_default` was already
+    //! wired). These tests call the field-level reapply directly - the
+    //! cascade itself is exercised elsewhere (`lumen_ir::css` tests).
+    use super::*;
+    use lumen_core::components::{
+        CaretBlink, CaretWidth, LineHeightSpec as CoreLineHeightSpec, PasswordCharacter, TextInput,
+        TextStyle,
+    };
+    use lumen_core::input::ScrollbarStyle;
+    use lumen_ir::layout_ir::{Attributes, LineHeightSpec as IrLineHeightSpec, Rgba};
+
+    /// A live `line-height` reapply overwrites an existing `TextStyle`'s
+    /// `line_height` field, converting the IR spec to the core mirror
+    /// type 1:1.
+    #[test]
+    fn line_height_reapply_updates_existing_text_style() {
+        let mut world = World::new();
+        let e = world.spawn(TextStyle::default()).id();
+        let attrs = Attributes {
+            line_height: Some(IrLineHeightSpec::Multiplier(1.5)),
+            ..Default::default()
+        };
+        apply_reapplied_attrs(&mut world, e, &attrs);
+        assert_eq!(
+            world.get::<TextStyle>(e).unwrap().line_height,
+            Some(CoreLineHeightSpec::Multiplier(1.5))
+        );
+    }
+
+    /// A CSS `line-height: <px>` reapply carries through as
+    /// `LineHeightSpec::Px`, not folded into a multiplier.
+    #[test]
+    fn line_height_reapply_preserves_px_variant() {
+        let mut world = World::new();
+        let e = world.spawn(TextStyle::default()).id();
+        let attrs = Attributes {
+            line_height: Some(IrLineHeightSpec::Px(19.0)),
+            ..Default::default()
+        };
+        apply_reapplied_attrs(&mut world, e, &attrs);
+        assert_eq!(
+            world.get::<TextStyle>(e).unwrap().line_height,
+            Some(CoreLineHeightSpec::Px(19.0))
+        );
+    }
+
+    /// `caret-width` / `password-character` reapply onto a `TextInput`
+    /// entity inserts the override components; an entity that isn't a
+    /// `TextInput` never gains them (matches the spawn-time gating on
+    /// `TextInputPaint`).
+    #[test]
+    fn caret_width_and_password_character_reapply_gated_on_text_input() {
+        let mut world = World::new();
+        let input = world.spawn(TextInput::default()).id();
+        let plain = world.spawn(TextStyle::default()).id();
+        let attrs = Attributes {
+            caret_width: Some(3.5),
+            password_character: Some('#'),
+            ..Default::default()
+        };
+        apply_reapplied_attrs(&mut world, input, &attrs);
+        apply_reapplied_attrs(&mut world, plain, &attrs);
+
+        assert_eq!(world.get::<CaretWidth>(input), Some(&CaretWidth(3.5)));
+        assert_eq!(
+            world.get::<PasswordCharacter>(input),
+            Some(&PasswordCharacter('#'))
+        );
+        assert!(
+            world.get::<CaretWidth>(plain).is_none(),
+            "non-text-input entity must not gain a CaretWidth override"
+        );
+        assert!(
+            world.get::<PasswordCharacter>(plain).is_none(),
+            "non-text-input entity must not gain a PasswordCharacter override"
+        );
+    }
+
+    /// `scrollbar-track-hover` / `scrollbar-hover-boost` reapply patches
+    /// the fields on an existing `ScrollbarStyle`, leaving the rest of
+    /// the component (thumb / track / width / margin / ...) untouched.
+    #[test]
+    fn scrollbar_track_hover_and_hover_boost_reapply_patch_existing_style() {
+        let mut world = World::new();
+        let base = ScrollbarStyle::default();
+        let e = world.spawn(base).id();
+        let attrs = Attributes {
+            scrollbar_track_hover: Some(Rgba {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.5,
+            }),
+            scrollbar_hover_boost: Some(2.0),
+            ..Default::default()
+        };
+        apply_reapplied_attrs(&mut world, e, &attrs);
+        let sb = world.get::<ScrollbarStyle>(e).unwrap();
+        assert_eq!(sb.hover_boost, 2.0);
+        assert_eq!(sb.hover_track.r, 1.0);
+        assert_eq!(sb.hover_track.a, 0.5);
+        // Untouched fields keep the pre-existing default.
+        assert_eq!(sb.thumb, base.thumb);
+        assert_eq!(sb.margin, base.margin);
+    }
+
+    /// `caret-blink` reapply on a `TextInput` entity updates the shared
+    /// `CaretBlink` resource's period; absent a `TextInput`, the global
+    /// resource is left alone (there is no per-entity blink state to
+    /// target, so an unrelated element must not repaint it).
+    #[test]
+    fn caret_blink_reapply_updates_global_resource_when_gated() {
+        let mut world = World::new();
+        world.insert_resource(CaretBlink {
+            visible: true,
+            phase: std::time::Instant::now(),
+            period: std::time::Duration::from_millis(530),
+        });
+        let plain = world.spawn(TextStyle::default()).id();
+        let attrs = Attributes {
+            caret_blink_ms: Some(250),
+            ..Default::default()
+        };
+        apply_reapplied_attrs(&mut world, plain, &attrs);
+        assert_eq!(
+            world.resource::<CaretBlink>().period,
+            std::time::Duration::from_millis(530),
+            "non-text-input entity must not repaint the shared blink period"
+        );
+
+        let input = world.spawn(TextInput::default()).id();
+        apply_reapplied_attrs(&mut world, input, &attrs);
+        assert_eq!(
+            world.resource::<CaretBlink>().period,
+            std::time::Duration::from_millis(250)
+        );
     }
 }

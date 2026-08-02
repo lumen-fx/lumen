@@ -14,12 +14,14 @@
 //!   `{}` capabilities so clients don't probe them.
 //!
 //! The legacy `lumen.tick` / `lumen.inspect_entity` direct method calls
-//! stay alive (server.rs dispatches them too) - the risk register
-//! requires one minor-version deprecation window for the IDE inspector
-//! that connects via newline-JSON-over-TCP.
+//! stay alive (server.rs dispatches them too): the `lumenc` CLI
+//! (`lumenc snapshot`, `screenshot`, `click`, ...) and the
+//! `lumen-mcp-server` stdio bridge both speak these dotted names
+//! directly over newline-delimited JSON-RPC, rather than going through
+//! `tools/call`.
 //!
 //! Transport-agnostic: this module only knows about JSON-RPC messages;
-//! `server.rs` provides the byte transport (TCP, stdio, HTTP-POST).
+//! `server.rs` provides the byte transport (TCP or stdio).
 
 use std::sync::{Arc, RwLock};
 
@@ -75,9 +77,9 @@ pub async fn handle_mcp(
         "tools/call" => Some(handle_tools_call(id, params, snapshot)),
         "resources/list" => Some(ok_response(id, json!({"resources": []}))),
         "prompts/list" => Some(ok_response(id, json!({"prompts": []}))),
-        // Legacy direct-method namespace. Kept alive for one minor
-        // version per the risk register; the IDE inspector at
-        // `assets/client.js` still uses these names.
+        // Legacy direct-method namespace. Kept alive because the
+        // `lumenc` CLI and the `lumen-mcp-server` bridge still call
+        // these dotted names directly over raw TCP.
         m if m.starts_with("lumen.") => {
             if is_notification {
                 return None;
@@ -147,7 +149,7 @@ fn tools_list_result() -> Value {
         ),
         tool_descriptor(
             "lumen_snapshot_tree",
-            "Structured JSON element tree (id, tag, classes, rect, text, flags, children). Backs the browser inspector.",
+            "Structured JSON element tree (id, tag, classes, rect, text, flags, children). What `lumenc snapshot` and agent tooling read.",
             json!({
                 "type": "object",
                 "properties": {

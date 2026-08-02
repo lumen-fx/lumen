@@ -789,27 +789,110 @@ impl EchoMode {
 
 /// Default glyph substituted for each scalar under [`EchoMode::Password`]:
 /// U+2022 BULLET, the platform password convention Qt and the web use.
-/// This is the single Rust fallback; a future `password-character` CSS
-/// property can override it per skin.
+/// This is the single Rust fallback, used when no [`PasswordCharacter`]
+/// override is present; the CSS `password-character` property authors
+/// that override per skin.
 pub const PASSWORD_MASK_CHAR: char = '\u{2022}';
 
-/// Line height as a multiple of the font size. Matches the shaper metrics
-/// (`cosmic_text::Metrics::new(size, size * 1.2)`), so a shaped line `i`
-/// sits `i * line_height` below the first one.
-pub const TEXT_LINE_HEIGHT_FACTOR: f32 = 1.2;
+/// Per-entity override for [`PASSWORD_MASK_CHAR`] (`password-character`
+/// CSS property). Split off as its own tiny component - rather than a
+/// field on [`TextInputPaint`] - so adding it never touches that
+/// component's existing struct literals elsewhere in the tree (same
+/// reasoning as `TextInputPaint`'s own doc comment). Absent =>
+/// [`PASSWORD_MASK_CHAR`]. Only meaningful on `<input>` / `<textarea>`.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct PasswordCharacter(pub char);
+
+impl Default for PasswordCharacter {
+    fn default() -> Self {
+        Self(PASSWORD_MASK_CHAR)
+    }
+}
+
+/// Default text-input caret stroke width, in logical pixels (`caret-width`
+/// CSS property). The single Rust fallback, used when no [`CaretWidth`]
+/// override is present; render paths scale this by the active DPR
+/// themselves.
+pub const CARET_WIDTH_PX: f32 = 2.0;
+
+/// Per-entity override for [`CARET_WIDTH_PX`] (`caret-width` CSS
+/// property). Split off as its own tiny component for the same reason as
+/// [`PasswordCharacter`]. Absent => [`CARET_WIDTH_PX`]. Only meaningful on
+/// `<input>` / `<textarea>`.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct CaretWidth(pub f32);
+
+impl Default for CaretWidth {
+    fn default() -> Self {
+        Self(CARET_WIDTH_PX)
+    }
+}
+
+/// Default CSS `line-height: normal` multiplier - the single Rust
+/// fallback used wherever no `line-height` value reaches the layout /
+/// shaping / paint path. Common browsers use ~1.2; Lumen matches that.
+/// This is the sole line-height ratio in the codebase; [`text_block_top`]
+/// and [`text_baseline_in_line`] take the resolved line height (see
+/// [`resolve_line_height`]) rather than re-deriving it from `size_px` and
+/// a hardcoded factor, so an authored CSS `line-height` moves the text
+/// block and baseline the same way it moves everything else.
+pub const DEFAULT_LINE_HEIGHT_MULTIPLIER: f32 = 1.2;
+
+/// Resolved CSS `line-height`: either a multiplier of the element's font
+/// size (unitless, e.g. `line-height: 1.5`) or an absolute value in
+/// logical pixels (`line-height: 24px`).
+///
+/// Mirrors `lumen_ir::layout_ir::LineHeightSpec` field-for-field;
+/// duplicated here because `lumen-core` cannot depend on `lumen-ir`
+/// (`lumen-ir` already depends on `lumen-core`, so the reverse edge would
+/// cycle). The runtime converts between the two 1:1 at the IR/ECS
+/// boundary (spawn, restyle).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LineHeightSpec {
+    /// Multiple of the resolved font size.
+    Multiplier(f32),
+    /// Absolute value in logical pixels.
+    Px(f32),
+}
+
+impl LineHeightSpec {
+    /// Resolve against a font size in logical pixels.
+    pub fn resolve(self, size_px: f32) -> f32 {
+        match self {
+            LineHeightSpec::Multiplier(m) => size_px * m,
+            LineHeightSpec::Px(px) => px,
+        }
+    }
+}
+
+/// Resolve a possibly-absent CSS `line-height` against `size_px`, falling
+/// back to [`DEFAULT_LINE_HEIGHT_MULTIPLIER`] (`line-height: normal`) when
+/// no value was authored. The single fallback-consumption point every
+/// line-height-aware call site outside this module should route through,
+/// rather than re-deriving `size_px * 1.2` locally.
+pub fn resolve_line_height(spec: Option<LineHeightSpec>, size_px: f32) -> f32 {
+    spec.map(|s| s.resolve(size_px))
+        .unwrap_or(size_px * DEFAULT_LINE_HEIGHT_MULTIPLIER)
+}
 
 /// Cap height as a multiple of the font size, used to optically center a
-/// line inside its line box.
+/// line inside its line box. A font-metric approximation, not a CSS
+/// `line-height` quantity, so it stays a fixed ratio rather than routing
+/// through [`resolve_line_height`].
 const TEXT_CAP_HEIGHT_FACTOR: f32 = 0.72;
 
 /// Offset from the inner content box top to the top of the FIRST line box,
-/// in logical pixels.
+/// in logical pixels. `line_height` is the resolved CSS line height (see
+/// [`resolve_line_height`]) - the caller passes
+/// `resolve_line_height(style.line_height, size_px)` so an authored
+/// `line-height` moves the block origin the same way it moves the line
+/// box.
 ///
 /// A lone line centers in the inner box, which is what `QLineEdit` does
 /// with its `lineRect`. A stacked block starts at the top, as every
 /// multi-line editor does, so line `i` occupies
-/// `[top + i * line_h, top + (i + 1) * line_h)`; that is the band
-/// `TextGeometry::x_to_byte` resolves a pointer y against.
+/// `[top + i * line_height, top + (i + 1) * line_height)`; that is the
+/// band `TextGeometry::x_to_byte` resolves a pointer y against.
 ///
 /// `stacked` is true for a text area (which stays top-aligned however
 /// little it holds, so the first newline does not make the content jump)
@@ -818,18 +901,19 @@ const TEXT_CAP_HEIGHT_FACTOR: f32 = 0.72;
 /// This is the single origin the drawn baseline and the hit test share; the
 /// layout producer evaluates it against the SHAPED (soft-wrap aware) line
 /// count and publishes the result as [`TextBlockOrigin`].
-pub fn text_block_top(inner_h: f32, size_px: f32, stacked: bool) -> f32 {
+pub fn text_block_top(inner_h: f32, line_height: f32, stacked: bool) -> f32 {
     if stacked {
         0.0
     } else {
-        (inner_h - size_px * TEXT_LINE_HEIGHT_FACTOR) / 2.0
+        (inner_h - line_height) / 2.0
     }
 }
 
 /// Baseline offset of a line from the top of its own line box, in logical
-/// pixels. Centers the cap height inside the line box.
-pub fn text_baseline_in_line(size_px: f32) -> f32 {
-    size_px * (TEXT_LINE_HEIGHT_FACTOR + TEXT_CAP_HEIGHT_FACTOR) / 2.0
+/// pixels. Centers the cap height (a `size_px`-derived font metric) inside
+/// the resolved `line_height` (see [`resolve_line_height`]).
+pub fn text_baseline_in_line(size_px: f32, line_height: f32) -> f32 {
+    (line_height + size_px * TEXT_CAP_HEIGHT_FACTOR) / 2.0
 }
 
 /// Published vertical origin of an entity's text block (see
@@ -879,7 +963,10 @@ pub struct CaretBlink {
     /// [`Self::period`] selects the half-cycle.
     pub phase: std::time::Instant,
     /// Half-cycle duration (visible for one period, hidden for the
-    /// next). Qt's default is ~530 ms.
+    /// next). Qt's default is ~530 ms; this default is the single Rust
+    /// fallback for the CSS `caret-blink` property, which overwrites this
+    /// field directly (there is no per-entity blink state to route a
+    /// per-element override through).
     pub period: std::time::Duration,
 }
 
@@ -1310,12 +1397,12 @@ fn resolve_one(
 }
 
 /// Shared hidden-check for every path that must honour visibility (spec
-/// section 17.4 -- one visibility story). True when `entity` or any ancestor is
+/// section 17.4: one visibility story). True when `entity` or any ancestor is
 /// hidden by either mechanism:
 ///
-/// * [`Visible(false)`](Visible) -- render-gate hide (keep-space variant,
+/// * [`Visible(false)`](Visible): render-gate hide (keep-space variant,
 ///   and the flag `<if mode="hide">` stamps on its subtree root), or
-/// * [`Style::display`] `== `[`Display::None`] -- space-releasing hide.
+/// * [`Style::display`] `== `[`Display::None`]: space-releasing hide.
 ///
 /// The `Style` query is generic over a [`QueryFilter`](bevy_ecs::query::QueryFilter)
 /// `F` so callers that already hold a conflicting `Style` view (e.g. the
@@ -1912,6 +1999,11 @@ pub struct TextStyle {
     /// separate [`TextInputPaint`] component so adding them never forces
     /// every `TextStyle` literal to change.
     pub selection_color: Option<Color>,
+    /// CSS `line-height`. Inherits down the tree like [`Self::size_px`]
+    /// (the IR resolves inheritance before this field is populated).
+    /// `None` => [`DEFAULT_LINE_HEIGHT_MULTIPLIER`] (`line-height: normal`),
+    /// resolved via [`resolve_line_height`].
+    pub line_height: Option<LineHeightSpec>,
 }
 
 impl Default for TextStyle {
@@ -1925,6 +2017,7 @@ impl Default for TextStyle {
             family: None,
             weight: 400,
             selection_color: None,
+            line_height: None,
         }
     }
 }

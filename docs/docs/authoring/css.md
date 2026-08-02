@@ -1,9 +1,12 @@
 # CSS subset
 
 Lumen parses a deliberately narrow CSS subset that maps 1:1 to the
-markup attribute surface. The grammar and the applicable property list
-live in
-[`lumenc/src/parser_css.rs`](https://github.com/lumen-fx/lumen/blob/main/lumenc/src/parser_css.rs).
+markup attribute surface. The grammar (tokenizer, selector parser) lives in
+[`lumenc/src/parser_css.rs`](https://github.com/lumen-fx/lumen/blob/main/lumenc/src/parser_css.rs);
+the applicable property list and cascade live in
+[`lumen/ir/src/css.rs`](https://github.com/lumen-fx/lumen/blob/main/lumen/ir/src/css.rs),
+which `parser_css.rs` re-exports.
+
 Most properties have the same name as their markup attribute; a few
 are CSS-only (notably `transition:` and `box-shadow:` with comma lists).
 
@@ -113,7 +116,28 @@ the state and restore when it ends:
   var(--lumen-accent); }`).
 
 Other properties inside a state rule are consumed without effect (no
-warning) - geometry is not state-routable.
+warning) - geometry is not state-routable. This batch of new properties
+follows the same rule: none of `knob-inset`, `thumb-size`, `popup-gap`,
+`progress-chunk`, `disabled-opacity`, `caret-width`, `caret-blink`,
+`password-character`, `line-height`, or any `scrollbar-*` property is
+state-routed. Write them as plain declarations; a `:hover { caret-width:
+3 }` or `.scroll:hover { scrollbar-track-hover: #333 }` parses but has no
+effect.
+
+#### Disabled dimming
+
+Two different slots both affect a disabled element's opacity, and they
+are easy to confuse:
+
+- `:disabled { opacity: <n> }` is the state-routed override - an
+  explicit dimming amount for one element.
+- `disabled-opacity: <n>` is a plain, always-applicable declaration -
+  the amount used when the element is disabled and the author set
+  *neither* `disabled-bg` nor the `:disabled { opacity }` override. It
+  replaces what used to be a fixed 50% runtime fallback.
+
+If both are absent, a disabled element with no other override dims to
+50% by default.
 
 ### Cascade
 
@@ -200,7 +224,10 @@ as a number surface as a `CssWarning` rather than silently applying.
 | `border-top-left-radius`, `border-top-right-radius`, `border-bottom-right-radius`, `border-bottom-left-radius` | *CSS-only* | Number (px) - per-corner longhands. |
 | `text-color` | `text-color` | Color. |
 | `selection-color` | `selection-color` | Color. Text-selection highlight on `input` / `textarea` (skin default: `var(--lumen-selection)`). |
+| `caret-color` | `caret-color` | Color. Text-input caret tint on `input` / `textarea`; unset falls back to the text fill. |
+| `selection-text-color` | `selection-text-color` | Color. Foreground of selected glyphs on `input` / `textarea` (Qt `HighlightedText` / Slint `selection-foreground-color`); unset keeps the normal text fill. |
 | `opacity` | `opacity` | 0..1. |
+| `disabled-opacity` | `disabled-opacity` | 0..1 (clamped). The dimming amount applied to a disabled element when the author set neither `disabled-bg` nor an explicit `:disabled { opacity: ... }`. This is a different slot from `:disabled { opacity: ... }` itself - see [Disabled dimming](#disabled-dimming). Not state-routable: writing it inside `:disabled { }` has no effect, use it as a plain declaration. |
 | `shadow` | `shadow` | Single shadow: `[inset] <ox> <oy> <blur> [<spread>] <color>`. |
 | `box-shadow` | *none - CSS-only* | Comma-separated shadow stack; each entry `[inset] <ox> <oy> <blur> [<spread>] <color>`. Spread inflates (or deflates, when negative) the shadow rect before blurring - `box-shadow: 0 0 0 2 #fff` draws a hard 2px ring, the standard double-focus-ring idiom. |
 
@@ -235,6 +262,7 @@ colors paint with mitred corner splits, exactly like browsers).
 | `text-overflow` | `wrap="ellipsis"` | `clip` \| `ellipsis`. `ellipsis` elides overflowing single-line text with a trailing `...` (Qt elide contract; the ellipsis is trimmed to fit inside the box). Combine with an explicit `wrap` + `max-lines` for a multi-line clamp. Not inherited. The built-in skins set it on `.tab-btn`, `.dropdown-button`, and `.dropdown-option` - the surfaces Qt elides. |
 | `text-align` | `text-align` | `start` \| `center` \| `end`. |
 | `style` | `style` | Named typography role - see below. |
+| `line-height` | `line-height` | Unitless multiplier (`1.2`) or a `px` length (`19px`) - the two mean different things, see below. Inherited. |
 
 **Named typography roles (`style`).** A `style` value names a
 predefined type scale that resolves to a `font-size`, so you can write
@@ -246,6 +274,28 @@ The roles are, largest to smallest: `display-xl`, `display-lg`,
 `body-md`, `body-sm`, `label-lg`, `label-md`, `label-sm`, `caption`,
 `overline`.
 
+**`line-height` has two forms that mean different things.** A bare
+number (`line-height: 1.2`) is a unitless multiplier of the element's
+own font size - it tracks `font-size` automatically, so it keeps
+working if you (or the OS text-scale setting) change the font size
+later. A `px` value (`line-height: 19px`) is a fixed line box height
+that does *not* track `font-size` - use it when you need an exact,
+unchanging line grid regardless of what font size ends up applied.
+Pick the form that matches what you actually want; the two are not
+interchangeable, and Lumen does not convert between them for you.
+
+### Text input
+
+Properties specific to `input` / `textarea` caret and masking. All
+three are Lumen-native (no standard CSS equivalent) and not
+state-routable.
+
+| CSS property | Markup attr | Value |
+|---|---|---|
+| `caret-width` | `caret-width` | Number (px). Stroke width of the caret. Absent = the runtime default. |
+| `caret-blink` | `caret-blink` | Duration (`Nms` / `Ns`). Full on/off blink period of the caret. Absent = the runtime default. |
+| `password-character` | `password-character` | A single character. The glyph substituted for every character of a masked (password-style) text input. Absent = the runtime default mask glyph. |
+
 ### Interaction
 
 | CSS property | Markup attr | Value |
@@ -255,8 +305,21 @@ The roles are, largest to smallest: `display-xl`, `display-lg`,
 | `focus-outline` | `focus-outline` | `<width-px> <#color>`. Draws outside the box while focused (CSS `outline` semantics - never affects layout). Same as `:focus { outline: ... }`; use `:focus-visible { outline: ... }` for a keyboard-only ring. |
 | `outline-offset` | *CSS-only* | Number (px) - gap between the border box edge and the focus ring's inner edge. Valid at rest or inside `:focus` / `:focus-visible`. |
 | `knob-color` | `knob-color` | Color - fill of a `<toggle>`'s knob / `<slider>`'s thumb child (Lumen-native analog property; the child is not selector-reachable). The skins seed it; absent = the runtime fallback. |
+| `knob-inset` | `knob-inset` | Number (px). Gap between a `<toggle>` / `<switch>` knob's edge and its track's edge. Lumen-native; absent = the runtime default. |
+| `thumb-size` | `thumb-size` | Number (px). Diameter of a `<slider>`'s thumb. Lumen-native; absent = the runtime default. |
+| `popup-gap` | `popup-gap` | Number (px). Offset between a `<dropdown>` / `<menu>` trigger and its floating panel. Lumen-native; absent = the runtime default. |
 | `hover-border` | *CSS-only* | Border shorthand. Equivalent to `:hover { border: ... }`. |
 | `focus-border` | *CSS-only* | Border shorthand. Equivalent to `:focus { border: ... }`; wins over `hover-border` when both states are active. |
+
+### Progress
+
+Applies to `<progress>`. Both properties are Lumen-native (no standard
+CSS equivalent) and not state-routable.
+
+| CSS property | Markup attr | Value |
+|---|---|---|
+| `progress-duration` | `duration` | Integer (ms), > 0. Sweep period of an indeterminate `<progress>` bar. |
+| `progress-chunk` | `chunk` | 0..1 fraction, rejected (not clamped) outside that range. Fraction of the track width covered by the moving chunk of an indeterminate sweep. |
 
 ### Image
 
@@ -287,14 +350,30 @@ The roles are, largest to smallest: `display-xl`, `display-lg`,
 |---|---|---|
 | `scrollbar-color` | *none - CSS-only* | `auto` \| `<thumb-color> [<track-color>]` (CSS Scrollbars Styling L1). |
 | `scrollbar-width` | *none - CSS-only* | `auto` \| `thin` \| `none`. |
+| `scrollbar-thickness` | `scrollbar-thickness` | Number (px). Overlay bar width at `scrollbar-width: auto`. Lumen-native; absent = the runtime default. |
+| `scrollbar-thickness-thin` | `scrollbar-thickness-thin` | Number (px). Overlay bar width at `scrollbar-width: thin`. Lumen-native; absent = the runtime default. |
+| `scrollbar-margin` | `scrollbar-margin` | Number (px). Gap between the bar and the container's content edge. Lumen-native; absent = the runtime default. |
+| `scrollbar-min-thumb` | `scrollbar-min-thumb` | Number (px). Minimum thumb length, so a very long scrollable area still gets a grabbable thumb. Lumen-native; absent = the runtime default. |
+| `scrollbar-track-hover` | `scrollbar-track-hover` | Color. Track fill shown while the pointer hovers the scrollbar. Lumen-native; not equivalent to a `:hover { }` rule - see the note below. |
+| `scrollbar-hover-boost` | `scrollbar-hover-boost` | Number. Brightness multiplier applied to the thumb fill while hovered, paired with `scrollbar-track-hover`. Lumen-native; absent = the runtime default. |
+| `scrollbar-fade-delay` | `scrollbar-fade-delay` | Duration (`Nms` / `Ns`). Idle time before an overlay bar starts fading out. Lumen-native; absent = the runtime default (~1 s). |
+| `scrollbar-fade-duration` | `scrollbar-fade-duration` | Duration (`Nms` / `Ns`). Length of the fade-out animation itself. Lumen-native; absent = the runtime default. |
 
 Applies to `<scroll>` containers. Overlay bars appear as-needed (only
-when content overflows), fade out after ~1 s of inactivity, and reappear
-on scroll or hover. One `scrollbar-color` value tints the thumb (the
-translucent track then shows on hover only); a second value paints the
-track whenever the bar is visible. `scrollbar-width: none` hides the
-bars while the container keeps scrolling. The default skin sets the
-thumb via the `--lumen-scrollbar-thumb` token.
+when content overflows), fade out after an idle delay (`scrollbar-fade-delay`,
+default ~1 s), and reappear on scroll or hover. One `scrollbar-color`
+value tints the thumb (the translucent track then shows on hover only);
+a second value paints the track whenever the bar is visible.
+`scrollbar-width: none` hides the bars while the container keeps
+scrolling. The default skin sets the thumb via the
+`--lumen-scrollbar-thumb` token.
+
+**`scrollbar-track-hover` and `scrollbar-hover-boost` are not
+`:hover`-routed**, despite the name. Declare them as plain properties on
+the `scroll` rule itself (`scroll { scrollbar-track-hover: #333; }`) -
+the "while hovering the bar" behavior is already what the property
+means. Putting either one inside an actual `:hover { }` block parses
+but has no effect, the same as any other non-state-routed property.
 
 ### Custom properties (CSS variables)
 
@@ -490,8 +569,9 @@ You can also flip a theme explicitly from script with
 ## Text-property inheritance
 
 Text properties (`text-color`, `font-size`, `font-family`,
-`font-weight`, `text-align`, `wrap`, `max-lines`, and the named `style`
-role) inherit down the tree the way CSS text properties do. Setting `text-color` on `root` (or any
+`font-weight`, `text-align`, `wrap`, `max-lines`, `line-height`, and
+the named `style` role) inherit down the tree the way CSS text
+properties do. Setting `text-color` on `root` (or any
 container) cascades to descendant `<label>` / `<input>` text unless a
 child overrides it. Non-text properties (`bg`, `padding`, `radius`, ...)
 do not inherit.
@@ -507,6 +587,20 @@ framework):
 | `macos` | macOS 14/15-era Aqua: 20px bezel buttons with **no hover state**, pill switch, accent menus, soft accent focus halo, SF font stack at 13px. |
 | `windows` | Windows 11 / WinUI 3 (Fluent 2): 4px radii, elevation bottom edge, accent primary buttons, TextBox focus underline, keyboard-only double focus ring, Segoe UI Variable at 14px. |
 | `linux` | libadwaita-leaning neutral: flat fg-alpha fills, bold suggested-action accent, 46x26 pill switch, 12px popovers, 50 %-opacity disabled, Adwaita Sans / Inter at 15px. |
+
+`<switch>` is styled in all four skins, each mirroring its own
+`<toggle>` treatment (same track/accent fill, per-skin pill geometry).
+
+These four are **independent, mutually exclusive stylesheets, not a
+base skin plus per-OS overlays**: selecting `linux` does not layer its
+rules on top of `default`. Each skin file declares its own complete
+`:root` token block and its own widget rules from scratch. A rule that
+reads a token missing from the *active* skin's own `:root` loses that
+property silently - like any other malformed declaration in a
+stylesheet, an unresolved `var()` there is reported as a `CssWarning`
+rather than a hard error, so copying a snippet that assumes another
+skin's token vocabulary is a real trap with no visible error to catch
+it.
 
 Select one via markup or `lumen.toml` (markup wins when both are set):
 
@@ -534,6 +628,26 @@ declaration -- regardless of specificity. So an author `.editor { bg:
 skin selector is more specific; you never need a higher-specificity or
 `!important` hack to retint a skinned widget. (`!important` still lifts a
 declaration above its origin's normal block per the cascade.)
+
+**There is a layer below the skin, and it is not itself a skin.** A
+built-in `ua.css` stylesheet applies to every app unconditionally -
+skinned, differently-skinned, or with no `skin=` attribute at all - and
+it loads first within the user-agent origin, below whichever named
+skin (if any) is active, which in turn loads below your own `main.css`.
+It carries baseline widget sizing: root and title-bar sizing, `button`
+min-height, `input` / `textarea` min-height and min-width, `toggle` /
+`switch` / `slider` height and min-width, `checkbox` / `radio`
+min-height, `progress` width and height, and the internal
+`.checkbox-box` / `.radio-dot` / `.progress-fill` floors. So a bare
+`<button>` with no skin opted in and no app CSS still gets a sane
+minimum size - "no skin" means no color/shape opinion, not no sizing at
+all. Because `ua.css` sits first in the user-agent origin, any app or
+skin rule of equal specificity overrides it exactly like overriding a
+skin rule - no `!important` needed. A few sizing defaults still come
+from Rust instead of `ua.css` because they are conditional on whether
+another property was already authored, something a static stylesheet
+cannot express, so do not be surprised if diffing `ua.css` against
+observed behavior does not explain everything you see.
 
 **`button.primary` convention class.** Like `.dialog-surface` and
 `.card`, the class `primary` on a `<button>` is a convention the skins
@@ -565,12 +679,24 @@ every reapply:
 The full token set (`--lumen-surface*`, `--lumen-track*`,
 `--lumen-panel*`, `--lumen-border*`, `--lumen-text*`, `--lumen-accent`,
 `--lumen-disabled-bg`, ...) lives at the top of each shipped skin in
-`lumenc/src/skins/{default,macos,windows,linux}.css`. The per-OS skins
-add accent-state and focus tokens on top of the default set:
+`lumen/runtime/src/skins/{default,linux,macos,windows}.css`. The per-OS
+skins add accent-state and focus tokens on top of the default set:
 `--lumen-accent-hover`, `--lumen-accent-active`, `--lumen-on-accent`,
 `--lumen-border-strong`, `--lumen-focus-ring`,
 `--lumen-focus-ring-width`, `--lumen-input-bg`, `--lumen-window-bg`,
 `--lumen-knob`, and (Windows) the elevation-edge pair.
+
+Every skin also seeds one token per widget-geometry / caret / scrollbar
+property from [Property surface](#property-surface) above:
+`--lumen-knob-inset`, `--lumen-thumb-size`, `--lumen-popup-gap`,
+`--lumen-progress-chunk`, `--lumen-disabled-opacity`,
+`--lumen-caret-width`, `--lumen-caret-blink`,
+`--lumen-password-character`, `--lumen-line-height`, and the eight
+`--lumen-scrollbar-*` tokens (`thickness`, `thickness-thin`, `margin`,
+`min-thumb`, `track-hover`, `hover-boost`, `fade-delay`,
+`fade-duration`). Redeclaring one of these in your own `:root` retints
+that value the same way as any other token above; see the property's
+own row for its accepted value shape.
 
 ## Splitting CSS across files (`@import`)
 

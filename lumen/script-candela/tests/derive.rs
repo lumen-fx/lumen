@@ -52,7 +52,7 @@ fn main() {}
     assert_eq!(matching[0].1, vec!["count".to_owned()]);
     assert_eq!(matching[0].2, "double_it");
 
-    // A derivation whose deps did NOT change and is not pending does not match.
+    // A derivation whose deps did not change and is not pending does not match.
     let unrelated: HashSet<&str> = ["something_else"].into_iter().collect();
     assert!(
         host.derivations_matching(&unrelated, &HashSet::new())

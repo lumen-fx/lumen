@@ -222,11 +222,16 @@ impl From<&ShapedRun> for TextGeometry {
 impl TextGeometry {
     /// Bake font-size line metrics so [`Self::byte_to_caret`] returns a real
     /// caret rect `top` / `height`. Matches the render caret math: ascent =
-    /// `size_px * 0.9` above the baseline, descent = `size_px * 0.15` below,
-    /// line height = `size_px * 1.2`.
-    pub fn with_size(mut self, size_px: f32) -> Self {
+    /// `size_px * 0.9` above the baseline, descent = `size_px * 0.15` below
+    /// (fixed font-metric ratios, independent of `line-height` - only the
+    /// spacing between lines changes, not the glyph box a caret hugs).
+    /// `line_height_px` is the resolved CSS `line-height` (or the
+    /// `size_px * DEFAULT_LINE_HEIGHT_MULTIPLIER` fallback), supplied by
+    /// the caller so this pure-math module never has to know the fallback
+    /// constant itself.
+    pub fn with_size(mut self, size_px: f32, line_height_px: f32) -> Self {
         self.metrics = Metrics {
-            line_height: size_px * 1.2,
+            line_height: line_height_px,
             ascent: size_px * 0.9,
             descent: size_px * 0.15,
         };
@@ -745,11 +750,51 @@ mod tests {
             segments: vec![seg],
             width: 20.0,
         };
-        let g = TextGeometry::from(&run).with_size(16.0);
+        let g = TextGeometry::from(&run).with_size(16.0, 16.0 * 1.2);
         let c = g.byte_to_caret(1);
         assert_eq!(c.x, 10.0);
         assert_eq!(c.top, -16.0 * 0.9);
         assert!((c.height - 16.0 * 1.05).abs() < 1e-4);
         assert_eq!(c.line, 0);
+    }
+
+    /// `with_size`'s `line_height_px` param is caller-supplied (a CSS
+    /// `line-height` override or the default multiplier) and drives
+    /// `byte_to_caret`'s visual-line selection independently of
+    /// `size_px`; ascent/descent (hence caret `top` / `height`) stay
+    /// fixed font-metric ratios of `size_px` regardless.
+    #[test]
+    fn with_size_honours_explicit_line_height_for_line_selection() {
+        let mk = |bs: u32, be: u32, x: f32, y: f32| GlyphPosition {
+            id: 0,
+            x,
+            y,
+            advance: 10.0,
+            byte_start: bs,
+            byte_end: be,
+        };
+        let seg = seg_at_level(0, vec![mk(0, 1, 0.0, 0.0), mk(1, 2, 0.0, 30.0)]);
+        let run = ShapedRun {
+            font_data: seg.font_data.clone(),
+            font_index: 0,
+            glyphs: seg.glyphs.clone(),
+            segments: vec![seg],
+            width: 10.0,
+        };
+        // A CSS `line-height: 30px` override should place baseline 30.0 on
+        // visual line 1 (30.0 / 30.0 == 1), not line 2 (round(30.0 / 19.2))
+        // that the default 16px*1.2 multiplier would infer.
+        //
+        // Query byte 2, not byte 1. Byte 1 sits on the boundary between the
+        // two clusters, so it resolves to the trailing edge of the first one
+        // and reports line 0; that caret-affinity choice is orthogonal to
+        // what this test covers.
+        let g = TextGeometry::from(&run).with_size(16.0, 30.0);
+        let c = g.byte_to_caret(2);
+        assert_eq!(c.line, 1);
+        // Ascent/descent (caret top/height) stay size_px-derived, unaffected
+        // by the line-height override.
+        assert_eq!(c.top, 30.0 - 16.0 * 0.9);
+        assert!((c.height - 16.0 * 1.05).abs() < 1e-4);
     }
 }

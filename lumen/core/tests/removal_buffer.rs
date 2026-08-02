@@ -42,7 +42,7 @@ fn maybe_despawn(mut commands: Commands, mut fire: ResMut<Fire>) {
     }
 }
 
-/// Invariant 1a: hundreds of spawn+despawn cycles must NOT grow the main
+/// Invariant 1a: hundreds of spawn+despawn cycles must not grow the main
 /// world's `Marker` removal buffer. Without `clear_trackers`, every removal
 /// accumulates forever and `world.removed::<Marker>()` would report ~N.
 #[test]

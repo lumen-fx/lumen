@@ -146,7 +146,7 @@ pub fn current() -> String {
 /// Resolve a requested `path` against the set of known page `keys` (each a
 /// `.lmn` filename stem), returning `(page_key, segment)`.
 ///
-/// Algorithm - the framework does NOT pattern-match segments:
+/// Algorithm - the framework does not pattern-match segments:
 /// 1. Strip a leading `/`. An empty path resolves to `entry` (the home page).
 /// 2. Try the full path as a page key; if absent, walk up one segment at a
 ///    time to the longest existing prefix (`/user/7` -> `user` when only

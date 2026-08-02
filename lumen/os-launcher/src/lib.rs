@@ -101,9 +101,9 @@ impl Launcher {
         }
         #[cfg(target_os = "windows")]
         {
-            // `explorer /select,<path>` wants the switch and path as ONE
+            // `explorer /select,<path>` wants the switch and path as one
             // argument, and - critically - returns exit code 1 even on
-            // success, so we must NOT gate on the exit status: a clean spawn
+            // success, so we must not gate on the exit status: a clean spawn
             // is the only success signal available here.
             let select = {
                 let mut s = std::ffi::OsString::from("/select,");

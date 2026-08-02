@@ -17,7 +17,7 @@ pub(crate) fn apply_script_commands(
     hot: Option<Res<HotReloadState>>,
     // Async file-dialog fast path (Part B tree-shaking): these are only read
     // when an embedder installed `lumen-async-tokio`'s resources. Compiled out
-    // of a build WITHOUT the `async` feature -- a trimmed bundle then always
+    // of a build without the `async` feature; a trimmed bundle then always
     // takes the blocking `file_dialog.open(..)` path below.
     #[cfg(feature = "async")] tokio_rt: Option<Res<lumen_async_tokio::TokioRuntime>>,
     #[cfg(feature = "async")] async_queue: Option<Res<lumen_async_tokio::AsyncCommandQueue>>,

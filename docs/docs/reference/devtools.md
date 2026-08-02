@@ -1,70 +1,61 @@
-# Devtools - the browser inspector
+# Devtools
 
-Every Lumen app that runs with the MCP plugin installed (the default
-`lumenc run` stack, windowed **and** `--headless`) serves a browser-based
-inspector on its MCP port. It is Lumen's answer to Chrome DevTools'
-element panel / Qt's GammaRay: a live view of the element tree, styles,
-signals, events, and frame timing of the running app.
+Lumen ships an in-window devtools panel: an overlay that draws over your
+running app and shows its live element tree, global signals, tick
+performance, and captured network activity, without leaving the app
+window or wiring up a separate tool. Toggle it while you develop to see
+what your UI and state actually look like, the way a game engine's
+built-in debug overlay works rather than a standalone inspector app.
+
+## Enabling it
+
+The overlay lives in the `lumen-devtools` crate and is off by default -
+a release or `--bundle` build never links it. Build `lumenc` with the
+`devtools` cargo feature to include it:
+
+```sh
+cargo build -p lumenc --features devtools
+```
+
+(`devtools` is a weak feature that only takes effect alongside `dev-run`,
+which is already in `lumenc`'s default feature set, so this is the whole
+command - no `--no-default-features` juggling needed.)
 
 ## Opening it
 
-```sh
-lumenc run my-app            # or: lumenc run my-app --headless
-# then open:
-xdg-open http://127.0.0.1:7878/
-```
+Press **F12** while the app window has focus to toggle the panel. It
+starts hidden. For a headless run, where there is no keyboard, set
+`LUMEN_DEVTOOLS_OPEN` to any non-empty value other than `0` to have it
+open automatically at startup instead of waiting for F12.
 
-The port is the MCP port (`lumen.toml [mcp] port`, default `7878`;
-`port = 0` disables the server and the inspector with it). The page is
-served by the app itself - vanilla HTML + JS, no CDN, works offline.
-Because the inspector talks to the same snapshot the MCP tools use, it
-works identically against a headless instance: you can drive a windowless
-CI app from a browser tab.
+## What it shows
 
-## Panels
+The panel docks to the right edge of the window and has three tabs,
+switched by clicking:
 
-| Panel | What it shows |
+| Tab | What it shows |
 |---|---|
-| **Elements** (left) | Live element tree, polled at 1 Hz from `lumen.snapshot_tree`. Each row shows the markup tag, `#id`, `.classes`, text label, and state flags (`H`overed, `F`ocused, `P`ressed, `T`ab-stop). Rows flash green when anything about the node changed since the last poll. The filter box narrows by tag, `#id`, `.class`, or text. |
-| **Screenshot** (middle) | On-demand capture via `lumen.screenshot` (press `r` or the Refresh button; enable *auto* to capture every poll). The selected tree node's on-screen rect is drawn as a magenta overlay - scroll-corrected, dpr-independent. |
-| **Inspect** (right, top) | Full component dump of the selected node from `lumen.inspect_entity`: transform, style, visuals, text style, bindings, tab index, scroll state, interaction tints. |
-| **Signals** (right, middle) | Every global reactive signal from the PropertyStore: name, value, stored kind, and the frame it last changed (`@N`). Rows flash on change. Click a row to load it into the write boxes; **Set** (or Enter) writes the value back through `lumen.set_signal` - the same external-property bus `Signals::set` uses, so ordering semantics against script writes hold. |
-| **Events** (right, bottom) | Tail of one message ring (`ClickEvent`, `KeyPressed`, `MouseWheel`, ...) via `lumen.recent_messages`. Newest first. |
-| **Perf strip** (top bar) | Frame counter, last tick duration in us, and a sparkline of the last ~70 samples. |
+| **Elements** | The live element tree as indented text: markup tag, `#id`, `.classes`, on-screen size, and `hover` / `focus` / `press` flags. The overlay's own subtree is excluded, so it never inspects itself. Capped at a few hundred lines so a very large tree does not stall the redraw. |
+| **Signals + Perf** | The current frame number, last tick duration, and entity count, followed by every global reactive signal as `name = value (kind)`. |
+| **Network** | Every `fetch()` / `http()` call scripts have made: method, URL, correlation tag, and status (or the transport error), oldest first, capped at a bounded ring so a chatty app cannot grow it without limit. |
 
-## Keyboard
+The body text rebuilds every tick while the panel is visible, reading the
+same in-process snapshot the MCP introspection tools use - it opens no
+socket of its own.
 
-The inspector is keyboard-first:
+## What is not built yet
 
-| Key | Action |
-|---|---|
-| `/` | Focus the tree filter |
-| `Up` / `Down` | Move the tree selection |
-| `Left` / `Right` | Collapse / expand the selected node |
-| `r` | Take a screenshot |
-| `s` | Focus the signal-write box |
-| `Escape` | Leave any text field |
+The panel is read-only and text-based today. It has no click-to-select
+node with a full component dump, no way to write a signal from the
+panel, no on-screen highlight for a selected element, and no search or
+filter box on the Elements tab. Tab clicks and F12 are the entire
+interaction surface.
 
-## Under the hood
+## Driving an app instead of watching it
 
-The page polls `POST /rpc` with plain JSON-RPC. Everything it does is
-available to scripts and agents directly:
-
-```sh
-curl -s -X POST http://127.0.0.1:7878/rpc \
-  -d '{"jsonrpc":"2.0","method":"lumen.snapshot_tree","id":1}'
-curl -s -X POST http://127.0.0.1:7878/rpc \
-  -d '{"jsonrpc":"2.0","method":"lumen.signals","params":{"filter":"vol"},"id":2}'
-curl -s -X POST http://127.0.0.1:7878/rpc \
-  -d '{"jsonrpc":"2.0","method":"lumen.set_signal","params":{"name":"volume","value":"0.5"},"id":3}'
-```
-
-The write path is one-way-safe: `lumen.set_signal` enqueues onto the
-cross-thread external-property bus and wakes the (possibly parked) event
-loop; the write commits at the next tick boundary, never mid-schedule.
-Watch out on windowed apps: the snapshot refreshes at 1 Hz there, so the
-inspector's view can trail the app by up to a second (headless instances
-snapshot every tick).
-
-See also the machine-facing surface these panels are built on:
-`lumen/mcp-server/README.md` documents every MCP tool and its schema.
+To query or control a running app from a script, CI job, or AI agent
+rather than watching the overlay live, use the MCP JSON-RPC tools: the
+`lumenc snapshot` / `screenshot` / `click` / `type` / `key` / `scroll`
+CLI commands, or the `lumen-mcp-server` bridge. See
+[Headless mode](headless.md) for how that server is enabled, and
+`lumen/mcp-server/README.md` for the full tool list and schemas.
