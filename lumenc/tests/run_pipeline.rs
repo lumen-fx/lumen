@@ -25,6 +25,19 @@ use lumenc::{RunError, RunOptions};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// Building an `App` drains the process-global external-property channel in
+/// `lumen_core::property_store`, so two tests running in parallel consume
+/// each other's pending writes: the bus test pushes a value, another test's
+/// `App` drains it, and the value is gone by the time the host looks. Every
+/// test in this binary takes this guard, which costs nothing at this suite's
+/// size and makes the bus test deterministic.
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    GUARD
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 mod pipeline_integration_tests {
     //! Headless full-pipeline regression tests.
     //!
@@ -87,6 +100,7 @@ mod pipeline_integration_tests {
     /// once the value outgrows the field.
     #[test]
     fn input_press_type_and_caret_scroll_end_to_end() {
+        let _serial = crate::serial();
         use lumen_core::components::{TextInput, TextInputScroll, Transform};
         use lumen_core::input::{
             Key, KeyPressed, Modifiers, PointerButton, PointerMoved, PointerPressed, PointerState,
@@ -185,6 +199,7 @@ mod pipeline_integration_tests {
 
     #[test]
     fn bind_text_and_for_rows_populate_from_on_start() {
+        let _serial = crate::serial();
         // A handful of ticks lets the on_start command backlog drain,
         // derivations compute, and the reconciler spawn rows.
         let mut app = build_and_tick(MARKUP, 6);
@@ -248,6 +263,7 @@ mod pipeline_integration_tests {
 
     #[test]
     fn bind_text_and_for_inside_tab_panel_populate() {
+        let _serial = crate::serial();
         let mut app = build_and_tick(TAB_MARKUP, 8);
         let texts = all_texts(&mut app);
         // bind-text inside the (if-gated) tab panel.
@@ -271,6 +287,7 @@ mod pipeline_integration_tests {
 
     #[test]
     fn signal_write_after_startup_updates_text_within_one_tick() {
+        let _serial = crate::serial();
         // Settle the initial pipeline first.
         let mut app = build_and_tick(MARKUP, 6);
         assert!(all_texts(&mut app).iter().any(|t| t == "world"));
@@ -353,6 +370,7 @@ mod pipeline_integration_tests {
 
     #[test]
     fn click_recomputes_derived_signal_and_chained_derivation() {
+        let _serial = crate::serial();
         let mut app = build_and_tick(CLICK_MARKUP, 6);
         // Initial derivation pass (pending_initial path) + in-tick cascade
         // for the derived-of-derived.
@@ -399,6 +417,7 @@ mod pipeline_integration_tests {
     // --- RC7: signal(name, default) publishes its default ----------------
     #[test]
     fn declared_but_never_set_signal_renders_its_default() {
+        let _serial = crate::serial();
         let markup = r#"
 <root>
   <label id="vol" bind-text="volume" />
@@ -427,6 +446,7 @@ mod pipeline_integration_tests {
 
     #[test]
     fn signal_default_does_not_clobber_preexisting_external_value() {
+        let _serial = crate::serial();
         // The SDK / FFI path: a value pushed onto the external property
         // bus BEFORE the script declares the signal must win over the
         // declaration default. Host-level (no App) so the assertion
@@ -494,6 +514,7 @@ mod pipeline_integration_tests {
 
     #[test]
     fn check_rejects_script_that_would_die_at_load_and_run_agrees() {
+        let _serial = crate::serial();
         // 600 nested exprs > the deliberate 512 cap: load would fail.
         let dir = write_app_dir(&nested_expr_script_markup(600));
         let check = lumenc::check_app(&dir);
@@ -520,6 +541,7 @@ mod pipeline_integration_tests {
 
     #[test]
     fn check_accepts_script_deeper_than_rhai_default_limits() {
+        let _serial = crate::serial();
         // 100 nested exprs: over Rhai's old default cap (64) that used to
         // kill real apps, under our deliberate 512. Both check and run
         // must accept it.
@@ -544,6 +566,7 @@ mod pipeline_integration_tests {
     /// garden's `toggle_status` label never left "dark mode".
     #[test]
     fn toggle_flip_recomputes_derived_signal_into_bound_label() {
+        let _serial = crate::serial();
         use lumen_core::components::{Toggleable, Transform};
         use lumen_core::input::{PointerButton, PointerMoved, PointerPressed, PointerState};
         let markup = r##"<root>
@@ -646,6 +669,7 @@ mod feel_wave_tests {
     /// at 1 once the tween completes.
     #[test]
     fn dialog_open_fades_in() {
+        let _serial = crate::serial();
         let markup = r#"
 <root>
   <dialog open="open">
@@ -712,6 +736,7 @@ mod feel_wave_tests {
     /// `ScrollbarStyle` component on the scroll container.
     #[test]
     fn scrollbar_css_lands_on_component() {
+        let _serial = crate::serial();
         let markup = r#"
 <root>
   <scroll height="200" width="300">
@@ -871,6 +896,7 @@ mod virtualization_tests {
     /// survive the shift.
     #[test]
     fn window_shift_reuses_overlapping_row_entities() {
+        let _serial = crate::serial();
         let mut app = build_virtual_grid(500);
         let before = row_entities(&mut app);
         assert!(
@@ -914,6 +940,7 @@ mod virtualization_tests {
     /// semantics survive the reuse optimisation).
     #[test]
     fn key_change_inside_window_respawns_that_row() {
+        let _serial = crate::serial();
         let mut app = build_virtual_grid(100);
         let before = row_entities(&mut app);
         assert!(!before.is_empty());
@@ -957,6 +984,7 @@ mod virtualization_tests {
     #[test]
     #[ignore = "manual profiling harness"]
     fn virt_scroll_profile_small() {
+        let _serial = crate::serial();
         let mut app = build_virtual_grid(200);
         const FRAMES: usize = 60;
         let mut times = Vec::with_capacity(FRAMES);
@@ -978,6 +1006,7 @@ mod virtualization_tests {
     #[test]
     #[ignore = "manual profiling harness"]
     fn virt_scroll_profile_slow() {
+        let _serial = crate::serial();
         let mut app = build_virtual_grid(5000);
         const FRAMES: usize = 64;
         let mut times = Vec::with_capacity(FRAMES);
@@ -997,6 +1026,7 @@ mod virtualization_tests {
     #[test]
     #[ignore = "manual profiling harness"]
     fn virt_scroll_profile() {
+        let _serial = crate::serial();
         let mut app = build_virtual_grid(5000);
         const FRAMES: usize = 120;
 
@@ -1165,6 +1195,7 @@ mod aot_roundtrip_tests {
 
     #[test]
     fn artifact_spawns_identically_to_parsed_source() {
+        let _serial = crate::serial();
         let dir = write_app(MARKUP, CSS);
 
         // Path A - parse from source directly.
