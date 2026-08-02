@@ -14,10 +14,13 @@
  * custom properties into one cascade on every reapply, so a single
  * app-side `:root` block can retint every widget covered here).
  *
- * Coverage: button, input, toggle, slider, tile (interactive surfaces),
- * dropdown (R4.1), menu (R4.2), dialog (backdrop + opt-in
- * `.dialog-surface`), tabs, tooltip, and a focus outline for
- * keyboard-focusable `<scroll>` regions.
+ * Coverage: button, input, textarea, toggle, switch, slider, tile
+ * (interactive surfaces), checkbox, radio, progress, dropdown (R4.1),
+ * menu (R4.2), dialog (backdrop + opt-in `.dialog-surface`), tabs,
+ * tooltip, and a focus outline for keyboard-focusable `<scroll>`
+ * regions. Also carries the caret / line-height /
+ * scrollbar-geometry tokens consumed by `<input>` / `<textarea>` /
+ * `<scroll>` even where this file sets no per-selector rule for them.
  *
  * Every rule below stays inside the CSS subset documented in
  * docs/src/authoring/css.md - state pseudos (`:hover` / `:focus` /
@@ -96,8 +99,42 @@
   --lumen-tooltip-delay: 500;
   --lumen-tooltip-offset: 12;
 
-  /* Indeterminate <progress> sweep period, ms per full bounce. */
+  /* Indeterminate <progress> sweep period, ms per full bounce, and the
+     fraction of the track width the moving chunk covers. */
   --lumen-progress-period: 1200;
+  --lumen-progress-chunk: 0.3;
+
+  /* Toggle / switch knob inset (px, gap from the track edge) and the
+     slider thumb's fixed diameter (px). */
+  --lumen-knob-inset: 4;
+  --lumen-thumb-size: 16;
+
+  /* Gap (px) between a dropdown/menu trigger and its floating panel. */
+  --lumen-popup-gap: 4;
+
+  /* Opacity applied to a disabled control when neither its `:disabled`
+     rule nor an explicit `disabled-bg` already dims it. */
+  --lumen-disabled-opacity: 0.5;
+
+  /* Text-input caret: stroke width (px) and full on/off blink period. */
+  --lumen-caret-width: 2;
+  --lumen-caret-blink: 530ms;
+
+  /* Line-height as a unitless multiplier of the element's font size
+     (matches the CSS `normal` keyword's usual ~1.2 ratio). */
+  --lumen-line-height: 1.2;
+
+  /* Overlay scrollbar geometry, hover feedback and fade timing for
+     `<scroll>` containers, alongside the `--lumen-scrollbar-thumb`
+     color above. */
+  --lumen-scrollbar-thickness: 8;
+  --lumen-scrollbar-thickness-thin: 4;
+  --lumen-scrollbar-margin: 2;
+  --lumen-scrollbar-min-thumb: 24;
+  --lumen-scrollbar-track-hover: #80808029;
+  --lumen-scrollbar-hover-boost: 1.6;
+  --lumen-scrollbar-fade-delay: 1000ms;
+  --lumen-scrollbar-fade-duration: 250ms;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -135,12 +172,12 @@ button:disabled { bg: var(--lumen-disabled-bg); }
  * the 1px chrome never changes an authored width. `selection-color`
  * feeds the text-edit selection highlight (--lumen-selection token).
  */
-input          { bg: var(--lumen-surface); radius: var(--lumen-radius); padding: 8 12; text-color: var(--lumen-text); border: 1px solid var(--lumen-border-subtle); transition: bg 130ms ease; selection-color: var(--lumen-selection); selection-text-color: var(--lumen-selection-text); }
+input          { bg: var(--lumen-surface); radius: var(--lumen-radius); padding: 8 12; text-color: var(--lumen-text); border: 1px solid var(--lumen-border-subtle); transition: bg 130ms ease; selection-color: var(--lumen-selection); selection-text-color: var(--lumen-selection-text); caret-width: var(--lumen-caret-width); caret-blink: var(--lumen-caret-blink); }
 input:hover    { bg: var(--lumen-surface-hover); border: 1px solid var(--lumen-border); }
 input:focus    { outline: 2 var(--lumen-accent); }
 input:disabled { bg: var(--lumen-disabled-bg); }
 
-textarea          { bg: var(--lumen-surface); radius: var(--lumen-radius); padding: 8 12; text-color: var(--lumen-text); border: 1px solid var(--lumen-border-subtle); transition: bg 130ms ease; selection-color: var(--lumen-selection); selection-text-color: var(--lumen-selection-text); }
+textarea          { bg: var(--lumen-surface); radius: var(--lumen-radius); padding: 8 12; text-color: var(--lumen-text); border: 1px solid var(--lumen-border-subtle); transition: bg 130ms ease; selection-color: var(--lumen-selection); selection-text-color: var(--lumen-selection-text); caret-width: var(--lumen-caret-width); caret-blink: var(--lumen-caret-blink); }
 textarea:hover    { bg: var(--lumen-surface-hover); border: 1px solid var(--lumen-border); }
 textarea:focus    { outline: 2 var(--lumen-accent); }
 textarea:disabled { bg: var(--lumen-disabled-bg); }
@@ -152,18 +189,35 @@ textarea:disabled { bg: var(--lumen-disabled-bg); }
  * or author CSS supplies one). Knob geometry stays runtime-driven
  * (sync_toggle_visuals).
  */
-toggle          { bg: var(--lumen-track); radius: 12; knob-color: #ebebf0; transition: bg 130ms ease; }
+toggle          { bg: var(--lumen-track); radius: 12; knob-color: #ebebf0; knob-inset: var(--lumen-knob-inset); transition: bg 130ms ease; }
 toggle:hover    { bg: var(--lumen-track-hover); }
 toggle:active   { bg: var(--lumen-track-active); }
 toggle:focus    { outline: 2 var(--lumen-accent); }
 toggle:checked  { bg: var(--lumen-accent); }
 toggle:disabled { bg: var(--lumen-disabled-bg); }
 
+/* === Switch ===
+ * `<switch>` is the pill-shaped on/off control (distinct element from
+ * `<toggle>`, same underlying track/knob colors so the two read as one
+ * family). Its own unstyled default height is a true 28px pill, so it
+ * gets a fuller radius than toggle's 36px slab. `knob-inset` places the
+ * thumb in from the track edge; the thumb's slide animation reuses this
+ * rule's `transition` duration/easing (same TransitionSpecs lookup
+ * hover.rs already uses for tint tweens, repointed at the slide).
+ */
+switch          { bg: var(--lumen-track); radius: 14; knob-color: #ebebf0; knob-inset: var(--lumen-knob-inset); transition: bg 140ms ease-out; }
+switch:hover    { bg: var(--lumen-track-hover); }
+switch:active   { bg: var(--lumen-track-active); }
+switch:focus    { outline: 2 var(--lumen-accent); }
+switch:checked  { bg: var(--lumen-accent); }
+switch:disabled { bg: var(--lumen-disabled-bg); }
+
 /* === Sliders ===
  * Same story as toggle: the thumb child (SliderThumb) takes the
- * `knob-color` fill; its diameter stays runtime-fixed.
+ * `knob-color` fill; `thumb-size` is its fixed diameter (unlike the
+ * toggle/switch knob, which derives from track height).
  */
-slider          { bg: var(--lumen-track); radius: 4; knob-color: #ebebf0; }
+slider          { bg: var(--lumen-track); radius: 4; knob-color: #ebebf0; thumb-size: var(--lumen-thumb-size); }
 slider:hover    { bg: var(--lumen-track-hover); }
 slider:focus    { outline: 2 var(--lumen-accent); }
 slider:disabled { bg: var(--lumen-disabled-bg); }
@@ -176,6 +230,7 @@ slider:disabled { bg: var(--lumen-disabled-bg); }
  * `:checked { bg }` routes to the box fill swap (runtime
  * sync_checkbox_visuals); the resting box look lives on `.checkbox-box`.
  */
+checkbox          { disabled-opacity: var(--lumen-disabled-opacity); }
 checkbox:checked  { bg: var(--lumen-accent); }
 checkbox:focus    { outline: 2 var(--lumen-accent); }
 .checkbox-box     { width: 18; height: 18; radius: 4; bg: var(--lumen-surface); border: 1px solid var(--lumen-border); text-color: #ffffff; font-size: 14; text-align: center; }
@@ -188,6 +243,7 @@ checkbox:focus    { outline: 2 var(--lumen-accent); }
  *     .radio-label (tag=label)
  * `:selected { bg }` routes to the dot fill swap (sync_radio_visuals).
  */
+radio             { disabled-opacity: var(--lumen-disabled-opacity); }
 radio:selected    { bg: var(--lumen-accent); }
 radio:focus       { outline: 2 var(--lumen-accent); }
 .radio-dot        { width: 18; height: 18; radius: 9; bg: var(--lumen-surface); border: 1px solid var(--lumen-border); }
@@ -198,7 +254,7 @@ radio:focus       { outline: 2 var(--lumen-accent); }
  * child whose width (determinate) / sweep offset (indeterminate) is
  * runtime-driven; everything visual is declared here.
  */
-progress          { bg: var(--lumen-track); radius: 3; height: 6; progress-duration: var(--lumen-progress-period); }
+progress          { bg: var(--lumen-track); radius: 3; height: 6; progress-duration: var(--lumen-progress-period); progress-chunk: var(--lumen-progress-chunk); }
 .progress-fill    { bg: var(--lumen-accent); radius: 3; }
 
 /* === Generic tiles (interactive surfaces) === */
@@ -230,13 +286,15 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
      (`overflow-y: scroll` promotes it to a live scroll container). */
   max-height: var(--lumen-dropdown-max-height);
   overflow-y: scroll;
+  /* Gap from the trigger button this panel is anchored to. */
+  popup-gap: var(--lumen-popup-gap);
 }
 
 /* The keyboard highlight IS the focus marker on the option row, and
  * the hover-tint path treats focus like hover - so `:hover` here
  * styles BOTH the pointer highlight and the keyboard highlight (one
  * shared state, Qt-style); `:focus` adds the keyboard ring. */
-.dropdown-option        { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; transition: bg 130ms ease; text-overflow: ellipsis; }
+.dropdown-option        { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; transition: bg 130ms ease; text-overflow: ellipsis; disabled-opacity: var(--lumen-disabled-opacity); }
 .dropdown-option:hover   { bg: var(--lumen-panel-hover); }
 .dropdown-option:focus   { outline: 2 var(--lumen-accent); }
 .dropdown-option:disabled { text-color: var(--lumen-text-muted); }
@@ -259,9 +317,10 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
   shadow: var(--lumen-shadow-panel);
   border: 1px solid var(--lumen-border);
   padding: 4 0;
+  popup-gap: var(--lumen-popup-gap);
 }
 
-.menu-item        { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; transition: bg 130ms ease; }
+.menu-item        { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; transition: bg 130ms ease; disabled-opacity: var(--lumen-disabled-opacity); }
 .menu-item:hover   { bg: var(--lumen-panel-hover); }
 .menu-item:focus   { outline: 2 var(--lumen-accent); }
 .menu-item:disabled { text-color: var(--lumen-text-muted); }
@@ -317,7 +376,7 @@ dialog { bg: var(--lumen-backdrop); transition: opacity 150ms ease; }
 
 /* Qt QTabBar elide contract: overlong tab titles elide with `...`
  * instead of widening the strip. */
-.tab-btn          { bg: #00000000; radius: var(--lumen-radius-sm); text-color: var(--lumen-text-muted); transition: bg 130ms ease; text-overflow: ellipsis; }
+.tab-btn          { bg: #00000000; radius: var(--lumen-radius-sm); text-color: var(--lumen-text-muted); transition: bg 130ms ease; text-overflow: ellipsis; disabled-opacity: var(--lumen-disabled-opacity); }
 .tab-btn:hover     { bg: var(--lumen-surface-hover); }
 .tab-btn:focus     { outline: 2 var(--lumen-accent); }
 .tab-btn:selected  { bg: var(--lumen-accent); }
@@ -338,5 +397,22 @@ dialog { bg: var(--lumen-backdrop); transition: opacity 150ms ease; }
  * overlay-scrollbar thumb tint (the fade / hover behavior is the
  * runtime's; only colors and width are CSS surface).
  */
-scroll       { scrollbar-color: var(--lumen-scrollbar-thumb); }
+scroll {
+  scrollbar-color: var(--lumen-scrollbar-thumb);
+  scrollbar-thickness: var(--lumen-scrollbar-thickness);
+  scrollbar-thickness-thin: var(--lumen-scrollbar-thickness-thin);
+  scrollbar-margin: var(--lumen-scrollbar-margin);
+  scrollbar-min-thumb: var(--lumen-scrollbar-min-thumb);
+  scrollbar-track-hover: var(--lumen-scrollbar-track-hover);
+  scrollbar-hover-boost: var(--lumen-scrollbar-hover-boost);
+  scrollbar-fade-delay: var(--lumen-scrollbar-fade-delay);
+  scrollbar-fade-duration: var(--lumen-scrollbar-fade-duration);
+}
 scroll:focus { outline: 2 var(--lumen-accent); }
+
+/* === Root ===
+ * `line-height` is the one root-level typography token this file sets;
+ * font-family / font-size stay with the always-on user-agent baseline
+ * so a skinless app still gets sane text sizing (see the file header).
+ */
+root { line-height: var(--lumen-line-height); }

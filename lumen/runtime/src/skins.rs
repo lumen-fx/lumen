@@ -1,6 +1,20 @@
-//! Embedded user-agent stylesheets activated via `<root skin="<name>">`
-//! or `lumen.toml` `[skin] name = "..."`. When neither opts in, no
-//! stylesheet is applied (blank-by-default contract).
+//! Embedded user-agent stylesheets.
+//!
+//! [`DEFAULT`] / [`MACOS`] / [`WINDOWS`] / [`LINUX`] are opt-in, activated
+//! via `<root skin="<name>">` or `lumen.toml` `[skin] name = "..."`; when
+//! neither opts in, none of them is applied.
+//!
+//! [`UA`] is different: it is not selected by name and applies to every
+//! app unconditionally, beneath whichever named skin (if any) and
+//! beneath the app's own CSS - see its own doc comment.
+
+/// The always-on user-agent baseline: per-tag sizing floors (button /
+/// input / toggle / switch / slider / progress minimums, root / title-bar
+/// fill) applied beneath any opt-in skin and beneath app CSS. Folded into
+/// the combined cascade by `run::loading::load_ir` for every app, skinned
+/// or not - the framework's equivalent of a browser's built-in
+/// stylesheet.
+pub const UA: &str = include_str!("skins/ua.css");
 
 /// Default (neutral, dark-first) skin CSS for buttons, inputs,
 /// toggles, sliders, and tiles.

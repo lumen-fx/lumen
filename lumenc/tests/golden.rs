@@ -750,7 +750,7 @@ fn golden_overlay_stacking() {
 /// Nested group opacity: 0.6 outer x 0.5 inner over an opaque leaf.
 ///
 /// NOTE: at baseline time opacity applies to each element's own fill
-/// (the two container fills blend correctly) but does NOT composite
+/// (the two container fills blend correctly) but does not composite
 /// down onto the opaque leaf, which renders solid white; the golden
 /// captures current behavior.
 #[test]

@@ -13,12 +13,19 @@ my-app/
 `-- assets/         # any extra dirs listed in [asset_roots]
 ```
 
+Before any of that, `lumenc run` / `build` / `bundle` run the app's
+declared `[[hooks]]` `prebuild` commands (`run` also fires `prerun`
+afterward) - the step that produces a native artifact a script imports,
+for example a C library built from source. `lumenc check` never runs
+hooks. See [`[[hooks]]`](../authoring/lumen-toml.md#hooks) for the schema
+and `--no-hooks` to skip them.
+
 The script file is `.cdl` for candela, the language these docs use
 throughout. Rhai (`.rhai`) and Lua (`.lua`) scripts work the same way and
 expose the same builtins; `[script] engine` in `lumen.toml` picks which
 host runs them.
 
-The compiler reads:
+The compiler then reads:
 
 1. `lumen.toml` if it exists (otherwise defaults).
 2. The entry markup file - `[app] entry = "main.lmn"` by default.

@@ -87,7 +87,7 @@ fn load_ir_from_artifact(path: &Path) -> Result<LoadResult, RunError> {
 
 /// Deserialize a precompiled AOT artifact from in-memory bytes into a
 /// [`LoadResult`]: the byte-slice counterpart of [`load_ir_from_artifact`].
-/// The link-not-embed launcher path -- the compiler produces LMNA bytes
+/// The link-not-embed launcher path: the compiler produces LMNA bytes
 /// in-process and hands them across the C-ABI, so the runtime never touches a
 /// file for the artifact itself.
 fn load_ir_from_artifact_bytes(bytes: &[u8]) -> Result<LoadResult, RunError> {
@@ -244,24 +244,38 @@ pub(crate) fn load_ir(
     {
         ir.skin = Some(s.to_string());
     }
-    // Skin (if opted in via `<root skin="...">` / lumen.toml) is
-    // concatenated BEFORE the user's `main.css` into one combined
-    // stylesheet with renumbered source order, then applied in a
-    // single cascade pass. One pass matters: applying the two sheets
-    // sequentially made the second pass's inline-origin snapshot treat
-    // the skin's values as inline-set, restoring them OVER author CSS
-    // - the author could never override a skin `bg`. With one combined
-    // sheet the standard cascade rules do the work.
+    // The always-on UA baseline (`skins::UA`), the opt-in named skin (if
+    // any, via `<root skin="...">` / lumen.toml), and the user's
+    // `main.css` are concatenated into one combined stylesheet with
+    // renumbered source order, then applied in a single cascade pass.
+    // One pass matters: applying the sheets sequentially made a later
+    // pass's inline-origin snapshot treat an earlier sheet's values as
+    // inline-set, restoring them OVER author CSS - the author could
+    // never override a skin `bg`. With one combined sheet the standard
+    // cascade rules do the work.
     //
-    // Origin precedence: skin rules are tagged `Origin::UserAgent` and
-    // author rules `Origin::Author`. The cascade sorts on origin FIRST
-    // (CSS Cascade section 6.1), so any author rule beats any skin rule for
-    // normal declarations regardless of specificity - e.g. author
-    // `.editor` wins over skin `textarea:hover`. The `source_order` bump
-    // below only orders rules WITHIN an origin. (The reconciler also
-    // re-applies this combined sheet to runtime-substituted `<for>`
-    // template elements.)
+    // Origin precedence: UA and skin rules are both tagged
+    // `Origin::UserAgent`; author rules are `Origin::Author`. The cascade
+    // sorts on origin FIRST (CSS Cascade section 6.1), so any author rule
+    // beats any UA or skin rule for normal declarations regardless of
+    // specificity - e.g. author `.editor` wins over skin
+    // `textarea:hover`. UA and skin share that one origin tier, so their
+    // relative order comes from the `source_order` bump below instead:
+    // UA rules are numbered first, so an equal-specificity skin rule for
+    // the same property always sorts after it and wins the tie. (The
+    // reconciler also re-applies this combined sheet to
+    // runtime-substituted `<for>` template elements.)
     let mut combined_rules = Vec::new();
+    {
+        let sheet = parser
+            .parse_css(crate::skins::UA)
+            .map_err(RunError::ParseCss)?;
+        for mut rule in sheet.rules {
+            rule.origin = lumen_ir::css::Origin::UserAgent;
+            combined_rules.push(rule);
+        }
+    }
+    let ua_rule_count = combined_rules.len();
     if let Some(name) = ir.skin.clone() {
         let skin_src = crate::skins::lookup(&name).ok_or_else(|| {
             RunError::ParseCss(format!(
@@ -271,8 +285,11 @@ pub(crate) fn load_ir(
         let sheet = parser.parse_css(skin_src).map_err(RunError::ParseCss)?;
         for mut rule in sheet.rules {
             // Built-in skin ships as the user-agent origin so author CSS
-            // always overrides it (per the cascade sort above).
+            // always overrides it (per the cascade sort above); the
+            // source-order bump keeps it ordered after the UA baseline
+            // within that shared origin.
             rule.origin = lumen_ir::css::Origin::UserAgent;
+            rule.source_order += ua_rule_count;
             combined_rules.push(rule);
         }
     }
@@ -281,7 +298,7 @@ pub(crate) fn load_ir(
         let sheet = parser.parse_css(css_src).map_err(RunError::ParseCss)?;
         for mut rule in sheet.rules {
             // Author origin is the parser default; the source-order bump
-            // keeps author rules ordered after skin rules within the
+            // keeps author rules ordered after UA + skin rules within the
             // combined sheet (matters only when origins ever tie).
             rule.source_order += skin_rule_count;
             combined_rules.push(rule);

@@ -23,11 +23,11 @@
 //! - `bind-checked` / `on_toggle(id, checked)` come with `Toggleable`.
 //!
 //! Tri-state: `indeterminate="true"` inserts the [`Indeterminate`]
-//! marker. The box renders a dash while it's present; the first USER
+//! marker. The box renders a dash while it's present; the first user
 //! toggle (click / Space - anything that fires
 //! [`crate::controls::ToggleChanged`]) clears it, mirroring the web's
 //! `indeterminate` IDL attribute and Qt's `PartiallyChecked`. Script
-//! `bind-checked` writes do NOT clear it.
+//! `bind-checked` writes do not clear it.
 
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::*;
@@ -140,7 +140,7 @@ pub fn sync_checkbox_visuals(
         };
         let indeterminate = indeterminate.is_some();
         // Capture the resting (CSS-authored) fill once, before the first
-        // swap can overwrite it (see [`capture_baseline`]) -- correct even
+        // swap can overwrite it (see [`capture_baseline`]); correct even
         // for a checkbox spawned already-checked.
         let base_fill = crate::baseline::capture_baseline(
             &mut commands,

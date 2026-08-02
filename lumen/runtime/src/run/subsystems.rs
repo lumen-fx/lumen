@@ -47,8 +47,8 @@ impl SubsystemUsage {
     ///
     /// `has_app_hooks` is `true` when the embedder supplied `RunOptions`
     /// `app_hooks` (Rust SDK closures). Their code is not scannable here, so
-    /// it downgrades a *newly-gated* subsystem's "unused" verdict to ON - an
-    /// SDK app may drive that subsystem from Rust. It does NOT affect audio,
+    /// it downgrades a *newly-gated* subsystem's "unused" verdict to on - an
+    /// SDK app may drive that subsystem from Rust. It does not affect audio,
     /// whose gating predates this refactor and must stay byte-identical.
     pub(crate) fn detect(
         opts: &RunOptions,
@@ -69,7 +69,7 @@ impl SubsystemUsage {
 
         // Audio: identical to the pre-refactor `detect_audio_usage` - explicit
         // `[runtime] audio` wins; else artifact (source unreadable) or a marker
-        // scan. Embedder hooks are deliberately NOT force-ON here, matching the
+        // scan. Embedder hooks are deliberately not force-on here, matching the
         // prior behaviour exactly.
         let audio = match cfg.runtime.audio {
             Some(v) => v,
@@ -145,7 +145,7 @@ pub(crate) fn audio_markers_present(hay: &str) -> bool {
 }
 
 // -------------------------------------------------------------------------
-// Core visual stack - ALWAYS registered. Every visual app needs it; there is
+// Core visual stack - always registered. Every visual app needs it; there is
 // no gate here by design (see the module contract's "never gate the core").
 // -------------------------------------------------------------------------
 
@@ -200,7 +200,7 @@ pub(crate) fn register_core(app: &mut App) {
 }
 
 /// Reactive bindings + reconcilers + dialog lifecycle + the in-app error
-/// overlay. ALWAYS registered: these drive `bind=`, `<for>` / `<if>`,
+/// overlay. Always registered: these drive `bind=`, `<for>` / `<if>`,
 /// `<dialog>`, and hot-reload parse-error surfacing - core to every app.
 pub(crate) fn register_reactive(app: &mut App) {
     // Reactive bindings: <element bind="text:foo"> reads
@@ -269,7 +269,7 @@ pub(crate) fn register_reactive(app: &mut App) {
 }
 
 /// Command-bus drain, the FFI typed-read mirror, and the `set_color_scheme`
-/// `Command::Typed` handler. ALWAYS registered: the command queue is the
+/// `Command::Typed` handler. Always registered: the command queue is the
 /// canonical mutation seam and the drains no-op cheaply on empty queues.
 pub(crate) fn register_commands(app: &mut App) {
     // Drain `Command::SetProperty` + `Command::Typed` entries on every
@@ -322,7 +322,7 @@ pub(crate) fn register_commands(app: &mut App) {
 
 /// Style-invalidation cache, style version tracking, the live combined
 /// stylesheet, the theme/media re-resolver systems, and the per-cache memory
-/// budget. ALWAYS registered: every app carries CSS + a memory budget.
+/// budget. Always registered: every app carries CSS + a memory budget.
 pub(crate) fn register_styles(
     app: &mut App,
     ir: &lumen_ir::layout_ir::LayoutIR,

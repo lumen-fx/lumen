@@ -7,7 +7,7 @@
 //! handle into the process-global side-table instead (see
 //! `lumen_core::node::intern_node`).
 //!
-//! Selector matching reuses the cascade matcher in `lumen-ir` -- there is
+//! Selector matching reuses the cascade matcher in `lumen-ir`; there is
 //! no second selector engine. A query walks each snapshot record's
 //! ancestor chain (root-first) and applies
 //! [`lumen_ir::css::selector_matches`]. Sibling combinators (`+`, `~`)
@@ -504,10 +504,10 @@ pub fn hovered_node() -> Option<u64> {
 
 // ---------------------------------------------------------------------------
 // External DOM command bus. Fire-and-forget mutation commands issued from
-// OUTSIDE a script tick (the C-ABI, the Rust SDK) queue here; the runtime
+// outside a script tick (the C-ABI, the Rust SDK) queue here; the runtime
 // drains them into `ScriptCommandEvent` each tick so they flow through the
 // same applier as script-issued mutations. Script hosts push into their
-// own per-host sink and do NOT use this bus.
+// own per-host sink and do not use this bus.
 // ---------------------------------------------------------------------------
 
 static DOM_CMD_QUEUE: OnceLock<Mutex<Vec<ScriptCommand>>> = OnceLock::new();

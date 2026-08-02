@@ -34,8 +34,8 @@ pub use checkbox::{
     clear_indeterminate_on_user_toggle, sync_checkbox_visuals,
 };
 pub use controls::{
-    ControlsPlugin, SliderChanged, SliderDragOrigin, SliderThumb, ToggleChanged, ToggleKnob,
-    ToggleStyle, WHEEL_NOTCH_PX, adjust_slider_on_wheel, cancel_slider_drag_on_escape,
+    ControlsPlugin, KnobGeometry, SliderChanged, SliderDragOrigin, SliderThumb, ToggleChanged,
+    ToggleKnob, ToggleStyle, WHEEL_NOTCH_PX, adjust_slider_on_wheel, cancel_slider_drag_on_escape,
     sync_slider_thumb, sync_toggle_visuals,
 };
 pub use cursor::{CursorPlugin, update_cursor_request};
@@ -46,7 +46,7 @@ pub use hover::{
 };
 pub use lumen_core::prelude::{Scroll, ScrollAxis, ScrollOffset};
 pub use popup::{
-    PopupPanel, PopupSide, anchored_popup_origin, dismiss_popups_on_outside_press,
+    PopupGap, PopupPanel, PopupSide, anchored_popup_origin, dismiss_popups_on_outside_press,
     flip_open_dropdown_panels,
 };
 pub use popup_nav::{
@@ -55,8 +55,8 @@ pub use popup_nav::{
 };
 pub use press::{PressConfig, PressPlugin, PressStartedAt};
 pub use progress::{
-    PROGRESS_PERIOD_MS, ProgressBar, ProgressFill, ProgressPlugin, apply_progress_bindings,
-    sync_progress_fill,
+    PROGRESS_PERIOD_MS, ProgressBar, ProgressChunk, ProgressFill, ProgressPlugin,
+    apply_progress_bindings, sync_progress_fill,
 };
 pub use radio::{
     RadioBaseFill, RadioButton, RadioDot, RadioPlugin, RadioStyle, dispatch_radio_clicks,

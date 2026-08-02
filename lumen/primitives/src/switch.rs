@@ -37,6 +37,15 @@
 //! [`AnimationsActive`] only while a slide is in flight, then retires the
 //! component - no per-frame loop.
 //!
+//! The slide's duration + easing come from a `transition: bg <duration>
+//! <easing>` declaration on the track (see [`slide_tween_params`]) - the
+//! same mechanism [`crate::hover`] uses for its hover / press tint tween -
+//! falling back to [`SWITCH_SLIDE_MS`] / [`SWITCH_SLIDE_EASING`] when
+//! none is authored. Track / thumb geometry (the inset gap and the
+//! thumb's diameter) come from [`crate::controls::KnobGeometry`],
+//! populated from the CSS `knob-inset` property, with the same
+//! today's-appearance fallback.
+//!
 //! Accessibility: `<switch>` carries an explicit
 //! [`lumen_core::components::A11yRole::Switch`], so the a11y tree exposes
 //! it as `Role::Switch` with the `Toggled` state derived from
@@ -50,19 +59,36 @@ use lumen_core::components::{Color, Fill, Visible, Visuals};
 use lumen_core::prelude::*;
 use lumen_core::render_world::AnimationsActive;
 
-use crate::controls::{KNOB_INSET, TOGGLE_CHECKED_BG, TOGGLE_UNCHECKED_BG};
+use crate::controls::{KnobGeometry, TOGGLE_CHECKED_BG, TOGGLE_UNCHECKED_BG};
 use crate::hover::{HoverBaseColor, PressBaseColor};
-use crate::transition::{Easing, Transition};
+use crate::transition::{Easing, Transition, TransitionProperty, TransitionSpecs};
 
-/// Duration of the thumb slide when the switch flips. 140 ms sits between
-/// Slint's 75 ms handle tween and the 200 ms Qt QML `Switch` default -
-/// long enough to read as motion, short enough to feel instant.
+/// Fallback duration of the thumb slide when the switch flips, used when
+/// the track carries no `transition: bg ...` [`TransitionSpecs`] (see
+/// [`slide_tween_params`]). 140 ms sits between Slint's 75 ms handle
+/// tween and the 200 ms Qt QML `Switch` default - long enough to read as
+/// motion, short enough to feel instant.
 pub const SWITCH_SLIDE_MS: u64 = 140;
 
-/// Easing for the thumb slide. Ease-out (fast start, gentle settle) is the
+/// Fallback easing for the thumb slide, used under the same condition as
+/// [`SWITCH_SLIDE_MS`]. Ease-out (fast start, gentle settle) is the
 /// Cocoa / Material short-transition curve; the same curve `<checkbox>` and
 /// the hover tints reach for.
 pub const SWITCH_SLIDE_EASING: Easing = Easing::EaseOut;
+
+/// Resolve the thumb slide's duration + easing for one flip. A CSS
+/// `transition: bg <duration> <easing>` declaration on the track entity
+/// (its [`TransitionSpecs`]) wins - the same `TransitionSpecs` +
+/// `TransitionProperty::BackgroundColor` lookup [`crate::hover`] consults
+/// for its hover / press tint tween duration - otherwise the built-in
+/// [`SWITCH_SLIDE_MS`] / [`SWITCH_SLIDE_EASING`] fallback, which
+/// reproduces today's hardcoded slide exactly.
+fn slide_tween_params(specs: Option<&TransitionSpecs>) -> (Duration, Easing) {
+    match specs.and_then(|s| s.for_property(TransitionProperty::BackgroundColor)) {
+        Some(spec) => (spec.duration, spec.easing),
+        None => (Duration::from_millis(SWITCH_SLIDE_MS), SWITCH_SLIDE_EASING),
+    }
+}
 
 /// Per-switch track fills, resolved at spawn from markup / CSS.
 /// [`sync_switch_visuals`] swaps [`Visuals::fill`] between the two on every
@@ -160,7 +186,12 @@ pub fn sync_switch_visuals(
         ),
         (Changed<Toggleable>, Without<SwitchThumb>),
     >,
-    parents: Query<(&Toggleable, &Transform)>,
+    parents: Query<(
+        &Toggleable,
+        &Transform,
+        Option<&KnobGeometry>,
+        Option<&TransitionSpecs>,
+    )>,
     mut thumbs: Query<
         (
             Entity,
@@ -193,17 +224,18 @@ pub fn sync_switch_visuals(
 
     // Thumb geometry + animated slide.
     for (thumb_e, child_of, mut thumb, mut style, mut vis, slide) in &mut thumbs {
-        let Ok((t, tr)) = parents.get(child_of.parent()) else {
+        let Ok((t, tr, geo, specs)) = parents.get(child_of.parent()) else {
             continue;
         };
         if tr.size.x <= 0.0 || tr.size.y <= 0.0 {
             continue;
         }
-        let knob = (tr.size.y - 2.0 * KNOB_INSET).max(2.0);
+        let inset = geo.copied().unwrap_or_default().inset;
+        let knob = (tr.size.y - 2.0 * inset).max(2.0);
         let target_left = if t.checked {
-            (tr.size.x - knob - KNOB_INSET).max(KNOB_INSET)
+            (tr.size.x - knob - inset).max(inset)
         } else {
-            KNOB_INSET
+            inset
         };
         let radius = knob / 2.0;
         if vis.radius != radius {
@@ -211,10 +243,10 @@ pub fn sync_switch_visuals(
         }
         let size = Length::Px(knob);
         let mut dirty = false;
-        if style.width != size || style.height != size || style.inset.top != KNOB_INSET {
+        if style.width != size || style.height != size || style.inset.top != inset {
             style.width = size;
             style.height = size;
-            style.inset.top = KNOB_INSET;
+            style.inset.top = inset;
             dirty = true;
         }
         match thumb.placed {
@@ -229,13 +261,14 @@ pub fn sync_switch_visuals(
                 let from = style.inset.left;
                 thumb.placed = Some(t.checked);
                 if (from - target_left).abs() > f32::EPSILON {
+                    let (duration, easing) = slide_tween_params(specs);
                     commands
                         .entity(thumb_e)
                         .insert(SwitchThumbSlide(Transition::new(
                             from,
                             target_left,
-                            Duration::from_millis(SWITCH_SLIDE_MS),
-                            SWITCH_SLIDE_EASING,
+                            duration,
+                            easing,
                         )));
                 } else {
                     style.inset.left = target_left;
@@ -297,27 +330,50 @@ pub fn step_switch_thumb(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::controls::{KNOB_INSET, THUMB_SIZE};
+    use crate::transition::TransitionSpec;
     use bevy_ecs::system::RunSystemOnce;
     use glam::Vec2;
 
-    /// Spawn a laid-out `<switch>` track + thumb child. Track is 52x28 so
-    /// the thumb math is `knob = 28 - 8 = 20`, `off = 4`, `on = 52-20-4 = 28`.
+    /// Spawn a laid-out `<switch>` track + thumb child, with no
+    /// [`KnobGeometry`] / [`TransitionSpecs`] on the track - the
+    /// no-CSS-authored path, which must reproduce today's hardcoded
+    /// geometry / slide timing exactly. Track is 52x28 so the thumb math
+    /// is `knob = 28 - 8 = 20`, `off = 4`, `on = 52-20-4 = 28`.
     fn spawn_switch(world: &mut World, checked: bool) -> (Entity, Entity) {
-        let track = world
-            .spawn((
-                Toggleable { checked },
-                SwitchStyle::default(),
-                Visuals {
-                    fill: Some(Fill::Solid(SwitchStyle::default().unchecked_bg)),
-                    ..Default::default()
-                },
-                Transform {
-                    absolute: Vec2::ZERO,
-                    size: Vec2::new(52.0, 28.0),
-                    baseline_y: None,
-                },
-            ))
-            .id();
+        spawn_switch_with(world, checked, None, None)
+    }
+
+    /// The component-based counterpart of [`spawn_switch`]: same track +
+    /// thumb shape, but with an optional CSS-supplied [`KnobGeometry`]
+    /// and/or [`TransitionSpecs`] inserted on the track, to prove they
+    /// move the resolved geometry / slide timing off the defaults.
+    fn spawn_switch_with(
+        world: &mut World,
+        checked: bool,
+        geo: Option<KnobGeometry>,
+        specs: Option<TransitionSpecs>,
+    ) -> (Entity, Entity) {
+        let mut track = world.spawn((
+            Toggleable { checked },
+            SwitchStyle::default(),
+            Visuals {
+                fill: Some(Fill::Solid(SwitchStyle::default().unchecked_bg)),
+                ..Default::default()
+            },
+            Transform {
+                absolute: Vec2::ZERO,
+                size: Vec2::new(52.0, 28.0),
+                baseline_y: None,
+            },
+        ));
+        if let Some(geo) = geo {
+            track.insert(geo);
+        }
+        if let Some(specs) = specs {
+            track.insert(specs);
+        }
+        let track = track.id();
         let thumb = world
             .spawn((
                 SwitchThumb::default(),
@@ -467,5 +523,90 @@ mod tests {
             !world.resource::<AnimationsActive>().get(),
             "hidden slide must not keep the loop awake"
         );
+    }
+
+    /// A CSS-supplied [`KnobGeometry`] on the track moves the thumb's
+    /// rest position (and size) off the [`KNOB_INSET`] / track-height
+    /// default - the component-based counterpart of the KNOB_INSET
+    /// assertions above.
+    #[test]
+    fn custom_knob_geometry_moves_the_thumb_off_the_default_inset() {
+        let mut world = World::new();
+        let geo = KnobGeometry {
+            inset: 8.0,
+            thumb_size: THUMB_SIZE,
+        };
+        let (_, thumb) = spawn_switch_with(&mut world, false, Some(geo), None);
+        world.run_system_once(sync_switch_visuals).unwrap();
+        assert_eq!(
+            thumb_left(&world, thumb),
+            8.0,
+            "a CSS-supplied inset moves the resting position off KNOB_INSET (4)"
+        );
+        // knob = 28 - 2*8 = 12, vs. the default geometry's 20.
+        let style = world.get::<Style>(thumb).unwrap();
+        assert_eq!(style.width, Length::Px(12.0));
+        assert_eq!(style.height, Length::Px(12.0));
+    }
+
+    /// An entity with no [`KnobGeometry`] must keep today's geometry - the
+    /// explicit no-component counterpart of the custom-geometry test
+    /// above (also covered implicitly by every `spawn_switch`-based test).
+    #[test]
+    fn no_knob_geometry_keeps_the_default_inset() {
+        let mut world = World::new();
+        let (_, thumb) = spawn_switch_with(&mut world, false, None, None);
+        world.run_system_once(sync_switch_visuals).unwrap();
+        assert_eq!(thumb_left(&world, thumb), KNOB_INSET);
+    }
+
+    /// An authored `transition: bg <duration> <easing>` on the track
+    /// overrides [`SWITCH_SLIDE_MS`] / [`SWITCH_SLIDE_EASING`] for the
+    /// thumb slide - the same [`TransitionSpecs`] +
+    /// `TransitionProperty::BackgroundColor` lookup [`crate::hover`] uses
+    /// for its tint tween duration.
+    #[test]
+    fn authored_transition_overrides_the_default_slide_duration_and_easing() {
+        let mut world = World::new();
+        let specs = TransitionSpecs(vec![TransitionSpec {
+            property: TransitionProperty::BackgroundColor,
+            duration: Duration::from_millis(300),
+            easing: Easing::Linear,
+        }]);
+        let (track, thumb) = spawn_switch_with(&mut world, false, None, Some(specs));
+        // First sync: snap to off (no slide yet).
+        world.run_system_once(sync_switch_visuals).unwrap();
+        world.get_mut::<Toggleable>(track).unwrap().checked = true;
+        world.run_system_once(sync_switch_visuals).unwrap();
+        let slide = world
+            .get::<SwitchThumbSlide>(thumb)
+            .expect("flip must start a thumb slide");
+        assert_eq!(
+            slide.0.duration,
+            Duration::from_millis(300),
+            "authored transition: bg 300ms overrides SWITCH_SLIDE_MS"
+        );
+        assert_eq!(
+            slide.0.easing,
+            Easing::Linear,
+            "authored easing overrides SWITCH_SLIDE_EASING"
+        );
+    }
+
+    /// No `transition:` authored on the track falls back to
+    /// [`SWITCH_SLIDE_MS`] / [`SWITCH_SLIDE_EASING`] - appearance must not
+    /// change for a skin that never declares `transition: bg` on `switch`.
+    #[test]
+    fn no_authored_transition_falls_back_to_switch_slide_defaults() {
+        let mut world = World::new();
+        let (track, thumb) = spawn_switch_with(&mut world, false, None, None);
+        world.run_system_once(sync_switch_visuals).unwrap();
+        world.get_mut::<Toggleable>(track).unwrap().checked = true;
+        world.run_system_once(sync_switch_visuals).unwrap();
+        let slide = world
+            .get::<SwitchThumbSlide>(thumb)
+            .expect("flip must start a thumb slide");
+        assert_eq!(slide.0.duration, Duration::from_millis(SWITCH_SLIDE_MS));
+        assert_eq!(slide.0.easing, SWITCH_SLIDE_EASING);
     }
 }

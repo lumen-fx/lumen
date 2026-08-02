@@ -455,7 +455,7 @@ pub enum ScriptCommand {
     /// Guarded: parsing needs the injected markup front-end
     /// ([`SourceParser`](crate) is a runtime concept), which is present on
     /// the dev / from-source run path but absent in the precompiled-artifact
-    /// path; there it is a no-op. Do NOT feed untrusted content -- this
+    /// path; there it is a no-op. Do not feed untrusted content; this
     /// injects live markup (XSS-adjacent).
     SetInnerMarkup {
         /// Target node whose children are replaced.
@@ -723,7 +723,7 @@ pub trait ScriptHost: Send + Sync + 'static {
     ///
     /// Deviation from the original v2 sketch (documented in the design
     /// doc section 1.9): the default impl composes `mirror_get` -> `call_closure`
-    /// -> `mirror_set` -> [`ScriptValue::stringify`], but hosts SHOULD
+    /// -> `mirror_set` -> [`ScriptValue::stringify`], but hosts should
     /// override with a native path - round-tripping dep values through
     /// [`ScriptValue`] loses fidelity for host-native structured values,
     /// and stringification is host-canonical (Rhai renders `1.0` where

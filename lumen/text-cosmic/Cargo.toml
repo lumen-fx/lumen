@@ -17,3 +17,7 @@ lru = "0.18"
 # FxHasher for the font-id -> face-data dedup map (trusted keys; no need
 # for SipHash's DoS resistance).
 rustc-hash.workspace = true
+
+[dev-dependencies]
+# Tests resolve the default `line-height` rather than restating its ratio.
+lumen-core = { path = "../core" }

@@ -83,6 +83,17 @@ libraries.
 > disabled. Pure-Wayland sessions still work (GTK3 falls back to
 > portal-less file dialogs through its own pathway).
 
+> **Build hooks need their own tools.** An app's `lumen.toml` can declare
+> `[[hooks]]` that run arbitrary build commands - the `apps/notes` example
+> compiles a small C library this way. Building Lumen from source already
+> needs a C toolchain (Rust's linker uses one), so this only bites if you
+> installed the prebuilt toolchain above: a Linux host additionally needs
+> a C compiler (`sudo apt install build-essential`, or your distro's
+> equivalent); macOS and Windows reuse the Xcode command-line tools /
+> Visual Studio Build Tools listed in the table above. See
+> [`[[hooks]]`](../authoring/lumen-toml.md#hooks) and pass `--no-hooks` to
+> `run` / `build` / `bundle` to skip an app's hooks entirely.
+
 ### GPU backend per OS
 
 A Lumen build compiles exactly one GPU backend for the host OS: Vulkan on

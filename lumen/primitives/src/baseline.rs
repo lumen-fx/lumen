@@ -7,8 +7,8 @@ use bevy_ecs::prelude::{Commands, Component, Entity};
 ///
 /// Widgets that swap a visual property (fill, colour, ...) toward an
 /// interaction state need the *resting* value to return to. That resting
-/// value is only observable on the very first sync -- before the first
-/// swap can overwrite it -- and it is the current live value even for a
+/// value is only observable on the very first sync, before the first
+/// swap can overwrite it, and it is the current live value even for a
 /// widget spawned already in the active state. This records `current`
 /// into the `T` baseline component the first time through (when `stored`
 /// is `None`) and thereafter reads the stored copy back via `project`,

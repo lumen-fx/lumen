@@ -436,7 +436,7 @@ pub fn popup_nav_lifecycle(
 
 /// Keyboard handling while a popup session is live: highlight
 /// movement, type-ahead, and `Alt+ArrowUp` close. Commit keys
-/// (`Enter` / `Space`) are deliberately NOT handled here - they flow
+/// (`Enter` / `Space`) are deliberately not handled here - they flow
 /// through `lumen_input::activate_focused_on_enter` -> `ClickEvent` ->
 /// the option / menu-item click dispatchers, so keyboard and pointer
 /// commits share one code path.

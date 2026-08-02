@@ -150,7 +150,7 @@ fn signal_set_int_does_not_emit_set_signal_anymore() {
 fn typed_setter_writes_to_property_store_via_plugin_tick() {
     // End-to-end: install the ScriptRhaiPlugin, run a tick, observe that
     // the foundation PropertyStore holds the typed `PropertyValue::I64`
-    // - and that the legacy `Signals` resource was NOT touched. The
+    // - and that the legacy `Signals` resource was not touched. The
     // typed write travels through `push_external_property` -> tick drain
     // -> `PropertyStore::set`.
     use lumen_core::app::{App, Tick};

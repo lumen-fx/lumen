@@ -172,6 +172,15 @@ pub struct ShapeOptions {
     pub family: Option<Arc<str>>,
     /// CSS `font-weight` (1-1000; 400 = normal, 700 = bold).
     pub weight: u16,
+    /// Resolved CSS `line-height`, in the same unit space as the `size_px`
+    /// argument passed alongside these options to [`TextShaper::shape`]
+    /// (a caller that scales `size_px` by DPR must scale this the same
+    /// way). `None` => the backend's own `line-height: normal` fallback
+    /// ([`DEFAULT_LINE_HEIGHT_MULTIPLIER`]). Callers with a `TextStyle`-ish
+    /// source resolve one via
+    /// `lumen_core::components::resolve_line_height` before constructing
+    /// these options; this field never re-derives the multiplier itself.
+    pub line_height: Option<f32>,
 }
 
 impl Default for ShapeOptions {
@@ -182,9 +191,15 @@ impl Default for ShapeOptions {
             max_lines: None,
             family: None,
             weight: 400,
+            line_height: None,
         }
     }
 }
+
+/// Re-export of [`lumen_core::components::DEFAULT_LINE_HEIGHT_MULTIPLIER`]
+/// for crates (e.g. `lumen-text-cosmic`) that depend on `lumen-text` but
+/// not directly on `lumen-core`.
+pub use lumen_core::components::DEFAULT_LINE_HEIGHT_MULTIPLIER;
 
 /// Backend that turns strings into [`ShapedRun`]s.
 pub trait TextShaper {

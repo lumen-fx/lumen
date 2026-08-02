@@ -531,7 +531,7 @@ impl AssetServer {
             .unwrap_or(2)
             .clamp(1, 4);
         let shutdown_flag = Arc::new(Mutex::new(false));
-        // Workers are NOT spawned here. The channel ends are stashed and the
+        // Workers are not spawned here. The channel ends are stashed and the
         // pool is materialised lazily on the first enqueue via
         // `ensure_workers` - an app that loads no assets keeps these threads
         // off the process entirely.

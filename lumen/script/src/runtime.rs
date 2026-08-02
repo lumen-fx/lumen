@@ -1,6 +1,6 @@
 //! Host-generic script runtime.
 //!
-//! Everything in the scripting contract that is NOT compilation, value
+//! Everything in the scripting contract that is not compilation, value
 //! conversion, or invocation lives here, parameterized over
 //! `H: `[`ScriptHost`]: the 18-event dispatch surface with per-id handler
 //! routing, the derivation fixed-point driver, the store->mirror sync
@@ -104,7 +104,7 @@ impl<H: ScriptHost + Resource> Plugin for ScriptPlugin<H> {
         let lang = self.host.lang();
         if let Err(e) = self.host.load(&self.source, &self.uri) {
             // Unmissable, multi-line stderr banner - a load failure kills
-            // EVERY handler / signal / derivation while the window keeps
+            // every handler / signal / derivation while the window keeps
             // rendering, which historically read as "the app ignores
             // clicks" rather than "the script is dead".
             eprintln!(
@@ -234,7 +234,7 @@ impl<H: ScriptHost + Resource> Plugin for ScriptPlugin<H> {
         app.add_systems(TickStage::Systems, dispatch_toggle_to_script::<H>);
         app.add_systems(TickStage::Systems, dispatch_slider_to_script::<H>);
         app.add_systems(TickStage::Systems, dispatch_close_to_script::<H>);
-        // MUST run after `fire_due_timers`: a repeating timer cancelled
+        // Must run after `fire_due_timers`: a repeating timer cancelled
         // from inside its own `on_timer` emits a `CancelTimer` during the
         // firing pass. Without this ordering the cancel could be drained a
         // tick late - after `fire_due_timers` had already re-armed the timer

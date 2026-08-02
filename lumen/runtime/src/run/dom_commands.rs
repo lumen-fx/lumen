@@ -399,7 +399,7 @@ fn element_from_entity(world: &World, entity: Entity) -> Option<Element> {
 /// Guarded: parsing needs the injected markup front-end
 /// ([`RuntimeParser`](crate::source_parser)), which the from-source run path
 /// installs but the precompiled-artifact path does not. Absent, this is a
-/// no-op with a one-time warning -- the documented limitation. The markup is
+/// no-op with a one-time warning, the documented limitation. The markup is
 /// live and unsanitized: callers must not feed it untrusted content.
 fn apply_inner_markup(world: &mut World, entity: Entity, markup: &str) -> bool {
     let Some(parser) = world

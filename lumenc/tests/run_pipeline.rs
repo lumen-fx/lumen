@@ -226,7 +226,7 @@ mod pipeline_integration_tests {
 
     // Bindings and a nested `<for>` mounted inside a `<tab>` panel - which
     // the parser compiles to an `<if eq="...">` gate whose body is spawned by
-    // the reconciler's `spawn_body_child`, NOT the top-level `spawn_element`.
+    // the reconciler's `spawn_body_child`, not the top-level `spawn_element`.
     // This is the widget-garden failure mode: every bound label lived inside
     // a tab, so `spawn_body_child` (missing the `bind` + nested-marker
     // handling) produced labels with no `BindText` and a `<for>` with no
@@ -278,7 +278,7 @@ mod pipeline_integration_tests {
                 "nested <for> row '{want}' missing (raw placeholder?); TextContents = {texts:?}"
             );
         }
-        // The literal `{label}` template must NOT survive unreconciled.
+        // The literal `{label}` template must not survive unreconciled.
         assert!(
             !texts.iter().any(|t| t.contains("{label}")),
             "unreconciled raw placeholder leaked; TextContents = {texts:?}"
@@ -892,7 +892,7 @@ mod virtualization_tests {
     }
 
     /// Spec section 15.3 (windowed reuse): scrolling the window by a few rows
-    /// must NOT respawn rows that stay inside the window - their entities
+    /// must not respawn rows that stay inside the window - their entities
     /// survive the shift.
     #[test]
     fn window_shift_reuses_overlapping_row_entities() {
@@ -979,7 +979,7 @@ mod virtualization_tests {
     /// Manual profile harness: `cargo test -p lumenc --release \
     /// virt_scroll_profile -- --ignored --nocapture`. Prints avg / p95 /
     /// max tick time over 120 continuously-scrolling frames on 5k rows.
-    /// Small-array control: distinguishes costs scaling with TOTAL row
+    /// Small-array control: distinguishes costs scaling with total row
     /// count from costs scaling with the mounted window.
     #[test]
     #[ignore = "manual profiling harness"]

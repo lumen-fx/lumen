@@ -18,9 +18,9 @@
 
 use crate::layout_ir::{
     Attributes, BgSpec, DisplaySpec, EasingIr, Edges, Element, FlexAlign, FlexJustify,
-    ImageFitSpec, LayoutIR, LengthSpec, OverflowSpec, ParseError, PositionSpec, Rgba,
-    ScrollAxisSpec, ScrollbarWidthSpec, ShadowSpec, TextAlignSpec, TextWrapSpec, TrackSizeSpec,
-    TransitionIr, TransitionPropertyIr,
+    ImageFitSpec, LayoutIR, LengthSpec, LineHeightSpec, OverflowSpec, ParseError, PositionSpec,
+    Rgba, ScrollAxisSpec, ScrollbarWidthSpec, ShadowSpec, TextAlignSpec, TextWrapSpec,
+    TrackSizeSpec, TransitionIr, TransitionPropertyIr,
 };
 use crate::values::{bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i32, parse_length};
 // ---------------------------------------------------------------------------
@@ -643,11 +643,11 @@ fn apply_to_element(
     }
 
     // Apply pass: per-declaration cascade. CSS Cascade section 6.4 makes
-    // `!important` participate at the DECLARATION level, not the rule
+    // `!important` participate at the declaration level, not the rule
     // level - a normal declaration sitting next to an important sibling
-    // must NOT be promoted with it. We flatten (rule, decl) units in
+    // must not be promoted with it. We flatten (rule, decl) units in
     // cascade order (specificity, source_order, selector_idx) then
-    // STABLE-sort by importance so all `!important` decls float to the
+    // stable-sort by importance so all `!important` decls float to the
     // end (last-wins) while normal decls keep their relative order.
     let mut units: Vec<(&MatchedRule, &Declaration)> = Vec::new();
     for m in &matched {
@@ -786,10 +786,10 @@ fn apply_to_element(
 }
 
 /// CSS-inherited text properties carried down the element tree. Per the
-/// CSS cascade, `color`/`font-size`/`text-align`/`text-wrap`/`max-lines`
-/// inherit from parent to child; custom properties inherit separately
-/// via the var map. Only slots that [`Attributes`] actually supports are
-/// modelled (no `line-height`/`font-family` slot exists yet).
+/// CSS cascade, `color`/`font-size`/`text-align`/`text-wrap`/`max-lines`/
+/// `line-height` inherit from parent to child; custom properties inherit
+/// separately via the var map. Only slots that [`Attributes`] actually
+/// supports are modelled.
 #[derive(Debug, Clone, Default)]
 struct InheritedText {
     text_color: Option<Rgba>,
@@ -802,6 +802,7 @@ struct InheritedText {
     text_align: Option<TextAlignSpec>,
     text_wrap: Option<TextWrapSpec>,
     max_lines: Option<u32>,
+    line_height: Option<LineHeightSpec>,
 }
 
 impl InheritedText {
@@ -839,6 +840,9 @@ impl InheritedText {
         if attrs.max_lines.is_none() {
             attrs.max_lines = self.max_lines;
         }
+        if attrs.line_height.is_none() {
+            attrs.line_height = self.line_height;
+        }
     }
 
     /// The inherited scope handed to children: the element's computed
@@ -859,6 +863,7 @@ impl InheritedText {
             text_align: attrs.text_align.or(parent.text_align),
             text_wrap: attrs.text_wrap.or(parent.text_wrap),
             max_lines: attrs.max_lines.or(parent.max_lines),
+            line_height: attrs.line_height.or(parent.line_height),
         }
     }
 }
@@ -933,8 +938,8 @@ fn collect_matching_rules(
     // ascending, so the last write wins. Origin dominates - a
     // user-agent (skin) rule loses to an author rule regardless of
     // specificity, per CSS Cascade section 6.1 (so an author `.editor` beats a
-    // skin `textarea:hover`). Importance is NOT folded in here - per
-    // CSS Cascade section 6.4 it participates at the DECLARATION level, and the
+    // skin `textarea:hover`). Importance is not folded in here - per
+    // CSS Cascade section 6.4 it participates at the declaration level, and the
     // apply/var passes stable-sort each declaration by its own
     // `!important` flag on top of this base ordering.
     matched.sort_by(|a, b| {
@@ -1909,7 +1914,7 @@ pub const COMPUTED_STYLE_PROPERTIES: &[&str] = &[
 ];
 
 /// Every resolved property in [`COMPUTED_STYLE_PROPERTIES`] that the
-/// cascade set on `attrs`, as `(name, value)` pairs -- the full-map form
+/// cascade set on `attrs`, as `(name, value)` pairs: the full-map form
 /// of [`computed_property`] backing the dynamic DOM `computed_style()`
 /// getter. An inspection call, not a per-frame path.
 pub fn computed_style_map(attrs: &Attributes) -> Vec<(String, String)> {
@@ -2007,7 +2012,7 @@ pub struct MatchedRuleInfo {
 /// Rules that match `subject` given its `ancestors` (root-first), with
 /// cascade provenance, ascending in cascade order (last wins). Reuses the
 /// cascade matcher's own `collect_matching_rules`, so this is the same
-/// match set the restyle pass resolves -- no second selector engine. An
+/// match set the restyle pass resolves; no second selector engine. An
 /// inspection call backing `matched_rules()`.
 pub fn matched_rules_for(
     subject: &AncestorInfo,
@@ -2117,6 +2122,7 @@ fn ancestor_var_scope(
                     | "text-align"
                     | "wrap"
                     | "max-lines"
+                    | "line-height"
             ) {
                 continue;
             }
@@ -2201,6 +2207,18 @@ fn copy_back_reapplied(el: &mut Element, probe: &Element) {
     }
     if probe.attrs.style_role.is_some() {
         el.attrs.style_role = probe.attrs.style_role.clone();
+    }
+    if probe.attrs.line_height.is_some() {
+        el.attrs.line_height = probe.attrs.line_height;
+    }
+    if probe.attrs.caret_width.is_some() {
+        el.attrs.caret_width = probe.attrs.caret_width;
+    }
+    if probe.attrs.caret_blink_ms.is_some() {
+        el.attrs.caret_blink_ms = probe.attrs.caret_blink_ms;
+    }
+    if probe.attrs.password_character.is_some() {
+        el.attrs.password_character = probe.attrs.password_character;
     }
     // Box.
     if probe.attrs.padding.is_some() {
@@ -2319,6 +2337,13 @@ fn copy_back_reapplied(el: &mut Element, probe: &Element) {
     if probe.attrs.disabled_opacity.is_some() {
         el.attrs.disabled_opacity = probe.attrs.disabled_opacity;
     }
+    // The CSS-authored default dimming fallback tracks its sibling
+    // `:disabled { opacity }` override above - both are plain opacity
+    // scalars, so a theme flip should move an unoverridden element's
+    // dimming amount exactly like it moves an overridden one's.
+    if probe.attrs.disabled_opacity_default.is_some() {
+        el.attrs.disabled_opacity_default = probe.attrs.disabled_opacity_default;
+    }
     if probe.attrs.hover_shadows.is_some() {
         el.attrs.hover_shadows = probe.attrs.hover_shadows.clone();
     }
@@ -2405,6 +2430,16 @@ fn copy_back_reapplied(el: &mut Element, probe: &Element) {
     }
     if probe.attrs.gap_column_pct.is_some() {
         el.attrs.gap_column_pct = probe.attrs.gap_column_pct;
+    }
+    // Scrollbar hover paint - cheap, paint-only values that should track
+    // a theme flip like any other color; the geometry siblings
+    // (thickness/margin/min-thumb) are spawn-time layout and are not
+    // reapplied here.
+    if probe.attrs.scrollbar_track_hover.is_some() {
+        el.attrs.scrollbar_track_hover = probe.attrs.scrollbar_track_hover;
+    }
+    if probe.attrs.scrollbar_hover_boost.is_some() {
+        el.attrs.scrollbar_hover_boost = probe.attrs.scrollbar_hover_boost;
     }
 }
 
@@ -2718,6 +2753,29 @@ fn apply_declaration(
         "selection-color" => attrs.selection_color = Some(parse_color(ctx, name, value)?),
         "caret-color" => attrs.caret_color = Some(parse_color(ctx, name, value)?),
         "selection-text-color" => attrs.selection_text_color = Some(parse_color(ctx, name, value)?),
+        // Lumen-native caret geometry/timing - sibling of `caret-color`,
+        // only meaningful on `<input>` / `<textarea>`.
+        "caret-width" => attrs.caret_width = Some(parse_f32(ctx, name, value)?),
+        "caret-blink" => attrs.caret_blink_ms = Some(parse_duration_ms(ctx, name, value.trim())?),
+        // The glyph substituted for every character of a masked text
+        // input. Exactly one Unicode scalar value; multi-char strings
+        // (including multi-codepoint graphemes) are rejected rather than
+        // silently truncated.
+        "password-character" => {
+            let mut chars = value.chars();
+            let c = chars
+                .next()
+                .ok_or_else(|| bad(ctx, name, value, "expected a single character".into()))?;
+            if chars.next().is_some() {
+                return Err(bad(
+                    ctx,
+                    name,
+                    value,
+                    "expected exactly one character".into(),
+                ));
+            }
+            attrs.password_character = Some(c);
+        }
         "hover-bg" => attrs.hover_bg = Some(parse_color(ctx, name, value)?),
         "scroll" => {
             attrs.scroll = Some(match value {
@@ -2745,6 +2803,28 @@ fn apply_declaration(
         }
         "font-weight" => {
             attrs.font_weight = Some(crate::values::parse_font_weight(ctx, name, value)?);
+        }
+        // CSS `line-height`: a bare number is a unitless multiplier of
+        // the element's own font size (scales with it); a `px` value is
+        // a fixed line box height (does not). Kept as two
+        // `LineHeightSpec` variants rather than one number - see the
+        // type's doc comment.
+        "line-height" => {
+            let v = value.trim();
+            attrs.line_height = Some(if let Some(rest) = v.strip_suffix("px") {
+                LineHeightSpec::Px(parse_f32(ctx, name, rest)?)
+            } else {
+                let n = parse_f32(ctx, name, v)?;
+                if n < 0.0 {
+                    return Err(bad(
+                        ctx,
+                        name,
+                        value,
+                        "line-height must be \u{2265} 0".into(),
+                    ));
+                }
+                LineHeightSpec::Multiplier(n)
+            });
         }
         "gap" => {
             // W5.9: `gap: <r> <c>` shorthand. One value -> both axes via
@@ -3047,6 +3127,11 @@ fn apply_declaration(
         "knob-color" => {
             attrs.knob_color = Some(parse_color(ctx, name, value)?);
         }
+        // Lumen-native widget geometry - like `knob-color`, no real CSS
+        // pseudo-element target exists for these parts.
+        "knob-inset" => attrs.knob_inset = Some(parse_f32(ctx, name, value)?),
+        "thumb-size" => attrs.thumb_size = Some(parse_f32(ctx, name, value)?),
+        "popup-gap" => attrs.popup_gap = Some(parse_f32(ctx, name, value)?),
         "display" => {
             attrs.display = Some(match value.trim() {
                 "flex" => DisplaySpec::Flex,
@@ -3152,6 +3237,20 @@ fn apply_declaration(
             }
             attrs.progress_duration = Some(n as u32);
         }
+        // Lumen-native: fraction of the track width covered by the
+        // moving chunk of an indeterminate `<progress>` sweep.
+        "progress-chunk" => {
+            let v = parse_f32(ctx, name, value)?;
+            if !(0.0..=1.0).contains(&v) {
+                return Err(bad(
+                    ctx,
+                    name,
+                    value,
+                    "progress-chunk must be between 0.0 and 1.0".to_string(),
+                ));
+            }
+            attrs.progress_chunk = Some(v);
+        }
         "text-overflow" => {
             attrs.text_overflow = Some(match value.trim() {
                 "clip" => crate::layout_ir::TextOverflowSpec::Clip,
@@ -3184,6 +3283,16 @@ fn apply_declaration(
         "opacity" => {
             let v = parse_f32(ctx, name, value)?;
             attrs.opacity = Some(v.clamp(0.0, 1.0));
+        }
+        // CSS-authored replacement for the runtime's generic
+        // `:disabled` dimming fallback - the amount used when the
+        // author set neither `disabled-bg` nor an explicit
+        // `:disabled { opacity }`. Not routed through
+        // `apply_decl_for_pseudo`: it is a plain, always-applicable
+        // property, not a state-pseudo swap.
+        "disabled-opacity" => {
+            let v = parse_f32(ctx, name, value)?;
+            attrs.disabled_opacity_default = Some(v.clamp(0.0, 1.0));
         }
         "shadow" | "box-shadow" => {
             attrs.shadows = parse_box_shadow(ctx, name, value)?;
@@ -3286,6 +3395,30 @@ fn apply_declaration(
                     ));
                 }
             });
+        }
+        // Lumen-native overlay-scrollbar geometry/timing, alongside the
+        // standard `scrollbar-color` / `scrollbar-width` above. Not a
+        // real CSS property family; there is no standard equivalent.
+        "scrollbar-thickness" => attrs.scrollbar_thickness = Some(parse_f32(ctx, name, value)?),
+        "scrollbar-thickness-thin" => {
+            attrs.scrollbar_thickness_thin = Some(parse_f32(ctx, name, value)?);
+        }
+        "scrollbar-margin" => attrs.scrollbar_margin = Some(parse_f32(ctx, name, value)?),
+        "scrollbar-min-thumb" => attrs.scrollbar_min_thumb = Some(parse_f32(ctx, name, value)?),
+        // Named like `hover-bg`: a distinct property, not a
+        // `:hover { ... }` pseudo rule, since the hover target is the
+        // scrollbar part rather than the whole element.
+        "scrollbar-track-hover" => {
+            attrs.scrollbar_track_hover = Some(parse_color(ctx, name, value)?);
+        }
+        "scrollbar-hover-boost" => {
+            attrs.scrollbar_hover_boost = Some(parse_f32(ctx, name, value)?);
+        }
+        "scrollbar-fade-delay" => {
+            attrs.scrollbar_fade_delay_ms = Some(parse_duration_ms(ctx, name, value.trim())?);
+        }
+        "scrollbar-fade-duration" => {
+            attrs.scrollbar_fade_duration_ms = Some(parse_duration_ms(ctx, name, value.trim())?);
         }
         // W5.5: CSS Logical Properties Level 1 subset. Each value
         // parses as an f32 in px (so typos surface immediately) and
@@ -3623,7 +3756,13 @@ fn parse_box_shadow(ctx: &str, name: &str, value: &str) -> Result<Vec<ShadowSpec
     Ok(out)
 }
 
-fn parse_duration_ms(ctx: &str, name: &str, raw: &str) -> Result<u32, ParseError> {
+/// Parse a CSS duration (`Nms` or `Ns`) into whole milliseconds. Shared
+/// by every duration-valued property in the cascade (`transition-duration`,
+/// `caret-blink`, `scrollbar-fade-delay`, `scrollbar-fade-duration`, ...);
+/// `pub` so the markup parser (`lumenc::parser_html`, a separate crate)
+/// reuses the same parser instead of duplicating the unit handling for
+/// its mirrored inline-attribute table.
+pub fn parse_duration_ms(ctx: &str, name: &str, raw: &str) -> Result<u32, ParseError> {
     if let Some(stripped) = raw.strip_suffix("ms") {
         let v: f32 = stripped
             .parse()
@@ -3916,10 +4055,10 @@ mod cascade_origin_tests {
         }
     }
 
-    /// A user-agent (skin) `textarea:hover` rule has HIGHER specificity
+    /// A user-agent (skin) `textarea:hover` rule has higher specificity
     /// (0,1,1) than an author `.editor` rule (0,1,0), yet author origin
-    /// dominates the cascade: the author rule must sort LAST (win). This
-    /// is the notes-app "dark blue unreadable hover" fix -- author
+    /// dominates the cascade: the author rule must sort last (win). This
+    /// is the notes-app "dark blue unreadable hover" fix: author
     /// `.editor { bg: var(--surface) }` beats skin `textarea:hover`.
     #[test]
     fn author_class_beats_user_agent_pseudo_despite_specificity() {
@@ -3980,7 +4119,7 @@ mod cascade_origin_tests {
     }
 
     /// Within a single origin the existing (specificity, source_order)
-    /// tie-break still applies -- origin only dominates ACROSS origins.
+    /// tie-break still applies; origin only dominates across origins.
     #[test]
     fn specificity_still_wins_within_same_origin() {
         let low = rule(
@@ -4170,5 +4309,307 @@ mod inline_style_tests {
         assert_eq!(computed_property(&attrs, "opacity").as_deref(), Some("0.5"));
         // An unmodeled property returns None rather than panicking.
         assert_eq!(computed_property(&attrs, "z-index"), None);
+    }
+}
+
+/// Stylesheet-declaration coverage for the skin-tokens property batch
+/// (widget geometry, caret/text, scrollbar). Each property here also has
+/// an inline-markup-attribute counterpart in
+/// `lumenc/tests/parse_skin_tokens.rs`; a property landing in only one of
+/// the two tables is the exact bug this batch is guarding against.
+#[cfg(test)]
+mod skin_token_property_tests {
+    use super::*;
+
+    #[test]
+    fn knob_inset_parses_px() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "knob-inset", "2px", &mut attrs).unwrap();
+        assert_eq!(attrs.knob_inset, Some(2.0));
+    }
+
+    #[test]
+    fn thumb_size_parses_bare_number_as_px() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "thumb-size", "20", &mut attrs).unwrap();
+        assert_eq!(attrs.thumb_size, Some(20.0));
+    }
+
+    #[test]
+    fn popup_gap_parses_px() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "popup-gap", "4px", &mut attrs).unwrap();
+        assert_eq!(attrs.popup_gap, Some(4.0));
+    }
+
+    #[test]
+    fn length_px_rejects_non_numeric() {
+        // Malformed case for the "length px" value shape shared by
+        // knob-inset / thumb-size / popup-gap / caret-width /
+        // scrollbar-thickness / scrollbar-margin / scrollbar-min-thumb.
+        let mut attrs = Attributes::default();
+        assert!(apply_declaration("ctx", "knob-inset", "wide", &mut attrs).is_err());
+    }
+
+    #[test]
+    fn progress_chunk_parses_fraction() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "progress-chunk", "0.35", &mut attrs).unwrap();
+        assert_eq!(attrs.progress_chunk, Some(0.35));
+    }
+
+    #[test]
+    fn progress_chunk_rejects_out_of_range() {
+        // Malformed case for the "fraction 0.0-1.0" shape: out of range
+        // is a hard error here (Lumen-native, no CSS clamping precedent).
+        let mut attrs = Attributes::default();
+        assert!(apply_declaration("ctx", "progress-chunk", "1.5", &mut attrs).is_err());
+    }
+
+    #[test]
+    fn progress_chunk_rejects_non_numeric() {
+        let mut attrs = Attributes::default();
+        assert!(apply_declaration("ctx", "progress-chunk", "lots", &mut attrs).is_err());
+    }
+
+    #[test]
+    fn disabled_opacity_parses_and_clamps() {
+        // Mirrors the existing `opacity` property: out-of-range values
+        // clamp rather than error, since this is the CSS-authored
+        // stand-in for a plain alpha multiplier.
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "disabled-opacity", "0.4", &mut attrs).unwrap();
+        assert_eq!(attrs.disabled_opacity_default, Some(0.4));
+        apply_declaration("ctx", "disabled-opacity", "2.0", &mut attrs).unwrap();
+        assert_eq!(attrs.disabled_opacity_default, Some(1.0));
+    }
+
+    #[test]
+    fn disabled_opacity_is_distinct_from_pseudo_disabled_opacity() {
+        // `disabled-opacity` (the generic fallback) and `:disabled {
+        // opacity }` (the explicit state override, already modeled as
+        // `disabled_opacity`) must not collide on one field.
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "disabled-opacity", "0.3", &mut attrs).unwrap();
+        assert_eq!(attrs.disabled_opacity_default, Some(0.3));
+        assert_eq!(attrs.disabled_opacity, None);
+    }
+
+    #[test]
+    fn caret_width_parses_px() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "caret-width", "2px", &mut attrs).unwrap();
+        assert_eq!(attrs.caret_width, Some(2.0));
+    }
+
+    #[test]
+    fn caret_blink_parses_ms() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "caret-blink", "530ms", &mut attrs).unwrap();
+        assert_eq!(attrs.caret_blink_ms, Some(530));
+    }
+
+    #[test]
+    fn caret_blink_parses_seconds() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "caret-blink", "0.5s", &mut attrs).unwrap();
+        assert_eq!(attrs.caret_blink_ms, Some(500));
+    }
+
+    #[test]
+    fn duration_rejects_missing_unit() {
+        // Malformed case for the "duration" shape shared by caret-blink
+        // and the scrollbar-fade-* properties: a bare number without
+        // `ms`/`s` is rejected, matching `transition-duration`.
+        let mut attrs = Attributes::default();
+        assert!(apply_declaration("ctx", "caret-blink", "500", &mut attrs).is_err());
+    }
+
+    #[test]
+    fn password_character_parses_single_char() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "password-character", "*", &mut attrs).unwrap();
+        assert_eq!(attrs.password_character, Some('*'));
+    }
+
+    #[test]
+    fn password_character_accepts_non_ascii_scalar() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "password-character", "\u{2022}", &mut attrs).unwrap();
+        assert_eq!(attrs.password_character, Some('\u{2022}'));
+    }
+
+    #[test]
+    fn password_character_rejects_multiple_characters() {
+        // Malformed case for the "single character" shape.
+        let mut attrs = Attributes::default();
+        assert!(apply_declaration("ctx", "password-character", "**", &mut attrs).is_err());
+    }
+
+    #[test]
+    fn password_character_rejects_empty() {
+        let mut attrs = Attributes::default();
+        assert!(apply_declaration("ctx", "password-character", "", &mut attrs).is_err());
+    }
+
+    #[test]
+    fn line_height_parses_unitless_multiplier() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "line-height", "1.2", &mut attrs).unwrap();
+        assert_eq!(attrs.line_height, Some(LineHeightSpec::Multiplier(1.2)));
+    }
+
+    #[test]
+    fn line_height_parses_px() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "line-height", "19px", &mut attrs).unwrap();
+        assert_eq!(attrs.line_height, Some(LineHeightSpec::Px(19.0)));
+    }
+
+    #[test]
+    fn line_height_unitless_and_px_are_distinct_variants() {
+        // The whole point of `LineHeightSpec`: "1.2" and "1.2px" carry
+        // different meanings and must not collapse to the same value.
+        let mut a = Attributes::default();
+        let mut b = Attributes::default();
+        apply_declaration("ctx", "line-height", "1.2", &mut a).unwrap();
+        apply_declaration("ctx", "line-height", "1.2px", &mut b).unwrap();
+        assert_ne!(a.line_height, b.line_height);
+    }
+
+    #[test]
+    fn line_height_rejects_negative() {
+        // Malformed case for the "unitless-vs-px" shape.
+        let mut attrs = Attributes::default();
+        assert!(apply_declaration("ctx", "line-height", "-1", &mut attrs).is_err());
+    }
+
+    #[test]
+    fn line_height_inherits_to_children() {
+        // `line-height` set on a container must cascade down to a
+        // non-matching child, mirroring the existing `font-size` /
+        // `text-color` inheritance behavior modeled by `InheritedText`.
+        let mut ir = LayoutIR {
+            root: Element {
+                tag: "column".to_string(),
+                children: vec![Element {
+                    tag: "label".to_string(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let css = Stylesheet {
+            rules: vec![Rule {
+                selectors: vec![SelectorBuf {
+                    chain: vec![(
+                        Combinator::Subject,
+                        CompoundSelector {
+                            tag: Some("column".to_string()),
+                            id: None,
+                            classes: Vec::new(),
+                            pseudo_classes: Vec::new(),
+                        },
+                    )],
+                }],
+                declarations: vec![Declaration {
+                    name: "line-height".to_string(),
+                    value: "1.5".to_string(),
+                    important: false,
+                }],
+                origin: Origin::Author,
+                source_order: 0,
+                media: None,
+                selector: LegacySelectorShim::default(),
+            }],
+        };
+        apply_css(&mut ir, &css).unwrap();
+        assert_eq!(
+            ir.root.children[0].attrs.line_height,
+            Some(LineHeightSpec::Multiplier(1.5))
+        );
+    }
+
+    #[test]
+    fn scrollbar_thickness_parses_px() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "scrollbar-thickness", "10px", &mut attrs).unwrap();
+        assert_eq!(attrs.scrollbar_thickness, Some(10.0));
+    }
+
+    #[test]
+    fn scrollbar_thickness_thin_parses_px() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "scrollbar-thickness-thin", "6px", &mut attrs).unwrap();
+        assert_eq!(attrs.scrollbar_thickness_thin, Some(6.0));
+    }
+
+    #[test]
+    fn scrollbar_margin_parses_px() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "scrollbar-margin", "2px", &mut attrs).unwrap();
+        assert_eq!(attrs.scrollbar_margin, Some(2.0));
+    }
+
+    #[test]
+    fn scrollbar_min_thumb_parses_px() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "scrollbar-min-thumb", "24px", &mut attrs).unwrap();
+        assert_eq!(attrs.scrollbar_min_thumb, Some(24.0));
+    }
+
+    #[test]
+    fn scrollbar_track_hover_parses_color() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "scrollbar-track-hover", "#334455", &mut attrs).unwrap();
+        let c = attrs.scrollbar_track_hover.unwrap();
+        assert!((c.g - (0x44 as f32 / 255.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn color_rejects_non_hex() {
+        // Malformed case for the "colour" shape.
+        let mut attrs = Attributes::default();
+        assert!(apply_declaration("ctx", "scrollbar-track-hover", "blue", &mut attrs).is_err());
+    }
+
+    #[test]
+    fn scrollbar_hover_boost_parses_number() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "scrollbar-hover-boost", "1.4", &mut attrs).unwrap();
+        assert_eq!(attrs.scrollbar_hover_boost, Some(1.4));
+    }
+
+    #[test]
+    fn scrollbar_fade_delay_parses_ms() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "scrollbar-fade-delay", "800ms", &mut attrs).unwrap();
+        assert_eq!(attrs.scrollbar_fade_delay_ms, Some(800));
+    }
+
+    #[test]
+    fn scrollbar_fade_duration_parses_seconds() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "scrollbar-fade-duration", "0.2s", &mut attrs).unwrap();
+        assert_eq!(attrs.scrollbar_fade_duration_ms, Some(200));
+    }
+
+    #[test]
+    fn none_of_the_batch_is_pseudo_routed() {
+        // All seventeen properties in this batch are plain,
+        // always-applicable declarations - none represent a per-state
+        // color/text/opacity/shadow/border swap, so none get a match arm
+        // in `apply_decl_for_pseudo`. Confirm the fallthrough (silently
+        // consumed, matching every other non-routed property) rather than
+        // an error, so a stray `:hover { knob-inset: 2px }` doesn't break
+        // the whole rule.
+        let mut attrs = Attributes::default();
+        let pseudo = SubjectPseudo {
+            hover: true,
+            ..Default::default()
+        };
+        assert!(apply_decl_for_pseudo("ctx", "knob-inset", "2px", &pseudo, &mut attrs).unwrap());
+        assert_eq!(attrs.knob_inset, None);
     }
 }

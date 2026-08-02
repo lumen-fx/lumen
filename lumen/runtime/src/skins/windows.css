@@ -14,7 +14,8 @@
  * bottom hairline at rest and the 2px accent UNDERLINE on focus
  * (state-routed inset box-shadow), pressed text dropping to secondary,
  * keyboard-only double focus ring (:focus-visible outer ring +
- * contrast inner ring via box-shadow spread), 40x20 pill switch, and
+ * contrast inner ring via box-shadow spread), 40x20 pill switch shared
+ * by both `<toggle>` and the dedicated `<switch>` element, and
  * non-accent selected tabs with top-only 4px rounding.
  *
  * Known approximations: Mica/acrylic materials use their documented
@@ -73,8 +74,39 @@
   --lumen-tooltip-delay: 400;
   --lumen-tooltip-offset: 14;
 
-  /* Indeterminate <progress> sweep period (ms). */
+  /* Indeterminate <progress> sweep period (ms) and moving-chunk width
+     as a fraction of the track. */
   --lumen-progress-period: 1200;
+  --lumen-progress-chunk: 0.3;
+
+  /* ToggleSwitch / <switch> knob inset (px) and the slider thumb
+     diameter (px) - the shared cross-platform values. */
+  --lumen-knob-inset: 4;
+  --lumen-thumb-size: 16;
+
+  /* Gap (px) between a ComboBox / MenuFlyout trigger and its panel. */
+  --lumen-popup-gap: 4;
+
+  /* Opacity for a disabled control with no `:disabled { bg }` of its
+     own (ComboBox items, menu items, TabView headers, form controls). */
+  --lumen-disabled-opacity: 0.5;
+
+  /* Text-input caret. */
+  --lumen-caret-width: 2;
+  --lumen-caret-blink: 530ms;
+
+  /* Line-height multiplier. */
+  --lumen-line-height: 1.2;
+
+  /* Overlay scrollbar geometry / hover feedback / fade timing. */
+  --lumen-scrollbar-thickness: 8;
+  --lumen-scrollbar-thickness-thin: 4;
+  --lumen-scrollbar-margin: 2;
+  --lumen-scrollbar-min-thumb: 24;
+  --lumen-scrollbar-track-hover: #80808029;
+  --lumen-scrollbar-hover-boost: 1.6;
+  --lumen-scrollbar-fade-delay: 1000ms;
+  --lumen-scrollbar-fade-duration: 250ms;
 
 }
 
@@ -131,6 +163,7 @@ root {
   text-color: var(--lumen-text);
   font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
   font-size: 14;
+  line-height: var(--lumen-line-height);
 }
 
 /* === Buttons ===
@@ -184,6 +217,8 @@ textarea {
   border: 1px solid var(--lumen-border-subtle);
   border-bottom-color: var(--lumen-border-strong);
   transition: bg 83ms linear;
+  caret-width: var(--lumen-caret-width);
+  caret-blink: var(--lumen-caret-blink);
 }
 input:hover, textarea:hover { bg: var(--lumen-surface-hover); }
 input:focus, textarea:focus {
@@ -203,6 +238,7 @@ toggle {
   bg: var(--lumen-track-off);
   border: 1px solid var(--lumen-border-strong);
   knob-color: var(--lumen-knob);
+  knob-inset: var(--lumen-knob-inset);
 }
 toggle:hover { bg: var(--lumen-track-off); }
 toggle:checked { bg: var(--lumen-accent); }
@@ -213,6 +249,34 @@ toggle:focus-visible {
 }
 toggle:disabled { bg: var(--lumen-disabled-bg); }
 
+/* === Switch ===
+ * `<switch>` is a distinct element from `<toggle>`, but WinUI has one
+ * ToggleSwitch look, so it shares the same 40x20 pill, stroke and
+ * colors. `transition` sets the duration/easing the thumb-slide
+ * animation reuses (same TransitionSpecs lookup the 83ms fill ramps
+ * elsewhere read); WinUI's own switch doesn't tween its track fill,
+ * so this declaration exists for the slide, not a visible bg tween.
+ */
+switch {
+  width: 40;
+  height: 20;
+  min-width: 40;
+  radius: 10;
+  bg: var(--lumen-track-off);
+  border: 1px solid var(--lumen-border-strong);
+  knob-color: var(--lumen-knob);
+  knob-inset: var(--lumen-knob-inset);
+  transition: bg 140ms ease-out;
+}
+switch:hover { bg: var(--lumen-track-off); }
+switch:checked { bg: var(--lumen-accent); }
+switch:focus-visible {
+  outline: 2 var(--lumen-focus-ring);
+  outline-offset: 1;
+  box-shadow: 0 0 0 1 var(--lumen-focus-ring-inner);
+}
+switch:disabled { bg: var(--lumen-disabled-bg); }
+
 /* === Slider ===
  * 4px rail; accent thumb (approximation of the ringed thumb).
  */
@@ -222,6 +286,7 @@ slider {
   radius: 2;
   bg: var(--lumen-track);
   knob-color: var(--lumen-accent);
+  thumb-size: var(--lumen-thumb-size);
 }
 slider:hover { bg: var(--lumen-track-hover); }
 slider:focus-visible {
@@ -260,8 +325,9 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
   shadow: var(--lumen-shadow-panel);
   border: 1px solid var(--lumen-border);
   padding: 4 2;
+  popup-gap: var(--lumen-popup-gap);
 }
-.dropdown-option { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius-sm); padding: 6 11; transition: bg 83ms linear; text-overflow: ellipsis; }
+.dropdown-option { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius-sm); padding: 6 11; transition: bg 83ms linear; text-overflow: ellipsis; disabled-opacity: var(--lumen-disabled-opacity); }
 .dropdown-option:hover { bg: var(--lumen-panel-hover); }
 .dropdown-option:focus { outline: 2 var(--lumen-focus-ring); }
 
@@ -273,8 +339,9 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
   shadow: var(--lumen-shadow-panel);
   border: 1px solid var(--lumen-border);
   padding: 4 2;
+  popup-gap: var(--lumen-popup-gap);
 }
-.menu-item { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius); min-height: 32; padding: 6 11; transition: bg 83ms linear; }
+.menu-item { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius); min-height: 32; padding: 6 11; transition: bg 83ms linear; disabled-opacity: var(--lumen-disabled-opacity); }
 .menu-item:hover { bg: var(--lumen-panel-hover); }
 .menu-item:focus { outline: 2 var(--lumen-focus-ring); }
 .menu-separator { bg: var(--lumen-border-subtle); height: 1; margin: 4 0; }
@@ -314,6 +381,7 @@ dialog { bg: var(--lumen-backdrop); transition: opacity 167ms ease; }
   font-size: 12;
   transition: bg 83ms linear;
   text-overflow: ellipsis;
+  disabled-opacity: var(--lumen-disabled-opacity);
 }
 .tab-btn:hover { bg: var(--lumen-panel-hover); }
 .tab-btn:selected { bg: var(--lumen-tab-selected); }
@@ -331,19 +399,32 @@ dialog { bg: var(--lumen-backdrop); transition: opacity 167ms ease; }
 }
 
 /* === Scroll regions === */
-scroll { scrollbar-color: var(--lumen-scrollbar-thumb); scrollbar-width: thin; }
+scroll {
+  scrollbar-color: var(--lumen-scrollbar-thumb);
+  scrollbar-width: thin;
+  scrollbar-thickness: var(--lumen-scrollbar-thickness);
+  scrollbar-thickness-thin: var(--lumen-scrollbar-thickness-thin);
+  scrollbar-margin: var(--lumen-scrollbar-margin);
+  scrollbar-min-thumb: var(--lumen-scrollbar-min-thumb);
+  scrollbar-track-hover: var(--lumen-scrollbar-track-hover);
+  scrollbar-hover-boost: var(--lumen-scrollbar-hover-boost);
+  scrollbar-fade-delay: var(--lumen-scrollbar-fade-delay);
+  scrollbar-fade-duration: var(--lumen-scrollbar-fade-duration);
+}
 scroll:focus { outline: 2 var(--lumen-focus-ring); }
 
 /* === Checkbox / Radio / Progress (W5 form controls) === */
+checkbox          { disabled-opacity: var(--lumen-disabled-opacity); }
 checkbox:checked  { bg: var(--lumen-accent); }
 checkbox:focus-visible { outline: 2 var(--lumen-focus-ring); }
 .checkbox-box     { width: 18; height: 18; radius: 4; bg: var(--lumen-track-off); border: 1px solid var(--lumen-track); text-color: #ffffff; font-size: 14; text-align: center; }
 .checkbox-label   { text-color: var(--lumen-text); }
+radio             { disabled-opacity: var(--lumen-disabled-opacity); }
 radio:selected    { bg: var(--lumen-accent); }
 radio:focus-visible { outline: 2 var(--lumen-focus-ring); }
 .radio-dot        { width: 18; height: 18; radius: 9; bg: var(--lumen-track-off); border: 1px solid var(--lumen-track); }
 .radio-label      { text-color: var(--lumen-text); }
-progress          { bg: var(--lumen-track-off); radius: 3; height: 4; progress-duration: var(--lumen-progress-period); }
+progress          { bg: var(--lumen-track-off); radius: 3; height: 4; progress-duration: var(--lumen-progress-period); progress-chunk: var(--lumen-progress-chunk); }
 .progress-fill    { bg: var(--lumen-accent); radius: 3; }
 
 /* Dialog default button (Enter-anywhere target): accent ring. */

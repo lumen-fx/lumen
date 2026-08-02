@@ -479,7 +479,7 @@ pub fn dispatch_tab_keys(
     // walk-order counter, so it always matches the on-screen strip
     // order. `Entity` is only the deterministic fallback for
     // hand-built worlds - bevy_ecs 0.18's `Entity: Ord` compares a
-    // niche-optimized row index and does NOT track spawn order (the
+    // niche-optimized row index and does not track spawn order (the
     // same trap `cycle_focus_on_tab` documents).
     siblings.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
     let siblings: Vec<(Entity, String, bool)> = siblings

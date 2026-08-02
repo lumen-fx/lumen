@@ -1,6 +1,6 @@
 //! Rhai 1.24 implementation of [`lumen_script::ScriptHost`] (v2).
 //!
-//! This crate is engine + builtins + value conversion ONLY. All
+//! This crate is engine + builtins + value conversion only. All
 //! host-generic machinery - the 18-event dispatch surface, the derivation
 //! fixed-point driver, the store->mirror sync driver, timers, fetch, the
 //! load-failure banner protocol, and the tick wiring - lives in
@@ -245,7 +245,7 @@ fn register_dom_mutators(engine: &mut Engine, sink: Arc<Mutex<Vec<ScriptCommand>
             text: text.to_string(),
         }
     });
-    // Guarded markup injection (design 4.4). Do NOT feed untrusted content.
+    // Guarded markup injection (design 4.4). Do not feed untrusted content.
     mutate!("set_inner_markup", |n, markup: rhai::ImmutableString| {
         ScriptCommand::SetInnerMarkup {
             node: n.handle,

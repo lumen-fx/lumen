@@ -52,10 +52,10 @@ pub(crate) fn build_dom_index(
 }
 
 /// Inert placeholder for [`audio::fire_audio_ended`] in a build compiled
-/// WITHOUT the `audio` feature (Part B tree-shaking). The real system lives in
+/// without the `audio` feature (Part B tree-shaking). The real system lives in
 /// the `audio` module (compiled only with the feature); this stub keeps the
 /// `fire_audio_ended::<H>` type path resolvable so the `.after(..)` ordering
-/// edge on `apply_script_commands` stays valid -- it references an unregistered
+/// edge on `apply_script_commands` stays valid; it references an unregistered
 /// system set and is therefore a no-op. Never added to any schedule.
 #[cfg(not(feature = "audio"))]
 pub(crate) fn fire_audio_ended<H: lumen_script::ScriptHost + Resource>(

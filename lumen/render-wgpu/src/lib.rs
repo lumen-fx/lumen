@@ -29,7 +29,7 @@ use vello::{AaConfig, RenderParams, RendererOptions};
 /// The single GPU backend this per-OS build compiles and probes (Part A of
 /// runtime-tree-shaking). The Cargo manifest already trims wgpu/naga to one
 /// backend per OS; pinning the instance's `Backends` to the same bit is
-/// defense in depth -- it keeps the requested set honest and avoids a surprise
+/// defense in depth; it keeps the requested set honest and avoids a surprise
 /// probe of a backend whose code was compiled out. Unknown OSes fall back to
 /// Vulkan (the widest cross-platform native backend).
 const NATIVE_BACKENDS: wgpu::Backends = {
@@ -104,7 +104,7 @@ pub struct WgpuRenderer {
     texture_view: wgpu::TextureView,
     /// Number of actual GPU encode+submit passes ([`render_current`]) since
     /// construction. Frames skipped by the empty-damage partial-repaint gate do
-    /// NOT increment it, so `render_count` measures real present work - a static
+    /// not increment it, so `render_count` measures real present work - a static
     /// UI redrawn on a false-positive dirty flag leaves it flat.
     render_count: u64,
     /// Adapter this renderer bound to. Kept so callers can tell a GPU from a
@@ -932,6 +932,11 @@ pub fn draw_text_into_vello<S: lumen_text::TextShaper + ?Sized>(
     let origin = text.origin * dpr;
     let size_px = text.size_px * dpr;
     let container_width = text.container_width * dpr;
+    // `ExtractedText::line_height_px` is already resolved (CSS `line-height`
+    // or the `DEFAULT_LINE_HEIGHT_MULTIPLIER` fallback) in logical px;
+    // scale it by the same `dpr` factor as `size_px` so the shaper's
+    // `Metrics` and the newline-caret math below stay in the same space.
+    let line_height_px = text.line_height_px * dpr;
     let fill = folded(text.fill, opacity);
     // Shape the full run for glyph painting using the text's configured wrap and `max_lines`.
     let wrap = WrapMode::from(text.wrap);
@@ -941,6 +946,7 @@ pub fn draw_text_into_vello<S: lumen_text::TextShaper + ?Sized>(
         max_lines: text.max_lines,
         family: text.family.clone(),
         weight: text.weight,
+        line_height: Some(line_height_px),
     };
     let shaped = shaper.shape(&text.text, size_px, shape_opts);
     let measured = shaped.as_ref().map(|r| r.width).unwrap_or(0.0);
@@ -955,7 +961,7 @@ pub fn draw_text_into_vello<S: lumen_text::TextShaper + ?Sized>(
     // per-node pass. Build it lazily only when one of those is present.
     // W3.6/D4: this is now `lumen_text::TextGeometry` (relocated from the
     // former private `ShapedRunSegmentIndex`); the render draw path still
-    // reshapes here -- the D4-R render-consume dedup is separate.
+    // reshapes here; the D4-R render-consume dedup is separate.
     let run_index = if text.caret.is_some() || text.selection.is_some() {
         shaped.as_ref().map(lumen_text::TextGeometry::from)
     } else {
@@ -1043,7 +1049,7 @@ pub fn draw_text_into_vello<S: lumen_text::TextShaper + ?Sized>(
     // shape pass. `caret_xy` also yields the baseline offset of
     // the byte's line so multiline carets land on the right line.
     if let Some(byte_offset) = text.caret {
-        let line_height = size_px as f64 * 1.2;
+        let line_height = line_height_px as f64;
         let (caret_x, caret_y) =
             if byte_offset > 0 && text.text.as_bytes().get(byte_offset - 1) == Some(&b'\n') {
                 // Caret sits at the start of a (possibly empty) line right
@@ -1060,14 +1066,18 @@ pub fn draw_text_into_vello<S: lumen_text::TextShaper + ?Sized>(
                 // No shape (empty text or shaper missing): caret at origin.
                 (0.0, 0.0)
             };
+        // Ascent / descent stay fixed font-metric ratios of `size_px`,
+        // independent of `line-height` - real CSS line-height changes the
+        // spacing between lines, not the glyph box a caret hugs.
         let h = size_px as f64 * 0.9;
         let x0 = draw_x as f64 + caret_x;
         let y0 = origin.y as f64 + caret_y - h;
-        // Caret width is a logical 2 px scaled to physical pixels (the
-        // old fixed `+2.0` rendered a ~1 px sliver on hidpi and was easy
-        // to lose against the field). Floor at 1 physical px so it never
-        // sub-pixels away entirely.
-        let x1 = x0 + (2.0 * dpr as f64).max(1.0);
+        // Caret width is `ExtractedText::caret_width_px` (CSS `caret-width`,
+        // else `CARET_WIDTH_PX`) scaled to physical pixels (a bare fixed
+        // width would render a sliver on hidpi and be easy to lose against
+        // the field). Floor at 1 physical px so it never sub-pixels away
+        // entirely.
+        let x1 = x0 + (text.caret_width_px as f64 * dpr as f64).max(1.0);
         let y1 = origin.y as f64 + caret_y + size_px as f64 * 0.15;
         // Caret color: `caret-color` token, else the text fill (web
         // default). Alpha-folds the inherited opacity like the glyphs.
@@ -1264,15 +1274,15 @@ fn wgpu_render_system(
     );
 
     // Partial-repaint gate. The retained Node-IR diff tells us whether the
-    // visual tree actually changed this frame. When it did NOT (empty damage)
+    // visual tree actually changed this frame. When it did not (empty damage)
     // and a previous frame already rendered into the target, skip the whole
     // encode + submit - the offscreen texture still holds the pixel-identical
     // last frame. Mirrors Qt `QWidget::update()` collapsing to no backing-store
     // flush when the computed dirty region is empty, and GTK's damage-region
     // coalescing.
     //
-    // When the tree DID change we re-encode the entire scene. A damage-bounded
-    // scissor is deliberately NOT applied: `render_to_texture` clears the whole
+    // When the tree did change we re-encode the entire scene. A damage-bounded
+    // scissor is deliberately not applied: `render_to_texture` clears the whole
     // target to `base_color` on every call, so clipping the encode to the
     // damage rect would blank every untouched pixel - not pixel-identical.
     // Pixel-safe partial *encode* needs a preserved backing store (deferred

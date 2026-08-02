@@ -106,7 +106,7 @@ impl Default for DevtoolsState {
 
 /// The devtools plugin. Registers overlay state, the network-capture ring +
 /// sink, and the per-tick systems that drive the F12 toggle, tab switching,
-/// and body refresh. Does NOT spawn the overlay markup - that is the lumenc
+/// and body refresh. Does not spawn the overlay markup - that is the lumenc
 /// dev-mount's job (it owns the parser). See [`crate::mount_marks`].
 #[derive(Debug, Default)]
 pub struct DevtoolsPlugin;

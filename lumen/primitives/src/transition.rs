@@ -164,7 +164,7 @@ impl<T: Lerp + Send + Sync + 'static> From<(T, T, Duration)> for Transition<T> {
 ///
 /// The v1 animatable set is colors + opacity - geometry-free visual
 /// properties only. Layout properties (`width`, `height`, padding, ...)
-/// are deliberately NOT transitionable: animating them would re-run
+/// are deliberately not transitionable: animating them would re-run
 /// layout every frame; the CSS parser warns and drops them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TransitionProperty {
