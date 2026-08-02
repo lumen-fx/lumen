@@ -834,7 +834,7 @@ mod cascade_tests {
     #[test]
     fn normal_sibling_of_important_decl_does_not_beat_later_normal() {
         // `.a { bg: red !important; color: blue }` - the important `bg`
-        // must NOT drag the normal sibling `color: blue` above a later
+        // must not drag the normal sibling `color: blue` above a later
         // normal `color` rule. Per-declaration importance means the
         // later `.b` color wins.
         let mut ir = tile_with_class("a b");
@@ -1112,7 +1112,7 @@ mod cascade_tests {
         let c = solid(el.attrs.bg.as_ref().expect("bg"));
         assert!(c.r < 0.01, "descendant .theme-dark .card selected");
 
-        // Root NOT theme-dark -> base rule keeps winning.
+        // Root not theme-dark -> base rule keeps winning.
         let root_light = AncestorInfo::new("root", vec!["theme-light".into()], None);
         let mut el2 = card_el();
         reapply_with_ancestors(&mut el2, &css, &media, &[root_light]).expect("reapply");

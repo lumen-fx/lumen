@@ -1,7 +1,7 @@
 //! Node handles and the per-tick DOM index for the dynamic query API.
 //!
 //! The read side of the scripting DOM surface (`query`, `get_by_id`,
-//! traversal) addresses live elements through a [`NodeHandle`] -- an
+//! traversal) addresses live elements through a [`NodeHandle`]: an
 //! `Entity` plus its generation, so a stale handle resolves to nothing
 //! instead of aliasing a recycled entity. [`DomIndex`] is an immutable
 //! per-tick snapshot of the selector-reachable tree that the runtime
@@ -136,12 +136,12 @@ impl NodeHandles {
 // Reserved spawn tokens
 // ---------------------------------------------------------------------------
 //
-// `spawn(tag)` must return a handle SYNCHRONOUSLY so a fluent chain
+// `spawn(tag)` must return a handle synchronously so a fluent chain
 // (`spawn("div").set_class("row").append_to(parent)`) addresses one node
 // across a whole tick, while the real ECS entity only materializes at the
 // next command-drain. Script hosts hold no `&World` at call time, so they
 // cannot reserve a live `Entity`. Instead a spawn mints a process-global
-// reserved TOKEN -- a `u64` with the top bit set so it never aliases a real
+// reserved token: a `u64` with the top bit set so it never aliases a real
 // `Entity::to_bits` value. Each structural command carries this token; the
 // runtime's command applier maps token -> freshly spawned entity in FIFO
 // order, so the queued mutations land on the right node.

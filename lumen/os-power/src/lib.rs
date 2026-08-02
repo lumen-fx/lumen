@@ -66,7 +66,7 @@ enum PlatformHandle {
     None,
     #[cfg(target_os = "linux")]
     /// Live D-Bus connection + cookie from `org.freedesktop.ScreenSaver.Inhibit`.
-    /// The connection MUST stay open for the inhibit's lifetime - the daemon
+    /// The connection must stay open for the inhibit's lifetime - the daemon
     /// tracks the inhibit against the owning bus name and auto-releases the
     /// moment that connection drops. `UnInhibit` fires on this same
     /// connection in `Drop`.

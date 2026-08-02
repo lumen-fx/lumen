@@ -10,15 +10,18 @@
  *
  * Signatures reproduced: 20px mini-bezel buttons with NO hover state
  * (macOS buttons give hover feedback only via tooltips), flat accent
- * default button, 38x22 pill switch with white knob, thin 5px slider
+ * default button, 38x22 pill switch with white knob (shared by both
+ * `<toggle>` and the dedicated `<switch>` element), thin 5px slider
  * track, accent-filled menu selection, soft 4px accent-alpha focus halo
  * (keyboard-only on buttons via :focus-visible, always-on for fields),
  * ~10px window-tier dialog radius.
  *
  * Known approximations (engine gaps): the focus halo is hard-edged (no
  * feathered blur), menu/vibrancy blur is a solid fallback, the switch
- * knob inset is runtime-fixed at 4px (authentic knob would be ~1px
- * inset), the slider thumb diameter is runtime-fixed at 16px (spec 20).
+ * knob inset (`--lumen-knob-inset` below) is the shared cross-platform
+ * 4px value rather than an authentic ~1px AppKit inset, and the slider
+ * thumb diameter (`--lumen-thumb-size`) is the shared 16px value rather
+ * than the ~20px HIG spec.
  */
 
 :root {
@@ -65,8 +68,39 @@
   --lumen-tooltip-delay: 1000;
   --lumen-tooltip-offset: 12;
 
-  /* Indeterminate <progress> sweep period (ms). */
+  /* Indeterminate <progress> sweep period (ms) and moving-chunk width
+     as a fraction of the track. */
   --lumen-progress-period: 1200;
+  --lumen-progress-chunk: 0.3;
+
+  /* Toggle / switch knob inset (px) and the slider thumb diameter (px);
+     see the "known approximations" note above. */
+  --lumen-knob-inset: 4;
+  --lumen-thumb-size: 16;
+
+  /* Gap (px) between a dropdown/menu trigger and its floating panel. */
+  --lumen-popup-gap: 4;
+
+  /* Opacity for a disabled control with no `:disabled { bg }` of its
+     own (menu items, popover rows, view-switcher tabs, form controls). */
+  --lumen-disabled-opacity: 0.5;
+
+  /* Text-input caret. */
+  --lumen-caret-width: 2;
+  --lumen-caret-blink: 530ms;
+
+  /* Line-height multiplier. */
+  --lumen-line-height: 1.2;
+
+  /* Overlay scrollbar geometry / hover feedback / fade timing. */
+  --lumen-scrollbar-thickness: 8;
+  --lumen-scrollbar-thickness-thin: 4;
+  --lumen-scrollbar-margin: 2;
+  --lumen-scrollbar-min-thumb: 24;
+  --lumen-scrollbar-track-hover: #80808029;
+  --lumen-scrollbar-hover-boost: 1.6;
+  --lumen-scrollbar-fade-delay: 1000ms;
+  --lumen-scrollbar-fade-duration: 250ms;
 
 }
 
@@ -120,6 +154,7 @@ root {
   text-color: var(--lumen-text);
   font-family: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
   font-size: 13;
+  line-height: var(--lumen-line-height);
 }
 
 /* === Buttons ===
@@ -160,6 +195,8 @@ textarea {
   min-height: 22;
   text-color: var(--lumen-text);
   border: 1px solid var(--lumen-border-subtle);
+  caret-width: var(--lumen-caret-width);
+  caret-blink: var(--lumen-caret-blink);
 }
 input:hover, textarea:hover { bg: var(--lumen-input-bg); }
 input:focus, textarea:focus { outline: 4 var(--lumen-focus-ring); }
@@ -175,12 +212,36 @@ toggle {
   radius: 11;
   bg: var(--lumen-track);
   knob-color: var(--lumen-knob);
+  knob-inset: var(--lumen-knob-inset);
 }
 toggle:hover { bg: var(--lumen-track); }
 toggle:active { bg: var(--lumen-track-active); }
 toggle:checked { bg: var(--lumen-accent); }
 toggle:focus-visible { outline: 4 var(--lumen-focus-ring); }
 toggle:disabled { bg: var(--lumen-disabled-bg); }
+
+/* === Switch ===
+ * `<switch>` is a distinct element from `<toggle>`, but AppKit has one
+ * switch control, so it shares the same 38x22 pill and colors. No
+ * hover shift, matching every other macOS control; `transition` here
+ * only sets the duration/easing the thumb-slide animation reuses (same
+ * TransitionSpecs lookup the tint tweens elsewhere read).
+ */
+switch {
+  width: 38;
+  height: 22;
+  min-width: 38;
+  radius: 11;
+  bg: var(--lumen-track);
+  knob-color: var(--lumen-knob);
+  knob-inset: var(--lumen-knob-inset);
+  transition: bg 140ms ease-out;
+}
+switch:hover { bg: var(--lumen-track); }
+switch:active { bg: var(--lumen-track-active); }
+switch:checked { bg: var(--lumen-accent); }
+switch:focus-visible { outline: 4 var(--lumen-focus-ring); }
+switch:disabled { bg: var(--lumen-disabled-bg); }
 
 /* === Slider ===
  * Thin 5px track (radius 2), round white thumb.
@@ -191,6 +252,7 @@ slider {
   radius: 2;
   bg: var(--lumen-track);
   knob-color: var(--lumen-knob);
+  thumb-size: var(--lumen-thumb-size);
 }
 slider:hover { bg: var(--lumen-track); }
 slider:focus-visible { outline: 4 var(--lumen-focus-ring); }
@@ -221,9 +283,10 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
   shadow: var(--lumen-shadow-panel);
   border: 1px solid var(--lumen-border);
   padding: 5 0;
+  popup-gap: var(--lumen-popup-gap);
 }
 /* Menu-style selection: accent bar + white text (HIG color roles). */
-.dropdown-option { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius-sm); text-overflow: ellipsis; }
+.dropdown-option { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius-sm); text-overflow: ellipsis; disabled-opacity: var(--lumen-disabled-opacity); }
 .dropdown-option:hover { bg: var(--lumen-accent); text-color: var(--lumen-on-accent); }
 .dropdown-option:focus { outline: 2 var(--lumen-focus-ring); }
 
@@ -235,8 +298,9 @@ tile:disabled { bg: var(--lumen-disabled-bg); }
   shadow: var(--lumen-shadow-panel);
   border: 1px solid var(--lumen-border);
   padding: 5 0;
+  popup-gap: var(--lumen-popup-gap);
 }
-.menu-item { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius-sm); min-height: 22; }
+.menu-item { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius-sm); min-height: 22; disabled-opacity: var(--lumen-disabled-opacity); }
 .menu-item:hover { bg: var(--lumen-accent); text-color: var(--lumen-on-accent); }
 .menu-item:focus { outline: 2 var(--lumen-focus-ring); }
 .menu-separator { bg: var(--lumen-border); height: 1; margin: 4 0; }
@@ -274,6 +338,7 @@ dialog { bg: var(--lumen-backdrop); transition: opacity 150ms ease; }
   min-height: 20;
   text-color: var(--lumen-text);
   text-overflow: ellipsis;
+  disabled-opacity: var(--lumen-disabled-opacity);
 }
 .tab-btn:hover { bg: #00000000; }
 .tab-btn:selected { bg: var(--lumen-surface); }
@@ -291,19 +356,31 @@ dialog { bg: var(--lumen-backdrop); transition: opacity 150ms ease; }
 }
 
 /* === Scroll regions === */
-scroll { scrollbar-color: var(--lumen-scrollbar-thumb); }
+scroll {
+  scrollbar-color: var(--lumen-scrollbar-thumb);
+  scrollbar-thickness: var(--lumen-scrollbar-thickness);
+  scrollbar-thickness-thin: var(--lumen-scrollbar-thickness-thin);
+  scrollbar-margin: var(--lumen-scrollbar-margin);
+  scrollbar-min-thumb: var(--lumen-scrollbar-min-thumb);
+  scrollbar-track-hover: var(--lumen-scrollbar-track-hover);
+  scrollbar-hover-boost: var(--lumen-scrollbar-hover-boost);
+  scrollbar-fade-delay: var(--lumen-scrollbar-fade-delay);
+  scrollbar-fade-duration: var(--lumen-scrollbar-fade-duration);
+}
 scroll:focus { outline: 3 var(--lumen-focus-ring); }
 
 /* === Checkbox / Radio / Progress (W5 form controls) === */
+checkbox          { disabled-opacity: var(--lumen-disabled-opacity); }
 checkbox:checked  { bg: var(--lumen-accent); }
 checkbox:focus-visible { outline: 2 var(--lumen-focus-ring); }
 .checkbox-box     { width: 16; height: 16; radius: 4; bg: var(--lumen-surface); border: 1px solid var(--lumen-border); text-color: var(--lumen-on-accent); font-size: 12; text-align: center; }
 .checkbox-label   { text-color: var(--lumen-text); }
+radio             { disabled-opacity: var(--lumen-disabled-opacity); }
 radio:selected    { bg: var(--lumen-accent); }
 radio:focus-visible { outline: 2 var(--lumen-focus-ring); }
 .radio-dot        { width: 16; height: 16; radius: 8; bg: var(--lumen-surface); border: 1px solid var(--lumen-border); }
 .radio-label      { text-color: var(--lumen-text); }
-progress          { bg: var(--lumen-surface); radius: 3; height: 6; progress-duration: var(--lumen-progress-period); }
+progress          { bg: var(--lumen-surface); radius: 3; height: 6; progress-duration: var(--lumen-progress-period); progress-chunk: var(--lumen-progress-chunk); }
 .progress-fill    { bg: var(--lumen-accent); radius: 3; }
 
 /* Dialog default button (Enter-anywhere target): accent ring. */

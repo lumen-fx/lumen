@@ -14,6 +14,15 @@ use lumen_core::components::{Fill, FlexDirection, Length, ShadowSpec, Style, Tex
 /// Resolve a Material 3-flavored typography role name to a pixel
 /// font size. Returns `None` for unknown names so the caller can
 /// fall back to the default 16 px.
+///
+/// This table stays in Rust rather than moving to `skins/ua.css` with
+/// the rest of the user-agent defaults: the cascade in `lumen_ir::css`
+/// matches selectors on tag, id, class, and pseudo-class only, with no
+/// attribute-value selector. There is no CSS rule that can say "an
+/// element carrying `style-role="display-xl"` gets `font-size: 128px`" -
+/// the mapping from the role keyword to its pixel size has to happen in
+/// code, the same way a keyword like `font-weight: bold` resolves to a
+/// numeric weight.
 pub fn typography_role_to_px(role: &str) -> Option<f32> {
     Some(match role {
         "display-xl" => 128.0,
@@ -189,9 +198,9 @@ impl From<crate::layout_ir::ShadowSpec> for ShadowSpec {
 }
 
 /// `None` when the element carries no text-style overrides (no color,
-/// no font size, no align, no wrap, no max-lines, no typography role).
-/// Absent => defaults apply at extract time - `<column>` / `<row>`
-/// containers stay component-light.
+/// no font size, no align, no wrap, no max-lines, no typography role,
+/// no line-height, ...). Absent => defaults apply at extract time -
+/// `<column>` / `<row>` containers stay component-light.
 impl From<&Attributes> for Option<TextStyle> {
     fn from(attrs: &Attributes) -> Self {
         let role_size = attrs.style_role.as_deref().and_then(typography_role_to_px);
@@ -209,10 +218,25 @@ impl From<&Attributes> for Option<TextStyle> {
             && attrs.font_family.is_none()
             && attrs.font_weight.is_none()
             && attrs.selection_color.is_none()
+            && attrs.line_height.is_none()
         {
             return None;
         }
         let defaults = TextStyle::default();
+        // `lumen_ir::layout_ir::LineHeightSpec` -> `lumen_core::components::LineHeightSpec`,
+        // a 1:1 variant mapping. `lumen-core` cannot depend on `lumen-ir`
+        // (the dependency would cycle: `lumen-ir` already depends on
+        // `lumen-core`), so the two enums are separate types kept in sync
+        // by hand; `run::restyle`'s live-reapply path does the same
+        // conversion at its own IR/ECS boundary.
+        let line_height = attrs.line_height.map(|lh| match lh {
+            crate::layout_ir::LineHeightSpec::Multiplier(m) => {
+                lumen_core::components::LineHeightSpec::Multiplier(m)
+            }
+            crate::layout_ir::LineHeightSpec::Px(px) => {
+                lumen_core::components::LineHeightSpec::Px(px)
+            }
+        });
         // `text-overflow: ellipsis` lowers onto the existing runtime
         // wrap machinery: glyph-wrap at the container width with a
         // 1-line cap makes the shaper truncate and append `...` (the
@@ -246,6 +270,7 @@ impl From<&Attributes> for Option<TextStyle> {
                 .map(std::sync::Arc::<str>::from),
             weight: attrs.font_weight.unwrap_or(defaults.weight),
             selection_color: attrs.selection_color.map(Into::into),
+            line_height,
         })
     }
 }
@@ -289,5 +314,72 @@ impl From<crate::layout_ir::OutlineSpec> for lumen_primitives::FocusOutlineSpec 
             color: spec.color.into(),
             offset: spec.offset,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout_ir::LineHeightSpec as IrLineHeightSpec;
+    use lumen_core::components::LineHeightSpec as CoreLineHeightSpec;
+
+    /// A `line-height` alone - no color, size, align, wrap, max-lines,
+    /// family, weight, or selection-color - must still produce a
+    /// `TextStyle`. The early-return guard in `Option<&Attributes> for
+    /// Option<TextStyle>` used to check every OTHER text property but not
+    /// `line_height`, so an element authoring only `line-height` returned
+    /// `None` and the value was silently dropped instead of reaching the
+    /// spawned entity.
+    #[test]
+    fn line_height_alone_produces_a_text_style() {
+        let attrs = Attributes {
+            line_height: Some(IrLineHeightSpec::Multiplier(1.5)),
+            ..Attributes::default()
+        };
+        let ts = Option::<TextStyle>::from(&attrs).expect("line-height alone must produce Some");
+        assert_eq!(
+            ts.line_height,
+            Some(CoreLineHeightSpec::Multiplier(1.5)),
+            "the authored value must survive, not just trigger Some(..)"
+        );
+    }
+
+    /// The `Px` variant survives the `lumen_ir` -> `lumen_core` conversion
+    /// too - the two `LineHeightSpec` enums are distinct types (`lumen-core`
+    /// cannot depend on `lumen-ir`), converted 1:1 by hand at this
+    /// boundary, so each variant needs its own coverage.
+    #[test]
+    fn line_height_px_variant_survives_conversion() {
+        let attrs = Attributes {
+            line_height: Some(IrLineHeightSpec::Px(19.0)),
+            ..Attributes::default()
+        };
+        let ts = Option::<TextStyle>::from(&attrs).expect("line-height alone must produce Some");
+        assert_eq!(ts.line_height, Some(CoreLineHeightSpec::Px(19.0)));
+    }
+
+    /// An element with no text properties at all - including no
+    /// line-height - still returns `None`, preserving the
+    /// "component-light plain container" contract the guard exists for.
+    #[test]
+    fn no_text_properties_returns_none() {
+        let attrs = Attributes::default();
+        assert!(Option::<TextStyle>::from(&attrs).is_none());
+    }
+
+    /// A property already covered by the guard (`font-size`) still
+    /// combines correctly with an authored `line-height` on the same
+    /// element - the fix to the guard must not regress the
+    /// already-working multi-property case.
+    #[test]
+    fn line_height_combines_with_other_text_properties() {
+        let attrs = Attributes {
+            font_size: Some(20.0),
+            line_height: Some(IrLineHeightSpec::Multiplier(1.4)),
+            ..Attributes::default()
+        };
+        let ts = Option::<TextStyle>::from(&attrs).expect("must produce Some");
+        assert_eq!(ts.size_px, 20.0);
+        assert_eq!(ts.line_height, Some(CoreLineHeightSpec::Multiplier(1.4)));
     }
 }

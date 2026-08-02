@@ -1134,9 +1134,9 @@ fn register_node_query(engine: &mut candela::Engine) {
 /// Register the dynamic DOM write side (phases 2 + 3) for candela.
 ///
 /// The pinned candela dep predates user-struct impl-block methods, so the
-/// mutators are PROCEDURAL under the `lumen` namespace
+/// mutators are procedural under the `lumen` namespace
 /// (`lumen::node_set_attr(h, name, value)`), not `node.set_attr(..)`
-/// method sugar, and there is no fluent chaining -- each call is a separate
+/// method sugar, and there is no fluent chaining; each call is a separate
 /// statement. A future candela-dep bump enables the method + chaining form
 /// the rhai / lua hosts already expose. Handles are the same `int` ids the
 /// read side uses; `node_spawn` / `node_clone_deep` mint a reserved-token
@@ -1177,7 +1177,7 @@ fn register_node_mutators(engine: &mut candela::Engine, r: &Registries) {
     mutate!("node_set_text", |node, text: String| {
         ScriptCommand::SetNodeText { node, text }
     });
-    // Guarded markup injection (design 4.4). Do NOT feed untrusted content.
+    // Guarded markup injection (design 4.4). Do not feed untrusted content.
     mutate!("node_set_inner_markup", |node, markup: String| {
         ScriptCommand::SetInnerMarkup { node, markup }
     });

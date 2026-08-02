@@ -2,8 +2,8 @@
 //!
 //! Builds a trivial precompiled LMNA artifact by hand (no markup parser, no
 //! optional subsystem) and ticks it through `run_app_headless`. Run under
-//! different `--features` sets to prove the trimmed runtime -- and each
-//! optional subsystem when enabled -- still builds and ticks an app headless,
+//! different `--features` sets to prove the trimmed runtime, and each
+//! optional subsystem when enabled, still builds and ticks an app headless,
 //! never opening a real window:
 //!
 //! ```text

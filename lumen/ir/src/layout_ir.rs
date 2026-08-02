@@ -259,7 +259,7 @@ impl Default for Element {
 ///   against [`lumen_core::signals::Signals`] (the global signal map).
 /// - `Row("field")` - `{row.field}`, only meaningful inside a `<for>`
 ///   body. Resolves against the current iteration's
-///   [`lumen_core::signals::ArrayItem`] record. Crucially does NOT fall
+///   [`lumen_core::signals::ArrayItem`] record. Crucially does not fall
 ///   through to globals when the row record is missing the field - that
 ///   substitution emits empty string and a one-shot `tracing::warn!`.
 /// - `RowIndex` - `{$index}` (preferred) or the legacy `{idx}` alias.
@@ -327,6 +327,22 @@ pub enum LengthSpec {
     Px(f32),
     /// Percentage of parent.
     Percent(f32),
+}
+
+/// CSS `line-height` value. Unlike [`LengthSpec`], the two forms carry
+/// different meanings rather than different units of the same quantity:
+/// a bare number (`line-height: 1.2`) scales with the element's own
+/// font size, while a `px` value (`line-height: 19px`) is a fixed line
+/// box height that does not track font-size changes. Kept as two
+/// variants instead of collapsing to a single px number so a consumer
+/// can tell which behavior the author asked for.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum LineHeightSpec {
+    /// Unitless multiplier of the element's font size (CSS `normal`-like
+    /// scaling behavior).
+    Multiplier(f32),
+    /// Fixed line height in px, independent of font size.
+    Px(f32),
 }
 
 /// Four edge values (in CSS order: left, right, top, bottom).
@@ -965,6 +981,87 @@ pub struct Attributes {
     /// `bind-checked="$parent.<field>"` - parent-entity toggle binding.
     /// See [`Self::bind_parent_text`].
     pub bind_parent_checked: Option<String>,
+    /// `knob-inset="2"` / CSS `knob-inset` - gap in px between the knob
+    /// child's edge and its track parent's edge on `<toggle>` /
+    /// `<switch>`. Lumen-native analog property (mirrors [`Self::knob_color`]
+    /// in having no real CSS pseudo-element target); absent = the
+    /// runtime's own inset constant.
+    pub knob_inset: Option<f32>,
+    /// `thumb-size="20"` / CSS `thumb-size` - diameter in px of the
+    /// `<slider>` thumb. Lumen-native analog property; absent = the
+    /// runtime's own thumb-size constant.
+    pub thumb_size: Option<f32>,
+    /// `popup-gap="4"` / CSS `popup-gap` - offset in px between a
+    /// `<dropdown>` / `<menu>` trigger and its floating panel. Absent =
+    /// the runtime's own gap constant.
+    pub popup_gap: Option<f32>,
+    /// CSS `progress-chunk` - fraction of the track width (`0.0` to
+    /// `1.0`) covered by the moving chunk of an indeterminate
+    /// `<progress>` sweep. Absent = the runtime's own chunk-width
+    /// constant.
+    pub progress_chunk: Option<f32>,
+    /// CSS `disabled-opacity` - alpha multiplier `[0, 1]` applied to a
+    /// disabled entity when neither [`Self::disabled_bg`] nor an
+    /// explicit `:disabled { opacity }` ([`Self::disabled_opacity`]) was
+    /// authored. Distinct from `disabled_opacity`: that field is the
+    /// per-element state-pseudo override, this field is the CSS-authored
+    /// replacement for the runtime's own generic dimming fallback.
+    pub disabled_opacity_default: Option<f32>,
+    /// `caret-width="2"` / CSS `caret-width` - stroke width in px of the
+    /// text-input caret. Absent = the runtime's own caret-width constant.
+    /// Only meaningful on `<input>` / `<textarea>`.
+    pub caret_width: Option<f32>,
+    /// CSS `caret-blink` - full on/off blink period of the text-input
+    /// caret, in milliseconds. Accepts `Nms` or `Ns`. Absent = the
+    /// runtime's own blink-period constant. Only meaningful on
+    /// `<input>` / `<textarea>`.
+    pub caret_blink_ms: Option<u32>,
+    /// CSS `password-character` - the glyph substituted for every
+    /// character of a masked (`type="password"`-equivalent) text input.
+    /// A single Unicode scalar value; absent = the runtime's own default
+    /// mask glyph (typically `*` or a bullet).
+    pub password_character: Option<char>,
+    /// CSS `line-height` - see [`LineHeightSpec`] for why the unitless
+    /// and px forms are kept distinct rather than folded into one number.
+    /// Inherited like [`Self::font_size`]. Absent = the runtime's own
+    /// line-height ratio.
+    pub line_height: Option<LineHeightSpec>,
+    /// CSS `scrollbar-thickness` - width in px of the overlay scrollbar
+    /// track/thumb on `<scroll>` containers at `scrollbar-width: auto`.
+    /// Absent = the runtime's own thickness constant.
+    pub scrollbar_thickness: Option<f32>,
+    /// CSS `scrollbar-thickness-thin` - width in px of the overlay
+    /// scrollbar at `scrollbar-width: thin`. Absent = the runtime's own
+    /// thin-thickness constant.
+    pub scrollbar_thickness_thin: Option<f32>,
+    /// CSS `scrollbar-margin` - gap in px between the scrollbar and the
+    /// container's content edge. Absent = the runtime's own margin
+    /// constant.
+    pub scrollbar_margin: Option<f32>,
+    /// CSS `scrollbar-min-thumb` - minimum thumb length in px, so a very
+    /// long scrollable area still gets a grabbable thumb. Absent = the
+    /// runtime's own minimum constant.
+    pub scrollbar_min_thumb: Option<f32>,
+    /// CSS `scrollbar-track-hover` - track fill shown while the pointer
+    /// hovers the scrollbar. Lumen-native named property (mirrors
+    /// [`Self::hover_bg`] in being a distinct property rather than a
+    /// `:hover { ... }` pseudo rule, since the hover target is the
+    /// scrollbar part, not the whole element). Absent = no track tint on
+    /// hover.
+    pub scrollbar_track_hover: Option<Rgba>,
+    /// CSS `scrollbar-hover-boost` - multiplier applied to the thumb
+    /// fill's brightness while hovered, paired with
+    /// [`Self::scrollbar_track_hover`]. Absent = the runtime's own boost
+    /// constant.
+    pub scrollbar_hover_boost: Option<f32>,
+    /// CSS `scrollbar-fade-delay` - idle time before an overlay
+    /// scrollbar starts fading out, in milliseconds. Accepts `Nms` or
+    /// `Ns`. Absent = the runtime's own delay constant.
+    pub scrollbar_fade_delay_ms: Option<u32>,
+    /// CSS `scrollbar-fade-duration` - length of the fade-out animation
+    /// itself, in milliseconds. Accepts `Nms` or `Ns`. Absent = the
+    /// runtime's own duration constant.
+    pub scrollbar_fade_duration_ms: Option<u32>,
 }
 
 impl Attributes {
@@ -1080,7 +1177,7 @@ pub struct TransitionIr {
 ///
 /// v1 animatable set: colors + opacity only - geometry-free visual
 /// props. Layout properties (`width`, `height`, padding, margins, ...)
-/// are deliberately NOT transitionable in v1: animating them would
+/// are deliberately not transitionable in v1: animating them would
 /// re-run layout every frame, and the parser warns + drops them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TransitionPropertyIr {

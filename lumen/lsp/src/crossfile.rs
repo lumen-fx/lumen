@@ -533,7 +533,7 @@ mod tests {
             assert_eq!(&rhai[s.start..s.end], "save");
         }
 
-        // `#saved` must NOT match `#save`.
+        // `#saved` must not match `#save`.
         let c = css_id_selector_spans(css, "save");
         assert_eq!(c.len(), 1);
         assert_eq!(&css[c[0].start..c[0].end], "save");

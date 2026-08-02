@@ -1,10 +1,10 @@
-//! The candela DOM write bindings are PROCEDURAL (`lumen::node_*(h, ...)`),
+//! The candela DOM write bindings are procedural (`lumen::node_*(h, ...)`),
 //! not method-chained: the pinned candela dep predates user-struct impl
 //! methods. Node handles are `int` ids; `node_spawn` returns a reserved-id
 //! valid for the whole tick, and every mutation pushes one command into the
-//! sink -- the same commands the rhai / lua fluent form emits.
+//! sink, the same commands the rhai / lua fluent form emits.
 //!
-//! The `window` / `history` namespaces DO work natively on candela
+//! The `window` / `history` namespaces do work natively on candela
 //! (`window.set_title(..)` compiles), so they are bound directly.
 
 use lumen_script::{ScriptCommand, ScriptHost};

@@ -21,7 +21,7 @@
 //!
 //! ## Page resolution
 //!
-//! The framework does NOT pattern-match `:id` segments. A requested path is
+//! The framework does not pattern-match `:id` segments. A requested path is
 //! resolved by longest existing `.lmn` prefix ([`lumen_core::nav::resolve_path`]):
 //! `/settings` -> `settings.lmn`; `/user/7` (no `user/7.lmn`) -> `user.lmn`
 //! with `/7` exposed on the reserved `route.segment` signal for the page's

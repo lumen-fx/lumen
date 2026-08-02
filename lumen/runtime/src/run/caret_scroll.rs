@@ -46,7 +46,11 @@ fn caret_scroll_axis(
 /// Horizontal: the caret x is the measured width of the caret line's
 /// prefix (same cosmic shaper the layout measure uses, so it agrees
 /// with the renderer's glyph positions). Vertical (multiline): logical
-/// line index x the shaper's line height (`size_px * 1.2`).
+/// line index x the resolved line height
+/// ([`lumen_core::components::resolve_line_height`] - the CSS
+/// `line-height` when authored, else `size_px *
+/// DEFAULT_LINE_HEIGHT_MULTIPLIER`), the same value the shaper and paint
+/// paths use.
 #[allow(clippy::type_complexity)]
 pub(crate) fn scroll_caret_into_view(
     mut commands: Commands,
@@ -113,7 +117,15 @@ pub(crate) fn scroll_caret_into_view(
             line_w + CARET_W,
         );
         let off_y = if ti.multiline {
-            let line_h = size_px * 1.2;
+            // Route through the resolved CSS `line-height` (falls back to
+            // `size_px * DEFAULT_LINE_HEIGHT_MULTIPLIER`, i.e. the same
+            // `1.2` this used to hardcode) so an authored `line-height`
+            // moves the caret's vertical scroll math too, not just the
+            // shaper / paint paths that already read it.
+            let line_h = lumen_core::components::resolve_line_height(
+                ts.and_then(|s| s.line_height),
+                size_px,
+            );
             let inner_h = (t.size.y - pad_t - pad_b).max(1.0);
             let line_idx = tc.0[..cur].matches('\n').count() as f32;
             let total_h = (tc.0.matches('\n').count() + 1) as f32 * line_h;

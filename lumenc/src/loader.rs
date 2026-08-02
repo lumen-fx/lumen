@@ -73,7 +73,7 @@ pub enum LoaderError {
 
 /// Platform-specific shared-library file name for the liblumen cdylib. The
 /// crate is `lumen-ffi`, so the produced file is `liblumen_ffi.{so,dylib}` /
-/// `lumen_ffi.dll` -- the same name the C++ / Python SDKs load.
+/// `lumen_ffi.dll`: the same name the C++ / Python SDKs load.
 fn soname() -> &'static str {
     #[cfg(target_os = "windows")]
     {
@@ -103,7 +103,7 @@ fn candidates() -> Vec<PathBuf> {
     if let Some(dir) = std::env::var_os("LUMEN_LIB_DIR") {
         out.push(Path::new(&dir).join(name));
     }
-    // 3. Bare soname -- the platform default search (LD_LIBRARY_PATH / DYLD_* /
+    // 3. Bare soname: the platform default search (LD_LIBRARY_PATH / DYLD_* /
     //    the DLL search path) resolves it.
     out.push(PathBuf::from(name));
     out

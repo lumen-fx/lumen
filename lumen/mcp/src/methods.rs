@@ -429,7 +429,8 @@ fn parse_snapshot_tree(params: Option<&Value>) -> Result<SnapshotTreeParams, Str
 const SNAPSHOT_TREE_DEFAULT_NODES: usize = 2000;
 const SNAPSHOT_TREE_MAX_NODES: usize = 10_000;
 
-/// Structured JSON element tree for the browser inspector. Node shape:
+/// Structured JSON element tree for MCP clients and agent tooling - what
+/// `lumen-mcp-server` proxies as the `lumen_snapshot_tree` tool. Node shape:
 /// `{ id, tag?, lumen_id?, classes, role, label, text?, rect: {x, y, w, h},
 ///    flags, children: [...] }`
 /// where `rect` is the scroll-corrected ON-SCREEN rect (same space as

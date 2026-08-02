@@ -9,7 +9,7 @@
 //!   (`lumen.toml [capabilities]` + a conservative source scan), maps it to a
 //!   cargo `--features` list, and builds the per-app static runtime seam
 //!   (`lumen-ffi`) with `--no-default-features --features "<set>"` so the
-//!   binary carries ONLY the subsystems that app uses. The shared dlopen'd
+//!   binary carries only the subsystems that app uses. The shared dlopen'd
 //!   cdylib and the dev `lumenc run` path stay full-featured and untrimmed.
 //!   See docs/design/runtime-tree-shaking.md.
 
@@ -22,10 +22,12 @@ use std::process::ExitCode;
 /// shared usage block.
 pub fn cmd_bundle(args: impl Iterator<Item = String>) -> ExitCode {
     let mut static_build = false;
+    let mut no_hooks = false;
     let mut positional: Vec<String> = Vec::new();
     for a in args {
         match a.as_str() {
             "--static" => static_build = true,
+            "--no-hooks" => no_hooks = true,
             other => positional.push(other.to_string()),
         }
     }
@@ -52,6 +54,14 @@ pub fn cmd_bundle(args: impl Iterator<Item = String>) -> ExitCode {
         return ExitCode::from(2);
     }
 
+    // `[[hooks]]`: build native artifacts before packing / building the seam.
+    // Requires a `dev-run` lumenc (`lumen.toml` config + hook execution live
+    // in `lumen-runtime`); a thin build without it has no config loader to
+    // read `[[hooks]]` from and silently skips them.
+    if !no_hooks && let Err(code) = run_prebuild_hooks(&src_path) {
+        return code;
+    }
+
     if static_build {
         return cmd_bundle_static(&src_path, &out_path);
     }
@@ -69,6 +79,37 @@ pub fn cmd_bundle(args: impl Iterator<Item = String>) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Run every `prebuild` `[[hooks]]` entry for `src_path`. Requires `dev-run`
+/// (config parsing + hook execution live in `lumen-runtime`); a lumenc built
+/// without it links no config loader, so it treats an app as having no
+/// declared hooks rather than failing the bundle outright.
+#[cfg(feature = "dev-run")]
+fn run_prebuild_hooks(src_path: &std::path::Path) -> Result<(), ExitCode> {
+    let cfg = match crate::config::LumenToml::load_or_default(src_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("lumenc bundle: {e}");
+            return Err(ExitCode::FAILURE);
+        }
+    };
+    lumen_runtime::hooks::run_hooks(
+        &cfg.hooks,
+        lumen_runtime::hooks::HookWhen::Prebuild,
+        src_path,
+    )
+    .map_err(|e| {
+        eprintln!("lumenc bundle: {e}");
+        ExitCode::FAILURE
+    })
+}
+
+/// Thin-build fallback: no `lumen-runtime` is linked, so there is no
+/// `LumenToml` to read `[[hooks]]` from. Silently a no-op.
+#[cfg(not(feature = "dev-run"))]
+fn run_prebuild_hooks(_src_path: &std::path::Path) -> Result<(), ExitCode> {
+    Ok(())
 }
 
 /// `lumenc bundle --static`: resolve the per-app capability set and build the

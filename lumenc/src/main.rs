@@ -80,9 +80,11 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
     let mut size: Option<(u32, u32)> = None;
     let mut dpr: Option<f32> = None;
     let mut ticks: Option<u64> = None;
+    let mut no_hooks = false;
     let mut args = args.peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--no-hooks" => no_hooks = true,
             "--profile" => {
                 let Some(v) = args.next() else {
                     eprintln!("lumenc run: --profile needs a value (chrome|stderr)");
@@ -173,14 +175,14 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
     // `lumen.toml [app] kind` value overrides auto-detection; otherwise the
     // directory contents decide (see `lumenc::app_kind`).
     let dir_path = PathBuf::from(&dir);
-    let kind_override = match lumenc::LumenToml::load_or_default(&dir_path) {
-        Ok(cfg) => cfg.app.kind,
+    let cfg = match lumenc::LumenToml::load_or_default(&dir_path) {
+        Ok(cfg) => cfg,
         Err(e) => {
             eprintln!("lumenc run: lumen.toml: {e}");
             return ExitCode::from(2);
         }
     };
-    let kind = lumenc::app_kind::resolve(&dir_path, kind_override);
+    let kind = lumenc::app_kind::resolve(&dir_path, cfg.app.kind);
     if kind != lumenc::app_kind::AppKind::Markup {
         if headless || artifact.is_some() || size.is_some() || dpr.is_some() || ticks.is_some() {
             eprintln!(
@@ -194,6 +196,27 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
     if !headless && (size.is_some() || dpr.is_some() || ticks.is_some()) {
         eprintln!("lumenc run: --size / --dpr / --ticks require --headless");
         return ExitCode::from(2);
+    }
+    // `[[hooks]]`: build native artifacts before the run (`prebuild`), then
+    // run any `prerun` setup commands. `--no-hooks` skips both. `check`
+    // never reaches this arm, so it stays side-effect free.
+    if !no_hooks {
+        if let Err(e) = lumen_runtime::hooks::run_hooks(
+            &cfg.hooks,
+            lumen_runtime::hooks::HookWhen::Prebuild,
+            &dir_path,
+        ) {
+            eprintln!("lumenc run: {e}");
+            return ExitCode::FAILURE;
+        }
+        if let Err(e) = lumen_runtime::hooks::run_hooks(
+            &cfg.hooks,
+            lumen_runtime::hooks::HookWhen::Prerun,
+            &dir_path,
+        ) {
+            eprintln!("lumenc run: {e}");
+            return ExitCode::FAILURE;
+        }
     }
     // Resolve `profile`: CLI flag wins; otherwise read `[profile] mode` from `lumen.toml`. A `lumen.toml` parse failure aborts the command.
     if profile.is_none() {
@@ -260,17 +283,19 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
 /// liblumen and drive it over the C-ABI. No backend is static-linked here.
 ///
 /// Alpha scope: markup apps only (no SDK app-kind reroute), no `--profile` /
-/// `--size` / `--dpr`, and no state-preserving hot-reload -- re-run to pick up
+/// `--size` / `--dpr`, and no state-preserving hot-reload; re-run to pick up
 /// edits. See `docs/design/link-not-embed.md`.
 #[cfg(all(feature = "dlopen-run", not(feature = "dev-run")))]
 fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
     let mut dir: Option<String> = None;
     let mut headless = false;
     let mut ticks: Option<u32> = None;
+    let mut no_hooks = false;
     let mut args = args.peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--headless" => headless = true,
+            "--no-hooks" => no_hooks = true,
             s if s == "--ticks" || s.starts_with("--ticks=") => {
                 let v = match s.strip_prefix("--ticks=") {
                     Some(v) => Some(v.to_string()),
@@ -311,6 +336,21 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
         return ExitCode::from(2);
     };
     let dir_path = PathBuf::from(&dir);
+    // `[[hooks]]`: this launcher links no `lumen-runtime` (that's the whole
+    // point of `dlopen-run`), so it cannot use `lumen_runtime::hooks` /
+    // `LumenToml`. `thin_run_hooks` reads the same schema straight off the
+    // raw `toml::Value`, mirroring `lumenc::compile::entry_name`'s existing
+    // pattern for reading `lumen.toml` without the full config parser.
+    if !no_hooks {
+        if let Err(e) = thin_run_hooks(&dir_path, "prebuild") {
+            eprintln!("lumenc run: {e}");
+            return ExitCode::FAILURE;
+        }
+        if let Err(e) = thin_run_hooks(&dir_path, "prerun") {
+            eprintln!("lumenc run: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
     // 1. Compile source -> LMNA bytes in-process (parser only; no runtime).
     let bytes = match lumenc::compile::compile_dir_to_lmna(&dir_path) {
         Ok(b) => b,
@@ -333,6 +373,128 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Minimal `[[hooks]]` reader + runner for the thin (`dlopen-run`) launcher.
+/// It links no `lumen-runtime`, so it cannot use the full `LumenToml` /
+/// `lumen_runtime::hooks` machinery; instead it reads the raw `toml::Value`
+/// directly, the same way `lumenc::compile::entry_name` reads `[app] entry`
+/// without the full config parser. Runs every `[[hooks]]` entry whose `when`
+/// matches `trigger` and whose `os` (if set) matches
+/// `std::env::consts::OS`, in declaration order, skipping a hook whose
+/// declared outputs are all already newer than its declared inputs (see
+/// `lumen_runtime::hooks::run_hooks` for the same staleness rule).
+///
+/// Unlike the full config parser, a malformed `lumen.toml` or an unknown
+/// `when` / `os` value here is not a hard error - it is silently skipped,
+/// matching this launcher's existing lenient `lumen.toml`-is-optional
+/// stance (see `entry_name`). A lumenc built with `dev-run` (the default)
+/// never takes this path.
+#[cfg(all(feature = "dlopen-run", not(feature = "dev-run")))]
+fn thin_run_hooks(dir: &std::path::Path, trigger: &str) -> Result<(), String> {
+    let Ok(text) = std::fs::read_to_string(dir.join("lumen.toml")) else {
+        return Ok(());
+    };
+    let Ok(value) = text.parse::<toml::Value>() else {
+        return Ok(());
+    };
+    let Some(hooks) = value.get("hooks").and_then(|h| h.as_array()) else {
+        return Ok(());
+    };
+    let os = std::env::consts::OS;
+    for hook in hooks {
+        if hook.get("when").and_then(|v| v.as_str()) != Some(trigger) {
+            continue;
+        }
+        if let Some(hook_os) = hook.get("os").and_then(|v| v.as_str())
+            && hook_os != os
+        {
+            continue;
+        }
+        let Some(run) = hook
+            .get("run")
+            .and_then(|v| v.as_str())
+            .filter(|r| !r.trim().is_empty())
+        else {
+            continue;
+        };
+        let inputs = thin_hook_paths(hook, "inputs");
+        let outputs = thin_hook_paths(hook, "outputs");
+        if thin_hook_is_stale_free(dir, &inputs, &outputs) {
+            continue;
+        }
+        let status = thin_shell_command(run)
+            .current_dir(dir)
+            .status()
+            .map_err(|e| format!("hook `{run}`: failed to run: {e}"))?;
+        if !status.success() {
+            return Err(format!("hook `{run}` exited with {status}"));
+        }
+    }
+    Ok(())
+}
+
+/// `sh -c "<run>"` on unix, `cmd /C "<run>"` on windows - mirrors
+/// `lumen_runtime::hooks`'s own shell dispatch.
+#[cfg(all(feature = "dlopen-run", not(feature = "dev-run"), unix))]
+fn thin_shell_command(run: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new("sh");
+    cmd.arg("-c").arg(run);
+    cmd
+}
+
+/// `sh -c "<run>"` on unix, `cmd /C "<run>"` on windows - mirrors
+/// `lumen_runtime::hooks`'s own shell dispatch.
+#[cfg(all(feature = "dlopen-run", not(feature = "dev-run"), windows))]
+fn thin_shell_command(run: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new("cmd");
+    cmd.arg("/C").arg(run);
+    cmd
+}
+
+/// Read a `[[hooks]]` entry's `inputs` / `outputs` string array (absent ->
+/// empty).
+#[cfg(all(feature = "dlopen-run", not(feature = "dev-run")))]
+fn thin_hook_paths(hook: &toml::Value, key: &str) -> Vec<String> {
+    hook.get(key)
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Same staleness rule as `lumen_runtime::hooks::is_stale_free`: skip only
+/// when both lists are non-empty, every output exists, every input exists,
+/// and every output's mtime is at least as new as the newest input's mtime.
+#[cfg(all(feature = "dlopen-run", not(feature = "dev-run")))]
+fn thin_hook_is_stale_free(dir: &std::path::Path, inputs: &[String], outputs: &[String]) -> bool {
+    if inputs.is_empty() || outputs.is_empty() {
+        return false;
+    }
+    let mtime = |rel: &str| -> Option<std::time::SystemTime> {
+        let p = std::path::Path::new(rel);
+        let full = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            dir.join(p)
+        };
+        std::fs::metadata(full).ok()?.modified().ok()
+    };
+    let Some(newest_input) = inputs
+        .iter()
+        .map(|p| mtime(p))
+        .collect::<Option<Vec<_>>>()
+        .and_then(|v| v.into_iter().max())
+    else {
+        return false;
+    };
+    let Some(output_mtimes) = outputs.iter().map(|p| mtime(p)).collect::<Option<Vec<_>>>() else {
+        return false;
+    };
+    output_mtimes.into_iter().all(|out| out >= newest_input)
 }
 
 /// Fallback `lumenc run` when neither run backend is compiled in. Building the
@@ -493,6 +655,7 @@ const USAGE: &str = "lumenc - Lumen markup runner
 USAGE:
     lumenc run <dir> [--profile chrome|tracy|stderr]
                      [--headless [--size WxH] [--dpr N] [--ticks N]]
+                     [--no-hooks]
                           Run <dir>/main.lmn (+ optional main.css).
                           --profile chrome writes lumen-trace.json (open
                           in chrome://tracing or https://ui.perfetto.dev).
@@ -516,6 +679,11 @@ USAGE:
                           --ticks N runs exactly N ticks then exits
                           (bounded CI runs). SIGINT/SIGTERM exit 0 via
                           the graceful-close path.
+                          Runs `lumen.toml`'s `[[hooks]]` `prebuild` then
+                          `prerun` entries first (skipped when an entry's
+                          declared outputs are already newer than its
+                          inputs); --no-hooks skips both. `check` never
+                          runs hooks.
     lumenc check <dir>    Parse without spawning a window (CI gate)
     lumenc new <template> <name>
                           Scaffold a fresh app directory from the
@@ -578,21 +746,25 @@ USAGE:
                           chosen entities (or every lint finding). With
                           --bounds, also writes the entity bounds_map
                           JSON.
-    lumenc build <app_dir> <out.lmna>
+    lumenc build <app_dir> <out.lmna> [--no-hooks]
                           Ahead-of-time compile `<app_dir>` (parse
                           main.lmn + main.css once, run the cascade, bake
                           scripts) into a precompiled artifact. Run it with
                           `lumenc run <dir> --artifact <out.lmna>`; a runtime
                           built with `--no-default-features` (no parser)
                           loads only this. Mirrors Qt's `qmlcachegen`.
+                          Runs `lumen.toml`'s `[[hooks]]` `prebuild` entries
+                          first; --no-hooks skips them.
     lumenc run <dir> --artifact <file> [--headless] [--ticks N]
                           Run from a precompiled artifact instead of source.
-    lumenc bundle <app_dir> <out.lpak>
+    lumenc bundle <app_dir> <out.lpak> [--no-hooks]
                           Pack `<app_dir>` (main.lmn / main.css /
                           main.rhai / images / fonts) into a single
                           `.lpak` archive. Mirrors GTK's
                           `glib-compile-resources` + Qt's `rcc`.
-    lumenc bundle --static <app_dir> <out_dir>
+                          Runs `lumen.toml`'s `[[hooks]]` `prebuild` entries
+                          first; --no-hooks skips them.
+    lumenc bundle --static <app_dir> <out_dir> [--no-hooks]
                           Build a per-app trimmed static runtime seam:
                           resolve the app's `[capabilities]` (lumen.toml +
                           source scan), map to a cargo `--features` set, and

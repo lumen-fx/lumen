@@ -23,16 +23,16 @@ lumenc run apps/counter --headless --ticks 120   # bounded CI run
 
 ## What is identical to a windowed run
 
+* Build hooks: `lumen.toml`'s `[[hooks]]` `prebuild` and `prerun` commands
+  run before a headless launch exactly as they do before a windowed one -
+  see [`[[hooks]]`](../authoring/lumen-toml.md#hooks). `--no-hooks` skips
+  them either way.
 * The tick schedule, plugin stack, scripts, bindings, and reconcilers -
   headless reuses the exact app construction the windowed path uses.
 * Rendering: the same offscreen wgpu + vello renderer and retained-scene
   walker as the windowed backend (adapter requested without a surface;
   falls back to lavapipe/llvmpipe when no GPU is reachable), including
   dpr scaling and the cosmic-text shaper.
-* The MCP server on the usual port (`lumen.toml [mcp]`), so
-  `lumenc snapshot`, `lumenc click` / `type` / `key` / `scroll` (with
-  `[mcp] simulate = true`), and `lumenc screenshot` all work unchanged -
-  `lumenc screenshot` returns real rendered PNGs.
 * Frame pacing semantics: tick + render when work is pending (a simulate
   event, dirty state, an active animation, a screenshot request), idle
   otherwise. An MCP request wakes a parked loop immediately, exactly like
@@ -46,6 +46,15 @@ close-observing systems fire, and exit with status 0.
 
 ## Documented divergences from the windowed run
 
+* **The MCP server is off by default.** A windowed run starts the MCP
+  introspection server automatically; a headless run does not, since the
+  server thread and per-tick snapshot pipeline are overhead a plain
+  `--ticks N` bench does not need. Set `[mcp] simulate = true` in
+  `lumen.toml` to turn it on - this is also what lets `lumenc click` /
+  `type` / `key` / `scroll` inject input - or set `[runtime] mcp = true`
+  to force it on for introspection alone. `[mcp] port = 0` disables it
+  either way. Once the server is running, `lumenc snapshot` and `lumenc
+  screenshot` (real rendered PNGs) behave exactly as they do windowed.
 * **No pause-on-unfocus.** The windowed scheduler suppresses redraws
   while unfocused/occluded; headless has no focus, so ticks always run
   on demand.

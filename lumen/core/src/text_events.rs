@@ -2,7 +2,7 @@
 //!
 //! Every text mutation flows through [`TextEditRequest`]. The single
 //! [`lumen_text_edit::text_apply_edits`] system drains the bus and is the
-//! ONLY system that mutates [`crate::text_model::TextBuffer`].
+//! only system that mutates [`crate::text_model::TextBuffer`].
 //!
 //! Producers (`route_ime_events`, `type_into_focused`, pointer drag,
 //! script `set_text(id, ...)`, paste) emit `TextEditRequest`; consumers

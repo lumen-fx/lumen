@@ -599,11 +599,11 @@ pub fn apply_scroll_bindings(
 /// [`PropertyStore`] entry for every [`BindScroll`] entity (W6 T6, the
 /// two-way half).
 ///
-/// Throttle contract: NOT per-frame. A user drag / wheel fling mutates the
+/// Throttle contract: not per-frame. A user drag / wheel fling mutates the
 /// offset every tick; pushing each intermediate value would spam the store
 /// (and re-run every derivation) at frame rate. Instead the system arms a
-/// pending entry while the offset keeps changing, and pushes ONCE on
-/// settle: the first tick where the offset did not change AND the
+/// pending entry while the offset keeps changing, and pushes once on
+/// settle: the first tick where the offset did not change and the
 /// container's fling velocity has slept. Spawn-tick rows (`is_added()`)
 /// are skipped - the freshly-inserted offset is the widget default, not a
 /// user scroll (same rule as [`push_toggle_to_signal`]). The value is

@@ -1541,7 +1541,7 @@ pub unsafe extern "C" fn lumen_signal_set_f64(name: *const c_char, value: f64) -
 // ============================================================
 // File-based-pages navigation (ABI 0.6).
 //
-// Navigation is a command on the shared bus, NOT a per-language builtin:
+// Navigation is a command on the shared bus, not a per-language builtin:
 // these exports write the reserved `route.request` cell through the same
 // `lumen_core::nav` surface the Rhai `page()` builtin and the Rust SDK use,
 // so every embedding (C/C++, Python ctypes, C# P/Invoke, plugins) reaches
@@ -1862,7 +1862,7 @@ fn stringify_lumen(v: &LumenValue) -> String {
 // queued external writes into the live store, the cache continues
 // to serve as the read-back surface (writes mirror into both).
 //
-// Architectural compromise: the FFI typed get exports CANNOT trivially
+// Architectural compromise: the FFI typed get exports cannot trivially
 // take a read lock on the running `App`'s `PropertyStore` resource
 // because the App is consumed by `lumen_app_run` and owned by the
 // winit event loop for the duration of the run. Sharing a
@@ -2001,7 +2001,7 @@ pub unsafe extern "C" fn lumen_signal_set_int64(
 
 /// Read a scalar signal as a 64-bit signed integer, typed. Returns
 /// [`LumenStatus::ErrBadArg`] when the signal was never set with a
-/// typed setter (the legacy string-typed setters do NOT populate the
+/// typed setter (the legacy string-typed setters do not populate the
 /// typed-value map).
 ///
 /// Round 4 closure: peeks the foundation typed-property bus snapshot
@@ -3222,8 +3222,8 @@ pub unsafe extern "C" fn lumen_node_set_text(node: LumenNode, text: *const c_cha
 /// Replace `node`'s children with the subtree parsed from `markup`
 /// (`element.innerHTML = ...`). Parsed by the injected front-end and spawned
 /// through the same path the `<for>` reconciler uses; a no-op on the
-/// precompiled-artifact path (no parser linked). Guarded: do NOT feed
-/// untrusted content -- this injects live markup. Thread-safe.
+/// precompiled-artifact path (no parser linked). Guarded: do not feed
+/// untrusted content; this injects live markup. Thread-safe.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_node_set_inner_markup(
     node: LumenNode,
@@ -3407,7 +3407,7 @@ pub unsafe extern "C" fn lumen_node_remove(node: LumenNode) -> LumenStatus {
     catch(|| push_dom(lumen_script::ScriptCommand::RemoveNode { node }))
 }
 
-/// `window.set_href` -- navigate to a page path. Binds onto the same
+/// `window.set_href`: navigate to a page path. Binds onto the same
 /// [`lumen_core::nav`] bus as [`lumen_navigate`]. Thread-safe.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_window_set_href(path: *const c_char) -> LumenStatus {
@@ -3421,7 +3421,7 @@ pub unsafe extern "C" fn lumen_window_set_href(path: *const c_char) -> LumenStat
     })
 }
 
-/// `window.reload` -- re-navigate to the current page. Thread-safe.
+/// `window.reload`: re-navigate to the current page. Thread-safe.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_window_reload() -> LumenStatus {
     catch(|| {
@@ -3448,7 +3448,7 @@ pub unsafe extern "C" fn lumen_window_set_size(width: f32, height: f32) -> Lumen
     catch(|| push_dom(lumen_script::ScriptCommand::WindowSetSize { width, height }))
 }
 
-/// `window.dpr` -- current device-pixel ratio, written to `*out`.
+/// `window.dpr`: current device-pixel ratio, written to `*out`.
 /// Thread-safe.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_window_dpr(out: *mut f32) -> LumenStatus {
@@ -3462,7 +3462,7 @@ pub unsafe extern "C" fn lumen_window_dpr(out: *mut f32) -> LumenStatus {
     })
 }
 
-/// `history.go(delta)` -- step `delta` entries (negative back, positive
+/// `history.go(delta)`: step `delta` entries (negative back, positive
 /// forward) through the in-memory history stack. Thread-safe.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_history_go(delta: c_int) -> LumenStatus {
@@ -3478,7 +3478,7 @@ pub unsafe extern "C" fn lumen_history_go(delta: c_int) -> LumenStatus {
     })
 }
 
-/// `document.spawn(tag)` -- document-scoped create verb; writes the new
+/// `document.spawn(tag)`: document-scoped create verb; writes the new
 /// handle to `*out`. Thread-safe.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_document_spawn(

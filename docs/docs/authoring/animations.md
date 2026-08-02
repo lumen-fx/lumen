@@ -50,10 +50,13 @@ fn fade_in(ev) {
 }
 ```
 
-> **Only `opacity` is wired.** Other property names parse successfully
-> but get silently dropped - drivers for `bg`, `color`, and
-> `border-radius` are not yet wired. Until then, treat the CSS path as
-> opacity-only.
+> **What is wired today.** `opacity`, `background-color` (aliases
+> `background` and `bg`), `color` (alias `text-color`), and
+> `border-color` all drive a real tween on a class flip. `radius` (alias
+> `border-radius`) and every layout property (`width`, `height`,
+> `padding`, margins, ...) parse successfully but are silently dropped;
+> layout properties are excluded on purpose, since tweening them would
+> re-run layout every frame.
 
 ### Grammar
 
@@ -62,7 +65,8 @@ The CSS shorthand:
 ```text
 transition := entry ("," entry)*
 entry      := <property> <duration> [<easing>]
-property   := "opacity" | ...    (v1: opacity only)
+property   := "opacity" | "background-color" | "background" | "bg"
+            | "color" | "text-color" | "border-color"
 duration   := Nms | Ns
 easing     := "linear" | "ease" | "ease-in" | "ease-out"
             | "ease-in-out" | "cubic-bezier(p1x, p1y, p2x, p2y)"
@@ -81,12 +85,15 @@ Comma-separate multiple properties:
 ```css
 .tile {
   transition: opacity 200ms ease-out,
-              bg      300ms ease;   /* parses but no-op in v1 */
+              bg      300ms ease;
 }
 ```
 
 Each entry is independent; only the first matching property's spec
-applies (CSS-style: first declaration wins).
+applies (CSS-style: first declaration wins). A property this grammar
+does not recognize, or a layout property such as `width`, still parses
+but is silently dropped, so a typo or an animated layout property fails
+quietly rather than with a parse error.
 
 ## Transition primitive
 
@@ -119,9 +126,17 @@ let t: Transition<f32> = (0.0, 10.0, Duration::from_millis(100)).into();
 
 ### Plugging into the ECS
 
-`Transition<T>` is a `Component`. The CSS opacity path uses it via
-the shipped `OpacityTransition(Transition<f32>)` wrapper +
-`step_opacity_transitions` system in `TransitionPlugin`.
+`Transition<T>` is a `Component`. Each CSS-wired property has its own
+thin wrapper component and sampler system, all registered by
+`TransitionPlugin`: `OpacityTransition` /
+`step_opacity_transitions` for `opacity`, `BackgroundTransition` /
+`step_background_transitions` for `background-color` (`background`,
+`bg`), `TextColorTransition` / `step_text_color_transitions` for
+`color` (`text-color`), and `BorderColorTransition` /
+`step_border_color_transitions` for `border-color`. You do not need to
+write a sampler for any of these four; they run automatically whenever
+a class flip changes the resolved value on an entity that declares a
+matching `transition:` property.
 
 For your own tween targets, register a sampler system:
 
@@ -203,19 +218,49 @@ Or via CSS:
 ```css
 button {
   bg: #2233ee;
+  transition: bg 130ms ease;
 }
 button:hover  { bg: #3344ff; }
 button:active { bg: #1122dd; }
 ```
 
 The pseudo-class apply pass routes `:hover` -> `hover-bg`, `:active` ->
-`press-bg`. The tween durations are baked into the `HoverTween` /
-`PressTween` impl; they're not authorable via CSS today.
+`press-bg`. The blend's duration and easing are authorable: a
+`transition: bg <duration> <easing>` declared on the base rule (not on
+`:hover` / `:active`) sets both, the same declaration that would drive
+a `background-color` class-flip tween anywhere else on the page. Leave
+it off and the hover blend falls back to a built-in 120ms ease-out; the
+press blend falls back to a built-in 60ms ease-out.
 
 > **HoverTint over gradients.** The hover tween path only animates
 > solid fills. Gradient `bg:` skips the tween - the gradient pops to
 > its hover counterpart instantly. Tracked in TODO ("HoverTint over
 > gradients").
+
+## Switch thumb slide
+
+`<switch>` glides its thumb between the off and on ends on every
+`checked` flip, using the same bespoke-tween mechanism as the hover /
+press blends above rather than a dedicated animation property:
+
+```css
+switch { transition: bg 140ms ease-out; }
+```
+
+A `transition: bg <duration> <easing>` declared on the `switch`
+element itself sets the slide's duration and easing - the shipped
+skins all declare this. Leave it off and the slide falls back to a
+built-in 140ms ease-out, so an unstyled switch looks and moves exactly
+as it always has.
+
+This is worth calling out plainly: `bg` here does not mean the track's
+own background color tweens. The track's checked / unchecked fill swap
+is instant, a snap, not a tween; only the thumb's position glides.
+`transition: bg` is reused as the switch's one authorable timing slot
+because it is the same slot that already carries hover / press tint
+timing everywhere else in the framework, not because a background color
+is actually changing. If you are looking for "how fast does the thumb
+move," this is the property, even though its name says otherwise.
 
 ## A worked example - fade-in on appear
 
@@ -260,7 +305,8 @@ fn on_timer(name) {
 ```
 
 The class flip is the trigger; the CSS `transition:` is the policy.
-Same pattern works for any opacity tween today; the property list is
+The same pattern works today for `opacity`, `background-color` (`bg`),
+`color` (`text-color`), and `border-color`; the property list is
 expected to grow over time.
 
 ## Why no `@keyframes` yet?

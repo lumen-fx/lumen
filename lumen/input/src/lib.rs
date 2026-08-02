@@ -13,7 +13,9 @@ use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::NonSendMut;
 use glam::Vec2;
-use lumen_core::components::{EchoMode, TextBlockOrigin, text_baseline_in_line, text_block_top};
+use lumen_core::components::{
+    EchoMode, TextBlockOrigin, resolve_line_height, text_baseline_in_line, text_block_top,
+};
 use lumen_core::input::{FocusTracker, FocusedKey, KeyPressed, PendingFileDrops};
 use lumen_core::prelude::*;
 use lumen_core::text_events::TextEditRequest;
@@ -109,8 +111,8 @@ fn is_named_key_string(s: &str) -> bool {
 /// model. Runs after `dispatch_focused_keys` so the `FocusedKey` bus is
 /// populated for this tick.
 ///
-/// Gate: only fires on entities that carry both [`TextContent`] AND
-/// [`TextInput`]. Plain labels / tiles with text are NOT editable -
+/// Gate: only fires on entities that carry both [`TextContent`] and
+/// [`TextInput`]. Plain labels / tiles with text are not editable -
 /// `<input>` in markup is the only way to opt in.
 ///
 /// ## Single source of truth (W2 text-editing core)
@@ -171,7 +173,7 @@ pub fn type_into_focused(
     let concealed = echo.is_some_and(|m| m.is_concealed());
     // Canonical state: the attached TextBuffer/TextCursor/UndoStack, or
     // temporaries seeded from the legacy pair when absent. Note the
-    // borrow through `as_deref_mut` does NOT trip change detection -
+    // borrow through `as_deref_mut` does not trip change detection -
     // only actual writes inside the key handler below do.
     let use_components = buf.is_some() && cur.is_some();
     let mut tmp_buf = TextBuffer::default();
@@ -789,9 +791,6 @@ pub fn activate_focused_on_enter(
     }
 }
 
-/// Logical width of the IME caret-area rect (Qt's thin `ImCursorRectangle`).
-const IME_CARET_WIDTH_PX: f32 = 2.0;
-
 /// Maintain [`ImeRequest`]: enable IME whenever a [`TextInput`] entity is
 /// focused, and point its cursor area at the CARET (Qt `ImCursorRectangle`),
 /// not the whole box (D8). Window backends poll the resource each frame and
@@ -824,9 +823,10 @@ pub fn update_ime_request(
         Option<&EchoMode>,
         Option<&TextBlockOrigin>,
         Option<&TextBuffer>,
+        Option<&lumen_core::components::CaretWidth>,
     )>,
 ) {
-    let Some((t, input, cursor, shaped, ts, style, escroll, echo, block, buf)) =
+    let Some((t, input, cursor, shaped, ts, style, escroll, echo, block, buf, caret_width)) =
         tracker.0.and_then(|e| inputs.get(e).ok())
     else {
         req.allowed = false;
@@ -838,6 +838,7 @@ pub fn update_ime_request(
     req.cursor_area = Some(match (cursor, shaped) {
         (Some(cur), Some(shaped)) => {
             let size_px = ts.map(|s| s.size_px).unwrap_or(16.0);
+            let line_height_px = resolve_line_height(ts.and_then(|s| s.line_height), size_px);
             let (pad_l, pad_t, pad_b) = style
                 .map(|s| (s.padding.left, s.padding.top, s.padding.bottom))
                 .unwrap_or((0.0, 0.0, 0.0));
@@ -856,8 +857,10 @@ pub fn update_ime_request(
                 pad_t,
                 pad_b,
                 size_px,
+                line_height_px,
             );
-            let baseline_y = t.absolute.y + pad_t + block_top + text_baseline_in_line(size_px);
+            let baseline_y =
+                t.absolute.y + pad_t + block_top + text_baseline_in_line(size_px, line_height_px);
             // The geometry describes the DISPLAYED run, so the caret byte
             // crosses into display coordinates first.
             let caret = geom.byte_to_caret(echo.display_offset(&plain, cur.head.byte));
@@ -865,7 +868,13 @@ pub fn update_ime_request(
                 t.absolute.x + pad_l + caret.x - esc.x,
                 baseline_y + caret.top - esc.y,
             );
-            (pos, Vec2::new(IME_CARET_WIDTH_PX, caret.height))
+            // `caret-width` (else `CARET_WIDTH_PX`): the same source
+            // the drawn caret uses, so the IME candidate window docks
+            // against the same width the user sees.
+            let width = caret_width
+                .map(|w| w.0)
+                .unwrap_or(lumen_core::components::CARET_WIDTH_PX);
+            (pos, Vec2::new(width, caret.height))
         }
         // No geometry / cursor: keep the whole-box rect.
         _ => (t.absolute, t.size),
@@ -1701,8 +1710,14 @@ pub struct LastTextClick {
 const MULTI_CLICK_WINDOW: std::time::Duration = std::time::Duration::from_millis(450);
 const MULTI_CLICK_RADIUS_PX: f32 = 4.0;
 
-/// Estimated line height matching the cosmic-text shaper's metrics
-/// (`Metrics::new(size, size * 1.2)`).
+/// Estimated line height matching the cosmic-text shaper's default metrics
+/// (`Metrics::new(size, size * 1.2)`). Deliberately not CSS-`line-height`-
+/// aware: this only feeds [`pointer_to_byte`]'s no-geometry fallback branch
+/// (headless / no shaper wired), which never runs when a real
+/// [`lumen_text::TextGeometry`] is present, and that real path already
+/// honours a resolved `line-height` via `TextGeometry::with_size`. Wiring
+/// an override through here would only affect a path that is by
+/// construction never hit once shaping is available.
 const LINE_HEIGHT_FACTOR: f32 = 1.2;
 
 /// Map a pointer position to a byte offset inside the plaintext `text`
@@ -1716,7 +1731,7 @@ const LINE_HEIGHT_FACTOR: f32 = 1.2;
 ///
 /// D4: when the entity's main-world [`lumen_text::TextGeometry`] is present
 /// (the layout producer shaped it last tick), the byte comes from a real
-/// glyph hit-test (`x_to_byte`) -- correct in proportional fonts and
+/// glyph hit-test (`x_to_byte`), correct in proportional fonts and
 /// soft-wrapped text. Absent (no shaper wired, e.g. a headless test that
 /// skipped the producer), it falls back (O4) to the uniform per-grapheme
 /// advance estimate (`avg_advance = size_px * 0.55`): multiline text resolves
@@ -1789,6 +1804,7 @@ fn block_top_of(
     pad_t: f32,
     pad_b: f32,
     size_px: f32,
+    line_height: f32,
 ) -> f32 {
     match block {
         Some(b) => b.top,
@@ -1797,7 +1813,7 @@ fn block_top_of(
                 .map(|g| g.line_count() > 1)
                 .unwrap_or_else(|| display.contains('\n'));
             let inner_h = (box_h - pad_t - pad_b).max(size_px);
-            text_block_top(inner_h, size_px, multiline || wrapped)
+            text_block_top(inner_h, line_height, multiline || wrapped)
         }
     }
 }
@@ -1855,6 +1871,7 @@ pub fn text_pointer_to_caret(
         let off = ancestor_scroll(entity, &parents, &scrolls);
         let origin = t.absolute - off;
         let size_px = style.map(|s| s.size_px).unwrap_or(16.0);
+        let line_height_px = resolve_line_height(style.and_then(|s| s.line_height), size_px);
         let (pad_b, pad) = box_style
             .map(|s| (s.padding.bottom, Vec2::new(s.padding.left, s.padding.top)))
             .unwrap_or((0.0, Vec2::ZERO));
@@ -1871,6 +1888,7 @@ pub fn text_pointer_to_caret(
             pad.y,
             pad_b,
             size_px,
+            line_height_px,
         );
         let byte = pointer_to_byte(
             geom,
@@ -1984,6 +2002,7 @@ pub fn text_pointer_drag_select(
     let off = ancestor_scroll(entity, &parents, &scrolls);
     let origin = t.absolute - off;
     let size_px = style.map(|s| s.size_px).unwrap_or(16.0);
+    let line_height_px = resolve_line_height(style.and_then(|s| s.line_height), size_px);
     let (pad_b, pad) = box_style
         .map(|s| (s.padding.bottom, Vec2::new(s.padding.left, s.padding.top)))
         .unwrap_or((0.0, Vec2::ZERO));
@@ -2000,6 +2019,7 @@ pub fn text_pointer_drag_select(
         pad.y,
         pad_b,
         size_px,
+        line_height_px,
     );
     let Some(last_pos) = moves.read().last().map(|m| m.position) else {
         return;
@@ -2875,7 +2895,7 @@ mod press_capture_tests {
         assert!(world.get::<Hovered>(a).is_some());
         world.entity_mut(a).insert(Pressed);
 
-        // Drag across onto b while held: b must NOT gain hover; a keeps
+        // Drag across onto b while held: b must not gain hover; a keeps
         // nothing either (pointer is off it) - capture shows un-pressed.
         set_pointer(&mut world, 150.0, 25.0, true);
         sched.run(&mut world);
@@ -3141,9 +3161,10 @@ mod focus_visible_tests {
     }
 }
 
-/// D4 / D8: exercise the shaped-geometry hit-test and IME caret rect with a
-/// REAL `CosmicShaper`, proving pointer->byte is proportional-font correct
-/// and that the IME cursor area is a thin caret rect, not the whole box.
+/// D4 / D8: exercise the shaped-geometry hit-test and IME caret rect using
+/// `CosmicShaper` shaping (not the no-geometry fallback), proving
+/// pointer->byte is proportional-font correct and that the IME cursor area
+/// is a thin caret rect, not the whole box.
 #[cfg(test)]
 mod shaped_geometry_tests {
     use super::*;
@@ -3257,8 +3278,8 @@ mod shaped_geometry_tests {
 
         world.run_system_once(update_ime_request).unwrap();
         let (pos1, size1) = world.resource::<ImeRequest>().cursor_area.expect("area");
-        // Thin caret rect, NOT the 200x30 box.
-        assert_eq!(size1.x, IME_CARET_WIDTH_PX);
+        // Thin caret rect, not the 200x30 box.
+        assert_eq!(size1.x, lumen_core::components::CARET_WIDTH_PX);
         assert!(
             (size1.y - 16.0 * 1.05).abs() < 1e-3,
             "caret height ~= 1.05*size ({})",
@@ -3405,6 +3426,47 @@ mod shaped_geometry_tests {
         );
         assert_eq!(byte, 0);
     }
+
+    /// A [`lumen_core::components::CaretWidth`] override on the focused
+    /// input (spawned from CSS `caret-width`) reaches the IME cursor-area
+    /// rect, replacing [`lumen_core::components::CARET_WIDTH_PX`]: the
+    /// same source the drawn caret in `render-wgpu` reads.
+    #[test]
+    fn ime_request_honours_caret_width_override() {
+        use lumen_core::components::CaretWidth;
+
+        let mut shaper = CosmicShaper::new();
+        let st = build_shaped_text(&mut shaper, "hello", 16.0, ShapeOptions::default(), 0)
+            .expect("shaped");
+
+        let mut world = World::new();
+        world.insert_resource(ImeRequest::default());
+        let e = world
+            .spawn((
+                Transform::new(Vec2::new(10.0, 20.0), Vec2::new(200.0, 30.0)),
+                TextInput {
+                    placeholder: String::new(),
+                    cursor: 1,
+                    selection_anchor: None,
+                    multiline: false,
+                },
+                TextStyle::default(),
+                Style::default(),
+                TextCursor {
+                    head: TextPos::from_byte("hello", 1),
+                    anchor: TextPos::from_byte("hello", 1),
+                    ..Default::default()
+                },
+                st,
+                CaretWidth(5.0),
+            ))
+            .id();
+        world.insert_resource(FocusTracker(Some(e)));
+
+        world.run_system_once(update_ime_request).unwrap();
+        let (_, size) = world.resource::<ImeRequest>().cursor_area.expect("area");
+        assert_eq!(size.x, 5.0);
+    }
 }
 
 /// The vertical origin the drawn baseline and the pointer hit test share.
@@ -3464,13 +3526,13 @@ mod text_block_origin_tests {
             }],
             width: 3.0 * ADVANCE,
         };
-        TextGeometry::from(&run).with_size(SIZE_PX)
+        TextGeometry::from(&run).with_size(SIZE_PX, resolve_line_height(None, SIZE_PX))
     }
 
     /// The origin the producer publishes for this box.
     fn block_top() -> f32 {
         let inner_h = (BOX_H - PAD - PAD).max(SIZE_PX);
-        text_block_top(inner_h, SIZE_PX, three_line_geometry().line_count() > 1)
+        text_block_top(inner_h, LINE_H, three_line_geometry().line_count() > 1)
     }
 
     /// Byte the hit test resolves for a pointer at the vertical center of
@@ -3520,7 +3582,7 @@ mod text_block_origin_tests {
     fn drawn_baseline_sits_inside_the_hit_band_of_its_own_line() {
         let top = block_top();
         assert_eq!(top, 0.0, "a multiline block starts at the inner box top");
-        let baseline = top + text_baseline_in_line(SIZE_PX);
+        let baseline = top + text_baseline_in_line(SIZE_PX, LINE_H);
         for line in 0..3 {
             let line_baseline = baseline + line as f32 * LINE_H;
             let band = ((line_baseline - top) / LINE_H).floor() as usize;
@@ -3533,9 +3595,9 @@ mod text_block_origin_tests {
     #[test]
     fn single_line_stays_centered_in_a_tall_box() {
         let inner_h = BOX_H - PAD - PAD;
-        let top = text_block_top(inner_h, SIZE_PX, false);
+        let top = text_block_top(inner_h, LINE_H, false);
         assert!(top > 0.0, "a lone line is pushed down to center");
-        let baseline = top + text_baseline_in_line(SIZE_PX);
+        let baseline = top + text_baseline_in_line(SIZE_PX, LINE_H);
         // Same value the pre-existing extract formula produced.
         assert!((baseline - (inner_h + SIZE_PX * 0.72) / 2.0).abs() < 1e-3);
     }

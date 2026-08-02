@@ -96,7 +96,7 @@ fn app_new_accepts_valid_dir_and_runs_headless() {
         "headless run should succeed: {}",
         last_error()
     );
-    // handle is consumed by lumen_app_run_headless; do NOT free it.
+    // handle is consumed by lumen_app_run_headless; do not free it.
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -2,8 +2,8 @@
 //! DOM `n.components()` / `n.component("LayoutBox")` reads (design 4.7).
 //!
 //! Each exposable Lumen component registers a reader that turns its public
-//! fields into a `(name, value)` string map. The read is bounded and typed
-//! -- there is no raw transmute or arbitrary memory access, and a name that
+//! fields into a `(name, value)` string map. The read is bounded and typed;
+//! there is no raw transmute or arbitrary memory access, and a name that
 //! is not in the registry is an error rather than an empty read. The
 //! runtime runs the registry against every element each tick and publishes
 //! the resulting maps into the cross-thread snapshot the script hosts read.

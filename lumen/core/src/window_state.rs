@@ -8,7 +8,7 @@
 //! and scale-factor changes; the setters write the requested title / size,
 //! which the backend applies to the real window when one exists. Headless
 //! runs have no window, so a setter followed by its getter round-trips
-//! through the cache -- the observable contract the tests assert.
+//! through the cache; the observable contract the tests assert.
 
 use std::sync::{Mutex, OnceLock};
 

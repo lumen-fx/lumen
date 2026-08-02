@@ -1,8 +1,8 @@
 //! Headless proof of the dynamic DOM write side (phases 2 + 3) and the
 //! `window` setters (section 4.8).
 //!
-//! Drives the host-neutral external DOM command bus -- the same seam the
-//! C-ABI and SDKs use -- against a window-free headless app, then reads the
+//! Drives the host-neutral external DOM command bus, the same seam the
+//! C-ABI and SDKs use, against a window-free headless app, then reads the
 //! published snapshot back to assert the tree / components. Every mutation
 //! materializes through the runtime's command applier; no window is opened.
 

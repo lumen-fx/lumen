@@ -30,8 +30,8 @@
 //! | `inertia`      | `f32` (forwarded to `Scroll::inertia`)                     |
 //! | `tab-index`    | `i32`                                                      |
 
-// `deny` (not `forbid`) so the single audited dlopen shim in `loader` -- the
-// link-not-embed launcher's only unsafe -- can opt in via `#[allow]`. Every
+// `deny` (not `forbid`) so the single audited dlopen shim in `loader`, the
+// link-not-embed launcher's only unsafe, can opt in via `#[allow]`. Every
 // other module stays unsafe-free and trips the deny.
 #![deny(unsafe_code)]
 #![warn(missing_docs)]

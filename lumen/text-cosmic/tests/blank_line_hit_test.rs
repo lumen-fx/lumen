@@ -29,7 +29,10 @@ fn geometry() -> TextGeometry {
             },
         )
         .expect("shaped");
-    TextGeometry::from(&run).with_size(SIZE)
+    TextGeometry::from(&run).with_size(
+        SIZE,
+        lumen_core::components::resolve_line_height(None, SIZE),
+    )
 }
 
 /// Pressing on a visual line resolves to a byte on THAT line.

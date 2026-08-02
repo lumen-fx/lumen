@@ -2,18 +2,24 @@
 //!
 //! [`compile_dir_to_lmna`] turns an app directory (`main.lmn` + optional
 //! `main.css` + inline / external `<script>`) into precompiled
-//! [`lumen_ir::artifact`] bytes using ONLY the compiler front-end
+//! [`lumen_ir::artifact`] bytes using only the compiler front-end
 //! (`parser_html` / `parser_css` / `resolve`), the shared CSS cascade
-//! (`lumen_ir::css`), and the artifact codec -- with NO dependency on
+//! (`lumen_ir::css`), and the artifact codec, with no dependency on
 //! `lumen-runtime`. That is what lets the `dlopen-run` launcher compile source
 //! without static-linking the fat runtime: it produces the bytes here and hands
 //! them across the C-ABI (`lumen_app_new_from_lmna`) to a dlopen'd liblumen.
 //!
 //! This mirrors the essential steps of `lumen_runtime::run::load_ir` +
 //! `compile_app` (the `dev-run` AOT path), minus file-based multi-page
-//! assembly and the embedded `skin=` user-agent stylesheet -- the same scope
-//! `lumenc build` covers today (single entry page). See
+//! assembly and the opt-in, by-name `skin=` user-agent stylesheet: the
+//! same scope `lumenc build` covers today (single entry page). See
 //! `docs/design/link-not-embed.md` for the alpha-limitation rationale.
+//!
+//! The always-on `ua.css` baseline is not part of that skipped scope: it
+//! is not a skin (nothing selects it by name, and it can't be opted
+//! out of), so an app compiled through this path still needs it folded
+//! into the cascade or its controls render with no sizing floor at all.
+//! [`UA_CSS`] folds it in at the same precedence `load_ir` uses.
 //!
 //! Gated on `runtime-parse`: it wraps the parser front-end, which is itself
 //! gated there.
@@ -22,6 +28,17 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use lumen_ir::layout_ir::Element;
+
+/// The always-on user-agent baseline (button / input / toggle / switch /
+/// slider / progress / checkbox / radio sizing floors, root / title-bar
+/// fill); see the header comment in the file itself for the full
+/// precedence story. `lumen_runtime::skins::UA` embeds the same file for
+/// the runtime-parse dev-run path and `lumenc build`; this path cannot
+/// depend on `lumen-runtime` (see the module doc comment above), so it
+/// includes the identical bytes directly instead of sharing the constant.
+/// There is exactly one `ua.css` file on disk, with two `include_str!`
+/// sites reading it.
+const UA_CSS: &str = include_str!("../../lumen/runtime/src/skins/ua.css");
 
 /// Errors raised while compiling a source directory to LMNA bytes.
 #[derive(Debug, thiserror::Error)]
@@ -116,22 +133,53 @@ fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileErr
     // Rewrite `<image src>` relative paths absolute against the app dir.
     resolve_asset_paths(&mut ir.root, dir);
 
-    // Single combined cascade pass over the author sheet.
+    // The always-on UA baseline, then the author sheet (if any), combined
+    // into one stylesheet with renumbered source order and applied in a
+    // single cascade pass; the same scheme `load_ir` uses (one pass so
+    // an author rule can actually override a UA one; see that function's
+    // comment for why a second pass breaks it). This path has no `skin=`
+    // support (module doc comment above), so there is no middle sheet to
+    // insert between the two.
+    //
+    // Origin precedence: `UA_CSS` rules are tagged `Origin::UserAgent`;
+    // author rules default to `Origin::Author`. The cascade sorts on
+    // origin first, so any author rule beats any UA rule for a normal
+    // declaration regardless of specificity. The source-order bump below
+    // only matters if that origin tier itself ever gets a second UA-origin
+    // sheet (it doesn't on this path).
+    let mut combined_rules = Vec::new();
+    {
+        let sheet = crate::parse_css(UA_CSS).map_err(|e| CompileError::ParseCss(e.to_string()))?;
+        for mut rule in sheet.rules {
+            rule.origin = lumen_ir::css::Origin::UserAgent;
+            combined_rules.push(rule);
+        }
+    }
+    let ua_rule_count = combined_rules.len();
     if let Some(css_src) = &css {
         let sheet = crate::parse_css(css_src).map_err(|e| CompileError::ParseCss(e.to_string()))?;
-        if !sheet.rules.is_empty() {
-            let warnings = lumen_ir::css::apply_css_with_media(
-                &mut ir,
-                &sheet,
-                &lumen_ir::css::MediaContext::default(),
-            )
-            .map_err(|e| CompileError::ApplyCss(e.to_string()))?;
-            for w in &warnings {
-                eprintln!("{w}");
-            }
+        for mut rule in sheet.rules {
+            rule.source_order += ua_rule_count;
+            combined_rules.push(rule);
         }
-        ir.combined_stylesheet = Some(sheet);
     }
+    let combined = lumen_ir::css::Stylesheet {
+        rules: combined_rules,
+    };
+    // `combined` always carries at least the UA rules, so this is never
+    // actually empty; the guard is defensive parity with `load_ir`.
+    if !combined.rules.is_empty() {
+        let warnings = lumen_ir::css::apply_css_with_media(
+            &mut ir,
+            &combined,
+            &lumen_ir::css::MediaContext::default(),
+        )
+        .map_err(|e| CompileError::ApplyCss(e.to_string()))?;
+        for w in &warnings {
+            eprintln!("{w}");
+        }
+    }
+    ir.combined_stylesheet = Some(combined);
 
     // Bake inline + external `<script>` into one string; strip both from the IR
     // so the parser-free runtime reconstructs the exact script-host input.
@@ -143,7 +191,7 @@ fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileErr
 }
 
 /// Read the `[app] entry` key from `lumen.toml`, falling back to `main.lmn`.
-/// A missing or malformed config is not fatal here -- it just yields the
+/// A missing or malformed config is not fatal here; it just yields the
 /// default; the compile step surfaces a genuinely missing entry file as a
 /// [`CompileError::Read`].
 fn entry_name(dir: &Path) -> String {
@@ -236,7 +284,7 @@ mod tests {
 
     /// A directory with markup + CSS + inline script compiles to valid LMNA
     /// bytes that decode back into an artifact carrying the baked script and a
-    /// cascaded tree -- the whole link-not-embed compile path, no runtime.
+    /// cascaded tree: the whole link-not-embed compile path, no runtime.
     #[test]
     fn compiles_dir_to_valid_lmna() {
         let tmp = std::env::temp_dir().join(format!("lumenc-compile-test-{}", std::process::id()));
@@ -253,6 +301,54 @@ mod tests {
         assert!(app.script_source.contains("let x = 1;"));
         assert_eq!(app.ir.root.tag, "root");
         assert!(app.ir.combined_stylesheet.is_some());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The always-on `ua.css` baseline reaches a control compiled through
+    /// this path even when there is no `main.css` at all - the exact
+    /// scenario that used to skip the cascade entirely on this path (no
+    /// author sheet meant no `apply_css_with_media` call), so `<button>`
+    /// came out with no `min-height` in the artifact. Once
+    /// `apply_ua_style_defaults` stopped setting per-tag sizing directly
+    /// on `Style` at spawn time and that sizing moved into `ua.css`
+    /// instead, a compile path that never folds `ua.css` in produces an
+    /// artifact with no sizing floor recorded anywhere - a control that
+    /// would render with no tap-size minimum. This pins `UA_CSS` actually
+    /// reaching `compile_dir`'s cascade.
+    ///
+    /// This only covers what the artifact carries (the resolved
+    /// `Attributes`), not the rendered pixels - this crate has no
+    /// dependency on `lumen-runtime`'s spawn / layout code to check
+    /// further, and that is the whole point of this compile path.
+    #[test]
+    fn ua_css_reaches_dlopen_run_compile_path() {
+        let tmp = std::env::temp_dir().join(format!("lumenc-compile-ua-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).expect("mkdir");
+        std::fs::write(
+            tmp.join("main.lmn"),
+            "<root><button id=\"b\" text=\"Go\"/></root>",
+        )
+        .expect("write lmn");
+        // Deliberately no main.css and no lumen.toml `[skin]` - the
+        // skinless, cssless case where nothing but `ua.css` supplies any
+        // sizing at all.
+
+        let bytes = compile_dir_to_lmna(&tmp).expect("compile");
+        let app = lumen_ir::artifact::read_bytes(&bytes).expect("decode");
+
+        let button = app
+            .ir
+            .root
+            .children
+            .iter()
+            .find(|e| e.tag == "button")
+            .expect("button child present");
+        assert_eq!(
+            button.attrs.min_height,
+            Some(lumen_ir::layout_ir::LengthSpec::Px(36.0)),
+            "ua.css's `button {{ min-height: 36 }}` must reach this compile path"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

@@ -185,7 +185,7 @@ fn spawn_tooltip_popups(
         let est = estimated_tooltip_size(&src.text);
         let anchor = cursor.unwrap_or(t.absolute);
         let origin = cursor_tooltip_origin(anchor, est, viewport_size, src.offset);
-        // Default Visuals / TextStyle are NOT spawned inline: they
+        // Default Visuals / TextStyle are not spawned inline: they
         // would beat any author CSS `.tooltip { background: ... }`
         // rule (inline-attribute styling has the highest cascade
         // priority). `apply_tooltip_defaults` fills them in only when

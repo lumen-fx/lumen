@@ -174,17 +174,18 @@ pub fn update_shaped_text(
             .unwrap_or((0.0, 0.0, 0.0, 0.0));
         let inner_w = (t.size.x - pad_l - pad_r).max(0.0);
         let inner_h = (t.size.y - pad_t - pad_b).max(size_px);
-        let line_h = size_px * 1.2;
-        let version = shape_version_of(
-            buf.version,
+        let line_h = lumen_core::components::resolve_line_height(ts.line_height, size_px);
+        let version = shape_version_of(ShapeInputs {
+            version: buf.version,
             size_px,
             inner_w,
             inner_h,
-            ts.wrap,
-            ts.family.as_deref(),
-            ts.weight,
+            wrap: ts.wrap,
+            family: ts.family.as_deref(),
+            weight: ts.weight,
             echo,
-        );
+            line_h,
+        });
         // Skip entities whose shape inputs are unchanged.
         if existing.is_some_and(|s| s.shape_version == version) {
             continue;
@@ -196,12 +197,13 @@ pub fn update_shaped_text(
             max_lines: ts.max_lines,
             family: ts.family.clone(),
             weight: ts.weight,
+            line_height: Some(line_h),
         };
         let plain = buf.rope.to_string();
         let display = echo.display_string(&plain);
         if let Some(st) = build_shaped_text(&mut *shaper, &display, size_px, opts, version) {
             let stacked = !buf.is_single_line() || st.geometry.line_count() > 1;
-            let top = text_block_top(inner_h, size_px, stacked);
+            let top = text_block_top(inner_h, line_h, stacked);
             commands.entity(e).insert((
                 st,
                 TextViewport {
@@ -214,32 +216,48 @@ pub fn update_shaped_text(
     }
 }
 
-/// Fold the [`lumen_core::text_model::TextBuffer`] content version with every
-/// shape input into a single scalar the producer compares to decide whether
-/// a reshape is needed. Busts on edit, resize, wrap toggle, and font / size /
-/// weight change -- exactly when the shaped output would differ. The echo
-/// mode is folded in too, since it selects which string gets shaped.
-#[allow(clippy::too_many_arguments)]
-fn shape_version_of(
+/// Every input whose change alters shaped output. Grouped in one struct
+/// rather than passed positionally: most of these are `f32`, so a swapped
+/// pair would still compile and would silently corrupt the cache key.
+struct ShapeInputs<'a> {
+    /// [`lumen_core::text_model::TextBuffer`] content version.
     version: u64,
+    /// Font size in logical pixels.
     size_px: f32,
+    /// Content-box width available for wrapping.
     inner_w: f32,
+    /// Content-box height.
     inner_h: f32,
+    /// Wrap mode.
     wrap: TextWrap,
-    family: Option<&str>,
+    /// Font family, or `None` for the default.
+    family: Option<&'a str>,
+    /// Font weight.
     weight: u16,
+    /// [`EchoMode`] - selects which string gets shaped (the masked display
+    /// run under a concealed mode), so a mode change must reshape.
     echo: EchoMode,
-) -> u64 {
+    /// Resolved line height in logical pixels.
+    line_h: f32,
+}
+
+/// Fold every shape input into a single scalar the producer compares to
+/// decide whether a reshape is needed. Busts on edit, resize, wrap toggle,
+/// font, size, weight, or CSS `line-height` change, and on an echo-mode
+/// change (it selects which string gets shaped); that is, exactly when the
+/// shaped output would differ.
+fn shape_version_of(i: ShapeInputs<'_>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    version.hash(&mut h);
-    size_px.to_bits().hash(&mut h);
-    inner_w.to_bits().hash(&mut h);
-    inner_h.to_bits().hash(&mut h);
-    (wrap as u8).hash(&mut h);
-    family.hash(&mut h);
-    weight.hash(&mut h);
-    (echo as u8).hash(&mut h);
+    i.version.hash(&mut h);
+    i.size_px.to_bits().hash(&mut h);
+    i.inner_w.to_bits().hash(&mut h);
+    i.inner_h.to_bits().hash(&mut h);
+    (i.wrap as u8).hash(&mut h);
+    i.family.hash(&mut h);
+    i.weight.hash(&mut h);
+    (i.echo as u8).hash(&mut h);
+    i.line_h.to_bits().hash(&mut h);
     h.finish()
 }
 
@@ -472,7 +490,7 @@ pub fn react_to_direction_changes(
 /// Mark every ancestor of every dirty entity as also dirty, stopping
 /// at the nearest [`RelayoutBoundary`]. The boundary itself is marked
 /// (so `sync_layout` includes it in its dirty-roots set) but its
-/// parent is NOT touched - that's the whole point of a boundary.
+/// parent is not touched - that's the whole point of a boundary.
 ///
 /// Without boundaries, a single typed character inside a deeply-nested
 /// `<scroll>` would mark every ancestor up to root dirty, then taffy
@@ -495,7 +513,7 @@ pub fn propagate_dirty_layout(
             let parent = child_of.parent();
             commands.entity(parent).insert(DirtyLayout);
             // Boundary reached - mark it dirty (already done above
-            // via insert) but DO NOT walk past it.
+            // via insert) but do not walk past it.
             if boundaries.contains(parent) {
                 break;
             }
@@ -860,6 +878,15 @@ pub fn sync_layout(
                                     // gives one; else the pre-pass wrap width
                                     // (so the intrinsic passes skip shaping
                                     // too).
+                                    // Deliberately not wired to `t.line_height`: this
+                                    // estimate only ever backs an off-screen / not-yet-
+                                    // shaped paragraph's provisional height, and the memo
+                                    // it first checks is itself keyed on (text, width)
+                                    // only, not line-height - so threading a CSS override
+                                    // through just this literal would still go stale the
+                                    // moment the entity scrolls into view and re-memoises.
+                                    // The exact path below (taken once the paragraph is
+                                    // visible) already carries the real `line_height`.
                                     let w = max_width.unwrap_or(lazy_w);
                                     let h = memo.get(*entity, &t.text, w).unwrap_or_else(|| {
                                         estimate_wrapped_height(&t.text, t.size_px, w)
@@ -877,6 +904,10 @@ pub fn sync_layout(
                                     max_lines: t.max_lines,
                                     family: t.family.clone(),
                                     weight: t.weight,
+                                    line_height: Some(lumen_core::components::resolve_line_height(
+                                        t.line_height,
+                                        t.size_px,
+                                    )),
                                 };
                                 let (w, h, baseline) =
                                     shaper.measure_with_baseline(&t.text, t.size_px, &opts);
@@ -1045,6 +1076,13 @@ fn collect_text_leaves(
 /// copy) and adds word-boundary slack so it tends to slightly *over*
 /// count lines - a conservative extent is preferable to one that snaps
 /// shorter when content is scrolled into view.
+///
+/// Uses the default `size_px * 1.2` line-height rather than a resolved
+/// CSS override deliberately: this is a provisional estimate for
+/// off-screen text (see the call site's comment), not a measured or
+/// painted value, so wiring an override through here would add a plumbing
+/// path without fixing the underlying staleness (the memo this backs is
+/// keyed on text + width only, not line-height).
 fn estimate_wrapped_height(text: &str, size_px: f32, width: f32) -> f32 {
     /// Mean advance as a fraction of the em; tuned against the shaped
     /// height of the English-prose benchmark corpus.
@@ -1087,6 +1125,10 @@ struct TextMeasureInput {
     family: Option<std::sync::Arc<str>>,
     /// CSS font-weight (variable fonts change advance widths per weight).
     weight: u16,
+    /// CSS `line-height`, resolved against [`Self::size_px`] just before
+    /// the exact (non-lazy) measure call below. `None` => the shaper's own
+    /// `line-height: normal` fallback.
+    line_height: Option<lumen_core::components::LineHeightSpec>,
 }
 
 fn classify_node_context(
@@ -1142,6 +1184,7 @@ fn build_measure_inputs(
                     max_width,
                     family: ts.family.clone(),
                     weight: ts.weight,
+                    line_height: ts.line_height,
                 }),
             );
             continue;
@@ -1608,7 +1651,7 @@ mod tests {
     use bevy_ecs::world::World;
 
     /// Build a chain `root -> boundary -> leaf`, mark the leaf dirty,
-    /// run propagation. The boundary's parent (root) must NOT receive
+    /// run propagation. The boundary's parent (root) must not receive
     /// `DirtyLayout` - propagation stops at the boundary.
     #[test]
     fn dirty_propagation_stops_at_boundary() {
@@ -2310,6 +2353,51 @@ mod css_flex_wave_tests {
         assert_eq!(
             world.get::<lumen_text::ShapedText>(e).unwrap().run.width,
             0.0
+        );
+    }
+
+    /// `TextViewport::line_h` falls back to `size_px * 1.2` absent a CSS
+    /// `line-height`, and honours an explicit override - the same
+    /// override/fallback shape as every other CSS-supplied value.
+    /// Changing only `line_height` (same buffer / size / width) must also
+    /// bust the shape version so the reshape actually happens.
+    #[test]
+    fn update_shaped_text_honours_line_height_override_and_busts_version() {
+        use bevy_ecs::system::RunSystemOnce;
+        use lumen_core::components::LineHeightSpec;
+        use lumen_core::text_model::TextBuffer;
+
+        let mut world = World::new();
+        world.insert_non_send_resource(CosmicShaper::new());
+        let e = world
+            .spawn((
+                TextBuffer::single_line("hello"),
+                Transform::new(Vec2::new(0.0, 0.0), Vec2::new(200.0, 30.0)),
+                TextStyle::default(),
+                Style::default(),
+            ))
+            .id();
+
+        world.run_system_once(update_shaped_text).unwrap();
+        let default_line_h = world.get::<lumen_text::TextViewport>(e).unwrap().line_h;
+        assert_eq!(default_line_h, 16.0 * 1.2);
+        let v1 = world
+            .get::<lumen_text::ShapedText>(e)
+            .unwrap()
+            .shape_version;
+
+        // Author a CSS `line-height: 40px` override; nothing else changes.
+        world.get_mut::<TextStyle>(e).unwrap().line_height = Some(LineHeightSpec::Px(40.0));
+        world.run_system_once(update_shaped_text).unwrap();
+        let overridden_line_h = world.get::<lumen_text::TextViewport>(e).unwrap().line_h;
+        assert_eq!(overridden_line_h, 40.0);
+        let v2 = world
+            .get::<lumen_text::ShapedText>(e)
+            .unwrap()
+            .shape_version;
+        assert_ne!(
+            v1, v2,
+            "a line-height-only change must bust the shape version"
         );
     }
 }

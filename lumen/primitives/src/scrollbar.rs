@@ -14,7 +14,7 @@
 //!   [`lumen_core::render_world::AnimationsActive`] and go quiescent the
 //!   moment alpha reaches its resting value.
 //!
-//! Wheel events are NEVER consumed here - hovering a bar resolves the
+//! Wheel events are never consumed here - hovering a bar resolves the
 //! hit-test to the scroll container itself (see `lumen_input::hit_test`),
 //! so the wheel keeps routing through the normal nested-scroll chain.
 

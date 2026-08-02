@@ -3,7 +3,7 @@
 //! Single-mutator architecture. Every text mutation (keyboard, IME,
 //! script, paste, undo, pointer drag) flows through
 //! [`lumen_core::text_events::TextEditRequest`]; the single
-//! [`text_apply_edits`] system in this crate is the ONLY place that
+//! [`text_apply_edits`] system in this crate is the only place that
 //! mutates [`lumen_core::text_model::TextBuffer`].
 //!
 //! Coexistence strategy. The existing `TextContent` + `TextInput` model
@@ -482,10 +482,10 @@ pub fn move_cursor(buf: &TextBuffer, from: TextPos, motion: CursorMotion) -> Tex
 }
 
 /// D6: resolve a soft-wrap-aware vertical / line-bound motion against shaped
-/// [`TextGeometry`]. Returns `(new head, new goal_x)` -- the goal x to store
+/// [`TextGeometry`]. Returns `(new head, new goal_x)`: the goal x to store
 /// back on the cursor (Qt `verticalMovementX`, D5).
 ///
-/// - `LineUp` / `LineDown`: step one VISUAL line, landing on the byte whose
+/// - `LineUp` / `LineDown`: step one visual line, landing on the byte whose
 ///   caret x is nearest the sticky `goal_x` (seeded from the caret's current
 ///   x when `goal_x` is `None`); the goal is preserved across the move so a
 ///   run of Up/Down tracks the original column. At the top / bottom visual

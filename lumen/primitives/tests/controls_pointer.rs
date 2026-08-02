@@ -1,8 +1,8 @@
 //! Headless regression tests for slider / toggle pointer correctness
-//! (Qt-parity Wave 1). Drives the REAL pipeline - `lumen_input::hit_test`
-//! -> `dispatch_clicks` -> drag FSM -> control mutators - by writing pointer
-//! / key / wheel messages into an [`App`] and ticking, exactly like the
-//! window backend would. No GPU, no display.
+//! (Qt-parity Wave 1). Drives the same `lumen_input::hit_test`
+//! -> `dispatch_clicks` -> drag FSM -> control mutators pipeline used at
+//! runtime, by writing pointer / key / wheel messages into an [`App`] and
+//! ticking, exactly like the window backend would. No GPU, no display.
 //!
 //! The headline defect: the `<slider>` thumb / `<toggle>` knob children
 //! spawn with [`Visuals`], so deepest-child-wins hit-testing routed
@@ -15,7 +15,7 @@ use bevy_ecs::message::Messages;
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::*;
 use lumen_input::InputPlugin;
-use lumen_primitives::controls::THUMB_SIZE;
+use lumen_primitives::controls::{KnobGeometry, THUMB_SIZE};
 use lumen_primitives::drag::DragPlugin;
 use lumen_primitives::scroll::ScrollPlugin;
 use lumen_primitives::{ControlsPlugin, SliderThumb, ToggleKnob};
@@ -412,4 +412,60 @@ fn space_on_focused_slider_leaves_value_unchanged() {
     press_key(&mut app.world, Key::Named(NamedKey::ArrowRight));
     app.tick();
     assert_eq!(slider_value(&app.world, slider), 43.0);
+}
+
+/// A CSS-supplied `KnobGeometry.thumb_size` on the slider must change the
+/// click-to-value mapping through the real input pipeline - proving the
+/// click dispatcher actually reads the component rather than the
+/// hardcoded [`THUMB_SIZE`] fallback.
+#[test]
+fn custom_knob_geometry_thumb_size_changes_click_mapping() {
+    let mut app = test_app();
+    let track_w = 200.0;
+    let thumb_size = 40.0;
+    let slider = app
+        .world
+        .spawn((
+            Transform::new(glam::Vec2::ZERO, glam::Vec2::new(track_w, 24.0)),
+            Visuals::default(),
+            SliderValue {
+                value: 0.0,
+                min: 0.0,
+                max: 100.0,
+                step: None,
+            },
+            KnobGeometry {
+                inset: 4.0,
+                thumb_size,
+            },
+            TabIndex(0),
+        ))
+        .id();
+    app.world.spawn((
+        Transform::new(glam::Vec2::new(0.0, 4.0), glam::Vec2::splat(thumb_size)),
+        Visuals::default(),
+        SliderThumb,
+        ChildOf(slider),
+    ));
+
+    // Click at x=60, clear of the 40px-wide thumb parked at the left end.
+    // Chosen off-centre so the custom 40px thumb and the default 16px
+    // THUMB_SIZE map it to visibly different fractions: with thumb_size=40,
+    // frac = (60 - 20) / (200 - 40) = 0.25 -> value 25; with the default
+    // 16px thumb it would instead be (60 - 8) / (200 - 16) ~ 0.283 -> ~28.3.
+    let at = glam::Vec2::new(60.0, 12.0);
+    move_pointer(&mut app.world, at);
+    app.tick();
+    press(&mut app.world, at);
+    app.tick();
+    release(&mut app.world, at);
+    settle(&mut app);
+
+    // frac = (60 - 20) / 160 = 0.25 -> value 25 with the custom 40px thumb.
+    assert!(
+        (slider_value(&app.world, slider) - 25.0).abs() < 0.5,
+        "a CSS-supplied thumb_size must be used for the click-to-value \
+         mapping (got {})",
+        slider_value(&app.world, slider)
+    );
 }

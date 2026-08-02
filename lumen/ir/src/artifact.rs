@@ -56,7 +56,14 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// Container format version. Bump on any incompatible change to
 /// [`CompiledApp`] or the framing. The loader refuses mismatches so a
 /// runtime never mis-decodes an artifact built by a different toolchain.
-pub const FORMAT_VERSION: u16 = 1;
+///
+/// `2`: the skin-tokens CSS batch adds a run of new fields to
+/// [`crate::layout_ir::Attributes`] (`knob-inset`, `thumb-size`,
+/// `popup-gap`, `progress-chunk`, `disabled-opacity`, `caret-width`,
+/// `caret-blink`, `password-character`, `line-height`, and the
+/// `scrollbar-*` geometry/timing/paint properties), changing the
+/// bincode wire shape.
+pub const FORMAT_VERSION: u16 = 2;
 
 /// The precompiled application: everything the runtime needs to spawn the UI
 /// without touching the markup / CSS parser.

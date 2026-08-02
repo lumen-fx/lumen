@@ -250,7 +250,7 @@ fn compile_check_is_side_effect_free() {
     load(&mut host, "fn main() {}");
 
     // A check compiles + runs `main` on a throwaway engine, so a builtin call
-    // inside `main` must NOT leak commands into the live sink.
+    // inside `main` must not leak commands into the live sink.
     host.compile_check(
         &format!("{HOST_BLOCK}\nfn main() {{ lumen::add_clicks(9); }}\n"),
         "check.cdl",

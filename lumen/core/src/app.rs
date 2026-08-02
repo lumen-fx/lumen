@@ -616,7 +616,7 @@ impl App {
         // Rotate the main world's removal/despawn event buffers once per tick.
         // Standalone bevy_ecs (no bevy_app) never rotates `RemovedComponentEvents`
         // on its own; without this every `Hovered`/`Pressed`/`Focused`/`ChildOf`/
-        // `Style` removal accumulates forever. Runs EVERY tick (the main world
+        // `Style` removal accumulates forever. Runs every tick (the main world
         // advances regardless of `FrameDirty`) and AFTER `run_schedule(Tick)`, so
         // all main-world `RemovedComponents` readers - `roll_up_frame_dirty`
         // (A11ySync), the taffy free-node sweeps, `sync_removed_direction`,
