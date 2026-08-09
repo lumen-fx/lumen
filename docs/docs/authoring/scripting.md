@@ -218,7 +218,7 @@ surface everywhere; these are the places the hosts diverge.
 | Nesting one host call inside another | Not allowed - bind the inner call to a local first | Fine |
 | Parsing JSON | Language builtin `json_parse` + `as_map` / `as_list` / `as_str` | `parse_json(s)` |
 | HTTP | `fetch(url, tag)` only (GET) | `fetch(url, tag)` plus `http(request)` for method / headers / body |
-| Page navigation | `window::set_href(path)` / `window::href()` | `page(path)` / `page()` |
+| Page navigation | `page(path)` / `page_current()` | `page(path)` / `page()` |
 
 Most of candela's gaps follow from its typed host boundary.
 `parse_json` returns a value of any shape and `http(request)` takes a map
@@ -227,11 +227,10 @@ closure argument has nowhere to live without a first-class closure value
 in the language. See
 [Limitations](../reference/scripting-candela.md#limitations) in the
 candela reference for the full list, including the nesting restriction
-above and the navigation functions the other two hosts get.
+above.
 
 ## File-based pages
 
-`page()` (Rhai, Lua) / `window::set_href(path)` (candela) is the scripting
-side of file-based multi-page navigation; see [Pages](./pages.md) for the
-full picture, including `<a href>`, the `route.path` / `route.segment`
-signals, and the shared-layout convention.
+`page(path)` is the scripting side of file-based multi-page navigation; see
+[Pages](./pages.md) for the full picture, including `<a href>`, the
+`route.path` / `route.segment` signals, and the shared-layout convention.

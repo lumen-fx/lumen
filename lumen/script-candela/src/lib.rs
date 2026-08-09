@@ -404,6 +404,28 @@ impl CandelaHost {
                 classes,
             }
         });
+        enqueue!(engine, r.sink, "set_color_scheme", |name: String| {
+            ScriptCommand::SetColorScheme { name }
+        });
+
+        // -- file-based pages --------------------------------------------
+        // Navigation rides the host-neutral `lumen_core::nav` bus, the same
+        // one an `<a href>` click and the Rust SDK write, so these need no
+        // world access and register here rather than as an embedder hook.
+        // A candela host fn cannot be arity-overloaded on one name, so the
+        // no-arg reader Rhai and Lua spell `page()` is `page_current()` here.
+        engine.register_host_fn(HOST_NAMESPACE, "page", |path: String| {
+            lumen_core::nav::navigate(path);
+        });
+        engine.register_host_fn(HOST_NAMESPACE, "page_current", || -> String {
+            lumen_core::nav::current()
+        });
+        engine.register_host_fn(HOST_NAMESPACE, "page_back", || {
+            lumen_core::nav::back();
+        });
+        engine.register_host_fn(HOST_NAMESPACE, "page_forward", || {
+            lumen_core::nav::forward();
+        });
 
         // -- networking (sugar; `http(map)` blocked on map marshalling) --
         enqueue!(engine, r.sink, "fetch", |url: String, tag: String| {

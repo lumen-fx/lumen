@@ -276,6 +276,15 @@ pub enum ScriptCommand {
         /// `class="..."` markup attr.
         classes: String,
     },
+    /// Switch the app's color scheme. The runtime parses `name` into a
+    /// `lumen_core::components::ColorScheme` and hands it to the style
+    /// manager, which re-resolves every theme token. An unknown name is
+    /// logged and ignored.
+    SetColorScheme {
+        /// One of `"default"`, `"force-light"`, `"force-dark"`,
+        /// `"prefer-light"`, `"prefer-dark"`. `"default"` follows the OS.
+        name: String,
+    },
     /// Open a native file dialog (open, multi-open, save, or folder
     /// pick). The runtime serves the dialog on the main thread via
     /// `rfd`, then fires `on_file_picked(tag, path)` /

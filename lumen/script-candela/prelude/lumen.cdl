@@ -8,11 +8,14 @@
 // preparation step (lumen-script-candela `resolve_prelude`) detects that import
 // and splices this block in before the source reaches `candela::Engine::compile`.
 //
-// SOURCE OF TRUTH: every declaration here mirrors a `register_host_fn` call in
-// `CandelaHost::build_engine` and its matching `BUILTINS` entry. candela type-checks
-// each declared host fn against its registered closure at compile time, and the
-// `prelude_declares_every_builtin` test guards the two against drift. candela int
-// = i32/i64 scalar; a bare `name(args);` returns null (`()`).
+// Source of truth: every declaration here mirrors a `register_host_fn` call in
+// `CandelaHost::build_engine` and its matching `BUILTINS` entry. candela checks
+// each declared host fn against its registered closure at compile time, so a
+// declaration with no closure behind it fails the compile of every app that
+// imports the prelude; the `prelude_declares_every_builtin` test guards the
+// other direction. An embedder can still replace any entry by registering its
+// own closure under the same name after the host is built. candela int =
+// i32/i64 scalar; a bare `name(args);` returns null (`()`).
 host "lumen" {
     // app-command emitters
     add_clicks(int);
@@ -151,9 +154,18 @@ host "lumen" {
     event_stop_propagation(int);
     event_stop_immediate_propagation(int);
 
-    // classes
+    // classes + color scheme
     set_class(string, string);
     set_root_class(string);
+    set_color_scheme(string);
+
+    // file-based pages. `page(path)` navigates; the no-arg reader is spelled
+    // `page_current()` because a candela host fn cannot be arity-overloaded on
+    // one name (the registry is keyed by namespace + name).
+    page(string);
+    string page_current();
+    page_back();
+    page_forward();
 
     // networking
     fetch(string, string);
