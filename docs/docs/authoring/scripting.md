@@ -104,6 +104,42 @@ four that carry no key, `on_start`, `on_ready`, `on_close`, and
 `on_audio_end`, are only ever global. See the per-host reference for the
 full event table and each callback's exact arguments.
 
+## Editing a script while it runs
+
+`lumenc run` watches the script file and swaps a new version into the
+running app, so you edit a handler and see the change on the next click
+without losing where you were.
+
+What survives the swap:
+
+- Signal values, and with them everything bound to a signal.
+- Per-element state addressed by markup `id`: caret positions, toggle and
+  slider values, scroll offsets.
+- Every `on(...)` route and every `derive` computed signal registered
+  before the reload. Each now runs the new version of the function it
+  names, so editing a handler body takes effect on the next event.
+
+What the new version does: the script's top level runs again, which is the
+file body in Rhai and Lua and `main` in candela. A registration made there
+replaces the matching one from before. Lifecycle callbacks do not fire
+again; `on_start` and `on_ready` each run once, at app construction and at
+first mount. That is why registrations carry over rather than being rebuilt
+from scratch: an app that calls `on(...)` from `on_start`, as the templates
+do, has no second chance to register.
+
+A reload whose source fails to compile leaves the running program exactly
+as it was and reports the error, so a half-typed edit does not take the app
+down.
+
+Two cases need a restart:
+
+- An app that builds its tree with the dynamic DOM API. A reload rebuilds
+  the element tree from the markup, so nodes your script spawned are gone,
+  and `on_ready`, where you built them, does not run a second time.
+- Renaming a handler function *and* the `on(...)` call that binds it in one
+  edit. The old route has nothing in the new source to collide with, so it
+  survives and keeps pointing at a name that no longer exists.
+
 ## Signals
 
 Signals are the named reactive values `bind-text`, `bind-value`, `<if>`,

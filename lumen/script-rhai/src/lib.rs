@@ -2598,19 +2598,23 @@ impl RhaiHost {
     /// **Atomicity**: handlers + derivations + pending are snapshotted
     /// before the clear-and-eval pass. If the compile or eval fails, the
     /// snapshots are restored so the live host retains the old
-    /// registrations. The OLD bug - clearing maps then crashing in
-    /// `eval_ast_with_scope` leaving the host with NO handlers and a
-    /// guaranteed crash on the next event - is gone.
+    /// registrations, rather than being left with an empty registry and a
+    /// crash on the next event.
     ///
     /// Preserved across the call:
     /// - [`Engine`] (registered Rust types and builtin fns).
     /// - [`Scope`] (top-level `let` bindings).
     /// - `signals_local`; `signal(name, default)` uses `or_insert_with(default)`.
     /// - In-flight `sink` (drained on the next tick).
+    /// - Registrations the new body does not make again. The re-run only
+    ///   repeats what the top level does; a handler an app binds from
+    ///   `on_start` never gets a second registration pass, so the snapshot is
+    ///   merged back underneath (see [`lumen_script::carry_forward`]).
     ///
     /// Rebuilt:
     /// - AST bytecode.
-    /// - `handlers`, `derivations`, and `pending_initial` (re-registered by re-running the body).
+    /// - Every `handlers` / `derivations` / `pending_initial` entry the new
+    ///   body registers; those win over the merged-back snapshot.
     pub fn replace_ast(&mut self, source: &str) -> Result<(), ScriptError> {
         self.replace_with_uri(source, "<inline>")
     }
@@ -2650,7 +2654,7 @@ impl RhaiHost {
         if let Ok(mut c) = self.event_closures.write() {
             c.clear();
         }
-        lumen_script::event::clear_host_bindings();
+        let prior_bindings = lumen_script::event::take_host_bindings();
         // Eval the new AST top-level into the existing scope.
         // `eval_ast_with_scope` re-runs `let` declarations - that resets
         // raw `let foo = ...` to their literal defaults, which is the
@@ -2662,6 +2666,22 @@ impl RhaiHost {
         {
             Ok(_) => {
                 self.ast = Some(ast);
+                // Merge the snapshot back under what the new body registered.
+                // The top-level re-run covers only top-level registrations;
+                // anything an app binds from `on_start` would otherwise vanish,
+                // leaving its clicks as silent no-ops until restart.
+                if let Ok(mut h) = self.handlers.write() {
+                    lumen_script::carry_forward(&mut h, prior_handlers);
+                }
+                lumen_script::carry_forward(&mut self.derivations.lock(), prior_derivations);
+                self.pending_initial.lock().extend(prior_pending);
+                let dropped = lumen_script::event::restore_host_bindings(prior_bindings);
+                if let Ok(mut c) = self.event_closures.write() {
+                    lumen_script::carry_forward(&mut c, prior_event_closures);
+                    for token in dropped {
+                        c.remove(&token);
+                    }
+                }
                 Ok(())
             }
             Err(e) => {
@@ -2675,6 +2695,8 @@ impl RhaiHost {
                 if let Ok(mut c) = self.event_closures.write() {
                     *c = prior_event_closures;
                 }
+                lumen_script::event::clear_host_bindings();
+                lumen_script::event::restore_host_bindings(prior_bindings);
                 self.ast = prior_ast;
                 Err(ScriptError::Runtime(e.to_string()))
             }

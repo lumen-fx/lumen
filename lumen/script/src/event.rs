@@ -295,12 +295,67 @@ pub fn unregister_binding(token: u64) -> Option<EventBinding> {
     Some(b.remove(idx))
 }
 
-/// Drop every host-closure binding. Called on host reset / hot reload before
-/// the script re-runs and re-binds.
+/// Drop every host-closure binding. Called on host reset, and on hot reload
+/// before the script re-runs and re-binds.
 pub fn clear_host_bindings() {
     if let Ok(mut b) = bindings().write() {
         b.retain(|e| !matches!(e.handler, EventHandler::Host));
     }
+}
+
+/// Remove every host-closure binding and return it, in registration order.
+///
+/// A hot reload takes the bindings out before it re-runs the script, then
+/// hands the snapshot to [`restore_host_bindings`] so the ones the new script
+/// did not re-bind keep firing. Native bindings are left in place; they belong
+/// to the C-ABI / SDK caller, not to the script.
+pub fn take_host_bindings() -> Vec<EventBinding> {
+    let Ok(mut b) = bindings().write() else {
+        return Vec::new();
+    };
+    let mut taken = Vec::new();
+    b.retain(|e| {
+        if matches!(e.handler, EventHandler::Host) {
+            taken.push(e.clone());
+            false
+        } else {
+            true
+        }
+    });
+    taken
+}
+
+/// Carry `prior` bindings forward past a hot reload, and report the tokens
+/// that were dropped instead.
+///
+/// A prior binding is dropped when the reloaded script already bound the same
+/// node, event type, and phase; the new binding is the one that matches the
+/// new source. Every other prior binding is re-registered, so a handler bound
+/// from `on_start` (which the runtime fires once, at app construction) still
+/// fires after a reload. The returned tokens are the dropped ones, for the
+/// caller to purge from its own handler map.
+///
+/// Carried bindings go back in front of the new ones, preserving the order
+/// handlers ran in before the reload.
+pub fn restore_host_bindings(prior: Vec<EventBinding>) -> Vec<u64> {
+    let Ok(mut b) = bindings().write() else {
+        return Vec::new();
+    };
+    let mut dropped = Vec::new();
+    let mut carried = Vec::new();
+    for e in prior {
+        let superseded = b
+            .iter()
+            .any(|n| n.node == e.node && n.event_type == e.event_type && n.capture == e.capture);
+        if superseded {
+            dropped.push(e.token);
+        } else {
+            carried.push(e);
+        }
+    }
+    carried.append(&mut b);
+    *b = carried;
+    dropped
 }
 
 /// Drop all bindings (mainly for test isolation).

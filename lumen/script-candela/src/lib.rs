@@ -569,26 +569,43 @@ impl ScriptHost for CandelaHost {
     }
 
     fn replace(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
-        // Compile FIRST (no live state touched on a parse error), then swap.
-        // Snapshot + clear the handler registry so a hot reload re-registers
-        // via the re-run of `main`/`on_start`, with full rollback on failure.
-        // The signal mirror is intentionally preserved across the swap.
+        // Compile first (no live state touched on a parse error), then swap.
+        // Snapshot + clear the registries so the re-run of `main` that
+        // compilation performs repopulates them from the new source, with full
+        // rollback on failure. The signal mirror is preserved across the swap.
         let prior_handlers = self.registries.handlers.read().unwrap().clone();
         let prior_event_handlers = self.registries.event_handlers.read().unwrap().clone();
+        let prior_bindings = lumen_script::event::take_host_bindings();
         self.registries.handlers.write().unwrap().clear();
         self.registries.event_handlers.write().unwrap().clear();
-        lumen_script::event::clear_host_bindings();
 
         let resolved = prelude::resolve_prelude(source);
         match self.vm.engine.compile(resolved.as_ref(), uri) {
             Ok(program) => {
                 self.source = source.to_owned();
                 self.vm.program = Some(program);
+                // Merge the snapshot back under the new registrations. candela
+                // has no top level beyond `main`, and apps bind from
+                // `on_start`, which the runtime fires once at app construction
+                // and never re-fires; without the merge the handler map would
+                // come back empty and every click would reach nothing.
+                lumen_script::carry_forward(
+                    &mut self.registries.handlers.write().unwrap(),
+                    prior_handlers,
+                );
+                let dropped = lumen_script::event::restore_host_bindings(prior_bindings);
+                let mut events = self.registries.event_handlers.write().unwrap();
+                lumen_script::carry_forward(&mut events, prior_event_handlers);
+                for token in dropped {
+                    events.remove(&token);
+                }
                 Ok(())
             }
             Err(d) => {
                 *self.registries.handlers.write().unwrap() = prior_handlers;
                 *self.registries.event_handlers.write().unwrap() = prior_event_handlers;
+                lumen_script::event::clear_host_bindings();
+                lumen_script::event::restore_host_bindings(prior_bindings);
                 Err(self.compile_error(&d, uri))
             }
         }
