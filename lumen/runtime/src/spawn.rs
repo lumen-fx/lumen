@@ -204,6 +204,28 @@ fn next_document_order(world: &mut World) -> u32 {
     n
 }
 
+/// The text an element spawns with.
+///
+/// Without `translatable="key"` this is just the authored `text`. With it,
+/// the key is resolved against the app's loaded catalogue; a key the
+/// catalogue does not carry falls back to the authored text, and an
+/// element with neither renders the key. That ordering means an app whose
+/// translations are missing still shows its source strings, and a
+/// `translatable` element with no text is never blank.
+fn resolve_text(world: &World, el: &Element) -> Option<String> {
+    let Some(key) = &el.attrs.translatable else {
+        return el.attrs.text.clone();
+    };
+    let translated = world
+        .get_resource::<lumen_i18n::SharedI18n>()
+        .and_then(|i18n| i18n.try_t(key));
+    Some(
+        translated
+            .or_else(|| el.attrs.text.clone())
+            .unwrap_or_else(|| key.clone()),
+    )
+}
+
 /// Alpha multiplier applied to a disabled entity when neither
 /// `disabled-bg` nor an explicit `:disabled { opacity }` was authored.
 /// CSS `disabled-opacity` (`Attributes::disabled_opacity_default`)
@@ -246,6 +268,9 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             store.set_global_str(&spec.name, v.as_str());
         }
     }
+    // Resolve the element's text before the world is borrowed by `spawn`:
+    // a `translatable="key"` element reads the loaded catalogue.
+    let text = resolve_text(world, el);
     let mut style = Style::from(&el.attrs);
     apply_ua_style_defaults(&el.tag, &el.attrs, &mut style);
     let is_boundary = is_relayout_boundary(&style, el);
@@ -264,7 +289,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     if let Some(v) = Option::<Visuals>::from(&el.attrs) {
         entity.insert(v);
     }
-    if let Some(text) = &el.attrs.text {
+    if let Some(text) = &text {
         entity.insert(TextContent(text.clone()));
     }
     if matches!(el.tag.as_str(), "input" | "textarea") {
@@ -731,7 +756,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
                 // TextContent)`; if the markup omits `text=""` we
                 // need to seed an empty TextContent so the first
                 // signal write has a target to update.
-                if el.attrs.text.is_none() {
+                if text.is_none() {
                     entity.insert(TextContent(String::new()));
                 }
             }
@@ -750,7 +775,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     // queries.
     if let Some(field) = &el.attrs.bind_self_text {
         entity.insert(BindSelfText::from(field.as_str()));
-        if el.attrs.text.is_none() {
+        if text.is_none() {
             entity.insert(TextContent(String::new()));
         }
     }
@@ -762,7 +787,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     }
     if let Some(field) = &el.attrs.bind_parent_text {
         entity.insert(BindParentText::from(field.as_str()));
-        if el.attrs.text.is_none() {
+        if text.is_none() {
             entity.insert(TextContent(String::new()));
         }
     }

@@ -71,6 +71,10 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
     // Reactive bindings, reconcilers, dialog lifecycle, error overlay - the
     // always-on reactive core.
     register_reactive(&mut app);
+    // Translation. Runs before the tree is spawned so a
+    // `translatable="key"` element resolves its text on the first frame,
+    // and before the script host loads so `t("key")` works from `on_start`.
+    register_i18n(&mut app, &dir, &cfg)?;
 
     // Initial load runs before the window exists, so there's no real
     // OS theme / viewport yet. Apply with the best-guess default
@@ -437,12 +441,14 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
     if hot_reload_enabled && opts.markup.is_none() && opts.artifact.is_none() {
         // Parent directories of every tracked source file (deduplicated).
         // Computed before the paths move into `HotReloadState`.
+        let locale_dir = crate::run::i18n::locale_dir(&dir);
         let watch_dirs: std::collections::HashSet<PathBuf> = [&html_path, &css_path]
             .into_iter()
             .chain(&script_paths)
             .chain(&include_paths)
             .chain(&css_import_paths)
             .filter_map(|p| p.parent())
+            .chain(locale_dir.is_dir().then_some(locale_dir.as_path()))
             .filter(|d| d.is_dir())
             .map(PathBuf::from)
             .collect();
@@ -458,6 +464,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
             include_mtimes,
             css_import_paths,
             css_import_mtimes,
+            locale_stamps: crate::run::i18n::locale_stamps(&dir),
             asset_roots: asset_roots.clone(),
             skin_override: skin_override.clone(),
             root,

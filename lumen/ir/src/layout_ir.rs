@@ -951,6 +951,13 @@ pub struct Attributes {
     /// stable `Option<u8>` so the AOT artifact stays parser-independent.
     #[serde(with = "layout_direction_serde")]
     pub dir: Option<lumen_core::components::LayoutDirection>,
+    /// `translatable="<key>"` - marks the element's text for
+    /// translation. The spawn layer resolves the key against the
+    /// loaded catalogue and uses the result as the element's
+    /// [`lumen_core::components::TextContent`], falling back to the
+    /// authored `text` and then to the key itself. `lumenc i18n
+    /// extract` collects these keys into `locale/<lang>.ftl`.
+    pub translatable: Option<String>,
     /// `lang="<bcp47>"` - BCP-47 language tag (W5.4). When set, the
     /// spawn layer installs a [`lumen_core::components::Lang`] component
     /// consumed by text shaping (cosmic-text), AccessKit, and

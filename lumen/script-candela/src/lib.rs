@@ -410,6 +410,20 @@ impl CandelaHost {
             ScriptCommand::Fetch { url, tag }
         });
 
+        // -- translation -------------------------------------------------
+        // `lumen::t("key")` returns the string the app's active locale
+        // carries for `key`, or `key` itself when no catalogue does - an
+        // untranslated app still renders something readable. The catalogue
+        // lives behind the process-wide `lumen_core::i18n` hook the runtime
+        // installs, so this host links no Fluent/ICU code and needs no
+        // world access. `tr` is Qt's spelling of the same call.
+        engine.register_host_fn(HOST_NAMESPACE, "t", |key: String| -> String {
+            lumen_core::i18n::translate(&key)
+        });
+        engine.register_host_fn(HOST_NAMESPACE, "tr", |key: String| -> String {
+            lumen_core::i18n::translate(&key)
+        });
+
         // -- filesystem --------------------------------------------------
         engine.register_host_fn(HOST_NAMESPACE, "read_file", |path: String| -> String {
             std::fs::read_to_string(path).unwrap_or_default()

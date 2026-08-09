@@ -3671,6 +3671,7 @@ dependencies = [
  "lumen-audio",
  "lumen-core",
  "lumen-devtools",
+ "lumen-i18n",
  "lumen-input",
  "lumen-ir",
  "lumen-layout-taffy",

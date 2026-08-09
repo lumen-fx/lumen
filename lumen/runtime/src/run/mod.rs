@@ -286,6 +286,10 @@ pub enum RunError {
     /// `lumen.toml` is invalid (parse / read error).
     #[error("lumen.toml: {0}")]
     Config(#[from] crate::config::ConfigError),
+    /// A `locale/*.ftl` catalogue could not be read or parsed, or its
+    /// filename is not a BCP-47 tag.
+    #[error("i18n: {0}")]
+    I18n(String),
     /// A precompiled AOT artifact failed to read / decode.
     #[error("artifact: {0}")]
     Artifact(String),
@@ -360,6 +364,7 @@ mod caret_scroll;
 mod check;
 mod dom_commands;
 mod hot_reload;
+mod i18n;
 mod loading;
 mod restyle;
 mod script_commands;
@@ -376,6 +381,7 @@ use audio::*;
 use caret_scroll::*;
 use check::*;
 use hot_reload::*;
+use i18n::*;
 use loading::*;
 use restyle::*;
 use script_commands::*;
