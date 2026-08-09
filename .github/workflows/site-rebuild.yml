@@ -1,0 +1,24 @@
+name: site-rebuild
+
+# Tells the site repo to rebuild and redeploy when main changes, so the
+# published docs track this repo. Needs the SITE_BUILD_TOKEN secret: a
+# fine-grained PAT that can write actions on lumen-fx/site. Until the
+# secret exists the step fails without failing the run, and the site's
+# daily cron picks the change up instead.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "tools/install.sh"
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send product-updated to the site
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.SITE_BUILD_TOKEN }}
+        run: gh api repos/lumen-fx/site/dispatches -f event_type=product-updated
