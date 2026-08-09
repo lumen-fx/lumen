@@ -9,10 +9,10 @@ use std::path::PathBuf;
 
 fn tempfile_path(tag: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let nanos = {
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    };
     p.push(format!("lumen-assets-bundle-{tag}-{nanos}"));
     p
 }

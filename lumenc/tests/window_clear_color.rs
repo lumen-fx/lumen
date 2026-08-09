@@ -15,13 +15,15 @@ use lumenc::RunOptions;
 use lumenc::run::build_headless_app;
 
 fn build(markup: &str, css: &str, lumen_toml: &str) -> lumen_window_winit::WinitOptions {
+    // A per-call counter, not a timestamp: these tests run concurrently in
+    // one process, and SystemTime's granularity (about a microsecond on
+    // macOS) let two of them mint the same directory and read each other's
+    // lumen.toml.
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
         "lumenc_clear_color_{}_{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("lumen.toml"), lumen_toml).unwrap();

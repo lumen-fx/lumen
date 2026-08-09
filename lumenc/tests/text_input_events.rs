@@ -20,14 +20,10 @@ use lumenc::RunOptions;
 use lumenc::run::build_app;
 
 fn build_and_tick(markup: &str, ticks: u32) -> App {
-    let dir = std::env::temp_dir().join(format!(
-        "lumenc_text_events_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = std::env::temp_dir().join(format!("lumenc_text_events_{}_{}", std::process::id(), {
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }));
     std::fs::create_dir_all(&dir).unwrap();
     // The markup below carries an inline Rhai `<script>`, and the fixture
     // directory holds no script file for host inference to read, so the host

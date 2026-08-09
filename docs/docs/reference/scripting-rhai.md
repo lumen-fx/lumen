@@ -21,24 +21,23 @@ app has no `<script>` tag at all and skips the whole scripting plugin.
 
 ## Choosing the host
 
-Rhai is the default host. `lumen.toml` selects a different one
+candela is the default host. `lumen.toml` selects a different one
 explicitly:
 
 ```toml
 [script]
-engine = "lua"   # "rhai" (default) | "lua" | "candela"
+engine = "rhai"   # "candela" (default) | "rhai" | "lua"
 ```
 
 The match on `engine` is case-insensitive; an absent or unrecognized
-value falls back to Rhai. When building a static `--bundle`, an app
-with no explicit `[script] engine` gets its host inferred from the
-file extensions present in the app directory (a `.lua` file selects
-Lua, a `.cdl` file selects candela); this inference only affects which
-single host gets compiled into the bundle, not which host a
-`lumenc run` dev session uses, which always follows `[script] engine`
-verbatim. Rhai, Lua, and candela expose the same set of lifecycle
-entry points and a near-identical function surface; this page covers
-the Rhai bindings only.
+value falls back to candela. With no `[script] engine` line at all, the
+host comes from the script file extensions present in the app directory:
+a `.cdl` file selects candela, otherwise a `.lua` file selects Lua,
+otherwise a `.rhai` file selects Rhai, and a directory carrying no script
+gets candela. That inference decides the host for `lumenc run` and, when
+building a static `--bundle`, which single host gets compiled in. Rhai,
+Lua, and candela expose the same set of lifecycle entry points and a
+near-identical function surface; this page covers the Rhai bindings only.
 
 ## Lifecycle entry points
 

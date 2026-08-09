@@ -1,44 +1,41 @@
 <p align="center">
-  <img src="assets/colored-logo.png" alt="Lumen" width="220">
+  <img src="assets/colored-logo.png" alt="Lumen" width="320">
 </p>
 
 # Lumen
 
-A declarative, markup-first UI framework for native desktop apps: Rust ECS
-core, GPU rendering, and live hot reload of your markup, styles, and script.
+Lumen is a UI framework for native desktop apps that you write as markup, a
+stylesheet, and a script.
 
-You author a `.lmn` markup tree, an optional CSS-subset stylesheet, and an
-optional script. `lumenc` compiles all three to a layout IR, spawns
-entities across a two-world [`bevy_ecs`](https://docs.rs/bevy_ecs) core, and
-renders through [`wgpu`](https://wgpu.rs) + [`vello`](https://github.com/linebender/vello)
-with [`cosmic-text`](https://github.com/pop-os/cosmic-text) shaping and
-[`taffy`](https://github.com/DioxusLabs/taffy) layout.
+You describe the window as a `.lmn` tree, style it with a CSS subset, and drive
+it from a script. `lumenc` compiles the three into one app and runs it on the
+GPU, with real text shaping and flexbox layout. Nothing browser-shaped sits
+underneath: no Electron, no embedded webview, no JavaScript engine, and the app
+ships as a native binary.
 
-## Features
+Reach for Lumen if markup and CSS are how you like to build a UI and the result
+has to be a desktop app.
 
-- **`.lmn` markup + CSS subset + scripting**: a fixed tag vocabulary, a
-  familiar CSS-like styling layer, and an embedded script for view logic and
-  reactive signals. Script in candela, Lua, or Rhai; the host is picked by
-  file extension.
-- **Hot reload**: markup, styles, and script all reload on save, preserving
-  component state (focus, scroll position, signal values) across the swap.
-- **GPU rendering**: `wgpu` + `vello` with `cosmic-text` glyph shaping.
-- **Flexbox and grid layout** via `taffy`.
-- **Accessibility**: an AccessKit-backed a11y tree.
-- **Text input**: IME composition (preedit/commit) and Unicode BiDi
-  (mixed LTR/RTL) text shaping.
-- **C ABI** for embedding Lumen from other languages, with Rust, Python, and
-  C/C++ SDKs on top.
-- **Editor tooling**: an LSP server (diagnostics, completion, hover) and a
-  formatter (`lumenc fmt`).
-- **MCP server**: inspect a running app's entities, components, resources,
-  and framebuffer from an MCP client over stdio, for automated testing or
-  agent-driven UI work.
-- **Cross-platform**: Linux, Windows, and macOS.
+## Install
 
-## Quick example
+```sh
+curl -fsSL https://lumenfx.dev/install.sh | sh
+```
 
-`main.lmn`:
+The installer puts `lumenc` and the `liblumen` runtime under `~/.lumen` and
+asks before touching your PATH. Linux and macOS, x86_64 and aarch64. To build
+from a checkout instead, see
+[Building Lumen from source](docs/docs/contributing/building-lumen.md).
+
+## Your first app
+
+```sh
+lumenc new counter my-app
+lumenc run my-app
+```
+
+That scaffolds a runnable directory and opens it in a window. `main.lmn` is the
+tree:
 
 ```xml
 <root bg="#0c1c30" padding="32" gap="20" align="center" justify="center">
@@ -48,74 +45,95 @@ with [`cosmic-text`](https://github.com/pop-os/cosmic-text) shaping and
     <button class="primary" id="bump"  width="120px" height="48px" text="+1" />
     <button class="primary" id="reset" width="120px" height="48px" text="reset" />
   </row>
-  <script src="main.rhai" />
+  <script src="main.cdl" />
 </root>
 ```
 
-`main.rhai`:
+`main.cdl` is the script:
 
-```rhai
+```candela
+import "lumen.cdl";
+
 fn on_start() {
-    on("click", "bump",  "handle_bump");
-    on("click", "reset", "handle_reset");
+    lumen::signal_set_int("clicks", 0);
+    lumen::on("click", "bump", "handle_bump");
+    lumen::on("click", "reset", "handle_reset");
 }
 
 fn handle_bump(id) {
-    let n = signal("clicks", 0);
-    n.set(n.get() + 1);
+    let n = lumen::signal_get_int("clicks");
+    lumen::signal_set_int("clicks", n + 1);
 }
 
 fn handle_reset(id) {
-    signal("clicks", 0).set(0);
+    lumen::signal_set_int("clicks", 0);
 }
+
+fn main() {}
 ```
 
-Generate this exact app with `lumenc new counter <name>` (see below).
+Clicking `+1` writes the `clicks` signal. The label carries
+`bind-text="clicks"`, so it re-renders itself; no code sets its text. The
+scaffold ships a `main.css` and a `lumen.toml` alongside these two, and a
+README describing what the template shows.
 
-## Getting started
+Edit the markup or the stylesheet while the app runs and the change lands
+without a restart, with the running count intact. Add `--headless` to
+`lumenc run` to drive the same app with no window, which is how you run one in
+CI.
 
-### Install
+candela is the default scripting language. One `import "lumen.cdl";` gives a
+script the whole host surface: signals, the DOM API, timers, dialogs, and the
+OS integrations. Rhai (`.rhai`) and Lua (`.lua`) hosts ship as well and expose
+the same builtins.
+
+## What you get
+
+- A fixed markup vocabulary of layout containers, text, images, and controls,
+  composable through `<template>` and `<slot>`.
+- A CSS subset with custom properties, specificity and combinators,
+  structural and state pseudo-classes, `@media` queries, and transitions.
+- A scripting surface that reads and writes signals, queries and edits the
+  live element tree, and binds events by capture or bubble phase.
+- Widgets you would otherwise hand-build: dropdowns, menus, dialogs,
+  tooltips, tabs, text areas, and validated date and time pickers.
+- Multi-page apps with no router to configure: a second `.lmn` file next to
+  `main.lmn` is a second page, reachable through a plain `<a href="...">`.
+- Native shell integration: menu bar, system tray, notifications, global
+  hotkeys, file dialogs, clipboard, drag and drop, and multi-monitor
+  awareness.
+- Accessibility through AccessKit, localization through Fluent and ICU4X,
+  and audio playback.
+- Headless runs plus automation subcommands that snapshot, search, and click
+  a running app, so a UI can be tested without a screen.
+- A C ABI with C++, Python, and Rust SDKs for embedding Lumen in a host
+  application, and a language server for `.lmn` files that you build from
+  this repo.
+
+## Examples
+
+`apps/` holds working apps to read. `apps/widget-garden` exercises every
+shipped tag, attribute, and OS builtin in a single file and is the reference
+when a doc is ambiguous; `apps/notes`, `apps/music`, and `apps/tracker` are
+full apps in candela. From a checkout:
 
 ```sh
-curl -fsSL https://lumenfx.dev/install.sh | sh
+cargo run -p lumenc -- run apps/widget-garden
 ```
-
-The installer downloads the release for your platform, verifies it, and
-unpacks it under `~/.lumen`. You do not need a Rust toolchain to build or run
-an app; `lumenc` ships as a binary.
-
-Candela, Lumen's scripting language, is built into `liblumen` already - a
-Lumen app with candela scripts needs nothing extra. See
-[the install guide](docs/docs/getting-started/install.md) for the installer's
-other flags and the per-platform requirements. You need a working GPU driver
-stack (Vulkan, Metal or DirectX); Linux additionally needs GTK 3 for native
-file dialogs.
-
-### Your first app
-
-```sh
-lumenc new counter my-app
-lumenc run my-app
-```
-
-`lumenc run` watches `my-app/` and hot-reloads markup, CSS, and script on
-save. See [Getting started](docs/docs/getting-started) in the docs for a full
-walkthrough.
-
-To work on Lumen itself rather than build an app with it, see the
-[developers guide](docs/docs/contributing/building-lumen.md).
 
 ## Status
 
-Lumen is in **alpha**. The author-facing surface (markup tags, the CSS
-subset, and the script builtins) is functional and reasonably broad, but APIs
-are not yet stable and may change without notice. No crates are published;
-there is no compatibility guarantee between commits.
+Alpha. Every tag, CSS property, and builtin in the docs works, and any of them
+can still change between releases. An app is one window; multi-window is on the
+roadmap.
 
-## Documentation
+## Docs
 
-The full documentation lives under [`docs/`](docs) and is published at
-[docs.lumenfx.dev](https://docs.lumenfx.dev). Build it locally with
+Full documentation lives at <https://docs.lumenfx.dev>: install, a guided
+first app, the tag and CSS references, the scripting builtins, the `lumenc`
+command surface, and the C ABI.
+
+The same pages are in `docs/`. To read them locally you need
 [uv](https://docs.astral.sh/uv/):
 
 ```sh
@@ -125,8 +143,11 @@ uv run zensical serve
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md)
+first: it lists the invariants a change must not break and the lint gates CI
+runs. Open an issue before building anything large, since APIs are still
+moving.
 
 ## License
 
-Licensed under the [Mozilla Public License 2.0](LICENSE).
+Mozilla Public License 2.0. See [LICENSE](LICENSE).
