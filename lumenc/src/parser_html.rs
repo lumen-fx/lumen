@@ -2521,6 +2521,25 @@ fn apply_attribute(
             }
             attrs.lang = Some(trimmed.to_string());
         }
+        // Translation marker. The value is a catalogue key, not display
+        // text: `lumenc i18n extract` collects it into
+        // `locale/<lang>.ftl`, and the runtime resolves it through the
+        // loaded catalogue at spawn time. Empty is an error - an empty
+        // key can never resolve, and silently dropping it would leave
+        // the author wondering why nothing translated.
+        "translatable" => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(bad(
+                    tag,
+                    name,
+                    value,
+                    "translatable attribute requires a catalogue key (e.g. \"app-title\")"
+                        .to_string(),
+                ));
+            }
+            attrs.translatable = Some(trimmed.to_string());
+        }
         // Quietly ignore unknown attributes for now; future strict mode can
         // raise them through ParseError.
         _ => {}

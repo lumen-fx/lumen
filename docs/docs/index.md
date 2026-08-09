@@ -95,8 +95,6 @@ Lumen is alpha, and its API is not stable yet.
   no regex backend behind it yet.
 - Transitions run on entry, not on removal: hiding or closing an element is
   instant.
-- The `lumenc i18n extract` command writes a translation catalogue, but
-  nothing loads one back at runtime yet.
 
 ## How to read these docs
 

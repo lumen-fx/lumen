@@ -7,6 +7,7 @@
 //! ```toml
 //! [app]
 //! entry = "main.lmn"          # default
+//! locale = "de-DE"            # default: the OS locale, else en-US
 //!
 //! [window]
 //! title = "My App"            # default: app directory name
@@ -93,6 +94,31 @@ pub struct AppCfg {
     /// it wins. Lets an ambiguous directory (e.g. a Rust workspace member that
     /// should still run as pure markup) pin its build/run route.
     pub kind: Option<crate::app_kind::AppKind>,
+    /// BCP-47 tag naming the locale the app starts in, e.g. `"de-DE"`.
+    /// Absent means "follow the OS", falling back to `en-US`. The tag
+    /// selects which `locale/<tag>.ftl` catalogue `translatable="..."`
+    /// markup and the scripts' `t()` builtin resolve against; every
+    /// catalogue in the directory is loaded regardless. A tag that is not
+    /// valid BCP-47 is a `lumen.toml` error.
+    #[serde(default, deserialize_with = "de_locale")]
+    pub locale: Option<lumen_i18n::LanguageIdentifier>,
+}
+
+/// Parse `[app] locale` into a validated language identifier, so a typo
+/// fails at config-load time naming the offending tag rather than silently
+/// leaving the app in its default locale.
+fn de_locale<'de, D>(deserializer: D) -> Result<Option<lumen_i18n::LanguageIdentifier>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let Some(raw) = Option::<String>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    lumen_i18n::Lang::try_from(raw.trim())
+        .map(|l| Some(l.into()))
+        .map_err(|e| {
+            serde::de::Error::custom(format!("app: `locale` is not a valid BCP-47 tag: {e}"))
+        })
 }
 
 /// `[pages]` block - file-based multi-page navigation.
@@ -1011,6 +1037,24 @@ mod tests {
         // Unknown value is rejected (deny_unknown_fields-style strictness on
         // the enum discriminant).
         assert!(toml::from_str::<LumenToml>("[app]\nkind = \"go\"\n").is_err());
+    }
+
+    #[test]
+    fn app_locale_parses_and_rejects_garbage() {
+        // Absent -> follow the OS.
+        let cfg: LumenToml = toml::from_str("[app]\nentry = \"main.lmn\"\n").unwrap();
+        assert!(cfg.app.locale.is_none());
+        // Valid BCP-47 lands parsed.
+        let cfg: LumenToml = toml::from_str("[app]\nlocale = \"de-DE\"\n").unwrap();
+        let locale = cfg.app.locale.expect("locale parsed");
+        assert_eq!(locale.language.as_str(), "de");
+        assert_eq!(
+            locale.region.map(|r| r.as_str().to_string()),
+            Some("DE".into())
+        );
+        // A typo names itself in the error.
+        let err = toml::from_str::<LumenToml>("[app]\nlocale = \"not a tag\"\n").unwrap_err();
+        assert!(err.to_string().contains("locale"), "{err}");
     }
 
     #[test]

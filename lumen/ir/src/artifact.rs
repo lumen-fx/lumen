@@ -63,7 +63,10 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// `caret-blink`, `password-character`, `line-height`, and the
 /// `scrollbar-*` geometry/timing/paint properties), changing the
 /// bincode wire shape.
-pub const FORMAT_VERSION: u16 = 2;
+///
+/// `3`: the `translatable="<key>"` attribute adds a field to
+/// [`crate::layout_ir::Attributes`].
+pub const FORMAT_VERSION: u16 = 3;
 
 /// The precompiled application: everything the runtime needs to spawn the UI
 /// without touching the markup / CSS parser.
