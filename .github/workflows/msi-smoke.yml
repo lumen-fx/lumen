@@ -1,0 +1,252 @@
+name: MSI smoke
+
+# Installs the Windows package on a real Windows machine and checks the four
+# things that can silently break it: where the files land, whether the user
+# PATH picks up the bin directory, whether a second release upgrades the first
+# instead of installing beside it, and whether an uninstall leaves anything
+# behind.
+#
+# It builds the same .wxs and runs the same tools/msi/build-msi.ps1 that
+# release.yml does, so the package under test differs from a released one only
+# in the compiler profile. That is deliberate: the structure of the package is
+# what is under test, not the optimizer, and a dev build keeps the job short.
+#
+# The versions are 9.9.9 and 9.9.10, which no release will ever carry, and
+# they exercise the numeric-not-lexical comparison a version-string bug would
+# get wrong.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "tools/msi/**"
+      - ".github/workflows/msi-smoke.yml"
+      - ".github/workflows/release.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: msi-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+  # The installed lumenc runs here with a receipt in place, which is exactly
+  # what turns the daily update check on. Keep it off the network.
+  LUMEN_NO_UPDATE_CHECK: 1
+
+jobs:
+  smoke:
+    name: install, upgrade, uninstall
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Install pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msi-smoke
+
+      - name: Build lumenc and liblumen
+        run: cargo build -p lumenc -p lumen-ffi
+
+      # Mirrors release.yml: the zip closes first, and only then does the MSI
+      # stage gain the receipt. Step "the portable zip carries no receipt"
+      # below is what holds that order in place.
+      - name: Stage the payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path dist\bin, msi-stage\bin, msi-stage\share\lumen | Out-Null
+          Copy-Item target\debug\lumenc.exe dist\bin\
+          Copy-Item target\debug\lumen_ffi.dll dist\bin\
+          Compress-Archive -Path dist\* -DestinationPath lumen-windows-x86_64.zip -Force
+          Copy-Item dist\bin\* msi-stage\bin\
+
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 6.0.1
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build both packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $receiptPath = "$PWD\msi-stage\share\lumen\lumen.receipt"
+          foreach ($version in '9.9.9', '9.9.10') {
+            $receipt = "version $version`ntarget windows-x86_64`ninstaller msi`n"
+            [IO.File]::WriteAllText($receiptPath, $receipt, [Text.Encoding]::ASCII)
+            tools\msi\build-msi.ps1 `
+              -Version $version `
+              -StageDir "$PWD\msi-stage" `
+              -OutFile "$PWD\lumen-$version.msi"
+          }
+
+      - name: Install 9.9.9
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msiexec = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+            '/i', "$PWD\lumen-9.9.9.msi", '/qn', '/l*v', "$PWD\install.log"
+          )
+          if ($msiexec.ExitCode -ne 0) {
+            Write-Host "msiexec exited $($msiexec.ExitCode); the verbose log follows"
+            Get-Content install.log
+            exit 1
+          }
+
+      - name: Check the installed layout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:LOCALAPPDATA 'Programs\Lumen'
+          foreach ($relative in 'bin\lumenc.exe', 'bin\lumen_ffi.dll', 'share\lumen\lumen.receipt') {
+            $path = Join-Path $root $relative
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "the install is missing $path"
+            }
+            Write-Host "found $path"
+          }
+
+      - name: Check the receipt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = Join-Path $env:LOCALAPPDATA 'Programs\Lumen\share\lumen\lumen.receipt'
+          $expected = "version 9.9.9`ntarget windows-x86_64`ninstaller msi`n"
+          $actual = [IO.File]::ReadAllText($path)
+          if ($actual -ne $expected) {
+            throw "the receipt reads`n$actual`nbut should read`n$expected"
+          }
+          # An MSI install is never pinned. A "pinned" line would make every
+          # installed copy stop offering updates.
+          if ($actual -match '(?m)^pinned\b') {
+            throw "the receipt carries a pinned line"
+          }
+
+      - name: Check the user PATH
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bin = Join-Path $env:LOCALAPPDATA 'Programs\Lumen\bin'
+          # Read the raw value rather than the expanded process PATH: this
+          # step's own process started before the install and never sees it.
+          $userPath = (Get-Item -LiteralPath 'HKCU:\Environment').GetValue('Path', '')
+          if ($userPath -notlike "*$bin*") {
+            throw "the user PATH does not contain ${bin}: $userPath"
+          }
+
+      - name: Run the installed lumenc
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & "$env:LOCALAPPDATA\Programs\Lumen\bin\lumenc.exe" --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "the installed lumenc exited $LASTEXITCODE"
+          }
+
+      # Two entries here means MajorUpgrade is broken and every release piles
+      # a fresh copy on top of the last one.
+      - name: Upgrade to 9.9.10
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msiexec = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+            '/i', "$PWD\lumen-9.9.10.msi", '/qn', '/l*v', "$PWD\upgrade.log"
+          )
+          if ($msiexec.ExitCode -ne 0) {
+            Write-Host "msiexec exited $($msiexec.ExitCode); the verbose log follows"
+            Get-Content upgrade.log
+            exit 1
+          }
+
+          # A per-user product is recorded under the machine hive, keyed by
+          # the installing user's SID, not under HKCU. The HKCU uninstall key
+          # is empty even after this install succeeds.
+          $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $key = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\$sid\Products\*\InstallProperties"
+          $entries = @(
+            Get-ItemProperty -Path $key -ErrorAction SilentlyContinue |
+              Where-Object { $_.DisplayName -eq 'Lumen' }
+          )
+          if ($entries.Count -ne 1) {
+            $entries | Format-List DisplayName, DisplayVersion
+            throw "expected one installed product named Lumen, found $($entries.Count)"
+          }
+          if ($entries[0].DisplayVersion -ne '9.9.10') {
+            throw "the installed product reads version $($entries[0].DisplayVersion), not 9.9.10"
+          }
+
+      - name: Uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msiexec = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+            '/x', "$PWD\lumen-9.9.10.msi", '/qn', '/l*v', "$PWD\uninstall.log"
+          )
+          if ($msiexec.ExitCode -ne 0) {
+            Write-Host "msiexec exited $($msiexec.ExitCode); the verbose log follows"
+            Get-Content uninstall.log
+            exit 1
+          }
+
+          $root = Join-Path $env:LOCALAPPDATA 'Programs\Lumen'
+          if (Test-Path -LiteralPath $root) {
+            Get-ChildItem -Recurse -LiteralPath $root | Select-Object -ExpandProperty FullName
+            throw "$root survived the uninstall"
+          }
+          $userPath = (Get-Item -LiteralPath 'HKCU:\Environment').GetValue('Path', '')
+          if ($userPath -like "*$root*") {
+            throw "the user PATH still contains ${root}: $userPath"
+          }
+
+          # Same per-SID machine-hive key the upgrade step checks: the product
+          # should be gone from it entirely.
+          $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $key = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\UserData\$sid\Products\*\InstallProperties"
+          $entries = @(
+            Get-ItemProperty -Path $key -ErrorAction SilentlyContinue |
+              Where-Object { $_.DisplayName -eq 'Lumen' }
+          )
+          if ($entries.Count -ne 0) {
+            $entries | Format-List DisplayName, DisplayVersion
+            throw "Lumen is still a registered product after the uninstall"
+          }
+
+      - name: The portable zip carries no receipt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $unpacked = Join-Path $env:RUNNER_TEMP 'zip-check'
+          Expand-Archive -Path lumen-windows-x86_64.zip -DestinationPath $unpacked -Force
+          if (Test-Path -LiteralPath (Join-Path $unpacked 'share\lumen\lumen.receipt')) {
+            throw "the portable zip installs a receipt, which would turn the update check on for a hand-extracted copy"
+          }
+          $stray = @(Get-ChildItem -Recurse -LiteralPath $unpacked -Filter 'lumen.receipt')
+          if ($stray.Count -ne 0) {
+            $stray | Select-Object -ExpandProperty FullName
+            throw "the portable zip carries a receipt somewhere in its tree"
+          }
+
+      - name: Keep the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: msi-logs
+          path: |
+            install.log
+            upgrade.log
+            uninstall.log
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Lumen Windows installer: lumenc, the liblumen runtime library, and an
+  install receipt, installed for the current user.
+
+  It installs into the user profile so it never asks for administrator
+  rights, which is the same shape VS Code's user installer uses. The payload
+  is authored file by file rather than harvested, because where the files
+  land is load-bearing: lumenc dlopens lumen_ffi.dll from beside its own
+  executable (lumenc/src/loader.rs), so the two must share one directory, and
+  the update check reads the receipt at ..\share\lumen\lumen.receipt relative
+  to that directory (lumenc/src/update_check.rs).
+
+  Built by build-msi.ps1 in this directory, which passes the two preprocessor
+  variables this file needs:
+
+    Version   the product version, x.y.z, taken from the release tag
+    StageDir  an absolute path to a directory holding bin\ and share\
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <!-- UpgradeCode generated once for Lumen; never change it, and never reuse it for another product, because two products sharing one UpgradeCode uninstall each other. -->
+  <!--
+    Scope="perUser" puts the install in the user profile with no UAC prompt.
+    A per-user and a per-machine install of the same UpgradeCode cannot
+    upgrade each other, so switching Scope later is a migration for everyone
+    already installed, not an edit to this file.
+  -->
+  <Package
+      Name="Lumen"
+      Manufacturer="Lumen FX"
+      Version="$(var.Version)"
+      UpgradeCode="{35DA2664-F179-43DE-BFB6-9B18C7DD5F34}"
+      Scope="perUser"
+      Compressed="yes"
+      Language="1033">
+
+    <!--
+      Each release replaces the one before it. AllowSameVersionUpgrades lets a
+      rebuilt package of the same version replace itself, which is what the
+      smoke workflow and a re-run release both need.
+    -->
+    <MajorUpgrade
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of Lumen is already installed." />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- What Settings > Installed apps links to. -->
+    <Property Id="ARPURLINFOABOUT" Value="https://lumenfx.dev" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/lumen-fx/lumen" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Lumen">
+          <Directory Id="BINFOLDER" Name="bin" />
+          <Directory Id="SHAREFOLDER" Name="share">
+            <Directory Id="RECEIPTFOLDER" Name="lumen" />
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Lumen" Level="1">
+      <ComponentGroupRef Id="Payload" />
+    </Feature>
+
+    <ComponentGroup Id="Payload">
+      <Component Id="LumencExe" Directory="BINFOLDER">
+        <File Id="LumencExe" Source="$(var.StageDir)\bin\lumenc.exe" KeyPath="yes" />
+      </Component>
+
+      <!-- Beside lumenc.exe, not in a sibling lib\: that is the only place lumenc looks. -->
+      <Component Id="LumenFfiDll" Directory="BINFOLDER">
+        <File Id="LumenFfiDll" Source="$(var.StageDir)\bin\lumen_ffi.dll" KeyPath="yes" />
+      </Component>
+
+      <!--
+        The receipt marks this as an installed copy, which is what turns the
+        daily update check on. It carries no "pinned" line, so an MSI install
+        is always offered a newer release.
+      -->
+      <Component Id="LumenReceipt" Directory="RECEIPTFOLDER">
+        <File Id="LumenReceipt" Source="$(var.StageDir)\share\lumen\lumen.receipt" KeyPath="yes" />
+      </Component>
+
+      <!-- Component GUID generated once for the PATH entry; never change it, and never reuse it, because a shared component GUID makes one product's uninstall strip another product's PATH. -->
+      <Component Id="PathEntry" Guid="{479DB308-F051-44BB-8574-382EED1EE584}" Directory="INSTALLFOLDER">
+        <!--
+          A registry value under HKCU is the keypath, because what this
+          component installs is an environment variable and MSI needs
+          something durable to detect it by. The value doubles as a record of
+          where Lumen went.
+        -->
+        <RegistryValue
+            Root="HKCU"
+            Key="Software\Lumen FX\Lumen"
+            Name="InstallPath"
+            Type="string"
+            Value="[INSTALLFOLDER]"
+            KeyPath="yes" />
+        <!--
+          Appends to the user PATH, not the machine PATH, and comes back out
+          on uninstall. A terminal already open keeps its old PATH; a new one
+          picks this up.
+        -->
+        <Environment
+            Id="PATH"
+            Name="PATH"
+            Value="[BINFOLDER]"
+            Action="set"
+            Part="last"
+            System="no"
+            Permanent="no" />
+      </Component>
+    </ComponentGroup>
+
+  </Package>
+</Wix>
