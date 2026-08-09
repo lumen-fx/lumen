@@ -9,8 +9,8 @@ Every command below is a `lumenc` subcommand. Run `lumenc --help` for the
 built-in summary and `lumenc --version` to print the installed version.
 
 A markup app directory needs `main.lmn`; `main.css` is optional, and a
-`<script>` tag inside `main.lmn` loads the script host (Rhai by default -
-see [Scripting](../authoring/scripting.md) for candela and Lua). `run` and
+`<script>` tag inside `main.lmn` loads the script host, candela by default
+(see [Scripting](../authoring/scripting.md) for Rhai and Lua). `run` and
 `build` auto-detect an app written against one of the SDKs instead - a Rust
 project depending on the `lumen` crate, a CMake C++ project, or a Python
 script importing `lumen` - and hand off to that project's own toolchain
@@ -197,8 +197,9 @@ Three unrelated checks live under this name:
   the CSS Cascade-5 last-wins ordering Lumen now uses. Non-zero exit on
   any divergence.
 - `lumenc lint --signals [<app-dir>] [--strict]` - an offline static check
-  over `<app-dir>/main.lmn` and `main.rhai` against the optional
-  `[signals]` schema in `lumen.toml`. Flags untyped `signal_set` writes
+  over `<app-dir>/main.lmn` and the app's script (`main.cdl`, `main.rhai`,
+  or `main.lua`) against the optional `[signals]` schema in `lumen.toml`.
+  Flags untyped `signal_set` writes
   that should use a typed setter, bare `{name}` interpolation that should
   be `{$name}`, a write whose value type disagrees with the declared
   schema type, a markup binding with no matching write or schema entry,
@@ -227,7 +228,9 @@ bounds alongside the image.
 Scans every `.lmn` and `.rhai` file under `app_dir` for translation call
 sites - the Rhai/Rust `t!("key", ...)` macro, the `lumen.tr("key", ...)`
 builtin, and the markup `translatable="key"` attribute - and writes or
-merges them into `<app_dir>/locale/<lang>.ftl`. Safe to re-run: existing
+merges them into `<app_dir>/locale/<lang>.ftl`. Candela (`.cdl`) and Lua
+(`.lua`) scripts are not scanned yet; declare those keys from markup or add
+them to the `.ftl` by hand. Safe to re-run: existing
 entries in the target file are left untouched, and only newly discovered
 keys are appended, each with a placeholder value for a translator to
 replace.

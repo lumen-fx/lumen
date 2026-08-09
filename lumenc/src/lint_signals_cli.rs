@@ -1,8 +1,8 @@
 //! `lumenc lint --signals <app-dir>` - static signal lint.
 //!
-//! Scans `<app-dir>/main.lmn` and `<app-dir>/main.rhai` against the
-//! optional `[signals]` schema declared in `<app-dir>/lumen.toml`
-//! and reports four classes of finding:
+//! Scans `<app-dir>/main.lmn` and the app's script (`main.cdl`,
+//! `main.rhai`, or `main.lua`) against the optional `[signals]` schema
+//! declared in `<app-dir>/lumen.toml` and reports four classes of finding:
 //!
 //! - **Untyped write** - `signal_set("count", "5")` reaches the
 //!   string-typed sink and bypasses the typed PropertyStore variant.
@@ -21,9 +21,10 @@
 //! - **Orphan write** - script writes `foo` but no markup reads it -
 //!   likely dead code.
 //!
-//! The scanner is **substring-based**: it does not parse the Rhai
+//! The scanner is **substring-based**: it does not parse the script
 //! AST and only recognizes top-level call sites of the form
-//! `signal_set("name", ...)` (and the four typed variants). Limits:
+//! `signal_set("name", ...)` (and the four typed variants), with or
+//! without a host prefix such as candela's `lumen::`. Limits:
 //!
 //! - Comments containing literal `signal_set("...")` are still flagged
 //!   (false positives in commented-out code).
@@ -205,11 +206,20 @@ pub fn cmd_lint_signals(args: impl Iterator<Item = String>) -> ExitCode {
     };
 
     let lmn_path = dir.join("main.lmn");
-    let rhai_path = dir.join("main.rhai");
     let lmn_src = std::fs::read_to_string(&lmn_path).unwrap_or_default();
-    let rhai_src = std::fs::read_to_string(&rhai_path).unwrap_or_default();
+    // The app's script, whichever host it targets. The scanner matches call
+    // sites by substring, so a candela `lumen::signal_set_int(...)` and a Rhai
+    // `signal_set_int(...)` both land; only the file name differs. With no
+    // script present at all the path names the default host's file, which is
+    // the one an author would go on to create.
+    let script_path = ["main.cdl", "main.rhai", "main.lua"]
+        .iter()
+        .map(|f| dir.join(f))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| dir.join("main.cdl"));
+    let script_src = std::fs::read_to_string(&script_path).unwrap_or_default();
 
-    let report = analyze(&cfg.signals, &lmn_src, &lmn_path, &rhai_src, &rhai_path);
+    let report = analyze(&cfg.signals, &lmn_src, &lmn_path, &script_src, &script_path);
 
     emit(&report, as_json, strict)
 }
@@ -228,8 +238,8 @@ pub fn analyze(
     schema: &SignalsCfg,
     lmn_src: &str,
     lmn_path: &Path,
-    rhai_src: &str,
-    rhai_path: &Path,
+    script_src: &str,
+    script_path: &Path,
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
 
@@ -254,8 +264,8 @@ pub fn analyze(
     let skip_bare_substring_scan = parser_findings.is_some();
 
     let markup_refs = scan_markup(lmn_src, lmn_path, &mut findings, skip_bare_substring_scan);
-    let script_writes = scan_script(rhai_src, rhai_path, schema, &mut findings);
-    let script_reads = scan_script_reads(rhai_src);
+    let script_writes = scan_script(script_src, script_path, schema, &mut findings);
+    let script_reads = scan_script_reads(script_src);
 
     // Untracked signal: markup bind refers to a name with no schema
     // entry AND no script write.
@@ -283,7 +293,7 @@ pub fn analyze(
                     "signal `{name}` is bound from markup but never declared in [signals] nor written from any script"
                 ),
                 suggestion: format!(
-                    "declare `{name} = \"...\"` in lumen.toml [signals] or wire a write from main.rhai"
+                    "declare `{name} = \"...\"` in lumen.toml [signals] or write it from the app script"
                 ),
             });
         }
@@ -308,7 +318,7 @@ pub fn analyze(
     for name in orphans {
         if let Some(w) = script_writes.iter().find(|w| w.name == name) {
             findings.push(Finding {
-                file: rhai_path.to_path_buf(),
+                file: script_path.to_path_buf(),
                 line: w.line,
                 col: w.col,
                 signal: name.to_string(),

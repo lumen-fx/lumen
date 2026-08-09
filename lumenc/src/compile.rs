@@ -241,7 +241,7 @@ fn entry_name(dir: &Path) -> String {
         .unwrap_or_else(|| "main.lmn".to_string())
 }
 
-/// Concatenate the inline `<script>` body with every external `.rhai` file
+/// Concatenate the inline `<script>` body with every external script file
 /// referenced via `<script src="...">`, separated by newlines. Mirror of
 /// `lumen_runtime::run::combined_script_source`.
 fn combined_script_source(

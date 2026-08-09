@@ -85,7 +85,7 @@ parse errors rather than silent no-ops.
 |---|---|
 | `main.lmn` | Re-parse + re-spawn, preserving stateful components by `LumenId`. Text input cursor, toggle / slider state, scroll position survive. |
 | `main.css` | Re-apply styling. A class-invalidation set fast-rejects no-op class flips. |
-| `main.cdl` | Compile the new source, then swap it in. Signals and handler registrations survive; a source that fails to compile leaves the running script untouched. |
+| `main.cdl` | Compile the new source, then swap it in. Signals survive, and a source that fails to compile leaves the running script untouched. |
 | `lumen.toml` | Read once at startup. Restart `lumenc run` to pick up changes. |
 | Assets in `[asset_roots]` | Image cache invalidates on next decode pull; `set_src(id, path)` re-resolves through the configured roots. |
 
@@ -94,6 +94,14 @@ references, and every included or imported file. A change wakes the loop
 for one tick and reloads only the affected path. Set
 `LUMEN_HOT_RELOAD_POLL=1` to fall back to mtime polling where a
 file-system watcher is unavailable.
+
+Every reload re-loads the script, which clears the per-id routes
+`on(event, id, handler)` registered. Routes a Rhai or Lua script registers at
+top level come back, because a reload re-runs the top level. Routes registered
+inside `on_start`, which is where a candela script registers them, do not:
+`on_start` runs at app construction and not again. Restart `lumenc run` to get
+those back; a script that dispatches through the global `on_click(id)` is
+unaffected either way.
 
 ## Window-state persistence
 

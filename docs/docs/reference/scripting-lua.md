@@ -672,8 +672,9 @@ other indexed accessor in the API (`ArraySignal:get`, `signals.list[i]`)
 is 1-indexed - both are called out at their entries above since they
 break the otherwise-consistent 1-based convention.
 
-candela, the third host, addresses DOM nodes and events as plain integer
-handles through prefixed free functions (`node_parent(h)`,
-`event_target(ev)`) rather than the userdata-with-methods shape Lua and
-Rhai both expose; it is the intended long-term default host but is
-younger and less battle-tested than Rhai or Lua for whole-app scripting.
+candela, the third host and Lumen's default, carries DOM nodes and events
+as integer handles. Its prelude wraps them in `Node` and `Event` types
+with the same method shape Lua and Rhai expose (`get_by_id(id).parent()`,
+`event(ev).target()`), and the prefixed free functions
+(`lumen::node_parent(h)`, `lumen::event_target(ev)`) stay reachable
+underneath. See [candela scripting](./scripting-candela.md).

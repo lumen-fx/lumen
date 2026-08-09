@@ -2,8 +2,8 @@
 //!
 //! Each template is a slice of `(relative_path, file_body)` tuples. The
 //! scaffolder walks the slice, creating subdirectories on demand and
-//! writing each body verbatim. Templates are starters, not full demos -
-//! but every one runs out of the box (`lumenc run <name>`) and each ships
+//! writing each body verbatim. Templates are starters, not full demos;
+//! every one runs out of the box (`lumenc run <name>`) and each ships
 //! a README explaining the concepts it demonstrates.
 //!
 //! The [`TEMPLATES`] registry drives `lumenc new --list` and the template
@@ -114,8 +114,8 @@ lumenc run .
     ),
 ];
 
-/// Click-to-bump counter. Demonstrates `<button>` + `bind-text` +
-/// per-id `on(\"click\", \"...\", \"...\")` routing + signal handles.
+/// Click-to-bump counter in candela. Demonstrates `<button>` + `bind-text` +
+/// per-id `lumen::on(\"click\", \"...\", \"...\")` routing + typed signals.
 pub const COUNTER: &[(&str, &str)] = &[
     (
         "main.lmn",
@@ -126,7 +126,7 @@ pub const COUNTER: &[(&str, &str)] = &[
     <button class="primary" id="bump"  width="120px" height="48px" text="+1" />
     <button class="primary" id="reset" width="120px" height="48px" text="reset" />
   </row>
-  <script src="main.rhai" />
+  <script src="main.cdl" />
 </root>
 "##,
     ),
@@ -156,20 +156,25 @@ pub const COUNTER: &[(&str, &str)] = &[
 "##,
     ),
     (
-        "main.rhai",
-        r##"fn on_start() {
-    on("click", "bump",  "handle_bump");
-    on("click", "reset", "handle_reset");
+        "main.cdl",
+        r##"import "lumen.cdl";
+
+fn on_start() {
+    lumen::signal_set_int("clicks", 0);
+    lumen::on("click", "bump", "handle_bump");
+    lumen::on("click", "reset", "handle_reset");
 }
 
 fn handle_bump(id) {
-    let n = signal("clicks", 0);
-    n.set(n.get() + 1);
+    let n = lumen::signal_get_int("clicks");
+    lumen::signal_set_int("clicks", n + 1);
 }
 
 fn handle_reset(id) {
-    signal("clicks", 0).set(0);
+    lumen::signal_set_int("clicks", 0);
 }
+
+fn main() {}
 "##,
     ),
     (
@@ -180,18 +185,22 @@ fn handle_reset(id) {
         "README.md",
         r##"# counter
 
-The classic click counter.
+The classic click counter, scripted in candela.
 
-Concepts demonstrated:
+What it shows:
 
-- **Signals** - `signal("clicks", 0)` returns a typed handle; `.get()` /
-  `.set(v)` round-trip through the reactive store.
-- **`bind-text="clicks"`** - the label re-renders whenever the signal
-  changes; no manual `set_text` calls.
-- **Per-id click routing** - `on("click", "bump", "handle_bump")` beats
-  a global `on_click(id)` dispatch for readability.
-- **CSS custom properties** - every color / radius lives in `:root` vars,
-  so a theme swap touches one block.
+- Signals. `lumen::signal_set_int("clicks", n)` writes a named entry in the
+  reactive store and `lumen::signal_get_int("clicks")` reads it back.
+- `bind-text="clicks"` on the label. The label re-renders whenever the
+  signal changes, so nothing sets its text by hand.
+- Per-id click routing. `lumen::on("click", "bump", "handle_bump")` sends
+  clicks on one element straight to one function, which reads better than
+  branching inside a global `on_click(id)`.
+- CSS custom properties. Every color and radius lives in `:root`, so a
+  theme swap touches one block.
+
+`import "lumen.cdl";` pulls in the whole Lumen host surface, and `main()`
+stays empty because a Lumen app does its work in the lifecycle handlers.
 
 Run it:
 

@@ -707,9 +707,10 @@ USAGE:
                           Scaffold a fresh app directory from the
                           template gallery: hello | counter | form |
                           todo | dashboard | settings | hotkeys.
-                          Every template ships main.lmn (+ CSS +
-                          Rhai + lumen.toml) and a README explaining
-                          the concepts it demonstrates.
+                          Every template ships main.lmn (+ CSS + a
+                          script + lumen.toml) and a README explaining
+                          the concepts it demonstrates. `counter` is
+                          scripted in candela; the rest are Rhai.
     lumenc new --list     Print the template gallery with one-line
                           descriptions.
     lumenc fmt <file>     Reformat a `.lmn` markup file in place. Pass
@@ -748,7 +749,8 @@ USAGE:
                           least one divergence.
     lumenc lint --signals [<app-dir>] [--json] [--strict]
                           Offline signal lint. Reads <app-dir>/main.lmn
-                          + main.rhai and the optional [signals]
+                          + the app script (main.cdl / main.rhai /
+                          main.lua) and the optional [signals]
                           schema in lumen.toml; flags untyped writes,
                           bare {name} interpolation ambiguities,
                           schema mismatches, untracked binds, and
@@ -776,8 +778,8 @@ USAGE:
     lumenc run <dir> --artifact <file> [--headless] [--ticks N]
                           Run from a precompiled artifact instead of source.
     lumenc bundle <app_dir> <out.lpak> [--no-hooks]
-                          Pack `<app_dir>` (main.lmn / main.css /
-                          main.rhai / images / fonts) into a single
+                          Pack `<app_dir>` (main.lmn / main.css / the
+                          script / images / fonts) into a single
                           `.lpak` archive. Mirrors GTK's
                           `glib-compile-resources` + Qt's `rcc`.
                           Runs `lumen.toml`'s `[[hooks]]` `prebuild` entries
@@ -799,10 +801,12 @@ USAGE:
     lumenc --version      Print version
 
 A markup app directory must contain `main.lmn`; `main.css` is optional and
-the `<script>` tag inside `main.lmn` loads into the Rhai host. `run` and
-`build` auto-detect SDK-authored apps (Rust: `Cargo.toml` depending on
-`lumen`; C++: `CMakeLists.txt`; Python: a `.py` importing `lumen`) and
-reroute to their native toolchain (`cargo` / `cmake` / the interpreter).
+the `<script>` tag inside `main.lmn` loads into the app's script host
+(candela unless a `.rhai` / `.lua` file or `[script] engine` says
+otherwise). `run` and `build` auto-detect SDK-authored apps (Rust:
+`Cargo.toml` depending on `lumen`; C++: `CMakeLists.txt`; Python: a `.py`
+importing `lumen`) and reroute to their native toolchain
+(`cargo` / `cmake` / the interpreter).
 Set `[app] kind = \"markup\"|\"rust\"|\"cpp\"|\"python\"` in `lumen.toml`
 to override detection.
 
