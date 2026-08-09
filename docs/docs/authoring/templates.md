@@ -1,12 +1,9 @@
 # Templates + slots
 
-`<template name="...">` defines a reusable markup body. Slots, id
-auto-namespacing, and default attribute values are collectively enough
-to refactor any repeated block out of a `.lmn` file and keep
-per-instance state isolated.
-
-This chapter walks the surface end-to-end: a before/after refactor,
-the core features, and the deferred work.
+`<template name="...">` defines a reusable markup body. Together with
+slots, id auto-namespacing, and default attribute values, that is enough
+to factor any repeated block out of a `.lmn` file and keep each instance's
+state separate, without introducing a component lifecycle.
 
 ## Why templates?
 
@@ -196,7 +193,7 @@ use-site tag itself flow through the placeholder substitution; the
 inner element tree slots in where `<slot/>` lives.
 
 ```xml
-<template name="dialog">
+<template name="modal">
   <overlay class="modal-dim">
     <column class="modal-body" width="420">
       <slot />
@@ -204,18 +201,20 @@ inner element tree slots in where `<slot/>` lives.
   </overlay>
 </template>
 
-<dialog>
+<modal>
   <label text="Are you sure?" />
   <row gap="10">
     <button id="cancel" text="Cancel" />
     <button id="confirm" text="OK" />
   </row>
-</dialog>
+</modal>
 ```
 
-The two children of `<dialog>` land where `<slot/>` was. There's only
-**one slot per template** today - named slots (`<slot name="header"/>`)
-are on the deferred list.
+The two children of `<modal>` land where `<slot/>` was. A template has one
+slot; named slots are not supported.
+
+Pick a template name that no built-in tag already uses. A `<template
+name="dialog">` would shadow the real `<dialog>` tag for the whole app.
 
 ## A bigger refactor - list items
 
@@ -272,24 +271,18 @@ attribute substitution (`{tone}`) use the same expansion rule and
 compose cleanly. `<for>` evaluates first (per-row item context), then
 the template expansion runs on the substituted use-site tag.
 
-## Deferred features
+## Limits
 
-These are not shipped yet:
+Placeholder substitution is textual. `{variant}` resolves through a
+literal string replace at parse time, so a value that needs XML escaping
+(`text="Click for {kind} info"` where `{kind}` contains a `<`) breaks the
+document. Keep placeholder values to plain text.
 
-- **Named slots** (`<slot name="header"/>` and
-  `<header slot="header">...</header>` at the use-site) for multi-slot
-  layouts like cards with separate title + body + footer sections.
-- **Scoped signals** - today `signal("count")` is global. Per-instance
-  signals scoped to a template instance would let two `<counter />`
-  uses keep independent state without the author writing
-  `signal("count-" + instance_id)` manually.
-- **`on_mount(id, fn)` / `on_unmount(id, fn)`** lifecycle hooks.
-- **`:host` CSS pseudo-class** to target the template root element
-  from the template's own stylesheet.
+A template has one slot, and it takes the use-site's whole child list.
+There are no named slots, so a card with separate title, body, and footer
+regions needs three templates or an attribute per region.
 
-> **Limitation: placeholder substitution is textual.** `{variant}`
-> resolves through a literal string replace at parse time, so
-> placeholders inside attribute values that need careful escaping
-> (e.g. `text="Click for {kind} info"` where `{kind}` contains `<`)
-> currently inherit XML's escaping rules. The widget-garden app's
-> template demos use only safe characters as a workaround.
+Signals are global. Two `<counter />` instances share `signal("count")`
+unless you namespace the name yourself, the way ids namespace
+automatically. There are no per-instance mount and unmount hooks, and no
+`:host` selector for styling a template's root from inside the template.

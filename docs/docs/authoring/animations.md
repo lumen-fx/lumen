@@ -1,20 +1,14 @@
 # Animations + transitions
 
-Lumen ships a small but composable animation surface. Three layers
-stack:
+Motion in Lumen comes from three places, in order of how often you reach
+for them:
 
-1. **CSS `transition:`** - declarative, ties to class flips.
-2. **`Transition<T>` primitive** - programmatic, generic over
-   any `Lerp`-able type. Cargo crate authors compose against this.
-3. **Bespoke hover / press tweens** - `HoverTint` / `PressTween` keep
-   their own state machines because bidirectional snap-on-state-flip
-   doesn't fit a one-shot transition.
-
-The implementation lives in
-[`lumen/primitives/src/transition.rs`](https://github.com/lumen-fx/lumen/blob/main/lumen/primitives/src/transition.rs)
-and the CSS apply pass in
-[`lumenc/src/parser_css.rs`](https://github.com/lumen-fx/lumen/blob/main/lumenc/src/parser_css.rs)
-(`parse_transition`).
+1. **CSS `transition:`** - declarative, driven by a class or state flip.
+   This is what an app author writes.
+2. **Built-in hover, press, and switch tweens** - always on, with their
+   timing authorable through the same `transition:` declaration.
+3. **The `Transition<T>` primitive** - a programmatic tween for a Rust
+   plugin that animates something the CSS layer does not cover.
 
 ## CSS `transition:`
 
@@ -41,22 +35,19 @@ instead of snapping.
 
 ```candela
 fn on_ready() {
-    let card = lumen::node_get_by_id("info-card");
-    lumen::event_on(card, "pointerenter", "fade_in");
+    get_by_id("info-card").on("pointerenter", "fade_in");
 }
 
 fn fade_in(ev) {
-    lumen::node_class_add(lumen::event_target(ev), "visible");
+    event(ev).target().class_add("visible");
 }
 ```
 
-> **What is wired today.** `opacity`, `background-color` (aliases
-> `background` and `bg`), `color` (alias `text-color`), and
-> `border-color` all drive a real tween on a class flip. `radius` (alias
-> `border-radius`) and every layout property (`width`, `height`,
-> `padding`, margins, ...) parse successfully but are silently dropped;
-> layout properties are excluded on purpose, since tweening them would
-> re-run layout every frame.
+Four properties tween: `opacity`, `background-color` (aliases
+`background` and `bg`), `color` (alias `text-color`), and `border-color`.
+Anything else in a `transition:` list, including `radius` and every layout
+property, parses and is dropped with a warning. Layout properties are
+excluded deliberately: tweening one would re-run layout every frame.
 
 ### Grammar
 
@@ -72,11 +63,9 @@ easing     := "linear" | "ease" | "ease-in" | "ease-out"
             | "ease-in-out" | "cubic-bezier(p1x, p1y, p2x, p2y)"
 ```
 
-Defaults:
-
-- `easing` defaults to `ease-out` when omitted. CSS' real default is
-  `ease` (~ `cubic-bezier(0.25, 0.1, 0.25, 1)`); `ease-out` is the
-  closest named curve and avoids the bezier sample for the common case.
+`easing` defaults to `ease-out` when omitted, where CSS itself defaults to
+`ease`. `ease-out` is the closest named curve and skips a bezier sample in
+the common case; write `ease` explicitly for the CSS default.
 
 ### Stacked transitions
 
@@ -168,46 +157,31 @@ method (see [Plugin author guide](../reference/plugins.md)).
 
 ## Easing curves
 
-The five `Easing` variants:
+Five curves, the CSS Transitions Level 1 set:
 
-| Variant | Curve | When to use |
+| Keyword | Shape | When to use |
 |---|---|---|
-| `Linear` | `f(t) = t` | Tests; rare in UI. |
-| `EaseIn` | `f(t) = t^3` | Slow start; departures from rest. |
-| `EaseOut` | `f(t) = 1 - (1 - t)^3` | **Default.** Fast start, soft settle. Matches Cocoa AppKit / Material 3 short-transition feel. |
-| `EaseInOut` | symmetric S-curve | Both endpoints feel slow; useful for back-and-forth motion. |
-| `CubicBezier(p1x, p1y, p2x, p2y)` | CSS `cubic-bezier(...)` | Custom curves; anchors are implicit `(0, 0)` and `(1, 1)`. |
+| `linear` | `f(t) = t`, constant speed | Tests; rare in UI. |
+| `ease-in` | `f(t) = t^3`, back-loaded | Slow start; departures from rest. |
+| `ease-out` | `f(t) = 1 - (1 - t)^3`, front-loaded | The default. Fast start, soft settle, matching the Cocoa and Material short-transition feel. |
+| `ease-in-out` | symmetric S-curve | Slow at both ends; useful for back-and-forth motion. |
+| `cubic-bezier(p1x, p1y, p2x, p2y)` | whatever you write | Custom curves. The anchors are an implicit `(0, 0)` and `(1, 1)`. |
 
-Sampled values at `t = 0.5`:
-
-| Easing | `f(0.5)` | Visual feel |
-|---|---|---|
-| `Linear` | 0.500 | constant speed |
-| `EaseIn` | 0.125 | back-loaded - most travel in second half |
-| `EaseOut` | 0.875 | front-loaded - most travel in first half |
-| `EaseInOut` | 0.500 | slow ends, fast middle |
-| `cubic-bezier(0.25, 0.1, 0.25, 1)` (CSS `ease`) | ~0.802 | front-loaded, soft-out |
-
-CSS `cubic-bezier` strings reach the same sampler:
+`ease` is `cubic-bezier(0.25, 0.1, 0.25, 1)`, front-loaded with a soft
+finish. Writing the bezier out reaches the same sampler:
 
 ```css
 .card { transition: opacity 200ms cubic-bezier(0.25, 0.1, 0.25, 1.0); }
 ```
 
-Sampling is Newton-Raphson (3 iterations) with a bisection fallback,
-matching the CSS Transitions Level 1 sampling note. Stable for all
-well-conditioned curves (the standard CSS keyword curves are
-well-conditioned by construction).
+## Hover and press tweens
 
-## Bespoke hover / press tweens
+Hover and press blends run on their own, without a `transition:`
+declaration, because they have to reverse mid-flight: the fill tweens
+toward the hover color and snaps back to the base when the pointer leaves,
+which a one-shot tween cannot express.
 
-`Interaction.hover_tint` and `Interaction.press_tint` keep their
-`HoverTween` / `PressTween` state machines (not `Transition<T>`)
-because their bidirectional snap-on-state-flip semantics - start
-tweening into the hover color, then snap back to base on hover-out
-mid-tween - don't fit the one-shot lifecycle of a `Transition`.
-
-Authoring still uses the simple shorthand:
+Author them with the shorthand attributes:
 
 ```xml
 <button hover-bg="#3344ff" press-bg="#1122dd">Click</button>
@@ -224,18 +198,18 @@ button:hover  { bg: #3344ff; }
 button:active { bg: #1122dd; }
 ```
 
-The pseudo-class apply pass routes `:hover` -> `hover-bg`, `:active` ->
-`press-bg`. The blend's duration and easing are authorable: a
-`transition: bg <duration> <easing>` declared on the base rule (not on
-`:hover` / `:active`) sets both, the same declaration that would drive
-a `background-color` class-flip tween anywhere else on the page. Leave
-it off and the hover blend falls back to a built-in 120ms ease-out; the
-press blend falls back to a built-in 60ms ease-out.
+`:hover { bg }` and `hover-bg` are the same slot, as are `:active { bg }`
+and `press-bg`. The blend's duration and easing are authorable: a
+`transition: bg <duration> <easing>` on the base rule (not on `:hover` or
+`:active`) sets both, the same declaration that drives a
+`background-color` class-flip tween anywhere else. Leave it off and each
+blend falls back to a short built-in ease-out, with the press blend
+quicker than the hover one.
 
-> **HoverTint over gradients.** The hover tween path only animates
-> solid fills. Gradient `bg:` skips the tween - the gradient pops to
-> its hover counterpart instantly. Tracked in TODO ("HoverTint over
-> gradients").
+The blend interpolates two solid colors, which is also all a state rule
+accepts: `bg` under `:hover` or `:active` takes a color, and a gradient
+there is a parse error. To swap between two gradients, flip a class from
+script instead.
 
 ## Switch thumb slide
 
@@ -247,20 +221,16 @@ press blends above rather than a dedicated animation property:
 switch { transition: bg 140ms ease-out; }
 ```
 
-A `transition: bg <duration> <easing>` declared on the `switch`
-element itself sets the slide's duration and easing - the shipped
-skins all declare this. Leave it off and the slide falls back to a
-built-in 140ms ease-out, so an unstyled switch looks and moves exactly
-as it always has.
+A `transition: bg <duration> <easing>` on the `switch` element sets the
+slide's duration and easing; the shipped skins all declare it. Leave it
+off and the slide falls back to a built-in ease-out.
 
-This is worth calling out plainly: `bg` here does not mean the track's
-own background color tweens. The track's checked / unchecked fill swap
-is instant, a snap, not a tween; only the thumb's position glides.
+`bg` here does not mean the track's background color tweens. The track's
+checked and unchecked fills swap instantly; only the thumb glides.
 `transition: bg` is reused as the switch's one authorable timing slot
-because it is the same slot that already carries hover / press tint
-timing everywhere else in the framework, not because a background color
-is changing. If you are looking for "how fast does the thumb
-move," this is the property, even though its name says otherwise.
+because it already carries hover and press timing everywhere else. If you
+are looking for how fast the thumb moves, this is the property, despite
+the name.
 
 ## A worked example - fade-in on appear
 
@@ -305,24 +275,13 @@ fn on_timer(name) {
 ```
 
 The class flip is the trigger; the CSS `transition:` is the policy.
-The same pattern works today for `opacity`, `background-color` (`bg`),
-`color` (`text-color`), and `border-color`; the property list is
-expected to grow over time.
 
-## Why no `@keyframes` yet?
+## Limits
 
-Two reasons:
+`@keyframes` does not exist, and writing one is a parse error rather than
+a skip. For keyframed motion, drive `Transition<T>` from a plugin and
+start the next segment when the previous one's `done()` returns true.
 
-1. **Limited demand.** CSS `transition:` covers the 80% case
-   (class-flip-driven property tweens). Keyframed multi-stop
-   animations are most useful for hero / loading scenes; Lumen's
-   pre-1.0 surface biases to forms / dashboards.
-
-2. **It's additive.** A future `@keyframes` parser would build atop
-   `Transition<T>` by chaining tweens (or compiling to a single
-   composite Bezier). Nothing in the current design precludes the
-   addition.
-
-If you need keyframed motion today, drive `Transition<T>` from your
-own plugin: spawn the next segment when the previous one's `done()`
-returns true.
+Transitions run on entry, not on removal. An element that appears and
+declares `transition: opacity` fades in; hiding or closing one is instant,
+the same limit CSS has without JavaScript.

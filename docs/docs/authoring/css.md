@@ -1,67 +1,70 @@
 # CSS subset
 
-Lumen parses a deliberately narrow CSS subset that maps 1:1 to the
-markup attribute surface. The grammar (tokenizer, selector parser) lives in
-[`lumenc/src/parser_css.rs`](https://github.com/lumen-fx/lumen/blob/main/lumenc/src/parser_css.rs);
-the applicable property list and cascade live in
-[`lumen/ir/src/css.rs`](https://github.com/lumen-fx/lumen/blob/main/lumen/ir/src/css.rs),
-which `parser_css.rs` re-exports.
+Lumen reads a narrow subset of CSS. Most properties share a name with a
+markup attribute and mean the same thing; a few, like `transition` and
+`display: grid`, exist only in a stylesheet. This page is the full
+property list, the selector grammar, and the cascade rules.
 
-Most properties have the same name as their markup attribute; a few
-are CSS-only (notably `transition:` and `box-shadow:` with comma lists).
+## What is in the subset
 
-## Why a subset?
+The parts of CSS that map onto a fixed tag vocabulary and a flexbox layout
+model: the full cascade order (origin, then importance, then specificity,
+then source order), descendant and child combinators, structural and state
+pseudo-classes, `:is()` / `:where()` / `:not()`, `!important`, custom
+properties, `@media`, and `@import`.
 
-Lumen supports the parts of CSS that map cleanly onto its markup and
-layout model: full cascade order (origin -> importance -> specificity ->
-source order), descendant / child combinators, structural and state
-pseudo-classes, `!important`, and a working `@media` layer. What it
-leaves out is the surface that doesn't fit a fixed tag vocabulary -
+What is left out is the surface that assumes an open-ended document:
 arbitrary property names, attribute selectors, pseudo-elements, and the
-at-rules that imply an animation or capability runtime (`@keyframes`,
-`@layer`, `@supports`). The one stylesheet-composition at-rule Lumen
-*does* support is `@import` - see [Splitting CSS across files](#splitting-css-across-files-import).
+at-rules that imply another runtime (`@keyframes`, `@supports`, `@layer`).
+Colors are hex, lengths are pixels or percentages, and there is no
+`calc()`.
 
-Each supported property either maps 1:1 to a markup attribute or is a
-small CSS-only extension (comma-separated `box-shadow`, `transition`).
-Inline markup attributes always win over CSS by origin precedence - the
-apply pass only fills values the HTML parser left unset - and
-`!important` can lift a CSS declaration above that.
+Inline markup attributes beat CSS, because they sit in a higher cascade
+origin; the apply pass only fills values the markup left unset.
+`!important` lifts a CSS declaration above that.
 
-The narrow property set also buys a fast invalidation set: every rule's
-class names go into a [`Stylesheet::class_invalidation_set`], and any
-class flip not in that set is a no-op (Blink's `RuleFeatureSet` pattern
-at small scale).
-
-A malformed declaration never aborts the sheet. The offending
-`property: value` pair is skipped and reported as a `CssWarning`
-(selector + property + reason); the rest of the stylesheet still
-applies.
+A bad declaration never aborts the stylesheet. The offending
+`property: value` pair is skipped and reported as a warning naming the
+selector, the property, and the reason, and the rest of the sheet applies.
 
 ## Grammar
 
 ```text
-stylesheet  := rule*
-rule        := selector "{" declaration* "}"
-selector    := ":root" | tag_part? ("." class_part)* (":" pseudo)?
-declaration := ident ":" value ";"
+stylesheet  := (at_rule | rule)*
+at_rule     := "@media" query "{" rule* "}"
+rule        := selector_list "{" declaration* "}"
+selector_list := selector ("," selector)*
+selector    := compound (combinator compound)*
+combinator  := " " | ">" | "+" | "~"
+compound    := tag? ("." class | "#" id | ":" pseudo)*
+declaration := ident ":" value ["!important"] ";"
 ```
 
 - `/* comments */` strip cleanly.
 - Whitespace is liberal.
 - Trailing `;` on the last declaration is optional.
-- An unknown property name is silently dropped (matches CSS).
-- An unknown selector form is a parse error.
+- An unknown property name is dropped and reported as a `CssWarning`; the
+  rest of the rule still applies.
+- An unknown selector form is a parse error, and so is an at-rule other
+  than `@media`.
+- `!important` matches case-insensitively and tolerates whitespace after
+  the `!`.
 
 ## Selectors
 
 | Selector | Matches |
 |---|---|
 | `tile` | Every `<tile>` element. |
+| `*` | Every element. |
 | `.card` | Every element whose `class` list contains `card`. |
+| `#save` | The element with `id="save"`. |
 | `tile.card.primary` | A `<tile>` carrying both `card` and `primary` classes. |
 | `tile:hover` | `<tile>` while hovered. Pseudo states route to dedicated `Attributes` fields (see below). |
-| `:root` | Sugar for `root`. Conventionally used for `:root { --token: value; }`. |
+| `button:hover:focus` | Several pseudo-classes on one compound. |
+| `:root` | The root element. |
+
+A tag must come first in a compound: `.card tile` is a descendant selector,
+not a compound.
 
 **Supported.**
 
@@ -69,20 +72,29 @@ declaration := ident ":" value ";"
 - Child combinator (`.list > .row`).
 - `:is(...)`, `:where(...)`, `:not(...)`.
 - Structural pseudos (`:first-child`, `:last-child`, `:only-child`,
-  `:empty`, `:nth-child(an+b)`, `:root`).
+  `:empty`, `:nth-child(an+b | odd | even)`, `:root`).
 - `!important`.
-- `@media (prefers-color-scheme: dark|light|no-preference)`,
-  `@media (prefers-reduced-motion)`, `@media (prefers-contrast)`,
-  `@media (min-width|max-width|width: <px>)`.
+- `@media`, covering `(prefers-color-scheme: dark|light|no-preference)`,
+  `(prefers-reduced-motion: reduce|no-preference)`,
+  `(prefers-contrast: more|less|custom|no-preference)`, and
+  `(min-width|max-width|width: <px>)`. Combine features with `and`. Each
+  feature needs its own parentheses, and a bare `(prefers-reduced-motion)`
+  or `(prefers-contrast)` means `no-preference`.
 
 **Not supported.**
 
-- Adjacent / general-sibling combinators (`+`, `~`) - parse but do
-  not match at this layer (W4.x follow-up to thread the sibling
-  cursor through `apply_to_element`).
+- Adjacent / general-sibling combinators (`+`, `~`). They parse and count
+  toward specificity, but they never match.
+- An `:is()` / `:where()` / `:not()` argument that is more than one
+  compound. `:not(.a)` works; `:not(.a .b)` parses and never matches.
 - Attribute selectors (`[type="text"]`).
 - Pseudo-elements (`::before`, `::placeholder`) - hard parse error.
-- `@supports`, `@keyframes`, `@import`, `@layer`.
+- Media types and query lists: `@media screen`, `@media (a), (b)`,
+  `not`, and `or` are all parse errors. A bare `(prefers-color-scheme)`
+  with no value is one too.
+- `@supports`, `@keyframes`, `@font-face`, `@layer`, `@property`,
+  `@charset`. Each aborts the stylesheet with a parse error rather than
+  being skipped.
 
 ### Pseudo-classes
 
@@ -103,27 +115,27 @@ declaration := ident ":" value ";"
 Any pseudo-class outside this set (attribute pseudos, pseudo-elements,
 ...) is a parse error so typos don't silently no-op.
 
-**State-routed properties.** Under `:hover` / `:focus` /
-`:focus-visible` / `:active` / `:disabled` / `:drag-over`, these
-properties swap with the state and restore when it ends:
+**State-routed properties.** Under a state pseudo-class, these properties
+swap with the state and restore when it ends:
 
-* `bg` - the fill (tweened for hover/press; see the pseudo table),
-* `border` (hover/focus) and `outline` + `outline-offset` (focus,
-  focus-visible),
-* `text-color` - e.g. Windows' pressed-text drop to secondary,
-* `opacity` - e.g. adwaita's documented 50 %-opacity disabled controls,
-* `box-shadow` - full stack replacement; e.g. the WinUI TextBox 2px
-  accent focus underline (`input:focus { box-shadow: inset 0 -2 0
-  var(--lumen-accent); }`).
+| Property | Routed under |
+|---|---|
+| `bg` | every state pseudo. Takes a plain color here; a gradient is rejected. |
+| `text-color` | every state pseudo, e.g. Windows' pressed-text drop to secondary. |
+| `opacity` | every state pseudo, e.g. adwaita's 50%-opacity disabled controls. |
+| `shadow` / `box-shadow` | every state pseudo. Full stack replacement, e.g. the WinUI TextBox accent focus underline (`input:focus { box-shadow: inset 0 -2 0 var(--lumen-accent); }`). |
+| `border` | `:hover`, `:focus`, `:focus-visible` only. |
+| `outline`, `outline-offset` | `:focus`, `:focus-visible` only. `outline` is not a property outside those two. |
 
-Other properties inside a state rule are consumed without effect (no
-warning) - geometry is not state-routable. This batch of new properties
-follows the same rule: none of `knob-inset`, `thumb-size`, `popup-gap`,
-`progress-chunk`, `disabled-opacity`, `caret-width`, `caret-blink`,
-`password-character`, `line-height`, or any `scrollbar-*` property is
-state-routed. Write them as plain declarations; a `:hover { caret-width:
-3 }` or `.scroll:hover { scrollbar-track-hover: #333 }` parses but has no
-effect.
+Every other property inside a state rule is consumed and dropped, with no
+warning and no effect: geometry is not state-routable. That covers
+`knob-inset`, `thumb-size`, `popup-gap`, `progress-chunk`,
+`disabled-opacity`, `caret-width`, `caret-blink`, `password-character`,
+`line-height`, and every `scrollbar-*` property. Write them as plain
+declarations; a `:hover { caret-width: 3 }` or
+`.scroll:hover { scrollbar-track-hover: #333 }` parses and does nothing.
+It also covers `border` and `outline` under a state they do not route
+under, so `:active { outline: 2 #fff }` is silently dropped.
 
 #### Disabled dimming
 
@@ -182,37 +194,53 @@ memory works:
 | `flex-grow` | `grow` |
 
 **Units.** Numeric properties accept a bare number or an explicit `px`
-suffix interchangeably - `radius: 8` and `radius: 8px` are the same,
-as are `font-size: 16` and `font-size: 16px`. Values that don't parse
-as a number surface as a `CssWarning` rather than silently applying.
+suffix interchangeably: `radius: 8` and `radius: 8px` are the same, as are
+`font-size: 16` and `font-size: 16px`. `em`, `rem`, `vw`, `vh`, `ch`, and
+`pt` are not units Lumen understands. `%` works only where a row below
+says so (the sizing properties, `padding` / `margin` / `inset`, and the
+gaps); `fr` only inside a grid track list; `deg` only inside a gradient;
+`ms` and `s` only in the properties that name a duration.
+
+**Colors are hex.** `#rrggbb` and `#rrggbbaa`, nothing else.
+`rgb()`, `rgba()`, `hsl()`, `transparent`, and the named colors all fail
+to parse. Write a fully transparent fill as `#00000000`.
+
+**There is no `calc()`**, and no `min()`, `max()`, `clamp()`, `env()`,
+`attr()`, or `url()`. The functions that do exist are `var()`, the three
+gradients, `minmax()` in a grid track list, and `cubic-bezier()` in a
+transition.
+
+A value that fails to parse surfaces as a `CssWarning` naming the selector,
+the property, and the reason; the declaration is skipped and the rest of
+the stylesheet still applies.
 
 ### Layout
 
 | CSS property | Markup attr | Value |
 |---|---|---|
-| `width`, `height` | `width`, `height` | Length (`24`, `50%`). |
-| `min-width`, `min-height`, `max-width`, `max-height` | same | Length. |
+| `width`, `height` | `width`, `height` | `auto`, a length (`24`, `24px`), or `50%`. |
+| `min-width`, `min-height`, `max-width`, `max-height` | same | Same as `width`. |
 | `aspect-ratio` | `aspect-ratio` | Number (w/h ratio). |
-| `padding`, `margin` | same | Edges (1, 2, 3, or 4 terms); each term is px **or** `%` (percent resolves against the containing block's width, per CSS). |
-| `gap` | `gap` | 1 or 2 terms (`<row+col>` / `<row> <col>`); px or `%`. |
+| `padding`, `margin` | same | Edges (1, 2, 3, or 4 terms); each term is px **or** `%` (percent resolves against the containing block's width, per CSS). The 3-term form is `top`, `left-right`, `bottom`. |
+| `gap` | `gap` | 1 or 2 terms (`<row+col>` / `<row> <col>`); px or `%`. The markup attribute takes a single px number only. |
 | `row-gap`, `column-gap` | *CSS-only* | Number (px) or `%`. |
 | `grow` | `grow` | Number (flex grow factor). |
 | `flex-shrink` | `shrink` | Number (flex shrink factor; default `1`). |
 | `flex-basis` | *CSS-only* | Length (`auto`, px, `%`). |
 | `flex` | *CSS-only* | `<grow> [<shrink>] [<basis>]`, plus `none` / `auto` / `initial` - exact CSS shorthand semantics (`flex: 1` = `1 1 0%`). |
 | `flex-wrap` | *CSS-only* | `nowrap` \| `wrap` \| `wrap-reverse`. |
-| `align-content` | *CSS-only* | `start` \| `end` \| `center` \| `stretch` \| `space-between` \| `space-around` \| `space-evenly`. Distribution of wrapped flex lines. |
-| `flex-direction` | `flex` | `row` \| `column` \| `row-reverse` \| `column-reverse`. |
+| `align-content` | *CSS-only* | `start` \| `end` \| `center` \| `stretch` \| `normal` \| `space-between` \| `space-around` \| `space-evenly`. Distribution of wrapped flex lines. |
+| `flex-direction` | *CSS-only* | `row` \| `column` \| `row-reverse` \| `column-reverse`. In markup, direction comes from the tag: pick `<row>` or `<column>`. |
 | `box-sizing` | *CSS-only* | `border-box` (Lumen UA default) \| `content-box`. |
-| `z-index` | `z-index` | Integer - sibling paint-order override (higher paints on top; equal keeps document order). |
-| `align` (alias `align-items`) | `align` | `start` \| `end` \| `center` \| `stretch` \| `baseline`. |
+| `z-index` | `z-index` | Integer, or `auto` (same as `0`) - sibling paint-order override (higher paints on top; equal keeps document order). |
+| `align` (alias `align-items`) | `align` | `start` \| `end` \| `center` \| `stretch` \| `baseline`, plus `flex-start` / `flex-end`. The markup attribute takes only the first four. |
 | `align-self` | *CSS-only* | Same values as `align`, one child overriding its parent's `align`. |
-| `justify` | `justify` | `start` \| `end` \| `center` \| `between` \| `around` \| `evenly`. |
-| `justify-items`, `justify-self` | *CSS-only* | `start` \| `end` \| `center` \| `stretch` \| `baseline` - grid-item placement within its cell. |
+| `justify` | `justify` | `start` \| `end` \| `center` \| `between` \| `around` \| `evenly`, plus the `space-` spellings. |
+| `justify-items`, `justify-self` | *CSS-only* | Same values as `align` - grid-item placement within its cell. |
 | `display` | *CSS-only* | `flex` (default) \| `grid` \| `none`. `none` removes the element and its subtree from layout entirely - space-releasing, unlike `opacity: 0`. |
-| `position` | `position` | `relative` \| `absolute`. |
+| `position` | `position` | `relative` \| `absolute`. There is no `static`, `fixed`, or `sticky`. |
 | `inset` | `inset` | Edges. Only meaningful with `position: absolute`. |
-| `overflow`, `overflow-x`, `overflow-y` | same | `visible` \| `hidden` \| `scroll`. |
+| `overflow`, `overflow-x`, `overflow-y` | same | `visible` \| `hidden` \| `scroll`. There is no `auto` and no `clip`. |
 | `scroll` | `scroll` | `y` \| `x` \| `both`. |
 | `sensitivity`, `inertia` | same | Scroll-tuning numbers. |
 | `tab-index` | `tab-index` | Integer. |
@@ -230,8 +258,8 @@ as a number surface as a `CssWarning` rather than silently applying.
 
 | CSS property | Markup attr | Value |
 |---|---|---|
-| `grid-template-columns`, `grid-template-rows` | *CSS-only* | Whitespace-separated track list: each track is a px length, an `fr` unit, `auto`, `min-content`, `max-content`, or `minmax(<min>, <max>)`. |
-| `grid-row`, `grid-column` | *CSS-only* | `<start>` or `<start>/<end>` - 1-based line numbers. A single number auto-places the end line. |
+| `grid-template-columns`, `grid-template-rows` | *CSS-only* | Whitespace-separated track list: each track is a px length, an `fr` unit, `auto`, `min-content`, `max-content`, or `minmax(<min>, <max>)`. A `%` track is a parse error. |
+| `grid-row`, `grid-column` | *CSS-only* | `<start>` or `<start>/<end>` - 1-based line numbers. A single number auto-places the end line. There is no `span N` and no `auto`. |
 
 ```css
 .grid {
@@ -243,15 +271,15 @@ as a number surface as a `CssWarning` rather than silently applying.
 .cell { justify-self: center; align-self: center; }
 ```
 
-Named grid lines, `grid-template-areas`, and `repeat()` are not
-supported - write out each track explicitly.
+Named grid lines, `grid-template-areas`, `repeat()`, and `fit-content()`
+are not supported. Write out each track explicitly.
 
 ### Visuals
 
 | CSS property | Markup attr | Value |
 |---|---|---|
-| `bg` | `bg` | Color **OR** gradient (see below). |
-| `radius` | `radius` | 1-4 numbers (px). Multi-value follows the CSS `border-radius` shorthand rotation `[top-left, top-right, bottom-right, bottom-left]` - `radius: 4 4 0 0` rounds only the top corners. |
+| `bg` | `bg` | Color **OR** gradient (see below). A state rule (`:hover { bg: ... }`) takes a color only. |
+| `radius` | `radius` | 1-4 numbers (px); no percentages. Multi-value follows the CSS `border-radius` shorthand rotation `[top-left, top-right, bottom-right, bottom-left]` - `radius: 4 4 0 0` rounds only the top corners. The markup attribute takes a single number. |
 | `border-top-left-radius`, `border-top-right-radius`, `border-bottom-right-radius`, `border-bottom-left-radius` | *CSS-only* | Number (px) - per-corner longhands. |
 | `text-color` | `text-color` | Color. |
 | `selection-color` | `selection-color` | Color. Text-selection highlight on `input` / `textarea` (skin default: `var(--lumen-selection)`). |
@@ -259,8 +287,7 @@ supported - write out each track explicitly.
 | `selection-text-color` | `selection-text-color` | Color. Foreground of selected glyphs on `input` / `textarea` (Qt `HighlightedText` / Slint `selection-foreground-color`); unset keeps the normal text fill. |
 | `opacity` | `opacity` | 0..1. |
 | `disabled-opacity` | `disabled-opacity` | 0..1 (clamped). The dimming amount applied to a disabled element when the author set neither `disabled-bg` nor an explicit `:disabled { opacity: ... }`. This is a different slot from `:disabled { opacity: ... }` itself - see [Disabled dimming](#disabled-dimming). Not state-routable: writing it inside `:disabled { }` has no effect, use it as a plain declaration. |
-| `shadow` | `shadow` | Single shadow: `[inset] <ox> <oy> <blur> [<spread>] <color>`. |
-| `box-shadow` | *none - CSS-only* | Comma-separated shadow stack; each entry `[inset] <ox> <oy> <blur> [<spread>] <color>`. Spread inflates (or deflates, when negative) the shadow rect before blurring - `box-shadow: 0 0 0 2 #fff` draws a hard 2px ring, the standard double-focus-ring idiom. |
+| `shadow`, `box-shadow` | `shadow` | Comma-separated shadow stack; each entry `[inset] <ox> <oy> <blur> [<spread>] <color>`. The two spellings are the same property in CSS; only the markup `shadow=` attribute is limited to one entry. Spread inflates (or deflates, when negative) the shadow rect before blurring, so `box-shadow: 0 0 0 2 #fff` draws a hard 2px ring, the standard double-focus-ring idiom. |
 
 ### Borders
 
@@ -277,7 +304,7 @@ colors paint with mitred corner splits, exactly like browsers).
 | `border-color` | *CSS-only* | Color (the uniform base for all four sides). |
 | `border-top-color`, `border-right-color`, `border-bottom-color`, `border-left-color` | *CSS-only* | Color - per-side override of the base. E.g. the Windows elevation edge: `border: 1px solid #0000000f; border-bottom-color: #00000029;`. |
 | `border-top`, `border-right`, `border-bottom`, `border-left` | *CSS-only* | Per-side shorthand `<width> [solid \| none] <#color>` - sets that side's width + color (and the shared solid style). |
-| `border-style` | *CSS-only* | `none` \| `solid`. Per CSS, without a style the computed width is `0` - width/color alone paint nothing. |
+| `border-style` | *CSS-only* | `none` \| `hidden` (a synonym for `none`) \| `solid`. Per CSS, without a style the computed width is `0`, so width and color alone paint nothing. `dashed`, `dotted`, and the rest are parse errors. |
 | `border-top-width`, `border-right-width`, `border-bottom-width`, `border-left-width` | *CSS-only* | Number. Useful for separators (`border-bottom-width: 1`). |
 | `border-inline-start-width`, `border-inline-end-width`, `border-block-start-width`, `border-block-end-width` | *CSS-only* | Number - CSS Logical Properties, resolved against the element's writing direction. |
 
@@ -288,22 +315,32 @@ colors paint with mitred corner splits, exactly like browsers).
 | `font-size` | `font-size` | Number (px). |
 | `font-family` | `font-family` | CSS fallback chain, e.g. `"Segoe UI Variable Text", "Segoe UI", sans-serif`. The shaper resolves the first family present in the system font database (case-insensitive; quotes optional); the generic keywords `sans-serif`, `serif`, `monospace`, `cursive`, `fantasy` (plus the platform aliases `system-ui`, `ui-sans-serif`, `ui-serif`, `ui-monospace`, `-apple-system`) map to the platform families. An unresolvable chain falls back to sans-serif. Inherited. |
 | `font-weight` | `font-weight` | `normal` (400), `bold` (700), or a number `1..=1000` (CSS Fonts 4). Variable and multi-weight families select the nearest face; the relative keywords `lighter` / `bolder` are rejected. Inherited. |
-| `wrap` (alias `white-space`) | `wrap` | `none` (= `nowrap`) \| `word` (= `normal`) \| `glyph`. Markup additionally accepts `wrap="ellipsis"` as shorthand for `text-overflow: ellipsis`. |
+| `wrap` (alias `white-space`) | `wrap` | `none` (= `nowrap`) \| `word` (= `normal`) \| `glyph` (= `char`). Markup additionally accepts `wrap="ellipsis"` as shorthand for `text-overflow: ellipsis`. |
 | `max-lines` | `max-lines` | Integer >= 0. Overflowing text past the cap is elided with `...`. |
 | `text-overflow` | `wrap="ellipsis"` | `clip` \| `ellipsis`. `ellipsis` elides overflowing single-line text with a trailing `...` (Qt elide contract; the ellipsis is trimmed to fit inside the box). Combine with an explicit `wrap` + `max-lines` for a multi-line clamp. Not inherited. The built-in skins set it on `.tab-btn`, `.dropdown-button`, and `.dropdown-option` - the surfaces Qt elides. |
-| `text-align` | `text-align` | `start` \| `center` \| `end`. |
-| `style` | `style` | Named typography role - see below. |
+| `text-align` | `text-align` | `start` \| `center` \| `end`, plus the aliases `left` / `right`. |
 | `line-height` | `line-height` | Unitless multiplier (`1.2`) or a `px` length (`19px`) - the two mean different things, see below. Inherited. |
 
-**Named typography roles (`style`).** A `style` value names a
-predefined type scale that resolves to a `font-size`, so you can write
-`style="headline-lg"` instead of picking pixel sizes by hand. An
-explicit `font-size` (inline or CSS) still overrides the role's size.
+**Named typography roles are a markup attribute, not a CSS property.**
+`style="headline-lg"` on an element names a predefined type scale that
+resolves to a `font-size`, so you can pick a role instead of a pixel size:
+
+```xml
+<label style="headline-lg" text="Settings" />
+```
+
 The roles are, largest to smallest: `display-xl`, `display-lg`,
-`display-md`, `display-sm`, `headline-lg`, `headline-md`,
-`headline-sm`, `title-lg`, `title-md`, `title-sm`, `body-lg`,
-`body-md`, `body-sm`, `label-lg`, `label-md`, `label-sm`, `caption`,
-`overline`.
+`display-md`, `display-sm`, `headline-lg`, `headline-md`, `headline-sm`,
+`title-lg`, `title-md`, `title-sm`, `body-lg`, `body-md`, `body-sm`,
+`label-lg`, `label-md`, `label-sm`, `caption`, `overline`. An explicit
+`font-size` still overrides the role's size.
+
+There is no matching CSS property: `style: headline-lg` in a stylesheet is
+an unknown property and warns. The role does not inherit either, so set it
+on the element that carries the text. And `style=` in Lumen markup never
+means a CSS declaration block - `style="color: red"` is a role name that
+does not resolve, not an inline style. Inline style properties go in their
+own attributes (`text-color="#f00"`).
 
 **`line-height` has two forms that mean different things.** A bare
 number (`line-height: 1.2`) is a unitless multiplier of the element's
@@ -349,7 +386,7 @@ CSS equivalent) and not state-routable.
 
 | CSS property | Markup attr | Value |
 |---|---|---|
-| `progress-duration` | `duration` | Integer (ms), > 0. Sweep period of an indeterminate `<progress>` bar. |
+| `progress-duration` | `duration` | Bare integer milliseconds, > 0. Sweep period of an indeterminate `<progress>` bar. Unlike the other durations on this page it takes no unit suffix: `progress-duration: 1200ms` is a parse error, `progress-duration: 1200` is right. |
 | `progress-chunk` | `chunk` | 0..1 fraction, rejected (not clamped) outside that range. Fraction of the track width covered by the moving chunk of an indeterminate sweep. |
 
 ### Image
@@ -367,7 +404,7 @@ CSS equivalent) and not state-routable.
 | `transition-duration` | *none - CSS-only* | Comma list of `Nms` / `Ns`, cycled over the property list. |
 | `transition-timing-function` | *none - CSS-only* | Comma list of easing keywords / `cubic-bezier(...)`, cycled. |
 
-> **Animatable set (v1):** `opacity`, `background-color` (aliases
+> **Animatable set.** `opacity`, `background-color` (aliases
 > `background`, `bg`), `color` (alias `text-color`), `border-color` -
 > geometry-free visual properties only. **Layout properties (`width`,
 > `height`, padding, margins, ...) are deliberately not transitionable**:
@@ -389,6 +426,12 @@ CSS equivalent) and not state-routable.
 | `scrollbar-hover-boost` | `scrollbar-hover-boost` | Number. Brightness multiplier applied to the thumb fill while hovered, paired with `scrollbar-track-hover`. Lumen-native; absent = the runtime default. |
 | `scrollbar-fade-delay` | `scrollbar-fade-delay` | Duration (`Nms` / `Ns`). Idle time before an overlay bar starts fading out. Lumen-native; absent = the runtime default (~1 s). |
 | `scrollbar-fade-duration` | `scrollbar-fade-duration` | Duration (`Nms` / `Ns`). Length of the fade-out animation itself. Lumen-native; absent = the runtime default. |
+
+The four geometry properties (`scrollbar-thickness`,
+`scrollbar-thickness-thin`, `scrollbar-margin`, `scrollbar-min-thumb`)
+apply when the container spawns and are not re-read on a later re-cascade,
+so a theme flip or a class change does not resize an existing scrollbar.
+`scrollbar-track-hover` and `scrollbar-hover-boost` do re-apply.
 
 Applies to `<scroll>` containers. Overlay bars appear as-needed (only
 when content overflows), fade out after an idle delay (`scrollbar-fade-delay`,
@@ -418,9 +461,20 @@ root  { bg: var(--bg); text-color: var(--fg); }
 label { text-color: var(--fg, #fff); }   /* fallback */
 ```
 
+Declare a custom property in any rule, not just `:root`. It cascades like
+any other declaration, honours `!important`, and inherits to descendants,
+so `.theme-light { --bg: #f6f6f9; }` retints that subtree.
 `var(--name, fallback)` resolves against the element's effective var
-scope: inherited from ancestors, then overridden by every matching
-rule's `--custom` declarations in source order.
+scope: inherited from ancestors, then overridden by every matching rule's
+`--custom` declarations in source order. Nested `var()` calls resolve
+recursively; a cycle is an error.
+
+Two places read a narrower set. Markup attribute substitution
+(`bg="var(--color-bg)"`, below) and the window's GPU clear color both look
+only at declarations under a bare `:root` selector. A `:root.dark { }`
+block, a `:root { }` inside `@media`, and a `root { }` tag rule are all
+invisible to those two, though they work normally everywhere a stylesheet
+declaration reaches.
 
 Inline-attribute substitution: markup `bg="var(--color-bg)"` resolves
 against the same merged set a stylesheet declaration does - the
@@ -444,7 +498,9 @@ everywhere a stylesheet declaration can reach it).
 ### Linear
 
 `linear-gradient([<deg>], <stop>, <stop>, ...)`. Angle defaults to
-`180deg` (top to bottom). Stops are color + optional `<offset%>`.
+`180deg` (top to bottom) and must be written in degrees; the CSS keyword
+directions (`to right`, `to bottom`) are not supported. Stops are a color
+plus an optional `<offset%>`.
 
 ```css
 .banner {
@@ -463,7 +519,7 @@ everywhere a stylesheet declaration can reach it).
 
 ### Radial
 
-`radial-gradient(<stop>, <stop>, ...)`. v1 keeps the center fixed at
+`radial-gradient(<stop>, <stop>, ...)`. The center is fixed at
 50%/50% and the radius at 1.0 (covering the box). `circle at <pos>`
 and `ellipse` shapes land in a follow-up.
 
@@ -484,26 +540,27 @@ and `ellipse` shapes land in a follow-up.
 }
 ```
 
-> **HoverTint over gradients.** The hover-tint tween only animates solid
-> fills. Gradient backgrounds skip the tween path - a gradient snaps to
-> its hover counterpart instead of blending.
+> **Gradients do not work in a state rule.** `bg` under `:hover`,
+> `:active`, `:checked`, and the rest takes a plain color; a gradient
+> there is a parse error. To swap a gradient on hover, flip a class from
+> script and put the second gradient on that class.
 
 ## Shadows
 
-### Markup `shadow=` - single
+### Markup `shadow=` - one entry
 
-`[inset] <offset-x> <offset-y> <blur> <#color>`. Markup form accepts
-exactly one shadow spec.
+`[inset] <offset-x> <offset-y> <blur> [<spread>] <#color>`. The markup
+attribute accepts exactly one shadow spec.
 
 ```xml
 <tile shadow="0 4 14 #00000077" />
 <tile shadow="inset 0 2 6 #00000055" />
 ```
 
-### CSS `box-shadow:` - stacked
+### CSS `box-shadow:` / `shadow:` - stacked
 
-Comma-separated. Leading `inset` keyword on each entry flips drop ->
-inner.
+Comma-separated; the two spellings are the same property. A leading
+`inset` keyword on an entry flips it from a drop shadow to an inner one.
 
 ```css
 .card {
@@ -540,7 +597,7 @@ and curve.
 - Comma-separated entries.
 - Each entry: `<property> <duration> [<easing>]`.
 - `<duration>`: `Nms` or `Ns` (seconds -> ms).
-- `<easing>`: `linear` | `ease` | `ease-in` | `ease-out` | `ease-in-out` | `cubic-bezier(p1x, p1y, p2x, p2y)`. Default `ease-out` (close enough to CSS `ease` for v1).
+- `<easing>`: `linear` | `ease` | `ease-in` | `ease-out` | `ease-in-out` | `cubic-bezier(p1x, p1y, p2x, p2y)`. Default `ease-out`.
 
 **Retargeting.** A transition re-triggered mid-flight restarts from the
 current interpolated value (never the old endpoint), and equal-value
@@ -611,13 +668,17 @@ You can also flip a theme explicitly from script with
 
 ## Text-property inheritance
 
-Text properties (`text-color`, `font-size`, `font-family`,
-`font-weight`, `text-align`, `wrap`, `max-lines`, `line-height`, and
-the named `style` role) inherit down the tree the way CSS text
-properties do. Setting `text-color` on `root` (or any
-container) cascades to descendant `<label>` / `<input>` text unless a
-child overrides it. Non-text properties (`bg`, `padding`, `radius`, ...)
-do not inherit.
+These properties inherit down the tree the way CSS text properties do:
+`text-color`, `font-size`, `font-family`, `font-weight`, `text-align`,
+`wrap`, `max-lines`, `line-height`, `selection-color`,
+`selection-text-color`, and `caret-color`. Setting `text-color` on `root`
+(or any container) cascades to descendant `<label>` / `<input>` text
+unless a child overrides it.
+
+Nothing else inherits. That includes `bg`, `padding`, `radius`, and the
+named typography `style` role, which applies only to the element that
+carries it. Custom properties are the other inheriting case; see
+[Custom properties](#custom-properties-css-variables).
 
 ## Skins
 
@@ -755,7 +816,7 @@ property from [Property surface](#property-surface) above:
 `--lumen-knob-inset`, `--lumen-thumb-size`, `--lumen-popup-gap`,
 `--lumen-progress-chunk`, `--lumen-disabled-opacity`,
 `--lumen-caret-width`, `--lumen-caret-blink`,
-`--lumen-password-character`, `--lumen-line-height`, and the eight
+`--lumen-line-height`, and the eight
 `--lumen-scrollbar-*` tokens (`thickness`, `thickness-thin`, `margin`,
 `min-thumb`, `track-hover`, `hover-boost`, `fade-delay`,
 `fade-duration`). Redeclaring one of these in your own `:root` retints
@@ -806,10 +867,21 @@ so the parser stays a pure string-to-stylesheet function.
   CSS `bg:` on the same element only applies if the markup didn't set
   one, unless the CSS declaration is marked `!important`. Switch the
   inline attr to a class to give CSS control.
+- **Colors are hex only.** `rgb(0 0 0 / 50%)`, `hsl(...)`, and `red` do
+  not parse. So `transparent` is `#00000000`.
+- **There is no `calc()`, `em`, or `rem`.** Numbers are px, or `%` where
+  a property says so.
+- **`overflow: auto` is not a value.** Use `scroll`.
 - **Layout properties don't transition.** `transition: width 200ms`
-  parses but is dropped with a warning - v1 animates colors
-  (`bg` / `color` / `border-color`) and `opacity` only.
+  parses but is dropped with a warning; only `opacity`,
+  `background-color`, `color`, and `border-color` animate.
+- **A state rule swallows most properties.** Anything inside
+  `:hover { }` that is not `bg`, `text-color`, `opacity`, a shadow, or a
+  border/outline under the states that route them is dropped with no
+  warning at all.
 - **`box-shadow: 0 0 0 transparent` is a no-op.** The fill optimization
   drops fully-transparent draws. Use `radius` + `bg` instead.
 - **Adjacent / general-sibling combinators (`+`, `~`) parse but don't
   match.** Descendant (` `) and child (`>`) combinators do work.
+- **An unsupported at-rule fails the whole stylesheet.** `@keyframes`,
+  `@font-face`, `@supports`, and `@layer` are parse errors, not skips.

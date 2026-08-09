@@ -155,8 +155,8 @@ to get completion, hover, and diagnostics for `.lmn` files.
 
 ```bash
 lumenc new hello hello-test
-lumenc check hello-test       # parse-only - should exit 0
-lumenc run hello-test         # opens a 960x720 window
+lumenc check hello-test       # parse-only, exits 0
+lumenc run hello-test         # opens a window saying hello
 ```
 
 If `lumenc check` fails on the scaffold, file an issue - the templates

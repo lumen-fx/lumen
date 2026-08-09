@@ -12,6 +12,7 @@ parse errors instead of silent no-ops.
 [app]
 entry = "main.lmn"
 id    = "com.example.myapp"
+kind  = "markup"
 
 [pages]
 entry   = "index"
@@ -74,6 +75,7 @@ outputs = ["libmd.so"]
 |---|---|---|---|
 | `entry` | string | `"main.lmn"` | Markup entry filename relative to the app dir. |
 | `id` | string | app dir name | Stable identifier - Reverse-DNS recommended (`"com.example.myapp"`). Used as the per-app state directory (window state, future plugin caches). |
+| `kind` | string | auto-detect | Which toolchain `run` / `build` route the app through: `"markup"`, `"rust"`, `"cpp"`, or `"python"`. Absent, `lumenc` guesses from the directory contents (a `Cargo.toml` depending on `lumen`, a `CMakeLists.txt`, a `.py` importing `lumen`). Set it when the guess is wrong. Any other value is a parse error. |
 
 ## `[pages]`
 
@@ -278,9 +280,12 @@ async      = false
 
 An optional typed schema for your signals, read by `lumenc lint --signals` to
 flag untyped writes and type mismatches. Each entry names a signal and its
-expected type: `i64`, `f64`, `bool`, `string`, `color`, `vec2`, an inline table
-for a record, or an explicit array record. Signals you leave out are not errors;
-they just get a weaker lint.
+expected type: `i64`, `f64`, `bool`, `string`, `color`, `vec2`, `array`,
+`object`, an inline table for a record, or an explicit array record. The
+common aliases work too (`int` / `integer`, `float` / `number`, `boolean`,
+`str` / `text`, `map`); an unrecognised type name is a parse error listing the
+accepted set. Signals you leave out are not errors; they just get a weaker
+lint.
 
 ```toml
 [signals]

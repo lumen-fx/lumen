@@ -1,13 +1,14 @@
 # Plugin author guide
 
-Lumen exposes a `Plugin` trait modelled on `bevy::Plugin`. Crate authors
-register systems into `TickStage::*` (main world), add render-world
-systems via `add_render_systems`, push extract fns via `add_extract_fn`,
-and insert resources via `world.insert_resource`.
+A plugin is how you add behaviour to Lumen from Rust: a widget, a visual
+primitive, an integration with something the framework does not ship. The
+`Plugin` trait is modelled on Bevy's. A plugin registers systems into the
+tick stages, inserts resources, and, if it draws something, pushes an
+extract function and render-world systems.
 
-This page is the practical guide: the trait shape, the tick pipeline,
-two worked examples (`TooltipPlugin`, `DragPlugin`), and the conventions
-that make plugins compose without fighting each other.
+Reach for one when a script cannot express what you need, or when the
+behaviour should be reusable across apps. Everything below assumes you are
+writing Rust against `lumen-core`.
 
 ## The trait
 
@@ -114,9 +115,14 @@ app.add_extract_fn(|main, render| {
 });
 ```
 
-Extract fns run sequentially. They're the **only** API for crossing
-the world boundary. Don't try to share components or entities
-directly - the worlds intentionally have independent IDs.
+Extract fns run sequentially, in registration order. They are the only way
+to cross the world boundary; the two worlds have independent entity ids,
+so a component or entity from one means nothing in the other.
+
+Iterate deterministically. Archetype order shifts as marker components
+like `Hovered` and `Pressed` come and go, so an extract that emits draws
+in raw query order reshuffles painter order from frame to frame and paints
+the wrong thing on top. Collect, sort by a stable key, then emit.
 
 ## Worked example 1 - `TooltipPlugin`
 
@@ -294,19 +300,15 @@ see `lumen/render-wgpu/src/` for the live shape.
   next tick) or spawn your own worker and post results back via a
   channel + drain system.
 
-## Where this is heading
+## Limits
 
-The `name` / `build` core of the plugin trait is settled. `depends_on` and
-`cleanup` exist on the trait already but are not fully wired up yet (see
-above); open questions still on the list:
+`name` and `build` are settled. Two trait methods are declared but not
+finished: a missing `depends_on` entry only logs a warning rather than
+ordering installation or refusing a cycle, and `cleanup` is never called,
+so do not put teardown you rely on there.
 
-- **Enforcing `depends_on`.** Today a missing dependency only logs a
-  warning; a topological sort that orders installation (or refuses a
-  cycle) is not built yet.
-- **Plugin registry / `lumenc add foo`** - index file mapping
-  `name -> git URL`. Post-v1.
-- **Plugin manifest / capability declaration** - let apps opt out of
-  specific plugin powers (network, files).
-- **Hot-reload-friendly plugins** - currently a plugin's systems
-  persist across `replace_ast`; full re-add semantics need a clean
-  shutdown hook.
+A plugin's systems persist across a script hot reload; there is no way to
+remove and re-add one at runtime.
+
+There is no plugin registry and no `lumenc add` command yet, so a plugin
+reaches an app as an ordinary Cargo dependency.
