@@ -27,8 +27,7 @@ copy is never offered a newer release. Run the installer again without
 `--version` to move to the current release and lift the pin.
 
 The installer covers Linux and macOS, on x86_64 and aarch64. Windows x86_64
-has its own package, [below](#windows). Prebuilt binaries ship with the first
-alpha release; until it is published, build Lumen from source instead. See
+has its own package, [below](#windows). To run Lumen anywhere else, see
 [Building Lumen from source](../contributing/building-lumen.md).
 
 Candela, Lumen's scripting language, is compiled into `liblumen` directly
