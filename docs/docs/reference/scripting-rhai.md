@@ -541,6 +541,8 @@ a parse error.
 | `copy_image(path)` | Copy the PNG at `path` (app-relative) to the system clipboard. |
 | `save_clipboard_image(path)` | Write the current clipboard image to `path` as PNG. |
 | `open_menu(id)` / `close_menu(id)` | Set / clear the `__menu_open:<id>` signal a `<menu id="...">` popup binds to. |
+| `t(key) -> string` | Translate `key` in the app's active locale. Returns `key` itself when no catalogue carries it. See [Translation](../authoring/i18n.md). |
+| `tr(key) -> string` | Alias for `t(key)`, under Qt's name. |
 | `read_file(path) -> string` | Read a file to a string. Empty string on error. |
 | `write_file(path, contents) -> bool` | Write `contents` to `path`. `true` on success. |
 

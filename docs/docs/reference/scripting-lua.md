@@ -404,6 +404,10 @@ them with `signals.audio_position.get()` / `bind-*` markup /
 
 ## Files and misc
 
+- `t(key) -> string` - translate `key` in the app's active locale; returns
+  `key` itself when no catalogue carries it. See
+  [Translation](../authoring/i18n.md).
+- `tr(key) -> string` - alias for `t(key)`, under Qt's name.
 - `read_file(path) -> string` - read a file to a string; empty string on
   error (a warning is logged).
 - `write_file(path, contents) -> bool` - write `contents` to `path`;

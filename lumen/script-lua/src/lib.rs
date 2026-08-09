@@ -2387,6 +2387,19 @@ fn build_lua(
         })?,
     )?;
 
+    // Translation. `t("key")` returns the string the app's active locale
+    // carries for `key`, or `key` itself when no catalogue does - an
+    // untranslated app still renders something readable. The catalogue
+    // lives behind the process-wide `lumen_core::i18n` hook the runtime
+    // installs, so this host links no Fluent/ICU code and needs no world
+    // access. `tr` is Qt's spelling of the same call.
+    for name in ["t", "tr"] {
+        g.set(
+            name,
+            lua.create_function(|_, key: String| Ok(lumen_core::i18n::translate(&key)))?,
+        )?;
+    }
+
     // read_file / write_file
     g.set(
         "read_file",

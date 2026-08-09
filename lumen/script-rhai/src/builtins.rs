@@ -334,6 +334,18 @@ pub const BUILTINS: &[BuiltinFn] = &[
         doc: "Parse markdown into a block list (`{ id, kind, level, text, lang }` maps) for `<for>`.",
     },
     BuiltinFn {
+        name: "t",
+        params: &[p("key", "string")],
+        ret: "string",
+        doc: "Translate `key` in the active locale; returns the key itself when untranslated.",
+    },
+    BuiltinFn {
+        name: "tr",
+        params: &[p("key", "string")],
+        ret: "string",
+        doc: "Alias for `t(key)`.",
+    },
+    BuiltinFn {
         name: "read_file",
         params: &[p("path", "string")],
         ret: "string",

@@ -2317,6 +2317,23 @@ impl RhaiHost {
             },
         );
 
+        // Translation. `t("key")` returns the string the app's active
+        // locale carries for `key`, or `key` itself when no catalogue
+        // does - an untranslated app still renders something readable.
+        // The catalogue lives behind the process-wide
+        // `lumen_core::i18n` hook the runtime installs, so this host
+        // links no Fluent/ICU code and needs no world access.
+        engine.register_fn("t", |key: rhai::ImmutableString| -> rhai::ImmutableString {
+            lumen_core::i18n::translate(key.as_str()).into()
+        });
+        // Qt's spelling of the same call.
+        engine.register_fn(
+            "tr",
+            |key: rhai::ImmutableString| -> rhai::ImmutableString {
+                lumen_core::i18n::translate(key.as_str()).into()
+            },
+        );
+
         // D1.2: tiny file I/O for apps that load/save user files
         // (markdown editor, future image viewer, etc.). Empty string
         // on read error so scripts can branch on `len() > 0`.
