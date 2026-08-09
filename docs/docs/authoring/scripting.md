@@ -6,9 +6,9 @@ script hosts - candela, Rhai, and Lua - all exposing the same lifecycle
 callbacks and close to the same function surface, so the choice is mostly
 about which language you or your team want to write app logic in.
 
-This page is the overview: how to attach a script, how the host is chosen,
-what concepts are shared across all three, and where they differ.
-It is not the API list - each host has its own exhaustive reference:
+Read this page for how to attach a script, how the host is chosen, and what
+the three hosts share. For the function-by-function surface, each has its
+own reference:
 
 - [Candela scripting reference](../reference/scripting-candela.md)
 - [Rhai scripting API](../reference/scripting-rhai.md)
@@ -32,13 +32,12 @@ The selection order, checked in this sequence:
    script written entirely as an inline `<script>` body in markup) falls
    back to candela.
 
-The runtime applies this selection rule to `lumenc run` itself as well as
-to what a static `--bundle` compiles in: a `.rhai` file
-sitting in an app directory with no `[script]` block runs on
-Rhai, and an app with a `.cdl` file and no `[script]` block runs
-on candela. Set `[script] engine` explicitly whenever you want the choice
-to be unambiguous regardless of what files happen to be in the directory.
-See [Per-app config](./lumen-toml.md#script) for the full key reference.
+The same rule decides the host for `lumenc run` and for the single host
+`lumenc bundle --static` compiles in. So a `.rhai` file in a directory with
+no `[script]` block runs on Rhai, and a `.cdl` file there runs on candela.
+Set `[script] engine` explicitly when you want the choice fixed regardless
+of which files happen to be in the directory. See
+[Per-app config](./lumen-toml.md#script) for the key reference.
 
 ```toml
 [script]
@@ -94,16 +93,23 @@ event. All three hosts share the same set: `on_start`, `on_ready`,
 `on_click` / `on_double_click` / `on_long_press`, `on_toggle`, `on_slider`,
 `on_text_input`, drag-and-drop and file-dialog callbacks, `on_fetch` /
 `on_fetch_error`, `on_timer`, `on_menu`, `on_hotkey`, `on_tray`, dialog
-callbacks, and `on_close`. `lumen::on(event, id, handler)` (candela) /
-`on(event, id, handler)` (Rhai, Lua) routes one element's event to a named
-function instead of the matching global dispatcher, for every event in that
-list. See the per-host reference for the full event table and each
-callback's exact arguments.
+callbacks, `on_audio_end`, and `on_close`.
+
+Every callback whose first argument names something - an element id, a
+dialog tag, a timer name - can be routed per key instead:
+`lumen::on(event, key, handler)` (candela) / `on(event, key, handler)`
+(Rhai, Lua) sends that one key to a named function rather than the global
+dispatcher, and an unrouted key still falls through to the global one. The
+four that carry no key, `on_start`, `on_ready`, `on_close`, and
+`on_audio_end`, are only ever global. See the per-host reference for the
+full event table and each callback's exact arguments.
 
 ## Signals
 
 Signals are the named reactive values `bind-text`, `bind-value`, `<if>`,
-and `<for>` read. Every host can read and write them; the spelling differs
+and `<for>` read. A signal is also how state survives between handler
+calls: each handler is a fresh call into the program, so a local does not
+outlive it. Every host can read and write signals; the spelling differs
 more here than almost anywhere else in the surface - see
 [What differs between hosts](#what-differs-between-hosts) below.
 
@@ -113,11 +119,27 @@ let text = lumen::signal_get("greeting");
 lumen::signal_set_int("count", 0);
 ```
 
+Markup reads a signal through a `bind-*` attribute, and the interactive
+controls write back through the same one:
+
+| Attribute | On | Direction |
+|---|---|---|
+| `bind-text` | `<label>` | Signal to the label's text. |
+| `bind-text` | `<input>`, `<textarea>` | Both ways: typing writes the signal back. |
+| `bind-checked` | `<toggle>`, `<switch>`, `<checkbox>` | Both ways. |
+| `bind-value` | `<slider>`, `<progress>`, `<dropdown>`, `<tabs>` | Both ways for the interactive ones. |
+| `bind-scroll` | `<scroll>` | Both ways; the read-back is throttled until scrolling settles. |
+| `bind-disabled` | any control | Signal to the element's disabled state. |
+
+`<if signal="name">` mounts a subtree while a signal is truthy, and
+`<for each="name">` renders one row per item in an array signal. See the
+[tag reference](./tags.md) for both.
+
 `lumen::derive(name, deps, f)` (candela) / `derive(name, deps, f)` (Rhai,
 Lua) registers a computed signal: `f` runs whenever a dep changes and its
-return value lands in `name`. A derivation also runs once right after
-registration, so the bound value is correct on the first frame even before
-any dep has changed.
+return value lands in `name`. Every derivation also runs once on the first
+tick after registration, whether or not a dep changed, so a bound value is
+correct on the first frame.
 
 ## The dynamic DOM API
 
@@ -168,12 +190,18 @@ example apps for this in a real, runnable app - both build list rows this
 way instead of via `<for>` + `signal_array`.
 
 Rhai and Lua expose the same operations differently: `query(selector)`
-returns a result-set object and `Node` methods that mutate return the
-receiver so calls chain. Lua spawns a fresh element with `spawn(tag)`, same
-as candela; Rhai reserves `spawn` as a keyword in its own tokenizer, so Rhai
-source spells the same operation `document.create(tag)` (or the global
+returns a result-set object, and their `Node` mutators return the receiver
+so calls chain. candela's mutators return nothing, so write one call per
+statement. Lua spawns a fresh element with `spawn(tag)`, same as candela;
+Rhai reserves `spawn` as a keyword in its own tokenizer, so Rhai source
+spells the same operation `document.create(tag)` (or the global
 `create(tag)`) instead. See the per-host reference for the exact method
 list.
+
+One rule applies to every host: `set_inner_markup` parses a markup
+fragment, which needs the markup parser, so it does nothing in an app
+running from a precompiled artifact. Build subtrees element by element and
+they work either way. Do not feed it untrusted content.
 
 ## What differs between hosts
 
@@ -186,19 +214,20 @@ surface everywhere; these are the places the hosts diverge.
 | Reading/writing a signal | Typed function pairs: `signal_get` / `signal_set`, `signal_get_int` / `signal_set_int`, ... | A `Signal` handle object: `signal(name, default)` then `.get()` / `.set(v)` / `.value` |
 | Building a reactive list | No `signal_array`; build real DOM nodes one by one (see above) | `signal_array(name)` backs `<for each="name">` directly |
 | `derive` / event handler reference | By function name (candela has no closure value) | A closure literal, or a function name |
-| DOM node calls | Method syntax on a wrapped `Node` / `Event` (see above) | Method syntax on a native `Node` object; mutators return the receiver so calls chain |
+| DOM node calls | Method syntax on a wrapped `Node` / `Event` (see above); mutators return nothing, so they do not chain | Method syntax on a native `Node` object; mutators return the receiver so calls chain |
+| Nesting one host call inside another | Not allowed - bind the inner call to a local first | Fine |
 | Parsing JSON | Language builtin `json_parse` + `as_map` / `as_list` / `as_str` | `parse_json(s)` |
 | HTTP | `fetch(url, tag)` only (GET) | `fetch(url, tag)` plus `http(request)` for method / headers / body |
 | Page navigation | `window::set_href(path)` / `window::href()` | `page(path)` / `page()` |
 
-candela's gaps here are not arbitrary: `parse_json`'s any-shaped return and
-`http(request)`'s mixed-type request map both need a value shape a typed
-host-function boundary cannot declare, and a closure argument has nowhere
-to live without a first-class closure value in the language. See
+Most of candela's gaps follow from its typed host boundary.
+`parse_json` returns a value of any shape and `http(request)` takes a map
+of mixed types, neither of which a typed host function can declare, and a
+closure argument has nowhere to live without a first-class closure value
+in the language. See
 [Limitations](../reference/scripting-candela.md#limitations) in the
-candela reference for the complete list, including which low-level
-introspection readers are registered on the Rust side but have no reachable
-candela declaration.
+candela reference for the full list, including the nesting restriction
+above and the navigation functions the other two hosts get.
 
 ## File-based pages
 

@@ -1,12 +1,20 @@
 # Lua scripting API
 
-Lua is a selectable scripting host for a Lumen app: an alternative to the
-default Rhai host that runs the same event handlers, signals, and dynamic
-DOM API on Lua 5.4 (via `mlua`) instead of Rhai. Use it when you or your
-team already think in Lua, or when you want Lua idioms (colon-call
-methods, 1-indexed arrays, `pcall`) for your app logic.
+Lua is one of the three script hosts Lumen ships, alongside candela (the
+default) and Rhai. It runs the same event handlers, signals, and dynamic DOM
+API on Lua 5.4, via `mlua`. Reach for it when you or your team already think
+in Lua, or when you want Lua idioms (colon-call methods, 1-indexed arrays,
+`pcall`) for app logic.
 
-An app opts in with `[script] engine = "lua"` in `lumen.toml`:
+Attach the script from markup the way every host does:
+
+```html
+<script src="main.lua" />
+```
+
+A `main.lua` in the app directory selects the Lua host on its own, as long as
+no `.cdl` file sits beside it. Pin the choice with `[script] engine` when you
+want it to hold regardless of which files are present:
 
 ```toml
 [app]
@@ -16,29 +24,14 @@ entry = "main.lmn"
 engine = "lua"
 ```
 
-and attaches its script the same way any host does, via `<script src="...">`
-in markup:
+An inline `<script>...</script>` body carries no extension for that inference
+to read, so an app that keeps its Lua entirely inline needs the explicit
+`engine = "lua"`. See [Choosing a host](../authoring/scripting.md#choosing-a-host)
+for the full selection order.
 
-```html
-<script src="main.lua" />
-```
-
-Engine selection at run time comes from `[script] engine` alone; there is no
-implicit "guess the engine from the file extension" behavior at run time.
-`lumen.toml`'s `[script]` block defaults to Rhai, so a `.lua` file referenced
-by `<script src>` is still run as Rhai source unless `engine = "lua"` is set
-explicitly. File-extension inference (a `.lua` file in the app directory
-selects the Lua host, a `.cdl` file selects candela) exists only for a static
-`--bundle` build's compile-time host selection, when `[script] engine` is
-absent - it decides which single host gets compiled into that release binary,
-not which host a `lumenc run` uses. Set `engine = "lua"` explicitly; do not
-rely on the file extension alone.
-
-`<script>` markup has no per-tag language marker - an inline
-`<script>...</script>` body is concatenated with every `<script src="...">`
-file into one combined source string, and that combined source is compiled
-by whichever single host `[script] engine` selects for the app. There is no
-way to mix hosts within one app.
+Every inline body and every `src` file concatenate, in document order, into
+one program compiled by that one host. There is no way to mix hosts within
+one app.
 
 ## Reaching the API from Lua
 
@@ -100,13 +93,15 @@ event happens; a script that omits one just never receives that event
 | `on_timer(name)` | A `set_timeout` / `set_interval` timer fired. |
 | `on_fetch(tag, body)` / `on_fetch_error(tag, message)` | `fetch(url, tag)` completed. A non-2xx response fires `on_fetch_error` with `"HTTP status <code>"` as the message - `fetch` treats anything outside 2xx as a failure. |
 | `on_http(tag, response)` | `http({...})` completed (2xx or not). `response` is a table `{ ok, status, headers, body, error }`; `ok` is only true for a 2xx status, but the call always reaches `on_http` rather than `on_http_error`. |
+| `on_audio_end()` | The active audio track finished playing. Fires only when the audio subsystem is compiled in. |
 
-Every event above except `on_start`, `on_ready`, and `on_close` also
-supports **per-id routing**: `on(event, key, "fn_name")` sends that one
-event/key pair to `fn_name` instead of the global `on_<event>` handler. The
-event name passed to `on(...)` is the lowercased word from the table above
-(`"click"`, `"double_click"`, `"text_input"`, `"toggle"`, `"slider"`,
-`"file_dropped"`, `"drop"`, `"drag_start"`, `"file_picked"`,
+Every event above except `on_start`, `on_ready`, `on_close`, and
+`on_audio_end` also supports **per-id routing**: `on(event, key, "fn_name")`
+sends that one event/key pair to `fn_name` instead of the global
+`on_<event>` handler. Those four carry no key to route on. The event name
+passed to `on(...)` is the lowercased word from the table above
+(`"click"`, `"double_click"`, `"long_press"`, `"text_input"`, `"toggle"`,
+`"slider"`, `"file_dropped"`, `"drop"`, `"drag_start"`, `"file_picked"`,
 `"files_picked"`, `"folder_picked"`, `"hotkey"`, `"menu"`,
 `"dialog_accepted"`, `"dialog_rejected"`, `"tray"`, `"timer"`, `"fetch"`,
 `"fetch_error"`, `"http"`). A handler registered against the bare suffix
@@ -166,21 +161,26 @@ signals.bg.set_color("#ff8800")    -- writes a typed Color
 
 `.get()` / `.set(v)` / `.set_color(hex)` work as both dotted
 (`signals.count.get()`) and colon (`signals.count:get()`) calls; the value
-is always the trailing argument. `signals` reads and writes the process
-global typed property store directly (immediately, not queued for next
-tick), so it and `signal()`/`Signal:set` observe the same underlying
-values but are not the same code path - `signals.x.set(v)` writes through
-`lumen_core::property_store::push_external_property` while
-`signal("x",...):set(v)` queues a `ScriptCommand::SetSignal`. Both are safe
-to use; `signals` has no entity-scoped form from Lua (only global keys).
+is always the trailing argument. `set` takes an integer, number, boolean,
+or string; any other Lua type is ignored. `get()` reads the cross-thread
+typed snapshot before the script-local mirror, so it sees a value written
+by an embedder or another thread.
+
+An index segment becomes part of the key verbatim, so Lua's 1-based
+`signals.users[1].name` addresses the key `users[1].name`. Rhai's 0-based
+`signals.users[0].name` is a different key for the same logical row; keep
+that in mind when porting a script between the two hosts.
+
+`signals` has no entity-scoped form from Lua; the keys are global.
 
 ### `derive(name, deps, fn) -> Signal`
 
 Register a computed signal. `deps` is a Lua array whose entries are either
 `Signal` handles or plain strings naming a signal. `fn` re-runs whenever
-any dependency's value changes (or once at startup, for an empty `deps`
-array, since a fresh `derive(...)` is pending-initial until it evaluates
-once); its return value is stringified into `name`.
+any dependency's value changes, and its return value is stringified into
+`name`. Every derivation also runs once on the first tick after
+registration, whether or not a dep has changed, so a bound value is
+correct on the first frame.
 
 ```lua
 local clicks = signal("clicks", 0)
@@ -452,6 +452,11 @@ a mutation call.
 - `document() -> Node | nil` / `document.root() -> Node | nil` - the
   document root. `document` is both callable and a namespace table (see
   below), so `document()` and `document.root()` are equivalent.
+- `document.query(selector)` / `document.get_by_id(id)` - the namespaced
+  spellings of the two globals above.
+- `document.focused() -> Node | nil` / `document.hovered() -> Node | nil` -
+  the currently focused and hovered elements. There is no global form of
+  these two.
 - `spawn(tag) -> Node` / `document.spawn(tag) -> Node` - create a fresh
   detached element with markup tag `tag` (e.g. `"div"`); attach it with
   `parent:append(node)` or `node:set_parent(parent)`.
@@ -598,7 +603,18 @@ types that bubble (`focus`, `blur`, `pointerenter`, `pointerleave`, and
 - `window.location.path() -> string` - same as `window.href()`.
   `window.location.query()` and `window.location.hash()` always return
   `""`; those parts of the URL are not tracked yet.
-- `history.back()` / `history.forward()` / `history.go(delta)`
+- `history.back() -> boolean` / `history.forward() -> boolean` (each
+  reports whether a step was available) / `history.go(delta)`
+
+The runtime adds four more navigation globals on top of the host crate:
+`page(path)` navigates, `page()` with no argument reads the current page
+path, and `page_back()` / `page_forward()` step the history stack.
+`set_color_scheme(name)` forces the resolved color scheme, taking one of
+`"default"`, `"force-light"`, `"force-dark"`, `"prefer-light"`, or
+`"prefer-dark"`. These come from the runtime rather than
+`lumen-script-lua`, so a custom embedding that skips the standard plugin
+wiring will not have them; the same applies to `on_ready`. See
+[Pages](../authoring/pages.md).
 
 ## A worked example
 
@@ -658,19 +674,37 @@ handler - see `apps/weather/main.lua` and its markup
 
 ## Limitations
 
-The Lua host's free-function and DOM-method surface matches the Rhai
-host's, name for name, including the full dynamic DOM API (query,
-traversal, mutation, introspection, events). Four global introspection
-functions - `pointer_state`, `frame_info`, `signals_all`, and
-`dump_tree` - are registered and callable exactly like the rest of the
-surface, but the Lua host's builtin metadata table (the source the LSP's
-completion and hover draw from) does not currently list them, so
-editor completion for those four may be missing even though the calls
-work. `window.size()` returns a positional pair rather than a
+The Lua host covers the same ground as the Rhai host, including the full
+dynamic DOM API (query, traversal, mutation, introspection, events), but a
+few names and shapes differ:
+
+- Lua creates an element with `spawn(tag)` / `document.spawn(tag)`. Rhai
+  reserves `spawn` as a keyword in its own tokenizer, so Rhai source spells
+  it `create(tag)` / `document.create(tag)`.
+- Rhai's `Signal` carries a `.value` get/set property; Lua's `Signal` has
+  only `:get()` and `:set(v)`.
+- Rhai overloads `audio_seek` / `audio_volume` on int and float; Lua takes
+  a single number for each, which covers both.
+- `register_command_fn` caps at four arguments on Rhai. Lua is natively
+  variadic and has no cap.
+
+`window.size()` returns a positional pair rather than a
 `{width=,height=}` table, and `NodeQuery:nth` is 0-indexed while every
 other indexed accessor in the API (`ArraySignal:get`, `signals.list[i]`)
-is 1-indexed - both are called out at their entries above since they
-break the otherwise-consistent 1-based convention.
+is 1-indexed. Both are called out at their entries above since they break
+the otherwise-consistent 1-based convention.
+
+Four global introspection functions - `pointer_state`, `frame_info`,
+`signals_all`, and `dump_tree` - are callable exactly like the rest of the
+surface, but the Lua host's builtin metadata table, which the language
+server draws completion and hover from, does not list them. Editor
+completion for those four is missing even though the calls work.
+
+A handler that raises clears the host's pending command queue, so the
+signal writes it made are discarded. DOM mutations are not: Lua queues
+them on a separate bus that a handler error does not roll back, so a
+partially built subtree survives. Build a subtree in one pass, or check
+your inputs before you start mutating.
 
 candela, the third host and Lumen's default, carries DOM nodes and events
 as integer handles. Its prelude wraps them in `Node` and `Event` types

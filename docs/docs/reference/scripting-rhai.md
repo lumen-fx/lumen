@@ -35,7 +35,7 @@ host comes from the script file extensions present in the app directory:
 a `.cdl` file selects candela, otherwise a `.lua` file selects Lua,
 otherwise a `.rhai` file selects Rhai, and a directory carrying no script
 gets candela. That inference decides the host for `lumenc run` and, when
-building a static `--bundle`, which single host gets compiled in. Rhai,
+building with `lumenc bundle --static`, which single host gets compiled in. Rhai,
 Lua, and candela expose the same set of lifecycle entry points and a
 near-identical function surface; this page covers the Rhai bindings only.
 
@@ -43,9 +43,11 @@ near-identical function surface; this page covers the Rhai bindings only.
 
 These are not builtins; they are functions you define that the
 runtime calls by convention. A missing handler is silent success (the
-runtime just doesn't call it). All engine-emitted commands (`signal`
-writes, `set_text`, `notify`, and so on) a handler queues are applied
-on the same tick the handler ran.
+runtime just doesn't call it). Commands a handler queues (`signal`
+writes, `set_text`, `notify`, and so on) are applied on the same tick
+the handler ran. `on_start` is the exception: it runs at app
+construction, before any tick, and its commands are held and applied on
+the first tick.
 
 | Function | Fires when |
 |---|---|
@@ -73,12 +75,18 @@ on the same tick the handler ran.
 | `on_http(tag, response)` | An `http(request)` request completed. `response` is `#{ ok, status, headers, body, error }` regardless of status. |
 | `on_audio_end()` | The active audio track finished playing. Only fires when the audio subsystem is compiled in. |
 
-Every one of these also supports **per-id routing**: `on(event, id,
-fn_name)` (see [Routing](#routing)) registers a handler that is called
-instead of the global fallback for that one `(event, id)` pair.
-`event` is the bare name without the `on_` prefix and without the
-trailing `(...)` (`"click"`, `"toggle"`, `"drop"`, `"hotkey"`,
-`"file_picked"`, `"timer"`, `"fetch"`, `"http"`, and so on).
+Every event with an `id`, `tag`, or `name` argument also supports **per-id
+routing**: `on(event, id, fn_name)` (see [Routing](#routing)) registers a
+handler called instead of the global fallback for that one `(event, id)`
+pair. `event` is the bare name without the `on_` prefix and without the
+trailing `(...)` (`"click"`, `"long_press"`, `"toggle"`, `"drop"`,
+`"hotkey"`, `"file_picked"`, `"timer"`, `"fetch"`, `"http"`, and so on).
+`on_start`, `on_ready`, `on_close`, and `on_audio_end` carry no key to route
+on, so they are only ever the global function.
+
+`on_ready` is wired by the runtime rather than by the Rhai host crate, the
+same way the `page*` functions are; a bare embedding of `lumen-script-rhai`
+that skips the standard plugin wiring never fires it.
 
 ## Signals (reactive state)
 
@@ -90,7 +98,10 @@ and `signal_array`-backed `<for>` reconciliation.
 
 Return a handle to a named scalar signal, initializing it to `default`
 the first time the name is seen. Repeat calls with the same name are
-cheap and share the same underlying value.
+cheap and share the same underlying value. A value already pushed into
+the store from outside the script (the Rust SDK, the C ABI, another
+thread) wins over `default`, so declaring a signal never clobbers what
+an embedder seeded.
 
 ```rhai
 let c = signal("clicks", 0);
@@ -171,11 +182,10 @@ goes through the explicit `set_color(hex)` method (`"#rrggbb"` or
 no-op). `get()` reads the cross-thread typed snapshot first, falling
 back to the script-local mirror.
 
-The following procedural functions are older equivalents of the same
-typed writes, kept working but superseded by the `signals.*` chained
-form above:
+The following procedural functions predate the `signals.*` chained form
+and are kept working; prefer the chained form in new code:
 
-| Function | Equivalent |
+| Function | Chained form |
 |---|---|
 | `signal_set_int(name, value:int)` | `signals.name.set(value)` |
 | `signal_get_int(name) -> int` | `signals.name.get()` (miss or wrong type: `()`) |
@@ -185,6 +195,12 @@ form above:
 | `signal_get_bool(name) -> bool` | `signals.name.get()` |
 | `signal_set_color(name, hex:string)` | `signals.name.set_color(hex)` |
 | `signal_get_color(name) -> map` | `signals.name.get()`; returns `#{ r, g, b, a }` (0..255 ints) |
+
+The writes are interchangeable, the reads are not. `signals.name.get()`
+consults the cross-thread typed snapshot before the script-local mirror,
+so it sees a value written by the Rust SDK, the C ABI, or another thread;
+`signal_get_int` and its siblings read the mirror alone and miss it. Use
+the chained form whenever a value can arrive from outside the script.
 
 ### `is_valid(id:string) -> bool`
 
@@ -463,7 +479,7 @@ fn handle_save(id) {
 
 Issue an HTTP GET off-thread. `on_fetch(tag, body)` fires on a 2xx
 reply; `on_fetch_error(tag, message)` fires on a transport failure or
-a non-2xx status.
+a non-2xx status, where `message` is `HTTP status <code>`.
 
 ```rhai
 fetch("https://api.example.com/weather?lat=40.7", "weather");
@@ -625,10 +641,11 @@ above Rhai's release-build defaults so real app scripts (long
 same limits `lumenc run` does. There is no native variadic function
 registration: `register_command_fn`, the escape hatch for embedders
 that want to add a host-native function from outside Lumen itself,
-tops out at 4 positional arguments. `n.set_inner_markup(...)` and
-`document.create` / DOM spawning need the markup parser linked in, so
-they are unavailable when running from a precompiled artifact that
-was built without it. `set_color_scheme` and the `page*` navigation
-functions come from the runtime, not the Rhai host crate, so a custom
+tops out at 4 positional arguments (the Lua host has no such cap).
+`n.set_inner_markup(...)` needs the markup parser linked in, so it does
+nothing when the app runs from a precompiled artifact built without it;
+`document.create` and the rest of DOM spawning work either way.
+`set_color_scheme`, the `page*` navigation functions, and `on_ready`
+come from the runtime rather than the Rhai host crate, so a custom
 embedding of `lumen-script-rhai` that skips the standard `lumenc`
 plugin wiring will not have them.

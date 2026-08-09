@@ -2,9 +2,13 @@
 
 Lumen ships a C ABI so a program written in another language can build, drive,
 and inspect a Lumen app: open the window, read and write signals, handle clicks
-and DOM events, and mutate the live element tree. The header is
-`lumen/ffi/include/lumen.h`, and the library it declares is `liblumen_ffi`
+and DOM events, and mutate the live element tree. The library is `liblumen_ffi`
 (cdylib and staticlib, with a `lumen.pc` for pkg-config).
+
+Include `lumen/ffi/include/lumen.h`. It carries the status enum, the tagged
+value union, and the callback typedefs, and it pulls in `lumen_simple.h` for
+everything else. That second header is generated from the Rust source at build
+time; read it for the current declarations, but never edit it.
 
 Reach for it when the app's logic lives outside Lumen: an existing C++ or Python
 program that wants a native UI, a language binding, or a tool that drives an app
@@ -64,7 +68,7 @@ no GPU surface, which is how the SDK examples and tests exercise the ABI.
 | Area | Entry points |
 |---|---|
 | Lifecycle | `lumen_app_new`, `lumen_app_new_from_lmna`, `lumen_app_set_title`, `lumen_app_set_size`, `lumen_app_run`, `lumen_app_run_headless`, `lumen_app_free` |
-| Signals | Typed setters and getters (`lumen_signal_set_int64` / `_float64` / `_bool` / `_color` and their `get` counterparts), `lumen_signal_set_string` / `lumen_signal_get_string`, array signals (`lumen_signal_set_array`, `lumen_signal_array_len`, `lumen_signal_array_get_field`), and `lumen_signal_clear` |
+| Signals | Typed setters and getters (`lumen_signal_set_int64` / `_float64` / `_bool` / `_color` and their `get` counterparts), the stringifying setters `lumen_signal_set_string` / `_set_int` / `_set_f64` with `lumen_signal_get_string`, array signals (`lumen_signal_set_array`, `lumen_signal_array_len`, `lumen_signal_array_get_field`), and `lumen_signal_clear` |
 | Change subscription | `lumen_signal_watch(name, cb, user_data)` fires once per tick in which the named signal's committed value changed |
 | Native handlers | `lumen_app_on_click(app, id, cb, user_data)` for an id-scoped click, `lumen_app_on_close(app, cb, user_data)` for a vetoable close request |
 | Exposed callbacks | `lumen_app_expose` / `lumen_app_expose_v2` publish a native function the app's script can call |
@@ -84,7 +88,8 @@ Find and traverse: `lumen_query`, `lumen_query_single`, `lumen_query_len`,
 `lumen_node_valid`. The list-returning calls fill a `LumenNodeList` you index
 with `lumen_nodelist_get` and release with `lumen_nodelist_free`.
 
-Mutate: `lumen_node_spawn` and `lumen_node_clone` mint a handle valid for the
+Mutate: `lumen_node_spawn` (or `lumen_document_spawn`, the document-scoped
+spelling) and `lumen_node_clone` mint a handle valid for the
 rest of the tick; `lumen_node_append`, `lumen_node_insert_before`,
 `lumen_node_set_parent`, `lumen_node_replace_with`, and `lumen_node_remove`
 place it. Content and styling go through `lumen_node_set_attr`,
@@ -107,14 +112,17 @@ Bind events with `lumen_on(node, event_type, capture, callback, user_data)`,
 which returns a token you pass to `lumen_off`. The callback receives a
 `LumenEvent` with the scalar fields (target, current target, positions, wheel
 delta, button, modifiers); read the string fields with `lumen_event_type`,
-`lumen_event_key`, and `lumen_event_value`, and control propagation with
+`lumen_event_key`, and `lumen_event_value`, reach the same two node handles
+outside the struct with `lumen_event_target` and `lumen_event_current_target`,
+and control propagation with
 `lumen_event_prevent_default`, `lumen_event_stop_propagation`, and
 `lumen_event_stop_immediate_propagation`. Propagation is the DOM contract:
 capture from the root to the target, then bubble back up.
 
 Introspect: post-layout geometry (`lumen_node_rect`, `lumen_node_content_rect`,
 `lumen_node_scroll`), visibility and paint order (`lumen_node_is_visible`,
-`lumen_node_z_index`), computed style, attributes, inline style and components
+`lumen_node_z_index`), the backing ECS handle (`lumen_node_entity_id`),
+computed style, attributes, inline style and components
 as key-value buffers (`lumen_node_computed_style`, `lumen_node_attrs`,
 `lumen_node_inline_style`, `lumen_node_component`), name lists
 (`lumen_node_classes`, `lumen_node_components`), markup
@@ -130,10 +138,28 @@ precompiled artifact, and it must not be fed untrusted content.
 ## Conventions
 
 **Status codes.** Every function returns `LumenStatus` (or `NULL` for a
-constructor). `LUMEN_OK` is 0. On any other value, `lumen_last_error()` returns
+constructor). On any value other than `LUMEN_OK`, `lumen_last_error()` returns
 a thread-local UTF-8 message, falling back to the global slot when the calling
 thread has none, and `lumen_status_message(status)` gives a static description
 without that round-trip.
+
+| Value | Code | Meaning |
+|---|---|---|
+| `LUMEN_OK` | 0 | Success. |
+| `LUMEN_ERR_BAD_PATH` | 1 | A path argument does not resolve. |
+| `LUMEN_ERR_BAD_ARG` | 2 | An argument is null, malformed, or out of range. |
+| `LUMEN_ERR_RUNTIME` | 3 | The runtime rejected the operation. |
+| `LUMEN_ERR_INTERNAL` | 4 | An internal invariant failed. |
+| `LUMEN_ERR_PARSE` | 5 | Markup failed to parse. |
+| `LUMEN_ERR_CSS` | 6 | A stylesheet failed to parse. |
+| `LUMEN_ERR_ASSET` | 7 | An asset failed to load. |
+| `LUMEN_ERR_WINDOW` | 8 | Window or surface creation failed. |
+| `LUMEN_ERR_SCRIPT` | 9 | The script failed to compile or run. |
+| `LUMEN_ERR_IO` | 10 | A filesystem operation failed. |
+| `LUMEN_ERR_INVALID_HANDLE` | 11 | A node or app handle no longer resolves. |
+| `LUMEN_ERR_INVALID_VALUE` | 12 | A `LumenValue` carries a kind the callee cannot accept. |
+| `LUMEN_ERR_PANIC` | 13 | A Rust panic was caught at the boundary. |
+| `LUMEN_ERR_BUFFER_TOO_SMALL` | 14 | Call again with a buffer of `*out_len` bytes. |
 
 **No panic escapes.** Every entry point catches a Rust panic and reports
 `LUMEN_ERR_PANIC` rather than unwinding across the boundary.
@@ -178,7 +204,9 @@ function under `name` so the app's script can call it, and
 `lumen_app_expose_v2` is the same registration with an out-parameter callback
 signature, which suits bindings that cannot express an aggregate return
 (`ctypes`, libffi). Arguments and return values cross as `LumenValue`, a tagged
-union covering nil, bool, int, float, string, array, and map.
+union covering nil, bool, int, float, string, array, and map. `arg_count` fixes
+the arity, up to eight; every argument crosses untyped, so the callback reads
+`kind` on each `LumenValue` itself.
 
 Exposed callbacks currently reach Rhai scripts. From a candela or Lua app, drive
 the native side through signals, `lumen_app_on_click`, and DOM event callbacks

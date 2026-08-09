@@ -25,7 +25,7 @@ depends on directory-listing order. A directory with no script file at all
 resolves to candela, since candela is the default language, not rhai; an
 inline script written in lua or rhai still needs an explicit `engine` line,
 since there is no file extension for inference to read. An explicit
-`[script] engine` always wins over inference. A static `--bundle` build
+`[script] engine` always wins over inference. A `lumenc bundle --static` build
 resolves the host the same way; that choice also decides which single
 script host gets compiled into the binary.
 
@@ -77,8 +77,12 @@ import introduces four namespaces:
 | `history` | `history::name(...)` | back/forward/go |
 | `document` | `document::name(...)` | root/query/get_by_id/focused/hovered/spawn |
 
-The prelude also defines one plain candela helper function, `lm_append`,
-described at the end of the DOM write-side section.
+On top of those namespaces the prelude defines a handful of plain candela
+functions and two wrapper types, so the DOM reads as method calls. Those
+are `Node` and `Event`, the constructors `node`, `event`, and `wrap_nodes`,
+the entry points `spawn`, `get_by_id`, `document_node`, and `query`, and
+the older list helper `lm_append`. Each is covered in
+[The dynamic DOM API](#the-dynamic-dom-api) below.
 
 Without the import, and without a hand-written `host` block, the source
 still compiles (candela resolves host functions lazily), but calling an
@@ -115,10 +119,18 @@ format for you, defaulting to zero/false on a miss or unparseable value.
 | `bool signal_get_bool(string name)` | Read a signal as bool; `false` on miss or unparseable value. |
 | `signal_set_bool(string name, bool value)` | Write a signal as bool. |
 
-Use this when a value drives a `bind-text`/`bind-value`/`bind-visible`
+Use this when a value drives a `bind-text` / `bind-value` / `bind-checked`
 attribute in markup, or needs to survive across handler calls (every event
 handler is a fresh call into the program; signals are the state that
 persists between calls).
+
+**Seed a signal with the setter whose type you intend to read.** A signal
+remembers the type it was written with, and the per-tick sync from the
+markup side only parses an incoming string back into that same type. Write
+`lumen::signal_set_float("audio_position", 0.0)` in `on_start` and later
+host writes parse back as floats; leave it unseeded and the first write
+lands as a string, so `signal_get_float` reads it through a string parse
+instead. The music example seeds its transport signals exactly this way.
 
 ### Classes
 
@@ -271,13 +283,10 @@ back through host-written signals bound with `bind-*` in markup.
 
 ## The dynamic DOM API
 
-candela reaches the live element tree the same way the C ABI and the other
-script hosts do, through a process-global node-id table
-(`lumen_core::node`); it does not go through the FFI crate's `lumen_*` C
-functions at all; it calls the same underlying Rust query/mutation code
-directly, as in-process host functions. Underneath, a node is a candela
-`int`: `0` always means "no node". Handles from `node_spawn` /
-`node_clone_deep` are valid for the rest of the current tick.
+candela reaches the same live element tree the other script hosts and the
+C ABI do. A node is a candela `int` handle, and `0` always means "no
+node". Handles from `node_spawn` / `node_clone_deep` are valid for the
+rest of the current tick, so you can append to a node you just spawned.
 
 Selectors passed to `node_query` / `node_closest` / `document::query` use
 the same CSS selector syntax as `main.css` (see
@@ -304,6 +313,12 @@ container.append(col);
 The field is named `handle`, not `id`, on purpose: `.id()` stays free to
 mean the element's `id` attribute (`node_id`), matching the DOM property of
 the same name.
+
+Mutator methods return nothing, so they do not chain:
+`n.set_text("x").class_add("y")` does not compile. Write one call per
+statement. The methods that hand back another node (`.parent()`,
+`.next()`, `.closest(...)`, `.clone_deep()`, ...) do chain, and they stay
+wrapped, so `container.first_child().next()` is still a `Node`.
 
 Every free function that used to hand back a raw node id (`node_spawn`,
 `node_get_by_id`, `node_document`, `node_parent`, ...) still works exactly
@@ -511,10 +526,11 @@ the handler receives as its argument. Binding is a `Node` method
 | `event_stop_propagation(int ev)` | `.stop_propagation()` | Stop the event from reaching the next node on its capture/bubble path. |
 | `event_stop_immediate_propagation(int ev)` | `.stop_immediate_propagation()` | Also stop any remaining handlers on the current node. |
 
-Every `event_*` accessor takes the event id, but currently all of them read
-one process-global "current event" cell rather than per-id state; the id
-parameter exists for the web-idiomatic `event_target(ev)` call shape and to
-leave room for nested dispatch later.
+Every `event_*` accessor takes an event id, but they all read the event
+currently being dispatched rather than the one that id names. The
+parameter is there for the web-idiomatic `event_target(ev)` call shape and
+to leave room for nested dispatch later; read an event's fields inside its
+own handler, and do not stash an id to read later.
 
 ```candela
 let btn = get_by_id("save-btn");
@@ -601,14 +617,19 @@ script into a host function.
 | `on_tray(id)` | A system tray icon is clicked. | `id: string` | `"tray"` |
 | `on_dialog_accepted(id)` | A dialog closes accepted. | `id: string` | `"dialog_accepted"` |
 | `on_dialog_rejected(id)` | A dialog closes rejected. | `id: string` | `"dialog_rejected"` |
+| `on_audio_end()` | The active audio track finishes playing. Fires only when the audio subsystem is compiled in. | none | - |
 | `on_close()` | The window is about to close, before the backend tears anything down. Return `false` to veto the close and keep the window open; any other return value (or no `on_close` at all) lets it proceed. | none | - |
 
 Every function with an `on(...)` event name above also supports per-id
 routing: `lumen::on(event, key, handler)` calls `handler` instead of the
 global function for that one key (the first argument: `id`, `tag`, `name`,
 `source_id`, or `target_id`). A key with no matching route falls through to
-the global function. `on_start`, `on_ready`, and `on_close` take no key
-argument, so they are never routed.
+the global function. `on_start`, `on_ready`, `on_audio_end`, and `on_close`
+take no key argument, so they are never routed.
+
+`on_ready` is wired by the runtime rather than by the candela host crate,
+so a bare embedding of `lumen-script-candela` that skips the standard
+plugin wiring never fires it.
 
 ## Example
 
@@ -674,3 +695,26 @@ still called as free `lumen::` functions.
 from-source run; a precompiled (AOT) app has no markup parser and treats
 it as a no-op, so apps that ship precompiled build lists node by node
 instead, as both example apps do.
+
+Two surfaces Rhai and Lua get from the runtime are not reachable here.
+`lumen::page(...)`, `lumen::page_current()`, `lumen::page_back()`,
+`lumen::page_forward()`, and `lumen::set_color_scheme(...)` are registered
+on the candela engine but are not declared in `lumen.cdl`, so calling one
+fails at runtime with "lumen is not a valid namespace". Navigate with
+`window::set_href(path)` and `window::href()` instead, which the prelude
+does declare; there is no candela equivalent for `set_color_scheme` today.
+
+**Do not nest one host call inside another's argument list.** Writing
+`lumen::signal_set_int("n", lumen::signal_get_int("n") + 1)` aborts the
+process. Bind the inner call to a local first:
+
+```candela
+let n = lumen::signal_get_int("n");
+lumen::signal_set_int("n", n + 1);
+```
+
+This is a defect in the candela virtual machine's host-call bridge, not a
+deliberate restriction. It applies to every `lumen::`, `window::`,
+`history::`, and `document::` function; calls nested inside a plain
+candela function, including the prelude's `Node` and `Event` methods, are
+unaffected.

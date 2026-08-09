@@ -109,10 +109,11 @@ cannot find the source tree on its own, point it there with the
 ### `lumenc new <template> <name>`
 
 Scaffolds a new app directory `<name>` from a built-in template: `hello`,
-`counter`, `form`, `todo`, `dashboard`, `settings`, or `hotkeys`. Every
-template ships a runnable `main.lmn` (+ CSS and script) and a README
-explaining what it demonstrates. Refuses to overwrite an existing
-directory.
+`counter`, `form`, `todo`, `dashboard`, `settings`, or `hotkeys`. Both
+arguments are required and positional; there is no default template.
+Every template ships a runnable `main.lmn`, a script, and a README
+explaining what it demonstrates, and all but `hello` ship a stylesheet.
+`new` refuses to overwrite an existing directory and has no force flag.
 
 ```
 $ lumenc new counter my-counter
@@ -134,7 +135,7 @@ run` exposes over a local TCP JSON-RPC connection - the same mechanism an
 AI agent or a CI job uses to look at and control an app under test without
 a screen. A windowed run starts this server on its own; a headless run
 does not unless `lumen.toml` turns it on. See [Headless
-mode](headless.md#documented-divergences-from-the-windowed-run) for the
+mode](headless.md#how-it-differs-from-a-windowed-run) for the
 `[mcp]` / `[runtime]` settings that control it, and
 `lumen/mcp-server/README.md` for the full JSON-RPC tool list.
 
@@ -226,14 +227,22 @@ bounds alongside the image.
 ### `lumenc i18n extract <app_dir> [--lang en-US]`
 
 Scans every `.lmn` and `.rhai` file under `app_dir` for translation call
-sites - the Rhai/Rust `t!("key", ...)` macro, the `lumen.tr("key", ...)`
-builtin, and the markup `translatable="key"` attribute - and writes or
-merges them into `<app_dir>/locale/<lang>.ftl`. Candela (`.cdl`) and Lua
-(`.lua`) scripts are not scanned yet; declare those keys from markup or add
-them to the `.ftl` by hand. Safe to re-run: existing
-entries in the target file are left untouched, and only newly discovered
-keys are appended, each with a placeholder value for a translator to
-replace.
+sites and writes or merges the keys it finds into
+`<app_dir>/locale/<lang>.ftl`, a Fluent catalogue. It recognises three
+shapes: the `t!(i18n, "key", ...)` and `tr!(i18n, "key", ...)` Rust macros,
+a `lumen.tr("key", ...)` script call, and the markup attribute
+`translatable="key"`.
+
+Re-running is safe. Entries already in the target file are left untouched,
+and only newly discovered keys are appended, each with a placeholder value
+for a translator to replace.
+
+The extractor is the only part of translation that is wired today: nothing
+loads the catalogue back at runtime, no script host registers a `tr`
+function, and `translatable="key"` is inert markup that only the scan
+reads. Treat this command as a way to start collecting keys, not as a
+working localization pipeline. Candela and Lua sources are not scanned at
+all.
 
 ## Update checks
 

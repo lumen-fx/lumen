@@ -1,14 +1,13 @@
 # Markup tag reference
 
-Lumen's authoring surface is a subset of XML-shaped markup with a fixed
-tag vocabulary. Unknown tags fail-fast at parse time with the byte
-offset. The live list is the `KNOWN_TAGS` array in
-[`lumenc/src/parser_html.rs`](https://github.com/lumen-fx/lumen/blob/main/lumenc/src/parser_html.rs);
-this page tracks every entry.
+Lumen markup is XML-shaped with a fixed tag vocabulary. An unknown tag
+fails at parse time with the byte offset, so a typo stops the build
+instead of rendering nothing. This page lists every tag, grouped by
+family.
 
-This page groups tags by family. For attribute semantics that work on
-*every* tag (`id`, `class`, `width`, `padding`, `bg`, etc.) see the
-[CSS subset](./css.md) - the same names work as inline markup attrs.
+Most attributes share a name with a CSS property and mean the same thing;
+the [CSS subset](./css.md) documents each one's full value grammar. This
+page covers the ones that are specific to a tag.
 
 ## Common attribute families
 
@@ -17,29 +16,50 @@ only when a tag interprets them in a non-default way.
 
 | Family | Attributes |
 |---|---|
-| **Layout box** | `width`, `height`, `min-width`, `min-height`, `max-width`, `max-height`, `aspect-ratio`, `padding`, `margin`, `gap`, `grow`, `align`, `justify`, `position`, `inset`, `overflow`, `overflow-x`, `overflow-y` |
-| **Visuals** | `bg`, `radius`, `shadow`, `opacity` |
-| **Text** | `text`, `text-color`, `font-size`, `text-align`, `wrap`, `max-lines`, `style` (named typography role) |
-| **Interaction** | `hover-bg`, `press-bg`, `focus-outline`, `tab-index`, `draggable`, `drop-target` (alias `drop`), `drag-payload`, `accept` |
+| **Layout box** | `width`, `height`, `min-width`, `min-height`, `max-width`, `max-height`, `aspect-ratio`, `padding`, `margin`, `inset`, `gap`, `grow`, `shrink`, `align`, `justify`, `position`, `overflow`, `overflow-x`, `overflow-y`, `z-index`, `layout-boundary` |
+| **Visuals** | `bg`, `radius`, `border`, `shadow`, `opacity` |
+| **Text** | `text`, `text-color`, `font-size`, `font-family`, `font-weight`, `line-height`, `text-align`, `wrap`, `max-lines`, `style` (named typography role) |
+| **Text input** | `selection-color`, `selection-text-color`, `caret-color`, `caret-width`, `caret-blink`, `password-character` |
+| **Widget parts** | `knob-color`, `knob-inset`, `thumb-size`, `popup-gap`, `disabled-opacity` |
+| **Scrolling** | `scroll`, `sensitivity`, `inertia`, and the eight `scrollbar-*` properties |
+| **Interaction** | `hover-bg`, `press-bg`, `focus-outline`, `tab-index`, `autofocus`, `disabled`, `draggable`, `drop-target` (alias `drop`), `drag-payload`, `accept` |
+| **Form values** | `value`, `checked`, `min`, `max`, `step`, `placeholder`, `required`, `pattern`, `multiline` |
 | **Bindings** | `bind-text`, `bind-checked`, `bind-value`, `bind-scroll`, `bind-disabled` |
-| **Reactivity** | `each`, `key`, `signal`, `mode`, `eq` (per-tag - see `<for>` / `<if>`) |
+| **Reactivity** | `each`, `key`, `virtualized`, `row-height`, `signal`, `mode`, `eq` (per-tag - see `<for>` / `<if>`) |
 | **i18n** | `dir` (`ltr` \| `rtl` \| `auto`, inherits down the tree) and `lang` (a BCP-47 tag, e.g. `en-US`) - drive text shaping, the CSS logical properties (`padding-inline-start` and friends, see the [CSS subset](./css.md#layout)), and assistive tech. |
 
-`drop-target="true"` (or the bare `drop-target` / `drop="true"` shorthand)
-marks an in-app drop zone; `accept="<mime>"` filters what it accepts
-(absent = accept anything). `drag-payload="..."` makes an element a drag
-source - an empty value derives the payload from the element's `id`. The
-`on_drop(target_id, payload)` script hook fires when a drag releases over
-a drop target; see [Scripting](./scripting.md).
+`drop-target` marks an in-app drop zone; it accepts `"true"`, `"yes"`, or
+the bare attribute with no value. Its alias `drop` needs an explicit
+`drop="true"` or `drop="yes"`. `accept="<mime>"` filters what a zone takes
+(absent, or empty, accepts anything). `drag-payload="..."` makes an element
+a drag source, and an empty value derives the payload from the element's
+`id`. The `on_drop(target_id, payload)` script hook fires when a drag
+releases over a drop target; see [Scripting](./scripting.md).
 
-Value grammar (lengths, edges, colors) lives in
-[`lumenc/src/values.rs`](https://github.com/lumen-fx/lumen/blob/main/lumenc/src/values.rs).
-A condensed reminder:
+**There are no event attributes.** Lumen has no `onclick`, `on-click`, or
+`@click`; the parser ignores them like any other unknown attribute. Wire
+behaviour from a script instead, with `lumen::on("click", "<id>", "fn")`.
 
-- Length: bare number is px (`24`), `Npx` (`24px`), `N%` (`50%`).
-- Edges (padding / margin / inset): 1, 2, or 4 numbers (CSS shorthand).
-- Color: `#rrggbb` or `#rrggbbaa`.
+**`style=` names a typography role, not a CSS block.**
+`style="headline-lg"` picks a size from the type scale;
+`style="color: red"` is a role name that does not resolve, and sets
+nothing. See [Named typography roles](./css.md#text).
+
+Value grammar:
+
+- Length: `auto`, a bare number as px (`24`), `Npx` (`24px`), or `N%` (`50%`).
+- Edges (padding / margin / inset): 1, 2, 3, or 4 terms, CSS shorthand
+  rotation; the 3-term form is `top`, `left-right`, `bottom`.
+- Color: `#rrggbb` or `#rrggbbaa`. No `rgb()`, no named colors.
 - `bg`: a color OR `linear-gradient(...)` / `radial-gradient(...)` / `conic-gradient(...)`.
+
+A few attributes are narrower than the CSS property of the same name:
+markup `radius`, `gap`, and `shadow` each take a single value, where CSS
+accepts the multi-value shorthand and a comma list. Markup `align` takes
+`start` / `end` / `center` / `stretch` and rejects `baseline`. Direction
+comes from the tag (`<row>` or `<column>`), so there is no `flex`
+attribute. The [CSS subset](./css.md) documents each property's full
+value grammar.
 
 ---
 
@@ -74,7 +94,9 @@ embedded user-agent stylesheet, `frameless` removes window decorations.
 ## `<column>` / `<row>`
 
 Flex containers. `<column>` stacks children top-to-bottom; `<row>`
-stacks left-to-right. Defaults: `align="stretch"`, `justify="start"`.
+stacks left-to-right. With no `align` or `justify` set, children stretch
+across the cross axis and pack at the start of the main axis, which is
+flexbox's own default.
 
 **Attributes.** Layout family. `gap` controls spacing between
 children. `grow` is set on *children* to claim leftover axis.
@@ -124,9 +146,7 @@ target for backgrounds, gradients, shadows.
 
 ## `<scroll>`
 
-Clipped scrolling container. Auto-applies `layout-boundary` (taffy
-sub-tree isolation) so its inner content can be relayouted without
-invalidating the rest of the tree.
+Clipped scrolling container.
 
 **Attributes.**
 
@@ -135,8 +155,13 @@ invalidating the rest of the tree.
 | `scroll` | `y` \| `x` \| `both` | Default `y`. `x` flips the inner flex to `row` automatically. |
 | `sensitivity` | number | Wheel-delta multiplier. `1.0` = default; `0.5` halves the scroll speed. |
 | `inertia` | number | 0..1 friction factor. `0` = no inertia; higher = longer glide. |
-| `layout-boundary` | bool | `true` by default for `<scroll>`. |
 | `bind-scroll` | signal name | Two-way f32 binding (logical px) to the vertical offset. |
+
+A `<scroll>` is a relayout boundary, so its contents can be laid out again
+without invalidating the rest of the tree. That falls out of its
+`overflow: scroll`; an element with both a fixed `width` and a fixed
+`height` becomes one the same way, and `layout-boundary="true"` forces it
+on any element.
 
 ```xml
 <scroll height="320" sensitivity="0.6" inertia="0.4">
@@ -207,12 +232,12 @@ Text leaf. Renders `text` through cosmic-text; respects `font-size`,
 | Attr | Type | Notes |
 |---|---|---|
 | `text` | string | Body text. Can also be the element's text content (`<label>Hi</label>`). |
-| `font-size` | number | px. Default 16. |
-| `text-color` | color | Default inherits from CSS / root. |
-| `wrap` | `none` \| `word` \| `glyph` | Default `none` (no wrap). |
+| `font-size` | number | px. Inherits; falls back to 16. |
+| `text-color` | color | Inherits from an ancestor or CSS. |
+| `wrap` | `none` \| `word` \| `glyph` \| `ellipsis` | Inherits; no wrap by default. `ellipsis` is shorthand for `text-overflow: ellipsis`. |
 | `max-lines` | int >= 0 | Truncate to N lines with an ellipsis. |
 | `text-align` | `start` \| `center` \| `end` | aliases: `left` / `right`. |
-| `style` | typography role | Named type scale (e.g. `title-lg`, `body-md`, `caption`) that sets a default `font-size`. See [CSS subset](./css.md#text). |
+| `style` | typography role | Named type scale (e.g. `title-lg`, `body-md`, `caption`) that sets a default `font-size`. Not a CSS declaration block. See [CSS subset](./css.md#text). |
 | `bind-text` | signal name | Replace text content with the named signal's value. |
 
 ```xml
@@ -330,7 +355,7 @@ href>`.
 
 | Attr | Type | Notes |
 |---|---|---|
-| `href` | page path | Required to navigate. Resolved by longest existing `.lmn` prefix, so `href="user/42"` hits `user.lmn` with `/42` left over for the page to read. |
+| `href` | page path | Needed to navigate; an `<a>` without one parses and does nothing. Resolved by longest existing `.lmn` prefix, so `href="user/42"` hits `user.lmn` with `/42` left over for the page to read. |
 | `text` | string | Same as `<label>` - can also be the element's text content. |
 
 ```xml
@@ -419,7 +444,7 @@ increment; absent, it defaults to `(max - min) / 100`.
 
 ## `<checkbox>` / `<radio>` / `<progress>`
 
-W5 form controls. All three desugar in the parser to real element
+Form controls. All three desugar in the parser to real element
 subtrees, so every visual (indicator size, colors, radii, sweep timing)
 is CSS-reachable through the skins or app CSS.
 
@@ -591,7 +616,7 @@ saves the despawn / respawn ECS cycles for branches that don't.
 
 Modal overlay. Sugar for an absolute-positioned full-viewport container
 whose visibility is bound to a signal. Implements the Qt `QDialog`
-contract (W5):
+contract:
 
 - **Focus trap** - Tab / Shift-Tab cycle only within the open dialog
   (`FocusBoundary`).
@@ -724,6 +749,7 @@ descendant state.
 |---|---|---|
 | `name` | string | Required. Used as the equality value for the bound signal. |
 | `label` | string | Optional. Visible button text; falls back to `name`. |
+| `disabled` | bool | Optional. Greys the strip button and blocks selection. |
 
 ```xml
 <tabs bind-value="active_tab">
@@ -761,6 +787,7 @@ outside its bounds.
 |---|---|---|
 | `value` | string | Required. Written to the bound signal on click. |
 | `label` | string | Optional. Visible text; falls back to `value`. |
+| `disabled` | bool | Optional. Greys the row and blocks selection. |
 
 ```xml
 <dropdown bind-value="weight" placeholder="Select weight...">
@@ -912,9 +939,12 @@ Or inline (avoid XML-illegal characters):
 </script>
 ```
 
-Multiple `<script>` blocks concatenate in source order. The file extension
-picks nothing on its own: select the host with `[script] engine` in
-`lumen.toml`. See [Scripting](./scripting.md).
+Multiple `<script>` blocks concatenate in source order into one program, run
+by one host. Lumen picks that host from the script file extensions in the app
+directory, or from `[script] engine` in `lumen.toml` when you set it; an app
+whose script is entirely inline has no extension to read and runs on candela
+unless `[script] engine` says otherwise. See
+[Scripting](./scripting.md#choosing-a-host).
 
 ---
 
@@ -1022,3 +1052,15 @@ built-in stylesheet and your own CSS.
 
 Unknown attributes are silently ignored today (forward-compat). A strict
 mode that surfaces them as parse errors is on the roadmap.
+
+## Tags that only work inside a parent
+
+Four tags are a parse error anywhere but inside their container:
+`<tab>` inside `<tabs>`, `<option>` inside `<dropdown>`, and `<menuitem>`
+and `<separator>` inside `<menu>` or `<menubar>`.
+
+Several attributes are required rather than optional, and their absence is
+a parse error: `bind-value` on `<tabs>`, `<dropdown>`, `<date-picker>`,
+and `<time-picker>`; `name` on `<tab>`; `value` on `<option>`; `id` on
+`<menu>` and `<menuitem>`; `label` on a `<menu>` nested in `<menubar>`;
+and a non-empty `group` on `<radio>`.

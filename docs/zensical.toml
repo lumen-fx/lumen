@@ -34,6 +34,7 @@ nav = [
      "authoring/tags.md",
      "authoring/css.md",
      "authoring/scripting.md",
+     "authoring/pages.md",
      "authoring/templates.md",
      "authoring/animations.md",
      "authoring/lumen-toml.md",

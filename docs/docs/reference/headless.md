@@ -1,11 +1,10 @@
 # Headless mode (automation / CI)
 
-`lumenc run <dir> --headless` runs the **full** app pipeline - layout,
-real GPU rendering, the MCP introspection server, input simulation,
-screenshots, and hot reload - with **zero windows**. No winit event loop
-is created and the compositor is never contacted, so automated
-verification (AI agents, CI jobs, golden-image checks) never disturbs
-the desktop the developer is working on.
+`lumenc run <dir> --headless` runs the whole app pipeline - layout, GPU
+rendering, the introspection server, input simulation, screenshots, and
+hot reload - without opening a window. No event loop is created and the
+compositor is never contacted, so a CI job, a test, or an agent driving an
+app never disturbs the desktop someone is working on.
 
 ```sh
 lumenc run apps/widget-garden --headless
@@ -44,7 +43,7 @@ lumenc run apps/counter --headless --ticks 120   # bounded CI run
 `CloseRequest` onto the message bus, run one final tick so
 close-observing systems fire, and exit with status 0.
 
-## Documented divergences from the windowed run
+## How it differs from a windowed run
 
 * **The MCP server is off by default.** A windowed run starts the MCP
   introspection server automatically; a headless run does not, since the
@@ -54,7 +53,7 @@ close-observing systems fire, and exit with status 0.
   `type` / `key` / `scroll` inject input - or set `[runtime] mcp = true`
   to force it on for introspection alone. `[mcp] port = 0` disables it
   either way. Once the server is running, `lumenc snapshot` and `lumenc
-  screenshot` (real rendered PNGs) behave exactly as they do windowed.
+  screenshot` behave exactly as they do windowed, rendered PNGs included.
 * **No pause-on-unfocus.** The windowed scheduler suppresses redraws
   while unfocused/occluded; headless has no focus, so ticks always run
   on demand.

@@ -107,9 +107,8 @@ browser's own URL bar.
 ## Navigating from script
 
 The scripting surface to navigate is `page(path)` for Rhai and Lua, and
-`window::set_href(path)` for candela (candela has no bare global functions,
-so navigation lives on the `window` namespace alongside the rest of the
-window/history surface):
+`window::set_href(path)` for candela, where it sits on the `window`
+namespace alongside the rest of the window and history surface:
 
 ```rhai
 // Rhai or Lua
@@ -176,6 +175,11 @@ page also shows the programmatic path:
   fn on_start() { on("click", "go-settings", "goto_settings"); }
 </script>
 ```
+
+That script is Rhai, and the app says so with `[script] engine = "rhai"`.
+It has to: the script is inline, so there is no file extension for host
+inference to read, and the fallback is candela. See
+[Choosing a host](./scripting.md#choosing-a-host).
 
 Run it to see file-based routing end to end, including the `/user/42`
 prefix-resolution case described above.

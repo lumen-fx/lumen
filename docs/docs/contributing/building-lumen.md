@@ -116,7 +116,7 @@ every subsystem; per-app trimming happens only on `lumenc bundle
 | `async` | on | Links `lumen-async-tokio`, the spawn/timer bridge scripts and the async file-dialog path use. |
 | `host-lua` | on | Links `lumen-script-lua` and `mlua`, adding the Lua script host alongside the always-on Rhai host. |
 | `host-candela` | on | Links `lumen-script-candela`, adding the candela script host. |
-| `devtools` | off | Links `lumen-devtools`, the in-window overlay. Off by default; a release or `--bundle` build never carries it. |
+| `devtools` | off | Links `lumen-devtools`, the in-window overlay. Off by default; a release or `lumenc bundle --static` build never carries it. |
 | `http-fetch` | on | Forwards to `lumen-script`, `lumen-script-rhai`, and weakly to `lumen-script-lua`/`lumen-script-candela`, compiling the scripts' HTTP `fetch()` builtin. |
 | `runtime-parse` | on | No dependency of its own; gates the from-source load + hot-reload code path itself. |
 | `profiling` | off | Adds `tracing-subscriber` and `tracing-chrome`, and turns on `bevy_ecs`'s `trace`/`debug` features, so every ECS system and schedule run emits a span. |
@@ -155,9 +155,11 @@ goldens, which are sensitive to the host's default font) detect a
 runner-like environment and skip themselves with a printed reason rather
 than failing.
 
-The `lumen-benches` crate holds tests for runtime hot paths, including a
-check that repeat text shaping is served from the cache rather than reshaped.
-They run with the rest of the suite.
+Hot-path regression tests live beside the crate they cover, so they run with
+the rest of the suite: `lumen-text-cosmic` checks that repeat shaping is
+served from the cache rather than reshaped, `lumen-layout-taffy` checks that
+an idle tick does no layout work, and `lumen-primitives` checks transition
+sampling.
 
 ## Installing the language server from source
 
@@ -173,9 +175,8 @@ stdio and negotiates its capabilities with the client.
 
 ## Crate layout
 
-The workspace lives under `lumen/`, plus `lumenc`, `sdk/rust`, and
-`benches` at the repo root. Rough map, for deciding where a change
-belongs:
+The workspace lives under `lumen/`, plus `lumenc` and `sdk/rust` at the
+repo root. Rough map, for deciding where a change belongs:
 
 - **`lumen-core`**: the tick loop, ECS setup, command queue, and the
   backend traits (window, renderer, text shaper, layout engine, script
@@ -187,7 +188,8 @@ belongs:
   file-based pages, and app loaders. Parser-free; `lumenc` injects a
   parser via `SourceParser`.
 - **`lumenc`**: the markup/CSS compiler front end and the CLI (`new`,
-  `run`, `build`, `check`, `bundle`, `fmt`, `lint`, `screenshot`, `mcp`).
+  `run`, `build`, `check`, `bundle`, `fmt`, `lint`, `screenshot`, and the
+  rest of the automation subcommands).
 - **Backend impl crates**: `lumen-render-wgpu` (wgpu/vello renderer),
   `lumen-render-headless` (in-memory RGBA renderer for CI/tests),
   `lumen-window-winit` (window + raw input), `lumen-layout-taffy`
@@ -214,7 +216,6 @@ belongs:
 - **`sdk/rust`** (crate name `lumen`): the single-dependency Rust SDK for
   building or embedding a Lumen app, built on `lumen-runtime` plus
   `lumenc`'s parser.
-- **`benches`** (crate name `lumen-benches`): tests for runtime hot paths.
 
 A change to how something looks or behaves at the app level usually
 belongs in `lumen-runtime` or a backend crate; a change to markup/CSS

@@ -10,7 +10,7 @@ built-in debug overlay works rather than a standalone inspector app.
 ## Enabling it
 
 The overlay lives in the `lumen-devtools` crate and is off by default -
-a release or `--bundle` build never links it. Build `lumenc` with the
+a release or `lumenc bundle --static` build never links it. Build `lumenc` with the
 `devtools` cargo feature to include it:
 
 ```sh
@@ -43,12 +43,11 @@ The body text rebuilds every tick while the panel is visible, reading the
 same in-process snapshot the MCP introspection tools use - it opens no
 socket of its own.
 
-## What is not built yet
+## Limits
 
-The panel is read-only and text-based today. It has no click-to-select
-node with a full component dump, no way to write a signal from the
-panel, no on-screen highlight for a selected element, and no search or
-filter box on the Elements tab. Tab clicks and F12 are the entire
+The panel is read-only and text-based. You cannot click a node to select
+it, write a signal from the panel, highlight an element on screen, or
+search and filter the Elements tab. Tab clicks and F12 are the whole
 interaction surface.
 
 ## Driving an app instead of watching it
