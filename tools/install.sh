@@ -39,8 +39,9 @@
 #
 #   lumen-<target>.tar.gz     target in {linux-x86_64, linux-aarch64,
 #                              macos-x86_64, macos-aarch64}
-#   lumen-windows-x86_64.zip  Windows is not unpacked by this script; see
-#                             the windows branch below
+#   lumen-windows-x86_64.msi  the Windows installer. This script never
+#                             fetches or runs it; the windows branch below
+#                             prints its URL and stops.
 #
 # tools/release-checklist.md documents producing the asset under this
 # scheme. The archive holds the tree to install: bin/ for lumenc, and the
@@ -484,13 +485,13 @@ TAG="$(rf tag_name)"
 RELEASE="${TAG#v}"
 
 if [ "$OS" = windows ]; then
-  WIN_URL="$(asset_field "lumen-windows-$ARCH.zip" browser_download_url || true)"
+  WIN_URL="$(asset_field "lumen-windows-$ARCH.msi" browser_download_url || true)"
   say "This installer covers Linux and macOS."
   if [ -n "$WIN_URL" ]; then
-    say "For Windows, download and unpack:"
+    say "For Windows, download and run the installer:"
     say "  $WIN_URL"
   else
-    say "A Windows build is not published for $ARCH yet. See https://github.com/$GH_REPO/releases"
+    say "A Windows installer is not published for $ARCH yet. See https://github.com/$GH_REPO/releases"
   fi
   exit 1
 fi

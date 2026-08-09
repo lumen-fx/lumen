@@ -18,14 +18,11 @@ run it with: lumenc run my-counter
 
 The template writes four source files and a README:
 
-```text
-my-counter/
-|-- main.lmn    # the markup tree
-|-- main.css    # styling
-|-- main.cdl    # the candela script
-|-- lumen.toml  # per-app config
-`-- README.md   # what the template demonstrates
-```
+- `main.lmn` - the markup tree.
+- `main.css` - styling.
+- `main.cdl` - the candela script.
+- `lumen.toml` - per-app config.
+- `README.md` - what the template demonstrates.
 
 ## Run it
 
