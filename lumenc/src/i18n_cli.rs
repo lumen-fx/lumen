@@ -1,13 +1,16 @@
 //! `lumenc i18n extract <app_dir>` - translation-string extractor.
 //!
-//! Walks `<app_dir>` for `.lmn` + `.rhai` files, finds every
-//! translation call site, and writes a `locale/<base_lang>.ftl` file
-//! with placeholder values matching the keys.
+//! Walks `<app_dir>` for markup (`.lmn`) and script (`.rhai`, `.lua`,
+//! `.cdl`) files, finds every translation call site, and writes a
+//! `locale/<base_lang>.ftl` file with placeholder values matching the
+//! keys.
 //!
-//! Two call shapes are recognized:
+//! Three call shapes are recognized:
 //!
-//! - Rhai / Rust macro: `t!("key", ...)` / `tr!("key", ...)` /
-//!   `lumen.tr("key", ...)` - string literal as the first argument.
+//! - Script builtin: `t("key")` / `tr("key")`, and candela's namespaced
+//!   `lumen::t("key")` - string literal as the first argument.
+//! - Rust macro: `t!(i18n, "key", ...)` / `tr!(i18n, "key", ...)` -
+//!   string literal as the second argument.
 //! - Markup attribute: `<text translatable="key">...</text>` or
 //!   `<label translatable="key">...</label>`.
 //!
@@ -25,10 +28,10 @@
 //!
 //! `<base_lang>` defaults to `en-US`; override with `--lang <tag>`.
 //!
-//! This is an intentionally simple substring/regex-style scanner - it
-//! catches the common shapes and emits a stub `.ftl`. A full
-//! AST-walking pass over the `.rhai` and `.lmn` parsers can come
-//! later; the W5.7 plan calls this out as the stub-and-iterate path.
+//! The scanner works on text, not on a parsed AST: it finds the call
+//! prefix, checks it starts a name rather than ending one, and reads the
+//! string literal that follows. A key built at runtime rather than
+//! written as a literal is invisible to it.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -116,8 +119,8 @@ fn cmd_extract(args: impl Iterator<Item = String>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Recursively walk `dir` and feed every `.lmn` / `.rhai` file
-/// through [`extract_keys_into`].
+/// Recursively walk `dir` and feed every markup / script file
+/// (`.lmn`, `.rhai`, `.lua`, `.cdl`) through [`extract_keys_into`].
 pub fn scan_dir(dir: &Path, keys: &mut BTreeSet<String>) -> std::io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
@@ -137,7 +140,7 @@ pub fn scan_dir(dir: &Path, keys: &mut BTreeSet<String>) -> std::io::Result<()> 
             && let Some(ext) = path.extension()
         {
             let ext = ext.to_string_lossy();
-            if matches!(ext.as_ref(), "lmn" | "rhai") {
+            if matches!(ext.as_ref(), "lmn" | "rhai" | "lua" | "cdl") {
                 let body = fs::read_to_string(&path)?;
                 extract_keys_into(&body, keys);
             }
@@ -150,16 +153,16 @@ pub fn scan_dir(dir: &Path, keys: &mut BTreeSet<String>) -> std::io::Result<()> 
 ///
 /// Recognizes three forms:
 ///
+/// - `t("key")` / `tr("key")` / `lumen::t("key")` - script builtin;
+///   first arg is the key literal.
 /// - `t!(i18n, "key", ...)` / `tr!(i18n, "key", ...)` - Rust macro;
 ///   first arg is the I18n resource binding (an expression),
 ///   second arg is the key literal.
-/// - `lumen.tr("key", ...)` / `lumen.t("key", ...)` - Rhai builtin;
-///   first arg is the key literal.
 /// - `translatable="key"` - markup attribute.
 ///
 /// The scanner is regex-free (no extra dep): it looks for the prefix
 /// substring, advances past whitespace, then either reads a string
-/// literal directly (Rhai / markup forms) or skips one argument and
+/// literal directly (builtin / markup forms) or skips one argument and
 /// then reads the literal (macro form).
 pub fn extract_keys_into(src: &str, out: &mut BTreeSet<String>) {
     // Macro forms - the key is the second arg.
@@ -173,12 +176,17 @@ pub fn extract_keys_into(src: &str, out: &mut BTreeSet<String>) {
             idx = start;
         }
     }
-    // Rhai builtins - the key is the first arg.
-    for prefix in ["lumen.tr(", "lumen.t("] {
+    // Script builtins - the key is the first arg. One scan covers every
+    // host's spelling: bare `t("key")` (rhai / lua) and the namespaced
+    // `lumen::t("key")` (candela) differ only in what precedes the call.
+    for prefix in ["t(", "tr("] {
         let mut idx = 0;
         while let Some(pos) = src[idx..].find(prefix) {
-            let start = idx + pos + prefix.len();
-            if let Some(key) = read_string_arg(&src[start..]) {
+            let at = idx + pos;
+            let start = at + prefix.len();
+            if is_call_boundary(src, at)
+                && let Some(key) = read_string_arg(&src[start..])
+            {
                 out.insert(key);
             }
             idx = start;
@@ -194,6 +202,18 @@ pub fn extract_keys_into(src: &str, out: &mut BTreeSet<String>) {
         }
         idx = start;
     }
+}
+
+/// Whether the name starting at byte `at` begins a call rather than
+/// ending a longer identifier. `t(` must not match the tail of
+/// `insert(` or `assert(`, but must match `lumen::t(` and `lumen.t(`,
+/// so the test is on the preceding character: anything that cannot
+/// continue an identifier starts a fresh name.
+fn is_call_boundary(src: &str, at: usize) -> bool {
+    src[..at]
+        .chars()
+        .next_back()
+        .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
 }
 
 /// Skip the first argument (a simple ident / path expression), then
@@ -363,15 +383,31 @@ mod tests {
     }
 
     #[test]
-    fn extract_rhai_lumen_tr() {
+    fn extract_script_builtin_calls() {
+        // Bare `t` / `tr` (rhai, lua) and candela's namespaced form.
         let src = r#"
-            let s = lumen.tr("hello");
-            let t = lumen.tr("count", #{ n: 3 });
+            let a = t("hello");
+            let b = tr("count");
+            let c = lumen::t("cdl-key");
+            let d = lumen::tr("cdl-alias");
         "#;
         let mut keys = BTreeSet::new();
         extract_keys_into(src, &mut keys);
-        assert!(keys.contains("hello"));
-        assert!(keys.contains("count"));
+        for k in ["hello", "count", "cdl-key", "cdl-alias"] {
+            assert!(keys.contains(k), "missing {k}");
+        }
+    }
+
+    #[test]
+    fn extract_ignores_names_merely_ending_in_t() {
+        let src = r#"
+            list.insert("not-a-key");
+            assert("also-not");
+            print("nope");
+        "#;
+        let mut keys = BTreeSet::new();
+        extract_keys_into(src, &mut keys);
+        assert!(keys.is_empty(), "picked up {keys:?}");
     }
 
     #[test]
@@ -442,11 +478,15 @@ mod tests {
         )
         .unwrap();
         let rhai = dir.join("main.rhai");
-        fs::write(&rhai, "let s = lumen.tr(\"greet\");\n").unwrap();
+        fs::write(&rhai, "let s = t(\"greet\");\n").unwrap();
+        // Every script language the runtime hosts is scanned.
+        fs::write(dir.join("logic.lua"), "local s = tr(\"lua-key\")\n").unwrap();
+        fs::write(dir.join("app.cdl"), "let s = lumen::t(\"cdl-key\");\n").unwrap();
         let mut keys = BTreeSet::new();
         scan_dir(&dir, &mut keys).unwrap();
-        assert!(keys.contains("app-title"));
-        assert!(keys.contains("greet"));
+        for k in ["app-title", "greet", "lua-key", "cdl-key"] {
+            assert!(keys.contains(k), "missing {k}");
+        }
     }
 
     fn tempdir() -> PathBuf {
