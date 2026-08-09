@@ -1,0 +1,7 @@
+[app]
+entry = "main.lmn"
+id    = "dev.lumen.examples.python-todo"
+
+[window]
+title = "Lumen - Python Todo"
+size  = [460, 520]

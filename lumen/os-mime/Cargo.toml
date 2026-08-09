@@ -1,0 +1,12 @@
+[package]
+name = "lumen-os-mime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Shared MimePayload + Action abstractions for lumen-os-* crates (QMimeData / GdkContentProvider / QAction / GAction analog)."
+
+[dependencies]
+smallvec = "1"

@@ -1,0 +1,22 @@
+<root class="app">
+  <column class="shell" gap="16" padding="28">
+    <label class="h1" text="Lumen - Python SDK Todo" />
+    <label id="summary" class="summary" bind-text="summary" text="0 items" />
+    <row gap="8">
+      <button id="add" class="btn" text="Add item" />
+      <button id="clear" class="btn-danger" text="Clear" />
+    </row>
+    <column class="list-card" grow="1" min-height="0" gap="4">
+      <scroll class="list-scroll" grow="1" min-height="0">
+        <!-- Rows come from the "items" array signal: one dict per row,
+             {text} interpolates the row's `text` field. -->
+        <for each="items" key="id">
+          <row class="todo-row">
+            <label class="todo-text" text="{text}" />
+          </row>
+        </for>
+      </scroll>
+    </column>
+    <label class="hint" text="state.items is a typed list signal; reassigning it re-renders the &lt;for&gt;." />
+  </column>
+</root>

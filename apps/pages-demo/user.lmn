@@ -1,0 +1,16 @@
+<root>
+  <use template="layout">
+    <column gap="8">
+      <label class="title" font-size="24" text="User"/>
+      <!--
+        There is no `user/42.lmn`. The runtime resolves `/user/42` to the
+        longest existing page prefix (`user.lmn`) and exposes the leftover
+        `/42` on the reserved `route.segment` signal. The framework never
+        parses the segment into typed params - the page does. Here we just
+        bind it into a label; a real app would parse it for an id.
+      -->
+      <label text="Resolved to user.lmn; leftover path segment:"/>
+      <label id="user-seg" bind-text="route.segment" text="(none)"/>
+    </column>
+  </use>
+</root>

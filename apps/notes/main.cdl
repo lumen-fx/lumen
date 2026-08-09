@@ -1,0 +1,244 @@
+// Margin - markdown notes on the candela dynamic DOM API.
+//
+// The sidebar note list and the live preview are built as real elements
+// (spawn / append, the Node method sugar over lumen.cdl's node_spawn /
+// node_append), the way JavaScript uses createElement / appendChild. There is
+// no signal_array and no <for>: main.lmn ships two empty containers
+// (#note-list-body, #preview-body) and this script fills them.
+//
+// Markdown rendering runs in C. The `dylib "md"` block below imports libmd.so
+// (built from md.c next to this file); the script splits a note body into lines
+// and calls md_class / md_text per line to classify and render each block. This
+// demonstrates candela calling a bundled C library on the host runtime.
+//
+// Per-note state lives in signals, since each event handler is a fresh call
+// into the program: `note_ids` holds the id list, `body:<id>` holds each note's
+// text, `current` the selected id. Editing writes straight to `body:<current>`
+// from the editor's input event, so switching notes never loses a word.
+
+import "lumen.cdl";
+
+// Markdown block classification in C. md_class returns the CSS block class for
+// a source line; md_text returns the text to display for it. candela resolves
+// the bare name "md" to libmd.so / libmd.dylib in this file's directory.
+dylib "md" {
+    string md_class(string);
+    string md_text(string);
+}
+
+// --- Per-note state, stored in signals ---------------------------------------
+
+fn note_body(id) {
+    let key = "body:" + id;
+    let body = lumen::signal_get(key);
+    return body;
+}
+
+fn seed_note(id, body) {
+    let key = "body:" + id;
+    lumen::signal_set(key, body);
+}
+
+fn note_ids() {
+    let joined = lumen::signal_get("note_ids");
+    let ids = joined.split("|");
+    return ids;
+}
+
+// --- Title / snippet derived from a note body --------------------------------
+
+fn first_line(body) {
+    let lines = body.split("\n");
+    if lines.len() == 0 {
+        return "";
+    }
+    return lines[0];
+}
+
+// The sidebar title is the first line run through the C parser (heading markers
+// stripped), so a "# Heading" note titles as "Heading".
+fn note_title(id) {
+    let body = note_body(id);
+    let fl = first_line(body);
+    let title = md::md_text(fl);
+    if title == "" {
+        return "Untitled";
+    }
+    return title;
+}
+
+fn note_snippet(id) {
+    let body = note_body(id);
+    let one = body.replace("\n", " ");
+    let trimmed = one.trim();
+    if trimmed == "" {
+        return "empty note";
+    }
+    if trimmed.len() > 46 {
+        let cut = trimmed[0..46];
+        return cut + "...";
+    }
+    return trimmed;
+}
+
+// --- Sidebar list (built element by element) ---------------------------------
+
+fn add_sidebar_row(container, id, cur) {
+    let cls = "note";
+    if id == cur {
+        cls = "note note-active";
+    }
+    let col = spawn("column");
+    col.set_attr("class", cls);
+    let row_id = "nt|" + id;
+    col.set_attr("id", row_id);
+    container.append(col);
+
+    let title = note_title(id);
+    let title_lbl = spawn("label");
+    title_lbl.set_attr("class", "note-title");
+    title_lbl.set_text(title);
+    col.append(title_lbl);
+
+    let snip = note_snippet(id);
+    let snip_lbl = spawn("label");
+    snip_lbl.set_attr("class", "note-snip");
+    snip_lbl.set_text(snip);
+    col.append(snip_lbl);
+}
+
+fn clear_children(container) {
+    let kids = container.children();
+    for k in kids {
+        k.remove();
+    }
+}
+
+fn rebuild_sidebar() {
+    let container = get_by_id("note-list-body");
+    if !container.exists() {
+        return;
+    }
+    clear_children(container);
+    let cur = lumen::signal_get("current");
+    let ids = note_ids();
+    for id in ids {
+        add_sidebar_row(container, id, cur);
+    }
+}
+
+// --- Live preview (markdown parsed in C, one label per block) ----------------
+
+fn add_preview_block(container, line) {
+    let cls = md::md_class(line);
+    if cls == "blk-blank" {
+        return;
+    }
+    let text = md::md_text(line);
+    let lbl = spawn("label");
+    lbl.set_attr("class", cls);
+    lbl.set_text(text);
+    container.append(lbl);
+}
+
+fn rebuild_preview() {
+    let container = get_by_id("preview-body");
+    if !container.exists() {
+        return;
+    }
+    clear_children(container);
+    let cur = lumen::signal_get("current");
+    let body = note_body(cur);
+    let lines = body.split("\n");
+    for line in lines {
+        add_preview_block(container, line);
+    }
+}
+
+// --- Note selection / editing ------------------------------------------------
+
+fn load_note(id) {
+    lumen::signal_set("current", id);
+    let body = note_body(id);
+    lumen::signal_set("body", body);
+    rebuild_preview();
+    rebuild_sidebar();
+}
+
+// The editor textarea binds bind-text="body". A commit dispatches
+// on_text_input(id, text); write the new text back into the current note and
+// rebuild the preview and sidebar. This is the event-driven live preview: there
+// is no tick watcher.
+fn on_text_input(id, text) {
+    if id != "editor" {
+        return;
+    }
+    let cur = lumen::signal_get("current");
+    if cur == "" {
+        return;
+    }
+    let key = "body:" + cur;
+    lumen::signal_set(key, text);
+    rebuild_preview();
+    rebuild_sidebar();
+}
+
+fn new_note(clicked_id) {
+    let n = lumen::signal_get_int("next_id");
+    let next = n + 1;
+    lumen::signal_set_int("next_id", next);
+    let new_id = "n" + str(n);
+    let joined = lumen::signal_get("note_ids");
+    let updated = joined + "|" + new_id;
+    lumen::signal_set("note_ids", updated);
+    let key = "body:" + new_id;
+    lumen::signal_set(key, "# Untitled\n\nWrite something.");
+    load_note(new_id);
+}
+
+fn toggle_theme(clicked_id) {
+    let theme = lumen::signal_get("theme");
+    if theme == "dark" {
+        lumen::signal_set("theme", "light");
+        lumen::set_root_class("app theme-light");
+        lumen::signal_set("theme_label", "Light mode");
+    } else {
+        lumen::signal_set("theme", "dark");
+        lumen::set_root_class("app theme-dark");
+        lumen::signal_set("theme_label", "Dark mode");
+    }
+}
+
+// Sidebar rows carry the id "nt|<note>"; no per-id handler is registered for
+// them, so their clicks fall through to on_click.
+fn on_click(id) {
+    if id.starts_with("nt|") {
+        let note_id = id[3..id.len()];
+        load_note(note_id);
+    }
+}
+
+fn on_start() {
+    lumen::signal_set("theme", "dark");
+    lumen::signal_set("theme_label", "Dark mode");
+    lumen::signal_set_int("next_id", 4);
+    lumen::signal_set("body", "");
+    lumen::signal_set("current", "");
+    lumen::signal_set("note_ids", "n1|n2|n3");
+
+    seed_note("n1", "# Welcome to Margin\n\nA two-pane markdown editor built on Lumen.\n\n- Type on the left\n- See it render on the right\n- Switch notes without losing a word\n\n## How it renders\n\nEach line runs through a C markdown parser, one label per block.");
+    seed_note("n2", "# Release checklist\n\n## Before tagging\n\n- Zero CSS warnings across examples\n- Snapshots eyeballed on the headless display\n- README run command verified\n\n## Notes\n\nThe reconciler keeps focus and scroll across edits, so typing in this list never jumps the caret.");
+    seed_note("n3", "# Palette\n\nMargin ships two full token scopes.\n\n## Dark\n\nInk background, warm ochre accent.\n\n## Light\n\nIvory paper, burnt-orange accent.\n\nToggle with the button in the sidebar; set_root_class swaps the whole scope in one tick.");
+
+    lumen::on("click", "new-note", "new_note");
+    lumen::on("click", "theme-toggle", "toggle_theme");
+}
+
+// on_ready fires on the first tick, after the DOM index is published, so the
+// containers are queryable. The initial note load (and its markdown parse via
+// the C library) lives here, not in on_start.
+fn on_ready() {
+    load_note("n1");
+}
+
+fn main() {}

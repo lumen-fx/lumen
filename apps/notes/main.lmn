@@ -1,0 +1,35 @@
+<root class="app theme-dark" skin="default">
+  <row class="frame" grow="1">
+
+    <!-- Note list -->
+    <column class="sidebar" width="248px">
+      <row class="side-head" align="center">
+        <label class="side-brand" grow="1" text="Margin" />
+        <button id="new-note" class="new-btn" text="+ New" />
+      </row>
+      <scroll class="note-list" grow="1">
+        <column id="note-list-body" gap="4" />
+      </scroll>
+      <button id="theme-toggle" class="theme-btn" bind-text="theme_label" />
+    </column>
+
+    <!-- Editor + preview -->
+    <row class="workspace" grow="1" gap="1">
+      <column class="pane editor-pane" grow="1">
+        <label class="pane-label" text="EDITOR" />
+        <textarea id="editor" class="editor" grow="1" width="100%"
+                  placeholder="# Start writing...&#10;&#10;Markdown renders on the right."
+                  bind-text="body" />
+      </column>
+
+      <column class="pane preview-pane" grow="1">
+        <label class="pane-label" text="PREVIEW" />
+        <scroll class="preview" grow="1">
+          <column id="preview-body" gap="8" />
+        </scroll>
+      </column>
+    </row>
+  </row>
+
+  <script src="main.cdl" />
+</root>

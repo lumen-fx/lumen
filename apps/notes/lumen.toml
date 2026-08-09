@@ -1,0 +1,37 @@
+[app]
+entry = "main.lmn"
+id    = "com.lumen.examples.notes"
+
+[script]
+engine = "candela"
+
+[window]
+title = "Margin - Notes"
+size  = [1000, 720]
+
+# The candela script imports `md.c` as a shared library (`dylib "md"`); build
+# it before the app runs. Only the entry matching the host OS fires. See
+# md.c:19-20 for the Linux/macOS command lines. candela resolves a bare
+# `dylib` name with no "lib" prefix on Windows, hence "md.dll" (not
+# "libmd.dll") below; the build line assumes a MinGW-flavored `cc` (MSYS2 /
+# MinGW-w64) is on PATH - see README.md.
+[[hooks]]
+when    = "prebuild"
+os      = "linux"
+run     = "cc -shared -fPIC -O2 -o libmd.so md.c"
+inputs  = ["md.c"]
+outputs = ["libmd.so"]
+
+[[hooks]]
+when    = "prebuild"
+os      = "macos"
+run     = "cc -shared -fPIC -O2 -o libmd.dylib md.c"
+inputs  = ["md.c"]
+outputs = ["libmd.dylib"]
+
+[[hooks]]
+when    = "prebuild"
+os      = "windows"
+run     = "cc -shared -O2 -o md.dll md.c"
+inputs  = ["md.c"]
+outputs = ["md.dll"]

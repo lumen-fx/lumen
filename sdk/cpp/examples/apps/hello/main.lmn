@@ -1,0 +1,6 @@
+<root class="app">
+  <column gap="12" padding="32">
+    <label class="h1" text="Hello from the Lumen C++ SDK" />
+    <label class="hint" text="The smallest possible app: lumen.toml + main.lmn." />
+  </column>
+</root>

@@ -1,0 +1,192 @@
+name: Release
+
+# Publishes the Lumen toolchain (lumenc + liblumen) to a GitHub release, in
+# the exact shape tools/install.sh expects: one lumen-<target>.tar.gz per
+# Unix target and one lumen-windows-x86_64.zip, each holding bin/lumenc plus
+# the liblumen shared library. That layout comes from two places, not from
+# guessing:
+#
+#   - install.sh requires a top-level bin/ directory in the archive (its
+#     unpack step fails otherwise) and looks up the asset by the exact name
+#     lumen-<target>.tar.gz / lumen-windows-x86_64.zip.
+#   - lumenc/src/loader.rs dlopens liblumen from next to its own executable
+#     (or an LUMEN_LIB_DIR override, or the platform loader's default
+#     search path) - never from a sibling lib/ directory. So the shared
+#     library goes in bin/, next to lumenc, or a normal `~/.lumen` install
+#     would put a lumenc on PATH that cannot find its own runtime.
+#
+# lumenc does not link lumen-ffi at compile time (that is the whole point of
+# the dlopen seam), so it and liblumen are two separate `cargo build`
+# invocations, both under the workspace's [profile.release] (opt-level "s",
+# fat LTO, strip = "symbols" - already stripped, no separate strip step
+# needed here).
+#
+# Target coverage - every leg here builds NATIVELY for its own target, no
+# cross-compilation:
+#
+#   linux-x86_64    ubuntu-latest, same image as ci.yml
+#   linux-aarch64   ubuntu-24.04-arm, GitHub's hosted Arm64 Linux runner.
+#                   ci.yml's matrix has no aarch64 leg, so this is the only
+#                   place this target gets built at all; unlike x86_64 it is
+#                   not proven by a green CI run first.
+#   macos-aarch64   macos-latest (Apple Silicon), same image as ci.yml
+#   macos-x86_64    macos-26-intel. ci.yml has no Intel Mac leg either;
+#                   this label is what lumen-fx/candela's own release
+#                   workflow uses today, which is the freshest evidence
+#                   available that it is a real, current runner image.
+#   windows-x86_64  windows-latest, same image as ci.yml
+#
+# install.sh also accepts a windows-aarch64 target in principle (it derives
+# the target from `uname`/platform detection generically), but there is no
+# GitHub-hosted Windows-on-Arm runner to build it on, so it is not produced.
+# install.sh already handles a missing Windows asset gracefully (it prints
+# the release page link instead of failing).
+#
+# Triggers on any vX.Y.Z tag push. The repository starts with no releases
+# and no tags, so the first run of this workflow is also the first release.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# contents: write is only needed by the release job, which is where it is
+# granted; the build matrix only checks out and compiles, so it keeps the
+# default read-only token.
+permissions:
+  contents: read
+
+# Unlike ci.yml, a release in progress is never cancelled by a follow-up
+# push to the same tag (tags do not move) or a different tag (different
+# group). This only matters if the same tag is deleted and re-pushed.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    # The release profile (fat LTO, one codegen unit) is slower to build
+    # than the dev-ish builds in ci.yml's test job, hence the longer budget.
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            os: ubuntu-latest
+            libname: liblumen_ffi.so
+          - target: linux-aarch64
+            os: ubuntu-24.04-arm
+            libname: liblumen_ffi.so
+          - target: macos-aarch64
+            os: macos-latest
+            libname: liblumen_ffi.dylib
+          - target: macos-x86_64
+            os: macos-26-intel
+            libname: liblumen_ffi.dylib
+          - target: windows-x86_64
+            os: windows-latest
+            libname: lumen_ffi.dll
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Install pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: .github/scripts/linux-deps.sh
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      # Two crates, two artifacts: the lumenc binary and the liblumen cdylib
+      # (crate lumen-ffi). Neither depends on the other at compile time -
+      # lumenc dlopens liblumen at run time - so both need building.
+      - name: Build lumenc
+        run: cargo build --release -p lumenc
+
+      - name: Build liblumen (lumen-ffi cdylib)
+        run: cargo build --release -p lumen-ffi
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist/bin
+          cp target/release/lumenc dist/bin/
+          cp target/release/${{ matrix.libname }} dist/bin/
+          tar -czf lumen-${{ matrix.target }}.tar.gz -C dist .
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist\bin | Out-Null
+          Copy-Item target\release\lumenc.exe dist\bin\
+          Copy-Item target\release\${{ matrix.libname }} dist\bin\
+          Compress-Archive -Path dist\* -DestinationPath lumen-${{ matrix.target }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lumen-${{ matrix.target }}
+          path: |
+            lumen-${{ matrix.target }}.tar.gz
+            lumen-${{ matrix.target }}.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: publish release
+    needs: build
+    # Runs even if one matrix leg failed, so a single broken target (most
+    # likely linux-aarch64 or macos-x86_64 - see the header comment) still
+    # lets every other archive reach the release instead of blocking all of
+    # them. gh release upload --clobber makes re-running this job safe after
+    # a fix: it replaces same-named assets rather than failing on them.
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Check something built
+        run: |
+          shopt -s nullglob
+          files=(artifacts/*.tar.gz artifacts/*.zip)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "release.yml: every build leg failed, nothing to publish" >&2
+            exit 1
+          fi
+          printf 'publishing:\n'
+          printf '  %s\n' "${files[@]}"
+
+      - name: Create the release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          files=(artifacts/*.tar.gz artifacts/*.zip)
+          if gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "${{ github.ref_name }}" "${files[@]}" \
+              --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "${{ github.ref_name }}" "${files[@]}" \
+              --repo "${{ github.repository }}" \
+              --title "${{ github.ref_name }}" \
+              --generate-notes
+          fi

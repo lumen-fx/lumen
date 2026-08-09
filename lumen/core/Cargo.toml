@@ -1,0 +1,32 @@
+[package]
+name = "lumen-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen UI framework core: tick loop, ECS, command queue, backend traits."
+
+[dependencies]
+# Core runtime/storage primitives only. No backend (render/window/text/script) deps.
+# Hierarchy lives in bevy_ecs::hierarchy. No bevy_hierarchy crate.
+bevy_ecs.workspace = true
+bevy_tasks.workspace = true
+crossbeam-channel.workspace = true
+glam.workspace = true
+thiserror.workspace = true
+# A11y state flags (mirrors GTK4 / Qt6 state bus). Already a transitive dep
+# via wgpu/winit/accesskit so no new code joins the tree.
+bitflags = "2"
+# Small inline buffer for a11y relations (labelled_by, controls, owns).
+# Most entities carry zero or one relation; inline 2 keeps it heap-free.
+# Already a transitive dep via wgpu/cosmic-text/etc.
+smallvec = "1"
+# W3.1: rope buffer for editable text.
+ropey.workspace = true
+# W3.1: grapheme cluster iteration for TextPos.
+unicode-segmentation.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

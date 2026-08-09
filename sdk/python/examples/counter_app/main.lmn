@@ -1,0 +1,18 @@
+<root class="app">
+  <column class="shell" gap="16" padding="32">
+    <label class="h1" text="Lumen - Python SDK Counter" />
+    <label id="count-label" class="count" bind-text="label" text="0 clicks" />
+    <row gap="0">
+      <button id="decrement" class="btn" text="-1" />
+      <button id="increment" class="btn" text="+1" />
+      <button id="reset" class="btn-danger" text="Reset" />
+    </row>
+    <label class="hint" text="Fields are typed signals: state.count += 1 syncs to the label." />
+  </column>
+
+  <!--
+    Clicks are routed natively per element id by the runtime (ABI 0.3):
+    @app.on_click(id) registers through lumen_app_on_click, so no
+    on_click(id) forwarding shim is needed in the markup.
+  -->
+</root>

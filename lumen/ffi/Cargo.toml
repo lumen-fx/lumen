@@ -1,0 +1,66 @@
+[package]
+name = "lumen-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen C-ABI: opaque LumenApp + tagged LumenValue, drives lumenc::run_app from any C-callable language."
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+lumen-core = { path = "../core" }
+# Runtime core: `RunOptions` / `run_app` / the default plugin stack.
+# `default-features = false` so the FULL shared cdylib turns every subsystem on
+# via lumen-ffi's own default feature set below, while a trimmed static
+# `--bundle` build (`--no-default-features --features "<caps>"`) selects exactly
+# the app's subsystems. See docs/design/runtime-tree-shaking.md (Part B).
+lumen-runtime = { path = "../runtime", default-features = false }
+# Host-neutral DOM read side (query / traversal over the snapshot) for the
+# LumenNode C-ABI. No host features needed here; the query engine is
+# host-independent.
+lumen-script = { path = "../script", default-features = false }
+# Compiler front-end, kept only to inject its parser (`default_parser()`).
+# OPTIONAL behind the default-on `embed-parser` feature: a static `--bundle`
+# runs a prebuilt LMNA artifact with NO parser, so dropping lumenc also drops
+# the feature-unification that would otherwise pull lumen-runtime back to full.
+lumenc = { path = "../../lumenc", optional = true }
+# Close-hook router (ABI 0.5): the `lumen_app_on_close` dispatch system
+# reads `Messages<CloseRequest>` through a `MessageCursor`, which
+# `lumen_core::prelude` does not re-export.
+bevy_ecs.workspace = true
+rhai.workspace = true
+crossbeam-channel.workspace = true
+
+[build-dependencies]
+cbindgen.workspace = true
+
+[features]
+# The DEFAULT cdylib/staticlib is FULL-featured: one shared library serves
+# every app (the whole point of link-not-embed). Per-app trimming applies ONLY
+# to the static `--bundle` path, built `--no-default-features --features
+# "<resolved capabilities>"` by lumenc.
+default = [
+    "embed-parser",
+    "runtime-parse",
+    "http-fetch",
+    "audio",
+    "mcp",
+    "async",
+    "host-lua",
+    "host-candela",
+]
+# Link lumenc for its `default_parser()` (the from-source embed path). Dropping
+# it yields a parser-free launcher that only runs prebuilt LMNA bytes.
+embed-parser = ["dep:lumenc", "runtime-parse"]
+# Forwards to the runtime's Part B tree-shaking knobs.
+runtime-parse = ["lumen-runtime/runtime-parse"]
+http-fetch = ["lumen-runtime/http-fetch"]
+audio = ["lumen-runtime/audio"]
+mcp = ["lumen-runtime/mcp"]
+async = ["lumen-runtime/async"]
+host-lua = ["lumen-runtime/host-lua"]
+host-candela = ["lumen-runtime/host-candela"]

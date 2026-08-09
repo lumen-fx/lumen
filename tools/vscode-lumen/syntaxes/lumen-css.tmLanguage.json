@@ -1,0 +1,106 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Lumen CSS",
+  "scopeName": "source.css.lumen",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#at-rule" },
+    { "include": "#rule" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.block.lumen-css",
+      "begin": "/\\*",
+      "end": "\\*/"
+    },
+    "at-rule": {
+      "comment": "@import / @media / etc. Highlight the keyword; body follows normal rules.",
+      "match": "(@[a-zA-Z-]+)",
+      "name": "keyword.control.at-rule.lumen-css"
+    },
+    "rule": {
+      "begin": "(?=[^{};]+\\{)",
+      "end": "(?<=\\})",
+      "patterns": [
+        { "include": "#selector" },
+        { "include": "#block" }
+      ]
+    },
+    "selector": {
+      "begin": "(?=\\S)",
+      "end": "(?=\\{)",
+      "patterns": [
+        { "include": "#comment" },
+        {
+          "match": "\\.[a-zA-Z_][a-zA-Z0-9_-]*",
+          "name": "entity.other.attribute-name.class.lumen-css"
+        },
+        {
+          "match": "#[a-zA-Z_][a-zA-Z0-9_-]*",
+          "name": "entity.other.attribute-name.id.lumen-css"
+        },
+        {
+          "match": ":(hover|focus|active|checked|disabled|root|first-child|last-child)\\b",
+          "name": "entity.other.attribute-name.pseudo-class.lumen-css"
+        },
+        {
+          "match": "\\b(root|column|row|scroll|tile|label|div|image|input|spacer|button|toggle|slider|checkbox|radio|progress|overlay|dialog|title-bar)\\b",
+          "name": "entity.name.tag.lumen-css"
+        },
+        {
+          "match": "[>~+]|\\*",
+          "name": "keyword.operator.combinator.lumen-css"
+        }
+      ]
+    },
+    "block": {
+      "begin": "\\{",
+      "end": "\\}",
+      "beginCaptures": { "0": { "name": "punctuation.section.block.begin.lumen-css" } },
+      "endCaptures": { "0": { "name": "punctuation.section.block.end.lumen-css" } },
+      "patterns": [
+        { "include": "#comment" },
+        {
+          "comment": "Custom property declaration: --token: value;",
+          "match": "(--[a-zA-Z0-9_-]+)\\s*(:)",
+          "captures": {
+            "1": { "name": "variable.other.custom-property.lumen-css" },
+            "2": { "name": "punctuation.separator.key-value.lumen-css" }
+          }
+        },
+        {
+          "comment": "Known Lumen property names (LSP validates the full set).",
+          "match": "\\b(width|height|min-width|min-height|max-width|max-height|flex|bg|hover-bg|radius|padding|margin|gap|text|text-color|text-align|selection-color|font-size|align|justify|position|inset|overflow|overflow-x|overflow-y|shadow|border|z-index|grow|shrink|aspect-ratio|draggable|sensitivity|inertia|tab-index|scroll|opacity)\\b\\s*(?=:)",
+          "name": "support.type.property-name.lumen-css"
+        },
+        { "include": "#value" }
+      ]
+    },
+    "value": {
+      "patterns": [
+        {
+          "match": "#[0-9a-fA-F]{3,8}\\b",
+          "name": "constant.other.color.rgb-value.lumen-css"
+        },
+        {
+          "match": "\\bvar\\(\\s*(--[a-zA-Z0-9_-]+)\\s*\\)",
+          "captures": { "1": { "name": "variable.other.custom-property.lumen-css" } },
+          "name": "support.function.var.lumen-css"
+        },
+        {
+          "match": "\\b(linear-gradient|radial-gradient|rgba?|calc)\\b",
+          "name": "support.function.lumen-css"
+        },
+        {
+          "match": "\\b[0-9]+(\\.[0-9]+)?(px|%)?\\b",
+          "name": "constant.numeric.lumen-css"
+        },
+        {
+          "name": "string.quoted.double.lumen-css",
+          "begin": "\"",
+          "end": "\""
+        }
+      ]
+    }
+  }
+}

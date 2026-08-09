@@ -1,0 +1,44 @@
+[package]
+name = "lumen-i18n"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Translation + locale-aware formatters (Fluent + ICU4X)."
+
+[dependencies]
+bevy_ecs.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+# Translation via Project Fluent. `fluent-bundle` is the low-level
+# `FluentBundle` API; `fluent` is the umbrella re-export. We keep both
+# so the `FluentArgs` / `FluentValue` types stay stable across minor
+# bumps.
+fluent.workspace = true
+fluent-bundle.workspace = true
+unic-langid.workspace = true
+
+# ICU4X umbrella with `experimental` (currency + relative-time),
+# `sync` (Arc-backed DataPayloads so formatters are Send + Sync for
+# bevy_ecs Resource). Round-7 consolidation: replaces individual
+# icu_decimal / icu_datetime / icu_calendar / icu_locale_core /
+# icu_provider pins.
+icu.workspace = true
+# Decimal::try_from_f64 needs fixed_decimal's `ryu` feature; the
+# umbrella doesn't expose it.
+fixed_decimal.workspace = true
+# CurrencyCode wraps a `TinyAsciiStr<3>`; we construct it from "USD" /
+# "EUR" / ... literals. icu doesn't re-export tinystr.
+tinystr.workspace = true
+
+# System locale detection. cosmic-text already pulls sys-locale transitively;
+# we depend on it directly so the i18n plugin can seed `I18n.current` at boot.
+sys-locale.workspace = true
+
+[[example]]
+name = "hello"
+path = "examples/hello/main.rs"
+

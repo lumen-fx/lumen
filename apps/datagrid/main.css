@@ -1,0 +1,273 @@
+root {
+  bg: #0a0d12;
+  text-color: #e6edf3;
+  width: 100%;
+  height: 100%;
+}
+
+.app {
+  bg: #0a0d12;
+  text-color: #e6edf3;
+  width: 100%;
+  height: 100%;
+}
+
+.window {
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  gap: 0;
+}
+
+/* ----- Sidebar (left rail) ----- */
+
+.sidebar {
+  width: 280px;
+  height: 100%;
+  bg: #11161d;
+  padding: 22 18 22 18;
+  gap: 18;
+}
+
+.brand-card {
+  bg: #182434;
+  border: 1px #1f4072;
+  radius: 14;
+  padding: 16;
+  gap: 8;
+}
+.brand-eyebrow {
+  font-size: 11;
+  text-color: #8b95a3;
+}
+.brand-title {
+  font-size: 18;
+  text-color: #ffffff;
+}
+.brand-values { align: center; }
+.kpi-value {
+  font-size: 22;
+  text-color: #ffffff;
+}
+.kpi-label {
+  font-size: 11;
+  text-color: #8b95a3;
+}
+
+.sidebar-section { gap: 8; }
+.section-eyebrow {
+  font-size: 10;
+  text-color: #8b95a3;
+  padding: 6 0 2 4;
+}
+
+.sidebar-row {
+  height: 36px;
+  padding: 0 12;
+  align: center;
+  gap: 10;
+  bg: #11161d;
+  hover-bg: #161b22;
+  radius: 8;
+}
+.sidebar-row.active {
+  bg: #1d2839;
+}
+
+.sidebar-dot { width: 8px; height: 8px; radius: 999; }
+.dot-blue  { bg: #58a6ff; }
+.dot-green { bg: #3fb950; }
+.dot-red   { bg: #f85149; }
+
+.sidebar-name {
+  font-size: 13;
+  text-color: #e1e7f0;
+}
+.sidebar-count {
+  font-size: 12;
+  text-color: #94a3b8;
+}
+
+.status-card {
+  bg: #0d1117;
+  border: 1px #21262d;
+  radius: 10;
+  padding: 12;
+  gap: 4;
+}
+.status-dot {
+  width: 8px;
+  height: 8px;
+  radius: 999;
+  bg: #3fb950;
+}
+.status-text {
+  font-size: 12;
+  text-color: #e1e7f0;
+}
+.status-sub {
+  font-size: 11;
+  text-color: #94a3b8;
+}
+
+.sidebar-footnote {
+  font-size: 10;
+  text-color: #7a8497;
+  padding: 0 4;
+}
+
+/* ----- Content (right pane) ----- */
+
+.content {
+  grow: 1;
+  height: 100%;
+  min-height: 0;
+  bg: #0a0d12;
+  padding: 24 28 22 28;
+  gap: 20;
+}
+
+.page-head {
+  align: center;
+  gap: 12;
+}
+.page-title-group {
+  grow: 1;
+  gap: 2;
+}
+.page-eyebrow {
+  font-size: 10;
+  text-color: #8b95a3;
+}
+.page-title {
+  font-size: 24;
+  text-color: #ffffff;
+}
+
+.btn-primary {
+  height: 38px;
+  padding: 0 18;
+  bg: #1f6feb;
+  hover-bg: #388bfd;
+  press-bg: #1a5fd1;
+  text-color: #ffffff;
+  radius: 10;
+  font-size: 13;
+}
+
+.btn-ghost {
+  height: 38px;
+  padding: 0 16;
+  bg: #161b22;
+  hover-bg: #21262d;
+  press-bg: #0d1117;
+  text-color: #c9d1d9;
+  radius: 10;
+  border: 1px #30363d;
+  font-size: 13;
+}
+
+.search-bar {
+  height: 44px;
+  margin: 4 0 4 0;
+}
+.search-input {
+  height: 44px;
+  grow: 1;
+  bg: #161b22;
+  text-color: #ffffff;
+  radius: 12;
+  padding: 0 16;
+  border: 1px #30363d;
+  hover-border: 1px #3d4654;
+  focus-border: 2px #1f6feb;
+  font-size: 14;
+}
+
+.list-card {
+  grow: 1;
+  min-height: 0;
+  bg: #0d1117;
+  radius: 14;
+  border: 1px #21262d;
+}
+
+.list-head {
+  height: 40px;
+  width: 100%;
+  padding: 0 22;
+  align: center;
+  gap: 14;
+  text-color: #8b95a3;
+  font-size: 11;
+}
+
+.list-scroll {
+  bg: #0d1117;
+  grow: 1;
+}
+
+.list-row {
+  height: 56px;
+  width: 100%;
+  padding: 0 22;
+  align: center;
+  gap: 14;
+  hover-bg: #161b22;
+  border: 1px #1a2030;
+}
+
+.col-rank  { width: 44px;  font-size: 12; text-color: #8b95a3; text-align: end; }
+.col-sym   { grow: 1; }
+.col-price { width: 150px; font-size: 14; text-color: #ffffff; text-align: end; }
+.col-chg   { width: 110px; font-size: 13; text-align: end; }
+.col-vol   { width: 140px; font-size: 12; text-color: #94a3b8; text-align: end; }
+.col-spark { width: 200px; height: 30px; }
+
+.sym-cell { gap: 2; }
+.sym-ticker {
+  font-size: 14;
+  text-color: #ffffff;
+}
+.sym-name {
+  font-size: 11;
+  text-color: #94a3b8;
+}
+
+.chg-up    { text-color: #3fb950; }
+.chg-down  { text-color: #f85149; }
+.chg-flat  { text-color: #8b95a3; }
+
+/* Sparkline: each row draws its 8-sample trend as a row of bars
+   instead of a block-glyph string, so it renders the same everywhere
+   regardless of the installed font. .spark-bar sets shape; the
+   .spark-{up,down,flat} wrapper colors its bars; the .lvl-N classes
+   set the bucketed height (see glyph_for/bucket_for in main.rhai). */
+.spark-bar { width: 18px; radius: 2; }
+
+.spark-up .spark-bar    { bg: #3fb950; }
+.spark-down .spark-bar  { bg: #f85149; }
+.spark-flat .spark-bar  { bg: #5b6473; }
+
+.lvl-0 { height: 6px; }
+.lvl-1 { height: 9px; }
+.lvl-2 { height: 13px; }
+.lvl-3 { height: 16px; }
+.lvl-4 { height: 19px; }
+.lvl-5 { height: 23px; }
+.lvl-6 { height: 26px; }
+.lvl-7 { height: 30px; }
+
+.empty {
+  padding: 48;
+  gap: 8;
+  align: center;
+}
+.empty-headline {
+  font-size: 16;
+  text-color: #c9d1d9;
+}
+.empty-sub {
+  font-size: 12;
+  text-color: #94a3b8;
+}

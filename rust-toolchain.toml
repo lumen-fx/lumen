@@ -1,0 +1,6 @@
+# Pinned so rustfmt/clippy output is identical across local dev, CI, and
+# worktree agents. Drift here reformats fmt-clean files and breaks
+# `cargo fmt --check` (see commit b6c4dbf). Bump deliberately, in one commit.
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]

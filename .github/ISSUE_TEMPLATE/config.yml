@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: documentation
+    url: https://docs.lumenfx.dev
+    about: guides and API reference for Lumen

@@ -1,0 +1,27 @@
+[package]
+name = "lumen-os-hotkey"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Global-hotkey host for Lumen (global-hotkey 0.8 wrapper, HotkeyPressed + HotkeyReleased messages). QShortcut (global) / GtkShortcutController analog."
+
+[dependencies]
+lumen-core = { path = "../core" }
+lumen-os-mime = { path = "../os-mime" }
+bevy_ecs.workspace = true
+
+# OS-level global hotkeys. Same crate Tauri ships under
+# tauri-plugin-global-shortcut. Posts events to a channel we poll each
+# tick.
+#
+# 0.8 is a hard floor (W6 T1/T7): 0.6's Xlib backend SEGFAULTS in its
+# event thread when no X display exists (`XOpenDisplay` null deref -
+# crashed `lumenc run --headless` on hosts with zero display sockets),
+# and its XGrabKey BadAccess check was wrong, so a stale grab from a
+# crashed predecessor killed the process via the default Xlib error
+# handler. 0.8 rewrote the backend on x11rb: connect failure is a plain
+# `Err`, and a grab conflict comes back as `Error::AlreadyRegistered`.
+global-hotkey = "0.8"

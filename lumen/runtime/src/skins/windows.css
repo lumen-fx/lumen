@@ -1,0 +1,431 @@
+/*
+ * lumen-skin-windows - Windows 11 / WinUI 3 (Fluent 2) skin.
+ *
+ * Activated via `<root skin="windows">` (or `[skin] name = "windows"` /
+ * `"auto"` on Windows in lumen.toml). Light-first with a full dark
+ * override. Color values come from the MIT WinUI theme XAML
+ * (#AARRGGBB -> Lumen #RRGGBBAA); metrics from the WinUI control
+ * templates.
+ *
+ * Signatures reproduced: universal 4px radii (8px overlays), the
+ * elevation border (1px stroke whose BOTTOM edge is darker - real
+ * per-side border-bottom-color, no inset-shadow hack), accent-filled
+ * primary buttons stepping 100 -> 90 -> 80 % opacity, the TextBox strong
+ * bottom hairline at rest and the 2px accent UNDERLINE on focus
+ * (state-routed inset box-shadow), pressed text dropping to secondary,
+ * keyboard-only double focus ring (:focus-visible outer ring +
+ * contrast inner ring via box-shadow spread), 40x20 pill switch shared
+ * by both `<toggle>` and the dedicated `<switch>` element, and
+ * non-accent selected tabs with top-only 4px rounding.
+ *
+ * Known approximations: Mica/acrylic materials use their documented
+ * solid fallbacks; the switch knob is a single color (WinUI's off-knob
+ * hover-grow animation is runtime geometry Lumen doesn't expose); the
+ * slider thumb is a flat accent dot (spec: white ring + accent core);
+ * control-state motion uses the 83ms "fast" ramp for fills.
+ */
+
+:root {
+  --lumen-accent: #0067c0;
+  --lumen-accent-hover: #0067c0e6;
+  --lumen-accent-active: #0067c0cc;
+  --lumen-on-accent: #ffffff;
+
+  --lumen-window-bg: #f3f3f3;
+  --lumen-surface: #ffffffb3;
+  --lumen-surface-hover: #f9f9f980;
+  --lumen-surface-active: #f9f9f94d;
+  --lumen-input-bg: #ffffffb3;
+  --lumen-input-bg-focus: #ffffff;
+
+  --lumen-panel: #f9f9f9;
+  --lumen-panel-hover: #00000009;
+
+  --lumen-border: #0000000f;
+  --lumen-border-subtle: #0000000f;
+  --lumen-border-strong: #00000072;
+  --lumen-elevation-edge: #00000029;
+  --lumen-accent-elevation-edge: #00000066;
+
+  --lumen-text: #000000e4;
+  --lumen-text-muted: #0000009e;
+  --lumen-text-disabled: #0000005c;
+  --lumen-disabled-bg: #f9f9f94d;
+
+  --lumen-track: #00000072;
+  --lumen-track-hover: #00000072;
+  --lumen-track-active: #00000072;
+  --lumen-track-off: #00000006;
+  --lumen-knob: #5d5d5d;
+  --lumen-tab-selected: #f9f9f9;
+
+  --lumen-focus-ring: #000000e4;
+  --lumen-focus-ring-inner: #ffffffb3;
+  --lumen-focus-ring-width: 2;
+
+  --lumen-radius-sm: 3;
+  --lumen-radius: 4;
+  --lumen-radius-lg: 8;
+  --lumen-shadow-panel: 0 8 16 #00000024;
+  --lumen-shadow-dialog: 0 32 64 #00000030;
+  --lumen-backdrop: #0000004d;
+  --lumen-scrollbar-thumb: #00000072;
+  /* Tooltip dwell (ms) / cursor gap (px) - Windows hover time. */
+  --lumen-tooltip-delay: 400;
+  --lumen-tooltip-offset: 14;
+
+  /* Indeterminate <progress> sweep period (ms) and moving-chunk width
+     as a fraction of the track. */
+  --lumen-progress-period: 1200;
+  --lumen-progress-chunk: 0.3;
+
+  /* ToggleSwitch / <switch> knob inset (px) and the slider thumb
+     diameter (px) - the shared cross-platform values. */
+  --lumen-knob-inset: 4;
+  --lumen-thumb-size: 16;
+
+  /* Gap (px) between a ComboBox / MenuFlyout trigger and its panel. */
+  --lumen-popup-gap: 4;
+
+  /* Opacity for a disabled control with no `:disabled { bg }` of its
+     own (ComboBox items, menu items, TabView headers, form controls). */
+  --lumen-disabled-opacity: 0.5;
+
+  /* Text-input caret. */
+  --lumen-caret-width: 2;
+  --lumen-caret-blink: 530ms;
+
+  /* Line-height multiplier. */
+  --lumen-line-height: 1.2;
+
+  /* Overlay scrollbar geometry / hover feedback / fade timing. */
+  --lumen-scrollbar-thickness: 8;
+  --lumen-scrollbar-thickness-thin: 4;
+  --lumen-scrollbar-margin: 2;
+  --lumen-scrollbar-min-thumb: 24;
+  --lumen-scrollbar-track-hover: #80808029;
+  --lumen-scrollbar-hover-boost: 1.6;
+  --lumen-scrollbar-fade-delay: 1000ms;
+  --lumen-scrollbar-fade-duration: 250ms;
+
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --lumen-accent: #4cc2ff;
+    --lumen-accent-hover: #4cc2ffe6;
+    --lumen-accent-active: #4cc2ffcc;
+    --lumen-on-accent: #000000;
+
+    --lumen-window-bg: #202020;
+    --lumen-surface: #ffffff0f;
+    --lumen-surface-hover: #ffffff15;
+    --lumen-surface-active: #ffffff08;
+    --lumen-input-bg: #ffffff0f;
+    --lumen-input-bg-focus: #1e1e1eb3;
+
+    --lumen-panel: #2c2c2c;
+    --lumen-panel-hover: #ffffff0f;
+
+    --lumen-border: #00000033;
+    --lumen-border-subtle: #ffffff12;
+    --lumen-border-strong: #ffffff8b;
+    --lumen-elevation-edge: #ffffff12;
+    --lumen-accent-elevation-edge: #00000038;
+
+    --lumen-text: #ffffff;
+    --lumen-text-muted: #ffffffc5;
+    --lumen-text-disabled: #ffffff5d;
+    --lumen-disabled-bg: #ffffff0b;
+
+    --lumen-track: #ffffff8b;
+    --lumen-track-hover: #ffffff8b;
+    --lumen-track-active: #ffffff8b;
+    --lumen-track-off: #00000019;
+    --lumen-knob: #cccccc;
+    --lumen-tab-selected: #282828;
+
+    --lumen-focus-ring: #ffffff;
+    --lumen-focus-ring-inner: #000000b3;
+
+    --lumen-shadow-panel: 0 8 16 #00000059;
+    --lumen-shadow-dialog: 0 32 64 #00000061;
+    --lumen-backdrop: #0000004d;
+    --lumen-scrollbar-thumb: #ffffff8b;
+  }
+}
+
+/* === Base ===
+ * Segoe UI Variable Text 14px is the Fluent body/control ramp entry.
+ */
+root {
+  bg: var(--lumen-window-bg);
+  text-color: var(--lumen-text);
+  font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  font-size: 14;
+  line-height: var(--lumen-line-height);
+}
+
+/* === Buttons ===
+ * 32px, 4px radius, elevation border (darker bottom edge). Neutral
+ * fills step Default -> Secondary -> Tertiary; pressed also drops the
+ * text to secondary. 83ms fast fill ramp [MS motion].
+ */
+button {
+  bg: var(--lumen-surface);
+  radius: var(--lumen-radius);
+  padding: 6 11;
+  min-height: 32;
+  text-color: var(--lumen-text);
+  border: 1px solid var(--lumen-border-subtle);
+  border-bottom-color: var(--lumen-elevation-edge);
+  transition: bg 83ms linear;
+}
+button:hover { bg: var(--lumen-surface-hover); }
+button:active { bg: var(--lumen-surface-active); text-color: var(--lumen-text-muted); }
+button:focus-visible {
+  outline: 2 var(--lumen-focus-ring);
+  outline-offset: 1;
+  box-shadow: 0 0 0 1 var(--lumen-focus-ring-inner);
+}
+button:disabled { bg: var(--lumen-disabled-bg); text-color: var(--lumen-text-disabled); }
+
+/* Accent (primary) button: fill steps 100 -> 90 -> 80 % opacity. */
+button.primary {
+  bg: var(--lumen-accent);
+  text-color: var(--lumen-on-accent);
+  border: 1px solid var(--lumen-accent);
+  border-bottom-color: var(--lumen-accent-elevation-edge);
+}
+button.primary:hover { bg: var(--lumen-accent-hover); }
+button.primary:active { bg: var(--lumen-accent-active); }
+button.primary:disabled { bg: var(--lumen-disabled-bg); text-color: var(--lumen-text-disabled); }
+
+/* === Text fields ===
+ * Strong bottom hairline at rest; on focus the field brightens and a
+ * 2px accent underline paints inside the bottom edge (state-routed
+ * inset box-shadow - the WinUI TextBox signature).
+ */
+input,
+textarea {
+  bg: var(--lumen-input-bg);
+  radius: var(--lumen-radius);
+  padding: 6 10;
+  min-height: 32;
+  min-width: 64;
+  text-color: var(--lumen-text);
+  border: 1px solid var(--lumen-border-subtle);
+  border-bottom-color: var(--lumen-border-strong);
+  transition: bg 83ms linear;
+  caret-width: var(--lumen-caret-width);
+  caret-blink: var(--lumen-caret-blink);
+}
+input:hover, textarea:hover { bg: var(--lumen-surface-hover); }
+input:focus, textarea:focus {
+  bg: var(--lumen-input-bg-focus);
+  box-shadow: inset 0 -2 0 var(--lumen-accent);
+}
+input:disabled, textarea:disabled { bg: var(--lumen-disabled-bg); text-color: var(--lumen-text-disabled); }
+
+/* === ToggleSwitch ===
+ * 40x20 pill; off = transparent-ish fill + strong stroke, on = accent.
+ */
+toggle {
+  width: 40;
+  height: 20;
+  min-width: 40;
+  radius: 10;
+  bg: var(--lumen-track-off);
+  border: 1px solid var(--lumen-border-strong);
+  knob-color: var(--lumen-knob);
+  knob-inset: var(--lumen-knob-inset);
+}
+toggle:hover { bg: var(--lumen-track-off); }
+toggle:checked { bg: var(--lumen-accent); }
+toggle:focus-visible {
+  outline: 2 var(--lumen-focus-ring);
+  outline-offset: 1;
+  box-shadow: 0 0 0 1 var(--lumen-focus-ring-inner);
+}
+toggle:disabled { bg: var(--lumen-disabled-bg); }
+
+/* === Switch ===
+ * `<switch>` is a distinct element from `<toggle>`, but WinUI has one
+ * ToggleSwitch look, so it shares the same 40x20 pill, stroke and
+ * colors. `transition` sets the duration/easing the thumb-slide
+ * animation reuses (same TransitionSpecs lookup the 83ms fill ramps
+ * elsewhere read); WinUI's own switch doesn't tween its track fill,
+ * so this declaration exists for the slide, not a visible bg tween.
+ */
+switch {
+  width: 40;
+  height: 20;
+  min-width: 40;
+  radius: 10;
+  bg: var(--lumen-track-off);
+  border: 1px solid var(--lumen-border-strong);
+  knob-color: var(--lumen-knob);
+  knob-inset: var(--lumen-knob-inset);
+  transition: bg 140ms ease-out;
+}
+switch:hover { bg: var(--lumen-track-off); }
+switch:checked { bg: var(--lumen-accent); }
+switch:focus-visible {
+  outline: 2 var(--lumen-focus-ring);
+  outline-offset: 1;
+  box-shadow: 0 0 0 1 var(--lumen-focus-ring-inner);
+}
+switch:disabled { bg: var(--lumen-disabled-bg); }
+
+/* === Slider ===
+ * 4px rail; accent thumb (approximation of the ringed thumb).
+ */
+slider {
+  height: 4;
+  min-width: 160;
+  radius: 2;
+  bg: var(--lumen-track);
+  knob-color: var(--lumen-accent);
+  thumb-size: var(--lumen-thumb-size);
+}
+slider:hover { bg: var(--lumen-track-hover); }
+slider:focus-visible {
+  outline: 2 var(--lumen-focus-ring);
+  outline-offset: 1;
+  box-shadow: 0 0 0 1 var(--lumen-focus-ring-inner);
+}
+slider:disabled { bg: var(--lumen-disabled-bg); }
+
+/* === Generic tiles === */
+tile:hover { bg: var(--lumen-panel-hover); }
+tile:focus-visible { outline: 2 var(--lumen-focus-ring); outline-offset: 1; }
+tile:disabled { bg: var(--lumen-disabled-bg); }
+
+/* === ComboBox (dropdown) === */
+.dropdown-button {
+  bg: var(--lumen-surface);
+  radius: var(--lumen-radius);
+  padding: 6 12;
+  min-height: 32;
+  min-width: 64;
+  text-color: var(--lumen-text);
+  border: 1px solid var(--lumen-border-subtle);
+  border-bottom-color: var(--lumen-elevation-edge);
+  transition: bg 83ms linear;
+  text-overflow: ellipsis;
+}
+.dropdown-button:hover { bg: var(--lumen-surface-hover); }
+.dropdown-button:active { bg: var(--lumen-surface-active); }
+.dropdown-button:focus-visible { outline: 2 var(--lumen-focus-ring); outline-offset: 1; }
+
+.dropdown-panel {
+  transition: opacity 167ms ease;
+  bg: var(--lumen-panel);
+  radius: var(--lumen-radius-lg);
+  shadow: var(--lumen-shadow-panel);
+  border: 1px solid var(--lumen-border);
+  padding: 4 2;
+  popup-gap: var(--lumen-popup-gap);
+}
+.dropdown-option { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius-sm); padding: 6 11; transition: bg 83ms linear; text-overflow: ellipsis; disabled-opacity: var(--lumen-disabled-opacity); }
+.dropdown-option:hover { bg: var(--lumen-panel-hover); }
+.dropdown-option:focus { outline: 2 var(--lumen-focus-ring); }
+
+/* === MenuFlyout === */
+.menu-panel {
+  transition: opacity 167ms ease;
+  bg: var(--lumen-panel);
+  radius: var(--lumen-radius-lg);
+  shadow: var(--lumen-shadow-panel);
+  border: 1px solid var(--lumen-border);
+  padding: 4 2;
+  popup-gap: var(--lumen-popup-gap);
+}
+.menu-item { bg: var(--lumen-panel); text-color: var(--lumen-text); text-align: start; radius: var(--lumen-radius); min-height: 32; padding: 6 11; transition: bg 83ms linear; disabled-opacity: var(--lumen-disabled-opacity); }
+.menu-item:hover { bg: var(--lumen-panel-hover); }
+.menu-item:focus { outline: 2 var(--lumen-focus-ring); }
+.menu-separator { bg: var(--lumen-border-subtle); height: 1; margin: 4 0; }
+
+/* === ContentDialog ===
+ * Smoke scrim #0000004D; 8px surface with the documented dialog stroke.
+ */
+dialog { bg: var(--lumen-backdrop); transition: opacity 167ms ease; }
+.dialog-surface {
+  bg: var(--lumen-panel);
+  radius: var(--lumen-radius-lg);
+  shadow: var(--lumen-shadow-dialog);
+  border: 1px solid #75757566;
+  padding: 24;
+  min-width: 320;
+}
+
+/* === Cards === */
+.card {
+  bg: var(--lumen-surface);
+  radius: var(--lumen-radius);
+  border: 1px solid var(--lumen-border-subtle);
+  padding: 16;
+}
+
+/* === TabView ===
+ * Selected tab = solid content-layer fill (NOT accent) with top-only
+ * 4px rounding; headers use the 12px caption size on secondary text.
+ */
+.tab-strip { bg: #00000000; padding: 0; gap: 0; }
+.tab-btn {
+  bg: #00000000;
+  radius: 4 4 0 0;
+  padding: 8 12;
+  min-height: 32;
+  text-color: var(--lumen-text-muted);
+  font-size: 12;
+  transition: bg 83ms linear;
+  text-overflow: ellipsis;
+  disabled-opacity: var(--lumen-disabled-opacity);
+}
+.tab-btn:hover { bg: var(--lumen-panel-hover); }
+.tab-btn:selected { bg: var(--lumen-tab-selected); }
+.tab-btn:focus-visible { outline: 2 var(--lumen-focus-ring); }
+
+/* === Tooltip === */
+.tooltip {
+  bg: var(--lumen-panel);
+  text-color: var(--lumen-text);
+  radius: var(--lumen-radius);
+  shadow: var(--lumen-shadow-panel);
+  border: 1px solid var(--lumen-border);
+  padding: 6 10;
+  font-size: 12;
+}
+
+/* === Scroll regions === */
+scroll {
+  scrollbar-color: var(--lumen-scrollbar-thumb);
+  scrollbar-width: thin;
+  scrollbar-thickness: var(--lumen-scrollbar-thickness);
+  scrollbar-thickness-thin: var(--lumen-scrollbar-thickness-thin);
+  scrollbar-margin: var(--lumen-scrollbar-margin);
+  scrollbar-min-thumb: var(--lumen-scrollbar-min-thumb);
+  scrollbar-track-hover: var(--lumen-scrollbar-track-hover);
+  scrollbar-hover-boost: var(--lumen-scrollbar-hover-boost);
+  scrollbar-fade-delay: var(--lumen-scrollbar-fade-delay);
+  scrollbar-fade-duration: var(--lumen-scrollbar-fade-duration);
+}
+scroll:focus { outline: 2 var(--lumen-focus-ring); }
+
+/* === Checkbox / Radio / Progress (W5 form controls) === */
+checkbox          { disabled-opacity: var(--lumen-disabled-opacity); }
+checkbox:checked  { bg: var(--lumen-accent); }
+checkbox:focus-visible { outline: 2 var(--lumen-focus-ring); }
+.checkbox-box     { width: 18; height: 18; radius: 4; bg: var(--lumen-track-off); border: 1px solid var(--lumen-track); text-color: #ffffff; font-size: 14; text-align: center; }
+.checkbox-label   { text-color: var(--lumen-text); }
+radio             { disabled-opacity: var(--lumen-disabled-opacity); }
+radio:selected    { bg: var(--lumen-accent); }
+radio:focus-visible { outline: 2 var(--lumen-focus-ring); }
+.radio-dot        { width: 18; height: 18; radius: 9; bg: var(--lumen-track-off); border: 1px solid var(--lumen-track); }
+.radio-label      { text-color: var(--lumen-text); }
+progress          { bg: var(--lumen-track-off); radius: 3; height: 4; progress-duration: var(--lumen-progress-period); progress-chunk: var(--lumen-progress-chunk); }
+.progress-fill    { bg: var(--lumen-accent); radius: 3; }
+
+/* Dialog default button (Enter-anywhere target): accent ring. */
+button.default { border: 2px solid var(--lumen-accent); }

@@ -1,0 +1,7 @@
+.app        { background: #14161c; color: #e6e8ee; }
+.shell      { align-items: center; }
+.h1         { font-size: 20; font-weight: 700; }
+.count      { font-size: 32; font-weight: 800; color: #7db4ff; }
+.hint       { font-size: 12; color: #8a90a2; }
+.btn        { padding: 10 18; margin: 6; background: #2a2f3a; color: #e6e8ee; border-radius: 8; }
+.btn-danger { padding: 10 18; margin: 6; background: #5a2530; color: #ffd9df; border-radius: 8; }

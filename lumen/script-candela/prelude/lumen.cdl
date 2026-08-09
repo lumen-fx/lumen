@@ -1,0 +1,371 @@
+// lumen.cdl: the Lumen candela host prelude.
+//
+// A `.cdl` app pulls in the ENTIRE Lumen host surface with one line:
+//
+//     import "lumen.cdl";
+//
+// in lieu of hand-declaring a `host "lumen" { ... }` block. The CandelaHost source
+// preparation step (lumen-script-candela `resolve_prelude`) detects that import
+// and splices this block in before the source reaches `candela::Engine::compile`.
+//
+// SOURCE OF TRUTH: every declaration here mirrors a `register_host_fn` call in
+// `CandelaHost::build_engine` and its matching `BUILTINS` entry. candela type-checks
+// each declared host fn against its registered closure at compile time, and the
+// `prelude_declares_every_builtin` test guards the two against drift. candela int
+// = i32/i64 scalar; a bare `name(args);` returns null (`()`).
+host "lumen" {
+    // app-command emitters
+    add_clicks(int);
+    set_string(string, string);
+    set_text(string, string);
+    set_src(string, string);
+
+    // signals (string + typed scalars)
+    string signal_get(string);
+    signal_set(string, string);
+    int signal_get_int(string);
+    signal_set_int(string, int);
+    float signal_get_float(string);
+    signal_set_float(string, float);
+    bool signal_get_bool(string);
+    signal_set_bool(string, bool);
+
+    // timers
+    set_timeout(string, int);
+    set_interval(string, int);
+    cancel_timer(string);
+
+    // notifications / clipboard / tray
+    notify(string, string);
+    copy_image(string);
+    save_clipboard_image(string);
+    tray_icon(string, string, string);
+    unregister_tray(string);
+
+    // menus
+    open_menu(string);
+    close_menu(string);
+
+    // file dialogs
+    pick_file(string);
+    pick_files(string);
+    pick_folder(string);
+    save_file(string, string);
+    pick_file_filtered(string, string);
+
+    // hotkeys
+    register_hotkey(string, string);
+    unregister_hotkey(string);
+
+    // dynamic DOM read side (node ids interned host-side; 0 = no node)
+    int[] node_query(string);
+    int node_get_by_id(string);
+    int node_document();
+    int node_parent(int);
+    int node_first_child(int);
+    int node_last_child(int);
+    int node_next(int);
+    int node_prev(int);
+    int[] node_children(int);
+    int node_closest(int, string);
+    bool node_valid(int);
+
+    // dynamic DOM write side (phases 2 + 3): mutate the tree the app renders.
+    // node_spawn / node_clone_deep mint a reserved-token id valid this tick.
+    int node_spawn(string);
+    int node_clone_deep(int);
+    node_set_attr(int, string, string);
+    node_remove_attr(int, string);
+    node_set_id(int, string);
+    node_set_text(int, string);
+    node_set_inner_markup(int, string);
+    node_class_add(int, string);
+    node_class_remove(int, string);
+    node_class_toggle(int, string);
+    node_set_class(int, string);
+    node_set_style(int, string, string);
+    node_style_remove(int, string);
+    node_remove(int);
+    node_append(int, int);
+    node_insert_before(int, int, int);
+    node_set_parent(int, int);
+    node_move_to(int, int);
+    node_replace_with(int, int);
+
+    // DOM read-backs on a single node.
+    string node_get_attr(int, string);
+    string node_text(int);
+    string node_id(int);
+    bool node_class_contains(int, string);
+    string node_style_get(int, string);
+    string node_computed_style(int, string);
+
+    // low-level introspection (scalar + array shapes).
+    bool node_is_visible(int);
+    int node_z_index(int);
+    string[] node_classes(int);
+    string[] node_components(int);
+    string node_outer_markup(int);
+    string node_inner_markup(int);
+    string dump_tree();
+
+    // low-level introspection, map-returning readers. A host block can
+    // declare a map return type (`{key_type: value_type}`), same as any
+    // other type position, so these reach candela directly like every
+    // other reader; see the `node_rect` entry in `dom_introspect.rs` for a
+    // second working example of the same syntax.
+    {string: float} node_rect(int);
+    {string: float} node_content_rect(int);
+    {string: float} node_scroll(int);
+    {string: string} node_computed_style_all(int);
+    {string: string} node_inline_style(int);
+    {string: string} node_attrs(int);
+    {string: int} node_entity_id(int);
+    {string: string} node_component(int, string);
+    {string: string} pointer_state();
+    {string: float} frame_info();
+    {string: string} signals_all();
+
+    // event objects (phase 4): bind a handler by name, read the current event
+    // through the accessors keyed by the event id the handler receives.
+    int event_on(int, string, string);
+    int event_on_capture(int, string, string);
+    event_off(int);
+    int event_target(int);
+    int event_current_target(int);
+    string event_type(int);
+    string event_key(int);
+    string event_value(int);
+    int event_button(int);
+    float event_x(int);
+    float event_y(int);
+    float event_client_x(int);
+    float event_client_y(int);
+    float event_delta_x(int);
+    float event_delta_y(int);
+    bool event_shift(int);
+    bool event_ctrl(int);
+    bool event_alt(int);
+    bool event_super(int);
+    event_prevent_default(int);
+    event_stop_propagation(int);
+    event_stop_immediate_propagation(int);
+
+    // classes
+    set_class(string, string);
+    set_root_class(string);
+
+    // networking
+    fetch(string, string);
+
+    // filesystem
+    string read_file(string);
+    bool write_file(string, string);
+
+    // per-id handler routing
+    on(string, string, string);
+
+    // derived signals (recompute body referenced by function name)
+    derive(string, string[], string);
+
+    // audio transport
+    audio_play(string);
+    audio_pause();
+    audio_resume();
+    audio_stop();
+    audio_seek(float);
+    audio_volume(float);
+}
+
+// window / document / history live in their own host namespaces (section 4.8),
+// so they are separate blocks. A candela app imports the prelude once and
+// reaches these as window::set_title(...), document::get_by_id(...), etc.
+host "window" {
+    set_href(string);
+    string href();
+    reload();
+    string title();
+    float dpr();
+    set_title(string);
+    set_size(float, float);
+    string location_path();
+    string location_query();
+    string location_hash();
+}
+
+host "history" {
+    back();
+    forward();
+    go(int);
+}
+
+host "document" {
+    int root();
+    int[] query(string);
+    int get_by_id(string);
+    int focused();
+    int hovered();
+    int spawn(string);
+}
+
+// --- Node / Event method sugar ------------------------------------------------
+//
+// The host blocks above expose the dynamic DOM and event surface as prefixed
+// free functions over a bare `int` handle (`lumen::node_set_text(n, t)`),
+// because a `host` block only declares scalar/array signatures. candela
+// dispatches `recv.method(...)` through an `impl` block only when the
+// receiver's static type is a struct or enum; a bare `int` receiver falls
+// through to the builtin number methods instead, so `Node` and `Event` wrap
+// the handle in a one-field struct and the methods below unwrap it to call
+// the same host functions. Every free function above is unchanged and still
+// works directly on raw handles.
+//
+// `node(handle)` / `event(handle)` lift a raw handle into the wrapped type;
+// any method that yields a new node handle re-wraps it before returning, so a
+// chain like `container.first_child().next()` never drops back to a bare
+// int. The field is named `handle`, not `id`, so `.id()` stays free to mean
+// the element's `id` attribute (`node_id`), matching the DOM property name.
+
+struct Node { handle: int }
+struct Event { handle: int }
+
+/// Wraps a raw node handle (e.g. the return of `lumen::node_spawn(...)`) as a `Node`.
+fn node(handle) {
+    return Node { handle: handle };
+}
+
+/// Wraps a raw event id (the value an event handler receives as its argument)
+/// as an `Event`.
+fn event(handle) {
+    return Event { handle: handle };
+}
+
+/// Wraps every handle in `handles` as a `Node`, preserving order.
+fn wrap_nodes(handles) {
+    let out = [];
+    for h in handles {
+        out.push(node(h));
+    }
+    return out;
+}
+
+// -- Node construction / lookup (there is no existing node to call these on) --
+
+/// Spawns a detached `tag` element and returns it, wrapped.
+fn spawn(tag) {
+    return node(lumen::node_spawn(tag));
+}
+
+/// Looks up an element by its `id` attribute. Returns a `Node` with handle 0
+/// when nothing matches; check with `.exists()`.
+fn get_by_id(id) {
+    return node(lumen::node_get_by_id(id));
+}
+
+/// The document root, wrapped.
+fn document_node() {
+    return node(lumen::node_document());
+}
+
+/// Every element matching a CSS-style selector, wrapped.
+fn query(selector) {
+    return wrap_nodes(lumen::node_query(selector));
+}
+
+impl Node {
+    // -- tree read side --
+    fn exists(self) { return self.handle != 0; }
+    fn valid(self) { return lumen::node_valid(self.handle); }
+    fn parent(self) { return node(lumen::node_parent(self.handle)); }
+    fn first_child(self) { return node(lumen::node_first_child(self.handle)); }
+    fn last_child(self) { return node(lumen::node_last_child(self.handle)); }
+    fn next(self) { return node(lumen::node_next(self.handle)); }
+    fn prev(self) { return node(lumen::node_prev(self.handle)); }
+    fn children(self) { return wrap_nodes(lumen::node_children(self.handle)); }
+    fn closest(self, selector) { return node(lumen::node_closest(self.handle, selector)); }
+
+    // -- tree write side --
+    fn clone_deep(self) { return node(lumen::node_clone_deep(self.handle)); }
+    fn set_attr(self, key, value) { return lumen::node_set_attr(self.handle, key, value); }
+    fn remove_attr(self, key) { return lumen::node_remove_attr(self.handle, key); }
+    fn set_id(self, id) { return lumen::node_set_id(self.handle, id); }
+    fn set_text(self, text) { return lumen::node_set_text(self.handle, text); }
+    fn set_inner_markup(self, markup) { return lumen::node_set_inner_markup(self.handle, markup); }
+    fn class_add(self, cls) { return lumen::node_class_add(self.handle, cls); }
+    fn class_remove(self, cls) { return lumen::node_class_remove(self.handle, cls); }
+    fn class_toggle(self, cls) { return lumen::node_class_toggle(self.handle, cls); }
+    fn set_class(self, cls) { return lumen::node_set_class(self.handle, cls); }
+    fn set_style(self, prop, value) { return lumen::node_set_style(self.handle, prop, value); }
+    fn style_remove(self, prop) { return lumen::node_style_remove(self.handle, prop); }
+    fn remove(self) { return lumen::node_remove(self.handle); }
+    fn append(self, child) { return lumen::node_append(self.handle, child.handle); }
+    fn insert_before(self, new_node, ref_node) {
+        return lumen::node_insert_before(self.handle, new_node.handle, ref_node.handle);
+    }
+    fn set_parent(self, parent) { return lumen::node_set_parent(self.handle, parent.handle); }
+    fn move_to(self, new_parent) { return lumen::node_move_to(self.handle, new_parent.handle); }
+    fn replace_with(self, other) { return lumen::node_replace_with(self.handle, other.handle); }
+
+    // -- read-backs --
+    fn get_attr(self, key) { return lumen::node_get_attr(self.handle, key); }
+    fn text(self) { return lumen::node_text(self.handle); }
+    fn id(self) { return lumen::node_id(self.handle); }
+    fn class_contains(self, cls) { return lumen::node_class_contains(self.handle, cls); }
+    fn style_get(self, prop) { return lumen::node_style_get(self.handle, prop); }
+    fn computed_style(self, prop) { return lumen::node_computed_style(self.handle, prop); }
+
+    // -- low-level introspection --
+    fn is_visible(self) { return lumen::node_is_visible(self.handle); }
+    fn z_index(self) { return lumen::node_z_index(self.handle); }
+    fn classes(self) { return lumen::node_classes(self.handle); }
+    fn components(self) { return lumen::node_components(self.handle); }
+    fn outer_markup(self) { return lumen::node_outer_markup(self.handle); }
+    fn inner_markup(self) { return lumen::node_inner_markup(self.handle); }
+
+    // -- events: bind by name (candela has no closure value to hand the host,
+    // so a handler is still referenced by function name) --
+    fn on(self, event_type, handler) { return lumen::event_on(self.handle, event_type, handler); }
+    fn on_capture(self, event_type, handler) {
+        return lumen::event_on_capture(self.handle, event_type, handler);
+    }
+}
+
+impl Event {
+    fn target(self) { return node(lumen::event_target(self.handle)); }
+    fn current_target(self) { return node(lumen::event_current_target(self.handle)); }
+    fn event_type(self) { return lumen::event_type(self.handle); }
+    fn key(self) { return lumen::event_key(self.handle); }
+    fn value(self) { return lumen::event_value(self.handle); }
+    fn button(self) { return lumen::event_button(self.handle); }
+    fn x(self) { return lumen::event_x(self.handle); }
+    fn y(self) { return lumen::event_y(self.handle); }
+    fn client_x(self) { return lumen::event_client_x(self.handle); }
+    fn client_y(self) { return lumen::event_client_y(self.handle); }
+    fn delta_x(self) { return lumen::event_delta_x(self.handle); }
+    fn delta_y(self) { return lumen::event_delta_y(self.handle); }
+    fn shift(self) { return lumen::event_shift(self.handle); }
+    fn ctrl(self) { return lumen::event_ctrl(self.handle); }
+    fn alt(self) { return lumen::event_alt(self.handle); }
+    fn super_key(self) { return lumen::event_super(self.handle); }
+    fn prevent_default(self) { return lumen::event_prevent_default(self.handle); }
+    fn stop_propagation(self) { return lumen::event_stop_propagation(self.handle); }
+    fn stop_immediate_propagation(self) {
+        return lumen::event_stop_immediate_propagation(self.handle);
+    }
+    // The token an `on`/`on_capture` bind returns is the same id the handler
+    // receives, so a handler can unbind itself with `event.off()`.
+    fn off(self) { return lumen::event_off(self.handle); }
+}
+
+// Element-wise row building helper. On the precompiled (AOT) path the
+// from-source markup parser is absent, so node_set_inner_markup is a no-op and
+// lists are built node by node. lm_append spawns a `tag` element, gives it a
+// class and text, appends it under `parent`, and returns the new node id, so a
+// row is one call instead of five. Pass "" for cls or text to skip that step.
+fn lm_append(parent, tag, cls, text) {
+    let e = lumen::node_spawn(tag);
+    if cls != "" { lumen::node_class_add(e, cls); }
+    if text != "" { lumen::node_set_text(e, text); }
+    lumen::node_append(parent, e);
+    return e;
+}

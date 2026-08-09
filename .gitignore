@@ -1,0 +1,33 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+.DS_Store
+*.swp
+.idea/
+.vscode/
+/lumen.toml.lock
+
+# Profiler captures (chrome trace JSON).
+/lumen-trace.json
+
+# VS Code extension build artifacts
+tools/vscode-lumen/node_modules/
+tools/vscode-lumen/out/
+tools/vscode-lumen/package-lock.json
+tools/vscode-lumen/*.vsix
+
+# C/C++ FFI consumer build dirs
+apps/sysmon/build/
+__pycache__/
+*.pyc
+.claude/
+
+# Docs site build artifacts (Zensical)
+/docs/site/
+/docs/.venv/
+/docs/.cache/
+
+# Native libraries built by an app's [[hooks]] (see apps/notes).
+apps/*/lib*.so
+apps/*/lib*.dylib
+apps/*/*.dll

@@ -1,0 +1,101 @@
+/* Margin - markdown notes.
+ * Two full token scopes on the <root> class: theme-dark (default) and
+ * theme-light.  set_root_class swaps the whole scope in one tick; every
+ * child reads the same --vars, so the ancestor reapply retints the tree. */
+.theme-dark {
+  --bg:      #16181d;
+  --side:    #1d2027;
+  --surface: #22262e;
+  --line:    #2c313b;
+  --text:    #e8e6df;
+  --muted:   #9a9488;
+  --faint:   #6f6a60;
+  --accent:  #d98a4b;
+  --code-bg: #1a1d24;
+}
+.theme-light {
+  --bg:      #f4f1ea;
+  --side:    #eae5da;
+  --surface: #fffdf8;
+  --line:    #ded7c8;
+  --text:    #2a2620;
+  --muted:   #6b6459;
+  --faint:   #9a9284;
+  --accent:  #b5642a;
+  --code-bg: #efe9dc;
+}
+
+.app { bg: var(--bg); text-color: var(--text); }
+.frame { }
+
+/* --- Sidebar --- */
+.sidebar { bg: var(--side); padding: 16 12; gap: 12; }
+.side-head { }
+.side-brand { font-size: 22; text-color: var(--text); }
+.new-btn {
+  bg: var(--accent);
+  hover-bg: #e79b5e;
+  text-color: #201206;
+  radius: 8;
+  padding: 6 12;
+}
+.new-btn:focus { outline: 2 var(--accent); }
+
+.note-list { }
+.note {
+  bg: #00000000;
+  hover-bg: var(--surface);
+  radius: 8;
+  padding: 10 12;
+}
+.note-active {
+  bg: var(--surface);
+  hover-bg: var(--surface);
+  radius: 8;
+  padding: 10 12;
+  shadow: 0 2 10 #00000055;
+}
+.note-title { font-size: 14; text-color: var(--text); wrap: none; }
+.note-snip  { font-size: 12; text-color: var(--faint); wrap: none; }
+.note-active .note-title { text-color: var(--accent); }
+
+.theme-btn {
+  bg: var(--surface);
+  hover-bg: var(--line);
+  text-color: var(--muted);
+  radius: 8;
+  padding: 9 12;
+}
+.theme-btn:focus { outline: 2 var(--accent); }
+
+/* --- Workspace --- */
+.workspace { bg: var(--line); }
+.pane { bg: var(--bg); padding: 18 20; gap: 12; }
+.pane-label { font-size: 11; text-color: var(--faint); }
+
+.editor {
+  bg: var(--surface);
+  text-color: var(--text);
+  radius: 10;
+  padding: 16;
+  font-size: 15;
+}
+.editor:focus { outline: 2 var(--accent); }
+
+.preview { bg: var(--surface); radius: 10; padding: 20; }
+
+/* Rendered markdown blocks. The C parser (md.c) classifies each source line
+   into one of these classes; the script sets the class and text per label. */
+.blk-h1 { font-size: 30; text-color: var(--text); wrap: word; }
+.blk-h2 { font-size: 23; text-color: var(--text); wrap: word; }
+.blk-h3 { font-size: 18; text-color: var(--accent); wrap: word; }
+.blk-p  { font-size: 15; text-color: var(--text); wrap: word; }
+.blk-li { font-size: 15; text-color: var(--text); padding: 0 0 0 8; wrap: word; }
+.blk-code {
+  font-size: 13;
+  text-color: #d7cbb6;
+  bg: var(--code-bg);
+  radius: 6;
+  padding: 12 14;
+}
+.blk-hr { height: 2px; bg: var(--line); }

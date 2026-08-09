@@ -1,0 +1,19 @@
+// candela host smoke script. One `import "lumen.cdl";` pulls in the entire
+// Lumen host surface (signal_set / on / ...); no hand-declared
+// `host "lumen" { ... }` block needed. The CandelaHost splices the prelude in.
+
+import "lumen.cdl";
+
+// on_start runs once at load: seed the `greeting` signal (a `bind-text`
+// label mirrors it) and route clicks on `bump` to `handle_bump`.
+fn on_start() {
+    lumen::signal_set("greeting", "candela host - ready");
+    lumen::on("click", "bump", "handle_bump");
+}
+
+// Per-id click handler: the runtime dispatches with the element id string.
+fn handle_bump(id) {
+    lumen::signal_set("greeting", "candela host - clicked");
+}
+
+fn main() {}

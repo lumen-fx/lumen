@@ -1,0 +1,31 @@
+[package]
+name = "lumen-os-power"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Screen-saver / sleep inhibit host for Lumen. gtk_application_inhibit / IOPMAssertion / SetThreadExecutionState analog."
+
+[dependencies]
+lumen-core = { path = "../core" }
+bevy_ecs.workspace = true
+tracing.workspace = true
+
+# Linux: zbus drives the org.freedesktop.ScreenSaver Inhibit/UnInhibit
+# D-Bus calls. Best-effort - if no session bus / no daemon, calls are
+# no-ops and the token still works as a marker for the in-process state.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"
+
+# macOS: IOPMAssertionCreateWithName / IOPMAssertionRelease via the
+# IOKit framework, surfaced through core-foundation for CFString.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+
+# Windows: SetThreadExecutionState lives in kernel32 - pulled in via
+# the windows crate's Win32_System_Power feature (winit already brings
+# windows transitively).
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = ["Win32_System_Power"] }

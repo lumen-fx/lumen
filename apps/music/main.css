@@ -1,0 +1,137 @@
+/* Waveform - a desktop player.
+ * Deep teal-charcoal with a coral now-playing accent; album art is a
+ * generated gradient, not a bitmap. */
+:root {
+  --bg:      #10141a;
+  --side:    #151a22;
+  --surface: #1b212b;
+  --row:     #1b212b;
+  --row-hi:  #232b37;
+  --line:    #232a34;
+  --text:    #eaf0f2;
+  --muted:   #7e8a94;
+  --coral:   #ff6f61;
+  --teal:    #3fb8af;
+
+  --lumen-surface:       #232b37;
+  --lumen-surface-hover: #2b3441;
+  --lumen-surface-active: #191f28;
+  --lumen-track:         #2a323d;
+  --lumen-track-hover:   #333c48;
+  --lumen-accent:        #ff6f61;
+  --lumen-text:          #eaf0f2;
+  --lumen-text-muted:    #7e8a94;
+  --lumen-radius:        8;
+  --lumen-radius-sm:     6;
+}
+
+.app { bg: var(--bg); text-color: var(--text); }
+.frame { }
+
+/* --- Sidebar --- */
+.sidebar {
+  bg: var(--side);
+  padding: 20 16;
+  gap: 12;
+}
+.side-brand { font-size: 22; text-color: var(--text); }
+.side-label {
+  font-size: 11;
+  text-color: var(--muted);
+  padding: 8 4 2 4;
+}
+.playlists { }
+.pl {
+  bg: #00000000;
+  hover-bg: #212936;
+  text-color: var(--muted);
+  text-align: start;
+  radius: 8;
+  padding: 9 12;
+}
+.pl:focus { outline: 2 var(--coral); }
+.pl-active {
+  bg: #212936;
+  text-color: var(--text);
+}
+.side-foot { }
+.side-stat { font-size: 12; text-color: var(--teal); }
+.side-hint { font-size: 11; text-color: var(--muted); }
+
+/* --- Library --- */
+.main { padding: 20 22; gap: 12; }
+.lib-head { }
+.lh-title { font-size: 24; text-color: var(--text); }
+.lh-meta  { font-size: 12; text-color: var(--muted); }
+
+.col-head { padding: 0 12 8 12; }
+.ch { font-size: 11; text-color: var(--muted); }
+.num    { width: 28px; }
+.artist { width: 150px; }
+.album  { width: 150px; }
+.dur    { width: 52px; text-align: end; }
+
+.lib-body { }
+.track {
+  bg: var(--row);
+  hover-bg: var(--row-hi);
+  radius: 8;
+  padding: 8 12;
+  align: center;
+  gap: 12;
+}
+.track:focus { outline: 2 var(--coral); }
+.track-now { bg: #2a2320; }
+.td { font-size: 13; text-color: var(--text); }
+.td.num    { width: 28px; text-color: var(--muted); }
+.td.grow   { grow: 1; wrap: none; }
+.td.artist { width: 150px; wrap: none; text-color: var(--muted); }
+.td.album  { width: 150px; wrap: none; text-color: var(--muted); }
+.td.dur    { width: 52px; text-align: end; text-color: var(--muted); }
+
+/* --- Now-playing bar --- */
+.nowbar {
+  bg: var(--surface);
+  height: 92px;
+  padding: 0 22;
+  gap: 16;
+  shadow: 0 -6 20 #00000066;
+}
+.art {
+  width: 60px;
+  height: 60px;
+  radius: 8;
+  bg: conic-gradient(from 30deg, #ff6f61, #ffb35c, #3fb8af, #6f7bff, #ff6f61);
+  shadow: 0 4 14 #00000088;
+}
+.np-meta { }
+.np-title  { font-size: 14; text-color: var(--text); }
+.np-artist { font-size: 12; text-color: var(--muted); }
+
+.transport { }
+.tbtns { }
+.tbtn {
+  bg: #00000000;
+  hover-bg: #2b3441;
+  text-color: var(--text);
+  radius: 999;
+  padding: 6 12;
+  min-width: 40px;
+}
+.tbtn:focus { outline: 2 var(--coral); }
+.play {
+  bg: var(--coral);
+  hover-bg: #ff8478;
+  press-bg: #e85c4f;
+  text-color: #23110e;
+  min-width: 48px;
+}
+.play:focus { outline: 2 #ffb3aa; }
+
+.seek { }
+.time { font-size: 11; text-color: var(--muted); width: 42px; text-align: center; }
+.seek-bar { bg: var(--line); radius: 4; }
+
+.vol { }
+.vol-icon { font-size: 14; text-color: var(--muted); }
+.vol-bar { bg: var(--line); radius: 4; }

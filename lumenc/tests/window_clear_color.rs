@@ -1,0 +1,102 @@
+// Needs `RunOptions` / `build_headless_app`, which only exist under
+// `dev-run`.
+#![cfg(feature = "dev-run")]
+
+//! The window's GPU clear color - what a user sees before the root element
+//! itself paints - used to be three different hardcoded values across
+//! `lumen-window-winit`, `lumen-runtime`, and the code that wired one into
+//! the other. It now resolves from the `--lumen-window-bg` custom property
+//! of the fully-combined stylesheet (Palette, then UA, then skin, then app)
+//! when any layer defines it, falling back to
+//! `lumen_window_winit::DEFAULT_CLEAR` otherwise. See
+//! `lumen_runtime::run::app_build::build_app`.
+
+use lumenc::RunOptions;
+use lumenc::run::build_headless_app;
+
+fn build(markup: &str, css: &str, lumen_toml: &str) -> lumen_window_winit::WinitOptions {
+    let dir = std::env::temp_dir().join(format!(
+        "lumenc_clear_color_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("lumen.toml"), lumen_toml).unwrap();
+    let opts = RunOptions::new(&dir)
+        .with_parser(lumenc::default_parser())
+        .with_markup(markup.to_string())
+        .with_css(css.to_string());
+    let (_app, winit) = build_headless_app(opts).expect("build_headless_app");
+    let _ = std::fs::remove_dir_all(&dir);
+    winit
+}
+
+fn approx(c: lumen_core::components::Color, want: (f32, f32, f32)) -> bool {
+    (c.r - want.0).abs() < 0.01 && (c.g - want.1).abs() < 0.01 && (c.b - want.2).abs() < 0.01
+}
+
+/// No skin, no `main.css` `:root` - nothing defines `--lumen-window-bg`, so
+/// the clear color must fall back to the constant, unchanged from what
+/// every real launch path (`RunOptions::new`) has always rendered.
+#[test]
+fn falls_back_to_the_constant_with_no_token_defined() {
+    let winit = build("<root/>", "", "[mcp]\nport = 0\n");
+    assert!(
+        approx(
+            winit.clear,
+            (
+                lumen_window_winit::DEFAULT_CLEAR.r,
+                lumen_window_winit::DEFAULT_CLEAR.g,
+                lumen_window_winit::DEFAULT_CLEAR.b,
+            )
+        ),
+        "expected the DEFAULT_CLEAR fallback, got {:?}",
+        winit.clear
+    );
+}
+
+/// `linux.css`'s light `--lumen-window-bg` (`#fafafb`) resolves once the
+/// skin is active, with no app CSS involved at all - proof the clear color
+/// is genuinely CSS-reachable, not just wired to the Rust constant.
+#[test]
+fn resolves_from_an_active_skin() {
+    let winit = build("<root/>", "", "[mcp]\nport = 0\n[skin]\nname = \"linux\"\n");
+    assert!(
+        approx(
+            winit.clear,
+            (
+                0xfa as f32 / 255.0,
+                0xfa as f32 / 255.0,
+                0xfb as f32 / 255.0
+            )
+        ),
+        "expected linux.css's light --lumen-window-bg (#fafafb), got {:?}",
+        winit.clear
+    );
+}
+
+/// The app's own `:root` overrides the active skin's `--lumen-window-bg`,
+/// matching ordinary author-beats-user-agent cascade precedence.
+#[test]
+fn app_root_overrides_the_skins_token() {
+    let winit = build(
+        "<root/>",
+        ":root { --lumen-window-bg: #112233; }",
+        "[mcp]\nport = 0\n[skin]\nname = \"linux\"\n",
+    );
+    assert!(
+        approx(
+            winit.clear,
+            (
+                0x11 as f32 / 255.0,
+                0x22 as f32 / 255.0,
+                0x33 as f32 / 255.0
+            )
+        ),
+        "app :root override did not win, got {:?}",
+        winit.clear
+    );
+}

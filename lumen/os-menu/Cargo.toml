@@ -1,0 +1,27 @@
+[package]
+name = "lumen-os-menu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Native menu bar abstraction for Lumen (muda integration + Action / MenuBuilder)."
+
+[dependencies]
+lumen-core = { path = "../core" }
+lumen-os-mime = { path = "../os-mime" }
+bevy_ecs.workspace = true
+
+# Native menu bar (extracted from lumen-window-winit; same target gating).
+# muda's Linux backend pulls libxdo-dev which we don't want as a system
+# dep. On Linux the menu attach is a stub that still surfaces the data
+# path through `MenuModel`; an inline-overlay fallback is wired by the
+# lumenc markup layer (see <menubar> overlay path).
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { version = "0.19", default-features = false }
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+muda = { version = "0.19", default-features = false }
+raw-window-handle = "0.6"

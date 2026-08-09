@@ -1,0 +1,30 @@
+[package]
+name = "lumen-os-lifecycle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "App lifecycle host for Lumen - single-instance lock, autostart entry, recent-files list. GApplication-unique / QSingleInstance / Win32 Run-key analog."
+
+[dependencies]
+lumen-core = { path = "../core" }
+bevy_ecs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+# Windows: HKCU\Software\Microsoft\Windows\CurrentVersion\Run autostart
+# entry via winreg. The named-pipe single-instance backend uses raw
+# winapi via the `windows` crate (which winit already pulls in
+# transitively).
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.56"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
+    "Win32_Security",
+    "Win32_System_IO",
+] }
