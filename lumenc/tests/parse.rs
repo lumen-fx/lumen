@@ -1448,14 +1448,10 @@ fn default_skin_applies_to_all_widgets_with_zero_warnings() {
 /// resolved at spawn, before any system runs, so the tree is already
 /// final the instant `build_app` returns.
 fn build_ua_test_app(markup: &str, css: Option<&str>) -> lumen_core::app::App {
-    let dir = std::env::temp_dir().join(format!(
-        "lumenc_ua_defaults_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = std::env::temp_dir().join(format!("lumenc_ua_defaults_{}_{}", std::process::id(), {
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }));
     std::fs::create_dir_all(&dir).expect("mkdir");
     // Same rationale as `run_pipeline.rs`'s helpers: disable the MCP
     // server so parallel test threads don't collide on a shared port.

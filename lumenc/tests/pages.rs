@@ -45,14 +45,10 @@ fn nav_test_guard() -> MutexGuard<'static, ()> {
 }
 
 fn scratch_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "lumen_pages_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = std::env::temp_dir().join(format!("lumen_pages_{}_{}", std::process::id(), {
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("lumen.toml"),
@@ -231,14 +227,10 @@ fn multi_page_navigation_end_to_end() {
 /// `<use template="layout">` then fails to resolve, which is the exact bug this
 /// guards against.
 fn auto_scratch_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "lumen_pages_auto_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = std::env::temp_dir().join(format!("lumen_pages_auto_{}_{}", std::process::id(), {
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }));
     std::fs::create_dir_all(&dir).unwrap();
     // No `[pages]` block: routing is entirely default-driven.
     std::fs::write(

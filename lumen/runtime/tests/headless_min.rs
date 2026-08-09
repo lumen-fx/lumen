@@ -23,14 +23,10 @@ use lumen_runtime::{RunOptions, run_app_headless};
 /// cleanly headless regardless of which optional subsystems were compiled in.
 #[test]
 fn minimal_artifact_ticks_headless() {
-    let dir = std::env::temp_dir().join(format!(
-        "lumen_headless_min_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = std::env::temp_dir().join(format!("lumen_headless_min_{}_{}", std::process::id(), {
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }));
     std::fs::create_dir_all(&dir).unwrap();
 
     let app = CompiledApp {

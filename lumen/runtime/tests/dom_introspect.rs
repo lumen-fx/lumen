@@ -52,14 +52,11 @@ fn introspection_read_side_headless() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let _ = node_query::drain_external_dom_commands();
 
-    let dir = std::env::temp_dir().join(format!(
-        "lumen_dom_introspect_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("lumen_dom_introspect_{}_{}", std::process::id(), {
+            static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        }));
     std::fs::create_dir_all(&dir).unwrap();
 
     // root#app.app (400x300) > column.list > [ button#save.row (100x40, pad 4),

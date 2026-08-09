@@ -17,14 +17,11 @@ use lumenc::RunOptions;
 use lumenc::run::build_app;
 
 fn build(markup: &str, css: &str) -> App {
-    let dir = std::env::temp_dir().join(format!(
-        "lumenc_palette_theme_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("lumenc_palette_theme_{}_{}", std::process::id(), {
+            static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        }));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
     let opts = RunOptions::new(&dir)

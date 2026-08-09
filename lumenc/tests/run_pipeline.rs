@@ -57,14 +57,11 @@ mod pipeline_integration_tests {
     fn build_and_tick(markup: &str, ticks: u32) -> App {
         // Unique scratch dir so parallel test threads don't collide, and so
         // the default `lumen.toml` (absent) resolves to built-in defaults.
-        let dir = std::env::temp_dir().join(format!(
-            "lumenc_pipeline_it_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("lumenc_pipeline_it_{}_{}", std::process::id(), {
+                static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            }));
         std::fs::create_dir_all(&dir).unwrap();
         // Disable the MCP server so the test doesn't spawn a thread that
         // binds a TCP port (parallel tests would collide on 7878).
@@ -494,14 +491,11 @@ mod pipeline_integration_tests {
     /// Write a minimal on-disk app (markup + mcp-off lumen.toml) and
     /// return its dir.
     fn write_app_dir(markup: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "lumenc_check_it_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("lumenc_check_it_{}_{}", std::process::id(), {
+                static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            }));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("lumen.toml"),
@@ -637,14 +631,10 @@ mod feel_wave_tests {
     use lumen_core::components::Opacity;
 
     fn build_with_css(markup: &str, css: &str) -> App {
-        let dir = std::env::temp_dir().join(format!(
-            "lumenc_feel_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = std::env::temp_dir().join(format!("lumenc_feel_{}_{}", std::process::id(), {
+            static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        }));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("lumen.toml"),
@@ -794,14 +784,10 @@ mod virtualization_tests {
     /// directly into `ArraySignals` (not via Rhai) so setup cost stays out
     /// of the measurements.
     fn build_virtual_grid(rows: usize) -> App {
-        let dir = std::env::temp_dir().join(format!(
-            "lumenc_virt_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = std::env::temp_dir().join(format!("lumenc_virt_{}_{}", std::process::id(), {
+            static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        }));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("lumen.toml"),
@@ -1135,14 +1121,10 @@ mod aot_roundtrip_tests {
 "#;
 
     fn write_app(markup: &str, css: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "lumenc_aot_rt_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = std::env::temp_dir().join(format!("lumenc_aot_rt_{}_{}", std::process::id(), {
+            static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        }));
         std::fs::create_dir_all(&dir).unwrap();
         // MCP off so parallel tests don't collide on a TCP port.
         std::fs::write(
