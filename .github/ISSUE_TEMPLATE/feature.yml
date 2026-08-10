@@ -1,6 +1,6 @@
 name: feature request
 description: propose a change or addition to Lumen
-labels: [enhancement]
+labels: [C-Feature, S-Needs-Triage]
 body:
   - type: textarea
     id: problem

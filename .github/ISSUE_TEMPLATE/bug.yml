@@ -1,6 +1,6 @@
 name: bug report
 description: something in Lumen behaves incorrectly
-labels: [bug]
+labels: [C-Bug, S-Needs-Triage]
 body:
   - type: textarea
     id: what-happened
