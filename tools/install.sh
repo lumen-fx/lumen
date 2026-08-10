@@ -706,5 +706,5 @@ if [ -n "$PIN_VERSION" ]; then
 fi
 say ""
 say "Get started:"
-say "  lumenc new counter my-app"
+say "  lumenc new my-app counter"
 say "  lumenc run my-app"

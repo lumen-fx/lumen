@@ -1,4 +1,4 @@
-//! Built-in templates for `lumenc new <template> <name>`.
+//! Built-in templates for `lumenc new <name> [template]`.
 //!
 //! Each template is a slice of `(relative_path, file_body)` tuples. The
 //! scaffolder walks the slice, creating subdirectories on demand and
@@ -12,7 +12,7 @@
 
 /// One gallery entry: name, one-line description, and the file set.
 pub struct Template {
-    /// CLI name (`lumenc new <name> <dir>`).
+    /// CLI name (the optional second argument to `lumenc new`).
     pub name: &'static str,
     /// One-line description shown by `lumenc new --list`.
     pub description: &'static str,
@@ -22,6 +22,11 @@ pub struct Template {
 
 /// Every built-in template, in gallery order (simplest first).
 pub const TEMPLATES: &[Template] = &[
+    Template {
+        name: "blank",
+        description: "Empty starting point: a bare <root>, a lumen.toml, nothing else.",
+        files: BLANK,
+    },
     Template {
         name: "hello",
         description: "Smallest runnable app: one label + a script that says hi.",
@@ -72,6 +77,34 @@ pub fn template_names() -> String {
         .collect::<Vec<_>>()
         .join(" | ")
 }
+
+/// Empty starting point: the default when `lumenc new` gets no template.
+pub const BLANK: &[(&str, &str)] = &[
+    ("main.lmn", "<root />\n"),
+    (
+        "lumen.toml",
+        "[app]\nentry = \"main.lmn\"\n\n[window]\ntitle = \"App\"\n",
+    ),
+    (
+        "README.md",
+        r##"# blank
+
+An empty Lumen app: one bare `<root>` and a `lumen.toml`.
+
+Build up from here:
+
+- Add children inside `<root>` in `main.lmn`.
+- Add a `main.css` next to it; it is picked up automatically.
+- Attach a script with `<script src="main.cdl" />` (or `.rhai` / `.lua`).
+
+Run it:
+
+```sh
+lumenc run .
+```
+"##,
+    ),
+];
 
 /// Smallest runnable app: a single label + script that says hi.
 pub const HELLO: &[(&str, &str)] = &[

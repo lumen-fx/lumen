@@ -606,16 +606,17 @@ fn cmd_check(mut args: impl Iterator<Item = String>) -> ExitCode {
     }
 }
 
-/// Handles `lumenc new <template> <name>` and `lumenc new --list`.
+/// Handles `lumenc new <name> [template]` and `lumenc new --list`.
 /// Scaffolds a directory `<name>` from one of the built-in gallery
-/// templates (see [`lumenc::scaffold::TEMPLATES`]).
+/// templates (see [`lumenc::scaffold::TEMPLATES`]); with no template
+/// argument it scaffolds `blank`.
 fn cmd_new(args: impl Iterator<Item = String>) -> ExitCode {
     let mut args = args;
-    let Some(template) = args.next() else {
-        eprintln!("lumenc new: missing <template>\n\n{USAGE}");
+    let Some(name) = args.next() else {
+        eprintln!("lumenc new: missing <name>\n\n{USAGE}");
         return ExitCode::from(2);
     };
-    if template == "--list" || template == "-l" {
+    if name == "--list" || name == "-l" {
         println!("Available templates:\n");
         let width = lumenc::scaffold::TEMPLATES
             .iter()
@@ -625,13 +626,10 @@ fn cmd_new(args: impl Iterator<Item = String>) -> ExitCode {
         for t in lumenc::scaffold::TEMPLATES {
             println!("    {:width$}  {}", t.name, t.description, width = width);
         }
-        println!("\nScaffold one with: lumenc new <template> <name>");
+        println!("\nScaffold one with: lumenc new <name> [template]");
         return ExitCode::SUCCESS;
     }
-    let Some(name) = args.next() else {
-        eprintln!("lumenc new: missing <name>\n\n{USAGE}");
-        return ExitCode::from(2);
-    };
+    let template = args.next().unwrap_or_else(|| String::from("blank"));
     let dir = PathBuf::from(&name);
     if dir.exists() {
         eprintln!("lumenc new: {name} already exists; refusing to overwrite");
@@ -703,14 +701,15 @@ USAGE:
                           inputs); --no-hooks skips both. `check` never
                           runs hooks.
     lumenc check <dir>    Parse without spawning a window (CI gate)
-    lumenc new <template> <name>
+    lumenc new <name> [template]
                           Scaffold a fresh app directory from the
-                          template gallery: hello | counter | form |
-                          todo | dashboard | settings | hotkeys.
-                          Every template ships main.lmn (+ CSS + a
-                          script + lumen.toml) and a README explaining
-                          the concepts it demonstrates. `counter` is
-                          scripted in candela; the rest are Rhai.
+                          template gallery: blank | hello | counter |
+                          form | todo | dashboard | settings | hotkeys.
+                          The template defaults to `blank`, an empty
+                          <root> plus lumen.toml. Every template ships
+                          main.lmn + lumen.toml and a README explaining
+                          the concepts it demonstrates; `counter` is
+                          scripted in candela, the rest in Rhai.
     lumenc new --list     Print the template gallery with one-line
                           descriptions.
     lumenc fmt <file>     Reformat a `.lmn` markup file in place. Pass
