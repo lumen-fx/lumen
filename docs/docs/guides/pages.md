@@ -111,9 +111,10 @@ Styling and scripting are app-wide, not per page.
 
 - One stylesheet. `main.css` styles the whole app; split it with `@import` if it
   grows. See [styling](styling.md).
-- One script program. The `<script>` blocks from every page are combined into a
-  single program, so define each function once across the app. `on_start` runs
-  once at startup, not on every navigation.
+- One script program per language. The `<script>` sources from every page are
+  grouped by host and combined, so define each function once across the app
+  rather than once per page. `on_start` runs once at startup, not on every
+  navigation. See [scripting](scripting.md) for how a file picks its host.
 - Window settings live on the home page. `skin`, `frameless`, and a `<menubar>`
   are read from the home page's `<root>`; the same attributes on another page
   are ignored.

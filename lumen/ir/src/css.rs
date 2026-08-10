@@ -23,6 +23,7 @@ use crate::layout_ir::{
     TrackSizeSpec, TransitionIr, TransitionPropertyIr,
 };
 use crate::values::{bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i32, parse_length};
+use std::rc::Rc;
 // ---------------------------------------------------------------------------
 // Public AST
 // ---------------------------------------------------------------------------
@@ -628,6 +629,7 @@ pub fn apply_css_with_media(
         &parents,
         1,
         1,
+        None,
         &mut warnings,
     );
     let mut seen = std::collections::HashSet::new();
@@ -668,6 +670,13 @@ struct ElementRef {
     child_index: i32,
     /// Total siblings (including self).
     sibling_count: i32,
+    /// Every element sibling of this node, self included, in document
+    /// order; `child_index` locates the node inside it. `None` when the
+    /// caller has no sibling identity to give, and `+` / `~` steps then
+    /// fail rather than guess. Entries hold `None` here themselves: a
+    /// sibling's sibling list is this same list, which the matcher
+    /// carries in its cursor.
+    siblings: Option<Rc<[ElementRef]>>,
 }
 
 impl ElementRef {
@@ -678,6 +687,53 @@ impl ElementRef {
             id: el.attrs.id.clone(),
             child_index,
             sibling_count,
+            siblings: None,
+        }
+    }
+
+    /// Attach the sibling list this node belongs to.
+    fn with_siblings(mut self, siblings: Option<Rc<[ElementRef]>>) -> Self {
+        self.siblings = siblings;
+        self
+    }
+
+    /// 0-based position inside [`Self::siblings`].
+    fn sibling_index(&self) -> usize {
+        (self.child_index.max(1) - 1) as usize
+    }
+}
+
+/// A node the matcher is currently standing on, with everything a
+/// compound selector can ask about it: its identity, its ancestors
+/// (root-first), and where it sits among its siblings.
+#[derive(Clone, Copy)]
+struct NodeCtx<'a> {
+    el: &'a ElementRef,
+    /// Ancestors of `el`, root-first.
+    ancestors: &'a [ElementRef],
+    /// Sibling list of `el` and the 0-based index of `el` inside it.
+    /// `None` list = sibling identity unavailable.
+    siblings: Option<&'a [ElementRef]>,
+    sibling_index: usize,
+    has_element_children: bool,
+    text_body: Option<&'a str>,
+    is_root: bool,
+}
+
+impl<'a> NodeCtx<'a> {
+    /// Context for the ancestor at index `k` of a root-first chain. The
+    /// ancestor pass assumes element children and no inline text, so
+    /// `:empty` matches conservatively there.
+    fn ancestor(parents: &'a [ElementRef], k: usize) -> Self {
+        let a = &parents[k];
+        Self {
+            el: a,
+            ancestors: &parents[..k],
+            siblings: a.siblings.as_deref(),
+            sibling_index: a.sibling_index(),
+            has_element_children: true,
+            text_body: None,
+            is_root: k == 0,
         }
     }
 }
@@ -692,9 +748,10 @@ fn apply_to_element(
     parents: &[ElementRef],
     child_index: i32,
     sibling_count: i32,
+    siblings: Option<Rc<[ElementRef]>>,
     warnings: &mut Vec<CssWarning>,
 ) {
-    let me = ElementRef::from_element(el, child_index, sibling_count);
+    let me = ElementRef::from_element(el, child_index, sibling_count).with_siblings(siblings);
     let is_root = parents.is_empty();
     let has_element_children = !el.children.is_empty();
 
@@ -869,6 +926,19 @@ fn apply_to_element(
     let mut new_parents: Vec<ElementRef> = parents.to_vec();
     new_parents.push(me);
     let n = el.children.len() as i32;
+    // One identity list per parent, shared by reference with every child,
+    // so `+` / `~` steps can walk leftwards through real siblings.
+    let child_refs: Option<Rc<[ElementRef]>> = if el.children.is_empty() {
+        None
+    } else {
+        Some(
+            el.children
+                .iter()
+                .enumerate()
+                .map(|(i, c)| ElementRef::from_element(c, (i as i32) + 1, n))
+                .collect(),
+        )
+    };
     for (i, child) in el.children.iter_mut().enumerate() {
         apply_to_element(
             child,
@@ -879,6 +949,7 @@ fn apply_to_element(
             &new_parents,
             (i as i32) + 1,
             n,
+            child_refs.clone(),
             warnings,
         );
     }
@@ -1011,6 +1082,15 @@ fn collect_matching_rules(
     text_body: Option<&str>,
     is_root: bool,
 ) -> Vec<MatchedRule> {
+    let subject_ctx = NodeCtx {
+        el: me,
+        ancestors: parents,
+        siblings: me.siblings.as_deref(),
+        sibling_index: me.sibling_index(),
+        has_element_children,
+        text_body,
+        is_root,
+    };
     let mut matched: Vec<MatchedRule> = Vec::new();
     for (rule_idx, rule) in css.rules.iter().enumerate() {
         if let Some(mq) = &rule.media {
@@ -1019,9 +1099,7 @@ fn collect_matching_rules(
             }
         }
         for (sel_idx, sel) in rule.selectors.iter().enumerate() {
-            if let Some(subject) =
-                match_selector(sel, me, parents, has_element_children, text_body, is_root)
-            {
+            if let Some(subject) = match_selector(sel, &subject_ctx) {
                 matched.push(MatchedRule {
                     rule_idx,
                     selector_idx: sel_idx,
@@ -1051,33 +1129,31 @@ fn collect_matching_rules(
     matched
 }
 
-/// Try to match `sel` against `me` (the subject element), consulting
-/// `parents` (outer-first) for ancestor matching. Returns the subject
-/// compound's pseudo classification.
-fn match_selector(
-    sel: &SelectorBuf,
-    me: &ElementRef,
-    parents: &[ElementRef],
-    has_element_children: bool,
-    text_body: Option<&str>,
-    is_root: bool,
-) -> Option<SubjectPseudo> {
+/// Try to match `sel` against `subject`, walking leftwards through the
+/// chain: ancestors for descendant / child steps, the sibling list for
+/// `+` / `~` steps. Returns the subject compound's pseudo
+/// classification.
+///
+/// Each step takes the nearest candidate that matches and does not
+/// backtrack, so a chain whose left half could only match via a farther
+/// candidate can miss. This is the same greediness the descendant walk
+/// has always had.
+fn match_selector(sel: &SelectorBuf, subject: &NodeCtx) -> Option<SubjectPseudo> {
     let last = sel.chain.last()?;
     let subject_compound = &last.1;
     let subject_pseudo = extract_subject_pseudo(subject_compound);
-    if !match_compound(
-        subject_compound,
-        me,
-        has_element_children,
-        text_body,
-        is_root,
-    ) {
+    if !match_compound(subject_compound, subject) {
         return None;
     }
-    // Walk leftwards through the chain. `anc_cursor` is the index of
-    // the next ancestor to try (counting from the IMMEDIATE parent =
-    // parents.len() - 1 and going up).
+    let parents = subject.ancestors;
+    // `anc_cursor` is the index of the next ancestor to try (counting
+    // from the IMMEDIATE parent = parents.len() - 1 and going up).
+    // `sibs` / `sib_idx` track where the cursor stands among its
+    // siblings; a `+` / `~` step moves inside that list, and a
+    // descendant / child step replaces it with the ancestor's own.
     let mut anc_cursor: isize = parents.len() as isize - 1;
+    let mut sibs: Option<&[ElementRef]> = subject.siblings;
+    let mut sib_idx: usize = subject.sibling_index;
     for i in (0..sel.chain.len().saturating_sub(1)).rev() {
         // The combinator that linked the *previous* compound on the
         // right side (sel.chain[i+1]) to this compound on the left
@@ -1089,10 +1165,12 @@ fn match_selector(
             Combinator::Descendant => {
                 let mut found = false;
                 while anc_cursor >= 0 {
-                    let a = &parents[anc_cursor as usize];
-                    let a_is_root = anc_cursor == 0;
+                    let k = anc_cursor as usize;
                     anc_cursor -= 1;
-                    if match_compound(compound, a, true, None, a_is_root) {
+                    let ctx = NodeCtx::ancestor(parents, k);
+                    if match_compound(compound, &ctx) {
+                        sibs = ctx.siblings;
+                        sib_idx = ctx.sibling_index;
                         found = true;
                         break;
                     }
@@ -1105,21 +1183,46 @@ fn match_selector(
                 if anc_cursor < 0 {
                     return None;
                 }
-                let a = &parents[anc_cursor as usize];
-                let a_is_root = anc_cursor == 0;
+                let k = anc_cursor as usize;
                 anc_cursor -= 1;
-                if !match_compound(compound, a, true, None, a_is_root) {
+                let ctx = NodeCtx::ancestor(parents, k);
+                if !match_compound(compound, &ctx) {
                     return None;
                 }
+                sibs = ctx.siblings;
+                sib_idx = ctx.sibling_index;
             }
             Combinator::AdjacentSibling | Combinator::GeneralSibling => {
-                // v1 limitation: sibling combinators require the
-                // sibling's class/tag info, which isn't in our
-                // ancestor-only context. Fail conservatively so we
-                // don't silently mis-apply rules. Tracked in
-                // theming.md follow-ups.
-                let _ = compound;
-                return None;
+                // Siblings share the cursor's ancestors, so the ancestor
+                // cursor stays put; only the position inside the sibling
+                // list moves.
+                let list = sibs?;
+                if sib_idx == 0 || sib_idx > list.len() {
+                    return None;
+                }
+                let anc_len = (anc_cursor + 1).max(0) as usize;
+                let mut hit: Option<usize> = None;
+                let mut j = sib_idx;
+                while j > 0 {
+                    j -= 1;
+                    let ctx = NodeCtx {
+                        el: &list[j],
+                        ancestors: &parents[..anc_len],
+                        siblings: Some(list),
+                        sibling_index: j,
+                        has_element_children: true,
+                        text_body: None,
+                        is_root: false,
+                    };
+                    if match_compound(compound, &ctx) {
+                        hit = Some(j);
+                        break;
+                    }
+                    if link == Combinator::AdjacentSibling {
+                        break;
+                    }
+                }
+                sib_idx = hit?;
             }
         }
     }
@@ -1144,13 +1247,8 @@ fn extract_subject_pseudo(c: &CompoundSelector) -> SubjectPseudo {
     sp
 }
 
-fn match_compound(
-    compound: &CompoundSelector,
-    el: &ElementRef,
-    has_element_children: bool,
-    text_body: Option<&str>,
-    is_root: bool,
-) -> bool {
+fn match_compound(compound: &CompoundSelector, node: &NodeCtx) -> bool {
+    let el = node.el;
     if let Some(t) = &compound.tag {
         if t != &el.tag {
             return false;
@@ -1167,20 +1265,18 @@ fn match_compound(
         }
     }
     for p in &compound.pseudo_classes {
-        if !matches_pseudo(p, el, has_element_children, text_body, is_root) {
+        if !matches_pseudo(p, node) {
             return false;
         }
     }
     true
 }
 
-fn matches_pseudo(
-    p: &PseudoClass,
-    el: &ElementRef,
-    has_element_children: bool,
-    text_body: Option<&str>,
-    is_root: bool,
-) -> bool {
+fn matches_pseudo(p: &PseudoClass, node: &NodeCtx) -> bool {
+    let el = node.el;
+    let is_root = node.is_root;
+    let has_element_children = node.has_element_children;
+    let text_body = node.text_body;
     match p {
         // State-conditional pseudos: matched as true at parse time;
         // the runtime ECS attaches the appropriate state component.
@@ -1202,18 +1298,15 @@ fn matches_pseudo(
             !has_element_children && no_text
         }
         PseudoClass::NthChild(anb) => anb.matches(el.child_index),
-        PseudoClass::Is(args) => args.iter().any(|s| {
-            s.chain.len() == 1
-                && match_compound(&s.chain[0].1, el, has_element_children, text_body, is_root)
-        }),
-        PseudoClass::Where(args) => args.iter().any(|s| {
-            s.chain.len() == 1
-                && match_compound(&s.chain[0].1, el, has_element_children, text_body, is_root)
-        }),
-        PseudoClass::Not(args) => !args.iter().any(|s| {
-            s.chain.len() == 1
-                && match_compound(&s.chain[0].1, el, has_element_children, text_body, is_root)
-        }),
+        // Selectors-4: the argument of `:is()` / `:where()` / `:not()` is
+        // a full complex-selector list whose subject is this element, so
+        // each argument runs back through the matcher with this node's
+        // own ancestor / sibling context. `.a:not(.b > .a)` therefore
+        // asks whether the element is a child of `.b`, not merely
+        // whether it carries `.b`.
+        PseudoClass::Is(args) => args.iter().any(|s| match_selector(s, node).is_some()),
+        PseudoClass::Where(args) => args.iter().any(|s| match_selector(s, node).is_some()),
+        PseudoClass::Not(args) => !args.iter().any(|s| match_selector(s, node).is_some()),
     }
 }
 
@@ -1241,10 +1334,10 @@ pub fn parse_selector_list(src: &str) -> Result<Vec<SelectorBuf>, String> {
 /// ([`match_selector`]) so `query()` and traversal share the exact match
 /// semantics of the live cascade.
 ///
-/// Sibling combinators (`+`, `~`) fail conservatively here, the same as
-/// in the cascade: the matcher has no sibling identity in an ancestor-only
-/// context, so a selector that ends in a sibling step never matches. Query
-/// inherits that limitation until sibling context is threaded through.
+/// Sibling combinators (`+`, `~`) fail here: an [`AncestorInfo`] chain
+/// carries no sibling identity, so a selector with a sibling step never
+/// matches. The full-tree cascade, which walks real siblings, matches
+/// them.
 ///
 /// `has_element_children` is assumed true and inline text is assumed
 /// absent for the subject, matching the ancestor-pass convention; `:empty`
@@ -1257,7 +1350,16 @@ pub fn selector_matches(
     let me = subject.to_ref();
     let parents: Vec<ElementRef> = ancestors.iter().map(AncestorInfo::to_ref).collect();
     let is_root = ancestors.is_empty();
-    match_selector(sel, &me, &parents, true, None, is_root).is_some()
+    let ctx = NodeCtx {
+        el: &me,
+        ancestors: &parents,
+        siblings: None,
+        sibling_index: me.sibling_index(),
+        has_element_children: true,
+        text_body: None,
+        is_root,
+    };
+    match_selector(sel, &ctx).is_some()
 }
 
 /// Selector-nesting depth cap for `:is()` / `:where()` / `:not()`,
@@ -1581,6 +1683,13 @@ fn sel_parse_anb(src: &str) -> Result<AnB, String> {
 
 /// Inline-set fields (origin: inline) beat CSS. Restore any field the
 /// inline snapshot had populated.
+///
+/// Every property the cascade can write is listed here, so the rule
+/// "markup beats CSS" holds for the whole attribute surface rather than
+/// for an arbitrary subset. The exception is `flex`, which the markup
+/// parser fills in from the tag itself (`<row>` / `<column>` / `<scroll>`
+/// ...) rather than from anything the author wrote; restoring it would
+/// make `flex-direction` unsettable from CSS on those tags.
 fn restore_inline_origin(target: &mut Attributes, inline: &Attributes) {
     if inline.width.is_some() {
         target.width = inline.width;
@@ -1792,6 +1901,164 @@ fn restore_inline_origin(target: &mut Attributes, inline: &Attributes) {
     if inline.scrollbar_width.is_some() {
         target.scrollbar_width = inline.scrollbar_width;
     }
+    if inline.overflow.is_some() {
+        target.overflow = inline.overflow;
+    }
+    if inline.overflow_x.is_some() {
+        target.overflow_x = inline.overflow_x;
+    }
+    if inline.overflow_y.is_some() {
+        target.overflow_y = inline.overflow_y;
+    }
+    if inline.line_height.is_some() {
+        target.line_height = inline.line_height;
+    }
+    if inline.text_overflow.is_some() {
+        target.text_overflow = inline.text_overflow;
+    }
+    if inline.layout_boundary {
+        target.layout_boundary = true;
+    }
+    if inline.border_color_top.is_some() {
+        target.border_color_top = inline.border_color_top;
+    }
+    if inline.border_color_right.is_some() {
+        target.border_color_right = inline.border_color_right;
+    }
+    if inline.border_color_bottom.is_some() {
+        target.border_color_bottom = inline.border_color_bottom;
+    }
+    if inline.border_color_left.is_some() {
+        target.border_color_left = inline.border_color_left;
+    }
+    if inline.outline_offset.is_some() {
+        target.outline_offset = inline.outline_offset;
+    }
+    if inline.focus_visible_outline.is_some() {
+        target.focus_visible_outline = inline.focus_visible_outline;
+    }
+    if inline.caret_width.is_some() {
+        target.caret_width = inline.caret_width;
+    }
+    if inline.caret_blink_ms.is_some() {
+        target.caret_blink_ms = inline.caret_blink_ms;
+    }
+    if inline.password_character.is_some() {
+        target.password_character = inline.password_character;
+    }
+    if inline.knob_inset.is_some() {
+        target.knob_inset = inline.knob_inset;
+    }
+    if inline.thumb_size.is_some() {
+        target.thumb_size = inline.thumb_size;
+    }
+    if inline.popup_gap.is_some() {
+        target.popup_gap = inline.popup_gap;
+    }
+    if inline.disabled_opacity_default.is_some() {
+        target.disabled_opacity_default = inline.disabled_opacity_default;
+    }
+    if inline.progress_duration.is_some() {
+        target.progress_duration = inline.progress_duration;
+    }
+    if inline.progress_chunk.is_some() {
+        target.progress_chunk = inline.progress_chunk;
+    }
+    if inline.scrollbar_thickness.is_some() {
+        target.scrollbar_thickness = inline.scrollbar_thickness;
+    }
+    if inline.scrollbar_thickness_thin.is_some() {
+        target.scrollbar_thickness_thin = inline.scrollbar_thickness_thin;
+    }
+    if inline.scrollbar_margin.is_some() {
+        target.scrollbar_margin = inline.scrollbar_margin;
+    }
+    if inline.scrollbar_min_thumb.is_some() {
+        target.scrollbar_min_thumb = inline.scrollbar_min_thumb;
+    }
+    if inline.scrollbar_track_hover.is_some() {
+        target.scrollbar_track_hover = inline.scrollbar_track_hover;
+    }
+    if inline.scrollbar_hover_boost.is_some() {
+        target.scrollbar_hover_boost = inline.scrollbar_hover_boost;
+    }
+    if inline.scrollbar_fade_delay_ms.is_some() {
+        target.scrollbar_fade_delay_ms = inline.scrollbar_fade_delay_ms;
+    }
+    if inline.scrollbar_fade_duration_ms.is_some() {
+        target.scrollbar_fade_duration_ms = inline.scrollbar_fade_duration_ms;
+    }
+    // State slots (`:hover` / `:active` / `:focus` / `:focus-visible` /
+    // `:checked` / `:selected` / `:disabled` / `:drag-over`). Markup can
+    // write `hover-bg` / `press-bg` / `focus-outline` directly; the rest
+    // are reachable only from CSS today, and are listed so a future
+    // inline spelling inherits the same precedence.
+    if inline.hover_text_color.is_some() {
+        target.hover_text_color = inline.hover_text_color;
+    }
+    if inline.active_text_color.is_some() {
+        target.active_text_color = inline.active_text_color;
+    }
+    if inline.focus_text_color.is_some() {
+        target.focus_text_color = inline.focus_text_color;
+    }
+    if inline.focus_visible_text_color.is_some() {
+        target.focus_visible_text_color = inline.focus_visible_text_color;
+    }
+    if inline.disabled_text_color.is_some() {
+        target.disabled_text_color = inline.disabled_text_color;
+    }
+    if inline.drag_over_text_color.is_some() {
+        target.drag_over_text_color = inline.drag_over_text_color;
+    }
+    if inline.hover_opacity.is_some() {
+        target.hover_opacity = inline.hover_opacity;
+    }
+    if inline.active_opacity.is_some() {
+        target.active_opacity = inline.active_opacity;
+    }
+    if inline.focus_opacity.is_some() {
+        target.focus_opacity = inline.focus_opacity;
+    }
+    if inline.focus_visible_opacity.is_some() {
+        target.focus_visible_opacity = inline.focus_visible_opacity;
+    }
+    if inline.disabled_opacity.is_some() {
+        target.disabled_opacity = inline.disabled_opacity;
+    }
+    if inline.drag_over_opacity.is_some() {
+        target.drag_over_opacity = inline.drag_over_opacity;
+    }
+    if inline.hover_shadows.is_some() {
+        target.hover_shadows = inline.hover_shadows.clone();
+    }
+    if inline.active_shadows.is_some() {
+        target.active_shadows = inline.active_shadows.clone();
+    }
+    if inline.focus_shadows.is_some() {
+        target.focus_shadows = inline.focus_shadows.clone();
+    }
+    if inline.focus_visible_shadows.is_some() {
+        target.focus_visible_shadows = inline.focus_visible_shadows.clone();
+    }
+    if inline.disabled_shadows.is_some() {
+        target.disabled_shadows = inline.disabled_shadows.clone();
+    }
+    if inline.drag_over_shadows.is_some() {
+        target.drag_over_shadows = inline.drag_over_shadows.clone();
+    }
+    if inline.checked_bg.is_some() {
+        target.checked_bg = inline.checked_bg;
+    }
+    if inline.selected_bg.is_some() {
+        target.selected_bg = inline.selected_bg;
+    }
+    if inline.disabled_bg.is_some() {
+        target.disabled_bg = inline.disabled_bg;
+    }
+    if inline.drag_over_bg.is_some() {
+        target.drag_over_bg = inline.drag_over_bg;
+    }
 }
 
 /// Re-apply CSS rules to a single substituted element with overwrite
@@ -1891,6 +2158,7 @@ impl AncestorInfo {
             id: self.id.clone(),
             child_index: self.child_index,
             sibling_count: self.sibling_count,
+            siblings: None,
         }
     }
 }
@@ -2263,6 +2531,7 @@ fn reapply_probe(
         parents,
         1,
         1,
+        None,
         &mut warnings,
     );
     copy_back_reapplied(el, &probe);
@@ -2762,6 +3031,13 @@ fn canonical_property_name(name: &str) -> &str {
         "background" | "background-color" => "bg",
         "border-radius" => "radius",
         "flex-grow" => "grow",
+        // The house name and the standard name are interchangeable in
+        // both directions: `justify` / `justify-content`, `fit` /
+        // `object-fit`, `shrink` / `flex-shrink`. Each pair collapses
+        // onto the spelling the property table below matches on.
+        "justify-content" => "justify",
+        "object-fit" => "fit",
+        "shrink" => "flex-shrink",
         // `white-space: nowrap | normal` shares the wrap slot - the
         // `wrap` parser already accepts both spellings as values.
         "white-space" => "wrap",
@@ -3422,16 +3698,21 @@ fn apply_declaration(
                     if entry.is_empty() {
                         continue;
                     }
-                    match TransitionPropertyIr::from_css_name(entry) {
-                        Some(p) => props.push(p),
-                        None => tracing::warn!(
-                            target: "lumenc::css",
-                            "transition-property: '{entry}' is not animatable - ignored"
-                        ),
-                    }
+                    props.extend(transition_properties_for(entry));
                 }
                 attrs.transition_property = Some(props);
             }
+        }
+        // Parsed and ignored: a transition always starts on the tick the
+        // value changes. Kept out of the unknown-property path so the
+        // warning says what happened, and so it matches the shorthand,
+        // which also warns on a delay term and drops it.
+        "transition-delay" => {
+            tracing::warn!(
+                target: "lumenc::css",
+                "transition-delay '{}' ignored - transitions start immediately",
+                value.trim()
+            );
         }
         "transition-duration" => {
             let mut out = Vec::new();
@@ -3768,6 +4049,42 @@ fn grid_line_to_i16(ctx: &str, name: &str, v: i32) -> i16 {
 // transition / shadow helpers (unchanged semantics)
 // ---------------------------------------------------------------------------
 
+/// Every property a transition can animate. `transition: all` and
+/// `transition-property: all` expand to this list.
+const ALL_TRANSITION_PROPERTIES: [TransitionPropertyIr; 4] = [
+    TransitionPropertyIr::Opacity,
+    TransitionPropertyIr::BackgroundColor,
+    TransitionPropertyIr::TextColor,
+    TransitionPropertyIr::BorderColor,
+];
+
+/// CSS `ease`, the initial `transition-timing-function`, used when an
+/// entry names no curve.
+const DEFAULT_EASING: EasingIr = EasingIr::CubicBezier(0.25, 0.1, 0.25, 1.0);
+
+/// Expand one `transition` / `transition-property` term into the
+/// properties it names. `all` covers the whole animatable set; an
+/// unanimatable or unknown name yields an empty list and a warning,
+/// per the CSS rule that such entries are ignored rather than fatal.
+/// Geometry props (width / height / padding ...) are excluded on
+/// purpose: animating them would re-run layout every frame.
+fn transition_properties_for(term: &str) -> Vec<TransitionPropertyIr> {
+    if term == "all" {
+        return ALL_TRANSITION_PROPERTIES.to_vec();
+    }
+    match TransitionPropertyIr::from_css_name(term) {
+        Some(p) => vec![p],
+        None => {
+            tracing::warn!(
+                target: "lumenc::css",
+                "transition: property '{term}' is not animatable (animatable: all, opacity, \
+                 background-color, color, border-color) - entry ignored"
+            );
+            Vec::new()
+        }
+    }
+}
+
 fn parse_transition(ctx: &str, name: &str, value: &str) -> Result<Vec<TransitionIr>, ParseError> {
     let mut out = Vec::new();
     for entry in split_top_level_commas(value) {
@@ -3784,34 +4101,51 @@ fn parse_transition(ctx: &str, name: &str, value: &str) -> Result<Vec<Transition
                 format!("expected '<property> <duration> [<easing>]' in entry '{entry}'"),
             ));
         }
-        let property = match TransitionPropertyIr::from_css_name(parts[0]) {
-            Some(p) => p,
-            None => {
-                // CSS behavior: unanimatable / unknown properties in a
-                // transition list are ignored, not errors. Geometry
-                // props (width / height / padding ...) are deliberately
-                // excluded in v1 - animating them would re-run layout
-                // every frame.
-                tracing::warn!(
-                    target: "lumenc::css",
-                    "transition: property '{}' is not animatable (v1 animates opacity, \
-                     background-color, color, border-color) - entry ignored",
-                    parts[0]
-                );
-                continue;
+        let properties = transition_properties_for(parts[0]);
+        if properties.is_empty() {
+            continue;
+        }
+        // Terms after the property come in any order: the first time
+        // value is the duration, a second one is the delay, and whatever
+        // is left names the curve (`cubic-bezier(...)` survives the
+        // whitespace split because none of its pieces read as a
+        // duration).
+        let mut duration_ms: Option<u32> = None;
+        let mut delay_term: Option<&str> = None;
+        let mut easing_terms: Vec<&str> = Vec::new();
+        for term in &parts[1..] {
+            match parse_duration_ms(ctx, name, term) {
+                Ok(ms) if duration_ms.is_none() => duration_ms = Some(ms),
+                Ok(_) => delay_term = Some(term),
+                Err(_) => easing_terms.push(term),
             }
+        }
+        let Some(duration_ms) = duration_ms else {
+            return Err(bad(
+                ctx,
+                name,
+                value,
+                format!("expected a duration ('Nms' or 'Ns') in entry '{entry}'"),
+            ));
         };
-        let duration_ms = parse_duration_ms(ctx, name, parts[1])?;
-        let easing = if parts.len() >= 3 {
-            parse_easing(ctx, name, &parts[2..])?
+        if let Some(delay) = delay_term {
+            tracing::warn!(
+                target: "lumenc::css",
+                "transition: delay '{delay}' ignored - transitions start immediately"
+            );
+        }
+        let easing = if easing_terms.is_empty() {
+            DEFAULT_EASING
         } else {
-            EasingIr::EaseOut
+            parse_easing(ctx, name, &easing_terms)?
         };
-        out.push(TransitionIr {
-            property,
-            duration_ms,
-            easing,
-        });
+        for property in properties {
+            out.push(TransitionIr {
+                property,
+                duration_ms,
+                easing,
+            });
+        }
     }
     Ok(out)
 }
@@ -3893,7 +4227,7 @@ fn parse_easing(ctx: &str, name: &str, parts: &[&str]) -> Result<EasingIr, Parse
     let raw = joined.trim();
     match raw {
         "linear" => Ok(EasingIr::Linear),
-        "ease" => Ok(EasingIr::CubicBezier(0.25, 0.1, 0.25, 1.0)),
+        "ease" => Ok(DEFAULT_EASING),
         "ease-in" => Ok(EasingIr::EaseIn),
         "ease-out" => Ok(EasingIr::EaseOut),
         "ease-in-out" => Ok(EasingIr::EaseInOut),
@@ -4111,9 +4445,78 @@ mod transition_tests {
     }
 
     #[test]
-    fn defaults_easing_to_ease_out() {
+    fn defaults_easing_to_ease() {
+        // CSS initial `transition-timing-function`.
         let out = parse_transition("ctx", "transition", "opacity 200ms").unwrap();
-        assert_eq!(out[0].easing, EasingIr::EaseOut);
+        assert_eq!(out[0].easing, DEFAULT_EASING);
+        assert_eq!(out[0].easing, parse_easing("ctx", "t", &["ease"]).unwrap());
+    }
+
+    #[test]
+    fn all_expands_to_every_animatable_property() {
+        let out = parse_transition("ctx", "transition", "all 200ms linear").unwrap();
+        assert_eq!(out.len(), ALL_TRANSITION_PROPERTIES.len());
+        let props: Vec<_> = out.iter().map(|t| t.property).collect();
+        assert_eq!(props, ALL_TRANSITION_PROPERTIES.to_vec());
+        assert!(out.iter().all(|t| t.duration_ms == 200));
+        assert!(out.iter().all(|t| t.easing == EasingIr::Linear));
+    }
+
+    #[test]
+    fn all_shorthand_overrides_longhands() {
+        // An `all` shorthand used to parse to an empty list, which then
+        // lost to whatever the longhands said.
+        let mut attrs = Attributes {
+            transition_property: Some(vec![TransitionPropertyIr::Opacity]),
+            transition_duration: Some(vec![900]),
+            ..Default::default()
+        };
+        apply_declaration("ctx", "transition", "all 120ms", &mut attrs).unwrap();
+        let eff = attrs.effective_transitions();
+        assert_eq!(eff.len(), ALL_TRANSITION_PROPERTIES.len());
+        assert!(eff.iter().all(|t| t.duration_ms == 120));
+    }
+
+    #[test]
+    fn longhand_property_accepts_all() {
+        let mut attrs = Attributes::default();
+        apply_declaration("ctx", "transition-property", "all", &mut attrs).unwrap();
+        assert_eq!(
+            attrs.transition_property.as_deref(),
+            Some(&ALL_TRANSITION_PROPERTIES[..])
+        );
+    }
+
+    #[test]
+    fn delay_term_is_ignored_not_fatal() {
+        // `transition: opacity 200ms 50ms` used to fail the whole
+        // declaration on the delay term.
+        let out = parse_transition("ctx", "transition", "opacity 200ms 50ms").unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].duration_ms, 200);
+        assert_eq!(out[0].easing, DEFAULT_EASING);
+
+        let out = parse_transition("ctx", "transition", "opacity 200ms ease-in 50ms").unwrap();
+        assert_eq!(out[0].duration_ms, 200);
+        assert_eq!(out[0].easing, EasingIr::EaseIn);
+    }
+
+    #[test]
+    fn delay_longhand_is_recognized_and_ignored() {
+        let mut attrs = Attributes::default();
+        assert!(apply_declaration("ctx", "transition-delay", "50ms", &mut attrs).unwrap());
+        assert!(attrs.transitions.is_empty());
+    }
+
+    #[test]
+    fn cubic_bezier_with_spaces_survives_the_term_scan() {
+        let out = parse_transition(
+            "ctx",
+            "transition",
+            "opacity 200ms cubic-bezier(0.4, 0, 0.2, 1)",
+        )
+        .unwrap();
+        assert_eq!(out[0].easing, EasingIr::CubicBezier(0.4, 0.0, 0.2, 1.0));
     }
 
     #[test]
@@ -4201,6 +4604,7 @@ mod cascade_origin_tests {
             id: None,
             child_index: 1,
             sibling_count: 1,
+            siblings: None,
         };
         let matched =
             collect_matching_rules(&css, &MediaContext::default(), &me, &[], false, None, false);
@@ -4250,6 +4654,7 @@ mod cascade_origin_tests {
             id: None,
             child_index: 1,
             sibling_count: 1,
+            siblings: None,
         };
         let matched =
             collect_matching_rules(&css, &MediaContext::default(), &me, &[], false, None, false);
@@ -4349,7 +4754,16 @@ mod query_surface_tests {
         let sel = one(".theme-dark .card");
         let me = subject.to_ref();
         let parents: Vec<ElementRef> = ancestors.iter().map(AncestorInfo::to_ref).collect();
-        let via_private = match_selector(&sel, &me, &parents, true, None, false).is_some();
+        let ctx = NodeCtx {
+            el: &me,
+            ancestors: &parents,
+            siblings: None,
+            sibling_index: 0,
+            has_element_children: true,
+            text_body: None,
+            is_root: false,
+        };
+        let via_private = match_selector(&sel, &ctx).is_some();
         let via_public = selector_matches(&sel, &subject, &ancestors);
         assert_eq!(via_private, via_public);
         assert!(via_public);
@@ -4359,8 +4773,8 @@ mod query_surface_tests {
     fn sibling_combinators_conservatively_fail() {
         let subject = anc("button", &["b"], None);
         let ancestors = [anc("root", &[], None)];
-        // `+` and `~` end the chain on the subject; the matcher has no
-        // sibling context, so these never match. Query inherits that.
+        // An `AncestorInfo` chain carries no sibling identity, so a
+        // sibling step fails here. The full-tree cascade matches them.
         assert!(!selector_matches(&one(".a + .b"), &subject, &ancestors));
         assert!(!selector_matches(&one(".a ~ .b"), &subject, &ancestors));
     }

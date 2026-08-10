@@ -26,6 +26,22 @@
 //!
 //! Dirty flags live exactly one tick; every consumer of "what changed"
 //! must be ordered inside that window.
+//!
+//! ## Several hosts in one app
+//!
+//! An app can run more than one host at a time (one per script language it
+//! ships). Each host is its own `Resource`, so every `::<H>` system above is
+//! monomorphised once per active host. Embedders must therefore order against
+//! [`ScriptSet`] rather than against a concrete `system::<H>`: a `.before(
+//! apply_derivations::<Rhai>)` edge says nothing about the Lua host's
+//! derivation pass, and the dirty-window guarantees collapse for every host it
+//! does not name. The sets below hold the same systems for every active host,
+//! so one edge covers all of them.
+//!
+//! Hosts share the world's `PropertyStore`, so a signal written by one is read
+//! by the others on the same tick. Lifecycle and event callbacks (`on_start`,
+//! `on_ready`, `on_click`, `on_timer`, ...) are delivered to every active host;
+//! a host that does not define the handler ignores the call.
 
 use bevy_ecs::component::Mutable;
 use bevy_ecs::message::{Message, MessageReader, MessageRegistry, MessageWriter};
@@ -62,6 +78,67 @@ pub struct ScriptStartedAt(pub Instant);
 pub(crate) fn prefix(lang: &str) -> String {
     format!("lumen-script-{lang}")
 }
+
+// ---------------------------------------------------------------------
+// Ordering anchors
+// ---------------------------------------------------------------------
+
+/// Ordering anchors for the host-generic script systems.
+///
+/// Every `::<H>` system [`ScriptPlugin`] registers joins one of these sets, so
+/// an app running several hosts still has exactly one name to order against.
+/// Order against the set, never against `system::<H>`: with more than one host
+/// installed a concrete-system edge constrains that host alone and silently
+/// leaves the others outside the one-tick dirty window.
+///
+/// The sets are pairwise disjoint, so `.after(one).before(another)` never
+/// closes a cycle.
+#[derive(bevy_ecs::schedule::SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ScriptSet {
+    /// [`sync_signals_into_host`]: store -> host mirror, per host.
+    SyncSignals,
+    /// A second [`sync_signals_into_host`] pass, late in the tick, installed
+    /// only when the app runs more than one host.
+    ///
+    /// A host updates its own mirror as its builtins run, so with one host the
+    /// early pass is enough. Across hosts it is not: a signal one host writes
+    /// reaches the store only when the embedder's command applier runs, which
+    /// is after the early pass, and the store's dirty flag is gone by the next
+    /// tick. Without this second pass the other hosts would never observe the
+    /// write at all. Ordered after the applier and before
+    /// [`ScriptSet::Derivations`], so a derivation in one language recomputes
+    /// on the same tick a dep written in another lands.
+    SyncSignalsLate,
+    /// [`tick_script`]: drain each host's command sink onto the message bus.
+    Tick,
+    /// [`apply_derivations`]: the per-host derived-signal fixed point.
+    Derivations,
+    /// Every event dispatcher that calls into a host
+    /// ([`dispatch_clicks_and_doubles`], [`dispatch_close_to_script`], the
+    /// toggle / slider / hotkey / menu / tray / DnD / text-input fanout).
+    Dispatch,
+    /// [`fire_due_timers`]: `on_timer` delivery, per host.
+    Timers,
+    /// [`fire_fetched_responses`]: `on_fetch` / `on_http` delivery, per host.
+    Fetch,
+    /// [`fire_on_ready`]: the once-per-mount `on_ready` dispatch, per host.
+    /// Registered by the embedder, not by [`ScriptPlugin`].
+    Ready,
+    /// The embedder's DOM-event propagation
+    /// ([`crate::dom_events::dispatch_pointer_and_key_events`] and
+    /// [`crate::dom_events::dispatch_state_events`]), per host.
+    DomEvents,
+    /// The embedder's `on_audio_end` dispatch, per host. Declared here so the
+    /// runtime's audio wiring has a set to order against.
+    AudioEnded,
+}
+
+/// Marker for the once-per-app half of [`ScriptPlugin::build`]: the shared
+/// registries, the message registration, and the non-generic drain systems.
+/// The second and later hosts skip that half, so a two-language app gets one
+/// [`TimerRegistry`] and one `drain_timer_commands`, not two of each.
+#[derive(Resource)]
+struct ScriptSharedInstalled;
 
 // ---------------------------------------------------------------------
 // Plugin
@@ -134,45 +211,92 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
         }
         app.world.insert_resource(self.host);
         app.world.insert_resource(ScriptStartedAt(Instant::now()));
-        // Latch for the post-mount `on_ready` dispatch (see `fire_on_ready`).
-        app.world.insert_resource(OnReadyFired::default());
-        app.world.insert_resource(TimerRegistry::default());
-        app.world.insert_resource(FetchRegistry::default());
-        MessageRegistry::register_message::<ScriptCommandEvent>(&mut app.world);
-        // Toggle / slider dispatchers below read these messages. In
-        // production `lumen-primitives::ControlsPlugin` registers them
-        // first; we self-register defensively so tests that drive the
-        // script host without `ControlsPlugin` still bring up a valid
-        // schedule. Idempotent: already-initialised resources stay.
-        app.world
-            .init_resource::<bevy_ecs::message::Messages<lumen_primitives::ToggleChanged>>();
-        app.world
-            .init_resource::<bevy_ecs::message::Messages<lumen_primitives::SliderChanged>>();
-        // DnD dispatchers below read these. `lumen-os-dnd::DndPlugin`
-        // registers them in production; self-register defensively so a
-        // script host without DndPlugin still brings up a valid schedule.
-        app.world
-            .init_resource::<bevy_ecs::message::Messages<lumen_os_dnd::DropAccepted>>();
-        app.world
-            .init_resource::<bevy_ecs::message::Messages<lumen_os_dnd::DragStarted>>();
-        // `dispatch_text_input_to_script` reads the keyboard-edit queue.
-        // `lumen-input::InputPlugin` registers it in production; self-register
-        // so a script host without the input layer still brings up a valid
-        // schedule.
-        app.world
-            .init_resource::<bevy_ecs::message::Messages<lumen_core::text_events::TextEditApplied>>(
+        // -- Once per app, however many hosts are installed ---------------
+        if !app.world.contains_resource::<ScriptSharedInstalled>() {
+            app.world.insert_resource(ScriptSharedInstalled);
+            // Latch for the post-mount `on_ready` dispatch (see `fire_on_ready`).
+            app.world.insert_resource(OnReadyFired::default());
+            app.world.insert_resource(TimerRegistry::default());
+            app.world.insert_resource(DueTimers::default());
+            app.world.insert_resource(FetchRegistry::default());
+            app.world.insert_resource(PendingFetchReplies::default());
+            MessageRegistry::register_message::<ScriptCommandEvent>(&mut app.world);
+            // Toggle / slider dispatchers below read these messages. In
+            // production `lumen-primitives::ControlsPlugin` registers them
+            // first; we self-register defensively so tests that drive the
+            // script host without `ControlsPlugin` still bring up a valid
+            // schedule. Idempotent: already-initialised resources stay.
+            app.world
+                .init_resource::<bevy_ecs::message::Messages<lumen_primitives::ToggleChanged>>();
+            app.world
+                .init_resource::<bevy_ecs::message::Messages<lumen_primitives::SliderChanged>>();
+            // DnD dispatchers below read these. `lumen-os-dnd::DndPlugin`
+            // registers them in production; self-register defensively so a
+            // script host without DndPlugin still brings up a valid schedule.
+            app.world
+                .init_resource::<bevy_ecs::message::Messages<lumen_os_dnd::DropAccepted>>();
+            app.world
+                .init_resource::<bevy_ecs::message::Messages<lumen_os_dnd::DragStarted>>();
+            // `dispatch_text_input_to_script` reads the keyboard-edit queue.
+            // `lumen-input::InputPlugin` registers it in production;
+            // self-register so a script host without the input layer still
+            // brings up a valid schedule.
+            app.world.init_resource::<bevy_ecs::message::Messages<
+                lumen_core::text_events::TextEditApplied,
+            >>();
+            // Foundation property store: defensively init so bare tests that
+            // skip `App::new()`'s standard resources still bring up a valid
+            // schedule for the store consumers.
+            app.world
+                .init_resource::<lumen_core::property_store::PropertyStore>();
+            // The foundation typed-property bus drain is registered globally
+            // by `App::new()` in `TickStage::CommandDrain` (before `Systems`),
+            // so typed writes from host builtins are already committed to
+            // `PropertyStore` by the time `sync_signals_into_host` and
+            // `apply_derivations` read it. Idempotent init.
+            lumen_core::property_store::init_external_properties();
+            // Timer bookkeeping is host-neutral and runs once: it reschedules
+            // repeating timers and drops one-shots BEFORE any host fires, so a
+            // handler that cancels or re-arms the same name sees a clean slate,
+            // and every host is offered the same due list.
+            app.add_systems(
+                TickStage::Systems,
+                retire_due_timers
+                    .after(ScriptSet::Tick)
+                    .before(ScriptSet::Timers),
             );
-        // Foundation property store: defensively init so bare tests that
-        // skip `App::new()`'s standard resources still bring up a valid
-        // schedule for the store consumers.
-        app.world
-            .init_resource::<lumen_core::property_store::PropertyStore>();
-        // The foundation typed-property bus drain is registered globally
-        // by `App::new()` in `TickStage::CommandDrain` (before `Systems`),
-        // so typed writes from host builtins are already committed to
-        // `PropertyStore` by the time `sync_signals_into_host` and
-        // `apply_derivations` read it. Idempotent init.
-        lumen_core::property_store::init_external_properties();
+            // HTTP replies land in a per-tick buffer rather than being taken
+            // straight off the channel, so every host is offered each reply
+            // instead of whichever host's system happened to run first.
+            app.add_systems(
+                TickStage::Systems,
+                collect_fetch_replies
+                    .after(drain_fetch_commands)
+                    .before(ScriptSet::Fetch),
+            );
+            app.add_systems(
+                TickStage::Systems,
+                clear_fetch_replies.after(ScriptSet::Fetch),
+            );
+            app.add_systems(
+                TickStage::Systems,
+                drain_fetch_commands.after(ScriptSet::Tick),
+            );
+            // Must run after `fire_due_timers`: a repeating timer cancelled
+            // from inside its own `on_timer` emits a `CancelTimer` during the
+            // firing pass. Without this ordering the cancel could be drained a
+            // tick late - after `retire_due_timers` had already re-armed the
+            // timer and fired it one extra time. Draining right after the
+            // firing pass applies the cancel on the same tick, before the next
+            // re-fire.
+            app.add_systems(
+                TickStage::Systems,
+                drain_timer_commands
+                    .after(ScriptSet::Tick)
+                    .after(ScriptSet::Timers),
+            );
+        }
+        // -- Once per host -------------------------------------------------
         // `.after(push_*)`: the two-way binding pushes (toggle flip,
         // slider drag, keystroke mirror) write the store mid-Systems, and
         // their dirty flags are cleared at end of tick. Unordered, this
@@ -185,6 +309,7 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
         app.add_systems(
             TickStage::Systems,
             sync_signals_into_host::<H>
+                .in_set(ScriptSet::SyncSignals)
                 .after(lumen_core::signals::push_toggle_to_signal)
                 .after(lumen_core::signals::push_slider_to_signal)
                 .after(lumen_core::signals::push_textinput_to_signal)
@@ -192,23 +317,23 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
         );
         app.add_systems(
             TickStage::Systems,
-            tick_script::<H>.after(sync_signals_into_host::<H>),
+            tick_script::<H>
+                .in_set(ScriptSet::Tick)
+                .after(ScriptSet::SyncSignals),
         );
         app.add_systems(
             TickStage::Systems,
-            apply_derivations::<H>.after(sync_signals_into_host::<H>),
+            apply_derivations::<H>
+                .in_set(ScriptSet::Derivations)
+                .after(ScriptSet::SyncSignals),
         );
         app.add_systems(
             TickStage::Systems,
-            fire_due_timers::<H>.after(tick_script::<H>),
+            fire_due_timers::<H>.in_set(ScriptSet::Timers),
         );
         app.add_systems(
             TickStage::Systems,
-            drain_fetch_commands.after(tick_script::<H>),
-        );
-        app.add_systems(
-            TickStage::Systems,
-            fire_fetched_responses::<H>.after(drain_fetch_commands),
+            fire_fetched_responses::<H>.in_set(ScriptSet::Fetch),
         );
         // Event dispatchers: forward Click / LongPress / DoubleClick to
         // the script's `on_click(id)` / `on_long_press(id)` /
@@ -220,33 +345,28 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
         app.add_systems(
             TickStage::Systems,
             dispatch_clicks_and_doubles::<H>
+                .in_set(ScriptSet::Dispatch)
                 .after(lumen_input::dispatch_clicks)
                 .after(lumen_primitives::press::detect_double_click),
         );
-        app.add_systems(TickStage::Systems, dispatch_long_press_to_script::<H>);
-        app.add_systems(TickStage::Systems, dispatch_text_input_to_script::<H>);
-        app.add_systems(TickStage::Systems, dispatch_file_drops_to_script::<H>);
-        app.add_systems(TickStage::Systems, dnd::dispatch_drops_to_script::<H>);
-        app.add_systems(TickStage::Systems, dnd::dispatch_drag_start_to_script::<H>);
-        app.add_systems(TickStage::Systems, dispatch_file_picks_to_script::<H>);
-        app.add_systems(TickStage::Systems, dispatch_hotkeys_to_script::<H>);
-        app.add_systems(TickStage::Systems, dispatch_menu_clicks_to_script::<H>);
-        app.add_systems(TickStage::Systems, dispatch_dialog_closes_to_script::<H>);
-        app.add_systems(TickStage::Systems, dispatch_tray_clicks_to_script::<H>);
-        app.add_systems(TickStage::Systems, dispatch_toggle_to_script::<H>);
-        app.add_systems(TickStage::Systems, dispatch_slider_to_script::<H>);
-        app.add_systems(TickStage::Systems, dispatch_close_to_script::<H>);
-        // Must run after `fire_due_timers`: a repeating timer cancelled
-        // from inside its own `on_timer` emits a `CancelTimer` during the
-        // firing pass. Without this ordering the cancel could be drained a
-        // tick late - after `fire_due_timers` had already re-armed the timer
-        // and fired it one extra time. Draining right after the firing pass
-        // applies the cancel on the same tick, before the next re-fire.
         app.add_systems(
             TickStage::Systems,
-            drain_timer_commands
-                .after(tick_script::<H>)
-                .after(fire_due_timers::<H>),
+            (
+                dispatch_long_press_to_script::<H>,
+                dispatch_text_input_to_script::<H>,
+                dispatch_file_drops_to_script::<H>,
+                dnd::dispatch_drops_to_script::<H>,
+                dnd::dispatch_drag_start_to_script::<H>,
+                dispatch_file_picks_to_script::<H>,
+                dispatch_hotkeys_to_script::<H>,
+                dispatch_menu_clicks_to_script::<H>,
+                dispatch_dialog_closes_to_script::<H>,
+                dispatch_tray_clicks_to_script::<H>,
+                dispatch_toggle_to_script::<H>,
+                dispatch_slider_to_script::<H>,
+                dispatch_close_to_script::<H>,
+            )
+                .in_set(ScriptSet::Dispatch),
         );
     }
 }
@@ -288,12 +408,12 @@ pub fn tick_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     }
 }
 
-/// Latch guarding [`fire_on_ready`]: flipped true when `on_ready` is
-/// dispatched so it fires once per mount. Hot reload resets it after
-/// respawning the tree, so a script that builds DOM in `on_ready` rebuilds
-/// it on the fresh mount.
+/// Latch guarding [`fire_on_ready`]: holds the [`ScriptHost::lang`] of every
+/// host that has already dispatched `on_ready`, so each active host fires
+/// once per mount. Hot reload clears the set after respawning the tree, so a
+/// script that builds DOM in `on_ready` rebuilds it on the fresh mount.
 #[derive(Resource, Default)]
-pub struct OnReadyFired(pub bool);
+pub struct OnReadyFired(pub std::collections::HashSet<&'static str>);
 
 /// Dispatch the script's optional `on_ready()` once per mount, on the first
 /// tick after the DOM index is published.
@@ -313,10 +433,9 @@ pub fn fire_on_ready<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut fired: ResMut<OnReadyFired>,
     mut events: MessageWriter<ScriptCommandEvent>,
 ) {
-    if fired.0 {
+    if !fired.0.insert(host.lang()) {
         return;
     }
-    fired.0 = true;
     match host.call("on_ready", &[]) {
         Ok(outcome) => {
             for c in outcome.commands {
@@ -507,15 +626,19 @@ pub fn drain_timer_commands(
     }
 }
 
-/// Fire `on_timer(name)` for every timer whose deadline has passed,
-/// rescheduling repeating timers. Due timers fire in sorted-name order
-/// (determinism); reschedule / remove happens BEFORE firing so handlers
-/// that cancel_timer / set_interval on the same name see a clean slate.
-pub fn fire_due_timers<H: ScriptHost + Resource<Mutability = Mutable>>(
-    mut host: ResMut<H>,
-    mut timers: ResMut<TimerRegistry>,
-    mut out: MessageWriter<ScriptCommandEvent>,
-) {
+/// Names of the timers due this tick, in sorted order. Rewritten every tick by
+/// [`retire_due_timers`] and read by [`fire_due_timers`] on each active host.
+#[derive(Resource, Default)]
+pub struct DueTimers(pub Vec<String>);
+
+/// Collect the timers whose deadline has passed, reschedule the repeating ones,
+/// and drop the one-shots. Host-neutral and registered once, so each active
+/// host is offered the same due list instead of the first one to run taking it.
+///
+/// Reschedule / remove happens BEFORE any host fires, so a handler that calls
+/// `cancel_timer` or `set_interval` on the same name sees a clean slate. Due
+/// timers are sorted by name for determinism.
+pub fn retire_due_timers(mut timers: ResMut<TimerRegistry>, mut due_out: ResMut<DueTimers>) {
     let now = Instant::now();
     let mut due: Vec<String> = timers
         .timers
@@ -523,24 +646,36 @@ pub fn fire_due_timers<H: ScriptHost + Resource<Mutability = Mutable>>(
         .filter(|(_, t)| t.fire_at <= now)
         .map(|(name, _)| name.clone())
         .collect();
-    // Stable order so test runs are deterministic.
     due.sort();
-    for name in due {
+    for name in &due {
         let next = timers
             .timers
-            .get(&name)
+            .get(name)
             .and_then(|t| t.repeat_every.map(|d| now + d));
         match next {
             Some(fire_at) => {
-                if let Some(t) = timers.timers.get_mut(&name) {
+                if let Some(t) = timers.timers.get_mut(name) {
                     t.fire_at = fire_at;
                 }
             }
             None => {
-                timers.timers.remove(&name);
+                timers.timers.remove(name);
             }
         }
-        if let Err(e) = route_event(&mut *host, "timer", "on_timer", &name, &mut out) {
+    }
+    due_out.0 = due;
+}
+
+/// Fire `on_timer(name)` for every timer [`retire_due_timers`] collected this
+/// tick. A host that defines no matching handler ignores the call, so in an app
+/// running several languages the timer reaches whichever host declared it.
+pub fn fire_due_timers<H: ScriptHost + Resource<Mutability = Mutable>>(
+    mut host: ResMut<H>,
+    due: Res<DueTimers>,
+    mut out: MessageWriter<ScriptCommandEvent>,
+) {
+    for name in &due.0 {
+        if let Err(e) = route_event(&mut *host, "timer", "on_timer", name, &mut out) {
             eprintln!("{}: on_timer({name}) failed: {e}", prefix(host.lang()));
         }
     }
@@ -559,11 +694,11 @@ pub fn fire_due_timers<H: ScriptHost + Resource<Mutability = Mutable>>(
 /// Both `fetch(url, tag)` (simple sugar) and `http(#{...})` (general form)
 /// flow through this single registry, worker pool discipline, and
 /// completion channel - there is exactly one async delivery mechanism.
-/// The worker only ever *sends* the outcome down the channel; the
-/// [`fire_fetched_responses`] system, running on the world thread,
-/// drains it and is the only place a signal / handler is touched. That
-/// worker->UI-thread hand-off mirrors Slint's `invoke_from_event_loop`
-/// marshalling.
+/// The worker only ever *sends* the outcome down the channel;
+/// [`collect_fetch_replies`], running on the world thread, moves it into
+/// [`PendingFetchReplies`], and [`fire_fetched_responses`] is the only place a
+/// signal / handler is touched. That worker->UI-thread hand-off mirrors
+/// Slint's `invoke_from_event_loop` marshalling.
 #[derive(Resource)]
 pub struct FetchRegistry {
     sender: crossbeam_channel::Sender<HttpOutcome>,
@@ -812,11 +947,47 @@ fn http_response_to_value(result: &Result<HttpResponse, String>) -> ScriptValue 
     ScriptValue::Map(map)
 }
 
-/// Drain finished HTTP replies (marshalled back from the worker threads)
-/// and invoke the script's completion handler once for each. This is the
-/// only place a network reply crosses into script/signal land - the
-/// worker never touches the world, mirroring Slint's
-/// `invoke_from_event_loop`.
+/// HTTP replies that finished this tick, waiting to be delivered to every
+/// active host. Filled by [`collect_fetch_replies`] and emptied by
+/// [`clear_fetch_replies`].
+#[derive(Resource, Default)]
+pub struct PendingFetchReplies(Vec<HttpOutcome>);
+
+/// Move finished HTTP replies (marshalled back from the worker threads) off the
+/// channel into [`PendingFetchReplies`], and record each for the devtools
+/// network pane. Host-neutral and registered once, so a reply is offered to
+/// every active host rather than taken by whichever ran first.
+pub fn collect_fetch_replies(
+    fetcher: Res<FetchRegistry>,
+    mut pending: ResMut<PendingFetchReplies>,
+) {
+    while let Ok(outcome) = fetcher.receiver.try_recv() {
+        // Dev-tooling capture (no-op unless the devtools sink is installed):
+        // pair the reply with its in-flight request by `tag`.
+        let (ok, status, error) = match &outcome.result {
+            Ok(resp) => (true, resp.status, String::new()),
+            Err(err) => (false, 0u16, err.clone()),
+        };
+        lumen_core::net_capture::record(lumen_core::net_capture::NetEvent::Completed {
+            tag: outcome.tag.clone(),
+            ok,
+            status,
+            error,
+        });
+        pending.0.push(outcome);
+    }
+}
+
+/// Drop this tick's delivered HTTP replies. Runs after every host's
+/// [`fire_fetched_responses`].
+pub fn clear_fetch_replies(mut pending: ResMut<PendingFetchReplies>) {
+    pending.0.clear();
+}
+
+/// Invoke the script's completion handler once for each reply
+/// [`collect_fetch_replies`] gathered. This is the only place a network reply
+/// crosses into script/signal land - the worker never touches the world,
+/// mirroring Slint's `invoke_from_event_loop`.
 ///
 /// `fetch()` replies preserve the historical contract: `on_fetch(tag,
 /// body)` on 2xx, `on_fetch_error(tag, msg)` on transport failure or
@@ -824,24 +995,10 @@ fn http_response_to_value(result: &Result<HttpResponse, String>) -> ScriptValue 
 /// structured map for every completed request.
 pub fn fire_fetched_responses<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
-    fetcher: Res<FetchRegistry>,
+    pending: Res<PendingFetchReplies>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
-    while let Ok(outcome) = fetcher.receiver.try_recv() {
-        // Dev-tooling capture (no-op unless the devtools sink is installed):
-        // pair the reply with its in-flight request by `tag`.
-        {
-            let (ok, status, error) = match &outcome.result {
-                Ok(resp) => (true, resp.status, String::new()),
-                Err(err) => (false, 0u16, err.clone()),
-            };
-            lumen_core::net_capture::record(lumen_core::net_capture::NetEvent::Completed {
-                tag: outcome.tag.clone(),
-                ok,
-                status,
-                error,
-            });
-        }
+    for outcome in &pending.0 {
         match outcome.style {
             DeliveryStyle::Fetch => {
                 let (event_name, fallback_fn, payload) = match &outcome.result {

@@ -15,6 +15,20 @@
 use lumen_script::{ScriptCommand, ScriptHost, ScriptValue};
 use lumen_script_candela::CandelaHost;
 
+/// The event-binding registry is process-global, and `replace()` walks it in
+/// the carry-forward, so tests in this binary mutate it concurrently and can
+/// wipe a binding another test registered. Serialise every test and start it
+/// from an empty registry.
+static GLOBAL_EVENT_STATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serialise() -> std::sync::MutexGuard<'static, ()> {
+    let guard = GLOBAL_EVENT_STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    lumen_script::event::clear_all_bindings();
+    guard
+}
+
 /// A program that registers its click handler from `main` (candela's module
 /// body), so a reload re-runs the registration.
 fn main_registered(handler: &str, clicks: i64) -> String {
@@ -42,6 +56,7 @@ fn main() {{}}
 
 #[test]
 fn replace_with_compile_error_preserves_old_handlers() {
+    let _serial = serialise();
     let mut host = CandelaHost::new();
     host.load(&main_registered("save_v1", 1), "app.cdl")
         .expect("initial load");
@@ -59,6 +74,7 @@ fn replace_with_compile_error_preserves_old_handlers() {
 
 #[test]
 fn replace_with_runtime_error_preserves_old_handlers() {
+    let _serial = serialise();
     let mut host = CandelaHost::new();
     host.load(&main_registered("save_v1", 1), "app.cdl")
         .expect("initial load");
@@ -81,6 +97,7 @@ fn replace_with_runtime_error_preserves_old_handlers() {
 
 #[test]
 fn replace_success_swaps_handlers() {
+    let _serial = serialise();
     let mut host = CandelaHost::new();
     host.load(&main_registered("save_v1", 1), "app.cdl")
         .expect("initial load");
@@ -104,6 +121,7 @@ fn replace_success_swaps_handlers() {
 /// the carried handler must dispatch against the reloaded program.
 #[test]
 fn on_start_registered_handler_survives_reload() {
+    let _serial = serialise();
     let mut host = CandelaHost::new();
     host.load(&on_start_registered(1), "counter.cdl")
         .expect("initial load");
@@ -148,6 +166,7 @@ fn on_start_registered_handler_survives_reload() {
 /// longer exists and goes inert rather than firing twice.
 #[test]
 fn on_start_event_binding_survives_reload() {
+    let _serial = serialise();
     use bevy_ecs::world::World;
     use lumen_core::node::{DomIndex, DomRecord, NodeHandle, publish_dom_index};
     use lumen_script::event::{self, EventData};

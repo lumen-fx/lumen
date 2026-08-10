@@ -137,7 +137,14 @@ fn cmd_bundle_static(src_path: &std::path::Path, out_path: &std::path::Path) -> 
     println!("    http-fetch = {}", caps.http_fetch);
     println!("    mcp        = {}", caps.mcp);
     println!("    async      = {}", caps.async_rt);
-    println!("    script host= {:?}", caps.host);
+    println!(
+        "    script hosts = {}",
+        caps.hosts
+            .iter()
+            .map(|h| h.name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     println!(
         "    runtime features: --no-default-features --features \"{}\"",
         if feature_arg.is_empty() {

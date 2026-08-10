@@ -6,7 +6,7 @@ talks to the OS.
 
 ## Choosing a host
 
-Lumen runs one script host per app, and three are available.
+Three hosts are available, and an app can use more than one.
 
 **candela** is the default. It is Lumen's own language, statically checked, and
 the one the scaffolds use. One import gives you the whole surface:
@@ -14,12 +14,12 @@ the one the scaffolds use. One import gives you the whole surface:
 ```rust
 import "lumen.cdl";
 
-fn on_start() {
+fn on_ready() {
     lumen::signal_set_int("clicks", 0);
-    lumen::on("click", "bump", "handle_bump");
+    get_by_id("bump").on("click", "on_bump");
 }
 
-fn handle_bump(id) {
+fn on_bump(ev) {
     let n = lumen::signal_get_int("clicks");
     lumen::signal_set_int("clicks", n + 1);
 }
@@ -54,20 +54,35 @@ function on_click(id)
 end
 ```
 
-The host is picked from the file extensions in the app directory: a `.cdl` file
-selects candela, a `.lua` file selects Lua, a `.rhai` file selects Rhai. A
-directory holding more than one is resolved in that order, so the answer never
-depends on directory listing order. Override it in `lumen.toml`:
+Each script file picks its own host from its extension: `.cdl` runs under
+candela, `.lua` under Lua, `.rhai` under Rhai.
+
+```html
+<script src="model.cdl"/>
+<script src="report.lua"/>
+```
+
+An app written this way runs both hosts at once. Files of the same language
+join into one program, so two `.cdl` files share their functions the way two
+halves of one file would; two different languages stay separate programs and
+cannot call each other. What they do share is signals: they read and write the
+same signal bus, and a value one host writes is visible to the other on the
+same tick. Lifecycle and event callbacks reach every host, so `on_start`,
+`on_ready`, `on_click` and the rest run in each language that defines them.
+
+An inline `<script>` block has no extension to read. It joins the app's one
+external language when there is exactly one, and candela otherwise.
+
+To put the whole app on one engine regardless of extensions, declare it in
+`lumen.toml`:
 
 ```toml
 [script]
 engine = "rhai"
 ```
 
-An app that keeps its script inline in `<script>` has no extension to read and
-is treated as candela, so declare the engine if it is written in something
-else. All `<script>` sources in an app are concatenated and handed to that one
-host; do not mix languages in a single app.
+That is also the answer for an app whose only script is an inline block written
+in something other than candela.
 
 ## Lifecycle
 

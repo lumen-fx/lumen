@@ -26,14 +26,15 @@ Element nesting is capped at 32 levels, as is template-expansion depth.
 
 ### Boolean attributes
 
-Truthiness is per attribute:
+Every boolean attribute reads the same set of values:
 
-| Attribute | True for |
+| Value | Result |
 | --- | --- |
-| `autofocus`, `default`, `disabled`, `drag`, `drop-target`, `indeterminate`, `layout-boundary`, `multiline`, `required` | `true`, `yes`, or the bare attribute (empty value) |
-| `checked`, `drop`, `virtualized` | `true`, `yes` |
-| `draggable` | `true`, `yes`; `false`, `no`, empty are false; any other value is an error |
-| `frameless` | `true`, `1`, `yes` |
+| `true`, `yes`, `1`, or an empty value (`disabled=""`) | true |
+| `false`, `no`, `0` | false |
+| anything else | false, with a compiler warning naming the accepted forms |
+
+Matching is case-sensitive, so `True` warns.
 
 ## Text content and interpolation
 
@@ -244,7 +245,7 @@ The document element. Lays out as a column and fills the window.
 | Attribute | Value | Effect |
 | --- | --- | --- |
 | `skin` | `default`, `macos`, `windows`, `linux`, `auto` | Loads a built-in skin beneath your CSS. `auto` picks the skin for the current OS. |
-| `frameless` | `true`, `1`, `yes` | Removes the OS window frame. Pair with `<title-bar>`. |
+| `frameless` | boolean | Removes the OS window frame. Pair with `<title-bar>`. |
 
 ### `<column>`
 
@@ -326,7 +327,7 @@ buffer, so a text child is ignored; use `text` for an initial value.
 | --- | --- | --- |
 | `placeholder` | text | Shown while the field is empty. Accepts `{...}` placeholders. |
 | `multiline` | boolean | Accept newlines. Defaults to false. |
-| `pattern` | text | The value is valid only if it contains this literal substring. |
+| `pattern` | text | The value is valid only if it contains this literal substring. Not a regex. Values starting with `shape:` are reserved for the built-in checks `<date-picker>` and `<time-picker>` attach. |
 | `required` | boolean | The value is valid only if it is non-empty. |
 | `autofocus` | boolean | Takes focus when the containing `<dialog>` opens. |
 | `password-character` | one character | Masks the rendered value. |
@@ -422,14 +423,17 @@ above the trigger near the bottom of the window.
 | Tag | Attribute | Effect |
 | --- | --- | --- |
 | `<dropdown>` | `bind-value` | Required. Signal holding the selected value. |
-| `<dropdown>` | `placeholder` | Header text while the signal is empty. |
+| `<dropdown>` | `placeholder` | Header text while the signal is empty. Setting it also suppresses the first-option seed, so the dropdown starts with nothing selected. |
 | `<option>` | `value` | Required. Value written to the signal on click. |
 | `<option>` | `label` | Display text. Defaults to `value`. |
 | `<option>` | `disabled` | Unclickable, skipped by arrow navigation. |
 
+The first `<option>` seeds the signal, so the dropdown opens on a real
+selection. Add `placeholder` to start unselected instead. A value your
+script writes first always wins over the seed.
+
 The closed dropdown handles Up and Down to step the value, Alt+Down,
-Space, or Enter to open, and type-ahead. No option is selected until
-something writes the signal, so set the initial value from your script.
+Space, or Enter to open, and type-ahead.
 
 `<option>` outside a `<dropdown>` is an error.
 
@@ -464,7 +468,14 @@ with a built-in pattern and the class `date-picker` or `time-picker`.
 | `placeholder` | text | Defaults to `YYYY-MM-DD` for dates and `HH:MM` for times. |
 | `id` | text | Passed through to the generated input. |
 
-The built-in pattern is a shape check, not a calendar check.
+The built-in check matches the placeholder: `YYYY-MM-DD` with month 01-12
+and day 01-31 for a date, `HH:MM` with hour 00-23 and minute 00-59 for a
+time. Digits and separators must sit in those positions, ignoring
+surrounding whitespace. It is a shape check, not a calendar check, so
+`2026-02-31` passes.
+
+Validity lands in the `valid:<id>` signal like any other validated
+field, so give the picker an `id` to read the result.
 
 ## Structure
 
@@ -529,10 +540,12 @@ anywhere in the tree.
 | --- | --- | --- |
 | `src` | path | Script file to load, relative to the app directory. |
 
-Without `src`, the tag's text content is the script. All collected
-sources are concatenated and run by one host, chosen by `[script] engine`
-in `lumen.toml` or inferred from the script file extensions in the app
-directory. See [Scripting](../guides/scripting.md).
+Without `src`, the tag's text content is the script. Each `src` file runs
+under the host its extension names (`.cdl`, `.rhai`, `.lua`); sources of one
+language are concatenated into one program. A tag with a body has no extension
+to read and joins the app's one external language, or candela when there is not
+exactly one. `[script] engine` in `lumen.toml` overrides all of it and puts
+every source on one host. See [Scripting](../guides/scripting.md).
 
 ## Shell
 

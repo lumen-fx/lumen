@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::config::ScriptEngine;
+
 /// Everything [`load_ir`] produces: the parsed [`lumen_ir::layout_ir::LayoutIR`] plus
 /// the full set of files the hot-reload watcher must poll (markup, CSS,
 /// external `.rhai` scripts, `<include>`d `.lmn` files, and `@import`ed
@@ -384,8 +386,13 @@ pub(crate) fn load_ir(
     })
 }
 
-/// Concatenate the inline `<script>` body with every external `.rhai`
-/// file referenced via `<script src="...">`, separated by newlines.
+/// Concatenate the inline `<script>` body with every external script file
+/// referenced via `<script src="...">`, separated by newlines.
+///
+/// One blob for one host. Used by the AOT paths (`lumenc build` bakes a single
+/// source string into the artifact) and by the `[script] engine` override,
+/// which puts the whole app on one engine by definition. The from-source run
+/// path groups per language instead; see [`grouped_script_sources`].
 pub(crate) fn combined_script_source(
     ir: &lumen_ir::layout_ir::LayoutIR,
     dir: &Path,
@@ -400,6 +407,90 @@ pub(crate) fn combined_script_source(
         combined.push_str(&body);
     }
     Ok(combined)
+}
+
+/// The app's script source split by language: one entry per engine the app
+/// needs, each holding that engine's whole program, in [`ScriptEngine::ALL`]
+/// order. Empty when the app ships no script.
+pub(crate) type GroupedScripts = Vec<(ScriptEngine, String)>;
+
+/// Group the app's scripts by the engine that runs them.
+///
+/// Each `<script src="...">` file joins its extension's engine (`.cdl` ->
+/// candela, `.lua` -> Lua, `.rhai` -> Rhai); within an engine the files
+/// concatenate in source order. An extension no host claims is read as candela.
+///
+/// An inline `<script>` block carries no extension. It joins the app's one
+/// external language when there is exactly one, and candela otherwise, so a
+/// markup file whose script sits next to `main.rhai` keeps running under Rhai.
+///
+/// `[script] engine` overrides all of it: every script, inline and external,
+/// joins the named engine as a single program.
+pub(crate) fn grouped_script_sources(
+    ir: &lumen_ir::layout_ir::LayoutIR,
+    dir: &Path,
+    cfg: &crate::config::LumenToml,
+) -> Result<GroupedScripts, RunError> {
+    if cfg.script.engine.is_some() {
+        let combined = combined_script_source(ir, dir)?;
+        if combined.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        return Ok(vec![(cfg.script.engine_kind(), combined)]);
+    }
+
+    // Which engines the external files name, in first-seen order.
+    let externals: Vec<(ScriptEngine, &String)> = ir
+        .external_scripts
+        .iter()
+        .map(|rel| {
+            (
+                ScriptEngine::from_path(Path::new(rel)).unwrap_or_default(),
+                rel,
+            )
+        })
+        .collect();
+    let mut external_engines: Vec<ScriptEngine> = Vec::new();
+    for (engine, _) in &externals {
+        if !external_engines.contains(engine) {
+            external_engines.push(*engine);
+        }
+    }
+    let inline_engine = match external_engines.as_slice() {
+        [only] => *only,
+        // No `<script src>` names a language. That is an inline-only app, or a
+        // precompiled artifact whose external sources were baked into one blob
+        // at build time and stripped from the IR. Fall back to the directory
+        // scan, which is what chose the host before grouping existed, so an
+        // artifact keeps running under the host its source files name.
+        [] => match crate::config::infer_script_hosts(dir, cfg).as_slice() {
+            [only] => *only,
+            _ => ScriptEngine::default(),
+        },
+        _ => ScriptEngine::default(),
+    };
+
+    let mut sources: Vec<(ScriptEngine, String)> = Vec::new();
+    let mut push = |engine: ScriptEngine, body: &str| {
+        if body.trim().is_empty() {
+            return;
+        }
+        match sources.iter_mut().find(|(e, _)| *e == engine) {
+            Some((_, acc)) => {
+                acc.push('\n');
+                acc.push_str(body);
+            }
+            None => sources.push((engine, body.to_string())),
+        }
+    };
+    push(inline_engine, &ir.script_source);
+    for (engine, rel) in &externals {
+        let path = dir.join(rel);
+        let body = std::fs::read_to_string(&path).map_err(|e| RunError::Read(path.clone(), e))?;
+        push(*engine, &body);
+    }
+    sources.sort_by_key(|(engine, _)| *engine);
+    Ok(sources)
 }
 
 #[cfg(feature = "runtime-parse")]

@@ -7,6 +7,19 @@ use lumen_core::prelude::{Entity, World};
 use lumen_ffi::*;
 use std::ffi::CString;
 
+/// The DOM index both tests publish into is process-global, so the two tests
+/// in this binary would overwrite each other's snapshot when run on parallel
+/// threads. Serialise them and start each from an empty index.
+static DOM_INDEX_ISOLATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn isolate() -> std::sync::MutexGuard<'static, ()> {
+    let guard = DOM_INDEX_ISOLATION
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    publish_dom_index(DomIndex::default());
+    guard
+}
+
 fn rec(
     entity: Entity,
     tag: &str,
@@ -31,6 +44,7 @@ fn rec(
 
 #[test]
 fn c_abi_dom_query_surface() {
+    let _isolation = isolate();
     // ABI reports the bumped minor.
     assert_eq!(lumen_abi_version(), LUMEN_ABI_VERSION);
     assert_eq!((LUMEN_ABI_VERSION >> 8) & 0xFF, LUMEN_ABI_MINOR);
@@ -165,6 +179,7 @@ fn c_abi_dom_query_surface() {
 /// headless runtime test).
 #[test]
 fn c_abi_dom_mutation_round_trip() {
+    let _isolation = isolate();
     use lumen_script::ScriptCommand;
     // Clear anything a prior test left on the bus.
     let _ = lumen_script::node_query::drain_external_dom_commands();

@@ -93,9 +93,7 @@ pub fn check_app(dir: &Path, parser: &dyn SourceParser) -> Result<CheckReport, R
             file = entry_path.display(),
             line = f.line,
             col = f.col,
-            kind = match f.kind {
-                lumen_ir::layout_ir::LintKind::BareInterpolation => "bare-interpolation",
-            },
+            kind = <&'static str>::from(f.kind),
             msg = f.message,
         );
         if let Some(s) = &f.suggest {
@@ -103,37 +101,35 @@ pub fn check_app(dir: &Path, parser: &dyn SourceParser) -> Result<CheckReport, R
         }
     }
     let has_script = !ir.script_source.trim().is_empty() || !ir.external_scripts.is_empty();
-    // RC6: actually compile the script (inline + external `.rhai`) with
-    // the same engine settings `lumenc run` uses. Compile-only - the top
-    // level is never evaluated, so `check` stays side-effect free. A
-    // script that would die at load (parse error, expression-depth
-    // overflow, ...) now fails the check instead of false-passing while
-    // `run` shows a window whose every handler is dead.
-    let combined = combined_script_source(&ir, dir)?;
-    if !combined.trim().is_empty() {
-        // Dispatch the compile-check by the app's `[script] engine`, mirroring
-        // the host selection in `build_app`. A candela / lua app must be
-        // checked with its own compiler: the Rhai checker false-fails on the
-        // other languages' syntax (a candela `host "lumen" { ... }` block is
-        // not valid Rhai). A host the current build trimmed out falls back to
-        // the always-present Rhai host, exactly as `build_app` remaps it.
-        let uri = entry_path.display().to_string();
-        match crate::config::infer_script_host(dir, &cfg) {
+    // RC6: compile the app's scripts with the same engine settings
+    // `lumenc run` uses. Compile-only - the top level is never evaluated, so
+    // `check` stays side-effect free. A script that would die at load (parse
+    // error, expression-depth overflow, ...) fails the check instead of
+    // false-passing while `run` shows a window whose every handler is dead.
+    //
+    // Check each language's program with its own compiler, on the same
+    // grouping `build_app` runs: the Rhai checker false-fails on the other
+    // languages' syntax (a candela `host "lumen" { ... }` block is not valid
+    // Rhai), so a mixed app checked as one blob could never pass. A host the
+    // current build trimmed out falls back to the always-present Rhai host.
+    let uri = entry_path.display().to_string();
+    for (engine, source) in grouped_script_sources(&ir, dir, &cfg)? {
+        match engine {
             #[cfg(feature = "host-candela")]
             crate::config::ScriptEngine::Candela => {
                 CandelaHost::new()
-                    .compile_check(&combined, &uri)
+                    .compile_check(&source, &uri)
                     .map_err(|e| RunError::Script(e.to_string()))?;
             }
             #[cfg(feature = "host-lua")]
             crate::config::ScriptEngine::Lua => {
                 LuaHost::new()
-                    .compile_check(&combined, &uri)
+                    .compile_check(&source, &uri)
                     .map_err(|e| RunError::Script(e.to_string()))?;
             }
             _ => {
                 RhaiHost::new()
-                    .compile_check(&combined)
+                    .compile_check(&source)
                     .map_err(|e| RunError::Script(e.to_string()))?;
             }
         }

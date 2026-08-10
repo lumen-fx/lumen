@@ -199,13 +199,12 @@ pub struct AssetRootsCfg {
     pub paths: Option<Vec<String>>,
 }
 
-/// `[script]` block - selects which `ScriptHost` engine runs the app's
-/// scripts. candela is the default language; `rhai` and `lua` select the
-/// compat hosts (`lumen-script-rhai`, and `lumen-script-lua` on mlua /
-/// Lua 5.4), which expose the same engine-function surface.
-///
-/// When the key is absent the host is inferred from the app's script file
-/// extensions; see [`infer_script_host`].
+/// `[script]` block - an override that forces every script in the app onto one
+/// engine. Without it each script file picks its host from its own extension
+/// (`.cdl` -> candela, `.rhai` -> rhai, `.lua` -> lua) and an app that ships
+/// more than one language runs one host per language. Set `engine` when the
+/// per-file answer is not the one you want, most often because the app keeps
+/// its script inline in the markup, where there is no extension to read.
 ///
 /// ```toml
 /// [script]
@@ -219,16 +218,51 @@ pub struct ScriptCfg {
     pub engine: Option<String>,
 }
 
-/// The resolved script engine for an app.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// One script engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub enum ScriptEngine {
-    /// Rhai (`lumen-script-rhai`) - compat host.
-    Rhai,
-    /// Lua 5.4 (`lumen-script-lua`).
-    Lua,
     /// candela (`lumen-script-candela`), the default Lumen language.
     #[default]
     Candela,
+    /// Lua 5.4 (`lumen-script-lua`).
+    Lua,
+    /// Rhai (`lumen-script-rhai`) - compat host.
+    Rhai,
+}
+
+impl ScriptEngine {
+    /// Every engine, in the fixed order active hosts are built and their
+    /// systems registered. Declaration order is the ordering key, so a
+    /// two-language app wires its hosts the same way on every run.
+    pub const ALL: [ScriptEngine; 3] =
+        [ScriptEngine::Candela, ScriptEngine::Lua, ScriptEngine::Rhai];
+
+    /// The engine that owns a script file with this extension, or `None` for an
+    /// extension no host claims.
+    pub fn from_extension(ext: &str) -> Option<ScriptEngine> {
+        match ext {
+            "cdl" => Some(ScriptEngine::Candela),
+            "lua" => Some(ScriptEngine::Lua),
+            "rhai" => Some(ScriptEngine::Rhai),
+            _ => None,
+        }
+    }
+
+    /// The engine that owns a script path, read from its file extension.
+    pub fn from_path(path: &Path) -> Option<ScriptEngine> {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .and_then(ScriptEngine::from_extension)
+    }
+
+    /// The `[script] engine` name for this engine.
+    pub fn name(self) -> &'static str {
+        match self {
+            ScriptEngine::Candela => "candela",
+            ScriptEngine::Lua => "lua",
+            ScriptEngine::Rhai => "rhai",
+        }
+    }
 }
 
 impl ScriptCfg {
@@ -312,8 +346,8 @@ pub struct RuntimeCfg {
 /// async = false
 /// ```
 ///
-/// The one compiled script host is selected by `[script] engine` (or inferred
-/// from the app's script file extensions), not here.
+/// Which script hosts get compiled in follows from the app's script file
+/// extensions (or `[script] engine`), not from this block.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CapabilitiesCfg {
@@ -353,8 +387,9 @@ pub struct BundleCapabilities {
     pub async_rt: bool,
     /// Scripts' HTTP `fetch()` builtin present.
     pub http_fetch: bool,
-    /// The single compiled script host.
-    pub host: ScriptEngine,
+    /// The script hosts compiled into the bundle, one per language the app
+    /// ships, in [`ScriptEngine::ALL`] order.
+    pub hosts: Vec<ScriptEngine>,
 }
 
 impl BundleCapabilities {
@@ -383,14 +418,14 @@ impl BundleCapabilities {
             .http_fetch
             .unwrap_or_else(|| hay.contains("fetch("));
 
-        let host = infer_script_host(dir, cfg);
+        let hosts = infer_script_hosts(dir, cfg);
 
         Self {
             audio,
             mcp,
             async_rt,
             http_fetch,
-            host,
+            hosts,
         }
     }
 
@@ -413,48 +448,48 @@ impl BundleCapabilities {
         if self.http_fetch {
             f.push("http-fetch".into());
         }
-        match self.host {
-            ScriptEngine::Rhai => {}
-            ScriptEngine::Lua => f.push("host-lua".into()),
-            ScriptEngine::Candela => f.push("host-candela".into()),
+        for host in &self.hosts {
+            match host {
+                ScriptEngine::Rhai => {}
+                ScriptEngine::Lua => f.push("host-lua".into()),
+                ScriptEngine::Candela => f.push("host-candela".into()),
+            }
         }
         f
     }
 }
 
-/// Select the script host for an app directory: explicit `[script] engine`
-/// wins; otherwise infer from the app's script file extensions (a `.lua` file
-/// -> Lua, a `.rhai` file -> Rhai, a `.cdl` file -> Candela), defaulting to
-/// candela when the directory carries no script at all.
+/// The script engines an app directory needs, in [`ScriptEngine::ALL`] order.
 ///
-/// A directory holding more than one script language resolves by a fixed
-/// precedence - candela, then Lua, then Rhai - so the answer never depends on
-/// the order the filesystem happens to yield. Declare `[script] engine` when a
-/// mixed directory should run something other than the winner.
+/// `[script] engine` forces the answer to that one engine. Otherwise every
+/// script file in the directory contributes its extension's engine (`.cdl` ->
+/// candela, `.lua` -> Lua, `.rhai` -> Rhai), so a directory holding two
+/// languages comes back with two engines. A directory with no script at all
+/// comes back with candela, the language an inline `<script>` block is read as.
 ///
-/// A script kept inline in the markup carries no extension to read, so an app
-/// written that way in a language other than candela declares its host.
-pub fn infer_script_host(dir: &Path, cfg: &LumenToml) -> ScriptEngine {
+/// This is the directory-scan answer, used before the markup is parsed: by
+/// `lumenc build` to pick which hosts to compile into a bundle, and by the
+/// startup subsystem gate. Once the markup is available, the authoritative
+/// grouping comes from the `<script src>` set the app references.
+pub fn infer_script_hosts(dir: &Path, cfg: &LumenToml) -> Vec<ScriptEngine> {
     if cfg.script.engine.is_some() {
-        return cfg.script.engine_kind();
+        return vec![cfg.script.engine_kind()];
     }
-    let (mut cdl, mut lua, mut rhai) = (false, false, false);
+    let mut found: Vec<ScriptEngine> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(dir) {
         for entry in rd.flatten().take(512) {
-            match entry.path().extension().and_then(|e| e.to_str()) {
-                Some("cdl") => cdl = true,
-                Some("lua") => lua = true,
-                Some("rhai") => rhai = true,
-                _ => {}
+            if let Some(engine) = ScriptEngine::from_path(&entry.path())
+                && !found.contains(&engine)
+            {
+                found.push(engine);
             }
         }
     }
-    match (cdl, lua, rhai) {
-        (true, _, _) => ScriptEngine::Candela,
-        (_, true, _) => ScriptEngine::Lua,
-        (_, _, true) => ScriptEngine::Rhai,
-        _ => ScriptEngine::default(),
+    if found.is_empty() {
+        return vec![ScriptEngine::default()];
     }
+    found.sort();
+    found
 }
 
 /// One `[[hooks]]` entry: an app-declared build/setup command.
@@ -904,7 +939,7 @@ mod tests {
         let cfg = LumenToml::default();
         let caps = BundleCapabilities::resolve(&dir, &cfg);
         assert!(!caps.audio && !caps.http_fetch && !caps.mcp && !caps.async_rt);
-        assert_eq!(caps.host, ScriptEngine::Candela);
+        assert_eq!(caps.hosts, vec![ScriptEngine::Candela]);
         assert_eq!(caps.to_features(), vec!["host-candela".to_string()]);
 
         // Audio + fetch markers flip inference ON.
@@ -924,18 +959,18 @@ mod tests {
         cfg2.capabilities.audio = Some(false);
         assert!(!BundleCapabilities::resolve(&dir, &cfg2).audio);
 
-        // A .lua file infers the lua host -> host-lua feature.
+        // A .lua file alongside the .rhai one needs both hosts compiled in.
         std::fs::write(dir.join("logic.lua"), "-- lua").unwrap();
         let caps = BundleCapabilities::resolve(&dir, &LumenToml::default());
-        assert_eq!(caps.host, ScriptEngine::Lua);
+        assert_eq!(caps.hosts, vec![ScriptEngine::Lua, ScriptEngine::Rhai]);
         assert!(caps.to_features().contains(&"host-lua".to_string()));
 
-        // Explicit [script] engine wins over extension inference.
+        // Explicit [script] engine collapses the app onto one host.
         let mut cfg3 = LumenToml::default();
         cfg3.script.engine = Some("candela".into());
         assert_eq!(
-            BundleCapabilities::resolve(&dir, &cfg3).host,
-            ScriptEngine::Candela
+            BundleCapabilities::resolve(&dir, &cfg3).hosts,
+            vec![ScriptEngine::Candela]
         );
 
         let _ = std::fs::remove_dir_all(&dir);

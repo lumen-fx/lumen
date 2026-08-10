@@ -98,36 +98,56 @@ skins: [styling guide](../guides/styling.md).
 ```rust
 import "lumen.cdl";
 
-fn on_start() {
+// on_ready runs on the first tick, once the tree is mounted, so the elements
+// are there to look up. on_start runs before that, when nothing is queryable.
+fn on_ready() {
     lumen::signal_set_int("clicks", 0);
-    lumen::on("click", "bump", "handle_bump");
-    lumen::on("click", "reset", "handle_reset");
+
+    get_by_id("bump").on("click", "on_bump");
+    get_by_id("reset").on("click", "on_reset");
 }
 
-fn handle_bump(id) {
+// A handler is called with the event id. Wrap it with `event(ev)` to read the
+// event itself: `event(ev).target()`, `.shift()`, `.prevent_default()`.
+fn on_bump(ev) {
     let n = lumen::signal_get_int("clicks");
     lumen::signal_set_int("clicks", n + 1);
 }
 
-fn handle_reset(id) {
+fn on_reset(ev) {
     lumen::signal_set_int("clicks", 0);
 }
 
 fn main() {}
 ```
 
-`import "lumen.cdl";` brings in the Lumen host surface, which is where
-`lumen::signal_set_int` and the rest come from. `main()` stays empty: a Lumen
+`import "lumen.cdl";` brings in the Lumen host surface: the `lumen::`
+functions, the `window::` and `document::` namespaces, and the `get_by_id` and
+`query` lookups that hand back element handles. `main()` stays empty: a Lumen
 app does its work in lifecycle handlers, not in a top-level program.
 
-`on_start()` runs once after the first layout. It does two things:
+`on_ready()` runs once, on the first tick, after the markup has been mounted.
+The timing is the reason to use it: `get_by_id` only finds an element that
+exists, and during `on_start`, which runs at load, none do yet. Bind events
+from `on_ready`.
+
+It does two things:
 
 - Creates the `clicks` signal with the value `0`. A signal is a named value the
   UI can follow; the label's `bind-text="clicks"` is what makes the connection.
-- Routes clicks. `lumen::on("click", "bump", "handle_bump")` sends clicks on
-  the element with `id="bump"` straight to `handle_bump`.
+- Binds a click handler to each button. `get_by_id("bump")` returns a handle to
+  the element with `id="bump"`, and `.on("click", "on_bump")` routes clicks on
+  that element to `on_bump`. Each button gets its own function instead of a
+  branch inside a shared handler.
 
-`handle_bump` reads the signal, adds one, and writes it back. That write is the
+The handler is named by a string because the host takes a function name, not a
+function value. It is called with the id of the event that fired, and
+`event(ev)` wraps that id so the event can be read: `event(ev).target()` is the
+element the click landed on, `.shift()` reports the modifier keys, and
+`.prevent_default()` cancels the default behaviour. A counter needs none of
+that, so both handlers ignore their argument.
+
+`on_bump` reads the signal, adds one, and writes it back. That write is the
 whole update: the label is already following `clicks`, so it redraws itself.
 There is no code that touches the label.
 

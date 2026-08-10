@@ -15,6 +15,21 @@
 
 use lumenc::{RunOptions, build_headless_app};
 
+/// The DOM index cache is process-global (`lumen_core::node`), so two apps in
+/// one test process observe each other's published index: this fixture's ids
+/// leak from one test's ticking app into the other's `on_start`, which must
+/// see an empty index. Serialize the tests and reset the cache before each
+/// build.
+static DOM_INDEX_ISOLATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn isolate() -> std::sync::MutexGuard<'static, ()> {
+    let guard = DOM_INDEX_ISOLATION
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    lumen_core::node::publish_dom_index(lumen_core::node::DomIndex::default());
+    guard
+}
+
 fn on_ready_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../apps/candela-on-ready")
@@ -32,6 +47,7 @@ fn label_text(app: &mut lumen_core::prelude::App, id: &str) -> Option<String> {
 
 #[test]
 fn on_ready_sees_populated_dom_on_start_does_not() {
+    let _isolation = isolate();
     let opts = RunOptions::new(on_ready_dir());
     let (mut app, _winit) = build_headless_app(opts).expect("build_headless_app");
 
@@ -57,6 +73,7 @@ fn on_ready_sees_populated_dom_on_start_does_not() {
 
 #[test]
 fn rearmed_latch_fires_on_ready_again() {
+    let _isolation = isolate();
     let opts = RunOptions::new(on_ready_dir());
     let (mut app, _winit) = build_headless_app(opts).expect("build_headless_app");
     for _ in 0..5 {
@@ -67,13 +84,19 @@ fn rearmed_latch_fires_on_ready_again() {
 
     // Re-arm the latch the way hot reload does after respawning the tree;
     // the dispatch counter moving to 2 proves the second run.
-    app.world.resource_mut::<lumen_script::OnReadyFired>().0 = false;
+    app.world
+        .resource_mut::<lumen_script::OnReadyFired>()
+        .0
+        .clear();
     for _ in 0..5 {
         app.tick();
     }
 
     assert!(
-        app.world.resource::<lumen_script::OnReadyFired>().0,
+        app.world
+            .resource::<lumen_script::OnReadyFired>()
+            .0
+            .contains("candela"),
         "fire_on_ready must have run again and re-latched after the reset"
     );
     let store = app

@@ -72,7 +72,8 @@ the app runs and the window updates.
 
 Lumen is in alpha, and APIs can change between releases. An app has one window.
 There is no web, iOS, or Android target. The CSS is a subset of the web's,
-aimed at application UI. An app runs one script host at a time.
+aimed at application UI. Scripts in different languages share signals and
+nothing else.
 
 ## Documentation
 
