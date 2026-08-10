@@ -16,6 +16,14 @@ name: Release
 #     library goes in bin/, next to lumenc, or a normal `~/.lumen` install
 #     would put a lumenc on PATH that cannot find its own runtime.
 #
+# The release carries one more asset than the archives: sha256sums.txt, in
+# sha256sum's own format, covering every asset published above. install.sh
+# downloads it first, and refuses to install anything whose download does not
+# match the line for it, so a release without this file is a release nobody
+# can install from. Generating it in the publish job, from the artifacts as
+# they are about to be uploaded, is what keeps it in step with a partial
+# release where a build leg failed.
+#
 # The MSI installs one extra file the zip does not carry: the receipt at
 # share/lumen/lumen.receipt. That file is what marks a copy as installed, and
 # an installed copy is the only kind that checks for updates. See
@@ -258,12 +266,25 @@ jobs:
           printf 'publishing:\n'
           printf '  %s\n' "${files[@]}"
 
+      # install.sh verifies every download against this file and installs
+      # nothing it cannot verify, so a release without it is a release nobody
+      # can install from. The names are bare (no artifacts/ prefix) because
+      # that is what an asset is called once it is on the release, and
+      # `sha256sum -c` in the same directory as the downloads then works.
+      - name: Generate sha256sums.txt
+        working-directory: artifacts
+        run: |
+          shopt -s nullglob
+          files=(*.tar.gz *.zip *.msi)
+          sha256sum "${files[@]}" > sha256sums.txt
+          cat sha256sums.txt
+
       - name: Create the release and upload assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
-          files=(artifacts/*.tar.gz artifacts/*.zip artifacts/*.msi)
+          files=(artifacts/*.tar.gz artifacts/*.zip artifacts/*.msi artifacts/sha256sums.txt)
           if gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release upload "${{ github.ref_name }}" "${files[@]}" \
               --repo "${{ github.repository }}" --clobber
