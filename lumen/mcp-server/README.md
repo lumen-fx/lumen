@@ -1,9 +1,9 @@
 # lumen-mcp-server
 
 Standalone Model Context Protocol (MCP) server that bridges Claude Code (or
-any MCP client) to a running Lumen app. Lets the model inspect entities,
-components, resources, recent messages, and the headless framebuffer of a
-live app over stdio.
+any MCP client) to a running Lumen app. It lets the model inspect entities,
+components, resources, recent messages, and a rendered screenshot of a live
+app over stdio.
 
 ## How it works
 
@@ -57,29 +57,34 @@ Put this file at the root of any project you want the integration available in:
 }
 ```
 
-The server binds lazily to the TCP port when the first tool is called, so
-the MCP server can register cleanly even when the Lumen app isn't running
-yet - it will report `"lumen app not running on 127.0.0.1:7878 - start your
-Lumen example with LumenMcpPlugin installed"` until you launch one.
+The server binds lazily to the TCP port when the first tool is called, so it
+registers cleanly even when no Lumen app is running yet. Until you launch one
+it reports `"lumen app not running on 127.0.0.1:7878 - start your Lumen
+example with LumenMcpPlugin installed"`.
 
 ## Use
 
-Start any Lumen app that has `LumenMcpPlugin` installed (the
-default plugin stack wired by `lumenc run` includes it):
+Start any Lumen app that has `LumenMcpPlugin` installed. A windowed
+`lumenc run` installs it by default:
 
 ```sh
 cargo run -p lumenc -- run apps/counter
 ```
 
-The window opens AND TCP `7878` binds. Sanity-check from a shell:
+The window opens and TCP `7878` binds; the run prints the port and a
+ready-to-paste `.mcp.json` snippet on stdout. A `--headless` run leaves the
+server off unless the app's `lumen.toml` asks for it with `[mcp] simulate =
+true` or `[runtime] mcp = true`, and `[mcp] port = 0` disables it everywhere.
+
+Sanity-check from a shell:
 
 ```sh
 printf '%s\n' '{"jsonrpc":"2.0","method":"lumen.tick","id":1}' | nc 127.0.0.1 7878
 ```
 
-Expected output (frame counter and the most recent tick's wall-clock
-duration - full main schedule, plus extract + scene encode on ticks that
-rendered; the key name predates the full-tick measurement):
+Expected output. `frame` is the frame counter; `last_tick_micros` is the most
+recent tick's wall-clock duration, covering the whole main schedule plus
+extract and scene encode on ticks that rendered:
 
 ```
 {"id":1,"jsonrpc":"2.0","result":{"frame":1234,"last_tick_micros":420}}
@@ -97,7 +102,7 @@ rendered; the key name predates the full-tick measurement):
 | `lumen_element_at` | `lumen.element_at { x, y }` |
 | `lumen_inspect_entity` | `lumen.inspect_entity { id }` |
 | `lumen_signals` | `lumen.signals { filter?, max? }` |
-| `lumen_set_signal` | `lumen.set_signal { name, value }` (write - see below) |
+| `lumen_set_signal` | `lumen.set_signal { name, value }` (write side; see below) |
 | `lumen_lint` | `lumen.lint` |
 | `lumen_diff_since` | `lumen.diff_since { tick? }` |
 | `lumen_framework_status` | `lumen.framework_status` |
@@ -113,17 +118,18 @@ rendered; the key name predates the full-tick measurement):
 
 ### `lumen.snapshot_tree`
 
-Structured JSON element tree - the surface the bundled browser inspector
-builds its Elements panel from.
+Structured JSON element tree. Reach for it when you need hierarchy or markup
+identity (tag, `#id`, `.classes`); `lumen.snapshot_text` is cheaper for
+orientation.
 
 - **Params**: `{ max_nodes?: int (default 2000, cap 10000),
   omit_invisible?: bool (default false) }`
 - **Result**: `{ summary, frame, tree: [Node], total, truncated }` where
   `Node = { id, tag?, lumen_id?, classes: [string], role, label, text?,
   rect: { x, y, w, h }, flags, children: [Node] }`.
-  `rect` is the scroll-corrected ON-SCREEN rect in logical pixels (the
-  same space `lumen.find` / `lumen.element_at` report); `flags` is the
-  `H`overed / `F`ocused / `P`ressed / `T`ab-stop string.
+  `rect` is the scroll-corrected on-screen rect in logical pixels (the
+  same space `lumen.find` and `lumen.element_at` report); `flags` is the
+  Hovered / Focused / Pressed / Tab-stop string.
 
 ### `lumen.signals`
 
@@ -139,10 +145,10 @@ Read-only listing of every global reactive signal (PropertyStore cell).
 
 ### `lumen.set_signal`
 
-The one write-side tool. Routes the value through the cross-thread
-external-property bus - the SAME ingress `Signals::set` mirrors through -
-so the write commits at a tick boundary with script-write ordering
-semantics intact. Always enabled (unlike `lumen.simulate`).
+The one write-side tool. It routes the value through the cross-thread
+external-property bus, the same ingress `Signals::set` mirrors through, so the
+write commits at a tick boundary with script-write ordering semantics intact.
+It is always enabled, unlike `lumen.simulate`.
 
 - **Params**: `{ name: string, value: string | number | bool }`. The
   value is written as the canonical string variant (`true` / `false` for
@@ -152,8 +158,8 @@ semantics intact. Always enabled (unlike `lumen.simulate`).
 - **Result**: `{ summary, name, value, committed, observed_value,
   frames_waited }`. `committed: true` means the write was observed in a
   fresh snapshot within 500 ms. On windowed apps the snapshot refreshes
-  at 1 Hz, so `committed: false` there usually means "unconfirmed", not
-  "failed" - headless apps snapshot every tick and confirm immediately.
+  at 1 Hz, so `committed: false` there usually means "unconfirmed" rather than
+  "failed"; headless apps snapshot every tick and confirm immediately.
 
 ## Configuration
 

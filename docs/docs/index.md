@@ -1,123 +1,120 @@
 # Lumen
 
-Lumen is a markup-first UI framework for native desktop apps. You write a
-`.lmn` markup tree, a `.css` stylesheet, and a script; `lumenc` compiles the
-three into one app and runs it on the GPU with real text shaping and flexbox
-layout.
+Lumen is a markup-first UI framework for native desktop apps. You describe the
+interface in `.lmn` markup, style it in CSS, and drive it with a script. The
+result is a native application on Linux, macOS, and Windows, drawn on the
+GPU.
 
-```xml
-<root padding="24" gap="12" align="center">
-  <label id="counter" text="0" bind-text="clicks" />
-  <button id="bump" text="Click me" />
+```html
+<root padding="32" gap="20" align="center" justify="center">
+  <label id="counter" text="0" bind-text="clicks" font-size="96" />
+  <button id="bump" text="+1" width="120px" height="48px" />
   <script src="main.cdl" />
 </root>
 ```
 
-```candela
-import "lumen.cdl";
-
-fn on_start() {
-    lumen::signal_set_int("clicks", 0);
-    lumen::on("click", "bump", "handle_bump");
-}
-
-fn handle_bump(id) {
-    let n = lumen::signal_get_int("clicks");
-    lumen::signal_set_int("clicks", n + 1);
-}
-
-fn main() {}
-```
+[Install it](getting-started/install.md), then
+[build the counter](getting-started/first-app.md).
 
 ## Who it is for
 
-Reach for Lumen if you want a desktop app with web-shaped tools (markup, CSS,
-a scripting language) but without a browser runtime underneath: no Electron,
-no embedded webview, no JavaScript engine. The renderer draws with GPU
-primitives and the app ships as a native binary.
+Lumen suits you if you want a desktop app that looks and behaves like one, and
+you would rather write markup and CSS than lay out widgets in code. The
+languages are small, the feedback loop is a file save, and none of it requires
+a Rust toolchain to use.
 
-candela is Lumen's default scripting language. One `import "lumen.cdl";` gives
-a script the whole host surface: signals, the DOM API, timers, dialogs, and
-the OS integrations. The language itself is documented at
-<https://candela.lumenfx.dev/>; these docs cover the Lumen bindings. Rhai
-(`.rhai`) and Lua (`.lua`) hosts ship as well and expose the same surface.
+It is not a browser. There is no DOM engine, no JavaScript runtime, and no web
+view; the CSS is a focused subset aimed at application UI rather than
+documents. If you need to render arbitrary web content, embed a browser
+instead.
 
-## What you can build with it
+## What you get
 
-**Layout and text.** Flexbox and CSS grid through taffy, real shaping through
-cosmic-text, word wrap, multi-line ellipsis truncation, and logical properties
-that follow an element's writing direction.
+**Markup and layout.** A compact tag set covering containers, text, images,
+buttons, text fields, toggles, switches, sliders, checkboxes, radios, progress
+bars, tabs, dropdowns, menus, dialogs, tooltips, date and time pickers, and
+scrollable regions. Layout is flexbox, with CSS grid where a two-dimensional
+arrangement fits better. Reusable subtrees come from `<template>`, and larger
+apps split across files with `<include>`.
 
-**A widget set.** Buttons, text fields, toggles and switches, sliders,
-checkboxes, radio groups, progress bars, dropdowns, menus and native menu
-bars, tabs, dialogs, tooltips, and date and time fields. Every visual is
-reachable from CSS, so a widget retints from your stylesheet rather than a
-fork.
+**Styling.** Selectors, the cascade, specificity, pseudo-classes, and custom
+properties, all behaving the way they do on the web. Skins supply a platform
+look, and `transition` animates a property change without a line of script.
 
-**Styling that behaves like CSS.** Full cascade order, descendant and child
-combinators, structural and state pseudo-classes, `:is()` / `:where()` /
-`:not()`, `!important`, custom properties, and `@media` queries resolved live
-against the OS theme. Four embedded skins (default, macOS, Windows, Linux)
-give an app a platform look without writing one.
+**Reactivity.** Named signals hold app state. Markup follows them through
+`bind-*` attributes, `<for>` renders a list from an array signal, and `<if>`
+mounts and unmounts a subtree. Writing a signal is the whole update; nothing
+imperatively pokes at elements.
 
-**Reactive markup.** `bind-text` and friends wire an element to a named
-signal, `<for each>` renders a list from an array signal, `<if>` mounts a
-subtree conditionally, and `<template>` / `<slot>` factor repeated markup out
-with per-instance id namespacing.
+**Scripting.** candela is the default language, with Rhai and Lua available as
+alternatives. The file extension picks the host. Scripts respond to lifecycle
+events, input, timers, and network replies, and can build and edit the element
+tree directly.
 
-**A live DOM from script.** Query the tree by id or selector, walk parents and
-children and siblings, spawn and move and remove elements, read back
-attributes and computed style, and bind events with capture and bubble
-phases.
+**Multi-page apps.** Every `.lmn` file in the directory is a page, reachable by
+its filename. `<a href="settings">` navigates, a shared `layout.lmn` wraps every
+page, and back and forward work.
 
-**Motion.** CSS `transition:` tweens `opacity`, `background-color`, `color`,
-and `border-color` on a class flip, over a generic tween primitive plugins can
-build on.
+**Text and internationalisation.** Shaping with font fallback, bidirectional
+text, and selection. Fluent catalogues translate the UI, with plural rules and
+right-to-left layout.
 
-**Native integration.** Menu bars, system tray, notifications, global
-hotkeys, file dialogs, clipboard, drag and drop, audio playback, and
-multi-monitor awareness.
+**The desktop around your app.** Native menus, tray icons, notifications,
+global hotkeys, file dialogs, clipboard, drag and drop, and audio playback.
 
-**Embedding.** A C ABI with C++, Python, and Rust SDKs, for driving a Lumen
-app from a program written in another language.
+**Accessibility.** The UI is published to the platform accessibility layer
+through AccessKit, so screen readers see the control tree.
 
-**Tooling.** `lumenc` runs, checks, compiles, and packages an app; hot reload
-swaps markup, CSS, and script while the app runs; an in-window devtools panel
-and an MCP introspection server let you inspect and drive a running app; a
-language server gives `.lmn` files completion, hover, and diagnostics.
+**Tooling.** `lumenc` creates, checks, formats, runs, and packages apps. A
+headless mode runs the full pipeline with no window for CI, with subcommands to
+click, type, screenshot, and snapshot a running app. An in-window devtools
+overlay, an editor language server, and an introspection server round it out;
+see [tooling](reference/tooling.md).
 
-## Known limits
+## Known limitations
 
-Lumen is alpha, and its API is not stable yet.
+Lumen is in alpha. APIs can change between releases, so pin a version for
+anything you depend on.
 
-- An app is one window. Multi-window is on the roadmap.
-- `pattern` validation on a text field matches a literal substring; there is
-  no regex backend behind it yet.
-- Transitions run on entry, not on removal: hiding or closing an element is
-  instant.
+- An app has one window. Dialogs, popups, and overlays are drawn inside it.
+- Desktop only. There is no web, iOS, or Android target.
+- The CSS is a subset. There are no pseudo-elements, and animation is limited
+  to transitions between property values.
+- An app runs one script host at a time. You can pick which one, but you cannot
+  mix languages in a single app.
+- A few OS integrations vary by platform, and each degrades rather than fails.
+  Native menus are macOS and Windows; global hotkeys on Linux need an X11
+  session; tray icons on some Linux desktops need a shell extension.
 
 ## How to read these docs
 
-- **Getting started** - install the toolchain, build a counter, learn what
-  belongs in an app directory, and browse the templates.
-- **Authoring** - the markup tags, the CSS subset, scripting, multi-page
-  navigation, templates and slots, animations, and per-app config.
-- **Reference** - the CLI, devtools, headless runs, plugin authoring, the C
-  ABI, and one exhaustive page per script host.
+- **Getting started** takes you from an empty machine to a running app:
+  [install](getting-started/install.md), the
+  [first app](getting-started/first-app.md), what the files in an app directory
+  are, and the templates you can scaffold from.
+- **Guides** are task-shaped. Each one covers an area end to end, in the order
+  you meet it: [markup](guides/markup.md), [styling](guides/styling.md),
+  [reactivity](guides/reactivity.md), [scripting](guides/scripting.md),
+  [pages](guides/pages.md), [composition](guides/composition.md),
+  [animations](guides/animations.md),
+  [OS integration](guides/os-integration.md),
+  [internationalisation](guides/i18n.md),
+  [accessibility](guides/accessibility.md), [packaging](guides/packaging.md),
+  and [testing](guides/testing.md).
+- **Reference** is for lookup once you know what you are doing: every
+  [tag](reference/tags.md), every [CSS form](reference/css.md), every
+  [config key](reference/lumen-toml.md), every
+  [CLI flag](reference/cli.md), the builtins for
+  [candela](reference/scripting-candela.md),
+  [Rhai](reference/scripting-rhai.md), and [Lua](reference/scripting-lua.md),
+  the [C ABI and SDKs](reference/ffi.md), and the
+  [tooling surfaces](reference/tooling.md).
+- **[Candela language](/candela/)** documents the language itself. Lumen's
+  bindings live in this doc set; the syntax and standard library live there.
+- **Contributing** is for working on Lumen rather than with it:
+  [building it](contributing/building-lumen.md), how it
+  [fits together](contributing/architecture.md), and how to
+  [write a plugin](contributing/plugins.md).
 
-The [widget garden](https://github.com/lumen-fx/lumen/tree/main/apps/widget-garden)
-app exercises every shipped tag, attribute, and OS-integration builtin in a
-single file. Read it when a doc page leaves you unsure.
-
-## Source code
-
-Repo: <https://github.com/lumen-fx/lumen>. MPL-2.0 licensed.
-
-## Build these docs
-
-```bash
-cd docs
-uv run zensical serve
-```
-
-`uv run zensical build` writes static HTML to `docs/site/`.
+Lumen is MPL-2.0 licensed and developed at
+[github.com/lumen-fx/lumen](https://github.com/lumen-fx/lumen).

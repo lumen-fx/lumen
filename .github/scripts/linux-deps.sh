@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # System libraries the workspace links against on Linux. The authoritative
-# list lives in docs/src/getting-started/install.md; keep the two in sync.
+# list lives in docs/docs/getting-started/install.md; keep the two in sync.
 #
 #   pkg-config          resolves the rest
 #   libgtk-3-dev        rfd's GTK3 file dialog (lumen-os-filedialog)

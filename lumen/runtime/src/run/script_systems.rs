@@ -65,8 +65,8 @@ pub(crate) fn fire_audio_ended<H: lumen_script::ScriptHost + Resource<Mutability
 
 /// Install every host-generic script system and its (RC-critical)
 /// ordering edge against the concrete [`ScriptHost`] `H` the
-/// `[script] engine` key selected. Monomorphised twice - once per host -
-/// from the two match arms in [`build_app`]; every `.after(..)` /
+/// `[script] engine` key selected. Monomorphised once per host from the
+/// match arms in [`build_app`]; every `.after(..)` /
 /// `.before(..)` edge that anchors `apply_derivations::<H>` /
 /// `tick_script::<H>` / `dispatch_clicks_and_doubles::<H>` must name the
 /// SAME `H` that the installed host plugin registered, or the dirty-gating

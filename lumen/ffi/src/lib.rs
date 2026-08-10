@@ -269,8 +269,9 @@ pub enum LumenStatus {
     /// A passed value was syntactically valid but semantically wrong
     /// (e.g. a `kind`/payload mismatch on `LumenValue`).
     ErrInvalidValue = 12,
-    /// A Rust panic occurred at the boundary. Same numeric code as the
-    /// legacy `ErrInternal`; kept as an alias for the rename.
+    /// A Rust panic occurred at the boundary. This is the code every
+    /// export returns for a caught panic; the legacy `ErrInternal` (4) is
+    /// a separate value and is no longer returned.
     ErrPanic = 13,
     /// A caller-provided output buffer was too small. The associated
     /// `out_len` out-parameter (where the export takes one) is set to the

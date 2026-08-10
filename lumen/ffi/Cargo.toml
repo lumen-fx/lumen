@@ -17,7 +17,7 @@ lumen-core = { path = "../core" }
 # `default-features = false` so the FULL shared cdylib turns every subsystem on
 # via lumen-ffi's own default feature set below, while a trimmed static
 # `--bundle` build (`--no-default-features --features "<caps>"`) selects exactly
-# the app's subsystems. See docs/design/runtime-tree-shaking.md (Part B).
+# the app's subsystems (Part B).
 lumen-runtime = { path = "../runtime", default-features = false }
 # Host-neutral DOM read side (query / traversal over the snapshot) for the
 # LumenNode C-ABI. No host features needed here; the query engine is

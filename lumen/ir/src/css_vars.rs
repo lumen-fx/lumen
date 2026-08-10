@@ -1,4 +1,4 @@
-//! CSS `var(--name [, fallback])` resolver shared by `parser_css::apply_to_element` and `run::load_ir`.
+//! CSS `var(--name [, fallback])` resolver shared by the cascade in [`crate::css`] and the runtime's IR loader.
 
 use std::collections::HashMap;
 

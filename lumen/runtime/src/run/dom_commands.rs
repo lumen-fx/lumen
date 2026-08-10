@@ -10,7 +10,10 @@
 //! Structure edits reuse the same spawn / despawn / hierarchy path the
 //! `<for>` reconciler uses, so layout / style / paint stay consistent. A
 //! class / attribute / inline-style change bumps [`StyleVersion`] so the
-//! cascade re-resolver restyles the affected nodes in place.
+//! cascade re-resolver restyles the affected nodes in place. The
+//! re-resolver reads the stylesheet only: an inline style written through
+//! `set_style` is stored on the node but is not read back, so it does not
+//! change what paints.
 
 use super::*;
 use bevy_ecs::hierarchy::{ChildOf, Children};

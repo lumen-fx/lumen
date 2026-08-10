@@ -26,10 +26,10 @@ pub trait Timer: Send + Sync {}
 
 /// Declares that a [`Component`] participates in the entity-property bus exposed by [`crate::property_store::PropertyStore`].
 ///
-/// One trait impl + one `App::register_bindable::<T>()` call (wave 1 wires the register call) collapses the legacy
-/// `BindText` / `BindChecked` / `BindValue` zoo onto a single, type-erased property pipeline.
-///
-/// Reference impl: [`crate::components::TextContent`] (`NAME = "text"`, `Value = Arc<str>`).
+/// The intent is to collapse the `BindText` / `BindChecked` / `BindValue` zoo onto a single, type-erased property
+/// pipeline. The trait defines the shape; there is no registration call on [`crate::app::App`] yet, so implementing
+/// it does not wire anything up, and no component in the workspace implements it yet. The shape it is designed
+/// for is [`crate::components::TextContent`] (`NAME = "text"`, `Value = Arc<str>`).
 pub trait Bindable: Component {
     /// Bus name for this component. Markup `bind-<NAME>="signal"` wires `PropertyKey::Entity(e, NAME)` to `PropertyKey::Global("signal")`.
     const NAME: &'static str;

@@ -1,264 +1,354 @@
-# CLI reference (`lumenc`)
+# lumenc command reference
 
-`lumenc` is the whole developer-facing interface to Lumen: it runs an app,
-compiles one ahead of time, packs it for distribution, scaffolds a new one,
-and drives a running app for testing and automation. If you never open the
-Rust source, this is the tool you use.
-
-Every command below is a `lumenc` subcommand. Run `lumenc --help` for the
-built-in summary and `lumenc --version` to print the installed version.
-
-A markup app directory needs `main.lmn`; `main.css` is optional, and a
-`<script>` tag inside `main.lmn` loads the script host, candela by default
-(see [Scripting](../authoring/scripting.md) for Rhai and Lua). `run` and
-`build` auto-detect an app written against one of the SDKs instead - a Rust
-project depending on the `lumen` crate, a CMake C++ project, or a Python
-script importing `lumen` - and hand off to that project's own toolchain
-(the Rust path needs `cargo`, the C++ path needs `cmake`, in each case a
-toolchain this CLI does not provide). Set `[app] kind = "markup"` (or
-`"rust"` / `"cpp"` / `"python"`) in `lumen.toml` to override the guess. The
-rest of this page covers the markup path, which is what `lumenc new`
-scaffolds.
-
-## Running and checking an app
-
-### `lumenc run <dir>`
-
-Runs `<dir>/main.lmn` (+ optional `main.css`), opening a window. Edits to
-the markup, stylesheet, or script hot-reload in place while it runs,
-preserving state where it can - see the hot-reload walkthrough in
-[Your first app](../getting-started/first-app.md).
-
-Flags:
-
-| Flag | Meaning |
-|---|---|
-| `--headless` | No window; see [Headless mode](headless.md). |
-| `--size WxH` | Logical viewport size for a headless run (e.g. `--size 1280x800`). Requires `--headless`. |
-| `--dpr N` | Device pixel ratio of the offscreen target for a headless run. Requires `--headless`. |
-| `--ticks N` | Run exactly `N` ticks then exit, for a headless run. Requires `--headless`. |
-| `--artifact <file>` | Load a precompiled `.lmna` artifact (from `lumenc build`) instead of parsing source. |
-| `--profile chrome\|tracy\|stderr` | Capture per-system tick spans. `chrome` writes `lumen-trace.json` (open in `chrome://tracing` or <https://ui.perfetto.dev>); `tracy` connects to a running `tracy-profiler`; `stderr` prints one line per span. All three need a `lumenc` built with the `profiling` cargo feature (`tracy` additionally needs `profiling-tracy`); a standard build errors with a rebuild hint instead of silently recording nothing. |
-| `--no-hooks` | Skip the `[[hooks]]` `prebuild` and `prerun` commands declared in `lumen.toml` (see below). |
-
-`--size`, `--dpr`, and `--ticks` only make sense for a headless run and
-`run` rejects them without `--headless`.
-
-Before the app starts, `run` executes `lumen.toml`'s `[[hooks]]` entries
-tagged `prebuild` and then `prerun`, in declaration order, skipping any
-whose declared outputs are already newer than their declared inputs.
-`--no-hooks` skips both passes. See
-[`[[hooks]]`](../authoring/lumen-toml.md#hooks) for how to declare one -
-the notes example compiles a small native library this way. `SIGINT` /
-`SIGTERM` exit cleanly through the same close path a window's close button
-takes.
-
-### `lumenc check <dir>`
-
-Parses the app and reports element and script counts without opening a
-window - a fast CI gate for "does this app still parse." It runs no
-build hooks, unlike `run` / `build` / `bundle`.
+`lumenc` is the Lumen command line tool: it runs apps, checks them, compiles
+them ahead of time, scaffolds new ones, and drives a running app for
+automation.
 
 ```
-$ lumenc check my-app
-my-app: ok (14 elements, script: yes)
+lumenc <command> [arguments]
+lumenc --help
+lumenc --version
 ```
-
-### `lumenc build <app_dir> <out.lmna> [--no-hooks]`
-
-Ahead-of-time compiles an app: parses `main.lmn` + `main.css` once, runs
-the CSS cascade, resolves asset and import paths, and bakes the combined
-script source into a single `.lmna` artifact. Reach for this to ship an
-app without carrying the markup parser at runtime, or to skip re-parsing
-on every launch. Run the result with `lumenc run <dir> --artifact
-<out.lmna>`. `--no-hooks` skips the `prebuild` hooks that otherwise run
-first.
-
-An `.lmna` file is versioned; a file built by an older `lumenc` can be
-rejected by a newer runtime after an incompatible change to the compiled
-format (see [FFI](ffi.md) for the version this build understands).
-Rebuild with the current `lumenc build` when that happens.
-
-## Packaging
-
-### `lumenc bundle <app_dir> <out.lpak> [--no-hooks]`
-
-Packs every regular file under `app_dir` (markup, CSS, scripts, images,
-fonts; dotfiles and `target/` are skipped) into one `.lpak` archive -
-the asset-packaging analogue of GTK's `glib-compile-resources` or Qt's
-`rcc`. `--no-hooks` skips the `prebuild` hooks that otherwise run first.
-
-### `lumenc bundle --static <app_dir> <out_dir> [--no-hooks]`
-
-Builds a trimmed, app-specific runtime instead of packing assets: it reads
-`lumen.toml`'s `[capabilities]` plus a scan of the app's scripts, works out
-which runtime subsystems (audio, MCP, the async bridge, `http-fetch`,
-which script hosts) the app touches, and compiles `liblumen_ffi`
-with only those. Use it for a release build where the extra megabytes of
-an unused subsystem matter; the default shared `liblumen_ffi` and
-`lumenc run` both stay full-featured.
-
-This step compiles the runtime from source, so it needs the Lumen source
-tree and a working Rust build environment on the machine doing the build -
-a plain prebuilt-toolchain install does not carry what this needs. If it
-cannot find the source tree on its own, point it there with the
-`LUMEN_WORKSPACE_DIR` environment variable.
-
-## Scaffolding and formatting
-
-### `lumenc new <template> <name>`
-
-Scaffolds a new app directory `<name>` from a built-in template: `hello`,
-`counter`, `form`, `todo`, `dashboard`, `settings`, or `hotkeys`. Both
-arguments are required and positional; there is no default template.
-Every template ships a runnable `main.lmn`, a script, and a README
-explaining what it demonstrates, and all but `hello` ship a stylesheet.
-`new` refuses to overwrite an existing directory and has no force flag.
-
-```
-$ lumenc new counter my-counter
-$ lumenc run my-counter
-```
-
-`lumenc new --list` prints the template gallery with its one-line
-descriptions.
-
-### `lumenc fmt <file> [--check]`
-
-Reformats a `.lmn` file in place. `--check` exits non-zero if the file
-would change, without writing anything - use it as a CI gate.
-
-## Driving a running app
-
-These commands talk to the MCP introspection server a running `lumenc
-run` exposes over a local TCP JSON-RPC connection - the same mechanism an
-AI agent or a CI job uses to look at and control an app under test without
-a screen. A windowed run starts this server on its own; a headless run
-does not unless `lumen.toml` turns it on. See [Headless
-mode](headless.md#how-it-differs-from-a-windowed-run) for the
-`[mcp]` / `[runtime]` settings that control it, and
-`lumen/mcp-server/README.md` for the full JSON-RPC tool list.
-
-Every command in this section resolves its port the same way: an explicit
-`--port N` flag wins, then the `LUMEN_MCP_PORT` environment variable, then
-`lumen.toml`'s `[mcp] port` when `--app <dir>` names the app, then `7878`.
-Most also accept `--app <dir>` for that lookup and `--json` for
-machine-readable output in place of the default text summary.
-
-### `lumenc snapshot [--text|--json] [--max-lines N] [--cursor C] [--include-invisible]`
-
-Dumps the running app's element tree as a compact, accessibility-tree-style
-text listing (or JSON). `--max-lines` / `--cursor` page through a large
-tree; `--include-invisible` keeps elements the default view omits.
-
-### `lumenc find [--text S] [--role R] [--id N] [--limit N]`
-
-Selector-style search over the live snapshot: match by visible text,
-accessibility role, or entity id. Prints one row per hit (id, role, label,
-bounds, state) and exits non-zero on no matches.
-
-### `lumenc element-at <x> <y>`
-
-Reports the topmost element at a logical-pixel point. Exits non-zero on a
-miss.
-
-### `lumenc click <x> <y> [--button primary|secondary|middle] [--wait-for <MessageType>]`
-
-Injects a click at a logical-pixel point via input simulation. Requires
-`[mcp] simulate = true` in the app's `lumen.toml`; without it the command
-reports simulation as disabled and fails. `--wait-for` blocks until a
-message of the given type (e.g. `ClickEvent`) has fired, useful for
-waiting out an async handler before the next assertion.
-
-### `lumenc type <text> [--wait-for <MessageType>]`
-
-Types a string into the currently focused element. Same `[mcp] simulate`
-requirement as `click`.
-
-### `lumenc key <name> [--shift] [--ctrl] [--alt] [--super] [--wait-for <MessageType>]`
-
-Injects a single key press (`Enter`, `Tab`, `Escape`, `a`, ...) with the
-given modifiers held. Same `[mcp] simulate` requirement as `click`.
-
-### `lumenc scroll <x> <y> <dx> <dy> [--wait-for <MessageType>]`
-
-Injects a wheel event of `(dx, dy)` pixels at a logical-pixel point. Same
-`[mcp] simulate` requirement as `click`.
-
-### `lumenc lint`
-
-Three unrelated checks live under this name:
-
-- `lumenc lint` (no flags beyond `--json`) - fetches the running app's
-  snapshot-derived findings over MCP: one line per issue, non-zero exit if
-  any is error-severity.
-- `lumenc lint --css-cascade [<dir>]` - an offline, no-running-app static
-  check that parses `<dir>/main.css` and flags every rule whose resolved
-  value would differ between the old first-declaration-wins ordering and
-  the CSS Cascade-5 last-wins ordering Lumen now uses. Non-zero exit on
-  any divergence.
-- `lumenc lint --signals [<app-dir>] [--strict]` - an offline static check
-  over `<app-dir>/main.lmn` and the app's script (`main.cdl`, `main.rhai`,
-  or `main.lua`) against the optional `[signals]` schema in `lumen.toml`.
-  Flags untyped `signal_set` writes
-  that should use a typed setter, bare `{name}` interpolation that should
-  be `{$name}`, a write whose value type disagrees with the declared
-  schema type, a markup binding with no matching write or schema entry,
-  and a script write nothing reads. `--strict` upgrades warnings to
-  errors. This scan is substring-based, not a full parse, so it can
-  misread a signal name that appears inside a comment or an unrelated
-  string literal.
-
-### `lumenc diff [tick]`
-
-Shows entity ids added, removed, or changed since the given tick (or since
-the previous tick, if omitted).
-
-### `lumenc screenshot [out.png] [--highlight id1,id2,...] [--lint] [--bounds map.json]`
-
-Captures the running app to a PNG on disk (never through stdout, so the
-image bytes never land in a calling agent's context). `--highlight` draws
-outlines around the listed entity ids; `--lint` outlines every current
-lint finding instead. `--bounds` additionally writes a JSON map of entity
-bounds alongside the image.
-
-## Internationalization
-
-### `lumenc i18n extract <app_dir> [--lang en-US]`
-
-Scans every markup (`.lmn`) and script (`.cdl`, `.lua`, `.rhai`) file under
-`app_dir` for translation call sites and writes or merges the keys it finds
-into `<app_dir>/locale/<lang>.ftl`, a Fluent catalogue. It recognises three
-shapes: the markup attribute `translatable="key"`, a `t("key")` / `tr("key")`
-script call (candela's namespaced `lumen::t("key")` included), and the
-`t!(i18n, "key", ...)` / `tr!(i18n, "key", ...)` Rust macros.
-
-Re-running is safe. Entries already in the target file are left untouched,
-and only newly discovered keys are appended, each with a placeholder value
-for a translator to replace.
-
-Translate the values, and the app picks them up on its next start: every
-`locale/*.ftl` is loaded at startup, the active locale comes from `[app]
-locale` or the OS, and a key the active locale lacks falls through to
-`en-US`. See [Translation](../authoring/i18n.md) for the whole loop.
-
-## Update checks
-
-The commands you type yourself (`run`, `check`, `build`, `bundle`, `new`,
-`fmt`, `i18n`) look for a newer release at most once a day and print one line
-on stderr when they find one, followed on a terminal by an `Update now? [y/N]`
-prompt that runs the installer for you. The automation subcommands, `--help`,
-`--version`, and any `--headless` run stay silent.
-
-Set `LUMEN_NO_UPDATE_CHECK` to any value to turn this off; `CI` in the
-environment does the same. A `lumenc` built from source never checks, and
-neither does one installed with `install.sh --version`. See
-[Install](../getting-started/install.md#staying-up-to-date).
 
 ## Exit codes
 
-Every command exits `0` on success. A command-line usage error (a missing
-argument, an unknown flag) exits `2`; a failure during the operation
-itself (a parse error, a lint finding at error severity, a failed MCP
-call) exits `1` or another non-zero value. Treat any non-zero exit as
-failure in a script or CI job rather than relying on the exact code.
+| Code | Meaning |
+|------|---------|
+| 0 | Success. |
+| 1 | The command ran and failed (parse error, I/O error, lint findings, no match). |
+| 2 | Usage error: unknown command, missing argument, bad flag value. |
+
+`lumenc --help`, `-h`, and `help` print usage and exit 0. `lumenc --version`
+and `-V` print `lumenc <version>` and exit 0. An unknown command prints usage
+on stderr and exits 2.
+
+## run
+
+```
+lumenc run <dir> [--profile chrome|tracy|stderr]
+                 [--headless [--size WxH] [--dpr N] [--ticks N]]
+                 [--artifact <file>] [--no-hooks]
+```
+
+Runs the app in `<dir>`. The directory must contain `main.lmn` unless
+`--artifact` is given; `main.css` is optional.
+
+| Flag | Value | Default | Effect |
+|------|-------|---------|--------|
+| `--profile` | `chrome`, `tracy`, `stderr` | `[profile] mode`, else off | Installs the tracing profiler. `chrome` writes `lumen-trace.json` in the current directory; `tracy` connects to a running `tracy-profiler`; `stderr` prints per-system spans live. |
+| `--headless` | - | off | Runs the whole pipeline (layout, GPU render, scripting, MCP, screenshots) with no window. |
+| `--size` | `WxH` | `[window] size`, else `960x720` | Logical viewport size. Requires `--headless`. Zero dimensions are rejected. |
+| `--dpr` | positive number | `1.0` | Scales the offscreen render target; screenshot pixels are logical size times dpr. Requires `--headless`. |
+| `--ticks` | integer | unbounded | Runs exactly N ticks, then exits through the graceful-close path. Requires `--headless`. |
+| `--artifact` | path | none | Loads a precompiled `.lmna` artifact instead of parsing source. Disables hot reload. |
+| `--no-hooks` | - | off | Skips the `prebuild` and `prerun` hooks. |
+
+Both `--flag value` and `--flag=value` are accepted for `--profile`,
+`--size`, `--dpr`, `--ticks`, and `--artifact`.
+
+Without `--headless`, passing `--size`, `--dpr`, or `--ticks` is a usage
+error.
+
+`run` executes the app's `[[hooks]]` entries: every `prebuild` hook, then
+every `prerun` hook. See [lumen.toml](lumen-toml.md#hooks).
+
+If the directory is a Rust, C++, or Python SDK app (detected from its
+contents, or declared with `[app] kind`), `run` hands off to `cargo`,
+`cmake`, or the Python interpreter. Combining a handoff with `--headless`,
+`--artifact`, `--size`, `--dpr`, or `--ticks` is a usage error.
+
+`--profile` needs a `lumenc` built with the `profiling` cargo feature, and
+`--profile tracy` additionally needs `profiling-tracy`. A default build
+reports this and exits 1.
+
+Under `--headless`, SIGINT and SIGTERM (Ctrl+C, Ctrl+Break, or console close
+on Windows) exit 0 through the graceful-close path.
+
+## check
+
+```
+lumenc check <dir>
+```
+
+Parses and validates the app without opening a window and without running
+hooks. Prints `<dir>: ok (N elements, script: yes|none)` and exits 0, or
+prints the parse error and exits 1. A missing `<dir>` exits 2.
+
+## build
+
+```
+lumenc build <app_dir> <out.lmna> [--no-hooks]
+```
+
+Compiles the app ahead of time into a `.lmna` artifact: parses `main.lmn` and
+`main.css` once, runs the cascade, resolves asset and include paths, and bakes
+the combined script source. Prints the element count, the output path, and the
+artifact size.
+
+Runs the app's `prebuild` hooks first unless `--no-hooks` is given.
+
+An `<app_dir>` that is not a directory, a missing output path, or an extra
+positional argument exits 2. For an SDK app the output path is ignored and the
+native build tool runs instead.
+
+Run the result with `lumenc run <dir> --artifact <out.lmna>`. See
+[Packaging](../guides/packaging.md).
+
+## bundle
+
+```
+lumenc bundle <app_dir> <out.lpak> [--no-hooks]
+lumenc bundle --static <app_dir> <out_dir> [--no-hooks]
+```
+
+Without `--static`, packs every regular file under `<app_dir>` into a single
+`.lpak` archive, skipping dotfiles and `target/` directories, and prints the
+file count.
+
+With `--static`, resolves the app's capability set from `[capabilities]` plus
+a source scan, maps it to a cargo feature list, builds the trimmed runtime
+library with only those subsystems, and copies the result into `<out_dir>`.
+It prints each resolved capability and the feature list. This needs the Lumen
+source tree; set `LUMEN_WORKSPACE_DIR` to point at it.
+
+Runs the app's `prebuild` hooks first unless `--no-hooks` is given. A missing
+argument or an extra positional argument exits 2.
+
+## new
+
+```
+lumenc new <name> [template]
+lumenc new --list
+```
+
+Scaffolds a directory `<name>` from a template. The template argument is
+optional and defaults to `blank`. Every template writes `main.lmn`,
+`lumen.toml`, and a README.
+
+| Template | Contents |
+|----------|----------|
+| `blank` | A bare `<root>` and a `lumen.toml`. |
+| `hello` | One label and a script. |
+| `counter` | Buttons, `bind-text`, per-id click routing. Scripted in candela. |
+| `form` | Input, toggle, slider, live status line. |
+| `todo` | List, input, `<for>` loop, array signals. |
+| `dashboard` | Stat tiles, progress bars, activity feed driven by a timer. |
+| `settings` | Checkbox, radio, dropdown, and slider groups with `derive()`. |
+| `hotkeys` | Global hotkeys, tray icon, OS notifications. |
+
+`counter` is scripted in candela; the rest are scripted in Rhai.
+
+`--list` (or `-l`) prints the gallery with one-line descriptions and exits 0.
+An existing `<name>` exits 1 without writing anything. An unknown template
+exits 2 and names the available set.
+
+## fmt
+
+```
+lumenc fmt <file> [--check]
+```
+
+Reformats a `.lmn` file in place and prints `lumenc fmt: rewrote <file>` when
+the bytes changed. With `--check` nothing is written; the command exits 1 when
+the file is not formatted and 0 when it is. A missing file argument or an
+unknown flag exits 2.
+
+## i18n extract
+
+```
+lumenc i18n extract <app_dir> [--lang <tag>]
+```
+
+Scans `.lmn`, `.rhai`, `.lua`, and `.cdl` files under `<app_dir>` for
+translation keys and writes `<app_dir>/locale/<tag>.ftl`. `--lang` defaults to
+`en-US` and also accepts `--lang=<tag>`.
+
+Recognised call shapes: `t("key")` and `tr("key")` (including candela's
+`lumen::t("key")`), `t!(i18n, "key", ...)` and `tr!(i18n, "key", ...)`, and
+the `translatable="key"` markup attribute. Keys built at runtime are invisible
+to the scan.
+
+The extractor is idempotent: existing entries are preserved verbatim and only
+new keys are appended, each with a placeholder value. `target`,
+`node_modules`, `.git`, and `locale` directories are skipped. The command
+prints the total and new key counts.
+
+`lumenc i18n` with no subcommand, or any subcommand other than `extract`,
+exits 2.
+
+## Automation commands
+
+These drive an already-running app over its JSON-RPC TCP server. Each opens a
+connection, sends one request, prints the reply, and exits. Start the app
+first, in another shell or in the background. See
+[Testing](../guides/testing.md) for a worked example.
+
+Every command in this group accepts `--port <n>` and `--app <dir>`.
+
+### Port resolution
+
+In order, first match wins:
+
+1. `--port <n>`
+2. `LUMEN_MCP_PORT`
+3. `[mcp] port` in `<dir>/lumen.toml`, when `--app <dir>` is given
+4. `7878`
+
+The connect timeout is one second and the read timeout five seconds. A
+connection failure exits 1 with a hint that the app may not be running.
+
+### snapshot
+
+```
+lumenc snapshot [--text|--json] [--max-lines N] [--cursor C]
+                [--include-invisible] [--port P] [--app <dir>]
+```
+
+Prints an accessibility-tree-style text dump of the live UI. `--text` is the
+default; `--json` prints the raw result. `--max-lines` truncates and prints a
+cursor to resume from; pass it back with `--cursor`. `--include-invisible`
+(also spelled `--no-omit-invisible`) keeps entities that are not visible.
+Exits 0 on any successful call.
+
+### find
+
+```
+lumenc find [--text S] [--role R] [--id N] [--limit N] [--json]
+            [--port P] [--app <dir>]
+```
+
+Searches the live snapshot. Prints one row per hit: id, role, label, position,
+size, state. Exits 1 with `no matches` when nothing matches.
+
+### element-at
+
+```
+lumenc element-at <x> <y> [--json] [--port P] [--app <dir>]
+```
+
+Prints the topmost entity at the logical-pixel point. Exits 1 on a miss.
+
+### click
+
+```
+lumenc click <x> <y> [--button primary|secondary|middle] [--wait-for R]
+             [--json] [--port P] [--app <dir>]
+```
+
+Injects a click at the logical-pixel point. `--wait-for` names a message ring
+to wait on before returning, for example `ClickEvent`. Requires
+`[mcp] simulate = true`; without it the command exits 1 and prints the hint.
+
+### type
+
+```
+lumenc type <text> [--wait-for R] [--json] [--port P] [--app <dir>]
+```
+
+Types a string into the focused entity.
+
+### key
+
+```
+lumenc key <name> [--shift] [--ctrl] [--alt] [--super] [--wait-for R]
+           [--json] [--port P] [--app <dir>]
+```
+
+Injects one key press, for example `Enter`, `Tab`, `Escape`, or `a`. `--cmd`
+is an alias for `--super`.
+
+### scroll
+
+```
+lumenc scroll <x> <y> <dx> <dy> [--wait-for R] [--json]
+              [--port P] [--app <dir>]
+```
+
+Injects a wheel event of `(dx, dy)` pixels at the logical-pixel point.
+
+### lint
+
+```
+lumenc lint [--json] [--port P] [--app <dir>]
+lumenc lint --css-cascade [<dir>] [--json]
+lumenc lint --signals [<app-dir>] [--json] [--strict]
+```
+
+Plain `lumenc lint` queries the running app and prints one finding per line as
+`<severity> <entity> <category>: <hint>`. It exits 1 when any finding has
+error severity.
+
+`--css-cascade` is offline: it parses `<dir>/main.css` and reports every rule
+whose resolved value differs between first-wins and last-wins cascade
+ordering. It exits 1 when it finds any divergence, and 0 when the app has no
+`main.css`.
+
+`--signals` is offline: it reads `<app-dir>/main.lmn`, the app script
+(`main.cdl`, `main.rhai`, or `main.lua`), and the optional `[signals]` schema.
+Findings are printed as `<severity> <file>:<line>:<col> [<kind>] <signal>:
+<message>` with an optional hint line. Kinds: `untyped-write`,
+`schema-mismatch`, `bare-interpolation`, `untracked-signal`, `orphan-write`.
+`--strict` upgrades warnings to errors. Exits 1 when any finding is an error.
+
+Both offline modes take the directory either positionally right after the flag
+or via `--app`, and default to `.`.
+
+### diff
+
+```
+lumenc diff [tick] [--json] [--port P] [--app <dir>]
+```
+
+Prints entity ids added, removed, and changed since `tick`, or since the
+previous tick when omitted.
+
+### screenshot
+
+```
+lumenc screenshot [out.png] [--highlight id1,id2,...] [--lint]
+                  [--bounds map.json] [--port P] [--app <dir>]
+```
+
+Captures the app to a PNG, defaulting to `lumen-screenshot.png`.
+`--highlight` outlines the listed entity ids; `--lint` outlines every lint
+finding. `--bounds` also writes the entity bounds map as JSON. Prints the
+output path and pixel size. A non-integer in `--highlight` exits 2; an
+unavailable capture exits 1.
+
+## Update check
+
+An installed `lumenc` looks for a newer release at most once a day and prints
+one line on stderr when it finds one. On a terminal it then offers to install
+it: the shell installer on Linux and macOS, the `.msi` on Windows.
+
+The check runs only for `run`, `check`, `build`, `bundle`, `new`, `fmt`, and
+`i18n`. It is skipped when any of these hold:
+
+- The command line contains `--headless`.
+- `LUMEN_NO_UPDATE_CHECK` is set to a non-empty value.
+- `CI` is set.
+- stderr is not a terminal.
+- The copy is not an installed one (a build from source has no install
+  receipt, and neither does the portable Windows zip).
+- The install is pinned, which `install.sh --version` records. An MSI install
+  is never pinned.
+
+The check never changes the command's exit code.
+
+## Environment variables
+
+| Variable | Effect |
+|----------|--------|
+| `LUMEN_MCP_PORT` | Port the automation commands connect to, below `--port` and above `lumen.toml`. |
+| `LUMEN_NO_UPDATE_CHECK` | Any non-empty value turns the update check off. |
+| `CI` | Turns the update check off. |
+| `LUMEN_THREADS` | Worker-thread budget. Overrides `[runtime] threads`. |
+| `LUMEN_DEVTOOLS_OPEN` | Any non-empty value other than `0` opens the devtools overlay at startup instead of waiting for F12. |
+| `LUMEN_HOT_RELOAD_POLL` | Forces the hot-reload watcher onto mtime polling instead of filesystem events. |
+| `LUMEN_FONT_CACHE` | `0`, `off`, `false`, or `no` disables the persistent font-metadata cache and rescans system fonts every launch. |
+| `LUMEN_BOOT_TRACE` | Prints a phase-by-phase startup breakdown on stderr. |
+| `LUMEN_GPU_INIT_TRACE` | Prints GPU adapter and device selection detail on stderr. |
+| `LUMEN_GPU_INIT_DEADLINE_MS` | GPU init deadline in milliseconds; defaults to 5000. Exceeding it aborts with a diagnostic instead of hanging. |
+| `LUMEN_TRACE_FRAME_DIRTY` | Logs which source marked each frame dirty. |
+| `LUMEN_WORKSPACE_DIR` | Lumen source tree that `bundle --static` builds the trimmed runtime from. |
+| `LUMEN_LIB_DIR` | Directory searched for the shared Lumen library, after the directory holding `lumenc`. |

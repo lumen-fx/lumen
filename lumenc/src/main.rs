@@ -102,7 +102,7 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
             "--no-hooks" => no_hooks = true,
             "--profile" => {
                 let Some(v) = args.next() else {
-                    eprintln!("lumenc run: --profile needs a value (chrome|stderr)");
+                    eprintln!("lumenc run: --profile needs a value (chrome|tracy|stderr)");
                     return ExitCode::from(2);
                 };
                 match lumenc::profile::ProfileMode::try_from(v.as_str()) {
@@ -685,7 +685,11 @@ USAGE:
                           --headless is the automation/CI mode: the full
                           pipeline (layout, GPU rendering, MCP server,
                           simulate, screenshots, hot reload) runs with
-                          ZERO windows - the desktop is never touched.
+                          no window - the desktop is never touched.
+                          A headless run is bounded, so the MCP server
+                          and the hot-reload watcher are off unless
+                          lumen.toml sets [mcp] simulate = true or
+                          [runtime] mcp = true.
                           Ticks run on demand (MCP wake / animations /
                           dirty state) and the process idles otherwise.
                           --size sets the logical viewport (default:
@@ -790,8 +794,10 @@ USAGE:
                           build `lumen-ffi` with only those subsystems. The
                           shared cdylib / dev path stay full-featured.
     lumenc i18n extract <app_dir> [--lang en-US]
-                          Scan `.lmn` + `.rhai` files for
-                          `t!(\"key\", ...)` / `lumen.tr(\"key\", ...)` /
+                          Scan `.lmn`, `.rhai`, `.lua` and `.cdl` files
+                          for `t(\"key\", ...)` / `tr(\"key\", ...)` /
+                          `lumen::t(\"key\", ...)` /
+                          `t!(i18n, \"key\", ...)` /
                           `translatable=\"key\"` and write / merge
                           `<app_dir>/locale/<lang>.ftl`. Idempotent:
                           existing entries are preserved; new keys

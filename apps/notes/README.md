@@ -1,8 +1,8 @@
 # Margin - Markdown notes
 
-A two-pane markdown editor: a note list on the left, a text editor in the
-middle, and a live preview on the right. Switching notes preserves every
-note's text, and a theme toggle swaps the whole color scope.
+A markdown editor: a note list on the left, a text editor in the middle, and
+a live preview on the right. Switching notes preserves every note's text, and
+a theme toggle swaps the whole color scope.
 
 ## Run
 
@@ -18,8 +18,8 @@ cargo run -p lumenc -- run apps/notes
   `md_class` / `md_text` per line to get each block's CSS class and text. This
   is candela calling a bundled C library on the host runtime.
 - **Element-wise DOM lists** - the sidebar note list and the preview blocks
-  are built from real elements (`node_spawn` / `node_append`), not a `<for>`
-  or `signal_array`. Per-row layout lives in CSS classes.
+  are built element by element with `node_spawn` and `node_append`, not with
+  `<for>` or `signal_array`. Per-row layout lives in CSS classes.
 - **Event-driven live preview** - the editor's input event (`on_text_input`)
   writes the new text back into the current note and rebuilds the preview and
   sidebar. There is no tick watcher.
@@ -31,16 +31,16 @@ cargo run -p lumenc -- run apps/notes
 
 ## The C markdown library
 
-`md.c` is a self-contained, single-line markdown classifier: headings
-(`#`..`###`), unordered list items, thematic breaks, indented code, and
-paragraphs. candela resolves the bare name `md` to `libmd.so` (Linux),
-`libmd.dylib` (macOS), or `md.dll` (Windows - no `lib` prefix there) in the
-app directory.
+`md.c` is a self-contained, line-at-a-time markdown classifier: ATX headings
+(levels 4 to 6 render as level 3), unordered list items, thematic breaks,
+indented code, and paragraphs. candela resolves the bare name `md` to
+`libmd.so` (Linux), `libmd.dylib` (macOS), or `md.dll` (Windows, which takes
+no `lib` prefix) in the app directory.
 
-None of those are committed - they're build artifacts, not source.
+None of those are committed; they are build artifacts, not source.
 `lumen.toml` declares a `[[hooks]]` entry per OS that compiles the library
-from `md.c` before the app runs (`lumenc run` fires it automatically; pass
-`--no-hooks` to skip it):
+from `md.c` before the app runs. `lumenc run` fires it automatically; pass
+`--no-hooks` to skip it:
 
 ```
 cc -shared -fPIC -O2 -o apps/notes/libmd.so apps/notes/md.c    # Linux

@@ -90,7 +90,7 @@ pub fn parse_bg(
     Ok(BgSpec::Solid(parse_color(ctx, name, value)?))
 }
 
-/// Parses `radial-gradient(<color1>, <color2 [stop%]>, ...)`. An optional trailing `<radius>` percentage normalises the radius in `0..1`.
+/// Parses `radial-gradient(<color1>, <color2 [stop%]>, ...)`. Every term is a colour stop; the radius is always 1.0.
 /// The centre is fixed at 50% / 50%; explicit position and ellipse shapes are not supported.
 fn parse_radial_gradient(
     ctx: &str,

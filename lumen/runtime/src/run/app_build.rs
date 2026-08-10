@@ -121,9 +121,9 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
     // `set_color_scheme` `Command::Typed` handler. Always-on reactive plumbing.
     register_commands(&mut app);
     let combined = combined_script_source(&ir, &dir)?;
-    // Script host selection. `[script] engine` (rhai default | lua) picks
-    // which `ScriptHost` runs the app's scripts. Both hosts re-export the
-    // same generic tick/dispatch/derivation systems from
+    // Script host selection. `[script] engine` (candela default | rhai | lua)
+    // picks which `ScriptHost` runs the app's scripts. Every host re-exports
+    // the same generic tick/dispatch/derivation systems from
     // `lumen-script`; `register_script_systems::<H>` installs them
     // (and every RC-critical ordering edge) against whichever host is
     // chosen. The per-host `set_color_scheme` / `page` engine extensions are

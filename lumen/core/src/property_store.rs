@@ -2,7 +2,7 @@
 //!
 //! - [`PropertyStore`] is a [`Resource`] holding a [`HashMap`] of [`PropertyKey`] -> [`PropertyCell`].
 //! - [`PropertyStore::set`] writes the cell, bumps its generation, and records the key onto the per-tick dirty queue.
-//! - [`PropertyStore::drain_dirty`] is consumed by downstream observer systems each tick (currently empty - wave 1 wires the observers).
+//! - The per-tick dirty queue drives the observer systems: they read it with [`PropertyStore::dirty_peek`] each tick, and the end-of-tick `clear_property_store_dirty` system resets it. [`PropertyStore::drain_dirty`] is the consuming variant for callers that want the entries.
 //! - [`PropertyStore::freeze_notify`] / [`PropertyStore::thaw_notify`] gate the dirty queue across batched writes (e.g. `<for>` reconciler rewriting 1000 rows).
 //!
 //! The legacy [`crate::signals::Signals`] resource is a thin wrapper over this store keyed on `PropertyKey::Global(name)`.
@@ -777,9 +777,10 @@ pub fn mirror_property_store_to_typed_cache(store: Option<Res<PropertyStore>>) {
             | PropertyValue::Vec2(_) => {
                 cache.insert(key.clone(), value.clone());
             }
-            // Strings + Custom skipped - FFI scalar accessors don't
-            // consume them. Strings still flow through the legacy
-            // Signals path for `bind-text` markup.
+            // Strings + Custom skipped - the FFI scalar accessors do not
+            // consume them. `bind-text` markup reads the string straight
+            // out of this store (`apply_text_bindings`), so it needs no
+            // mirror entry.
             PropertyValue::Str(_) | PropertyValue::Custom(_) => {}
         }
     }

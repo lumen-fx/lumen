@@ -1,9 +1,10 @@
 //! Lua (mlua / Lua 5.4) implementation of [`lumen_script::ScriptHost`].
 //!
-//! A selectable alternative to `lumen-script-rhai`, exposing the SAME
-//! engine-function surface (same builtin names + semantics) so an app
-//! author can write handlers and logic in Lua instead of Rhai. Rhai
-//! stays the default/compat host; this crate is purely additive.
+//! A selectable alternative to `lumen-script-candela` and
+//! `lumen-script-rhai`, exposing the same engine-function surface (same
+//! builtin names + semantics) so an app author can write handlers and
+//! logic in Lua instead. candela is the default host; this crate is
+//! purely additive.
 //!
 //! Like the Rhai host, this crate is engine + builtins + value
 //! conversion only. All host-generic machinery - the event dispatch

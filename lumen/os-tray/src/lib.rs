@@ -230,7 +230,12 @@ pub fn poll_tray_events(mut out: MessageWriter<TrayClicked>) {
     }
 }
 
-/// Linux click-poll: drains the ksni click channel and emits [`TrayClicked`] messages.
+/// Linux click-poll: drains the ksni click channel and emits [`TrayClicked`]
+/// messages.
+///
+/// The runtime does not schedule this system on Linux, so a tray click there
+/// does not reach the app; an embedder that wants it must add the system
+/// itself.
 #[cfg(target_os = "linux")]
 pub fn poll_tray_events(mut out: MessageWriter<TrayClicked>) {
     while let Some(id) = linux::pop_click() {

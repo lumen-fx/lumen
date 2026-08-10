@@ -1121,9 +1121,9 @@ Concepts demonstrated:
   OS-level accelerators (Electron-style `CommandOrControl+Shift+L`
   strings); `on_hotkey(name)` fires even when the app is unfocused.
   The "Hotkeys armed" toggle registers / unregisters live.
-- **`tray_icon(id, icon_path, tooltip)`** - system tray entry
-  (macOS / Windows; Linux logs a warning and skips). Clicks fire
-  `on_tray(id)`. Ship an icon at `icons/tray.png` to light it up.
+- **`tray_icon(id, icon_path, tooltip)`** - system tray entry. The icon
+  appears on macOS, Windows and Linux; clicks fire `on_tray(id)` on
+  macOS and Windows. Ship an icon at `icons/tray.png` to light it up.
 - **`notify(title, body)`** - fire-and-forget OS notification via the
   platform daemon.
 - **Bounded log feed** - the same array-signal + `<for>` pattern the

@@ -22,10 +22,10 @@
 //!    request.
 //!
 //! The legacy [`FileDialogService::open`] (`MessageWriter`-flavoured)
-//! is preserved for callers that have not migrated. It now sets the
-//! same async pipeline in motion when a runtime is available and falls
-//! back to the previous `pollster::block_on` path only when none is
-//! installed (head-less tests, FFI hosts without an async runtime).
+//! is preserved for callers that have not migrated. It has no access to
+//! the world, so it always takes the `pollster::block_on` path; on macOS
+//! that path would deadlock the run loop and refuses, writing an empty
+//! result instead.
 //!
 //! ## Why a request id + drain instead of a oneshot channel?
 //!
@@ -251,17 +251,15 @@ impl FileDialogService {
     /// Legacy `MessageWriter`-flavoured entry point kept for back-compat
     /// with `lumenc::run::apply_script_commands`.
     ///
-    /// Behaviour change versus the previous release: instead of
-    /// blocking the caller on `pollster::block_on(rfd::AsyncFileDialog
-    /// ::pick_file())`, the request is fanned out to the same async
-    /// pipeline as [`Self::open_single`]. The supplied `MessageWriter`
-    /// is therefore unused - the result still lands as a [`FilePicked`]
-    /// message via [`drain_file_dialog_results`].
+    /// This entry point has no access to the world, so it always takes the
+    /// synchronous pollster path and writes the result straight to `out`.
+    /// Callers that can reach a [`TokioRuntime`]
+    /// and an [`AsyncCommandQueue`] should use [`Self::open_single`] or
+    /// [`Self::open_single_with`] instead, which fan the request out to the
+    /// async pipeline.
     ///
-    /// When neither [`TokioRuntime`] nor [`AsyncCommandQueue`] is
-    /// available on the world we fall back to the synchronous pollster
-    /// path so headless tests / FFI hosts without an async runtime
-    /// keep working.
+    /// On macOS the blocking path would deadlock the run loop, so it refuses
+    /// and writes an empty result; a macOS caller needs the async path.
     pub fn open(&self, req: &FileDialogRequest, out: &mut MessageWriter<FileDialogResult>) {
         // No runtime / queue available - fall back to the legacy
         // pollster-driven synchronous path. We can't reach into the

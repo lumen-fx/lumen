@@ -1,224 +1,219 @@
-# Building Lumen from source
+# Building Lumen
 
-This page is for people working on Lumen itself: fixing a bug in a crate,
-adding a feature, or building the language server from a checkout. If you
-just want to write and run Lumen apps, install the prebuilt toolchain
-instead; see [Install](../getting-started/install.md). Everything below
-needs a Rust toolchain and, on some platforms, a C toolchain and a few
-system libraries.
+How to get a Lumen checkout compiling, running, and passing the same gates CI
+runs. For the contribution policy (issues, pull requests, the CLA, the
+invariants you must not break), read `CONTRIBUTING.md` at the repository root.
 
 ## Toolchain
 
-The workspace pins its Rust toolchain in `rust-toolchain.toml`
-(currently 1.97.0, edition 2024). Install [rustup](https://rustup.rs) and
-it picks up the pin automatically the first time you run `cargo` inside
-the repo:
+The repository pins its Rust toolchain in `rust-toolchain.toml`. Install
+`rustup` and let it resolve the pin; `cargo` and `rustc` in a checkout then use
+the pinned channel with `rustfmt` and `clippy` already attached.
 
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
+The pin exists so `cargo fmt --check` produces the same answer everywhere. A
+different toolchain reformats files that are already clean and turns the format
+gate red. Bump the pin deliberately, on its own, never as a side effect of
+another change.
 
-The pin matters for `cargo fmt` and `cargo clippy`: their output depends on
-the exact toolchain version, and CI runs the pinned one. A newer or older
-toolchain can report different results than CI.
+The workspace targets Rust 2024 and declares a minimum supported Rust version
+in `Cargo.toml` under `[workspace.package]`.
 
 ## System dependencies
 
-Lumen links against a handful of OS libraries through winit (windowing),
-wgpu (GPU), AccessKit (accessibility), `rfd` (native file dialogs), `muda`
-(native menu bars), `rodio`/`cpal` (audio), and `notify-rust` (toasts).
-This table is what a clean machine needs; it matches
-`.github/scripts/linux-deps.sh`, the script CI runs before building on
-Linux.
+On Linux the workspace links against a handful of system libraries. The
+authoritative list is `.github/scripts/linux-deps.sh`, which CI runs verbatim:
 
-| Platform | Dependency | Required for | Install |
-|---|---|---|---|
-| Linux | pkg-config | resolves the rest | `sudo apt install pkg-config` |
-| Linux | GTK 3 dev headers | `rfd`'s GTK3 file dialog (`lumen-os-filedialog`) | `sudo apt install libgtk-3-dev` |
-| Linux | ALSA dev headers | audio via `cpal` under `rodio` (`lumen-audio`) | `sudo apt install libasound2-dev` |
-| Linux | libxkbcommon dev headers | keyboard handling under winit | `sudo apt install libxkbcommon-dev` |
-| Linux | libwayland dev headers | Wayland session support under winit | `sudo apt install libwayland-dev` |
-| Linux | Vulkan loader + ICD | wgpu device init | `sudo apt install libvulkan1 mesa-vulkan-drivers` |
-| Linux | libxdo-dev | native menu bars via `muda` (optional; Lumen builds without it on Linux, only macOS/Windows get menu bars) | `sudo apt install libxdo-dev` |
-| Linux | libnotify | the `notify(...)` script builtin | `sudo apt install libnotify-bin` |
-| Linux | a C toolchain | Rust's linker calls a C linker; also needed to build any app's `[[hooks]]` that compile C | `sudo apt install build-essential` |
-| macOS | Xcode command-line tools | linker + Metal headers | `xcode-select --install` |
-| Windows | Visual Studio Build Tools 2022 (C++ workload) | MSVC linker | <https://visualstudio.microsoft.com/downloads/> |
-| Windows | DirectX 12 | wgpu DX12 backend | ships with Windows 10/11 |
+- `pkg-config` to resolve the rest.
+- `libgtk-3-dev` for the GTK file dialog behind `lumen-os-filedialog`.
+- `libasound2-dev` for ALSA, reached through cpal under `lumen-audio`.
+- `libxkbcommon-dev` and `libwayland-dev` for keyboard and Wayland handling
+  under winit.
+- `libvulkan1` for the Vulkan loader, since wgpu builds the Vulkan backend on
+  Linux.
+- `mesa-vulkan-drivers` for the lavapipe software device. Without a Vulkan
+  device the renderer tests skip instead of running.
 
-Fedora and Arch equivalents for the Linux packages: `sudo dnf install
-gtk3-devel pkgconf-pkg-config alsa-lib-devel libxkbcommon-devel
-wayland-devel` / `sudo pacman -S gtk3 pkgconf alsa-lib libxkbcommon wayland`.
+macOS and Windows need no system packages beyond the Rust toolchain. The
+renderer selects Metal on macOS and DX12 on Windows, both of which ship with
+the OS.
 
-`mesa-vulkan-drivers` gives you `lavapipe`, a software Vulkan device. CI
-runs on headless runners with no GPU, and this is the only adapter wgpu
-finds there; it is also useful locally in a VM or container. A Linux
-host with a real GPU still needs the Vulkan loader package
-(`libvulkan1`) even if you have proprietary or Mesa GPU drivers already.
+Building the Windows installer additionally needs WiX; the release workflow
+installs it on the runner.
 
-## Build and run from a checkout
+## Build and run
 
-```bash
-git clone https://github.com/lumen-fx/lumen.git
-cd lumen
-cargo run -p lumenc -- new hello my-app
-cargo run -p lumenc -- run my-app
-```
+Build everything:
 
-The first build compiles the full stack in dev mode (wgpu, vello,
-cosmic-text, taffy) and is slow; subsequent builds reuse the incremental
-cache. For a faster inner loop, build once and put the release binary on
-your PATH:
-
-```bash
-cargo install --path lumenc
-lumenc run my-app
-```
-
-`cargo build --workspace` builds every crate in the workspace, which is
-what CI does before running tests.
-
-## Feature flags
-
-`lumenc` and `lumen-runtime` are both cargo-feature-gated so a thin build
-(the language server, or a size-trimmed release bundle) can drop backends
-it does not need. Features marked "weak" (`crate?/feature`) only take
-effect when something else has already pulled the crate in; they never
-force it on by themselves.
-
-### `lumenc` (`lumenc/Cargo.toml`)
-
-Default features: `http-fetch`, `runtime-parse`, `dev-run`, `bundle`.
-
-| Feature | Default | What it does |
-|---|---|---|
-| `runtime-parse` | on | Pulls in `roxmltree` and the markup/CSS front end (`parser_html`, `formatter`, `resolve`), so `lumenc` can compile `.lmn`/`.css` from source. Also forwards to `lumen-runtime`'s own `runtime-parse` (the from-source load + hot-reload code path). Turning it off builds a parser-free `lumenc` library that only consumes precompiled `.lmna` artifacts; `lumen-lsp` links `lumenc` this way. |
-| `dev-run` | on | Links `lumen-runtime` statically (plus `rhai` and `lumen-window-winit`), and turns on the runtime's `audio`, `mcp`, `async`, `host-lua`, and `host-candela` features. This is what makes `lumenc run` / `build` / `check` run an app in-process. |
-| `bundle` | on | Links `lumen-assets` so the `lumenc bundle` subcommand can pack an app into a `.lpak` archive or build a trimmed static runtime with `--static`. |
-| `dlopen-run` | off | Builds a thin `lumenc` that compiles source to `.lmna` in-process (needs `runtime-parse`) and dlopens the shared `liblumen` cdylib over the C ABI to run it, instead of statically linking `lumen-runtime` via `dev-run`. This is the small-binary distribution shape: `cargo build -p lumenc --no-default-features --features "runtime-parse,dlopen-run"`. |
-| `devtools` | off | Weak forward to `lumen-runtime/devtools`; needs `dev-run` already active. Links the in-window devtools overlay into `lumenc run`. |
-| `http-fetch` | on | Weak forward to `lumen-runtime/http-fetch`. Compiles the scripts' `fetch(url, tag)` builtin. |
-| `profiling` | off | Weak forward to `lumen-runtime/profiling`. Enables `lumenc run --profile chrome\|stderr`. |
-| `profiling-tracy` | off | `profiling` plus a weak forward to `lumen-runtime/profiling-tracy`. Enables `--profile tracy`. |
-
-### `lumen-runtime` (`lumen/runtime/Cargo.toml`)
-
-Default features: `http-fetch`, `runtime-parse`, `audio`, `mcp`, `async`,
-`host-lua`, `host-candela`. The default set is deliberately full, so the
-shared `liblumen_ffi` cdylib and the `lumenc run` dev path both carry
-every subsystem; per-app trimming happens only on `lumenc bundle
---static`, which builds `lumen-ffi` with a resolved, narrower feature set.
-
-| Feature | Default | What it does |
-|---|---|---|
-| `audio` | on | Links `lumen-audio` (rodio/cpal/symphonia). |
-| `mcp` | on | Links `lumen-mcp`, the JSON-RPC introspection server used by `lumenc mcp` and devtools tooling. |
-| `async` | on | Links `lumen-async-tokio`, the spawn/timer bridge scripts and the async file-dialog path use. |
-| `host-lua` | on | Links `lumen-script-lua` and `mlua`, adding the Lua script host alongside the always-on Rhai host. |
-| `host-candela` | on | Links `lumen-script-candela`, adding the candela script host. |
-| `devtools` | off | Links `lumen-devtools`, the in-window overlay. Off by default; a release or `lumenc bundle --static` build never carries it. |
-| `http-fetch` | on | Forwards to `lumen-script`, `lumen-script-rhai`, and weakly to `lumen-script-lua`/`lumen-script-candela`, compiling the scripts' HTTP `fetch()` builtin. |
-| `runtime-parse` | on | No dependency of its own; gates the from-source load + hot-reload code path itself. |
-| `profiling` | off | Adds `tracing-subscriber` and `tracing-chrome`, and turns on `bevy_ecs`'s `trace`/`debug` features, so every ECS system and schedule run emits a span. |
-| `profiling-tracy` | off | `profiling` plus `tracing-tracy`, for the Tracy profiler. |
-
-Rhai itself is not behind a feature; it is the always-compiled default
-host. `host-lua` and `host-candela` add the other two.
-
-### `lumen-render-wgpu` (`lumen/render-wgpu/Cargo.toml`)
-
-| Feature | Default | What it does |
-|---|---|---|
-| `gl-fallback` | off | Re-adds the OpenGL/GLES backend (`wgpu/gles`) and an explicit GL adapter fallback in offscreen renderer setup. A shipped per-OS release otherwise compiles exactly one native backend (Vulkan on Linux, Metal on macOS, DX12 on Windows). Turn this on for an old GPU, a GL-only VM, or a Vulkan-less headless container: `cargo build -p lumen-render-wgpu --features gl-fallback`. |
-
-## Tests and lint gates
-
-CI (`.github/workflows/ci.yml`) runs three jobs; reproduce them locally
-with the same commands:
-
-```bash
-# formatting
-cargo fmt --all --check
-
-# lints, denied as errors
-cargo clippy --workspace --all-targets -- -D warnings
-
-# build, then the full test suite
+```sh
 cargo build --workspace
-cargo test --workspace --no-fail-fast
 ```
 
-`cargo fmt` and `cargo clippy` are repo law; see `CONTRIBUTING.md`. The
-test job runs on Linux, macOS, and Windows in CI; a couple of GPU-dependent
-tests (framebuffer readback on a software adapter, and the screenshot
-goldens, which are sensitive to the host's default font) detect a
-runner-like environment and skip themselves with a printed reason rather
-than failing.
+Run one of the example apps in `apps/` through the CLI:
 
-Hot-path regression tests live beside the crate they cover, so they run with
-the rest of the suite: `lumen-text-cosmic` checks that repeat shaping is
-served from the cache rather than reshaped, `lumen-layout-taffy` checks that
-an idle tick does no layout work, and `lumen-primitives` checks transition
-sampling.
-
-## Installing the language server from source
-
-```bash
-cargo install --path lumen/lsp
+```sh
+cargo run -p lumenc -- run apps/widget-garden
 ```
 
-`lumen-lsp` links `lumenc` with `--no-default-features --features
-runtime-parse`, so it gets the markup/CSS parser without the runtime and
-its backends (wgpu, winit, vello, cosmic-text, taffy, rodio, mlua). Point
-an editor's LSP client at the installed `lumen-lsp` binary; it speaks
-stdio and negotiates its capabilities with the client.
+`apps/widget-garden` exercises every tag, attribute, and OS builtin, so it is
+the fastest way to see whether a change broke something visible. The other
+apps are narrower: `apps/counter` and `apps/notes` for basic markup and
+scripting, `apps/kanban` for drag and drop, `apps/pages-demo` for multi-page
+navigation, `apps/music` for audio.
 
-## Crate layout
+## Developing without a window
 
-The workspace lives under `lumen/`, plus `lumenc` and `sdk/rust` at the
-repo root. Rough map, for deciding where a change belongs:
+Add `--headless` to run the whole pipeline (layout, shaping, GPU render, MCP
+server) with no window at all, and `--ticks N` to run a fixed number of ticks
+and exit:
 
-- **`lumen-core`**: the tick loop, ECS setup, command queue, and the
-  backend traits (window, renderer, text shaper, layout engine, script
-  host) that everything else implements. Never depends on an impl crate.
-- **`lumen-ir`**: the IR shared between the compiler and the runtime -
-  layout IR, the CSS AST and cascade, and the compiled `.lmna` artifact
-  format.
-- **`lumen-runtime`**: the run loop, default plugin stack, hot reload,
-  file-based pages, and app loaders. Parser-free; `lumenc` injects a
-  parser via `SourceParser`.
-- **`lumenc`**: the markup/CSS compiler front end and the CLI (`new`,
-  `run`, `build`, `check`, `bundle`, `fmt`, `lint`, `screenshot`, and the
-  rest of the automation subcommands).
-- **Backend impl crates**: `lumen-render-wgpu` (wgpu/vello renderer),
-  `lumen-render-headless` (in-memory RGBA renderer for CI/tests),
-  `lumen-window-winit` (window + raw input), `lumen-layout-taffy`
-  (layout), `lumen-text-cosmic` (text shaping), `lumen-a11y-accesskit`
-  (accessibility tree), `lumen-audio` (playback), `lumen-input` (focus,
-  hit-test, event dispatch).
-- **Script hosts**: `lumen-script` (the `ScriptHost`/`StateProxy` trait),
-  and the three implementations, `lumen-script-rhai`, `lumen-script-lua`,
-  `lumen-script-candela`.
-- **OS integration crates** (`lumen-os-*`): clipboard, drag-and-drop,
-  file dialogs, tray, notifications, hotkeys, menu bars, launcher,
-  lifecycle, power/inhibit. Each wraps one native subsystem behind a
-  small trait, with `lumen-os-mime` holding types shared across several
-  of them.
-- **`lumen-widget` / `lumen-widget-macros`**: the `Widget` trait and the
-  `#[derive(Widget)]` proc macro that generates its plugin/spawn glue.
-- **`lumen-ffi`**: the C ABI (`liblumen_ffi`), for driving a Lumen app
-  from another language.
-- **`lumen-lsp`**: the language server.
-- **`lumen-mcp` / `lumen-mcp-server`**: the in-app JSON-RPC introspection
-  server and the standalone stdio bridge that fronts it for MCP clients
-  such as Claude Code.
-- **`lumen-devtools`**: the in-window devtools overlay.
-- **`sdk/rust`** (crate name `lumen`): the single-dependency Rust SDK for
-  building or embedding a Lumen app, built on `lumen-runtime` plus
-  `lumenc`'s parser.
+```sh
+cargo run -p lumenc -- run apps/widget-garden --headless --ticks 5
+```
 
-A change to how something looks or behaves at the app level usually
-belongs in `lumen-runtime` or a backend crate; a change to markup/CSS
-syntax or the CLI belongs in `lumenc`; a new native capability (another
-OS integration) gets its own `lumen-os-*` crate following the existing
-pattern.
+Headless is the mode to use for automation, for CI, and on machines with no
+display. `--size` and `--dpr` set the offscreen surface geometry and only apply
+together with `--headless`.
+
+`lumenc check <dir>` parses markup and CSS and reports diagnostics without
+running anything, which is the quickest gate while editing an app.
+
+The same mode is what app authors use for automated testing; see
+[Testing](../guides/testing.md).
+
+## Feature flags that matter
+
+Three crates carry flags you will meet while working on the tree.
+
+**`lumenc`** builds in two shapes. The default shape statically links
+`lumen-runtime` (feature `dev-run`) so `run`, `build`, `check`, and the
+integration tests drive an app in process. The thin shape drops that and loads
+the shared `liblumen` over the C ABI instead:
+
+```sh
+cargo build -p lumenc --no-default-features --features "runtime-parse,dlopen-run"
+```
+
+`runtime-parse` compiles the markup and CSS front end into the compiler; a
+build without it consumes only precompiled artifacts. `bundle` adds the `.lpak`
+packer. `devtools` is off by default and compiles the in-window overlay.
+`profiling` and `profiling-tracy` add the `--profile` backends.
+
+Dropping every default feature yields a compiler library with no backends at
+all. That is what `lumen-lsp` links, which is why the LSP does not pull wgpu,
+winit, cosmic-text, taffy, or the script hosts.
+
+**`lumen-runtime`** defaults to every subsystem on: `audio`, `mcp`, `async`,
+`host-lua`, `host-candela`, `http-fetch`, `runtime-parse`. The Rhai host is
+always compiled. Per-app trimming happens only on the static bundle path, where
+`lumenc` selects the exact feature set an app needs; the development path stays
+full featured.
+
+**`lumen-render-wgpu`** selects one wgpu backend per operating system through
+target-scoped dependencies, so a build compiles the Vulkan, Metal, or DX12
+backend and nothing else. The off-by-default `gl-fallback` feature adds the
+OpenGL backend for GL-only virtual machines and Vulkan-less containers.
+
+## Gates
+
+CI runs these, and they are the same commands to run locally before opening a
+pull request:
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+Format and clippy run on Linux only, since neither depends on the platform.
+Tests run on Linux, macOS, and Windows. That three-way matrix is also the
+release parity check, so a red macOS or Windows leg is a portability gap to
+fix, not a platform to drop.
+
+Two families of test skip themselves rather than fail when the machine cannot
+support them, printing the reason:
+
+- Framebuffer readback on a software adapter. Direct3D's WARP rasterizer faults
+  the test process when a texture is read back, so those cases want a real GPU.
+- The screenshot goldens in `lumenc/tests/golden.rs`. Baselines carry the font
+  set of the machine that captured them, and a machine that resolves a
+  different default sans-serif redraws every case containing text. They run
+  locally and skip when `CI` is set.
+
+Useful targeted runs while working in one area:
+
+```sh
+cargo test -p lumen-render-headless --test golden_rects
+cargo test -p lumen-render-wgpu --test smoke
+cargo test -p lumen-layout-taffy --test dirty_invariant
+```
+
+Golden images are regenerated, not hand-edited. `UPDATE_GOLDENS=1` rewrites the
+software rasterizer baseline in `lumen-render-headless`;
+`LUMEN_GOLDEN_UPDATE=1` rewrites the screenshot baselines in `lumenc`. On a
+mismatch the screenshot suite writes the actual and diff images under a
+`lumen-golden-failures` directory inside `CARGO_TARGET_DIR`.
+
+## Language server and editor extension
+
+The language server is a normal workspace binary:
+
+```sh
+cargo build --release -p lumen-lsp
+```
+
+That produces `lumen-lsp` in the target directory. It links the compiler
+library without the runtime, so it builds quickly and starts without touching a
+GPU.
+
+The VS Code extension lives in `tools/vscode-lumen` and is TypeScript:
+
+```sh
+cd tools/vscode-lumen
+npm install
+npm run compile
+npm run package
+```
+
+`compile` emits the extension entry point; `package` produces a `.vsix` you can
+install into VS Code directly.
+
+The extension finds its binaries by searching the workspace target directories
+(honoring `CARGO_TARGET_DIR`) and then `PATH`. Point it at a specific build
+with the `lumen.serverPath` and `lumen.lumencPath` settings, or turn the search
+off entirely. Its live preview drives `lumenc run --headless` and the
+screenshot path, so it never opens a window either.
+
+## Documentation
+
+The documentation site is built with Zensical from `docs/`:
+
+```sh
+cd docs
+uv run zensical build --strict
+```
+
+`--strict` turns broken links and unknown navigation entries into errors. The
+navigation lives in `docs/zensical.toml`.
+
+Every change that adds, changes, or removes something a user can observe
+updates the matching page in the same commit. That includes tags, attributes,
+CSS properties, `lumen.toml` keys, CLI flags, scripting builtins, defaults, and
+supported platforms.
+
+## Third-party licences
+
+`about.toml` holds the accepted-licence allowlist for the dependency graph.
+Regenerate the attribution page with `cargo about`:
+
+```sh
+cargo about generate about.hbs > third-party-licenses.html
+```
+
+A licence that is not on the allowlist shows up as an error, which is the point:
+a new dependency carrying an unexpected licence gets noticed before it ships.
+
+## Where to go next
+
+- [Architecture](architecture.md) for the crate map and how a frame is
+  produced.
+- [Writing plugins](plugins.md) for extending the runtime from Rust.

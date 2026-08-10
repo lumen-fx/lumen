@@ -159,7 +159,7 @@ pub struct PagesCfg {
 pub struct WindowCfg {
     /// Window title override.
     pub title: Option<String>,
-    /// `[w, h]` in physical pixels.
+    /// `[w, h]` in logical pixels.
     pub size: Option<[u32; 2]>,
     /// When `true`, persists window position, size, and maximised state to `<state_dir>/<app-id>/window-state.toml` on close and restores from it on the next launch. Defaults to `false`.
     pub remember_state: Option<bool>,
@@ -187,7 +187,7 @@ pub struct McpCfg {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProfileCfg {
-    /// `off` | `chrome` | `stderr`. Default `off`.
+    /// `off` | `chrome` | `tracy` | `stderr`. Default `off`.
     pub mode: Option<String>,
 }
 

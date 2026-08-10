@@ -112,9 +112,10 @@ pub struct NotificationActionInvoked {
 /// become possible.
 #[derive(Resource, Default, Clone)]
 pub struct NotificationService {
-    /// Optional `[app] id` used by the macOS / Windows backends.
-    /// Empty means "use the binary's bundle id" (`cargo run` ends up
-    /// empty there).
+    /// Optional app id used by the macOS / Windows backends. `None` means
+    /// "use the binary's bundle id". The runtime never sets this, so it is
+    /// `None` under `lumenc run`; an embedder can fill it in with
+    /// [`Self::with_app_id`].
     pub app_id: Option<String>,
 }
 

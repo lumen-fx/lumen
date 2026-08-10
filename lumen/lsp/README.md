@@ -1,30 +1,46 @@
 # lumen-lsp
 
-`tower-lsp` 0.20 language server for Lumen markup (`.lumen` files).
+`tower-lsp` 0.20 language server for a Lumen app directory: `.lmn` markup,
+Lumen CSS in `.css`, and `.rhai` scripts. It calls `lumenc`'s own parser and a
+fully-registered Rhai engine, so the editor and the compiler always agree on
+what counts as valid.
 
 ## What it does
 
-- **Diagnostics**: re-parses the document on every open / change via
-  `lumenc::parse_html` and surfaces the resulting `ParseError` as an LSP
-  `Diagnostic`. The LSP can never diverge from `lumenc` on what counts as
-  a valid Lumen file because it calls the compiler directly.
-- **Completion**:
-  - Tag position (after `<`): the seven supported tags
-    (`root`, `column`, `row`, `scroll`, `tile`, `label`, `div`).
-  - Attribute-name position: the seventeen supported attributes.
-  - Attribute-value position for the three constrained values:
-    `flex` -> `row` / `column`, `scroll` -> `y` / `x` / `both`,
-    `draggable` -> `true` / `false`.
-- **Hover**: markdown documentation for tags and attribute names
-  (hardcoded in `src/docs.rs`; sync by hand if the markup vocabulary
-  grows).
+- **Diagnostics**: re-parses the document on every open and change.
+  - `.lmn`: parse errors from `lumenc::parse_html`, plus every parse-time lint
+    finding as its own diagnostic at its severity.
+  - `.css`: parse errors from `lumenc::parse_css`, plus apply-time warnings for
+    unknown properties and unparseable values. The sibling markup is used as
+    the scratch tree so selector matching is realistic.
+  - `.rhai`: compile errors from a Rhai engine with every Lumen builtin
+    registered, so `signal`, `derive`, and `on` never read as unknown
+    functions. The optimizer is off during analysis, so no builtin can run as a
+    side effect of opening a file.
+- **Completion**: tag names after `<`, attribute names inside an open tag, and
+  values for the attributes with a fixed vocabulary (`flex`, `align`,
+  `justify`, `position`, `overflow`, `wrap`, `fit`, and the boolean
+  attributes). In `.rhai`, the Lumen builtins, plus the ids declared in the
+  sibling markup when completing an id argument.
+- **Hover**: markdown documentation for tags and attribute names, and builtin
+  signatures in `.rhai`.
+- **Signature help**: parameter hints for the Rhai builtins.
+- **Goto-definition**: from a template use site to its `<template name="...">`,
+  and from an id string in `.rhai` to the element that declares it.
+- **References and rename**: every `id="X"` in markup, `"X"` string literal in
+  Rhai, and `#X` selector in CSS that names the same id.
+- **Document symbols**: the markup element tree, and the function list of a
+  `.rhai` file.
+- **Formatting**: whole-document formatting of `.lmn` files.
 
-## File extension
+## File extensions
 
-Lumen markup uses `.lumen`. **Not `.html`** - opening Lumen markup as
-HTML triggers VS Code's built-in HTML language server, which floods the
-Problems panel with false positives because it doesn't know the Lumen
-vocabulary.
+Lumen markup uses `.lmn`. Opening it as HTML hands it to the editor's built-in
+HTML language server, which floods the Problems panel with false positives
+because it does not know the Lumen vocabulary.
+
+Stylesheets are ordinary `.css` files that use the Lumen property subset, and
+scripts are `.rhai`.
 
 ## Install
 
@@ -35,8 +51,8 @@ cargo build --release -p lumen-lsp
 # binary lands at <cargo-target>/release/lumen-lsp
 ```
 
-You can either put `lumen-lsp` on your `$PATH`, or set
-`"lumen.serverPath"` in VS Code settings to the absolute path.
+Put `lumen-lsp` on your `$PATH`, or set `"lumen.serverPath"` in VS Code
+settings to the absolute path.
 
 ### Sideload the VS Code extension
 
@@ -51,13 +67,11 @@ Then symlink (or copy) the directory into your user extensions folder:
 - Linux / macOS: `ln -s "$PWD" ~/.vscode/extensions/lumen-vscode`
 - Windows: copy the directory into `%USERPROFILE%\.vscode\extensions\lumen-vscode\`
 
-Restart VS Code. Opening any `.lumen` file should now show "Lumen Markup"
-in the bottom-right status bar and the Problems panel will populate from
-`lumen-lsp` rather than from the built-in HTML server.
-
-The workspace ships `.vscode/settings.json` (force-added past the
-ignore rule for `.vscode/`) mapping `*.lumen` to the `lumen-markup`
-language id, so the extension's contributions take effect.
+Restart VS Code. The extension registers `.lmn` as the `lumen-markup` language
+and starts the server, so opening any `.lmn` file shows "Lumen Markup" in the
+status bar and populates the Problems panel from `lumen-lsp`. See
+[`tools/vscode-lumen/README.md`](../../tools/vscode-lumen/README.md) for the
+rest of the extension.
 
 ## Manual smoke test (no VS Code)
 
@@ -65,39 +79,40 @@ The server speaks LSP over stdio:
 
 ```sh
 cargo build --release -p lumen-lsp
-# then send framed JSON-RPC at $TARGET/release/lumen-lsp
+# then send framed JSON-RPC at <cargo-target>/release/lumen-lsp
 ```
 
-A canonical `initialize` -> `didOpen` exchange with a broken file
-produces diagnostics like:
+An `initialize` then `didOpen` exchange with a broken file produces
+diagnostics like:
 
 ```json
 {
   "method": "textDocument/publishDiagnostics",
   "params": {
     "diagnostics": [{
-      "message": "Unknown tag `<nope>`. Allowed: root, column, row, scroll, tile, label, div, script.",
+      "message": "Unknown tag `<nope>`. See LSP completion list for the full set.",
       "range": {"start": {"line": 1, "character": 3}, "end": {"line": 1, "character": 7}},
       "severity": 1,
       "source": "lumen-lsp"
     }],
-    "uri": "file:///tmp/x.lumen"
+    "uri": "file:///tmp/x.lmn"
   }
 }
 ```
 
 ## Known gaps
 
-- `<script>` body contents are not linted. Rhai/JS diagnostics are
-  future scope.
-- Inline CSS (the future `<style>` block, or external `.css` files)
-  is not validated by the LSP; `lumenc::parse_css` is not invoked.
-- `parse_html` short-circuits on the first error, so only one diagnostic
-  is surfaced per save. A future "best-effort parser" pass could collect
-  several at once.
-- Completion does not yet offer value snippets for length-typed
-  attributes (`width`, `height`, `padding`, `margin`) or color-typed
-  attributes (`bg`, `text-color`, `hover-bg`).
-- No goto-definition for `id="..."` references yet.
-- TextMate grammar is minimal - covers tag/attribute/string coloring,
-  not value validation (the LSP does that).
+- CSS gets diagnostics but no completion or hover, so property names and
+  `var(--token)` names are not suggested.
+- candela (`.cdl`) and Lua (`.lua`) scripts get no intelligence; only `.rhai`
+  is analysed.
+- `<script>` bodies inside `.lmn` are not linted. Rhai diagnostics run for
+  standalone `.rhai` files only.
+- `parse_html` stops at the first error, so one markup parse error surfaces per
+  save. Lint findings are not affected and all surface at once.
+- Only whole-document formatting is offered; "Format Selection" does nothing.
+- The tag and attribute vocabulary in `src/docs.rs` is written by hand and is
+  behind the parser. `a`, `textarea`, `switch`, `tooltip`, `tabs`, `tab`,
+  `dropdown`, `option`, `menu`, `menuitem`, `separator`, `date-picker`, and
+  `time-picker` parse fine but are not offered in completion or hover.
+  Extending the markup vocabulary means updating `docs.rs` in the same change.

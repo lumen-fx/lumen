@@ -11,9 +11,10 @@
 //! 2. Define a `Plugin` struct.
 //! 3. In `Plugin::build`, register N systems against one or more
 //!    [`lumen_core::tick::TickStage`] sets.
-//! 4. Tell the markup parser about the new tag (today still hard-coded
-//!    in `lumenc/src/parser_html.rs`; once that table is moved into a
-//!    registry, `Widget::parser_tag` becomes the wire-up).
+//! 4. Tell the markup parser about the new tag. The plugin the derive
+//!    generates calls `<Type>::register()` in its `build`, publishing
+//!    `Widget::parser_tag` into the registry the parser consults after
+//!    its built-in table.
 //! 5. Provide a spawn fn that turns a parsed `<tag attr="...">` into an
 //!    ECS entity carrying the marker + the author-specified props.
 //!
@@ -55,15 +56,14 @@
 //! for tooltips) stay hand-written. A future iteration may grow the
 //! `#[widget(systems = ...)]` attribute to register them automatically.
 //!
-//! ## Parser integration note
+//! ## Parser integration
 //!
-//! The lumenc HTML parser ships a hard-coded tag whitelist
-//! (`KNOWN_TAGS` in `lumenc/src/parser_html.rs`). Until that table
-//! migrates to a runtime registry, `Widget::parser_tag` is a
-//! self-documenting hook: invoking the derive does not yet wire the
-//! widget into the parser. Authors still need to add the tag to the
-//! whitelist (or use the existing per-primitive Spec attribute lookup
-//! once the registry lands).
+//! The lumenc HTML parser checks its built-in tag table
+//! (`KNOWN_TAGS` in `lumenc/src/parser_html.rs`) first and falls back
+//! to [`is_widget_tag_registered`]. The plugin the derive generates
+//! calls `<Type>::register()` when it is added, so adding that plugin
+//! before the parser runs is enough for `<my-thing>` markup to be
+//! accepted; no edit to the built-in table is needed.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -208,8 +208,9 @@ pub trait Widget: Sized + Send + Sync + 'static {
     fn name() -> &'static str;
 
     /// Markup tag handled by the widget. The derive picks this up from
-    /// `#[widget(tag = "...")]`. When the lumenc parser registry lands,
-    /// the parser consults this string at registration time.
+    /// `#[widget(tag = "...")]`. `<Type>::register()` publishes it into
+    /// the registry behind [`is_widget_tag_registered`], which is what
+    /// makes the lumenc parser accept the tag.
     fn parser_tag() -> &'static str;
 
     /// Build a widget entity under `parent` from `attrs`, returning

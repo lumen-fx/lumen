@@ -7,38 +7,42 @@ world.
 
 ## Survey before touching code
 
-- `lumenc framework_status` (via MCP) - surfaces open TODO.md items per
-  section. Check whether the component is already half-shipped
-  (`[~]`) or queued (`[ ]`); avoid duplicating.
-- `lumen/primitives/src/lib.rs` - existing primitives (drag, hover,
-  press, scroll, tabs, tooltip, dialog). Mirror the smallest one that
-  matches your component's shape.
+- `lumen/primitives/src/lib.rs` - the existing primitives (baseline, checkbox,
+  controls, cursor, drag, hover, popup, press, progress, radio, scroll,
+  scrollbar, state_style, switch, tabs, tooltip, transition, validation, wake).
+  Mirror the smallest one that matches your component's shape.
+- `lumen_snapshot_text` on a running app - shows what the introspection layer
+  already reports, which is the shape your component has to fit into.
 
 ## File layout
 
-- `lumen/primitives/src/<thing>.rs` - Component + its driving system.
+- `lumen/primitives/src/<thing>.rs` - Component plus its driving system.
 - `lumen/primitives/src/lib.rs` - plugin registration and exports.
-- `lumenc/src/spawn.rs` - wire the new tag/attribute to the component.
-- `lumenc/src/parser_html.rs` - parse the markup form if it's new.
-- `lumen/lsp/...` - update completions + diagnostics for the new tag.
+- `lumen/runtime/src/spawn.rs` - wire the new tag or attribute to the
+  component.
+- `lumenc/src/parser_html.rs` - parse the markup form if it is new.
+- `lumen/lsp/src/docs.rs` - add the tag or attribute to `TAGS` / `ATTRS`, its
+  hover documentation, and any fixed value set.
 
 ## Constraints
 
-- Hierarchy: use `ChildOf` / `Children`, not the legacy `Parent`. The MCP
+- Hierarchy: use `ChildOf` and `Children`. `Parent` no longer exists. The MCP
   snapshot already follows this.
 - Two-world split: components mutating render-only data go in
   `app.render_world`, not `app.world`. Cross-world data passes through
   the extract step.
 - Snapshot coverage: add the new component to `lumen/mcp/src/plugin.rs`
-  (`snap_*` sweeps) and `lumen/mcp/src/snapshot.rs` (`EntityInspect`
+  (the `snap_*` sweeps) and `lumen/mcp/src/snapshot.rs` (an `EntityInspect`
   field) so MCP introspection sees it from day one.
-- Tests: ship a unit test under the relevant crate AND a golden-image
-  pass in `lumen-render-headless/tests/` if the component renders.
+- Docs: document the new tag or attribute on the reference page that owns it,
+  in the same change.
+- Tests: ship a unit test under the relevant crate, and a golden-image case in
+  `lumen/render-headless/tests/` if the component renders.
 
 ## Definition of done
 
-1. `cargo build` clean across the workspace.
-2. `cargo clippy --no-deps --all-targets -- -D warnings` clean.
+1. `cargo build --workspace` clean.
+2. `cargo clippy --workspace --all-targets -- -D warnings` clean.
 3. `cargo test -p lumen-primitives -p lumen-mcp -p lumenc` green.
 4. `lumenc check apps/<some-app>` succeeds with the new tag used.
 5. `lumenc snapshot --text` shows the new component on a sample app.

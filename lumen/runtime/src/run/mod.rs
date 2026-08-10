@@ -87,7 +87,7 @@ pub struct RunOptions {
     pub dir: PathBuf,
     /// Window title. Defaults to the directory name.
     pub title: Option<String>,
-    /// Window size in physical pixels.
+    /// Window size in logical pixels.
     pub size: (u32, u32),
     /// Background color when no CSS sets one.
     pub clear: Color,
