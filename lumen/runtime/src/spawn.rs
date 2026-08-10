@@ -487,6 +487,15 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
                 .progress_duration
                 .unwrap_or(lumen_primitives::PROGRESS_PERIOD_MS),
         });
+        // The accessibility walk reads `A11yValue`, not `ProgressBar`;
+        // `apply_progress_bindings` keeps the two in step.
+        entity.insert(lumen_core::components::A11yValue {
+            now: f64::from(el.attrs.value.unwrap_or(0.0)),
+            min: 0.0,
+            max: f64::from(el.attrs.max.unwrap_or(1.0)),
+            step: 0.0,
+            text: None,
+        });
         // `progress-chunk` (markup attr or the CSS property) wins;
         // `ProgressChunk::default()` carries the runtime's own
         // indeterminate-fill-fraction constant when unauthored.

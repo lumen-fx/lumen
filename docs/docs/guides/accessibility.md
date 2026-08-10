@@ -16,14 +16,24 @@ A control's accessible name is its `text` attribute:
 ```
 
 That button announces as "Save". If a control has no `text`, its `id` is used
-instead, which is rarely what you want a person to hear. An input's
-`placeholder` is published separately from the name.
+instead, which is rarely what you want a person to hear. Text fields are the
+exception: what someone types is published as the field's value, so an `input`
+is named by its `id`. An input's `placeholder` is published separately from the
+name.
 
-There is no `role` attribute and no `aria-*` attributes today. Roles are
-inferred from what a widget is: a text input, a slider, a checkbox, a switch, a
-scrollable region, a focusable control, or a piece of text. Unrecognised
-attributes are dropped without a warning, so writing `aria-label` has no
-effect.
+There is no `role` attribute and no `aria-*` attributes today. Roles come from
+the element you wrote. `button`, `a`, `input`, `textarea`, `checkbox`,
+`toggle`, `switch`, `radio`, `slider`, `progress`, `dialog`, `menu`,
+`menuitem`, `scroll`, `image`, `label`, `date-picker` and `time-picker` each
+report their own role, and composite widgets report as their parts: a `tabs`
+strip is a tab list of tabs, a `dropdown` is a combo box over a list of
+options. Unrecognised attributes are dropped without a warning, so writing
+`aria-label` has no effect.
+
+State travels with the role. A disabled control reports as disabled, a checked
+checkbox or a chosen radio as toggled on, the active tab as selected, an open
+dropdown as expanded, and a `dialog` as modal. The tree is republished whenever
+any of this changes.
 
 The practical consequence: a control that shows only an image has no accessible
 name. Give it a `text` as well, or pair it with a `label` that says what it
@@ -98,8 +108,6 @@ your own setting for anything heavily animated. See
 
 - No `role` or `aria-*` attributes, and no way to announce a message
   programmatically.
-- `disabled` is respected by focus and input, and is not yet published to the
-  accessibility tree.
-- Composite widgets such as tabs, radio groups, and dropdowns navigate
-  correctly with the keyboard, and report as generic controls rather than as
-  tab lists, radio groups, and combo boxes.
+- A radio group is not an element of its own, so its options report as
+  individual radio buttons rather than as one group.
+- A `progress` bar reports as a progress bar, without its value.
