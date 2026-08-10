@@ -9,6 +9,7 @@ pub(crate) fn apply_script_commands(
     mut inputs: Query<&mut lumen_core::components::TextInput>,
     mut store: ResMut<lumen_core::property_store::PropertyStore>,
     mut array_signals: ResMut<lumen_core::signals::ArraySignals>,
+    mut style_manager: ResMut<lumen_core::components::StyleManager>,
     mut picked: MessageWriter<lumen_core::input::FilePicked>,
     mut hotkeys: Option<NonSendMut<OsHotkeyRegistry>>,
     file_dialog: Res<FileDialogService>,
@@ -101,6 +102,16 @@ pub(crate) fn apply_script_commands(
                                 ));
                         }
                     }
+                }
+            }
+            ScriptCommand::SetColorScheme { name } => {
+                match lumen_core::components::ColorScheme::from_name(name) {
+                    Some(scheme) => style_manager.set_scheme(scheme),
+                    None => tracing::warn!(
+                        "set_color_scheme: unknown name {name:?}; expected one of \
+                         \"default\"/\"force-light\"/\"force-dark\"/\
+                         \"prefer-light\"/\"prefer-dark\""
+                    ),
                 }
             }
             ScriptCommand::SetArray { name, items } => {

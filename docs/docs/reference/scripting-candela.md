@@ -72,7 +72,7 @@ import introduces four namespaces:
 
 | Namespace | Reached as | Covers |
 |---|---|---|
-| `lumen` | `lumen::name(...)` | signals, timers, notifications, dialogs, hotkeys, the dynamic DOM, events, audio, classes, networking, filesystem |
+| `lumen` | `lumen::name(...)` | signals, timers, notifications, dialogs, hotkeys, the dynamic DOM, events, audio, classes, color scheme, pages, networking, filesystem |
 | `window` | `window::name(...)` | window title/size, href, reload, dpr |
 | `history` | `history::name(...)` | back/forward/go |
 | `document` | `document::name(...)` | root/query/get_by_id/focused/hovered/spawn |
@@ -142,6 +142,38 @@ instead. The music example seeds its transport signals exactly this way.
 ```candela
 lumen::set_root_class("app theme-dark");
 ```
+
+### Color scheme
+
+| Signature | Description |
+|---|---|
+| `set_color_scheme(string name)` | Switch the color scheme. `"default"` follows the OS; `"force-light"` and `"force-dark"` pin one; `"prefer-light"` and `"prefer-dark"` pick a side only when the OS expresses no preference. An unrecognized name is ignored. |
+
+```candela
+lumen::set_color_scheme("force-dark");
+```
+
+Theme-token CSS resolves against the effective scheme, so this is the way
+to flip a theme. `set_root_class` still works and still sets classes, but a
+class swap does not re-resolve the theme tokens.
+
+### Pages
+
+| Signature | Description |
+|---|---|
+| `page(string path)` | Navigate to a page path (`"settings"`, `"/user/7"`, `"/"`). |
+| `string page_current()` | The active page key. |
+| `page_back()` | Step one entry back in the page history. |
+| `page_forward()` | Step one entry forward. |
+
+```candela
+lumen::page("/settings");
+```
+
+Navigation is one bus shared with `<a href>` clicks and the `window` /
+`history` namespaces, so the three spellings are interchangeable. The
+reader is `page_current()` rather than a no-arg `page()`, because a candela
+host function takes one argument list per name.
 
 ### Timers
 
@@ -702,14 +734,6 @@ still called as free `lumen::` functions.
 from-source run; a precompiled (AOT) app has no markup parser and treats
 it as a no-op, so apps that ship precompiled build lists node by node
 instead, as both example apps do.
-
-Two surfaces Rhai and Lua get from the runtime are not reachable here.
-`lumen::page(...)`, `lumen::page_current()`, `lumen::page_back()`,
-`lumen::page_forward()`, and `lumen::set_color_scheme(...)` are registered
-on the candela engine but are not declared in `lumen.cdl`, so calling one
-fails at runtime with "lumen is not a valid namespace". Navigate with
-`window::set_href(path)` and `window::href()` instead, which the prelude
-does declare; there is no candela equivalent for `set_color_scheme` today.
 
 **Do not nest one host call inside another's argument list.** Writing
 `lumen::signal_set_int("n", lumen::signal_get_int("n") + 1)` aborts the

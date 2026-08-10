@@ -309,67 +309,11 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
                 // Pass the entry path so a `dylib "..."` import in the app
                 // resolves its library next to the app under `lumenc run`,
                 // matching how `lumenc check` resolves it.
-                let mut plugin =
+                // Color scheme and page navigation register inside the host's
+                // own engine build (`lumen-script-candela`), beside the rest
+                // of the prelude surface, so no extension hooks are needed.
+                let plugin =
                     ScriptCandelaPlugin::new(combined).with_uri(html_path.display().to_string());
-                // Host-specific ports of the Rhai `set_color_scheme` + `page`
-                // extensions. candela reaches host functions through a typed
-                // `host "lumen" { ... }` block, so these are registered under the
-                // `lumen` namespace; a candela app declares + calls them as
-                // `lumen::set_color_scheme(...)` / `lumen::page(...)`. The
-                // effects are byte-identical to the Rhai/Lua closures: the same
-                // `Command::Typed(ColorSchemeIntent)` push and the same
-                // host-neutral `lumen_core::nav` navigation bus.
-                let sender = app
-                    .world
-                    .resource::<lumen_core::command::CommandQueue>()
-                    .sender()
-                    .clone();
-                plugin = plugin.with_extension(
-                    move |engine: &mut lumen_script_candela::candela::Engine| {
-                        engine.register_host_fn("lumen", "set_color_scheme", move |name: String| {
-                        let Some(scheme) =
-                            lumen_core::components::ColorScheme::from_name(&name)
-                        else {
-                            tracing::warn!(
-                                "set_color_scheme: unknown name {:?}; expected one of \
-                                 \"default\"/\"force-light\"/\"force-dark\"/\
-                                 \"prefer-light\"/\"prefer-dark\"",
-                                name
-                            );
-                            return;
-                        };
-                        let cmd = lumen_core::command::Command::Typed {
-                            type_id: std::any::TypeId::of::<ColorSchemeIntent>(),
-                            payload: Box::new(ColorSchemeIntent(scheme)),
-                        };
-                        if sender.try_send(cmd).is_err() {
-                            tracing::warn!(
-                                "set_color_scheme: CommandQueue full; dropping scheme update"
-                            );
-                        }
-                    });
-                    },
-                );
-                plugin = plugin.with_extension(
-                    move |engine: &mut lumen_script_candela::candela::Engine| {
-                        // candela host functions cannot be arity-overloaded on one
-                        // name (the registry is keyed by (namespace, name)), so the
-                        // Rhai/Lua `page()` no-arg reader is exposed here as the
-                        // distinct `page_current()`; `page(path)` still navigates.
-                        engine.register_host_fn("lumen", "page", move |path: String| {
-                            lumen_core::nav::navigate(path);
-                        });
-                        engine.register_host_fn("lumen", "page_current", move || -> String {
-                            lumen_core::nav::current()
-                        });
-                        engine.register_host_fn("lumen", "page_back", move || {
-                            lumen_core::nav::back();
-                        });
-                        engine.register_host_fn("lumen", "page_forward", move || {
-                            lumen_core::nav::forward();
-                        });
-                    },
-                );
                 // Native `rhai_extensions` (RunOptions / Rust SDK hooks) are
                 // rhai::Engine-typed and cannot bind to a candela engine, so they
                 // are inapplicable under `engine = "candela"`.

@@ -246,6 +246,86 @@ fn main() {}
     );
 }
 
+/// The prelude also grants the color scheme and the file-based page
+/// navigation. Scheme changes ride the command sink; navigation rides the
+/// host-neutral `lumen_core::nav` bus, so `page(path)` is observable through
+/// the request the resolver reads, and `page_current()` reads the active page
+/// key back.
+#[test]
+fn prelude_grants_color_scheme_and_page_navigation() {
+    use lumen_core::nav::{NavOp, REQUEST_SIGNAL, parse_request};
+    use lumen_core::property_store::{PropertyKey, PropertyValue, external_property_snapshot};
+
+    /// The navigation op sitting on the external bus, if any.
+    fn pending_nav() -> Option<NavOp> {
+        let key = PropertyKey::Global(std::sync::Arc::from(REQUEST_SIGNAL));
+        match external_property_snapshot().get(&key) {
+            Some(PropertyValue::Str(raw)) => parse_request(raw).map(|(_, op)| op),
+            _ => None,
+        }
+    }
+
+    lumen_core::property_store::init_external_properties();
+    let mut host = CandelaHost::new();
+    let src = r#"
+import "lumen.cdl";
+fn go() {
+    lumen::set_color_scheme("force-dark");
+    lumen::page("/about");
+    return lumen::page_current();
+}
+fn step_back() { lumen::page_back(); }
+fn main() {}
+"#;
+    host.load(src, "nav.cdl")
+        .expect("the scheme + page entries compile via the prelude, no host block");
+
+    let out = host.call("go", &[]).expect("go ok");
+    assert!(
+        out.commands
+            .iter()
+            .any(|c| matches!(c, ScriptCommand::SetColorScheme { name } if name == "force-dark")),
+        "set_color_scheme reached the sink"
+    );
+    assert_eq!(
+        out.ret,
+        Some(ScriptValue::Str(lumen_core::nav::current())),
+        "page_current reads the active page key"
+    );
+    assert_eq!(
+        pending_nav(),
+        Some(NavOp::Navigate("/about".to_owned())),
+        "page(path) queued a navigation on the shared bus"
+    );
+
+    host.call("step_back", &[]).expect("step_back ok");
+    assert_eq!(
+        pending_nav(),
+        Some(NavOp::Back),
+        "page_back queued a back step on the same bus"
+    );
+}
+
+/// An embedder can still replace any of those with its own closure: a later
+/// `register_host_fn` under the same namespace and name wins, which is how the
+/// runtime swaps in implementations that need world access.
+#[test]
+fn embedder_registration_overrides_a_builtin() {
+    let mut host = CandelaHost::new();
+    host.engine_mut()
+        .register_host_fn("lumen", "page_current", || -> String {
+            "/from-embedder".to_owned()
+        });
+    let src = r#"
+import "lumen.cdl";
+fn where_am_i() { return lumen::page_current(); }
+fn main() {}
+"#;
+    host.load(src, "override.cdl").expect("compiles");
+    let out = host.call("where_am_i", &[]).expect("call ok");
+    assert_eq!(out.ret, Some(ScriptValue::Str("/from-embedder".to_owned())));
+}
+
 /// Anti-drift: every registered builtin must be declared in the embedded
 /// prelude, so a new `BUILTINS` entry that forgets the prelude fails CI. The
 /// trailing `(` disambiguates prefix names (`signal_get` vs `signal_get_int`).

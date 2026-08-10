@@ -4,16 +4,13 @@ A Lumen app lives in a single directory. The only required file is
 `main.lmn`; everything else is optional and resolves relative to that
 directory.
 
-```text
-my-app/
-|-- main.lmn        # required - the markup root
-|-- main.css        # optional - styling, picked up automatically
-|-- main.cdl        # optional - the script
-|-- lumen.toml      # optional - per-app config
-|-- settings.lmn    # optional - a second page
-|-- icons/          # optional - image assets
-`-- assets/         # any extra dirs listed in [asset_roots]
-```
+- `main.lmn` - the markup root.
+- `main.css` - styling, picked up automatically.
+- `main.cdl` - the script.
+- `lumen.toml` - per-app config.
+- `settings.lmn` - a second page.
+- `icons/` - image assets.
+- `assets/` - any extra directory listed in `[asset_roots]`.
 
 The script file is `.cdl` for candela, the default language and the one
 these docs use throughout. Rhai (`.rhai`) and Lua (`.lua`) work the same

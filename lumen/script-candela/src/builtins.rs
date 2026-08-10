@@ -300,6 +300,36 @@ pub const BUILTINS: &[BuiltinFn] = &[
         doc: "Replace the CSS classes on the `<root>` element (drives theme-token selectors).",
     },
     BuiltinFn {
+        name: "set_color_scheme",
+        params: &[p("name", "string")],
+        ret: "()",
+        doc: "Switch the color scheme: \"default\" (follow the OS), \"force-light\", \"force-dark\", \"prefer-light\", \"prefer-dark\".",
+    },
+    BuiltinFn {
+        name: "page",
+        params: &[p("path", "string")],
+        ret: "()",
+        doc: "Navigate to a page path (`\"settings\"`, `\"/user/7\"`, `\"/\"`).",
+    },
+    BuiltinFn {
+        name: "page_current",
+        params: &[],
+        ret: "string",
+        doc: "The active page key. Spelled apart from `page(path)` because a host fn takes one arity per name.",
+    },
+    BuiltinFn {
+        name: "page_back",
+        params: &[],
+        ret: "()",
+        doc: "Step one entry back in the in-memory page history.",
+    },
+    BuiltinFn {
+        name: "page_forward",
+        params: &[],
+        ret: "()",
+        doc: "Step one entry forward in the in-memory page history.",
+    },
+    BuiltinFn {
         name: "fetch",
         params: &[p("url", "string"), p("tag", "string")],
         ret: "()",

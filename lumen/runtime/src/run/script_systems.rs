@@ -169,11 +169,18 @@ pub(crate) fn register_script_systems<
     // ScriptPlugin installs). A missing `on_ready` is a no-op, so `on_start`-
     // only apps are unaffected.
     if has_script {
+        // `.after(sync_signals_into_host)`: both write the host's signal
+        // mirror on the tick where a value is still dirty, and the sync
+        // rewrites entries from the store. Unordered, the sync can run after
+        // the dispatch and overwrite the values `on_ready` just wrote with
+        // the pre-dispatch store state, leaving the mirror stale for every
+        // later handler read.
         app.add_systems(
             TickStage::Systems,
             fire_on_ready::<H>
                 .after(build_dom_index)
                 .after(crate::run::dom_commands::publish_node_details)
+                .after(lumen_script::sync_signals_into_host::<H>)
                 .before(crate::run::dom_commands::collect_dom_commands),
         );
     }

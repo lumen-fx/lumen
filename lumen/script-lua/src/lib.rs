@@ -892,6 +892,30 @@ fn bind_lua_event(
     })
 }
 
+/// Every event token currently holding a handler in the Lua handler table.
+fn lua_handler_tokens(lua: &Lua) -> std::collections::HashSet<u64> {
+    let Ok(table) = lua_handler_table(lua) else {
+        return std::collections::HashSet::new();
+    };
+    table
+        .pairs::<i64, LuaValue>()
+        .filter_map(|p| p.ok())
+        .map(|(k, _)| k as u64)
+        .collect()
+}
+
+/// Drop the handler stored for each token in `tokens`.
+fn clear_lua_handlers(lua: &Lua, tokens: &[u64]) {
+    if tokens.is_empty() {
+        return;
+    }
+    if let Ok(table) = lua_handler_table(lua) {
+        for token in tokens {
+            let _ = table.set(*token as i64, LuaValue::Nil);
+        }
+    }
+}
+
 /// Get (creating if absent) the Lua global handler table.
 fn lua_handler_table(lua: &Lua) -> mlua::Result<Table> {
     let globals = lua.globals();
@@ -1380,10 +1404,16 @@ impl LuaHost {
     }
 
     /// Compile a fresh chunk and run its top level against the live
-    /// engine (hot reload). Compile FIRST (no state touched on parse
-    /// error); snapshot handlers/derivations/pending; clear; re-run;
-    /// FULL rollback on run failure so the live host keeps the old
-    /// registrations.
+    /// engine (hot reload). Compile first (no state touched on a parse
+    /// error), snapshot handlers / derivations / pending, clear, re-run, and
+    /// roll the snapshot back in full if the run fails, so the live host keeps
+    /// the old registrations.
+    ///
+    /// On success the snapshot is merged back under whatever the new top level
+    /// registered (see [`lumen_script::carry_forward`]). The re-run repeats
+    /// only what the top level does; a handler an app binds from `on_start`
+    /// never gets a second registration pass, and without the merge its events
+    /// would stop reaching it after the first reload.
     pub fn replace_ast(&mut self, source: &str) -> Result<(), ScriptError> {
         self.replace_with_uri(source, "<inline>")
     }
@@ -1405,16 +1435,25 @@ impl LuaHost {
         }
         self.derivations.lock().clear();
         self.pending_initial.lock().clear();
-        // Phase-4 event bindings re-register when the body re-runs; clear the
-        // old handler table and the host-neutral registry first.
-        if let Ok(t) = lua_handler_table(&self.lua) {
-            let _ = t.clear();
-        }
-        lumen_script::event::clear_host_bindings();
+        // Phase-4 event handlers stay in the Lua handler table across the
+        // re-run: a token the new body does not rebind still has to dispatch.
+        // The tokens present now mark which entries predate the re-run, so a
+        // failed run can drop exactly what it added.
+        let prior_tokens = lua_handler_tokens(&self.lua);
+        let prior_bindings = lumen_script::event::take_host_bindings();
 
         match chunk.call::<()>(()) {
             Ok(()) => {
                 self.loaded = true;
+                if let Ok(mut h) = self.handlers.write() {
+                    lumen_script::carry_forward(&mut h, prior_handlers);
+                }
+                lumen_script::carry_forward(&mut self.derivations.lock(), prior_derivations);
+                self.pending_initial.lock().extend(prior_pending);
+                // A prior binding the new body rebound on the same node is
+                // superseded; drop its stale handler-table entry.
+                let dropped = lumen_script::event::restore_host_bindings(prior_bindings);
+                clear_lua_handlers(&self.lua, &dropped);
                 Ok(())
             }
             Err(e) => {
@@ -1423,6 +1462,13 @@ impl LuaHost {
                 }
                 *self.derivations.lock() = prior_derivations;
                 *self.pending_initial.lock() = prior_pending;
+                let added: Vec<u64> = lua_handler_tokens(&self.lua)
+                    .into_iter()
+                    .filter(|t| !prior_tokens.contains(t))
+                    .collect();
+                clear_lua_handlers(&self.lua, &added);
+                lumen_script::event::clear_host_bindings();
+                lumen_script::event::restore_host_bindings(prior_bindings);
                 Err(ScriptError::Runtime(e.to_string()))
             }
         }

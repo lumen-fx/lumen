@@ -2,18 +2,24 @@ name: Release
 
 # Publishes the Lumen toolchain (lumenc + liblumen) to a GitHub release, in
 # the exact shape tools/install.sh expects: one lumen-<target>.tar.gz per
-# Unix target and one lumen-windows-x86_64.zip, each holding bin/lumenc plus
-# the liblumen shared library. That layout comes from two places, not from
-# guessing:
+# Unix target and, for Windows, lumen-windows-x86_64.msi as the install
+# channel plus lumen-windows-x86_64.zip as the portable archive. Every one of
+# them holds bin/lumenc plus the liblumen shared library. That layout comes
+# from two places, not from guessing:
 #
 #   - install.sh requires a top-level bin/ directory in the archive (its
 #     unpack step fails otherwise) and looks up the asset by the exact name
-#     lumen-<target>.tar.gz / lumen-windows-x86_64.zip.
+#     lumen-<target>.tar.gz / lumen-windows-x86_64.msi.
 #   - lumenc/src/loader.rs dlopens liblumen from next to its own executable
 #     (or an LUMEN_LIB_DIR override, or the platform loader's default
 #     search path) - never from a sibling lib/ directory. So the shared
 #     library goes in bin/, next to lumenc, or a normal `~/.lumen` install
 #     would put a lumenc on PATH that cannot find its own runtime.
+#
+# The MSI installs one extra file the zip does not carry: the receipt at
+# share/lumen/lumen.receipt. That file is what marks a copy as installed, and
+# an installed copy is the only kind that checks for updates. See
+# tools/msi/lumen.wxs.
 #
 # lumenc does not link lumen-ffi at compile time (that is the whole point of
 # the dlopen seam), so it and liblumen are two separate `cargo build`
@@ -68,8 +74,45 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # The tag is the version, and three separate things read it: the MSI's
+  # ProductVersion, the receipt the MSI installs, and CARGO_PKG_VERSION baked
+  # into lumenc by the workspace Cargo.toml. Nothing downstream reconciles
+  # them, so a tag that disagrees with Cargo.toml ships an installer whose
+  # ARP entry, receipt, and `lumenc --version` all say different things. Catch
+  # it before anything is built.
+  version:
+    name: tag matches the workspace version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Compare the tag with Cargo.toml
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate="$(awk -F'"' '
+            /^\[workspace\.package\]/ { in_section = 1; next }
+            /^\[/                     { in_section = 0 }
+            in_section && /^version[[:space:]]*=/ { print $2; exit }
+          ' Cargo.toml)"
+          if [ -z "$crate" ]; then
+            echo "release.yml: no [workspace.package] version in Cargo.toml" >&2
+            exit 1
+          fi
+          if [ "$tag" != "$crate" ]; then
+            echo "release.yml: tag ${GITHUB_REF_NAME} says $tag, Cargo.toml says $crate." >&2
+            echo "The MSI version, the install receipt, and lumenc --version all come from" >&2
+            echo "these two values. Bump [workspace.package] version to $tag (or retag as" >&2
+            echo "v$crate) and push again." >&2
+            exit 1
+          fi
+          echo "tag ${GITHUB_REF_NAME} matches the workspace version $crate"
+
   build:
     name: build (${{ matrix.target }})
+    needs: version
     runs-on: ${{ matrix.os }}
     # The release profile (fat LTO, one codegen unit) is slower to build
     # than the dev-ish builds in ci.yml's test job, hence the longer budget.
@@ -137,24 +180,64 @@ jobs:
           Copy-Item target\release\${{ matrix.libname }} dist\bin\
           Compress-Archive -Path dist\* -DestinationPath lumen-${{ matrix.target }}.zip
 
+      # The MSI payload is staged separately from dist\, and only after the
+      # zip is closed, because the two differ by one file. The MSI installs a
+      # receipt, which is what marks a copy as installed and turns the daily
+      # update check on; the portable zip must not carry one, or a
+      # hand-extracted copy would start offering to MSI-install a second Lumen
+      # beside itself.
+      - name: Stage the MSI payload (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          New-Item -ItemType Directory -Force -Path msi-stage\bin, msi-stage\share\lumen | Out-Null
+          Copy-Item dist\bin\* msi-stage\bin\
+          # LF line endings and no BOM: lumenc reads this with a plain line
+          # split, and a BOM would land inside the first key.
+          $receipt = "version $version`ntarget windows-x86_64`ninstaller msi`n"
+          [IO.File]::WriteAllText("$PWD\msi-stage\share\lumen\lumen.receipt", $receipt, [Text.Encoding]::ASCII)
+          Get-Content msi-stage\share\lumen\lumen.receipt
+
+      - name: Install WiX (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 6.0.1
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build the MSI (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          tools\msi\build-msi.ps1 `
+            -Version $version `
+            -StageDir "$PWD\msi-stage" `
+            -OutFile "$PWD\lumen-${{ matrix.target }}.msi"
+
       - uses: actions/upload-artifact@v4
         with:
           name: lumen-${{ matrix.target }}
           path: |
             lumen-${{ matrix.target }}.tar.gz
             lumen-${{ matrix.target }}.zip
+            lumen-${{ matrix.target }}.msi
           if-no-files-found: error
           retention-days: 1
 
   release:
     name: publish release
-    needs: build
+    needs: [version, build]
     # Runs even if one matrix leg failed, so a single broken target (most
     # likely linux-aarch64 or macos-x86_64 - see the header comment) still
     # lets every other archive reach the release instead of blocking all of
     # them. gh release upload --clobber makes re-running this job safe after
     # a fix: it replaces same-named assets rather than failing on them.
-    if: always()
+    #
+    # A tag that disagrees with Cargo.toml publishes nothing at all, which is
+    # why the version guard is a gate here and not one more build leg.
+    if: always() && needs.version.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -167,7 +250,7 @@ jobs:
       - name: Check something built
         run: |
           shopt -s nullglob
-          files=(artifacts/*.tar.gz artifacts/*.zip)
+          files=(artifacts/*.tar.gz artifacts/*.zip artifacts/*.msi)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "release.yml: every build leg failed, nothing to publish" >&2
             exit 1
@@ -180,7 +263,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
-          files=(artifacts/*.tar.gz artifacts/*.zip)
+          files=(artifacts/*.tar.gz artifacts/*.zip artifacts/*.msi)
           if gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release upload "${{ github.ref_name }}" "${files[@]}" \
               --repo "${{ github.repository }}" --clobber

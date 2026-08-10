@@ -26,9 +26,9 @@ install.sh --uninstall
 copy is never offered a newer release. Run the installer again without
 `--version` to move to the current release and lift the pin.
 
-Linux and macOS, x86_64 and aarch64. Prebuilt binaries ship with the first
-alpha release; until it is published, build Lumen from source instead -
-see [Building Lumen from source](../contributing/building-lumen.md).
+The installer covers Linux and macOS, on x86_64 and aarch64. Windows x86_64
+has its own package, [below](#windows). To run Lumen anywhere else, see
+[Building Lumen from source](../contributing/building-lumen.md).
 
 Candela, Lumen's scripting language, is compiled into `liblumen` directly
 (the runtime and its compiler both ship as part of the library) - a Lumen
@@ -36,6 +36,31 @@ app with candela scripts needs nothing beyond this install. The standalone
 candela language toolchain (for running candela programs outside a Lumen
 app) is a separate product with its own installer, at candela's own release
 channel - it is not part of this installer.
+
+## Windows
+
+Download and run the installer:
+
+<https://github.com/lumen-fx/lumen/releases/latest/download/lumen-windows-x86_64.msi>
+
+It installs `lumenc` and its runtime library for the current user, under
+`%LOCALAPPDATA%\Programs\Lumen`, so it never asks for an administrator
+password. It adds the `bin` directory to your user PATH; open a new terminal
+for that to take effect.
+
+The package is not signed yet, so SmartScreen may warn you about it. Choose
+"More info", then "Run anyway".
+
+`lumen-windows-x86_64.zip` on the same release page is the portable
+alternative: unpack it wherever you like and put its `bin` directory on PATH
+yourself. Keep `lumenc.exe` and `lumen_ffi.dll` in the same directory; that is
+where `lumenc` looks for its runtime.
+
+To remove Lumen, use Settings > Installed apps, or run:
+
+```powershell
+msiexec /x lumen-windows-x86_64.msi
+```
 
 ## Staying up to date
 
@@ -47,8 +72,12 @@ lumenc 0.2.0 is available (you have 0.1.0). Update: curl -fsSL https://lumenfx.d
 ```
 
 On a terminal it then asks `Update now? [y/N]`. Answer `y` and it runs that
-installer command for you; anything else leaves the install alone. Windows
-prints the line without the prompt.
+installer command for you; anything else leaves the install alone.
+
+On Windows the line names `lumen-windows-x86_64.msi` instead, and `y`
+downloads it and installs it. The install starts once the current command
+exits, because Windows cannot replace `lumenc.exe` while it is running; open a
+new terminal afterwards to pick up the new version.
 
 The check runs only for the commands you type yourself: `run`, `check`,
 `build`, `bundle`, `new`, `fmt`, and `i18n`. It is skipped for `--headless`
@@ -58,8 +87,10 @@ command; an answer that has not arrived by the time the command finishes is
 dropped. A `lumenc` built from source is not an installed copy and never
 checks.
 
-Set `LUMEN_NO_UPDATE_CHECK` to any value to turn the check off. A pinned
-install (`--version` above) is never checked either.
+Set `LUMEN_NO_UPDATE_CHECK` to any value to turn the check off, on every
+platform. A pinned install (`--version` above) is never checked either. Only
+`install.sh --version` pins; an MSI install is never pinned, and a copy
+unpacked from the portable zip is not an installed copy and never checks.
 
 ## System dependencies
 

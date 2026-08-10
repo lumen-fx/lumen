@@ -104,6 +104,41 @@ four that carry no key, `on_start`, `on_ready`, `on_close`, and
 `on_audio_end`, are only ever global. See the per-host reference for the
 full event table and each callback's exact arguments.
 
+## Editing a script while it runs
+
+`lumenc run` watches the script file and swaps a new version into the
+running app, so you edit a handler and see the change on the next click
+without losing where you were.
+
+What survives the swap:
+
+- Signal values, and with them everything bound to a signal.
+- Per-element state addressed by markup `id`: caret positions, toggle and
+  slider values, scroll offsets.
+- Every `on(...)` route and every `derive` computed signal registered
+  before the reload. Each now runs the new version of the function it
+  names, so editing a handler body takes effect on the next event.
+
+What the new version does: the script's top level runs again, which is the
+file body in Rhai and Lua and `main` in candela. A registration made there
+replaces the matching one from before. `on_start` does not fire again; it
+runs once, at app construction, which is why registrations carry over
+rather than being rebuilt from scratch: an app that calls `on(...)` from
+`on_start`, as the templates do, has no second chance to register.
+`on_ready` does fire again, because a reload rebuilds the element tree
+from the markup: nodes your script spawned through the DOM API are gone,
+and the new mount runs `on_ready` so the script builds them back the same
+way it did at startup.
+
+A reload whose source fails to compile leaves the running program exactly
+as it was and reports the error, so a half-typed edit does not take the app
+down.
+
+One case needs a restart: renaming a handler function *and* the `on(...)`
+call that binds it in one edit. The old route has nothing in the new
+source to collide with, so it survives and keeps pointing at a name that
+no longer exists.
+
 ## Signals
 
 Signals are the named reactive values `bind-text`, `bind-value`, `<if>`,
@@ -218,7 +253,7 @@ surface everywhere; these are the places the hosts diverge.
 | Nesting one host call inside another | Not allowed - bind the inner call to a local first | Fine |
 | Parsing JSON | Language builtin `json_parse` + `as_map` / `as_list` / `as_str` | `parse_json(s)` |
 | HTTP | `fetch(url, tag)` only (GET) | `fetch(url, tag)` plus `http(request)` for method / headers / body |
-| Page navigation | `window::set_href(path)` / `window::href()` | `page(path)` / `page()` |
+| Page navigation | `page(path)` / `page_current()` | `page(path)` / `page()` |
 
 Most of candela's gaps follow from its typed host boundary.
 `parse_json` returns a value of any shape and `http(request)` takes a map
@@ -227,11 +262,10 @@ closure argument has nowhere to live without a first-class closure value
 in the language. See
 [Limitations](../reference/scripting-candela.md#limitations) in the
 candela reference for the full list, including the nesting restriction
-above and the navigation functions the other two hosts get.
+above.
 
 ## File-based pages
 
-`page()` (Rhai, Lua) / `window::set_href(path)` (candela) is the scripting
-side of file-based multi-page navigation; see [Pages](./pages.md) for the
-full picture, including `<a href>`, the `route.path` / `route.segment`
-signals, and the shared-layout convention.
+`page(path)` is the scripting side of file-based multi-page navigation; see
+[Pages](./pages.md) for the full picture, including `<a href>`, the
+`route.path` / `route.segment` signals, and the shared-layout convention.

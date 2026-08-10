@@ -404,6 +404,28 @@ impl CandelaHost {
                 classes,
             }
         });
+        enqueue!(engine, r.sink, "set_color_scheme", |name: String| {
+            ScriptCommand::SetColorScheme { name }
+        });
+
+        // -- file-based pages --------------------------------------------
+        // Navigation rides the host-neutral `lumen_core::nav` bus, the same
+        // one an `<a href>` click and the Rust SDK write, so these need no
+        // world access and register here rather than as an embedder hook.
+        // A candela host fn cannot be arity-overloaded on one name, so the
+        // no-arg reader Rhai and Lua spell `page()` is `page_current()` here.
+        engine.register_host_fn(HOST_NAMESPACE, "page", |path: String| {
+            lumen_core::nav::navigate(path);
+        });
+        engine.register_host_fn(HOST_NAMESPACE, "page_current", || -> String {
+            lumen_core::nav::current()
+        });
+        engine.register_host_fn(HOST_NAMESPACE, "page_back", || {
+            lumen_core::nav::back();
+        });
+        engine.register_host_fn(HOST_NAMESPACE, "page_forward", || {
+            lumen_core::nav::forward();
+        });
 
         // -- networking (sugar; `http(map)` blocked on map marshalling) --
         enqueue!(engine, r.sink, "fetch", |url: String, tag: String| {
@@ -561,26 +583,43 @@ impl ScriptHost for CandelaHost {
     }
 
     fn replace(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
-        // Compile FIRST (no live state touched on a parse error), then swap.
-        // Snapshot + clear the handler registry so a hot reload re-registers
-        // via the re-run of `main`/`on_start`, with full rollback on failure.
-        // The signal mirror is intentionally preserved across the swap.
+        // Compile first (no live state touched on a parse error), then swap.
+        // Snapshot + clear the registries so the re-run of `main` that
+        // compilation performs repopulates them from the new source, with full
+        // rollback on failure. The signal mirror is preserved across the swap.
         let prior_handlers = self.registries.handlers.read().unwrap().clone();
         let prior_event_handlers = self.registries.event_handlers.read().unwrap().clone();
+        let prior_bindings = lumen_script::event::take_host_bindings();
         self.registries.handlers.write().unwrap().clear();
         self.registries.event_handlers.write().unwrap().clear();
-        lumen_script::event::clear_host_bindings();
 
         let resolved = prelude::resolve_prelude(source);
         match self.vm.engine.compile(resolved.as_ref(), uri) {
             Ok(program) => {
                 self.source = source.to_owned();
                 self.vm.program = Some(program);
+                // Merge the snapshot back under the new registrations. candela
+                // has no top level beyond `main`, and apps bind from
+                // `on_start`, which the runtime fires once at app construction
+                // and never re-fires; without the merge the handler map would
+                // come back empty and every click would reach nothing.
+                lumen_script::carry_forward(
+                    &mut self.registries.handlers.write().unwrap(),
+                    prior_handlers,
+                );
+                let dropped = lumen_script::event::restore_host_bindings(prior_bindings);
+                let mut events = self.registries.event_handlers.write().unwrap();
+                lumen_script::carry_forward(&mut events, prior_event_handlers);
+                for token in dropped {
+                    events.remove(&token);
+                }
                 Ok(())
             }
             Err(d) => {
                 *self.registries.handlers.write().unwrap() = prior_handlers;
                 *self.registries.event_handlers.write().unwrap() = prior_event_handlers;
+                lumen_script::event::clear_host_bindings();
+                lumen_script::event::restore_host_bindings(prior_bindings);
                 Err(self.compile_error(&d, uri))
             }
         }

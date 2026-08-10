@@ -23,8 +23,11 @@ curl -fsSL https://lumenfx.dev/install.sh | sh
 ```
 
 The installer puts `lumenc` and the `liblumen` runtime under `~/.lumen` and
-asks before touching your PATH. Linux and macOS, x86_64 and aarch64. To build
-from a checkout instead, see
+asks before touching your PATH. Linux and macOS, x86_64 and aarch64. On
+Windows, run
+[lumen-windows-x86_64.msi](https://github.com/lumen-fx/lumen/releases/latest/download/lumen-windows-x86_64.msi)
+instead; it installs for the current user and needs no administrator
+password. To build from a checkout, see
 [Building Lumen from source](docs/docs/contributing/building-lumen.md).
 
 ## Your first app

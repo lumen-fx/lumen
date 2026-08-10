@@ -2,7 +2,8 @@
 //!
 //! Someone running `lumenc run` should find out that a newer release exists
 //! without going looking for it. This prints one short line on stderr and, on
-//! a terminal, offers to run the installer.
+//! a terminal, offers to install the new release: the shell installer on Unix,
+//! the `.msi` on Windows.
 //!
 //! The rules it follows, in order:
 //!
@@ -11,10 +12,12 @@
 //!   `--version`, and anything with `--headless` are silent.
 //! * Only an installed copy checks. Discovery starts at the running executable
 //!   and looks for `../share/lumen/lumen.receipt`, the receipt `tools/install.sh`
-//!   writes. A cargo-built copy in `target/debug` has no receipt and never
-//!   reaches the network.
+//!   and the Windows `.msi` both write. A cargo-built copy in `target/debug`
+//!   has no receipt and never reaches the network, and neither does a copy
+//!   unpacked from the portable Windows zip, which carries no receipt.
 //! * A receipt with a `pinned` line is left alone. Pinning is a decision, not a
-//!   mistake to correct.
+//!   mistake to correct. Only `install.sh --version` writes that line; an MSI
+//!   install is never pinned.
 //! * `LUMEN_NO_UPDATE_CHECK` (any non-empty value) or `CI` in the environment
 //!   turns the whole thing off, as does a stderr that is not a terminal.
 //! * At most one network request per day, tracked in a small state file under
@@ -30,7 +33,7 @@
 //! arrived shortly after the command finishes is dropped.
 
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -39,7 +42,33 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const LATEST_URL: &str = "https://github.com/lumen-fx/lumen/releases/latest";
 
 /// What the notice tells you to run, and what the prompt runs for you.
+#[cfg(unix)]
 const INSTALL_COMMAND: &str = "curl -fsSL https://lumenfx.dev/install.sh | sh";
+
+/// The Windows installer for the newest release. The URL never changes:
+/// `releases/latest/download/<asset>` redirects to whichever release is
+/// current.
+#[cfg(windows)]
+const MSI_URL: &str =
+    "https://github.com/lumen-fx/lumen/releases/latest/download/lumen-windows-x86_64.msi";
+
+/// What the notice points you at.
+#[cfg(unix)]
+fn update_hint() -> &'static str {
+    INSTALL_COMMAND
+}
+
+/// What the notice points you at.
+#[cfg(windows)]
+fn update_hint() -> &'static str {
+    MSI_URL
+}
+
+/// What the notice points you at.
+#[cfg(not(any(unix, windows)))]
+fn update_hint() -> &'static str {
+    LATEST_URL
+}
 
 /// One network check per day.
 const INTERVAL_SECS: u64 = 24 * 60 * 60;
@@ -142,8 +171,9 @@ impl Check {
             return;
         }
         eprintln!(
-            "lumenc {latest} is available (you have {}). Update: {INSTALL_COMMAND}",
-            current()
+            "lumenc {latest} is available (you have {}). Update: {}",
+            current(),
+            update_hint()
         );
         offer_update();
     }
@@ -170,19 +200,112 @@ fn offer_update() {
     let _ = Command::new("sh").arg("-c").arg(INSTALL_COMMAND).status();
 }
 
-/// Windows gets the notice without the prompt: there is no `sh` to run the
-/// one-liner with.
-#[cfg(not(unix))]
+/// On a terminal, offer to install the newest `.msi`. Anything but `y` does
+/// nothing.
+///
+/// The install cannot run now. Windows Installer has to replace `lumenc.exe`,
+/// and this process has it open, so a `/passive` run would hit files-in-use
+/// and end at 1603 or 3010. The download happens here and the install happens
+/// afterwards, driven by a detached PowerShell that waits for this process id
+/// to go away first.
+#[cfg(windows)]
+fn offer_update() {
+    use std::io::Write;
+    use std::os::windows::process::CommandExt;
+
+    // Detached and in its own process group, so the waiter outlives both this
+    // process and the console it was started from.
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return;
+    }
+    eprint!("Update now? [y/N] ");
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() {
+        return;
+    }
+    let answer = line.trim().to_ascii_lowercase();
+    if answer != "y" && answer != "yes" {
+        return;
+    }
+
+    let Some(temp) = std::env::var_os("TEMP").filter(|v| !v.is_empty()) else {
+        eprintln!("No TEMP directory to download into. Install {MSI_URL} by hand.");
+        return;
+    };
+    let msi = PathBuf::from(temp).join("lumen-update.msi");
+    let msi = msi.display().to_string();
+
+    if !download(MSI_URL, &msi) {
+        eprintln!("Could not download {MSI_URL}");
+        return;
+    }
+
+    // Single quotes are PowerShell's literal string, and a doubled quote is
+    // how a literal quote is written inside one.
+    let quoted = msi.replace('\'', "''");
+    let pid = std::process::id();
+    let script = format!(
+        "Wait-Process -Id {pid} -Timeout 120 -ErrorAction SilentlyContinue; \
+         Start-Process msiexec -ArgumentList '/i','{quoted}','/passive','/norestart' -Wait; \
+         Remove-Item '{quoted}' -ErrorAction SilentlyContinue"
+    );
+    let spawned = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+        .spawn();
+    if spawned.is_err() {
+        eprintln!("Could not start the installer. Run {msi} by hand.");
+        return;
+    }
+    eprintln!("The update installs once this command exits. Open a new terminal afterwards.");
+}
+
+/// Download `url` to `dest`, and report whether it arrived. A missing
+/// `curl.exe` (a spawn error, not a failed request) falls back to PowerShell.
+#[cfg(windows)]
+fn download(url: &str, dest: &str) -> bool {
+    let curl = Command::new("curl.exe")
+        .args(["-fL", "--max-time", "300", "-o", dest, url])
+        .status();
+    match curl {
+        Ok(status) => status.success(),
+        Err(_) => {
+            let quoted = dest.replace('\'', "''");
+            Command::new("powershell")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    &format!("Invoke-WebRequest -Uri '{url}' -OutFile '{quoted}'"),
+                ])
+                .status()
+                .is_ok_and(|status| status.success())
+        }
+    }
+}
+
+/// Everything else gets the notice without a prompt: there is no installer to
+/// offer.
+#[cfg(not(any(unix, windows)))]
 fn offer_update() {}
 
 // --- receipt -----------------------------------------------------------------
 
-/// `<prefix>/share/lumen/lumen.receipt`, derived from the running executable at
-/// `<prefix>/bin/lumenc`. Symlinks are resolved first so a `~/.local/bin/lumenc`
-/// symlink into the install prefix still finds the receipt.
+/// The receipt for the running executable. Symlinks are resolved first so a
+/// `~/.local/bin/lumenc` symlink into the install prefix still finds it.
 fn receipt_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    receipt_path_from(&exe)
+}
+
+/// `<prefix>/share/lumen/lumen.receipt` for an executable at
+/// `<prefix>/bin/lumenc`. Path arithmetic only; the caller resolves symlinks.
+fn receipt_path_from(exe: &Path) -> Option<PathBuf> {
     let prefix = exe.parent()?.parent()?;
     Some(prefix.join("share").join("lumen").join("lumen.receipt"))
 }
@@ -474,6 +597,33 @@ mod tests {
         assert!(receipt_is_pinned(pinned));
         // A path that merely contains the word is not a pin.
         assert!(!receipt_is_pinned("file bin/pinned\n"));
+    }
+
+    /// The MSI installs into `%LOCALAPPDATA%\Programs\Lumen`, two levels
+    /// above the receipt and one above the executable. Built out of `join`
+    /// rather than a literal path so it reads the same on any host.
+    #[test]
+    fn the_receipt_sits_beside_the_install_prefix() {
+        let prefix = PathBuf::from("C:")
+            .join("Users")
+            .join("dev")
+            .join("AppData")
+            .join("Local")
+            .join("Programs")
+            .join("Lumen");
+        let exe = prefix.join("bin").join("lumenc.exe");
+        let want = prefix.join("share").join("lumen").join("lumen.receipt");
+        assert_eq!(receipt_path_from(&exe), Some(want));
+
+        let prefix = PathBuf::from("home").join("dev").join(".lumen");
+        let exe = prefix.join("bin").join("lumenc");
+        let want = prefix.join("share").join("lumen").join("lumen.receipt");
+        assert_eq!(receipt_path_from(&exe), Some(want));
+    }
+
+    #[test]
+    fn an_executable_with_nothing_above_it_has_no_receipt() {
+        assert_eq!(receipt_path_from(Path::new("lumenc")), None);
     }
 
     #[test]

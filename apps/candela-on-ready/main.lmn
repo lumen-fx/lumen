@@ -1,6 +1,7 @@
 <root>
   <label id="start-label" bind-text="start_saw" text="waiting" />
   <label id="ready-label" bind-text="ready_saw" text="waiting" />
+  <label id="runs-label" bind-text="ready_runs" text="0" />
   <column id="playlist" />
   <script src="main.cdl" />
 </root>

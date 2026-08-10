@@ -276,6 +276,15 @@ pub enum ScriptCommand {
         /// `class="..."` markup attr.
         classes: String,
     },
+    /// Switch the app's color scheme. The runtime parses `name` into a
+    /// `lumen_core::components::ColorScheme` and hands it to the style
+    /// manager, which re-resolves every theme token. An unknown name is
+    /// logged and ignored.
+    SetColorScheme {
+        /// One of `"default"`, `"force-light"`, `"force-dark"`,
+        /// `"prefer-light"`, `"prefer-dark"`. `"default"` follows the OS.
+        name: String,
+    },
     /// Open a native file dialog (open, multi-open, save, or folder
     /// pick). The runtime serves the dialog on the main thread via
     /// `rfd`, then fires `on_file_picked(tag, path)` /
@@ -663,6 +672,30 @@ pub struct CallOutcome {
 /// to [`ScriptValue`]s; returns commands to push into the host sink.
 pub type CommandFn = std::sync::Arc<dyn Fn(&[ScriptValue]) -> Vec<ScriptCommand> + Send + Sync>;
 
+/// Merge a pre-reload registry snapshot back under the entries the reloaded
+/// script just registered, so a reload never silently loses a registration.
+///
+/// `current` holds what the new top level registered and wins every collision;
+/// `prior` fills in the rest. Every [`ScriptHost::replace`] implementation runs
+/// this over its handler, event-handler, and derivation maps on the success
+/// path. The registrations that need it are the ones an app makes from
+/// `on_start`: that callback fires once at app construction and never again, so
+/// its handlers cannot re-register themselves during a reload.
+///
+/// One case stays stale until the app restarts: renaming a handler function
+/// together with the `on(...)` call that binds it leaves the old name in the
+/// map under its old key, because nothing in the new source collides with it.
+pub fn carry_forward<K, V>(
+    current: &mut std::collections::HashMap<K, V>,
+    prior: std::collections::HashMap<K, V>,
+) where
+    K: std::hash::Hash + Eq,
+{
+    for (key, value) in prior {
+        current.entry(key).or_insert(value);
+    }
+}
+
 /// Backend that compiles + executes scripts and exposes the host-neutral
 /// registries the generic runtime (`lumen-script`) drives: the
 /// command sink, the rich-typed signal mirror, the per-id handler
@@ -691,11 +724,18 @@ pub trait ScriptHost: Send + Sync + 'static {
     /// Fresh-start load; replaces any previously loaded program.
     fn load(&mut self, source: &str, uri: &str) -> Result<(), ScriptError>;
 
-    /// Hot reload: compile FIRST (no state touched on parse error), then
-    /// atomically swap - snapshot registries, clear, re-evaluate the top
-    /// level into the EXISTING persistent scope, FULL rollback on eval
-    /// failure. Persistent across the swap: engine registrations, scope
-    /// bindings, the signal mirror, and the in-flight command sink.
+    /// Hot reload: compile first (no state touched on a parse error), then
+    /// swap atomically. Snapshot the registries, clear them, re-evaluate the
+    /// top level into the existing persistent scope, and roll the snapshot
+    /// back in full if that evaluation fails. Persistent across the swap:
+    /// engine registrations, scope bindings, the signal mirror, and the
+    /// in-flight command sink.
+    ///
+    /// On success the snapshot is merged back under whatever the new top
+    /// level registered, via [`carry_forward`]. Lifecycle callbacks do not
+    /// re-fire on reload, so a handler an app bound from `on_start` has no
+    /// second chance to register itself; without the merge every such handler
+    /// would go quiet after the first reload.
     fn replace(&mut self, source: &str, uri: &str) -> Result<(), ScriptError>;
 
     /// Drop the loaded program and all persistent state. Genuine

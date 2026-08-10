@@ -106,9 +106,7 @@ browser's own URL bar.
 
 ## Navigating from script
 
-The scripting surface to navigate is `page(path)` for Rhai and Lua, and
-`window::set_href(path)` for candela, where it sits on the `window`
-namespace alongside the rest of the window and history surface:
+The scripting surface to navigate is `page(path)`:
 
 ```rhai
 // Rhai or Lua
@@ -117,15 +115,16 @@ fn goto_settings(id) { page("settings"); }
 
 ```candela
 // candela
-fn goto_settings(id) { window::set_href("settings"); }
+fn goto_settings(id) { lumen::page("settings"); }
 ```
 
-Reading the current page back works the same way: `page()` with no
-arguments in Rhai/Lua, `window::href()` in candela. All three hosts also
-step through the in-memory history stack under a `history` namespace -
-`back()`, `forward()`, `go(delta)` - spelled `history.back()` in Rhai/Lua
-and `history::back()` in candela. See [Scripting](./scripting.md) for how
-the three hosts differ more broadly.
+Reading the current page back is `page()` with no arguments in Rhai and
+Lua, and `page_current()` in candela, where one name carries one argument
+list. candela also reaches the same navigation through `window::set_href`
+and `window::href`. All three hosts step through the in-memory history
+stack under a `history` namespace - `back()`, `forward()`, `go(delta)` -
+spelled `history.back()` in Rhai/Lua and `history::back()` in candela. See
+[Scripting](./scripting.md) for how the three hosts differ more broadly.
 
 Under the hood every one of these calls - the anchor click included - goes
 through the same host-neutral navigation request; there is no separate
@@ -190,5 +189,5 @@ There is one in-memory history stack per running app, not per window; a
 future multi-window target will need to decide whether history is per-window
 or shared. The web-transpile target is expected to swap this same navigation
 surface onto the real History API and real URLs without changing anything
-you author - `<a href>` and `page()` / `window::set_href()` are written now
-the way they'll work then.
+you author; `<a href>` and `page()` are written now the way they'll work
+then.

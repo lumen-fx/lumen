@@ -286,16 +286,25 @@ pub(crate) fn hot_reload<H: ScriptHost + Resource<Mutability = Mutable>>(world: 
     {
         // `ScriptHost::replace` preserves the engine, scope, and the
         // signal mirror, so signal values survive across edit-save
-        // cycles. Handlers and derivations re-register from the new
-        // body; compile-first + full rollback on eval failure keeps the
-        // live host usable on the old source. No-op when no script host
-        // is installed.
+        // cycles. Handler and derivation registrations carry over, with
+        // anything the new top level registers replacing its match;
+        // compile-first + full rollback on eval failure keeps the live
+        // host usable on the old source. No-op when no script host is
+        // installed.
         let combined = combined_script_source(&ir, &dir).unwrap_or_default();
         if !combined.trim().is_empty()
             && let Some(Err(e)) = reload_script::<H>(world, &combined, "<inline>")
         {
             eprintln!("lumenc hot-reload: script load failed: {e}");
         }
+    }
+
+    // The respawn above rebuilt the tree from markup alone, so nodes the
+    // script spawned through the DOM API are gone. Re-arm `on_ready`: it
+    // dispatches again once the fresh DOM index is published, and the
+    // script rebuilds its dynamic tree the way it built it at first mount.
+    if let Some(mut fired) = world.get_resource_mut::<lumen_script::OnReadyFired>() {
+        fired.0 = false;
     }
 
     if let Some(mut s) = world.get_resource_mut::<HotReloadState>() {
