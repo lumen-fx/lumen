@@ -32,6 +32,21 @@ host "lumen" {
     signal_set_float(string, float);
     bool signal_get_bool(string);
     signal_set_bool(string, bool);
+    signal_set_color(string, string);
+    {string: int} signal_get_color(string);
+    bool is_valid(string);
+
+    // array signals: the reactive lists <for each="name"> renders. A record's
+    // value type is not fixed, so the entries that carry one are variadic
+    // (`...`) and the readers return `any`. The ArraySignal method sugar below
+    // wraps these.
+    signal_array_set(...);
+    signal_array_push(...);
+    any signal_array_get(...);
+    any signal_array_all(...);
+    int signal_array_len(string);
+    signal_array_remove(string, int);
+    signal_array_clear(string);
 
     // timers
     set_timeout(string, int);
@@ -167,8 +182,20 @@ host "lumen" {
     page_back();
     page_forward();
 
-    // networking
+    // networking. `http` takes one request map, whose fields mix strings, an
+    // int timeout, and a header map, so it is variadic.
     fetch(string, string);
+    http(...);
+
+    // text parsers. Both hand back a dynamically-shaped value, read with the
+    // as_map / as_list / as_str / as_int downcasts.
+    any parse_json(...);
+    any parse_markdown(...);
+
+    // template-local ids, cascade provenance, diagnostics
+    string local_id(string, string);
+    any matched_rules(...);
+    print(...);
 
     // translation (tr is Qt's spelling of t)
     string t(string);
@@ -202,6 +229,7 @@ host "window" {
     reload();
     string title();
     float dpr();
+    float[] size();
     set_title(string);
     set_size(float, float);
     string location_path();
@@ -244,6 +272,43 @@ host "document" {
 
 struct Node { handle: int }
 struct Event { handle: int }
+
+// --- Array signals ------------------------------------------------------------
+//
+// `signal_array("rows")` returns a handle to the named reactive array that
+// `<for each="rows">` renders, so a list is driven by data instead of by
+// element-by-element DOM building. The struct holds only the signal name; every
+// method calls the matching name-keyed builtin above.
+//
+// An item is a record whose fields `<for>` binds by name. Bind the record to a
+// variable first: a collection literal written directly in a call to a
+// script-level function trips a candela compiler bug, while the same literal
+// passed to a `lumen::` host function is fine.
+//
+//     let rows = signal_array("rows");
+//     let first = {"id": "a", "title": "First"};
+//     rows.push(first);
+//     let back = as_map(rows.get(0));
+//
+// Indices are zero-based. `get` and `all` return `any`; read them with the
+// `as_map` / `as_list` downcasts.
+
+struct ArraySignal { name: string }
+
+/// Wraps the named reactive array as an `ArraySignal`.
+fn signal_array(name) {
+    return ArraySignal { name: name };
+}
+
+impl ArraySignal {
+    fn set(self, items) { return lumen::signal_array_set(self.name, items); }
+    fn push(self, item) { return lumen::signal_array_push(self.name, item); }
+    fn get(self, index) { return lumen::signal_array_get(self.name, index); }
+    fn all(self) { return lumen::signal_array_all(self.name); }
+    fn len(self) { return lumen::signal_array_len(self.name); }
+    fn remove(self, index) { return lumen::signal_array_remove(self.name, index); }
+    fn clear(self) { return lumen::signal_array_clear(self.name); }
+}
 
 /// Wraps a raw node handle (e.g. the return of `lumen::node_spawn(...)`) as a `Node`.
 fn node(handle) {

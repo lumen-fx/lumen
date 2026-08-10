@@ -1,0 +1,31 @@
+// Array signals on candela: `<for each="rows">` in main.lmn renders one label
+// per record in the `rows` array signal, so the list is data-driven and the
+// script never touches the element tree.
+import "lumen.cdl";
+
+// Mirrors the record count into a signal the count label binds to. The count
+// is read into a variable first: on the pinned candela the compiler mislays
+// the arguments of a host call nested inside another host call's argument
+// list.
+fn publish_count() {
+    let n = lumen::signal_array_len("rows");
+    lumen::signal_set_int("row_count", n);
+}
+
+fn on_start() {
+    lumen::signal_array_set("rows", [
+        {"id": "a", "title": "Alpha"},
+        {"id": "b", "title": "Beta"}
+    ]);
+    lumen::signal_array_push("rows", {"id": "c", "title": "Gamma"});
+    publish_count();
+}
+
+// Called from the test to prove a later write re-renders the block.
+fn drop_first() {
+    let rows = signal_array("rows");
+    rows.remove(0);
+    publish_count();
+}
+
+fn main() {}

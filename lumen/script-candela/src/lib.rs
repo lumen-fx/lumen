@@ -33,17 +33,33 @@
 //!   `Fn(&[ScriptValue]) -> Vec<ScriptCommand>` bridges cleanly. The script
 //!   declares the fn with a `...` arg list in its `host "lumen" { ... }` block.
 //!
-//! A few Rhai builtins still have no candela-expressible shape and are absent:
+//! # Dynamically-shaped builtins
+//!
+//! A fixed host-fn signature names one concrete [`HostType`](candela::Value):
+//! scalars, homogeneous arrays, and string-keyed maps of one value type. The
+//! builtins whose value has no single such shape - an array signal's records,
+//! an `http` request map, `parse_json`'s result, a markdown block list, a
+//! matched-rule list - register variadically instead. The script declares them
+//! with a `...` argument list and, where they return a value, the `any` return
+//! type candela's type checker treats permissively:
+//!
+//! ```candela
+//! host "lumen" {
+//!     signal_array_push(...);
+//!     any parse_json(...);
+//! }
+//! ```
+//!
+//! Runtime marshalling is unaffected: the VM converts whatever `Value` the
+//! closure returns, so nested maps and arrays round-trip. Read the result with
+//! candela's `as_map` / `as_list` / `as_str` / `as_int` downcasts.
+//!
+//! Two Rhai spellings have no candela counterpart and stay absent:
 //!
 //! | Rhai builtin | why it is still blocked |
 //! |---|---|
-//! | `signal(name, default)` / `signal_array(name)` | return a custom `Signal`/`ArraySignal` handle object - candela has no user-defined [`Value`](candela::Value) object type to hand back |
-//! | `http(request)` | a heterogeneously-typed `#{...}` request map (string headers + int timeout) - a single concrete `Map<String, T>` can't carry the mixed value types |
-//! | `parse_json(s)` | returns `any` (array **or** map **or** scalar) - a host fn must declare one concrete return type |
-//!
-//! Array/map returns that DO have one concrete type (e.g. a future
-//! `parse_markdown -> {string: string}[]`) are now expressible; they are simply
-//! not wired yet.
+//! | `signal(name, default)` | returns a `Signal` handle object that carries its own host state - candela has no user-defined [`Value`](candela::Value) object type to hand back. The prelude's `ArraySignal` struct works because it holds only the signal *name* and calls back into name-keyed builtins; a scalar `Signal` would need the same treatment, and the `signal_get_*` / `signal_set_*` pairs already cover it. |
+//! | `signals.a.b.set(v)` chaining | Rhai's property-chain fallback has no candela analogue; write the path out (`lumen::signal_set("a.b", v)`). |
 //!
 //! Because candela reaches builtins through a typed `host "lumen" { ... }` block
 //! (rather than Rhai's bare globals), a Lumen candela script opts into the
@@ -72,6 +88,7 @@
 #![warn(missing_docs)]
 
 pub mod builtins;
+pub mod parse;
 pub mod prelude;
 
 use std::collections::{HashMap, HashSet};
@@ -285,6 +302,21 @@ impl CandelaHost {
         register_typed_signal_int(&mut engine, r);
         register_typed_signal_float(&mut engine, r);
         register_typed_signal_bool(&mut engine, r);
+        register_color_signals(&mut engine, r);
+        register_array_signals(&mut engine, r);
+
+        // `is_valid(id)`: the per-tick `valid:<id>` signal `apply_validation`
+        // writes from the element's `Validation` component. An element with no
+        // validation state has never written the signal, and reads as valid.
+        let m = r.mirror.clone();
+        engine.register_host_fn(HOST_NAMESPACE, "is_valid", move |id: String| -> bool {
+            match m.lock().unwrap().get(&format!("valid:{id}")) {
+                Some(ScriptValue::Bool(b)) => *b,
+                Some(ScriptValue::Str(s)) => s == "true",
+                Some(_) => false,
+                None => true,
+            }
+        });
 
         // -- timers ------------------------------------------------------
         enqueue!(engine, r.sink, "set_timeout", |name: String, ms: i64| {
@@ -427,10 +459,62 @@ impl CandelaHost {
             lumen_core::nav::forward();
         });
 
-        // -- networking (sugar; `http(map)` blocked on map marshalling) --
+        // -- networking --------------------------------------------------
         enqueue!(engine, r.sink, "fetch", |url: String, tag: String| {
             ScriptCommand::Fetch { url, tag }
         });
+        register_http(&mut engine, r);
+
+        // -- text parsers ------------------------------------------------
+        // Both return a dynamically-shaped value, so both register
+        // variadically and are declared `any name(...)`; see the crate docs.
+        engine.register_host_fn_variadic(
+            HOST_NAMESPACE,
+            "parse_json",
+            |args: &[candela::Value]| parse::json(&arg_text(args, 0)),
+        );
+        engine.register_host_fn_variadic(
+            HOST_NAMESPACE,
+            "parse_markdown",
+            |args: &[candela::Value]| parse::markdown(&arg_text(args, 0)),
+        );
+
+        // -- template-local ids ------------------------------------------
+        // `local_id("user-card:btn", "label")` is `"user-card:label"`: the
+        // sibling id `suffix` inside the same template instance as `source`.
+        // A source with no `:` prefix returns `suffix` unchanged.
+        engine.register_host_fn(
+            HOST_NAMESPACE,
+            "local_id",
+            |source: String, suffix: String| -> String {
+                match source.rfind(':') {
+                    Some(colon) => format!("{}:{suffix}", &source[..colon]),
+                    None => suffix,
+                }
+            },
+        );
+
+        // -- diagnostics -------------------------------------------------
+        // candela's own `print` writes to process stdout. `lumen::print`
+        // routes through the command sink instead, so the text reaches the
+        // same place the Rhai and Lua hosts' `print` does. Arguments are
+        // stringified and joined with a space.
+        {
+            let sink = r.sink.clone();
+            engine.register_host_fn_variadic(
+                HOST_NAMESPACE,
+                "print",
+                move |args: &[candela::Value]| {
+                    let line = args
+                        .iter()
+                        .map(|v| candela_value_to_script(v).stringify())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    sink.lock().unwrap().push(ScriptCommand::Print(line));
+                    candela::Value::Null
+                },
+            );
+        }
 
         // -- translation -------------------------------------------------
         // `lumen::t("key")` returns the string the app's active locale
@@ -949,6 +1033,22 @@ impl ScriptContext for CandelaScriptContext<'_> {
 }
 
 // -- free helpers ------------------------------------------------------------
+
+/// Read positional argument `idx` of a variadic host call as text. A string
+/// argument comes through verbatim; anything else takes its canonical
+/// stringified form, and a missing argument is the empty string.
+fn arg_text(args: &[candela::Value], idx: usize) -> String {
+    args.get(idx)
+        .map(|v| candela_value_to_script(v).stringify())
+        .unwrap_or_default()
+}
+
+/// Read positional argument `idx` of a variadic host call as a
+/// [`ScriptValue`], or [`ScriptValue::Unit`] when it is absent.
+fn arg_value(args: &[candela::Value], idx: usize) -> ScriptValue {
+    args.get(idx)
+        .map_or(ScriptValue::Unit, candela_value_to_script)
+}
 
 /// Resolve a candela `int` node id (from the process-global side-table)
 /// into the packed handle the host-neutral query surface consumes.
@@ -1590,6 +1690,57 @@ fn register_node_introspection(engine: &mut candela::Engine) {
     engine.register_host_fn(HOST_NAMESPACE, "dump_tree", || -> String {
         ins::dump_tree()
     });
+
+    // `matched_rules(node)`: the stylesheet rules that matched, in ascending
+    // cascade order (last wins). Each entry is
+    // `{ selector, specificity, source, source_order, declarations }`, mixing
+    // strings, an int list, and a nested map, so it registers variadically and
+    // is declared `any matched_rules(...)`.
+    engine.register_host_fn_variadic(
+        HOST_NAMESPACE,
+        "matched_rules",
+        |args: &[candela::Value]| {
+            let Some(handle) = args
+                .first()
+                .and_then(candela::Value::as_i64)
+                .and_then(cd_id_to_raw)
+            else {
+                return candela::Value::Array(Vec::new());
+            };
+            candela::Value::Array(
+                ins::node_matched_rules(handle)
+                    .into_iter()
+                    .map(|rule| {
+                        candela::Value::Map(std::collections::BTreeMap::from([
+                            ("selector".to_owned(), candela::Value::String(rule.selector)),
+                            (
+                                "specificity".to_owned(),
+                                candela::Value::Array(vec![
+                                    candela::Value::Int(i64::from(rule.specificity.0)),
+                                    candela::Value::Int(i64::from(rule.specificity.1)),
+                                    candela::Value::Int(i64::from(rule.specificity.2)),
+                                ]),
+                            ),
+                            ("source".to_owned(), candela::Value::String(rule.source)),
+                            (
+                                "source_order".to_owned(),
+                                candela::Value::Int(rule.source_order as i64),
+                            ),
+                            (
+                                "declarations".to_owned(),
+                                candela::Value::Map(
+                                    rule.declarations
+                                        .into_iter()
+                                        .map(|(k, v)| (k, candela::Value::String(v)))
+                                        .collect(),
+                                ),
+                            ),
+                        ]))
+                    })
+                    .collect(),
+            )
+        },
+    );
 }
 
 /// Register the `window` / `document` / `history` namespaces (section 4.8)
@@ -1615,6 +1766,12 @@ fn register_web_namespaces(engine: &mut candela::Engine, r: &Registries) {
     });
     engine.register_host_fn("window", "dpr", || -> f64 {
         lumen_core::window_state::dpr() as f64
+    });
+    // `[width, height]` in logical pixels; a two-element list because a candela
+    // host fn returns one value.
+    engine.register_host_fn("window", "size", || -> Vec<f64> {
+        let (width, height) = lumen_core::window_state::size();
+        vec![f64::from(width), f64::from(height)]
     });
     {
         let sink = r.sink.clone();
@@ -1782,6 +1939,297 @@ fn register_typed_signal_bool(engine: &mut candela::Engine, r: &Registries) {
             });
         },
     );
+}
+
+/// Register the array-signal builtins: the reactive lists `<for each="name">`
+/// renders.
+///
+/// Rhai and Lua hand back an `ArraySignal` handle object; candela has no
+/// user-defined value type, so the surface is name-keyed free functions and the
+/// prelude's `ArraySignal` struct wraps a name to give the same
+/// `rows.push(item)` reading. Items are records - string-keyed maps whose
+/// fields `<for>` binds by name - and a non-record item is carried as a
+/// one-field `value` row, matching the other hosts.
+///
+/// The item-carrying entries register variadically because a record mixes
+/// value types; the rest have concrete signatures. Indices are zero-based.
+fn register_array_signals(engine: &mut candela::Engine, r: &Registries) {
+    /// Current items of the named array signal; empty when it holds anything
+    /// else.
+    fn items(mirror: &Arc<Mutex<HashMap<String, ScriptValue>>>, name: &str) -> Vec<ScriptValue> {
+        match mirror.lock().unwrap().get(name) {
+            Some(ScriptValue::Array(a)) => a.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Store `next` as the array signal's value and queue the `SetArray`
+    /// command that drives `<for each>` reconciliation next tick.
+    fn store(
+        mirror: &Arc<Mutex<HashMap<String, ScriptValue>>>,
+        sink: &Arc<Mutex<Vec<ScriptCommand>>>,
+        name: &str,
+        next: Vec<ScriptValue>,
+    ) {
+        let rows = array_to_rows(&next);
+        mirror
+            .lock()
+            .unwrap()
+            .insert(name.to_owned(), ScriptValue::Array(next));
+        sink.lock().unwrap().push(ScriptCommand::SetArray {
+            name: name.to_owned(),
+            items: rows,
+        });
+    }
+
+    // set(name, items): replace the whole array.
+    let m = r.mirror.clone();
+    let s = r.sink.clone();
+    engine.register_host_fn_variadic(
+        HOST_NAMESPACE,
+        "signal_array_set",
+        move |args: &[candela::Value]| {
+            let next = match arg_value(args, 1) {
+                ScriptValue::Array(a) => a,
+                ScriptValue::Unit => Vec::new(),
+                other => vec![other],
+            };
+            store(&m, &s, &arg_text(args, 0), next);
+            candela::Value::Null
+        },
+    );
+
+    // push(name, item): append one record.
+    let m = r.mirror.clone();
+    let s = r.sink.clone();
+    engine.register_host_fn_variadic(
+        HOST_NAMESPACE,
+        "signal_array_push",
+        move |args: &[candela::Value]| {
+            let name = arg_text(args, 0);
+            let mut next = items(&m, &name);
+            next.push(arg_value(args, 1));
+            store(&m, &s, &name, next);
+            candela::Value::Null
+        },
+    );
+
+    // get(name, index) -> the record, or null when out of range.
+    let m = r.mirror.clone();
+    engine.register_host_fn_variadic(
+        HOST_NAMESPACE,
+        "signal_array_get",
+        move |args: &[candela::Value]| {
+            let index = args.get(1).and_then(candela::Value::as_i64).unwrap_or(-1);
+            let Ok(index) = usize::try_from(index) else {
+                return candela::Value::Null;
+            };
+            items(&m, &arg_text(args, 0))
+                .get(index)
+                .map_or(candela::Value::Null, script_value_to_candela)
+        },
+    );
+
+    // all(name) -> every record, as a list.
+    let m = r.mirror.clone();
+    engine.register_host_fn_variadic(
+        HOST_NAMESPACE,
+        "signal_array_all",
+        move |args: &[candela::Value]| {
+            script_value_to_candela(&ScriptValue::Array(items(&m, &arg_text(args, 0))))
+        },
+    );
+
+    // len(name) -> item count.
+    let m = r.mirror.clone();
+    engine.register_host_fn(HOST_NAMESPACE, "signal_array_len", move |name: String| {
+        items(&m, &name).len() as i64
+    });
+
+    // remove(name, index): drop one record; out-of-range indices no-op.
+    let m = r.mirror.clone();
+    let s = r.sink.clone();
+    engine.register_host_fn(
+        HOST_NAMESPACE,
+        "signal_array_remove",
+        move |name: String, index: i64| {
+            let mut next = items(&m, &name);
+            let Ok(index) = usize::try_from(index) else {
+                return;
+            };
+            if index >= next.len() {
+                return;
+            }
+            next.remove(index);
+            store(&m, &s, &name, next);
+        },
+    );
+
+    // clear(name): empty the array.
+    let m = r.mirror.clone();
+    let s = r.sink.clone();
+    engine.register_host_fn(HOST_NAMESPACE, "signal_array_clear", move |name: String| {
+        store(&m, &s, &name, Vec::new());
+    });
+}
+
+/// Register the color-signal pair. `signal_set_color` pushes a typed
+/// `Color` cell onto the property bus (so CSS-facing consumers see a color,
+/// not a string) and mirrors the channels; `signal_get_color` reads them back
+/// as an `{ r, g, b, a }` map of 0-255 ints. An unparseable hex string is
+/// ignored, and a signal that holds no color reads as an empty map.
+fn register_color_signals(engine: &mut candela::Engine, r: &Registries) {
+    use lumen_core::property_store::{PropertyKey, PropertyValue, push_external_property};
+
+    let m = r.mirror.clone();
+    engine.register_host_fn(
+        HOST_NAMESPACE,
+        "signal_set_color",
+        move |name: String, hex: String| {
+            let Some((red, green, blue, alpha)) = parse_hex_color(&hex) else {
+                return;
+            };
+            m.lock().unwrap().insert(
+                name.clone(),
+                ScriptValue::Map(HashMap::from([
+                    ("r".to_owned(), ScriptValue::I64(i64::from(red))),
+                    ("g".to_owned(), ScriptValue::I64(i64::from(green))),
+                    ("b".to_owned(), ScriptValue::I64(i64::from(blue))),
+                    ("a".to_owned(), ScriptValue::I64(i64::from(alpha))),
+                ])),
+            );
+            let color = lumen_core::components::Color::rgba(
+                f32::from(red) / 255.0,
+                f32::from(green) / 255.0,
+                f32::from(blue) / 255.0,
+                f32::from(alpha) / 255.0,
+            );
+            push_external_property(
+                PropertyKey::Global(Arc::<str>::from(name.as_str())),
+                PropertyValue::Color(color),
+            );
+        },
+    );
+
+    let m = r.mirror.clone();
+    engine.register_host_fn(
+        HOST_NAMESPACE,
+        "signal_get_color",
+        move |name: String| -> HashMap<String, i64> {
+            let channels = |r: u8, g: u8, b: u8, a: u8| {
+                HashMap::from([
+                    ("r".to_owned(), i64::from(r)),
+                    ("g".to_owned(), i64::from(g)),
+                    ("b".to_owned(), i64::from(b)),
+                    ("a".to_owned(), i64::from(a)),
+                ])
+            };
+            match m.lock().unwrap().get(&name) {
+                Some(ScriptValue::Map(map)) => map
+                    .iter()
+                    .filter_map(|(k, v)| match v {
+                        ScriptValue::I64(n) => Some((k.clone(), *n)),
+                        _ => None,
+                    })
+                    .collect(),
+                Some(ScriptValue::Str(s)) => parse_hex_color(s)
+                    .map(|(r, g, b, a)| channels(r, g, b, a))
+                    .unwrap_or_default(),
+                _ => HashMap::new(),
+            }
+        },
+    );
+}
+
+/// Register `http(request)`: one general HTTP request, mirroring the Rhai and
+/// Lua form. Only `url` and `tag` are required; `method` defaults to `GET`, and
+/// `body`, `timeout_ms`, and headers are optional. The reply lands on
+/// `on_http(tag, response)`.
+///
+/// It registers variadically because the request carries a map, which a fixed
+/// signature cannot name alongside the rest of the surface.
+///
+/// A candela map literal holds one value type, so the request a script writes
+/// by hand is a flat string map and each header rides on a `header:<Name>` key:
+///
+/// ```candela
+/// lumen::http({
+///     "method": "POST",
+///     "url": "https://example.test/items",
+///     "header:Accept": "application/json",
+///     "timeout_ms": "2500",
+///     "tag": "items"
+/// });
+/// ```
+///
+/// A request that did not come from a literal, one built by `parse_json` for
+/// instance, may instead carry a nested `headers` map and an int `timeout_ms`,
+/// which is the shape the Rhai and Lua hosts take. Both are accepted.
+fn register_http(engine: &mut candela::Engine, r: &Registries) {
+    /// Header name prefix for the flat form.
+    const HEADER_PREFIX: &str = "header:";
+
+    let sink = r.sink.clone();
+    engine.register_host_fn_variadic(HOST_NAMESPACE, "http", move |args: &[candela::Value]| {
+        let Some(candela::Value::Map(req)) = args.first() else {
+            return candela::Value::Null;
+        };
+        let text = |v: &candela::Value| candela_value_to_script(v).stringify();
+        let field = |key: &str| req.get(key).map(&text);
+
+        // Headers: the nested `headers` map first, then the flat
+        // `header:<Name>` keys, so a request can use either or both.
+        let mut headers: Vec<(String, String)> = match req.get("headers") {
+            Some(candela::Value::Map(m)) => m.iter().map(|(k, v)| (k.clone(), text(v))).collect(),
+            _ => Vec::new(),
+        };
+        headers.extend(req.iter().filter_map(|(k, v)| {
+            k.strip_prefix(HEADER_PREFIX)
+                .map(|name| (name.to_owned(), text(v)))
+        }));
+
+        sink.lock().unwrap().push(ScriptCommand::Http {
+            method: field("method")
+                .filter(|m| !m.is_empty())
+                .unwrap_or_else(|| "GET".to_owned()),
+            url: field("url").unwrap_or_default(),
+            headers,
+            body: match req.get("body") {
+                Some(candela::Value::Null) | None => None,
+                Some(v) => Some(text(v)),
+            },
+            // Accepts an int or a numeric string; anything else, and any
+            // non-positive value, means no client-imposed deadline.
+            timeout_ms: req
+                .get("timeout_ms")
+                .and_then(|v| match v {
+                    candela::Value::Int(n) => Some(*n),
+                    candela::Value::String(s) => s.parse().ok(),
+                    _ => None,
+                })
+                .and_then(|n| u64::try_from(n).ok())
+                .filter(|n| *n > 0),
+            tag: field("tag").unwrap_or_default(),
+        });
+        candela::Value::Null
+    });
+}
+
+/// Parse a `"#rrggbb"` or `"#rrggbbaa"` hex color into RGBA bytes. The leading
+/// `#` is optional. `None` when the input matches neither shape.
+fn parse_hex_color(s: &str) -> Option<(u8, u8, u8, u8)> {
+    let s = s.strip_prefix('#').unwrap_or(s);
+    let channel = |range: std::ops::Range<usize>| u8::from_str_radix(s.get(range)?, 16).ok();
+    match s.len() {
+        6 => Some((channel(0..2)?, channel(2..4)?, channel(4..6)?, 0xff)),
+        8 => Some((
+            channel(0..2)?,
+            channel(2..4)?,
+            channel(4..6)?,
+            channel(6..8)?,
+        )),
+        _ => None,
+    }
 }
 
 /// Register the `audio_*` transport builtins, each a thin enqueue onto the

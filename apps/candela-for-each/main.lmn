@@ -1,0 +1,9 @@
+<root>
+  <column id="list">
+    <for each="rows" key="id">
+      <label class="row" text="{title}" />
+    </for>
+  </column>
+  <label id="count-label" bind-text="row_count" text="0" />
+  <script src="main.cdl" />
+</root>
