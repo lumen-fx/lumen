@@ -34,7 +34,7 @@ pub const TEMPLATES: &[Template] = &[
     },
     Template {
         name: "counter",
-        description: "Click-to-bump counter: buttons, bind-text, per-id click routing.",
+        description: "Click-to-bump counter: buttons, bind-text, per-element click handlers.",
         files: COUNTER,
     },
     Template {
@@ -135,7 +135,7 @@ Concepts demonstrated:
 
 - **`main.lmn`** - every app is one `<root>` element; a `<label>` fills it.
 - **`<script src="main.rhai" />`** - attaches a Rhai script; `on_start()`
-  runs once after the first layout.
+  runs once when the app loads.
 - **`lumen.toml`** - window title + logical size.
 
 Run it:
@@ -148,7 +148,8 @@ lumenc run .
 ];
 
 /// Click-to-bump counter in candela. Demonstrates `<button>` + `bind-text` +
-/// per-id `lumen::on(\"click\", \"...\", \"...\")` routing + typed signals.
+/// looking elements up with `get_by_id` and binding a click handler on the
+/// returned node handle + typed signals.
 pub const COUNTER: &[(&str, &str)] = &[
     (
         "main.lmn",
@@ -192,18 +193,23 @@ pub const COUNTER: &[(&str, &str)] = &[
         "main.cdl",
         r##"import "lumen.cdl";
 
-fn on_start() {
+// on_ready runs on the first tick, once the tree is mounted, so the elements
+// are there to look up. on_start runs before that, when nothing is queryable.
+fn on_ready() {
     lumen::signal_set_int("clicks", 0);
-    lumen::on("click", "bump", "handle_bump");
-    lumen::on("click", "reset", "handle_reset");
+
+    get_by_id("bump").on("click", "on_bump");
+    get_by_id("reset").on("click", "on_reset");
 }
 
-fn handle_bump(id) {
+// A handler is called with the event id. Wrap it with `event(ev)` to read the
+// event itself: `event(ev).target()`, `.shift()`, `.prevent_default()`.
+fn on_bump(ev) {
     let n = lumen::signal_get_int("clicks");
     lumen::signal_set_int("clicks", n + 1);
 }
 
-fn handle_reset(id) {
+fn on_reset(ev) {
     lumen::signal_set_int("clicks", 0);
 }
 
@@ -222,13 +228,18 @@ The classic click counter, scripted in candela.
 
 What it shows:
 
+- Element handles. `get_by_id("bump")` returns a node you can call methods
+  on, the same way `document.getElementById` does on the web.
+- Per-element event binding. `node.on("click", "on_bump")` sends clicks on
+  that one element straight to that one function, which reads better than
+  branching inside a shared handler.
+- `on_ready` versus `on_start`. `on_start` runs at load, before the tree is
+  mounted, so a lookup there finds nothing; `on_ready` runs on the first
+  tick, once the elements exist. Bind events from `on_ready`.
 - Signals. `lumen::signal_set_int("clicks", n)` writes a named entry in the
   reactive store and `lumen::signal_get_int("clicks")` reads it back.
 - `bind-text="clicks"` on the label. The label re-renders whenever the
   signal changes, so nothing sets its text by hand.
-- Per-id click routing. `lumen::on("click", "bump", "handle_bump")` sends
-  clicks on one element straight to one function, which reads better than
-  branching inside a global `on_click(id)`.
 - CSS custom properties. Every color and radius lives in `:root`, so a
   theme swap touches one block.
 

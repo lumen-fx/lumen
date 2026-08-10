@@ -32,8 +32,8 @@ The smallest runnable app: one label filling the window, and a script that
 prints a line at startup.
 
 Shows the shape of an app in three files: the `<root>` element every app has,
-a `<script>` tag with an `on_start()` handler that runs once after the first
-layout, and the `[window]` block in `lumen.toml` that sets the title and size.
+a `<script>` tag with an `on_start()` handler that runs once when the app
+loads, and the `[window]` block in `lumen.toml` that sets the title and size.
 
 ## counter
 
@@ -41,10 +41,12 @@ Click-to-bump counter with `+1` and `reset` buttons, scripted in candela.
 
 Shows signals and bindings, the core of how a Lumen UI updates: the script
 writes a named `clicks` signal, the label carries `bind-text="clicks"`, and
-that is the entire connection. Clicks are routed per element, so the `+1`
-button's handler is its own function rather than a branch inside a shared
-handler. Colours and the corner radius are custom properties in `:root`, so
-re-theming is one block of edits.
+that is the entire connection. It also shows the DOM side: the script looks
+each button up with `get_by_id` and binds a click handler on the handle it gets
+back, so the `+1` button's handler is its own function rather than a branch
+inside a shared handler. That lookup happens in `on_ready`, which runs once the
+tree is mounted. Colours and the corner radius are custom properties in
+`:root`, so re-theming is one block of edits.
 
 This is the template the [first app walkthrough](first-app.md) reads line by
 line.

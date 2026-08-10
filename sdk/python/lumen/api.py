@@ -96,7 +96,7 @@ class App:
     Use as a context manager so the handle is always freed even if you
     never call :meth:`run`::
 
-        with App("apps/counter") as app:
+        with App("my-app") as app:
             @app.on_click("increment")
             def _(element_id: str) -> None:
                 ...
@@ -334,7 +334,7 @@ class App:
     # dispatched by the Rhai runtime to global script functions
     # (`on_click(id)`, `on_double_click(id)`, `on_long_press(id)`), or
     # per-element via the script-side `on("click", id, "fn_name")`
-    # router (see apps/counter/main.lmn). These decorators assume your
+    # router (see apps/scroll-tiles/main.lmn). These decorators assume your
     # main.lmn/main.rhai forwards those globals to one exposed native
     # function per event kind, e.g.:
     #

@@ -38,7 +38,9 @@ button { padding: 0 12; }
 ```
 
 Combinators are descendant (whitespace), child (`>`), adjacent sibling (`+`),
-and general sibling (`~`). `*` matches any tag.
+and general sibling (`~`). `*` matches any tag. A sibling combinator looks at
+elements before it in the same parent, so `.row + .row { margin: 8 0 0 0 }`
+spaces a list without touching its first item.
 
 Available pseudo-classes: `:hover`, `:focus`, `:focus-visible`, `:active`,
 `:disabled`, `:checked`, `:selected`, `:drag-over`, `:root`, `:first-child`,
@@ -66,7 +68,9 @@ skin.
 
 Above all of that sit inline markup attributes. `<tile width="50px" />` wins
 over `.tile { width: 100px }`. That is deliberate: an attribute is a statement
-about one element, and it stays true no matter which stylesheet loads later.
+about one element, and it stays true no matter which stylesheet loads later. It
+holds for every property both surfaces can write; the layout tags' own
+direction is the exception, and CSS can change that with `flex-direction`.
 
 ## Custom properties and theming
 
@@ -181,17 +185,22 @@ Supported features are `prefers-color-scheme` (`dark`, `light`,
 viewport widths `min-width`, `max-width`, and `width`. Combine them with `and`.
 Blocks may nest.
 
-Media state is live. When the OS theme changes or the window crosses a width
-you wrote a rule for, the affected elements re-resolve.
+The color scheme and the viewport are live. The motion and contrast
+preferences are not read from the OS yet, so those two features only match
+`no-preference`; offer an in-app switch instead.
+
+When the OS theme changes or the window crosses a width you wrote a rule for,
+the affected elements re-resolve.
 
 ## What is deliberately not here
 
 - **Pseudo-elements.** `::before` and `::after` are a parse error. Add an
   element instead; it is cheaper to reason about and a script can reach it.
 - **Attribute selectors.** Select on a class.
-- **Keyframe animations.** Lumen animates through CSS transitions, started by a
-  state change or by a script flipping a class; see
-  [Animations](animations.md).
+- **Keyframe animations.** An `@keyframes` block is skipped with a warning, as
+  is any other at-rule beyond `@import` and `@media`. Lumen animates through
+  CSS transitions, started by a state change or by a script flipping a class;
+  see [Animations](animations.md).
 - **Inline `!important`.** Importance is authorable in a stylesheet, not in a
   markup attribute, because an attribute already outranks the stylesheet.
 

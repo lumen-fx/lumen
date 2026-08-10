@@ -176,7 +176,7 @@ needs no bridge. See [Testing](../guides/testing.md).
 
 | Tool | Parameters | Returns |
 |------|------------|---------|
-| `lumen_tick` | none | Current frame number and last tick duration. |
+| `lumen_tick` | none | Current frame number, and `last_tick_micros`: the last tick's wall-clock duration, covering the whole main schedule plus extract and scene encode on ticks that rendered. |
 | `lumen_snapshot_text` | `max_lines` (default 200, capped at 2000), `cursor`, `omit_invisible` (default true) | Indented one-line-per-entity text tree, with a resume cursor when truncated. |
 | `lumen_snapshot_tree` | `max_nodes` (default 2000, capped at 10000), `omit_invisible` (default false) | The same tree as nested JSON nodes carrying tag, id, classes, role, label, text, rect, and flags. |
 | `lumen_find` | `by_text`, `by_role`, `by_id`, `limit` (default 50, capped at 500) | Matching entities with id, role, label, bounds, and state. |
@@ -221,6 +221,9 @@ in a headless run, they refresh every tick so a driver sees each frame.
 Through the bridge, an agent can also list and read project files: the
 `TODO.md` that roots the project, `lumen.toml`, `main.lmn`, `main.css`, the
 example apps, and the docs. Reads are restricted to that catalogue.
+
+These come from the bridge, which runs in your checkout. Talking to the
+app's socket directly gets tools only.
 
 Two prompts ship with the bridge:
 

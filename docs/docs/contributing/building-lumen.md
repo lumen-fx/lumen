@@ -56,7 +56,7 @@ cargo run -p lumenc -- run apps/widget-garden
 
 `apps/widget-garden` exercises every tag, attribute, and OS builtin, so it is
 the fastest way to see whether a change broke something visible. The other
-apps are narrower: `apps/counter` and `apps/notes` for basic markup and
+apps are narrower: `apps/scroll-tiles` and `apps/notes` for basic markup and
 scripting, `apps/kanban` for drag and drop, `apps/pages-demo` for multi-page
 navigation, `apps/music` for audio.
 

@@ -16,8 +16,10 @@ pub const TAGS: &[&str] = &[
     "tile",
     "label",
     "div",
+    "a",
     "image",
     "input",
+    "textarea",
     "spacer",
     "dialog",
     "template",
@@ -26,10 +28,21 @@ pub const TAGS: &[&str] = &[
     "overlay",
     "button",
     "toggle",
+    "switch",
     "slider",
     "checkbox",
     "radio",
     "progress",
+    "tabs",
+    "tab",
+    "dropdown",
+    "option",
+    "date-picker",
+    "time-picker",
+    "tooltip",
+    "menu",
+    "menuitem",
+    "separator",
     "title-bar",
 ];
 
@@ -87,6 +100,15 @@ pub const ATTRS: &[&str] = &[
     "drag",
     "tab-index",
     "fit",
+    "href",
+    "disabled",
+    "autofocus",
+    "default",
+    "open",
+    "drop-target",
+    "drag-payload",
+    "accept",
+    "layout-boundary",
     // scroll
     "scroll",
     "sensitivity",
@@ -101,6 +123,16 @@ pub const ATTRS: &[&str] = &[
     "checked",
     "indeterminate",
     "duration",
+    "min",
+    "max",
+    "step",
+    "multiline",
+    "pattern",
+    "required",
+    "password-character",
+    "accel",
+    "delay",
+    "offset",
     // reactivity / templates
     "bind-text",
     "bind-checked",
@@ -109,7 +141,10 @@ pub const ATTRS: &[&str] = &[
     "signal",
     "each",
     "key",
+    "virtualized",
+    "row-height",
     "mode",
+    "eq",
     "name",
     "src",
     "template",
@@ -139,11 +174,17 @@ Carries `Scroll` + `ScrollOffset` components at runtime."
             "**`<label>`** - Text-bearing node. Inner text becomes the `text` attribute when not set explicitly."
         }
         "div" => "**`<div>`** - Generic container with no defaults.",
+        "a" => {
+            "**`<a href=\"settings\">`** - Anchor. Clicking navigates the app to the page at `href`, which is a file-based page path (resolved by longest existing `.lmn` prefix), not a URL."
+        }
         "image" => {
             "**`<image>`** - Bitmap or SVG. Attributes: `src`, `fit`, `width`, `height`, `opacity`."
         }
         "input" => {
-            "**`<input>`** - Single-line text input. `placeholder`, `bind-text`, `on_text_input`."
+            "**`<input>`** - Single-line text input. `placeholder`, `bind-text`, `on_text_input`. Validation attributes: `pattern`, `required`, `min`, `max`. `password-character` masks the rendered value."
+        }
+        "textarea" => {
+            "**`<textarea>`** - Multi-line text input: an `<input>` with `multiline` defaulting to true. Same attributes and events."
         }
         "spacer" => "**`<spacer>`** - Flex spacer. Expands to fill remaining axis space.",
         "template" => {
@@ -165,6 +206,9 @@ Carries `Scroll` + `ScrollOffset` components at runtime."
         "toggle" => {
             "**`<toggle>`** - Boolean control. `bind-checked`, fires `on_toggle(id, checked)`."
         }
+        "switch" => {
+            "**`<switch>`** - The `<toggle>` machinery in switch presentation: a pill track with a thumb that slides between off and on. Same attributes; reported to assistive technology as a switch."
+        }
         "slider" => {
             "**`<slider min max value step>`** - Scalar range. `bind-value`, fires `on_slider(id, value)`. `step` sets the keyboard/wheel increment (default `(max-min)/100`)."
         }
@@ -180,12 +224,47 @@ Carries `Scroll` + `ScrollOffset` components at runtime."
         "title-bar" => {
             "**`<title-bar drag=\"true\">`** - Custom title-bar region for `<root frameless=\"true\">`. With `drag=\"true\"` pressing the bar requests a native window drag via the platform backend."
         }
+        "tabs" => {
+            "**`<tabs bind-value=\"signal\">`** - Tabbed container. `bind-value` is required and holds the active tab name; children must be `<tab>`. Expands to a button strip plus one hidden-when-inactive body per tab, so focus and scroll state survive switching. The first `<tab>` seeds the signal."
+        }
+        "tab" => {
+            "**`<tab name=\"x\" label=\"X\">`** - One tab inside `<tabs>`. `name` is required and is the value written when the tab is picked; `label` defaults to `name`. `disabled` makes the strip button unclickable and skips it in arrow navigation. Only valid inside `<tabs>`."
+        }
+        "dropdown" => {
+            "**`<dropdown bind-value=\"signal\">`** - Combobox. `bind-value` is required and holds the selected value; children must be `<option>`. Expands to a header button plus a floating options panel that dismisses on an outside click. Without `placeholder`, the first `<option>` seeds the signal. Up/Down step the value, Alt+Down / Space / Enter open, and type-ahead jumps."
+        }
+        "option" => {
+            "**`<option value=\"x\" label=\"X\">`** - One `<dropdown>` entry. `value` is required and is written to the bound signal on click; `label` defaults to `value`. `disabled` makes it unclickable. Only valid inside `<dropdown>`."
+        }
+        "date-picker" => {
+            "**`<date-picker bind-value=\"signal\">`** - Text field for an ISO date. Expands to an `<input class=\"date-picker\">` whose built-in pattern checks the `YYYY-MM-DD` shape (month 01-12, day 01-31); it is a shape check, not a calendar check. `bind-value` is required."
+        }
+        "time-picker" => {
+            "**`<time-picker bind-value=\"signal\">`** - Text field for a 24-hour clock time. Expands to an `<input class=\"time-picker\">` whose built-in pattern checks the `HH:MM` shape (hour 00-23, minute 00-59). `bind-value` is required."
+        }
+        "tooltip" => {
+            "**`<tooltip text=\"...\" delay=\"500\">`** - Hover-delay popup. Wraps exactly one trigger element; the wrapper collapses at parse time, so CSS selectors apply to the trigger. `offset` sets the gap from the trigger."
+        }
+        "menu" => {
+            "**`<menu>`** - Inside `<menubar>`, a top-level OS menu titled by `label`, holding `<menuitem>` and `<separator>` children. Outside it, `<menu id=\"m\">` is an in-window popup panel toggled by the `__menu_open:m` signal, dismissed on an outside click."
+        }
+        "menuitem" => {
+            "**`<menuitem id=\"open\" label=\"Open\">`** - One menu entry. `id` is required and is passed to `on_menu(id)`; `label` defaults to `id`. `accel` sets a keyboard accelerator (menubar menus only) and `disabled` greys it out (popup menus only)."
+        }
+        "separator" => {
+            "**`<separator/>`** - Divider line between menu entries. Only valid inside a `<menu>`."
+        }
         _ => return None,
     })
 }
 
 /// Markdown documentation for an attribute name. Returns `None` for
 /// unknown attributes.
+///
+/// Attributes described as "boolean" all share one truthiness rule:
+/// `true`, `yes`, `1` and an empty value are true, `false`, `no`,
+/// `0` are false, and anything else raises a parse warning and reads
+/// as false.
 pub fn attr_doc(attr: &str) -> Option<&'static str> {
     Some(match attr {
         "width" => "**`width`** - `auto` | `<n>px` | `<n>%`. Element width.",
@@ -216,8 +295,51 @@ Falls back to the authored `text`, then to the key itself."
         "id" => "**`id`** - string. Emits a `LumenId` marker for lookup.",
         "class" => "**`class`** - whitespace-separated class names for CSS matching.",
         "hover-bg" => "**`hover-bg`** - `#rrggbb` or `#rrggbbaa`. Background while hovered.",
-        "draggable" => {
-            "**`draggable`** - `true` | `false`. When true, drag input translates the element."
+        "draggable" => "**`draggable`** - boolean. When true, drag input translates the element.",
+        "href" => {
+            "**`href`** - page path on `<a>`. Clicking navigates there; resolved by longest existing `.lmn` prefix, not as a URL."
+        }
+        "disabled" => {
+            "**`disabled`** - boolean. Unclickable, skipped by keyboard navigation, matched by `:disabled`, and dimmed unless `disabled-bg` / `disabled-opacity` says otherwise."
+        }
+        "autofocus" => {
+            "**`autofocus`** - boolean. Marks the element that takes focus when the containing `<dialog>` opens."
+        }
+        "default" => {
+            "**`default`** - boolean on `<button>`. The containing `<dialog>`'s default button: Enter anywhere activates it and closing through it takes the accepted path. Adds the `default` class."
+        }
+        "open" => {
+            "**`open`** - signal name on `<dialog>`. The dialog shows while the signal is truthy; the body stays mounted, so its state survives a close."
+        }
+        "min" => {
+            "**`min`** - number. Lower bound for `<slider>` / `<progress>`, and a validation bound on text that parses as a number."
+        }
+        "max" => {
+            "**`max`** - number. Upper bound for `<slider>` / `<progress>`, and a validation bound on text that parses as a number."
+        }
+        "step" => {
+            "**`step`** - number. `<slider>` keyboard / wheel increment. Defaults to `(max - min) / 100`."
+        }
+        "multiline" => {
+            "**`multiline`** - boolean. Accept newlines in a text field. Defaults to false on `<input>`, true on `<textarea>`."
+        }
+        "pattern" => {
+            "**`pattern`** - literal substring the value must contain to be valid. Not a regex. `<date-picker>` / `<time-picker>` attach a built-in shape check instead."
+        }
+        "required" => {
+            "**`required`** - boolean. The field is valid only when it is non-empty (a toggle must be checked, a slider above zero). Result mirrors into the `valid:<id>` signal."
+        }
+        "password-character" => {
+            "**`password-character`** - exactly one character. Masks the rendered value of a text field; the buffer and bound signal keep the real text."
+        }
+        "accel" => {
+            "**`accel`** - keyboard accelerator on `<menuitem>`, in muda spelling (`CommandOrControl+S`, `Alt+F4`). Menubar menus only."
+        }
+        "delay" => {
+            "**`delay`** - milliseconds of pointer dwell before a `<tooltip>` appears. Defaults to `500` or the `--lumen-tooltip-delay` custom property."
+        }
+        "offset" => {
+            "**`offset`** - pixels between a `<tooltip>` and its trigger. Defaults to `12` or the `--lumen-tooltip-offset` custom property."
         }
         "min-width" => "**`min-width`** - `<n>px` | `<n>%`. Lower bound on width.",
         "min-height" => "**`min-height`** - `<n>px` | `<n>%`. Lower bound on height.",
@@ -279,9 +401,28 @@ multi-line clamp. Not inherited."
         "focus-outline" => {
             "**`focus-outline`** - `<width>px <color>`. Outline ring when focused (any source). Use `:focus-visible { outline: ... }` for a keyboard-only ring and `outline-offset` for a gap between box edge and ring."
         }
-        "drop" => "**`drop`** - `true` | `false`. Accept dropped files; fires `on_file_dropped`.",
+        "drop" => "**`drop`** - boolean. Accept dropped files; fires `on_file_dropped`.",
+        "drop-target" => {
+            "**`drop-target`** - boolean. Marks an in-app drop zone. Pair with `accept` to filter payloads by MIME type."
+        }
+        "drag-payload" => {
+            "**`drag-payload`** - string carried by an in-app drag (web `dataTransfer.setData`). May contain `{row.field}` placeholders; empty derives the payload from `id`."
+        }
+        "accept" => "**`accept`** - MIME type filter on a drop target. Unset accepts any payload.",
+        "layout-boundary" => {
+            "**`layout-boundary`** - boolean. Confines relayout to this subtree. Inferred for scroll containers and for elements with a fixed width and height."
+        }
+        "virtualized" => {
+            "**`virtualized`** - boolean on `<for>`. Spawn only the rows inside the visible scroll window. Needs a `<scroll>` ancestor; pair with `row-height`."
+        }
+        "row-height" => {
+            "**`row-height`** - pixels per row of a virtualized `<for>`. Defaults to `32`."
+        }
+        "eq" => {
+            "**`eq`** - value on `<if>`. Mounts the children when the signal equals this string, instead of testing truthiness."
+        }
         "drag" => {
-            "**`drag`** - `true` | `false` on `<title-bar>`. Initiates a native window drag when pressed."
+            "**`drag`** - boolean on `<title-bar>`. Initiates a native window drag when pressed."
         }
         "fit" => "**`fit`** - `fill | cover | contain | none | scale-down`. Image fit mode.",
         "style" => "**`style`** - typography token (display-xl, headline-md, body-md, ...).",
@@ -296,10 +437,10 @@ multi-line clamp. Not inherited."
             "**`value`** - number for `<slider>` / `<progress>`; the member's string value for `<radio>`."
         }
         "checked" => {
-            "**`checked`** - `true` | `false`. Initial state for `<toggle>` / `<checkbox>`; on `<radio>`, seeds the group's selected value."
+            "**`checked`** - boolean. Initial state for `<toggle>` / `<checkbox>`; on `<radio>`, seeds the group's selected value."
         }
         "indeterminate" => {
-            "**`indeterminate`** - `true` | `false`. `<checkbox>` tri-state dash; cleared by the first user toggle (web `indeterminate` / Qt `PartiallyChecked`)."
+            "**`indeterminate`** - boolean. `<checkbox>` tri-state dash; cleared by the first user toggle (web `indeterminate` / Qt `PartiallyChecked`)."
         }
         "duration" => {
             "**`duration`** - milliseconds. `<progress>` indeterminate sweep period (CSS `progress-duration`, token `--lumen-progress-period`)."
@@ -319,7 +460,7 @@ multi-line clamp. Not inherited."
         "name" => "**`name`** - `<template name=\"...\">` or `<theme>` token name.",
         "src" => "**`src`** - path or URL. Used by `<image>`, `<script>`.",
         "template" => "**`template`** - name of a `<template>` to instantiate inside `<for>`.",
-        "frameless" => "**`frameless`** - `true` | `false`. Suppress OS chrome on `<root>`.",
+        "frameless" => "**`frameless`** - boolean. Suppress OS chrome on `<root>`.",
         "skin" => "**`skin`** - name of an embedded skin (e.g. `default`).",
         _ => return None,
     })
@@ -331,10 +472,11 @@ pub fn attr_value_completions(attr: &str) -> &'static [&'static str] {
     match attr {
         "flex" => &["row", "column"],
         "scroll" => &["y", "x", "both"],
-        "draggable" => &["true", "false"],
-        "drop" => &["true", "false"],
-        "drag" => &["true", "false"],
-        "frameless" => &["true", "false"],
+        // Every boolean attribute accepts the same set; completion
+        // offers the canonical spelling of each side.
+        "draggable" | "drop" | "drop-target" | "drag" | "frameless" | "disabled" | "autofocus"
+        | "default" | "required" | "multiline" | "checked" | "indeterminate" | "virtualized"
+        | "layout-boundary" => &["true", "false"],
         "position" => &["static", "relative", "absolute"],
         "align" => &["start", "end", "center", "stretch", "between"],
         "justify" => &["start", "end", "center", "between", "around"],
@@ -344,8 +486,6 @@ pub fn attr_value_completions(attr: &str) -> &'static [&'static str] {
         "text-overflow" => &["clip", "ellipsis"],
         "fit" => &["fill", "cover", "contain", "none", "scale-down"],
         "mode" => &["render", "hide"],
-        "checked" => &["true", "false"],
-        "indeterminate" => &["true", "false"],
         "skin" => &["default"],
         _ => &[],
     }
