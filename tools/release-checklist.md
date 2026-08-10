@@ -14,10 +14,16 @@ them.
 | `lumen-macos-x86_64.tar.gz`    | GitHub Actions, `macos-26-intel`       |
 | `lumen-windows-x86_64.msi`     | GitHub Actions, `windows-latest`       |
 | `lumen-windows-x86_64.zip`     | GitHub Actions, `windows-latest`       |
+| `sha256sums.txt`               | GitHub Actions, the publish job        |
 
 The `.msi` is the Windows install channel and the `.zip` is the portable
 alternative, so the Windows leg publishes both. `install.sh` never fetches
 either one: on Windows it prints the `.msi` URL and stops.
+
+`sha256sums.txt` is `sha256sum` output covering every other asset in the
+table, one `<hex>  <filename>` line each. The publish job generates it from
+the artifacts it is about to upload, so a partial release (one build leg
+failed) gets a checksum file listing exactly what it published.
 
 Every leg builds natively for its own target; none of this is cross-compiled.
 `linux-aarch64` and `macos-x86_64` have no equivalent leg in `ci.yml`, whose
@@ -65,8 +71,9 @@ and its own release process, and is out of scope for this checklist.
      staged after the zip is closed, so only the MSI carries one: a receipt
      marks a copy as installed, and an installed copy is the only kind that
      checks for updates;
-   - once every target has finished (or failed), creates the release for the
-     tag if it does not exist and uploads every archive that did get built.
+   - once every target has finished (or failed), hashes every archive that
+     did get built into `sha256sums.txt`, creates the release for the tag if
+     it does not exist, and uploads the archives and the checksum file.
 
    A single failed target does not block the others: the publish step runs
    even if a build leg failed, and only what succeeded gets uploaded.
@@ -94,13 +101,19 @@ own runtime. The archive therefore puts both files in `bin/`:
 `curl -fsSL https://lumenfx.dev/install.sh | sh` is how people get the
 toolchain. The installer lives here, at `tools/install.sh`; the site repo
 (`lumen-fx/site`) fetches it fresh from this repo at build time and serves
-it from the Lumen landing page. It reads the release itself through the
-GitHub Releases API (`https://api.github.com/repos/lumen-fx/lumen`, the
-latest release by default, or the tag given by `--version`) and verifies
-each download against the sha256 digest GitHub reports for that asset.
-There is no manifest and no separate download host: publishing a release
-means attaching the archives to the GitHub release for the tag, which
+it from the Lumen landing page. It reads the release itself, with no API
+call: the latest tag comes from the redirect
+`https://github.com/lumen-fx/lumen/releases/latest` sends, a `--version` pin
+is turned into a tag directly, and everything after that is a plain download
+from `releases/download/<tag>/<asset>`. It fetches `sha256sums.txt` first and
+verifies each download against the line for it, installing nothing it cannot
+verify. There is no manifest and no separate download host: publishing a
+release means attaching the assets to the GitHub release for the tag, which
 `release.yml` does automatically.
+
+A release with no `sha256sums.txt` cannot be installed by the script at all.
+That is what `--version` pointing at a release from before this file existed
+runs into, and the error says so.
 
 Asset naming is the contract `install.sh` relies on to find a build. It
 computes `<target>` from `uname -s` and `uname -m` and looks for
@@ -124,15 +137,17 @@ link.
 
 - The release page (`https://github.com/lumen-fx/lumen/releases/tag/vX.Y.Z`)
   lists every asset from the table above that a build leg produced.
-- Spot-check that GitHub reports a digest for one of them:
+- `sha256sums.txt` is among them and covers every one of the others:
 
   ```sh
-  curl -fsSL https://api.github.com/repos/lumen-fx/lumen/releases/tags/vX.Y.Z |
-    grep -A2 '"name": "lumen-linux-x86_64.tar.gz"'
+  base=https://github.com/lumen-fx/lumen/releases/download/vX.Y.Z
+  curl -fsSLO "$base/sha256sums.txt"
+  curl -fsSLO "$base/lumen-linux-x86_64.tar.gz"
+  sha256sum --ignore-missing -c sha256sums.txt
   ```
 
-  A missing `digest` field on an asset means `install.sh` cannot verify it and
-  will refuse to install it.
+  An asset with no line in that file cannot be verified, and `install.sh`
+  refuses to install it.
 
 - The installer runs end to end against the real release, into a throwaway
   prefix:
@@ -144,14 +159,16 @@ link.
   curl -fsSL https://lumenfx.dev/install.sh | sh -s -- --prefix /tmp/lumen-check --uninstall --no-confirm
   ```
 
-  A checksum mismatch here means the uploaded asset does not match what
-  GitHub recorded for it: re-run the release workflow for that target.
+  A checksum mismatch here means the uploaded asset does not match the line
+  for it in `sha256sums.txt`: re-run the release workflow for that target,
+  which regenerates both.
 
 - An already-installed `lumenc` finds out about this release from the tag
-  alone: it follows `releases/latest` and reads the last path segment of the
-  redirect. That works while tags are `vX.Y.Z`; a tag in any other shape
-  leaves every installed copy quiet about the release. Confirm the redirect
-  points at the new tag:
+  alone, and so does `install.sh` when no `--version` is given: both follow
+  `releases/latest` and read the last path segment of the redirect. That
+  works while tags are `vX.Y.Z`; a tag in any other shape leaves every
+  installed copy quiet about the release. Confirm the redirect points at the
+  new tag:
 
   ```sh
   curl -fsSI https://github.com/lumen-fx/lumen/releases/latest |
@@ -198,9 +215,7 @@ the `.msi` link is the install channel for now.
 - The MSI is unsigned. Every download trips SmartScreen until there is a
   code-signing certificate to sign it with, and `winget` will not take an
   unsigned package either.
-- `install.sh` queries the GitHub API unauthenticated, which is rate-limited
-  to 60 requests per hour per source IP. A shared IP (office NAT, a CI fleet)
-  can hit that limit; there is no workaround available to an anonymous
-  installer.
+- Releases published before `sha256sums.txt` was part of the workflow have no
+  checksum file, so `install.sh --version` cannot install them.
 - `tools/release-assets.sh` targets a Gitea instance's API and is unrelated
   to this workflow; it is not part of the GitHub release path.

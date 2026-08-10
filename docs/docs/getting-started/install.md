@@ -11,9 +11,12 @@ curl -fsSL https://lumenfx.dev/install.sh | sh
 ```
 
 The installer resolves the current release, downloads the archive for your
-platform, checks it against the SHA-256 digest published with the release, and
-unpacks it under `~/.lumen`. It prints what it is about to do and asks before
-writing anything.
+platform, and unpacks it under `~/.lumen`. It prints what it is about to do and
+asks before writing anything.
+
+Every release publishes a `sha256sums.txt` covering its assets. The installer
+downloads that file first and checks the archive against the line for it;
+anything that does not match is not installed.
 
 Builds are published for Linux and macOS on x86_64 and aarch64. The installer
 needs `curl` or `wget`, and `sha256sum` or `shasum`.
@@ -105,6 +108,9 @@ curl -fsSL https://lumenfx.dev/install.sh | sh -s -- --version 0.1.0
 
 A pinned install is never offered a newer release. Run the installer again
 without `--version` to lift the pin.
+
+Releases from before `sha256sums.txt` was published cannot be installed this
+way; the installer has nothing to verify them against and stops.
 
 ## Next
 

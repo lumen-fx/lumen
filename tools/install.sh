@@ -3,27 +3,30 @@
 #
 #   curl -fsSL https://lumenfx.dev/install.sh | sh
 #
-# Resolves a release of lumen-fx/lumen through the GitHub Releases API
-# (latest by default, or the tag given by --version), downloads the archive
-# asset matching this platform, verifies it against the sha256 digest GitHub
-# reports for that asset, and unpacks it under ~/.lumen. Nothing is written
-# outside the prefix except an optional PATH line in a shell rc file, which is
-# only added with consent.
+# Resolves a release of lumen-fx/lumen (latest by default, or the tag given
+# by --version), downloads the archive asset matching this platform, verifies
+# it against the checksums published with the release, and unpacks it under
+# ~/.lumen. Nothing is written outside the prefix except an optional PATH line
+# in a shell rc file, which is only added with consent.
 #
-# There is no separate manifest and no separate download host: the release
-# itself, at https://github.com/lumen-fx/lumen/releases, is the source of
-# both the archives and their checksums. A GET to
+# There is no separate manifest, no separate download host, and no API call:
+# the release itself, at https://github.com/lumen-fx/lumen/releases, is the
+# source of both the archives and their checksums, and every request this
+# script makes is a plain file download from
 #
-#   https://api.github.com/repos/lumen-fx/lumen/releases/latest
-#   https://api.github.com/repos/lumen-fx/lumen/releases/tags/<tag>
+#   https://github.com/lumen-fx/lumen/releases/download/<tag>/<asset>
 #
-# returns a release object whose "assets" array holds, per asset, "name",
-# "browser_download_url", "size", and a "digest" field of the form
-# "sha256:<hex>". That digest is what this script verifies against; it needs
-# no authentication and is present on public releases without special
-# request headers. GitHub rate-limits unauthenticated API requests to 60 per
-# source IP per hour; a heavily shared IP (office NAT, CI fleet) can hit that
-# limit.
+# The latest tag comes from the redirect that
+# https://github.com/lumen-fx/lumen/releases/latest sends: its final URL ends
+# in the tag, which is the same resolution lumenc's own update check uses
+# (lumenc/src/update_check.rs). A pinned --version needs no lookup at all; it
+# becomes a tag directly, tried as given and then with a "v" prefix.
+#
+# Checksums live in one asset per release, sha256sums.txt, in sha256sum's own
+# format: one "<hex>  <filename>" line per published asset. This script
+# downloads it first, reads the line for the asset it wants, and refuses to
+# install anything whose download does not match. A release that has no
+# sha256sums.txt cannot be installed by this script.
 #
 # This installs the Lumen toolchain: lumenc and liblumen. There is nothing
 # else to choose - no component flag, no candela option. Candela is a
@@ -42,6 +45,7 @@
 #   lumen-windows-x86_64.msi  the Windows installer. This script never
 #                             fetches or runs it; the windows branch below
 #                             prints its URL and stops.
+#   sha256sums.txt            checksums covering every asset above.
 #
 # tools/release-checklist.md documents producing the asset under this
 # scheme. The archive holds the tree to install: bin/ for lumenc, and the
@@ -61,7 +65,7 @@
 set -eu
 
 GH_REPO="${LUMEN_GH_REPO:-lumen-fx/lumen}"
-GH_API="https://api.github.com/repos/$GH_REPO"
+GH_URL="https://github.com/$GH_REPO"
 PREFIX="${LUMEN_PREFIX:-$HOME/.lumen}"
 
 PIN_VERSION=""
@@ -179,13 +183,19 @@ sha256_of() {
   esac
 }
 
-human_size() {
-  awk -v b="$1" 'BEGIN {
-    if (b == "" || b + 0 <= 0) { print "unknown"; exit }
-    if (b + 0 >= 1048576) { printf "%.1f MiB\n", b / 1048576; exit }
-    if (b + 0 >= 1024) { printf "%.0f KiB\n", b / 1024; exit }
-    printf "%d B\n", b
-  }'
+final_url() {
+  # final_url URL -> the URL a GET of URL ends at, after redirects.
+  case "$DOWNLOADER" in
+    curl) curl -fsSL -o /dev/null -w '%{url_effective}' "$1" ;;
+    wget)
+      # --spider makes it a HEAD; --server-response writes every response
+      # header to stderr, so the last Location is the end of the chain.
+      wget --server-response --spider "$1" 2>&1 |
+        awk 'tolower($1) == "location:" { print $2 }' |
+        tail -n 1
+      ;;
+    *) fail "need curl or wget" ;;
+  esac
 }
 
 # --- prompts -----------------------------------------------------------------
@@ -213,142 +223,40 @@ ask() {
 }
 
 # --- release data --------------------------------------------------------------
+#
+# Everything the script needs about a release comes out of its sha256sums.txt:
+# which assets exist, and what each one hashes to. The file is sha256sum's own
+# output, so a line is "<hex>  <filename>", and a filename may carry a leading
+# "*" from binary mode.
 
-# Flattens JSON to "dotted.path=value" lines, one per scalar. The GitHub
-# release response is small, so a scanner is enough and keeps the installer
-# free of a jq dependency.
-flatten_json() {
-  awk '
-  function skipws() {
-    while (i <= n) {
-      wc = substr(s, i, 1)
-      if (wc == " " || wc == "\t" || wc == "\n" || wc == "\r") { i++ } else { return }
-    }
-  }
-  function pstring(   out, ch) {
-    i++
-    out = ""
-    while (i <= n) {
-      ch = substr(s, i, 1)
-      if (ch == "\\") {
-        i++
-        ch = substr(s, i, 1)
-        if (ch == "n") { out = out "\n" }
-        else if (ch == "t") { out = out "\t" }
-        else { out = out ch }
-        i++
-        continue
-      }
-      if (ch == "\"") { i++; return out }
-      out = out ch
-      i++
-    }
-    return out
-  }
-  function pvalue(path,   ch, key, kp, idx, lit) {
-    skipws()
-    ch = substr(s, i, 1)
-    if (ch == "{") {
-      i++
-      skipws()
-      if (substr(s, i, 1) == "}") { i++; return }
-      while (i <= n) {
-        skipws()
-        key = pstring()
-        skipws()
-        i++
-        if (path == "") { kp = key } else { kp = path "." key }
-        pvalue(kp)
-        skipws()
-        ch = substr(s, i, 1)
-        i++
-        if (ch == "}") { return }
-      }
-      return
-    }
-    if (ch == "[") {
-      i++
-      skipws()
-      if (substr(s, i, 1) == "]") { i++; return }
-      idx = 0
-      while (i <= n) {
-        pvalue(path "." idx)
-        idx++
-        skipws()
-        ch = substr(s, i, 1)
-        i++
-        if (ch == "]") { return }
-      }
-      return
-    }
-    if (ch == "\"") {
-      print path "=" pstring()
-      return
-    }
-    lit = ""
-    while (i <= n) {
-      ch = substr(s, i, 1)
-      if (ch == "," || ch == "}" || ch == "]" || ch == " " || ch == "\t" || ch == "\n" || ch == "\r") { break }
-      lit = lit ch
-      i++
-    }
-    print path "=" lit
-  }
-  { s = s $0 "\n" }
-  END { n = length(s); i = 1; pvalue("") }
-  ' "$1"
+asset_url() {
+  # asset_url NAME -> the download URL for NAME in the resolved release
+  printf '%s/releases/download/%s/%s\n' "$GH_URL" "$TAG" "$1"
 }
 
-rf() {
-  # rf KEY -> value from $FLAT, empty if absent
-  printf '%s\n' "$FLAT" |
-    awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }'
-}
-
-asset_index_for_name() {
-  # asset_index_for_name NAME -> N such that assets.N.name = NAME in $FLAT.
-  # Scans by value rather than splitting on "=", since a URL value could
-  # contain one.
-  printf '%s\n' "$FLAT" | awk -v want="$1" '
-    {
-      eq = index($0, "=")
-      if (eq == 0) { next }
-      path = substr($0, 1, eq - 1)
-      if (path !~ /^assets\.[0-9]+\.name$/) { next }
-      val = substr($0, eq + 1)
-      if (val != want) { next }
-      n = path
-      sub(/^assets\./, "", n)
-      sub(/\.name$/, "", n)
-      print n
-      exit
-    }'
-}
-
-asset_field() {
-  # asset_field NAME FIELD -> assets.<index-of-NAME>.<FIELD>, failing if no
-  # asset in the release has that name.
-  af_idx="$(asset_index_for_name "$1")"
-  [ -n "$af_idx" ] || return 1
-  rf "assets.$af_idx.$2"
+asset_sha() {
+  # asset_sha NAME -> the sha256 recorded for NAME, empty if it has no line
+  awk -v want="$1" '
+    NF >= 2 {
+      name = $2
+      sub(/^\*/, "", name)
+      if (name == want) { print $1; exit }
+    }' "$SUMS"
 }
 
 published_targets() {
   # published_targets -> one target per line the release has a lumen-*.tar.gz
-  # asset for, read off the asset names rather than a separate targets list.
-  printf '%s\n' "$FLAT" | awk '
-    {
-      eq = index($0, "=")
-      if (eq == 0) { next }
-      path = substr($0, 1, eq - 1)
-      if (path !~ /^assets\.[0-9]+\.name$/) { next }
-      val = substr($0, eq + 1)
-      if (index(val, "lumen-") != 1) { next }
-      if (val !~ /\.tar\.gz$/) { next }
-      t = substr(val, length("lumen-") + 1)
+  # asset for, read off the checksum lines rather than a separate list.
+  awk '
+    NF >= 2 {
+      name = $2
+      sub(/^\*/, "", name)
+      if (index(name, "lumen-") != 1) { next }
+      if (name !~ /\.tar\.gz$/) { next }
+      t = substr(name, length("lumen-") + 1)
       sub(/\.tar\.gz$/, "", t)
       print t
-    }'
+    }' "$SUMS"
 }
 
 # --- receipt -------------------------------------------------------------------
@@ -456,42 +364,55 @@ TARGET="$OS-$ARCH"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/lumen-install.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 
+SUMS="$TMP/sha256sums.txt"
+
+sums_missing() {
+  fail "release $1 of $GH_REPO has no sha256sums.txt. Either that release does not exist, or it predates checksum publishing and this installer cannot verify it. See $GH_URL/releases"
+}
+
 # A pinned version is tried as given, then with a "v" prefix, since this
 # project tags releases vX.Y.Z but --version is documented as taking the bare
-# number. Unauthenticated GitHub API requests are limited to 60/hour per
-# source IP; a failure here can mean a bad version as easily as that limit.
+# number. The checksum file is the probe: a tag with no sha256sums.txt behind
+# it is a tag this script cannot install from, whatever the reason.
 if [ -n "$PIN_VERSION" ]; then
   TAG="$PIN_VERSION"
-  if ! fetch_quiet "$GH_API/releases/tags/$TAG" "$TMP/release.json"; then
+  # The first attempt is a guess at which of the two tag shapes this is, so
+  # its failure is not news: keep the downloader quiet about it and let the
+  # retry, or the message below, do the talking.
+  if ! fetch_quiet "$(asset_url sha256sums.txt)" "$SUMS" 2>/dev/null; then
     case "$PIN_VERSION" in
-      v*) fail "no release $PIN_VERSION in $GH_REPO. See https://github.com/$GH_REPO/releases" ;;
+      v*) sums_missing "$PIN_VERSION" ;;
       *)
         TAG="v$PIN_VERSION"
-        fetch_quiet "$GH_API/releases/tags/$TAG" "$TMP/release.json" ||
-          fail "no release $PIN_VERSION (tried tags $PIN_VERSION and $TAG) in $GH_REPO. See https://github.com/$GH_REPO/releases"
+        fetch_quiet "$(asset_url sha256sums.txt)" "$SUMS" ||
+          sums_missing "$PIN_VERSION (tried tags $PIN_VERSION and $TAG)"
         ;;
     esac
   fi
 else
-  fetch_quiet "$GH_API/releases/latest" "$TMP/release.json" ||
-    fail "could not fetch the latest release for $GH_REPO. Either it has no releases yet, or the unauthenticated GitHub API rate limit (60/hour per IP) was hit. See https://github.com/$GH_REPO/releases"
+  # /releases/latest redirects to /releases/tag/<tag>, so the last path
+  # segment of the final URL is the tag. With no releases at all the redirect
+  # lands on the release index instead, which is what the guard below catches.
+  LATEST_URL="$(final_url "$GH_URL/releases/latest" || true)"
+  TAG="${LATEST_URL##*/}"
+  case "$TAG" in
+    ''|latest|releases)
+      fail "could not resolve the latest release of $GH_REPO. Either it has no releases yet, or the request did not get through. See $GH_URL/releases"
+      ;;
+  esac
+  fetch_quiet "$(asset_url sha256sums.txt)" "$SUMS" || sums_missing "$TAG"
 fi
 
-FLAT="$(flatten_json "$TMP/release.json")"
-[ -n "$FLAT" ] || fail "the release response from $GH_API was empty or not JSON"
-
-TAG="$(rf tag_name)"
-[ -n "$TAG" ] || fail "the release response from $GH_API had no tag_name"
+[ -s "$SUMS" ] || sums_missing "$TAG"
 RELEASE="${TAG#v}"
 
 if [ "$OS" = windows ]; then
-  WIN_URL="$(asset_field "lumen-windows-$ARCH.msi" browser_download_url || true)"
   say "This installer covers Linux and macOS."
-  if [ -n "$WIN_URL" ]; then
+  if [ -n "$(asset_sha "lumen-windows-$ARCH.msi")" ]; then
     say "For Windows, download and run the installer:"
-    say "  $WIN_URL"
+    say "  $(asset_url "lumen-windows-$ARCH.msi")"
   else
-    say "A Windows installer is not published for $ARCH yet. See https://github.com/$GH_REPO/releases"
+    say "A Windows installer is not published for $ARCH yet. See $GH_URL/releases"
   fi
   exit 1
 fi
@@ -499,7 +420,8 @@ fi
 # --- resolve the asset ---------------------------------------------------------
 
 ASSET_NAME="lumen-$TARGET.tar.gz"
-asset_field "$ASSET_NAME" name >/dev/null 2>&1 ||
+ASSET_SHA="$(asset_sha "$ASSET_NAME")"
+[ -n "$ASSET_SHA" ] ||
   fail "no build for $TARGET in release $TAG (published: $(published_targets | tr '\n' ' ' | sed 's/ *$//'))"
 
 INSTALLED="$(receipt_version)"
@@ -527,12 +449,6 @@ if [ "$FORCE" -eq 0 ] && [ "$INSTALLED" = "$RELEASE" ]; then
   exit 0
 fi
 
-ASSET_SIZE="$(asset_field "$ASSET_NAME" size || true)"
-SIZE_NOTE=""
-if [ -n "$ASSET_SIZE" ] && [ "$ASSET_SIZE" != 0 ]; then
-  SIZE_NOTE=" ($(human_size "$ASSET_SIZE"))"
-fi
-
 say ""
 say "Lumen toolchain installer"
 say ""
@@ -541,9 +457,9 @@ say "  target    $TARGET"
 say "  prefix    $PREFIX"
 say ""
 if [ -n "$INSTALLED" ]; then
-  say "  lumen $INSTALLED -> $RELEASE$SIZE_NOTE"
+  say "  lumen $INSTALLED -> $RELEASE"
 else
-  say "  lumen $RELEASE$SIZE_NOTE"
+  say "  lumen $RELEASE"
 fi
 say "    lumenc and the liblumen runtime library"
 say ""
@@ -555,13 +471,7 @@ fi
 
 # --- download and verify -----------------------------------------------------
 
-ASSET_URL="$(asset_field "$ASSET_NAME" browser_download_url || true)"
-[ -n "$ASSET_URL" ] || fail "release $TAG has no browser_download_url for $ASSET_NAME"
-ASSET_DIGEST="$(asset_field "$ASSET_NAME" digest || true)"
-case "$ASSET_DIGEST" in
-  sha256:*) ASSET_SHA="${ASSET_DIGEST#sha256:}" ;;
-  *) fail "asset $ASSET_NAME in release $TAG has no sha256 digest from the GitHub API. Nothing was downloaded." ;;
-esac
+ASSET_URL="$(asset_url "$ASSET_NAME")"
 
 say "Downloading lumen"
 mkdir -p "$TMP/dl"
@@ -574,7 +484,7 @@ if [ "$got" != "$ASSET_SHA" ]; then
   fail "checksum mismatch for lumen
   expected $ASSET_SHA
   got      $got
-Nothing was installed. The download was corrupted, or the asset at $ASSET_URL does not match the digest GitHub reports for it."
+Nothing was installed. The download was corrupted, or the asset at $ASSET_URL does not match the checksum published with release $TAG."
 fi
 
 # --- unpack and install ------------------------------------------------------
