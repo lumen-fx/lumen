@@ -5,10 +5,11 @@
 //! drain the [`ScriptCommand`]s the host produced this tick and forward
 //! them onto the ECS message bus for the embedder's applier.
 //!
-//! Concrete implementations (`lumen-script-rhai`, future `-candela`) provide
-//! a [`ScriptHost`] that compiles + executes whatever source language they
-//! speak, exposing the host-neutral registries (command sink, signal
-//! mirror, per-id handlers, derivations) the generic runtime drives.
+//! Concrete implementations (`lumen-script-candela`, `lumen-script-rhai`,
+//! `lumen-script-lua`) provide a [`ScriptHost`] that compiles + executes
+//! whatever source language they speak, exposing the host-neutral registries
+//! (command sink, signal mirror, per-id handlers, derivations) the generic
+//! runtime drives.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -249,9 +250,9 @@ pub enum ScriptCommand {
         /// Destination PNG path.
         path: String,
     },
-    /// Registers or replaces a system tray icon (macOS/Windows). On Linux logs a warning and no-ops. `icon_path` resolves relative to the app dir.
+    /// Registers or replaces a system tray icon. The icon appears on macOS, Windows and Linux; clicks reach the app on macOS and Windows only. `icon_path` resolves relative to the app dir.
     RegisterTrayIcon {
-        /// Stable id; clicks fire `on_tray(id)`.
+        /// Stable id; clicks fire `on_tray(id)` on macOS and Windows.
         id: String,
         /// Path to a PNG icon.
         icon_path: String,
@@ -871,7 +872,7 @@ pub trait ScriptHost: Send + Sync + 'static {
 
     // -- metadata ------------------------------------------------------
 
-    /// Language tag (`"rhai"`, `"candela"`). Used in diagnostics prefixes
+    /// Language tag (`"candela"`, `"rhai"`, `"lua"`). Used in diagnostics prefixes
     /// (`lumen-script-<lang>: ...`).
     fn lang(&self) -> &'static str;
 

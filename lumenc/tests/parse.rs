@@ -1274,7 +1274,7 @@ fn find_by_class<'a>(
 /// tabs / tooltip / scroll in addition to the original button / input /
 /// toggle / slider / tile set. This is the zero-`CssWarning` regression
 /// gate: every property + selector the skin writes must be in the
-/// supported subset (docs/src/authoring/css.md), or this test fails.
+/// supported subset (docs/docs/reference/css.md), or this test fails.
 #[test]
 fn default_skin_applies_to_all_widgets_with_zero_warnings() {
     let src = r##"<root>

@@ -36,8 +36,10 @@ pub enum Command {
     ScriptUpdate(Box<dyn Any + Send>),
     /// Writes a typed value into the [`PropertyStore`].
     ///
-    /// Folds the formerly-global `EXTERNAL_TX` / `EXTERNAL_RX` ring (lumen-ffi, async tasks) onto the bounded per-`App` queue.
     /// Drained in [`TickStage::CommandDrain`](crate::tick::TickStage::CommandDrain) via [`apply_property_commands`].
+    /// The per-`App` queue is the intended home for external property writes, but the global `EXTERNAL_TX` /
+    /// `EXTERNAL_RX` ring in `property_store` is still what lumen-ffi and the async tasks use; this variant has
+    /// no producer yet.
     SetProperty {
         /// Target property key.
         key: PropertyKey,
@@ -149,8 +151,9 @@ impl CommandRegistry {
 ///
 /// Other [`Command`] variants are intentionally dropped by this drain - their owning plugins install dedicated drains.
 ///
-/// Not auto-installed by [`crate::app::App::new`]: wave 1 wires it into the [`crate::tick::TickStage::CommandDrain`]
-/// schedule once the property-bus consumers exist. Foundation only ships the system so downstream wiring is one-liner.
+/// Not auto-installed by [`crate::app::App::new`]. `lumen-runtime` registers it in the
+/// [`crate::tick::TickStage::CommandDrain`] stage when it builds an app; an embedder assembling its own `App`
+/// adds it the same way.
 pub fn apply_property_commands(world: &mut World) {
     let mut to_apply: Vec<(PropertyKey, PropertyValue)> = Vec::new();
     let mut typed_dispatch: Vec<(TypeId, Box<dyn Any + Send>)> = Vec::new();

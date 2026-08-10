@@ -23,11 +23,9 @@
 //!
 //! Comments `/* ... */` are stripped. Tokenisation goes through a
 //! hand-rolled scanner that mirrors the relevant subset of W3C
-//! Syntax-3. The `cssparser` crate is declared as a workspace dep
-//! (W4.1 lays the groundwork) and will be threaded in as we extend
-//! coverage to `@property`, full `@layer`, and attribute selectors;
-//! today's selector / value coverage is narrower than cssparser's
-//! lifetime model is worth.
+//! Syntax-3. The scanner is what the parser uses; the supported
+//! selector and value coverage is narrow enough that a general CSS
+//! tokeniser would cost more than it saves.
 //!
 //! ## Cascade ordering
 //!

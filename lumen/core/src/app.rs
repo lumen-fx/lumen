@@ -11,8 +11,12 @@
 //!
 //! 1. [`Tick`](crate::tick::Tick) `advance()`, bumping the frame counter and `dt`.
 //! 2. The main schedule, ordered `Input -> CommandDrain -> Systems -> LayoutSync -> A11ySync`.
+//!
+//! Steps 3 to 5 run only when [`FrameDirty`] is set; an idle tick stops after step 2.
+//!
 //! 3. [`clear_extracted`] on the render world to remove transient `Extracted*` entities.
-//! 4. Every registered [`ExtractFn`] against `(&main, &mut render)`.
+//! 4. Every registered [`ExtractFn`] against `(&mut main, &mut render)`. The main world is taken mutably because
+//!    [`bevy_ecs::world::World::query`] mutates the world's query cache; extract does not change main-world state.
 //! 5. The render schedule on the render world, ordered `Prepare -> Render`.
 
 use crate::command::{Command, CommandQueue, CommandReceiver, CommandRegistry};
@@ -106,9 +110,9 @@ pub trait Plugin: Sized {
 
     /// Returns the list of plugin names this plugin depends on. Default: empty.
     ///
-    /// [`App::add_plugin`] checks each name against the already-installed set and returns [`AppError::PluginCycle`]
-    /// (or [`AppError::MissingDependency`]) before the build runs, catching "X registered Y's resource before Y was
-    /// installed today" at insertion time. Wave 1 wires the actual topological sort over a deferred plugin queue.
+    /// [`App::add_plugin`] checks each name against the already-installed set and prints a warning for any name it
+    /// does not find, then builds the plugin anyway. Ordering is the caller's responsibility; the topological sort
+    /// over a deferred plugin queue is not written yet.
     fn depends_on(&self) -> &'static [&'static str] {
         &[]
     }
@@ -116,10 +120,10 @@ pub trait Plugin: Sized {
     /// Registers systems and resources on `app`, consuming the plugin.
     fn build(self, app: &mut App);
 
-    /// Optional teardown invoked on [`App::drop`]. Default no-op.
+    /// Optional teardown hook. Default no-op.
     ///
-    /// async-tokio joins workers here; render backends release GPU resources.
-    /// Reserved for wave 2 wiring - foundation only defines the hook.
+    /// The intent is for async-tokio to join workers here and for render backends to release GPU resources.
+    /// [`App`] has no `Drop` impl and nothing calls this yet, so implementing it has no effect today.
     fn cleanup(&mut self, _app: &mut App) {}
 }
 
@@ -196,7 +200,8 @@ pub struct App {
     /// Render world carrying per-frame extracted draw data and GPU resources.
     pub render_world: World,
     /// Extract fns invoked in registration order each tick, after the main schedule and before the render schedule.
-    /// Plugins may push, replace, or swap entries (for example, [`crate::render_world::extract_rects`] is swapped out by scroll / mask / transform plugins that need to alter [`crate::render_world::ExtractedRect`] origins).
+    /// [`App::new`] seeds the list with the built-in extractors and [`App::add_extract_fn`] appends to it. The list is
+    /// public so a plugin can also replace or reorder an entry; nothing in the workspace does that today.
     pub extract_fns: Vec<ExtractFn>,
     /// Worker-thread budget for the `bevy_ecs` multithreaded executor.
     ///

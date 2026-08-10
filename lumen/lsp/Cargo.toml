@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "tower-lsp server for .lumen markup sources."
+description = "tower-lsp server for .lmn markup, Lumen CSS, and Rhai sources."
 
 [lib]
 name = "lumen_lsp"

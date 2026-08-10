@@ -1,46 +1,39 @@
 <p align="center">
-  <img src="assets/colored-logo.png" alt="Lumen" width="320">
+  <img src="assets/colored-logo.png" alt="Lumen" width="160">
 </p>
 
 # Lumen
 
-Lumen is a UI framework for native desktop apps that you write as markup, a
-stylesheet, and a script.
+Lumen is a markup-first UI framework for native desktop apps.
 
-You describe the window as a `.lmn` tree, style it with a CSS subset, and drive
-it from a script. `lumenc` compiles the three into one app and runs it on the
-GPU, with real text shaping and flexbox layout. Nothing browser-shaped sits
-underneath: no Electron, no embedded webview, no JavaScript engine, and the app
-ships as a native binary.
+You describe the interface in `.lmn` markup, style it in CSS, and drive it with
+a script. The result is a native application on Linux, macOS, and Windows,
+drawn on the GPU. Reach for it when you want a desktop app that looks and
+behaves like one, and you would rather write markup and CSS than assemble
+widgets in code. It is not a browser: there is no DOM engine, no JavaScript
+runtime, and no web view.
 
-Reach for Lumen if markup and CSS are how you like to build a UI and the result
-has to be a desktop app.
+## Quick start
 
-## Install
+Install the toolchain:
 
 ```sh
 curl -fsSL https://lumenfx.dev/install.sh | sh
 ```
 
-The installer puts `lumenc` and the `liblumen` runtime under `~/.lumen` and
-asks before touching your PATH. Linux and macOS, x86_64 and aarch64. On
-Windows, run
-[lumen-windows-x86_64.msi](https://github.com/lumen-fx/lumen/releases/latest/download/lumen-windows-x86_64.msi)
-instead; it installs for the current user and needs no administrator
-password. To build from a checkout, see
-[Building Lumen from source](docs/docs/contributing/building-lumen.md).
+On Windows, run the per-user installer from the
+[latest release](https://github.com/lumen-fx/lumen/releases/latest/download/lumen-windows-x86_64.msi).
 
-## Your first app
+Then scaffold an app and run it:
 
 ```sh
-lumenc new counter my-app
+lumenc new my-app counter
 lumenc run my-app
 ```
 
-That scaffolds a runnable directory and opens it in a window. `main.lmn` is the
-tree:
+`my-app/main.lmn` is the whole interface:
 
-```xml
+```html
 <root bg="#0c1c30" padding="32" gap="20" align="center" justify="center">
   <label class="display" id="counter" width="100%" height="120px" text="0"
          bind-text="clicks" />
@@ -52,104 +45,42 @@ tree:
 </root>
 ```
 
-`main.cdl` is the script:
+The script writes a `clicks` value and the label follows it. Edit any file while
+the app runs and the window updates.
 
-```candela
-import "lumen.cdl";
+## What it does
 
-fn on_start() {
-    lumen::signal_set_int("clicks", 0);
-    lumen::on("click", "bump", "handle_bump");
-    lumen::on("click", "reset", "handle_reset");
-}
+- **Markup and layout.** Containers, text, images, and the usual controls:
+  buttons, text fields, toggles, sliders, checkboxes, radios, progress bars,
+  tabs, dropdowns, menus, dialogs, tooltips, and scrollable regions. Flexbox,
+  with CSS grid where it fits better.
+- **CSS you already know.** Selectors, the cascade, pseudo-classes, custom
+  properties, transitions, and platform skins.
+- **Reactive by default.** Named signals hold state; `bind-*`, `<for>`, and
+  `<if>` keep the UI in step. Writing a signal is the whole update.
+- **Scripting in candela, Rhai, or Lua.** The file extension picks the host.
+- **Multi-page apps.** Every `.lmn` file is a page, reachable by its filename,
+  with `<a href>` links.
+- **The desktop around your app.** Menus, tray icons, notifications, global
+  hotkeys, file dialogs, clipboard, drag and drop, audio, and accessibility
+  through AccessKit.
+- **Tooling.** One command to create, check, format, run, and package. A
+  headless mode runs the full pipeline with no window, so a UI can be driven
+  and screenshotted from CI.
 
-fn handle_bump(id) {
-    let n = lumen::signal_get_int("clicks");
-    lumen::signal_set_int("clicks", n + 1);
-}
+## Limitations
 
-fn handle_reset(id) {
-    lumen::signal_set_int("clicks", 0);
-}
+Lumen is in alpha, and APIs can change between releases. An app has one window.
+There is no web, iOS, or Android target. The CSS is a subset of the web's,
+aimed at application UI. An app runs one script host at a time.
 
-fn main() {}
-```
+## Documentation
 
-Clicking `+1` writes the `clicks` signal. The label carries
-`bind-text="clicks"`, so it re-renders itself; no code sets its text. The
-scaffold ships a `main.css` and a `lumen.toml` alongside these two, and a
-README describing what the template shows.
+Full documentation is at [docs.lumenfx.dev](https://docs.lumenfx.dev): getting
+started, task guides, and a complete reference for the markup, CSS, config, CLI,
+and scripting surfaces.
 
-Edit the markup or the stylesheet while the app runs and the change lands
-without a restart, with the running count intact. Add `--headless` to
-`lumenc run` to drive the same app with no window, which is how you run one in
-CI.
-
-candela is the default scripting language. One `import "lumen.cdl";` gives a
-script the whole host surface: signals, the DOM API, timers, dialogs, and the
-OS integrations. Rhai (`.rhai`) and Lua (`.lua`) hosts ship as well and expose
-the same builtins.
-
-## What you get
-
-- A fixed markup vocabulary of layout containers, text, images, and controls,
-  composable through `<template>` and `<slot>`.
-- A CSS subset with custom properties, specificity and combinators,
-  structural and state pseudo-classes, `@media` queries, and transitions.
-- A scripting surface that reads and writes signals, queries and edits the
-  live element tree, and binds events by capture or bubble phase.
-- Widgets you would otherwise hand-build: dropdowns, menus, dialogs,
-  tooltips, tabs, text areas, and validated date and time pickers.
-- Multi-page apps with no router to configure: a second `.lmn` file next to
-  `main.lmn` is a second page, reachable through a plain `<a href="...">`.
-- Native shell integration: menu bar, system tray, notifications, global
-  hotkeys, file dialogs, clipboard, drag and drop, and multi-monitor
-  awareness.
-- Accessibility through AccessKit, localization through Fluent and ICU4X,
-  and audio playback.
-- Headless runs plus automation subcommands that snapshot, search, and click
-  a running app, so a UI can be tested without a screen.
-- A C ABI with C++, Python, and Rust SDKs for embedding Lumen in a host
-  application, and a language server for `.lmn` files that you build from
-  this repo.
-
-## Examples
-
-`apps/` holds working apps to read. `apps/widget-garden` exercises every
-shipped tag, attribute, and OS builtin in a single file and is the reference
-when a doc is ambiguous; `apps/notes`, `apps/music`, and `apps/tracker` are
-full apps in candela. From a checkout:
-
-```sh
-cargo run -p lumenc -- run apps/widget-garden
-```
-
-## Status
-
-Alpha. Every tag, CSS property, and builtin in the docs works, and any of them
-can still change between releases. An app is one window; multi-window is on the
-roadmap.
-
-## Docs
-
-Full documentation lives at <https://docs.lumenfx.dev>: install, a guided
-first app, the tag and CSS references, the scripting builtins, the `lumenc`
-command surface, and the C ABI.
-
-The same pages are in `docs/`. To read them locally you need
-[uv](https://docs.astral.sh/uv/):
-
-```sh
-cd docs
-uv run zensical serve
-```
-
-## Contributing
-
-Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md)
-first: it lists the invariants a change must not break and the lint gates CI
-runs. Open an issue before building anything large, since APIs are still
-moving.
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

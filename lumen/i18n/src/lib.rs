@@ -317,11 +317,11 @@ pub fn is_rtl(lang: &LanguageIdentifier) -> bool {
 /// resources. `fallback_chain` is consulted when the current locale
 /// lacks a key.
 ///
-/// Note: this crate does not depend on `lumen-core`'s `App` /
-/// `Plugin` trait to avoid pulling the entire render/runtime stack
-/// into translation. The runner crate (`lumenc`) can register it as
-/// a normal `lumen_core::Plugin` via the shim below - or call
-/// [`I18nPlugin::install`] directly on a `World` for headless usage.
+/// This crate does not depend on `lumen-core`'s `App` / `Plugin`
+/// trait, to avoid pulling the whole render/runtime stack into
+/// translation, and it does not implement `lumen_core::Plugin`.
+/// Install it by calling [`I18nPlugin::install`] on a `World`, which
+/// is what the runner does.
 pub struct I18nPlugin {
     /// Locales to walk through (in order) when the active locale
     /// lacks a key. Usually ends with the locale the app was authored

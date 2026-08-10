@@ -200,7 +200,7 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "lumen_snapshot_tree",
-                "description": "Structured JSON element tree of the live UI (the surface the bundled browser inspector renders). Node shape: {id, tag?, lumen_id?, classes, role, label, text?, rect:{x,y,w,h}, flags, children:[...]} - rect is the scroll-corrected on-screen rect in logical pixels, flags is the Hovered/Focused/Pressed/Tab-stop string. Prefer lumen_snapshot_text for cheap orientation; use this when you need hierarchy or markup identity (tag / #id / .classes).",
+                "description": "Structured JSON element tree of the live UI. Node shape: {id, tag?, lumen_id?, classes, role, label, text?, rect:{x,y,w,h}, flags, children:[...]} - rect is the scroll-corrected on-screen rect in logical pixels, flags is the Hovered/Focused/Pressed/Tab-stop string. Prefer lumen_snapshot_text for cheap orientation; use this when you need hierarchy or markup identity (tag / #id / .classes).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {

@@ -1,19 +1,19 @@
 # Lumen Python SDK
 
-Effortless, typed Python bindings for the [Lumen](../../) UI framework,
-over the C ABI (`lumen/ffi/include/lumen.h`). State is declarative and
-reactive: you write a `Model` whose fields are typed signals, mutate them
-with plain Python, and the runtime keeps the UI in sync.
+Typed Python bindings for the [Lumen](../../) UI framework, over the C ABI
+(`lumen/ffi/include/lumen.h`). State is declarative and reactive: you write a
+`Model` whose fields are typed signals, mutate them with plain Python, and the
+runtime keeps the UI in sync.
 
-Stdlib only - `ctypes`, no `cffi`, no compiled extension, no build step of
-its own. The only thing to build is the Rust side, once.
+Stdlib only: `ctypes`, no `cffi`, no compiled extension, no build step of its
+own. The only thing to build is the Rust side, once.
 
 ## Quickstart
 
 ```python
 import lumen
 
-class Counter(lumen.Model):        # dataclass-style: fields ARE signals
+class Counter(lumen.Model):        # dataclass-style: each field is a signal
     count: int = 0
     label: str = "0 clicks"
 
@@ -28,10 +28,10 @@ def bump():
 app.run()                          # blocks until the window closes
 ```
 
-Handlers may take the clicked `element_id` string **or no argument** -
-`def bump():` and `def bump(element_id):` both work (mirrors the C++
-SDK's `void()` / `void(std::string)` overloads). You can also register
-without the decorator: `app.on_click("bump", bump)`.
+Handlers may take the clicked `element_id` string or no argument at all;
+`def bump():` and `def bump(element_id):` both work, mirroring the C++ SDK's
+`void()` and `void(std::string)` overloads. You can also register without the
+decorator: `app.on_click("bump", bump)`.
 
 `state.count` and `state.label` *are* signals: reading a field reads the
 signal, writing it pushes the new value to the runtime, and markup bound
@@ -107,12 +107,11 @@ initial value, or to widen an `int` literal to `float`.
 
 ### `watch` and `computed`
 
-`signal.watch(fn)` is a **real ABI subscription** (`lumen_signal_watch`):
-`fn(new_value)` fires on the Lumen tick thread each time the value
-commits - not a polling loop. A freshly-registered watch also fires once
-with the current value on the first tick it is observed. Watches only fire
-**while an app is running** (`run` / `run_headless`), because that is when
-ticks happen.
+`signal.watch(fn)` is an ABI subscription (`lumen_signal_watch`), not a
+polling loop: `fn(new_value)` fires on the Lumen tick thread each time the
+value commits. A freshly-registered watch also fires once with the current
+value on the first tick it is observed. Watches only fire while an app is
+running (`run` or `run_headless`), because that is when ticks happen.
 
 `computed(name, fn, *deps)` derives a signal from `fn()`, recomputing
 whenever any dependency commits. Direct or decorator form:
@@ -151,9 +150,9 @@ completion for `Model` fields, `Signal[T]`, and the `App` methods.
 
 - Python 3.9+ (stdlib `ctypes` only).
 - The Lumen C library, `liblumen_ffi`, built as a `cdylib`.
-- `App.run()` opens a real OS window/GPU surface. For CI or a no-display
+- `App.run()` opens an OS window and a GPU surface. For CI or a no-display
   environment, `App.run_headless(ticks)` drives the full app (scripts,
-  bindings, `<for>`/`<if>` reconciliation, **and `watch` firing**) for a
+  bindings, `<for>` and `<if>` reconciliation, and `watch` firing) for a
   fixed number of ticks with no window.
 
 ## Build the C library
@@ -173,7 +172,7 @@ LUMEN_LIBRARY_PATH=target/debug python sdk/python/examples/todo.py
 ```
 
 Both scripts add their parent directory to `sys.path`, so they run
-straight from a checkout - no `pip install` required. `counter.py` is the
+straight from a checkout with no `pip install`. `counter.py` is the
 quickstart above; `todo.py` exercises a `Model` with a `list` field
 driving a `<for>` block (array signals).
 
@@ -183,9 +182,9 @@ driving a `<for>` block (array signals).
 pip install -e sdk/python
 ```
 
-Registers the `lumen` package (distribution name `lumenui`). It does
-**not** build or bundle `liblumen_ffi` - you still need
-`cargo build -p lumen-ffi` and a way for the loader to find it.
+Registers the `lumen` package (distribution name `lumenui`). It does not
+build or bundle `liblumen_ffi`; you still need `cargo build -p lumen-ffi`
+and a way for the loader to find it.
 
 ## Locating the library
 
@@ -199,14 +198,14 @@ Registers the `lumen` package (distribution name `lumenui`). It does
 4. The system loader's own search paths (`LD_LIBRARY_PATH`, `/usr/lib`, ...).
 
 The loaded library's `lumen_abi_version()` is checked against the version
-this SDK targets (ABI **0.4**); a major mismatch or an older minor raises
+this SDK targets, ABI 0.12. A major mismatch or an older minor raises
 `LumenAbiVersionError`.
 
 ## Threading
 
 `@app.on_click` handlers and `watch` callbacks fire on **Lumen's tick
 thread**, not necessarily the thread that called `run`. `ctypes` acquires
-the GIL for you, so touching Python state is safe - but a slow or blocking
+the GIL for you, so touching Python state is safe; a slow or blocking
 handler stalls the whole event loop (rendering, input, timers). Keep
 handlers fast; hand real work to a Python thread you spawn yourself.
 
@@ -226,7 +225,7 @@ cover the two pre-call failures.
 
 `lumen.raw.Signal` is the thin, stringly surface every abstraction above is
 built on: each method is exactly one `lumen_signal_*` C call. Reach for it
-only when you need the raw ABI - e.g. the array setter, or the stringly
+only when you need the raw ABI, for example the array setter or the stringly
 text setters `bind-text` reads directly.
 
 ```python
@@ -239,7 +238,7 @@ raw.Signal.set_array("rows", [{"id": "a", "name": "x"}])   # <for> array
 raw.Signal.get_string("label")            # read back what the FFI last pushed
 ```
 
-Read-back caveat: `get_string` / `array_len` / `array_field` return the
-value the *embedder* last pushed through the FFI, not live in-app state (a
-Rhai `signals.x.set(..)` or a two-way input binding is not visible here).
-The typed layer above hides all of this.
+Read-back caveat: `get_string`, `array_len`, and `array_field` return the
+value the *embedder* last pushed through the FFI, not live in-app state. A
+write from the app's own script, or a two-way input binding, is not visible
+here. The typed layer above hides all of this.

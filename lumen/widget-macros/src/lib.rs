@@ -68,11 +68,10 @@
 //!
 //! - Per-widget system registration. Authors still call
 //!   `app.add_systems(...)` next to `app.add_plugin(WidgetPlugin)`.
-//! - Parser integration. The lumenc HTML parser ships a hard-coded
-//!   `KNOWN_TAGS` whitelist; emitting an `inventory`-style
-//!   registration would be ignored today. The `Widget::parser_tag`
-//!   method documents the intended tag for the future runtime
-//!   registry.
+//! - Nothing here: the generated plugin calls `<Type>::register()` in
+//!   its `build`, which publishes the tag into the registry the lumenc
+//!   parser consults after its built-in tag table, so adding the
+//!   generated plugin is enough for `<my-thing>` markup to parse.
 
 #![forbid(unsafe_code)]
 

@@ -1,34 +1,11 @@
 //! `lumenc` library. Parses Lumen markup into a [`LayoutIR`] tree and spawns it into an ECS world via [`run_app`].
 //!
-//! Supported tags (all are styled containers; the tag selects defaults - for example `<column>` defaults `flex="column"`):
+//! Every tag is a styled container and the tag selects the defaults: `<column>` sets `flex="column"`, `<scroll>`
+//! attaches the scroll components, `<root>` fills the viewport, and so on. Attributes cover sizing, spacing, paint,
+//! typography, scrolling, interaction, and binding.
 //!
-//! | Tag        | Notes                                                 |
-//! |------------|-------------------------------------------------------|
-//! | `<root>`   | Top-level; defaults to width=100% height=100%.        |
-//! | `<column>` | flex=column.                                          |
-//! | `<row>`    | flex=row.                                             |
-//! | `<scroll>` | Adds a `Scroll` component (plus `ScrollOffset` etc.). |
-//! | `<tile>`   | Styled clickable box; defaults BackgroundColor.       |
-//! | `<label>`  | Carries TextContent.                                  |
-//! | `<div>`    | Generic container, no defaults.                       |
-//!
-//! Supported attributes:
-//!
-//! | Attribute      | Type / values                                              |
-//! |----------------|------------------------------------------------------------|
-//! | `width`        | `auto`, `<n>px`, `<n>%`                                    |
-//! | `height`       | same                                                       |
-//! | `flex`         | `row`, `column`                                            |
-//! | `bg`           | `#rrggbb` or `#rrggbbaa`                                   |
-//! | `radius`       | pixels                                                     |
-//! | `padding`      | `<n>` or `<l> <r> <t> <b>` (all px)                        |
-//! | `margin`       | same                                                       |
-//! | `text`         | text content                                               |
-//! | `text-color`   | `#rrggbb` or `#rrggbbaa`                                   |
-//! | `scroll`       | `y`, `x`, `both` (auto-implied on `<scroll>`)              |
-//! | `sensitivity`  | `f32` (forwarded to `Scroll::sensitivity`)                 |
-//! | `inertia`      | `f32` (forwarded to `Scroll::inertia`)                     |
-//! | `tab-index`    | `i32`                                                      |
+//! The accepted tags live in `KNOWN_TAGS` in [`parser_html`], with the per-tag attribute handling beside it; the
+//! reader-facing lists are the "Tags and attributes" and "CSS" reference pages in `docs/docs/reference/`.
 
 // `deny` (not `forbid`) so the single audited dlopen shim in `loader`, the
 // link-not-embed launcher's only unsafe, can opt in via `#[allow]`. Every

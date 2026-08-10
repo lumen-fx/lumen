@@ -831,7 +831,7 @@ pub struct Attributes {
     /// template; `{field}` placeholders inside their attrs / text get
     /// replaced at reconcile time with the matching record field.
     pub each: Option<String>,
-    /// `key="id"` on `<for>` - record field used as the stable reconciliation key. Stored but not yet consulted by the reconciler.
+    /// `key="id"` on `<for>` - record field used as the stable reconciliation key. Without it the reconciler keys rows by item index.
     pub key: Option<String>,
     /// `<for virtualized="true">` - spawn only rows in the visible scroll window. Requires a `<scroll>` ancestor for the reconciler to compute the visible band.
     pub virtualized: bool,

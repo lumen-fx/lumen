@@ -1,43 +1,27 @@
 # Your first app
 
-This walkthrough builds a click counter end to end: scaffold it, run it, read
-the four files it generated, change one, and watch hot reload swap it in with
-the count intact. Every command is `lumenc`. No Rust compiler is involved at
-any point.
+This walks through the `counter` template: a number, two buttons, and a script
+that ties them together. It is the shortest complete example of how a Lumen app
+is put together, and every idea in it scales up unchanged.
 
-## Scaffold it
+## Create and run it
 
-```bash
-lumenc new counter my-counter
+```sh
+lumenc new my-app counter
+lumenc run my-app
 ```
 
-```
-created my-counter/ from template 'counter'.
-run it with: lumenc run my-counter
-```
+A window opens with a large `0` and two buttons. Click `+1` and the number
+goes up; click `reset` and it goes back to zero.
 
-The template writes four source files and a README:
+Four files were written into `my-app/`: the markup, a stylesheet, a script, and
+a small config file. Take them one at a time.
 
-- `main.lmn` - the markup tree.
-- `main.css` - styling.
-- `main.cdl` - the candela script.
-- `lumen.toml` - per-app config.
-- `README.md` - what the template demonstrates.
+## The markup
 
-## Run it
+`main.lmn` is the element tree. It is the only required file in an app.
 
-```bash
-lumenc run my-counter
-```
-
-A 480x360 window opens on a dark blue field: a large `0` with two buttons
-under it, `+1` and `reset`. Click `+1` and the number goes up; click `reset`
-and it goes back to zero. Leave the window open, because the rest of this page
-edits the files underneath it.
-
-## `main.lmn` - the markup
-
-```xml
+```html
 <root bg="#0c1c30" padding="32" gap="20" align="center" justify="center">
   <label class="display" id="counter" width="100%" height="120px" text="0"
          bind-text="clicks" />
@@ -49,74 +33,31 @@ edits the files underneath it.
 </root>
 ```
 
-`<root>` is the single document root. Every `.lmn` file has exactly one, and
-it defaults to a vertical flex container filling the window. Here it carries
-layout attributes directly: `padding`, `gap`, and centered `align` / `justify`.
+Reading it top to bottom:
 
-`<label>` is a text leaf. Its `bind-text="clicks"` pushes the value of the
-`clicks` signal into the label whenever that signal changes, so the `text="0"`
-is only what shows before the script runs. `<row>` lays its children out
-left to right. `<button>` is a focusable tile with click dispatch wired in;
-each one carries an `id` so the script can name it.
+- `<root>` is the window's content. Every app has exactly one, and layout
+  attributes on it apply to its children: `padding` insets them, `gap` spaces
+  them out, `align` and `justify` centre them. By default children stack
+  vertically.
+- `<label>` draws text. `text="0"` is what it shows before anything runs, and
+  `bind-text="clicks"` says the label follows a value named `clicks`: whenever
+  `clicks` changes, the label redraws. Nothing sets its text by hand.
+- `<row>` lays its children out horizontally. Its vertical counterpart is
+  `<column>`.
+- `<button>` is clickable. `id` is the name the script uses to talk about a
+  specific element.
+- `<script src="main.cdl" />` attaches the app's script.
 
-`<script src="main.cdl" />` attaches the script. It is captured at parse time
-and never rendered. Nothing points at `main.css`: Lumen loads the `main.css`
-sitting next to the entry file on its own.
+`class` picks up styling, and `width` / `height` size an element. `100%` is a
+share of the parent; `120px` is a fixed logical pixel size.
 
-Unknown tags fail at parse time with a byte offset, so a typo like `<colum>`
-stops the run instead of silently rendering nothing. The
-[tag reference](../authoring/tags.md) lists every tag and its attributes.
+Full tag and attribute list: [Tags reference](../reference/tags.md). The
+[markup guide](../guides/markup.md) covers the tree in depth.
 
-## `main.cdl` - the script
+## The styling
 
-```candela
-import "lumen.cdl";
-
-fn on_start() {
-    lumen::signal_set_int("clicks", 0);
-    lumen::on("click", "bump", "handle_bump");
-    lumen::on("click", "reset", "handle_reset");
-}
-
-fn handle_bump(id) {
-    let n = lumen::signal_get_int("clicks");
-    lumen::signal_set_int("clicks", n + 1);
-}
-
-fn handle_reset(id) {
-    lumen::signal_set_int("clicks", 0);
-}
-
-fn main() {}
-```
-
-`import "lumen.cdl";` is the whole setup. It declares the Lumen host surface
-in one line: signals, events, timers, the dynamic DOM, dialogs, and the OS
-integrations. `main()` is candela's program entry point; a Lumen app leaves it
-empty and works from the lifecycle handlers instead.
-
-`on_start()` runs once at app construction, before the first tick. Seed
-signals and register event routes here.
-
-`lumen::on(event, id, handler)` routes one event on one element to one
-function. The handler receives the id of the element that fired, so one
-function can serve several ids. A click on an element with no route falls
-through to a global `on_click(id)` instead, which is what you reach for when
-ids are generated rather than known up front.
-
-`lumen::signal_get_int` and `lumen::signal_set_int` read and write a named
-entry in the reactive store. The `<label>` carries `bind-text="clicks"`, so
-every write re-renders it. There is no redraw call.
-
-A signal is the state that survives between handler calls: every handler is a
-fresh call into the program, and locals do not outlive it.
-[Scripting](../authoring/scripting.md) covers signals, derived signals, and
-the rest of the host surface; the
-[candela reference](../reference/scripting-candela.md) lists every function.
-The candela language itself, its syntax, types, and standard library, is
-documented at <https://candela.lumenfx.dev/>.
-
-## `main.css` - the styling
+`main.css` sits next to `main.lmn` and is picked up automatically. You never
+link it from the markup.
 
 ```css
 :root {
@@ -142,17 +83,65 @@ documented at <https://candela.lumenfx.dev/>.
 .primary:focus { outline: 2 var(--color-accent); }
 ```
 
-`:root { --name: value; }` declares custom properties, and `var(--name)`
-reads them back. Keeping every color in one block is what makes a theme swap
-a one-block edit.
+Selectors, the cascade, and pseudo-classes work the way they do on the web.
+`:root` holds custom properties, so changing the palette is one block of edits
+rather than a search through the file. `hover-bg` and `press-bg` give a button
+its hover and pressed backgrounds without writing a `:hover` rule for each.
 
-`.display` and `.primary` match the `class` attributes in the markup.
-`.primary:focus` styles the focused state. Inline markup attributes win over
-CSS, so the `bg="#0c1c30"` written on `<root>` stays put no matter what a
-stylesheet says; move a value into a class when you want CSS to own it. The
-[CSS subset](../authoring/css.md) has the full property list.
+Every property and value form: [CSS reference](../reference/css.md). Theming and
+skins: [styling guide](../guides/styling.md).
 
-## `lumen.toml` - the config
+## The script
+
+`main.cdl` is written in candela, Lumen's default scripting language.
+
+```rust
+import "lumen.cdl";
+
+fn on_start() {
+    lumen::signal_set_int("clicks", 0);
+    lumen::on("click", "bump", "handle_bump");
+    lumen::on("click", "reset", "handle_reset");
+}
+
+fn handle_bump(id) {
+    let n = lumen::signal_get_int("clicks");
+    lumen::signal_set_int("clicks", n + 1);
+}
+
+fn handle_reset(id) {
+    lumen::signal_set_int("clicks", 0);
+}
+
+fn main() {}
+```
+
+`import "lumen.cdl";` brings in the Lumen host surface, which is where
+`lumen::signal_set_int` and the rest come from. `main()` stays empty: a Lumen
+app does its work in lifecycle handlers, not in a top-level program.
+
+`on_start()` runs once after the first layout. It does two things:
+
+- Creates the `clicks` signal with the value `0`. A signal is a named value the
+  UI can follow; the label's `bind-text="clicks"` is what makes the connection.
+- Routes clicks. `lumen::on("click", "bump", "handle_bump")` sends clicks on
+  the element with `id="bump"` straight to `handle_bump`.
+
+`handle_bump` reads the signal, adds one, and writes it back. That write is the
+whole update: the label is already following `clicks`, so it redraws itself.
+There is no code that touches the label.
+
+The signal and binding model: [reactivity guide](../guides/reactivity.md). What
+scripts can call: [scripting guide](../guides/scripting.md) and the
+[candela reference](../reference/scripting-candela.md).
+
+!!! note "Other languages"
+    Rhai and Lua work the same way. Name the file `main.rhai` or `main.lua` and
+    Lumen picks the matching host from the extension.
+
+## The config
+
+`lumen.toml` describes everything static about the app.
 
 ```toml
 [app]
@@ -163,77 +152,29 @@ title = "Counter"
 size = [480, 360]
 ```
 
-Every key is optional. This one names the entry file (which is already the
-default) and sets the window title and size. There is no `[script]` block:
-Lumen sees `main.cdl` in the directory and runs the app on candela. See
-[Per-app config](../authoring/lumen-toml.md) for the whole surface and
-[Choosing a host](../authoring/scripting.md#choosing-a-host) for the selection
-rule.
+`entry` names the markup file to start from, and `[window]` sets the title and
+the starting size. Every key: [lumen.toml reference](../reference/lumen-toml.md).
 
-## Change it
+## Change something
 
-With the app still running, add one line to `handle_bump` so the pressed
-button picks up a `hot` class:
+Leave the app running and edit a file. Save `main.css` with a different
+`--color-accent`, or add a button to `main.lmn`, and the window updates without
+a restart.
 
-```candela
-fn handle_bump(id) {
-    let n = lumen::signal_get_int("clicks");
-    lumen::signal_set_int("clicks", n + 1);
-    get_by_id(id).class_add("hot");
-}
+Two more commands are worth knowing early:
+
+```sh
+lumenc check my-app
+lumenc run my-app --headless --ticks 5
 ```
 
-`get_by_id(id)` returns a `Node` wrapping one live element, and `.class_add`
-edits its class list. That is the dynamic DOM API: `spawn("label")` mints an
-element, `parent.append(child)` places it, and `.set_text(...)` /
-`.set_style(...)` edit it. A lookup that misses returns a `Node` with handle
-`0` rather than raising, so call `.exists()` when you are not sure the element
-is there.
-
-Give the class something to do, in `main.css`:
-
-```css
-.hot { bg: var(--color-accent); }
-```
-
-## Hot reload
-
-Saving any of the three source files reloads that file alone, without
-restarting the app:
-
-| File | What happens on save |
-|---|---|
-| `main.lmn` | Re-parse and re-spawn, preserving stateful components by `LumenId`. Text cursors, toggles, sliders, and scroll positions survive. |
-| `main.css` | Re-apply styling. A class-invalidation set fast-rejects a class flip no rule cares about. |
-| `main.cdl` | Compile the new source, then swap it in. Signals survive, so the running count does not blink back to zero. A source that fails to compile leaves the running script untouched and logs the error. |
-
-Try the first two:
-
-1. Change one button's text from `+1` to `add` in `main.lmn`. Save. The label
-   flips and the count keeps its value.
-2. Change `--color-accent` from `#5fd9e0` to `#f7768e` in `main.css`. Save.
-   The focus outline repaints without losing focus or hover state.
-
-The watcher covers the entry markup, its stylesheet, every script the markup
-references, and every included or imported file. `lumen.toml` is read once at
-startup; restart `lumenc run` to pick up a config change.
-
-Editing `main.cdl` has a catch worth knowing before you try it. A script
-reload clears the per-id routes `lumen::on(event, id, handler)` registered,
-and `on_start` only runs at app construction, so nothing re-registers them.
-The new code is live, but the counter's buttons go quiet until you restart
-`lumenc run`. Change `n + 1` to `n + 5`, save, restart, and the next click
-adds five.
-
-A script that dispatches through the global `on_click(id)` instead of
-per-id routes keeps working across reloads, because that handler is
-resolved by name on every click.
+`check` parses the app and reports errors without opening a window, which is
+what you run in CI. `--headless` runs the whole app, layout and rendering
+included, with no window at all; see the [testing guide](../guides/testing.md).
 
 ## Next
 
-- [Project layout](./project-layout.md) - what files belong where.
-- [Template gallery](./templates.md) - the other six scaffolds.
-- [Markup tags](../authoring/tags.md) - every shipped tag.
-- [Scripting](../authoring/scripting.md) - signals, events, and the DOM API.
-- [`apps/widget-garden`](https://github.com/lumen-fx/lumen/tree/main/apps/widget-garden)
-  exercises every tag and attribute in one file.
+- [What each file in an app directory is](project-layout.md).
+- [The other templates](templates.md), including list rendering, forms, and
+  native shell integration.
+- [Package an app for other people](../guides/packaging.md).

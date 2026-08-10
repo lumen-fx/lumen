@@ -8,7 +8,7 @@
         <tooltip text="Toggle OS-following theme override" delay="300">
           <button id="theme-toggle" class="btn-ghost" text="Toggle theme" />
         </tooltip>
-        <tooltip text="Hotkey: Ctrl+S" delay="300">
+        <tooltip text="Hotkey: Ctrl+Shift+L" delay="300">
           <button id="notify" class="btn-primary" text="Notify" />
         </tooltip>
       </row>

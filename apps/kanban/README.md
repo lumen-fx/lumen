@@ -1,9 +1,8 @@
 # Lanes - Kanban board
 
 A three-column board (Backlog / In progress / Done) with add, edit, move,
-delete, and live search. Built to show a real data flow, not a static
-mock: one `cards` ArraySignal is the single source of truth, and the three
-visible lists are rebuilt from it on every change.
+delete, and live search. One `cards` ArraySignal is the single source of
+truth, and the three visible lists are rebuilt from it on every change.
 
 ## Run
 

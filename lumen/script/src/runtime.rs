@@ -7,8 +7,9 @@
 //! policy driver, timers, HTTP fetch plumbing, the load-failure banner
 //! protocol, and the [`ScriptPlugin`] that wires it all into the tick.
 //!
-//! Concrete hosts (`lumen-script-rhai`, future `-candela`) provide engine +
-//! builtins + conversion and hand a built host to [`ScriptPlugin::new`].
+//! Concrete hosts (`lumen-script-candela`, `lumen-script-rhai`,
+//! `lumen-script-lua`) provide engine + builtins + conversion and hand a
+//! built host to [`ScriptPlugin::new`].
 //!
 //! ## Ordering contract (7bfc0f2 - do not regress)
 //!

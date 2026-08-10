@@ -1,718 +1,498 @@
-# Lua scripting API
+# Lua scripting reference
 
-Lua is one of the three script hosts Lumen ships, alongside candela (the
-default) and Rhai. It runs the same event handlers, signals, and dynamic DOM
-API on Lua 5.4, via `mlua`. Reach for it when you or your team already think
-in Lua, or when you want Lua idioms (colon-call methods, 1-indexed arrays,
-`pcall`) for app logic.
+Every builtin the Lua script host registers, with its signature, parameters, and
+behaviour. The host runs Lua 5.4. For the task-oriented introduction see
+[Scripting](../guides/scripting.md).
 
-Attach the script from markup the way every host does:
+The same surface in the other hosts: [candela](scripting-candela.md),
+[rhai](scripting-rhai.md).
 
-```html
-<script src="main.lua" />
-```
+## Selecting the host
 
-A `main.lua` in the app directory selects the Lua host on its own, as long as
-no `.cdl` file sits beside it. Pin the choice with `[script] engine` when you
-want it to hold regardless of which files are present:
+An app runs one script host. Lumen picks it from `lumen.toml`:
 
 ```toml
-[app]
-entry = "main.lmn"
-
 [script]
-engine = "lua"
+engine = "lua"   # "candela" (default) | "rhai" | "lua"
 ```
 
-An inline `<script>...</script>` body carries no extension for that inference
-to read, so an app that keeps its Lua entirely inline needs the explicit
-`engine = "lua"`. See [Choosing a host](../authoring/scripting.md#choosing-a-host)
-for the full selection order.
+With no `[script] engine` key, the host is inferred from the file extensions in
+the app directory: a `.cdl` file selects candela, then `.lua` selects lua, then
+`.rhai` selects rhai. Every script file the markup references is concatenated
+into one program.
 
-Every inline body and every `src` file concatenate, in document order, into
-one program compiled by that one host. There is no way to mix hosts within
-one app.
+## Reaching the builtins
 
-## Reaching the API from Lua
-
-There is no `require` and no module table to import. Every Lumen-provided
-capability is installed as a plain Lua global (a function, or a table of
-functions) before your script's top level runs, alongside Lua's normal
-standard library (`string`, `table`, `math`, `os`, `io`, `coroutine`, ...) -
-the host does not sandbox the interpreter beyond what `mlua`'s default state
-loads. Four shapes show up:
-
-- **Global functions** - most of the surface: `signal(...)`, `set_text(...)`,
-  `fetch(...)`, `query(...)`, and so on. Call them directly.
-- **Namespace tables** - `document`, `window`, `history`, and the chained
-  `signals` root group related functionality: `document.query(sel)`,
-  `window.set_title(t)`, `history.back()`, `signals.count.get()`.
-- **Handle objects (userdata)** - `signal(...)`, `signal_array(...)`,
-  `query(...)`, `get_by_id(...)`, and the DOM traversal methods return
-  Lua userdata with **colon-call** methods: `local c = signal("n", 0);
-  c:set(c:get() + 1)`. This is the one place Lua's idiom diverges from
-  Rhai's dot-call - the receiver is the object before the colon, matching
-  ordinary Lua OOP.
-- **Lifecycle callbacks** - functions **you** define at the top level
-  (`function on_click(id) ... end`) that the runtime calls by name at
-  well-defined points. See [Lifecycle callbacks](#lifecycle-callbacks)
-  below.
-
-Lua's native 1-indexing is preserved where it fits: `ArraySignal:get(i)`
-and a `signals.list[i]` subscript are 1-based. Two exceptions inherited
-from the underlying Rust query result type are called out at their entry
-below (`NodeQuery:nth`, `window.size()`).
-
-## Lifecycle callbacks
-
-These are not builtins - they are functions you write at the script's top
-level. The runtime looks each one up by name and calls it when the matching
-event happens; a script that omits one just never receives that event
-(a missing function is silent, not an error).
-
-| Function | Fires when |
-|---|---|
-| `on_start()` | Once, at app construction, before the first tick and before any element is queryable. Register handlers and signals here. |
-| `on_ready()` | Once, on the first tick after the DOM index is first published - the first point a `query`/`get_by_id` call inside a handler sees the mounted tree. Optional; a script without it is unaffected. |
-| `on_close()` | Before the window backend tears anything down. Returning `false` vetoes the close and keeps the window open; any other return value (or no `on_close` at all) lets it proceed. |
-| `on_click(id)` / `on_double_click(id)` | Pointer click / double-click on the element with id `id`. When both fire on the same element in one tick, only `on_double_click` runs. |
-| `on_long_press(id)` | Long-press gesture on `id`. |
-| `on_text_input(id, text)` | IME commit on an `<input>` / `<textarea>`; `text` is the committed substring. |
-| `on_toggle(id, checked)` | A toggle control changed; `checked` is a bool. |
-| `on_slider(id, value)` | A slider commit; `value` is a float. |
-| `on_file_dropped(id, path)` | An OS file drop landed on an element with `drop="true"`. |
-| `on_drop(target_id, payload)` | In-app drag-and-drop: a drag ended over `target_id`. `payload` is the source's `drag-payload` attribute (or its id). |
-| `on_drag_start(source_id, payload)` | In-app drag-and-drop: a drag started from `source_id`. |
-| `on_file_picked(tag, path)` | `pick_file` / `save_file` / `pick_file_filtered` dialog closed. Empty `path` means the user cancelled. |
-| `on_files_picked(tag, paths)` | `pick_files` dialog closed; `paths` is the selected paths joined with `\|`. |
-| `on_folder_picked(tag, path)` | `pick_folder` dialog closed. |
-| `on_hotkey(name)` | A global OS hotkey registered with `register_hotkey` fired. |
-| `on_menu(id)` | A `<menubar>` / `<menu>` item was clicked. |
-| `on_dialog_accepted(id)` / `on_dialog_rejected(id)` | A native dialog closed via its accept / reject action. |
-| `on_tray(id)` | A system tray icon registered with `tray_icon` was clicked. |
-| `on_timer(name)` | A `set_timeout` / `set_interval` timer fired. |
-| `on_fetch(tag, body)` / `on_fetch_error(tag, message)` | `fetch(url, tag)` completed. A non-2xx response fires `on_fetch_error` with `"HTTP status <code>"` as the message - `fetch` treats anything outside 2xx as a failure. |
-| `on_http(tag, response)` | `http({...})` completed (2xx or not). `response` is a table `{ ok, status, headers, body, error }`; `ok` is only true for a 2xx status, but the call always reaches `on_http` rather than `on_http_error`. |
-| `on_audio_end()` | The active audio track finished playing. Fires only when the audio subsystem is compiled in. |
-
-Every event above except `on_start`, `on_ready`, `on_close`, and
-`on_audio_end` also supports **per-id routing**: `on(event, key, "fn_name")`
-sends that one event/key pair to `fn_name` instead of the global
-`on_<event>` handler. Those four carry no key to route on. The event name
-passed to `on(...)` is the lowercased word from the table above
-(`"click"`, `"double_click"`, `"long_press"`, `"text_input"`, `"toggle"`,
-`"slider"`, `"file_dropped"`, `"drop"`, `"drag_start"`, `"file_picked"`,
-`"files_picked"`, `"folder_picked"`, `"hotkey"`, `"menu"`,
-`"dialog_accepted"`, `"dialog_rejected"`, `"tray"`, `"timer"`, `"fetch"`,
-`"fetch_error"`, `"http"`). A handler registered against the bare suffix
-of a templated id also matches every instance of that template (see
-`on` / `local_id` below).
-
-## Reactive state
-
-### `signal(name, default) -> Signal`
-
-Return a handle to a named scalar signal, seeding it with `default` the
-first time the name is seen (an existing SDK/FFI-pushed value wins over
-`default`). Every call for the same `name` shares the same underlying
-value.
+Builtins are Lua globals; there is no import or require step.
 
 ```lua
-local c = signal("clicks", 0)
-c:set(c:get() + 1)
+function on_start()
+    local count = signal("count", 0)
+    count:set(1)
+end
 ```
 
-`Signal` methods: `sig:get()`, `sig:set(v)`.
+Handles (`Signal`, `ArraySignal`, `Node`, `NodeQuery`, `Event`) are userdata
+with methods, called with the colon form. The chained `signals` accessor works
+with either form, because the value is always the last argument:
+`signals.count.set(5)` and `signals.count:set(5)` both write `5`.
 
-### `signal_array(name) -> ArraySignal`
+Arrays follow Lua convention where the host builds them: `ArraySignal:get(i)`,
+the numeric `signals.users[i]` subscript, and every returned sequence table are
+1-indexed.
 
-Return a handle to a named reactive array backing `<for each="name">`
-markup. The array is created lazily on first `:set` / `:push`.
+`print(...)` is captured into the script command stream instead of writing to
+stdout; arguments are joined with a tab.
+
+## Lifecycle hooks
+
+Define these as global functions. Each is optional; a missing hook is a no-op.
+
+| Hook | Fires |
+| --- | --- |
+| `on_start()` | Once at app construction, before the first tick. No element is queryable yet: `get_by_id` returns `nil`. |
+| `on_ready()` | Once per mount, on the first tick after the element tree is published. Queries resolve here. Re-armed after a hot reload, so it runs again on the fresh tree. |
+| `on_close()` | On an OS close request, before teardown. Return `false` to veto the close and keep the window open. |
+| `on_audio_end()` | When the audio transport reaches the end of a track. |
+
+Top-level statements run once when the script loads, so that is where handler
+functions and `on(...)` registrations are defined. A top-level `local` survives
+as an upvalue of any function that closes over it. Across a hot reload the
+signal values, the `on(...)` routing table, and live event bindings are
+preserved.
+
+## Event handlers
+
+Each event dispatches to a global handler function named below. Handlers are
+optional.
+
+| Handler | Arguments |
+| --- | --- |
+| `on_click(id)` | Element id. Suppressed when a double-click fires on the same element in the same tick. |
+| `on_double_click(id)` | Element id. |
+| `on_long_press(id)` | Element id. |
+| `on_toggle(id, checked)` | Element id, boolean. |
+| `on_slider(id, value)` | Element id, number. |
+| `on_text_input(id, text)` | Element id, current text. Fires on every edit that changes the text, and once more on Enter commit. |
+| `on_drop(target_id, payload)` | Drop-zone id, the source's text payload. |
+| `on_drag_start(source_id, payload)` | Drag-source id, its text payload. |
+| `on_file_dropped(id, path)` | Element id, dropped file path. |
+| `on_file_picked(tag, path)` | Dialog tag, chosen path. Empty path on cancel. |
+| `on_files_picked(tag, paths)` | Dialog tag, paths joined with `\|`. |
+| `on_folder_picked(tag, path)` | Dialog tag, chosen folder. |
+| `on_hotkey(name)` | Registered hotkey name. |
+| `on_menu(id)` | Menu item id. |
+| `on_tray(id)` | Tray icon id. |
+| `on_dialog_accepted(id)` | Dialog id. |
+| `on_dialog_rejected(id)` | Dialog id. |
+| `on_timer(name)` | Timer name. |
+| `on_fetch(tag, body)` | Request tag, response body (2xx only). |
+| `on_fetch_error(tag, message)` | Request tag, error text. |
+| `on_http(tag, response)` | Request tag, the response table described under [Networking](#networking). |
+
+### Per-element routing
 
 ```lua
-local todos = signal_array("todos")
-todos:set({
-    { id = "1", label = "Task A" },
-    { id = "2", label = "Task B" },
-})
-todos:push({ id = "3", label = "Task C" })
-local n = todos:len()
-local row = todos:get(1)   -- 1-indexed: first item, or nil if empty
+on(event, id, handler)
 ```
 
-`ArraySignal` methods: `:set(arr)` (a Lua array/sequence table; a
-non-sequence table is stored as a single-item array), `:push(item)`,
-`:len()`, `:get(i)` (1-based), `:all()` (a snapshot array of every item -
-mutating it does not write back; follow up with `:set(...)`).
+Routes one `(event, id)` pair to the script function named `handler` (a string),
+bypassing the global handler for that pair only. `event` is the name without the
+`on_` prefix (`"click"`, `"toggle"`, `"timer"`, `"file_picked"`, ...). A handler
+registered for `save` also matches template-instance ids ending in `:save`.
 
-### `signals` (chained accessor)
+## Signals
 
-A global `signals` table gives dot- or index-chained access to the same
-global property store `signal()` reads, without minting a named handle
-first:
+### Handles
+
+```lua
+signal(name, default)   -- -> Signal
+signal_array(name)      -- -> ArraySignal
+```
+
+`signal` returns a handle to the named scalar signal, seeding it with `default`
+the first time that name is seen. A value pushed in before the script loaded
+wins over the default. `signal_array` returns a handle to the named reactive
+array that drives `<for each="name">`.
+
+| Method | Returns | Behaviour |
+| --- | --- | --- |
+| `Signal:get()` | any | Current value. |
+| `Signal:set(value)` | | Replace the value. |
+| `ArraySignal:set(table)` | | Replace all rows. |
+| `ArraySignal:push(item)` | | Append one row. |
+| `ArraySignal:len()` | integer | Row count. |
+| `ArraySignal:get(index)` | any | One row; 1-indexed. `nil` out of range. |
+| `ArraySignal:all()` | table | Every row. |
+
+Rows are string-keyed tables; their fields become the values a `<for>` block
+binds to.
+
+### Chained access
+
+`signals` is a pre-bound global. Each `.name` or `[index]` step extends the
+property path, and a terminal method commits:
 
 ```lua
 signals.count.set(5)
+signals.user.name.set("Alice")
+signals.users[1].name.set("Bo")
+signals.bg.set_color("#ff8800")
 local n = signals.count.get()
-signals.user.name.set("Alice")     -- dotted path -> key "user.name"
-signals.users[1].name.set("Bo")    -- 1-based index -> key "users[1].name"
-signals.bg.set_color("#ff8800")    -- writes a typed Color
 ```
 
-`.get()` / `.set(v)` / `.set_color(hex)` work as both dotted
-(`signals.count.get()`) and colon (`signals.count:get()`) calls; the value
-is always the trailing argument. `set` takes an integer, number, boolean,
-or string; any other Lua type is ignored. `get()` reads the cross-thread
-typed snapshot before the script-local mirror, so it sees a value written
-by an embedder or another thread.
+The Lua type of the argument picks the stored type: an integer stores an
+integer, a number a float, a string a string, a boolean a boolean. Hex colours
+need the explicit `set_color` method. Index subscripts render as `[N]` in the
+property key, so `signals.users[1].name` is the key `users[1].name`.
 
-An index segment becomes part of the key verbatim, so Lua's 1-based
-`signals.users[1].name` addresses the key `users[1].name`. Rhai's 0-based
-`signals.users[0].name` is a different key for the same logical row; keep
-that in mind when porting a script between the two hosts.
+### Typed accessors
 
-`signals` has no entity-scoped form from Lua; the keys are global.
+These predate the chained form and remain available.
 
-### `derive(name, deps, fn) -> Signal`
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `signal_get_int(name)` | integer | Read as an integer; `nil` on miss. |
+| `signal_set_int(name, value)` | | Write an integer. |
+| `signal_get_float(name)` | number | Read as a float; `nil` on miss. |
+| `signal_set_float(name, value)` | | Write a float. |
+| `signal_get_bool(name)` | boolean | Read as a boolean; `nil` on miss. |
+| `signal_set_bool(name, value)` | | Write a boolean. |
+| `signal_get_color(name)` | table | Read as `{ r, g, b, a }` with integer channels; `nil` on miss. |
+| `signal_set_color(name, hex)` | | Write a `#rrggbb` or `#rrggbbaa` colour. An unparseable value is ignored. |
+| `signals_all()` | table | The whole signal set as a name-to-value table. |
+| `is_valid(id)` | boolean | Whether the element with that `id` currently passes validation. `true` for an element with no validation state. |
 
-Register a computed signal. `deps` is a Lua array whose entries are either
-`Signal` handles or plain strings naming a signal. `fn` re-runs whenever
-any dependency's value changes, and its return value is stringified into
-`name`. Every derivation also runs once on the first tick after
-registration, whether or not a dep has changed, so a bound value is
-correct on the first frame.
+### Derived signals
 
 ```lua
-local clicks = signal("clicks", 0)
-local label = derive("counter_label", { clicks }, function(n)
-    return "Clicks: " .. n
-end)
-
-derive("status", {}, function() return "ready" end)  -- fires once at startup
+derive(name, deps, f)   -- -> Signal
 ```
 
-### Deprecated typed signal builtins
-
-`signal_set_int(name, value)` / `signal_get_int(name)`,
-`signal_set_float(name, value)` / `signal_get_float(name)`,
-`signal_set_bool(name, value)` / `signal_get_bool(name)`, and
-`signal_set_color(name, hex)` / `signal_get_color(name)` write and read a
-single typed global signal directly (same store as `signals`). They
-predate the chained `signals.name.set(v)` / `.get()` form and are kept for
-back-compat; prefer the chained form in new code. Every getter returns
-`nil` on a miss or a type mismatch.
-
-## Element and text mutators
-
-These take the target's `id="..."` string and mutate it in one call - no
-`Node` handle needed. They are the lowest-friction way to update markup
-that isn't wired to a `bind-*` attribute.
-
-- `set_text(target_id, text)` - replace the element's text content.
-- `set_src(target_id, path)` - swap an `<image>`'s asset path
-  (app-relative); the old decoded asset is dropped and re-decoded.
-- `set_class(id, classes)` - replace the element's whitespace-separated
-  class list.
-- `set_root_class(classes)` - same, targeting `<root>` directly (no id
-  needed); the usual way to drive a theme switch.
-- `is_valid(id) -> bool` - whether the element currently passes validation
-  (true when no validity signal has been recorded for it).
+Registers a computed signal recomputed whenever any dependency changes. `deps`
+is a sequence of `Signal` handles or signal-name strings; `f` receives the
+dependency values in `deps` order and returns the new value:
 
 ```lua
-set_text("hero-temp", "21C")
-set_src("hero-icon", "icons/sun.png")
-set_root_class("app theme-dark")
+local a = signal("a", 1)
+local b = signal("b", 2)
+local sum = derive("sum", { a, b }, function(a, b) return a + b end)
 ```
 
-## Routing and ids
-
-### `on(event, id, handler_fn_name)`
-
-Route one `event` on element `id` to the script function named
-`handler_fn_name`, instead of the global `on_<event>(id)` fallback. See
-[Lifecycle callbacks](#lifecycle-callbacks) for the full event-name list.
-
-```lua
-on("click", "save", "handle_save")
-on("click", "cancel", "handle_cancel")
-
-function handle_save(_id) end
-function handle_cancel(_id) end
-```
-
-A handler registered for a bare suffix (`"save"`) also matches every
-templated instance's qualified id (`"user-card:save"`,
-`"team-card:save"`) via a last-`:` suffix fallback; register the full
-qualified id instead for per-instance routing.
-
-### `local_id(source, suffix) -> string`
-
-Return the sibling id `suffix` inside the same template instance as
-`source`. `local_id("user-card:btn", "label")` returns
-`"user-card:label"`; a `source` with no colon returns `suffix` unchanged.
-
-```lua
-function handle_save(id)
-    set_text(local_id(id, "status"), "Saved!")
-end
-```
+A derivation runs once after registration, then on every change to a
+dependency. Derived-of-derived chains settle within the same tick. A derivation
+that errors is retried on the next tick.
 
 ## Timers
 
-- `set_timeout(name, ms)` - one-shot; fires `on_timer(name)` after `ms`
-  milliseconds.
-- `set_interval(name, ms)` - repeating; fires `on_timer(name)` every `ms`
-  milliseconds until cancelled.
-- `cancel_timer(name)` - cancel a pending or repeating timer by name;
-  no-op if unknown. Safe to call from inside the timer's own `on_timer`.
+| Builtin | Behaviour |
+| --- | --- |
+| `set_timeout(name, ms)` | One-shot timer; fires `on_timer(name)` after `ms` milliseconds. |
+| `set_interval(name, ms)` | Repeating timer; fires `on_timer(name)` every `ms` milliseconds. |
+| `cancel_timer(name)` | Cancel the named timer. |
+
+Timer names are unique: setting a timer with an existing name replaces it.
+Negative delays clamp to zero. Cancelling from inside the timer's own handler
+takes effect before the next fire.
+
+## Query and traverse the element tree
+
+`Node` is a cheap handle. Reads resolve against the snapshot rebuilt each tick,
+so a handle to a removed element stops resolving.
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `query(selector)` | `NodeQuery` | Every element matching a CSS selector, document order. A malformed selector raises. |
+| `get_by_id(id)` | `Node` or `nil` | Element with that `id`. |
+| `document()` | `Node` or `nil` | The document root. `document` is also a namespace table; calling it returns the root. |
+
+| `NodeQuery` method | Returns | Behaviour |
+| --- | --- | --- |
+| `len()` | integer | Match count. |
+| `is_empty()` | boolean | Whether there are no matches. |
+| `first()` | `Node` or `nil` | First match. |
+| `nth(i)` | `Node` or `nil` | Match at zero-based `i`. |
+| `iter()` | table | Every match, 1-indexed. |
+| `collect()` | table | Every match, 1-indexed. |
+| `single()` | `Node` | The one match; raises when the count is not exactly one. |
+| `get_single()` | `Node` or `nil` | The one match, or `nil` for any other count. |
+
+| `Node` method | Returns | Behaviour |
+| --- | --- | --- |
+| `parent()` | `Node` or `nil` | Parent. |
+| `first_child()` / `last_child()` | `Node` or `nil` | Bounding child. |
+| `next()` / `prev()` | `Node` or `nil` | Sibling. |
+| `children()` | table | Children in document order, 1-indexed. |
+| `closest(selector)` | `Node` or `nil` | Nearest ancestor-or-self matching the selector. |
+| `exists()` / `valid()` | boolean | Whether the handle is in the current snapshot. |
+| `handle()` | integer | The raw packed handle. |
+
+## Mutate the element tree
+
+Every mutator returns the receiver, so calls chain; read-backs end the chain.
+Mutations queue a command applied later in the same tick.
+
+| Builtin or method | Returns | Behaviour |
+| --- | --- | --- |
+| `spawn(tag)` / `document.spawn(tag)` | `Node` | Create a detached element. The handle is valid for the rest of the tick; attach it before the tick ends. |
+| `Node:clone_deep()` | `Node` | Deep-clone the subtree into a fresh detached element. |
+| `Node:set_attr(name, value)` | `Node` | Set an attribute. `id`, `class`, `text`, and `disabled` route to their typed component; anything else lands in the attribute map. |
+| `Node:remove_attr(name)` | `Node` | Remove an attribute. |
+| `Node:set_id(id)` | `Node` | Set the `id` attribute. |
+| `Node:set_text(text)` | `Node` | Replace the text content. |
+| `Node:set_inner_markup(markup)` | `Node` | Replace the children with a parsed markup fragment. Do not feed untrusted content. A no-op when the app runs from a precompiled artifact, which links no parser. |
+| `Node:add_class(class)` | `Node` | Add one class. |
+| `Node:remove_class(class)` | `Node` | Remove one class. |
+| `Node:toggle_class(class)` | `Node` | Toggle one class. |
+| `Node:set_class(classes)` | `Node` | Replace the whole class list. |
+| `Node:set_style(name, value)` / `Node:style_set(name, value)` | `Node` | Set one inline style property. |
+| `Node:style_remove(name)` | `Node` | Remove one inline style property. |
+| `Node:append(child)` | `Node` | Append `child` under the receiver. |
+| `Node:insert_before(child, reference)` | `Node` | Insert `child` before `reference` under the receiver. |
+| `Node:set_parent(parent)` / `Node:move_to(parent)` | `Node` | Reparent the receiver under `parent`. |
+| `Node:replace_with(new)` | `Node` | Replace the receiver with `new`, despawning the receiver's subtree. Returns `new`. |
+| `Node:remove()` | | Detach and despawn the receiver and its subtree. Terminal. |
+
+## Read element state
+
+| Method | Returns | Behaviour |
+| --- | --- | --- |
+| `Node:get_attr(name)` | string or `nil` | One attribute value. |
+| `Node:text()` | string or `nil` | Text content. |
+| `Node:id()` | string or `nil` | The `id` attribute. |
+| `Node:has_class(class)` | boolean | Whether the class list contains `class`. |
+| `Node:style_get(name)` | string or `nil` | One inline style override. |
+| `Node:computed_style(name)` | string or `nil` | One resolved style property after the cascade. |
+| `Node:computed_style()` | table | Every resolved style property. |
+| `Node:inline_style()` | table | Every inline style override. |
+| `Node:attrs()` | table | Every attribute. |
+| `Node:classes()` | table | The class list, 1-indexed. |
+
+## Introspection
+
+| Builtin or method | Returns | Behaviour |
+| --- | --- | --- |
+| `Node:rect()` | table or `nil` | Post-layout border box: `x`, `y`, `width`, `height`, `client_x`, `client_y`. Local `x` / `y` are relative to the parent; `client_*` are window coordinates. |
+| `Node:content_rect()` | table or `nil` | Same keys, for the content box (padding and border removed). |
+| `Node:scroll()` | table or `nil` | `x`, `y`, `max_x`, `max_y`. |
+| `Node:is_visible()` | boolean | Effective visibility. |
+| `Node:z_index()` | integer | Resolved stacking order. |
+| `Node:matched_rules()` | table | Every CSS rule that matched, each a table of `selector`, `specificity` (a three-element sequence), `source`, `source_order`, and `declarations`. |
+| `Node:entity_id()` | table or `nil` | `index` and `generation` of the backing entity. |
+| `Node:components()` | table | Names of the introspectable components on the element. |
+| `Node:component(name)` | table or `nil` | Field map of one component. Raises for a name outside the introspectable set. |
+| `Node:outer_markup()` | string | The subtree serialized to markup text. |
+| `Node:inner_markup()` | string | The children serialized to markup text. |
+| `dump_tree()` | string | Whole-tree structural dump. |
+| `pointer_state()` | table | `x`, `y`, `inside`, `buttons`, and a nested `modifiers` table of `shift`, `ctrl`, `alt`, `super`. |
+| `frame_info()` | table | `frame`, `dt_ms`, `dirty_count`. |
+
+The introspectable components are `LayoutBox`, `Visuals`, `Opacity`, `ZIndex`,
+`Visible`, `TextContent`, `LumenClasses`, `LumenAttributes`, `InlineStyle`, and
+`Style`.
+
+## Element events
+
+Bind a function to one element and one event type. Binding returns a function
+that unbinds when called.
+
+| Method | Returns | Behaviour |
+| --- | --- | --- |
+| `Node:on(event_type, handler)` | function | Bind for the bubble phase. |
+| `Node:on(event_type, handler, capture)` | function | Bind for the capture phase when `capture` is `true`. |
+| `Node:on_capture(event_type, handler)` | function | Bind for the capture phase. |
 
 ```lua
-set_timeout("hide-toast", 3000)
-
-function on_timer(name)
-    if name == "hide-toast" then
-        signals.toast.set("")
-    end
-end
+local off = get_by_id("save"):on("click", function(e)
+    e:prevent_default()
+    print(e:event_type())
+end)
+-- later
+off()
 ```
 
-## HTTP
+The handler receives an `Event`:
 
-### `fetch(url, tag)`
+| `Event` method | Returns | Value |
+| --- | --- | --- |
+| `target()` | `Node` | The element the event originated on. |
+| `current_target()` | `Node` | The element whose handler is running. |
+| `event_type()` | string | Event type name. |
+| `key()` | string | Key name for keyboard events. |
+| `value()` | string | Text value for `input` / `change` / `submit`. |
+| `button()` | integer | `0` primary, `1` middle, `2` secondary. |
+| `x()` / `y()` | number | Pointer position relative to the target. |
+| `client_x()` / `client_y()` | number | Pointer position in window coordinates. |
+| `delta_x()` / `delta_y()` | number | Wheel delta. |
+| `position()` | table | `x`, `y`, `client_x`, `client_y`. |
+| `modifiers()` | table | `shift`, `ctrl`, `alt`, `super`. |
+| `prevent_default()` | | Cancel the default action. |
+| `stop_propagation()` | | Stop the event reaching further elements. |
+| `stop_immediate_propagation()` | | Stop the event entirely, including other handlers on this element. |
 
-Issue an HTTP GET off-thread. On a 2xx response, fires
-`on_fetch(tag, body)`; anything else (transport failure or non-2xx) fires
-`on_fetch_error(tag, message)`.
+### Event types
 
-```lua
-fetch("https://api.example.com/weather?lat=40.7", "weather")
+`click`, `dblclick`, `pointerdown`, `pointerup`, `pointermove`, `pointerenter`,
+`pointerleave`, `wheel`, `keydown`, `keyup`, `input`, `change`, `focus`, `blur`,
+`submit`, `scroll`.
 
-function on_fetch(tag, body)
-    if tag == "weather" then
-        local data = parse_json(body)
-        signals.temp.set(data.current.temp)
-    end
-end
+Dispatch runs capture (root down to the target), then the target, then bubble
+(target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`, and
+`scroll` do not bubble.
 
-function on_fetch_error(tag, msg)
-    signals.status.set("error: " .. msg)
-end
-```
+`input`, `change`, and `submit` all come from the text-commit signal, so they
+fire on commit rather than per keystroke. Only `click` has a default action
+(link navigation); `prevent_default` on a click skips it.
 
-### `http(request)`
+## window, document, history
 
-General HTTP request. `request` is a table:
-`{ method, url, headers, body, timeout_ms, tag }` (`method` defaults to
-`"GET"`; `headers` is a string-keyed table; everything else is optional).
-Fires `on_http(tag, response)` once the reply lands, where `response` is
-`{ ok, status, headers, body, error }` - `ok` reflects a 2xx status, but
-the callback fires for any completed request (transport failure sets
-`status = 0` and fills `error`).
+Pre-bound global tables.
 
-```lua
-http({ method = "POST", url = "https://api.example.com/todos",
-       headers = { ["Content-Type"] = "application/json" },
-       body = "{\"title\":\"test\"}", tag = "create" })
+| Call | Returns | Behaviour |
+| --- | --- | --- |
+| `window.set_href(path)` | | Navigate to a page path. |
+| `window.href()` | string | The current page path. |
+| `window.reload()` | | Re-navigate to the current page. |
+| `window.title()` | string | Window title. |
+| `window.set_title(title)` | | Set the window title. |
+| `window.dpr()` | number | Device pixel ratio. |
+| `window.size()` | table | `{ width, height }` in logical pixels. |
+| `window.set_size(width, height)` | | Resize the window, in logical pixels. |
+| `window.location.path()` | string | The current page path. |
+| `window.location.query()` | string | Always empty; query strings are not tracked. |
+| `window.location.hash()` | string | Always empty; fragments are not tracked. |
+| `history.back()` | | Step one entry back. |
+| `history.forward()` | | Step one entry forward. |
+| `history.go(delta)` | | Step `delta` entries; negative goes back. |
+| `document.root()` | `Node` or `nil` | The document root. |
+| `document.query(selector)` | `NodeQuery` | Matching elements, document order. |
+| `document.get_by_id(id)` | `Node` or `nil` | Element with that `id`. |
+| `document.focused()` | `Node` or `nil` | The focused element. |
+| `document.hovered()` | `Node` or `nil` | The hovered element. |
+| `document.spawn(tag)` | `Node` | Create a detached element. |
 
-function on_http(tag, response)
-    if tag == "create" and response.ok then
-        set_text("status", "created, status " .. response.status)
-    end
-end
-```
+## Page navigation
 
-### `parse_json(json) -> any`
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `page(path)` | | Navigate to a page path (`"settings"`, `"/user/7"`, `"/"`). |
+| `page()` | string | The active page key. |
+| `page_back()` | boolean | Step one entry back in the page history. |
+| `page_forward()` | boolean | Step one entry forward. |
 
-Parse a JSON string into a Lua table/array/scalar. Returns `nil` on a
-parse error.
+See [Pages](../guides/pages.md) for the file layout these paths resolve against.
 
 ## Dialogs
 
-- `pick_file(tag)` - native open-file dialog; fires
-  `on_file_picked(tag, path)`.
-- `pick_files(tag)` - native multi-select dialog; fires
-  `on_files_picked(tag, paths)` (paths joined with `|`).
-- `pick_folder(tag)` - native folder picker; fires
-  `on_folder_picked(tag, path)`.
-- `save_file(tag, default_name)` - native save dialog seeded with
-  `default_name`; fires `on_file_picked(tag, path)`.
-- `pick_file_filtered(tag, spec)` - `pick_file` with a filter list.
-  `spec` is pipe-separated `Label:ext1,ext2` groups; a literal `*`
-  extension means "no filter" (`"Images:png,jpg|All:*"`).
+Each opens a native dialog and delivers the result to the matching handler,
+keyed by `tag`. A cancelled dialog still fires once, with an empty path.
 
-Every dialog fires its handler once, even on cancel (with an empty path),
-so scripts can clean up modal state unconditionally.
+| Builtin | Behaviour |
+| --- | --- |
+| `pick_file(tag)` | Open-file dialog; fires `on_file_picked(tag, path)`. |
+| `pick_files(tag)` | Multi-select dialog; fires `on_files_picked(tag, paths)` with paths joined by `\|`. |
+| `pick_folder(tag)` | Folder picker; fires `on_folder_picked(tag, path)`. |
+| `save_file(tag, default_name)` | Save dialog seeded with `default_name`; fires `on_file_picked(tag, path)`. |
+| `pick_file_filtered(tag, spec)` | Open-file dialog with extension filters. `spec` is pipe-separated `Label:ext1,ext2` groups; a `*` extension means no filter. |
 
-```lua
-on("click", "open", "do_open")
-function do_open(_id) pick_file_filtered("open", "Text:txt,md|All:*") end
+## OS integration
 
-function on_file_picked(tag, path)
-    if tag == "open" and path ~= "" then
-        signals.opened.set(path)
-    end
-end
-```
+| Builtin | Behaviour |
+| --- | --- |
+| `notify(title, body)` | Show an OS notification. |
+| `copy_image(path)` | Copy the image at `path` to the system clipboard. |
+| `save_clipboard_image(path)` | Write the clipboard image to `path` as PNG. |
+| `tray_icon(id, icon_path, tooltip)` | Register or replace a tray icon; clicks fire `on_tray(id)`. An empty tooltip disables it. |
+| `unregister_tray(id)` | Remove a tray icon. |
+| `register_hotkey(name, accelerator)` | Register a global hotkey (`"CommandOrControl+S"`, `"Alt+Space"`, `"F11"`); fires `on_hotkey(name)`. |
+| `unregister_hotkey(name)` | Remove a global hotkey. |
+| `open_menu(id)` | Open menu `id` by setting the `__menu_open:id` signal to true. |
+| `close_menu(id)` | Close menu `id`. |
 
-## Native shell (OS integration)
+See [OS integration](../guides/os-integration.md) for the markup these pair with.
 
-- `notify(title, body)` - OS notification (libnotify / NSUserNotification
-  / Toast). Fire-and-forget; a missing notification daemon logs to
-  stderr rather than erroring the script.
-- `copy_image(path)` - read the PNG at `path` (app-relative) and put it
-  on the system clipboard.
-- `save_clipboard_image(path)` - write the current clipboard image to
-  `path` as PNG.
-- `tray_icon(id, icon_path, tooltip)` - register or replace a system
-  tray icon (macOS/Windows; Linux logs a warning and no-ops). Empty
-  `tooltip` disables the tooltip. Clicks fire `on_tray(id)`.
-- `unregister_tray(id)` - remove a previously registered tray icon.
-- `register_hotkey(name, accelerator)` - register a global OS hotkey
-  (Electron/`global-hotkey` accelerator syntax, e.g.
-  `"CommandOrControl+S"`); fires `on_hotkey(name)` regardless of window
-  focus.
-- `unregister_hotkey(name)` - remove a previously registered hotkey.
-- `open_menu(id)` / `close_menu(id)` - flip the `__menu_open:<id>` signal
-  driving a `<menu id="...">` popup.
+## Styling and theming
 
-```lua
-register_hotkey("save", "CommandOrControl+S")
-function on_hotkey(name)
-    if name == "save" then notify("Lumen", "Saved.") end
-end
-```
+| Builtin | Behaviour |
+| --- | --- |
+| `set_class(id, classes)` | Replace the class list on the element with that `id`. |
+| `set_root_class(classes)` | Replace the class list on the root element, which drives theme-token selectors. |
+| `set_color_scheme(name)` | Switch the color scheme: `"default"` (follow the OS), `"force-light"`, `"force-dark"`, `"prefer-light"`, `"prefer-dark"`. An unknown name is ignored with a warning. |
 
 ## Audio
 
-Thin transport controls over the app's single audio player
-(`lumen-audio`). `audio_seek` / `audio_volume` take a Lua number, so an
-integer literal (`audio_seek(30)`) works the same as a float
-(`audio_seek(30.5)`).
+| Builtin | Behaviour |
+| --- | --- |
+| `audio_play(path)` | Load and play the track at `path` (app-relative wav or ogg); resets position to zero. |
+| `audio_pause()` | Pause, holding position. |
+| `audio_resume()` | Resume a paused transport. |
+| `audio_stop()` | Stop and rewind. |
+| `audio_seek(secs)` | Seek to `secs`, clamped to the track duration. |
+| `audio_volume(level)` | Set output volume in `0.0` to `1.0`. |
 
-- `audio_play(path)` - load and play the app-relative track (wav/ogg),
-  replacing any current track and resetting position to 0.
-- `audio_pause()` - pause, holding position.
-- `audio_resume()` - resume a paused transport.
-- `audio_stop()` - stop and rewind to 0.
-- `audio_seek(secs)` - seek to `secs` seconds (clamped to track duration).
-- `audio_volume(level)` - set output volume, `0.0..=1.0`.
+The transport writes the `audio_position`, `audio_duration`, and `audio_playing`
+signals each tick, so markup binds to them directly.
 
-Playback position / duration / playing state are host-written signals,
-not builtins: `audio_position`, `audio_duration`, `audio_playing`. Read
-them with `signals.audio_position.get()` / `bind-*` markup /
-`derive(...)`, not a getter function.
+## Networking
 
-## Files and misc
+| Builtin | Behaviour |
+| --- | --- |
+| `fetch(url, tag)` | HTTP GET. A 2xx reply fires `on_fetch(tag, body)`; a transport failure or non-2xx fires `on_fetch_error(tag, message)`. |
+| `http(request)` | General HTTP request. Fires `on_http(tag, response)` for every completed request. |
 
-- `t(key) -> string` - translate `key` in the app's active locale; returns
-  `key` itself when no catalogue carries it. See
-  [Translation](../authoring/i18n.md).
-- `tr(key) -> string` - alias for `t(key)`, under Qt's name.
-- `read_file(path) -> string` - read a file to a string; empty string on
-  error (a warning is logged).
-- `write_file(path, contents) -> bool` - write `contents` to `path`;
-  `true` on success.
-- `parse_markdown(src) -> array` - parse markdown into a block list for
-  `<for>`: each entry is `{ id, kind, level, text, lang }`, where `kind`
-  is `"h"` / `"p"` / `"code"` / `"li"` / `"hr"` and `level` is the heading
-  depth (0 otherwise).
-- `add_clicks(n)` - legacy host-interpreted token; the runtime forwards it
-  without attaching semantics. Kept for early-alpha app compatibility.
-- `set_string(key, value)` - free-form key/value token, forwarded without
-  semantics; only meaningful to a custom host extension.
-- `print(...)` - Lua's `print` is overridden to capture its arguments
-  (tab-joined, Lua's own `tostring` convention for numbers) into the host
-  diagnostic stream instead of stdout.
+`request` is a table: `url` and `tag` are required; `method` defaults to
+`"GET"`; `headers` is a table of header name to value; `body` is a string;
+`timeout_ms` is a positive number.
 
-## Global introspection
+`response` is a table of `ok` (true for a 2xx status), `status` (`0` on a
+transport failure), `headers` (names lowercased), `body`, and `error` (empty on
+success).
 
-Read-only snapshots of runtime state, useful for debugging and devtools-style
-scripts.
+Requests run off the UI thread; the reply is delivered on the tick thread, so a
+handler may touch signals and the element tree freely.
 
-- `pointer_state() -> table` - `{ x, y, inside, buttons, modifiers =
-  { shift, ctrl, alt, super } }` for the current pointer.
-- `frame_info() -> table` - `{ frame, dt_ms, dirty_count }` for the current
-  tick.
-- `signals_all() -> table` - every signal's current stringified value, as
-  a string-keyed table.
-- `dump_tree() -> string` - a serialized dump of the live element tree.
+## Data helpers
 
-## Dynamic DOM API
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `parse_json(json)` | any | Parse JSON into a table or scalar. `nil` on a parse error. |
+| `parse_markdown(src)` | table | Parse markdown into block tables of `id`, `kind`, `level`, `text`, `lang`. `kind` is one of `h`, `p`, `code`, `li`, `hr`; `level` carries the heading level. |
+| `local_id(source, suffix)` | string | The sibling id `suffix` inside the same template instance as `source`. `local_id("user-card:btn", "label")` is `"user-card:label"`; a `source` without a `:` returns `suffix`. |
 
-Lua reaches the same host-neutral dynamic-DOM surface the C ABI and the
-other script hosts use (`lumen_script::node_query` /
-`lumen_script::introspect` / `lumen_script::event` in the Rust source) -
-it calls those Rust functions directly rather than going through the C
-ABI. A `Node` is a lightweight handle wrapping a packed integer, valid for
-the current tick's snapshot; nodes come from a query, a traversal step, or
-a mutation call.
+## Translation
 
-### Finding nodes
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `t(key)` | string | The active locale's string for `key`, or `key` itself when untranslated. |
+| `tr(key)` | string | Alias for `t`. |
 
-- `query(selector) -> NodeQuery` - run a CSS selector (the same selector
-  engine the stylesheet cascade uses, including sibling combinators)
-  against the live tree; returns a result set in document order.
-- `get_by_id(id) -> Node | nil` - fast id lookup.
-- `document() -> Node | nil` / `document.root() -> Node | nil` - the
-  document root. `document` is both callable and a namespace table (see
-  below), so `document()` and `document.root()` are equivalent.
-- `document.query(selector)` / `document.get_by_id(id)` - the namespaced
-  spellings of the two globals above.
-- `document.focused() -> Node | nil` / `document.hovered() -> Node | nil` -
-  the currently focused and hovered elements. There is no global form of
-  these two.
-- `spawn(tag) -> Node` / `document.spawn(tag) -> Node` - create a fresh
-  detached element with markup tag `tag` (e.g. `"div"`); attach it with
-  `parent:append(node)` or `node:set_parent(parent)`.
+See [Translation](../guides/i18n.md) for the catalogue format.
 
-`NodeQuery` methods: `:len()`, `:is_empty()`, `:first() -> Node|nil`,
-`:nth(i) -> Node|nil`, `:iter()` / `:collect()` (both return a 1-indexed
-Lua array of every matched `Node`), `:single() -> Node` (errors unless
-exactly one match), `:get_single() -> Node|nil` (`nil` for zero or more
-than one match). **`:nth(i)` is 0-indexed** (`nth(0)` is the first
-match) - this is the one place the DOM API does not follow Lua's usual
-1-based convention, inherited from the underlying Rust index.
+## Filesystem
 
-```lua
-local cards = query(".card.selected")
-if not cards:is_empty() then
-    cards:first():add_class("highlight")
-end
-```
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `read_file(path)` | string | File contents; empty string on error. |
+| `write_file(path, contents)` | boolean | `true` on success. |
 
-### Node traversal
+## Embedder commands
 
-`node:parent()`, `node:first_child()`, `node:last_child()`, `node:next()`,
-`node:prev()` each return a `Node` or `nil`. `node:children()` returns a
-1-indexed Lua array of every child `Node`. `node:closest(selector)` walks
-up from `node` (inclusive) and returns the first ancestor matching
-`selector`, or `nil`; a malformed selector raises a Lua error.
-`node:exists()` / `node:valid()` (identical) report whether the handle
-still resolves to a live element. `node:handle()` returns the packed
-handle as an integer.
+Two builtins emit a command with no built-in effect under `lumenc run`. They
+exist for embedders that read the script command stream directly.
 
-### Node mutation
+| Builtin | Behaviour |
+| --- | --- |
+| `add_clicks(n)` | Emit an add-clicks command carrying `n`. |
+| `set_string(key, value)` | Emit a set-string command carrying `key` and `value`. |
 
-Every mutator enqueues its change and returns the receiver `Node` (except
-where noted), so chains compose:
-`node:add_class("a"):add_class("b"):set_text("done")`.
+Two more write directly to the element tree by id, without a node handle:
 
-- `node:set_attr(name, value)` / `node:remove_attr(name)`
-- `node:set_id(id)` - sugar for `set_attr("id", id)`
-- `node:set_text(text)` - replace text content
-- `node:set_inner_markup(markup)` - parse `markup` and replace the
-  node's children with it. Only available on the dev / from-source run
-  path (the injected markup parser is absent from a precompiled
-  artifact, where this is a no-op). Do not feed it untrusted content -
-  it injects live markup.
-- `node:add_class(class)` / `node:remove_class(class)` /
-  `node:toggle_class(class)`
-- `node:set_class(classes)` - replace the whole class list
-- `node:set_style(name, value)` (alias `node:style_set(name, value)`) /
-  `node:style_remove(name)` - inline style property, the highest
-  cascade tier
-- `node:set_parent(parent)` (alias `node:move_to(parent)`) - append under
-  a new parent, detaching from the current one
-- `node:append(child)` - append `child` under `node`
-- `node:insert_before(child, reference)` - insert `child` under `node`
-  ahead of `reference`
-- `node:replace_with(new)` - replace `node` with `new` in its parent,
-  then remove `node`'s subtree; **returns `new`**, not the receiver
-- `node:remove()` - detach and remove `node` and its subtree; returns
-  nothing
-- `node:clone_deep()` - deep-clone `node`'s subtree into a fresh detached
-  node; **returns the clone**, not the receiver
+| Builtin | Behaviour |
+| --- | --- |
+| `set_text(target_id, text)` | Replace the text content of the element with that `id`. |
+| `set_src(target_id, path)` | Swap the asset path of an `<image>` at run time. Paths are app-relative. |
 
-### Node read-backs
+## Reserved global
 
-These end a chain and return a value instead of the receiver:
-
-- `node:get_attr(name) -> string|nil`, `node:id() -> string|nil`,
-  `node:text() -> string|nil`
-- `node:has_class(class) -> bool`
-- `node:style_get(name) -> string|nil` - inline style only
-- `node:computed_style(name) -> string|nil` - the resolved cascade value
-  for one property; `node:computed_style()` with no argument returns the
-  full resolved property map as a table
-
-### Node introspection
-
-Lower-level, post-layout state:
-
-- `node:rect() -> table|nil` / `node:content_rect() -> table|nil` -
-  `{ x, y, width, height, client_x, client_y }`, or `nil` before first
-  layout
-- `node:scroll() -> table|nil` - `{ x, y, max_x, max_y }`
-- `node:is_visible() -> bool`
-- `node:z_index() -> integer`
-- `node:inline_style() -> table` - property name -> value
-- `node:attrs() -> table` - attribute name -> value
-- `node:classes() -> table` - 1-indexed array of class names
-- `node:matched_rules() -> table` - 1-indexed array of every stylesheet
-  rule matching `node`, each `{ selector, specificity = {a,b,c}, source,
-  source_order, declarations }` (`source` is `"user-agent"` or
-  `"author"`; `source_order` and `specificity` are what the cascade uses
-  to break ties between entries)
-- `node:entity_id() -> table|nil` - `{ index, generation }` of the
-  backing ECS entity
-- `node:components() -> table` - 1-indexed array of component type names
-  present on the entity
-- `node:component(name) -> table|nil` - one component's fields as a
-  string-keyed table, or `nil` if absent; raises a Lua error for an
-  unknown component name
-- `node:outer_markup() -> string` / `node:inner_markup() -> string`
-
-### Events
-
-`node:on(event_type, handler)` and `node:on(event_type, handler, capture)`
-bind a Lua function to `node`; `node:on_capture(event_type, handler)` is
-the capture-phase shorthand for `on(type, handler, true)`. Both return an
-**off function**: calling it unbinds the handler.
-
-```lua
-local off = get_by_id("save-btn"):on("click", function(ev)
-    ev:prevent_default()
-    set_text("status", "clicked at " .. ev:x() .. "," .. ev:y())
-end)
-
--- later: off()
-```
-
-The handler receives one argument, an `Event` userdata, with:
-`ev:target()` / `ev:current_target()` (`Node`), `ev:event_type()`,
-`ev:key()`, `ev:value()`, `ev:button()`, `ev:x()` / `ev:y()` (local
-coordinates), `ev:client_x()` / `ev:client_y()` (window coordinates),
-`ev:delta_x()` / `ev:delta_y()` (wheel), `ev:position()` (a table with
-`x`, `y`, `client_x`, `client_y`), `ev:modifiers()` (a table with `shift`,
-`ctrl`, `alt`, `super`), `ev:prevent_default()`, `ev:stop_propagation()`,
-`ev:stop_immediate_propagation()`.
-
-Propagation follows the standard DOM contract: capture phase root-to-target,
-then the target's own handlers, then bubble phase target-to-root for event
-types that bubble (`focus`, `blur`, `pointerenter`, `pointerleave`, and
-`scroll` do not bubble; everything else does).
-
-### Window, location, and history
-
-`window` and `history` are namespace tables, not per-node methods:
-
-- `window.set_href(path)` / `window.href() -> string` - navigate / read
-  the current page path (file-based pages)
-- `window.reload()` - re-navigate to the current path
-- `window.title() -> string` / `window.set_title(title)`
-- `window.size() -> table` - a 1-indexed pair `{ width, height }` (not a
-  named `{w, h}` table - index it as `window.size()[1]`)
-- `window.set_size(width, height)`
-- `window.dpr() -> number` - device pixel ratio
-- `window.location.path() -> string` - same as `window.href()`.
-  `window.location.query()` and `window.location.hash()` always return
-  `""`; those parts of the URL are not tracked yet.
-- `history.back() -> boolean` / `history.forward() -> boolean` (each
-  reports whether a step was available) / `history.go(delta)`
-
-The runtime adds four more navigation globals on top of the host crate:
-`page(path)` navigates, `page()` with no argument reads the current page
-path, and `page_back()` / `page_forward()` step the history stack.
-`set_color_scheme(name)` forces the resolved color scheme, taking one of
-`"default"`, `"force-light"`, `"force-dark"`, `"prefer-light"`, or
-`"prefer-dark"`. These come from the runtime rather than
-`lumen-script-lua`, so a custom embedding that skips the standard plugin
-wiring will not have them; the same applies to `on_ready`. See
-[Pages](../authoring/pages.md).
-
-## A worked example
-
-Based on the shipped weather app (`apps/weather/main.lua`), which sets
-`engine = "lua"` and loads via `<script src="main.lua" />`:
-
-```lua
-local function fmt_temp(c)
-    local unit = signal("unit", "C"):get()
-    if unit == "F" then
-        return math.floor(c * 9.0 / 5.0 + 32.0) .. "F"
-    end
-    return math.floor(c) .. "C"
-end
-
-local function render_hero()
-    local city = signal("city", ""):get()
-    if city == "" then
-        set_text("hero-city", "Pick a city")
-        return
-    end
-    set_text("hero-city", city)
-    set_text("hero-temp", fmt_temp(signal("hero_temp", 0.0):get()))
-end
-
-function on_start()
-    signal("unit", "C"):set("C")
-    render_hero()
-end
-
-function on_text_input(id, text)
-    if id == "search" then
-        set_text("status", "Fetching " .. text .. "...")
-        local url = "https://geocoding-api.open-meteo.com/v1/search?count=1&name=" .. text
-        fetch(url, "geo")
-    end
-end
-
-function on_fetch(tag, body)
-    local data = parse_json(body)
-    if tag == "geo" then
-        local r = data.results[1]
-        signal("city", ""):set(r.name)
-        render_hero()
-    end
-end
-
-function on_fetch_error(tag, msg)
-    set_text("status", "Fetch " .. tag .. " failed: " .. msg)
-end
-```
-
-The full app additionally shows per-day forecast rendering with a `for`
-loop over a fetched array, unit toggling on click, and a drop-target
-handler - see `apps/weather/main.lua` and its markup
-`apps/weather/main.lmn` for the complete picture.
-
-## Limitations
-
-The Lua host covers the same ground as the Rhai host, including the full
-dynamic DOM API (query, traversal, mutation, introspection, events), but a
-few names and shapes differ:
-
-- Lua creates an element with `spawn(tag)` / `document.spawn(tag)`. Rhai
-  reserves `spawn` as a keyword in its own tokenizer, so Rhai source spells
-  it `create(tag)` / `document.create(tag)`.
-- Rhai's `Signal` carries a `.value` get/set property; Lua's `Signal` has
-  only `:get()` and `:set(v)`.
-- Rhai overloads `audio_seek` / `audio_volume` on int and float; Lua takes
-  a single number for each, which covers both.
-- `register_command_fn` caps at four arguments on Rhai. Lua is natively
-  variadic and has no cap.
-
-`window.size()` returns a positional pair rather than a
-`{width=,height=}` table, and `NodeQuery:nth` is 0-indexed while every
-other indexed accessor in the API (`ArraySignal:get`, `signals.list[i]`)
-is 1-indexed. Both are called out at their entries above since they break
-the otherwise-consistent 1-based convention.
-
-Four global introspection functions - `pointer_state`, `frame_info`,
-`signals_all`, and `dump_tree` - are callable exactly like the rest of the
-surface, but the Lua host's builtin metadata table, which the language
-server draws completion and hover from, does not list them. Editor
-completion for those four is missing even though the calls work.
-
-A handler that raises clears the host's pending command queue, so the
-signal writes it made are discarded. DOM mutations are not: Lua queues
-them on a separate bus that a handler error does not roll back, so a
-partially built subtree survives. Build a subtree in one pass, or check
-your inputs before you start mutating.
-
-candela, the third host and Lumen's default, carries DOM nodes and events
-as integer handles. Its prelude wraps them in `Node` and `Event` types
-with the same method shape Lua and Rhai expose (`get_by_id(id).parent()`,
-`event(ev).target()`), and the prefixed free functions
-(`lumen::node_parent(h)`, `lumen::event_target(ev)`) stay reachable
-underneath. See [candela scripting](./scripting-candela.md).
+`__lumen_event_handlers` is the table the host keeps bound event handlers in,
+keyed by token. Do not write to it.

@@ -1302,11 +1302,11 @@ fn build_element(
         // option's value if the author hasn't pre-set it.
         column.attrs.signal_seed = Some((open_signal, "false".to_string()));
         if let Some(default) = default_value {
-            // Stack a second seed for the value signal. Attributes only
-            // carries one signal_seed slot today, so we use a child
-            // element to seed the value via a no-op `<if signal>`
-            // wrapping pattern... or, simpler, accept the limitation and
-            // Drop the auto-default; authors set the initial value via `signal("<value_signal>", "<first-option>");` in `main.rhai`.
+            // `Attributes` carries one `signal_seed` slot and it is
+            // already spent on the open-panel signal, so the computed
+            // first-option default is dropped. Authors set the initial
+            // value by writing the value signal from the app's script,
+            // in whichever host the app uses.
             let _ = default;
         }
         return Ok(column);

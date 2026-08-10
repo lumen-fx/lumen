@@ -1,64 +1,112 @@
-# Template gallery
+# Templates
 
-`lumenc new <template> <name>` scaffolds a runnable app directory from one of
-seven built-in templates. Every one ships `main.lmn`, a script, `lumen.toml`,
-and a `README.md` explaining the concepts it demonstrates; all but `hello`
-also ship a `main.css`. They all run as scaffolded:
+`lumenc new` scaffolds an app directory from a small gallery of starters. Each
+one runs as written, is short enough to read in a sitting, and ships a README
+naming the ideas it demonstrates.
 
 ```sh
-lumenc new --list          # print this gallery
-lumenc new todo my-todo
-lumenc run my-todo         # or: lumenc run my-todo --headless
+lumenc new my-app            # blank
+lumenc new my-app counter    # a named template
+lumenc new --list            # the gallery with one-line descriptions
 ```
 
-| Template | What it is | What it teaches |
-|---|---|---|
-| `hello` | The smallest runnable app: one label and a script that says hi. | `<root>`, `<label>`, `<script>`, `lumen.toml` |
-| `counter` | Click-to-bump counter, scripted in candela. | signals, `bind-text`, per-id click routing, CSS custom properties |
-| `form` | Two-way bound form with a live status line. | `bind-text` / `bind-checked` / `bind-value`, `on_text_input` / `on_toggle` / `on_slider`, focus styling |
-| `todo` | The canonical tutorial app: a reactive list with add, toggle, and remove. | array signals, `<for each key>`, `{row.field}`, per-row action ids routed through the global `on_click`, `<scroll>` |
-| `dashboard` | Stat tiles, progress bars, and an activity feed driven by a timer. | `<tile>` composition, `<progress bind-value>`, `set_interval` / `cancel_timer`, bounded array feeds |
-| `settings` | A settings panel: grouped controls plus a derived summary. | `<checkbox>`, `<radio group>`, `<dropdown>` + `<option>`, `<slider step>`, `derive()`, state pseudo-classes |
-| `hotkeys` | A native-shell showcase. | `register_hotkey` / `on_hotkey`, `tray_icon` / `on_tray`, `notify`, re-arming from a toggle |
+The template argument is optional and defaults to `blank`. `lumenc new` refuses
+to write into a directory that already exists.
 
-A good path through them: `hello`, then `counter`, then `todo` for the full
-reactive-list pattern, `form` and `settings` for input handling, `dashboard`
-for timers and feeds, and `hotkeys` when you need the OS shell.
+Every template ships `main.lmn` and `lumen.toml`. Most also ship a `main.css`
+and a script. `counter` is written in candela; the other scripted templates are
+written in Rhai, which reads closely enough that either one is a fine starting
+point.
 
-[Your first app](./first-app.md) walks the `counter` template line by line.
+## blank
 
-## Which language each template is in
+An empty starting point: a bare `<root>` and a `lumen.toml`, nothing else.
 
-`counter` ships a candela script (`main.cdl`). The other six ship Rhai
-(`main.rhai`). Both run as scaffolded, because Lumen picks the host from the
-script file extension.
+Use it when you know what you are building. The README points at the three ways
+to grow it: add children to `<root>`, drop a `main.css` beside the markup, and
+attach a script with `<script src="main.cdl" />`.
 
-To move one to candela, replace `main.rhai` with a `main.cdl` and point the
-`<script>` tag at it. No `lumen.toml` edit is needed: a `.cdl` file wins over
-a `.rhai` file sitting next to it. Set `[script] engine = "candela"` to pin
-the choice regardless of which files are present.
+## hello
 
-The markup, the CSS, and the concepts carry over unchanged; only the script
-language differs. Start a `.cdl` script with `import "lumen.cdl";` to reach
-the whole builtin surface, and go through the `Node` and `Event` methods that
-import defines (`get_by_id(id).set_text(...)`, `event(ev).target()`) rather
-than the prefixed `lumen::node_*` / `lumen::event_*` free functions
-underneath them.
+The smallest runnable app: one label filling the window, and a script that
+prints a line at startup.
 
-The one thing that does not port directly is `todo`'s array signal. candela
-has no `signal_array`, so a candela version of that app builds its rows as
-real elements through the DOM API. See
-[the dynamic DOM API](../authoring/scripting.md#the-dynamic-dom-api).
+Shows the shape of an app in three files: the `<root>` element every app has,
+a `<script>` tag with an `on_start()` handler that runs once after the first
+layout, and the `[window]` block in `lumen.toml` that sets the title and size.
 
-## Full apps to read
+## counter
 
-The templates are small on purpose. For complete apps, the repo ships
-[`apps/notes`](https://github.com/lumen-fx/lumen/tree/main/apps/notes),
-[`apps/music`](https://github.com/lumen-fx/lumen/tree/main/apps/music),
-[`apps/tracker`](https://github.com/lumen-fx/lumen/tree/main/apps/tracker), and
-[`apps/widget-garden`](https://github.com/lumen-fx/lumen/tree/main/apps/widget-garden),
-all in candela, plus
-[`apps/kanban`](https://github.com/lumen-fx/lumen/tree/main/apps/kanban) in
-Rhai and
-[`apps/weather`](https://github.com/lumen-fx/lumen/tree/main/apps/weather) in
-Lua.
+Click-to-bump counter with `+1` and `reset` buttons, scripted in candela.
+
+Shows signals and bindings, the core of how a Lumen UI updates: the script
+writes a named `clicks` signal, the label carries `bind-text="clicks"`, and
+that is the entire connection. Clicks are routed per element, so the `+1`
+button's handler is its own function rather than a branch inside a shared
+handler. Colours and the corner radius are custom properties in `:root`, so
+re-theming is one block of edits.
+
+This is the template the [first app walkthrough](first-app.md) reads line by
+line.
+
+## form
+
+A profile form: a text field, a toggle, a slider, and a status line that
+re-derives from all three on every edit.
+
+Shows two-way bindings, where a control both reads and writes its signal
+(`bind-text` on the input, `bind-checked` on the toggle, `bind-value` on the
+slider), and the per-control lifecycle callbacks that fire alongside them. It
+also puts the controls in the Tab order with `tab-index` and styles the focus
+ring with `:focus`.
+
+## todo
+
+The canonical tutorial app: a list with add, toggle, remove, and clear-done,
+plus a live count.
+
+Shows list rendering. Rows live in an array signal, and `<for each="todos"
+key="id">` spawns one subtree per item. Row fields are read with `{row.field}`,
+and per-row buttons carry an interpolated id so one handler can serve every
+row. Presentation flags are computed in the script so the markup stays
+declarative, and the list sits in a `<scroll>` so it stays usable at any
+length.
+
+## dashboard
+
+Stat tiles, progress bars, and an activity feed, all moving on a repeating
+timer, with a pause button.
+
+Shows time-driven UI: `set_interval` plus an `on_timer` handler, cancelled and
+restarted by the pause button. Progress bars track numeric signals through
+`bind-value` and `max`, and the feed keeps itself bounded by trimming the array
+signal it pushes onto. The metrics come from a small simulation, and the README
+points at where to swap it for a live endpoint.
+
+## settings
+
+A settings panel: theme dropdown, density radio group, UI scale slider,
+notification checkboxes, and a summary line.
+
+Shows the rest of the form controls (`<checkbox>`, `<radio>`, `<dropdown>` with
+`<option>`, `<slider>` with a step) and their state pseudo-classes in CSS. The
+summary line uses a derived value: one declaration lists the signals it depends
+on, and it recomputes when any of them changes, which replaces a callback per
+control.
+
+## hotkeys
+
+Native shell showcase: OS-global hotkeys, a tray icon, and desktop
+notifications, with an in-app event log.
+
+Shows the integrations that reach outside the window. Hotkeys are registered by
+accelerator string and fire while another app has focus; a toggle registers and
+unregisters them live. The log keeps everything observable where a shell
+surface is unavailable, which matters because these features vary by platform;
+see the [OS integration guide](../guides/os-integration.md) for what each one
+supports where.
+
+## Next
+
+- [What each file in the scaffolded directory is](project-layout.md).
+- [Every `lumenc` subcommand and flag](../reference/cli.md).

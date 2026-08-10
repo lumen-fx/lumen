@@ -2,7 +2,7 @@
 
 Music by Kevin MacLeod, licensed under CC BY 4.0.
 
-The default "Featured" playlist ships three royalty-free tracks by
+The default Featured playlist ships three royalty-free tracks by
 Kevin MacLeod (incompetech.com), delivered via Git LFS as OGG Vorbis:
 
 | Track | Artist | Source | License |
@@ -14,5 +14,5 @@ Kevin MacLeod (incompetech.com), delivered via Git LFS as OGG Vorbis:
 The source MP3s were transcoded to OGG Vorbis (`libvorbis -q:a 4`, 44.1 kHz)
 because the Lumen audio runtime decodes OGG Vorbis and WAV only.
 
-The `pure` and `moving` playlists use synthetic test tones generated in-repo
-(see `README.md`); those are not third-party works.
+The Pure Tones and Moving Tones playlists use synthetic test tones generated
+in-repo (see `README.md`); those are not third-party works.

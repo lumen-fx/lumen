@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Lumen markup compiler + runner: parse main.lumen / main.css, spawn ECS, run."
+description = "Lumen markup compiler + runner: parse main.lmn / main.css, spawn ECS, run."
 
 [lib]
 name = "lumenc"
@@ -165,8 +165,9 @@ dev-run = [
 # in-process compile. Build with:
 #   cargo build -p lumenc --no-default-features --features "runtime-parse,dlopen-run"
 dlopen-run = ["dep:libloading"]
-# Dev-only in-window devtools overlay (F12). OFF by default - never compiled
-# into release / bundle builds. `lumenc run` enables it for the dev loop.
+# Dev-only in-window devtools overlay (F12). Off by default - never compiled
+# into release / bundle builds. Build with `--features devtools` to get it, and
+# `lumenc run` then serves the overlay for the dev loop.
 devtools = ["lumen-runtime?/devtools"]
 # Scripts' HTTP `fetch(url, tag)` builtin (ureq + rustls + ring). On by
 # default; a packager size knob. Owned by the runtime's script hosts now.

@@ -108,15 +108,18 @@ pub struct IfMarker {
 
 /// Marker for a `<for each="...">` block. The reconciler reads the referenced [`ArraySignals`] entry each tick,
 /// expands `body` once per item (substituting `{field}` placeholders against the item record), and spawns/despawns child entities to match.
-/// The reconciler performs full despawn-and-respawn on every array change; `key_field` is currently stored but not consulted.
+/// The reconciler compares the key sequence it built last tick with the new one: an unchanged sequence is a no-op,
+/// an appended prefix spawns only the new rows, a truncated prefix despawns only the trailing rows, and anything
+/// else (reorder, mid-insert, mid-remove) is a full despawn-and-respawn. `key_field` names the record field the
+/// keys come from; without it the item index is the key.
 #[derive(bevy_ecs::component::Component, Clone, Debug)]
 pub struct ForMarker {
     /// Name of the `ArraySignals` entry to iterate.
     pub array_name: String,
     /// Template body - the markup children of the `<for>` element.
     pub body: Vec<Element>,
-    /// Stable-id field within each record (e.g. `"id"`). Optional but
-    /// recommended for future keyed reconciliation.
+    /// Stable-id field within each record (e.g. `"id"`). Optional; without
+    /// it the reconciler keys rows by item index.
     pub key_field: Option<String>,
     /// Cache of the keys (or item indices when `key_field` is absent)
     /// currently materialized as children, so the reconciler can detect
@@ -718,7 +721,6 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     if el.tag == "image"
         && let Some(src) = &el.attrs.src
     {
-        eprintln!("[spawn] image src={src}");
         entity.insert(lumen_assets::ImageSource(std::path::PathBuf::from(src)));
     }
     if let Some(f) = el.attrs.image_fit {

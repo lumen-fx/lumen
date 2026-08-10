@@ -1,103 +1,59 @@
 # Project layout
 
-A Lumen app lives in a single directory. The only required file is
-`main.lmn`; everything else is optional and resolves relative to that
-directory.
+A Lumen app is a directory. Most of what is in it is found by name, so there is
+little to wire up: put a file where Lumen looks for it and it is used.
 
-- `main.lmn` - the markup root.
-- `main.css` - styling, picked up automatically.
-- `main.cdl` - the script.
-- `lumen.toml` - per-app config.
-- `settings.lmn` - a second page.
-- `icons/` - image assets.
-- `assets/` - any extra directory listed in `[asset_roots]`.
+## The files
 
-The script file is `.cdl` for candela, the default language and the one
-these docs use throughout. Rhai (`.rhai`) and Lua (`.lua`) work the same
-way; see [Choosing a host](../authoring/scripting.md#choosing-a-host) for
-how Lumen decides which one runs.
+- `main.lmn` - the markup. This is the only required file. `[app] entry` in
+  `lumen.toml` can name a different file.
+- `main.css` - the stylesheet. Optional, and picked up automatically when it is
+  there. You never link it from the markup. Split it with `@import "other.css";`
+  at the top of the file.
+- `main.cdl`, `main.rhai`, or `main.lua` - the script. Attach it with
+  `<script src="main.cdl" />` in the markup. The extension picks the language;
+  `.cdl` is candela, and `.rhai` and `.lua` are the other two hosts. A short
+  script can live inline between `<script>` tags instead.
+- `lumen.toml` - the app manifest. Window title and size, the starting locale,
+  which script engine to use, build hooks, and everything else static about the
+  app. Every key is listed in the
+  [lumen.toml reference](../reference/lumen-toml.md).
+- `README.md` - written by the scaffolder to explain what a template
+  demonstrates. Delete it whenever you like; nothing reads it.
 
-Drop a second `.lmn` file next to the first and the app becomes multi-page,
-with each file addressable as a route. See [Pages](../authoring/pages.md).
+## Additional files Lumen looks for
 
-## What gets loaded, in order
+- Other `.lmn` files are pages. Each one is reachable by its filename without
+  the extension, `settings.lmn` is `/settings`, and `index.lmn` is the home
+  page. `layout.lmn` is reserved: it contributes a shared template to every
+  page rather than being a page of its own. A directory holding one `.lmn` file
+  is a single-page app and none of this applies. See the
+  [pages guide](../guides/pages.md).
+- `locale/` holds translation catalogues, one `.ftl` file per language tag
+  (`locale/de-DE.ftl`). Every catalogue in the directory loads at startup, and
+  `[app] locale` picks the one the app starts in. See the
+  [i18n guide](../guides/i18n.md).
+- Images, fonts, and audio you reference by relative path from the markup or a
+  script. Paths resolve against the app directory, so `icons/tray.png` means
+  the `icons` directory next to `main.lmn`. Organise them however you like.
+- Markup fragments pulled in with `<include src="parts/header.lmn" />`, and
+  stylesheets pulled in with `@import`. Both resolve relative to the file doing
+  the including, and both can nest.
 
-1. `lumen.toml`, if it exists. Otherwise the defaults.
-2. The entry markup file, `main.lmn` unless `[app] entry` says otherwise,
-   with every `<include src="...">` spliced in.
-3. Every inline `<script>` body, then every file named by a
-   `<script src="...">` tag, concatenated in document order into one
-   program.
-4. `main.css`, if it sits next to the entry file. Nothing in the markup
-   references it; the loader looks for it by name. Further stylesheets come
-   in through `@import` from that file.
+## Running from anywhere
 
-Before any of that, `lumenc run` / `build` / `bundle` run the app's
-declared `[[hooks]]`, the step that produces a native artifact the app
-needs on disk. `lumenc check` never runs hooks. See
-[`[[hooks]]`](../authoring/lumen-toml.md#hooks).
+`lumenc run <dir>` takes the directory, so you can run an app from outside it:
 
-## `lumen.toml`
-
-```toml
-[app]
-entry = "main.lmn"
-id    = "com.example.myapp"
-
-[window]
-title          = "My app"
-size           = [960, 720]
-remember_state = true
-
-[asset_roots]
-paths = ["icons", "../shared"]
+```sh
+lumenc run my-app
+lumenc run .
 ```
 
-Every key is optional, and CLI flags override config values. Unknown keys
-are rejected, so a typo surfaces as a parse error rather than a silent
-no-op. [Per-app config](../authoring/lumen-toml.md) documents every table.
+While an app runs from source, edits to the markup, the stylesheet, the script,
+included fragments, and the locale catalogues take effect without a restart.
 
-## What reloads while the app runs
+## Next
 
-`lumenc run` watches the entry markup, its stylesheet, every script it
-references, and every included or imported file. A change reloads only the
-path that changed; [Your first app](./first-app.md#hot-reload) walks
-through what each one does.
-
-Two things sit outside that loop:
-
-| File | Behaviour |
-|---|---|
-| `lumen.toml` | Read once at startup. Restart `lumenc run` to pick up a change. |
-| Assets under `[asset_roots]` | The image cache invalidates on the next decode, and `set_src(id, path)` re-resolves through the configured roots. |
-
-Set `LUMEN_HOT_RELOAD_POLL=1` to fall back to mtime polling where a
-filesystem watcher is unavailable.
-
-## Window-state persistence
-
-With `[window] remember_state = true`, Lumen saves the window's position,
-size, and maximized state on close and restores it on the next launch,
-under `<state_dir>/lumen/<app-id>/window-state.toml`.
-
-| OS | `<state_dir>` |
-|---|---|
-| Linux | `$XDG_STATE_HOME`, else `~/.local/state` |
-| macOS | `~/Library/Application Support` |
-| Windows | `%LOCALAPPDATA%` |
-
-`<app-id>` is `[app] id`, falling back to the app directory name. Where no
-per-user state directory exists, a container without `$HOME` for example,
-`remember_state` does nothing.
-
-## Asset resolution
-
-Image `src="..."`, `set_src(id, path)`, and `tray_icon(id, path, ...)` all
-resolve a relative path the same way:
-
-1. The app directory itself.
-2. Each path listed in `[asset_roots] paths`, in order. Relative paths
-   resolve against the app directory; absolute paths are used as written.
-
-The first hit wins, so an `icons/sun.png` in the app directory beats a
-sibling `../shared/icons/sun.png`.
+- [The template gallery](templates.md).
+- [Writing markup](../guides/markup.md) and [styling it](../guides/styling.md).
+- [Packaging an app](../guides/packaging.md) into a single artifact.

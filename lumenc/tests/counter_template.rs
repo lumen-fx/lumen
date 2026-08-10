@@ -6,7 +6,7 @@
 
 //! End-to-end proof that the `counter` template runs as scaffolded.
 //!
-//! `lumenc new counter` writes a candela script, and the top-level README and
+//! `lumenc new <dir> counter` writes a candela script, and the top-level README and
 //! the getting-started walkthrough both quote it verbatim. This test writes the
 //! template to a temp dir exactly as the scaffolder does, boots it through
 //! the headless plugin stack (no window, no GPU), clicks `bump` and `reset`,

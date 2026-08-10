@@ -83,6 +83,7 @@ interface TemplateItem {
 
 // Kept in sync with lumenc's scaffold::TEMPLATES gallery.
 const TEMPLATES: TemplateItem[] = [
+    { label: "blank", description: "Empty starting point: a bare <root> and a lumen.toml." },
     { label: "hello", description: "Minimal one-screen app." },
     { label: "counter", description: "Buttons, bind-text, per-id click routing." },
     { label: "form", description: "Two-way bound form: input, toggle, slider." },
@@ -110,7 +111,7 @@ async function cmdNewFromTemplate(): Promise<void> {
         return;
     }
     const folder = workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-    runInTerminal([lumenc(), "new", pick.label, name], folder);
+    runInTerminal([lumenc(), "new", name, pick.label], folder);
 
     // Offer to open the scaffolded main.lmn once the CLI has written it.
     const target = Uri.file(path.join(folder, name, "main.lmn"));

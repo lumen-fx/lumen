@@ -11,7 +11,6 @@
 //!   (`lumen-ffi`) with `--no-default-features --features "<set>"` so the
 //!   binary carries only the subsystems that app uses. The shared dlopen'd
 //!   cdylib and the dev `lumenc run` path stay full-featured and untrimmed.
-//!   See docs/design/runtime-tree-shaking.md.
 
 use std::path::PathBuf;
 use std::process::ExitCode;

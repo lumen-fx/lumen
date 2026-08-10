@@ -1287,9 +1287,9 @@ impl ResolvedDirection {
 
 /// Default writing direction for the application root. The
 /// [`resolve_layout_direction`] system uses this when the root entity
-/// has no explicit [`LayoutDirection`]. Plugins (e.g.
-/// `lumen-i18n::I18nPlugin`) seed it from the detected system locale;
-/// the bare framework defaults to [`LayoutDirection::Ltr`].
+/// has no explicit [`LayoutDirection`]. It defaults to
+/// [`LayoutDirection::Ltr`] and nothing sets it from the locale today,
+/// so a right-to-left app still needs `dir="rtl"` in its markup.
 #[derive(bevy_ecs::resource::Resource, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DefaultLayoutDirection(pub LayoutDirection);
 
