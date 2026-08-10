@@ -11,8 +11,9 @@ use accesskit::{Action, Node, NodeId, Rect, Role, Tree, TreeId, TreeUpdate};
 use bevy_ecs::prelude::*;
 use lumen_core::components::{
     A11yAnnouncement, A11yDescription, A11yLabel, A11yLevel, A11yLive, A11yRelations, A11yRole,
-    A11yRootLabel, A11ySetSize, A11yState, A11yValue, DirtyA11y, LumenId, PendingA11yUpdate,
-    RootWindowEntity, TabIndex, TextContent, TextInput, Toggleable, Visible,
+    A11yRootLabel, A11ySetSize, A11yState, A11yValue, DirtyA11y, Disabled, LumenClasses, LumenId,
+    LumenTag, PendingA11yUpdate, RootWindowEntity, Selected, TabIndex, TextContent, TextInput,
+    Toggleable, Visible,
 };
 use lumen_core::input::{FocusTracker, Scroll};
 use lumen_core::prelude::*;
@@ -238,8 +239,9 @@ pub use accesskit_winit;
 //
 // The new `sync_a11y_tree` system below:
 // - Runs inside `TickStage::A11ySync` (registered via [`A11yPlugin`]).
-// - Skips entirely when [`DirtyA11y`] is absent from every entity and focus
-//   has not moved (mirrors the audit's "skip when not dirty" recommendation).
+// - Skips entirely when [`flag_a11y_changes`] saw no change tick on any
+//   published component, no entity carries [`DirtyA11y`], and focus has not
+//   moved (mirrors the audit's "skip when not dirty" recommendation).
 // - Uses the real window-entity root rather than the synthetic
 //   `NodeId(u64::MAX)`.
 // - Maps the new `A11y*` components onto AccessKit `Node` setters via
@@ -300,6 +302,80 @@ impl From<AkRole> for Role {
     fn from(r: AkRole) -> Self {
         r.0
     }
+}
+
+/// Roles whose text content is the field's value rather than its name.
+fn is_text_entry(role: Role) -> bool {
+    matches!(
+        role,
+        Role::TextInput
+            | Role::MultilineTextInput
+            | Role::SearchInput
+            | Role::DateInput
+            | Role::TimeInput
+    )
+}
+
+/// True when `classes` carries `name`.
+fn has_class(classes: &LumenClasses, name: &str) -> bool {
+    classes.0.iter().any(|c| &**c == name)
+}
+
+/// Role for a markup tag name, for the tags that survive to the ECS as
+/// themselves. Returns `None` for layout containers and control flow
+/// (`row`, `column`, `tile`, `div`, `spacer`, `overlay`, `for`, `if`),
+/// which fall through to the component-derived role.
+fn role_for_tag(tag: &str) -> Option<Role> {
+    Some(match tag {
+        "root" => Role::Window,
+        "dialog" => Role::Dialog,
+        "a" => Role::Link,
+        "button" => Role::Button,
+        "checkbox" | "toggle" => Role::CheckBox,
+        "switch" => Role::Switch,
+        "radio" => Role::RadioButton,
+        "slider" => Role::Slider,
+        "progress" => Role::ProgressIndicator,
+        "input" => Role::TextInput,
+        "textarea" => Role::MultilineTextInput,
+        "image" => Role::Image,
+        "scroll" => Role::ScrollView,
+        "label" => Role::Label,
+        "menu" => Role::Menu,
+        "menuitem" => Role::MenuItem,
+        "separator" => Role::Splitter,
+        "title-bar" => Role::TitleBar,
+        "tooltip" => Role::Tooltip,
+        _ => return None,
+    })
+}
+
+/// Role for a composite widget the markup compiler desugars away.
+///
+/// `<tabs>`, `<tab>` and `<dropdown>` never reach the ECS as tags: the
+/// compiler lowers each into plain containers and buttons and marks the
+/// parts with a reserved class. Those classes are what identifies a tab
+/// strip, a tab, a combo box, its list and its options.
+fn role_for_classes(classes: &LumenClasses) -> Option<Role> {
+    for class in classes.0.iter() {
+        let role = match &**class {
+            "tabs" => Role::Group,
+            "tab-strip" => Role::TabList,
+            "tab-btn" => Role::Tab,
+            "dropdown" => Role::Group,
+            "dropdown-button" => Role::ComboBox,
+            "dropdown-panel" => Role::ListBox,
+            "dropdown-option" => Role::ListBoxOption,
+            "menu-panel" => Role::Menu,
+            "menu-item" => Role::MenuItem,
+            "menu-separator" => Role::Splitter,
+            "date-picker" => Role::DateInput,
+            "time-picker" => Role::TimeInput,
+            _ => continue,
+        };
+        return Some(role);
+    }
+    None
 }
 
 /// Convenience wrapper translating an [`A11yRole`] into an [`accesskit::Role`]
@@ -386,6 +462,102 @@ impl<'a> A11yStateApply<'a> {
     }
 }
 
+/// Set for one tick when any component feeding the published tree changed.
+///
+/// [`sync_a11y_tree`] walks the world when this flag is up, when an entity
+/// carries [`DirtyA11y`], or when focus moved, and clears it on the way
+/// out. The flag is what keeps the published tree in step with ordinary
+/// app state; [`DirtyA11y`] covers only inbound assistive-technology
+/// actions.
+#[derive(Resource, Default, Debug)]
+pub struct A11yChanged(pub bool);
+
+/// Every component whose value feeds a published node. Split into nested
+/// `Or` groups because a single `Or` tuple caps out well below the number
+/// of components the tree reads.
+type A11yChangeFilter = Or<(
+    Or<(
+        bevy_ecs::query::Changed<Transform>,
+        bevy_ecs::query::Changed<TextContent>,
+        bevy_ecs::query::Changed<TabIndex>,
+        bevy_ecs::query::Changed<TextInput>,
+        bevy_ecs::query::Changed<Scroll>,
+        bevy_ecs::query::Changed<LumenId>,
+        bevy_ecs::query::Changed<Children>,
+        bevy_ecs::query::Changed<ChildOf>,
+    )>,
+    Or<(
+        bevy_ecs::query::Changed<Visible>,
+        bevy_ecs::query::Changed<Toggleable>,
+        bevy_ecs::query::Changed<SliderValue>,
+        bevy_ecs::query::Changed<Disabled>,
+        bevy_ecs::query::Changed<Selected>,
+        bevy_ecs::query::Changed<LumenTag>,
+        bevy_ecs::query::Changed<LumenClasses>,
+    )>,
+    Or<(
+        bevy_ecs::query::Changed<A11yRole>,
+        bevy_ecs::query::Changed<A11yLabel>,
+        bevy_ecs::query::Changed<A11yDescription>,
+        bevy_ecs::query::Changed<A11yState>,
+        bevy_ecs::query::Changed<A11yValue>,
+        bevy_ecs::query::Changed<A11yLevel>,
+        bevy_ecs::query::Changed<A11ySetSize>,
+        bevy_ecs::query::Changed<A11yLive>,
+        bevy_ecs::query::Changed<A11yRelations>,
+    )>,
+)>;
+
+/// Removal readers for the components whose disappearance changes a node
+/// but leaves no change tick behind: dropping `Disabled` re-enables a
+/// control, dropping `Selected` deselects a tab, and so on.
+type A11yRemovals<'w, 's> = (
+    RemovedComponents<'w, 's, Disabled>,
+    RemovedComponents<'w, 's, Selected>,
+    RemovedComponents<'w, 's, ChildOf>,
+    RemovedComponents<'w, 's, TabIndex>,
+    RemovedComponents<'w, 's, Visible>,
+    RemovedComponents<'w, 's, TextContent>,
+    RemovedComponents<'w, 's, Toggleable>,
+    RemovedComponents<'w, 's, SliderValue>,
+    RemovedComponents<'w, 's, TextInput>,
+    RemovedComponents<'w, 's, A11yRole>,
+    RemovedComponents<'w, 's, A11yLabel>,
+    RemovedComponents<'w, 's, A11yState>,
+);
+
+/// Raise [`A11yChanged`] when this tick touched anything the accessibility
+/// tree publishes. Runs in [`TickStage::A11ySync`] ahead of
+/// [`sync_a11y_tree`] (registered by [`A11yPlugin`]).
+pub fn flag_a11y_changes(
+    mut flag: ResMut<A11yChanged>,
+    changed: Query<(), (A11yChangeFilter, Without<bevy_ecs::resource::IsResource>)>,
+    mut removed: A11yRemovals,
+) {
+    // Drain every reader before short-circuiting. A reader left holding
+    // entries would re-raise the flag on a later idle tick and keep the
+    // app from parking.
+    let removed_any = [
+        removed.0.read().count(),
+        removed.1.read().count(),
+        removed.2.read().count(),
+        removed.3.read().count(),
+        removed.4.read().count(),
+        removed.5.read().count(),
+        removed.6.read().count(),
+        removed.7.read().count(),
+        removed.8.read().count(),
+        removed.9.read().count(),
+        removed.10.read().count(),
+        removed.11.read().count(),
+    ]
+    .iter()
+    .any(|n| *n > 0);
+    if removed_any || !changed.is_empty() {
+        flag.0 = true;
+    }
+}
+
 /// Per-frame state used by [`sync_a11y_tree`] for change tracking.
 ///
 /// - Mirrors the legacy [`A11ySnapshot`] but keyed by content hash that
@@ -410,24 +582,30 @@ pub struct A11yTreeCache {
 /// - Walks every entity with a [`Transform`] so layout-resolved nodes have
 ///   bounds. Layout-less entities are still emitted (the legacy walker
 ///   required `Transform`, dropping early-tick spawns).
-/// - Reads the new `A11y*` components and falls back to primitive
-///   components ([`Toggleable`], [`SliderValue`], [`TextInput`]) when an
-///   explicit role/state/value is not supplied.
+/// - Reads the new `A11y*` components and falls back to the markup tag
+///   ([`LumenTag`]), the reserved classes the compiler stamps on
+///   desugared composite widgets ([`LumenClasses`]), and the primitive
+///   components ([`Toggleable`], [`SliderValue`], [`TextInput`],
+///   [`Disabled`], [`Selected`]) when an explicit role/state/value is not
+///   supplied.
 /// - Uses the real root window entity instead of `NodeId(u64::MAX)` when
 ///   a `RootWindowEntity` resource is present; otherwise falls back to
 ///   the legacy synthetic root for compatibility.
 pub fn sync_a11y_tree(world: &mut World) {
     world.init_resource::<A11yTreeCache>();
     world.init_resource::<PendingA11yUpdate>();
+    world.init_resource::<A11yChanged>();
 
-    // Skip when nothing dirty. The DirtyA11y marker is the per-entity signal
-    // the audit asked us to honour; FocusTracker.is_changed cannot be observed
-    // through &mut World, so we compare against the cached focus below to
-    // catch focus-only ticks.
+    // Skip when nothing moved. [`flag_a11y_changes`] carries the ordinary
+    // case: any change tick or removal on a component the tree publishes.
+    // The DirtyA11y marker stays as the explicit per-entity signal inbound
+    // assistive-technology actions raise. FocusTracker.is_changed cannot be
+    // observed through &mut World, so we compare against the cached focus
+    // below to catch focus-only ticks.
     let any_dirty_a11y = {
         let mut q = world.query::<&DirtyA11y>();
         q.iter(world).next().is_some()
-    };
+    } || world.resource::<A11yChanged>().0;
 
     let focus_entity = world.resource::<FocusTracker>().0;
 
@@ -463,8 +641,31 @@ pub fn sync_a11y_tree(world: &mut World) {
         // hasn't moved. Drop the previous PendingA11yUpdate so we don't keep
         // re-emitting an old payload.
         world.resource_mut::<PendingA11yUpdate>().boxed = None;
+        world.resource_mut::<A11yChanged>().0 = false;
         return;
     }
+    world.resource_mut::<A11yChanged>().0 = false;
+
+    // `<dropdown>` expansion. The compiler desugars a dropdown into a
+    // `.dropdown` column holding a `.dropdown-button` header plus an
+    // `<if mode="hide">` block whose body is the `.dropdown-panel`. The
+    // if-block carries the `Visible` flip, so a visible panel means the
+    // combobox is expanded; collect the owning columns here and stamp
+    // EXPANDED on their header during the walk.
+    let expanded_owners: HashSet<Entity> = {
+        let panel_parents: Vec<Entity> = {
+            let mut q = world.query::<(&LumenClasses, &ChildOf)>();
+            q.iter(world)
+                .filter(|(c, _)| has_class(c, "dropdown-panel"))
+                .map(|(_, p)| p.parent())
+                .collect()
+        };
+        panel_parents
+            .into_iter()
+            .filter(|block| world.get::<Visible>(*block).map(|v| v.0).unwrap_or(true))
+            .filter_map(|block| world.get::<ChildOf>(block).map(|c| c.parent()))
+            .collect()
+    };
 
     let mut nodes: Vec<(NodeId, Node)> = Vec::new();
     let mut roots: Vec<NodeId> = Vec::new();
@@ -491,6 +692,10 @@ pub fn sync_a11y_tree(world: &mut World) {
         Option<&'a Visible>,
         Option<&'a Toggleable>,
         Option<&'a SliderValue>,
+        Option<&'a Disabled>,
+        Option<&'a Selected>,
+        Option<&'a LumenTag>,
+        Option<&'a LumenClasses>,
     );
     type A11yData<'a> = (
         Option<&'a A11yRole>,
@@ -503,11 +708,15 @@ pub fn sync_a11y_tree(world: &mut World) {
         Option<&'a A11yLive>,
         Option<&'a A11yRelations>,
     );
-    let mut q = world.query::<(CoreData<'_>, PrimData<'_>, A11yData<'_>)>();
+    // Bevy 0.19 stores resources as entities, and every field above is
+    // optional, so an unfiltered walk would publish a node per resource.
+    let mut q = world.query_filtered::<(CoreData<'_>, PrimData<'_>, A11yData<'_>), Without<
+        bevy_ecs::resource::IsResource,
+    >>();
 
     for (
         (entity, transform, text, tab, input, scroll, id, children, parent),
-        (visible, toggle, slider),
+        (visible, toggle, slider, disabled, selected, tag, classes),
         (
             role_override,
             label,
@@ -524,9 +733,15 @@ pub fn sync_a11y_tree(world: &mut World) {
         let node_id = entity_to_node(entity);
         seen.insert(node_id);
 
-        // Role: explicit override wins; otherwise derive from primitive components.
+        // Role, in falling order of authority: an explicit A11yRole, the
+        // compiler-generated class of a desugared composite widget, the
+        // markup tag, then the primitive components on the entity.
         let role: Role = if let Some(r) = role_override {
             role_from_a11y(*r)
+        } else if let Some(r) = classes.and_then(role_for_classes) {
+            r
+        } else if let Some(r) = tag.and_then(|t| role_for_tag(&t.0)) {
+            r
         } else if let Some(t) = input {
             role_from_a11y(A11yRole::from(t))
         } else if let Some(s) = slider {
@@ -549,17 +764,17 @@ pub fn sync_a11y_tree(world: &mut World) {
             .map(|c| c.iter().map(entity_to_node).collect())
             .unwrap_or_default();
 
-        // Label: explicit A11yLabel wins; fall back to text for text-bearing
-        // roles only (per audit: don't reuse a Label's own body as its label).
+        // Label: explicit A11yLabel wins, then the element's own text. Text
+        // inputs are the exception - their text is the value, and naming a
+        // field after its contents announces the typed string twice.
         let label_str: Option<&str> = if let Some(l) = label {
             if l.0.is_empty() {
                 None
             } else {
                 Some(l.0.as_str())
             }
-        } else if matches!(role, Role::Label) {
-            None
-        } else if let Some(t) = text
+        } else if !is_text_entry(role)
+            && let Some(t) = text
             && !t.0.is_empty()
         {
             Some(t.0.as_str())
@@ -578,6 +793,34 @@ pub fn sync_a11y_tree(world: &mut World) {
             && t.checked
         {
             state_bits |= A11yState::CHECKED;
+        }
+        if disabled.is_some() {
+            state_bits |= A11yState::DISABLED;
+        }
+        // `Selected` is the single-selection marker the owning primitive
+        // maintains. On a radio it means "this option is the chosen one",
+        // which AccessKit models as toggled rather than selected.
+        if selected.is_some() {
+            if matches!(
+                role,
+                Role::RadioButton | Role::CheckBox | Role::Switch | Role::MenuItemRadio
+            ) {
+                state_bits |= A11yState::CHECKED;
+            } else {
+                state_bits |= A11yState::SELECTED;
+            }
+        }
+        if matches!(role, Role::ComboBox)
+            && parent
+                .map(|p| expanded_owners.contains(&p.parent()))
+                .unwrap_or(false)
+        {
+            state_bits |= A11yState::EXPANDED;
+        }
+        // A `<dialog>` is a modal overlay; nothing behind it takes input
+        // while it is up.
+        if matches!(role, Role::Dialog) {
+            state_bits |= A11yState::MODAL;
         }
 
         // Effective value: explicit A11yValue wins, else derived from SliderValue.
@@ -652,7 +895,7 @@ pub fn sync_a11y_tree(world: &mut World) {
             node.set_placeholder(s);
         }
         // Text input value: emit the body text as `value`, not `label`.
-        if matches!(role, Role::TextInput | Role::MultilineTextInput)
+        if is_text_entry(role)
             && let Some(t) = text
         {
             node.set_value(t.0.as_str());
@@ -670,6 +913,18 @@ pub fn sync_a11y_tree(world: &mut World) {
         }
         // Apply state bits via the local newtype helper (no convert_x_to_y).
         A11yStateApply::new(&mut node, state_bits).apply();
+        // Selection and expansion are tri-state in AccessKit, where unset
+        // means the concept does not apply to this node. Roles that always
+        // own the state say "false" out loud, so an assistive tool can
+        // announce "tab 2 of 4" or "collapsed".
+        if matches!(role, Role::Tab | Role::ListBoxOption)
+            && !state_bits.contains(A11yState::SELECTED)
+        {
+            node.set_selected(false);
+        }
+        if matches!(role, Role::ComboBox) && !state_bits.contains(A11yState::EXPANDED) {
+            node.set_expanded(false);
+        }
         if let Some(l) = level_val
             && l > 0
         {
@@ -715,15 +970,22 @@ pub fn sync_a11y_tree(world: &mut World) {
             | Role::Tab
             | Role::Switch
             | Role::CheckBox
-            | Role::RadioButton => {
+            | Role::RadioButton
+            | Role::ListBoxOption => {
                 node.add_action(Action::Click);
             }
-            Role::Slider | Role::SpinButton | Role::ProgressIndicator => {
+            // A progress bar reports a value but takes none, so it is not
+            // in this arm.
+            Role::Slider | Role::SpinButton => {
                 node.add_action(Action::Increment);
                 node.add_action(Action::Decrement);
                 node.add_action(Action::SetValue);
             }
-            Role::TextInput | Role::MultilineTextInput | Role::SearchInput => {
+            Role::TextInput
+            | Role::MultilineTextInput
+            | Role::SearchInput
+            | Role::DateInput
+            | Role::TimeInput => {
                 node.add_action(Action::SetValue);
                 node.add_action(Action::ReplaceSelectedText);
                 node.add_action(Action::SetTextSelection);
@@ -943,13 +1205,15 @@ pub fn entity_click_point(world: &World, entity: Entity) -> glam::Vec2 {
     }
 }
 
-/// Lumen plugin registering [`sync_a11y_tree`] in [`TickStage::A11ySync`].
+/// Lumen plugin registering [`flag_a11y_changes`] and [`sync_a11y_tree`]
+/// in [`TickStage::A11ySync`].
 /// Apps install this once at startup via `app.add_plugin(A11yPlugin)`.
 pub struct A11yPlugin;
 
 impl lumen_core::app::Plugin for A11yPlugin {
     fn build(self, app: &mut lumen_core::app::App) {
         app.world.init_resource::<A11yTreeCache>();
+        app.world.init_resource::<A11yChanged>();
         app.world.init_resource::<PendingA11yUpdate>();
         app.world
             .init_resource::<lumen_core::components::A11yAnnouncementQueue>();
@@ -957,7 +1221,8 @@ impl lumen_core::app::Plugin for A11yPlugin {
             .init_resource::<lumen_core::components::A11yScrollIntoViewRequests>();
         app.world
             .init_resource::<lumen_core::components::A11yContextMenuRequests>();
-        app.add_systems(TickStage::A11ySync, sync_a11y_tree);
+        app.add_systems(TickStage::A11ySync, flag_a11y_changes);
+        app.add_systems(TickStage::A11ySync, sync_a11y_tree.after(flag_a11y_changes));
     }
 }
 
@@ -975,13 +1240,55 @@ mod tests {
     use super::*;
     use lumen_core::app::{App, Plugin};
     use lumen_core::components::{
-        A11yLabel, A11yState, A11yValue, DirtyA11y, PendingA11yUpdate, SliderValue,
+        A11yLabel, A11yState, A11yValue, DirtyA11y, Disabled, LumenClasses, LumenTag,
+        PendingA11yUpdate, Selected, SliderValue, TextContent, Visible,
     };
 
     fn drive_one_tick(app: &mut App) {
         // The Tick schedule includes A11ySync; running it once is the
         // ECS-side roundtrip.
         app.world.run_schedule(lumen_core::app::Tick);
+    }
+
+    /// One tick of the real `App::tick` path: the schedule plus the
+    /// end-of-tick `clear_trackers` that rotates the removal buffers.
+    fn drive_full_tick(app: &mut App) {
+        app.world.run_schedule(lumen_core::app::Tick);
+        app.world.clear_trackers();
+    }
+
+    fn transform(w: f32, h: f32) -> Transform {
+        Transform {
+            absolute: glam::Vec2::ZERO,
+            size: glam::Vec2::new(w, h),
+            baseline_y: None,
+        }
+    }
+
+    fn classes(names: &[&str]) -> LumenClasses {
+        LumenClasses(names.iter().map(|n| (*n).into()).collect())
+    }
+
+    fn node_for(update: &TreeUpdate, entity: Entity) -> &Node {
+        let id = entity_to_node(entity);
+        update
+            .nodes
+            .iter()
+            .find(|(nid, _)| *nid == id)
+            .map(|(_, n)| n)
+            .unwrap_or_else(|| panic!("no node published for {entity:?}"))
+    }
+
+    /// App with the plugin installed and one root entity every other
+    /// fixture entity hangs off, so root auto-detection is deterministic.
+    fn app_with_root() -> (App, Entity) {
+        let mut app = App::new();
+        A11yPlugin.build(&mut app);
+        let root = app
+            .world
+            .spawn((transform(800.0, 600.0), LumenTag("root".into())))
+            .id();
+        (app, root)
     }
 
     #[test]
@@ -1112,5 +1419,264 @@ mod tests {
             .get_resource::<lumen_core::components::RootWindowEntity>()
             .expect("RootWindowEntity must auto-resolve once a parentless entity exists");
         assert_eq!(resolved.0, root);
+    }
+
+    #[test]
+    fn component_change_republishes_without_a_focus_move_or_dirty_marker() {
+        let (mut app, root) = app_with_root();
+        let label = app
+            .world
+            .spawn((
+                transform(80.0, 20.0),
+                LumenTag("label".into()),
+                TextContent("before".into()),
+                ChildOf(root),
+            ))
+            .id();
+
+        drive_full_tick(&mut app);
+        let first = take_pending_tree_update(&mut app.world).expect("first tick publishes a tree");
+        assert_eq!(node_for(&first, label).label(), Some("before"));
+
+        drive_full_tick(&mut app);
+        assert!(
+            app.world.resource::<PendingA11yUpdate>().boxed.is_none(),
+            "a tick with no change must not republish",
+        );
+
+        // No DirtyA11y, no focus move: only the text moves.
+        app.world.get_mut::<TextContent>(label).unwrap().0 = "after".into();
+        drive_full_tick(&mut app);
+        let second = take_pending_tree_update(&mut app.world)
+            .expect("a plain component change must republish the tree");
+        assert_eq!(node_for(&second, label).label(), Some("after"));
+    }
+
+    #[test]
+    fn disabled_reaches_the_tree_and_clears_on_removal() {
+        let (mut app, root) = app_with_root();
+        let button = app
+            .world
+            .spawn((
+                transform(60.0, 24.0),
+                LumenTag("button".into()),
+                TextContent("Save".into()),
+                TabIndex(0),
+                Disabled,
+                ChildOf(root),
+            ))
+            .id();
+
+        drive_full_tick(&mut app);
+        let update = take_pending_tree_update(&mut app.world).expect("first tick publishes a tree");
+        let node = node_for(&update, button);
+        assert_eq!(node.role(), Role::Button);
+        assert_eq!(node.label(), Some("Save"));
+        assert!(node.is_disabled(), "disabled must reach the published node");
+
+        // Removing the marker leaves no change tick behind; the removal
+        // reader is what keeps the tree in step.
+        app.world.entity_mut(button).remove::<Disabled>();
+        drive_full_tick(&mut app);
+        let update = take_pending_tree_update(&mut app.world)
+            .expect("removing Disabled must republish the tree");
+        assert!(!node_for(&update, button).is_disabled());
+    }
+
+    #[test]
+    fn dialog_reports_a_modal_dialog() {
+        let (mut app, root) = app_with_root();
+        let dialog = app
+            .world
+            .spawn((
+                transform(400.0, 300.0),
+                LumenTag("dialog".into()),
+                A11yLabel("Confirm".into()),
+                ChildOf(root),
+            ))
+            .id();
+        drive_full_tick(&mut app);
+        let update = take_pending_tree_update(&mut app.world).expect("tree");
+        let node = node_for(&update, dialog);
+        assert_eq!(node.role(), Role::Dialog);
+        assert!(node.is_modal());
+    }
+
+    #[test]
+    fn tab_strip_reports_a_tab_list_with_a_selected_tab() {
+        let (mut app, root) = app_with_root();
+        let strip = app
+            .world
+            .spawn((
+                transform(400.0, 36.0),
+                LumenTag("row".into()),
+                classes(&["tab-strip"]),
+                ChildOf(root),
+            ))
+            .id();
+        let active = app
+            .world
+            .spawn((
+                transform(100.0, 36.0),
+                LumenTag("button".into()),
+                classes(&["tab-btn"]),
+                TextContent("General".into()),
+                TabIndex(0),
+                Selected,
+                ChildOf(strip),
+            ))
+            .id();
+        let idle = app
+            .world
+            .spawn((
+                transform(100.0, 36.0),
+                LumenTag("button".into()),
+                classes(&["tab-btn"]),
+                TextContent("Advanced".into()),
+                TabIndex(0),
+                ChildOf(strip),
+            ))
+            .id();
+
+        drive_full_tick(&mut app);
+        let update = take_pending_tree_update(&mut app.world).expect("tree");
+        assert_eq!(node_for(&update, strip).role(), Role::TabList);
+        let active_node = node_for(&update, active);
+        assert_eq!(active_node.role(), Role::Tab);
+        assert_eq!(active_node.is_selected(), Some(true));
+        assert_eq!(node_for(&update, idle).is_selected(), Some(false));
+    }
+
+    #[test]
+    fn radio_reports_a_toggled_radio_button() {
+        let (mut app, root) = app_with_root();
+        let chosen = app
+            .world
+            .spawn((
+                transform(120.0, 24.0),
+                LumenTag("radio".into()),
+                A11yLabel("Weekly".into()),
+                Selected,
+                ChildOf(root),
+            ))
+            .id();
+        let other = app
+            .world
+            .spawn((
+                transform(120.0, 24.0),
+                LumenTag("radio".into()),
+                A11yLabel("Daily".into()),
+                ChildOf(root),
+            ))
+            .id();
+
+        drive_full_tick(&mut app);
+        let update = take_pending_tree_update(&mut app.world).expect("tree");
+        let chosen_node = node_for(&update, chosen);
+        assert_eq!(chosen_node.role(), Role::RadioButton);
+        assert_eq!(chosen_node.toggled(), Some(accesskit::Toggled::True));
+        assert_eq!(node_for(&update, other).toggled(), None);
+    }
+
+    #[test]
+    fn progress_reports_a_progress_indicator_and_takes_no_value_actions() {
+        let (mut app, root) = app_with_root();
+        let bar = app
+            .world
+            .spawn((
+                transform(200.0, 8.0),
+                LumenTag("progress".into()),
+                A11yLabel("Import".into()),
+                A11yValue {
+                    now: 40.0,
+                    min: 0.0,
+                    max: 100.0,
+                    step: 0.0,
+                    text: None,
+                },
+                ChildOf(root),
+            ))
+            .id();
+        drive_full_tick(&mut app);
+        let update = take_pending_tree_update(&mut app.world).expect("tree");
+        let node = node_for(&update, bar);
+        assert_eq!(node.role(), Role::ProgressIndicator);
+        assert_eq!(node.numeric_value(), Some(40.0));
+        assert_eq!(node.max_numeric_value(), Some(100.0));
+        assert!(!node.supports_action(Action::Increment));
+    }
+
+    #[test]
+    fn dropdown_header_reports_a_combo_box_that_tracks_its_panel() {
+        let (mut app, root) = app_with_root();
+        let column = app
+            .world
+            .spawn((
+                transform(200.0, 36.0),
+                LumenTag("column".into()),
+                classes(&["dropdown"]),
+                ChildOf(root),
+            ))
+            .id();
+        let header = app
+            .world
+            .spawn((
+                transform(200.0, 36.0),
+                LumenTag("button".into()),
+                classes(&["dropdown-button"]),
+                TextContent("Medium".into()),
+                TabIndex(0),
+                ChildOf(column),
+            ))
+            .id();
+        // The `<if mode="hide">` block that owns the panel body.
+        let block = app
+            .world
+            .spawn((LumenTag("if".into()), Visible(false), ChildOf(column)))
+            .id();
+        app.world.spawn((
+            transform(200.0, 96.0),
+            LumenTag("column".into()),
+            classes(&["dropdown-panel"]),
+            ChildOf(block),
+        ));
+
+        drive_full_tick(&mut app);
+        let update = take_pending_tree_update(&mut app.world).expect("tree");
+        let node = node_for(&update, header);
+        assert_eq!(node.role(), Role::ComboBox);
+        assert_eq!(
+            node.is_expanded(),
+            Some(false),
+            "a hidden panel means collapsed"
+        );
+
+        app.world.get_mut::<Visible>(block).unwrap().0 = true;
+        drive_full_tick(&mut app);
+        let update = take_pending_tree_update(&mut app.world)
+            .expect("opening the panel must republish the tree");
+        assert_eq!(node_for(&update, header).is_expanded(), Some(true));
+    }
+
+    #[test]
+    fn a_text_input_names_itself_from_its_id_and_values_itself_from_its_text() {
+        let (mut app, root) = app_with_root();
+        let field = app
+            .world
+            .spawn((
+                transform(200.0, 28.0),
+                LumenTag("input".into()),
+                LumenId("city".into()),
+                TextContent("Berlin".into()),
+                TabIndex(0),
+                ChildOf(root),
+            ))
+            .id();
+        drive_full_tick(&mut app);
+        let update = take_pending_tree_update(&mut app.world).expect("tree");
+        let node = node_for(&update, field);
+        assert_eq!(node.role(), Role::TextInput);
+        assert_eq!(node.value(), Some("Berlin"));
+        assert_eq!(node.label(), Some("city"));
     }
 }

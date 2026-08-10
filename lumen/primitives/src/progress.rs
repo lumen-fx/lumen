@@ -103,13 +103,17 @@ impl Plugin for ProgressPlugin {
 /// `SliderValue`, or it would inherit wheel / click / drag mutation).
 pub fn apply_progress_bindings(
     store: Res<PropertyStore>,
-    mut q: Query<(&BindValue, &mut ProgressBar)>,
+    mut q: Query<(
+        &BindValue,
+        &mut ProgressBar,
+        Option<&mut lumen_core::components::A11yValue>,
+    )>,
     new_binds: Query<(), Added<BindValue>>,
 ) {
     if store.dirty_peek().is_empty() && new_binds.is_empty() {
         return;
     }
-    for (bind, mut bar) in &mut q {
+    for (bind, mut bar, a11y) in &mut q {
         let key = PropertyKey::Global(std::sync::Arc::<str>::from(bind.0.as_str()));
         let Some(pv) = store.get(&key) else {
             continue;
@@ -127,6 +131,16 @@ pub fn apply_progress_bindings(
         let clamped = parsed.clamp(0.0, bar.max.max(0.0));
         if bar.value != Some(clamped) {
             bar.value = Some(clamped);
+        }
+        // Mirror into the accessibility value so the published reading
+        // follows `bind-value` writes. Guarded so an unchanged value
+        // does not trip the a11y change detection.
+        if let Some(mut v) = a11y {
+            let (now, max) = (f64::from(clamped), f64::from(bar.max));
+            if v.now != now || v.max != max {
+                v.now = now;
+                v.max = max;
+            }
         }
     }
 }
