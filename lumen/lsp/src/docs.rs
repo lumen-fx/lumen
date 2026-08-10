@@ -113,6 +113,8 @@ pub const ATTRS: &[&str] = &[
     "name",
     "src",
     "template",
+    // i18n
+    "translatable",
     // misc
     "frameless",
     "skin",
@@ -206,6 +208,11 @@ pub fn attr_doc(attr: &str) -> Option<&'static str> {
         "sensitivity" => "**`sensitivity`** - `f32`. Scroll wheel sensitivity multiplier.",
         "inertia" => "**`inertia`** - `f32`. Scroll inertia factor (0 = no inertia).",
         "tab-index" => "**`tab-index`** - `i32`. Focus order (lower = earlier).",
+        "translatable" => {
+            "**`translatable`** - catalogue key. The element's text is looked up in the \
+app's active locale; `lumenc i18n extract` collects the key into `locale/<lang>.ftl`. \
+Falls back to the authored `text`, then to the key itself."
+        }
         "id" => "**`id`** - string. Emits a `LumenId` marker for lookup.",
         "class" => "**`class`** - whitespace-separated class names for CSS matching.",
         "hover-bg" => "**`hover-bg`** - `#rrggbb` or `#rrggbbaa`. Background while hovered.",

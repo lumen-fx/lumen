@@ -170,6 +170,10 @@ host "lumen" {
     // networking
     fetch(string, string);
 
+    // translation (tr is Qt's spelling of t)
+    string t(string);
+    string tr(string);
+
     // filesystem
     string read_file(string);
     bool write_file(string, string);

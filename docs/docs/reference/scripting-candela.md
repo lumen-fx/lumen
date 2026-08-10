@@ -246,6 +246,13 @@ mixed-typed fields, which cannot cross the scalar host boundary), so
 `on_http(tag, response)` never fires for a candela script; use `fetch` for
 GET requests.
 
+### Translation
+
+| Signature | Description |
+|---|---|
+| `string t(string key)` | Translate `key` in the app's active locale; returns `key` itself when no catalogue carries it. See [Translation](../authoring/i18n.md). |
+| `string tr(string key)` | Alias for `t(key)`, under Qt's name. |
+
 ### Filesystem
 
 | Signature | Description |

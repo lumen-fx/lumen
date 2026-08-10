@@ -21,6 +21,10 @@ lumen-core = { path = "../core" }
 lumen-ir = { path = "../ir" }
 lumen-primitives = { path = "../primitives" }
 lumen-assets = { path = "../assets" }
+# Translation catalogues + locale-aware formatters. The runtime resolves the
+# app's locale, loads `locale/*.ftl`, and publishes the translator that
+# `translatable="..."` markup and the scripts' `t()` builtin read.
+lumen-i18n = { path = "../i18n" }
 bevy_ecs.workspace = true
 glam.workspace = true
 thiserror.workspace = true

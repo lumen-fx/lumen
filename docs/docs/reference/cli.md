@@ -226,23 +226,21 @@ bounds alongside the image.
 
 ### `lumenc i18n extract <app_dir> [--lang en-US]`
 
-Scans every `.lmn` and `.rhai` file under `app_dir` for translation call
-sites and writes or merges the keys it finds into
-`<app_dir>/locale/<lang>.ftl`, a Fluent catalogue. It recognises three
-shapes: the `t!(i18n, "key", ...)` and `tr!(i18n, "key", ...)` Rust macros,
-a `lumen.tr("key", ...)` script call, and the markup attribute
-`translatable="key"`.
+Scans every markup (`.lmn`) and script (`.cdl`, `.lua`, `.rhai`) file under
+`app_dir` for translation call sites and writes or merges the keys it finds
+into `<app_dir>/locale/<lang>.ftl`, a Fluent catalogue. It recognises three
+shapes: the markup attribute `translatable="key"`, a `t("key")` / `tr("key")`
+script call (candela's namespaced `lumen::t("key")` included), and the
+`t!(i18n, "key", ...)` / `tr!(i18n, "key", ...)` Rust macros.
 
 Re-running is safe. Entries already in the target file are left untouched,
 and only newly discovered keys are appended, each with a placeholder value
 for a translator to replace.
 
-The extractor is the only part of translation that is wired today: nothing
-loads the catalogue back at runtime, no script host registers a `tr`
-function, and `translatable="key"` is inert markup that only the scan
-reads. Treat this command as a way to start collecting keys, not as a
-working localization pipeline. Candela and Lua sources are not scanned at
-all.
+Translate the values, and the app picks them up on its next start: every
+`locale/*.ftl` is loaded at startup, the active locale comes from `[app]
+locale` or the OS, and a key the active locale lacks falls through to
+`en-US`. See [Translation](../authoring/i18n.md) for the whole loop.
 
 ## Update checks
 

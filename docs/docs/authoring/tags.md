@@ -26,7 +26,7 @@ only when a tag interprets them in a non-default way.
 | **Form values** | `value`, `checked`, `min`, `max`, `step`, `placeholder`, `required`, `pattern`, `multiline` |
 | **Bindings** | `bind-text`, `bind-checked`, `bind-value`, `bind-scroll`, `bind-disabled` |
 | **Reactivity** | `each`, `key`, `virtualized`, `row-height`, `signal`, `mode`, `eq` (per-tag - see `<for>` / `<if>`) |
-| **i18n** | `dir` (`ltr` \| `rtl` \| `auto`, inherits down the tree) and `lang` (a BCP-47 tag, e.g. `en-US`) - drive text shaping, the CSS logical properties (`padding-inline-start` and friends, see the [CSS subset](./css.md#layout)), and assistive tech. |
+| **i18n** | `dir` (`ltr` \| `rtl` \| `auto`, inherits down the tree) and `lang` (a BCP-47 tag, e.g. `en-US`) - drive text shaping, the CSS logical properties (`padding-inline-start` and friends, see the [CSS subset](./css.md#layout)), and assistive tech. `translatable="<key>"` marks the element's text for translation: the key is looked up in the app's catalogue and the result becomes the element's text. See [Translation](./i18n.md). |
 
 `drop-target` marks an in-app drop zone; it accepts `"true"`, `"yes"`, or
 the bare attribute with no value. Its alias `drop` needs an explicit

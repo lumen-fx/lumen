@@ -37,6 +37,7 @@ nav = [
      "authoring/pages.md",
      "authoring/templates.md",
      "authoring/animations.md",
+     "authoring/i18n.md",
      "authoring/lumen-toml.md",
   ]},
   {"Reference" = [

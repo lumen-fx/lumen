@@ -10,9 +10,10 @@ parse errors instead of silent no-ops.
 
 ```toml
 [app]
-entry = "main.lmn"
-id    = "com.example.myapp"
-kind  = "markup"
+entry  = "main.lmn"
+id     = "com.example.myapp"
+kind   = "markup"
+locale = "de-DE"
 
 [pages]
 entry   = "index"
@@ -76,6 +77,7 @@ outputs = ["libmd.so"]
 | `entry` | string | `"main.lmn"` | Markup entry filename relative to the app dir. |
 | `id` | string | app dir name | Stable identifier - Reverse-DNS recommended (`"com.example.myapp"`). Used as the per-app state directory (window state, future plugin caches). |
 | `kind` | string | auto-detect | Which toolchain `run` / `build` route the app through: `"markup"`, `"rust"`, `"cpp"`, or `"python"`. Absent, `lumenc` guesses from the directory contents (a `Cargo.toml` depending on `lumen`, a `CMakeLists.txt`, a `.py` importing `lumen`). Set it when the guess is wrong. Any other value is a parse error. |
+| `locale` | string | OS locale | BCP-47 tag naming the locale the app starts in, e.g. `"de-DE"`. Selects which `locale/<tag>.ftl` catalogue translations resolve against; see [Translation](./i18n.md). Absent, the app follows the OS and falls back to `en-US`. A tag that is not valid BCP-47 is a parse error. |
 
 ## `[pages]`
 

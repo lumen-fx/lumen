@@ -15,10 +15,11 @@
 //!   the 2.x `icu` line we pinned, so the precise CLDR-driven
 //!   relative-time path is deferred.
 //!
-//! ECS integration: [`I18nPlugin`] installs `I18n` and
-//! [`LocaleFormatter`] as resources, seeded from the system locale
-//! (via `sys-locale`). The [`t!`] macro reads `Res<I18n>` inside a
-//! bevy_ecs system.
+//! ECS integration: [`I18nPlugin`] installs [`SharedI18n`] (a shared
+//! handle to the registry) and [`LocaleFormatter`] as resources, for the
+//! locale the caller pins or the one `sys-locale` reports. The [`t!`]
+//! macro takes any `I18n` binding, including a [`SharedI18n::read`]
+//! guard.
 //!
 //! Conversions follow the project's `From`/`Into` convention - no
 //! bespoke `parse_lang` or `convert_locale_to_langid` helpers.
@@ -41,6 +42,7 @@ use fluent_bundle::concurrent::FluentBundle;
 use fluent_bundle::{FluentArgs, FluentResource};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use thiserror::Error;
 pub use unic_langid::LanguageIdentifier;
 
@@ -158,19 +160,58 @@ impl I18n {
         self.current = lang;
     }
 
+    /// Load every `<dir>/*.ftl` file, keying each bundle by the file
+    /// stem (`de-DE.ftl` becomes the `de-DE` bundle). Returns the
+    /// locales it loaded, in filesystem order. A missing directory is
+    /// not an error; it just loads nothing.
+    ///
+    /// Re-running replaces the bundles it touches, so this doubles as
+    /// the catalogue-reload entry point.
+    pub fn load_dir(
+        &mut self,
+        dir: &std::path::Path,
+    ) -> Result<Vec<LanguageIdentifier>, I18nError> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Ok(Vec::new());
+        };
+        let mut loaded = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("ftl") {
+                continue;
+            }
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| I18nError::BadLocale(path.display().to_string()))?;
+            let lang: LanguageIdentifier = Lang::try_from(stem)?.into();
+            let source = std::fs::read_to_string(&path)
+                .map_err(|e| I18nError::Parse(format!("{}: {e}", path.display())))?;
+            self.load_ftl(lang.clone(), &source)?;
+            loaded.push(lang);
+        }
+        Ok(loaded)
+    }
+
     /// Resolve `key` against the current locale, falling through
     /// `fallback_chain`. Returns the key string itself (as
     /// `Cow::Borrowed`) on a complete miss. `args` may carry
     /// [`FluentValue`] entries; `&FluentArgs::default()` is fine when
     /// the message takes no parameters.
     pub fn t<'a>(&'a self, key: &'a str, args: &'a FluentArgs) -> Cow<'a, str> {
-        self.lookup(&self.current, key, args)
-            .or_else(|| {
-                self.fallback_chain
-                    .iter()
-                    .find_map(|l| self.lookup(l, key, args))
-            })
-            .unwrap_or(Cow::Borrowed(key))
+        self.try_t(key, args).unwrap_or(Cow::Borrowed(key))
+    }
+
+    /// Like [`Self::t`], but reports a miss as `None` instead of
+    /// echoing the key. Callers with their own fallback (markup that
+    /// carries authored text alongside its `translatable` key) need to
+    /// tell "translated to the key" from "no entry".
+    pub fn try_t<'a>(&'a self, key: &'a str, args: &'a FluentArgs) -> Option<Cow<'a, str>> {
+        self.lookup(&self.current, key, args).or_else(|| {
+            self.fallback_chain
+                .iter()
+                .find_map(|l| self.lookup(l, key, args))
+        })
     }
 
     /// Resolve `key` against an explicit locale (no fallback chain).
@@ -211,6 +252,54 @@ impl Default for I18n {
     }
 }
 
+/// Shared handle to the app's [`I18n`] registry, installed as a resource
+/// by [`I18nPlugin::install`].
+///
+/// Translation is read from two places that cannot both hold an ECS
+/// resource borrow: the spawn path (which has the world) and the script
+/// hosts' `t()` builtin (which runs inside a script engine with no world
+/// access). Both share one registry through this handle, so a catalogue
+/// reload is visible everywhere at once.
+#[derive(Resource, Clone)]
+pub struct SharedI18n(Arc<RwLock<I18n>>);
+
+impl SharedI18n {
+    /// Wrap `i18n` in a shareable handle.
+    pub fn new(i18n: I18n) -> Self {
+        Self(Arc::new(RwLock::new(i18n)))
+    }
+
+    /// Borrow the registry for reading. A poisoned lock is recovered
+    /// rather than propagated: a panic mid-translation must not take the
+    /// whole UI down.
+    pub fn read(&self) -> std::sync::RwLockReadGuard<'_, I18n> {
+        self.0.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Borrow the registry for writing (locale switch, catalogue reload).
+    pub fn write(&self) -> std::sync::RwLockWriteGuard<'_, I18n> {
+        self.0.write().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Resolve `key` for the current locale, returning the key itself on
+    /// a miss. The no-argument form scripts and markup use.
+    pub fn t(&self, key: &str) -> String {
+        self.try_t(key).unwrap_or_else(|| key.to_string())
+    }
+
+    /// Resolve `key`, reporting a miss as `None`. See [`I18n::try_t`].
+    pub fn try_t(&self, key: &str) -> Option<String> {
+        let args = FluentArgs::new();
+        self.read().try_t(key, &args).map(Cow::into_owned)
+    }
+}
+
+impl From<I18n> for SharedI18n {
+    fn from(i18n: I18n) -> Self {
+        Self::new(i18n)
+    }
+}
+
 /// RTL languages list. Lifted straight from the i18n audit spec
 /// (`docs/audits/i18n.md` "Rewrite spec section 1") so the plugin agrees with
 /// whatever `LayoutDirection::DefaultLayoutDirection` ends up doing in
@@ -235,10 +324,12 @@ pub fn is_rtl(lang: &LanguageIdentifier) -> bool {
 /// [`I18nPlugin::install`] directly on a `World` for headless usage.
 pub struct I18nPlugin {
     /// Locales to walk through (in order) when the active locale
-    /// lacks a key. The active locale itself is detected via
-    /// `sys-locale`; override it after install via
-    /// [`I18n::set_current`] if the host wants a different default.
+    /// lacks a key. Usually ends with the locale the app was authored
+    /// in (`en-US`).
     pub fallback_chain: Vec<LanguageIdentifier>,
+    /// Active locale. `None` detects it from the OS via `sys-locale`,
+    /// falling back to `en-US`.
+    pub locale: Option<LanguageIdentifier>,
 }
 
 impl Default for I18nPlugin {
@@ -246,20 +337,31 @@ impl Default for I18nPlugin {
         let en: LanguageIdentifier = "en-US".parse().expect("en-US is valid");
         Self {
             fallback_chain: vec![en],
+            locale: None,
         }
     }
 }
 
 impl I18nPlugin {
-    /// Detect the system locale and install [`I18n`] + [`LocaleFormatter`]
-    /// onto `world`. Returns the resolved active locale so callers can
-    /// log it.
+    /// Builder: pin the active locale instead of detecting it. An app
+    /// declaring `[app] locale` in `lumen.toml` takes this path.
+    pub fn with_locale(mut self, locale: LanguageIdentifier) -> Self {
+        self.locale = Some(locale);
+        self
+    }
+
+    /// Install [`SharedI18n`] + [`LocaleFormatter`] onto `world` for the
+    /// resolved locale ([`Self::locale`], else the OS locale, else
+    /// `en-US`). Returns that locale so callers can log it and load the
+    /// matching catalogues.
     pub fn install(self, world: &mut bevy_ecs::world::World) -> LanguageIdentifier {
-        let current =
-            detect_system_locale().unwrap_or_else(|| "en-US".parse().expect("en-US is valid"));
+        let current = self
+            .locale
+            .or_else(detect_system_locale)
+            .unwrap_or_else(|| "en-US".parse().expect("en-US is valid"));
         let i18n = I18n::new(current.clone(), self.fallback_chain);
         let fmt = LocaleFormatter::new(current.clone());
-        world.insert_resource(i18n);
+        world.insert_resource(SharedI18n::new(i18n));
         world.insert_resource(fmt);
         current
     }
@@ -354,6 +456,84 @@ mod tests {
         assert!(is_rtl(&lang("he-IL")));
         assert!(!is_rtl(&lang("en-US")));
         assert!(!is_rtl(&lang("de-DE")));
+    }
+
+    #[test]
+    fn try_t_reports_a_miss() {
+        let mut i = I18n::new(lang("en-US"), vec![]);
+        i.load_ftl(lang("en-US"), "hit = Hit!").unwrap();
+        let args = FluentArgs::new();
+        assert_eq!(i.try_t("hit", &args).as_deref(), Some("Hit!"));
+        assert_eq!(i.try_t("miss", &args), None);
+        // `t` still echoes the key so untranslated UI renders something.
+        assert_eq!(i.t("miss", &args), "miss");
+    }
+
+    #[test]
+    fn load_dir_keys_bundles_by_file_stem() {
+        let dir = std::env::temp_dir().join(format!(
+            "lumen-i18n-load-dir-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("en-US.ftl"), "greet = Hello!\n").unwrap();
+        std::fs::write(dir.join("de-DE.ftl"), "greet = Hallo!\n").unwrap();
+        // Non-FTL files are ignored.
+        std::fs::write(dir.join("notes.txt"), "not a catalogue").unwrap();
+
+        let mut i = I18n::new(lang("de-DE"), vec![lang("en-US")]);
+        let loaded = i.load_dir(&dir).unwrap();
+        assert_eq!(loaded.len(), 2);
+        let args = FluentArgs::new();
+        assert_eq!(i.t("greet", &args), "Hallo!");
+        assert_eq!(i.t_with_lang(&lang("en-US"), "greet", &args), "Hello!");
+
+        // A stem that is not a BCP-47 tag is a load error, not a silent skip.
+        std::fs::write(dir.join("not a tag.ftl"), "greet = x\n").unwrap();
+        assert!(i.load_dir(&dir).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_dir_tolerates_a_missing_directory() {
+        let mut i = I18n::default();
+        let loaded = i
+            .load_dir(std::path::Path::new("/definitely/not/here"))
+            .unwrap();
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn shared_handle_translates_and_reloads() {
+        let mut i = I18n::new(lang("de-DE"), vec![lang("en-US")]);
+        i.load_ftl(lang("de-DE"), "greet = Hallo!").unwrap();
+        let shared = SharedI18n::new(i);
+        assert_eq!(shared.t("greet"), "Hallo!");
+        assert_eq!(shared.t("missing"), "missing");
+        assert_eq!(shared.try_t("missing"), None);
+
+        shared
+            .write()
+            .load_ftl(lang("de-DE"), "greet = Servus!")
+            .unwrap();
+        assert_eq!(shared.t("greet"), "Servus!");
+    }
+
+    #[test]
+    fn plugin_installs_shared_resources_for_the_pinned_locale() {
+        let mut world = bevy_ecs::world::World::new();
+        let current = I18nPlugin::default()
+            .with_locale(lang("fr-FR"))
+            .install(&mut world);
+        assert_eq!(current, lang("fr-FR"));
+        let shared = world.resource::<SharedI18n>().clone();
+        assert_eq!(shared.read().current, lang("fr-FR"));
+        assert!(world.get_resource::<LocaleFormatter>().is_some());
     }
 
     #[test]

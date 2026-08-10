@@ -30,6 +30,10 @@ pub(crate) struct HotReloadState {
     pub(crate) css_import_paths: Vec<PathBuf>,
     /// mtime of each `css_import_paths` entry, in the same order.
     pub(crate) css_import_mtimes: Vec<Option<SystemTime>>,
+    /// Path + mtime of every `locale/*.ftl` catalogue. Stored as whole
+    /// pairs rather than two parallel lists because the set itself can
+    /// change: adding a translation file is a change, not just editing one.
+    pub(crate) locale_stamps: Vec<(PathBuf, Option<SystemTime>)>,
     /// Extra `[asset_roots]` from `lumen.toml`, absolutized once at
     /// startup so hot-reload can keep using them.
     pub(crate) asset_roots: Vec<PathBuf>,
@@ -191,11 +195,13 @@ pub(crate) fn hot_reload<H: ScriptHost + Resource<Mutability = Mutable>>(world: 
         state.include_paths.iter().map(|p| mtime(p)).collect();
     let css_import_now: Vec<Option<SystemTime>> =
         state.css_import_paths.iter().map(|p| mtime(p)).collect();
+    let locale_now = locale_stamps(&state.dir);
     if html_now == state.html_mtime
         && css_now == state.css_mtime
         && script_now == state.script_mtimes
         && include_now == state.include_mtimes
         && css_import_now == state.css_import_mtimes
+        && locale_now == state.locale_stamps
     {
         return;
     }
@@ -250,10 +256,15 @@ pub(crate) fn hot_reload<H: ScriptHost + Resource<Mutability = Mutable>>(world: 
                 s.script_mtimes = script_now;
                 s.include_mtimes = include_now;
                 s.css_import_mtimes = css_import_now;
+                s.locale_stamps = locale_now;
             }
             return;
         }
     };
+
+    // Re-read the translation catalogues before the respawn below, so
+    // `translatable="key"` resolves against the edited strings.
+    reload_catalogues(world, &dir);
 
     // Stable-identity state preservation: snapshot per-LumenId state
     // BEFORE we despawn the old tree, then re-apply after spawn so
@@ -306,6 +317,7 @@ pub(crate) fn hot_reload<H: ScriptHost + Resource<Mutability = Mutable>>(world: 
         s.include_mtimes = include_mtimes;
         s.css_import_paths = css_import_paths;
         s.css_import_mtimes = css_import_mtimes;
+        s.locale_stamps = locale_now;
     }
     if let Some(mut banner) = world.get_resource_mut::<ErrorBanner>() {
         banner.0 = None;
