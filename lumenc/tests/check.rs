@@ -19,11 +19,11 @@ fn workspace_root() -> PathBuf {
 }
 
 #[test]
-fn counter_app_parses() {
-    let dir = workspace_root().join("apps").join("counter");
-    let report = lumenc::check_app(&dir).expect("apps/counter parses");
-    assert!(report.element_count > 5, "counter has multiple tiles");
-    assert!(report.has_script, "counter has a <script> block");
+fn scroll_tiles_app_parses() {
+    let dir = workspace_root().join("apps").join("scroll-tiles");
+    let report = lumenc::check_app(&dir).expect("apps/scroll-tiles parses");
+    assert!(report.element_count > 5, "scroll-tiles has multiple tiles");
+    assert!(report.has_script, "scroll-tiles has a <script> block");
 }
 
 #[test]

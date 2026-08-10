@@ -83,4 +83,4 @@ pub use transition::{
     TextColorTransition, Transition, TransitionPlugin, TransitionProperty, TransitionSpec,
     TransitionSpecs, retarget,
 };
-pub use validation::{ValidationPlugin, apply_validation, evaluate};
+pub use validation::{ValidationPlugin, apply_validation, evaluate, matches_pattern};
