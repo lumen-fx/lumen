@@ -93,9 +93,7 @@ pub fn check_app(dir: &Path, parser: &dyn SourceParser) -> Result<CheckReport, R
             file = entry_path.display(),
             line = f.line,
             col = f.col,
-            kind = match f.kind {
-                lumen_ir::layout_ir::LintKind::BareInterpolation => "bare-interpolation",
-            },
+            kind = <&'static str>::from(f.kind),
             msg = f.message,
         );
         if let Some(s) = &f.suggest {

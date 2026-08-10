@@ -6,7 +6,8 @@
 //! Supported matchers:
 //!
 //! - `required`: trimmed text must be non-empty; the slider value must be `> 0`; the toggle must be `checked`.
-//! - `pattern`: content must contain the configured literal substring.
+//! - `pattern`: content must contain the configured literal substring, or match a
+//!   named shape when the pattern starts with `shape:` (see [`matches_pattern`]).
 //! - `min` / `max`: numeric range applied to slider values and to input text when it parses as a number.
 
 use bevy_ecs::prelude::*;
@@ -93,7 +94,7 @@ pub fn evaluate(
         }
     }
     if let (Some(pat), Some(t)) = (v.pattern.as_deref(), text)
-        && !t.contains(pat)
+        && !matches_pattern(pat, t)
     {
         return false;
     }
@@ -112,6 +113,71 @@ pub fn evaluate(
         }
     }
     true
+}
+
+/// Apply a `pattern` rule to one value.
+///
+/// A pattern starting with `shape:` names a built-in structural check;
+/// `<date-picker>` and `<time-picker>` compile to inputs carrying one.
+/// Any other pattern is the literal-substring rule.
+///
+/// | Pattern | Shape | Ranges |
+/// | --- | --- | --- |
+/// | `shape:date` | `YYYY-MM-DD` | month 01-12, day 01-31 |
+/// | `shape:time` | `HH:MM` | hour 00-23, minute 00-59 |
+///
+/// Both are shape checks, not calendar checks: `2026-02-31` passes.
+/// Surrounding whitespace is trimmed first. An unknown `shape:` name
+/// never matches, so a typo fails loudly instead of silently accepting
+/// everything.
+pub fn matches_pattern(pattern: &str, text: &str) -> bool {
+    match pattern {
+        "shape:date" => is_iso_date(text),
+        "shape:time" => is_clock_time(text),
+        other => match other.strip_prefix("shape:") {
+            Some(_) => false,
+            None => text.contains(other),
+        },
+    }
+}
+
+/// Parse a fixed-width run of ASCII digits into a number, rejecting any
+/// other byte. `slice` must already be the exact span to read.
+fn fixed_digits(slice: &str, width: usize) -> Option<u32> {
+    if slice.len() != width || !slice.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    slice.parse().ok()
+}
+
+/// `YYYY-MM-DD` with month 01-12 and day 01-31.
+fn is_iso_date(text: &str) -> bool {
+    let t = text.trim();
+    // ASCII gate first: the byte slicing below is only char-boundary
+    // safe once every byte is a single-byte character.
+    if !t.is_ascii() || t.len() != 10 || t.as_bytes()[4] != b'-' || t.as_bytes()[7] != b'-' {
+        return false;
+    }
+    let (Some(_year), Some(month), Some(day)) = (
+        fixed_digits(&t[0..4], 4),
+        fixed_digits(&t[5..7], 2),
+        fixed_digits(&t[8..10], 2),
+    ) else {
+        return false;
+    };
+    (1..=12).contains(&month) && (1..=31).contains(&day)
+}
+
+/// 24-hour `HH:MM` with hour 00-23 and minute 00-59.
+fn is_clock_time(text: &str) -> bool {
+    let t = text.trim();
+    if !t.is_ascii() || t.len() != 5 || t.as_bytes()[2] != b':' {
+        return false;
+    }
+    let (Some(hour), Some(minute)) = (fixed_digits(&t[0..2], 2), fixed_digits(&t[3..5], 2)) else {
+        return false;
+    };
+    hour <= 23 && minute <= 59
 }
 
 #[cfg(test)]
@@ -146,6 +212,63 @@ mod tests {
         let v = validation(false, Some("@"), None, None);
         assert!(!evaluate(&v, Some("plain"), None, None));
         assert!(evaluate(&v, Some("name@host"), None, None));
+    }
+
+    #[test]
+    fn date_shape_checks_positions_and_ranges() {
+        let v = validation(false, Some("shape:date"), None, None);
+        assert!(evaluate(&v, Some("2026-08-10"), None, None));
+        assert!(evaluate(&v, Some("0001-01-01"), None, None));
+        // Shape, not calendar: day 31 of February passes.
+        assert!(evaluate(&v, Some("2026-02-31"), None, None));
+        // Surrounding whitespace is trimmed, as it is for `required`.
+        assert!(evaluate(&v, Some("  2026-08-10\t"), None, None));
+        for bad in [
+            "",
+            "-",
+            "not-a-date",
+            "2026-8-10",
+            "26-08-10",
+            "2026/08/10",
+            "2026-13-01",
+            "2026-00-01",
+            "2026-08-32",
+            "2026-08-00",
+            "2026-08-1o",
+            "2026-08-10x",
+            "2026-08-10-01",
+        ] {
+            assert!(
+                !evaluate(&v, Some(bad), None, None),
+                "{bad:?} must not pass the date shape"
+            );
+        }
+    }
+
+    #[test]
+    fn time_shape_checks_positions_and_ranges() {
+        let v = validation(false, Some("shape:time"), None, None);
+        assert!(evaluate(&v, Some("00:00"), None, None));
+        assert!(evaluate(&v, Some("23:59"), None, None));
+        for bad in [
+            "", ":", "9:05", "24:00", "23:60", "1:2", "12:5", "12-05", "aa:bb",
+        ] {
+            assert!(
+                !evaluate(&v, Some(bad), None, None),
+                "{bad:?} must not pass the time shape"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_shape_never_matches() {
+        assert!(!matches_pattern("shape:weekday", "monday"));
+    }
+
+    #[test]
+    fn non_ascii_input_does_not_panic() {
+        assert!(!matches_pattern("shape:date", "2026-08-1\u{00e9}"));
+        assert!(!matches_pattern("shape:time", "1\u{00e9}:00"));
     }
 
     #[test]

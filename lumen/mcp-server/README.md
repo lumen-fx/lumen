@@ -68,7 +68,7 @@ Start any Lumen app that has `LumenMcpPlugin` installed. A windowed
 `lumenc run` installs it by default:
 
 ```sh
-cargo run -p lumenc -- run apps/counter
+cargo run -p lumenc -- run apps/scroll-tiles
 ```
 
 The window opens and TCP `7878` binds; the run prints the port and a

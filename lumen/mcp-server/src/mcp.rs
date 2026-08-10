@@ -129,7 +129,7 @@ fn tools_list_result() -> Value {
         "tools": [
             {
                 "name": "lumen_tick",
-                "description": "Return the current frame counter and last main-world snapshot duration (microseconds).",
+                "description": "Return the current frame counter and the last tick's wall-clock duration in microseconds (`last_tick_micros`): the whole main schedule, plus extract and scene encode on ticks that rendered.",
                 "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
             },
             {
@@ -270,11 +270,11 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "lumen_simulate",
-                "description": "Inject pointer/key/scroll input into the running app and wait until the tick consumes it. Requires the app to opt in via `[mcp] simulate = true` in lumen.toml (or LumenMcpPlugin::with_simulate_enabled). Use `wait_for` with a ring name like \"ClickEvent\" or \"KeyPressed\" to confirm the event reached its handler. Kinds: click, pointer_move, key, type, scroll.",
+                "description": "Inject pointer/key/scroll input into the running app and wait until the tick consumes it. Requires the app to opt in via `[mcp] simulate = true` in lumen.toml (or LumenMcpPlugin::with_simulate_enabled). Use `wait_for` with a ring name like \"ClickEvent\" or \"KeyPressed\" to confirm the event reached its handler. Kinds: click, pointer_down, pointer_up, pointer_move, key, type, scroll. pointer_down leaves the button held, so pairing it with pointer_move and pointer_up drives a drag gesture.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "kind": { "type": "string", "enum": ["click", "pointer_move", "key", "type", "scroll"] },
+                        "kind": { "type": "string", "enum": ["click", "pointer_down", "pointer_up", "pointer_move", "key", "type", "scroll"] },
                         "x": { "type": "number" },
                         "y": { "type": "number" },
                         "dx": { "type": "number" },
@@ -543,4 +543,56 @@ fn prompts_get(params: Option<&Value>) -> Result<Value, (i64, String)> {
             }
         ]
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool(name: &str) -> Value {
+        tools_list_result()["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .find(|t| t["name"] == json!(name))
+            .unwrap_or_else(|| panic!("no tool named {name}"))
+            .clone()
+    }
+
+    #[test]
+    fn simulate_schema_lists_every_kind() {
+        // The schema sets additionalProperties:false, so a kind missing
+        // from the enum is rejected before it reaches the app - which
+        // accepts all seven.
+        let kinds = tool("lumen_simulate")["inputSchema"]["properties"]["kind"]["enum"].clone();
+        let kinds: Vec<&str> = kinds
+            .as_array()
+            .expect("enum array")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        for expected in [
+            "click",
+            "pointer_down",
+            "pointer_up",
+            "pointer_move",
+            "key",
+            "type",
+            "scroll",
+        ] {
+            assert!(
+                kinds.contains(&expected),
+                "{expected} missing from {kinds:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_tool_declares_an_object_schema() {
+        for t in tools_list_result()["tools"].as_array().expect("tools") {
+            let schema = &t["inputSchema"];
+            assert_eq!(schema["type"], json!("object"), "{}", t["name"]);
+            assert!(t["description"].is_string(), "{}", t["name"]);
+        }
+    }
 }

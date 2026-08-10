@@ -27,13 +27,17 @@ declaration   := ident ":" value "!important"? ";"
 case-insensitively at the end of a value.
 
 `@import "other.css";` splices another stylesheet in place. Paths are
-relative to the importing file. Imports must come before any rule, they
-nest, and a cycle is an error. Imported rules are placed before the
-importing file's own rules, so at equal specificity the importing file
-wins.
+relative to the importing file. Imports must come before any rule; one
+written later is an error, as is a cycle. They nest. Imported rules are
+placed before the importing file's own rules, so at equal specificity the
+importing file wins.
 
 `@media` blocks nest up to 32 levels, as do `:is()`, `:where()`, and
 `:not()` arguments.
+
+`@import` and `@media` are the at-rules Lumen implements. Any other one,
+`@keyframes` and `@font-face` included, is skipped with a warning along
+with its whole block, and the rest of the stylesheet applies.
 
 Pseudo-elements (`::before` and friends) are a parse error, not a warning.
 
@@ -56,12 +60,18 @@ A compound writes the tag first: `button.primary#save`.
 | --- | --- |
 | `A B` | `B` with an `A` ancestor. |
 | `A > B` | `B` whose immediate parent is `A`. |
-| `A + B` | Adjacent sibling. |
-| `A ~ B` | General sibling. |
+| `A + B` | `B` immediately preceded by a sibling `A`. |
+| `A ~ B` | `B` preceded anywhere by a sibling `A`. |
 
-The two sibling combinators parse and carry specificity, but never match:
-the cascade resolves each element against its ancestor chain only. Use a
-class or `:nth-child()` instead.
+Each step takes the nearest candidate that matches it and does not
+reconsider: `.a .b .c` binds `.b` to the closest matching ancestor, and
+`.a ~ .b ~ .c` binds `.b` to the closest matching earlier sibling. A
+selector that would only match through a farther candidate misses.
+
+Sibling steps resolve when the stylesheet is applied to the document.
+Restyles that run against one element on its own (a `<for>` row, a class
+change from a script, an OS theme flip) walk ancestors only, so a rule
+that needs a sibling step is not reapplied there.
 
 ### Pseudo-classes
 
@@ -94,8 +104,10 @@ Structural pseudo-classes filter at compile time:
 | `:where(list)` | Any selector in the list, contributing zero specificity. |
 | `:not(list)` | No selector in the list. |
 
-`:is()`, `:where()`, and `:not()` take a comma-separated list of single
-compounds. An argument with a combinator in it never matches.
+`:is()`, `:where()`, and `:not()` take a comma-separated list of
+selectors, each of which may use combinators. The element being tested is
+the subject of every argument, so `.row:not(.list > .row)` matches a
+`.row` that is not a child of a `.list`.
 
 ### Specificity
 
@@ -120,14 +132,15 @@ Declarations are ordered by, in decreasing priority:
 4. Source order, then position within a selector list. The last matching
    declaration wins.
 
-Markup attributes beat CSS. `<tile width="50px"/>` keeps its width
-against `.t { width: 100px }`. A few properties are outside that rule and
-a CSS declaration wins over the matching attribute: `overflow` and its
-per-axis forms, `line-height`, `text-overflow`, `layout-boundary`, the
-per-side `border-*-color` longhands, the caret and password properties,
-`knob-inset`, `thumb-size`, `popup-gap`, `disabled-opacity`,
-`progress-duration`, `progress-chunk`, and the `scrollbar-*` geometry and
-timing properties.
+Markup attributes beat CSS, for every property both surfaces can set.
+`<tile width="50px"/>` keeps its width against `.t { width: 100px }`.
+
+`flex-direction` is the one property CSS wins: `<row>`, `<column>`,
+`<scroll>`, and the other layout tags carry a direction that comes from
+the tag rather than from anything you wrote, so a stylesheet can change
+it. `<overlay>` and `<dialog>` take `position: absolute` and a full
+`inset` from their tag too, but those two count as markup and a
+stylesheet cannot move them.
 
 One exception keeps skins from repainting your surfaces: when you set a
 resting `bg` (in CSS or as an attribute), a skin's `:hover` and `:active`
@@ -203,11 +216,16 @@ Features are joined with `and`. Comma-separated query lists, `or`, and
 | Feature | Values | Matches when |
 | --- | --- | --- |
 | `prefers-color-scheme` | `dark`, `light`, `no-preference` | The OS color scheme equals the value. With no known scheme, only `no-preference` matches. |
-| `prefers-reduced-motion` | `reduce`, `no-preference` | The user's motion preference equals the value. |
-| `prefers-contrast` | `more`, `less`, `custom`, `no-preference` | The user's contrast preference equals the value. |
+| `prefers-reduced-motion` | `reduce`, `no-preference` | Always `no-preference`; see below. |
+| `prefers-contrast` | `more`, `less`, `custom`, `no-preference` | Always `no-preference`; see below. |
 | `min-width` | length in px | The viewport is at least that wide. |
 | `max-width` | length in px | The viewport is at most that wide. |
 | `width` | length in px | The viewport is that wide. |
+
+Lumen reads the OS color scheme and the window size. It does not read the
+motion or contrast preference from the OS yet, so `prefers-reduced-motion`
+and `prefers-contrast` only ever match `no-preference`. Give people an
+in-app switch for anything heavily animated or low-contrast.
 
 ## Value forms
 
@@ -253,10 +271,11 @@ separated and paint in order. `shadow` is an accepted synonym.
 
 ## Property catalogue
 
-The Lumen short names and the standard CSS names below are both
-accepted: `color` for `text-color`, `background` and `background-color`
-for `bg`, `border-radius` for `radius`, `flex-grow` for `grow`, and
-`white-space` for `wrap`.
+The Lumen short names and the standard CSS names below are
+interchangeable: `color` for `text-color`, `background` and
+`background-color` for `bg`, `border-radius` for `radius`, `flex-grow`
+for `grow`, `flex-shrink` for `shrink`, `justify-content` for `justify`,
+`object-fit` for `fit`, and `white-space` for `wrap`.
 
 ### Layout
 
@@ -273,22 +292,21 @@ for `bg`, `border-radius` for `radius`, `flex-grow` for `grow`, and
 | `flex-direction` | `row`, `column`, `row-reverse`, `column-reverse` | from the tag |
 | `flex-wrap` | `nowrap`, `wrap`, `wrap-reverse` | `nowrap` |
 | `flex` | `none`, `auto`, `initial`, or `<grow> [<shrink>] [<basis>]` | |
-| `grow` | number | `0` |
-| `flex-shrink` | number | `1` |
+| `grow`, `flex-grow` | number | `0` |
+| `shrink`, `flex-shrink` | number | `1` |
 | `flex-basis` | length | `auto` |
 | `gap` | `<both>` or `<row> <column>`; each may be a percentage | `0` |
 | `row-gap`, `column-gap` | number or percentage | `0` |
 | `align`, `align-items` | `start`/`flex-start`, `end`/`flex-end`, `center`, `stretch`, `baseline` | `stretch` |
 | `align-self` | same as `align-items` | from the container |
 | `align-content` | `start`/`flex-start`, `end`/`flex-end`, `center`, `stretch`/`normal`, `space-between`, `space-around`, `space-evenly` | `stretch` |
-| `justify` | `start`, `end`, `center`, `between`/`space-between`, `around`/`space-around`, `evenly`/`space-evenly` | `start` |
+| `justify`, `justify-content` | `start`, `end`, `center`, `between`/`space-between`, `around`/`space-around`, `evenly`/`space-evenly` | `start` |
 | `justify-items` | same as `align-items` | grid only |
 | `justify-self` | same as `align-items` | from `justify-items` |
 | `z-index` | integer or `auto` | document order (`auto` is `0`) |
 | `overflow`, `overflow-x`, `overflow-y` | `visible`, `hidden`, `scroll` | `visible` |
 | `layout-boundary` | `true`, `yes` | automatic |
 
-Main-axis distribution is `justify`, not `justify-content`.
 `overflow: scroll` makes an element a live scroll container.
 
 ### Logical properties
@@ -321,7 +339,7 @@ integer are clamped with a warning.
 | `border-top-left-radius`, `border-top-right-radius`, `border-bottom-right-radius`, `border-bottom-left-radius` | number | from `radius` |
 | `opacity` | number, clamped to 0..1 | `1` |
 | `shadow`, `box-shadow` | shadow list | none |
-| `fit` | `fill`, `cover`, `contain`, `none`, `scale-down` | `fill`; `<image>` only |
+| `fit`, `object-fit` | `fill`, `cover`, `contain`, `none`, `scale-down` | `fill`; `<image>` only |
 | `disabled-opacity` | number, clamped to 0..1 | `0.5` |
 | `knob-color` | color | built-in knob fill |
 | `knob-inset` | number | `4` |
@@ -333,8 +351,6 @@ integer are clamped with a warning.
 `:disabled { bg }` nor `:disabled { opacity }` was authored.
 `knob-color`, `knob-inset`, `thumb-size`, and `popup-gap` reach widget
 parts that have no selector of their own.
-
-`fit` is the image-fit property; `object-fit` is not an accepted name.
 
 ### Borders and outlines
 
@@ -447,19 +463,24 @@ The same swaps are reachable as plain properties, which is often shorter:
 | Property | Values | Default |
 | --- | --- | --- |
 | `transition` | `<property> <duration> [<easing>]`, comma separated | none |
-| `transition-property` | comma-separated property names, or `none` | none |
+| `transition-property` | comma-separated property names, `all`, or `none` | none |
 | `transition-duration` | comma-separated durations | `0` |
-| `transition-timing-function` | comma-separated easings | `ease-out` |
+| `transition-timing-function` | comma-separated easings | `ease` |
 
 Animatable properties: `opacity`, `background-color` (`background`,
-`bg`), `color` (`text-color`), and `border-color`. Any other name in a
-transition list is ignored with a warning; layout properties are
-deliberately excluded so a transition never re-runs layout every frame.
+`bg`), `color` (`text-color`), and `border-color`. `all` stands for all
+four. Any other name in a transition list is ignored with a warning;
+layout properties are deliberately excluded so a transition never re-runs
+layout every frame.
+
+An entry that names no easing gets `ease`. A second duration in an entry
+is a delay, which Lumen warns about and ignores: a transition always
+starts on the tick the value changes. `transition-delay` is warned about
+and ignored for the same reason.
 
 The `transition` shorthand resets the longhands. Otherwise
 `transition-property` defines the list and the duration and easing lists
-cycle over it; a duration list without a property list produces nothing,
-because there is no `all` keyword.
+cycle over it; a duration list without a property list produces nothing.
 
 ### Scrollbars
 

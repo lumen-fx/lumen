@@ -6,7 +6,7 @@
       <label class="side-brand" text="Waveform" />
       <label class="side-label" text="Library" />
       <column class="playlists" gap="2">
-        <button id="pl|tones"  class="pl pl-active" text="Test Tones" />
+        <button id="pl|tones"  class="pl pl-active" text="Featured" />
         <button id="pl|pure"   class="pl" text="Pure Tones" />
         <button id="pl|moving" class="pl" text="Moving Tones" />
       </column>

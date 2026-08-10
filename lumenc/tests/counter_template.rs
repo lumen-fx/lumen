@@ -6,13 +6,15 @@
 
 //! End-to-end proof that the `counter` template runs as scaffolded.
 //!
-//! `lumenc new <dir> counter` writes a candela script, and the top-level README and
-//! the getting-started walkthrough both quote it verbatim. This test writes the
-//! template to a temp dir exactly as the scaffolder does, boots it through
-//! the headless plugin stack (no window, no GPU), clicks `bump` and `reset`,
-//! and asserts the `bind-text` label follows the `clicks` signal. A template
-//! whose script fails to compile, or whose per-id routes never register,
-//! leaves the label on its markup default and fails here.
+//! `lumenc new <dir> counter` writes a candela script, and the getting-started
+//! walkthrough quotes it verbatim. This test writes the template to a temp dir
+//! exactly as the scaffolder does, boots it through the headless plugin stack
+//! (no window, no GPU), clicks `bump` and `reset`, and asserts the `bind-text`
+//! label follows the `clicks` signal. The script looks each button up with
+//! `get_by_id` from `on_ready` and binds its click handler on the node handle,
+//! so a template whose script fails to compile, whose `on_ready` runs too early
+//! to see the mounted tree, or whose bindings never reach the dispatcher leaves
+//! the label on its markup default and fails here.
 
 use bevy_ecs::prelude::Entity;
 use lumen_core::app::App;
@@ -78,8 +80,9 @@ fn run_case() {
     let dir = scaffolded_counter();
     let (mut app, _winit) = build_headless_app(RunOptions::new(dir.clone())).expect("build app");
 
-    // A few ticks so the candela `on_start` fires, its `signal_set_int`
-    // command drains, and the `bind-text` reader mirrors it into the label.
+    // A few ticks so the tree mounts, the candela `on_ready` fires, its
+    // `signal_set_int` and event-bind commands drain, and the `bind-text`
+    // reader mirrors the signal into the label.
     for _ in 0..5 {
         app.tick();
     }
