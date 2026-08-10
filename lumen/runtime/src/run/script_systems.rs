@@ -51,39 +51,21 @@ pub(crate) fn build_dom_index(
     lumen_core::node::publish_dom_index(DomIndex::build(records));
 }
 
-/// Inert placeholder for [`audio::fire_audio_ended`] in a build compiled
-/// without the `audio` feature (Part B tree-shaking). The real system lives in
-/// the `audio` module (compiled only with the feature); this stub keeps the
-/// `fire_audio_ended::<H>` type path resolvable so the `.after(..)` ordering
-/// edge on `apply_script_commands` stays valid; it references an unregistered
-/// system set and is therefore a no-op. Never added to any schedule.
-#[cfg(not(feature = "audio"))]
-pub(crate) fn fire_audio_ended<H: lumen_script::ScriptHost + Resource<Mutability = Mutable>>(
-    _out: MessageWriter<ScriptCommandEvent>,
-) {
-}
-
-/// Install every host-generic script system and its (RC-critical)
-/// ordering edge against the concrete [`ScriptHost`] `H` the
-/// `[script] engine` key selected. Monomorphised once per host from the
-/// match arms in [`build_app`]; every `.after(..)` /
-/// `.before(..)` edge that anchors `apply_derivations::<H>` /
-/// `tick_script::<H>` / `dispatch_clicks_and_doubles::<H>` must name the
-/// SAME `H` that the installed host plugin registered, or the dirty-gating
-/// order collapses (the anchor set is empty for the wrong host).
+/// Install the host-neutral half of the script wiring: the DOM snapshot
+/// publishers, the mutation pipeline, the two-way binding readers and pushes,
+/// and the command applier. Called once per app however many hosts are active.
 ///
-/// The binding / push systems (BLOCK A) are unconditional: they run even
-/// with no script installed, in which case their host-anchor edges are
-/// inert (the referenced `::<H>` systems have zero registrations). The
-/// audio + `apply_script_commands` systems (`has_script`) only exist when
-/// the app actually ships a script.
-pub(crate) fn register_script_systems<
-    H: lumen_script::ScriptHost + Resource<Mutability = Mutable>,
->(
-    app: &mut App,
-    has_script: bool,
-    hot_reload_enabled: bool,
-) {
+/// Every RC-critical ordering edge anchors on [`lumen_script::ScriptSet`], not
+/// on a concrete `system::<H>`. That is what makes several hosts safe: an edge
+/// naming one host's `apply_derivations` says nothing about the others, so the
+/// one-tick dirty window would close unobserved for every host it did not name,
+/// and dirty-gated readers would freeze at their spawn value.
+///
+/// The binding / push systems are unconditional: they run even with no script
+/// installed, in which case their set edges are inert (the sets have zero
+/// members). The audio + `apply_script_commands` systems (`has_script`) only
+/// exist when the app ships a script.
+pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
     // Same-tick signal commit: a script `on_click` handler pushes its
     // `signals.x.set(..)` write onto the cross-thread property bus from
     // inside the `Systems`-stage dispatch. The global drain runs back in
@@ -94,13 +76,13 @@ pub(crate) fn register_script_systems<
     // binding readers below then run `.after` this drain and observe the
     // fresh value on the same tick the click fired.
     //
-    // `.before(apply_derivations::<H>)`: derivations consult the store's dirty
+    // `.before(ScriptSet::Derivations)`: derivations consult the store's dirty
     // queue, and `clear_property_store_dirty` (A11ySync) empties it every
     // tick - so a typed dep write committed here must land BEFORE the
     // derivation pass or its one-tick dirty window closes unobserved and
     // the derived signal freezes (RC1). Edge is inert when no script is
-    // installed (`apply_derivations` unregistered => empty set), same as
-    // the `dispatch_clicks_and_doubles` reference above.
+    // installed (the set has no members), same as the `ScriptSet::Dispatch`
+    // references above.
     // Dynamic DOM read side: rebuild + publish the query snapshot before
     // any handler runs, so `query()` / traversal from an `on_click` body
     // sees this tick's tree. Unconditional (runs with or without a script,
@@ -108,7 +90,7 @@ pub(crate) fn register_script_systems<
     app.add_systems(
         TickStage::Systems,
         build_dom_index
-            .before(dispatch_clicks_and_doubles::<H>)
+            .before(ScriptSet::Dispatch)
             .before(lumen_input::dispatch_focused_keys),
     );
     // Publish per-node detail (text / generic attrs / inline style) + the
@@ -118,7 +100,7 @@ pub(crate) fn register_script_systems<
     app.add_systems(
         TickStage::Systems,
         crate::run::dom_commands::publish_node_details
-            .before(dispatch_clicks_and_doubles::<H>)
+            .before(ScriptSet::Dispatch)
             .before(lumen_input::dispatch_focused_keys),
     );
     // Phase-5 low-level introspection snapshot: geometry, component field
@@ -130,7 +112,7 @@ pub(crate) fn register_script_systems<
     app.add_systems(
         TickStage::Systems,
         crate::run::dom_commands::publish_introspection
-            .before(dispatch_clicks_and_doubles::<H>)
+            .before(ScriptSet::Dispatch)
             .before(lumen_input::dispatch_focused_keys),
     );
     // Dynamic DOM mutation pipeline. `collect_dom_commands` gathers this
@@ -146,72 +128,31 @@ pub(crate) fn register_script_systems<
     // parameter validation.
     if !has_script {
         bevy_ecs::message::MessageRegistry::register_message::<ScriptCommandEvent>(&mut app.world);
+        // No host means `register_script_host_systems` never runs, so install
+        // the DOM-event dispatchers here against the always-compiled Rhai host.
+        // They take an optional host and deliver to C-ABI / SDK native handlers.
+        register_dom_event_dispatchers::<RhaiHost>(app);
     }
     app.world
         .insert_resource(crate::run::dom_commands::PendingDomCommands::default());
     app.add_systems(
         TickStage::Systems,
         crate::run::dom_commands::collect_dom_commands
-            .after(tick_script::<H>)
-            .after(dispatch_clicks_and_doubles::<H>)
-            .after(dispatch_close_to_script::<H>),
+            .after(ScriptSet::Tick)
+            .after(ScriptSet::Dispatch)
+            .after(ScriptSet::Ready)
+            .after(ScriptSet::DomEvents),
     );
     app.add_systems(
         TickStage::Systems,
         crate::run::dom_commands::apply_dom_commands
             .after(crate::run::dom_commands::collect_dom_commands),
     );
-    // Post-mount lifecycle: dispatch `on_ready` once, after the first
-    // `build_dom_index` publish so a DOM query inside it sees the mounted
-    // static tree, and before `collect_dom_commands` so any tree the handler
-    // builds is materialized on the same first tick. Script-gated: only an app
-    // with a host has the `on_ready` seam (and the `OnReadyFired` latch the
-    // ScriptPlugin installs). A missing `on_ready` is a no-op, so `on_start`-
-    // only apps are unaffected.
-    if has_script {
-        // `.after(sync_signals_into_host)`: both write the host's signal
-        // mirror on the tick where a value is still dirty, and the sync
-        // rewrites entries from the store. Unordered, the sync can run after
-        // the dispatch and overwrite the values `on_ready` just wrote with
-        // the pre-dispatch store state, leaving the mirror stale for every
-        // later handler read.
-        app.add_systems(
-            TickStage::Systems,
-            fire_on_ready::<H>
-                .after(build_dom_index)
-                .after(crate::run::dom_commands::publish_node_details)
-                .after(lumen_script::sync_signals_into_host::<H>)
-                .before(crate::run::dom_commands::collect_dom_commands),
-        );
-    }
-    // Dynamic DOM events (phase 4): turn input messages into DOM events and
-    // run capture -> target -> bubble propagation over the binding registry.
-    // Ordered like the legacy `on_click` dispatch - after the input
-    // producers and the snapshot build, before `collect_dom_commands` so a
-    // handler's queued DOM mutations apply this same tick. `.before(
-    // navigate_on_anchor_click)` lets a `prevent_default` on a link click be
-    // observed before the anchor-navigation executor runs. Unconditional so
-    // a script-less app still delivers to C-ABI / SDK native handlers.
-    app.add_systems(
-        TickStage::Systems,
-        lumen_script::dispatch_pointer_and_key_events::<H>
-            .after(build_dom_index)
-            .after(lumen_input::dispatch_clicks)
-            .after(lumen_input::dispatch_focused_keys)
-            .before(crate::run::dom_commands::collect_dom_commands)
-            .before(crate::pages::navigate_on_anchor_click),
-    );
-    app.add_systems(
-        TickStage::Systems,
-        lumen_script::dispatch_state_events::<H>
-            .after(build_dom_index)
-            .before(crate::run::dom_commands::collect_dom_commands),
-    );
     app.add_systems(
         TickStage::Systems,
         lumen_core::property_store::commit_external_properties
-            .after(dispatch_clicks_and_doubles::<H>)
-            .before(apply_derivations::<H>),
+            .after(ScriptSet::Dispatch)
+            .before(ScriptSet::Derivations),
     );
     // Signal -> TextContent must land BEFORE the keystroke / IME path so a
     // user's mid-tick keystroke always wins over an external signal write,
@@ -240,7 +181,7 @@ pub(crate) fn register_script_systems<
         TickStage::Systems,
         lumen_core::signals::apply_text_bindings
             .after(lumen_core::property_store::commit_external_properties)
-            .after(apply_derivations::<H>)
+            .after(ScriptSet::Derivations)
             .after(lumen_core::signals::push_toggle_to_signal)
             .after(lumen_core::signals::push_slider_to_signal)
             .after(lumen_core::signals::push_textinput_to_signal)
@@ -250,7 +191,7 @@ pub(crate) fn register_script_systems<
         TickStage::Systems,
         lumen_core::signals::apply_checked_bindings
             .after(lumen_core::property_store::commit_external_properties)
-            .after(apply_derivations::<H>)
+            .after(ScriptSet::Derivations)
             .after(lumen_core::signals::push_toggle_to_signal)
             .after(lumen_core::signals::push_slider_to_signal)
             .after(lumen_core::signals::push_textinput_to_signal),
@@ -259,7 +200,7 @@ pub(crate) fn register_script_systems<
         TickStage::Systems,
         lumen_core::signals::apply_value_bindings
             .after(lumen_core::property_store::commit_external_properties)
-            .after(apply_derivations::<H>)
+            .after(ScriptSet::Derivations)
             .after(lumen_core::signals::push_toggle_to_signal)
             .after(lumen_core::signals::push_slider_to_signal)
             .after(lumen_core::signals::push_textinput_to_signal),
@@ -274,7 +215,7 @@ pub(crate) fn register_script_systems<
         TickStage::Systems,
         lumen_core::signals::apply_scroll_bindings
             .after(lumen_core::property_store::commit_external_properties)
-            .after(apply_derivations::<H>)
+            .after(ScriptSet::Derivations)
             .after(lumen_core::signals::push_toggle_to_signal)
             .after(lumen_core::signals::push_slider_to_signal)
             .after(lumen_core::signals::push_textinput_to_signal)
@@ -298,7 +239,7 @@ pub(crate) fn register_script_systems<
         TickStage::Systems,
         lumen_core::signals::apply_disabled_bindings
             .after(lumen_core::property_store::commit_external_properties)
-            .after(apply_derivations::<H>)
+            .after(ScriptSet::Derivations)
             .after(lumen_core::signals::push_toggle_to_signal)
             .after(lumen_core::signals::push_slider_to_signal)
             .after(lumen_core::signals::push_textinput_to_signal),
@@ -307,31 +248,31 @@ pub(crate) fn register_script_systems<
     // Toggleable / SliderValue, mirror back into the signal. The Pull
     // half above is idempotent so they don't fight - the No-op equality
     // checks in each function ensure stable state.
-    // `.before(apply_derivations::<H>)`: derivations are dirty-gated too, so a
+    // `.before(ScriptSet::Derivations)`: derivations are dirty-gated too, so a
     // control write pushed after the derivation pass on the write tick
     // would never recompute the derived signal (the garden's
     // `toggle_status` freezing on toggle flips was the live repro).
     app.add_systems(
         TickStage::Systems,
-        lumen_core::signals::push_textinput_to_signal.before(apply_derivations::<H>),
+        lumen_core::signals::push_textinput_to_signal.before(ScriptSet::Derivations),
     );
     app.add_systems(
         TickStage::Systems,
-        lumen_core::signals::push_toggle_to_signal.before(apply_derivations::<H>),
+        lumen_core::signals::push_toggle_to_signal.before(ScriptSet::Derivations),
     );
     app.add_systems(
         TickStage::Systems,
-        lumen_core::signals::push_slider_to_signal.before(apply_derivations::<H>),
+        lumen_core::signals::push_slider_to_signal.before(ScriptSet::Derivations),
     );
     // W6 T6: `bind-scroll` push half - the settled scroll offset mirrors
     // back into the signal (throttled to scroll-settle inside the system,
-    // never per-frame). `.before(apply_derivations::<H>)` per the 7bfc0f2 push
+    // never per-frame). `.before(ScriptSet::Derivations)` per the 7bfc0f2 push
     // rules; the `.before(sync_signals_into_host)` edge lives in
     // lumen-script-rhai's registration (expressed as its
     // `.after(push_scroll_to_signal)`).
     app.add_systems(
         TickStage::Systems,
-        lumen_core::signals::push_scroll_to_signal.before(apply_derivations::<H>),
+        lumen_core::signals::push_scroll_to_signal.before(ScriptSet::Derivations),
     );
     // W5 dialog contract (Qt QDialog): Enter-anywhere activates the default
     // button. Ordered after the focused-key fanout (same-tick keystroke) and
@@ -341,23 +282,23 @@ pub(crate) fn register_script_systems<
         TickStage::Systems,
         crate::spawn::activate_dialog_default_on_enter
             .after(lumen_input::dispatch_focused_keys)
-            .before(dispatch_clicks_and_doubles::<H>),
+            .before(ScriptSet::Dispatch),
     );
     if has_script {
         // `apply_script_commands` is the sole applier of script-produced
         // `SetSignal` / `SetArray` writes into `PropertyStore` /
         // `ArraySignals`. Its ordering is load-bearing post perf dirty-gating:
         //
-        //  * `.after(tick_script::<H>)` / `.after(dispatch_clicks_and_doubles::<H>)` -
+        //  * `.after(ScriptSet::Tick)` / `.after(ScriptSet::Dispatch)` -
         //    those systems emit the `ScriptCommandEvent`s this drains (the
         //    `on_start` backlog and click-handler writes respectively).
         //    Running after them applies this tick's writes in-tick instead
         //    of lagging a frame through the message double-buffer.
         //
-        //  * `.before(apply_derivations::<H>)` - RC1 fix. Derivations consult the
+        //  * `.before(ScriptSet::Derivations)` - RC1 fix. Derivations consult the
         //    store's per-tick dirty queue, which `clear_property_store_dirty`
         //    (A11ySync) empties every tick - a signal write is dirty for
-        //    exactly one tick. The previous `.after(apply_derivations::<H>)` edge
+        //    exactly one tick. The previous `.after(ScriptSet::Derivations)` edge
         //    was exactly backwards: every `SetSignal` dep write landed after
         //    the derivation pass had already run, its dirty flag was gone by
         //    the next tick, and `derive()` signals froze at their startup
@@ -380,32 +321,30 @@ pub(crate) fn register_script_systems<
         //    same tick the backing array is populated rather than the next one
         //    (the reconciler is un-gated so it would converge regardless, but
         //    same-tick keeps first-frame output correct).
-        //  * `.after(dispatch_close_to_script)` - the `on_close` hook runs
-        //    on the veto tick that follows an OS close request; when the
-        //    close commits, that tick is the app's LAST. Without this edge
-        //    the commands `on_close` emits (final signal writes, prints)
-        //    would sit in the message buffer for a next tick that never
-        //    runs and be silently dropped at exit.
+        //  * `.after(ScriptSet::Dispatch)` also covers `dispatch_close_to_script`
+        //    - the `on_close` hook runs on the veto tick that follows an OS
+        //    close request; when the close commits, that tick is the app's
+        //    LAST. Without this edge the commands `on_close` emits (final
+        //    signal writes, prints) would sit in the message buffer for a next
+        //    tick that never runs and be silently dropped at exit.
         app.add_systems(
             TickStage::Systems,
             apply_script_commands
-                .after(tick_script::<H>)
-                .after(dispatch_clicks_and_doubles::<H>)
-                .after(dispatch_close_to_script::<H>)
-                .before(apply_derivations::<H>)
+                .after(ScriptSet::Tick)
+                .after(ScriptSet::Dispatch)
+                .before(ScriptSet::Derivations)
                 .before(lumen_core::signals::apply_text_bindings)
                 .before(lumen_core::signals::apply_checked_bindings)
                 .before(lumen_core::signals::apply_value_bindings)
                 .before(crate::spawn::reconcile_for_blocks)
                 // on_audio_end (auto-advance) may emit SetSignal commands.
-                .after(fire_audio_ended::<H>),
+                .after(ScriptSet::AudioEnded),
         );
         // Audio transport wiring. COMPILE-TIME GATE (Part B tree-shaking):
         // only registered when the `audio` feature is compiled in. The
-        // `.after(fire_audio_ended::<H>)` ordering edge on `apply_script_commands`
-        // above stays valid in a no-audio build because an inert
-        // `fire_audio_ended` stub (below) keeps the `::<H>` path resolvable --
-        // the edge then references an unregistered system set and is a no-op.
+        // `.after(ScriptSet::AudioEnded)` edge on `apply_script_commands` above
+        // stays valid in a no-audio build: the set then has no members and the
+        // edge is a no-op.
         //
         // `poll_audio` pushes position/duration/playing into the store
         // *before* the host mirror sync so `derive()`s over them recompute
@@ -415,7 +354,7 @@ pub(crate) fn register_script_systems<
         {
             app.add_systems(
                 TickStage::Systems,
-                poll_audio.before(sync_signals_into_host::<H>),
+                poll_audio.before(ScriptSet::SyncSignals),
             );
             // `apply_loaded_audio` starts playback once the AssetServer resolves
             // the track bytes; runs after the shared decode drain.
@@ -423,36 +362,119 @@ pub(crate) fn register_script_systems<
                 TickStage::Systems,
                 apply_loaded_audio.after(lumen_assets::drain_completed_decodes),
             );
-            // `fire_audio_ended` invokes the optional `on_audio_end()` after the
-            // script tick; its emitted commands are drained by the two appliers
-            // below (both ordered `.after(fire_audio_ended::<H>)`).
+            // The end-of-track flag is cleared once, after every host has been
+            // offered `on_audio_end`, so a second host still sees it.
             app.add_systems(
                 TickStage::Systems,
-                fire_audio_ended::<H>.after(tick_script::<H>),
+                clear_audio_ended.after(ScriptSet::AudioEnded),
             );
             // `apply_audio_commands` applies transport commands + routes
             // `audio_play` through the AssetServer.
             app.add_systems(
                 TickStage::Systems,
                 apply_audio_commands
-                    .after(tick_script::<H>)
-                    .after(dispatch_clicks_and_doubles::<H>)
-                    .after(fire_audio_ended::<H>),
+                    .after(ScriptSet::Tick)
+                    .after(ScriptSet::Dispatch)
+                    .after(ScriptSet::AudioEnded),
             );
         }
-        // RC6: a script that failed to load at plugin build leaves
-        // `ScriptLoadFailure` behind. Mirror it into the in-app error
-        // banner so the failure is visible in the window itself, not
-        // only in the stderr banner the plugin printed.
-        if let Some(fail) = app.world.get_resource::<lumen_script::ScriptLoadFailure>() {
-            let msg = format!("script load failed: {}", fail.0);
-            app.world.resource_mut::<ErrorBanner>().0 = Some(msg);
-        }
     }
-    #[cfg(feature = "runtime-parse")]
-    if hot_reload_enabled {
-        app.add_systems(TickStage::Systems, hot_reload::<H>);
+}
+
+/// Dynamic DOM events (phase 4): turn input messages into DOM events and run
+/// capture -> target -> bubble propagation over the binding registry.
+///
+/// Ordered like the legacy `on_click` dispatch: after the input producers and
+/// the snapshot build, before `collect_dom_commands` so a handler's queued DOM
+/// mutations apply this same tick. `.before(navigate_on_anchor_click)` lets a
+/// `prevent_default` on a link click be observed before the anchor-navigation
+/// executor runs.
+///
+/// Both dispatchers take an optional host, so a script-less app still installs
+/// them (against the always-compiled Rhai host) and delivers to C-ABI / SDK
+/// native handlers.
+fn register_dom_event_dispatchers<H: lumen_script::ScriptHost + Resource<Mutability = Mutable>>(
+    app: &mut App,
+) {
+    app.add_systems(
+        TickStage::Systems,
+        lumen_script::dispatch_pointer_and_key_events::<H>
+            .in_set(ScriptSet::DomEvents)
+            .after(build_dom_index)
+            .after(lumen_input::dispatch_clicks)
+            .after(lumen_input::dispatch_focused_keys)
+            .before(crate::pages::navigate_on_anchor_click),
+    );
+    app.add_systems(
+        TickStage::Systems,
+        lumen_script::dispatch_state_events::<H>
+            .in_set(ScriptSet::DomEvents)
+            .after(build_dom_index),
+    );
+}
+
+/// Install the per-host half of the script wiring, once for each active
+/// [`ScriptHost`]. Every system here joins a [`lumen_script::ScriptSet`], so
+/// the host-neutral edges in [`register_script_common`] cover it without
+/// naming its concrete type.
+pub(crate) fn register_script_host_systems<
+    H: lumen_script::ScriptHost + Resource<Mutability = Mutable>,
+>(
+    app: &mut App,
+    multi_host: bool,
+) {
+    // RC6: a script that failed to load at plugin build leaves
+    // `ScriptLoadFailure` behind. Mirror it into the in-app error banner so the
+    // failure is visible in the window itself, not only in the stderr banner
+    // the plugin printed. Read here, right after this host's plugin installed.
+    if let Some(fail) = app.world.get_resource::<lumen_script::ScriptLoadFailure>() {
+        let msg = format!("script load failed: {}", fail.0);
+        app.world.resource_mut::<ErrorBanner>().0 = Some(msg);
     }
-    #[cfg(not(feature = "runtime-parse"))]
-    let _ = hot_reload_enabled;
+    // Cross-host signal reads. A host keeps its own mirror current as its
+    // builtins run, so with one host the early `ScriptSet::SyncSignals` pass
+    // is all that is needed and this stays unregistered. With two, a signal
+    // written in one language reaches `PropertyStore` only when
+    // `apply_script_commands` runs, and its dirty flag is cleared at end of
+    // tick - so the other host's mirror must be refreshed here, inside that
+    // one-tick window, or the write is invisible to it forever.
+    if multi_host {
+        app.add_systems(
+            TickStage::Systems,
+            lumen_script::sync_signals_into_host::<H>
+                .in_set(ScriptSet::SyncSignalsLate)
+                .after(apply_script_commands)
+                .before(ScriptSet::Derivations),
+        );
+    }
+    // Post-mount lifecycle: dispatch `on_ready` once per host, after the first
+    // `build_dom_index` publish so a DOM query inside it sees the mounted
+    // static tree, and before `collect_dom_commands` so any tree the handler
+    // builds is materialized on the same first tick. A missing `on_ready` is a
+    // no-op, so `on_start`-only apps are unaffected.
+    //
+    // `.after(ScriptSet::SyncSignals)`: both write the host's signal mirror on
+    // the tick where a value is still dirty, and the sync rewrites entries from
+    // the store. Unordered, the sync can run after the dispatch and overwrite
+    // the values `on_ready` just wrote with the pre-dispatch store state,
+    // leaving the mirror stale for every later handler read.
+    app.add_systems(
+        TickStage::Systems,
+        fire_on_ready::<H>
+            .in_set(ScriptSet::Ready)
+            .after(build_dom_index)
+            .after(crate::run::dom_commands::publish_node_details)
+            .after(ScriptSet::SyncSignals),
+    );
+    register_dom_event_dispatchers::<H>(app);
+    // `fire_audio_ended` invokes the optional `on_audio_end()` after the script
+    // tick; its emitted commands are drained by the appliers ordered
+    // `.after(ScriptSet::AudioEnded)`.
+    #[cfg(feature = "audio")]
+    app.add_systems(
+        TickStage::Systems,
+        fire_audio_ended::<H>
+            .in_set(ScriptSet::AudioEnded)
+            .after(ScriptSet::Tick),
+    );
 }

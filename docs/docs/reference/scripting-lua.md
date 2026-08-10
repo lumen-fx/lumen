@@ -9,17 +9,20 @@ The same surface in the other hosts: [candela](scripting-candela.md),
 
 ## Selecting the host
 
-An app runs one script host. Lumen picks it from `lumen.toml`:
+Each script file picks its host from its own extension: `.cdl` runs under
+candela, `.lua` under Lua, `.rhai` under Rhai. Files of one language combine
+into a single program; an app that ships two languages runs both hosts, sharing
+signals but not functions.
+
+An inline `<script>` block has no extension. It joins the app's one external
+language when there is exactly one, and candela otherwise.
+
+`lumen.toml` overrides all of it and puts every script on one engine:
 
 ```toml
 [script]
 engine = "lua"   # "candela" (default) | "rhai" | "lua"
 ```
-
-With no `[script] engine` key, the host is inferred from the file extensions in
-the app directory: a `.cdl` file selects candela, then `.lua` selects lua, then
-`.rhai` selects rhai. Every script file the markup references is concatenated
-into one program.
 
 ## Reaching the builtins
 

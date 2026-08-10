@@ -41,13 +41,10 @@ use lumen_script_rhai::{RhaiHost, ScriptRhaiPlugin};
 // re-exported by both host crates. Importing them from the runtime crate
 // means a single generic `::<H>` path resolves for whichever `ScriptHost`
 // the `[script] engine` key selects (Rhai or Lua).
-use lumen_script::{
-    ScriptCommandEvent, apply_derivations, dispatch_clicks_and_doubles, dispatch_close_to_script,
-    fire_on_ready, reload_script, tick_script,
-};
-// Only referenced by the (feature-gated) audio transport wiring.
-#[cfg(feature = "audio")]
-use lumen_script::sync_signals_into_host;
+// `ScriptSet` is how the host-neutral half orders against them: with several
+// hosts installed, an edge naming one host's system leaves the others outside
+// the one-tick dirty window.
+use lumen_script::{ScriptCommandEvent, ScriptSet, fire_on_ready, reload_script};
 use lumen_text_cosmic::CosmicShaper;
 use lumen_window_winit::{WinitOptions, run};
 use std::path::{Path, PathBuf};

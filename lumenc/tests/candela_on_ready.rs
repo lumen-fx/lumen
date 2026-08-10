@@ -84,13 +84,19 @@ fn rearmed_latch_fires_on_ready_again() {
 
     // Re-arm the latch the way hot reload does after respawning the tree;
     // the dispatch counter moving to 2 proves the second run.
-    app.world.resource_mut::<lumen_script::OnReadyFired>().0 = false;
+    app.world
+        .resource_mut::<lumen_script::OnReadyFired>()
+        .0
+        .clear();
     for _ in 0..5 {
         app.tick();
     }
 
     assert!(
-        app.world.resource::<lumen_script::OnReadyFired>().0,
+        app.world
+            .resource::<lumen_script::OnReadyFired>()
+            .0
+            .contains("candela"),
         "fire_on_ready must have run again and re-latched after the reset"
     );
     let store = app
