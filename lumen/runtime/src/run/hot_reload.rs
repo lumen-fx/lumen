@@ -138,8 +138,26 @@ pub(crate) fn spawn_hot_reload_watcher(
     Ok(watcher)
 }
 
+/// Swaps a live host's loaded program: [`lumen_script::reload_script`]
+/// monomorphised for one host, held as a plain fn pointer so the hot-reload
+/// system can walk every active host without being generic itself.
+pub(crate) type ReloadFn =
+    fn(&mut World, &str, &str) -> Option<Result<(), lumen_script::ScriptError>>;
+
+/// The active hosts' reload entry points, in the order [`build_app`] installed
+/// them. One entry per script language the app ships.
+#[derive(Resource, Default)]
+pub(crate) struct ScriptReloaders(Vec<(crate::config::ScriptEngine, ReloadFn)>);
+
+impl ScriptReloaders {
+    /// Record a host's reload entry point.
+    pub(crate) fn push(&mut self, engine: crate::config::ScriptEngine, reload: ReloadFn) {
+        self.0.push((engine, reload));
+    }
+}
+
 #[cfg(feature = "runtime-parse")]
-pub(crate) fn hot_reload<H: ScriptHost + Resource<Mutability = Mutable>>(world: &mut World) {
+pub(crate) fn hot_reload(world: &mut World) {
     // Decide whether the (comparatively expensive) mtime sweep runs this
     // tick. Watch mode: only when the notify callback raised the flag.
     // Poll mode: at most every `HOT_RELOAD_POLL_INTERVAL`.
@@ -291,20 +309,40 @@ pub(crate) fn hot_reload<H: ScriptHost + Resource<Mutability = Mutable>>(world: 
         // compile-first + full rollback on eval failure keeps the live
         // host usable on the old source. No-op when no script host is
         // installed.
-        let combined = combined_script_source(&ir, &dir).unwrap_or_default();
-        if !combined.trim().is_empty()
-            && let Some(Err(e)) = reload_script::<H>(world, &combined, "<inline>")
-        {
-            eprintln!("lumenc hot-reload: script load failed: {e}");
+        //
+        // Regrouped per language and applied host by host: each host gets
+        // exactly the source its own language contributes, so an edit to one
+        // language's file never feeds the other language's compiler.
+        let cfg = crate::config::LumenToml::load_or_default(&dir).unwrap_or_default();
+        let grouped = grouped_script_sources(&ir, &dir, &cfg).unwrap_or_default();
+        let reloaders: Vec<(crate::config::ScriptEngine, ReloadFn)> = world
+            .get_resource::<ScriptReloaders>()
+            .map(|r| r.0.clone())
+            .unwrap_or_default();
+        for (engine, reload) in reloaders {
+            let source = grouped
+                .iter()
+                .find(|(e, _)| *e == engine)
+                .map(|(_, s)| s.as_str())
+                .unwrap_or("");
+            if source.trim().is_empty() {
+                continue;
+            }
+            if let Some(Err(e)) = reload(world, source, "<inline>") {
+                eprintln!(
+                    "lumenc hot-reload: {} script load failed: {e}",
+                    engine.name()
+                );
+            }
         }
     }
 
     // The respawn above rebuilt the tree from markup alone, so nodes the
-    // script spawned through the DOM API are gone. Re-arm `on_ready`: it
-    // dispatches again once the fresh DOM index is published, and the
-    // script rebuilds its dynamic tree the way it built it at first mount.
+    // script spawned through the DOM API are gone. Re-arm `on_ready` on every
+    // host: each dispatches again once the fresh DOM index is published, and
+    // the script rebuilds its dynamic tree the way it built it at first mount.
     if let Some(mut fired) = world.get_resource_mut::<lumen_script::OnReadyFired>() {
-        fired.0 = false;
+        fired.0.clear();
     }
 
     if let Some(mut s) = world.get_resource_mut::<HotReloadState>() {

@@ -77,15 +77,15 @@ setting per-tag sizing floors applies to every app either way.
 
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
-| `engine` | `"candela"`, `"rhai"`, `"lua"` | inferred | Selects the script host. Matched case-insensitively; an unrecognised value falls back to candela. |
+| `engine` | `"candela"`, `"rhai"`, `"lua"` | per file | Forces every script in the app onto one host. Matched case-insensitively; an unrecognised value falls back to candela. |
 
-With the key absent, the host is inferred from the script file extensions in
-the app directory: a `.cdl` file selects candela, a `.lua` file selects Lua, a
-`.rhai` file selects Rhai. A directory holding more than one language resolves
-by that fixed precedence, so the answer never depends on directory order. An
-app with no script file at all, including one whose script is inline in the
-markup, gets candela; declare `engine` when an inline script is written in
-something else.
+With the key absent, each script file picks its host from its own extension: a
+`.cdl` file runs under candela, a `.lua` file under Lua, a `.rhai` file under
+Rhai. An app holding more than one language runs one host per language. An
+inline `<script>` block has no extension to read; it joins the app's one
+external language when there is exactly one, and candela otherwise. Set
+`engine` when that is not the host you want, most often for an inline script
+written in something other than candela.
 
 ## [mcp]
 

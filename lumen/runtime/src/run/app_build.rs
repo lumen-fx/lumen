@@ -6,7 +6,7 @@ use super::*;
 /// reuse the identical build without duplicating the plugin / system
 /// wiring.
 pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> {
-    let rhai_extensions = std::mem::take(&mut opts.rhai_extensions);
+    let mut rhai_extensions = std::mem::take(&mut opts.rhai_extensions);
     let app_hooks = std::mem::take(&mut opts.app_hooks);
     // The injected markup/CSS front-end (the runtime links no parser itself).
     // Shared as an `Arc` so the initial load, the hot-reload resource, and the
@@ -120,48 +120,27 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
     // Command-bus drain, the FFI typed-read mirror, and the
     // `set_color_scheme` `Command::Typed` handler. Always-on reactive plumbing.
     register_commands(&mut app);
-    let combined = combined_script_source(&ir, &dir)?;
-    // Script host selection. `[script] engine` (candela default | rhai | lua)
-    // picks which `ScriptHost` runs the app's scripts. Every host re-exports
-    // the same generic tick/dispatch/derivation systems from
-    // `lumen-script`; `register_script_systems::<H>` installs them
-    // (and every RC-critical ordering edge) against whichever host is
-    // chosen. The per-host `set_color_scheme` / `page` engine extensions are
-    // necessarily engine-typed (rhai::Engine vs mlua::Lua) so they live in
-    // the arms, but push byte-identical commands.
-    let has_script = !combined.trim().is_empty();
-    let hot_reload_enabled = opts.hot_reload && opts.markup.is_none() && opts.artifact.is_none();
-    // Part B tree-shaking: a static `--bundle` compiles exactly ONE alternate
-    // host (or none). Rhai is always compiled; `host-lua` / `host-candela` add
-    // the other hosts. If `[script] engine` selects a host this build trimmed
-    // out, fall back to the always-present Rhai host (lumenc guarantees it
-    // enables the selected host's feature for the bundle, so this only fires on
-    // a hand-edited misconfig). The remap makes the trimmed match arms below
-    // provably unreachable.
-    let engine = crate::config::infer_script_host(&dir, &cfg);
-    #[cfg(not(feature = "host-lua"))]
-    let engine = if engine == crate::config::ScriptEngine::Lua {
-        tracing::warn!(
-            "[script] engine = \"lua\" but this build was compiled without the \
-             lua host (host-lua feature); falling back to the rhai host"
-        );
-        crate::config::ScriptEngine::Rhai
-    } else {
-        engine
-    };
-    #[cfg(not(feature = "host-candela"))]
-    let engine = if engine == crate::config::ScriptEngine::Candela {
-        tracing::warn!(
-            "[script] engine = \"candela\" but this build was compiled without \
-             the candela host (host-candela feature); falling back to the rhai host"
-        );
-        crate::config::ScriptEngine::Rhai
-    } else {
-        engine
-    };
-    match engine {
-        crate::config::ScriptEngine::Rhai => {
-            if has_script {
+    // Script host selection. Each script file picks its host from its own
+    // extension, so an app that ships two languages runs two hosts side by
+    // side; `[script] engine` collapses everything onto one. Every host
+    // re-exports the same generic tick / dispatch / derivation systems from
+    // `lumen-script`, and hosts reach each other only through the shared
+    // `PropertyStore` signal bus.
+    //
+    // `register_script_common` installs the host-neutral half once, ordering
+    // it against `lumen_script::ScriptSet` so its RC-critical edges cover
+    // every active host; `register_script_host_systems::<H>` then installs
+    // the per-host half once per language. The `set_color_scheme` / `page`
+    // engine extensions are engine-typed (rhai::Engine vs mlua::Lua) so they
+    // live in the arms below, but push byte-identical commands.
+    let grouped = remap_trimmed_hosts(grouped_script_sources(&ir, &dir, &cfg)?);
+    let has_script = !grouped.is_empty();
+    let mut reloaders = ScriptReloaders::default();
+    let multi_host = grouped.len() > 1;
+    register_script_common(&mut app, has_script);
+    for (engine, combined) in grouped {
+        match engine {
+            crate::config::ScriptEngine::Rhai => {
                 let mut plugin = ScriptRhaiPlugin::new(combined);
                 // Built-in `set_color_scheme(name)` extension. Installed before
                 // user-supplied extensions so apps can override (they'd
@@ -171,28 +150,30 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
                     .resource::<lumen_core::command::CommandQueue>()
                     .sender()
                     .clone();
-                plugin =
-                    plugin.with_extension(move |engine: &mut rhai::Engine| {
-                        engine.register_fn("set_color_scheme", move |name: rhai::ImmutableString| {
-                let Some(scheme) = lumen_core::components::ColorScheme::from_name(name.as_str())
-                else {
-                    tracing::warn!(
-                        "set_color_scheme: unknown name {:?}; expected one of \
-                         \"default\"/\"force-light\"/\"force-dark\"/\
-                         \"prefer-light\"/\"prefer-dark\"",
-                        name.as_str()
-                    );
-                    return;
-                };
-                let cmd = lumen_core::command::Command::Typed {
-                    type_id: std::any::TypeId::of::<ColorSchemeIntent>(),
-                    payload: Box::new(ColorSchemeIntent(scheme)),
-                };
-                if sender.try_send(cmd).is_err() {
-                    tracing::warn!("set_color_scheme: CommandQueue full; dropping scheme update");
-                }
-            });
+                plugin = plugin.with_extension(move |engine: &mut rhai::Engine| {
+                    engine.register_fn("set_color_scheme", move |name: rhai::ImmutableString| {
+                        let Some(scheme) =
+                            lumen_core::components::ColorScheme::from_name(name.as_str())
+                        else {
+                            tracing::warn!(
+                                "set_color_scheme: unknown name {:?}; expected one of \
+                                 \"default\"/\"force-light\"/\"force-dark\"/\
+                                 \"prefer-light\"/\"prefer-dark\"",
+                                name.as_str()
+                            );
+                            return;
+                        };
+                        let cmd = lumen_core::command::Command::Typed {
+                            type_id: std::any::TypeId::of::<ColorSchemeIntent>(),
+                            payload: Box::new(ColorSchemeIntent(scheme)),
+                        };
+                        if sender.try_send(cmd).is_err() {
+                            tracing::warn!(
+                                "set_color_scheme: CommandQueue full; dropping scheme update"
+                            );
+                        }
                     });
+                });
                 // File-based-pages navigation from script. Not a Rhai-only builtin:
                 // both arities route through the shared, host-neutral
                 // `lumen_core::nav` bus (`page("x")` navigates; no-arg `page()` reads
@@ -209,16 +190,18 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
                     engine.register_fn("page_back", lumen_core::nav::back);
                     engine.register_fn("page_forward", lumen_core::nav::forward);
                 });
-                for ext in rhai_extensions {
+                // Native extensions (RunOptions / Rust SDK hooks) are
+                // `rhai::Engine`-typed, so they only bind to the Rhai host and
+                // are inapplicable to an app with no Rhai in it.
+                for ext in std::mem::take(&mut rhai_extensions) {
                     plugin = plugin.with_extension(ext);
                 }
                 app.add_plugin(plugin);
+                register_script_host_systems::<RhaiHost>(&mut app, multi_host);
+                reloaders.push(engine, reload_script::<RhaiHost>);
             }
-            register_script_systems::<RhaiHost>(&mut app, has_script, hot_reload_enabled);
-        }
-        #[cfg(feature = "host-lua")]
-        crate::config::ScriptEngine::Lua => {
-            if has_script {
+            #[cfg(feature = "host-lua")]
+            crate::config::ScriptEngine::Lua => {
                 let mut plugin = ScriptLuaPlugin::new(combined);
                 // Host-specific ports of the Rhai `set_color_scheme` + `page`
                 // extensions. Different engine type, identical semantics:
@@ -295,17 +278,12 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
                         );
                     }
                 });
-                // Native `rhai_extensions` (RunOptions / Rust SDK hooks) are
-                // rhai::Engine-typed and cannot bind to a Lua engine, so they
-                // are inapplicable under `engine = "lua"`.
-                let _ = &rhai_extensions;
                 app.add_plugin(plugin);
+                register_script_host_systems::<LuaHost>(&mut app, multi_host);
+                reloaders.push(engine, reload_script::<LuaHost>);
             }
-            register_script_systems::<LuaHost>(&mut app, has_script, hot_reload_enabled);
-        }
-        #[cfg(feature = "host-candela")]
-        crate::config::ScriptEngine::Candela => {
-            if has_script {
+            #[cfg(feature = "host-candela")]
+            crate::config::ScriptEngine::Candela => {
                 // Pass the entry path so a `dylib "..."` import in the app
                 // resolves its library next to the app under `lumenc run`,
                 // matching how `lumenc check` resolves it.
@@ -314,19 +292,18 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
                 // of the prelude surface, so no extension hooks are needed.
                 let plugin =
                     ScriptCandelaPlugin::new(combined).with_uri(html_path.display().to_string());
-                // Native `rhai_extensions` (RunOptions / Rust SDK hooks) are
-                // rhai::Engine-typed and cannot bind to a candela engine, so they
-                // are inapplicable under `engine = "candela"`.
-                let _ = &rhai_extensions;
                 app.add_plugin(plugin);
+                register_script_host_systems::<CandelaHost>(&mut app, multi_host);
+                reloaders.push(engine, reload_script::<CandelaHost>);
             }
-            register_script_systems::<CandelaHost>(&mut app, has_script, hot_reload_enabled);
+            // A trimmed-out host is remapped onto Rhai by `remap_trimmed_hosts`
+            // above, so its `ScriptEngine` variant can never reach here.
+            #[cfg(not(all(feature = "host-lua", feature = "host-candela")))]
+            _ => unreachable!("a trimmed script host must be remapped to Rhai before this match"),
         }
-        // When an alternate host was trimmed out, `engine` was remapped to Rhai
-        // above so its `ScriptEngine` variant can never reach here.
-        #[cfg(not(all(feature = "host-lua", feature = "host-candela")))]
-        _ => unreachable!("a trimmed script host must be remapped to Rhai before this match"),
     }
+    let _ = &rhai_extensions;
+    app.world.insert_resource(reloaders);
     use crate::spawn::SpawnIntoWorld;
     let root = ir.spawn_into(&mut app.world);
 
@@ -446,8 +423,9 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
             app.world
                 .insert_resource(crate::source_parser::RuntimeParser(parser));
         }
-        // `hot_reload::<H>` is registered by `register_script_systems`
-        // so its `reload_script::<H>` call targets the selected host.
+        // One watcher system for the whole app: it respawns the tree once and
+        // then reloads each active host through the `ScriptReloaders` table.
+        app.add_systems(TickStage::Systems, hot_reload);
     }
 
     // RunOptions (set by the CLI / embedder) overrides lumen.toml,
@@ -568,6 +546,52 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
         hook(&mut app);
     }
     Ok((app, winit_opts))
+}
+
+/// Fold any group whose host this build trimmed out into the Rhai group.
+///
+/// A static `--bundle` compiles only the hosts the app needs (Rhai is always
+/// present; `host-lua` / `host-candela` add the others). `lumenc` derives that
+/// feature list from the same app directory, so a missing host only happens on
+/// a hand-edited misconfig; folding the source onto Rhai keeps the app running
+/// with a warning instead of dropping its script, and makes the trimmed match
+/// arms in [`build_app`] provably unreachable.
+fn remap_trimmed_hosts(grouped: GroupedScripts) -> GroupedScripts {
+    #[cfg(all(feature = "host-lua", feature = "host-candela"))]
+    {
+        grouped
+    }
+    #[cfg(not(all(feature = "host-lua", feature = "host-candela")))]
+    {
+        let mut kept: GroupedScripts = Vec::new();
+        for (engine, source) in grouped {
+            let available = match engine {
+                crate::config::ScriptEngine::Rhai => true,
+                crate::config::ScriptEngine::Lua => cfg!(feature = "host-lua"),
+                crate::config::ScriptEngine::Candela => cfg!(feature = "host-candela"),
+            };
+            if !available {
+                tracing::warn!(
+                    "this build was compiled without the {} host; running its \
+                     script under the rhai host instead",
+                    engine.name()
+                );
+            }
+            let engine = if available {
+                engine
+            } else {
+                crate::config::ScriptEngine::Rhai
+            };
+            match kept.iter_mut().find(|(e, _)| *e == engine) {
+                Some((_, acc)) => {
+                    acc.push('\n');
+                    acc.push_str(&source);
+                }
+                None => kept.push((engine, source)),
+            }
+        }
+        kept
+    }
 }
 
 /// Lowercase + dash-only fallback `app-id` when `lumen.toml [app] id`

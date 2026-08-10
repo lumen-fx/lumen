@@ -47,9 +47,10 @@ mounts and unmounts a subtree. Writing a signal is the whole update; nothing
 imperatively pokes at elements.
 
 **Scripting.** candela is the default language, with Rhai and Lua available as
-alternatives. The file extension picks the host. Scripts respond to lifecycle
-events, input, timers, and network replies, and can build and edit the element
-tree directly.
+alternatives. Each script file's extension picks the host that runs it, and an
+app can use more than one language, sharing state across them through signals.
+Scripts respond to lifecycle events, input, timers, and network replies, and can
+build and edit the element tree directly.
 
 **Multi-page apps.** Every `.lmn` file in the directory is a page, reachable by
 its filename. `<a href="settings">` navigates, a shared `layout.lmn` wraps every
@@ -80,8 +81,8 @@ anything you depend on.
 - Desktop only. There is no web, iOS, or Android target.
 - The CSS is a subset. There are no pseudo-elements, and animation is limited
   to transitions between property values.
-- An app runs one script host at a time. You can pick which one, but you cannot
-  mix languages in a single app.
+- Scripts in different languages share signals but nothing else. One language's
+  functions are not callable from another.
 - A few OS integrations vary by platform, and each degrades rather than fails.
   Native menus are macOS and Windows; global hotkeys on Linux need an X11
   session; tray icons on some Linux desktops need a shell extension.

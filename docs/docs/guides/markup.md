@@ -146,9 +146,10 @@ For reusable parameterised chunks, see [Composition](composition.md).
 
 The `src` form points at a script file next to the markup. A `<script>` tag
 with a body works too, and is convenient for a few lines. An app can carry more
-than one `<script>` tag; the sources are concatenated in document order, so
-they all share one set of functions and one script host. Pick one language per
-app. See [Scripting](scripting.md).
+than one `<script>` tag, and each file's extension picks the host that runs it.
+Files of one language are concatenated in document order and share a set of
+functions; different languages run side by side and share only signals. See
+[Scripting](scripting.md).
 
 ## Where to look things up
 

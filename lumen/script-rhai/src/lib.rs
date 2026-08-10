@@ -696,28 +696,24 @@ fn register_web_namespaces(engine: &mut Engine, sink: Arc<Mutex<Vec<ScriptComman
     engine.register_fn("hovered", |_d: &mut Document| -> rhai::Dynamic {
         node_to_dynamic(node_query::hovered_node())
     });
-    // Create verb. `spawn` is a RESERVED KEYWORD in the rhai tokenizer, so
-    // it cannot be used as a call in rhai source; rhai scripts use the
-    // `create` synonym (`document.create("div")` / `create("div")`). The
-    // `spawn`-named registrations are kept for API-name parity with the
-    // other hosts, even though rhai source cannot reach them.
-    for name in ["spawn", "create"] {
-        let s = sink.clone();
-        engine.register_fn(
-            name,
-            move |_d: &mut Document, tag: rhai::ImmutableString| -> Node {
-                let (handle, cmd) = node_query::build_spawn(tag.as_str());
-                s.lock().push(cmd);
-                Node { handle }
-            },
-        );
-        let s = sink.clone();
-        engine.register_fn(name, move |tag: rhai::ImmutableString| -> Node {
+    // Create verb. Rhai's tokenizer reserves `spawn`, so a rhai script writes
+    // `create` (`document.create("div")` / `create("div")`) where the other
+    // hosts also accept `spawn`.
+    let s = sink.clone();
+    engine.register_fn(
+        "create",
+        move |_d: &mut Document, tag: rhai::ImmutableString| -> Node {
             let (handle, cmd) = node_query::build_spawn(tag.as_str());
             s.lock().push(cmd);
             Node { handle }
-        });
-    }
+        },
+    );
+    let s = sink.clone();
+    engine.register_fn("create", move |tag: rhai::ImmutableString| -> Node {
+        let (handle, cmd) = node_query::build_spawn(tag.as_str());
+        s.lock().push(cmd);
+        Node { handle }
+    });
 }
 
 /// Register the phase-4 event surface: the `Event` handle type + accessor

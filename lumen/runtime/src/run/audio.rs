@@ -107,16 +107,17 @@ pub(crate) fn poll_audio(
 
 /// Invokes the script's optional `on_audio_end()` when a track finishes,
 /// enabling auto-advance. Mirrors `fire_fetched_responses`: calls the host
-/// and forwards the produced commands onto the bus.
+/// and forwards the produced commands onto the bus. Registered once per
+/// active host, so [`clear_audio_ended`] does the clearing; a host that
+/// cleared the flag itself would hide the end of the track from the others.
 pub(crate) fn fire_audio_ended<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: Option<ResMut<H>>,
-    mut ended: ResMut<AudioEndedFlag>,
+    ended: Res<AudioEndedFlag>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
     if !ended.0 {
         return;
     }
-    ended.0 = false;
     if let Some(host) = host.as_mut()
         && let Ok(outcome) = host.call("on_audio_end", &[])
     {
@@ -124,4 +125,10 @@ pub(crate) fn fire_audio_ended<H: ScriptHost + Resource<Mutability = Mutable>>(
             out.write(ScriptCommandEvent(c));
         }
     }
+}
+
+/// Consume the end-of-track flag once every active host has been offered
+/// `on_audio_end`.
+pub(crate) fn clear_audio_ended(mut ended: ResMut<AudioEndedFlag>) {
+    ended.0 = false;
 }

@@ -1,0 +1,8 @@
+<root>
+  <label id="shared-label" width="100%" padding="24 0 8 0"
+         bind-text="shared" text="waiting" />
+  <label id="seen-label" width="100%" padding="0 0 24 0"
+         bind-text="seen_by_lua" text="waiting" />
+  <script src="model.cdl" />
+  <script src="report.lua" />
+</root>
