@@ -73,9 +73,8 @@ Reordering the array or editing the middle of it rebuilds the block.
 For a long list, add `virtualized="true"` and `row-height="56"` and only the
 rows in the visible window are built.
 
-A script fills the array by name. Rhai and Lua expose an array-signal handle
-for this; a candela script has no array-signal builtin yet, so a candela app
-builds list contents through the DOM API instead. See
+A script fills the array by name. Every host exposes an array-signal handle for
+this, with `set`, `push`, `get`, and `len` on it. See
 [Scripting](scripting.md).
 
 ## Conditionals

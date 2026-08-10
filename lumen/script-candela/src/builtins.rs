@@ -13,12 +13,12 @@
 //!   block from this table and compiles it - proving every entry is
 //!   registered with a matching scalar signature.
 //!
-//! The surface is scalar-marshallable apart from `derive`, whose `deps`
-//! argument is a `string[]` (candela marshals homogeneous arrays natively). The
-//! Rhai builtins that pass or return maps / heterogeneous `any` values
-//! (`signal`, `signal_array`, `http`, `parse_json`, `parse_markdown`,
-//! `signal_get_color`) still have no entry - see the crate-level docs for the
-//! exact upstream gap.
+//! Most entries have a concrete signature: scalars, homogeneous arrays
+//! (`string[]`), and string-keyed maps of one value type (`{string: int}`).
+//! An entry that names `any` in a parameter or its return carries a value with
+//! no single concrete shape; those register variadically and are declared
+//! `name(...)` in the prelude, with the `any` return type where they return
+//! one. [`is_variadic`] is the single place that rule lives.
 //!
 //! The metadata *types* are host-neutral and live in
 //! [`lumen_script::builtins`]; only this candela table is host-specific.
@@ -29,6 +29,15 @@ pub use lumen_script::builtins::{BuiltinFn, BuiltinParam};
 #[must_use]
 pub fn lookup(name: &str) -> Option<&'static BuiltinFn> {
     BUILTINS.iter().find(|b| b.name == name)
+}
+
+/// Whether `b` is registered variadically, which is true exactly when it names
+/// `any` in a parameter or its return type. Such a builtin is declared
+/// `name(...)` in a `host` block; every other entry keeps its concrete
+/// signature.
+#[must_use]
+pub fn is_variadic(b: &BuiltinFn) -> bool {
+    b.ret == "any" || b.params.iter().any(|p| p.ty == "any")
 }
 
 // Shorthand param constructor keeps the table below readable.
@@ -114,6 +123,74 @@ pub const BUILTINS: &[BuiltinFn] = &[
         params: &[p("name", "string"), p("value", "bool")],
         ret: "()",
         doc: "Write a typed bool signal.",
+    },
+    // Array signals: the reactive lists `<for each="name">` renders. Items are
+    // records (string-keyed maps), so the item-carrying entries are `any`.
+    BuiltinFn {
+        name: "signal_array_set",
+        params: &[p("name", "string"), p("items", "any")],
+        ret: "()",
+        doc: "Replace the named array signal with `items`, a list of records.",
+    },
+    BuiltinFn {
+        name: "signal_array_push",
+        params: &[p("name", "string"), p("item", "any")],
+        ret: "()",
+        doc: "Append one record to the named array signal.",
+    },
+    BuiltinFn {
+        name: "signal_array_get",
+        params: &[p("name", "string"), p("index", "int")],
+        ret: "any",
+        doc: "Read one record by zero-based index; null when out of range.",
+    },
+    BuiltinFn {
+        name: "signal_array_all",
+        params: &[p("name", "string")],
+        ret: "any",
+        doc: "Every record in the named array signal, as a list.",
+    },
+    BuiltinFn {
+        name: "signal_array_len",
+        params: &[p("name", "string")],
+        ret: "int",
+        doc: "Number of records in the named array signal.",
+    },
+    BuiltinFn {
+        name: "signal_array_remove",
+        params: &[p("name", "string"), p("index", "int")],
+        ret: "()",
+        doc: "Drop the record at `index`; an out-of-range index does nothing.",
+    },
+    BuiltinFn {
+        name: "signal_array_clear",
+        params: &[p("name", "string")],
+        ret: "()",
+        doc: "Empty the named array signal.",
+    },
+    BuiltinFn {
+        name: "signal_set_color",
+        params: &[p("name", "string"), p("hex", "string")],
+        ret: "()",
+        doc: "Write a `#rrggbb` / `#rrggbbaa` color signal; unparseable input is ignored.",
+    },
+    BuiltinFn {
+        name: "signal_get_color",
+        params: &[p("name", "string")],
+        ret: "{string: int}",
+        doc: "Read a color signal as an `{ r, g, b, a }` map of 0-255 channels; empty when the signal holds no color.",
+    },
+    BuiltinFn {
+        name: "is_valid",
+        params: &[p("id", "string")],
+        ret: "bool",
+        doc: "Whether the element with id `id` currently passes validation. An element with no validation state reads as valid.",
+    },
+    BuiltinFn {
+        name: "local_id",
+        params: &[p("source", "string"), p("suffix", "string")],
+        ret: "string",
+        doc: "The sibling id `suffix` inside the same template instance as `source`.",
     },
     BuiltinFn {
         name: "set_timeout",
@@ -336,6 +413,36 @@ pub const BUILTINS: &[BuiltinFn] = &[
         doc: "Issue an HTTP GET; fires `on_fetch(tag, body)` when the response lands.",
     },
     BuiltinFn {
+        name: "http",
+        params: &[p("request", "any")],
+        ret: "()",
+        doc: "Issue an HTTP request `{ method, url, headers, body, timeout_ms, tag }`; fires `on_http(tag, response)` with `{ ok, status, headers, body, error }`.",
+    },
+    BuiltinFn {
+        name: "parse_json",
+        params: &[p("json", "string")],
+        ret: "any",
+        doc: "Parse a JSON string into a map, list, or scalar; null on a parse error.",
+    },
+    BuiltinFn {
+        name: "parse_markdown",
+        params: &[p("src", "string")],
+        ret: "any",
+        doc: "Parse markdown into a block list of `{ id, kind, level, text, lang }` records.",
+    },
+    BuiltinFn {
+        name: "matched_rules",
+        params: &[p("node", "int")],
+        ret: "any",
+        doc: "The stylesheet rules that matched `node`, ascending in cascade order.",
+    },
+    BuiltinFn {
+        name: "print",
+        params: &[p("args", "any")],
+        ret: "()",
+        doc: "Emit a print command carrying the arguments, stringified and joined with a space.",
+    },
+    BuiltinFn {
         name: "t",
         params: &[p("key", "string")],
         ret: "string",
@@ -430,29 +537,55 @@ mod tests {
         }
     }
 
-    #[test]
-    fn every_param_type_is_marshallable() {
-        // candela's embedding marshalling handles scalars plus homogeneous arrays
-        // of scalars; the table must never grow a `map` / `fn` / `any` param or
-        // a non-scalar return type.
+    /// Whether `ty` is a type a fixed host-fn signature can name: a scalar, a
+    /// homogeneous array of scalars, or a string-keyed map of one scalar.
+    fn is_concrete(ty: &str) -> bool {
         fn is_scalar(ty: &str) -> bool {
             matches!(ty, "int" | "float" | "bool" | "string")
         }
+        is_scalar(ty)
+            || ty.strip_suffix("[]").is_some_and(is_scalar)
+            || ty
+                .strip_prefix("{string: ")
+                .and_then(|rest| rest.strip_suffix('}'))
+                .is_some_and(is_scalar)
+    }
+
+    #[test]
+    fn every_non_variadic_type_is_concrete() {
+        // A fixed host-fn signature names one concrete type per position. An
+        // entry that needs a dynamically-shaped value says so with `any`, which
+        // makes it variadic; everything else must stay concrete.
         for b in BUILTINS {
+            if is_variadic(b) {
+                continue;
+            }
             for param in b.params {
-                let ok = is_scalar(param.ty) || param.ty.strip_suffix("[]").is_some_and(is_scalar);
                 assert!(
-                    ok,
+                    is_concrete(param.ty),
                     "builtin {} has non-marshallable param type {}",
-                    b.name, param.ty
+                    b.name,
+                    param.ty
                 );
             }
-            let ret_ok = matches!(b.ret, "int" | "float" | "bool" | "string" | "()")
-                || b.ret.strip_suffix("[]").is_some_and(is_scalar);
             assert!(
-                ret_ok,
+                b.ret == "()" || is_concrete(b.ret),
                 "builtin {} has non-marshallable return type {}",
-                b.name, b.ret
+                b.name,
+                b.ret
+            );
+        }
+    }
+
+    #[test]
+    fn variadic_entries_are_the_ones_naming_any() {
+        for b in BUILTINS {
+            let names_any = b.ret == "any" || b.params.iter().any(|p| p.ty == "any");
+            assert_eq!(
+                is_variadic(b),
+                names_any,
+                "builtin {} disagrees with the `any` marker",
+                b.name
             );
         }
     }

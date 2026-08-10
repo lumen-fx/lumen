@@ -1,0 +1,8 @@
+# Proof fixture for array signals on the candela host. `main.cdl` fills the
+# `rows` array signal, and `<for each="rows">` renders one element per record.
+[script]
+engine = "candela"
+
+# No introspection server, so a headless CI run binds no port.
+[mcp]
+port = 0

@@ -3728,6 +3728,8 @@ dependencies = [
  "candela",
  "lumen-core",
  "lumen-script",
+ "pulldown-cmark",
+ "serde_json",
 ]
 
 [[package]]

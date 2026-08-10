@@ -2,8 +2,9 @@
 //
 // The sidebar note list and the live preview are built as real elements
 // (spawn / append, the Node method sugar over lumen.cdl's node_spawn /
-// node_append), the way JavaScript uses createElement / appendChild. There is
-// no signal_array and no <for>: main.lmn ships two empty containers
+// node_append), the way JavaScript uses createElement / appendChild. That is
+// what this app demonstrates; a list of uniform rows would instead use an
+// array signal and <for>. main.lmn ships two empty containers
 // (#note-list-body, #preview-body) and this script fills them.
 //
 // Markdown rendering runs in C. The `dylib "md"` block below imports libmd.so

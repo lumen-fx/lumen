@@ -264,14 +264,19 @@ fn compile_check_is_side_effect_free() {
 
 /// Parity guard: synthesize a `host \"lumen\" { ... }` block from every entry in
 /// [`BUILTINS`] and compile it. candela validates each declared host fn against
-/// its registered closure (arity + scalar types), so a clean compile proves
-/// the table and the registrations agree - the candela analogue of the Rhai
-/// host's `gen_fn_signatures` parity test.
+/// its registered closure (arity, types, and fixed-versus-variadic), so a clean
+/// compile proves the table and the registrations agree - the candela analogue
+/// of the Rhai host's `gen_fn_signatures` parity test. An entry naming `any` is
+/// registered variadically and declares a `...` argument list.
 #[test]
 fn builtins_parity() {
     let mut block = String::from("host \"lumen\" {\n");
     for b in BUILTINS {
-        let args = b.params.iter().map(|p| p.ty).collect::<Vec<_>>().join(", ");
+        let args = if lumen_script_candela::builtins::is_variadic(b) {
+            "...".to_owned()
+        } else {
+            b.params.iter().map(|p| p.ty).collect::<Vec<_>>().join(", ")
+        };
         if b.ret == "()" {
             block.push_str(&format!("    {}({});\n", b.name, args));
         } else {
@@ -282,6 +287,6 @@ fn builtins_parity() {
 
     let mut host = CandelaHost::new();
     host.load(&block, "parity.cdl").unwrap_or_else(|e| {
-        panic!("every BUILTINS entry must be a registered scalar host fn: {e}\n{block}")
+        panic!("every BUILTINS entry must be a registered host fn: {e}\n{block}")
     });
 }

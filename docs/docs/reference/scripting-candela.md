@@ -44,11 +44,46 @@ block), the source still compiles, and calling a builtin fails at run time with
 `lumen is not a valid namespace`.
 
 The prelude also declares the `window`, `document`, and `history` namespaces and
-defines the `Node` / `Event` method wrappers described below.
+defines the `Node`, `Event`, and `ArraySignal` method wrappers described below.
 
 Types in signatures are candela types: `int`, `float`, `bool`, `string`, arrays
 (`int[]`), and maps (`{string: float}`). A builtin with no return type returns
 null.
+
+### Dynamically-shaped builtins
+
+A few builtins carry a value with no single concrete type: an array signal's
+records, an `http` request, a `parse_json` result. Those are declared with a
+`...` argument list and, where they return a value, the `any` return type. The
+tables below give what each one takes and returns; the prelude declares them, so
+an app calls them like any other builtin.
+
+Read an `any` result with candela's `as_map`, `as_list`, `as_str`, `as_int`,
+`as_float`, and `as_bool` downcasts, and test it with `is_map`, `is_list`,
+`is_null`, and their siblings.
+
+### Writing arguments
+
+Three candela rules shape how you write a call. Each has the same remedy: bind
+the value to a variable first.
+
+- A map literal holds one value type. `{"id": "a", "n": 1}` is rejected; write
+  `{"id": "a", "n": "1"}`, or build the value from `parse_json`.
+- A collection literal passed directly to a script-level function, including an
+  `impl` method, aborts the compiler. A literal passed straight to a `lumen::`
+  builtin is fine.
+- A builtin call nested inside another builtin's argument list mislays its
+  arguments.
+
+```rust
+let rows = signal_array("rows");
+let row = {"id": "a", "title": "First"};
+rows.push(row);                                  // literal through a variable
+lumen::signal_array_push("rows", {"id": "b"});   // literal straight to a builtin
+
+let n = lumen::signal_array_len("rows");         // not nested in the next call
+lumen::signal_set_int("row_count", n);
+```
 
 ## Lifecycle hooks
 
@@ -104,6 +139,15 @@ the global handler for that pair only. `event` is the name without the `on_`
 prefix (`"click"`, `"toggle"`, `"timer"`, `"file_picked"`, ...). A handler
 registered for `save` also matches template-instance ids ending in `:save`.
 
+```rust
+lumen::local_id(source: string, suffix: string) -> string
+```
+
+Returns the id of the sibling `suffix` inside the same template instance as
+`source`: `local_id("user-card:save", "status")` is `"user-card:status"`. A
+source with no instance prefix returns `suffix` unchanged. Use it inside a
+handler to reach the other elements of the instance that fired it.
+
 ## Signals
 
 Signals are the named reactive cells markup binds to with `bind-text` and
@@ -119,10 +163,63 @@ friends.
 | `lumen::signal_set_float(name: string, value: float)` | | Write a float. |
 | `lumen::signal_get_bool(name: string)` | `bool` | Read as a boolean. `false` on miss or an unparseable value. |
 | `lumen::signal_set_bool(name: string, value: bool)` | | Write a boolean. |
+| `lumen::signal_set_color(name: string, hex: string)` | | Write a `#rrggbb` or `#rrggbbaa` color. The six-digit form is opaque. Unparseable input is ignored. |
+| `lumen::signal_get_color(name: string)` | `{string: int}` | Read a color as an `{ r, g, b, a }` map of 0-255 channels. Empty when the signal holds no color. |
 | `lumen::signals_all()` | `{string: string}` | The whole signal set as a name-to-value map. |
 
 A getter converts across the scalar types: an integer cell read through
 `signal_get_float` yields the same number as a float, and a string cell parses.
+
+A color signal is a typed cell, not a string: CSS reads it as a color, so
+`signal_set_color("accent", "#ff8800")` recolors everything bound to `accent`.
+
+### Array signals
+
+An array signal is the reactive list `<for each="name">` renders, one element
+per record. A record is a string-keyed map whose fields `<for>` binds by name;
+an item that is not a map is carried as a one-field `value` record.
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `lumen::signal_array_set(name: string, items: any)` | | Replace the whole array with a list of records. |
+| `lumen::signal_array_push(name: string, item: any)` | | Append one record. |
+| `lumen::signal_array_get(name: string, index: int)` | `any` | One record by zero-based index; null when out of range. |
+| `lumen::signal_array_all(name: string)` | `any` | Every record, as a list. |
+| `lumen::signal_array_len(name: string)` | `int` | Record count. |
+| `lumen::signal_array_remove(name: string, index: int)` | | Drop the record at `index`. An out-of-range index does nothing. |
+| `lumen::signal_array_clear(name: string)` | | Empty the array. |
+
+`signal_array(name)` wraps the name so the same calls read as methods:
+
+```rust
+import "lumen.cdl";
+
+fn on_start() {
+    let rows = signal_array("rows");
+    let first = {"id": "a", "title": "Alpha"};
+    rows.push(first);
+    let back = as_map(rows.get(0));
+}
+
+fn main() {}
+```
+
+Methods: `set`, `push`, `get`, `all`, `len`, `remove`, `clear`.
+
+Field values are stringified on the way into the rendered row, so a record built
+from a map literal carries strings. A record from `parse_json`, a response body,
+or the host side keeps every field's own type when you read it back with
+`signal_array_get`.
+
+### Validation state
+
+```rust
+lumen::is_valid(id: string) -> bool
+```
+
+Whether the element with that `id` currently passes validation. The runtime
+writes the backing `valid:<id>` signal each tick from the element's validation
+rules; an element that carries none reads as valid.
 
 ### Derived signals
 
@@ -225,6 +322,7 @@ Mutations queue a command applied later in the same tick.
 | `lumen::node_component(node: int, name: string)` | `{string: string}` | Field map of one component. Empty for an absent or non-introspectable name. |
 | `lumen::node_outer_markup(node: int)` | `string` | The subtree serialized to markup text. |
 | `lumen::node_inner_markup(node: int)` | `string` | The children serialized to markup text. |
+| `lumen::matched_rules(node: int)` | `any` | The stylesheet rules that matched the node, ascending in cascade order (last wins). Each record is `{ selector, specificity, source, source_order, declarations }`, where `specificity` is a three-int list and `declarations` a property-to-value map. |
 | `lumen::dump_tree()` | `string` | Whole-tree structural dump. |
 | `lumen::pointer_state()` | `{string: string}` | `x`, `y`, `inside`, `buttons`, `shift`, `ctrl`, `alt`, `super`. Values are stringified. |
 | `lumen::frame_info()` | `{string: float}` | `frame`, `dt_ms`, `dirty_count`. |
@@ -314,6 +412,10 @@ Constructors: `node(handle)`, `event(handle)`, `wrap_nodes(handles)`,
 `exists()` tests the handle against `0`; `valid()` tests it against the current
 snapshot.
 
+`ArraySignal` methods mirror the `signal_array_*` builtins with the prefix
+dropped: `set`, `push`, `get`, `all`, `len`, `remove`, `clear`. Construct one
+with `signal_array(name)`.
+
 `Event` methods: `target`, `current_target`, `event_type`, `key`, `value`,
 `button`, `x`, `y`, `client_x`, `client_y`, `delta_x`, `delta_y`, `shift`,
 `ctrl`, `alt`, `super_key`, `prevent_default`, `stop_propagation`,
@@ -340,6 +442,7 @@ Each is its own host namespace, declared by the same prelude import.
 | `window::title()` | `string` | Window title. |
 | `window::set_title(title: string)` | | Set the window title. |
 | `window::dpr()` | `float` | Device pixel ratio. |
+| `window::size()` | `float[]` | `[width, height]` in logical pixels. |
 | `window::set_size(width: float, height: float)` | | Resize the window, in logical pixels. |
 | `window::location_path()` | `string` | The current page path. |
 | `window::location_query()` | `string` | Always empty; query strings are not tracked. |
@@ -427,9 +530,75 @@ a transport failure or non-2xx fires `on_fetch_error(tag, message)`. The reply
 is delivered on the tick thread, so a handler may touch signals and the element
 tree freely.
 
-The general `http(request)` form and `parse_json` are not available to candela;
-both need a value type this host cannot marshal. Use `fetch` plus candela's own
-JSON support.
+```rust
+lumen::http(request: any)
+```
+
+Issues any HTTP request. The request is a map; only `url` and `tag` are
+required. `method` defaults to `GET`, and `body` and `timeout_ms` are optional.
+Each header rides on a `header:<Name>` key, because a candela map literal holds
+one value type:
+
+```rust
+lumen::http({
+    "method": "POST",
+    "url": "https://example.test/items",
+    "header:Content-Type": "application/json",
+    "body": "{\"title\":\"First\"}",
+    "timeout_ms": "2500",
+    "tag": "create"
+});
+```
+
+A request built from `parse_json` or handed in from the host may instead carry a
+nested `headers` map and an integer `timeout_ms`; both forms are accepted.
+
+Every completed request fires `on_http(tag, response)`, including a 4xx or 5xx.
+The response is a map:
+
+| Field | Type | Value |
+| --- | --- | --- |
+| `ok` | `bool` | True for a 2xx status. |
+| `status` | `int` | HTTP status, `0` on a transport failure. |
+| `headers` | map | Response headers, names lowercased. |
+| `body` | `string` | Response body. |
+| `error` | `string` | Transport error text; empty when the request completed. |
+
+```rust
+fn on_http(tag, response) {
+    let r = as_map(response);
+    if as_bool(r.get("ok")) {
+        lumen::signal_set("status", as_str(r.get("body")));
+    }
+}
+```
+
+## Parsing
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `lumen::parse_json(json: string)` | `any` | Parse JSON into a map, list, or scalar. Null on a parse error. |
+| `lumen::parse_markdown(src: string)` | `any` | Parse markdown into a list of block records. |
+
+`parse_json` returns candela values, not text, so numbers stay numbers and
+nesting survives:
+
+```rust
+let root = as_map(lumen::parse_json(body));
+let geo = as_map(root.get("geo"));
+let city = as_str(geo.get("city_name"));
+```
+
+candela's own `json_parse` builtin parses JSON too. Prefer `lumen::parse_json`:
+it interns the keys it produces, so a key longer than six characters is still
+reachable with `map.get(...)`.
+
+A `parse_markdown` block record carries `id`, `kind`, `level`, `text`, and
+`lang`. `kind` is `h`, `p`, `code`, `li`, or `hr`; `level` is the heading depth
+and `0` elsewhere; `lang` is the code fence's language and empty elsewhere.
+Feed the list straight to an array signal to render a document with `<for>`.
+Inline emphasis keeps its markdown delimiters in `text`, since a label renders
+plain text.
 
 ## Translation
 
@@ -446,6 +615,17 @@ See [Translation](../guides/i18n.md) for the catalogue format.
 | --- | --- | --- |
 | `lumen::read_file(path: string)` | `string` | File contents; empty string on error. |
 | `lumen::write_file(path: string, contents: string)` | `bool` | `true` on success. |
+
+## Diagnostics
+
+```rust
+lumen::print(args: any)
+```
+
+Stringifies its arguments, joins them with a space, and emits the line through
+the script command stream, where `lumenc run` prints it prefixed with
+`[script]`. candela's own `print` writes to process stdout instead and bypasses
+that stream.
 
 ## Embedder commands
 

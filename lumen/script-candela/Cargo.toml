@@ -13,10 +13,14 @@ lumen-script = { path = "../script", default-features = false }
 lumen-core = { path = "../core" }
 bevy_ecs.workspace = true
 # candela embedding API (Engine/Program) lives on the crate's `main` branch.
-# Structured host-fn marshalling (string/int/float/bool/null plus Array/Map);
-# see the crate docs for the remaining closure/heterogeneous-map gaps that keep
-# a few Rhai builtins from full parity.
+# Structured host-fn marshalling (string/int/float/bool/null plus Array/Map),
+# plus the variadic registration that carries dynamically-shaped values.
 candela = { git = "https://github.com/lumen-fx/candela", branch = "main" }
+# `parse_json`: JSON text -> candela values. Same dep the Rhai and Lua hosts
+# carry for their own `parse_json`.
+serde_json.workspace = true
+# `parse_markdown`: markdown -> block list, matching the Rhai and Lua hosts.
+pulldown-cmark.workspace = true
 
 [features]
 # Mirrors `lumen-script-rhai`: `http-fetch` is on by default and forwards to
