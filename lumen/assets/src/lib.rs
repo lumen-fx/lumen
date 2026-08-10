@@ -451,13 +451,19 @@ pub struct AssetServer {
     /// Shared cancellation flag handed to workers. Flipping it true at shutdown unblocks any worker that's
     /// already started a decode call so the join handles complete promptly.
     shutdown_flag: Arc<Mutex<bool>>,
-    /// Registered `.lpak` bundles, consulted in registration order
-    /// when an [`ImageSource`] path begins with `lumen://app/`. First
-    /// hit wins. Bundles are kept behind `Arc<Mutex<...>>` only at
-    /// the resource boundary; their internal blob is `Arc<[u8]>` so
-    /// `register_bundle` / `read` clone cheaply. Bundles also feed the
-    /// font-registration path in `lumen-text-cosmic`.
+    /// Registered `.lpak` bundles, consulted in registration order when
+    /// an [`ImageSource`] path is a `lumen://app/` URI or resolves under
+    /// [`Self::bundle_root`]. First hit wins. Their internal blob is
+    /// `Arc<[u8]>` so `register_bundle` / `read` clone cheaply. Bundles
+    /// also feed the font-registration path in `lumen-text-cosmic`.
     bundles: Vec<LumenBundle>,
+    /// Directory the registered bundles' keys are relative to - the app
+    /// directory the archive was packed from. Set alongside the first
+    /// bundle so an ordinary filesystem path (which the markup loader
+    /// has already resolved against the app directory) can be mapped
+    /// back to a bundle key. `None` leaves bundles reachable only
+    /// through `lumen://app/` URIs.
+    bundle_root: Option<PathBuf>,
 }
 
 struct PendingWaiter {
@@ -478,10 +484,10 @@ struct DecodeJob {
     /// `DecodeResult` so callers tracing job -> result pairs can correlate by id; the actual stale-waiter
     /// check uses per-waiter ids on the `pending` list.
     request_id: u64,
-    /// Pre-resolved bundle bytes for `lumen://app/...` URIs. `Some`
-    /// when the cache miss came from a registered [`LumenBundle`];
-    /// `None` for raw filesystem paths (workers fall back to
-    /// `image::open` / `std::fs::read` against `path`).
+    /// Pre-resolved bundle bytes. `Some` when the cache miss was
+    /// satisfied by a registered [`LumenBundle`]; `None` when the path
+    /// is not bundled, and workers fall back to `image::open` /
+    /// `std::fs::read` against `path`.
     bundle_bytes: Option<Vec<u8>>,
 }
 
@@ -558,6 +564,7 @@ impl AssetServer {
             watched: std::collections::HashSet::new(),
             shutdown_flag,
             bundles: Vec::new(),
+            bundle_root: None,
         }
     }
 
@@ -566,8 +573,20 @@ impl AssetServer {
     /// registered bundle in insertion order. Bundles are cheap to
     /// clone (one `Arc<[u8]>` bump) so the same instance can be
     /// shared with `lumen-text-cosmic`'s font_db registration pass.
+    ///
+    /// Set [`Self::set_bundle_root`] as well to serve plain filesystem
+    /// paths (`<app_dir>/icons/sun.png`) out of the archive.
     pub fn register_bundle(&mut self, bundle: LumenBundle) {
         self.bundles.push(bundle);
+    }
+
+    /// Declare the directory registered bundles were packed from. A
+    /// lookup for a path under this root is tried against the bundles
+    /// first, using the remainder of the path as the key; the entry
+    /// wins over the file on disk, so an app can ship the archive and
+    /// leave the loose files behind.
+    pub fn set_bundle_root(&mut self, root: impl Into<PathBuf>) {
+        self.bundle_root = Some(root.into());
     }
 
     /// Iterate the currently registered bundles. Used by the
@@ -581,12 +600,35 @@ impl AssetServer {
     /// unknown scheme (callers fall back to disk in that case).
     pub fn resolve_uri(&self, uri: &str) -> Option<Vec<u8>> {
         let rel = parse_lumen_uri(uri)?;
-        for b in &self.bundles {
-            if let Some(bytes) = b.read(rel) {
-                return Some(bytes);
-            }
+        self.read_key(rel)
+    }
+
+    /// Resolve an [`ImageSource`]-shaped path out of the registered
+    /// bundles: either a `lumen://app/<key>` URI, or a filesystem path
+    /// under [`Self::set_bundle_root`] whose remainder is the key.
+    /// `None` means "not bundled", and the caller reads from disk.
+    pub fn resolve_bundled(&self, path: &Path) -> Option<Vec<u8>> {
+        if self.bundles.is_empty() {
+            return None;
         }
-        None
+        let s = path.to_str()?;
+        if s.starts_with("lumen://") {
+            return self.resolve_uri(s);
+        }
+        let rel = path.strip_prefix(self.bundle_root.as_ref()?).ok()?;
+        // Bundle keys are forward-slash joined at pack time, so rebuild
+        // the key the same way rather than trusting the host separator.
+        let key = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        self.read_key(&key)
+    }
+
+    /// First registered bundle holding `key`, if any.
+    fn read_key(&self, key: &str) -> Option<Vec<u8>> {
+        self.bundles.iter().find_map(|b| b.read(key))
     }
 
     /// Returns the approximate CPU bytes held by the image and SVG content caches.
@@ -714,14 +756,11 @@ impl AssetServer {
             });
         }
         let request_id = self.current_request_id(entity);
-        // If the path is a `lumen://app/...` URI, resolve the bundle
-        // bytes synchronously here. The worker thread doesn't see the
+        // If a registered bundle holds this path, resolve the bytes
+        // synchronously here. The worker thread doesn't see the
         // `AssetServer` resource, so we have to feed it the payload
         // upfront.
-        let bundle_bytes = path
-            .to_str()
-            .filter(|&s| s.starts_with("lumen://"))
-            .and_then(|s| self.resolve_uri(s));
+        let bundle_bytes = self.resolve_bundled(&path);
         // Reaching here means a cache miss: this call will either enqueue a
         // fresh decode (Vacant) or attach to one already in flight
         // (Occupied - the pool was spawned by that prior enqueue). Either

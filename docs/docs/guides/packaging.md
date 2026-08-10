@@ -51,11 +51,27 @@ This packs every regular file under the app directory into one `.lpak`
 archive, skipping dotfiles and `target/` directories. It is the counterpart to
 the artifact: `build` compiles the app, `bundle` collects the files around it.
 
-An archive is read through the asset server, so it suits an app you embed in
-your own program with the Rust SDK or the C API: register the archive and
-asset lookups resolve out of it. `lumenc` has no command that runs a `.lpak`
-directly, so a markup app started with `lumenc run` reads its assets from disk
-as usual.
+Run against the archive with `--assets`:
+
+```sh
+lumenc run myapp --assets myapp.lpak
+```
+
+Every image, icon, and sound the markup names is then read out of the archive.
+Lookups are keyed by the path relative to the app directory, the same path you
+write in the markup, so nothing in the app changes. A file the archive does not
+carry still comes from disk, which lets you keep one loose file for a quick edit
+without repacking. Fonts are the exception: they load through the system font
+database and are read from disk even when the archive carries them.
+
+Pair it with an artifact to ship an app as two files plus `lumen.toml`:
+
+```sh
+lumenc run myapp --artifact myapp.lmna --assets myapp.lpak
+```
+
+Rebuild the archive whenever an asset changes. A missing or corrupt archive
+stops the run rather than quietly falling back to the directory.
 
 ## Trim the runtime
 
@@ -124,7 +140,7 @@ reference](../reference/lumen-toml.md#hooks).
 
 ## What to ship
 
-A released markup app is the artifact, the app directory's assets, and
+A released markup app is the artifact, the assets (loose or as a `.lpak`), and
 `lumen.toml`. Lumen itself is a library the runner links, so your users need a
 Lumen installation or a runner you ship alongside the app.
 

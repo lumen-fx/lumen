@@ -91,6 +91,7 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
     let mut dir: Option<String> = None;
     let mut profile: Option<lumenc::profile::ProfileMode> = None;
     let mut artifact: Option<PathBuf> = None;
+    let mut assets: Option<PathBuf> = None;
     let mut headless = false;
     let mut size: Option<(u32, u32)> = None;
     let mut dpr: Option<f32> = None;
@@ -161,6 +162,18 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
             s if s.starts_with("--artifact=") => {
                 artifact = Some(PathBuf::from(&s["--artifact=".len()..]));
             }
+            // Serve the app's assets from a `lumenc bundle` archive
+            // instead of the loose files in the app directory.
+            "--assets" => {
+                let Some(v) = args.next() else {
+                    eprintln!("lumenc run: --assets needs a path to a .lpak archive");
+                    return ExitCode::from(2);
+                };
+                assets = Some(PathBuf::from(v));
+            }
+            s if s.starts_with("--assets=") => {
+                assets = Some(PathBuf::from(&s["--assets=".len()..]));
+            }
             s if s == "--ticks" || s.starts_with("--ticks=") => {
                 let v = match s.strip_prefix("--ticks=") {
                     Some(v) => Some(v.to_string()),
@@ -199,10 +212,16 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
     };
     let kind = lumenc::app_kind::resolve(&dir_path, cfg.app.kind);
     if kind != lumenc::app_kind::AppKind::Markup {
-        if headless || artifact.is_some() || size.is_some() || dpr.is_some() || ticks.is_some() {
+        if headless
+            || artifact.is_some()
+            || assets.is_some()
+            || size.is_some()
+            || dpr.is_some()
+            || ticks.is_some()
+        {
             eprintln!(
-                "lumenc run: --headless / --artifact / --size / --dpr / --ticks apply only to \
-                 markup apps; {kind:?} apps run via their native toolchain"
+                "lumenc run: --headless / --artifact / --assets / --size / --dpr / --ticks apply \
+                 only to markup apps; {kind:?} apps run via their native toolchain"
             );
             return ExitCode::from(2);
         }
@@ -273,6 +292,9 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
     if let Some(path) = artifact {
         opts.artifact = Some(path);
     }
+    if let Some(path) = assets {
+        opts.assets = Some(path);
+    }
     let result = if headless {
         lumenc::run_app_headless_rendered(
             opts,
@@ -298,8 +320,8 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
 /// liblumen and drive it over the C-ABI. No backend is static-linked here.
 ///
 /// Alpha scope: markup apps only (no SDK app-kind reroute), no `--profile` /
-/// `--size` / `--dpr`, and no state-preserving hot-reload; re-run to pick up
-/// edits. See `docs/design/link-not-embed.md`.
+/// `--size` / `--dpr` / `--assets`, and no state-preserving hot-reload; re-run
+/// to pick up edits. See `docs/design/link-not-embed.md`.
 #[cfg(all(feature = "dlopen-run", not(feature = "dev-run")))]
 fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
     let mut dir: Option<String> = None;
@@ -331,7 +353,9 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
                 || s == "--size"
                 || s.starts_with("--size=")
                 || s == "--dpr"
-                || s.starts_with("--dpr=") =>
+                || s.starts_with("--dpr=")
+                || s == "--assets"
+                || s.starts_with("--assets=") =>
             {
                 eprintln!(
                     "lumenc run: '{s}' is not supported by the thin (dlopen) launcher; \
@@ -787,6 +811,9 @@ USAGE:
                           `glib-compile-resources` + Qt's `rcc`.
                           Runs `lumen.toml`'s `[[hooks]]` `prebuild` entries
                           first; --no-hooks skips them.
+    lumenc run <dir> --assets <file.lpak>
+                          Read the app's assets from a `.lpak` archive
+                          instead of the loose files in `<dir>`.
     lumenc bundle --static <app_dir> <out_dir> [--no-hooks]
                           Build a per-app trimmed static runtime seam:
                           resolve the app's `[capabilities]` (lumen.toml +

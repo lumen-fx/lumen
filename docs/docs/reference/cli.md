@@ -27,7 +27,7 @@ on stderr and exits 2.
 ```
 lumenc run <dir> [--profile chrome|tracy|stderr]
                  [--headless [--size WxH] [--dpr N] [--ticks N]]
-                 [--artifact <file>] [--no-hooks]
+                 [--artifact <file>] [--assets <file.lpak>] [--no-hooks]
 ```
 
 Runs the app in `<dir>`. The directory must contain `main.lmn` unless
@@ -41,10 +41,11 @@ Runs the app in `<dir>`. The directory must contain `main.lmn` unless
 | `--dpr` | positive number | `1.0` | Scales the offscreen render target; screenshot pixels are logical size times dpr. Requires `--headless`. |
 | `--ticks` | integer | unbounded | Runs exactly N ticks, then exits through the graceful-close path. Requires `--headless`. |
 | `--artifact` | path | none | Loads a precompiled `.lmna` artifact instead of parsing source. Disables hot reload. |
+| `--assets` | path to a `.lpak` | none | Reads images, icons, and sounds from a `lumenc bundle` archive, keyed by the path relative to `<dir>`. A path the archive does not carry falls back to disk; fonts always come from disk. An unreadable archive exits 1. |
 | `--no-hooks` | - | off | Skips the `prebuild` and `prerun` hooks. |
 
 Both `--flag value` and `--flag=value` are accepted for `--profile`,
-`--size`, `--dpr`, `--ticks`, and `--artifact`.
+`--size`, `--dpr`, `--ticks`, `--artifact`, and `--assets`.
 
 Without `--headless`, passing `--size`, `--dpr`, or `--ticks` is a usage
 error.
@@ -55,7 +56,7 @@ every `prerun` hook. See [lumen.toml](lumen-toml.md#hooks).
 If the directory is a Rust, C++, or Python SDK app (detected from its
 contents, or declared with `[app] kind`), `run` hands off to `cargo`,
 `cmake`, or the Python interpreter. Combining a handoff with `--headless`,
-`--artifact`, `--size`, `--dpr`, or `--ticks` is a usage error.
+`--artifact`, `--assets`, `--size`, `--dpr`, or `--ticks` is a usage error.
 
 `--profile` needs a `lumenc` built with the `profiling` cargo feature, and
 `--profile tracy` additionally needs `profiling-tracy`. A default build
@@ -103,7 +104,8 @@ lumenc bundle --static <app_dir> <out_dir> [--no-hooks]
 
 Without `--static`, packs every regular file under `<app_dir>` into a single
 `.lpak` archive, skipping dotfiles and `target/` directories, and prints the
-file count.
+file count. Entries are keyed by their path relative to `<app_dir>`. Run
+against the archive with `lumenc run <app_dir> --assets <out.lpak>`.
 
 With `--static`, resolves the app's capability set from `[capabilities]` plus
 a source scan, maps it to a cargo feature list, builds the trimmed runtime

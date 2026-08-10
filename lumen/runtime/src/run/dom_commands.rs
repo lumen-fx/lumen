@@ -11,9 +11,10 @@
 //! `<for>` reconciler uses, so layout / style / paint stay consistent. A
 //! class / attribute / inline-style change bumps [`StyleVersion`] so the
 //! cascade re-resolver restyles the affected nodes in place. The
-//! re-resolver reads the stylesheet only: an inline style written through
-//! `set_style` is stored on the node but is not read back, so it does not
-//! change what paints.
+//! re-resolver folds each node's [`InlineStyle`] on top of the stylesheet
+//! result, so a `set_style` write wins over author rules and repaints; a
+//! change to an animatable property tweens when the node declares a
+//! matching `transition`.
 
 use super::*;
 use bevy_ecs::hierarchy::{ChildOf, Children};

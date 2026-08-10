@@ -1,10 +1,31 @@
 use super::*;
 
+/// Whether writing `new` over `current` changes the class list. Order
+/// matters: `set_class` assigns the whole list, so `"a b"` and `"b a"`
+/// are different writes.
+fn class_list_differs(
+    current: Option<&lumen_core::components::LumenClasses>,
+    new: &[String],
+) -> bool {
+    match current {
+        Some(c) => {
+            c.0.len() != new.len() || c.0.iter().zip(new).any(|(a, b)| a.as_ref() != b.as_str())
+        }
+        None => !new.is_empty(),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_script_commands(
     mut events: MessageReader<ScriptCommandEvent>,
     mut commands: Commands,
-    ids: Query<(Entity, &LumenId)>,
+    // `LumenClasses` rides on this query rather than a second one: the
+    // applier is already at bevy's system-parameter ceiling.
+    ids: Query<(
+        Entity,
+        &LumenId,
+        Option<&lumen_core::components::LumenClasses>,
+    )>,
     mut texts: Query<&mut TextContent>,
     mut inputs: Query<&mut lumen_core::components::TextInput>,
     mut store: ResMut<lumen_core::property_store::PropertyStore>,
@@ -34,7 +55,7 @@ pub(crate) fn apply_script_commands(
         match &ev.0 {
             ScriptCommand::Print(s) => eprintln!("[script] {s}"),
             ScriptCommand::SetText { target_id, text } => {
-                for (e, id) in &ids {
+                for (e, id, _) in &ids {
                     if id.0 == *target_id {
                         if let Ok(mut tc) = texts.get_mut(e) {
                             tc.0 = text.clone();
@@ -55,7 +76,7 @@ pub(crate) fn apply_script_commands(
                 } else {
                     p.to_path_buf()
                 };
-                for (e, id) in &ids {
+                for (e, id, _) in &ids {
                     if id.0 == *target_id {
                         let mut ent = commands.entity(e);
                         // Strip stale results so the asset pipeline
@@ -93,14 +114,36 @@ pub(crate) fn apply_script_commands(
                             .insert(lumen_core::components::LumenClasses::from(new_classes));
                     }
                 } else {
-                    for (e, id) in &ids {
+                    // A non-root element has no equivalent of the root-class
+                    // watcher (`reapply_styles_on_root_class_change`), so
+                    // rewriting its class list only restyles if this bumps
+                    // `StyleVersion` itself. Without the bump the cascade
+                    // re-resolver never re-walks the entity, the new class's
+                    // rules never land, and a `transition` on the swapped
+                    // property never runs - the `Node::set_class` path in
+                    // `dom_commands` bumps, and this global form must match it.
+                    let mut changed = false;
+                    for (e, id, current) in &ids {
                         if id.0 == *target_id {
+                            changed |= class_list_differs(current, &new_classes);
                             commands
                                 .entity(e)
                                 .insert(lumen_core::components::LumenClasses::from(
                                     new_classes.clone(),
                                 ));
                         }
+                    }
+                    if changed {
+                        // Queued rather than taken as a `ResMut` param for the
+                        // same reason as above, and it lands with the class
+                        // write at the next sync point.
+                        commands.queue(|world: &mut World| {
+                            if let Some(mut v) =
+                                world.get_resource_mut::<crate::run::restyle::StyleVersion>()
+                            {
+                                v.0 = v.0.wrapping_add(1);
+                            }
+                        });
                     }
                 }
             }
