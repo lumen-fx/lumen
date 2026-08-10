@@ -133,6 +133,13 @@ pub struct RunOptions {
     /// automation drivers set) and the hot-reload file watcher. Off by
     /// default so an ordinary `lumenc run` keeps both. See [`build_app`].
     pub bounded: bool,
+    /// Serve the app's assets from a `.lpak` archive (`lumenc bundle`)
+    /// instead of the loose files under [`Self::dir`]. A path the markup
+    /// resolves under `dir` is looked up in the archive first and read
+    /// from disk only when the archive has no such entry, so an app can
+    /// ship one file next to its binary. `None` reads everything from
+    /// disk. Applied by [`run_app`] and [`build_headless_app`].
+    pub assets: Option<PathBuf>,
     /// Injected markup/CSS front-end used for dev source-load and hot-reload
     /// re-parse. `lumen-runtime` links no parser itself (it stays in the
     /// compiler); the CLI / SDK / FFI dev paths populate this with a
@@ -168,6 +175,7 @@ impl RunOptions {
             artifact: None,
             artifact_bytes: None,
             bounded: false,
+            assets: None,
             parser: None,
         }
     }
@@ -227,6 +235,35 @@ impl RunOptions {
         self.app_hooks.push(Box::new(f));
         self
     }
+
+    /// Builder: serve assets from a `.lpak` archive. See [`Self::assets`].
+    pub fn with_assets(mut self, lpak: impl Into<PathBuf>) -> Self {
+        self.assets = Some(lpak.into());
+        self
+    }
+}
+
+/// Open the `.lpak` named by [`RunOptions::assets`] and hand it to the
+/// app's [`AssetServer`](lumen_assets::AssetServer), keyed on the app
+/// directory the archive was packed from.
+///
+/// Split from [`build_app`] so every entry point that hands an [`App`] to
+/// a caller installs the archive the same way. A missing or malformed
+/// archive fails the run rather than silently falling back to disk: the
+/// path was named explicitly, so reading different bytes than asked for
+/// is worse than stopping.
+fn install_assets(app: &mut App, lpak: Option<&Path>, dir: &Path) -> Result<(), RunError> {
+    let Some(lpak) = lpak else {
+        return Ok(());
+    };
+    let bundle = lumen_assets::LumenBundle::open(lpak)
+        .map_err(|e| RunError::Assets(lpak.to_path_buf(), e.to_string()))?;
+    let Some(mut server) = app.world.get_resource_mut::<lumen_assets::AssetServer>() else {
+        return Ok(());
+    };
+    server.set_bundle_root(dir);
+    server.register_bundle(bundle);
+    Ok(())
 }
 
 /// Convenience entry point for embedding apps. Wraps [`run_app`] with
@@ -303,12 +340,17 @@ pub enum RunError {
          --features runtime-parse"
     )]
     ParserDisabled,
+    /// The `.lpak` archive named by [`RunOptions::assets`] could not be read.
+    #[error("read asset bundle {0}: {1}")]
+    Assets(PathBuf, String),
 }
 
 /// Read `<dir>/main.lmn` + optional `<dir>/main.css`, build a default
 /// `App`, spawn the parsed tree, and enter winit's event loop.
 pub fn run_app(opts: RunOptions) -> Result<(), RunError> {
-    let (app, winit_opts) = build_app(opts)?;
+    let (dir, assets) = (opts.dir.clone(), opts.assets.clone());
+    let (mut app, winit_opts) = build_app(opts)?;
+    install_assets(&mut app, assets.as_deref(), &dir)?;
     run(app, winit_opts).map_err(|e| RunError::Window(e.to_string()))
 }
 
@@ -348,7 +390,9 @@ pub fn run_app_headless(mut opts: RunOptions, ticks: u32) -> Result<(), RunError
 /// (`lumenc/tests/golden.rs`), which installs an offscreen
 /// `WgpuRendererPlugin` on top and reads the framebuffer back.
 pub fn build_headless_app(opts: RunOptions) -> Result<(App, WinitOptions), RunError> {
+    let (dir, assets) = (opts.dir.clone(), opts.assets.clone());
     let (mut app, winit_opts) = build_app(opts)?;
+    install_assets(&mut app, assets.as_deref(), &dir)?;
     app.add_plugin(lumen_window_winit::WinitPlugin);
     Ok((app, winit_opts))
 }

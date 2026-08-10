@@ -476,6 +476,11 @@ pub(crate) fn detect_media_change(world: &mut World) {
 /// the properties in that function's extended whitelist are copied back;
 /// a property the cascade didn't set is left untouched so non-flipped
 /// inline values survive.
+///
+/// The element's own [`InlineStyle`] (the `set_style` / `element.style`
+/// layer) folds on top of the stylesheet result, so an inline value beats
+/// every author and skin rule. An app with no stylesheet at all still
+/// gets its inline layer applied.
 pub(crate) fn reapply_computed_styles(world: &mut World) {
     let version = world
         .get_resource::<StyleVersion>()
@@ -487,13 +492,9 @@ pub(crate) fn reapply_computed_styles(world: &mut World) {
     {
         return;
     }
-    let Some(sheet) = world
+    let sheet = world
         .get_resource::<RuntimeStylesheet>()
-        .map(|s| s.0.clone())
-    else {
-        world.insert_resource(AppliedStyleVersion(version));
-        return;
-    };
+        .map(|s| s.0.clone());
     let media = world
         .get_resource::<LastMediaContext>()
         .map(|m| m.0)
@@ -515,15 +516,50 @@ pub(crate) fn reapply_computed_styles(world: &mut World) {
         let Some(mut el) = entity_to_element(world, entity) else {
             continue;
         };
-        // Walk `ChildOf` up to the root, reading each ancestor's identity
-        // components, then reverse to root-first order for the cascade.
-        let ancestors = build_ancestor_chain(world, entity);
-        if lumen_ir::css::reapply_with_ancestors(&mut el, &sheet, &media, &ancestors).is_err() {
-            continue;
+        let mut resolved = false;
+        if let Some(sheet) = sheet.as_ref() {
+            // Walk `ChildOf` up to the root, reading each ancestor's identity
+            // components, then reverse to root-first order for the cascade.
+            let ancestors = build_ancestor_chain(world, entity);
+            if lumen_ir::css::reapply_with_ancestors(&mut el, sheet, &media, &ancestors).is_err() {
+                continue;
+            }
+            resolved = true;
         }
-        apply_reapplied_attrs(world, entity, &el.attrs);
+        // Highest cascade tier, applied last so it wins.
+        resolved |= overlay_inline_style(world, entity, &mut el.attrs);
+        if resolved {
+            apply_reapplied_attrs(world, entity, &el.attrs);
+        }
     }
     world.insert_resource(AppliedStyleVersion(version));
+}
+
+/// Fold an entity's [`InlineStyle`] declarations onto an already-cascaded
+/// [`Attributes`], returning whether anything landed. This is the DOM
+/// `element.style` tier: it runs after the stylesheet pass so an inline
+/// value overrides every author and skin rule, matching the precedence
+/// `lumen_script::node_query::resolved_attributes` reports through
+/// `computed_style`.
+///
+/// A property the value parser rejects is skipped and logged, mirroring
+/// CSS error recovery; one bad `set_style` never discards the rest of the
+/// element's inline layer.
+fn overlay_inline_style(world: &World, entity: Entity, attrs: &mut Attributes) -> bool {
+    let Some(inline) = world.get::<lumen_core::components::InlineStyle>(entity) else {
+        return false;
+    };
+    let mut applied = false;
+    for (property, value) in &inline.0 {
+        match lumen_ir::css::apply_inline_declaration(property, value, attrs) {
+            Ok(true) => applied = true,
+            Ok(false) => {
+                tracing::debug!("set_style: unknown property {property:?}, ignored")
+            }
+            Err(e) => tracing::warn!("set_style: {property}: {e}"),
+        }
+    }
+    applied
 }
 
 /// Build a cascade target [`Element`] from an entity's identity

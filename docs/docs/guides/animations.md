@@ -75,9 +75,22 @@ Lua spells these `node:add_class(name)`, `node:remove_class(name)`, and
 `node:toggle_class(name)`; candela uses `lumen::node_class_add(n, name)` and
 its siblings. See [scripting](scripting.md).
 
+Replacing the whole list with `set_class` triggers the same re-run, whether you
+call it on a node or by element id.
+
+**An inline style change from a script.** `set_style` writes the element's own
+style layer, which sits above every rule, and tweens the same way a class
+change does:
+
+```rhai
+fn on_click(id) {
+    get_by_id("panel").set_style("bg", "#37405020");
+}
+```
+
 Setting `disabled`, `class`, or `id` from a script re-runs the cascade. Other
-attributes do not, so writing a colour or an opacity directly is a snap, not a
-tween.
+attributes do not, so writing a colour through `set_attr` is a snap; write it
+with `set_style` to tween it.
 
 **Appearing.** An element mounted by `<if>` or `<for>` fades in if it has an
 `opacity` transition:
