@@ -2554,3 +2554,179 @@ fn bind_scroll_drives_offset_and_pushes_back_on_settle() {
         .unwrap();
     assert_eq!(world.get::<ScrollOffset>(scroller).unwrap().0.y, 50.0);
 }
+
+#[test]
+fn boolean_attributes_share_one_truthiness_rule() {
+    // Every boolean attribute takes the same set, whichever tag or
+    // desugar reads it: `true` / `yes` / `1` / an empty value for
+    // true, and `false` / `no` / `0` for false.
+    for spelling in ["true", "yes", "1", ""] {
+        let value = format!("=\"{spelling}\"");
+        let ir = parse_html(&format!(
+            r##"<root frameless{value}>
+                    <button disabled{value} default{value} text="Go"/>
+                    <tile draggable{value} drop{value} drop-target{value} layout-boundary{value}/>
+                    <checkbox indeterminate{value} checked{value}/>
+                    <input required{value} autofocus{value} multiline{value}/>
+                    <for each="rows" virtualized{value}/>
+                    <title-bar drag{value}/>
+                </root>"##
+        ))
+        .expect("html");
+        assert!(ir.frameless, "frameless with `{spelling}`");
+        let btn = &ir.root.children[0];
+        assert!(btn.attrs.disabled, "disabled with `{spelling}`");
+        assert!(btn.attrs.default_button, "default with `{spelling}`");
+        let tile = &ir.root.children[1];
+        assert!(tile.attrs.draggable, "draggable with `{spelling}`");
+        assert!(tile.attrs.drop_target, "drop-target with `{spelling}`");
+        assert!(
+            tile.attrs.layout_boundary,
+            "layout-boundary with `{spelling}`"
+        );
+        let check = &ir.root.children[2];
+        assert!(check.attrs.indeterminate, "indeterminate with `{spelling}`");
+        assert_eq!(check.attrs.checked, Some(true), "checked with `{spelling}`");
+        let input = &ir.root.children[3];
+        assert!(input.attrs.required, "required with `{spelling}`");
+        assert!(input.attrs.autofocus, "autofocus with `{spelling}`");
+        assert_eq!(
+            input.attrs.multiline,
+            Some(true),
+            "multiline with `{spelling}`"
+        );
+        assert!(
+            ir.root.children[4].attrs.virtualized,
+            "virtualized with `{spelling}`"
+        );
+        assert!(
+            ir.root.children[5].attrs.title_bar_drag,
+            "drag with `{spelling}`"
+        );
+        assert!(
+            ir.lint_findings.is_empty(),
+            "`{spelling}` must not lint: {:?}",
+            ir.lint_findings
+        );
+    }
+
+    for spelling in ["false", "no", "0"] {
+        let ir = parse_html(&format!(
+            r##"<root frameless="{spelling}">
+                    <button disabled="{spelling}" text="Go"/>
+                    <tile draggable="{spelling}" drop="{spelling}"/>
+                    <checkbox checked="{spelling}"/>
+                </root>"##
+        ))
+        .expect("html");
+        assert!(!ir.frameless, "frameless with `{spelling}`");
+        assert!(!ir.root.children[0].attrs.disabled);
+        assert!(!ir.root.children[1].attrs.draggable);
+        assert!(!ir.root.children[1].attrs.drop_target);
+        assert_eq!(ir.root.children[2].attrs.checked, Some(false));
+        assert!(
+            ir.lint_findings.is_empty(),
+            "`{spelling}` must not lint: {:?}",
+            ir.lint_findings
+        );
+    }
+}
+
+#[test]
+fn unrecognized_boolean_value_warns_and_reads_false() {
+    use lumenc::layout_ir::{LintKind, LintSeverity};
+    // `draggable` used to be the one boolean that hard-errored on a
+    // stray value; it now warns like the rest.
+    let ir = parse_html(r##"<root><tile draggable="maybe"/></root>"##).expect("html");
+    assert!(!ir.root.children[0].attrs.draggable);
+    assert_eq!(ir.lint_findings.len(), 1);
+    let f = &ir.lint_findings[0];
+    assert_eq!(f.kind, LintKind::BooleanAttribute);
+    assert_eq!(f.severity, LintSeverity::Warn);
+    assert!(f.message.contains("draggable"), "{}", f.message);
+    assert!(f.message.contains("true"), "{}", f.message);
+    assert!(f.line >= 1 && f.col >= 1);
+
+    // Case matters, and the rule reaches attributes the desugar passes
+    // read off children rather than through the attribute table.
+    let ir = parse_html(
+        r##"<root>
+                <dropdown bind-value="pick" placeholder="Pick">
+                    <option value="a" disabled="True"/>
+                </dropdown>
+                <tabs bind-value="tab"><tab name="one" disabled="on"/></tabs>
+            </root>"##,
+    )
+    .expect("html");
+    assert_eq!(ir.lint_findings.len(), 2, "{:?}", ir.lint_findings);
+    assert!(
+        ir.lint_findings
+            .iter()
+            .all(|f| f.kind == LintKind::BooleanAttribute)
+    );
+}
+
+#[test]
+fn dropdown_seeds_the_first_option() {
+    // Parity with `<tabs>`: without a placeholder the widget opens on a
+    // real selection instead of showing an empty header.
+    let ir = parse_html(
+        r##"<root>
+                <dropdown bind-value="pick">
+                    <option value="a" label="Ay"/>
+                    <option value="b" label="Bee"/>
+                </dropdown>
+            </root>"##,
+    )
+    .expect("html");
+    let column = &ir.root.children[0];
+    assert_eq!(
+        column.attrs.signal_seed,
+        Some(("__dropdown_open:pick".to_string(), "false".to_string())),
+        "the panel still starts closed"
+    );
+    let header = &column.children[0];
+    assert_eq!(
+        header.attrs.signal_seed,
+        Some(("pick".to_string(), "a".to_string())),
+        "the first option seeds the value signal"
+    );
+}
+
+#[test]
+fn dropdown_with_placeholder_starts_unselected() {
+    let ir = parse_html(
+        r##"<root>
+                <dropdown bind-value="pick" placeholder="Choose one">
+                    <option value="a"/>
+                </dropdown>
+            </root>"##,
+    )
+    .expect("html");
+    let header = &ir.root.children[0].children[0];
+    assert_eq!(header.attrs.text.as_deref(), Some("Choose one"));
+    assert_eq!(
+        header.attrs.signal_seed, None,
+        "a placeholder opts out of the first-option seed"
+    );
+}
+
+#[test]
+fn pickers_carry_a_shape_pattern() {
+    // The generated pattern is the structural check, not the `-` / `:`
+    // substring the placeholder used to promise.
+    let ir = parse_html(
+        r##"<root>
+                <date-picker bind-value="due" id="due"/>
+                <time-picker bind-value="at" id="at"/>
+            </root>"##,
+    )
+    .expect("html");
+    let date = &ir.root.children[0];
+    assert_eq!(date.tag, "input");
+    assert_eq!(date.attrs.pattern.as_deref(), Some("shape:date"));
+    assert_eq!(date.attrs.placeholder.as_deref(), Some("YYYY-MM-DD"));
+    let time = &ir.root.children[1];
+    assert_eq!(time.attrs.pattern.as_deref(), Some("shape:time"));
+    assert_eq!(time.attrs.placeholder.as_deref(), Some("HH:MM"));
+}

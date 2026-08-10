@@ -56,10 +56,18 @@ use crate::layout_ir::{LintFinding, LintKind, LintSeverity};
 /// same emission code. Round-8 wave B uses this to fold structured
 /// parser findings into the lint stream instead of relying on the
 /// substring scan.
-impl From<(&LintFinding, &Path)> for Finding {
-    fn from((f, path): (&LintFinding, &Path)) -> Self {
+///
+/// Fails for parser findings outside this command's remit; the signals
+/// lint reports on signals, so a markup rule such as
+/// [`LintKind::BooleanAttribute`] is dropped rather than reshaped into
+/// a signal finding. `lumenc check` surfaces those.
+impl TryFrom<(&LintFinding, &Path)> for Finding {
+    type Error = LintKind;
+
+    fn try_from((f, path): (&LintFinding, &Path)) -> Result<Self, Self::Error> {
         let kind = match f.kind {
             LintKind::BareInterpolation => FindingKind::BareInterpolation,
+            other => return Err(other),
         };
         let severity = Severity::from(f.severity);
         // Recover the signal name from the suggestion (`{$name}`) when
@@ -71,7 +79,7 @@ impl From<(&LintFinding, &Path)> for Finding {
             .and_then(|s| s.strip_suffix('}'))
             .unwrap_or("")
             .to_string();
-        Finding {
+        Ok(Finding {
             file: path.to_path_buf(),
             line: f.line,
             col: f.col,
@@ -80,7 +88,7 @@ impl From<(&LintFinding, &Path)> for Finding {
             severity,
             message: f.message.clone(),
             suggestion: f.suggest.clone().unwrap_or_default(),
-        }
+        })
     }
 }
 
@@ -257,9 +265,10 @@ pub fn analyze(
     #[cfg(not(feature = "runtime-parse"))]
     let parser_findings: Option<Vec<LintFinding>> = None;
     if let Some(pf) = &parser_findings {
-        for f in pf {
-            findings.push(Finding::from((f, lmn_path)));
-        }
+        findings.extend(
+            pf.iter()
+                .filter_map(|f| Finding::try_from((f, lmn_path)).ok()),
+        );
     }
     let skip_bare_substring_scan = parser_findings.is_some();
 

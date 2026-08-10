@@ -10,8 +10,9 @@
 //!   MCP `Tool { name, description, inputSchema }` objects.
 //!   `tools/call` dispatches to the existing [`crate::methods::dispatch_with_ctx`]
 //!   table by mapping `name="lumen_inspect_entity"` -> `lumen.inspect_entity`.
-//! - Resources / prompts: not implemented yet; advertised as
-//!   `{}` capabilities so clients don't probe them.
+//! - Resources / prompts: not served here, and not advertised. They
+//!   expose a source checkout, which is the `lumen-mcp-server` bridge's
+//!   job; a running app has no view of one.
 //!
 //! The legacy `lumen.tick` / `lumen.inspect_entity` direct method calls
 //! stay alive (server.rs dispatches them too): the `lumenc` CLI
@@ -75,8 +76,6 @@ pub async fn handle_mcp(
         "ping" => Some(ok_response(id, json!({}))),
         "tools/list" => Some(ok_response(id, tools_list_result())),
         "tools/call" => Some(handle_tools_call(id, params, snapshot)),
-        "resources/list" => Some(ok_response(id, json!({"resources": []}))),
-        "prompts/list" => Some(ok_response(id, json!({"prompts": []}))),
         // Legacy direct-method namespace. Kept alive because the
         // `lumenc` CLI and the `lumen-mcp-server` bridge still call
         // these dotted names directly over raw TCP.
@@ -107,12 +106,12 @@ fn initialize_result(params: Option<&Value>) -> Value {
     json!({
         "protocolVersion": MCP_PROTOCOL_VERSION,
         "capabilities": {
+            // Tools only. Resources (project source files) and prompts
+            // (workflow templates) are the bridge's surface, not the
+            // app's: they describe a checkout on disk, which the app
+            // has no view of. Advertising them here made a client list
+            // two capabilities that always answered empty.
             "tools": { "listChanged": false },
-            // No resources/prompts surface yet; advertise empty so a
-            // client doesn't probe them and doesn't reject the
-            // handshake on missing capabilities.
-            "resources": {},
-            "prompts": {},
         },
         "serverInfo": {
             "name": "lumen-mcp",
@@ -126,7 +125,7 @@ fn tools_list_result() -> Value {
     let tools = vec![
         tool_descriptor(
             "lumen_tick",
-            "Get the current frame number + last-tick duration.",
+            "Get the current frame number plus `last_tick_micros`: the last tick's wall-clock duration in microseconds, spanning the whole main schedule, and extract plus scene encode on ticks that rendered.",
             json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         ),
         tool_descriptor(
@@ -416,6 +415,21 @@ mod tests {
         assert_eq!(result["protocolVersion"], json!(MCP_PROTOCOL_VERSION));
         assert!(result["capabilities"]["tools"].is_object());
         assert_eq!(result["serverInfo"]["name"], json!("lumen-mcp"));
+        // Resources and prompts belong to the bridge; advertising them
+        // here promised a surface that always answered empty.
+        assert!(result["capabilities"].get("resources").is_none());
+        assert!(result["capabilities"].get("prompts").is_none());
+    }
+
+    #[tokio::test]
+    async fn unadvertised_resources_and_prompts_are_method_not_found() {
+        let snap = Arc::new(RwLock::new(Snapshot::default()));
+        for method in ["resources/list", "prompts/list"] {
+            let out = handle_mcp(method, json!(1), None, &snap, false)
+                .await
+                .expect("response");
+            assert_eq!(out["error"]["code"], json!(-32601), "{method}");
+        }
     }
 
     #[tokio::test]

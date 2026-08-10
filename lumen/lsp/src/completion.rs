@@ -320,6 +320,51 @@ mod tests {
     }
 
     #[test]
+    fn every_completed_name_has_documentation() {
+        // Completion and hover read the same tables; a name offered
+        // without a doc string is an empty hover popup.
+        for tag in crate::docs::TAGS {
+            assert!(
+                crate::docs::tag_doc(tag).is_some(),
+                "tag `{tag}` is completed but has no documentation"
+            );
+        }
+        for attr in crate::docs::ATTRS {
+            assert!(
+                crate::docs::attr_doc(attr).is_some(),
+                "attribute `{attr}` is completed but has no documentation"
+            );
+        }
+    }
+
+    #[test]
+    fn widget_tags_are_offered() {
+        // Regression: the table used to stop at the W5 control set, so
+        // the composite widgets completed as unknown tags.
+        let items = items_for(&Context::TagName {
+            prefix: String::new(),
+        });
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        for tag in [
+            "a",
+            "textarea",
+            "switch",
+            "tooltip",
+            "tabs",
+            "tab",
+            "dropdown",
+            "option",
+            "menu",
+            "menuitem",
+            "separator",
+            "date-picker",
+            "time-picker",
+        ] {
+            assert!(labels.contains(&tag), "`{tag}` missing from completion");
+        }
+    }
+
+    #[test]
     fn attr_value_items_for_scroll() {
         let items = items_for(&Context::AttrValue {
             attr: "scroll".into(),

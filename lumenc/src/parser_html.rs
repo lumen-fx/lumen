@@ -172,11 +172,12 @@ fn parse_html_impl(
     // `skin` is not a layout attribute and shouldn't survive in
     // `Attributes` - it's metadata for the runtime.
     let skin = doc.root_element().attribute("skin").map(|s| s.to_string());
-    let frameless = doc
-        .root_element()
-        .attribute("frameless")
-        .map(|s| matches!(s, "true" | "1" | "yes"))
-        .unwrap_or(false);
+    let frameless = bool_attribute_of(
+        doc.root_element(),
+        "frameless",
+        &expanded,
+        &mut lint_findings,
+    );
     // Extract `<menubar>` blocks from the layout tree before
     // `build_element` walks the root - they live in `LayoutIR.menubar`
     // and the window backend builds an OS-native menu from them.
@@ -820,6 +821,105 @@ fn line_col_of(src: &str, offset: usize) -> (usize, usize) {
     (line, col)
 }
 
+/// The one truthiness rule every boolean attribute in the markup
+/// follows. `true`, `yes`, `1` and an empty value (`disabled=""`,
+/// the closest the XML shape gets to HTML's bare attribute) are true;
+/// `false`, `no`, `0` are false. `None` means the value is
+/// outside the set - callers report [`LintKind::BooleanAttribute`] and
+/// read the attribute as false.
+///
+/// Matching is exact apart from surrounding whitespace: `True` is not
+/// accepted.
+fn parse_bool_value(value: &str) -> Option<bool> {
+    match value.trim() {
+        "" | "true" | "yes" | "1" => Some(true),
+        "false" | "no" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+/// Push the finding a boolean attribute raises when its value is
+/// outside [`parse_bool_value`]'s set. `offset` anchors at the value in
+/// the expanded source so editors can point at the exact span.
+fn push_bool_lint(
+    tag: &str,
+    name: &str,
+    value: &str,
+    src: &str,
+    offset: usize,
+    lint_findings: &mut Vec<LintFinding>,
+) {
+    let (line, col) = line_col_of(src, offset);
+    lint_findings.push(LintFinding {
+        kind: LintKind::BooleanAttribute,
+        severity: LintSeverity::Warn,
+        message: format!(
+            "`<{tag} {name}=\"{value}\">` is not a boolean value; write `true`, `yes`, `1` or an empty value for true, or `false`, `no`, `0` for false. Reading it as false."
+        ),
+        line,
+        col,
+        // No machine-applicable fix: which of true / false the author
+        // meant is exactly what the value failed to say.
+        suggest: None,
+    });
+}
+
+/// Read a boolean attribute straight off `node`. Absent = false. Used
+/// by the desugar passes (`<tab disabled>`, `<option disabled>`,
+/// `<menuitem disabled>`, `<root frameless>`), which read child
+/// attributes without going through [`apply_attribute`].
+fn bool_attribute_of(
+    node: roxmltree::Node<'_, '_>,
+    name: &str,
+    src: &str,
+    lint_findings: &mut Vec<LintFinding>,
+) -> bool {
+    let Some(attr) = node.attributes().find(|a| a.name() == name) else {
+        return false;
+    };
+    parse_bool_value(attr.value()).unwrap_or_else(|| {
+        push_bool_lint(
+            node.tag_name().name(),
+            name,
+            attr.value(),
+            src,
+            attr.range_value().start,
+            lint_findings,
+        );
+        false
+    })
+}
+
+/// Source anchor plus lint sink for [`apply_attribute`]. Carrying the
+/// offset (rather than a resolved line/col) keeps the per-attribute
+/// cost at zero: the source scan only runs when a value is rejected.
+struct AttrCtx<'a> {
+    /// Expanded markup source, for line/col resolution.
+    src: &'a str,
+    /// Byte offset of the current attribute's value in `src`.
+    value_offset: usize,
+    /// Findings collected for the whole document.
+    lint_findings: &'a mut Vec<LintFinding>,
+}
+
+impl AttrCtx<'_> {
+    /// Resolve a boolean attribute value, reporting the shared
+    /// truthiness rule when it does not apply.
+    fn bool_value(&mut self, tag: &str, name: &str, value: &str) -> bool {
+        parse_bool_value(value).unwrap_or_else(|| {
+            push_bool_lint(
+                tag,
+                name,
+                value,
+                self.src,
+                self.value_offset,
+                self.lint_findings,
+            );
+            false
+        })
+    }
+}
+
 /// Replace every `{name}` token in `body` with the matching attribute
 /// value. Unknown placeholders are left intact so misuse fails loudly
 /// downstream rather than silently producing an attribute named `{x}`.
@@ -1063,7 +1163,7 @@ fn build_element(
             // The body `<if>` still mounts if the tab is somehow
             // activated by a script write - parity with QTabBar, where
             // disabling a tab doesn't unmount its page.
-            btn.attrs.disabled = matches!(child.attribute("disabled"), Some("true" | "yes" | ""));
+            btn.attrs.disabled = bool_attribute_of(child, "disabled", src, lint_findings);
             tab_buttons.push(btn);
             // Body - wrap children in `<if signal=... mode="hide" eq=tab_name>...</if>`
             let mut body_children: Vec<Element> = Vec::new();
@@ -1153,10 +1253,14 @@ fn build_element(
                 ))
             })?;
         let open_signal = format!("__dropdown_open:{signal_name}");
-        let placeholder = node
-            .attribute("placeholder")
-            .map(|s| s.to_string())
-            .unwrap_or_default();
+        // An authored `placeholder` means "start with nothing picked":
+        // the header shows the placeholder until a click or a script
+        // writes the value signal. Without one, the first `<option>`
+        // seeds the signal, so the dropdown opens on a real selection
+        // the way `<tabs>` opens on its first tab.
+        let placeholder = node.attribute("placeholder");
+        let seed_first_option = placeholder.is_none();
+        let placeholder = placeholder.unwrap_or_default().to_string();
         let mut options: Vec<Element> = Vec::new();
         let mut option_specs: Vec<(String, String, bool)> = Vec::new();
         let mut default_value: Option<String> = None;
@@ -1184,9 +1288,9 @@ fn build_element(
                 .attribute("label")
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| value.clone());
-            // `disabled="true"` on an `<option>` - same truthy spelling
-            // set the generic `disabled` attribute accepts.
-            let disabled = matches!(child.attribute("disabled"), Some("true" | "yes" | ""));
+            // `disabled="true"` on an `<option>` - same truthiness rule
+            // every boolean attribute follows.
+            let disabled = bool_attribute_of(child, "disabled", src, lint_findings);
             option_specs.push((value.clone(), label.clone(), disabled));
             if default_value.is_none() {
                 default_value = Some(value.clone());
@@ -1250,6 +1354,15 @@ fn build_element(
             value_signal: signal_name.clone(),
             options: option_specs,
         });
+        // `Attributes` carries one `signal_seed` slot per element and
+        // the wrapper column's is spent on the open-panel flag, so the
+        // value seed rides on the header button. `spawn_element` reads
+        // the slot on every element and seeds only when nothing has
+        // written the signal yet, so a script's own initial value still
+        // wins.
+        if seed_first_option && let Some(default) = default_value {
+            header.attrs.signal_seed = Some((signal_name.clone(), default));
+        }
 
         // Panel - absolute-positioned overlay with the options stack.
         let mut panel = Element {
@@ -1298,17 +1411,8 @@ fn build_element(
         };
         column.attrs.classes = vec!["dropdown".to_string()];
         // Seed the open-panel signal to "false" so the panel hides at
-        // startup. Seed the value signal too - defaults to the first
-        // option's value if the author hasn't pre-set it.
+        // startup.
         column.attrs.signal_seed = Some((open_signal, "false".to_string()));
-        if let Some(default) = default_value {
-            // `Attributes` carries one `signal_seed` slot and it is
-            // already spent on the open-panel signal, so the computed
-            // first-option default is dropped. Authors set the initial
-            // value by writing the value signal from the app's script,
-            // in whichever host the app uses.
-            let _ = default;
-        }
         return Ok(column);
     }
 
@@ -1375,8 +1479,7 @@ fn build_element(
                     btn.attrs.menu_item = Some((open_signal.clone(), item_id));
                     // `disabled="true"` on a `<menuitem>`: unclickable,
                     // skipped by arrow nav, `:disabled`-styled.
-                    btn.attrs.disabled =
-                        matches!(child.attribute("disabled"), Some("true" | "yes" | ""));
+                    btn.attrs.disabled = bool_attribute_of(child, "disabled", src, lint_findings);
                     body.push(btn);
                 }
                 "separator" => {
@@ -1479,15 +1582,12 @@ fn build_element(
                     "YYYY-MM-DD".to_string()
                 }
             });
-        let pattern = if is_time {
-            // 24-hour HH:MM. Hour 0-23, minute 0-59.
-            ":"
-        } else {
-            // ISO 8601 calendar date. Literal-substring matcher in R6
-            // accepts any string containing `-`; the placeholder hints
-            // at the full shape.
-            "-"
-        };
+        // Structural patterns, checked by `lumen_primitives::validation`:
+        // `shape:time` is 24-hour `HH:MM` (hour 00-23, minute 00-59),
+        // `shape:date` is ISO 8601 `YYYY-MM-DD` (month 01-12, day
+        // 01-31). Both are shape checks, not calendar checks - 2026-02-31
+        // passes.
+        let pattern = if is_time { "shape:time" } else { "shape:date" };
         let class = if is_time {
             "time-picker"
         } else {
@@ -1629,7 +1729,13 @@ fn build_element(
             "class" => class_off = Some(off),
             _ => {}
         }
-        apply_attribute(&tag, a.name(), a.value(), &mut attrs)?;
+        let mut ctx = AttrCtx {
+            src,
+            value_offset: off,
+            // Reborrow: the sink outlives every attribute in the loop.
+            lint_findings: &mut *lint_findings,
+        };
+        apply_attribute(&tag, a.name(), a.value(), &mut attrs, &mut ctx)?;
     }
 
     // Normalise `{$name}` -> `{name}` in string-valued attrs that may
@@ -1889,6 +1995,7 @@ fn apply_attribute(
     name: &str,
     value: &str,
     attrs: &mut Attributes,
+    ctx: &mut AttrCtx<'_>,
 ) -> Result<(), ParseError> {
     match name {
         "width" => attrs.width = Some(parse_length(tag, name, value)?),
@@ -1981,21 +2088,21 @@ fn apply_attribute(
         "z-index" => attrs.z_index = Some(parse_i32(tag, name, value)?),
         "placeholder" => attrs.placeholder = Some(value.to_string()),
         "drop" => {
-            attrs.drop_target = matches!(value, "true" | "yes");
+            attrs.drop_target = ctx.bool_value(tag, name, value);
         }
         // HTML5-DnD parity: `<x drop-target>` / `drop-target="true"`
-        // marks an in-app drop zone. Bare form (`drop-target`) counts.
+        // marks an in-app drop zone.
         "drop-target" => {
-            attrs.drop_target = matches!(value, "true" | "yes" | "");
+            attrs.drop_target = ctx.bool_value(tag, name, value);
         }
         // MIME filter for a drop target - mirrors HTML5 `dropzone` /
         // `DataTransfer` type filtering. Empty = accept any.
         "accept" if !value.is_empty() => attrs.drop_accept = Some(value.trim().to_string()),
         "drag" if tag == "title-bar" => {
-            attrs.title_bar_drag = matches!(value, "true" | "yes" | "");
+            attrs.title_bar_drag = ctx.bool_value(tag, name, value);
         }
         "layout-boundary" => {
-            attrs.layout_boundary = matches!(value, "true" | "yes" | "");
+            attrs.layout_boundary = ctx.bool_value(tag, name, value);
         }
         "src" => attrs.src = Some(value.to_string()),
         "font-size" => attrs.font_size = Some(parse_f32(tag, name, value)?),
@@ -2193,7 +2300,7 @@ fn apply_attribute(
             attrs.each = Some(stripped);
         }
         "key" => attrs.key = Some(value.trim().to_string()),
-        "virtualized" => attrs.virtualized = matches!(value, "true" | "yes"),
+        "virtualized" => attrs.virtualized = ctx.bool_value(tag, name, value),
         "row-height" => attrs.row_height = Some(parse_f32(tag, name, value)?),
         "wrap" => {
             if value == "ellipsis" {
@@ -2381,7 +2488,7 @@ fn apply_attribute(
             attrs.if_eq = Some(value.to_string());
         }
         "checked" => {
-            attrs.checked = Some(matches!(value, "true" | "yes"));
+            attrs.checked = Some(ctx.bool_value(tag, name, value));
         }
         // `<radio value="apple">` carries a STRING member value; every
         // other tag's `value` (slider, progress) is numeric.
@@ -2409,7 +2516,7 @@ fn apply_attribute(
             attrs.text = Some(value.to_string());
         }
         "indeterminate" if tag == "checkbox" => {
-            attrs.indeterminate = matches!(value, "true" | "yes" | "");
+            attrs.indeterminate = ctx.bool_value(tag, name, value);
         }
         "duration" if tag == "progress" => {
             let n: u32 = value
@@ -2436,7 +2543,7 @@ fn apply_attribute(
         "max" => attrs.max = Some(parse_f32(tag, name, value)?),
         "step" => attrs.step = Some(parse_f32(tag, name, value)?),
         "required" => {
-            attrs.required = matches!(value, "true" | "yes" | "");
+            attrs.required = ctx.bool_value(tag, name, value);
         }
         // Dialog contract (W5): `autofocus` marks the initial-focus
         // target when the containing <dialog> opens; `default` marks
@@ -2445,13 +2552,13 @@ fn apply_attribute(
         // parse time so the compile-time cascade can style
         // `button.default`.
         "autofocus" => {
-            attrs.autofocus = matches!(value, "true" | "yes" | "");
+            attrs.autofocus = ctx.bool_value(tag, name, value);
         }
         "default" if tag == "button" => {
-            attrs.default_button = matches!(value, "true" | "yes" | "");
+            attrs.default_button = ctx.bool_value(tag, name, value);
         }
         "disabled" => {
-            attrs.disabled = matches!(value, "true" | "yes" | "");
+            attrs.disabled = ctx.bool_value(tag, name, value);
         }
         // CSS-authored replacement for the runtime's generic `:disabled`
         // dimming fallback - see `lumen_ir::css`'s arm for how this
@@ -2461,24 +2568,13 @@ fn apply_attribute(
             attrs.disabled_opacity_default = Some(v.clamp(0.0, 1.0));
         }
         "pattern" if !value.is_empty() => attrs.pattern = Some(value.to_string()),
-        "multiline" => attrs.multiline = Some(matches!(value, "true" | "yes" | "")),
+        "multiline" => attrs.multiline = Some(ctx.bool_value(tag, name, value)),
         // In-app DnD source payload - mirrors HTML5 `dataTransfer.setData`.
         // Value may be a `{row.field}` placeholder (substituted per-row in
         // a `<for>`); empty string means "derive the payload from `id`".
         "drag-payload" => attrs.drag_payload = Some(value.to_string()),
         "draggable" => {
-            attrs.draggable = match value {
-                "true" | "yes" => true,
-                "false" | "no" | "" => false,
-                other => {
-                    return Err(bad(
-                        tag,
-                        name,
-                        value,
-                        format!("expected 'true' or 'false', got '{other}'"),
-                    ));
-                }
-            };
+            attrs.draggable = ctx.bool_value(tag, name, value);
         }
         // W5.4: CSS Logical Properties direction attribute. Accepts
         // `ltr` / `rtl` / `auto`. Validated at parse time so typos
