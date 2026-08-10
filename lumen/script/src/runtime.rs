@@ -287,13 +287,15 @@ pub fn tick_script<H: ScriptHost + Resource<Mutability = Mutable>>(
     }
 }
 
-/// One-shot latch guarding [`fire_on_ready`]: flipped true the first time
-/// `on_ready` is dispatched so it never fires again.
+/// Latch guarding [`fire_on_ready`]: flipped true when `on_ready` is
+/// dispatched so it fires once per mount. Hot reload resets it after
+/// respawning the tree, so a script that builds DOM in `on_ready` rebuilds
+/// it on the fresh mount.
 #[derive(Resource, Default)]
 pub struct OnReadyFired(pub bool);
 
-/// Dispatch the script's optional `on_ready()` exactly once, on the first tick
-/// after the DOM index is published.
+/// Dispatch the script's optional `on_ready()` once per mount, on the first
+/// tick after the DOM index is published.
 ///
 /// `on_start` runs at app-construction time, before any tick, when no element
 /// is queryable yet: a `node_get_by_id` there returns 0. That forced DOM apps

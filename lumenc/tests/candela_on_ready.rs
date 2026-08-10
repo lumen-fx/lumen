@@ -54,3 +54,41 @@ fn on_ready_sees_populated_dom_on_start_does_not() {
     );
     assert_ne!(ready, "waiting", "on_ready must have written ready_saw");
 }
+
+#[test]
+fn rearmed_latch_fires_on_ready_again() {
+    let opts = RunOptions::new(on_ready_dir());
+    let (mut app, _winit) = build_headless_app(opts).expect("build_headless_app");
+    for _ in 0..5 {
+        app.tick();
+    }
+    let runs = label_text(&mut app, "runs-label").expect("runs-label present");
+    assert_eq!(runs, "1", "on_ready must have run exactly once");
+
+    // Re-arm the latch the way hot reload does after respawning the tree;
+    // the dispatch counter moving to 2 proves the second run.
+    app.world.resource_mut::<lumen_script::OnReadyFired>().0 = false;
+    for _ in 0..5 {
+        app.tick();
+    }
+
+    assert!(
+        app.world.resource::<lumen_script::OnReadyFired>().0,
+        "fire_on_ready must have run again and re-latched after the reset"
+    );
+    let store = app
+        .world
+        .resource::<lumen_core::property_store::PropertyStore>();
+    let read_back = store.get_global_str("ready_read");
+    let store_runs = store.get_global_str("ready_runs");
+    assert_eq!(
+        (store_runs.as_deref(), read_back.as_deref()),
+        (Some("2"), Some("1")),
+        "the second on_ready dispatch must read 1 and write 2"
+    );
+    let runs = label_text(&mut app, "runs-label").expect("runs-label present");
+    assert_eq!(
+        runs, "2",
+        "re-arming the latch must dispatch on_ready exactly once more"
+    );
+}

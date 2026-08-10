@@ -121,24 +121,23 @@ What survives the swap:
 
 What the new version does: the script's top level runs again, which is the
 file body in Rhai and Lua and `main` in candela. A registration made there
-replaces the matching one from before. Lifecycle callbacks do not fire
-again; `on_start` and `on_ready` each run once, at app construction and at
-first mount. That is why registrations carry over rather than being rebuilt
-from scratch: an app that calls `on(...)` from `on_start`, as the templates
-do, has no second chance to register.
+replaces the matching one from before. `on_start` does not fire again; it
+runs once, at app construction, which is why registrations carry over
+rather than being rebuilt from scratch: an app that calls `on(...)` from
+`on_start`, as the templates do, has no second chance to register.
+`on_ready` does fire again, because a reload rebuilds the element tree
+from the markup: nodes your script spawned through the DOM API are gone,
+and the new mount runs `on_ready` so the script builds them back the same
+way it did at startup.
 
 A reload whose source fails to compile leaves the running program exactly
 as it was and reports the error, so a half-typed edit does not take the app
 down.
 
-Two cases need a restart:
-
-- An app that builds its tree with the dynamic DOM API. A reload rebuilds
-  the element tree from the markup, so nodes your script spawned are gone,
-  and `on_ready`, where you built them, does not run a second time.
-- Renaming a handler function *and* the `on(...)` call that binds it in one
-  edit. The old route has nothing in the new source to collide with, so it
-  survives and keeps pointing at a name that no longer exists.
+One case needs a restart: renaming a handler function *and* the `on(...)`
+call that binds it in one edit. The old route has nothing in the new
+source to collide with, so it survives and keeps pointing at a name that
+no longer exists.
 
 ## Signals
 

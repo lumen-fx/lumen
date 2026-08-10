@@ -16,6 +16,11 @@ fn on_ready() {
     let n = lumen::node_get_by_id("playlist");
     let s = str(n);
     lumen::signal_set("ready_saw", s);
+    // Counts dispatches: hot reload re-arms on_ready, and the runs label
+    // moving from 1 to 2 is what proves the second dispatch.
+    let runs = lumen::signal_get_int("ready_runs");
+    lumen::signal_set("ready_read", str(runs));
+    lumen::signal_set_int("ready_runs", runs + 1);
 }
 
 fn main() {}
