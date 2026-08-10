@@ -10,15 +10,15 @@ button { transition: bg 130ms ease; }
 
 ## Writing a transition
 
-Each entry is a property, a duration, and an optional easing, in that order:
+Each entry is a property, a duration, and an optional easing:
 
 ```css
 transition: opacity 200ms ease-out, border-color 120ms linear;
 ```
 
-The property and the duration are both required, and the order is fixed. A
-duration needs its unit, `ms` or `s`; `0` alone is not a duration, `0ms` is.
-Leave the easing out and you get `ease-out`.
+The property comes first and a duration is required. A duration needs its
+unit, `ms` or `s`; `0` alone is not a duration, `0ms` is. Leave the easing out
+and you get `ease`.
 
 Easings: `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, and
 `cubic-bezier(a, b, c, d)`.
@@ -30,9 +30,14 @@ Four properties animate:
 - `text-color`, also spelled `color`
 - `border-color`
 
+`all` covers all four:
+
+```css
+.card { transition: all 150ms ease-out; }
+```
+
 Naming anything else drops that entry with a warning and the value snaps
-instead. `all` is not a property name. Size, position, spacing, and radius do
-not animate.
+instead. Size, position, spacing, and radius do not animate.
 
 Longhands work too, and cycle their lists across the properties the way CSS
 does:
@@ -45,9 +50,12 @@ transition-timing-function: ease-out;
 
 A `transition` shorthand on the same element replaces the longhands entirely.
 
-There is no `transition-delay`, and no `@keyframes`. An `@keyframes` block
-fails the stylesheet rather than being skipped, so remove it rather than
-leaving it in.
+A transition starts on the tick its value changes. Delays are not supported:
+`transition-delay`, and a second duration in a `transition` entry, are warned
+about and ignored.
+
+There is no `@keyframes`. Such a block is skipped with a warning and the rest
+of the stylesheet applies.
 
 ## Starting one
 

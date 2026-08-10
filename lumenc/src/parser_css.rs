@@ -104,10 +104,44 @@ fn parse_rule_list(
             parse_rule_list(&mut body_str, Some(&mq), out, next_order, depth + 1)?;
             continue;
         }
+        if input.starts_with('@') {
+            skip_at_rule(input)?;
+            continue;
+        }
         let rule = parse_rule(input, media, *next_order)?;
         *next_order += 1;
         out.push(rule);
     }
+    Ok(())
+}
+
+/// Consume one at-rule that the cascade does not implement (`@keyframes`,
+/// `@font-face`, `@import`, ...) and warn. A block at-rule loses its whole
+/// brace-balanced body; a statement at-rule ends at its `;`. Skipping keeps
+/// CSS error recovery: one unsupported rule must not take down the rest of
+/// the stylesheet.
+fn skip_at_rule(input: &mut &str) -> Result<(), ParseError> {
+    let name: String = input[1..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    let brace = input.find('{');
+    let semi = input.find(';');
+    match (brace, semi) {
+        (Some(b), s) if s.is_none_or(|s| b < s) => {
+            let after = &input[b + 1..];
+            let close = find_matching_brace(after)
+                .ok_or_else(|| ParseError::Xml(format!("css: @{name} missing '}}'")))?;
+            *input = &after[close + 1..];
+        }
+        (_, Some(s)) => *input = &input[s + 1..],
+        // No terminator left in the file: the at-rule runs to the end.
+        _ => *input = "",
+    }
+    tracing::warn!(
+        target: "lumenc::css",
+        "@{name} is not supported - block skipped"
+    );
     Ok(())
 }
 
@@ -958,6 +992,149 @@ mod cascade_tests {
     }
 
     #[test]
+    fn adjacent_sibling_matches_only_the_next_element() {
+        let mut ir = parse_html(
+            r#"<root>
+                <tile class="a" />
+                <tile class="b" />
+                <tile class="b" />
+            </root>"#,
+        )
+        .expect("html");
+        let css = parse_css(".a + .b { bg: #ff0000; }").expect("css");
+        apply_css(&mut ir, &css).expect("apply");
+        assert!(
+            ir.root.children[1].attrs.bg.is_some(),
+            ".b right after .a matches"
+        );
+        assert!(
+            ir.root.children[2].attrs.bg.is_none(),
+            "the second .b is not adjacent to .a"
+        );
+    }
+
+    #[test]
+    fn general_sibling_matches_every_later_element() {
+        let mut ir = parse_html(
+            r#"<root>
+                <tile class="b" />
+                <tile class="a" />
+                <tile class="b" />
+                <tile class="b" />
+            </root>"#,
+        )
+        .expect("html");
+        let css = parse_css(".a ~ .b { bg: #ff0000; }").expect("css");
+        apply_css(&mut ir, &css).expect("apply");
+        assert!(
+            ir.root.children[0].attrs.bg.is_none(),
+            "a .b before .a must not match"
+        );
+        assert!(ir.root.children[2].attrs.bg.is_some());
+        assert!(ir.root.children[3].attrs.bg.is_some());
+    }
+
+    #[test]
+    fn sibling_step_chains_with_a_child_step() {
+        let mut ir = parse_html(
+            r#"<root>
+                <column class="wrap">
+                    <tile class="a" />
+                    <tile class="b" />
+                </column>
+                <column>
+                    <tile class="a" />
+                    <tile class="b" />
+                </column>
+            </root>"#,
+        )
+        .expect("html");
+        let css = parse_css(".wrap > .a + .b { bg: #ff0000; }").expect("css");
+        apply_css(&mut ir, &css).expect("apply");
+        assert!(ir.root.children[0].children[1].attrs.bg.is_some());
+        assert!(
+            ir.root.children[1].children[1].attrs.bg.is_none(),
+            "the second column is not .wrap"
+        );
+    }
+
+    #[test]
+    fn not_argument_with_a_combinator_filters() {
+        // An argument carrying a combinator used to never match, which
+        // inverted to `:not()` matching everything.
+        let mut ir = parse_html(
+            r#"<root>
+                <column class="list"><tile class="row" /></column>
+                <column><tile class="row" /></column>
+            </root>"#,
+        )
+        .expect("html");
+        let css = parse_css(".row:not(.list > .row) { bg: #ff0000; }").expect("css");
+        apply_css(&mut ir, &css).expect("apply");
+        assert!(
+            ir.root.children[0].children[0].attrs.bg.is_none(),
+            "a .row inside .list is excluded"
+        );
+        assert!(
+            ir.root.children[1].children[0].attrs.bg.is_some(),
+            "a .row elsewhere still matches"
+        );
+    }
+
+    #[test]
+    fn is_argument_with_a_combinator_matches() {
+        let mut ir = parse_html(
+            r#"<root>
+                <column class="list"><tile class="row" /></column>
+                <column><tile class="row" /></column>
+            </root>"#,
+        )
+        .expect("html");
+        let css = parse_css(":is(.list > .row) { bg: #ff0000; }").expect("css");
+        apply_css(&mut ir, &css).expect("apply");
+        assert!(ir.root.children[0].children[0].attrs.bg.is_some());
+        assert!(ir.root.children[1].children[0].attrs.bg.is_none());
+    }
+
+    #[test]
+    fn markup_attribute_beats_css_for_overflow() {
+        // `overflow` was one of the properties the inline-origin restore
+        // missed, so CSS silently won over the attribute.
+        let mut ir =
+            parse_html(r#"<root><scroll class="s" overflow="hidden" /></root>"#).expect("html");
+        let css = parse_css(".s { overflow: scroll; }").expect("css");
+        apply_css(&mut ir, &css).expect("apply");
+        assert_eq!(
+            ir.root.children[0].attrs.overflow,
+            Some(crate::layout_ir::OverflowSpec::Hidden)
+        );
+    }
+
+    #[test]
+    fn markup_attribute_beats_css_for_caret_width() {
+        let mut ir =
+            parse_html(r#"<root><input class="f" caret-width="6" /></root>"#).expect("html");
+        let css = parse_css(".f { caret-width: 2; }").expect("css");
+        apply_css(&mut ir, &css).expect("apply");
+        assert_eq!(ir.root.children[0].attrs.caret_width, Some(6.0));
+    }
+
+    #[test]
+    fn standard_property_spellings_are_accepted() {
+        let mut ir = parse_html(r#"<root><image class="x" /></root>"#).expect("html");
+        let css = parse_css(
+            ".x { justify-content: center; object-fit: cover; flex-shrink: 0; shrink: 0; }",
+        )
+        .expect("css");
+        let warnings = apply_css(&mut ir, &css).expect("apply");
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        let attrs = &ir.root.children[0].attrs;
+        assert_eq!(attrs.justify, Some(crate::layout_ir::FlexJustify::Center));
+        assert_eq!(attrs.image_fit, Some(crate::layout_ir::ImageFitSpec::Cover));
+        assert_eq!(attrs.shrink, Some(0.0));
+    }
+
+    #[test]
     fn not_pseudo_excludes() {
         let mut ir = parse_html(r#"<root><tile class="x" /><tile class="x special" /></root>"#)
             .expect("html");
@@ -1502,6 +1679,29 @@ mod bughunt_tests {
         let decl = &sheet.rules[0].declarations[0];
         assert_eq!(decl.name, "content");
         assert_eq!(decl.value, "\"caf\u{e9}\"");
+    }
+
+    #[test]
+    fn unsupported_at_rules_are_skipped() {
+        let css = parse_css(
+            r#"
+            .a { color: #ffffff; }
+            @keyframes spin {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(360deg); }
+            }
+            @font-face { font-family: "X"; src: url(x.ttf); }
+            @charset "utf-8";
+            .b { color: #000000; }
+            "#,
+        )
+        .expect("an unsupported at-rule must not fail the stylesheet");
+        let selectors: Vec<String> = css
+            .rules
+            .iter()
+            .map(|r| format!("{:?}", r.selectors))
+            .collect();
+        assert_eq!(css.rules.len(), 2, "got rules: {selectors:?}");
     }
 
     #[test]

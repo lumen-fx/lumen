@@ -1150,8 +1150,8 @@ impl Attributes {
     /// - Otherwise `transition-property` defines the entry list, with
     ///   `transition-duration` / `transition-timing-function` values
     ///   cycled over it (the CSS list-repeat rule). A duration list
-    ///   without `transition-property` produces nothing - Lumen v1 has
-    ///   no `all` keyword, so there is no default property list.
+    ///   without `transition-property` produces nothing: there is no
+    ///   default property list, so name the properties or write `all`.
     pub fn effective_transitions(&self) -> Vec<TransitionIr> {
         if !self.transitions.is_empty() {
             return self.transitions.clone();
@@ -1166,7 +1166,9 @@ impl Attributes {
             Some(d) if !d.is_empty() => d,
             _ => &[0],
         };
-        let default_timing = [EasingIr::EaseOut];
+        // CSS `ease`, the initial `transition-timing-function`, same
+        // default the `transition` shorthand applies.
+        let default_timing = [EasingIr::CubicBezier(0.25, 0.1, 0.25, 1.0)];
         let timings: &[EasingIr] = match self.transition_timing.as_deref() {
             Some(t) if !t.is_empty() => t,
             _ => &default_timing,
@@ -1240,7 +1242,7 @@ pub enum EasingIr {
     Linear,
     /// `ease-in`.
     EaseIn,
-    /// `ease-out` (CSS default for non-named curves).
+    /// `ease-out`.
     EaseOut,
     /// `ease-in-out`.
     EaseInOut,
@@ -1831,6 +1833,6 @@ mod bughunt_tests {
         let out = attrs.effective_transitions();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].duration_ms, 0);
-        assert_eq!(out[0].easing, EasingIr::EaseOut);
+        assert_eq!(out[0].easing, EasingIr::CubicBezier(0.25, 0.1, 0.25, 1.0));
     }
 }
