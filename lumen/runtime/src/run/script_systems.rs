@@ -340,6 +340,15 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
                 // on_audio_end (auto-advance) may emit SetSignal commands.
                 .after(ScriptSet::AudioEnded),
         );
+        // Second applier, for the OS-host commands (notifications, clipboard,
+        // launcher, sleep inhibit); its doc has why they are not arms of
+        // `apply_script_commands`.
+        app.add_systems(
+            TickStage::Systems,
+            apply_os_script_commands
+                .after(ScriptSet::Tick)
+                .after(ScriptSet::Dispatch),
+        );
         // Audio transport wiring. COMPILE-TIME GATE (Part B tree-shaking):
         // only registered when the `audio` feature is compiled in. The
         // `.after(ScriptSet::AudioEnded)` edge on `apply_script_commands` above

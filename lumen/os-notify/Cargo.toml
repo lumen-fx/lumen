@@ -12,9 +12,8 @@ description = "Desktop-notification host for Lumen (notify-rust wrapper, Action-
 lumen-core = { path = "../core" }
 lumen-os-mime = { path = "../os-mime" }
 bevy_ecs.workspace = true
+tracing.workspace = true
 
 # Cross-platform notifications: libnotify (Linux/BSD),
-# NSUserNotificationCenter (macOS), Toast (Windows). v1 keeps the
-# fire-and-forget shape; action handles + on_close callbacks land in a
-# follow-up alongside the per-platform app-id wiring.
+# NSUserNotificationCenter (macOS), Toast (Windows).
 notify-rust = "4"

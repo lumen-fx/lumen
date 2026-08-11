@@ -30,7 +30,7 @@ engine = "candela"
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
 | `entry` | string | `"main.lmn"` | Markup entry filename, relative to the app directory. |
-| `id` | string | the app directory name | Stable identifier for per-app state directories. |
+| `id` | string | the app directory name | Stable identifier for per-app state directories, and the app id notifications are attributed to. |
 | `kind` | `"markup"`, `"rust"`, `"cpp"`, `"python"` | auto-detected | Pins the build and run route instead of letting the directory contents decide. |
 | `locale` | BCP-47 tag | the OS locale, else `en-US` | The locale the app starts in. Selects which `locale/<tag>.ftl` catalogue `translatable` markup and the scripts' `t()` builtin resolve against; every catalogue in the directory is loaded regardless. A tag that is not valid BCP-47 is a parse error. |
 
@@ -156,7 +156,7 @@ runtime carrying only the listed subsystems. The shared runtime and
 | `audio` | bool | inferred from `audio_*` calls and audio files in the app | Compiles the audio subsystem in. |
 | `http-fetch` | bool | inferred from a `fetch(` call in the app | Compiles the scripts' HTTP `fetch()` builtin in. |
 | `mcp` | bool | `false` | Compiles the introspection server in. Never inferred. |
-| `async` | bool | `false` | Compiles the async bridge in. Never inferred. |
+| `async` | bool | inferred from a file-dialog call in the app | Compiles the async bridge in. File dialogs resolve on it, and on macOS they do not open without it. |
 
 Inference is conservative: a capability is left out only on a reliable
 unused signal, and anything ambiguous keeps it in. An explicit value always

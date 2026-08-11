@@ -323,6 +323,9 @@ impl App {
         MessageRegistry::register_message::<FileDropped>(&mut world);
         MessageRegistry::register_message::<FilePicked>(&mut world);
         MessageRegistry::register_message::<HotkeyFired>(&mut world);
+        MessageRegistry::register_message::<crate::input::HotkeyReleased>(&mut world);
+        MessageRegistry::register_message::<crate::input::NotificationActionInvoked>(&mut world);
+        MessageRegistry::register_message::<crate::input::ClipboardRead>(&mut world);
         MessageRegistry::register_message::<MenuClicked>(&mut world);
         MessageRegistry::register_message::<crate::input::DialogClosed>(&mut world);
         MessageRegistry::register_message::<TrayClicked>(&mut world);

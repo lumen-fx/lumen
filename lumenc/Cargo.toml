@@ -119,6 +119,9 @@ lumen-script = { path = "../lumen/script", default-features = false, features = 
 lumen-script-rhai = { path = "../lumen/script-rhai", default-features = false }
 lumen-script-lua = { path = "../lumen/script-lua", default-features = false }
 lumen-script-candela = { path = "../lumen/script-candela", default-features = false }
+# os_integration.rs names the tray config / menu types directly, to assert a
+# script-supplied menu spec reaches them.
+lumen-os-tray = { path = "../lumen/os-tray" }
 lumen-text-cosmic = { path = "../lumen/text-cosmic" }
 # text_geometry_pipeline.rs asserts against the shaped run the layout
 # producer publishes (`ShapedText` / `TextGeometry`), so it has to be able

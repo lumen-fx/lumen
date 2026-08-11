@@ -878,6 +878,31 @@ pub struct HotkeyFired {
     pub name: String,
 }
 
+/// Emitted when a previously-pressed global hotkey is released. Routed by the scripting layer as `on_hotkey_release(name)` and through `on("hotkey_release", name, fn)`. Pairs with [`HotkeyFired`] so one chord can drive push-to-talk.
+#[derive(Message, Clone, Debug)]
+pub struct HotkeyReleased {
+    /// Identifier matching the `register_hotkey(name, ...)` call that installed the binding.
+    pub name: String,
+}
+
+/// Emitted when the user activates an action button on a desktop notification. Routed as `on_notification_action(id, action_id)` and through `on("notification_action", id, fn)`.
+#[derive(Message, Clone, Debug)]
+pub struct NotificationActionInvoked {
+    /// Notification id, matching the `notify_ex(id, ...)` call that raised it.
+    pub id: String,
+    /// Action id, matching one entry of that call's action spec.
+    pub action_id: String,
+}
+
+/// Emitted once a `clipboard_read(tag)` request has pulled the system clipboard text. Routed as `on_clipboard(tag, text)` and through `on("clipboard", tag, fn)`.
+#[derive(Message, Clone, Debug)]
+pub struct ClipboardRead {
+    /// Identifier the script passed to `clipboard_read(tag)`.
+    pub tag: String,
+    /// Clipboard text; empty when the clipboard holds no text payload.
+    pub text: String,
+}
+
 /// Emitted when the user clicks a native menu item. Routed as `on_menu(id)` and through `on("menu", id, fn)`.
 #[derive(Message, Clone, Debug)]
 pub struct MenuClicked {

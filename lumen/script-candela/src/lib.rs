@@ -341,6 +341,44 @@ impl CandelaHost {
         enqueue!(engine, r.sink, "notify", |title: String, body: String| {
             ScriptCommand::Notify { title, body }
         });
+        enqueue!(
+            engine,
+            r.sink,
+            "notify_ex",
+            |id: String, title: String, body: String, options: String, actions: String| {
+                ScriptCommand::NotifyEx {
+                    id,
+                    title,
+                    body,
+                    options,
+                    actions,
+                }
+            }
+        );
+        enqueue!(engine, r.sink, "clipboard_write", |text: String| {
+            ScriptCommand::ClipboardWrite { text }
+        });
+        enqueue!(engine, r.sink, "clipboard_read", |tag: String| {
+            ScriptCommand::ClipboardRead { tag }
+        });
+        enqueue!(engine, r.sink, "open_url", |url: String| {
+            ScriptCommand::OpenUrl { url }
+        });
+        enqueue!(engine, r.sink, "open_path", |path: String| {
+            ScriptCommand::OpenPath { path }
+        });
+        enqueue!(engine, r.sink, "reveal_path", |path: String| {
+            ScriptCommand::RevealPath { path }
+        });
+        enqueue!(
+            engine,
+            r.sink,
+            "keep_awake",
+            |name: String, reason: String| ScriptCommand::KeepAwake { name, reason }
+        );
+        enqueue!(engine, r.sink, "allow_sleep", |name: String| {
+            ScriptCommand::AllowSleep { name }
+        });
         enqueue!(engine, r.sink, "copy_image", |path: String| {
             ScriptCommand::CopyImageToClipboard { path }
         });
@@ -355,6 +393,22 @@ impl CandelaHost {
                 id,
                 icon_path,
                 tooltip: (!tooltip.is_empty()).then_some(tooltip),
+                menu: String::new(),
+                template: false,
+            }
+        );
+        enqueue!(
+            engine,
+            r.sink,
+            "tray_icon_menu",
+            |id: String, icon_path: String, tooltip: String, menu: String, template: bool| {
+                ScriptCommand::RegisterTrayIcon {
+                    id,
+                    icon_path,
+                    tooltip: (!tooltip.is_empty()).then_some(tooltip),
+                    menu,
+                    template,
+                }
             }
         );
         enqueue!(engine, r.sink, "unregister_tray", |id: String| {

@@ -1044,10 +1044,9 @@ pub const HOTKEYS: &[(&str, &str)] = &[
     ),
     (
         "main.rhai",
-        r##"// Global hotkeys (global-hotkey crate under the hood), a tray icon
-// (macOS / Windows; Linux logs a warning and skips), and OS
-// notifications (notify-rust). Everything lands in the in-app log so
-// the demo is observable even when notifications are unavailable.
+        r##"// Global hotkeys, a tray icon with a context menu, and notifications
+// with an action button. Everything lands in the in-app log, so the
+// demo stays observable even where a shell surface is missing.
 
 fn log_event(kind, text) {
     let n = signal("log_n", 0);
@@ -1072,13 +1071,18 @@ fn disarm() {
     unregister_hotkey("notify");
 }
 
-fn on_start() {
-    on("click", "notify-now", "send_notification");
-    on("click", "clear-log", "clear_log");
+// on_ready runs on the first tick, once the tree is mounted, so the buttons
+// are there to look up and bind. Fn("name") hands the binding a pointer to
+// a function declared below.
+fn on_ready() {
+    get_by_id("notify-now").on("click", Fn("send_notification"));
+    get_by_id("clear-log").on("click", Fn("clear_log"));
     arm();
     // Tray icons need a real icon asset; ship one at icons/tray.png to
-    // light this up on macOS / Windows. Linux logs a warning and skips.
-    tray_icon("main", "icons/tray.png", "Lumen hotkeys demo");
+    // light this up. The last argument is the macOS template flag: true
+    // for a monochrome icon the menu bar should recolour.
+    tray_icon_menu("main", "icons/tray.png", "Lumen hotkeys demo",
+                   "ping:Say hello|-|clear:Clear the log", false);
     log_event("ready", "hotkeys armed - try Ctrl/Cmd+Shift+L from another window");
 }
 
@@ -1088,12 +1092,29 @@ fn on_hotkey(name) {
     }
     if name == "notify" {
         log_event("hotkey", "Ctrl/Cmd+Shift+K pressed - sending notification");
-        notify("Lumen hotkeys", "Global hotkey fired.");
+        notify_ex("hotkey-fired", "Lumen hotkeys", "Global hotkey fired.",
+                  "urgency:normal", "log:Log it");
     }
+}
+
+// The release half of the same chord. Holding a hotkey down and letting
+// it go is how push-to-talk is built.
+fn on_hotkey_release(name) {
+    log_event("hotkey", name + " released");
+}
+
+fn on_notification_action(id, action_id) {
+    log_event("notify", "notification button '" + action_id + "' pressed");
 }
 
 fn on_tray(id) {
     log_event("tray", "tray icon clicked (" + id + ")");
+}
+
+// Tray menu picks arrive as menu clicks, the same handler a menu bar uses.
+fn on_menu(id) {
+    if id == "ping"  { log_event("tray", "hello from the tray menu"); }
+    if id == "clear" { reset_log(); }
 }
 
 fn on_toggle(id, checked) {
@@ -1103,12 +1124,18 @@ fn on_toggle(id, checked) {
     }
 }
 
-fn send_notification(id) {
+// A bound handler is called with the event itself: `ev.target()`,
+// `ev.modifiers()`, `ev.prevent_default()`.
+fn send_notification(ev) {
     notify("Lumen", "Test notification from the hotkeys template.");
     log_event("notify", "test notification sent");
 }
 
-fn clear_log(id) {
+fn clear_log(ev) {
+    reset_log();
+}
+
+fn reset_log() {
     signal_array("log").set([]);
     signal("log_label", "").set("Event log");
 }
@@ -1122,21 +1149,26 @@ fn clear_log(id) {
         "README.md",
         r##"# hotkeys
 
-Native shell showcase: OS-global hotkeys, a system tray icon, and
-desktop notifications - with an in-app event log so everything is
-observable even where a shell surface is unavailable.
+Native shell showcase: OS-global hotkeys, a system tray icon with a
+context menu, and desktop notifications with an action button - with an
+in-app event log so everything is observable even where a shell surface
+is unavailable.
 
 Concepts demonstrated:
 
 - **`register_hotkey(name, accel)` / `unregister_hotkey(name)`** -
   OS-level accelerators (Electron-style `CommandOrControl+Shift+L`
-  strings); `on_hotkey(name)` fires even when the app is unfocused.
-  The "Hotkeys armed" toggle registers / unregisters live.
-- **`tray_icon(id, icon_path, tooltip)`** - system tray entry. The icon
-  appears on macOS, Windows and Linux; clicks fire `on_tray(id)` on
-  macOS and Windows. Ship an icon at `icons/tray.png` to light it up.
-- **`notify(title, body)`** - fire-and-forget OS notification via the
-  platform daemon.
+  strings); `on_hotkey(name)` fires even when the app is unfocused, and
+  `on_hotkey_release(name)` fires on the way back up. The "Hotkeys
+  armed" toggle registers and unregisters live.
+- **`tray_icon_menu(id, icon_path, tooltip, menu, template)`** - system
+  tray entry with a right-click menu whose picks reach `on_menu(id)`.
+  Ship an icon at `icons/tray.png` to light it up.
+- **`notify_ex(id, title, body, options, actions)`** - a notification
+  carrying a button; a press reaches
+  `on_notification_action(id, action_id)`.
+- **Element handles** - `get_by_id("clear-log").on("click", Fn("clear_log"))`
+  binds one button to one function, from `on_ready` where the tree exists.
 - **Bounded log feed** - the same array-signal + `<for>` pattern the
   dashboard template uses.
 

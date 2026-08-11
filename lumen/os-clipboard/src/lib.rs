@@ -28,6 +28,11 @@ pub use lumen_os_mime as mime;
 /// `Mutex` - the underlying handle is `!Send` on Linux/Wayland so this
 /// type stays `!Sync` by virtue of `Mutex<arboard::Clipboard>` having
 /// the same restriction.
+///
+/// Call it from the thread that owns the app, which is what holding it as
+/// a `NonSend` resource enforces. macOS `NSPasteboard` mutates shared
+/// state without locking it, so two threads reaching the clipboard at
+/// once corrupts memory there rather than returning an error.
 pub struct ClipboardHost {
     inner: Mutex<arboard::Clipboard>,
 }

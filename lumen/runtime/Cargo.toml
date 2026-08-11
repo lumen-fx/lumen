@@ -37,12 +37,12 @@ lumen-os-filedialog = { path = "../os-filedialog" }
 lumen-os-tray = { path = "../os-tray" }
 lumen-os-notify = { path = "../os-notify" }
 lumen-os-hotkey = { path = "../os-hotkey" }
+lumen-os-launcher = { path = "../os-launcher" }
+lumen-os-power = { path = "../os-power" }
 # Async spawn/timer bridge (tokio rt-multi-thread). Part B tree-shaking:
-# OPTIONAL behind the `async` feature. The default runtime stack never
-# installs `AsyncTokioPlugin` itself -- it only *opportunistically reads*
-# `TokioRuntime`/`AsyncCommandQueue` in `apply_script_commands` when an
-# embedder (SDK) supplied them, so a trimmed bundle drops the crate entirely
-# and falls back to the blocking file-dialog path.
+# OPTIONAL behind the `async` feature. File dialogs resolve on this runtime,
+# so the run loop installs `AsyncTokioPlugin` for an app that opens them; a
+# trimmed bundle drops the crate and falls back to the blocking path.
 lumen-async-tokio = { path = "../async-tokio", optional = true }
 # Audio (rodio + cpal + symphonia). Part B: OPTIONAL behind `audio`.
 lumen-audio = { path = "../audio", optional = true }

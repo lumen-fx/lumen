@@ -34,7 +34,6 @@ pub(crate) fn apply_script_commands(
     mut picked: MessageWriter<lumen_core::input::FilePicked>,
     mut hotkeys: Option<NonSendMut<OsHotkeyRegistry>>,
     file_dialog: Res<FileDialogService>,
-    notifier: Res<NotificationService>,
     mut tray: NonSendMut<OsTrayService>,
     hot: Option<Res<HotReloadState>>,
     // Async file-dialog fast path (Part B tree-shaking): these are only read
@@ -160,14 +159,6 @@ pub(crate) fn apply_script_commands(
             ScriptCommand::SetArray { name, items } => {
                 array_signals.set(name, items.clone());
             }
-            ScriptCommand::Notify { title, body } => {
-                // Fire-and-forget - the notifier returns once the
-                // daemon accepts the spec; the actual popup lives on
-                // the OS side. Errors log through the service so a
-                // missing libnotify (CI / headless) doesn't kill the
-                // app. Now lives in lumen-os-notify (W6.5).
-                notifier.send_simple(title, body);
-            }
             ScriptCommand::OpenFileDialog {
                 kind,
                 tag,
@@ -216,13 +207,15 @@ pub(crate) fn apply_script_commands(
                 id,
                 icon_path,
                 tooltip,
+                menu,
+                template,
             } => {
                 let cfg = OsTrayConfig {
                     id: id.clone(),
                     icon_path: PathBuf::from(icon_path),
                     tooltip: tooltip.clone(),
-                    menu: None,
-                    template: false,
+                    menu: (!menu.is_empty()).then(|| OsTrayMenu::parse(menu)),
+                    template: *template,
                 };
                 tray.register(&cfg, &dir);
             }
@@ -238,6 +231,18 @@ pub(crate) fn apply_script_commands(
                 lumen_core::property_store::push_external_property(key.clone(), value.clone());
             }
             ScriptCommand::AddClicks(_)
+            // Notifications, clipboard, launcher, and sleep inhibit are
+            // applied by `apply_os_script_commands` below, which holds
+            // those hosts; no-op here.
+            | ScriptCommand::Notify { .. }
+            | ScriptCommand::NotifyEx { .. }
+            | ScriptCommand::ClipboardWrite { .. }
+            | ScriptCommand::ClipboardRead { .. }
+            | ScriptCommand::OpenUrl { .. }
+            | ScriptCommand::OpenPath { .. }
+            | ScriptCommand::RevealPath { .. }
+            | ScriptCommand::KeepAwake { .. }
+            | ScriptCommand::AllowSleep { .. }
             | ScriptCommand::SetString { .. }
             | ScriptCommand::SetTimer { .. }
             | ScriptCommand::CancelTimer { .. }
@@ -277,6 +282,179 @@ pub(crate) fn apply_script_commands(
         }
     }
 }
+
+/// Apply the OS-host script commands: notifications, clipboard text,
+/// the URL / file launcher, and sleep inhibits.
+///
+/// A second applier beside [`apply_script_commands`] rather than more
+/// arms in it: that system already sits at the system-parameter limit.
+/// Both read the same `ScriptCommandEvent` stream through their own
+/// cursor, so each sees every command and each ignores what the other
+/// owns.
+///
+/// The clipboard host is absent on a machine whose backend refused, and
+/// the two clipboard commands warn rather than fail the tick.
+pub(crate) fn apply_os_script_commands(
+    mut events: MessageReader<ScriptCommandEvent>,
+    notifier: Res<NotificationService>,
+    launcher: Res<Launcher>,
+    clipboard: Option<NonSend<ClipboardHost>>,
+    mut inhibits: NonSendMut<InhibitHolder>,
+    mut clipboard_out: MessageWriter<lumen_core::input::ClipboardRead>,
+    hot: Option<Res<HotReloadState>>,
+) {
+    let dir: PathBuf = hot
+        .as_ref()
+        .map(|h| h.dir.clone())
+        .unwrap_or_else(|| PathBuf::from("."));
+    for ev in events.read() {
+        match &ev.0 {
+            ScriptCommand::Notify { title, body } => {
+                // Fire-and-forget: the call returns once the daemon accepts
+                // the spec and the popup lives on the OS side. A missing
+                // libnotify logs through the service rather than killing
+                // the app.
+                notifier.send_simple(title, body);
+            }
+            ScriptCommand::NotifyEx {
+                id,
+                title,
+                body,
+                options,
+                actions,
+            } => {
+                let options = lumen_os_notify::parse_options(options);
+                notifier.send(&lumen_os_notify::Notification {
+                    id: id.clone(),
+                    title: title.clone(),
+                    body: body.clone(),
+                    icon: options.icon,
+                    urgency: options.urgency,
+                    actions: lumen_os_notify::parse_actions(actions),
+                });
+            }
+            ScriptCommand::ClipboardWrite { text } => match clipboard.as_ref() {
+                Some(clip) => {
+                    if !clip.write_text(text) {
+                        eprintln!("lumenc: clipboard_write: backend rejected the text");
+                    }
+                }
+                None => eprintln!("lumenc: clipboard_write: no clipboard backend"),
+            },
+            ScriptCommand::ClipboardRead { tag } => {
+                // Answer every request, even with no backend, so a script
+                // waiting on `on_clipboard(tag, text)` is never left hanging.
+                let text = clipboard
+                    .as_ref()
+                    .map(|clip| clip.read_text())
+                    .unwrap_or_default();
+                clipboard_out.write(lumen_core::input::ClipboardRead {
+                    tag: tag.clone(),
+                    text,
+                });
+            }
+            ScriptCommand::OpenUrl { url } => {
+                report_launch(&launcher.open_url(url), "open_url", url);
+            }
+            ScriptCommand::OpenPath { path } => {
+                let resolved = resolve_app_path(path, &dir);
+                report_launch(
+                    &launcher.open_path(&resolved),
+                    "open_path",
+                    &resolved.display().to_string(),
+                );
+            }
+            ScriptCommand::RevealPath { path } => {
+                let resolved = resolve_app_path(path, &dir);
+                report_launch(
+                    &launcher.reveal_in_file_manager(&resolved),
+                    "reveal_path",
+                    &resolved.display().to_string(),
+                );
+            }
+            ScriptCommand::KeepAwake { name, reason } => {
+                inhibits.start(
+                    name,
+                    reason,
+                    lumen_os_power::InhibitKinds::DISPLAY
+                        .union(lumen_os_power::InhibitKinds::SUSPEND),
+                );
+            }
+            ScriptCommand::AllowSleep { name } => inhibits.stop(name),
+            // Everything else is applied by `apply_script_commands`, by
+            // the audio applier, or by the exclusive DOM applier. Listed
+            // rather than caught by `_` so a new command has to be placed
+            // deliberately instead of silently going nowhere.
+            ScriptCommand::Print(_)
+            | ScriptCommand::AddClicks(_)
+            | ScriptCommand::SetString { .. }
+            | ScriptCommand::SetText { .. }
+            | ScriptCommand::SetSrc { .. }
+            | ScriptCommand::SetTimer { .. }
+            | ScriptCommand::CancelTimer { .. }
+            | ScriptCommand::Fetch { .. }
+            | ScriptCommand::Http { .. }
+            | ScriptCommand::SetSignal { .. }
+            | ScriptCommand::SetProperty { .. }
+            | ScriptCommand::SetArray { .. }
+            | ScriptCommand::CopyImageToClipboard { .. }
+            | ScriptCommand::SaveClipboardImage { .. }
+            | ScriptCommand::RegisterTrayIcon { .. }
+            | ScriptCommand::UnregisterTrayIcon { .. }
+            | ScriptCommand::SetClasses { .. }
+            | ScriptCommand::SetColorScheme { .. }
+            | ScriptCommand::OpenFileDialog { .. }
+            | ScriptCommand::RegisterHotkey { .. }
+            | ScriptCommand::UnregisterHotkey { .. }
+            | ScriptCommand::AudioPlay { .. }
+            | ScriptCommand::AudioPause
+            | ScriptCommand::AudioResume
+            | ScriptCommand::AudioStop
+            | ScriptCommand::AudioSeek { .. }
+            | ScriptCommand::AudioVolume { .. }
+            | ScriptCommand::SetAttr { .. }
+            | ScriptCommand::RemoveAttr { .. }
+            | ScriptCommand::SetNodeText { .. }
+            | ScriptCommand::ClassAdd { .. }
+            | ScriptCommand::ClassRemove { .. }
+            | ScriptCommand::ClassToggle { .. }
+            | ScriptCommand::SetStyleProp { .. }
+            | ScriptCommand::RemoveStyleProp { .. }
+            | ScriptCommand::Spawn { .. }
+            | ScriptCommand::Insert { .. }
+            | ScriptCommand::ReplaceWith { .. }
+            | ScriptCommand::RemoveNode { .. }
+            | ScriptCommand::CloneNode { .. }
+            | ScriptCommand::SetInnerMarkup { .. }
+            | ScriptCommand::BindEvent { .. }
+            | ScriptCommand::UnbindEvent { .. }
+            | ScriptCommand::WindowSetTitle { .. }
+            | ScriptCommand::WindowSetSize { .. } => {}
+        }
+    }
+}
+
+/// Resolve a script-supplied path against the app directory, matching how
+/// `set_src` and the tray icon path resolve, so authors can write
+/// app-relative paths regardless of cwd.
+fn resolve_app_path(path: &str, dir: &Path) -> PathBuf {
+    let p = Path::new(path);
+    if p.is_relative() {
+        dir.join(p)
+    } else {
+        p.to_path_buf()
+    }
+}
+
+/// Log a failed launch. Success is silent: the platform helper exiting
+/// zero says the handler started, not that the user saw anything, so
+/// there is nothing useful to report.
+fn report_launch(result: &lumen_os_launcher::OpenResult, builtin: &str, target: &str) {
+    if let lumen_os_launcher::OpenResult::Failed(msg) = result {
+        eprintln!("lumenc: {builtin}('{target}'): {msg}");
+    }
+}
+
 // File dialog wiring moved to lumen-os-filedialog (W6.4). Tray
 // register / unregister / poll moved to lumen-os-tray (W6.5). The
 // runtime installs `FileDialogService` / `NotificationService` as

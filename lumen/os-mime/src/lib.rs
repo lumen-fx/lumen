@@ -266,6 +266,42 @@ impl Action {
     }
 }
 
+/// Action id reserved for a menu separator. A backend that can draw one
+/// (a tray menu, a menu bar) turns an action carrying this id into its
+/// platform separator.
+pub const SEPARATOR_ID: &str = "separator";
+
+impl From<&str> for Action {
+    /// Read one `id:label` entry of an action spec. An entry with no
+    /// `:` uses its whole text as both id and label, and a lone `-` is
+    /// the separator.
+    fn from(entry: &str) -> Self {
+        let entry = entry.trim();
+        if entry == "-" {
+            return Action::new(SEPARATOR_ID, "-");
+        }
+        match entry.split_once(':') {
+            Some((id, label)) => Action::new(id.trim(), label.trim()),
+            None => Action::new(entry, entry),
+        }
+    }
+}
+
+/// Read an action spec: `|`-separated `id:label` entries, where `-` is a
+/// separator.
+///
+/// One spelling serves every surface a script builds from a string, so an
+/// author learns the shape once and a tray menu and a notification's
+/// buttons read alike. Empty entries are skipped, which makes a trailing
+/// `|` harmless and an empty spec an empty list.
+pub fn parse_action_spec(spec: &str) -> Vec<Action> {
+    spec.split('|')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(Action::from)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,6 +360,35 @@ mod tests {
     fn action_check_state() {
         let a = Action::new("view.bold", "Bold").checked(true);
         assert_eq!(a.checked, Some(true));
+    }
+
+    #[test]
+    fn action_spec_reads_ids_labels_and_separators() {
+        let items = parse_action_spec("open:Open|-|quit: Quit ");
+        assert_eq!(items.len(), 3);
+        assert_eq!(&*items[0].id, "open");
+        assert_eq!(&*items[0].label, "Open");
+        assert_eq!(&*items[1].id, SEPARATOR_ID);
+        assert_eq!(&*items[2].id, "quit");
+        assert_eq!(&*items[2].label, "Quit");
+    }
+
+    #[test]
+    fn action_spec_tolerates_blanks_and_bare_entries() {
+        assert!(parse_action_spec("").is_empty());
+        assert!(parse_action_spec("  |  ").is_empty());
+        let items = parse_action_spec("Quit|");
+        assert_eq!(items.len(), 1);
+        assert_eq!(&*items[0].id, "Quit");
+        assert_eq!(&*items[0].label, "Quit");
+    }
+
+    #[test]
+    fn action_entry_keeps_a_windows_path_label_intact() {
+        // Only the first `:` splits, so a drive letter survives.
+        let a = Action::from(r"icon:C:\icons\app.png");
+        assert_eq!(&*a.id, "icon");
+        assert_eq!(&*a.label, r"C:\icons\app.png");
     }
 
     #[test]

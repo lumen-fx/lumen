@@ -84,6 +84,9 @@ optional.
 | `on_files_picked(tag, paths)` | Dialog tag, paths joined with `\|`. |
 | `on_folder_picked(tag, path)` | Dialog tag, chosen folder. |
 | `on_hotkey(name)` | Registered hotkey name. |
+| `on_hotkey_release(name)` | Registered hotkey name, on release of the chord. |
+| `on_notification_action(id, action_id)` | Notification id, pressed button's action id. |
+| `on_clipboard(tag, text)` | Read tag, clipboard text. Empty when the clipboard holds no text. |
 | `on_menu(id)` | Menu item id. |
 | `on_tray(id)` | Tray icon id. |
 | `on_dialog_accepted(id)` | Dialog id. |
@@ -403,12 +406,21 @@ keyed by `tag`. A cancelled dialog still fires once, with an empty path.
 | Builtin | Behaviour |
 | --- | --- |
 | `notify(title, body)` | Show an OS notification. |
+| `notify_ex(id, title, body, options, actions)` | Show an OS notification. `options` is pipe-separated `key:value` entries, where `icon` takes a themed name or path and `urgency` takes `"low"`, `"normal"`, or `"critical"`. `actions` is pipe-separated `id:Label` buttons; a press fires `on_notification_action(id, action_id)`. An empty string in either position means the defaults. |
+| `clipboard_write(text)` | Put `text` on the system clipboard. |
+| `clipboard_read(tag)` | Request the clipboard text; fires `on_clipboard(tag, text)` on the next tick. |
 | `copy_image(path)` | Copy the image at `path` to the system clipboard. |
 | `save_clipboard_image(path)` | Write the clipboard image to `path` as PNG. |
 | `tray_icon(id, icon_path, tooltip)` | Register or replace a tray icon; clicks fire `on_tray(id)`. An empty tooltip disables it. |
+| `tray_icon_menu(id, icon_path, tooltip, menu, template)` | Register a tray icon with a context menu, given as pipe-separated `id:Label` entries where `-` is a separator; a pick fires `on_menu(id)`. `template` is the macOS monochrome-icon flag, ignored elsewhere. |
 | `unregister_tray(id)` | Remove a tray icon. |
 | `register_hotkey(name, accelerator)` | Register a global hotkey (`"CommandOrControl+S"`, `"Alt+Space"`, `"F11"`); fires `on_hotkey(name)`. |
 | `unregister_hotkey(name)` | Remove a global hotkey. |
+| `open_url(url)` | Open `url` with the default browser, or the mail client for `mailto:`. |
+| `open_path(path)` | Open `path` with the platform's default application. Relative paths resolve against the app directory. |
+| `reveal_path(path)` | Show `path` in the platform's file manager. |
+| `keep_awake(name, reason)` | Hold off the screensaver and system sleep under `name`. Repeating a live name replaces its request. |
+| `allow_sleep(name)` | Release the inhibit registered under `name`. |
 | `open_menu(id)` | Open menu `id` by setting the `__menu_open:id` signal to true. |
 | `close_menu(id)` | Close menu `id`. |
 

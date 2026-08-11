@@ -40,6 +40,10 @@ pub(crate) struct SubsystemUsage {
     /// per-tick `poll_hotkeys` drain. The manager opens an X11 connection on
     /// Linux, so skipping it for a hotkey-free app is a real idle win.
     pub(crate) hotkey: bool,
+    /// Install `AsyncTokioPlugin` so file dialogs resolve on the shared tokio
+    /// runtime instead of blocking the tick. The runtime spawns worker
+    /// threads, so a dialog-free app skips it.
+    pub(crate) file_dialog: bool,
 }
 
 impl SubsystemUsage {
@@ -84,7 +88,15 @@ impl SubsystemUsage {
         // may register a hotkey).
         let hotkey = no_source || has_app_hooks || hay.contains("register_hotkey");
 
-        Self { audio, hotkey }
+        // File dialogs: gate on the dialog builtins, with the same
+        // conservative fallbacks as the hotkey gate above.
+        let file_dialog = no_source || has_app_hooks || file_dialog_markers_present(&hay);
+
+        Self {
+            audio,
+            hotkey,
+            file_dialog,
+        }
     }
 }
 
@@ -142,6 +154,15 @@ pub(crate) fn audio_markers_present(hay: &str) -> bool {
     let lower = hay.to_ascii_lowercase();
     const AUDIO_EXTS: [&str; 7] = [".wav", ".ogg", ".oga", ".mp3", ".flac", ".m4a", ".aac"];
     AUDIO_EXTS.iter().any(|ext| lower.contains(ext))
+}
+
+/// True when `hay` (concatenated markup + script source) calls one of the
+/// file-dialog builtins. `pick_file` is a prefix of `pick_files` and
+/// `pick_file_filtered`, so these three markers cover the whole family.
+pub(crate) fn file_dialog_markers_present(hay: &str) -> bool {
+    ["pick_file", "save_file", "pick_folder"]
+        .iter()
+        .any(|marker| hay.contains(marker))
 }
 
 // -------------------------------------------------------------------------
@@ -403,54 +424,92 @@ pub(crate) fn register_os_hotkey(app: &mut App) {
     // the event receiver each tick.
     if let Some(reg) = OsHotkeyRegistry::new() {
         app.world.insert_non_send(reg);
-        // The `HotkeyReleased` message is owned by `lumen-os-hotkey`
-        // (round-3 extract) and ships unregistered by default - the
-        // core App::new only registers the legacy `HotkeyFired`
-        // (== `HotkeyPressed`) alias. Register the release message
-        // here so `poll_hotkeys`'s `MessageWriter<HotkeyReleased>`
-        // doesn't panic at first dispatch.
-        app.add_message::<lumen_os_hotkey::HotkeyReleased>();
+        // Both `HotkeyPressed` and `HotkeyReleased` are registered by
+        // `App::new`, beside every other input message, so `poll_hotkeys`
+        // can write either one without a local registration here.
         app.add_systems(TickStage::Systems, lumen_os_hotkey::poll_hotkeys);
     }
 }
 
-/// File-dialog host resource. DEFAULT-ON.
+/// File-dialog host resource, plus the async runtime the dialogs resolve on.
 ///
-/// TODO(tree-shake): gate on the file-dialog script builtins (`pick_file` /
-/// `pick_files` / `save_file` / `pick_file_filtered`). Left default-on for now:
-/// the constructor is a single `AtomicU64` (no thread, no device), so an idle
-/// app pays nothing, and gating would risk a false negative for an embedder
-/// that opens dialogs from a Rust hook.
-pub(crate) fn register_os_filedialog(app: &mut App) {
+/// The service itself is DEFAULT-ON: its constructor is a single `AtomicU64`
+/// (no thread, no device), so an idle app pays nothing and a false negative
+/// would silently swallow an embedder's `pick_file(...)`.
+///
+/// `AsyncTokioPlugin` is GATED on [`SubsystemUsage::file_dialog`] because it
+/// builds a multi-threaded tokio runtime. It has to be installed for dialogs
+/// to work at all on macOS: `NSOpenPanel` only resolves while the main run
+/// loop is pumping, so the blocking path deadlocks there and refuses, and
+/// only the async path posts a result back. Installing it here rather than
+/// leaving it to embedders is what makes `pick_file` reach the user on every
+/// platform.
+pub(crate) fn register_os_filedialog(app: &mut App, file_dialog_used: bool) {
     app.world.insert_resource(FileDialogService::new());
+    #[cfg(feature = "async")]
+    if file_dialog_used {
+        app.add_plugin(lumen_async_tokio::AsyncTokioPlugin);
+    }
+    #[cfg(not(feature = "async"))]
+    let _ = file_dialog_used;
 }
 
-/// Notification host resource. DEFAULT-ON.
+/// Notification host resource + the per-tick action-button drain. DEFAULT-ON.
+///
+/// The `[app] id` from `lumen.toml` becomes the notification app id: Windows
+/// keys toasts off the AppUserModelID and macOS off the bundle id, so without
+/// it a notification is attributed to whatever binary happens to be running.
 ///
 /// TODO(tree-shake): gate on the `notify` script builtin. Left default-on:
-/// `NotificationService::new()` is `Default` (no thread / no connection), so
-/// the idle cost is nil and a false negative would silently swallow an
+/// `NotificationService::new()` opens no thread and no connection, so the
+/// idle cost is nil and a false negative would silently swallow an
 /// embedder's `notify(...)`.
-pub(crate) fn register_os_notify(app: &mut App) {
-    app.world.insert_resource(NotificationService::new());
+pub(crate) fn register_os_notify(app: &mut App, cfg: &crate::config::LumenToml) {
+    let service = match cfg.app.id.as_deref().filter(|s| !s.is_empty()) {
+        Some(id) => NotificationService::new().with_app_id(id),
+        None => NotificationService::new(),
+    };
+    app.world.insert_resource(service);
+    app.add_systems(
+        TickStage::Systems,
+        lumen_os_notify::poll_notification_actions,
+    );
 }
 
-/// System-tray host resource + the per-tick click drain (mac/win only).
-/// DEFAULT-ON.
+/// System-tray host resource + the per-tick click drain. DEFAULT-ON.
 ///
 /// TODO(tree-shake): gate on the `tray_icon` script builtin / a `<tray>`
 /// markup marker. Left default-on: the service is `Default` (registration is
 /// what actually creates the OS icon, lazily), and `poll_tray_events` is a
-/// cheap per-tick `try_recv`.
+/// cheap per-tick queue check.
 pub(crate) fn register_os_tray(app: &mut App) {
-    // W6.5: tray host resource. Stateless for v1 - wrapping the previous
-    // in-line `tray_icon::` call sites so the OS surface lives in its own
-    // crate from now on.
     app.world.insert_non_send(OsTrayService::new());
-    // Drain the global system-tray click channel each tick. Skipped on Linux
-    // because the `tray-icon` dep is absent on that target.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    // Every target has a `poll_tray_events`: `tray-icon` backs macOS and
+    // Windows, `ksni` backs Linux, and anything else gets an inert stub.
     app.add_systems(TickStage::Systems, lumen_os_tray::poll_tray_events);
+}
+
+/// Clipboard, launcher, and sleep-inhibit hosts. DEFAULT-ON.
+///
+/// The clipboard handle is `NonSend` (`arboard` is `!Send` on Linux and
+/// Wayland) and long-lived on purpose: on X11 the process that wrote the
+/// selection has to stay alive to serve it, so a per-call handle would lose
+/// the text the moment the call returned. A backend that refuses (headless
+/// CI, no compositor) leaves the resource absent and the clipboard builtins
+/// no-op with a warning.
+///
+/// The launcher and the inhibit holder are both idle until called: the
+/// launcher is stateless, and the holder only talks to the platform once a
+/// script asks to keep the machine awake.
+pub(crate) fn register_os_misc(app: &mut App, cfg: &crate::config::LumenToml) {
+    match ClipboardHost::try_new() {
+        Some(host) => app.world.insert_non_send(host),
+        None => eprintln!("lumenc: no clipboard backend; clipboard builtins are inert"),
+    }
+    app.world.insert_resource(Launcher::new());
+    let app_name = cfg.app.id.clone().unwrap_or_else(|| "lumen".to_string());
+    app.world
+        .insert_non_send(InhibitHolder::new().with_app_name(app_name));
 }
 
 /// The rodio-backed audio service (or the inert `disabled()` sink), the player

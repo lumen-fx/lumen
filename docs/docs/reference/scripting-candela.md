@@ -123,6 +123,9 @@ optional.
 | `on_files_picked(tag, paths)` | Dialog tag, paths joined with `\|`. |
 | `on_folder_picked(tag, path)` | Dialog tag, chosen folder. |
 | `on_hotkey(name)` | Registered hotkey name. |
+| `on_hotkey_release(name)` | Registered hotkey name, on release of the chord. |
+| `on_notification_action(id, action_id)` | Notification id, pressed button's action id. |
+| `on_clipboard(tag, text)` | Read tag, clipboard text. Empty when the clipboard holds no text. |
 | `on_menu(id)` | Menu item id. |
 | `on_tray(id)` | Tray icon id. |
 | `on_dialog_accepted(id)` | Dialog id. |
@@ -489,12 +492,21 @@ keyed by `tag`. A cancelled dialog still fires once, with an empty path.
 | Builtin | Behaviour |
 | --- | --- |
 | `lumen::notify(title: string, body: string)` | Show an OS notification. |
+| `lumen::notify_ex(id: string, title: string, body: string, options: string, actions: string)` | Show an OS notification. `options` is pipe-separated `key:value` entries, where `icon` takes a themed name or path and `urgency` takes `"low"`, `"normal"`, or `"critical"`. `actions` is pipe-separated `id:Label` buttons; a press fires `on_notification_action(id, action_id)`. An empty string in either position means the defaults. |
+| `lumen::clipboard_write(text: string)` | Put `text` on the system clipboard. |
+| `lumen::clipboard_read(tag: string)` | Request the clipboard text; fires `on_clipboard(tag, text)` on the next tick. |
 | `lumen::copy_image(path: string)` | Copy the image at `path` to the system clipboard. |
 | `lumen::save_clipboard_image(path: string)` | Write the clipboard image to `path` as PNG. |
 | `lumen::tray_icon(id: string, icon_path: string, tooltip: string)` | Register or replace a tray icon; clicks fire `on_tray(id)`. An empty tooltip disables it. |
+| `lumen::tray_icon_menu(id: string, icon_path: string, tooltip: string, menu: string, template: bool)` | Register a tray icon with a context menu, given as pipe-separated `id:Label` entries where `-` is a separator; a pick fires `on_menu(id)`. `template` is the macOS monochrome-icon flag, ignored elsewhere. |
 | `lumen::unregister_tray(id: string)` | Remove a tray icon. |
 | `lumen::register_hotkey(name: string, accelerator: string)` | Register a global hotkey (`"CommandOrControl+S"`, `"Alt+Space"`, `"F11"`); fires `on_hotkey(name)`. |
 | `lumen::unregister_hotkey(name: string)` | Remove a global hotkey. |
+| `lumen::open_url(url: string)` | Open `url` with the default browser, or the mail client for `mailto:`. |
+| `lumen::open_path(path: string)` | Open `path` with the platform's default application. Relative paths resolve against the app directory. |
+| `lumen::reveal_path(path: string)` | Show `path` in the platform's file manager. |
+| `lumen::keep_awake(name: string, reason: string)` | Hold off the screensaver and system sleep under `name`. Repeating a live name replaces its request. |
+| `lumen::allow_sleep(name: string)` | Release the inhibit registered under `name`. |
 | `lumen::open_menu(id: string)` | Open menu `id` by setting the `__menu_open:id` signal to true. |
 | `lumen::close_menu(id: string)` | Close menu `id`. |
 

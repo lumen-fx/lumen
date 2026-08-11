@@ -52,17 +52,21 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
     // `build_app` installs the default stack as a sequence of per-subsystem
     // `register_*` calls. The core visual stack is unconditional; the gated
     // units (hotkey / audio / MCP) are skipped when `usage` / run-mode proves
-    // them unused. The OS host-resource units (filedialog / notify / tray) are
-    // cheap constructors left default-on (see their `TODO(tree-shake)` notes).
+    // them unused. The OS host-resource units (filedialog / notify / tray /
+    // clipboard / launcher / power) are cheap constructors left default-on
+    // (see their `TODO(tree-shake)` notes).
     register_core(&mut app);
     // Global hotkeys - GATED on `usage.hotkey` (the `register_hotkey` marker);
     // skipping it avoids opening the X11 hotkey manager for a hotkey-free app.
     if usage.hotkey {
         register_os_hotkey(&mut app);
     }
-    register_os_filedialog(&mut app);
-    register_os_notify(&mut app);
+    // File dialogs - the service is default-on, its tokio runtime GATED on
+    // `usage.file_dialog`.
+    register_os_filedialog(&mut app, usage.file_dialog);
+    register_os_notify(&mut app, &cfg);
     register_os_tray(&mut app);
+    register_os_misc(&mut app, &cfg);
     // Audio - GATED on `usage.audio`; a no-audio app gets the inert
     // `AudioService::disabled()` (no device, no ticker thread).
     register_audio(&mut app, usage.audio);

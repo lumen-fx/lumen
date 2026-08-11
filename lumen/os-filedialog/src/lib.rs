@@ -5,11 +5,12 @@
 //! `GtkFileDialog` (GTK 4) - both are spec'd as one-shot modals that
 //! emit a single result back to the application loop.
 //!
-//! ## W6.10 round 2: real async via `TokioRuntime`
+//! ## Async via `TokioRuntime`
 //!
-//! [`FileDialogService::open_single`] no longer blocks the main thread.
+//! [`FileDialogService::open_single`] does not block the main thread.
 //! When [`TokioRuntime`] and [`AsyncCommandQueue`] are installed in the
-//! world (the [`AsyncTokioPlugin`] does this automatically) the call:
+//! world (the [`AsyncTokioPlugin`] does this, and the Lumen runtime
+//! installs that plugin for an app that opens dialogs) the call:
 //!
 //! 1. Allocates a fresh [`RequestId`] and returns it to the caller.
 //! 2. Spawns the rfd `pick_file().await` (or its `pick_files` / `save`
@@ -25,7 +26,8 @@
 //! is preserved for callers that have not migrated. It has no access to
 //! the world, so it always takes the `pollster::block_on` path; on macOS
 //! that path would deadlock the run loop and refuses, writing an empty
-//! result instead.
+//! result instead. This is why the async path is the one the runtime
+//! installs: it is the only one that works on every platform.
 //!
 //! ## Why a request id + drain instead of a oneshot channel?
 //!

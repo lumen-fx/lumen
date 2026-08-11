@@ -9,10 +9,9 @@
 //! struct + `register_hotkey` / `unregister_hotkey` /
 //! `poll_global_hotkeys` helpers) per W6.5.
 //!
-//! v1 fix from the audit: both `Pressed` and `Released` events are
-//! surfaced as separate messages - `global-hotkey` 0.6 supports both
-//! (pre-extract the runtime dropped the Release path, blocking
-//! push-to-talk use cases).
+//! Both `Pressed` and `Released` events are surfaced as separate
+//! messages, so one chord can drive push-to-talk. Scripts see them as
+//! `on_hotkey(name)` and `on_hotkey_release(name)`.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -28,16 +27,14 @@ pub use lumen_os_mime::KeyChord;
 /// it as `on_hotkey(name)`.
 pub use lumen_core::input::HotkeyFired as HotkeyPressed;
 
-/// New message: a previously-pressed hotkey was released. Surfaces
-/// the bug noted in the audit (`run.rs:931-933` dropped Release
-/// events). Scripts route it as `on_hotkey_release(name)`; the dispatch
-/// wiring lands alongside W6.5's follow-up Rhai changes.
-#[derive(Message, Clone, Debug)]
-pub struct HotkeyReleased {
-    /// Identifier matching the `register_hotkey(name, ...)` call that
-    /// installed the binding.
-    pub name: String,
-}
+/// A previously-pressed hotkey was released. Scripts route it as
+/// `on_hotkey_release(name)`, the release half of the push-to-talk
+/// pair.
+///
+/// Lives in `lumen-core` beside [`HotkeyPressed`] so the scripting
+/// layer can dispatch it without depending on this crate; re-exported
+/// here because this crate produces it.
+pub use lumen_core::input::HotkeyReleased;
 
 /// OS-level global hotkey registry. `GlobalHotKeyManager` is `!Send`
 /// on some platforms (macOS NSEvent monitor), so this resource lives

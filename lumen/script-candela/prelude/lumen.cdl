@@ -55,10 +55,21 @@ host "lumen" {
 
     // notifications / clipboard / tray
     notify(string, string);
+    notify_ex(string, string, string, string, string);
+    clipboard_write(string);
+    clipboard_read(string);
     copy_image(string);
     save_clipboard_image(string);
     tray_icon(string, string, string);
+    tray_icon_menu(string, string, string, string, bool);
     unregister_tray(string);
+
+    // launcher / power
+    open_url(string);
+    open_path(string);
+    reveal_path(string);
+    keep_awake(string, string);
+    allow_sleep(string);
 
     // menus
     open_menu(string);
