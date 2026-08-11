@@ -9,23 +9,27 @@ pub struct CheckReport {
     pub has_script: bool,
 }
 
-/// Ahead-of-time compile `<dir>/main.lmn` + optional `main.css` into a
+/// Ahead-of-time compile an app directory into a
 /// [`lumen_ir::artifact::CompiledApp`]: parse markup + CSS once, run the full
 /// cascade, resolve asset / include / import paths, and bake the combined
 /// script source. The returned artifact is what `lumenc build` writes to
 /// disk and what a parser-free runtime loads via [`RunOptions::artifact`].
 ///
-/// This is the AOT counterpart to [`load_ir`]: same front-end work, but the
-/// result is serialized instead of spawned. Requires the source parser
-/// (`runtime-parse` feature).
+/// This is the AOT counterpart to [`load_ir`]: same front-end work, on the
+/// same discovered page set, but the result is serialized instead of spawned.
+/// A multi-page app compiles whole - every page assembled into the one gated
+/// tree the run path builds, plus the page set the routing needs. Requires the
+/// source parser (`runtime-parse` feature).
 #[cfg(feature = "runtime-parse")]
 pub fn compile_app(
     dir: &Path,
     parser: &dyn SourceParser,
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
-    let entry = cfg.app.entry.as_deref().unwrap_or("main.lmn");
-    let html_path = dir.join(entry);
+    // The same discovery the run path does, so compiling sees the app the way
+    // running it does: the entry file it would open, and every sibling page.
+    let plan = crate::pages::discover(dir, &cfg);
+    let html_path = plan.entry_file.clone();
     let css_path = dir.join("main.css");
     let asset_roots = cfg.resolved_asset_roots(dir);
     let skin_override = cfg.skin.name.clone();
@@ -37,19 +41,43 @@ pub fn compile_app(
         &asset_roots,
         skin_override.as_deref(),
         &lumen_ir::css::MediaContext::default(),
-        // AOT multi-page packaging is a follow-up: `lumenc build` bakes the
-        // single entry page today (SourceOverrides::default -> plan: None).
-        // See the `pages` module docs for the fold-in.
-        SourceOverrides::default(),
+        SourceOverrides {
+            plan: Some(&plan),
+            ..SourceOverrides::default()
+        },
     )?;
     // Concatenate inline + external `<script>` sources once, then strip both
     // from the IR: the artifact carries the combined string in its own field
     // so the parser-free runtime never re-reads `.rhai` files.
     let script_source = combined_script_source(&loaded.ir, dir)?;
+    // Which engine runs which part of the program is decided here, at compile
+    // time, from the script files' own extensions. The runtime cannot
+    // rediscover it later: a shipped app carries no `.lua` / `.rhai` files for
+    // the directory scan to read, and the flattened source above has no
+    // language boundary left in it.
+    let scripts = grouped_script_sources(&loaded.ir, dir, &cfg)?
+        .into_iter()
+        .map(|(engine, source)| lumen_ir::artifact::CompiledScript {
+            engine: engine.name().to_string(),
+            source,
+        })
+        .collect();
+    // Routing data for a multi-page app. The pages themselves are already in
+    // the tree, each behind its gate; this is the part the runtime would
+    // otherwise rediscover by listing `.lmn` files.
+    let pages = plan.multipage.then(|| lumen_ir::artifact::CompiledPages {
+        entry: plan.entry_key.clone(),
+        keys: plan.keys(),
+    });
     let mut ir = loaded.ir;
     ir.script_source = String::new();
     ir.external_scripts.clear();
-    Ok(lumen_ir::artifact::CompiledApp { ir, script_source })
+    Ok(lumen_ir::artifact::CompiledApp {
+        ir,
+        script_source,
+        scripts,
+        pages,
+    })
 }
 
 /// Parse `<dir>/main.lmn` + optional `<dir>/main.css` and validate them
@@ -149,7 +177,10 @@ fn count_elements(el: &Element) -> usize {
 /// assets (`<image>`) to be absolute, joining the path against the
 /// app directory. Author-written relative paths then survive
 /// arbitrary cwd shifts at run time.
-#[cfg(feature = "runtime-parse")]
+///
+/// Runs on the from-source load and on the artifact load alike, which is what
+/// lets a packaged app carry paths relative to itself and still find its
+/// files from whichever directory it was started in.
 pub(crate) fn resolve_asset_paths(el: &mut Element, dir: &Path, extra_roots: &[PathBuf]) {
     if el.tag == "image"
         && let Some(src) = &el.attrs.src

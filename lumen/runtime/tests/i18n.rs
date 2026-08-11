@@ -52,6 +52,7 @@ fn build(dir: &Path, root: Element) -> lumen_core::app::App {
     let bytes = artifact::serialize(&CompiledApp {
         ir,
         script_source: String::new(),
+        ..Default::default()
     })
     .expect("serialize artifact");
     let opts = RunOptions::new(dir).with_artifact_bytes(bytes);
@@ -187,6 +188,7 @@ fn a_bad_catalogue_filename_fails_the_load() {
     let bytes = artifact::serialize(&CompiledApp {
         ir,
         script_source: String::new(),
+        ..Default::default()
     })
     .unwrap();
     let err = match build_headless_app(RunOptions::new(&dir).with_artifact_bytes(bytes)) {

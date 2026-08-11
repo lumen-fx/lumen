@@ -336,3 +336,186 @@ fn auto_discovered_pages_navigate_with_no_config() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A compiled multi-page app: the same routing, out of an artifact, in a
+/// directory holding no `.lmn` files at all.
+///
+/// This is what a packaged app is. Every page is compiled into the artifact
+/// behind its own gate, and the page set travels with it, so navigation
+/// resolves without the directory scan a from-source run uses. The app is
+/// built in a second directory that holds only `lumen.toml`, which is what
+/// makes the point: nothing here can be coming off the page files.
+fn artifact_scratch_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("lumen_pages_lmna_{}_{}", std::process::id(), {
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("layout.lmn"),
+        r#"<root>
+  <template name="layout">
+    <column>
+      <a href="index" text="Home"/>
+      <a href="settings" text="Settings"/>
+      <column>
+        <slot/>
+      </column>
+    </column>
+  </template>
+</root>"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("index.lmn"),
+        r#"<root>
+  <use template="layout">
+    <label id="page-marker" text="INDEX_PAGE"/>
+    <button id="go" text="Open settings"/>
+  </use>
+  <script>
+fn on_click(id) {
+    if id == "go" { page("settings"); }
+}
+  </script>
+</root>"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("settings.lmn"),
+        r#"<root>
+  <use template="layout">
+    <label id="page-marker" text="SETTINGS_PAGE"/>
+  </use>
+</root>"#,
+    )
+    .unwrap();
+    dir
+}
+
+/// Find a spawned entity by its markup id.
+fn entity_by_id(app: &mut App, id: &str) -> bevy_ecs::entity::Entity {
+    let mut q = app
+        .world
+        .query::<(bevy_ecs::entity::Entity, &lumen_core::components::LumenId)>();
+    q.iter(&app.world)
+        .find(|(_, lid)| lid.0 == id)
+        .map(|(e, _)| e)
+        .unwrap_or_else(|| panic!("no spawned element with id \"{id}\""))
+}
+
+#[test]
+fn multi_page_navigation_from_an_artifact() {
+    let _guard = nav_test_guard();
+    let source = artifact_scratch_dir();
+
+    // Compile the whole app, then throw the source away: the run below gets a
+    // directory with `lumen.toml` and nothing else, the shape a packaged app
+    // has once its markup is compiled in.
+    let compiled = lumenc::compile_app(&source).expect("compile the page set");
+    let pages = compiled
+        .pages
+        .as_ref()
+        .expect("a multi-page app compiles with its page set");
+    assert_eq!(pages.entry, "index");
+    assert!(pages.keys.iter().any(|k| k == "settings"));
+    assert!(
+        !pages.keys.iter().any(|k| k == "layout"),
+        "the shared layout is a template, not a navigable page"
+    );
+    let bytes = lumen_ir::artifact::serialize(&compiled).expect("serialize");
+
+    let packaged = std::env::temp_dir().join(format!(
+        "lumen_pages_lmna_run_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&packaged).unwrap();
+    std::fs::write(packaged.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+
+    let mut opts = RunOptions::new(&packaged).with_artifact_bytes(bytes);
+    opts.hot_reload = false;
+    let (mut app, _winit) = build_headless_app(opts).expect("build from the artifact");
+    tick_n(&mut app, 4);
+
+    // The entry page mounted, and only it.
+    assert_eq!(route_signal(&mut app, "route.path"), "index");
+    assert!(
+        texts(&mut app).iter().any(|t| t == "INDEX_PAGE"),
+        "the entry page should be mounted: {:?}",
+        texts(&mut app)
+    );
+    assert!(
+        !texts(&mut app).iter().any(|t| t == "SETTINGS_PAGE"),
+        "a page that is not active must stay unmounted"
+    );
+    // The shared layout template reached the compiled pages too.
+    assert_eq!(anchor_count(&mut app), 2, "the layout nav should render");
+
+    // Navigate with the script `page()` builtin, from the compiled script.
+    let button = entity_by_id(&mut app, "go");
+    app.world
+        .resource_mut::<bevy_ecs::message::Messages<ClickEvent>>()
+        .write(ClickEvent {
+            entity: button,
+            position: glam::Vec2::ZERO,
+            button: PointerButton::Primary,
+        });
+    tick_n(&mut app, 6);
+
+    assert_eq!(route_signal(&mut app, "route.path"), "settings");
+    assert!(
+        texts(&mut app).iter().any(|t| t == "SETTINGS_PAGE"),
+        "the second page should have spawned from the artifact: {:?}",
+        texts(&mut app)
+    );
+    assert!(
+        !texts(&mut app).iter().any(|t| t == "INDEX_PAGE"),
+        "the entry page should unmount after navigating away"
+    );
+
+    // A declarative anchor from the compiled layout navigates back.
+    let home = anchor_entity(&mut app, "index");
+    app.world
+        .resource_mut::<bevy_ecs::message::Messages<ClickEvent>>()
+        .write(ClickEvent {
+            entity: home,
+            position: glam::Vec2::ZERO,
+            button: PointerButton::Primary,
+        });
+    tick_n(&mut app, 6);
+    assert_eq!(route_signal(&mut app, "route.path"), "index");
+
+    let _ = std::fs::remove_dir_all(&source);
+    let _ = std::fs::remove_dir_all(&packaged);
+}
+
+/// A single-page app compiles with no page set at all, so nothing about
+/// routing is installed for it and the load path stays as it was.
+#[test]
+fn a_single_page_app_compiles_without_a_page_set() {
+    let dir = std::env::temp_dir().join(format!("lumen_pages_single_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+    std::fs::write(
+        dir.join("main.lmn"),
+        "<root><label id=\"only\" text=\"ONE_PAGE\"/></root>",
+    )
+    .unwrap();
+
+    let compiled = lumenc::compile_app(&dir).expect("compile");
+    assert!(
+        compiled.pages.is_none(),
+        "a single-page app carries no routing data"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

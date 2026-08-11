@@ -19,6 +19,14 @@ pub(crate) struct LoadResult {
     /// Normalized paths of every `@import`ed `.css` file (transitive).
     pub(crate) css_import_paths: Vec<PathBuf>,
     pub(crate) css_import_mtimes: Vec<Option<SystemTime>>,
+    /// The app's program split by engine, as recorded by the AOT compiler.
+    /// Empty on the from-source path, which reads the split off the script
+    /// files themselves.
+    pub(crate) scripts: GroupedScripts,
+    /// The page set of a compiled multi-page app. `None` on the from-source
+    /// path, which discovers the pages from the directory, and for any
+    /// single-page app.
+    pub(crate) pages: Option<lumen_ir::artifact::CompiledPages>,
 }
 
 /// Produce a [`LoadResult`] for [`build_app`] from whichever source the
@@ -38,10 +46,10 @@ pub(crate) fn load_inputs(
     plan: Option<&crate::pages::PagePlan>,
 ) -> Result<LoadResult, RunError> {
     if let Some(bytes) = &opts.artifact_bytes {
-        return load_ir_from_artifact_bytes(bytes);
+        return load_ir_from_artifact_bytes(bytes, dir);
     }
     if let Some(path) = &opts.artifact {
-        return load_ir_from_artifact(path);
+        return load_ir_from_artifact(path, dir);
     }
     #[cfg(feature = "runtime-parse")]
     {
@@ -77,14 +85,14 @@ pub(crate) fn load_inputs(
 }
 
 /// Deserialize a precompiled AOT artifact into a [`LoadResult`]. All
-/// resolution (asset paths, `<include>` / `@import` splicing, the CSS
-/// cascade, script concatenation) happened at build time, so this path never
-/// touches the parser or the filesystem beyond reading the artifact itself.
-/// Hot-reload watch fields come back empty - a compiled artifact has no
-/// source files to watch.
-fn load_ir_from_artifact(path: &Path) -> Result<LoadResult, RunError> {
+/// resolution (`<include>` / `@import` splicing, the CSS cascade, script
+/// concatenation) happened at build time, so this path never touches the
+/// parser or the filesystem beyond reading the artifact itself. Hot-reload
+/// watch fields come back empty - a compiled artifact has no source files to
+/// watch.
+fn load_ir_from_artifact(path: &Path, dir: &Path) -> Result<LoadResult, RunError> {
     let compiled = lumen_ir::artifact::read(path).map_err(|e| RunError::Artifact(e.to_string()))?;
-    Ok(load_result_from_compiled(compiled))
+    Ok(load_result_from_compiled(compiled, dir))
 }
 
 /// Deserialize a precompiled AOT artifact from in-memory bytes into a
@@ -92,22 +100,32 @@ fn load_ir_from_artifact(path: &Path) -> Result<LoadResult, RunError> {
 /// The link-not-embed launcher path: the compiler produces LMNA bytes
 /// in-process and hands them across the C-ABI, so the runtime never touches a
 /// file for the artifact itself.
-fn load_ir_from_artifact_bytes(bytes: &[u8]) -> Result<LoadResult, RunError> {
+fn load_ir_from_artifact_bytes(bytes: &[u8], dir: &Path) -> Result<LoadResult, RunError> {
     let compiled =
         lumen_ir::artifact::read_bytes(bytes).map_err(|e| RunError::Artifact(e.to_string()))?;
-    Ok(load_result_from_compiled(compiled))
+    Ok(load_result_from_compiled(compiled, dir))
 }
 
 /// Shared tail of the two artifact-load entry points: fold a decoded
 /// [`lumen_ir::artifact::CompiledApp`] into a [`LoadResult`] with empty
 /// hot-reload watch fields (a compiled artifact has no source files to watch).
-fn load_result_from_compiled(compiled: lumen_ir::artifact::CompiledApp) -> LoadResult {
+fn load_result_from_compiled(compiled: lumen_ir::artifact::CompiledApp, dir: &Path) -> LoadResult {
     let mut ir = compiled.ir;
     // The build step bakes the combined (inline + external) script source
     // into the artifact and clears `external_scripts`, so the parser-free
     // runtime reconstructs the exact script-host input with no disk read.
     ir.script_source = compiled.script_source;
     ir.external_scripts.clear();
+    // An artifact built for a fixed directory carries absolute asset paths and
+    // is unaffected here; one built to travel (`lumenc package`) carries paths
+    // relative to the app, and `dir` is where that app now lives.
+    resolve_asset_paths(&mut ir.root, dir, &[]);
+    let scripts = compiled
+        .scripts
+        .into_iter()
+        .map(|s| (ScriptEngine::from_name(&s.engine), s.source))
+        .collect();
+    let pages = compiled.pages;
     LoadResult {
         ir,
         html_mtime: None,
@@ -118,6 +136,8 @@ fn load_result_from_compiled(compiled: lumen_ir::artifact::CompiledApp) -> LoadR
         include_mtimes: Vec::new(),
         css_import_paths: Vec::new(),
         css_import_mtimes: Vec::new(),
+        scripts,
+        pages,
     }
 }
 
@@ -383,6 +403,11 @@ pub(crate) fn load_ir(
         include_mtimes,
         css_import_paths,
         css_import_mtimes,
+        // The script files are right there on disk, so the engine split comes
+        // from their extensions rather than from a recorded one, and the page
+        // set from the directory listing.
+        scripts: Vec::new(),
+        pages: None,
     })
 }
 

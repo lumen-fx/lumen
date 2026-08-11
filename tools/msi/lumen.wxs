@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The Lumen Windows installer: lumenc, the liblumen runtime library, and an
-  install receipt, installed for the current user.
+  The Lumen Windows installer: lumenc, the liblumen runtime library, the app
+  launcher stub, and an install receipt, installed for the current user.
 
   It installs into the user profile so it never asks for administrator
   rights, which is the same shape VS Code's user installer uses. The payload
@@ -73,6 +73,16 @@
       <!-- Beside lumenc.exe, not in a sibling lib\: that is the only place lumenc looks. -->
       <Component Id="LumenFfiDll" Directory="BINFOLDER">
         <File Id="LumenFfiDll" Source="$(var.StageDir)\bin\lumen_ffi.dll" KeyPath="yes" />
+      </Component>
+
+      <!--
+        The stub `lumenc package` copies to make an app executable. It sits
+        beside lumenc.exe because that is where lumenc/src/package_cli.rs
+        looks for it, the same directory rule the library above follows.
+        Nobody runs it directly: on its own it carries no app.
+      -->
+      <Component Id="LumenLauncherExe" Directory="BINFOLDER">
+        <File Id="LumenLauncherExe" Source="$(var.StageDir)\bin\lumen-launcher.exe" KeyPath="yes" />
       </Component>
 
       <!--

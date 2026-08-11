@@ -32,6 +32,7 @@ fn minimal_artifact_ticks_headless() {
     let app = CompiledApp {
         ir: LayoutIR::default(),
         script_source: String::new(),
+        ..Default::default()
     };
     let bytes = artifact::serialize(&app).expect("serialize trivial artifact");
 

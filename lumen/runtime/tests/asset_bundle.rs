@@ -55,6 +55,7 @@ fn image_app(dir: &std::path::Path) -> Vec<u8> {
     artifact::serialize(&CompiledApp {
         ir,
         script_source: String::new(),
+        ..Default::default()
     })
     .unwrap()
 }

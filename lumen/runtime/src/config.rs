@@ -255,6 +255,20 @@ impl ScriptEngine {
             .and_then(ScriptEngine::from_extension)
     }
 
+    /// The engine an engine name selects, defaulting to
+    /// [`ScriptEngine::Candela`] for a name no host claims. The inverse of
+    /// [`Self::name`], with the same fallback [`ScriptCfg::engine_kind`] uses.
+    pub fn from_name(name: &str) -> ScriptEngine {
+        let name = name.trim();
+        if name.eq_ignore_ascii_case("lua") {
+            ScriptEngine::Lua
+        } else if name.eq_ignore_ascii_case("rhai") {
+            ScriptEngine::Rhai
+        } else {
+            ScriptEngine::Candela
+        }
+    }
+
     /// The `[script] engine` name for this engine.
     pub fn name(self) -> &'static str {
         match self {

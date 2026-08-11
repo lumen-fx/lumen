@@ -66,22 +66,72 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 ///
 /// `3`: the `translatable="<key>"` attribute adds a field to
 /// [`crate::layout_ir::Attributes`].
-pub const FORMAT_VERSION: u16 = 3;
+///
+/// `4`: [`CompiledApp::scripts`] records which engine runs each part of the
+/// app's script, so an app that ships more than one language keeps running
+/// under one host per language after compilation, and
+/// [`CompiledApp::pages`] carries a multi-page app's page set so navigation
+/// works without the page files on disk.
+pub const FORMAT_VERSION: u16 = 4;
+
+/// The navigable page set of a compiled multi-page app.
+///
+/// The tree in [`CompiledApp::ir`] already holds every page, each behind the
+/// gate that mounts it while it is the active one, exactly as a from-source
+/// load assembles it. What a compiled app still needs is the routing data:
+/// which page names exist, and which one is home. The run path reads that from
+/// here rather than by looking for `.lmn` files, which a shipped app does not
+/// carry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompiledPages {
+    /// Home page key: the page that mounts before any navigation happens, and
+    /// the fallback for a path matching no page.
+    pub entry: String,
+    /// Every navigable page key, longest first, which is the order path
+    /// resolution walks them in.
+    pub keys: Vec<String>,
+}
+
+/// One engine's whole program, as baked at build time.
+///
+/// A script file picks its engine from its own extension, so an app that
+/// mixes languages compiles to one entry per engine. The engine is stored by
+/// name (`candela`, `lua`, `rhai`) rather than as a typed enum because the
+/// enum lives in the runtime's config layer, which this crate sits below.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompiledScript {
+    /// Engine name: `candela`, `lua`, or `rhai`. A name the loading runtime
+    /// does not recognise falls back to the default engine.
+    pub engine: String,
+    /// Every source file that engine owns, concatenated in source order.
+    pub source: String,
+}
 
 /// The precompiled application: everything the runtime needs to spawn the UI
 /// without touching the markup / CSS parser.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CompiledApp {
     /// Fully-resolved layout IR: includes cascaded inline attributes plus the
     /// combined (skin + user) stylesheet on
-    /// [`LayoutIR::combined_stylesheet`], with `<image src>` asset paths
-    /// already resolved and `<include>` / `@import` directives spliced away.
+    /// [`LayoutIR::combined_stylesheet`], with `<include>` / `@import`
+    /// directives spliced away. A relative `<image src>` resolves against the
+    /// directory the artifact is run with; an absolute one is used as written.
     pub ir: LayoutIR,
     /// Combined script source (inline `<script>` body + every external
     /// `<script src="...">` file, concatenated in source order). Baked at build
     /// time so the parser-free runtime never reads `.rhai` files from disk to
     /// reconstruct the script host input. Empty when the app ships no script.
+    ///
+    /// This is the flattened form, which is what `[script] engine` runs when
+    /// an app puts every language on one host. The per-engine split in
+    /// [`Self::scripts`] is what a multi-language app runs.
     pub script_source: String,
+    /// The same program split by the engine that runs each part, in the
+    /// runtime's fixed host order. Empty when the app ships no script.
+    pub scripts: Vec<CompiledScript>,
+    /// The page set, for an app with more than one page. `None` for a
+    /// single-page app, which needs no routing at all.
+    pub pages: Option<CompiledPages>,
 }
 
 /// Errors from (de)serializing or reading/writing an artifact.
@@ -180,6 +230,14 @@ mod tests {
         CompiledApp {
             ir: LayoutIR::default(),
             script_source: "let x = 1;".to_string(),
+            scripts: vec![CompiledScript {
+                engine: "rhai".to_string(),
+                source: "let x = 1;".to_string(),
+            }],
+            pages: Some(CompiledPages {
+                entry: "index".to_string(),
+                keys: vec!["settings".to_string(), "index".to_string()],
+            }),
         }
     }
 
@@ -190,6 +248,11 @@ mod tests {
         assert_eq!(&bytes[0..4], &MAGIC);
         let back = deserialize(&bytes).expect("deserialize");
         assert_eq!(back.script_source, app.script_source);
+        assert_eq!(back.scripts.len(), 1);
+        assert_eq!(back.scripts[0].engine, "rhai");
+        let pages = back.pages.expect("the page set round-trips");
+        assert_eq!(pages.entry, "index");
+        assert_eq!(pages.keys.len(), 2);
     }
 
     #[test]

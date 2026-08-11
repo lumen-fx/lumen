@@ -88,6 +88,7 @@ fn introspection_read_side_headless() {
     let bytes = lumen_ir::artifact::serialize(&lumen_ir::artifact::CompiledApp {
         ir,
         script_source: String::new(),
+        ..Default::default()
     })
     .expect("serialize fixture artifact");
 

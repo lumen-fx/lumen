@@ -28,14 +28,14 @@
 # install anything whose download does not match. A release that has no
 # sha256sums.txt cannot be installed by this script.
 #
-# This installs the Lumen toolchain: lumenc and liblumen. There is nothing
-# else to choose - no component flag, no candela option. Candela is a
-# scripting engine linked into liblumen (the lumen-script-candela crate,
-# compiled in - see the `host-candela` feature on lumen-ffi / lumen-runtime),
-# not an external binary this installer runs or manages; a Lumen app never
-# shells out to a candela executable. Someone who wants the standalone
-# candela language outside a Lumen app installs it from candela's own
-# release channel (lumen-fx/candela), independent of this script.
+# This installs the Lumen toolchain: lumenc, liblumen, and the app launcher
+# stub. There is nothing else to choose - no component flag, no candela
+# option. Candela is a scripting engine linked into liblumen (the
+# lumen-script-candela crate, compiled in - see the `host-candela` feature on
+# lumen-ffi / lumen-runtime), not an external binary this installer runs or
+# manages; a Lumen app never shells out to a candela executable. Someone who
+# wants the standalone candela language outside a Lumen app installs it from
+# candela's own release channel (lumen-fx/candela), independent of this script.
 #
 # The asset naming below is the contract between the release process and
 # this script:
@@ -48,12 +48,13 @@
 #   sha256sums.txt            checksums covering every asset above.
 #
 # tools/release-checklist.md documents producing the asset under this
-# scheme. The archive holds the tree to install: bin/ for lumenc, and the
-# liblumen shared library right next to it in the same bin/ directory (see
-# lumenc/src/loader.rs: it only looks next to its own executable, an
-# LUMEN_LIB_DIR override, or the platform loader's default search path, not
-# a sibling lib/ directory). Every installed path is recorded in a receipt
-# under <prefix>/share/lumen, so a later run can replace an old version
+# scheme. The archive holds the tree to install: bin/ for lumenc, with the
+# liblumen shared library and the lumen-launcher app stub right next to it in
+# the same bin/ directory (see lumenc/src/loader.rs and
+# lumenc/src/package_cli.rs: both look next to the running executable, then an
+# LUMEN_LIB_DIR override, then the platform loader's default search path, and
+# never in a sibling lib/ directory). Every installed path is recorded in a
+# receipt under <prefix>/share/lumen, so a later run can replace an old version
 # exactly and --uninstall can undo it.
 #
 # The receipt also records whether the install was pinned. With --version the

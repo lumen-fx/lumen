@@ -68,6 +68,11 @@ fn dispatch(cmd: &str, args: Vec<String>) -> ExitCode {
         "screenshot" => lumenc::mcp_cli::cmd_screenshot(args),
         #[cfg(feature = "bundle")]
         "bundle" => lumenc::bundle_cli::cmd_bundle(args),
+        // `package` compiles the app in-process, so it needs the same parser +
+        // runtime `build` does, plus the release-channel fetch behind its own
+        // feature.
+        #[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "package"))]
+        "package" => lumenc::package_cli::cmd_package(args),
         "i18n" => lumenc::i18n_cli::cmd_i18n(args),
         "--help" | "-h" | "help" => {
             println!("{USAGE}");
@@ -804,6 +809,25 @@ USAGE:
                           first; --no-hooks skips them.
     lumenc run <dir> --artifact <file> [--headless] [--ticks N]
                           Run from a precompiled artifact instead of source.
+    lumenc package <app_dir> [<out_dir>] [--name N] [--target T]
+                          [--lib-dir <dir>] [--no-hooks]
+                          Assemble a folder to ship: the app executable, the
+                          Lumen runtime library where one is needed, and the
+                          app's files. The result runs on a machine with no
+                          Lumen installation. A markup app is compiled into
+                          the executable, pages and all; an SDK app is built
+                          by its own toolchain (cargo / CMake) and the folder
+                          assembled around what that produced.
+                          <out_dir> defaults to <app_dir>/dist/<name>, and
+                          --name defaults to the app directory's name.
+                          --target packages a markup app for another platform
+                          (linux-x86_64 | linux-aarch64 | macos-x86_64 |
+                          macos-aarch64 | windows-x86_64), fetching that
+                          platform's files from the release channel into a
+                          per-version cache; --lib-dir points at a directory
+                          holding them instead.
+                          Runs `lumen.toml`'s `[[hooks]]` `prebuild` entries
+                          first; --no-hooks skips them.
     lumenc bundle <app_dir> <out.lpak> [--no-hooks]
                           Pack `<app_dir>` (main.lmn / main.css / the
                           script / images / fonts) into a single
