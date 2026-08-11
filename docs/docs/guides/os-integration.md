@@ -1,8 +1,8 @@
 # OS integration
 
 Menus, a tray icon, notifications, global hotkeys, file dialogs, the clipboard,
-drag and drop, and audio. Some of these are markup, the rest are script calls
-with a callback.
+drag and drop, opening links, keeping the machine awake, and audio. Some of
+these are markup, the rest are script calls with a callback.
 
 Examples here are written in Rhai. Lua uses the same names with Lua syntax;
 candela puts them in the `lumen` namespace, so `notify(...)` becomes
@@ -71,14 +71,18 @@ on every platform:
 ```
 
 ```rhai
-fn handle_open_menu(id) { open_menu("actions"); }
+fn handle_open_menu(ev) { open_menu("actions"); }
 
-fn on_start() {
-    on("click", "open-actions-menu", "handle_open_menu");
+fn on_ready() {
+    get_by_id("open-actions-menu").on("click", Fn("handle_open_menu"));
     on("menu", "rename", "handle_menu_action");
     on("menu", "delete", "handle_menu_action");
 }
 ```
+
+Bind element events from `on_ready`, which runs once the tree is mounted;
+`on_start` runs before that, when a lookup finds nothing. Menu items are not
+elements, so they route by id with `on("menu", ...)`.
 
 `close_menu(id)` closes it; picking an item closes it for you. Items reach the
 same `on_menu` handler as the native bar. Style the panel and its rows with the
@@ -99,9 +103,24 @@ fn on_tray(id) {
 The icon is a PNG path relative to the app directory. An empty tooltip leaves
 the icon untitled. `unregister_tray(id)` removes it.
 
-Only a left click is reported, and only on macOS and Windows; on Linux the icon
-appears but its clicks do not reach the app. On GNOME the icon needs the
-AppIndicator extension to be visible at all.
+Only a left click is reported. On GNOME the icon needs the AppIndicator
+extension to be visible at all.
+
+### A tray context menu
+
+`tray_icon_menu` adds a right-click menu and the macOS template-image flag:
+
+```rhai
+tray_icon_menu("main", "icons/tray.png", "Lumen", "show:Show|-|quit:Quit", true);
+```
+
+The menu is a list of `id:Label` entries separated by `|`, where `-` is a
+separator. Picking one calls `on_menu(id)`, the same handler the menu bar uses,
+so `on("menu", "quit", "handle_quit")` routes a single item.
+
+The last argument is the macOS template flag: pass `true` for a monochrome icon
+you want recoloured for the light or dark menu bar, `false` for a full-colour
+icon. It is ignored elsewhere.
 
 ## Notifications
 
@@ -109,8 +128,30 @@ AppIndicator extension to be visible at all.
 notify("Lumen", "Export finished.");
 ```
 
-A title and a body, delivered to the desktop's notification service. There are
-no action buttons and no callback when someone clicks the toast.
+A title and a body, delivered to the desktop's notification service.
+
+For an icon, an urgency, and buttons, use `notify_ex`:
+
+```rhai
+notify_ex("export-done", "Lumen", "Export finished.",
+          "icon:document-save|urgency:critical", "open:Open|dismiss:Dismiss");
+
+fn on_notification_action(id, action_id) {
+    if id == "export-done" && action_id == "open" { /* ... */ }
+}
+```
+
+The first argument is an id you choose; it comes back on the callback. The
+fourth is a settings list of `key:value` entries separated by `|`: `icon` takes
+a themed icon name or a path, and `urgency` takes `low`, `normal`, or
+`critical`. The fifth is the buttons, in the same `id:Label|id2:Label2` shape as
+the tray menu. An empty string in either position means the defaults.
+
+Button presses report back on Linux and the BSDs. On macOS and Windows the
+buttons render but their presses do not reach the app.
+
+Set `[app] id` in `lumen.toml` so notifications are attributed to your app:
+Windows keys toasts off it and macOS treats it as the bundle id.
 
 ## Global hotkeys
 
@@ -130,6 +171,14 @@ Accelerators are written in the Electron style: `CommandOrControl+S`,
 `Alt+Space`, `F11`. Registering a name that already exists replaces it, and
 `unregister_hotkey(name)` releases it.
 
+Releasing the chord calls `on_hotkey_release(name)`, so one hotkey can drive
+push-to-talk:
+
+```rhai
+fn on_hotkey(name)         { if name == "talk" { start_capture(); } }
+fn on_hotkey_release(name) { if name == "talk" { stop_capture(); } }
+```
+
 If another application already holds a chord, the registration is skipped and
 your name stays unbound; the app keeps running. On Linux, global hotkeys need
 X11, so a pure Wayland session without XWayland has none.
@@ -140,7 +189,9 @@ Every dialog call takes a `tag` you choose, and the answer comes back on a
 callback carrying that tag:
 
 ```rhai
-fn handle_open(id) { pick_file("import"); }
+fn on_ready() { get_by_id("open").on("click", Fn("handle_open")); }
+
+fn handle_open(ev) { pick_file("import"); }
 
 fn on_file_picked(tag, path) {
     if path == "" { return; }   // cancelled
@@ -160,22 +211,69 @@ form: `on("file_picked", "import", "handle_import")`.
 Cancelling still calls back once, with an empty path, so you can clear a
 loading state.
 
-Native file dialogs do not open on macOS in a markup app; the call returns an
-empty result immediately.
-
 ## Clipboard
 
 Text copy, cut, and paste work inside text inputs with the usual keyboard
 shortcuts, with nothing for you to wire.
 
-Images have a script surface:
+For clipboard text under your own control:
+
+```rhai
+fn on_ready() {
+    get_by_id("copy").on("click", Fn("handle_copy"));
+    get_by_id("paste").on("click", Fn("handle_paste"));
+}
+
+fn handle_copy(ev) { clipboard_write("copied from Lumen"); }
+
+fn handle_paste(ev) { clipboard_read("editor"); }
+
+fn on_clipboard(tag, text) {
+    if tag == "editor" { set_text("field", text); }
+}
+```
+
+`clipboard_write(text)` is immediate. `clipboard_read(tag)` is a request: the
+clipboard lives on the OS side, so the text arrives on `on_clipboard(tag, text)`
+on the next tick. A clipboard holding no text still calls back once, with an
+empty string. `on("clipboard", "editor", "handle_paste_result")` routes one tag.
+
+Images have their own pair:
 
 ```rhai
 copy_image("shots/graph.png");        // put a PNG on the clipboard
 save_clipboard_image("shots/in.png"); // write the clipboard image to disk
 ```
 
-There is no script call for clipboard text.
+## Opening links and files
+
+Hand something to the platform's default handler:
+
+```rhai
+open_url("https://lumenfx.dev");   // default browser, or mail client for mailto:
+open_path("reports/q3.pdf");       // default application for the file type
+reveal_path("reports/q3.pdf");     // show it in Finder, Explorer, or Files
+```
+
+Paths are relative to the app directory. These calls do not report back; a
+failure logs to stderr.
+
+## Keeping the machine awake
+
+While a long job runs, hold off the screensaver and system sleep:
+
+```rhai
+fn on_ready() { get_by_id("export").on("click", Fn("start_export")); }
+
+fn start_export(ev)  { keep_awake("export", "Exporting video"); }
+
+fn on_export_done()  { allow_sleep("export"); }
+```
+
+The name pairs the two calls, so several jobs can hold their own request.
+Repeating a live name replaces its request rather than stacking a second one.
+The reason string is what the platform's power settings show. Nothing is held
+after the app exits.
 
 ## Drag and drop
 
@@ -232,9 +330,12 @@ your window into another application does not.
 One track plays at a time:
 
 ```rhai
-fn on_start() { audio_play("music/track.ogg"); }
+fn on_ready() {
+    audio_play("music/track.ogg");
+    get_by_id("pause").on("click", Fn("handle_pause"));
+}
 
-fn toggle(id) { audio_pause(); }
+fn handle_pause(ev) { audio_pause(); }
 ```
 
 The transport is `audio_play(path)`, `audio_pause()`, `audio_resume()`,

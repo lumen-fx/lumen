@@ -5,11 +5,13 @@
 //! `GApplication::send_notification` and
 //! `QSystemTrayIcon::showMessage`.
 //!
-//! Extracted from `lumenc/src/run.rs:1377-1389` (the
-//! `ScriptCommand::Notify` branch) per W6.5. The v1 surface preserves
-//! the existing fire-and-forget behaviour - the actions list and
-//! [`NotificationActionInvoked`] reader-side wiring lay the
-//! follow-up's surface down.
+//! A notification carries a title, body, optional icon, urgency, and a
+//! list of action buttons. Pressing a button emits
+//! [`NotificationActionInvoked`], which [`poll_notification_actions`]
+//! drains each tick; scripts see it as
+//! `on_notification_action(id, action_id)`. Button presses report back
+//! on freedesktop desktops only, the one backend `notify-rust` gives an
+//! activation callback for.
 //!
 //! `Action`s come from [`lumen_os_mime::Action`] so one Action drives
 //! menu items, hotkeys, tray menus, and notification buttons (the
@@ -37,6 +39,62 @@ pub enum Urgency {
     Normal,
     /// Urgent / persistent alert.
     Critical,
+}
+
+impl Urgency {
+    /// Parse the name a script passes to `notify_ex`. Unknown and empty
+    /// names resolve to [`Urgency::Normal`], so an app that leaves the
+    /// argument blank gets the default rather than a failed call.
+    pub fn from_name(name: &str) -> Self {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "low" => Urgency::Low,
+            "critical" => Urgency::Critical,
+            _ => Urgency::Normal,
+        }
+    }
+}
+
+/// Parse an action-button spec into [`Action`]s: `|`-separated
+/// `id:Label` buttons, the same shape a tray menu takes. See
+/// [`lumen_os_mime::parse_action_spec`] for the full grammar. A
+/// notification draws no separator, so the spec's `-` entry has no use
+/// here.
+pub fn parse_actions(spec: &str) -> Vec<Action> {
+    lumen_os_mime::parse_action_spec(spec)
+}
+
+/// The per-notification settings that are neither text nor buttons.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NotifyOptions {
+    /// Themed icon name or icon path.
+    pub icon: Option<String>,
+    /// Urgency hint.
+    pub urgency: Urgency,
+}
+
+/// Parse an options spec into [`NotifyOptions`].
+///
+/// Same `|`-separated `key:value` shape as the action spec. Recognised
+/// keys are `icon` and `urgency`; anything else is ignored, so a spec
+/// written against a newer runtime degrades instead of failing. An empty
+/// spec yields the defaults: no icon, normal urgency.
+///
+/// Only the value is split off, so an icon path carrying a drive letter
+/// (`icon:C:\icons\app.png`) survives intact.
+pub fn parse_options(spec: &str) -> NotifyOptions {
+    let mut out = NotifyOptions::default();
+    for entry in spec.split('|').map(str::trim).filter(|e| !e.is_empty()) {
+        let Some((key, value)) = entry.split_once(':') else {
+            continue;
+        };
+        let value = value.trim();
+        match key.trim().to_ascii_lowercase().as_str() {
+            "icon" if !value.is_empty() => out.icon = Some(value.to_string()),
+            "urgency" => out.urgency = Urgency::from_name(value),
+            _ => {}
+        }
+    }
+    out
 }
 
 impl From<Urgency> for notify_rust::Urgency {
@@ -95,19 +153,46 @@ impl From<String> for NotificationId {
 /// fired. Routed by the scripting layer as
 /// `on_notification_action(id, action_id)`.
 ///
-/// v1 doesn't actually wire backend callbacks (notify-rust's
-/// `wait_for_action` is per-handle and blocking); the type is here so
-/// downstream code can already write the handler.
-#[derive(Message, Clone, Debug)]
-pub struct NotificationActionInvoked {
-    /// Notification id (matches [`Notification::id`]).
-    pub id: String,
-    /// Action id (matches the action's [`Action::id`]).
-    pub action_id: String,
+/// Lives in `lumen-core` so the scripting layer can dispatch it
+/// without depending on this crate; re-exported here because this
+/// crate produces it.
+pub use lumen_core::input::NotificationActionInvoked;
+
+/// Process-global queue of `(notification_id, action_id)` pairs the
+/// activation waiters have observed, drained once per tick by
+/// [`poll_notification_actions`].
+fn action_queue() -> &'static std::sync::Mutex<Vec<(String, String)>> {
+    static Q: std::sync::OnceLock<std::sync::Mutex<Vec<(String, String)>>> =
+        std::sync::OnceLock::new();
+    Q.get_or_init(|| std::sync::Mutex::new(Vec::new()))
 }
 
-/// Notification-host resource. Stateless today - `send` is a pure
-/// fire-and-forget call into notify-rust. A follow-up holds live
+/// Push one observed activation. Poison recovery instead of a silent
+/// drop: the queue is a plain `Vec`, so a panicking holder leaves it
+/// perfectly usable, and swallowing the poison would lose every future
+/// action with no diagnostic.
+///
+/// Compiled where the waiter that calls it is.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn push_action(id: String, action_id: String) {
+    let mut q = action_queue().lock().unwrap_or_else(|e| e.into_inner());
+    q.push((id, action_id));
+}
+
+/// Drain the activation queue each tick and emit one
+/// [`NotificationActionInvoked`] per observed button press.
+pub fn poll_notification_actions(mut out: MessageWriter<NotificationActionInvoked>) {
+    let drained: Vec<(String, String)> = {
+        let mut q = action_queue().lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::take(&mut *q)
+    };
+    for (id, action_id) in drained {
+        out.write(NotificationActionInvoked { id, action_id });
+    }
+}
+
+/// Notification-host resource. Holds no live notification: `send`
+/// hands the spec to notify-rust and returns. A follow-up keeps
 /// `NotificationHandle`s here so `dismiss(id)` / `update(id, ...)`
 /// become possible.
 #[derive(Resource, Default, Clone)]
@@ -171,11 +256,49 @@ impl NotificationService {
                 let _ = id;
             }
         }
-        if let Err(e) = builder.show() {
-            eprintln!("lumen-os-notify: notify failed: {e}");
+        match builder.show() {
+            Ok(handle) => self.watch_actions(n, handle),
+            Err(e) => eprintln!("lumen-os-notify: notify failed: {e}"),
         }
         NotificationId::from(n.id.as_str())
     }
+
+    /// Park a waiter on the live notification so a button press reaches
+    /// the app.
+    ///
+    /// `wait_for_action` blocks until the user picks a button or the
+    /// popup expires, so it runs on its own thread; the thread ends with
+    /// the notification. Only notifications that declared buttons get a
+    /// waiter, so a plain `notify(title, body)` still costs nothing.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn watch_actions(&self, n: &Notification, handle: notify_rust::NotificationHandle) {
+        if n.actions.is_empty() {
+            return;
+        }
+        let id = n.id.clone();
+        let spawned = std::thread::Builder::new()
+            .name("lumen-os-notify/action".to_string())
+            .spawn(move || {
+                handle.wait_for_action(|action| {
+                    // The spec's synthetic "closed" / "__closed" action
+                    // fires on dismissal; forward it verbatim so a script
+                    // can tell dismissal from a real button.
+                    push_action(id, action.to_string());
+                });
+            });
+        if let Err(e) = spawned {
+            tracing::debug!("lumen-os-notify: action waiter spawn failed: {e}");
+        }
+    }
+
+    /// Activation waiting is freedesktop-only: `notify-rust` exposes no
+    /// callback for the macOS or Windows backends, so buttons render but
+    /// never report back.
+    ///
+    /// Generic over the handle because `show()` resolves to a different
+    /// success type per backend; this arm ignores whichever it gets.
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    fn watch_actions<H>(&self, _n: &Notification, _handle: H) {}
 
     /// Convenience: build + send a plain title / body notification.
     /// Matches the pre-extract `notify(title, body)` Rhai shape.
@@ -220,6 +343,64 @@ mod tests {
         assert!(n.id.is_empty());
         assert!(n.actions.is_empty());
         assert_eq!(n.urgency, Urgency::Normal);
+    }
+
+    #[test]
+    fn urgency_from_name_defaults_to_normal() {
+        assert_eq!(Urgency::from_name("low"), Urgency::Low);
+        assert_eq!(Urgency::from_name(" Critical "), Urgency::Critical);
+        assert_eq!(Urgency::from_name("normal"), Urgency::Normal);
+        // An empty or unknown name must not fail the call.
+        assert_eq!(Urgency::from_name(""), Urgency::Normal);
+        assert_eq!(Urgency::from_name("shouty"), Urgency::Normal);
+    }
+
+    #[test]
+    fn action_spec_parses_ids_and_labels() {
+        let actions = parse_actions("open:Open|dismiss:Dismiss");
+        assert_eq!(actions.len(), 2);
+        assert_eq!(&*actions[0].id, "open");
+        assert_eq!(&*actions[0].label, "Open");
+        assert_eq!(&*actions[1].id, "dismiss");
+        assert!(parse_actions("").is_empty());
+    }
+
+    #[test]
+    fn options_spec_reads_icon_and_urgency() {
+        let o = parse_options("icon:document-save|urgency:critical");
+        assert_eq!(o.icon.as_deref(), Some("document-save"));
+        assert_eq!(o.urgency, Urgency::Critical);
+    }
+
+    #[test]
+    fn options_spec_keeps_a_windows_path_intact() {
+        let o = parse_options(r"icon:C:\icons\app.png");
+        assert_eq!(o.icon.as_deref(), Some(r"C:\icons\app.png"));
+    }
+
+    #[test]
+    fn options_spec_defaults_and_ignores_unknown_keys() {
+        assert_eq!(parse_options(""), NotifyOptions::default());
+        let o = parse_options("timeout:5000|urgency:low");
+        assert!(o.icon.is_none());
+        assert_eq!(o.urgency, Urgency::Low);
+    }
+
+    #[test]
+    fn action_queue_drains_once() {
+        // Queued the way the freedesktop waiter queues, which is the only
+        // producer and is not compiled on every target.
+        action_queue()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(("n1".to_string(), "open".to_string()));
+        let drained: Vec<(String, String)> = {
+            let mut q = action_queue().lock().unwrap_or_else(|e| e.into_inner());
+            std::mem::take(&mut *q)
+        };
+        assert!(drained.contains(&("n1".to_string(), "open".to_string())));
+        let again = action_queue().lock().unwrap_or_else(|e| e.into_inner());
+        assert!(again.is_empty(), "a drained action must not repeat");
     }
 
     #[test]

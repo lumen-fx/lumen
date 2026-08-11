@@ -358,8 +358,8 @@ pub struct CapabilitiesCfg {
     /// (MCP is a dev/introspection capability, never inferred into a release
     /// bundle).
     pub mcp: Option<bool>,
-    /// Force the async (tokio) bridge into/out of the bundle. `None` = OFF (the
-    /// markup runtime never installs `AsyncTokioPlugin` itself).
+    /// Force the async (tokio) bridge into/out of the bundle. `None` = infer
+    /// from the file-dialog builtins, which resolve on that runtime.
     #[serde(rename = "async")]
     pub async_rt: Option<bool>,
     /// Force the scripts' HTTP `fetch()` builtin (ureq + rustls + ring)
@@ -407,10 +407,17 @@ impl BundleCapabilities {
             .or(cfg.runtime.audio)
             .unwrap_or_else(|| crate::run::subsystems::audio_markers_present(&hay));
 
-        // MCP + async: dev/embedder-only capabilities. Never inferred ON for a
-        // release bundle; only an explicit toggle pulls them in.
+        // MCP: a dev/introspection capability, never inferred ON for a release
+        // bundle; only an explicit toggle pulls it in.
         let mcp = cfg.capabilities.mcp.unwrap_or(false);
-        let async_rt = cfg.capabilities.async_rt.unwrap_or(false);
+
+        // Async: an app that opens dialogs must keep the capability, since
+        // that is what they resolve on. Same marker scan the runtime startup
+        // gate uses.
+        let async_rt = cfg
+            .capabilities
+            .async_rt
+            .unwrap_or_else(|| crate::run::subsystems::file_dialog_markers_present(&hay));
 
         // HTTP fetch: explicit, else infer from a `fetch(` builtin marker.
         let http_fetch = cfg
@@ -958,6 +965,19 @@ mod tests {
         let mut cfg2 = LumenToml::default();
         cfg2.capabilities.audio = Some(false);
         assert!(!BundleCapabilities::resolve(&dir, &cfg2).audio);
+
+        // A file-dialog builtin keeps the async runtime in the bundle: on
+        // macOS it is the only path that opens a dialog at all.
+        std::fs::write(dir.join("dialogs.rhai"), "fn f(){ pick_file(\"import\"); }").unwrap();
+        let caps = BundleCapabilities::resolve(&dir, &cfg);
+        assert!(caps.async_rt);
+        assert!(caps.to_features().contains(&"async".to_string()));
+
+        // Explicit [capabilities] async = false still overrides the marker.
+        let mut cfg_no_async = LumenToml::default();
+        cfg_no_async.capabilities.async_rt = Some(false);
+        assert!(!BundleCapabilities::resolve(&dir, &cfg_no_async).async_rt);
+        std::fs::remove_file(dir.join("dialogs.rhai")).unwrap();
 
         // A .lua file alongside the .rhai one needs both hosts compiled in.
         std::fs::write(dir.join("logic.lua"), "-- lua").unwrap();

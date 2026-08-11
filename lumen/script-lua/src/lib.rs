@@ -2221,6 +2221,20 @@ fn build_lua(
 
     // -- OS surface (all thin enqueues) --------------------------------
     enqueue!("notify", (title: String, body: String), ScriptCommand::Notify { title, body });
+    enqueue!("notify_ex", (id: String, title: String, body: String, options: String, actions: String), ScriptCommand::NotifyEx {
+        id,
+        title,
+        body,
+        options,
+        actions,
+    });
+    enqueue!("clipboard_write", (text: String), ScriptCommand::ClipboardWrite { text });
+    enqueue!("clipboard_read", (tag: String), ScriptCommand::ClipboardRead { tag });
+    enqueue!("open_url", (url: String), ScriptCommand::OpenUrl { url });
+    enqueue!("open_path", (path: String), ScriptCommand::OpenPath { path });
+    enqueue!("reveal_path", (path: String), ScriptCommand::RevealPath { path });
+    enqueue!("keep_awake", (name: String, reason: String), ScriptCommand::KeepAwake { name, reason });
+    enqueue!("allow_sleep", (name: String), ScriptCommand::AllowSleep { name });
     enqueue!("copy_image", (path: String), ScriptCommand::CopyImageToClipboard { path });
     enqueue!("save_clipboard_image", (path: String), ScriptCommand::SaveClipboardImage { path });
     enqueue!("tray_icon", (id: String, icon_path: String, tooltip: String), ScriptCommand::RegisterTrayIcon {
@@ -2231,6 +2245,19 @@ fn build_lua(
         } else {
             Some(tooltip)
         },
+        menu: String::new(),
+        template: false,
+    });
+    enqueue!("tray_icon_menu", (id: String, icon_path: String, tooltip: String, menu: String, template: bool), ScriptCommand::RegisterTrayIcon {
+        id,
+        icon_path,
+        tooltip: if tooltip.is_empty() {
+            None
+        } else {
+            Some(tooltip)
+        },
+        menu,
+        template,
     });
     enqueue!("unregister_tray", (id: String), ScriptCommand::UnregisterTrayIcon { id });
     enqueue!("open_menu", (id: String), ScriptCommand::SetSignal {

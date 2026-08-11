@@ -22,10 +22,15 @@ use lumen_input::InputPlugin;
 use lumen_layout_taffy::TaffyLayoutPlugin;
 #[cfg(feature = "mcp")]
 use lumen_mcp::LumenMcpPlugin;
+use lumen_os_clipboard::ClipboardHost;
 use lumen_os_filedialog::{FileDialogKind, FileDialogRequest, FileDialogService};
 use lumen_os_hotkey::HotkeyRegistry as OsHotkeyRegistry;
+use lumen_os_launcher::Launcher;
 use lumen_os_notify::NotificationService;
-use lumen_os_tray::{TrayConfig as OsTrayConfig, TrayService as OsTrayService};
+use lumen_os_power::InhibitHolder;
+use lumen_os_tray::{
+    TrayConfig as OsTrayConfig, TrayMenu as OsTrayMenu, TrayService as OsTrayService,
+};
 use lumen_primitives::{
     CheckboxPlugin, ControlsPlugin, DragPlugin, HoverTintPlugin, PressPlugin, ProgressPlugin,
     RadioPlugin, ScrollPlugin, TabsPlugin, TooltipPlugin, TransitionPlugin, ValidationPlugin,

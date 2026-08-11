@@ -29,6 +29,11 @@ pub use lumen_os_mime::Action;
 /// emitted for the left / Trigger activation reason.
 pub use lumen_core::input::TrayClicked;
 
+/// Emitted when the user picks an item from a tray icon's context menu.
+/// Shared with the menu-bar host so one `on_menu(id)` handler covers
+/// both surfaces.
+pub use lumen_core::input::MenuClicked;
+
 /// One tray entry: id, icon path, optional tooltip, optional menu.
 ///
 /// Mirrors `QSystemTrayIcon::{setIcon, setToolTip, setContextMenu}`.
@@ -59,9 +64,8 @@ pub struct TrayConfig {
 /// follow-up if needed.
 #[derive(Clone, Debug, Default)]
 pub struct TrayMenu {
-    /// Top-level actions in source order. Separators are encoded as an
-    /// [`Action`] with id `"separator"` (matching the `lumen-os-menu`
-    /// convention so a single Action vocabulary works everywhere).
+    /// Top-level actions in source order. A separator is an [`Action`]
+    /// carrying [`SEPARATOR_ID`].
     pub items: Vec<Action>,
 }
 
@@ -70,7 +74,20 @@ impl TrayMenu {
     pub fn new(items: Vec<Action>) -> Self {
         Self { items }
     }
+
+    /// Parse a menu spec into a [`TrayMenu`]: `|`-separated `id:Label`
+    /// entries, where `-` is a separator. See
+    /// [`lumen_os_mime::parse_action_spec`] for the full grammar.
+    pub fn parse(spec: &str) -> Self {
+        Self {
+            items: lumen_os_mime::parse_action_spec(spec),
+        }
+    }
 }
+
+/// Action id reserved for a menu separator, shared with every other
+/// Action surface.
+pub use lumen_os_mime::SEPARATOR_ID;
 
 /// Tray-host resource. Holds the live `tray_icon::TrayIcon` (Windows / macOS) or `ksni::Handle`
 /// (Linux). `NonSend` because the platform crates own a per-thread receiver on macOS.
@@ -164,6 +181,10 @@ impl TrayService {
         let attrs = tray_icon::TrayIconAttributes {
             icon: Some(icon),
             tooltip: cfg.tooltip.clone(),
+            menu: cfg.menu.as_ref().map(build_muda_menu),
+            // macOS-only: recolour a monochrome icon for the active
+            // menu-bar theme. Ignored on Windows.
+            icon_is_template: cfg.template,
             ..Default::default()
         };
         let tray = match tray_icon::TrayIcon::with_id(&cfg.id, attrs) {
@@ -198,7 +219,10 @@ impl TrayService {
         for chunk in argb.chunks_exact_mut(4) {
             chunk.rotate_right(1);
         }
-        let handle = linux::register(cfg.id.clone(), cfg.tooltip.clone(), w, h, argb);
+        // `template` is a macOS menu-bar concept with no StatusNotifierItem
+        // equivalent, so Linux carries the icon as given.
+        let menu = cfg.menu.clone().unwrap_or_default();
+        let handle = linux::register(cfg.id.clone(), cfg.tooltip.clone(), w, h, argb, menu);
         self.linux_handles.insert(cfg.id.clone(), handle);
     }
 
@@ -212,40 +236,71 @@ impl TrayService {
     }
 }
 
-/// Drain the global tray-icon channel each tick and re-emit
-/// matching clicks as [`TrayClicked`] messages. Mirrors the previous
-/// `poll_tray_events` system from `lumenc/src/run.rs:1505`.
+/// Build the `muda` context menu backing a [`TrayMenu`].
 ///
-/// Backwards-compatible: only the left-click / Trigger reason is
-/// surfaced today so widget-garden's `on_tray(id)` continues to work
-/// unchanged. The audit calls for splitting into left / right /
-/// double / middle in a follow-up - the Action-routed `TrayMenu`
-/// already lays the surface down.
+/// Menu activations land on muda's process-global event channel, which
+/// `lumen-os-menu` already drains into [`MenuClicked`], so a tray item
+/// and a menu-bar item reach the same `on_menu(id)` handler.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-pub fn poll_tray_events(mut out: MessageWriter<TrayClicked>) {
+fn build_muda_menu(menu: &TrayMenu) -> Box<dyn tray_icon::menu::ContextMenu> {
+    use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
+    let built = Menu::new();
+    for action in &menu.items {
+        let appended = if &*action.id == SEPARATOR_ID {
+            built.append(&PredefinedMenuItem::separator())
+        } else {
+            built.append(&MenuItem::with_id(
+                action.id.as_ref(),
+                action.label.as_ref(),
+                true,
+                None,
+            ))
+        };
+        if let Err(e) = appended {
+            eprintln!("lumen-os-tray: menu item '{}': {e}", action.id);
+        }
+    }
+    Box::new(built)
+}
+
+/// Drain the tray icon channel each tick: an activation becomes a
+/// [`TrayClicked`].
+///
+/// Only the left-click / Trigger reason is surfaced today, so an
+/// existing `on_tray(id)` handler keeps working unchanged. Splitting
+/// into left / right / double / middle is a follow-up; the
+/// Action-routed [`TrayMenu`] already lays that surface down.
+///
+/// Context-menu picks need no work here: `muda` publishes them on a
+/// process-global channel the window backend drains into [`MenuClicked`]
+/// every tick, the same one the menu bar uses.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub fn poll_tray_events(mut clicks: MessageWriter<TrayClicked>) {
     while let Ok(ev) = tray_icon::TrayIconEvent::receiver().try_recv() {
         if let tray_icon::TrayIconEvent::Click { id, .. } = ev {
-            out.write(TrayClicked { id: id.0 });
+            clicks.write(TrayClicked { id: id.0 });
         }
     }
 }
 
-/// Linux click-poll: drains the ksni click channel and emits [`TrayClicked`]
-/// messages.
-///
-/// The runtime does not schedule this system on Linux, so a tray click there
-/// does not reach the app; an embedder that wants it must add the system
-/// itself.
+/// Linux poll: drains the ksni activation and menu queues. `ksni` has no
+/// shared channel with the menu bar, so the menu half is drained here.
 #[cfg(target_os = "linux")]
-pub fn poll_tray_events(mut out: MessageWriter<TrayClicked>) {
+pub fn poll_tray_events(
+    mut clicks: MessageWriter<TrayClicked>,
+    mut menus: MessageWriter<MenuClicked>,
+) {
     while let Some(id) = linux::pop_click() {
-        out.write(TrayClicked { id });
+        clicks.write(TrayClicked { id });
+    }
+    while let Some(id) = linux::pop_menu_click() {
+        menus.write(MenuClicked { id });
     }
 }
 
-/// No-op stub on non-tray-icon targets.
+/// No-op stub on targets with no tray backend.
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-pub fn poll_tray_events(_out: MessageWriter<TrayClicked>) {}
+pub fn poll_tray_events(_clicks: MessageWriter<TrayClicked>) {}
 
 #[cfg(target_os = "linux")]
 mod linux {
@@ -263,12 +318,17 @@ mod linux {
         Q.get_or_init(|| Mutex::new(Vec::new()))
     }
 
-    pub fn pop_click() -> Option<String> {
-        // Recover from a poisoned lock instead of returning `None` forever:
-        // the queue is a plain `Vec<String>`, so a panic in another holder
-        // leaves it in a perfectly usable state. Swallowing poison here
-        // would silently drop every future tray click with no diagnostic.
-        let mut g = click_queue().lock().unwrap_or_else(|e| e.into_inner());
+    fn menu_queue() -> &'static Mutex<Vec<String>> {
+        static Q: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+        Q.get_or_init(|| Mutex::new(Vec::new()))
+    }
+
+    /// Pop one queued value, recovering from a poisoned lock instead of
+    /// returning `None` forever: the queue is a plain `Vec<String>`, so a
+    /// panic in another holder leaves it perfectly usable, and swallowing
+    /// the poison would drop every future click with no diagnostic.
+    fn pop(queue: &Mutex<Vec<String>>) -> Option<String> {
+        let mut g = queue.lock().unwrap_or_else(|e| e.into_inner());
         if g.is_empty() {
             None
         } else {
@@ -276,10 +336,21 @@ mod linux {
         }
     }
 
-    fn push_click(id: String) {
-        // Same poison-recovery rationale as `pop_click`.
-        let mut g = click_queue().lock().unwrap_or_else(|e| e.into_inner());
+    fn push(queue: &Mutex<Vec<String>>, id: String) {
+        let mut g = queue.lock().unwrap_or_else(|e| e.into_inner());
         g.push(id);
+    }
+
+    pub fn pop_click() -> Option<String> {
+        pop(click_queue())
+    }
+
+    pub fn pop_menu_click() -> Option<String> {
+        pop(menu_queue())
+    }
+
+    fn push_click(id: String) {
+        push(click_queue(), id);
     }
 
     /// The `ksni::Tray` impl backing one Lumen tray entry.
@@ -289,6 +360,7 @@ mod linux {
         pub width: i32,
         pub height: i32,
         pub argb: Vec<u8>,
+        pub menu: super::TrayMenu,
     }
 
     impl ksni::Tray for LumenTray {
@@ -318,6 +390,27 @@ mod linux {
         fn activate(&mut self, _x: i32, _y: i32) {
             push_click(self.id.clone());
         }
+
+        fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
+            self.menu
+                .items
+                .iter()
+                .map(|action| {
+                    if &*action.id == super::SEPARATOR_ID {
+                        return ksni::MenuItem::Separator;
+                    }
+                    let action_id = action.id.to_string();
+                    ksni::menu::StandardItem {
+                        label: action.label.to_string(),
+                        activate: Box::new(move |_: &mut Self| {
+                            push(menu_queue(), action_id.clone());
+                        }),
+                        ..Default::default()
+                    }
+                    .into()
+                })
+                .collect()
+        }
     }
 
     pub fn register(
@@ -326,6 +419,7 @@ mod linux {
         width: i32,
         height: i32,
         argb: Vec<u8>,
+        menu: super::TrayMenu,
     ) -> Option<ksni::blocking::Handle<LumenTray>> {
         let tray = LumenTray {
             id: id.clone(),
@@ -333,6 +427,7 @@ mod linux {
             width,
             height,
             argb,
+            menu,
         };
         // Use the blocking variant - Lumen's tick is serial and ksni's own runtime drives the SNI loop
         // on a background thread regardless of which spawn variant we call.
@@ -370,6 +465,17 @@ mod tests {
         ]);
         assert_eq!(m.items.len(), 2);
         assert_eq!(&*m.items[0].id, "file.open");
+    }
+
+    #[test]
+    fn menu_spec_parses_ids_labels_and_separators() {
+        let m = TrayMenu::parse("open:Open|-|quit:Quit");
+        assert_eq!(m.items.len(), 3);
+        assert_eq!(&*m.items[0].id, "open");
+        assert_eq!(&*m.items[0].label, "Open");
+        assert_eq!(&*m.items[1].id, SEPARATOR_ID);
+        assert_eq!(&*m.items[2].id, "quit");
+        assert!(TrayMenu::parse("").items.is_empty());
     }
 
     #[test]

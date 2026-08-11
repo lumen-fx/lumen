@@ -98,15 +98,16 @@ control.
 
 ## hotkeys
 
-Native shell showcase: OS-global hotkeys, a tray icon, and desktop
-notifications, with an in-app event log.
+Native shell showcase: OS-global hotkeys, a tray icon with a context menu, and
+desktop notifications carrying a button, with an in-app event log.
 
 Shows the integrations that reach outside the window. Hotkeys are registered by
 accelerator string and fire while another app has focus; a toggle registers and
-unregisters them live. The log keeps everything observable where a shell
-surface is unavailable, which matters because these features vary by platform;
-see the [OS integration guide](../guides/os-integration.md) for what each one
-supports where.
+unregisters them live, and press and release are separate handlers. The log
+keeps everything observable where a shell surface is unavailable, which matters
+because these features vary by platform; see the
+[OS integration guide](../guides/os-integration.md) for what each one supports
+where.
 
 ## Next
 

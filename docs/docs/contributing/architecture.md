@@ -92,7 +92,7 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
 - **lumen-os-launcher**: opening URLs, paths, and file-manager reveals.
 - **lumen-os-power**: screen-saver and sleep inhibition.
 - **lumen-os-lifecycle**: single-instance enforcement, autostart, and recent
-  files.
+  files. A Rust-only surface: no script builtin or config key reaches it yet.
 
 ### Assembly and tooling
 

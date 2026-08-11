@@ -359,6 +359,13 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
                 dnd::dispatch_drag_start_to_script::<H>,
                 dispatch_file_picks_to_script::<H>,
                 dispatch_hotkeys_to_script::<H>,
+                // Ordered after the press so a chord pressed and released
+                // inside one tick reaches the script in that order; both
+                // take `ResMut<H>`, so without the edge the schedule is
+                // free to run the release first.
+                dispatch_hotkey_releases_to_script::<H>.after(dispatch_hotkeys_to_script::<H>),
+                dispatch_notification_actions_to_script::<H>,
+                dispatch_clipboard_reads_to_script::<H>,
                 dispatch_menu_clicks_to_script::<H>,
                 dispatch_dialog_closes_to_script::<H>,
                 dispatch_tray_clicks_to_script::<H>,
@@ -1384,6 +1391,77 @@ pub fn dispatch_hotkeys_to_script<H: ScriptHost + Resource<Mutability = Mutable>
     for ev in events.read() {
         if let Err(e) = route_event(&mut *host, "hotkey", "on_hotkey", &ev.name, &mut out) {
             eprintln!("{}: on_hotkey failed: {e}", prefix(host.lang()));
+        }
+    }
+}
+
+/// Forward [`lumen_core::input::HotkeyReleased`] to the script as
+/// `on_hotkey_release(name)`, with the per-id
+/// `on("hotkey_release", name, fn)` router applying first. Paired with
+/// [`dispatch_hotkeys_to_script`] so one chord drives push-to-talk.
+pub fn dispatch_hotkey_releases_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
+    mut host: ResMut<H>,
+    mut events: MessageReader<lumen_core::input::HotkeyReleased>,
+    mut out: MessageWriter<ScriptCommandEvent>,
+) {
+    for ev in events.read() {
+        if let Err(e) = route_event(
+            &mut *host,
+            "hotkey_release",
+            "on_hotkey_release",
+            &ev.name,
+            &mut out,
+        ) {
+            eprintln!("{}: on_hotkey_release failed: {e}", prefix(host.lang()));
+        }
+    }
+}
+
+/// Forward [`lumen_core::input::NotificationActionInvoked`] to the
+/// script as `on_notification_action(id, action_id)`, with the per-id
+/// `on("notification_action", id, fn)` router applying first.
+pub fn dispatch_notification_actions_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
+    mut host: ResMut<H>,
+    mut events: MessageReader<lumen_core::input::NotificationActionInvoked>,
+    mut out: MessageWriter<ScriptCommandEvent>,
+) {
+    for ev in events.read() {
+        if let Err(e) = route_event_two_args(
+            &mut *host,
+            "notification_action",
+            "on_notification_action",
+            &ev.id,
+            &ev.action_id,
+            &mut out,
+        ) {
+            eprintln!(
+                "{}: on_notification_action failed: {e}",
+                prefix(host.lang())
+            );
+        }
+    }
+}
+
+/// Forward [`lumen_core::input::ClipboardRead`] results to the script as
+/// `on_clipboard(tag, text)`, with the per-tag
+/// `on("clipboard", tag, fn)` router applying first. A clipboard holding
+/// no text still fires once, with an empty string, so a script can clear
+/// a pending state.
+pub fn dispatch_clipboard_reads_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
+    mut host: ResMut<H>,
+    mut events: MessageReader<lumen_core::input::ClipboardRead>,
+    mut out: MessageWriter<ScriptCommandEvent>,
+) {
+    for ev in events.read() {
+        if let Err(e) = route_event_two_args(
+            &mut *host,
+            "clipboard",
+            "on_clipboard",
+            &ev.tag,
+            &ev.text,
+            &mut out,
+        ) {
+            eprintln!("{}: on_clipboard failed: {e}", prefix(host.lang()));
         }
     }
 }

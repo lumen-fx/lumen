@@ -234,6 +234,55 @@ impl PowerInhibitor {
     }
 }
 
+/// Name-keyed holder for live inhibits.
+///
+/// [`InhibitToken`] is RAII, which suits a Rust caller and suits a
+/// script badly: a script has nowhere to park the token. This holder
+/// keeps tokens in a map, so a script says `keep_awake("export", "...")`
+/// and later `allow_sleep("export")` - the paired shape
+/// `register_hotkey` / `unregister_hotkey` already uses.
+///
+/// Starting a name that is already live replaces its token, so repeated
+/// calls are idempotent rather than stacking a second inhibit.
+#[derive(Default)]
+pub struct InhibitHolder {
+    inhibitor: PowerInhibitor,
+    live: std::collections::HashMap<String, InhibitToken>,
+}
+
+impl InhibitHolder {
+    /// Empty holder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Configure the app name advertised to the screensaver daemon.
+    pub fn with_app_name(mut self, name: impl Into<String>) -> Self {
+        self.inhibitor = self.inhibitor.with_app_name(name);
+        self
+    }
+
+    /// Start (or restart) the inhibit registered under `name`.
+    pub fn start(&mut self, name: &str, reason: &str, kinds: InhibitKinds) {
+        // Drop the previous token before acquiring the replacement, or both
+        // are live across the gap and the daemon counts two inhibits.
+        self.live.remove(name);
+        let token = self.inhibitor.start(reason, kinds);
+        self.live.insert(name.to_string(), token);
+    }
+
+    /// Release the inhibit registered under `name`. No-op when `name` was
+    /// never started.
+    pub fn stop(&mut self, name: &str) {
+        self.live.remove(name);
+    }
+
+    /// True when `name` currently holds an inhibit.
+    pub fn is_live(&self, name: &str) -> bool {
+        self.live.contains_key(name)
+    }
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
     //! D-Bus `org.freedesktop.ScreenSaver` backend. Blocking - the daemon RPC completes in microseconds and
@@ -449,6 +498,26 @@ mod tests {
         assert!(k.contains(InhibitKinds::DISPLAY));
         assert!(k.contains(InhibitKinds::SUSPEND));
         assert!(!k.contains(InhibitKinds::LOGOUT));
+    }
+
+    #[test]
+    fn holder_starts_stops_by_name() {
+        let mut h = InhibitHolder::new();
+        h.start("export", "rendering a video", InhibitKinds::SUSPEND);
+        assert!(h.is_live("export"));
+        h.stop("export");
+        assert!(!h.is_live("export"));
+        // Stopping an unknown name is a no-op, not a panic.
+        h.stop("never-started");
+    }
+
+    #[test]
+    fn holder_restart_replaces_rather_than_stacks() {
+        let mut h = InhibitHolder::new();
+        h.start("export", "first", InhibitKinds::DISPLAY);
+        h.start("export", "second", InhibitKinds::DISPLAY);
+        assert!(h.is_live("export"));
+        assert_eq!(h.inhibitor.live_count(), 1);
     }
 
     #[test]

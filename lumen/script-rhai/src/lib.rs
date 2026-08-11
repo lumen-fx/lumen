@@ -1858,6 +1858,77 @@ impl RhaiHost {
             }
         );
 
+        // notify_ex(id, title, body, options, actions) - the same
+        // notification with an icon, an urgency, and buttons. `options`
+        // is `"icon:name-or-path|urgency:critical"` and `actions` is
+        // `"id:Label|id2:Label2"`; pressing one fires
+        // `on_notification_action(id, action_id)`. Empty strings mean
+        // "defaults" and "no buttons".
+        enqueue!(
+            "notify_ex",
+            |id: rhai::ImmutableString,
+             title: rhai::ImmutableString,
+             body: rhai::ImmutableString,
+             options: rhai::ImmutableString,
+             actions: rhai::ImmutableString| ScriptCommand::NotifyEx {
+                id: id.to_string(),
+                title: title.to_string(),
+                body: body.to_string(),
+                options: options.to_string(),
+                actions: actions.to_string(),
+            }
+        );
+
+        // clipboard_write(text) / clipboard_read(tag) - system clipboard
+        // text. The read is answered next tick by `on_clipboard(tag, text)`
+        // because the clipboard lives on the main thread's OS handle, not
+        // in the script engine.
+        enqueue!("clipboard_write", |text: rhai::ImmutableString| {
+            ScriptCommand::ClipboardWrite {
+                text: text.to_string(),
+            }
+        });
+        enqueue!("clipboard_read", |tag: rhai::ImmutableString| {
+            ScriptCommand::ClipboardRead {
+                tag: tag.to_string(),
+            }
+        });
+
+        // open_url(url) / open_path(path) / reveal_path(path) - hand a
+        // URL or file to the platform's default handler, or show a file
+        // in the file manager. Paths resolve relative to the app dir.
+        enqueue!("open_url", |url: rhai::ImmutableString| {
+            ScriptCommand::OpenUrl {
+                url: url.to_string(),
+            }
+        });
+        enqueue!("open_path", |path: rhai::ImmutableString| {
+            ScriptCommand::OpenPath {
+                path: path.to_string(),
+            }
+        });
+        enqueue!("reveal_path", |path: rhai::ImmutableString| {
+            ScriptCommand::RevealPath {
+                path: path.to_string(),
+            }
+        });
+
+        // keep_awake(name, reason) / allow_sleep(name) - hold off the
+        // screensaver and system sleep. Paired by name, like
+        // register_hotkey / unregister_hotkey.
+        enqueue!(
+            "keep_awake",
+            |name: rhai::ImmutableString, reason: rhai::ImmutableString| ScriptCommand::KeepAwake {
+                name: name.to_string(),
+                reason: reason.to_string(),
+            }
+        );
+        enqueue!("allow_sleep", |name: rhai::ImmutableString| {
+            ScriptCommand::AllowSleep {
+                name: name.to_string(),
+            }
+        });
+
         // `copy_image(path)` enqueues a `CopyImageToClipboard` command. Paths resolve relative to the app directory at runtime.
         enqueue!("copy_image", |path: rhai::ImmutableString| {
             ScriptCommand::CopyImageToClipboard {
@@ -1885,6 +1956,31 @@ impl RhaiHost {
                 } else {
                     Some(tooltip.to_string())
                 },
+                menu: String::new(),
+                template: false,
+            }
+        );
+
+        // `tray_icon_menu(id, icon_path, tooltip, menu, template)` adds a
+        // context menu and the macOS template-image flag. `menu` is
+        // `"id:Label|-|id2:Label2"` where `-` is a separator; picking an
+        // item fires `on_menu(id)`.
+        enqueue!(
+            "tray_icon_menu",
+            |id: rhai::ImmutableString,
+             icon_path: rhai::ImmutableString,
+             tooltip: rhai::ImmutableString,
+             menu: rhai::ImmutableString,
+             template: bool| ScriptCommand::RegisterTrayIcon {
+                id: id.to_string(),
+                icon_path: icon_path.to_string(),
+                tooltip: if tooltip.is_empty() {
+                    None
+                } else {
+                    Some(tooltip.to_string())
+                },
+                menu: menu.to_string(),
+                template,
             }
         );
 

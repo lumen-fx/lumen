@@ -239,6 +239,65 @@ pub enum ScriptCommand {
         /// Body text.
         body: String,
     },
+    /// Show a native desktop notification carrying an icon, an urgency,
+    /// and action buttons. Pressing a button fires
+    /// `on_notification_action(id, action_id)`.
+    NotifyEx {
+        /// Stable id echoed back in `on_notification_action`.
+        id: String,
+        /// Notification summary / title.
+        title: String,
+        /// Body text.
+        body: String,
+        /// Settings as `"icon:name-or-path|urgency:critical"`. Unknown
+        /// keys are ignored; empty means no icon and normal urgency.
+        options: String,
+        /// Buttons as `"id:Label|id2:Label2"`. Empty means no buttons.
+        actions: String,
+    },
+    /// Put `text` on the system clipboard.
+    ClipboardWrite {
+        /// Text to copy.
+        text: String,
+    },
+    /// Request the system clipboard's text. The runtime reads it and
+    /// fires `on_clipboard(tag, text)`.
+    ClipboardRead {
+        /// Identifier the script gets back in the event handler.
+        tag: String,
+    },
+    /// Open a URL with the user's default handler (browser, mail client).
+    OpenUrl {
+        /// Absolute URL, including its scheme.
+        url: String,
+    },
+    /// Open a filesystem path with the platform's default application.
+    /// Relative paths resolve against the app directory.
+    OpenPath {
+        /// Path to open.
+        path: String,
+    },
+    /// Show a file in the platform's file manager. Relative paths resolve
+    /// against the app directory.
+    RevealPath {
+        /// Path to reveal.
+        path: String,
+    },
+    /// Hold off the screensaver and system sleep under `name` until a
+    /// matching [`ScriptCommand::AllowSleep`]. Repeating a live name
+    /// replaces its request rather than stacking a second one.
+    KeepAwake {
+        /// Identifier used to release the request later.
+        name: String,
+        /// Human-readable reason shown by the platform's power settings.
+        reason: String,
+    },
+    /// Release the sleep inhibit registered under `name`. No-op when the
+    /// name is unknown.
+    AllowSleep {
+        /// Identifier matching the previous `KeepAwake` call.
+        name: String,
+    },
     /// Reads the PNG at `path` and writes its pixels to the system clipboard.
     /// `path` is resolved relative to the app directory by the runtime handler.
     CopyImageToClipboard {
@@ -250,14 +309,21 @@ pub enum ScriptCommand {
         /// Destination PNG path.
         path: String,
     },
-    /// Registers or replaces a system tray icon. The icon appears on macOS, Windows and Linux; clicks reach the app on macOS and Windows only. `icon_path` resolves relative to the app dir.
+    /// Registers or replaces a system tray icon on macOS, Windows, and
+    /// Linux. `icon_path` resolves relative to the app dir.
     RegisterTrayIcon {
-        /// Stable id; clicks fire `on_tray(id)` on macOS and Windows.
+        /// Stable id; clicks fire `on_tray(id)`.
         id: String,
         /// Path to a PNG icon.
         icon_path: String,
         /// Optional hover tooltip.
         tooltip: Option<String>,
+        /// Context-menu items as `"id:Label|-|id2:Label2"`, where `-` is a
+        /// separator. Picking one fires `on_menu(id)`. Empty means no menu.
+        menu: String,
+        /// macOS template-image flag: treat a monochrome icon as a
+        /// template and recolour it for the active menu-bar theme.
+        template: bool,
     },
     /// Drops a previously-registered tray icon by id.
     UnregisterTrayIcon {

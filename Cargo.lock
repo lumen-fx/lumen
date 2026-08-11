@@ -3587,6 +3587,7 @@ dependencies = [
  "lumen-core",
  "lumen-os-mime",
  "notify-rust",
+ "tracing",
 ]
 
 [[package]]
@@ -3680,7 +3681,9 @@ dependencies = [
  "lumen-os-dnd",
  "lumen-os-filedialog",
  "lumen-os-hotkey",
+ "lumen-os-launcher",
  "lumen-os-notify",
+ "lumen-os-power",
  "lumen-os-tray",
  "lumen-primitives",
  "lumen-render-wgpu",
@@ -3844,6 +3847,7 @@ dependencies = [
  "lumen-ir",
  "lumen-mcp",
  "lumen-os-dnd",
+ "lumen-os-tray",
  "lumen-primitives",
  "lumen-render-wgpu",
  "lumen-runtime",
