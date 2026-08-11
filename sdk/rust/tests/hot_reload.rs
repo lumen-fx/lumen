@@ -15,9 +15,9 @@
 //! `LUMEN_HOT_RELOAD_POLL=1` selects the deterministic mtime-diff driver so the
 //! test doesn't ride on cross-platform fs-event timing.
 
-use lumen::components::TextContent;
-use lumen::ecs_app::App as EcsApp;
-use lumen::runtime::RunOptions;
+use lumenui::components::TextContent;
+use lumenui::ecs_app::App as EcsApp;
+use lumenui::runtime::RunOptions;
 // `build_headless_app` via the compiler wrapper so the injected parser is
 // wired (the bare `lumen_runtime` entry links no parser and would return
 // `ParserDisabled` on a from-source load).

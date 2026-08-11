@@ -1,0 +1,210 @@
+[package]
+name = "lumenc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen markup compiler + runner: parse main.lmn / main.css, spawn ECS, run."
+
+[lib]
+name = "lumenc"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lumenc"
+path = "src/main.rs"
+# The CLI binary compiles source in-process, so it needs the parser
+# (`runtime-parse`). A default build additionally has `dev-run` (static
+# runtime, full in-process run + state-preserving hot-reload) and `bundle`; the
+# thin link-not-embed launcher drops both and instead dlopens liblumen over the
+# C-ABI (`--no-default-features --features "runtime-parse,dlopen-run"`). The
+# subcommand arms in `main.rs` are cfg-gated on their features, so the binary
+# builds in either shape. A pure thin-LIBRARY build
+# (`--no-default-features --features runtime-parse`, used by lumen-lsp) still
+# skips the binary target only if `runtime-parse` is off; lumen-lsp links the
+# library, not the binary.
+required-features = ["runtime-parse"]
+
+[dependencies]
+lumen-core = { path = "../core" }
+# Runtime-shared IR (LayoutIR, CSS AST + Cascade-5 application, value parsers,
+# `var()` resolver, AOT artifact). Extracted from lumenc; the modules are
+# re-exported from `lumenc::lib` so historical `lumenc::...` paths stay valid.
+lumen-ir = { path = "../ir" }
+# The runtime core (run loop, plugin stack, hot reload, config, pages, spawn,
+# app-kind, skins, profiler) plus every heavy backend it drags in
+# (wgpu / vello / winit / cosmic-text / taffy / rodio / mlua / the script
+# hosts). OPTIONAL and pulled in only by the default-on `dev-run` feature so
+# the compiler LIBRARY built `--no-default-features` (which is what
+# `lumen-lsp` links) stays thin. The `lumenc` BINARY keeps it for the CLI
+# `run` / `build` / `check` / `mcp` dev paths and injects its own parser
+# front-end via `LumencParser` (SourceParser).
+lumen-runtime = { path = "../runtime", optional = true, default-features = false }
+# `.lpak` archive packer for `lumenc bundle` (bundle_cli). OPTIONAL behind the
+# default-on `bundle` feature: lumen-assets carries a hard `vello` dependency
+# for its runtime GPU-upload path, so a thin compiler library
+# (`--no-default-features`, as `lumen-lsp` links) drops it - and vello/wgpu with
+# it - while the `lumenc` binary keeps the `bundle` subcommand.
+lumen-assets = { path = "../assets", optional = true }
+bevy_ecs.workspace = true
+glam.workspace = true
+# Markup (`.lmn`) XML parser. Optional + gated behind the default-on
+# `runtime-parse` feature: a runtime that only loads a precompiled AOT
+# artifact (`lumenc build`) drops roxmltree and the whole `parser_html`
+# stack entirely. See [features] below.
+roxmltree = { version = "0.21", optional = true }
+thiserror.workspace = true
+cssparser.workspace = true
+# Compact binary codec for the AOT artifact. Always compiled: both the
+# `build` (serialize) and the parser-free runtime (deserialize) paths use it.
+bincode.workspace = true
+# Widget tag registry - parser_html consults
+# `lumen_widget::is_widget_tag_registered` to accept `#[derive(Widget)]`
+# custom tags after the built-in KNOWN_TAGS miss.
+lumen-widget = { path = "../widget" }
+
+# `lumenc package --target <another platform>`: fetch that platform's
+# toolchain files from the release channel, check them against the release's
+# published checksums, and read the two files needed out of the archive.
+# OPTIONAL behind the default-on `package` feature, so a thin compiler library
+# carries none of it.
+ureq = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+tar = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
+zip = { workspace = true, optional = true }
+
+# Script host engine handle, named ONLY in the `dev-run`-gated `run_with`
+# wrapper signature (`rhai::Engine`). Optional, pulled under `dev-run`.
+rhai = { workspace = true, optional = true }
+# Named ONLY in the `dev-run`-gated `build_headless_app` return type
+# (`lumen_window_winit::WinitOptions`). Optional, pulled under `dev-run`.
+lumen-window-winit = { path = "../backends/window-winit", optional = true }
+
+# link-not-embed launcher: dlopen the shared liblumen (lumen cdylib) and
+# drive a prebuilt LMNA app over the C-ABI. OPTIONAL behind `dlopen-run`; this
+# is the whole point of the thin launcher -- it pulls NO backend crate, only
+# the dynamic-loader shim.
+libloading = { version = "0.9", optional = true }
+
+# `tracing` stays unconditional: lumenc emits plain warn!/debug! diagnostics
+# through it. The subscriber / chrome / tracy backends live in `lumen-runtime`
+# now and are reached via the `profiling` feature forward below.
+tracing.workspace = true
+serde_json.workspace = true
+
+# Per-app config (lumen.toml) codec, kept for the CLI helpers.
+toml.workspace = true
+serde.workspace = true
+
+# `lumenc screenshot` (mcp_cli, itself `dev-run`-gated) decodes the base64-PNG
+# returned by the MCP `lumen.screenshot` RPC and writes the raw bytes to disk.
+base64.workspace = true
+image.workspace = true
+
+# Golden-image screenshot suite (tests/golden.rs) + the headless-render and
+# kanban DnD integration tests: offscreen wgpu+vello renderer / real app world
+# driven fully in-process - never a real window. Test-only, so these never
+# reach `lumen-lsp` or the release binary.
+[dev-dependencies]
+lumen-render-wgpu = { path = "../backends/render-wgpu" }
+lumen-core = { path = "../core" }
+lumen-os-dnd = { path = "../os/dnd" }
+# Widget-component assertions (parse.rs / run_pipeline.rs): StateVisuals,
+# ToggleStyle, TabStripButton, DropdownButton, transition/wake systems. Test
+# -only, so it stays out of the thin compiler library's link graph.
+lumen-primitives = { path = "../primitives" }
+# Script-host and renderer crates named DIRECTLY by the integration tests
+# (run_pipeline / *_host_selection / golden / devtools_mount). They reach the
+# binary transitively through lumen-runtime, but a test can only *name*
+# `lumen_script_rhai::RhaiHost` etc. if the crate is a direct dependency - so
+# they live here (test-only) rather than in the thin library's `[dependencies]`.
+# `http-fetch` on so the dev-dep matches the default (dev-run) graph where
+# lumen-runtime already turns it on; without it a thin `--all-targets` test
+# build compiles lumen-script's http request path as dead code.
+lumen-script = { path = "../script/api", default-features = false, features = [
+    "http-fetch",
+] }
+lumen-script-rhai = { path = "../script/rhai", default-features = false }
+lumen-script-lua = { path = "../script/lua", default-features = false }
+lumen-script-candela = { path = "../script/candela", default-features = false }
+# os_integration.rs names the tray config / menu types directly, to assert a
+# script-supplied menu spec reaches them.
+lumen-os-tray = { path = "../os/tray" }
+lumen-text-cosmic = { path = "../backends/text-cosmic" }
+# text_geometry_pipeline.rs asserts against the shaped run the layout
+# producer publishes (`ShapedText` / `TextGeometry`), so it has to be able
+# to name the crate that defines them.
+lumen-text = { path = "../text" }
+# devtools_mount.rs (compiled only under `--features devtools`) names these.
+lumen-mcp = { path = "../mcp" }
+lumen-devtools = { path = "../dev/devtools" }
+bevy_ecs.workspace = true
+glam.workspace = true
+
+[features]
+default = ["http-fetch", "runtime-parse", "dev-run", "bundle", "package"]
+# `lumenc package` - assemble a shippable app folder (launcher stub + the
+# app's compiled artifact + liblumen + the app's files). ON by default. The
+# deps it pulls are for `--target`, which fetches another platform's toolchain
+# files from the release channel; a thin compiler library omits the whole
+# subcommand with `--no-default-features`.
+package = ["dep:ureq", "dep:sha2", "dep:tar", "dep:flate2", "dep:zip"]
+# `lumenc bundle` - pack an app dir into a `.lpak` archive via lumen-assets.
+# ON by default. Pulls lumen-assets (and its hard vello/wgpu dep), so a thin
+# compiler library omits it with `--no-default-features`.
+bundle = ["dep:lumen-assets"]
+# Link the runtime (run loop, plugin stack, script hosts, GPU renderer, window
+# backend, audio, OS surfaces) so the `lumenc` binary can actually run / build /
+# check / drive apps. ON by default. Build the library `--no-default-features`
+# (as `lumen-lsp` does) to drop the runtime and every heavy backend it pulls -
+# this is the compiler-slimming knob. The forwards below all use the weak
+# `lumen-runtime?/...` form so they never *force* the runtime into a thin build;
+# they only augment it when `dev-run` has already pulled it.
+# The dev path stays FULL-featured (owner decision): `dev-run` turns on every
+# runtime subsystem so `lumenc run` / `build` / `check` and the integration
+# tests keep audio, MCP, the async bridge, and the lua / candela script hosts.
+# Per-app trimming is exclusive to `lumenc bundle --static` (which builds
+# `lumen` with its own trimmed feature set), never the dev path.
+dev-run = [
+    "dep:lumen-runtime",
+    "dep:rhai",
+    "dep:lumen-window-winit",
+    "lumen-runtime/audio",
+    "lumen-runtime/mcp",
+    "lumen-runtime/async",
+    "lumen-runtime/host-lua",
+    "lumen-runtime/host-candela",
+]
+# link-not-embed launcher: build a THIN `lumenc` that compiles source to LMNA
+# in-process (via `runtime-parse`) and dlopens the shared liblumen over the
+# C-ABI to run it, instead of static-linking `lumen-runtime` via `dev-run`.
+# This is the small-binary distribution shape. Needs `runtime-parse` for the
+# in-process compile. Build with:
+#   cargo build -p lumenc --no-default-features --features "runtime-parse,dlopen-run"
+dlopen-run = ["dep:libloading"]
+# Dev-only in-window devtools overlay (F12). Off by default - never compiled
+# into release / bundle builds. Build with `--features devtools` to get it, and
+# `lumenc run` then serves the overlay for the dev loop.
+devtools = ["lumen-runtime?/devtools"]
+# Scripts' HTTP `fetch(url, tag)` builtin (ureq + rustls + ring). On by
+# default; a packager size knob. Owned by the runtime's script hosts now.
+http-fetch = ["lumen-runtime?/http-fetch"]
+# `--profile chrome|stderr` support: compiles the tracing-subscriber /
+# tracing-chrome stack (inside the runtime) and turns on bevy_ecs's `trace`
+# feature so every system / schedule run emits a span. Off by default.
+profiling = ["lumen-runtime?/profiling"]
+# `--profile tracy` support on top of `profiling`.
+profiling-tracy = ["profiling", "lumen-runtime?/profiling-tracy"]
+# Ship the source parser (markup + CSS front-end) inside the compiler. ON by
+# default so the dev loop - `lumenc run <dir>`, hot reload, `check`, `fmt`,
+# `lint`, and `build` - parses `.lmn` / `.css` from source. Turn it OFF
+# (`--no-default-features`) to build a parser-free compiler library that only
+# consumes a precompiled AOT artifact (`lumenc build`). This gates lumenc's own
+# `parser_html` / `formatter` / `resolve` / `source_parser` stack (dropping
+# `roxmltree`) AND, when the runtime is present, the runtime's from-source load
+# path (weak forward - a no-op in a thin build). Mirrors Qt's `qmlcachegen`
+# and Slint's compile-.slint-to-Rust model.
+runtime-parse = ["dep:roxmltree", "lumen-runtime?/runtime-parse"]

@@ -11,7 +11,7 @@
 #
 # The target carries the include paths for both this SDK's <lumen.hpp>
 # and the C ABI header <lumen.h> it wraps. Linking the actual Lumen
-# library (liblumen_ffi) is handled two ways:
+# library (liblumen) is handled two ways:
 #   * if pkg-config can resolve `lumen` (installed lumen.pc), the link
 #     flags are attached to the interface automatically;
 #   * otherwise the consumer links the cargo-built staticlib/cdylib
@@ -22,7 +22,7 @@ project(lumen_cpp LANGUAGES CXX VERSION 0.4.0)
 
 # Path to the committed C ABI header (<lumen.h> + lumen_simple.h) that
 # the C++ SDK wraps. Overridable by a superproject if the layout moves.
-set(LUMEN_C_HEADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../lumen/ffi/include"
+set(LUMEN_C_HEADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../include"
     CACHE PATH "Directory containing the Lumen C ABI header lumen.h")
 
 add_library(lumen_cpp INTERFACE)
@@ -48,7 +48,7 @@ if(PkgConfig_FOUND)
         message(STATUS "lumen::cpp: linking C library via pkg-config (lumen ${LUMEN_FFI_VERSION})")
     else()
         message(STATUS "lumen::cpp: pkg-config could not resolve 'lumen'; "
-                       "consumer must link liblumen_ffi directly")
+                       "consumer must link liblumen directly")
     endif()
 endif()
 
@@ -57,7 +57,7 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 # Header-only: install the SDK header. (The C ABI header lumen.h is
-# shipped by the lumen-ffi install step / distro package.)
+# shipped by the lumen install step / distro package.)
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/lumen.hpp
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 

@@ -1,0 +1,34 @@
+[package]
+name = "lumen-script"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Scripting backend trait (ScriptHost, StateProxy)."
+
+[dependencies]
+lumen-core = { path = "../../core" }
+lumen-ir = { path = "../../ir" }
+lumen-input = { path = "../../input" }
+lumen-primitives = { path = "../../primitives" }
+lumen-os-dnd = { path = "../../os/dnd" }
+bevy_ecs.workspace = true
+crossbeam-channel.workspace = true
+thiserror.workspace = true
+# Behind the default-on `http-fetch` feature: the scripts' `fetch(url,
+# tag)` builtin's actual HTTP transport. ureq's rustls+ring stack costs
+# ~0.8 MiB of release .text, so packagers who don't ship script HTTP can
+# rebuild with default features off. With the feature off, `fetch()`
+# still parses/queues but every request resolves to
+# `on_fetch_error(tag, "...built without the http-fetch feature...")`.
+ureq = { workspace = true, optional = true }
+
+[features]
+# `http-fetch` is on by default so a plain build behaves exactly as
+# before; it exists as a packager knob for size-trimmed lumenc builds
+# (see the ureq dep comment above). Host crates (lumen-script-rhai)
+# forward their own `http-fetch` feature here.
+default = ["http-fetch"]
+http-fetch = ["dep:ureq"]

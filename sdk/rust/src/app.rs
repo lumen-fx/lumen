@@ -23,7 +23,7 @@ type RunSetup = (RunOptions, Vec<(PropertyKey, PropertyValue)>, Vec<Deferred>);
 /// systems, then [`run`](Self::run).
 ///
 /// ```no_run
-/// use lumen::prelude::*;
+/// use lumenui::prelude::*;
 ///
 /// fn bump(mut clicks: MessageReader<ClickEvent>, mut signals: Signals) {
 ///     if clicks.read().next().is_some() {
@@ -32,8 +32,8 @@ type RunSetup = (RunOptions, Vec<(PropertyKey, PropertyValue)>, Vec<Deferred>);
 ///     }
 /// }
 ///
-/// # fn demo() -> lumen::Result<()> {
-/// lumen::App::new()
+/// # fn demo() -> lumenui::Result<()> {
+/// lumenui::App::new()
 ///     .add_plugins(LumenDefaultPlugins.with_markup("<root/>"))
 ///     .add_systems(TickStage::Systems, bump)
 ///     .run()
@@ -84,11 +84,11 @@ impl App {
     /// `.chain()`, `.after(..)`, `.run_if(..)`.
     ///
     /// ```
-    /// use lumen::prelude::*;
+    /// use lumenui::prelude::*;
     /// fn a() {}
     /// fn b() {}
     /// # let app =
-    /// lumen::App::new().add_systems(TickStage::Systems, (a, b).chain());
+    /// lumenui::App::new().add_systems(TickStage::Systems, (a, b).chain());
     /// ```
     #[must_use]
     pub fn add_systems<M: 'static>(
@@ -150,10 +150,10 @@ impl App {
     /// overrides [`on_any_click`](Self::on_any_click) for its id.
     ///
     /// ```
-    /// use lumen::prelude::*;
+    /// use lumenui::prelude::*;
     ///
     /// # let app =
-    /// lumen::App::new().on_click("bump", |ctx| {
+    /// lumenui::App::new().on_click("bump", |ctx| {
     ///     let n = ctx.get_or::<i64>("count", 0) + 1;
     ///     ctx.set("count", n);
     /// });
@@ -221,10 +221,10 @@ impl App {
     /// never spams observers.
     ///
     /// ```
-    /// use lumen::prelude::*;
+    /// use lumenui::prelude::*;
     ///
     /// # let app =
-    /// lumen::App::new()
+    /// lumenui::App::new()
     ///     .insert_signal("count", 0i64)
     ///     .add_computed("label", |s| format!("clicks: {}", s.get_or::<i64>("count", 0)));
     /// ```

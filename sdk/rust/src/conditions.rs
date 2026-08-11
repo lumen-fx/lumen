@@ -4,13 +4,13 @@
 //! be gated declaratively:
 //!
 //! ```
-//! use lumen::prelude::*;
+//! use lumenui::prelude::*;
 //!
 //! fn reset(mut signals: Signals) {
 //!     signals.set("count", 0i64);
 //! }
 //!
-//! # let mut app = lumen::App::new();
+//! # let mut app = lumenui::App::new();
 //! app.add_systems(TickStage::Systems, reset.run_if(on_click("reset")));
 //! ```
 //!

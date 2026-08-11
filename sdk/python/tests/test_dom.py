@@ -1,7 +1,7 @@
 """Unit tests for the pure-Python parts of the ``lumen.dom`` wrappers.
 
 These exercise the bits that do NOT touch the native library, so they run
-without ``liblumen_ffi`` built: ``Node`` handle identity, the ``Listener``
+without ``liblumen`` built: ``Node`` handle identity, the ``Listener``
 token, and the geometry named tuples. The C-ABI round trips (query /
 mutate / read back) are covered by the runtime + Rust SDK integration
 tests. Runnable with ``pytest`` or plain ``python -m unittest``.

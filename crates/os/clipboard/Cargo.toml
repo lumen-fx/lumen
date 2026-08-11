@@ -1,0 +1,19 @@
+[package]
+name = "lumen-os-clipboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "OS clipboard host (arboard wrapper) for Lumen - MIME-typed read/write, optional PRIMARY selection on Linux."
+
+[features]
+default = []
+# Gate the X11 PRIMARY-selection helpers. arboard 3.x exposes them only on
+# the Linux/X11 build; setting this feature requires consumers to opt in.
+linux_primary = []
+
+[dependencies]
+lumen-os-mime = { path = "../mime" }
+arboard.workspace = true

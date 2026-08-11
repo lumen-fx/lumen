@@ -1,7 +1,7 @@
 """Unit tests for the pure-Python ergonomic sugar.
 
 These exercise the bits that do NOT touch the native library, so they run
-without ``liblumen_ffi`` built: ``Color`` parsing/formatting, event-handler
+without ``liblumen`` built: ``Color`` parsing/formatting, event-handler
 arity adaptation, and exposed-function arity inference. Runnable with
 ``pytest`` or plain ``python -m unittest``.
 """

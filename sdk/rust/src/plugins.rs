@@ -8,10 +8,10 @@
 //! window configuration and is the value passed to [`App::add_plugins`]:
 //!
 //! ```no_run
-//! use lumen::prelude::*;
+//! use lumenui::prelude::*;
 //!
-//! # fn demo() -> lumen::Result<()> {
-//! lumen::App::new()
+//! # fn demo() -> lumenui::Result<()> {
+//! lumenui::App::new()
 //!     .add_plugins(
 //!         // Dev-hot-reload-by-default: reads from disk + watches in `cargo
 //!         // run`, `include_str!`-embeds in `cargo run --release`.
@@ -82,11 +82,11 @@ impl<P: Plugin + Send + 'static> BoxedPlugin for P {
 /// [`App::add_plugins`](crate::App::add_plugins):
 ///
 /// ```
-/// use lumen::prelude::*;
-/// use lumen::plugins::{PluginGroup, PluginGroupBuilder};
+/// use lumenui::prelude::*;
+/// use lumenui::plugins::{PluginGroup, PluginGroupBuilder};
 ///
-/// # struct Physics; impl lumen::ecs_app::Plugin for Physics { fn build(self, _: &mut lumen::ecs_app::App) {} }
-/// # struct Audio; impl lumen::ecs_app::Plugin for Audio { fn build(self, _: &mut lumen::ecs_app::App) {} }
+/// # struct Physics; impl lumenui::ecs_app::Plugin for Physics { fn build(self, _: &mut lumenui::ecs_app::App) {} }
+/// # struct Audio; impl lumenui::ecs_app::Plugin for Audio { fn build(self, _: &mut lumenui::ecs_app::App) {} }
 /// struct GamePlugins;
 /// impl PluginGroup for GamePlugins {
 ///     fn build(self) -> PluginGroupBuilder {
@@ -420,10 +420,10 @@ impl Source {
 /// named files are embedded.
 ///
 /// ```no_run
-/// use lumen::prelude::*;
+/// use lumenui::prelude::*;
 ///
-/// # fn demo() -> lumen::Result<()> {
-/// lumen::App::new()
+/// # fn demo() -> lumenui::Result<()> {
+/// lumenui::App::new()
 ///     .add_plugins(
 ///         LumenDefaultPlugins
 ///             // hot-reloads in `cargo run`, embedded in `cargo run --release`
@@ -436,9 +436,9 @@ impl Source {
 /// Markup-only form (no stylesheet):
 ///
 /// ```no_run
-/// # use lumen::prelude::*;
-/// # fn demo() -> lumen::Result<()> {
-/// # lumen::App::new().add_plugins(
+/// # use lumenui::prelude::*;
+/// # fn demo() -> lumenui::Result<()> {
+/// # lumenui::App::new().add_plugins(
 /// LumenDefaultPlugins.with_source(lumen_source!("examples/main.lmn"))
 /// # ).run() }
 /// ```
@@ -501,9 +501,9 @@ impl LumenDefaultPlugins {
     /// hot reload in `cargo run` and embedding in `cargo run --release`:
     ///
     /// ```no_run
-    /// # use lumen::prelude::*;
-    /// # fn demo() -> lumen::Result<()> {
-    /// # lumen::App::new().add_plugins(
+    /// # use lumenui::prelude::*;
+    /// # fn demo() -> lumenui::Result<()> {
+    /// # lumenui::App::new().add_plugins(
     /// LumenDefaultPlugins.with_source(lumen_source!("examples/main.lmn", "examples/main.css"))
     /// # ).run() }
     /// ```

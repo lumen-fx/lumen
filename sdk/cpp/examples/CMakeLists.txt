@@ -1,7 +1,7 @@
 # Lumen C++ SDK - examples.
 #
 # A set of small, self-contained programs that each compile + link against
-# the built `lumen-ffi` cdylib and run headless. Build them all with:
+# the built `lumen` cdylib and run headless. Build them all with:
 #
 #     cmake -B build
 #     cmake --build build            # builds the cdylib (if stale) + all examples
@@ -9,7 +9,7 @@
 # then run e.g. `./build/counter`. See README.md in this directory.
 #
 # CMake resolves the workspace cargo target dir via `cargo metadata` (so a
-# custom CARGO_TARGET_DIR is honoured) and drives `cargo build -p lumen-ffi`
+# custom CARGO_TARGET_DIR is honoured) and drives `cargo build -p lumen`
 # through a custom target - mirroring apps/sysmon. Headers come from the
 # header-only interface target `lumen::cpp` (../, i.e. sdk/cpp).
 
@@ -38,15 +38,15 @@ else()
     set(_LUMEN_CARGO_FLAGS "")
 endif()
 
-set(LUMEN_LIB "${LUMEN_CARGO_TARGET_DIR}/${_LUMEN_PROFILE_DIR}/liblumen_ffi.so")
+set(LUMEN_LIB "${LUMEN_CARGO_TARGET_DIR}/${_LUMEN_PROFILE_DIR}/liblumen.so")
 
 add_custom_command(
     OUTPUT  ${LUMEN_LIB}
-    COMMAND cargo build -p lumen-ffi ${_LUMEN_CARGO_FLAGS}
+    COMMAND cargo build -p lumen ${_LUMEN_CARGO_FLAGS}
     WORKING_DIRECTORY ${LUMEN_REPO}
     VERBATIM
     USES_TERMINAL)
-add_custom_target(lumen_ffi DEPENDS ${LUMEN_LIB})
+add_custom_target(lumen DEPENDS ${LUMEN_LIB})
 
 # Header-only SDK interface target (lumen::cpp): <lumen.hpp> + <lumen.h>.
 add_subdirectory(${LUMEN_REPO}/sdk/cpp ${CMAKE_BINARY_DIR}/lumen_cpp)
@@ -54,10 +54,10 @@ add_subdirectory(${LUMEN_REPO}/sdk/cpp ${CMAKE_BINARY_DIR}/lumen_cpp)
 # Each example: name -> (source, default app dir baked in as LUMEN_APP_DIR).
 function(lumen_example name src appdir)
     add_executable(${name} ${src})
-    add_dependencies(${name} lumen_ffi)
+    add_dependencies(${name} lumen)
     target_link_libraries(${name} PRIVATE lumen::cpp ${LUMEN_LIB} pthread)
     target_compile_definitions(${name} PRIVATE LUMEN_APP_DIR="${appdir}")
-    # Bake the cargo target dir as RPATH so the binary finds liblumen_ffi.so
+    # Bake the cargo target dir as RPATH so the binary finds liblumen.so
     # without LD_LIBRARY_PATH.
     set_target_properties(${name} PROPERTIES
         BUILD_RPATH   "${LUMEN_CARGO_TARGET_DIR}/${_LUMEN_PROFILE_DIR}"

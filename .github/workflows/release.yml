@@ -1,7 +1,7 @@
 name: Release
 
 # Publishes the Lumen toolchain (lumenc + liblumen + the app launcher stub) to
-# a GitHub release, in the exact shape tools/install.sh expects: one
+# a GitHub release, in the exact shape tools/release/install.sh expects: one
 # lumen-<target>.tar.gz per Unix target and, for Windows,
 # lumen-windows-x86_64.msi as the install channel plus
 # lumen-windows-x86_64.zip as the portable archive. Every one of them holds
@@ -11,12 +11,12 @@ name: Release
 #   - install.sh requires a top-level bin/ directory in the archive (its
 #     unpack step fails otherwise) and looks up the asset by the exact name
 #     lumen-<target>.tar.gz / lumen-windows-x86_64.msi.
-#   - lumenc/src/loader.rs dlopens liblumen from next to its own executable
+#   - crates/lumenc/src/loader.rs dlopens liblumen from next to its own executable
 #     (or an LUMEN_LIB_DIR override, or the platform loader's default
 #     search path) - never from a sibling lib/ directory. So the shared
 #     library goes in bin/, next to lumenc, or a normal `~/.lumen` install
 #     would put a lumenc on PATH that cannot find its own runtime.
-#   - lumenc/src/package_cli.rs looks for the launcher stub in the same place
+#   - crates/lumenc/src/package_cli.rs looks for the launcher stub in the same place
 #     it looks for liblumen, so `lumenc package` on an installed toolchain
 #     finds it without being told where it is. An archive without the stub
 #     leaves that command with nothing to build an app executable from.
@@ -32,9 +32,9 @@ name: Release
 # The MSI installs one extra file the zip does not carry: the receipt at
 # share/lumen/lumen.receipt. That file is what marks a copy as installed, and
 # an installed copy is the only kind that checks for updates. See
-# tools/msi/lumen.wxs.
+# tools/release/msi/lumen.wxs.
 #
-# lumenc does not link lumen-ffi at compile time (that is the whole point of
+# lumenc does not link lumen at compile time (that is the whole point of
 # the dlopen seam), so it and liblumen are two separate `cargo build`
 # invocations, both under the workspace's [profile.release] (opt-level "s",
 # fat LTO, strip = "symbols" - already stripped, no separate strip step
@@ -136,19 +136,19 @@ jobs:
         include:
           - target: linux-x86_64
             os: ubuntu-latest
-            libname: liblumen_ffi.so
+            libname: liblumen.so
           - target: linux-aarch64
             os: ubuntu-24.04-arm
-            libname: liblumen_ffi.so
+            libname: liblumen.so
           - target: macos-aarch64
             os: macos-latest
-            libname: liblumen_ffi.dylib
+            libname: liblumen.dylib
           - target: macos-x86_64
             os: macos-26-intel
-            libname: liblumen_ffi.dylib
+            libname: liblumen.dylib
           - target: windows-x86_64
             os: windows-latest
-            libname: lumen_ffi.dll
+            libname: lumen.dll
     steps:
       - uses: actions/checkout@v4
         with:
@@ -168,15 +168,15 @@ jobs:
           key: release-${{ matrix.target }}
 
       # Three crates, three artifacts: the lumenc binary, the liblumen cdylib
-      # (crate lumen-ffi), and the launcher stub `lumenc package` turns into a
+      # (crate lumen), and the launcher stub `lumenc package` turns into a
       # shipped app. None of them depends on another at compile time - lumenc
       # and the stub both dlopen liblumen at run time - so each is its own
       # build.
       - name: Build lumenc
         run: cargo build --release -p lumenc
 
-      - name: Build liblumen (lumen-ffi cdylib)
-        run: cargo build --release -p lumen-ffi
+      - name: Build liblumen (lumen cdylib)
+        run: cargo build --release -p lumen
 
       - name: Build the app launcher stub
         run: cargo build --release -p lumen-launcher
@@ -231,7 +231,7 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}" -replace '^v', ''
-          tools\msi\build-msi.ps1 `
+          tools\release\msi\build-msi.ps1 `
             -Version $version `
             -StageDir "$PWD\msi-stage" `
             -OutFile "$PWD\lumen-${{ matrix.target }}.msi"

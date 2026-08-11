@@ -21,7 +21,7 @@ classifiers = [
 ]
 
 # Deliberately empty: this is a pure ctypes wrapper over a shared
-# library you build with `cargo build -p lumen-ffi`. No cffi, no
+# library you build with `cargo build -p lumen`. No cffi, no
 # setuptools-rust, no compiled extension of its own -- stdlib only.
 dependencies = []
 

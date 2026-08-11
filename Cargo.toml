@@ -1,47 +1,102 @@
+# The engine crate lives at the workspace root: `src/` builds `liblumen`, the
+# shared library every app executable, launcher stub, and SDK loads. Every
+# other crate sits under `crates/`, grouped by the role it plays.
+[package]
+name = "lumen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen C-ABI: opaque LumenApp + tagged LumenValue, drives lumenc::run_app from any C-callable language."
+
+[lib]
+# The file name of the shared library is the seam: `lumenc`, the launcher
+# stub, and the C++/Python SDKs all look for `liblumen.{so,dylib}` /
+# `lumen.dll`. Renaming this renames all of them.
+name = "lumen"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+lumen-core = { path = "crates/core" }
+# Runtime core: `RunOptions` / `run_app` / the default plugin stack.
+# `default-features = false` so the FULL shared cdylib turns every subsystem on
+# via this crate's own default feature set below, while a trimmed static
+# `--bundle` build (`--no-default-features --features "<caps>"`) selects exactly
+# the app's subsystems (Part B).
+lumen-runtime = { path = "crates/runtime", default-features = false }
+# Host-neutral DOM read side (query / traversal over the snapshot) for the
+# LumenNode C-ABI. No host features needed here; the query engine is
+# host-independent.
+lumen-script = { path = "crates/script/api", default-features = false }
+# Compiler front-end, kept only to inject its parser (`default_parser()`).
+# OPTIONAL behind the default-on `embed-parser` feature: a static `--bundle`
+# runs a prebuilt LMNA artifact with NO parser, so dropping lumenc also drops
+# the feature-unification that would otherwise pull lumen-runtime back to full.
+lumenc = { path = "crates/lumenc", optional = true }
+# Close-hook router (ABI 0.5): the `lumen_app_on_close` dispatch system
+# reads `Messages<CloseRequest>` through a `MessageCursor`, which
+# `lumen_core::prelude` does not re-export.
+bevy_ecs.workspace = true
+rhai.workspace = true
+crossbeam-channel.workspace = true
+
+[build-dependencies]
+cbindgen.workspace = true
+
+[features]
+# The DEFAULT cdylib/staticlib is FULL-featured: one shared library serves
+# every app (the whole point of link-not-embed). Per-app trimming applies ONLY
+# to the static `--bundle` path, built `--no-default-features --features
+# "<resolved capabilities>"` by lumenc.
+default = [
+    "embed-parser",
+    "runtime-parse",
+    "http-fetch",
+    "audio",
+    "mcp",
+    "async",
+    "host-lua",
+    "host-candela",
+]
+# Link lumenc for its `default_parser()` (the from-source embed path). Dropping
+# it yields a parser-free launcher that only runs prebuilt LMNA bytes.
+embed-parser = ["dep:lumenc", "runtime-parse"]
+# Forwards to the runtime's Part B tree-shaking knobs.
+runtime-parse = ["lumen-runtime/runtime-parse"]
+http-fetch = ["lumen-runtime/http-fetch"]
+audio = ["lumen-runtime/audio"]
+mcp = ["lumen-runtime/mcp"]
+async = ["lumen-runtime/async"]
+host-lua = ["lumen-runtime/host-lua"]
+host-candela = ["lumen-runtime/host-candela"]
+
 [workspace]
 resolver = "2"
+# The four grouped directories glob cleanly. The flat spine is listed crate by
+# crate, because a `crates/*` glob would also match the group directories,
+# which hold crates rather than being one.
 members = [
-    "lumen/core",
-    "lumen/ir",
-    "lumen/runtime",
-    "lumen/script",
-    "lumen/text",
-    "lumen/audio",
-    "lumen/render-wgpu",
-    "lumen/render-headless",
-    "lumen/layout-taffy",
-    "lumen/text-cosmic",
-    "lumen/window-winit",
-    "lumen/async-tokio",
-    "lumen/a11y-accesskit",
-    "lumen/script-rhai",
-    "lumen/script-lua",
-    "lumen/script-candela",
-    "lumen/input",
-    "lumen/primitives",
-    "lumen/widget",
-    "lumen/widget-macros",
-    "lumen/assets",
-    "lumen/ffi",
-    "lumen/launcher",
-    "lumen/os-mime",
-    "lumen/os-clipboard",
-    "lumen/os-dnd",
-    "lumen/os-menu",
-    "lumen/os-filedialog",
-    "lumen/os-tray",
-    "lumen/os-notify",
-    "lumen/os-hotkey",
-    "lumen/os-launcher",
-    "lumen/os-power",
-    "lumen/os-lifecycle",
-    "lumen/i18n",
-    "lumen/devtools",
-    "lumenc",
+    "crates/assets",
+    "crates/audio",
+    "crates/core",
+    "crates/i18n",
+    "crates/input",
+    "crates/ir",
+    "crates/launcher",
+    "crates/lumenc",
+    "crates/mcp",
+    "crates/primitives",
+    "crates/runtime",
+    "crates/text",
+    "crates/widget",
+    "crates/widget-macros",
+    "crates/backends/*",
+    "crates/dev/*",
+    "crates/os/*",
+    "crates/script/*",
     "sdk/rust",
-    "lumen/lsp",
-    "lumen/mcp",
-    "lumen/mcp-server",
 ]
 
 [workspace.package]
@@ -287,7 +342,7 @@ proptest = "1.11"
 opt-level = 0
 debug = "line-tables-only"
 
-# panic stays "unwind": lumen-ffi's C-ABI exports rely on catch_unwind to
+# panic stays "unwind": lumen's C-ABI exports rely on catch_unwind to
 # convert panics into error codes; abort would kill the host process instead.
 #
 # opt-level "s": author's trade (2026-07-22) - measured 27.66 -> 19.98 MiB

@@ -1,7 +1,7 @@
 """Python SDK for the Lumen UI framework, built on ``ctypes`` over the
-``lumen-ffi`` C ABI. Stdlib-only -- no compiled extension, no ``cffi``,
-no build step of its own; it just needs ``liblumen_ffi`` built once
-(``cargo build -p lumen-ffi``) and loadable at import time.
+``lumen`` C ABI. Stdlib-only -- no compiled extension, no ``cffi``,
+no build step of its own; it just needs ``liblumen`` built once
+(``cargo build -p lumen``) and loadable at import time.
 
 Typical usage::
 

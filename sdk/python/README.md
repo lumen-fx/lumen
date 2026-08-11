@@ -1,7 +1,7 @@
 # Lumen Python SDK
 
 Typed Python bindings for the [Lumen](../../) UI framework, over the C ABI
-(`lumen/ffi/include/lumen.h`). State is declarative and reactive: you write a
+(`include/lumen.h`). State is declarative and reactive: you write a
 `Model` whose fields are typed signals, mutate them with plain Python, and the
 runtime keeps the UI in sync.
 
@@ -149,7 +149,7 @@ completion for `Model` fields, `Signal[T]`, and the `App` methods.
 ## Requirements
 
 - Python 3.9+ (stdlib `ctypes` only).
-- The Lumen C library, `liblumen_ffi`, built as a `cdylib`.
+- The Lumen C library, `liblumen`, built as a `cdylib`.
 - `App.run()` opens an OS window and a GPU surface. For CI or a no-display
   environment, `App.run_headless(ticks)` drives the full app (scripts,
   bindings, `<for>` and `<if>` reconciliation, and `watch` firing) for a
@@ -160,8 +160,8 @@ completion for `Model` fields, `Signal[T]`, and the `App` methods.
 From the Lumen workspace root:
 
 ```sh
-cargo build -p lumen-ffi            # -> target/debug/liblumen_ffi.{so,dylib,dll}
-cargo build -p lumen-ffi --release  # -> target/release/...
+cargo build -p lumen            # -> target/debug/liblumen.{so,dylib,dll}
+cargo build -p lumen --release  # -> target/release/...
 ```
 
 ## Run the examples
@@ -183,7 +183,7 @@ pip install -e sdk/python
 ```
 
 Registers the `lumen` package (distribution name `lumenui`). It does not
-build or bundle `liblumen_ffi`; you still need `cargo build -p lumen-ffi`
+build or bundle `liblumen`; you still need `cargo build -p lumen`
 and a way for the loader to find it.
 
 ## Locating the library

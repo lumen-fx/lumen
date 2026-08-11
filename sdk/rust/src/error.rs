@@ -38,6 +38,6 @@ impl From<lumen_runtime::RunError> for Error {
     }
 }
 
-/// Convenience alias used across the SDK; `fn main() -> lumen::Result<()>`
+/// Convenience alias used across the SDK; `fn main() -> lumenui::Result<()>`
 /// is the idiomatic app signature.
 pub type Result<T> = std::result::Result<T, Error>;
