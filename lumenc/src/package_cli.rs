@@ -1,0 +1,1275 @@
+//! `lumenc package <app_dir> [<out_dir>]` - assemble a shippable app folder.
+//!
+//! The output is a directory an end user can copy anywhere and double-click:
+//! the app executable, the shared Lumen runtime library where the app needs
+//! one, `lumen.toml`, and the app's own files at the same relative paths the
+//! markup names them by. Nothing on the target machine needs a Lumen
+//! installation or a toolchain.
+//!
+//! This is the same job `windeployqt` / `macdeployqt` do for Qt: put the
+//! executable, the libraries it opens, and its data in one directory.
+//!
+//! An app authored against one of the SDKs is a program in its own language,
+//! so its own toolchain builds it (the same one `lumenc build` hands off to)
+//! and the folder is assembled around the executable that produced. What
+//! travels with it follows how the language reaches Lumen: a Rust app links
+//! the runtime in, a C++ app calls the C ABI and needs the shared library
+//! beside it, and both read their markup and scripts at run time rather than
+//! compiling them in.
+//!
+//! For a markup app the executable is a copy of the prebuilt `lumen-launcher`
+//! stub, never a freshly compiled binary, so packaging needs no Rust
+//! toolchain. How the artifact gets into it depends on the target:
+//!
+//! - Windows and Linux: appended to the file, with a footer recording where
+//!   it starts. Both program loaders ignore trailing bytes.
+//! - macOS, packaged on macOS: linked in as a Mach-O section by a small C
+//!   wrapper compiled on the spot, because a code signature has to cover the
+//!   whole file and `__LINKEDIT` has to stay last. This needs `cc`.
+//! - macOS, packaged anywhere else: shipped as a `.lmna` file beside the
+//!   executable, since embedding needs a Mach-O linker.
+//!
+//! `--target` packages for a platform other than the one you are on. The
+//! toolchain files for another platform come from the release channel and are
+//! cached per version.
+
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+use crate::app_kind::AppKind;
+
+/// Conventional extension for a compiled-app artifact, matching
+/// [`crate::build_cli::ARTIFACT_EXT`].
+const ARTIFACT_EXT: &str = "lmna";
+
+/// Trailing marker on an executable that carries its app inside it. Read back
+/// by `lumen-launcher`; the two constants must stay in step.
+const FOOTER_MAGIC: &[u8; 8] = b"LMNAPACK";
+
+/// Name of the launcher stub as the release channel and a workspace build
+/// both produce it.
+const STUB_STEM: &str = "lumen-launcher";
+
+/// The C wrapper used for a macOS package built on macOS. It is compiled with
+/// `-sectcreate __LUMEN __lmna <artifact>`, which puts the artifact in a
+/// section of the executable and leaves the layout a code signature needs
+/// intact. It declares the four C-ABI entry points itself rather than
+/// including a header, so packaging needs no Lumen headers on disk.
+const MACOS_WRAPPER_C: &str = r#"
+#include <dlfcn.h>
+#include <libgen.h>
+#include <mach-o/dyld.h>
+#include <mach-o/getsect.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+extern const struct mach_header_64 _mh_execute_header;
+
+typedef uint32_t (*abi_version_fn)(void);
+typedef void *(*new_from_lmna_fn)(const uint8_t *, size_t, const char *);
+typedef uint32_t (*run_fn)(void *);
+typedef uint32_t (*run_headless_fn)(void *, uint32_t);
+typedef const char *(*last_error_fn)(void);
+
+/* Must match lumen_ffi::LUMEN_ABI_{MAJOR,MINOR}. */
+#define WANT_ABI_MAJOR 0u
+#define WANT_ABI_MINOR 7u
+
+int main(int argc, char **argv) {
+    int headless = 0;
+    uint32_t ticks = 1;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--headless") == 0) {
+            headless = 1;
+        } else if (strcmp(argv[i], "--ticks") == 0 && i + 1 < argc) {
+            ticks = (uint32_t)strtoul(argv[++i], NULL, 10);
+        }
+    }
+
+    unsigned long size = 0;
+    const uint8_t *data =
+        getsectiondata(&_mh_execute_header, "__LUMEN", "__lmna", &size);
+    if (data == NULL || size == 0) {
+        fprintf(stderr, "this executable carries no app\n");
+        return 1;
+    }
+
+    char exe[4096];
+    uint32_t exe_len = (uint32_t)sizeof(exe);
+    if (_NSGetExecutablePath(exe, &exe_len) != 0) {
+        fprintf(stderr, "cannot locate this executable\n");
+        return 1;
+    }
+    char dir_buf[4096];
+    snprintf(dir_buf, sizeof(dir_buf), "%s", exe);
+    char *dir = dirname(dir_buf);
+
+    char lib_path[4200];
+    snprintf(lib_path, sizeof(lib_path), "%s/liblumen_ffi.dylib", dir);
+    void *lib = dlopen(lib_path, RTLD_NOW);
+    if (lib == NULL) {
+        lib = dlopen("liblumen_ffi.dylib", RTLD_NOW);
+    }
+    if (lib == NULL) {
+        fprintf(stderr, "cannot open %s: %s\n", lib_path, dlerror());
+        return 1;
+    }
+
+    abi_version_fn abi = (abi_version_fn)dlsym(lib, "lumen_abi_version");
+    new_from_lmna_fn new_app =
+        (new_from_lmna_fn)dlsym(lib, "lumen_app_new_from_lmna");
+    run_fn run = (run_fn)dlsym(lib, "lumen_app_run");
+    run_headless_fn run_headless =
+        (run_headless_fn)dlsym(lib, "lumen_app_run_headless");
+    last_error_fn last_error = (last_error_fn)dlsym(lib, "lumen_last_error");
+    if (abi == NULL || new_app == NULL || run == NULL || run_headless == NULL) {
+        fprintf(stderr, "%s is missing a required entry point\n", lib_path);
+        return 1;
+    }
+
+    uint32_t packed = abi();
+    uint32_t got_major = packed >> 16;
+    uint32_t got_minor = (packed >> 8) & 0xFFu;
+    if (got_major != WANT_ABI_MAJOR || got_minor < WANT_ABI_MINOR) {
+        fprintf(stderr,
+                "liblumen ABI mismatch: this app needs %u.%u.x, the library "
+                "reports %u.%u.x\n",
+                WANT_ABI_MAJOR, WANT_ABI_MINOR, got_major, got_minor);
+        return 1;
+    }
+
+    void *app = new_app(data, (size_t)size, dir);
+    if (app == NULL) {
+        const char *msg = last_error ? last_error() : NULL;
+        fprintf(stderr, "cannot start the app: %s\n", msg ? msg : "(no detail)");
+        return 1;
+    }
+
+    uint32_t status = headless ? run_headless(app, ticks) : run(app);
+    if (status != 0) {
+        const char *msg = last_error ? last_error() : NULL;
+        fprintf(stderr, "the app failed (status %u): %s\n", status,
+                msg ? msg : "(no detail)");
+        return 1;
+    }
+    return 0;
+}
+"#;
+
+/// A platform to package for, named the way the release assets are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Target {
+    /// Release asset name, for example `linux-x86_64`.
+    name: &'static str,
+    /// Operating system family: `linux`, `macos`, or `windows`.
+    os: Os,
+}
+
+/// The operating system a target runs on. Everything platform-specific about
+/// packaging follows from this, not from the architecture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Os {
+    Linux,
+    Macos,
+    Windows,
+}
+
+impl Target {
+    /// Every target the release channel publishes toolchain files for.
+    const ALL: [Target; 5] = [
+        Target {
+            name: "linux-x86_64",
+            os: Os::Linux,
+        },
+        Target {
+            name: "linux-aarch64",
+            os: Os::Linux,
+        },
+        Target {
+            name: "macos-x86_64",
+            os: Os::Macos,
+        },
+        Target {
+            name: "macos-aarch64",
+            os: Os::Macos,
+        },
+        Target {
+            name: "windows-x86_64",
+            os: Os::Windows,
+        },
+    ];
+
+    /// The target name for a release-asset name, or `None` for a name no
+    /// release covers.
+    fn parse(name: &str) -> Option<Target> {
+        Target::ALL.into_iter().find(|t| t.name == name)
+    }
+
+    /// The platform this `lumenc` is running on.
+    fn host() -> Target {
+        let os = if cfg!(target_os = "windows") {
+            "windows"
+        } else if cfg!(target_os = "macos") {
+            "macos"
+        } else {
+            "linux"
+        };
+        let arch = if cfg!(target_arch = "aarch64") {
+            "aarch64"
+        } else {
+            "x86_64"
+        };
+        Target::parse(&format!("{os}-{arch}")).unwrap_or(Target {
+            name: "linux-x86_64",
+            os: Os::Linux,
+        })
+    }
+
+    /// File name of the launcher stub for this target.
+    fn stub_name(self) -> String {
+        match self.os {
+            Os::Windows => format!("{STUB_STEM}.exe"),
+            _ => STUB_STEM.to_string(),
+        }
+    }
+
+    /// File name of the shared Lumen runtime library for this target.
+    fn lib_name(self) -> &'static str {
+        match self.os {
+            Os::Windows => "lumen_ffi.dll",
+            Os::Macos => "liblumen_ffi.dylib",
+            Os::Linux => "liblumen_ffi.so",
+        }
+    }
+
+    /// File name the packaged app executable gets.
+    fn exe_name(self, app: &str) -> String {
+        match self.os {
+            Os::Windows => format!("{app}.exe"),
+            _ => app.to_string(),
+        }
+    }
+
+    /// Release asset holding this target's toolchain files.
+    fn archive_name(self) -> String {
+        match self.os {
+            Os::Windows => format!("lumen-{}.zip", self.name),
+            _ => format!("lumen-{}.tar.gz", self.name),
+        }
+    }
+}
+
+/// Entry: `lumenc package <app_dir> [<out_dir>] [--name <n>] [--target <t>]
+/// [--lib-dir <dir>] [--no-hooks]`.
+pub fn cmd_package(args: impl Iterator<Item = String>) -> ExitCode {
+    let mut no_hooks = false;
+    let mut name: Option<String> = None;
+    let mut lib_dir: Option<PathBuf> = None;
+    let mut target = Target::host();
+    let mut positional: Vec<String> = Vec::new();
+    let mut args = args;
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--no-hooks" => no_hooks = true,
+            "--name" => match args.next() {
+                Some(v) => name = Some(v),
+                None => return usage_error("--name needs a value"),
+            },
+            "--lib-dir" => match args.next() {
+                Some(v) => lib_dir = Some(PathBuf::from(v)),
+                None => return usage_error("--lib-dir needs a directory"),
+            },
+            "--target" => match args.next() {
+                Some(v) => match Target::parse(&v) {
+                    Some(t) => target = t,
+                    None => return unknown_target(&v),
+                },
+                None => return usage_error("--target needs a platform name"),
+            },
+            other => positional.push(other.to_string()),
+        }
+    }
+
+    let mut positional = positional.into_iter();
+    let Some(src) = positional.next() else {
+        return usage_error("missing <app_dir>");
+    };
+    let out_arg = positional.next();
+    if let Some(unexpected) = positional.next() {
+        return usage_error(&format!("unexpected extra argument '{unexpected}'"));
+    }
+
+    // Every asset path baked into the artifact is joined onto this, and the
+    // packaged copy needs those paths relative to the app rather than to
+    // wherever `lumenc` was run from.
+    let src_path = match std::fs::canonicalize(&src) {
+        Ok(p) if p.is_dir() => p,
+        Ok(_) => return usage_error(&format!("'{src}' is not a directory")),
+        Err(e) => return usage_error(&format!("'{src}': {e}")),
+    };
+
+    let cfg = crate::LumenToml::load_or_default(&src_path).unwrap_or_default();
+    let kind = crate::app_kind::resolve(&src_path, cfg.app.kind);
+
+    // An SDK app's own toolchain owns cross-compilation: it decides target
+    // triples, sysroots, and linkers, none of which packaging can stand in for.
+    if kind != AppKind::Markup && target != Target::host() {
+        eprintln!(
+            "lumenc package: --target packages a markup app for another platform. A {} \
+             app is cross-compiled by its own toolchain: build it for that platform \
+             first, then package on a machine of that platform, or use its own \
+             cross-compilation support.",
+            language_of(kind)
+        );
+        return ExitCode::from(2);
+    }
+    // Python has no compile step and so produces nothing to package around.
+    if kind == AppKind::Python {
+        eprintln!(
+            "lumenc package: a Python app is not compiled, so there is no executable to \
+             assemble a package around. Ship the app directory itself together with the \
+             Lumen runtime library, and start it with `python3 <entry>.py` on a machine \
+             that has Python. `lumenc run {src}` runs it here."
+        );
+        return ExitCode::from(2);
+    }
+
+    let app_name = name.unwrap_or_else(|| {
+        src_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "app".to_string())
+    });
+    let out_dir = out_arg
+        .map(PathBuf::from)
+        .unwrap_or_else(|| src_path.join("dist").join(&app_name));
+    // Writing the package over its own source would copy files onto
+    // themselves. A subdirectory of the app is fine, and is the default.
+    if std::fs::canonicalize(&out_dir).is_ok_and(|p| p == src_path) {
+        return usage_error("the output directory cannot be the app directory itself");
+    }
+
+    if !no_hooks
+        && let Err(e) = lumen_runtime::hooks::run_hooks(
+            &cfg.hooks,
+            lumen_runtime::hooks::HookWhen::Prebuild,
+            &src_path,
+        )
+    {
+        eprintln!("lumenc package: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    let assembled = match kind {
+        AppKind::Markup => package(&src_path, &out_dir, &app_name, target, lib_dir.as_deref()),
+        _ => package_sdk(
+            &src_path,
+            &out_dir,
+            &app_name,
+            target,
+            lib_dir.as_deref(),
+            kind,
+        ),
+    };
+    match assembled {
+        Ok(summary) => {
+            println!("lumenc package: {summary}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("lumenc package: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// The language a kind is written in, for messages.
+fn language_of(kind: AppKind) -> &'static str {
+    match kind {
+        AppKind::Rust => "Rust",
+        AppKind::Cpp => "C++",
+        AppKind::Python => "Python",
+        AppKind::Markup => "markup",
+    }
+}
+
+fn usage_error(msg: &str) -> ExitCode {
+    eprintln!("lumenc package: {msg}");
+    ExitCode::from(2)
+}
+
+fn unknown_target(name: &str) -> ExitCode {
+    let known: Vec<&str> = Target::ALL.iter().map(|t| t.name).collect();
+    eprintln!(
+        "lumenc package: no target called '{name}'. Pick one of: {}",
+        known.join(", ")
+    );
+    ExitCode::from(2)
+}
+
+/// Build an SDK app with its own toolchain, then assemble the same folder
+/// shape around what that build produced. Returns the summary to print.
+///
+/// The two compiled kinds differ in how they reach the runtime, and the
+/// package differs with them: a Rust app links `lumen-runtime` into its own
+/// executable and needs nothing beside it, while a C++ app links the C ABI and
+/// needs the shared library there. Both read their markup, stylesheet, and
+/// scripts at run time, so unlike a markup app those files travel.
+fn package_sdk(
+    src: &Path,
+    out: &Path,
+    app_name: &str,
+    target: Target,
+    lib_dir: Option<&Path>,
+    kind: AppKind,
+) -> Result<String, String> {
+    let built = match kind {
+        AppKind::Rust => build_rust_app(src)?,
+        AppKind::Cpp => build_cpp_app(src)?,
+        // Cross-packaging and Python are turned away before this point.
+        _ => return Err(format!("{} apps are not packaged here", language_of(kind))),
+    };
+
+    std::fs::create_dir_all(out).map_err(|e| format!("create {}: {e}", out.display()))?;
+    let exe_path = out.join(target.exe_name(app_name));
+    copy_executable(&built, &exe_path)?;
+
+    // A C++ app calls the C ABI through the shared library, so it travels. A
+    // Rust app has the runtime linked in already.
+    let mut carried_lib = false;
+    if kind == AppKind::Cpp {
+        let toolchain = locate_toolchain(target, lib_dir)?;
+        let lib_dest = out.join(target.lib_name());
+        std::fs::copy(&toolchain.lib, &lib_dest).map_err(|e| {
+            format!(
+                "copy {} -> {}: {e}",
+                toolchain.lib.display(),
+                lib_dest.display()
+            )
+        })?;
+        carried_lib = true;
+    }
+
+    let copied = copy_app_files(src, out, CopyRules::sdk(kind))?;
+    Ok(format!(
+        "wrote {} from the {} build ({} app file{} beside it{})",
+        exe_path.display(),
+        language_of(kind),
+        copied,
+        if copied == 1 { "" } else { "s" },
+        if carried_lib {
+            ", with the runtime library"
+        } else {
+            ""
+        }
+    ))
+}
+
+/// Build a Rust SDK app and return the executable cargo produced.
+///
+/// The build command is the one `lumenc build` uses; the extra flag makes
+/// cargo report where the executable landed, which cannot be worked out from
+/// the app directory alone because a workspace puts it under the workspace
+/// root rather than the app.
+fn build_rust_app(src: &Path) -> Result<PathBuf, String> {
+    let mut command = std::process::Command::new("cargo");
+    command
+        .current_dir(src)
+        .arg("build")
+        .arg("--release")
+        .arg("--message-format=json-render-diagnostics")
+        .stderr(std::process::Stdio::inherit());
+    eprintln!("lumenc: cargo build --release (in {})", src.display());
+    let output = command
+        .output()
+        .map_err(|e| format!("cannot run cargo: {e}. A Rust app is built with cargo."))?;
+    if !output.status.success() {
+        return Err("the cargo build failed".to_string());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut executable: Option<PathBuf> = None;
+    for line in stdout.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value.get("reason").and_then(|r| r.as_str()) != Some("compiler-artifact") {
+            continue;
+        }
+        if let Some(path) = value.get("executable").and_then(|e| e.as_str()) {
+            executable = Some(PathBuf::from(path));
+        }
+    }
+    if let Some(path) = executable.filter(|p| p.is_file()) {
+        return Ok(path);
+    }
+    // cargo names the file it wrote, which is the reliable answer because a
+    // workspace puts it under the workspace root rather than the app. Fall
+    // back to the conventional location for the cases where that path does not
+    // resolve here, such as a cargo that builds somewhere else.
+    conventional_cargo_executable(src).ok_or_else(|| {
+        format!(
+            "the cargo build in {} produced no executable to package. A packaged app needs \
+             a binary target; a library crate has nothing to ship.",
+            src.display()
+        )
+    })
+}
+
+/// The release binary at the layout a single-crate cargo project uses:
+/// `target/release/<package name>`, with the package name read from the
+/// manifest.
+fn conventional_cargo_executable(src: &Path) -> Option<PathBuf> {
+    let manifest = std::fs::read_to_string(src.join("Cargo.toml")).ok()?;
+    let value = toml::from_str::<toml::Value>(&manifest).ok()?;
+    let name = value
+        .get("package")
+        .and_then(|p| p.get("name"))
+        .and_then(|n| n.as_str())?;
+    let exe = if cfg!(target_os = "windows") {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    let candidate = src.join("target").join("release").join(exe);
+    candidate.is_file().then_some(candidate)
+}
+
+/// Build a C++ SDK app with CMake and return the executable it produced.
+///
+/// CMake names the binary in the project's own `CMakeLists.txt`, so there is
+/// nothing to read it off; the build tree is searched for the executable it
+/// wrote instead, and an ambiguous result is reported rather than guessed at.
+fn build_cpp_app(src: &Path) -> Result<PathBuf, String> {
+    let specs = crate::app_kind::dispatch(AppKind::Cpp, src, crate::app_kind::Mode::Build)
+        .map_err(|e| e.to_string())?;
+    for spec in &specs {
+        eprintln!(
+            "lumenc: {} {} (in {})",
+            spec.program,
+            spec.args.join(" "),
+            spec.cwd.display()
+        );
+        let status = std::process::Command::new(&spec.program)
+            .args(&spec.args)
+            .current_dir(&spec.cwd)
+            .envs(spec.env.iter().map(|(k, v)| (k.clone(), v.clone())))
+            .status()
+            .map_err(|e| {
+                format!(
+                    "cannot run {}: {e}. A C++ app is built with CMake.",
+                    spec.program
+                )
+            })?;
+        if !status.success() {
+            return Err(format!("the {} step failed", spec.program));
+        }
+    }
+
+    let build_dir = src.join("build");
+    let mut found = built_executables(&build_dir);
+    match found.len() {
+        0 => Err(format!(
+            "the CMake build in {} produced no executable to package. Check that the \
+             project defines an executable target.",
+            build_dir.display()
+        )),
+        1 => Ok(found.remove(0)),
+        _ => {
+            // Newest wins, and the alternatives are named so the choice is
+            // visible rather than silent.
+            found.sort_by_key(|p| {
+                std::fs::metadata(p)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            });
+            let chosen = found.pop().expect("more than one executable");
+            eprintln!(
+                "lumenc package: the CMake build produced more than one executable ({}); \
+                 packaging the most recent, {}.",
+                found
+                    .iter()
+                    .filter_map(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                chosen.display()
+            );
+            Ok(chosen)
+        }
+    }
+}
+
+/// Every executable a CMake build tree holds, ignoring CMake's own machinery
+/// and the libraries an executable links.
+fn built_executables(build_dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    // Multi-configuration generators (Visual Studio, Xcode) put the binary in
+    // a per-configuration subdirectory; single-configuration ones do not.
+    let roots = [
+        build_dir.to_path_buf(),
+        build_dir.join("Release"),
+        build_dir.join("bin"),
+    ];
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() || !is_executable_file(&path) {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let skipped_ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| matches!(e, "so" | "dylib" | "a" | "lib" | "cmake" | "txt"));
+            if skipped_ext || name.starts_with("CMake") || name == "Makefile" {
+                continue;
+            }
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// Whether a path is a file the OS would run: the executable bit on Unix, a
+/// `.exe` suffix on Windows.
+fn is_executable_file(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("exe"))
+    }
+}
+
+/// Compile the app, gather the toolchain files, and write the folder.
+/// Returns the one-line summary to print.
+fn package(
+    src: &Path,
+    out: &Path,
+    app_name: &str,
+    target: Target,
+    lib_dir: Option<&Path>,
+) -> Result<String, String> {
+    let compiled = crate::compile_app(src).map_err(|e| e.to_string())?;
+    let artifact = build_artifact(compiled, src)?;
+
+    let toolchain = locate_toolchain(target, lib_dir)?;
+
+    std::fs::create_dir_all(out).map_err(|e| format!("create {}: {e}", out.display()))?;
+
+    let exe_path = out.join(target.exe_name(app_name));
+    let mut sidecar = false;
+    match (target.os, cfg!(target_os = "macos")) {
+        // A Mach-O signature covers the whole file, so the artifact goes in a
+        // section instead of past the end. That needs a linker.
+        (Os::Macos, true) => embed_via_cc(&exe_path, &artifact)?,
+        (Os::Macos, false) => {
+            copy_executable(&toolchain.stub, &exe_path)?;
+            let path = out.join(format!("{app_name}.{ARTIFACT_EXT}"));
+            std::fs::write(&path, &artifact)
+                .map_err(|e| format!("write {}: {e}", path.display()))?;
+            sidecar = true;
+        }
+        _ => {
+            copy_executable(&toolchain.stub, &exe_path)?;
+            append_artifact(&exe_path, &artifact)?;
+        }
+    }
+
+    let lib_dest = out.join(target.lib_name());
+    std::fs::copy(&toolchain.lib, &lib_dest).map_err(|e| {
+        format!(
+            "copy {} -> {}: {e}",
+            toolchain.lib.display(),
+            lib_dest.display()
+        )
+    })?;
+
+    let copied = copy_app_files(src, out, CopyRules::markup())?;
+
+    if sidecar {
+        println!(
+            "lumenc package: cross-packaging to macOS, so the app ships as \
+             {app_name}.{ARTIFACT_EXT} beside the executable"
+        );
+    }
+    Ok(format!(
+        "wrote {} for {} ({} app file{} beside it)",
+        exe_path.display(),
+        target.name,
+        copied,
+        if copied == 1 { "" } else { "s" }
+    ))
+}
+
+/// Serialize the compiled app, with asset paths rewritten relative to the app
+/// so they still resolve once the package is copied to another machine. The
+/// compiler resolves them against the app directory on this machine, which is
+/// the right answer for `lumenc run` and the wrong one for a shipped folder.
+fn build_artifact(
+    mut compiled: lumen_ir::artifact::CompiledApp,
+    src: &Path,
+) -> Result<Vec<u8>, String> {
+    let mut outside: Vec<String> = Vec::new();
+    relativize_assets(&mut compiled.ir.root, src, &mut outside);
+    for path in &outside {
+        eprintln!(
+            "lumenc package: warning: {path} is outside the app directory, so it is not \
+             copied into the package"
+        );
+    }
+    lumen_ir::artifact::serialize(&compiled).map_err(|e| e.to_string())
+}
+
+/// Rewrite every `<image src>` that points inside `src` to a path relative to
+/// it, recording the ones that point elsewhere.
+fn relativize_assets(el: &mut lumen_ir::layout_ir::Element, src: &Path, outside: &mut Vec<String>) {
+    if el.tag == "image"
+        && let Some(path) = &el.attrs.src
+    {
+        let p = Path::new(path);
+        if p.is_absolute() {
+            match p.strip_prefix(src) {
+                // Joined with forward slashes whatever the packaging machine
+                // uses: every platform's loader accepts them, so an artifact
+                // built for another platform names its files in a way that
+                // platform can follow.
+                Ok(rel) => {
+                    let parts: Vec<String> = rel
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                        .collect();
+                    el.attrs.src = Some(parts.join("/"));
+                }
+                Err(_) => outside.push(path.clone()),
+            }
+        }
+    }
+    for child in &mut el.children {
+        relativize_assets(child, src, outside);
+    }
+}
+
+/// The two toolchain files a package is assembled from.
+struct Toolchain {
+    stub: PathBuf,
+    lib: PathBuf,
+}
+
+/// Find the launcher stub and the shared runtime library for `target`.
+///
+/// `--lib-dir` wins outright. Otherwise a package for this machine's own
+/// platform uses the files shipped with the running `lumenc`, which is what an
+/// installed toolchain has beside it and what `LUMEN_LIB_DIR` points at in a
+/// source tree. A package for another platform comes from the per-version
+/// cache, and is fetched from the release channel when the cache is empty.
+fn locate_toolchain(target: Target, lib_dir: Option<&Path>) -> Result<Toolchain, String> {
+    let mut probed: Vec<PathBuf> = Vec::new();
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(dir) = lib_dir {
+        dirs.push(dir.to_path_buf());
+    }
+    if target == Target::host() {
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            dirs.push(dir.to_path_buf());
+        }
+        if let Some(dir) = std::env::var_os("LUMEN_LIB_DIR") {
+            dirs.push(PathBuf::from(dir));
+        }
+    }
+    if let Some(dir) = cache_dir(target) {
+        dirs.push(dir);
+    }
+
+    for dir in &dirs {
+        let stub = dir.join(target.stub_name());
+        let lib = dir.join(target.lib_name());
+        if stub.is_file() && lib.is_file() {
+            return Ok(Toolchain { stub, lib });
+        }
+        probed.push(dir.clone());
+    }
+
+    if target != Target::host()
+        && let Some(dir) = cache_dir(target)
+    {
+        fetch_toolchain(target, &dir)?;
+        return Ok(Toolchain {
+            stub: dir.join(target.stub_name()),
+            lib: dir.join(target.lib_name()),
+        });
+    }
+
+    let list: Vec<String> = probed.iter().map(|p| p.display().to_string()).collect();
+    Err(format!(
+        "cannot find {} and {} for {}. Looked in: {}. Set LUMEN_LIB_DIR (or pass \
+         --lib-dir) to the directory holding them; in a Lumen source tree that is \
+         target/release after `cargo build --release -p lumen-launcher -p lumen-ffi`.",
+        target.stub_name(),
+        target.lib_name(),
+        target.name,
+        if list.is_empty() {
+            "nowhere".to_string()
+        } else {
+            list.join(", ")
+        }
+    ))
+}
+
+/// Where another platform's toolchain files are kept between runs: under the
+/// platform cache directory, keyed by Lumen version and target so an upgrade
+/// never reuses the old ones.
+fn cache_dir(target: Target) -> Option<PathBuf> {
+    let base = if cfg!(target_os = "windows") {
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library").join("Caches"))
+    } else {
+        std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+    }?;
+    Some(
+        base.join("lumen")
+            .join("toolchain")
+            .join(env!("CARGO_PKG_VERSION"))
+            .join(target.name),
+    )
+}
+
+/// Copy a file and make it executable on Unix, since a copy keeps the source
+/// permissions but an archive member may arrive without them.
+fn copy_executable(from: &Path, to: &Path) -> Result<(), String> {
+    std::fs::copy(from, to)
+        .map_err(|e| format!("copy {} -> {}: {e}", from.display(), to.display()))?;
+    set_executable(to)
+}
+
+#[cfg(unix)]
+fn set_executable(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(path)
+        .map_err(|e| format!("stat {}: {e}", path.display()))?
+        .permissions();
+    perms.set_mode(perms.mode() | 0o755);
+    std::fs::set_permissions(path, perms).map_err(|e| format!("chmod {}: {e}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn set_executable(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+/// Append the artifact and the footer that says where it starts.
+fn append_artifact(exe: &Path, artifact: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(exe)
+        .map_err(|e| format!("open {}: {e}", exe.display()))?;
+    file.write_all(artifact)
+        .and_then(|()| file.write_all(FOOTER_MAGIC))
+        .and_then(|()| file.write_all(&(artifact.len() as u64).to_le_bytes()))
+        .map_err(|e| format!("write {}: {e}", exe.display()))
+}
+
+/// Build the macOS executable by compiling the C wrapper with the artifact
+/// linked in as a Mach-O section. `cc` ad-hoc-signs the result, which is what
+/// makes it runnable on Apple silicon.
+fn embed_via_cc(exe: &Path, artifact: &[u8]) -> Result<(), String> {
+    let tmp = std::env::temp_dir().join(format!("lumen-package-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).map_err(|e| format!("create {}: {e}", tmp.display()))?;
+    let wrapper = tmp.join("wrapper.c");
+    let payload = tmp.join(format!("app.{ARTIFACT_EXT}"));
+    std::fs::write(&wrapper, MACOS_WRAPPER_C)
+        .map_err(|e| format!("write {}: {e}", wrapper.display()))?;
+    std::fs::write(&payload, artifact).map_err(|e| format!("write {}: {e}", payload.display()))?;
+
+    let status = std::process::Command::new("cc")
+        .arg(&wrapper)
+        .arg("-o")
+        .arg(exe)
+        .arg("-sectcreate")
+        .arg("__LUMEN")
+        .arg("__lmna")
+        .arg(&payload)
+        .status()
+        .map_err(|e| {
+            format!(
+                "cannot run cc: {e}. A macOS package is linked, not appended, so it needs \
+                 the Xcode Command Line Tools (xcode-select --install)."
+            )
+        })?;
+    let _ = std::fs::remove_dir_all(&tmp);
+    if !status.success() {
+        return Err("cc failed to build the app executable".to_string());
+    }
+    Ok(())
+}
+
+/// What to leave behind when copying an app directory into a package: build
+/// inputs and build trees, which differ per app kind.
+struct CopyRules {
+    /// Directory names never descended into.
+    skip_dirs: &'static [&'static str],
+    /// File extensions never copied.
+    skip_exts: &'static [&'static str],
+    /// Exact file names never copied.
+    skip_files: &'static [&'static str],
+}
+
+impl CopyRules {
+    /// A markup app: the markup, the stylesheet, and the scripts are all
+    /// compiled into the executable, so they stay behind.
+    fn markup() -> Self {
+        Self {
+            skip_dirs: &["target"],
+            skip_exts: &["lmn", "css", "rhai", "lua", "cdl"],
+            skip_files: &[],
+        }
+    }
+
+    /// An SDK app: its markup, stylesheet, and scripts are read at run time by
+    /// the app itself, so they travel. What stays behind is the source it was
+    /// compiled from and the build tree that compile left.
+    fn sdk(kind: AppKind) -> Self {
+        match kind {
+            AppKind::Cpp => Self {
+                skip_dirs: &["target", "build", "src", "include"],
+                skip_exts: &["cpp", "cc", "cxx", "h", "hpp"],
+                skip_files: &["CMakeLists.txt"],
+            },
+            _ => Self {
+                skip_dirs: &["target", "src"],
+                skip_exts: &["rs"],
+                skip_files: &["Cargo.toml", "Cargo.lock"],
+            },
+        }
+    }
+}
+
+/// Copy the app's own files into the package, at the same relative paths.
+///
+/// Everything the app directory holds travels except what the executable
+/// already carries and what is not part of the shipped app: dotfiles, the
+/// build inputs and outputs named by `rules`, and whichever directory the
+/// package is being written into. Copying whole rather than only the files the
+/// markup names is deliberate: an app reaches many of its files at run time,
+/// through a script that plays a sound or a translation the locale picks, and
+/// a static reading of the markup cannot see those.
+fn copy_app_files(src: &Path, out: &Path, rules: CopyRules) -> Result<usize, String> {
+    let mut count = 0usize;
+    let mut stack = vec![src.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries =
+            std::fs::read_dir(&dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.')
+                || rules.skip_dirs.contains(&name.as_str())
+                || rules.skip_files.contains(&name.as_str())
+            {
+                continue;
+            }
+            if path.is_dir() {
+                // Never descend towards the package being written, so the
+                // default `dist/<name>` output and anything else already
+                // built there stays out of it.
+                if !holds(&path, out) {
+                    stack.push(path);
+                }
+                continue;
+            }
+            if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| rules.skip_exts.contains(&e))
+            {
+                continue;
+            }
+            let Ok(rel) = path.strip_prefix(src) else {
+                continue;
+            };
+            let dest = out.join(rel);
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("create {}: {e}", parent.display()))?;
+            }
+            std::fs::copy(&path, &dest)
+                .map_err(|e| format!("copy {} -> {}: {e}", path.display(), dest.display()))?;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+/// Whether `dir` is `inner` or holds it, comparing resolved paths so a
+/// relative `dist/App` and an absolute output directory still match.
+fn holds(dir: &Path, inner: &Path) -> bool {
+    match (std::fs::canonicalize(dir), std::fs::canonicalize(inner)) {
+        (Ok(dir), Ok(inner)) => inner.starts_with(&dir),
+        _ => inner.starts_with(dir),
+    }
+}
+
+// ============================================================
+// Fetching another platform's toolchain files
+// ============================================================
+
+/// Download this Lumen version's release archive for `target`, check it
+/// against the checksums published with the release, and put the launcher
+/// stub and the shared library in `dest`.
+fn fetch_toolchain(target: Target, dest: &Path) -> Result<(), String> {
+    let repo = std::env::var("LUMEN_GH_REPO").unwrap_or_else(|_| "lumen-fx/lumen".to_string());
+    let version = env!("CARGO_PKG_VERSION");
+    let base = format!("https://github.com/{repo}/releases/download/v{version}");
+    let archive = target.archive_name();
+
+    println!(
+        "lumenc package: fetching the {} toolchain from {base}",
+        target.name
+    );
+
+    let sums = http_get(&format!("{base}/sha256sums.txt"))?;
+    let sums = String::from_utf8(sums).map_err(|_| {
+        "the release checksums are not text; refusing to install from it".to_string()
+    })?;
+    let want = sums
+        .lines()
+        .find_map(|line| {
+            let (hash, name) = line.split_once("  ")?;
+            (name.trim() == archive).then(|| hash.trim().to_lowercase())
+        })
+        .ok_or_else(|| {
+            format!(
+                "the v{version} release publishes no checksum for {archive}, so it cannot be \
+                 verified. Build the toolchain files for {} yourself and pass --lib-dir.",
+                target.name
+            )
+        })?;
+
+    let bytes = http_get(&format!("{base}/{archive}"))?;
+    let got = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        format!("{:x}", hasher.finalize())
+    };
+    if got != want {
+        return Err(format!(
+            "{archive} does not match the checksum published with the release; \
+             nothing was installed"
+        ));
+    }
+
+    std::fs::create_dir_all(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
+    let wanted = [target.stub_name(), target.lib_name().to_string()];
+    let found = match target.os {
+        Os::Windows => extract_zip(&bytes, &wanted, dest)?,
+        _ => extract_tar_gz(&bytes, &wanted, dest)?,
+    };
+    for name in &wanted {
+        if !found.contains(name) {
+            return Err(format!(
+                "{archive} carries no {name}. A release older than app packaging ships no \
+                 launcher; package with --lib-dir instead."
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Fetch a URL whole, following redirects.
+fn http_get(url: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut response = ureq::get(url)
+        .call()
+        .map_err(|e| format!("cannot download {url}: {e}"))?;
+    let mut bytes = Vec::new();
+    response
+        .body_mut()
+        .as_reader()
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("cannot read {url}: {e}"))?;
+    Ok(bytes)
+}
+
+/// Write out the named members of a `.tar.gz`, ignoring their directories.
+fn extract_tar_gz(bytes: &[u8], wanted: &[String], dest: &Path) -> Result<Vec<String>, String> {
+    let mut found = Vec::new();
+    let decoder = flate2::read::GzDecoder::new(bytes);
+    let mut archive = tar::Archive::new(decoder);
+    let entries = archive
+        .entries()
+        .map_err(|e| format!("cannot read the release archive: {e}"))?;
+    for entry in entries {
+        let mut entry = entry.map_err(|e| format!("cannot read the release archive: {e}"))?;
+        let path = entry
+            .path()
+            .map_err(|e| format!("cannot read the release archive: {e}"))?
+            .into_owned();
+        let Some(name) = file_name_of(&path) else {
+            continue;
+        };
+        if !wanted.contains(&name) {
+            continue;
+        }
+        let out = dest.join(&name);
+        entry
+            .unpack(&out)
+            .map_err(|e| format!("write {}: {e}", out.display()))?;
+        set_executable(&out)?;
+        found.push(name);
+    }
+    Ok(found)
+}
+
+/// Write out the named members of a `.zip`, ignoring their directories.
+fn extract_zip(bytes: &[u8], wanted: &[String], dest: &Path) -> Result<Vec<String>, String> {
+    let mut found = Vec::new();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+        .map_err(|e| format!("cannot read the release archive: {e}"))?;
+    for i in 0..archive.len() {
+        let mut member = archive
+            .by_index(i)
+            .map_err(|e| format!("cannot read the release archive: {e}"))?;
+        let Some(name) = member.enclosed_name().as_deref().and_then(file_name_of) else {
+            continue;
+        };
+        if !wanted.contains(&name) {
+            continue;
+        }
+        let out = dest.join(&name);
+        let mut file =
+            std::fs::File::create(&out).map_err(|e| format!("write {}: {e}", out.display()))?;
+        std::io::copy(&mut member, &mut file)
+            .map_err(|e| format!("write {}: {e}", out.display()))?;
+        found.push(name);
+    }
+    Ok(found)
+}
+
+/// The last component of an archive member path, as an owned string.
+fn file_name_of(path: &Path) -> Option<String> {
+    path.file_name().map(|n| n.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_names_match_the_release_assets() {
+        assert_eq!(
+            Target::parse("windows-x86_64").map(|t| t.archive_name()),
+            Some("lumen-windows-x86_64.zip".to_string())
+        );
+        assert_eq!(
+            Target::parse("linux-aarch64").map(|t| t.archive_name()),
+            Some("lumen-linux-aarch64.tar.gz".to_string())
+        );
+        assert!(Target::parse("plan9-x86_64").is_none());
+    }
+
+    #[test]
+    fn a_windows_package_keeps_the_exe_suffix_on_any_host() {
+        let windows = Target::parse("windows-x86_64").expect("known target");
+        assert_eq!(windows.exe_name("Notes"), "Notes.exe");
+        assert_eq!(windows.stub_name(), "lumen-launcher.exe");
+        let linux = Target::parse("linux-x86_64").expect("known target");
+        assert_eq!(linux.exe_name("Notes"), "Notes");
+    }
+
+    #[test]
+    fn the_cache_is_keyed_by_version_and_target() {
+        let Some(dir) = cache_dir(Target::parse("macos-aarch64").expect("known target")) else {
+            return;
+        };
+        let text = dir.to_string_lossy();
+        assert!(text.contains(env!("CARGO_PKG_VERSION")));
+        assert!(text.ends_with("macos-aarch64"));
+    }
+
+    /// An appended package is the stub, then the artifact, then the footer -
+    /// the exact shape `lumen-launcher` reads back.
+    #[test]
+    fn appending_leaves_the_footer_last() {
+        let tmp = std::env::temp_dir().join(format!("lumen-append-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).expect("mkdir");
+        let exe = tmp.join("App");
+        std::fs::write(&exe, b"stub").expect("write stub");
+        append_artifact(&exe, b"LMNA-bytes").expect("append");
+
+        let image = std::fs::read(&exe).expect("read back");
+        assert_eq!(&image[image.len() - 8..], &10u64.to_le_bytes());
+        assert_eq!(&image[image.len() - 16..image.len() - 8], FOOTER_MAGIC);
+        assert!(image.starts_with(b"stub"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Asset paths come out of the compiler resolved against this machine and
+    /// have to leave relative to the app, or a copied package looks for its
+    /// images in a directory that only exists on the packaging machine.
+    #[test]
+    fn asset_paths_leave_relative_to_the_app() {
+        use lumen_ir::layout_ir::{Attributes, Element};
+
+        // Absolute on every platform, and with each family's own separators:
+        // a literal POSIX path is relative on Windows, where the rewrite would
+        // have nothing to do and the test would pass without testing anything.
+        let app = std::env::temp_dir().join("notes");
+        let inside = app.join("icons").join("save.png");
+        let elsewhere = std::env::temp_dir().join("pixmaps").join("other.png");
+
+        let image = |path: &Path| Element {
+            tag: "image".to_string(),
+            attrs: Attributes {
+                src: Some(path.to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+            children: Vec::new(),
+            interpolations: Vec::new(),
+        };
+        let mut root = Element {
+            tag: "root".to_string(),
+            attrs: Attributes::default(),
+            children: vec![image(&inside), image(&elsewhere)],
+            interpolations: Vec::new(),
+        };
+
+        let mut outside = Vec::new();
+        relativize_assets(&mut root, &app, &mut outside);
+
+        // Compared as a path, not as text: the separator between `icons` and
+        // the file name is the platform's own.
+        let rewritten = root.children[0]
+            .attrs
+            .src
+            .as_deref()
+            .expect("the asset keeps a path");
+        assert_eq!(Path::new(rewritten), Path::new("icons").join("save.png"));
+        assert!(
+            Path::new(rewritten).is_relative(),
+            "a packaged asset path must be relative to the app: {rewritten}"
+        );
+        assert_eq!(
+            outside,
+            vec![elsewhere.to_string_lossy().into_owned()],
+            "a file outside the app directory keeps the path it had"
+        );
+    }
+}

@@ -31,12 +31,14 @@ matrix is `ubuntu-latest`, `macos-latest`, and `windows-latest` only, so a
 regression specific to either one only shows up when a release is cut, not on
 every pull request.
 
-There is one component, `lumen`, meaning `lumenc` plus the `liblumen` runtime
-library (the `lumen-ffi` crate, built as a cdylib). Lumen's candela scripting
-support is compiled into `liblumen` directly; there is no separate candela
-binary and nothing here builds or ships one. The standalone candela language
-toolchain is a different product with its own repository (`lumen-fx/candela`)
-and its own release process, and is out of scope for this checklist.
+There is one component, `lumen`, meaning `lumenc`, the `liblumen` runtime
+library (the `lumen-ffi` crate, built as a cdylib), and `lumen-launcher`, the
+stub `lumenc package` copies to make an app executable. Lumen's candela
+scripting support is compiled into `liblumen` directly; there is no separate
+candela binary and nothing here builds or ships one. The standalone candela
+language toolchain is a different product with its own repository
+(`lumen-fx/candela`) and its own release process, and is out of scope for this
+checklist.
 
 ## One-time setup
 
@@ -59,13 +61,14 @@ and its own release process, and is out of scope for this checklist.
    ```
 
 4. The `release` workflow then, automatically, for each target:
-   - checks out at the tag and builds `lumenc` and `liblumen` in release
-     mode (`cargo build --release -p lumenc` and `-p lumen-ffi`; the
-     workspace `[profile.release]` already strips symbols, so there is no
-     separate strip step);
-   - packages `bin/lumenc` (`lumenc.exe` on Windows) and the liblumen shared
-     library into one archive, both files in the *same* `bin/` directory. See
-     the note on `lumenc/src/loader.rs` below;
+   - checks out at the tag and builds `lumenc`, `liblumen`, and the launcher
+     stub in release mode (`cargo build --release` with `-p lumenc`,
+     `-p lumen-ffi`, and `-p lumen-launcher`; the workspace
+     `[profile.release]` already strips symbols, so there is no separate
+     strip step);
+   - packages `bin/lumenc` (`lumenc.exe` on Windows), the liblumen shared
+     library, and `bin/lumen-launcher` into one archive, all in the *same*
+     `bin/` directory. See the note on `lumenc/src/loader.rs` below;
    - on Windows, also stages an install receipt and builds
      `lumen-windows-x86_64.msi` from `tools/msi/lumen.wxs`. The receipt is
      staged after the zip is closed, so only the MSI carries one: a receipt
@@ -88,13 +91,14 @@ order is: next to its own executable, then an `LUMEN_LIB_DIR` override,
 then the platform loader's default search path. It does not look in a
 sibling `lib/` directory. A prebuilt install that put `lumenc` in `bin/`
 and `liblumen_ffi.*` in `lib/` would install a `lumenc` that cannot find its
-own runtime. The archive therefore puts both files in `bin/`:
+own runtime. `lumenc package` looks for the launcher stub the same way, so it
+belongs in `bin/` too. The archive therefore puts all three files there:
 
-| Platform | Files in `bin/`                          |
-| -------- | ------------------------------------------ |
-| Linux    | `lumenc`, `liblumen_ffi.so`                |
-| macOS    | `lumenc`, `liblumen_ffi.dylib`             |
-| Windows  | `lumenc.exe`, `lumen_ffi.dll`              |
+| Platform | Files in `bin/`                                             |
+| -------- | ----------------------------------------------------------- |
+| Linux    | `lumenc`, `liblumen_ffi.so`, `lumen-launcher`                |
+| macOS    | `lumenc`, `liblumen_ffi.dylib`, `lumen-launcher`             |
+| Windows  | `lumenc.exe`, `lumen_ffi.dll`, `lumen-launcher.exe`          |
 
 ## Publishing to the install channel
 

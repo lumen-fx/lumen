@@ -211,10 +211,82 @@ fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileErr
     // Bake inline + external `<script>` into one string; strip both from the IR
     // so the parser-free runtime reconstructs the exact script-host input.
     let script_source = combined_script_source(&ir, dir)?;
+    let scripts = grouped_script_sources(&ir, dir)?;
     ir.script_source = String::new();
     ir.external_scripts.clear();
 
-    Ok(lumen_ir::artifact::CompiledApp { ir, script_source })
+    Ok(lumen_ir::artifact::CompiledApp {
+        ir,
+        script_source,
+        scripts,
+        // This path covers the single entry page (see the module comment);
+        // `lumenc build` and `lumenc package` are what compile a page set.
+        pages: None,
+    })
+}
+
+/// The engine name a script file's extension selects. Mirror of
+/// `lumen_runtime::config::ScriptEngine::from_extension`, which this path
+/// cannot reach (see the module doc comment).
+fn engine_for(path: &Path) -> Option<&'static str> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("cdl") => Some("candela"),
+        Some("lua") => Some("lua"),
+        Some("rhai") => Some("rhai"),
+        _ => None,
+    }
+}
+
+/// Split the app's script by the engine that runs each part, so an app that
+/// mixes languages keeps one host per language after compilation. Each
+/// `<script src>` file joins its extension's engine; the inline block joins
+/// the app's one external language when there is exactly one, and candela
+/// otherwise. Mirror of `lumen_runtime::run::loading::grouped_script_sources`
+/// without the `[script] engine` override, which the runtime applies itself.
+fn grouped_script_sources(
+    ir: &lumen_ir::layout_ir::LayoutIR,
+    dir: &Path,
+) -> Result<Vec<lumen_ir::artifact::CompiledScript>, CompileError> {
+    let externals: Vec<(&'static str, &String)> = ir
+        .external_scripts
+        .iter()
+        .map(|rel| (engine_for(Path::new(rel)).unwrap_or("candela"), rel))
+        .collect();
+    let mut engines: Vec<&'static str> = Vec::new();
+    for (engine, _) in &externals {
+        if !engines.contains(engine) {
+            engines.push(engine);
+        }
+    }
+    let inline_engine = match engines.as_slice() {
+        [only] => *only,
+        _ => "candela",
+    };
+
+    let mut out: Vec<lumen_ir::artifact::CompiledScript> = Vec::new();
+    let mut push = |engine: &str, body: &str| {
+        if body.trim().is_empty() {
+            return;
+        }
+        match out.iter_mut().find(|s| s.engine == engine) {
+            Some(entry) => {
+                entry.source.push('\n');
+                entry.source.push_str(body);
+            }
+            None => out.push(lumen_ir::artifact::CompiledScript {
+                engine: engine.to_string(),
+                source: body.to_string(),
+            }),
+        }
+    };
+    push(inline_engine, &ir.script_source);
+    for (engine, rel) in &externals {
+        let path = dir.join(rel);
+        let body =
+            std::fs::read_to_string(&path).map_err(|e| CompileError::Read(path.clone(), e))?;
+        push(engine, &body);
+    }
+    Ok(out)
 }
 
 /// Read the `[app] entry` key from `lumen.toml`, falling back to `main.lmn`.

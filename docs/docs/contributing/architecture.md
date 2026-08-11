@@ -101,9 +101,13 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   and the loaders for both compiled artifacts and source. Links no parser.
 - **lumenc**: the compiler front end and the CLI. Markup and CSS parsers, the
   include and import resolver, the formatter, the scaffolder, and the
-  `check` / `run` / `build` / `bundle` subcommands.
+  `check` / `run` / `build` / `bundle` / `package` subcommands.
 - **lumen-ffi**: the C ABI. An opaque app handle, a tagged value type, and the
   node binding, built as a shared and static library.
+- **lumen-launcher**: the executable stub `lumenc package` turns into a shipped
+  app. It reads the artifact packaging put inside it, opens the shared runtime
+  library beside it, and runs. It links the dlopen seam and nothing else, so it
+  carries no renderer, window backend, or script host of its own.
 - **lumen** (in `sdk/rust`): the Rust SDK. Plugin groups, typed signals, safe
   node handles, and event-condition helpers.
 - **lumen-devtools**: the in-window overlay, itself authored in Lumen markup
@@ -220,9 +224,17 @@ The load path:
 A precompiled artifact skips steps 1 through 4 entirely: parsing, cascade, and
 script concatenation all happened at build time, and the artifact carries the
 finished IR. The container is a magic number, a format version, and a bincode
-body holding the IR and the script source; a version the runtime does not
-recognise is rejected before decoding. A runtime built without the source-load
-path can run only artifacts, and links no parser at all.
+body holding the IR, the script source, the split of that source by the engine
+that runs each part, and the page set of a multi-page app; a version the
+runtime does not recognise is rejected before decoding. The engine split and
+the page set are recorded rather than rediscovered, because a shipped app has
+neither script files nor page files left to read them off. Pages are assembled
+at compile time exactly as the from-source path assembles them, so the IR
+already holds every page behind its gate and only the routing data travels
+separately. Relative asset paths in the IR resolve against the directory the
+artifact is run with, so a packaged app finds its files wherever it is copied.
+A runtime built without the source-load path can run only artifacts, and links
+no parser at all.
 
 Some styling is re-resolved after spawn. A theme flip, a media-query change, or
 a root class change bumps a style version, and a system rebuilds a synthetic

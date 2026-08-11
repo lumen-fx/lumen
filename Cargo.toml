@@ -23,6 +23,7 @@ members = [
     "lumen/widget-macros",
     "lumen/assets",
     "lumen/ffi",
+    "lumen/launcher",
     "lumen/os-mime",
     "lumen/os-clipboard",
     "lumen/os-dnd",
@@ -183,8 +184,18 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.23"
 
 # Synchronous HTTP for scripts' `fetch(url, tag)` builtin. Spawned on a
-# dedicated thread per request, so the main loop stays unblocked.
+# dedicated thread per request, so the main loop stays unblocked. Also how
+# `lumenc package --target` fetches another platform's toolchain files.
 ureq = { version = "3", features = ["json"] }
+
+# Release-archive handling for `lumenc package --target`: verify a download
+# against the release's published checksums, then read the two files needed
+# out of the archive. Unix releases ship .tar.gz, Windows ships .zip, so both
+# readers are needed on every host that can cross-package.
+sha2 = "0.10"
+tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+zip = { version = "6", default-features = false, features = ["deflate"] }
 
 # OS clipboard for text-input copy/cut/paste. Cross-platform: Wayland, X11,
 # macOS, Windows. We instantiate one Clipboard per process at plugin init.

@@ -107,6 +107,8 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
         include_mtimes,
         css_import_paths,
         css_import_mtimes,
+        scripts: compiled_scripts,
+        pages: compiled_pages,
     } = loaded;
     // Hot-reload watch fields are only consumed by the (feature-gated)
     // watcher below; in a parser-free build they are always empty.
@@ -137,7 +139,17 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
     // the per-host half once per language. The `set_color_scheme` / `page`
     // engine extensions are engine-typed (rhai::Engine vs mlua::Lua) so they
     // live in the arms below, but push byte-identical commands.
-    let grouped = remap_trimmed_hosts(grouped_script_sources(&ir, &dir, &cfg)?);
+    //
+    // A precompiled artifact carries the split the AOT compiler recorded, and
+    // it is the only source of it: the app's `.lua` / `.rhai` files are not
+    // shipped beside a compiled app for the directory scan to read. An
+    // explicit `[script] engine` still collapses everything onto one host.
+    let resolve_here = compiled_scripts.is_empty() || cfg.script.engine.is_some();
+    let grouped = remap_trimmed_hosts(if resolve_here {
+        grouped_script_sources(&ir, &dir, &cfg)?
+    } else {
+        compiled_scripts
+    });
     let has_script = !grouped.is_empty();
     let mut reloaders = ScriptReloaders::default();
     let multi_host = grouped.len() > 1;
@@ -311,14 +323,21 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
     use crate::spawn::SpawnIntoWorld;
     let root = ir.spawn_into(&mut app.world);
 
-    // File-based pages: install the page registry, in-memory history, the
-    // reserved `route.*` signal seeds, and the navigation systems
-    // (`apply_navigation` before the `<if>` reconciler; anchor-click ->
-    // navigate). Only when the app is genuinely multi-page.
-    if let Some(plan) = &page_plan
-        && plan.multipage
-    {
-        crate::pages::install(&mut app, plan);
+    // Pages: install the page registry, in-memory history, the reserved
+    // `route.*` signal seeds, and the navigation systems (`apply_navigation`
+    // before the `<if>` reconciler; anchor-click -> navigate). Only when the
+    // app has more than one page.
+    //
+    // A compiled app carries its page set in the artifact and is authoritative
+    // about it: the `.lmn` files a directory scan would look for are compiled
+    // in and not shipped, so the scan above always comes back single-page for
+    // one. An app loaded from source uses the plan discovered from its files.
+    match (&compiled_pages, &page_plan) {
+        (Some(pages), _) => {
+            crate::pages::install_routing(&mut app, pages.entry.clone(), pages.keys.clone());
+        }
+        (None, Some(plan)) if plan.multipage => crate::pages::install(&mut app, plan),
+        _ => {}
     }
 
     // Seed K9's class cache so the first `set_root_class` call has a

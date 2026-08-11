@@ -149,3 +149,15 @@ descriptions are in the [lumen.toml reference](../reference/lumen-toml.md).
 
 `lumenc run` watches every page file. Editing any page, or the shared
 `layout.lmn`, reloads the app in place.
+
+## Shipping a multi-page app
+
+`lumenc package` compiles every page into the app executable, together with the
+page names navigation resolves against, so a packaged app routes exactly as it
+does here while carrying no `.lmn` files at all. `lumenc build` bakes the same
+page set into an artifact. Nothing about a page changes once it ships:
+`page()`, `<a href>`, back and forward, and paths with parameters all behave as
+described above.
+
+The one difference is that a shipped app has no page files to reload, so adding
+a page means rebuilding. See [packaging](packaging.md).

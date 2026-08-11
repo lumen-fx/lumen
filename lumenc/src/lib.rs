@@ -47,6 +47,13 @@ pub mod loader;
 /// `--signals` lint to [`lint_signals_cli`] (`runtime-parse`).
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub mod mcp_cli;
+/// `lumenc package` - assemble a shippable app folder from the launcher stub,
+/// the app's compiled artifact, the shared runtime library, and the app's own
+/// files. Gated with the compile path it uses (`runtime-parse` + `dev-run`)
+/// and with `package`, which carries the release-channel fetch `--target`
+/// needs.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "package"))]
+pub mod package_cli;
 pub mod parser_css;
 /// Markup (`.lmn`) parser - the `roxmltree`-backed front-end, dropped from
 /// parser-free runtime builds via the `runtime-parse` feature.

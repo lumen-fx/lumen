@@ -425,11 +425,24 @@ fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// Install the page registry, in-memory history, the reserved-signal seeds,
 /// and the navigation systems onto a built app. Called once at boot when
 /// `plan.multipage` is set.
+///
+/// The [`PagePlan`] goes in as a resource alongside the routing itself,
+/// because a from-source run reloads pages from the files it names. A compiled
+/// app has no files to reload and installs through [`install_routing`].
 pub fn install(app: &mut lumen_core::app::App, plan: &PagePlan) {
-    use lumen_core::tick::TickStage;
+    install_routing(app, plan.entry_key.clone(), plan.keys());
+    app.world.insert_resource(plan.clone());
+}
 
-    let keys = plan.keys();
-    let entry = plan.entry_key.clone();
+/// Install navigation for a known page set: the registry, the in-memory
+/// history, the reserved-signal seeds, and the two navigation systems.
+///
+/// This is what both an app loaded from source and one loaded from a compiled
+/// artifact end up calling; they differ only in where the page set came from,
+/// a directory listing in one case and [`lumen_ir::artifact::CompiledPages`]
+/// in the other.
+pub fn install_routing(app: &mut lumen_core::app::App, entry: String, keys: Vec<String>) {
+    use lumen_core::tick::TickStage;
 
     // Seed the reserved signals so the entry page's `<if>` gate mounts on the
     // first reconcile pass.
@@ -451,7 +464,6 @@ pub fn install(app: &mut lumen_core::app::App, plan: &PagePlan) {
         }],
         cursor: 0,
     });
-    app.world.insert_resource(plan.clone());
 
     // Resolver runs before the `<if>` reconciler so a navigation this tick
     // swaps the mounted page this tick.

@@ -65,6 +65,17 @@ bincode.workspace = true
 # custom tags after the built-in KNOWN_TAGS miss.
 lumen-widget = { path = "../lumen/widget" }
 
+# `lumenc package --target <another platform>`: fetch that platform's
+# toolchain files from the release channel, check them against the release's
+# published checksums, and read the two files needed out of the archive.
+# OPTIONAL behind the default-on `package` feature, so a thin compiler library
+# carries none of it.
+ureq = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+tar = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
+zip = { workspace = true, optional = true }
+
 # Script host engine handle, named ONLY in the `dev-run`-gated `run_with`
 # wrapper signature (`rhai::Engine`). Optional, pulled under `dev-run`.
 rhai = { workspace = true, optional = true }
@@ -134,7 +145,13 @@ bevy_ecs.workspace = true
 glam.workspace = true
 
 [features]
-default = ["http-fetch", "runtime-parse", "dev-run", "bundle"]
+default = ["http-fetch", "runtime-parse", "dev-run", "bundle", "package"]
+# `lumenc package` - assemble a shippable app folder (launcher stub + the
+# app's compiled artifact + liblumen + the app's files). ON by default. The
+# deps it pulls are for `--target`, which fetches another platform's toolchain
+# files from the release channel; a thin compiler library omits the whole
+# subcommand with `--no-default-features`.
+package = ["dep:ureq", "dep:sha2", "dep:tar", "dep:flate2", "dep:zip"]
 # `lumenc bundle` - pack an app dir into a `.lpak` archive via lumen-assets.
 # ON by default. Pulls lumen-assets (and its hard vello/wgpu dep), so a thin
 # compiler library omits it with `--no-default-features`.

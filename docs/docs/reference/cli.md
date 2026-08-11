@@ -81,12 +81,15 @@ prints the parse error and exits 1. A missing `<dir>` exits 2.
 lumenc build <app_dir> <out.lmna> [--no-hooks]
 ```
 
-Compiles the app ahead of time into a `.lmna` artifact: parses `main.lmn` and
-`main.css` once, runs the cascade, resolves asset and include paths, and bakes
-the combined script source. Prints the element count, the output path, and the
-artifact size.
+Compiles the app ahead of time into a `.lmna` artifact: parses the entry
+`.lmn` file and `main.css` once, runs the cascade, resolves asset and include
+paths, bakes the script source, and records which engine runs each part of it.
+Prints the element count, the output path, and the artifact size.
 
 Runs the app's `prebuild` hooks first unless `--no-hooks` is given.
+
+A multi-page app compiles whole: every page goes into the artifact behind the
+gate that mounts it, together with the page set navigation resolves against.
 
 An `<app_dir>` that is not a directory, a missing output path, or an extra
 positional argument exits 2. For an SDK app the output path is ignored and the
@@ -94,6 +97,75 @@ native build tool runs instead.
 
 Run the result with `lumenc run <dir> --artifact <out.lmna>`. See
 [Packaging](../guides/packaging.md).
+
+## package
+
+```
+lumenc package <app_dir> [<out_dir>] [--name <name>] [--target <target>]
+                         [--lib-dir <dir>] [--no-hooks]
+```
+
+Assembles a folder that runs on a machine with no Lumen installation: the app
+executable, the Lumen runtime library where the app needs one, `lumen.toml`,
+and every other file from `<app_dir>` at the same relative path. Dotfiles, the
+output directory, and the app's build inputs and build tree are skipped. Prints
+one line naming the executable it wrote and how many app files travelled with
+it.
+
+For a markup app the executable is the launcher with the compiled app inside
+it, and the markup, stylesheet, and scripts are compiled in rather than copied.
+A multi-page app packages whole, routing included.
+
+For an SDK app the app's own toolchain builds it first, exactly as `lumenc
+build` would, and the folder is assembled around what that produced:
+
+| Kind | Executable | Runtime library | Detected from |
+|------|-----------|-----------------|---------------|
+| Rust | the binary `cargo build --release` reports | linked in, not copied | `Cargo.toml` depending on `lumen` |
+| C++ | the executable in the CMake build tree | copied beside it | `CMakeLists.txt` |
+| Python | none; exits 2 saying to ship the directory with the runtime library | - | a `.py` importing `lumen` |
+
+`[app] kind` in `lumen.toml` overrides detection. An SDK app's markup,
+stylesheet, and scripts are read at run time rather than compiled in, so those
+files travel with it. A C++ build that produced several executables packages
+the most recent and names the rest.
+
+| Flag | Value | Default | Effect |
+|------|-------|---------|--------|
+| `<out_dir>` | path | `<app_dir>/dist/<name>` | Where the folder is written. Created if missing; existing files are overwritten. |
+| `--name` | string | the app directory's name | Names the executable, and the default output directory. |
+| `--target` | see below | this machine's platform | Packages for another platform. |
+| `--lib-dir` | path | none | Directory holding the launcher stub and the runtime library to use, instead of looking them up. |
+| `--no-hooks` | - | off | Skips the `prebuild` hooks. |
+
+Targets are `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`,
+and `windows-x86_64`. Any host can package a markup app for any of them. An
+unrecognised name exits 2 and lists the ones that exist, and `--target` with an
+SDK app exits 2: cross-compilation belongs to that app's own toolchain.
+
+The launcher stub and the runtime library are looked up in this order:
+`--lib-dir`, then, for this machine's own platform, the directory holding the
+running `lumenc` and then `$LUMEN_LIB_DIR`, then the download cache. When none
+of them has both files and the target is another platform, the release matching
+this `lumenc` version is downloaded, checked against the `sha256sums.txt`
+published with it, and unpacked into the cache; a release that publishes no
+checksum for the archive, or no launcher in it, exits 1 rather than installing
+anything. Set `LUMEN_GH_REPO` to fetch from a different repository. When
+nothing can be found and nothing can be fetched, the error names every
+directory it looked in.
+
+Windows and Linux packages carry the compiled app appended to the executable. A
+macOS package built on macOS links it in as a Mach-O section, which needs `cc`
+from the Xcode Command Line Tools; a macOS package built anywhere else ships it
+as `<name>.lmna` beside the executable instead.
+
+Runs the app's `prebuild` hooks first unless `--no-hooks` is given. An
+`<app_dir>` that is not a directory, an extra positional argument, or an output
+directory that is the app directory itself, exits 2. A failed build, or a build
+that produced no executable, exits 1.
+
+A packaged app accepts `--headless [--ticks N]`, which runs it window-free for
+N ticks and exits; every other argument is left to the app.
 
 ## bundle
 
@@ -353,4 +425,5 @@ The check never changes the command's exit code.
 | `LUMEN_GPU_INIT_DEADLINE_MS` | GPU init deadline in milliseconds; defaults to 5000. Exceeding it aborts with a diagnostic instead of hanging. |
 | `LUMEN_TRACE_FRAME_DIRTY` | Logs which source marked each frame dirty. |
 | `LUMEN_WORKSPACE_DIR` | Lumen source tree that `bundle --static` builds the trimmed runtime from. |
-| `LUMEN_LIB_DIR` | Directory searched for the shared Lumen library, after the directory holding `lumenc`. |
+| `LUMEN_LIB_DIR` | Directory searched for the shared Lumen library and the launcher stub, after the directory holding `lumenc`. |
+| `LUMEN_GH_REPO` | Repository, as `owner/name`, that `package --target` fetches another platform's toolchain files from. Defaults to `lumen-fx/lumen`. |

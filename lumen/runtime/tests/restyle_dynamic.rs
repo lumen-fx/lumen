@@ -100,6 +100,7 @@ impl Harness {
         let bytes = artifact::serialize(&CompiledApp {
             ir,
             script_source: script.to_string(),
+            ..Default::default()
         })
         .unwrap();
         let mut opts = RunOptions::new(&dir).with_artifact_bytes(bytes);

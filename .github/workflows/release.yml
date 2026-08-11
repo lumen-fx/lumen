@@ -1,11 +1,12 @@
 name: Release
 
-# Publishes the Lumen toolchain (lumenc + liblumen) to a GitHub release, in
-# the exact shape tools/install.sh expects: one lumen-<target>.tar.gz per
-# Unix target and, for Windows, lumen-windows-x86_64.msi as the install
-# channel plus lumen-windows-x86_64.zip as the portable archive. Every one of
-# them holds bin/lumenc plus the liblumen shared library. That layout comes
-# from two places, not from guessing:
+# Publishes the Lumen toolchain (lumenc + liblumen + the app launcher stub) to
+# a GitHub release, in the exact shape tools/install.sh expects: one
+# lumen-<target>.tar.gz per Unix target and, for Windows,
+# lumen-windows-x86_64.msi as the install channel plus
+# lumen-windows-x86_64.zip as the portable archive. Every one of them holds
+# bin/lumenc, the liblumen shared library, and bin/lumen-launcher. That layout
+# comes from three places, not from guessing:
 #
 #   - install.sh requires a top-level bin/ directory in the archive (its
 #     unpack step fails otherwise) and looks up the asset by the exact name
@@ -15,6 +16,10 @@ name: Release
 #     search path) - never from a sibling lib/ directory. So the shared
 #     library goes in bin/, next to lumenc, or a normal `~/.lumen` install
 #     would put a lumenc on PATH that cannot find its own runtime.
+#   - lumenc/src/package_cli.rs looks for the launcher stub in the same place
+#     it looks for liblumen, so `lumenc package` on an installed toolchain
+#     finds it without being told where it is. An archive without the stub
+#     leaves that command with nothing to build an app executable from.
 #
 # The release carries one more asset than the archives: sha256sums.txt, in
 # sha256sum's own format, covering every asset published above. install.sh
@@ -162,14 +167,19 @@ jobs:
         with:
           key: release-${{ matrix.target }}
 
-      # Two crates, two artifacts: the lumenc binary and the liblumen cdylib
-      # (crate lumen-ffi). Neither depends on the other at compile time -
-      # lumenc dlopens liblumen at run time - so both need building.
+      # Three crates, three artifacts: the lumenc binary, the liblumen cdylib
+      # (crate lumen-ffi), and the launcher stub `lumenc package` turns into a
+      # shipped app. None of them depends on another at compile time - lumenc
+      # and the stub both dlopen liblumen at run time - so each is its own
+      # build.
       - name: Build lumenc
         run: cargo build --release -p lumenc
 
       - name: Build liblumen (lumen-ffi cdylib)
         run: cargo build --release -p lumen-ffi
+
+      - name: Build the app launcher stub
+        run: cargo build --release -p lumen-launcher
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -177,6 +187,7 @@ jobs:
           mkdir -p dist/bin
           cp target/release/lumenc dist/bin/
           cp target/release/${{ matrix.libname }} dist/bin/
+          cp target/release/lumen-launcher dist/bin/
           tar -czf lumen-${{ matrix.target }}.tar.gz -C dist .
 
       - name: Package (Windows)
@@ -186,6 +197,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist\bin | Out-Null
           Copy-Item target\release\lumenc.exe dist\bin\
           Copy-Item target\release\${{ matrix.libname }} dist\bin\
+          Copy-Item target\release\lumen-launcher.exe dist\bin\
           Compress-Archive -Path dist\* -DestinationPath lumen-${{ matrix.target }}.zip
 
       # The MSI payload is staged separately from dist\, and only after the

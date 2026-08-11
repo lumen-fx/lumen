@@ -248,6 +248,10 @@ pub(crate) fn hot_reload(world: &mut World) {
         include_mtimes,
         css_import_paths,
         css_import_mtimes,
+        // Hot reload only ever runs from source, where the engine split and
+        // the page set both come off the files themselves.
+        scripts: _,
+        pages: _,
     } = match load_ir(
         &*parser,
         &html_path,
