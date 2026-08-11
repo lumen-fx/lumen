@@ -80,6 +80,18 @@ running anything, which is the quickest gate while editing an app.
 The same mode is what app authors use for automated testing; see
 [Testing](../guides/testing.md).
 
+## Debug info in dev builds
+
+Dev builds keep line tables for the workspace crates, so panic backtraces
+name the file and line, and compile dependencies with no debug info at all.
+This keeps the target directory to a fraction of what full debug info costs
+across a dependency tree this size. To step through code in a debugger with
+full variable information, override the profile for that one session:
+
+```sh
+CARGO_PROFILE_DEV_DEBUG=true cargo build -p <crate>
+```
+
 ## Feature flags that matter
 
 Three crates carry flags you will meet while working on the tree.

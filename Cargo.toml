@@ -269,9 +269,12 @@ sys-locale = "0.3"
 # Testing
 proptest = "1.11"
 
+# Line tables keep panic backtraces pointing at file and line; the full
+# debug-info tier is opt-in for a debugger session (cargo's own default via
+# `debug = true`) because it multiplies the on-disk size of every artifact.
 [profile.dev]
 opt-level = 0
-debug = true
+debug = "line-tables-only"
 
 # panic stays "unwind": lumen-ffi's C-ABI exports rely on catch_unwind to
 # convert panics into error codes; abort would kill the host process instead.
@@ -287,6 +290,13 @@ debug = false
 strip = "symbols"
 
 # Speed up dev builds of heavy backend crates while keeping our own crates
-# fast to recompile.
+# fast to recompile. Dependencies carry no debug info at all: their sources
+# do not change under a debugger here, and the debug-info sections are what
+# turn a target directory into hundreds of gigabytes.
 [profile.dev.package."*"]
 opt-level = 1
+debug = false
+
+# Build scripts and proc macros run at compile time; nothing debugs them.
+[profile.dev.build-override]
+debug = false
