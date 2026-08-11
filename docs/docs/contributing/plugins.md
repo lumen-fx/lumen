@@ -208,8 +208,8 @@ Rust.
 - **Provide an alternative.** A backend trait needs at least one default
   implementation and one other path, so removing the default does not break the
   build. A headless or stub implementation counts.
-- **Never let a panic cross the C ABI.** If your plugin is reachable from
-  `lumen-ffi`, its failure has to become a status code, not an unwind through a
+- **Never let a panic cross the C ABI.** If your plugin is reachable from the
+  C ABI, its failure has to become a status code, not an unwind through a
   foreign frame.
 - **Keep the core stack ungated.** Layout, input, text editing, and the
   interaction primitives are always installed. Gating a subsystem on a usage

@@ -1,0 +1,17 @@
+[package]
+name = "lumen-os-launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "URL / file launcher for Lumen (opener wrapper). QDesktopServices::openUrl / gtk_show_uri analog."
+
+[dependencies]
+lumen-core = { path = "../../core" }
+bevy_ecs.workspace = true
+
+# Cross-platform URL / path launcher. Wraps the platform helpers
+# (`xdg-open`, `start`, `open`) plus a fallback to `webbrowser`.
+opener.workspace = true

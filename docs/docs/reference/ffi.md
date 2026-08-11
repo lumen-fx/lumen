@@ -11,24 +11,24 @@ from a directory (or from a precompiled artifact), registers native callbacks,
 and hands control to Lumen's event loop. Markup and CSS still describe the UI;
 your language holds the state and the logic.
 
-The seam is a C ABI exported by the `lumen-ffi` library. Two headers describe
-it, both committed to the repository so there is no generation step:
+The seam is a C ABI exported by the `lumen` library. Two headers describe it,
+both committed to the repository so there is no generation step:
 
-- `lumen/ffi/include/lumen.h` - the header you include. It defines the status
-  enum, the tagged `LumenValue` type, and the callback signatures.
-- `lumen/ffi/include/lumen_simple.h` - generated from the Rust source, included
-  by `lumen.h`. It declares the lifecycle, signal, DOM, and event entry points.
+- `include/lumen.h` - the header you include. It defines the status enum, the
+  tagged `LumenValue` type, and the callback signatures.
+- `include/lumen_simple.h` - generated from the Rust source, included by
+  `lumen.h`. It declares the lifecycle, signal, DOM, and event entry points.
 
 Build the library from the workspace root:
 
 ```sh
-cargo build -p lumen-ffi            # target/debug/liblumen_ffi.{so,dylib,dll,a}
-cargo build -p lumen-ffi --release
+cargo build -p lumen             # target/debug/liblumen.{so,dylib,dll,a}
+cargo build -p lumen --release
 ```
 
 The build also renders a `lumen.pc` file into the crate's output directory.
 Install it where pkg-config looks and `pkg-config --cflags --libs lumen`
-resolves the include path and `-llumen_ffi`.
+resolves the include path and `-llumen`.
 
 ## Conventions
 
@@ -331,7 +331,7 @@ int main() {
 
 Link with CMake (`add_subdirectory(sdk/cpp)` provides the `lumen::cpp`
 interface target), with `find_package(lumen-cpp CONFIG REQUIRED)`, or with
-pkg-config. `liblumen_ffi` must be findable at run time. Runnable examples
+pkg-config. `liblumen` must be findable at run time. Runnable examples
 covering the whole surface live in `sdk/cpp/examples`; see `sdk/cpp/README.md`.
 
 ## Python SDK
@@ -366,13 +366,13 @@ app.run()
 ```
 
 Install with `pip install -e sdk/python`, which registers the package but does
-not build the library. `load_library()` looks for `liblumen_ffi` under
+not build the library. `load_library()` looks for `liblumen` under
 `LUMEN_LIBRARY_PATH` (a file or a directory), then `target/debug` and
 `target/release` relative to the working directory and to the workspace root,
 then the system loader's own paths. Examples run straight from a checkout:
 
 ```sh
-cargo build -p lumen-ffi
+cargo build -p lumen
 LUMEN_LIBRARY_PATH=target/debug python sdk/python/examples/counter.py
 ```
 
@@ -380,9 +380,9 @@ Handlers and watches fire on Lumen's tick thread. See `sdk/python/README.md`.
 
 ## Rust SDK
 
-The `lumen` crate in `sdk/rust` is the Rust entry point. It does not go through
-the C ABI: it links the runtime directly and exposes it in its native ECS
-shape, so a handler is an ordinary `bevy_ecs` system scheduled beside the
+The `lumenui` crate in `sdk/rust` is the Rust entry point. It does not go
+through the C ABI: it links the runtime directly and exposes it in its native
+ECS shape, so a handler is an ordinary `bevy_ecs` system scheduled beside the
 framework's own.
 
 The surface is `App` for assembly, `LumenDefaultPlugins` for the standard stack
@@ -394,10 +394,10 @@ picks hot reload from disk in a debug build and embedded markup in a release
 build from one line.
 
 ```rust
-use lumen::prelude::*;
+use lumenui::prelude::*;
 
-fn main() -> lumen::Result<()> {
-    lumen::App::new()
+fn main() -> lumenui::Result<()> {
+    lumenui::App::new()
         .add_plugins(
             LumenDefaultPlugins
                 .with_source(lumen_source!("examples/main.lmn", "examples/main.css")),

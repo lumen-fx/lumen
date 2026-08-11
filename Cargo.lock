@@ -3380,12 +3380,11 @@ name = "lumen"
 version = "0.0.2"
 dependencies = [
  "bevy_ecs",
- "glam 0.33.3",
+ "cbindgen",
+ "crossbeam-channel",
  "lumen-core",
  "lumen-runtime",
  "lumen-script",
- "lumen-widget",
- "lumen-widget-macros",
  "lumenc",
  "rhai",
 ]
@@ -3463,20 +3462,6 @@ dependencies = [
  "glam 0.33.3",
  "lumen-core",
  "lumen-mcp",
-]
-
-[[package]]
-name = "lumen-ffi"
-version = "0.0.2"
-dependencies = [
- "bevy_ecs",
- "cbindgen",
- "crossbeam-channel",
- "lumen-core",
- "lumen-runtime",
- "lumen-script",
- "lumenc",
- "rhai",
 ]
 
 [[package]]
@@ -3957,6 +3942,21 @@ dependencies = [
  "tracing",
  "ureq",
  "zip",
+]
+
+[[package]]
+name = "lumenui"
+version = "0.0.2"
+dependencies = [
+ "bevy_ecs",
+ "glam 0.33.3",
+ "lumen-core",
+ "lumen-runtime",
+ "lumen-script",
+ "lumen-widget",
+ "lumen-widget-macros",
+ "lumenc",
+ "rhai",
 ]
 
 [[package]]

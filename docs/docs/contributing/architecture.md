@@ -17,6 +17,26 @@ renderer submits it.
 Lumen uses `bevy_ecs` as a library, not `bevy_app`. The `App` type, the plugin
 trait, and the schedules are Lumen's own.
 
+## Where the crates live
+
+The workspace root is the engine itself: `src/` builds `liblumen`, the shared
+library every app executable, launcher stub, and SDK loads. Everything else
+sits under `crates/`, grouped by the role it plays.
+
+```
+src/               the engine crate (package `lumen`, builds liblumen)
+include/           the C ABI headers
+crates/            the flat spine: core, ir, runtime, lumenc, the widgets
+crates/backends/   swappable capability implementations
+crates/os/         one desktop capability per crate
+crates/script/     the scripting API and its three hosts
+crates/dev/        tools that never ship inside an app
+sdk/               the Rust, C++, and Python SDKs
+apps/              example apps
+fixtures/          small apps the test suite drives
+tools/             the release plumbing and the VS Code extension
+```
+
 ## Crate map
 
 ### Kernel
@@ -102,13 +122,14 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
 - **lumenc**: the compiler front end and the CLI. Markup and CSS parsers, the
   include and import resolver, the formatter, the scaffolder, and the
   `check` / `run` / `build` / `bundle` / `package` subcommands.
-- **lumen-ffi**: the C ABI. An opaque app handle, a tagged value type, and the
-  node binding, built as a shared and static library.
+- **lumen**: the engine crate at the workspace root. It exports the C ABI, an
+  opaque app handle, a tagged value type, and the node binding, and builds as
+  the shared `liblumen` plus a static library.
 - **lumen-launcher**: the executable stub `lumenc package` turns into a shipped
   app. It reads the artifact packaging put inside it, opens the shared runtime
   library beside it, and runs. It links the dlopen seam and nothing else, so it
   carries no renderer, window backend, or script host of its own.
-- **lumen** (in `sdk/rust`): the Rust SDK. Plugin groups, typed signals, safe
+- **lumenui** (in `sdk/rust`): the Rust SDK. Plugin groups, typed signals, safe
   node handles, and event-condition helpers.
 - **lumen-devtools**: the in-window overlay, itself authored in Lumen markup
   and CSS.

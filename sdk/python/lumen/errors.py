@@ -1,7 +1,7 @@
 """Exception hierarchy mirroring the C ABI's ``LumenStatus`` codes.
 
 Every ``lumen_*`` C entry point returns a ``LumenStatus`` (an unsigned
-32-bit enum, see ``lumen/ffi/src/lib.rs``). This module maps each
+32-bit enum, see ``src/lib.rs``). This module maps each
 numeric code onto a dedicated Python exception class so callers can
 ``except LumenCssError`` instead of string-matching an error message.
 
@@ -153,7 +153,7 @@ class LumenBufferTooSmallError(LumenError):
 
 
 class LumenLibraryNotFoundError(LumenError):
-    """Raised when the ``lumen_ffi`` shared library could not be located.
+    """Raised when the ``lumen`` shared library could not be located.
 
     Not a ``LumenStatus`` - this happens before any C call is made.
     """

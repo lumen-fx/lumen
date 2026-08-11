@@ -4,10 +4,10 @@
 //! compiler wrapper (so the injected parser is present) and reads back through
 //! the same `Node` handles a caller would use.
 
-use lumen::dom::{self, Node};
-use lumen::ecs_app::App as EcsApp;
-use lumen::runtime::RunOptions;
 use lumenc::build_headless_app;
+use lumenui::dom::{self, Node};
+use lumenui::ecs_app::App as EcsApp;
+use lumenui::runtime::RunOptions;
 use std::path::PathBuf;
 
 // The DOM snapshot + external command bus are process-global; the app that

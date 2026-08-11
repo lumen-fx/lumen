@@ -9,10 +9,10 @@
 //! Run with:
 //!
 //! ```bash
-//! cargo run -p lumen --example systems
+//! cargo run -p lumenui --example systems
 //! ```
 
-use lumen::prelude::*;
+use lumenui::prelude::*;
 
 /// A little palette the clicked tile cycles through.
 const PALETTE: [Color; 5] = [
@@ -23,8 +23,8 @@ const PALETTE: [Color; 5] = [
     Color::rgb(0.71, 0.34, 0.85),
 ];
 
-fn main() -> lumen::Result<()> {
-    lumen::App::new()
+fn main() -> lumenui::Result<()> {
+    lumenui::App::new()
         .add_plugins(
             LumenDefaultPlugins
                 .with_source(lumen_source!("examples/main.lmn", "examples/main.css"))

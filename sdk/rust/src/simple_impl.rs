@@ -17,9 +17,9 @@ type RhaiExtension = Box<dyn FnOnce(&mut rhai::Engine) + Send + 'static>;
 /// This is a facade over [`AppBuilder`]; start with [`App::builder`]:
 ///
 /// ```no_run
-/// use lumen::simple::App;
+/// use lumenui::simple::App;
 ///
-/// fn main() -> lumen::Result<()> {
+/// fn main() -> lumenui::Result<()> {
 ///     App::builder()
 ///         .markup("<root><label id=\"l\" bind-text=\"msg\" text=\"hi\" /></root>")
 ///         .title("Quickstart")

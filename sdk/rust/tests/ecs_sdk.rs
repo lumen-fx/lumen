@@ -1,9 +1,9 @@
 //! Integration tests for the ECS-first SDK surface: plugin-group composition,
 //! bare-app assembly, and the typed `Signals` param.
 
-use lumen::ecs_app::{App as EcsApp, Plugin};
-use lumen::plugins::PluginGroupBuilder;
-use lumen::prelude::*;
+use lumenui::ecs_app::{App as EcsApp, Plugin};
+use lumenui::plugins::PluginGroupBuilder;
+use lumenui::prelude::*;
 
 // -- Dummy plugins that record their installation via marker resources --------
 
@@ -74,7 +74,7 @@ fn read_seed(signals: Signals, mut out: ResMut<Observed>) {
 
 #[test]
 fn build_bare_runs_user_systems_with_seeded_signals() {
-    let mut app = lumen::App::new()
+    let mut app = lumenui::App::new()
         .add_plugin(RecordCountPlugin)
         .insert_signal("count", 41i64)
         .add_systems(TickStage::Systems, read_seed)
@@ -100,7 +100,7 @@ fn write_then_bump(mut signals: Signals) {
 
 #[test]
 fn signals_param_reads_and_writes_typed() {
-    let mut app = lumen::App::new()
+    let mut app = lumenui::App::new()
         .insert_signal("n", 10i64)
         .add_systems(TickStage::Systems, write_then_bump)
         .build_bare();
@@ -136,9 +136,9 @@ fn signals_macro_mints_typed_handles() {
 /// matching id fires the closure and its signal write lands same-tick.
 #[test]
 fn on_click_closure_fires_and_writes_signal() {
-    use lumen::prelude::*;
+    use lumenui::prelude::*;
 
-    let mut app = lumen::App::new()
+    let mut app = lumenui::App::new()
         .insert_signal("count", 0i64)
         .on_click("go", |ctx| {
             let n = ctx.get_or::<i64>("count", 0) + 1;
@@ -150,7 +150,7 @@ fn on_click_closure_fires_and_writes_signal() {
     app.world.write_message(ClickEvent {
         entity: go,
         position: glam::Vec2::ZERO,
-        button: lumen::input::PointerButton::Primary,
+        button: lumenui::input::PointerButton::Primary,
     });
     app.tick();
 
@@ -161,9 +161,9 @@ fn on_click_closure_fires_and_writes_signal() {
 /// `on_any_click` is the wildcard fallback; a per-id `on_click` overrides it.
 #[test]
 fn on_any_click_is_wildcard_and_per_id_overrides() {
-    use lumen::prelude::*;
+    use lumenui::prelude::*;
 
-    let mut app = lumen::App::new()
+    let mut app = lumenui::App::new()
         .on_any_click(|ctx| ctx.set("hit", "wildcard"))
         .on_click("special", |ctx| ctx.set("hit", "special"))
         .build_bare();
@@ -172,7 +172,7 @@ fn on_any_click_is_wildcard_and_per_id_overrides() {
     app.world.write_message(ClickEvent {
         entity: special,
         position: glam::Vec2::ZERO,
-        button: lumen::input::PointerButton::Primary,
+        button: lumenui::input::PointerButton::Primary,
     });
     app.tick();
     assert_eq!(
@@ -187,7 +187,7 @@ fn on_any_click_is_wildcard_and_per_id_overrides() {
     app.world.write_message(ClickEvent {
         entity: plain,
         position: glam::Vec2::ZERO,
-        button: lumen::input::PointerButton::Primary,
+        button: lumenui::input::PointerButton::Primary,
     });
     app.tick();
     assert_eq!(
@@ -203,7 +203,7 @@ fn on_any_click_is_wildcard_and_per_id_overrides() {
 
 #[test]
 fn add_computed_recomputes_from_inputs() {
-    let mut app = lumen::App::new()
+    let mut app = lumenui::App::new()
         .insert_signal("count", 3i64)
         .add_computed("doubled", |s| s.get_or::<i64>("count", 0) * 2)
         .build_bare();
@@ -221,7 +221,7 @@ fn bump_update(mut signals: Signals) {
 
 #[test]
 fn signals_update_read_modify_writes() {
-    let mut app = lumen::App::new()
+    let mut app = lumenui::App::new()
         .insert_signal("n", 5i64)
         .add_systems(TickStage::Systems, bump_update)
         .build_bare();
@@ -238,7 +238,7 @@ fn flip(mut signals: Signals) {
 
 #[test]
 fn signals_toggle_flips_bool() {
-    let mut app = lumen::App::new()
+    let mut app = lumenui::App::new()
         .add_systems(TickStage::Systems, flip)
         .build_bare();
 

@@ -1,7 +1,7 @@
 # Lumen C++ SDK
 
 Header-only C++17 bindings for the [Lumen](../../) UI framework, over the
-C ABI (`lumen/ffi/include/lumen.h`). The primary surface is the typed
+C ABI (`include/lumen.h`). The primary surface is the typed
 reactive handle `lumen::Signal<T>`: name a signal, read/write it with
 natural operators, and subscribe to changes, all statically typed.
 
@@ -95,16 +95,16 @@ accordingly.
 ## Requirements
 
 - A C++17 compiler (tested with g++ and clang++).
-- The Lumen C library, `liblumen_ffi`, built as a `cdylib` or `staticlib`.
+- The Lumen C library, `liblumen`, built as a `cdylib` or `staticlib`.
 
 Build the C library from the workspace root:
 
 ```sh
-cargo build -p lumen-ffi            # debug   -> target/debug/liblumen_ffi.{so,a}
-cargo build -p lumen-ffi --release  # release -> target/release/liblumen_ffi.{so,a}
+cargo build -p lumen            # debug   -> target/debug/liblumen.{so,a}
+cargo build -p lumen --release  # release -> target/release/liblumen.{so,a}
 ```
 
-The C ABI header lives at `lumen/ffi/include/lumen.h`, with the
+The C ABI header lives at `include/lumen.h`, with the
 cbindgen-generated `lumen_simple.h` beside it. Both are committed, so there is
 no generation step to consume them. This SDK targets ABI 0.12. The
 compatibility check, `abi_compatible()`, compares the cbindgen-generated
@@ -121,7 +121,7 @@ add_subdirectory(path/to/sdk/cpp lumen_cpp)   # provides lumen::cpp
 add_executable(myapp main.cpp)
 target_link_libraries(myapp PRIVATE
     lumen::cpp                                # headers (lumen.hpp + lumen.h)
-    ${CARGO_TARGET_DIR}/debug/liblumen_ffi.so # the built library
+    ${CARGO_TARGET_DIR}/debug/liblumen.so     # the built library
     pthread)
 ```
 
@@ -147,7 +147,7 @@ target_link_libraries(myapp PRIVATE lumen::cpp)
 
 ### Loader path
 
-`liblumen_ffi.so` must be findable at runtime: install it to a system
+`liblumen.so` must be findable at runtime: install it to a system
 library directory, set `LD_LIBRARY_PATH`, or bake an `RPATH` pointing at
 the cargo target directory (sysmon's CMake does the last).
 

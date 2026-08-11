@@ -9,7 +9,7 @@ signal, updated alongside.
 
 Run from the Lumen workspace root (build the C library first):
 
-    cargo build -p lumen-ffi
+    cargo build -p lumen
     LUMEN_LIBRARY_PATH=target/debug python sdk/python/examples/todo.py
 """
 

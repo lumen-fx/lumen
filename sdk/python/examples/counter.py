@@ -8,7 +8,7 @@ driving the ``bind-text="label"`` markup in ``counter_app/main.lmn``.
 
 Run from the Lumen workspace root (build the C library first):
 
-    cargo build -p lumen-ffi
+    cargo build -p lumen
     LUMEN_LIBRARY_PATH=target/debug python sdk/python/examples/counter.py
 
 See sdk/python/README.md for why LUMEN_LIBRARY_PATH is needed and the

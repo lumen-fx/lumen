@@ -1,0 +1,25 @@
+[package]
+name = "lumen-os-filedialog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Native file-dialog host for Lumen - rfd wrapper, MIME-typed filters, async via lumen-async-tokio (QFileDialog / GtkFileDialog analog)."
+
+[dependencies]
+lumen-core = { path = "../../core" }
+lumen-os-mime = { path = "../mime" }
+lumen-async-tokio = { path = "../../backends/async-tokio" }
+bevy_ecs.workspace = true
+
+# Native file dialogs. Same crate Tauri ships under tauri-plugin-dialog.
+# `default-features = false` + `gtk3` selects the GTK3 backend on Linux
+# (rfd's own default is the XDG portal), so a Linux build needs the GTK3
+# development headers. The dialogs are driven through `AsyncFileDialog`:
+# on a world carrying a `TokioRuntime` the future is spawned there, and
+# otherwise a `pollster::block_on` fallback runs it inline.
+rfd = { version = "0.17", default-features = false, features = ["gtk3"] }
+pollster = "1.0"
+tracing.workspace = true

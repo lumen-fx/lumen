@@ -8,10 +8,10 @@
 //! ## Quickstart
 //!
 //! ```no_run
-//! use lumen::prelude::*;
+//! use lumenui::prelude::*;
 //!
-//! fn main() -> lumen::Result<()> {
-//!     lumen::App::new()
+//! fn main() -> lumenui::Result<()> {
+//!     lumenui::App::new()
 //!         .add_plugins(
 //!             // Hot-reloads from disk in `cargo run`; embedded in
 //!             // `cargo run --release`. Same line, both behaviours.
@@ -72,8 +72,8 @@
 //! loads - you write one line:
 //!
 //! ```no_run
-//! # use lumen::prelude::*;
-//! # fn demo() -> lumen::Result<()> { lumen::App::new().add_plugins(
+//! # use lumenui::prelude::*;
+//! # fn demo() -> lumenui::Result<()> { lumenui::App::new().add_plugins(
 //! LumenDefaultPlugins.with_source(lumen_source!("examples/main.lmn", "examples/main.css"))
 //! # ).run() }
 //! ```
@@ -134,10 +134,10 @@ pub use signal::Signals;
 /// The v1 builder surface - a terse facade over the ECS core for small apps.
 ///
 /// ```no_run
-/// use lumen::simple::App;
-/// use lumen::prelude::*;
+/// use lumenui::simple::App;
+/// use lumenui::prelude::*;
 ///
-/// # fn demo() -> lumen::Result<()> {
+/// # fn demo() -> lumenui::Result<()> {
 /// App::builder()
 ///     .markup("<root><label id=\"l\" bind-text=\"msg\" text=\"hi\"/></root>")
 ///     .property("msg", "hello")
@@ -166,7 +166,7 @@ pub use bevy_ecs as ecs;
 /// Typed reactive property store and typed [`Property`] handle.
 pub use lumen_core::property_store::{Property, PropertyStore};
 
-/// One-stop import: `use lumen::prelude::*;`.
+/// One-stop import: `use lumenui::prelude::*;`.
 ///
 /// Brings in [`App`], the plugin groups, typed [`Signals`], the run-condition
 /// adapters, the common components, the typed signal surface, and the

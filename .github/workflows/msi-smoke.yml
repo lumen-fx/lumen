@@ -5,7 +5,7 @@ name: MSI smoke
 # up the bin directory, whether a second release upgrades the first instead of
 # installing beside it, and whether an uninstall leaves anything behind.
 #
-# It builds the same .wxs and runs the same tools/msi/build-msi.ps1 that
+# It builds the same .wxs and runs the same tools/release/msi/build-msi.ps1 that
 # release.yml does, so the package under test differs from a released one only
 # in the compiler profile. That is deliberate: the structure of the package is
 # what is under test, not the optimizer, and a dev build keeps the job short.
@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "tools/msi/**"
+      - "tools/release/msi/**"
       - ".github/workflows/msi-smoke.yml"
       - ".github/workflows/release.yml"
 
@@ -57,7 +57,7 @@ jobs:
           key: msi-smoke
 
       - name: Build lumenc, liblumen, and the launcher stub
-        run: cargo build -p lumenc -p lumen-ffi -p lumen-launcher
+        run: cargo build -p lumenc -p lumen -p lumen-launcher
 
       # Mirrors release.yml: the zip closes first, and only then does the MSI
       # stage gain the receipt. Step "the portable zip carries no receipt"
@@ -68,7 +68,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path dist\bin, msi-stage\bin, msi-stage\share\lumen | Out-Null
           Copy-Item target\debug\lumenc.exe dist\bin\
-          Copy-Item target\debug\lumen_ffi.dll dist\bin\
+          Copy-Item target\debug\lumen.dll dist\bin\
           Copy-Item target\debug\lumen-launcher.exe dist\bin\
           Compress-Archive -Path dist\* -DestinationPath lumen-windows-x86_64.zip -Force
           Copy-Item dist\bin\* msi-stage\bin\
@@ -87,7 +87,7 @@ jobs:
           foreach ($version in '9.9.9', '9.9.10') {
             $receipt = "version $version`ntarget windows-x86_64`ninstaller msi`n"
             [IO.File]::WriteAllText($receiptPath, $receipt, [Text.Encoding]::ASCII)
-            tools\msi\build-msi.ps1 `
+            tools\release\msi\build-msi.ps1 `
               -Version $version `
               -StageDir "$PWD\msi-stage" `
               -OutFile "$PWD\lumen-$version.msi"
@@ -111,7 +111,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:LOCALAPPDATA 'Programs\Lumen'
-          foreach ($relative in 'bin\lumenc.exe', 'bin\lumen_ffi.dll', 'bin\lumen-launcher.exe', 'share\lumen\lumen.receipt') {
+          foreach ($relative in 'bin\lumenc.exe', 'bin\lumen.dll', 'bin\lumen-launcher.exe', 'share\lumen\lumen.receipt') {
             $path = Join-Path $root $relative
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
               throw "the install is missing $path"

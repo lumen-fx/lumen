@@ -16,7 +16,7 @@ _LIB: ctypes.CDLL | None = None
 
 
 def get_library() -> ctypes.CDLL:
-    """Return the process-wide loaded ``liblumen_ffi``, loading it (and
+    """Return the process-wide loaded ``liblumen``, loading it (and
     checking its ABI version) on first use. See
     :func:`lumen._ffi.load_library`.
     """

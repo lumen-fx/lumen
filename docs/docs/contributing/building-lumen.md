@@ -146,8 +146,8 @@ support them, printing the reason:
 
 - Framebuffer readback on a software adapter. Direct3D's WARP rasterizer faults
   the test process when a texture is read back, so those cases want a real GPU.
-- The screenshot goldens in `lumenc/tests/golden.rs`. Baselines carry the font
-  set of the machine that captured them, and a machine that resolves a
+- The screenshot goldens in `crates/lumenc/tests/golden.rs`. Baselines carry
+  the font set of the machine that captured them, and a machine that resolves a
   different default sans-serif redraws every case containing text. They run
   locally and skip when `CI` is set.
 

@@ -1,0 +1,34 @@
+[package]
+name = "lumen-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "tower-lsp server for .lmn markup, Lumen CSS, and Rhai sources."
+
+[lib]
+name = "lumen_lsp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lumen-lsp"
+path = "src/main.rs"
+
+[dependencies]
+# Link the THIN compiler library only: `runtime-parse` gives us the markup /
+# CSS front-end (`parse_html`, `formatter`, `FsLoader`) the LSP needs; dropping
+# the default `dev-run` feature keeps the runtime and every heavy backend
+# (wgpu / winit / vello / cosmic-text / taffy / rodio / mlua) out of the LSP.
+lumenc = { path = "../../lumenc", default-features = false, features = ["runtime-parse"] }
+# Source of truth for the Rhai builtins table + a fully-registered
+# engine to compile `.rhai` buffers against.
+lumen-script-rhai = { path = "../../script/rhai" }
+rhai.workspace = true
+tower-lsp.workspace = true
+tokio = { version = "1.52", features = ["rt-multi-thread", "io-util", "io-std", "macros", "sync"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -1,7 +1,7 @@
-"""ctypes bindings for the Lumen C ABI (``lumen/ffi``).
+"""ctypes bindings for the Lumen C ABI.
 
 Stdlib-only - no ``cffi``, no build step. This module is the thin,
-unopinionated layer: it finds ``liblumen_ffi``, declares every exported
+unopinionated layer: it finds ``liblumen``, declares every exported
 function's ``argtypes``/``restype``, mirrors the C structs byte-for-byte,
 and converts between :class:`LumenValue` and plain Python values.
 
@@ -9,8 +9,8 @@ Everything Pythonic (the ``App`` class, decorators, typed signal
 get/set) lives in :mod:`lumen.api`. Import this module directly only if
 you need the raw C surface.
 
-Source of truth for the layout below: ``lumen/ffi/src/lib.rs`` and the
-generated header pair ``lumen/ffi/include/{lumen.h,lumen_simple.h}``.
+Source of truth for the layout below: ``src/lib.rs`` and the
+generated header pair ``include/{lumen.h,lumen_simple.h}``.
 Read those before changing a ``_fields_`` list - a mismatched struct
 layout is silent memory corruption, not a Python exception.
 """
@@ -57,7 +57,7 @@ __all__ = [
 # ============================================================
 # ABI version this SDK was written against.
 #
-# Mirrors LUMEN_ABI_{MAJOR,MINOR,PATCH} in lumen/ffi/src/lib.rs at the
+# Mirrors LUMEN_ABI_{MAJOR,MINOR,PATCH} in src/lib.rs at the
 # time this SDK was written. `load_library()` compares this against
 # the *loaded* library's `lumen_abi_version()` at import time.
 # ============================================================
@@ -549,9 +549,9 @@ def from_lumen_value(v: "LumenValue") -> object:
 # ============================================================
 
 _PLATFORM_LIBNAMES: dict[str, tuple[str, ...]] = {
-    "linux": ("liblumen_ffi.so",),
-    "darwin": ("liblumen_ffi.dylib",),
-    "win32": ("lumen_ffi.dll",),
+    "linux": ("liblumen.so",),
+    "darwin": ("liblumen.dylib",),
+    "win32": ("lumen.dll",),
 }
 
 
@@ -560,7 +560,7 @@ def _libnames_for_platform() -> tuple[str, ...]:
         if sys.platform.startswith(prefix):
             return names
     # Best-effort fallback for platforms we haven't special-cased.
-    return ("liblumen_ffi.so", "liblumen_ffi.dylib", "lumen_ffi.dll")
+    return ("liblumen.so", "liblumen.dylib", "lumen.dll")
 
 
 def _candidate_paths() -> list[Path]:
@@ -598,9 +598,9 @@ def _candidate_paths() -> list[Path]:
             candidates.append(cwd / "target" / profile / name)
 
     # Walk up from this file looking for the workspace root (marked by
-    # a top-level Cargo.toml with a [workspace] table containing
-    # "lumen/ffi"). Bounded depth so a misplaced copy of the SDK can't
-    # walk all the way to `/`.
+    # a top-level Cargo.toml with a [workspace] table listing "crates/*").
+    # Bounded depth so a misplaced copy of the SDK can't walk all the way
+    # to `/`.
     here = Path(__file__).resolve()
     for ancestor in list(here.parents)[:8]:
         cargo_toml = ancestor / "Cargo.toml"
@@ -609,7 +609,7 @@ def _candidate_paths() -> list[Path]:
                 text = cargo_toml.read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 continue
-            if "[workspace]" in text and "lumen/ffi" in text:
+            if "[workspace]" in text and "crates/*" in text:
                 for profile in ("debug", "release"):
                     for name in names:
                         candidates.append(ancestor / "target" / profile / name)
@@ -619,7 +619,7 @@ def _candidate_paths() -> list[Path]:
 
 
 def load_library(path: str | os.PathLike | None = None) -> ctypes.CDLL:
-    """Locate and load ``liblumen_ffi``, then run every exported
+    """Locate and load ``liblumen``, then run every exported
     function's prototype declaration and an ABI version check.
 
     Args:
@@ -650,7 +650,7 @@ def load_library(path: str | os.PathLike | None = None) -> ctypes.CDLL:
         if lib is None:
             # Last resort: let the OS loader search its own paths
             # (LD_LIBRARY_PATH, /usr/lib, DYLD_LIBRARY_PATH, PATH, ...).
-            for soname in ("lumen_ffi", "lumen-ffi", "lumen"):
+            for soname in ("lumen",):
                 found = ctypes.util.find_library(soname)
                 if found:
                     tried.append(found)
@@ -659,8 +659,8 @@ def load_library(path: str | os.PathLike | None = None) -> ctypes.CDLL:
 
     if lib is None:
         raise LumenLibraryNotFoundError(
-            "could not locate liblumen_ffi. Build it with "
-            "`cargo build -p lumen-ffi` from the Lumen workspace root, "
+            "could not locate liblumen. Build it with "
+            "`cargo build -p lumen` from the Lumen workspace root, "
             "then either set LUMEN_LIBRARY_PATH=target/debug (or "
             ".../release), or run from a directory below target/. "
             f"Tried: {tried}"
@@ -674,11 +674,11 @@ def load_library(path: str | os.PathLike | None = None) -> ctypes.CDLL:
     loaded_patch = version & 0xFF
     if loaded_major != ABI_MAJOR or loaded_minor < ABI_MINOR:
         raise LumenAbiVersionError(
-            "lumen_ffi ABI mismatch: this SDK was written against "
+            "lumen ABI mismatch: this SDK was written against "
             f"{ABI_MAJOR}.{ABI_MINOR}.{ABI_PATCH} but the loaded library "
             f"reports {loaded_major}.{loaded_minor}.{loaded_patch}. "
             "A different major version, or an older minor version, is a "
-            "hard incompatibility -- rebuild lumen-ffi or pin the SDK "
+            "hard incompatibility -- rebuild lumen or pin the SDK "
             "version that matches it."
         )
 
@@ -688,7 +688,7 @@ def load_library(path: str | os.PathLike | None = None) -> ctypes.CDLL:
 def _declare_prototypes(lib: ctypes.CDLL) -> None:
     """Set ``argtypes``/``restype`` for every ``lumen_*`` export.
 
-    Cross-referenced 1:1 against ``lumen/ffi/include/lumen.h`` and
+    Cross-referenced 1:1 against ``include/lumen.h`` and
     ``lumen_simple.h``. Keep this list in the same order as the header
     so a future ABI diff is easy to spot-check.
     """

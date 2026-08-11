@@ -9,8 +9,8 @@
 //! Run with:
 //!
 //! ```bash
-//! cargo run -p lumen --example counter          # hot-reloads examples/main.lmn live
-//! cargo run -p lumen --example counter --release # markup/CSS embedded, no watcher
+//! cargo run -p lumenui --example counter          # hot-reloads examples/main.lmn live
+//! cargo run -p lumenui --example counter --release # markup/CSS embedded, no watcher
 //! ```
 //!
 //! The UI comes from [`lumen_source!`]: in a debug `cargo run` it is read from
@@ -18,10 +18,10 @@
 //! runtime watcher (edit the markup and the window updates live); a
 //! `--release` build `include_str!`-embeds the same files.
 
-use lumen::prelude::*;
+use lumenui::prelude::*;
 
-fn main() -> lumen::Result<()> {
-    lumen::App::new()
+fn main() -> lumenui::Result<()> {
+    lumenui::App::new()
         .add_plugins(
             LumenDefaultPlugins
                 .with_source(lumen_source!("examples/main.lmn", "examples/main.css"))

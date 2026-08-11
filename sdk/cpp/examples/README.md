@@ -1,7 +1,7 @@
 # Lumen C++ SDK - examples
 
 Small, self-contained programs that each compile and link against the built
-`lumen-ffi` cdylib and run headless, with no window and no display, so they
+`lumen` cdylib and run headless, with no window and no display, so they
 double as smoke tests. They mirror the Python SDK's examples so the two SDKs
 feel consistent.
 
@@ -33,7 +33,7 @@ cmake --build build --target examples
 
 CMake locates the workspace's cargo target directory via `cargo metadata`, so
 a custom `CARGO_TARGET_DIR` is honoured, and bakes it as an RPATH so the
-binaries find `liblumen_ffi.so` without `LD_LIBRARY_PATH`.
+binaries find `liblumen.so` without `LD_LIBRARY_PATH`.
 
 ## Run
 
