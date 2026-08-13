@@ -215,6 +215,10 @@ ctrlc = "3"
 # Serialization (used by lumen-mcp + lumen-mcp-server)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Reads the script builtin metadata (`crates/script/api/builtins.ron`) in that
+# crate's build script, which generates the per-host tables. Build-time only:
+# no shipped binary links it, and nothing parses RON at run time.
+ron = "0.11"
 # Compact binary codec for the AOT compiled-app artifact (`lumenc build`).
 # Chosen over RON/JSON because bincode drops all field-name/schema overhead;
 # the artifact is embedded/shipped, so on-disk size is the priority.

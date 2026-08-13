@@ -325,8 +325,15 @@ removing the default does not break the build.
 loading, reloading, ticking, routing events to handlers, firing timers,
 delivering HTTP responses, and running derivations to a fixed point. Those
 systems are generic over the host, so a host crate is an engine, a value
-conversion layer, a builtin table, and a plugin whose `build` does little more
-than hand the host to the generic plugin.
+conversion layer, and a plugin whose `build` does little more than hand the
+host to the generic plugin.
+
+The metadata describing every builtin, which the LSP reads for completion and
+hover, is not per host. It lives once in `crates/script/api/builtins.ron`,
+listing for each builtin the hosts that expose it and, where a host spells a
+signature or a doc line differently, that host's override. A build script turns
+that file into the per-host tables each host crate re-exports, so the tables
+cost nothing at run time and cannot drift apart by hand.
 
 The trait covers lifecycle (compile check, load, replace, reset), invocation
 (call a function, call a closure, evaluate a derivation), a command sink, a

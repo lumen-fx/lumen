@@ -2085,7 +2085,7 @@ dependencies = [
  "libc",
  "log",
  "rustversion",
- "windows-link 0.1.3",
+ "windows-link 0.2.1",
  "windows-result 0.4.1",
 ]
 
@@ -3789,6 +3789,8 @@ dependencies = [
  "lumen-ir",
  "lumen-os-dnd",
  "lumen-primitives",
+ "ron",
+ "serde",
  "thiserror 2.0.19",
  "ureq",
 ]
@@ -5352,6 +5354,19 @@ dependencies = [
  "num-rational",
  "symphonia",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "ron"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db09040cc89e461f1a265139777a2bde7f8d8c67c4936f700c63ce3e2904d468"
+dependencies = [
+ "base64 0.22.1",
+ "bitflags 2.13.1",
+ "serde",
+ "serde_derive",
+ "unicode-ident",
 ]
 
 [[package]]
