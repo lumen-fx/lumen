@@ -14,9 +14,11 @@ The template argument is optional and defaults to `blank`. `lumenc new` refuses
 to write into a directory that already exists.
 
 Every template ships `main.lmn` and `lumen.toml`. Most also ship a `main.css`
-and a script. `counter` is written in candela; the other scripted templates are
-written in Rhai, which reads closely enough that either one is a fine starting
-point.
+and a script. Scripts are written in candela, the default host, except for two
+that show what the other hosts look like: `dashboard` is Lua and `hotkeys` is
+Rhai. The three read closely enough that any of them is a fine starting point,
+and an app can mix them, since a script file picks its host from its own
+extension.
 
 ## blank
 
@@ -79,6 +81,9 @@ length.
 Stat tiles, progress bars, and an activity feed, all moving on a repeating
 timer, with a pause button.
 
+This is the Lua template, so it also shows what Lua looks like: globals with
+no import step, handles called with the colon form, and 1-indexed sequences.
+
 Shows time-driven UI: `set_interval` plus an `on_timer` handler, cancelled and
 restarted by the pause button. Progress bars track numeric signals through
 `bind-value` and `max`, and the feed keeps itself bounded by trimming the array
@@ -100,6 +105,10 @@ control.
 
 Native shell showcase: OS-global hotkeys, a tray icon with a context menu, and
 desktop notifications carrying a button, with an in-app event log.
+
+This is the Rhai template, so it also shows what Rhai looks like: globals, and
+a function pointer (`Fn("clear_log")`) where the other hosts pass a handler
+name.
 
 Shows the integrations that reach outside the window. Hotkeys are registered by
 accelerator string and fire while another app has focus; a toggle registers and

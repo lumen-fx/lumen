@@ -715,6 +715,12 @@ impl UserData for Node {
                 )?)),
             }
         });
+        // Explicit spelling of the no-arg form, so the whole-map read has one
+        // name on every host (candela cannot overload on arity).
+        methods.add_method("computed_style_all", |lua, this, ()| {
+            use lumen_script::introspect as ins;
+            kv_table(lua, ins::node_computed_style_map(this.handle))
+        });
 
         // -- low-level introspection (phase 5) ----------------------------
         methods.add_method("rect", |lua, this, ()| {
@@ -1953,7 +1959,7 @@ fn build_lua(
 
     // `document` is a namespace table (section 4.8) that is ALSO callable
     // for back-compat: `document()` still returns the root node, while
-    // `document.query(..)` / `document.root()` / `document.spawn(..)` are
+    // `document.query(..)` / `document.root()` / `document.create(..)` are
     // the namespaced entry points.
     {
         use lumen_script::node_query;
@@ -1979,7 +1985,7 @@ fn build_lua(
             })?,
         )?;
         document.set(
-            "spawn",
+            "create",
             lua.create_function(|_, tag: String| {
                 let (handle, cmd) = node_query::build_spawn(&tag);
                 node_query::push_external_dom_command(cmd);
@@ -2009,9 +2015,9 @@ fn build_lua(
         g.set("document", document)?;
     }
 
-    // Global `spawn(tag)` create verb.
+    // Global `create(tag)` create verb.
     g.set(
-        "spawn",
+        "create",
         lua.create_function(|_, tag: String| {
             let (handle, cmd) = lumen_script::node_query::build_spawn(&tag);
             lumen_script::node_query::push_external_dom_command(cmd);

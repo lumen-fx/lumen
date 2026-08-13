@@ -54,12 +54,16 @@
 //! closure returns, so nested maps and arrays round-trip. Read the result with
 //! candela's `as_map` / `as_list` / `as_str` / `as_int` downcasts.
 //!
-//! Two Rhai spellings have no candela counterpart and stay absent:
+//! One Rhai spelling has no candela counterpart and stays absent:
 //!
 //! | Rhai builtin | why it is still blocked |
 //! |---|---|
-//! | `signal(name, default)` | returns a `Signal` handle object that carries its own host state - candela has no user-defined [`Value`](candela::Value) object type to hand back. The prelude's `ArraySignal` struct works because it holds only the signal *name* and calls back into name-keyed builtins; a scalar `Signal` would need the same treatment, and the `signal_get_*` / `signal_set_*` pairs already cover it. |
 //! | `signals.a.b.set(v)` chaining | Rhai's property-chain fallback has no candela analogue; write the path out (`lumen::signal_set("a.b", v)`). |
+//!
+//! `signal(name)` is a prelude struct rather than a host fn: candela has no
+//! user-defined [`Value`](candela::Value) object type to hand back, so `Signal`
+//! holds only the signal *name* and its methods call the name-keyed
+//! `signal_get_*` / `signal_set_*` builtins. `ArraySignal` works the same way.
 //!
 //! Because candela reaches builtins through a typed `host "lumen" { ... }` block
 //! (rather than Rhai's bare globals), a Lumen candela script opts into the
@@ -1897,7 +1901,7 @@ fn register_web_namespaces(engine: &mut candela::Engine, r: &Registries) {
     });
     {
         let sink = r.sink.clone();
-        engine.register_host_fn("document", "spawn", move |tag: String| -> i64 {
+        engine.register_host_fn("document", "create", move |tag: String| -> i64 {
             let (handle, cmd) = node_query::build_spawn(&tag);
             sink.lock().unwrap().push(cmd);
             cd_intern_raw(handle)

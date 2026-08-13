@@ -113,13 +113,20 @@ pub const HELLO: &[(&str, &str)] = &[
         r##"<root bg="#0c1c30">
   <label width="100%" height="100%" text-align="center" font-size="48"
          text-color="#ffffff" text="Hello, Lumen" />
-  <script src="main.rhai" />
+  <script src="main.cdl" />
 </root>
 "##,
     ),
     (
-        "main.rhai",
-        "fn on_start() {\n    print(\"hello from lumen\");\n}\n",
+        "main.cdl",
+        r##"import "lumen.cdl";
+
+fn on_start() {
+    lumen::print("hello from lumen");
+}
+
+fn main() {}
+"##,
     ),
     (
         "lumen.toml",
@@ -134,8 +141,10 @@ The smallest runnable Lumen app.
 Concepts demonstrated:
 
 - **`main.lmn`** - every app is one `<root>` element; a `<label>` fills it.
-- **`<script src="main.rhai" />`** - attaches a Rhai script; `on_start()`
-  runs once when the app loads.
+- **`<script src="main.cdl" />`** - attaches a candela script; `on_start()`
+  runs once when the app loads. `import "lumen.cdl";` pulls in the whole
+  Lumen surface, and `main()` stays empty because a Lumen app works through
+  its lifecycle handlers.
 - **`lumen.toml`** - window title + logical size.
 
 Run it:
@@ -284,7 +293,7 @@ pub const FORM: &[(&str, &str)] = &[
   <label class="echo" width="100%" height="40px" bind-text="status"
          text="(waiting for input...)" />
 
-  <script src="main.rhai" />
+  <script src="main.cdl" />
 </root>
 "##,
     ),
@@ -316,14 +325,20 @@ pub const FORM: &[(&str, &str)] = &[
 "##,
     ),
     (
-        "main.rhai",
-        r##"fn refresh_status() {
-    let name = signal("name", "").get();
-    let dark = signal("dark", "false").get();
-    let vol  = signal("volume", "0.5").get();
-    let theme = if dark == "true" { "dark" } else { "light" };
-    signal("status", "")
-        .set("Hi " + name + " - theme=" + theme + " volume=" + vol);
+        "main.cdl",
+        r##"import "lumen.cdl";
+
+// Each control mirrors into its signal, so one function rebuilds the status
+// line for every callback below. `signal(name)` is a handle to the named
+// cell: `get` reads the string form, `get_bool` / `get_float` read it typed.
+fn refresh_status() {
+    let name = signal("name").get();
+    let dark = signal("dark").get_bool();
+    let vol = signal("volume").get();
+    let theme = "light";
+    if dark { theme = "dark"; }
+    let line = "Hi " + name + " - theme=" + theme + " volume=" + vol;
+    signal("status").set(line);
 }
 
 fn on_start() {
@@ -331,8 +346,10 @@ fn on_start() {
 }
 
 fn on_text_input(id, text) { refresh_status(); }
-fn on_toggle(id, on)       { refresh_status(); }
-fn on_slider(id, value)    { refresh_status(); }
+fn on_toggle(id, on) { refresh_status(); }
+fn on_slider(id, value) { refresh_status(); }
+
+fn main() {}
 "##,
     ),
     (
@@ -352,6 +369,8 @@ Concepts demonstrated:
   `bind-value` (slider). User edits write back into the signals.
 - **Lifecycle callbacks** - `on_text_input(id, text)`, `on_toggle(id, on)`,
   `on_slider(id, value)` fire on every control change.
+- **Signal handles** - `signal("dark")` names a cell; `get` reads its string
+  form and `get_bool` / `get_int` / `get_float` read it typed.
 - **Focus styling** - `tab-index` puts controls in the Tab chain;
   `:focus { outline: ... }` shows the ring.
 
@@ -396,7 +415,7 @@ pub const TODO: &[(&str, &str)] = &[
     <button id="clear-done" class="ghost" width="140px" height="36px" text="Clear done" />
   </row>
 
-  <script src="main.rhai" />
+  <script src="main.cdl" />
 </root>
 "##,
     ),
@@ -477,83 +496,130 @@ pub const TODO: &[(&str, &str)] = &[
 "##,
     ),
     (
-        "main.rhai",
-        r##"// Rows live in the "todos" array signal; `<for each="todos" key="id">`
-// reconciles the list on every write. Presentation fields (mark,
-// label_cls, check_cls) are computed here so the markup stays dumb.
+        "main.cdl",
+        r##"import "lumen.cdl";
 
-fn decorate(rows) {
-    let out = [];
-    for r in rows {
-        let done = r.done == "true";
-        r.mark      = if done { "X" } else { "" };
-        r.check_cls = if done { "check-on" } else { "" };
-        r.label_cls = if done { "todo-label-done" } else { "todo-label" };
-        out.push(r);
+// Rows live in the "todos" array signal; `<for each="todos" key="id">`
+// reconciles the list on every write. Presentation fields (mark, check_cls,
+// label_cls) are computed here so the markup stays dumb.
+
+// One row record. A candela map literal holds one value type, so every field
+// is a string; `<for>` binds them by name.
+fn make_row(id, label, done) {
+    let row = {"id": id, "label": label, "done": done};
+    if done == "true" {
+        row.insert("mark", "X");
+        row.insert("check_cls", "check-on");
+        row.insert("label_cls", "todo-label-done");
+    } else {
+        row.insert("mark", "");
+        row.insert("check_cls", "");
+        row.insert("label_cls", "todo-label");
     }
-    out
+    return row;
 }
 
+// Every edit ends here: publish the rows, then refresh the count line.
 fn write_rows(rows) {
-    signal_array("todos").set(decorate(rows));
+    let todos = signal_array("todos");
+    todos.set(rows);
     let left = 0;
-    for r in rows { if r.done != "true" { left += 1; } }
+    for r in rows {
+        let done = as_str(r.get("done"));
+        if done != "true" { left = left + 1; }
+    }
     let total = rows.len();
-    signal("left_label", "").set(left + " open / " + total + " total");
+    let count = str(left) + " open / " + str(total) + " total";
+    signal("left_label").set(count);
+}
+
+// The current rows, as plain maps. `all()` hands back `any`, so the list and
+// each record are read through the `as_list` / `as_map` downcasts.
+fn current_rows() {
+    let todos = signal_array("todos");
+    let raw = as_list(todos.all());
+    let out = [];
+    for item in raw {
+        out.push(as_map(item));
+    }
+    return out;
 }
 
 fn on_start() {
-    on("click", "add", "add_todo");
-    on("click", "clear-done", "clear_done");
-    signal("next_id", 4);
-    write_rows([
-        #{ id: "1", label: "Scaffold this app",        done: "true"  },
-        #{ id: "2", label: "Read the todo README",     done: "false" },
-        #{ id: "3", label: "Build something reactive", done: "false" },
-    ]);
+    lumen::on("click", "add", "add_todo");
+    lumen::on("click", "clear-done", "clear_done");
+    signal("next_id").set_int(4);
+
+    let rows = [];
+    rows.push(make_row("1", "Scaffold this app", "true"));
+    rows.push(make_row("2", "Read the todo README", "false"));
+    rows.push(make_row("3", "Build something reactive", "false"));
+    write_rows(rows);
 }
 
 fn add_todo(id) {
-    let draft = signal("draft", "").get();
+    let draft = signal("draft").get();
     if draft == "" { return; }
-    let n = signal("next_id", 4);
-    let rows = signal_array("todos").all();
-    rows.push(#{ id: "" + n.get(), label: draft, done: "false" });
-    n.set(n.get() + 1);
-    signal("draft", "").set("");
+    let next = signal("next_id");
+    let n = next.get_int();
+    let rows = current_rows();
+    rows.push(make_row(str(n), draft, "false"));
+    next.set_int(n + 1);
+    signal("draft").set("");
     write_rows(rows);
 }
 
+// candela has no closure value, so a filter is an explicit loop.
 fn clear_done(id) {
-    let rows = signal_array("todos").all();
-    rows.retain(|r| r.done != "true");
-    write_rows(rows);
+    let kept = [];
+    let rows = current_rows();
+    for r in rows {
+        let done = as_str(r.get("done"));
+        if done != "true" { kept.push(r); }
+    }
+    write_rows(kept);
 }
 
-// Per-row buttons carry interpolated ids ("tg|<id>", "rm|<id>");
-// the global on_click fallback parses the prefix.
+// Per-row buttons carry interpolated ids ("tg|<id>", "rm|<id>"); the global
+// on_click fallback splits the prefix off.
 fn on_click(id) {
-    if id.starts_with("tg|") { toggle_todo(id.sub_string(3)); return; }
-    if id.starts_with("rm|") { remove_todo(id.sub_string(3)); return; }
+    let parts = id.split("|");
+    if parts.len() != 2 { return; }
+    let kind = parts[0];
+    let tid = parts[1];
+    if kind == "tg" { toggle_todo(tid); }
+    if kind == "rm" { remove_todo(tid); }
 }
 
 fn toggle_todo(tid) {
-    let rows = signal_array("todos").all();
-    for i in 0..rows.len() {
-        if rows[i].id == tid {
-            let r = rows[i];
-            r.done = if r.done == "true" { "false" } else { "true" };
-            rows[i] = r;
+    let out = [];
+    let rows = current_rows();
+    for r in rows {
+        let rid = as_str(r.get("id"));
+        if rid != tid {
+            out.push(r);
+        } else {
+            let done = as_str(r.get("done"));
+            let label = as_str(r.get("label"));
+            let flipped = "true";
+            if done == "true" { flipped = "false"; }
+            out.push(make_row(rid, label, flipped));
         }
     }
-    write_rows(rows);
+    write_rows(out);
 }
 
 fn remove_todo(tid) {
-    let rows = signal_array("todos").all();
-    rows.retain(|r| r.id != tid);
-    write_rows(rows);
+    let kept = [];
+    let rows = current_rows();
+    for r in rows {
+        let rid = as_str(r.get("id"));
+        if rid != tid { kept.push(r); }
+    }
+    write_rows(kept);
 }
+
+fn main() {}
 "##,
     ),
     (
@@ -578,7 +644,10 @@ Concepts demonstrated:
   prefix. Compare with the per-id `on("click", ...)` routing used for
   the static Add button.
 - **Derived presentation** - `mark` / `label_cls` / `check_cls` are
-  computed in the script (`decorate`), keeping markup declarative.
+  computed in the script (`make_row`), keeping markup declarative.
+- **Records in candela** - a map literal holds one value type, so a row's
+  fields are strings; `as_list` / `as_map` read the array back, and a filter
+  is an explicit loop because candela has no closure value.
 - **`<scroll>`** - the list scrolls independently; try adding 30 rows.
 
 Run it:
@@ -641,7 +710,7 @@ pub const DASHBOARD: &[(&str, &str)] = &[
     </for>
   </scroll>
 
-  <script src="main.rhai" />
+  <script src="main.lua" />
 </root>
 "##,
     ),
@@ -686,77 +755,78 @@ progress { bg: var(--color-row); radius: 5; }
 "##,
     ),
     (
-        "main.rhai",
-        r##"// A repeating timer walks the metrics through a deterministic
-// pseudo-random sequence (LCG), so the dashboard animates without any
-// backend. Swap `step()` for `fetch(...)` + `on_fetch` to drive it
-// from a real API.
+        "main.lua",
+        r##"-- A repeating timer walks the metrics through a deterministic
+-- pseudo-random sequence (LCG), so the dashboard animates without any
+-- backend. Swap `step()` for `fetch(...)` + `on_fetch` to drive it
+-- from a real API.
 
-fn rand(n) {
-    // Park-Miller LCG over a signal-backed seed.
-    let s = signal("seed", 20260722);
-    let next = (s.get() * 48271) % 2147483647;
-    s.set(next);
-    next % n
-}
+local function rand(n)
+    -- Park-Miller LCG over a signal-backed seed.
+    local s = signal("seed", 20260722)
+    local next_seed = (s:get() * 48271) % 2147483647
+    s:set(next_seed)
+    return next_seed % n
+end
 
-fn step() {
-    let tick = signal("ticks", 0);
-    tick.set(tick.get() + 1);
-    signal("clock", "").set("tick " + tick.get());
+local function step()
+    local tick = signal("ticks", 0)
+    tick:set(tick:get() + 1)
+    signal("clock", ""):set("tick " .. tick:get())
 
-    let req = 180 + rand(120);
-    let usr = 40 + rand(25);
-    let err = rand(40);
-    signal("requests", 0).set(req);
-    signal("users", 0).set(usr);
-    signal("errors", "").set((err / 10) + "." + (err % 10) + "%");
+    local req = 180 + rand(120)
+    local usr = 40 + rand(25)
+    local err = rand(40)
+    signal("requests", 0):set(req)
+    signal("users", 0):set(usr)
+    signal("errors", ""):set(math.floor(err / 10) .. "." .. (err % 10) .. "%")
 
-    let cpu = 20 + rand(70);
-    let mem = 35 + rand(50);
-    signal("cpu", 0).set(cpu);
-    signal("mem", 0).set(mem);
-    signal("cpu_label", "").set(cpu + "%");
-    signal("mem_label", "").set(mem + "%");
+    local cpu = 20 + rand(70)
+    local mem = 35 + rand(50)
+    signal("cpu", 0):set(cpu)
+    signal("mem", 0):set(mem)
+    signal("cpu_label", ""):set(cpu .. "%")
+    signal("mem_label", ""):set(mem .. "%")
 
-    let feed = signal_array("activity");
-    let n = tick.get();
-    feed.push(#{
-        id: "" + n,
-        time: "+" + n + "s",
-        text: "deploy " + (1000 + rand(9000)) + " served " + req + " req/min",
-    });
-    // Keep the feed bounded (newest last).
-    let rows = feed.all();
-    if rows.len() > 12 {
-        rows.remove(0);
-        feed.set(rows);
-    }
-}
+    local feed = signal_array("activity")
+    local n = tick:get()
+    feed:push({
+        id = "" .. n,
+        time = "+" .. n .. "s",
+        text = "deploy " .. (1000 + rand(9000)) .. " served " .. req .. " req/min",
+    })
+    -- Keep the feed bounded (newest last). Rows come back 1-indexed, the Lua
+    -- convention every host-built sequence follows.
+    local rows = feed:all()
+    if #rows > 12 then
+        table.remove(rows, 1)
+        feed:set(rows)
+    end
+end
 
-fn on_start() {
-    on("click", "pause", "toggle_pause");
-    signal("pause_label", "").set("Pause");
-    step();
-    set_interval("sim", 1200);
-}
+function on_start()
+    on("click", "pause", "toggle_pause")
+    signal("pause_label", ""):set("Pause")
+    step()
+    set_interval("sim", 1200)
+end
 
-fn on_timer(name) {
-    if name == "sim" { step(); }
-}
+function on_timer(name)
+    if name == "sim" then step() end
+end
 
-fn toggle_pause(id) {
-    let running = signal("running", "true");
-    if running.get() == "true" {
-        cancel_timer("sim");
-        running.set("false");
-        signal("pause_label", "").set("Resume");
-    } else {
-        set_interval("sim", 1200);
-        running.set("true");
-        signal("pause_label", "").set("Pause");
-    }
-}
+function toggle_pause(id)
+    local running = signal("running", "true")
+    if running:get() == "true" then
+        cancel_timer("sim")
+        running:set("false")
+        signal("pause_label", ""):set("Resume")
+    else
+        set_interval("sim", 1200)
+        running:set("true")
+        signal("pause_label", ""):set("Pause")
+    end
+end
 "##,
     ),
     (
@@ -769,6 +839,10 @@ fn toggle_pause(id) {
 
 A live metrics dashboard: stat tiles, progress bars, and an activity
 feed, all animated by a repeating timer.
+
+This is the Lua template. The builtins are Lua globals with no import
+step, handles use the colon call form (`signal("cpu", 0):set(70)`), and
+every sequence the host builds is 1-indexed.
 
 Concepts demonstrated:
 
@@ -840,7 +914,7 @@ pub const SETTINGS: &[(&str, &str)] = &[
 
   <label class="summary" height="60px" wrap="word" bind-text="summary" text="" />
 
-  <script src="main.rhai" />
+  <script src="main.cdl" />
 </root>
 "##,
     ),
@@ -871,39 +945,54 @@ slider:focus     { outline: 2 var(--color-accent); }
 "##,
     ),
     (
-        "main.rhai",
-        r##"// Every control writes a signal; `derive` recomputes the summary from
-// the full set whenever ANY of them changes - no per-control wiring.
+        "main.cdl",
+        r##"import "lumen.cdl";
 
+// Every control writes a signal; `derive` recomputes the summary from the
+// full set whenever any of them changes - no per-control wiring. candela has
+// no closure value, so the recompute body is a named function and its
+// parameters arrive as the current dep values, in `deps` order.
+
+fn calc_summary(theme, density, scale, email, push, sound, dnd) {
+    let chan = "";
+    if email { chan = chan + "email "; }
+    if push { chan = chan + "push "; }
+    if sound { chan = chan + "sound "; }
+    if chan == "" { chan = "none"; }
+    let quiet = "";
+    if dnd { quiet = " - do not disturb"; }
+    return "Theme " + theme + " | density " + density + " | scale " + str(scale)
+        + " | notify via " + chan + quiet;
+}
+
+// Seed every dep with its authored default, and with the type the summary
+// expects: a derivation runs once at registration, so an unwritten cell would
+// otherwise reach `calc_summary` untyped.
 fn on_start() {
-    signal("theme", "").set("dark");
-    derive("summary",
+    signal("theme").set("dark");
+    signal("density").set("comfortable");
+    signal("scale").set_float(1.0);
+    signal("scale_label").set("1.0");
+    signal("notify_email").set_bool(false);
+    signal("notify_push").set_bool(true);
+    signal("notify_sound").set_bool(false);
+    signal("dnd").set_bool(false);
+
+    lumen::derive("summary",
         ["theme", "density", "scale", "notify_email", "notify_push",
          "notify_sound", "dnd"],
-        |theme, density, scale, email, push, sound, dnd| {
-            // Deps may be unset on the very first evaluation (the
-            // on_start writes above commit at the next tick boundary) -
-            // fall back to the authored defaults for display.
-            if theme == "" { theme = "dark"; }
-            if scale == "" { scale = "1.0"; }
-            let chan = "";
-            if email == "true" { chan += "email "; }
-            if push  == "true" { chan += "push "; }
-            if sound == "true" { chan += "sound "; }
-            if chan == "" { chan = "none"; }
-            let quiet = if dnd == "true" { " - do not disturb" } else { "" };
-            "Theme " + theme + " | density " + density + " | scale " + scale
-                + " | notify via " + chan + quiet
-        });
+        "calc_summary");
 }
 
 fn on_slider(id, value) {
     if id == "scale" {
         // Round to one decimal for the caption.
         let tenths = (value * 10.0).round() / 10.0;
-        signal("scale_label", "").set("" + tenths);
+        signal("scale_label").set(str(tenths));
     }
 }
+
+fn main() {}
 "##,
     ),
     (
@@ -928,8 +1017,10 @@ Concepts demonstrated:
   an outside click dismisses the panel.
 - **`<slider min max step bind-value>`** - keyboard-drivable numeric
   input.
-- **`derive(name, deps, fn)`** - the summary recomputes when any dep
-  changes; one declaration replaces seven callbacks.
+- **`derive(name, deps, fn_name)`** - the summary recomputes when any dep
+  changes; one declaration replaces seven callbacks. candela references the
+  recompute body by function name, and its parameters arrive as the current
+  dep values in `deps` order.
 - **State pseudo-classes** - `checkbox:checked`, `radio:selected`,
   `:focus` outlines, all in CSS.
 
@@ -1153,6 +1244,10 @@ Native shell showcase: OS-global hotkeys, a system tray icon with a
 context menu, and desktop notifications with an action button - with an
 in-app event log so everything is observable even where a shell surface
 is unavailable.
+
+This is the Rhai template. Builtins are bare globals, a handler bound to
+a node is a function pointer (`Fn("clear_log")`), and `create(tag)` is
+the spelling of the create verb because `spawn` is a Rhai keyword.
 
 Concepts demonstrated:
 

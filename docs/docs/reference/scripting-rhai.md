@@ -4,8 +4,12 @@ Every builtin the Rhai script host registers, with its signature, parameters,
 and behaviour. For the task-oriented introduction see
 [Scripting](../guides/scripting.md).
 
-The same surface in the other hosts: [candela](scripting-candela.md),
-[lua](scripting-lua.md).
+The same surface in the other hosts, under the same names:
+[candela](scripting-candela.md), [lua](scripting-lua.md). One structural
+difference shapes those names: a candela host function is keyed by name alone
+and cannot be overloaded on arity, so a call with two forms gets two names on
+every host: `page(path)` and `page_current()`, `computed_style(prop)` and
+`computed_style_all()`.
 
 ## Selecting the host
 
@@ -39,12 +43,9 @@ Custom types (`Signal`, `ArraySignal`, `Node`, `NodeQuery`, `Event`,
 `SignalRef`) carry methods dispatched on the receiver. Three scope constants are
 pre-bound: `signals`, `window`, `document`, and `history`.
 
-Two Rhai-specific spellings differ from the other hosts:
-
-- `spawn` is a reserved word in the Rhai tokenizer, so the create verb is
-  `create(tag)` / `document.create(tag)`.
-- A function-pointer value is invoked through `.call()`, so an unbind token
-  returned by `n.on(...)` is used as `off.call()`.
+One Rhai-specific spelling differs from the other hosts: a function-pointer
+value is invoked through `.call()`, so an unbind token returned by `n.on(...)`
+is used as `off.call()`.
 
 Parse depth and call depth are raised well past the defaults so a large
 generated script parses; the runtime safety limits stay off, because a Lumen
@@ -275,7 +276,7 @@ Mutations queue a command applied later in the same tick.
 | `Node.has_class(class)` | `bool` | Whether the class list contains `class`. |
 | `Node.style_get(name)` | `string` or `()` | One inline style override. |
 | `Node.computed_style(name)` | `string` or `()` | One resolved style property after the cascade. |
-| `Node.computed_style()` | `map` | Every resolved style property. |
+| `Node.computed_style()` / `Node.computed_style_all()` | `map` | Every resolved style property. |
 | `Node.inline_style()` | `map` | Every inline style override. |
 | `Node.attrs()` | `map` | Every attribute. |
 | `Node.classes()` | `array` | The class list. |
@@ -390,7 +391,7 @@ Pre-bound scope constants.
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |
 | `page(path)` | | Navigate to a page path (`"settings"`, `"/user/7"`, `"/"`). |
-| `page()` | `string` | The active page key. |
+| `page()` / `page_current()` | `string` | The active page key. |
 | `page_back()` | `bool` | Step one entry back in the page history. |
 | `page_forward()` | `bool` | Step one entry forward. |
 
@@ -441,6 +442,11 @@ See [OS integration](../guides/os-integration.md) for the markup these pair with
 | `set_class(id, classes)` | Replace the class list on the element with that `id`. |
 | `set_root_class(classes)` | Replace the class list on the root element, which drives theme-token selectors. |
 | `set_color_scheme(name)` | Switch the color scheme: `"default"` (follow the OS), `"force-light"`, `"force-dark"`, `"prefer-light"`, `"prefer-dark"`. An unknown name is ignored with a warning. |
+
+`set_class` takes an element id and `Node.set_class` takes none because it
+already has the element. They share a name and do the same thing through
+different routes: reach for the global when all you have is an id, and the
+method when you are holding a handle.
 
 ## Audio
 

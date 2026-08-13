@@ -4,8 +4,12 @@ Every builtin the Lua script host registers, with its signature, parameters, and
 behaviour. The host runs Lua 5.4. For the task-oriented introduction see
 [Scripting](../guides/scripting.md).
 
-The same surface in the other hosts: [candela](scripting-candela.md),
-[rhai](scripting-rhai.md).
+The same surface in the other hosts, under the same names:
+[candela](scripting-candela.md), [rhai](scripting-rhai.md). One structural
+difference shapes those names: a candela host function is keyed by name alone
+and cannot be overloaded on arity, so a call with two forms gets two names on
+every host: `page(path)` and `page_current()`, `computed_style(prop)` and
+`computed_style_all()`.
 
 ## Selecting the host
 
@@ -240,7 +244,7 @@ Mutations queue a command applied later in the same tick.
 
 | Builtin or method | Returns | Behaviour |
 | --- | --- | --- |
-| `spawn(tag)` / `document.spawn(tag)` | `Node` | Create a detached element. The handle is valid for the rest of the tick; attach it before the tick ends. |
+| `create(tag)` / `document.create(tag)` | `Node` | Create a detached element. The handle is valid for the rest of the tick; attach it before the tick ends. |
 | `Node:clone_deep()` | `Node` | Deep-clone the subtree into a fresh detached element. |
 | `Node:set_attr(name, value)` | `Node` | Set an attribute. `id`, `class`, `text`, and `disabled` route to their typed component; anything else lands in the attribute map. |
 | `Node:remove_attr(name)` | `Node` | Remove an attribute. |
@@ -269,7 +273,7 @@ Mutations queue a command applied later in the same tick.
 | `Node:has_class(class)` | boolean | Whether the class list contains `class`. |
 | `Node:style_get(name)` | string or `nil` | One inline style override. |
 | `Node:computed_style(name)` | string or `nil` | One resolved style property after the cascade. |
-| `Node:computed_style()` | table | Every resolved style property. |
+| `Node:computed_style()` / `Node:computed_style_all()` | table | Every resolved style property. |
 | `Node:inline_style()` | table | Every inline style override. |
 | `Node:attrs()` | table | Every attribute. |
 | `Node:classes()` | table | The class list, 1-indexed. |
@@ -377,14 +381,14 @@ Pre-bound global tables.
 | `document.get_by_id(id)` | `Node` or `nil` | Element with that `id`. |
 | `document.focused()` | `Node` or `nil` | The focused element. |
 | `document.hovered()` | `Node` or `nil` | The hovered element. |
-| `document.spawn(tag)` | `Node` | Create a detached element. |
+| `document.create(tag)` | `Node` | Create a detached element. |
 
 ## Page navigation
 
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |
 | `page(path)` | | Navigate to a page path (`"settings"`, `"/user/7"`, `"/"`). |
-| `page()` | string | The active page key. |
+| `page()` / `page_current()` | string | The active page key. |
 | `page_back()` | boolean | Step one entry back in the page history. |
 | `page_forward()` | boolean | Step one entry forward. |
 
@@ -435,6 +439,11 @@ See [OS integration](../guides/os-integration.md) for the markup these pair with
 | `set_class(id, classes)` | Replace the class list on the element with that `id`. |
 | `set_root_class(classes)` | Replace the class list on the root element, which drives theme-token selectors. |
 | `set_color_scheme(name)` | Switch the color scheme: `"default"` (follow the OS), `"force-light"`, `"force-dark"`, `"prefer-light"`, `"prefer-dark"`. An unknown name is ignored with a warning. |
+
+`set_class` takes an element id and `Node:set_class` takes none because it
+already has the element. They share a name and do the same thing through
+different routes: reach for the global when all you have is an id, and the
+method when you are holding a handle.
 
 ## Audio
 

@@ -10,7 +10,7 @@ use lumen_script_lua::LuaHost;
 
 const SRC: &str = r##"
 function build()
-    local n = spawn("div")
+    local n = create("div")
     n:set_class("row"):add_class("active"):set_attr("role", "button"):set_text("Save")
     n:set_style("color", "#ff0000")
     window.set_title("Hi")

@@ -519,3 +519,70 @@ fn a_single_page_app_compiles_without_a_page_set() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `page_current()` reads the active page key, on every host and under the
+/// same name. The no-argument reader is spelled apart from `page(path)`
+/// because a candela host function takes one arity per name; rhai and lua get
+/// the same spelling as a runtime extension beside their `page` overloads.
+///
+/// Each app writes what it read into the `seen` signal, which a label binds,
+/// so the value travels the same path a real app's would.
+#[test]
+fn page_current_reads_the_active_page_on_every_host() {
+    let scripts = [
+        (
+            "rhai",
+            "main.rhai",
+            "fn on_ready() { signal(\"seen\", \"\").set(page_current()); }".to_string(),
+        ),
+        (
+            "lua",
+            "main.lua",
+            "function on_ready() signal(\"seen\", \"\"):set(page_current()) end".to_string(),
+        ),
+        (
+            "candela",
+            "main.cdl",
+            "import \"lumen.cdl\";\n\
+             fn on_ready() { let key = lumen::page_current(); \
+             lumen::signal_set(\"seen\", key); }\n\
+             fn main() {}\n"
+                .to_string(),
+        ),
+    ];
+
+    for (engine, script_name, script) in scripts {
+        let _guard = nav_test_guard();
+        let dir = std::env::temp_dir().join(format!(
+            "lumen_page_current_{engine}_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+        std::fs::write(
+            dir.join("index.lmn"),
+            format!(
+                "<root>\n  <label id=\"seen\" bind-text=\"seen\" text=\"(none)\"/>\n  \
+                 <script src=\"{script_name}\"/>\n</root>"
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.join("settings.lmn"), "<root><label text=\"S\"/></root>").unwrap();
+        std::fs::write(dir.join(script_name), script).unwrap();
+
+        let mut opts = RunOptions::new(&dir);
+        opts.hot_reload = false;
+        let (mut app, _winit) =
+            build_headless_app(opts).unwrap_or_else(|e| panic!("build {engine} app: {e}"));
+        tick_n(&mut app, 6);
+
+        assert_eq!(
+            route_signal(&mut app, "seen"),
+            "index",
+            "{engine}: page_current() should read the active page key"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
