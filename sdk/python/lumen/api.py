@@ -3,7 +3,7 @@
 :class:`App` is the main entry point - a context manager around the
 opaque ``LumenApp*`` handle. The typed reactive signal surface
 (:class:`lumen.Signal`, :class:`lumen.Model`, :func:`lumen.computed`)
-lives in :mod:`lumen.signals` / :mod:`lumen.model`; the raw stringly
+lives in :mod:`lumen.signals` / :mod:`lumen.model`; the raw
 ``lumen_signal_*`` layer is :mod:`lumen.raw`.
 
 Threading note: ``lumen_app_expose`` callbacks - including the ones

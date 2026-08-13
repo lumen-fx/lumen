@@ -13,10 +13,10 @@
 //   - `lumen::Value`   Owned, recursive value type (nil/bool/int/float/
 //                      string/array/map) with materialisation into the
 //                      borrowed C `LumenValue` tree for one ABI call.
-//   - `lumen::Signal`  Thread-safe signal surface - the stringified
-//                      text-signal setters that `bind-text` markup reads,
-//                      plus the *typed* scalar get/set accessors (int64,
-//                      float64, bool, RGBA color) that skip stringify.
+//   - `lumen::Signal`  Thread-safe signal surface - typed scalar get/set
+//                      accessors (string, int64, float64, bool, RGBA
+//                      color) that `bind-text` markup reads, plus the
+//                      record-shaped array signals `<for>` consumes.
 //   - `std::function`  callbacks exposed to the script runtime, bridged
 //                      through the C `LumenFn` trampoline.
 //
@@ -688,41 +688,41 @@ private:
 };
 
 // =====================================================================
-// raw - thin, stringly signal surface. Free functions; no App needed.
+// raw - thin signal surface. Free functions; no App needed.
 //
 // This is the LOW-LEVEL layer beneath the typed `lumen::Signal<T>` handle
-// below; reach for it only when you need a raw `lumen_signal_*` C call
-// (arrays, or the stringly text setters `bind-text` reads). Two families:
-//   * Text signals (`set`, `set_array`, `clear`) - stringified into the
-//     store that `bind-text` / `<for>` markup observes.
-//   * Typed scalars (`set_int`, `get_int`, ...) - carried as typed
-//     `PropertyValue` cells without a stringify/parse round-trip.
+// below; reach for it only when you need a raw `lumen_signal_*` C call.
+// Scalars are one typed family - `set` / `get_string`, `set_int` /
+// `get_int`, and friends carry a typed `PropertyValue` cell with no
+// stringify/parse round-trip, and `bind-text` markup reads any of them.
+// Array signals (`set_array`, `array_len`, `array_field`) are a separate,
+// record-shaped family that `<for>` markup consumes.
 //
 // Setters return `LumenStatus` and are `noexcept`; getters return
-// `std::optional<T>` (empty when the signal was never set with a typed
-// setter). See the error-model note at the top of this header.
+// `std::optional<T>` (empty when the signal holds no value of that
+// type). See the error-model note at the top of this header.
 // =====================================================================
 
 namespace raw {
 
 using Rgba = std::array<std::uint8_t, 4>;
 
-// ---- Text signals (bind-text / <for>) ------------------------------
+// ---- Scalar signals (bind-text) ------------------------------------
 
-/// Set a text signal to a UTF-8 string.
+/// Set a scalar signal to a UTF-8 string.
 inline LumenStatus set(std::string_view name, std::string_view value) noexcept {
     std::string n(name), v(value);
-    return lumen_signal_set_string(n.c_str(), v.c_str());
+    return lumen_signal_set_str(n.c_str(), v.c_str());
 }
-/// Set a text signal to a stringified 64-bit integer.
+/// Set a scalar signal to a 64-bit integer.
 inline LumenStatus set(std::string_view name, std::int64_t value) noexcept {
     std::string n(name);
-    return lumen_signal_set_int(n.c_str(), value);
+    return lumen_signal_set_int64(n.c_str(), value);
 }
-/// Set a text signal to a stringified double.
+/// Set a scalar signal to a double.
 inline LumenStatus set(std::string_view name, double value) noexcept {
     std::string n(name);
-    return lumen_signal_set_f64(n.c_str(), value);
+    return lumen_signal_set_float64(n.c_str(), value);
 }
 
 /// Replace the rows of an array signal. `v` must be a `LUMEN_ARRAY` of
@@ -736,18 +736,19 @@ inline LumenStatus set_array(std::string_view name, const Value& v) noexcept {
     return lumen_signal_set_array(n.c_str(), &lv);
 }
 
-/// Clear a signal (string -> empty, array -> empty).
+/// Clear a signal (scalar -> empty string, array -> empty).
 inline LumenStatus clear(std::string_view name) noexcept {
     std::string n(name);
     return lumen_signal_clear(n.c_str());
 }
 
-// ---- String / array read-back (ABI 0.3) ----------------------------
+// ---- String / array read-back --------------------------------------
 //
-// Reads the value the embedder last pushed through the FFI string
-// setters - not live in-app state (a Rhai `signals.x.set(..)` or a
-// two-way input binding is not visible here). Empty optional when the
-// signal was never set through the FFI.
+// `get_string` and the array getters read what the embedder last pushed
+// through the FFI, not live in-app state (a script `signals.x.set(..)`
+// or a two-way input binding is not visible through them). Empty
+// optional when the signal was never set through the FFI. The number,
+// bool, and color getters below do see in-app writes.
 
 namespace detail {
 
@@ -769,11 +770,11 @@ inline std::optional<std::string> read_string_out(Call&& call) noexcept {
 
 } // namespace detail
 
-/// Read back a string signal set through the FFI string setters.
+/// Read a scalar signal back as a string.
 inline std::optional<std::string> get_string(std::string_view name) noexcept {
     std::string n(name);
     return detail::read_string_out([&](char* buf, std::size_t len, std::size_t* out) {
-        return lumen_signal_get_string(nullptr, n.c_str(), buf, len, out);
+        return lumen_signal_get_str(n.c_str(), buf, len, out);
     });
 }
 
@@ -781,7 +782,7 @@ inline std::optional<std::string> get_string(std::string_view name) noexcept {
 inline std::optional<std::size_t> array_len(std::string_view name) noexcept {
     std::string n(name);
     std::size_t out = 0;
-    if (lumen_signal_array_len(nullptr, n.c_str(), &out) == LUMEN_OK) return out;
+    if (lumen_signal_array_len(n.c_str(), &out) == LUMEN_OK) return out;
     return std::nullopt;
 }
 
@@ -791,54 +792,54 @@ inline std::optional<std::string> array_field(std::string_view name, std::size_t
                                               std::string_view field) noexcept {
     std::string n(name), f(field);
     return detail::read_string_out([&](char* buf, std::size_t len, std::size_t* out) {
-        return lumen_signal_array_get_field(nullptr, n.c_str(), row, f.c_str(), buf, len, out);
+        return lumen_signal_array_get_field(n.c_str(), row, f.c_str(), buf, len, out);
     });
 }
 
-// ---- Typed scalar signals (no stringify round-trip) ----------------
+// ---- Typed scalar signals ------------------------------------------
 
 inline LumenStatus set_int(std::string_view name, std::int64_t value) noexcept {
     std::string n(name);
-    return lumen_signal_set_int64(nullptr, n.c_str(), value);
+    return lumen_signal_set_int64(n.c_str(), value);
 }
 inline std::optional<std::int64_t> get_int(std::string_view name) noexcept {
     std::string n(name);
     std::int64_t out = 0;
-    if (lumen_signal_get_int64(nullptr, n.c_str(), &out) == LUMEN_OK) return out;
+    if (lumen_signal_get_int64(n.c_str(), &out) == LUMEN_OK) return out;
     return std::nullopt;
 }
 
 inline LumenStatus set_float(std::string_view name, double value) noexcept {
     std::string n(name);
-    return lumen_signal_set_float64(nullptr, n.c_str(), value);
+    return lumen_signal_set_float64(n.c_str(), value);
 }
 inline std::optional<double> get_float(std::string_view name) noexcept {
     std::string n(name);
     double out = 0.0;
-    if (lumen_signal_get_float64(nullptr, n.c_str(), &out) == LUMEN_OK) return out;
+    if (lumen_signal_get_float64(n.c_str(), &out) == LUMEN_OK) return out;
     return std::nullopt;
 }
 
 inline LumenStatus set_bool(std::string_view name, bool value) noexcept {
     std::string n(name);
-    return lumen_signal_set_bool(nullptr, n.c_str(), value);
+    return lumen_signal_set_bool(n.c_str(), value);
 }
 inline std::optional<bool> get_bool(std::string_view name) noexcept {
     std::string n(name);
     bool out = false;
-    if (lumen_signal_get_bool(nullptr, n.c_str(), &out) == LUMEN_OK) return out;
+    if (lumen_signal_get_bool(n.c_str(), &out) == LUMEN_OK) return out;
     return std::nullopt;
 }
 
 /// Set an RGBA color signal (each channel 0..=255).
 inline LumenStatus set_color(std::string_view name, Rgba rgba) noexcept {
     std::string n(name);
-    return lumen_signal_set_color(nullptr, n.c_str(), rgba.data());
+    return lumen_signal_set_color(n.c_str(), rgba.data());
 }
 inline std::optional<Rgba> get_color(std::string_view name) noexcept {
     std::string n(name);
     Rgba out{};
-    if (lumen_signal_get_color(nullptr, n.c_str(), out.data()) == LUMEN_OK) return out;
+    if (lumen_signal_get_color(n.c_str(), out.data()) == LUMEN_OK) return out;
     return std::nullopt;
 }
 

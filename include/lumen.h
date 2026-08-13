@@ -66,7 +66,7 @@ typedef struct LumenApp LumenApp;
  * top 24 bits (major+minor) is a hard incompatibility.
  */
 #define LUMEN_API_VERSION_MAJOR 0u
-#define LUMEN_API_VERSION_MINOR 12u
+#define LUMEN_API_VERSION_MINOR 13u
 #define LUMEN_API_VERSION_PATCH 0u
 #define LUMEN_API_VERSION                                                          \
     ((LUMEN_API_VERSION_MAJOR << 16) | (LUMEN_API_VERSION_MINOR << 8) |            \
@@ -227,9 +227,8 @@ typedef int (*LumenCloseFn)(void* user_data);
  *
  * lumen_app_new / lumen_app_set_title / lumen_app_set_size /
  * lumen_app_free / lumen_app_run / lumen_last_error /
- * lumen_signal_set_string / lumen_signal_set_int /
- * lumen_signal_set_f64 / lumen_signal_clear / lumen_abi_version
- * are declared in `lumen_simple.h`.
+ * lumen_signal_clear / lumen_abi_version are declared in
+ * `lumen_simple.h`.
  */
 
 /*
@@ -329,80 +328,72 @@ LumenStatus lumen_app_run_headless(LumenApp* app, uint32_t ticks);
 LumenStatus lumen_signal_set_array (const char* name, const LumenValue* value);
 
 /* ============================================================
- * Typed scalar signal accessors (W7.x).
+ * Typed scalar signal accessors (ABI 0.13).
  *
- * Avoid the round-trip stringification of the legacy
- * `lumen_signal_set_int` / `lumen_signal_set_f64` exports. Each setter
- * lands a typed value directly in the foundation `PropertyStore` (via
- * the cross-thread typed-property bus) and also seeds a process-wide
- * typed cache for pre-run / cross-thread read-back. The getters read
- * that typed value straight - no parsing.
+ * One family for every scalar signal: a set/get pair per type, keyed by
+ * signal name. Each setter lands a typed value directly in the
+ * foundation `PropertyStore` (via the cross-thread typed-property bus)
+ * and also seeds a process-wide typed cache for pre-run / cross-thread
+ * read-back. The getters read that typed value straight - no parsing.
  *
- * `bind-text="..."` markup still observes a typed write: there is no
- * separate legacy-`Signals` mirror (post-wave-D there is no `Signals`
- * HashMap to mirror into), but the per-tick `apply_text_bindings`
- * system stringifies scalar `PropertyStore` cells on read (I64/F64 ->
- * decimal, Bool -> "true"/"false"), so a bound element reflects the
- * typed value on the next tick without the embedder writing a second,
- * pre-stringified string signal.
+ * `bind-text="..."` markup observes any of these writes: the per-tick
+ * binding pass stringifies scalar `PropertyStore` cells on read (I64/F64
+ * -> decimal, Bool -> "true"/"false"), so a bound element reflects the
+ * value on the next tick.
  *
- * The `LumenApp*` parameter is reserved for a future per-app
- * store; the current implementation only null-checks it, so
- * passing NULL is supported.
+ * Each accessor returns LUMEN_OK on success or LUMEN_ERR_BAD_ARG when
+ * the name is null/non-utf8, the out pointer is null, or the signal
+ * holds no value of the requested type. Call `lumen_status_message()`
+ * for a static, human-readable description of the status code (handy
+ * for embedders that log on non-OK returns without grabbing the
+ * thread-local error string).
  *
- * Each accessor returns LUMEN_OK on success or LUMEN_ERR_BAD_ARG
- * when the name is null/non-utf8, the out pointer is null, or the
- * signal has never been set via a typed setter. Call
- * `lumen_status_message()` for a static, human-readable description
- * of the status code (handy for embedders that log on non-OK
- * returns without grabbing the thread-local error string).
+ * String-out convention, used by lumen_signal_get_str: on success the
+ * value is copied into `buf` with a trailing NUL and `*out_len` (if
+ * non-NULL) is set to the byte length excluding the NUL. If `buf` is
+ * NULL or `buf_len` is too small, no bytes are written, `*out_len` is
+ * set to the required capacity (byte length + 1 for the NUL), and
+ * LUMEN_ERR_BUFFER_TOO_SMALL is returned - call once with a NULL/zero
+ * buffer to size it, then again to fill.
  * ============================================================ */
 
-LumenStatus lumen_signal_set_int64 (LumenApp* app, const char* name, int64_t value);
-LumenStatus lumen_signal_get_int64 (LumenApp* app, const char* name, int64_t* out);
+LumenStatus lumen_signal_set_str   (const char* name, const char* value);
+LumenStatus lumen_signal_get_str   (const char* name,
+                                    char* buf, size_t buf_len, size_t* out_len);
 
-LumenStatus lumen_signal_set_float64(LumenApp* app, const char* name, double value);
-LumenStatus lumen_signal_get_float64(LumenApp* app, const char* name, double* out);
+LumenStatus lumen_signal_set_int64 (const char* name, int64_t value);
+LumenStatus lumen_signal_get_int64 (const char* name, int64_t* out);
 
-LumenStatus lumen_signal_set_bool  (LumenApp* app, const char* name, bool value);
-LumenStatus lumen_signal_get_bool  (LumenApp* app, const char* name, bool* out);
+LumenStatus lumen_signal_set_float64(const char* name, double value);
+LumenStatus lumen_signal_get_float64(const char* name, double* out);
+
+LumenStatus lumen_signal_set_bool  (const char* name, bool value);
+LumenStatus lumen_signal_get_bool  (const char* name, bool* out);
 
 /*
  * RGBA bytes (R, G, B, A - each 0..=255). `rgba` / `out` must
  * point to at least 4 writable bytes.
  */
-LumenStatus lumen_signal_set_color (LumenApp* app, const char* name, const uint8_t rgba[4]);
-LumenStatus lumen_signal_get_color (LumenApp* app, const char* name, uint8_t out[4]);
+LumenStatus lumen_signal_set_color (const char* name, const uint8_t rgba[4]);
+LumenStatus lumen_signal_get_color (const char* name, uint8_t out[4]);
 
 /* ============================================================
- * String / array signal read-back (ABI 0.3).
+ * Array signal read-back (ABI 0.3).
  *
- * The legacy string setters (lumen_signal_set_string / _int / _f64 /
- * _array / clear) previously had no getter. These read back the value
- * the EMBEDDER last pushed through those FFI setters. A write that
- * originates inside the running app (a Rhai `signals.x.set(..)` or a
- * two-way input binding) is not visible here - reading live in-app
- * state cross-thread would require sharing the running app's world
- * across the FFI. The `LumenApp*` parameter is reserved (null-checked
- * only); passing NULL is supported.
- *
- * String-out convention: on success the value is copied into `buf` with
- * a trailing NUL and `*out_len` (if non-NULL) is set to the byte length
- * excluding the NUL. If `buf` is NULL or `buf_len` is too small, no
- * bytes are written, `*out_len` is set to the required capacity (byte
- * length + 1 for the NUL), and LUMEN_ERR_BUFFER_TOO_SMALL is returned -
- * call once with a NULL/zero buffer to size it, then again to fill.
+ * These read back the rows the EMBEDDER last pushed through
+ * lumen_signal_set_array (an empty list after lumen_signal_clear). A
+ * write that originates inside the running app (a script
+ * `signals.x.set(..)` or a two-way input binding) is not visible here -
+ * reading live in-app state cross-thread would require sharing the
+ * running app's world across the FFI.
  * ============================================================ */
 
-LumenStatus lumen_signal_get_string(LumenApp* app, const char* name,
-                                    char* buf, size_t buf_len, size_t* out_len);
-
 /* Row count of an array signal into `*out_len`. */
-LumenStatus lumen_signal_array_len (LumenApp* app, const char* name, size_t* out_len);
+LumenStatus lumen_signal_array_len (const char* name, size_t* out_len);
 
 /* One field of one row (record-shaped field -> stringified value),
  * copied out per the string-out convention above. */
-LumenStatus lumen_signal_array_get_field(LumenApp* app, const char* name, size_t row,
+LumenStatus lumen_signal_array_get_field(const char* name, size_t row,
                                          const char* field,
                                          char* buf, size_t buf_len, size_t* out_len);
 

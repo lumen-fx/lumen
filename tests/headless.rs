@@ -8,11 +8,13 @@ use std::ffi::{CString, c_char};
 use std::path::PathBuf;
 
 use lumen::{
-    LumenClickFn, LumenCloseFn, LumenFn, LumenStatus, LumenValue, LumenWatchFn, lumen_app_expose,
-    lumen_app_free, lumen_app_new, lumen_app_on_click, lumen_app_on_close, lumen_app_run_headless,
-    lumen_last_error, lumen_signal_set_int64, lumen_signal_watch,
+    LumenClickFn, LumenCloseFn, LumenFn, LumenKind, LumenStatus, LumenValue, LumenWatchFn,
+    lumen_app_expose, lumen_app_free, lumen_app_new, lumen_app_on_click, lumen_app_on_close,
+    lumen_app_run_headless, lumen_last_error, lumen_signal_get_str, lumen_signal_set_int64,
+    lumen_signal_set_str, lumen_signal_watch,
 };
 use std::os::raw::c_void;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 /// Four of these tests build a whole app and tick it. An app is not a
@@ -252,7 +254,7 @@ fn signal_watch_fires_during_headless_run() {
     let name = CString::new("watched_count").unwrap();
     WATCH_SEEN.store(-1, Ordering::SeqCst);
     assert_eq!(
-        unsafe { lumen_signal_set_int64(std::ptr::null_mut(), name.as_ptr(), 42) },
+        unsafe { lumen_signal_set_int64(name.as_ptr(), 42) },
         LumenStatus::Ok
     );
     let cb: LumenWatchFn = record_int_watch;
@@ -274,6 +276,93 @@ fn signal_watch_fires_during_headless_run() {
         "the watcher must fire with the seeded value once it commits to the PropertyStore"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Records the last string value delivered to a watch callback.
+static STR_WATCH_SEEN: Mutex<Option<String>> = Mutex::new(None);
+
+extern "C" fn record_str_watch(_name: *const c_char, value: *const LumenValue, _ud: *mut c_void) {
+    if value.is_null() {
+        return;
+    }
+    let v = unsafe { &*value };
+    if v.kind != LumenKind::String {
+        return;
+    }
+    let p = unsafe { v.as_.string };
+    if p.is_null() {
+        return;
+    }
+    let s = unsafe { std::ffi::CStr::from_ptr(p) }
+        .to_string_lossy()
+        .into_owned();
+    *STR_WATCH_SEEN.lock().unwrap() = Some(s);
+}
+
+#[test]
+fn string_signal_reaches_the_store_during_a_headless_run() {
+    let dir = write_fixture("str");
+    let cdir = CString::new(dir.to_str().unwrap()).unwrap();
+    let handle = unsafe { lumen_app_new(cdir.as_ptr()) };
+    assert!(
+        !handle.is_null(),
+        "valid app dir must construct: {}",
+        last_error()
+    );
+
+    // A signal the fixture markup does not bind, so the only writer is
+    // this test. (`msg`, which the fixture's <label bind-text="msg">
+    // reads, is seeded from the element's own text on the first tick.)
+    let name = CString::new("embedder_note").unwrap();
+    let value = CString::new("from the embedder").unwrap();
+    *STR_WATCH_SEEN.lock().unwrap() = None;
+    assert_eq!(
+        unsafe { lumen_signal_set_str(name.as_ptr(), value.as_ptr()) },
+        LumenStatus::Ok
+    );
+
+    // Read back before the run: the setter seeds the process-wide cache.
+    let mut buf = [0i8; 64];
+    let mut out_len: usize = 0;
+    assert_eq!(
+        unsafe { lumen_signal_get_str(name.as_ptr(), buf.as_mut_ptr(), buf.len(), &mut out_len) },
+        LumenStatus::Ok
+    );
+    assert_eq!(
+        unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }
+            .to_str()
+            .unwrap(),
+        "from the embedder"
+    );
+
+    let cb: LumenWatchFn = record_str_watch;
+    assert_eq!(
+        unsafe { lumen_signal_watch(name.as_ptr(), Some(cb), std::ptr::null_mut()) },
+        LumenStatus::Ok
+    );
+    assert_eq!(
+        unsafe { lumen_app_run_headless(handle, 4) },
+        LumenStatus::Ok,
+        "headless run should succeed: {}",
+        last_error()
+    );
+    assert_eq!(
+        STR_WATCH_SEEN.lock().unwrap().as_deref(),
+        Some("from the embedder"),
+        "the string setter must commit a string cell the watcher observes"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn get_str_rejects_an_unset_signal() {
+    let name = CString::new("never_set_str_signal").unwrap();
+    let mut buf = [0i8; 8];
+    let mut out_len: usize = 0;
+    assert_eq!(
+        unsafe { lumen_signal_get_str(name.as_ptr(), buf.as_mut_ptr(), buf.len(), &mut out_len) },
+        LumenStatus::ErrBadArg
+    );
 }
 
 #[test]

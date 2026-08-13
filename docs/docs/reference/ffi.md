@@ -169,40 +169,37 @@ borrowed.
 
 ## Signals
 
-Scalar setters that stringify on write:
+Scalar signals are one typed family: a set/get pair per type, keyed by signal
+name. Each setter stores the value typed, and each getter reads it back without
+a string round-trip.
 
-- `lumen_signal_set_string(const char *name, const char *value)`
-- `lumen_signal_set_int(const char *name, int64_t value)`
-- `lumen_signal_set_f64(const char *name, double value)`
-- `lumen_signal_clear(const char *name)` - empty string, or empty array
-
-Typed accessors, which store and read the value without a string round-trip.
-The `LumenApp *` parameter is reserved and only null-checked, so passing `NULL`
-is supported.
-
+- `lumen_signal_set_str(const char *name, const char *value)` /
+  `lumen_signal_get_str(const char *name, char *buf, size_t buf_len, size_t *out_len)`
 - `lumen_signal_set_int64` / `lumen_signal_get_int64`
 - `lumen_signal_set_float64` / `lumen_signal_get_float64`
 - `lumen_signal_set_bool` / `lumen_signal_get_bool`
 - `lumen_signal_set_color` / `lumen_signal_get_color` - RGBA bytes, four
   channels of `0` to `255`
+- `lumen_signal_clear(const char *name)` - empty string, or empty array
 
-A getter returns `LUMEN_ERR_BAD_ARG` when the signal was never written through a
-typed setter. Markup bound with `bind-text` still observes a typed write: the
-binding pass stringifies scalar cells on read.
+A getter returns `LUMEN_ERR_BAD_ARG` when the signal holds no value of that
+type. Markup bound with `bind-text` observes any of these writes: the binding
+pass stringifies scalar cells on read.
 
-Arrays and read-back:
+Array signals are a separate family, because a row is a record rather than a
+scalar and the property store has no array cell:
 
 | Function | Behaviour |
 | --- | --- |
-| `lumen_signal_set_array(const char *name, const LumenValue *value)` | Replace an array signal. `value->kind` must be `LUMEN_ARRAY`; each item should be a `LUMEN_MAP` whose entries become one row of the bound `<for>` block. |
-| `lumen_signal_get_string(LumenApp *, const char *name, char *buf, size_t buf_len, size_t *out_len)` | Read back a string signal, string-out convention. |
-| `lumen_signal_array_len(LumenApp *, const char *name, size_t *out_len)` | Row count of an array signal. |
-| `lumen_signal_array_get_field(LumenApp *, const char *name, size_t row, const char *field, char *buf, size_t buf_len, size_t *out_len)` | One field of one row, string-out convention. |
+| `lumen_signal_set_array(const char *name, const LumenValue *value)` | Replace an array signal. `value->kind` must be `LUMEN_ARRAY`; each item should be a `LUMEN_MAP` whose entries become one row of the bound `<for>` block. Values are stringified into the row. |
+| `lumen_signal_array_len(const char *name, size_t *out_len)` | Row count of an array signal. |
+| `lumen_signal_array_get_field(const char *name, size_t row, const char *field, char *buf, size_t buf_len, size_t *out_len)` | One field of one row, string-out convention. |
 | `lumen_signals_all(LumenKVList *out)` | The whole signal set. Free with `lumen_kvlist_free`. |
 
-The read-back functions return what the embedder last pushed through the FFI
-setters. A write originating inside the running app, from a script or a two-way
-input binding, is not visible through them.
+`lumen_signal_get_str` and the two array getters return what the embedder last
+pushed through the FFI. A write originating inside the running app, from a
+script or a two-way input binding, is not visible through them; the number,
+bool, and color getters do see such writes.
 
 ## Navigation
 

@@ -52,15 +52,14 @@ include = [
     "lumen_app_run",
     "lumen_last_error",
     "lumen_last_error_global",
-    "lumen_signal_set_string",
-    "lumen_signal_set_int",
-    "lumen_signal_set_f64",
     "lumen_signal_clear",
-    # W7.x typed scalar accessors. The hand-written `lumen.h` also
+    # The one typed scalar signal family. The hand-written `lumen.h` also
     # declares these (to keep one canonical authoritative copy that
     # never depends on cbindgen running); the cbindgen mirror lets
     # downstream tooling that consumes the auto-generated header
     # also pick them up.
+    "lumen_signal_set_str",
+    "lumen_signal_get_str",
     "lumen_signal_set_int64",
     "lumen_signal_get_int64",
     "lumen_signal_set_float64",
@@ -94,7 +93,6 @@ exclude = [
     "lumen_app_expose_v2",
     "lumen_app_on_click",
     "lumen_app_run_headless",
-    "lumen_signal_get_string",
     "lumen_signal_array_len",
     "lumen_signal_array_get_field",
     # ABI 0.4 change-subscription surface. Hand-written in `lumen.h`; the

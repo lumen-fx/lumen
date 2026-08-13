@@ -329,15 +329,15 @@ namespace Signal {
 
     inline void set(std::string_view name, std::string_view value) {
         std::string n(name), v(value);
-        lumen_signal_set_string(n.c_str(), v.c_str());
+        lumen_signal_set_str(n.c_str(), v.c_str());
     }
     inline void set(std::string_view name, int64_t value) {
         std::string n(name);
-        lumen_signal_set_int(n.c_str(), value);
+        lumen_signal_set_int64(n.c_str(), value);
     }
     inline void set(std::string_view name, double value) {
         std::string n(name);
-        lumen_signal_set_f64(n.c_str(), value);
+        lumen_signal_set_float64(n.c_str(), value);
     }
     inline void set_array(std::string_view name, const Value& v) {
         std::string n(name);

@@ -99,8 +99,17 @@
  through the injected front-end (present on the from-source run path, a
  no-op on the precompiled-artifact path) and must not be fed untrusted
  content. Additive, so a minor bump.
+
+ 0.13 unified the scalar signal surface into one typed family:
+ [`lumen_signal_set_str`] / [`lumen_signal_get_str`] join the existing
+ int64 / float64 / bool / color pairs, the older stringifying setters
+ and their string getter are removed, and the unread `LumenApp*` first
+ parameter is gone from every typed accessor and from
+ [`lumen_signal_array_len`] / [`lumen_signal_array_get_field`]. Kept
+ names changed arity, so embedders rebuild against the new header
+ rather than relinking.
  */
-#define LUMEN_ABI_MINOR 12
+#define LUMEN_ABI_MINOR 13
 
 /*
  Patch ABI version. Bump on non-API metadata changes (docs, code, etc.).
@@ -386,22 +395,6 @@ extern "C" {
  const char *lumen_last_error_global(void) ;
 
 /*
- Set a scalar signal to a UTF-8 string. Thread-safe.
- */
- LumenStatus lumen_signal_set_string(const char *name, const char *value) ;
-
-/*
- Set a scalar signal to a 64-bit signed integer. Stringified.
- */
- LumenStatus lumen_signal_set_int(const char *name, int64_t value) ;
-
-/*
- Set a scalar signal to a double. Stringified with the default
- Rust `Display` (no rounding).
- */
- LumenStatus lumen_signal_set_f64(const char *name, double value) ;
-
-/*
  Navigate the active page to `path` (UTF-8, NUL-terminated). `path` is a
  page path (`"settings"`, `"/user/7"`, `"/"`), resolved by longest
  existing `.lmn` prefix - not a URL scheme. Equivalent to the script
@@ -433,75 +426,102 @@ extern "C" {
  LumenStatus lumen_current_page(char *buf, size_t buf_len, size_t *out_len) ;
 
 /*
- Clear a signal (string => empty, array => empty vec).
+ Clear a signal (scalar => empty string, array => empty vec).
  */
  LumenStatus lumen_signal_clear(const char *name) ;
 
 /*
+ Set a scalar signal to a UTF-8 string. A null `value` writes an empty
+ string. Thread-safe.
+
+ Pushes a `PropertyValue::Str` through the foundation typed-property
+ bus, so `bind-text="..."` markup observes the new string on the next
+ tick. Mirrors the write into the FFI-local cache for pre-run
+ read-back.
+ */
+ LumenStatus lumen_signal_set_str(const char *name, const char *value) ;
+
+/*
+ Read a scalar signal as a UTF-8 string into a caller-provided buffer.
+
+ On success copies the value plus a trailing NUL into `buf` and, when
+ `out_len` is non-null, sets `*out_len` to the byte length (excluding
+ the NUL). When `buf` is null or `buf_len` is too small, sets
+ `*out_len` to the required capacity (byte length + 1) and returns
+ [`LumenStatus::ErrBufferTooSmall`] without writing `buf`; call once
+ with a null/zero buffer to size it, then again to fill.
+
+ Returns [`LumenStatus::ErrBadArg`] when `name` is null / non-UTF-8, or
+ when the signal holds no string.
+
+ Scope: this reads back the string the embedder last pushed through
+ the FFI (a `clear` leaves an empty string). A string written inside
+ the running app lands in `PropertyStore`, which the cross-thread
+ mirror keeps for numbers, bools, and colors only, so it is not
+ visible here.
+ */
+ LumenStatus lumen_signal_get_str(const char *name, char *buf, size_t buf_len, size_t *out_len) ;
+
+/*
  Set a scalar signal to a 64-bit signed integer, typed.
 
- Round 4 closure: pushes a `PropertyValue::I64` through the foundation
- typed-property bus so the receiving cell in `PropertyStore` keeps the
- typed variant (no stringify-on-write, no parse-on-read). Mirrors the
- write into the FFI-local cache for pre-run read-back.
-
- Prefer this over `lumen_signal_set_int` (which stringifies on the
- Rust side and forces every reader to parse back).
+ Pushes a `PropertyValue::I64` through the foundation typed-property
+ bus so the receiving cell in `PropertyStore` keeps the typed variant
+ (no stringify-on-write, no parse-on-read). Mirrors the write into the
+ FFI-local cache for pre-run read-back.
  */
- LumenStatus lumen_signal_set_int64(LumenApp *_app, const char *name, int64_t value) ;
+ LumenStatus lumen_signal_set_int64(const char *name, int64_t value) ;
 
 /*
  Read a scalar signal as a 64-bit signed integer, typed. Returns
- [`LumenStatus::ErrBadArg`] when the signal was never set with a
- typed setter (the legacy string-typed setters do not populate the
- typed-value map).
+ [`LumenStatus::ErrBadArg`] when the signal holds no number.
 
- Round 4 closure: peeks the foundation typed-property bus snapshot
- first (catches pending pre-run writes that haven't been drained
- yet) before falling back to the local cache.
+ Peeks the foundation typed-property bus snapshot first (catches
+ pending pre-run writes that haven't been drained yet) before falling
+ back to the local cache.
  */
- LumenStatus lumen_signal_get_int64(LumenApp *_app, const char *name, int64_t *out) ;
+ LumenStatus lumen_signal_get_int64(const char *name, int64_t *out) ;
 
 /*
  Set a scalar signal to an IEEE-754 double, typed.
 
- Round 4 closure: pushes `PropertyValue::F64` through the typed-property
- bus so the `PropertyStore` cell receives the typed variant directly.
+ Pushes `PropertyValue::F64` through the typed-property bus so the
+ `PropertyStore` cell receives the typed variant directly.
  */
- LumenStatus lumen_signal_set_float64(LumenApp *_app, const char *name, double value) ;
+ LumenStatus lumen_signal_set_float64(const char *name, double value) ;
 
 /*
  Read a scalar signal as an IEEE-754 double, typed.
  */
- LumenStatus lumen_signal_get_float64(LumenApp *_app, const char *name, double *out) ;
+ LumenStatus lumen_signal_get_float64(const char *name, double *out) ;
 
 /*
  Set a scalar signal to a boolean, typed.
 
- Round 4 closure: pushes `PropertyValue::Bool` through the typed-property
- bus so the `PropertyStore` cell receives the typed variant directly.
+ Pushes `PropertyValue::Bool` through the typed-property bus so the
+ `PropertyStore` cell receives the typed variant directly.
  */
- LumenStatus lumen_signal_set_bool(LumenApp *_app, const char *name, bool value) ;
+ LumenStatus lumen_signal_set_bool(const char *name, bool value) ;
 
 /*
  Read a scalar signal as a boolean, typed.
  */
- LumenStatus lumen_signal_get_bool(LumenApp *_app, const char *name, bool *out) ;
+ LumenStatus lumen_signal_get_bool(const char *name, bool *out) ;
 
 /*
  Set a scalar signal to a 4-byte RGBA color (each channel in 0..=255).
  `rgba` must point to at least 4 bytes (`R`, `G`, `B`, `A`).
 
- Round 4 closure: pushes `PropertyValue::Color` (channels normalised
- to `[0, 1]` floats) through the typed-property bus.
+ Pushes `PropertyValue::Color` (channels normalised to `[0, 1]`
+ floats) through the typed-property bus.
  */
- LumenStatus lumen_signal_set_color(LumenApp *_app, const char *name, const uint8_t *rgba) ;
+ LumenStatus lumen_signal_set_color(const char *name, const uint8_t *rgba) ;
 
 /*
  Read a scalar signal as a 4-byte RGBA color. `out` must point to at
  least 4 writable bytes.
  */
- LumenStatus lumen_signal_get_color(LumenApp *_app, const char *name, uint8_t *out) ;
+ LumenStatus lumen_signal_get_color(const char *name, uint8_t *out) ;
 
 /*
  Returns a static, NUL-terminated UTF-8 description of `status`. Useful for

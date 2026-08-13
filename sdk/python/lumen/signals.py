@@ -224,7 +224,7 @@ class Signal(Generic[T]):
         if k == "bool":
             return _raw.get_bool(self.name)  # type: ignore[return-value]
         if k == "str":
-            return _raw.get_string(self.name)  # type: ignore[return-value]
+            return _raw.get_str(self.name)  # type: ignore[return-value]
         if k == "color":
             return Color(*_raw.get_color(self.name))  # type: ignore[return-value]
         # list: the Python-side structured value is authoritative.
@@ -241,7 +241,7 @@ class Signal(Generic[T]):
         elif k == "bool":
             _raw.set_bool(self.name, bool(value))
         elif k == "str":
-            _raw.set_string(self.name, str(value))
+            _raw.set_str(self.name, str(value))
         elif k == "color":
             _raw.set_color(self.name, tuple(value))  # type: ignore[arg-type]
         else:  # list
