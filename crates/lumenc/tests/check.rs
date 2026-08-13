@@ -55,3 +55,39 @@ fn candela_app_checks_clean() {
         lumenc::check_app(&dir).expect("fixtures/candela-smoke checks clean under candela");
     assert!(report.has_script, "candela-smoke has a <script> block");
 }
+
+/// An unknown attribute reaches the terminal, at its own severity. The
+/// severity word was hardcoded `info` for every finding, which read as a
+/// style nudge for something that drops what the author wrote.
+#[test]
+fn unknown_attribute_prints_a_warning_on_check() {
+    let dir = std::env::temp_dir().join(format!("lumenc-unknown-attr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create app dir");
+    std::fs::write(
+        dir.join("main.lmn"),
+        "<root><label tect=\"typo\" text=\"hi\"/></root>\n",
+    )
+    .expect("write main.lmn");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_lumenc"))
+        .arg("check")
+        .arg(&dir)
+        .output()
+        .expect("run lumenc check");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    std::fs::remove_dir_all(&dir).ok();
+
+    assert!(out.status.success(), "a lint finding does not fail check");
+    assert!(
+        stderr.contains("warn") && stderr.contains("[unknown-attribute]"),
+        "expected a warn-level unknown-attribute line, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("tect"),
+        "the finding names the attribute: {stderr}"
+    );
+    assert!(
+        !stderr.contains("info  "),
+        "an unknown attribute is not an info nudge: {stderr}"
+    );
+}

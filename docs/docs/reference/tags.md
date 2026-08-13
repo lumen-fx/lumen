@@ -7,7 +7,9 @@ task-level introduction see [Writing markup](../guides/markup.md).
 Markup is XML-shaped. Every tag closes (`<tile/>` or `<tile></tile>`),
 attribute values are double-quoted, and a single element wraps the
 document (`<root>` by convention). An unknown tag is a compile error. An
-unknown attribute is ignored, so forward-compatible markup still parses.
+unknown attribute is dropped with a warning, so forward-compatible markup
+still parses and a typo is still reported. Attributes on a custom widget tag
+are exempt: the widget reads its own props out of them.
 
 Element nesting is capped at 32 levels, as is template-expansion depth.
 

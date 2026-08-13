@@ -53,7 +53,7 @@ pub struct EventData {
     pub alt: bool,
     /// Super / Cmd / Windows held.
     pub super_: bool,
-    /// Pointer button: `0` primary, `1` secondary, `2` middle, `-1` none.
+    /// Pointer button: `0` primary, `1` middle, `2` secondary, `-1` none.
     pub button: i64,
     /// Wheel scroll delta, logical pixels.
     pub delta: (f64, f64),
@@ -515,14 +515,18 @@ pub fn dispatch(
     current_event()
 }
 
+/// Serialises the process-global binding registry and current-event cell
+/// across every test that touches them: the ones in this module and the
+/// dispatch tests in [`crate::dom_events`]. One lock, or a
+/// `clear_all_bindings` in one module wipes what another just registered.
+#[cfg(test)]
+pub(crate) static TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
+    use super::TEST_GUARD as GUARD;
     use super::*;
     use std::sync::Mutex;
-
-    // Serialise the process-global registry / cell across the tests in this
-    // module so they don't clobber each other.
-    static GUARD: Mutex<()> = Mutex::new(());
 
     fn record(log: &Arc<Mutex<Vec<String>>>, tag: &'static str) -> Arc<dyn Fn() + Send + Sync> {
         let log = log.clone();

@@ -942,6 +942,85 @@ fn mixed_text_records_only_bare() {
 }
 
 #[test]
+fn unknown_attribute_records_lint_finding() {
+    // An attribute the vocabulary has no meaning for is still dropped -
+    // forward-compatible markup parses - but it warns, so a typo does
+    // not pass review as working markup.
+    use lumenc::layout_ir::{LintKind, LintSeverity};
+    let ir = parse_html(r##"<root><label tect="hi"/></root>"##).expect("html");
+    let unknown: Vec<_> = ir
+        .lint_findings
+        .iter()
+        .filter(|f| f.kind == LintKind::UnknownAttribute)
+        .collect();
+    assert_eq!(
+        unknown.len(),
+        1,
+        "expected 1 UnknownAttribute finding, got {:?}",
+        ir.lint_findings,
+    );
+    assert_eq!(unknown[0].severity, LintSeverity::Warn);
+    assert!(
+        unknown[0].message.contains("tect") && unknown[0].message.contains("label"),
+        "message names the attribute and the tag: {}",
+        unknown[0].message,
+    );
+    assert!(unknown[0].line >= 1 && unknown[0].col >= 1);
+    // The attribute is still dropped: nothing lands in the IR.
+    assert!(ir.root.children[0].attrs.text.is_none());
+}
+
+#[test]
+fn known_attributes_record_no_unknown_finding() {
+    use lumenc::layout_ir::LintKind;
+    let ir = parse_html(r##"<root skin="macos" frameless="true"><label id="a" class="b" text="hi" width="10"/></root>"##)
+        .expect("html");
+    assert!(
+        !ir.lint_findings
+            .iter()
+            .any(|f| f.kind == LintKind::UnknownAttribute),
+        "spelled-right markup should not lint, got {:?}",
+        ir.lint_findings,
+    );
+}
+
+#[test]
+fn typoed_bind_attribute_lints_or_errors() {
+    use lumenc::layout_ir::LintKind;
+    // A typo in the bind KIND is caught by the `bind-` arm itself and
+    // fails the parse - the vocabulary there is closed.
+    let err = parse_html(r##"<root><label bind-tex="$title"/></root>"##)
+        .expect_err("unknown bind kind is a parse error");
+    assert!(format!("{err}").contains("unknown bind kind"), "got {err}",);
+    // A typo in the `bind-` prefix itself lands in the catch-all and warns.
+    let ir = parse_html(r##"<root><label bnid-text="$title"/></root>"##).expect("html");
+    assert!(
+        ir.lint_findings
+            .iter()
+            .any(|f| f.kind == LintKind::UnknownAttribute && f.message.contains("bnid-text")),
+        "expected an unknown-attribute finding, got {:?}",
+        ir.lint_findings,
+    );
+}
+
+#[test]
+fn markup_event_attribute_lints() {
+    // There are no event attributes in markup: `on_click` is a script
+    // naming convention, so `on_click="inc"` in a `.lmn` file does
+    // nothing at all. The warning is the only thing that says so.
+    use lumenc::layout_ir::LintKind;
+    let ir =
+        parse_html(r##"<root><button id="inc" on_click="inc" text="+"/></root>"##).expect("html");
+    assert!(
+        ir.lint_findings
+            .iter()
+            .any(|f| f.kind == LintKind::UnknownAttribute && f.message.contains("on_click")),
+        "expected an unknown-attribute finding for on_click, got {:?}",
+        ir.lint_findings,
+    );
+}
+
+#[test]
 fn lint_findings_have_correct_suggestion() {
     // The structured suggestion is the explicit-form replacement -
     // `{$count}` for a bare `{count}`. Tools like `lumenc fix` use it

@@ -16,10 +16,13 @@
 //!   `pointerenter` / `pointerleave` come from the hover marker transitions.
 //! - `keydown` targets the focused entity (from the input router's
 //!   `FocusedKey`); `keyup` targets the focused entity.
-//! - `input`, `change`, and `submit` are all produced from the input router's
-//!   commit signal (`TextInputCommitted`): `input` / `change` fire on commit
-//!   rather than per keystroke, and `submit` is the Enter-commit on a
-//!   single-line input. A finer-grained `input` stream is deferred.
+//! - `input` fires per edit, from the text pipeline's `TextEditApplied`
+//!   signal: one event per keystroke, paste, or IME commit that changes the
+//!   text, at most one per entity per tick, carrying the live buffer. A pure
+//!   caret move is not an edit and fires nothing.
+//! - `change` and `submit` fire on commit, from the input router's
+//!   `TextInputCommitted` signal; `submit` is the Enter-commit on a
+//!   single-line input.
 //! - `scroll` comes from a changed scroll offset and does not bubble.
 //!
 //! Default actions: only `click` (link navigation via `<a href>`) and
@@ -261,12 +264,14 @@ pub fn dispatch_pointer_and_key_events<H: ScriptHost + Resource<Mutability = Mut
 pub fn dispatch_state_events<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: Option<ResMut<H>>,
     mut out: MessageWriter<ScriptCommandEvent>,
+    mut edits: MessageReader<lumen_core::text_events::TextEditApplied>,
     mut commits: MessageReader<TextInputCommitted>,
     gained_focus: Query<Entity, Added<Focused>>,
     mut lost_focus: RemovedComponents<Focused>,
     gained_hover: Query<Entity, Added<Hovered>>,
     mut lost_hover: RemovedComponents<Hovered>,
     scrolled: Query<Entity, Changed<ScrollOffset>>,
+    buffers: Query<&lumen_core::text_model::TextBuffer>,
 ) {
     // A binding keys on a node's packed handle (entity + generation), so a
     // despawned + recycled entity never matches a live binding; the
@@ -287,9 +292,30 @@ pub fn dispatch_state_events<H: ScriptHost + Resource<Mutability = Mutable>>(
     for e in lost_hover.read() {
         deliver(host.as_deref_mut(), &mut out, base(e, "pointerleave"), e);
     }
-    // input / change / submit from the commit signal.
+    // input, once per edit that changed the text. An entity gets at most
+    // one `input` per tick: an IME commit both mutates the buffer and
+    // raises `TextInputCommitted`, and that is one edit to a handler, not
+    // two. The value is the live buffer, so a handler reads the text as it
+    // stands after the edit it was told about.
+    let mut fired: Vec<Entity> = Vec::new();
+    for ev in edits.read() {
+        if matches!(ev.kind, lumen_core::text_events::AppliedKind::CursorMove)
+            || fired.contains(&ev.entity)
+        {
+            continue;
+        }
+        let Ok(buf) = buffers.get(ev.entity) else {
+            continue;
+        };
+        fired.push(ev.entity);
+        let mut data = base(ev.entity, "input");
+        data.value = buf.to_string();
+        deliver(host.as_deref_mut(), &mut out, data, ev.entity);
+    }
+    // change / submit from the commit signal (Enter on a single-line
+    // input, or focus leaving a committed field).
     for c in commits.read() {
-        for etype in ["input", "change", "submit"] {
+        for etype in ["change", "submit"] {
             let mut data = base(c.entity, etype);
             data.value = c.text.clone();
             deliver(host.as_deref_mut(), &mut out, data, c.entity);
@@ -298,5 +324,246 @@ pub fn dispatch_state_events<H: ScriptHost + Resource<Mutability = Mutable>>(
     // scroll (does not bubble).
     for e in scrolled.iter() {
         deliver(host.as_deref_mut(), &mut out, base(e, "scroll"), e);
+    }
+}
+
+#[cfg(test)]
+mod text_event_tests {
+    use super::*;
+    use bevy_ecs::message::Messages;
+    use bevy_ecs::system::RunSystemOnce;
+    use lumen_core::text_events::{AppliedKind, TextEditApplied};
+    use lumen_core::text_model::TextBuffer;
+    use std::sync::{Arc, Mutex, MutexGuard};
+
+    /// The binding registry and the current-event cell are process-wide,
+    /// so every test that touches them takes the same turn-taking lock.
+    fn serial() -> MutexGuard<'static, ()> {
+        event::TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A host the dispatcher never sees: the systems take
+    /// `Option<ResMut<H>>` and these tests leave the resource out, so the
+    /// events route through native bindings only. The type exists to name
+    /// `H`.
+    #[derive(Resource)]
+    struct NoHost;
+
+    impl ScriptHost for NoHost {
+        type Closure = ();
+        fn compile_check(&self, _source: &str, _uri: &str) -> Result<(), crate::ScriptError> {
+            unimplemented!("no host in these tests")
+        }
+        fn load(&mut self, _source: &str, _uri: &str) -> Result<(), crate::ScriptError> {
+            unimplemented!("no host in these tests")
+        }
+        fn replace(&mut self, _source: &str, _uri: &str) -> Result<(), crate::ScriptError> {
+            unimplemented!("no host in these tests")
+        }
+        fn reset(&mut self) {
+            unimplemented!("no host in these tests")
+        }
+        fn call(
+            &mut self,
+            _fn_name: &str,
+            _args: &[crate::ScriptValue],
+        ) -> Result<crate::CallOutcome, crate::ScriptError> {
+            unimplemented!("no host in these tests")
+        }
+        fn call_closure(
+            &mut self,
+            _closure: &Self::Closure,
+            _args: &[crate::ScriptValue],
+        ) -> Result<crate::ScriptValue, crate::ScriptError> {
+            unimplemented!("no host in these tests")
+        }
+        fn drain_commands(&mut self) -> Vec<crate::ScriptCommand> {
+            Vec::new()
+        }
+        fn push_commands(&mut self, _cmds: Vec<crate::ScriptCommand>) {}
+        fn mirror_get(&self, _name: &str) -> Option<crate::ScriptValue> {
+            None
+        }
+        fn mirror_set(&mut self, _name: &str, _value: crate::ScriptValue) {}
+        fn mirror_sync_str(&mut self, _name: &str, _value: &str) {}
+        fn handler_for(&self, _event: &str, _key: &str) -> Option<String> {
+            None
+        }
+        fn derivations_matching(
+            &self,
+            _dirty: &std::collections::HashSet<&str>,
+            _pending: &std::collections::HashSet<String>,
+        ) -> Vec<(String, Vec<String>, Self::Closure)> {
+            Vec::new()
+        }
+        fn pending_initial(&self) -> std::collections::HashSet<String> {
+            std::collections::HashSet::new()
+        }
+        fn clear_pending(&mut self, _evaluated: &[String]) {}
+        fn register_command_fn(
+            &mut self,
+            _name: &str,
+            _arity: usize,
+            _f: crate::CommandFn,
+        ) -> Result<(), crate::ScriptError> {
+            unimplemented!("no host in these tests")
+        }
+        fn lang(&self) -> &'static str {
+            "test"
+        }
+        fn builtins(&self) -> &'static [crate::BuiltinFn] {
+            &[]
+        }
+    }
+
+    /// Record `(event type, value)` for every event delivered to `node`.
+    fn watch(node: u64, types: &[&str]) -> Arc<Mutex<Vec<(String, String)>>> {
+        let seen: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        for t in types {
+            let sink = Arc::clone(&seen);
+            event::register_native_binding(
+                node,
+                (*t).to_string(),
+                false,
+                Arc::new(move || {
+                    if let Ok(mut v) = sink.lock() {
+                        v.push((event::event_type(), event::event_value()));
+                    }
+                }),
+            );
+        }
+        seen
+    }
+
+    /// One tick. `run_system_once` builds fresh system state every call, so
+    /// its readers start at the front of the buffer; draining after each
+    /// run is what keeps a tick from re-reading the previous tick's
+    /// messages.
+    fn drive(world: &mut World) {
+        world
+            .run_system_once(dispatch_state_events::<NoHost>)
+            .expect("system ran");
+        world.resource_mut::<Messages<TextEditApplied>>().clear();
+        world.resource_mut::<Messages<TextInputCommitted>>().clear();
+    }
+
+    #[test]
+    fn input_fires_per_edit_and_change_only_on_commit() {
+        let _guard = serial();
+        event::clear_all_bindings();
+        let mut world = World::new();
+        world.init_resource::<Messages<ScriptCommandEvent>>();
+        world.init_resource::<Messages<TextEditApplied>>();
+        world.init_resource::<Messages<TextInputCommitted>>();
+        let field = world.spawn(TextBuffer::single_line("ab")).id();
+        let node = lumen_core::node::NodeHandle::new(field).pack();
+        let seen = watch(node, &["input", "change", "submit"]);
+
+        // One edit this tick: `input` only, carrying the live buffer.
+        world
+            .resource_mut::<Messages<TextEditApplied>>()
+            .write(TextEditApplied {
+                entity: field,
+                version: 1,
+                kind: AppliedKind::Insert,
+                before_byte: 1,
+                after_byte: 2,
+            });
+        drive(&mut world);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![("input".to_string(), "ab".to_string())],
+        );
+
+        // A caret move is not an edit.
+        seen.lock().unwrap().clear();
+        world
+            .resource_mut::<Messages<TextEditApplied>>()
+            .write(TextEditApplied {
+                entity: field,
+                version: 2,
+                kind: AppliedKind::CursorMove,
+                before_byte: 2,
+                after_byte: 0,
+            });
+        drive(&mut world);
+        assert!(seen.lock().unwrap().is_empty(), "caret moves fire nothing");
+
+        // A commit fires change + submit, and no second `input`.
+        world
+            .resource_mut::<Messages<TextInputCommitted>>()
+            .write(TextInputCommitted {
+                entity: field,
+                text: "ab".to_string(),
+            });
+        drive(&mut world);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                ("change".to_string(), "ab".to_string()),
+                ("submit".to_string(), "ab".to_string()),
+            ],
+        );
+        event::clear_all_bindings();
+    }
+
+    #[test]
+    fn repeated_edits_in_one_tick_fire_input_once() {
+        let _guard = serial();
+        event::clear_all_bindings();
+        let mut world = World::new();
+        world.init_resource::<Messages<ScriptCommandEvent>>();
+        world.init_resource::<Messages<TextEditApplied>>();
+        world.init_resource::<Messages<TextInputCommitted>>();
+        let field = world.spawn(TextBuffer::single_line("hi")).id();
+        let node = lumen_core::node::NodeHandle::new(field).pack();
+        let seen = watch(node, &["input"]);
+
+        // An IME commit mutates the buffer and raises the commit signal in
+        // the same tick; a handler sees one edit, not two.
+        for version in 1..=3 {
+            world
+                .resource_mut::<Messages<TextEditApplied>>()
+                .write(TextEditApplied {
+                    entity: field,
+                    version,
+                    kind: AppliedKind::Insert,
+                    before_byte: 0,
+                    after_byte: 1,
+                });
+        }
+        drive(&mut world);
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            1,
+            "one `input` per entity per tick"
+        );
+        event::clear_all_bindings();
+    }
+
+    #[test]
+    fn edit_without_a_buffer_fires_nothing() {
+        let _guard = serial();
+        event::clear_all_bindings();
+        let mut world = World::new();
+        world.init_resource::<Messages<ScriptCommandEvent>>();
+        world.init_resource::<Messages<TextEditApplied>>();
+        world.init_resource::<Messages<TextInputCommitted>>();
+        let ghost = world.spawn_empty().id();
+        let node = lumen_core::node::NodeHandle::new(ghost).pack();
+        let seen = watch(node, &["input"]);
+
+        world
+            .resource_mut::<Messages<TextEditApplied>>()
+            .write(TextEditApplied {
+                entity: ghost,
+                version: 1,
+                kind: AppliedKind::Insert,
+                before_byte: 0,
+                after_byte: 1,
+            });
+        drive(&mut world);
+        assert!(seen.lock().unwrap().is_empty());
+        event::clear_all_bindings();
     }
 }

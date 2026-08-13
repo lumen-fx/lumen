@@ -116,11 +116,12 @@ pub struct LayoutIR {
     /// `<label class="md-h{level}">` never picks up `.md-h1` because
     /// the parse-time apply pass only saw the literal placeholder.
     pub combined_stylesheet: Option<crate::css::Stylesheet>,
-    /// Parse-time lint findings (info-level by default). Populated by
-    /// the markup walker for stylistic / migration nudges that don't
-    /// invalidate the IR - `{name}` bare interpolation today, more
-    /// rules as they land. The runtime / IR consumers ignore this;
-    /// `lumenc check` prints it to stderr and `lumenc lint --signals`
+    /// Parse-time lint findings. Populated by the markup walker for
+    /// problems that don't invalidate the IR: `{name}` bare
+    /// interpolation, a boolean attribute with an off-list value, an
+    /// attribute nothing reads. The runtime / IR consumers ignore this;
+    /// every compile path (`lumenc check`, `run`, `build`) prints it to
+    /// stderr at the finding's own severity, and `lumenc lint --signals`
     /// folds it into the finding stream.
     pub lint_findings: Vec<LintFinding>,
     /// Normalized paths of every `.lmn` file pulled in via
@@ -161,6 +162,10 @@ pub enum LintKind {
     /// truthiness set (`true` / `yes` / `1` / bare for true,
     /// `false` / `no` / `0` for false). The attribute reads as false.
     BooleanAttribute,
+    /// An attribute the markup vocabulary has no meaning for. It is
+    /// dropped: nothing reads it at spawn time, so a typo (`tect=` for
+    /// `text=`) or a web-only attribute silently does nothing.
+    UnknownAttribute,
 }
 
 impl From<LintKind> for &'static str {
@@ -168,6 +173,18 @@ impl From<LintKind> for &'static str {
         match k {
             LintKind::BareInterpolation => "bare-interpolation",
             LintKind::BooleanAttribute => "boolean-attribute",
+            LintKind::UnknownAttribute => "unknown-attribute",
+        }
+    }
+}
+
+impl From<LintSeverity> for &'static str {
+    fn from(s: LintSeverity) -> &'static str {
+        match s {
+            LintSeverity::Error => "error",
+            LintSeverity::Warn => "warn",
+            LintSeverity::Info => "info",
+            LintSeverity::Hint => "hint",
         }
     }
 }
@@ -191,6 +208,29 @@ pub struct LintFinding {
     /// interpolation rule). `None` when no machine-applicable fix is
     /// available.
     pub suggest: Option<String>,
+}
+
+impl LintFinding {
+    /// Render the finding as the stderr diagnostic the compile paths
+    /// print: one severity-prefixed line anchored at `file:line:col`,
+    /// plus a `hint:` line when the rule carries a machine-applicable
+    /// fix. Every path that compiles markup from source calls this, so
+    /// `check`, `run` and `build` cannot drift apart on the wording.
+    pub fn render(&self, file: &std::path::Path) -> String {
+        let mut out = format!(
+            "{sev:<5} {file}:{line}:{col}  [{kind}] {msg}",
+            sev = <&'static str>::from(self.severity),
+            file = file.display(),
+            line = self.line,
+            col = self.col,
+            kind = <&'static str>::from(self.kind),
+            msg = self.message,
+        );
+        if let Some(s) = &self.suggest {
+            out.push_str(&format!("\n      hint: replace with `{s}`"));
+        }
+        out
+    }
 }
 
 /// Parsed `<menubar>` content. Top-level submenus + their items.
