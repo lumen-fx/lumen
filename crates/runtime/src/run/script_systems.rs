@@ -418,7 +418,15 @@ fn register_dom_event_dispatchers<H: lumen_script::ScriptHost + Resource<Mutabil
         TickStage::Systems,
         lumen_script::dispatch_state_events::<H>
             .in_set(ScriptSet::DomEvents)
-            .after(build_dom_index),
+            .after(build_dom_index)
+            // `input` is derived from the edit stream, so this reads the
+            // messages the text mutator writes. Anchor the edge on the
+            // shared set label: an edit applied this tick raises `input`
+            // on the same tick, in one fixed order, instead of leaving
+            // the reader and the writer ambiguous for the executor to
+            // interleave however it likes. Inert when no text plugin is
+            // installed (empty set).
+            .after(lumen_core::text_events::TextEditSet::Apply),
     );
 }
 

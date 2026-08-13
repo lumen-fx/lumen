@@ -15,6 +15,27 @@ use lumen::{
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicI64, Ordering};
 
+/// Four of these tests build a whole app and tick it. An app is not a
+/// process-local object: it publishes the DOM index, the node-handle
+/// registry, the event-binding registry, the global property store and
+/// the last-error slot, and its plugin stack constructs OS host
+/// resources (hotkey manager, notifier, tray, clipboard) that several
+/// platforms bind to one per process. libtest runs the tests in this
+/// binary on parallel threads, so without this lock two or three apps
+/// exist at once and take turns overwriting each other's globals; on
+/// macOS the OS-side constructors trap rather than misbehave, which
+/// kills the whole binary with no test output. One app at a time.
+///
+/// Same treatment the candela hot-reload suite and the FFI dom-query
+/// pair already get.
+static APP_ISOLATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn isolate() -> std::sync::MutexGuard<'static, ()> {
+    APP_ISOLATION
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Write a minimal, self-contained app fixture into a fresh temp dir.
 /// MCP is disabled (`[mcp] port = 0`) so the headless run doesn't bind a
 /// socket in CI.
@@ -49,6 +70,7 @@ fn last_error() -> String {
 
 #[test]
 fn app_new_rejects_missing_directory() {
+    let _isolated = isolate();
     let bogus = CString::new("/definitely/not/a/lumen/app/dir/xyzzy").unwrap();
     let handle = unsafe { lumen_app_new(bogus.as_ptr()) };
     assert!(
@@ -63,6 +85,7 @@ fn app_new_rejects_missing_directory() {
 
 #[test]
 fn app_new_rejects_dir_without_manifest() {
+    let _isolated = isolate();
     let mut dir = std::env::temp_dir();
     dir.push(format!("lumen_empty_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -78,6 +101,7 @@ fn app_new_rejects_dir_without_manifest() {
 
 #[test]
 fn app_new_accepts_valid_dir_and_runs_headless() {
+    let _isolated = isolate();
     let dir = write_fixture("basic");
     let cdir = CString::new(dir.to_str().unwrap()).unwrap();
     let handle = unsafe { lumen_app_new(cdir.as_ptr()) };
@@ -104,6 +128,7 @@ extern "C" fn noop_click(_id: *const c_char, _ud: *mut c_void) {}
 
 #[test]
 fn on_click_registration_replaces_and_rejects_nulls() {
+    let _isolated = isolate();
     let dir = write_fixture("onclick");
     let cdir = CString::new(dir.to_str().unwrap()).unwrap();
     let handle = unsafe { lumen_app_new(cdir.as_ptr()) };
@@ -158,6 +183,7 @@ extern "C" fn allow_close(_ud: *mut c_void) -> std::os::raw::c_int {
 
 #[test]
 fn on_close_registration_replaces_and_rejects_nulls() {
+    let _isolated = isolate();
     let dir = write_fixture("onclose");
     let cdir = CString::new(dir.to_str().unwrap()).unwrap();
     let handle = unsafe { lumen_app_new(cdir.as_ptr()) };
@@ -210,6 +236,7 @@ extern "C" fn record_int_watch(_name: *const c_char, value: *const LumenValue, _
 
 #[test]
 fn signal_watch_fires_during_headless_run() {
+    let _isolated = isolate();
     let dir = write_fixture("watch");
     let cdir = CString::new(dir.to_str().unwrap()).unwrap();
     let handle = unsafe { lumen_app_new(cdir.as_ptr()) };
@@ -251,6 +278,7 @@ fn signal_watch_fires_during_headless_run() {
 
 #[test]
 fn signal_watch_rejects_null_args() {
+    let _isolated = isolate();
     let name = CString::new("watch_null_test").unwrap();
     let cb: LumenWatchFn = record_int_watch;
     // Null callback rejected.
@@ -267,6 +295,7 @@ fn signal_watch_rejects_null_args() {
 
 #[test]
 fn app_free_on_unrun_handle_is_safe() {
+    let _isolated = isolate();
     let dir = write_fixture("freed");
     let cdir = CString::new(dir.to_str().unwrap()).unwrap();
     let handle = unsafe { lumen_app_new(cdir.as_ptr()) };
