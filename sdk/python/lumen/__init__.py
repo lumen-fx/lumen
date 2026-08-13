@@ -25,8 +25,8 @@ The surface, from most to least abstract:
 
 * :class:`Model` / :class:`Field` - declarative reactive state.
 * :class:`Signal` (typed handle), :func:`computed`, :class:`Color`.
-* :mod:`lumen.raw` - the thin stringly ``lumen_signal_*`` layer under all
-  of the above; reach for it only when you need a raw C call.
+* :mod:`lumen.raw` - the thin ``lumen_signal_*`` layer under all of the
+  above; reach for it only when you need a raw C call.
 
 See ``lumen.errors`` for the exception hierarchy every ``lumen_*`` call
 can raise, and the package README for install/run instructions.

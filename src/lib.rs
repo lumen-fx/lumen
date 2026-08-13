@@ -37,7 +37,7 @@ use lumen_core::components::Color;
 use lumen_core::property_store::{
     PropertyKey, PropertyValue, external_property_snapshot, push_external_property,
 };
-use lumen_core::signals::{push_external_array, push_external_clear, push_external_signal};
+use lumen_core::signals::{push_external_array, push_external_clear};
 use lumen_runtime::RunOptions;
 use lumen_script::{NativeExternFn, ScriptValue};
 use std::collections::HashMap;
@@ -125,7 +125,16 @@ pub const LUMEN_ABI_MAJOR: u32 = 0;
 /// through the injected front-end (present on the from-source run path, a
 /// no-op on the precompiled-artifact path) and must not be fed untrusted
 /// content. Additive, so a minor bump.
-pub const LUMEN_ABI_MINOR: u32 = 12;
+///
+/// 0.13 unified the scalar signal surface into one typed family:
+/// [`lumen_signal_set_str`] / [`lumen_signal_get_str`] join the existing
+/// int64 / float64 / bool / color pairs, the older stringifying setters
+/// and their string getter are removed, and the unread `LumenApp*` first
+/// parameter is gone from every typed accessor and from
+/// [`lumen_signal_array_len`] / [`lumen_signal_array_get_field`]. Kept
+/// names changed arity, so embedders rebuild against the new header
+/// rather than relinking.
+pub const LUMEN_ABI_MINOR: u32 = 13;
 /// Patch ABI version. Bump on non-API metadata changes (docs, code, etc.).
 pub const LUMEN_ABI_PATCH: u32 = 0;
 
@@ -1389,23 +1398,23 @@ fn lumen_to_script_value(v: &LumenValue) -> ScriptValue {
 }
 
 // ============================================================
-// String / array read-back caches (ABI 0.3).
+// Array read-back cache (ABI 0.3).
 //
-// The legacy string setters (`lumen_signal_set_string` / `_int` / `_f64`
-// / `_array` / `clear`) write into Lumen's reactive store but had no
-// read-back path. These process-wide caches mirror every FFI-originated
-// legacy write so `lumen_signal_get_string` / `lumen_signal_array_*` can
-// answer "what did I last push into this signal" from any thread,
-// before or during a run - the same pre-run cache pattern the typed
-// accessors use (`TYPED_SIGNALS`).
+// `lumen_signal_set_array` / `lumen_signal_clear` write into Lumen's
+// reactive store but have no read-back path of their own. This
+// process-wide cache mirrors every FFI-originated array write so
+// `lumen_signal_array_len` / `lumen_signal_array_get_field` can answer
+// "what did I last push into this signal" from any thread, before or
+// during a run - the same pre-run cache pattern the typed accessors use
+// (`TYPED_SIGNALS`).
 //
-// Scope note (documented in the header + SDK READMEs): these read back
-// the value the *embedder* last pushed through the FFI. A write that
-// originates inside the running app (a Rhai `signals.x.set(..)` or a
-// two-way input binding) lands in `PropertyStore` / `ArraySignals` but
-// is not mirrored here, so it is not visible to these getters. Reading
-// live in-app state cross-thread would require sharing the running
-// `App`'s world across the FFI (tracked with the typed-getter TODO).
+// Scope note (documented in the header + SDK READMEs): the array getters
+// read back the value the *embedder* last pushed through the FFI. A write
+// that originates inside the running app (a script `signals.x.set(..)` or
+// a two-way input binding) lands in `ArraySignals` but is not mirrored
+// here, so it is not visible to them. Reading live in-app state
+// cross-thread would require sharing the running `App`'s world across the
+// FFI (tracked with the typed-getter TODO).
 // ============================================================
 
 /// One record-shaped array-signal row: field name -> stringified value.
@@ -1413,23 +1422,10 @@ type ArrayRow = HashMap<String, String>;
 /// FFI-local mirror of every array signal the embedder has pushed.
 type ArraySignalMap = HashMap<String, Vec<ArrayRow>>;
 
-static STRING_SIGNALS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 static ARRAY_SIGNALS: OnceLock<Mutex<ArraySignalMap>> = OnceLock::new();
-
-fn string_signals() -> &'static Mutex<HashMap<String, String>> {
-    STRING_SIGNALS.get_or_init(|| Mutex::new(HashMap::new()))
-}
 
 fn array_signals() -> &'static Mutex<ArraySignalMap> {
     ARRAY_SIGNALS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// Record an FFI string write so `lumen_signal_get_string` can read it back.
-fn cache_string_signal(name: &str, value: &str) {
-    string_signals()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(name.to_owned(), value.to_owned());
 }
 
 /// Copy `value` (UTF-8) into the caller buffer following the shared
@@ -1460,81 +1456,6 @@ fn write_string_out(
         unsafe { *out_len = bytes.len() };
     }
     LumenStatus::Ok
-}
-
-// ============================================================
-// Direct signal mutation - DOM-style mutation without Rhai.
-//
-// Any thread (the C++ embedder's sampler thread, a Python ctypes
-// caller, a tokio task) may call these to push a value into a Lumen
-// named signal. `bind-text="cpu_label"` markup observes the new
-// string the next tick. Mirrors the Rhai `signal(name).set(value)`
-// path but works in apps with no `main.rhai`.
-// ============================================================
-
-/// Set a scalar signal to a UTF-8 string. Thread-safe.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lumen_signal_set_string(
-    name: *const c_char,
-    value: *const c_char,
-) -> LumenStatus {
-    catch(|| {
-        if name.is_null() {
-            return LumenStatus::ErrBadArg;
-        }
-        let n = match unsafe { CStr::from_ptr(name) }.to_str() {
-            Ok(s) => s,
-            Err(_) => return LumenStatus::ErrBadArg,
-        };
-        let v = if value.is_null() {
-            String::new()
-        } else {
-            match unsafe { CStr::from_ptr(value) }.to_str() {
-                Ok(s) => s.to_owned(),
-                Err(_) => return LumenStatus::ErrBadArg,
-            }
-        };
-        cache_string_signal(n, &v);
-        push_external_signal(n, v);
-        LumenStatus::Ok
-    })
-}
-
-/// Set a scalar signal to a 64-bit signed integer. Stringified.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lumen_signal_set_int(name: *const c_char, value: i64) -> LumenStatus {
-    catch(|| {
-        if name.is_null() {
-            return LumenStatus::ErrBadArg;
-        }
-        let n = match unsafe { CStr::from_ptr(name) }.to_str() {
-            Ok(s) => s,
-            Err(_) => return LumenStatus::ErrBadArg,
-        };
-        let v = value.to_string();
-        cache_string_signal(n, &v);
-        push_external_signal(n, v);
-        LumenStatus::Ok
-    })
-}
-
-/// Set a scalar signal to a double. Stringified with the default
-/// Rust `Display` (no rounding).
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lumen_signal_set_f64(name: *const c_char, value: f64) -> LumenStatus {
-    catch(|| {
-        if name.is_null() {
-            return LumenStatus::ErrBadArg;
-        }
-        let n = match unsafe { CStr::from_ptr(name) }.to_str() {
-            Ok(s) => s,
-            Err(_) => return LumenStatus::ErrBadArg,
-        };
-        let v = format!("{value}");
-        cache_string_signal(n, &v);
-        push_external_signal(n, v);
-        LumenStatus::Ok
-    })
 }
 
 // ============================================================
@@ -1668,7 +1589,7 @@ pub unsafe extern "C" fn lumen_signal_set_array(
     })
 }
 
-/// Clear a signal (string => empty, array => empty vec).
+/// Clear a signal (scalar => empty string, array => empty vec).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_signal_clear(name: *const c_char) -> LumenStatus {
     catch(|| {
@@ -1679,56 +1600,16 @@ pub unsafe extern "C" fn lumen_signal_clear(name: *const c_char) -> LumenStatus 
             Ok(s) => s,
             Err(_) => return LumenStatus::ErrBadArg,
         };
-        cache_string_signal(n, "");
+        typed_signals()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(n.to_owned(), TypedSignalValue::Str(Arc::<str>::from("")));
         array_signals()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(n.to_owned(), Vec::new());
         push_external_clear(n);
         LumenStatus::Ok
-    })
-}
-
-/// Read a scalar signal back as a UTF-8 string into a caller-provided
-/// buffer (ABI 0.3).
-///
-/// Reads the value the embedder last pushed through the FFI string
-/// setters (`lumen_signal_set_string` / `_int` / `_f64`; a `clear`
-/// leaves an empty string). On success copies the value plus a trailing
-/// NUL into `buf` and, when `out_len` is non-null, sets `*out_len` to the
-/// byte length (excluding the NUL). When `buf` is null or `buf_len` is
-/// too small, sets `*out_len` to the required capacity (byte length + 1)
-/// and returns [`LumenStatus::ErrBufferTooSmall`] without writing `buf`;
-/// call once with a null/zero buffer to size it, then again to fill.
-///
-/// Returns [`LumenStatus::ErrBadArg`] when `name` is null / non-UTF-8, or
-/// when the signal has never been set through the FFI string setters. See
-/// the read-back scope note above: in-app writes are not visible here.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lumen_signal_get_string(
-    _app: *mut LumenApp,
-    name: *const c_char,
-    buf: *mut c_char,
-    buf_len: usize,
-    out_len: *mut usize,
-) -> LumenStatus {
-    catch(|| {
-        let Some(n) = typed_signal_name(name) else {
-            set_last_error("lumen_signal_get_string: null or non-utf8 name");
-            return LumenStatus::ErrBadArg;
-        };
-        let value = string_signals()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&n)
-            .cloned();
-        match value {
-            Some(v) => write_string_out(&v, buf, buf_len, out_len),
-            None => {
-                set_last_error("lumen_signal_get_string: no string signal by that name");
-                LumenStatus::ErrBadArg
-            }
-        }
     })
 }
 
@@ -1740,7 +1621,6 @@ pub unsafe extern "C" fn lumen_signal_get_string(
 /// non-UTF-8, or the array signal has never been set through the FFI.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_signal_array_len(
-    _app: *mut LumenApp,
     name: *const c_char,
     out_len: *mut usize,
 ) -> LumenStatus {
@@ -1777,7 +1657,7 @@ pub unsafe extern "C" fn lumen_signal_array_len(
 /// Rows are the record-shaped (field -> stringified value) maps pushed
 /// through `lumen_signal_set_array`. Looks up `row`-th row's `field`
 /// entry and copies it out following the same buffer convention as
-/// [`lumen_signal_get_string`] (NUL-terminated; `ErrBufferTooSmall` with
+/// [`lumen_signal_get_str`] (NUL-terminated; `ErrBufferTooSmall` with
 /// `*out_len` = required capacity when `buf` is too small).
 ///
 /// Returns [`LumenStatus::ErrBadArg`] when `name` / `field` is null or
@@ -1785,7 +1665,6 @@ pub unsafe extern "C" fn lumen_signal_array_len(
 /// row has no such field.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_signal_array_get_field(
-    _app: *mut LumenApp,
     name: *const c_char,
     row: usize,
     field: *const c_char,
@@ -1843,15 +1722,19 @@ fn stringify_lumen(v: &LumenValue) -> String {
 }
 
 // ============================================================
-// W7.x typed scalar accessors.
+// Typed scalar accessors - the one scalar signal family.
 //
-// Round 4 typed-signal closure: the typed setters now push directly
-// into the foundation `PropertyStore` via
+// Every scalar signal is set and read through a `set_<type>` /
+// `get_<type>` pair keyed by name alone: string, int64, float64, bool,
+// color. The setters push directly into the foundation
+// `PropertyStore` via
 // `lumen_core::property_store::push_external_property`. The receiving
 // `drain_external_properties` system (installed by
 // `lumen-script-rhai`'s `ScriptRhaiPlugin`) lands the typed
-// `PropertyValue::I64` / `F64` / `Bool` / `Color` cell on the next
-// tick - no stringify-on-write, no parse-on-read.
+// `PropertyValue::Str` / `I64` / `F64` / `Bool` / `Color` cell on the
+// next tick - no stringify-on-write, no parse-on-read. `bind-text`
+// markup reads the same cell, stringifying scalars on read, so a
+// bound element reflects a typed write on the next tick.
 //
 // The accessors keep a thread-safe in-process map (`TYPED_SIGNALS`)
 // as a *pre-run cache*: embedders that call `lumen_signal_set_int64`
@@ -1884,16 +1767,15 @@ fn stringify_lumen(v: &LumenValue) -> String {
 // `lumen_app_run` so post-run reads can hit the live `PropertyStore`
 // directly without the channel snapshot dance. Tracked in TODO.md.
 //
-// Each accessor takes a `LumenApp*` first arg for API parity with
-// the design doc and future-proofing. The pointer is currently only
-// used for null-checking; NULL is accepted for embedders that want
-// to set/read signals before constructing the `LumenApp`.
+// Every accessor is keyed by signal name alone. Signals are global, so
+// there is no app handle to pass and none of these take one.
 // ============================================================
 
 use std::sync::OnceLock;
 
 #[derive(Clone, Debug)]
 enum TypedSignalValue {
+    Str(Arc<str>),
     Int64(i64),
     Float64(f64),
     Bool(bool),
@@ -1954,36 +1836,103 @@ fn typed_read(name: &str) -> Option<TypedSignalValue> {
 impl From<PropertyValue> for TypedSignalValue {
     fn from(v: PropertyValue) -> Self {
         match v {
+            PropertyValue::Str(s) => Self::Str(s),
             PropertyValue::I64(n) => Self::Int64(n),
             PropertyValue::F64(n) => Self::Float64(n),
             PropertyValue::Bool(b) => Self::Bool(b),
             PropertyValue::Color(c) => Self::Color(c.to_rgba8()),
-            // Strings, Vec2, Custom fall back to a sentinel - callers
-            // only ever request the matching variant. The match arms in
-            // each `lumen_signal_get_*` handle the mismatch by returning
-            // ErrBadArg.
-            PropertyValue::Str(_) | PropertyValue::Vec2(_) | PropertyValue::Custom(_) => {
-                Self::Bool(false)
-            }
+            // Vec2 and Custom have no scalar accessor - they fall back to
+            // a sentinel, and the match arms in each `lumen_signal_get_*`
+            // report the mismatch as ErrBadArg.
+            PropertyValue::Vec2(_) | PropertyValue::Custom(_) => Self::Bool(false),
         }
     }
 }
 
+/// Set a scalar signal to a UTF-8 string. A null `value` writes an empty
+/// string. Thread-safe.
+///
+/// Pushes a `PropertyValue::Str` through the foundation typed-property
+/// bus, so `bind-text="..."` markup observes the new string on the next
+/// tick. Mirrors the write into the FFI-local cache for pre-run
+/// read-back.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_signal_set_str(
+    name: *const c_char,
+    value: *const c_char,
+) -> LumenStatus {
+    catch(|| {
+        let Some(n) = typed_signal_name(name) else {
+            set_last_error("lumen_signal_set_str: null or non-utf8 name");
+            return LumenStatus::ErrBadArg;
+        };
+        let v: Arc<str> = if value.is_null() {
+            Arc::<str>::from("")
+        } else {
+            match unsafe { CStr::from_ptr(value) }.to_str() {
+                Ok(s) => Arc::<str>::from(s),
+                Err(_) => {
+                    set_last_error("lumen_signal_set_str: value is not utf-8");
+                    return LumenStatus::ErrBadArg;
+                }
+            }
+        };
+        typed_signals()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(n.clone(), TypedSignalValue::Str(Arc::clone(&v)));
+        push_external_property(global_key(&n), PropertyValue::Str(v));
+        LumenStatus::Ok
+    })
+}
+
+/// Read a scalar signal as a UTF-8 string into a caller-provided buffer.
+///
+/// On success copies the value plus a trailing NUL into `buf` and, when
+/// `out_len` is non-null, sets `*out_len` to the byte length (excluding
+/// the NUL). When `buf` is null or `buf_len` is too small, sets
+/// `*out_len` to the required capacity (byte length + 1) and returns
+/// [`LumenStatus::ErrBufferTooSmall`] without writing `buf`; call once
+/// with a null/zero buffer to size it, then again to fill.
+///
+/// Returns [`LumenStatus::ErrBadArg`] when `name` is null / non-UTF-8, or
+/// when the signal holds no string.
+///
+/// Scope: this reads back the string the embedder last pushed through
+/// the FFI (a `clear` leaves an empty string). A string written inside
+/// the running app lands in `PropertyStore`, which the cross-thread
+/// mirror keeps for numbers, bools, and colors only, so it is not
+/// visible here.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_signal_get_str(
+    name: *const c_char,
+    buf: *mut c_char,
+    buf_len: usize,
+    out_len: *mut usize,
+) -> LumenStatus {
+    catch(|| {
+        let Some(n) = typed_signal_name(name) else {
+            set_last_error("lumen_signal_get_str: null or non-utf8 name");
+            return LumenStatus::ErrBadArg;
+        };
+        match typed_read(&n) {
+            Some(TypedSignalValue::Str(s)) => write_string_out(&s, buf, buf_len, out_len),
+            _ => {
+                set_last_error("lumen_signal_get_str: no string signal by that name");
+                LumenStatus::ErrBadArg
+            }
+        }
+    })
+}
+
 /// Set a scalar signal to a 64-bit signed integer, typed.
 ///
-/// Round 4 closure: pushes a `PropertyValue::I64` through the foundation
-/// typed-property bus so the receiving cell in `PropertyStore` keeps the
-/// typed variant (no stringify-on-write, no parse-on-read). Mirrors the
-/// write into the FFI-local cache for pre-run read-back.
-///
-/// Prefer this over `lumen_signal_set_int` (which stringifies on the
-/// Rust side and forces every reader to parse back).
+/// Pushes a `PropertyValue::I64` through the foundation typed-property
+/// bus so the receiving cell in `PropertyStore` keeps the typed variant
+/// (no stringify-on-write, no parse-on-read). Mirrors the write into the
+/// FFI-local cache for pre-run read-back.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lumen_signal_set_int64(
-    _app: *mut LumenApp,
-    name: *const c_char,
-    value: i64,
-) -> LumenStatus {
+pub unsafe extern "C" fn lumen_signal_set_int64(name: *const c_char, value: i64) -> LumenStatus {
     catch(|| {
         let Some(n) = typed_signal_name(name) else {
             set_last_error("lumen_signal_set_int64: null or non-utf8 name");
@@ -1999,19 +1948,13 @@ pub unsafe extern "C" fn lumen_signal_set_int64(
 }
 
 /// Read a scalar signal as a 64-bit signed integer, typed. Returns
-/// [`LumenStatus::ErrBadArg`] when the signal was never set with a
-/// typed setter (the legacy string-typed setters do not populate the
-/// typed-value map).
+/// [`LumenStatus::ErrBadArg`] when the signal holds no number.
 ///
-/// Round 4 closure: peeks the foundation typed-property bus snapshot
-/// first (catches pending pre-run writes that haven't been drained
-/// yet) before falling back to the local cache.
+/// Peeks the foundation typed-property bus snapshot first (catches
+/// pending pre-run writes that haven't been drained yet) before falling
+/// back to the local cache.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lumen_signal_get_int64(
-    _app: *mut LumenApp,
-    name: *const c_char,
-    out: *mut i64,
-) -> LumenStatus {
+pub unsafe extern "C" fn lumen_signal_get_int64(name: *const c_char, out: *mut i64) -> LumenStatus {
     catch(|| {
         let Some(n) = typed_signal_name(name) else {
             set_last_error("lumen_signal_get_int64: null or non-utf8 name");
@@ -2041,14 +1984,10 @@ pub unsafe extern "C" fn lumen_signal_get_int64(
 
 /// Set a scalar signal to an IEEE-754 double, typed.
 ///
-/// Round 4 closure: pushes `PropertyValue::F64` through the typed-property
-/// bus so the `PropertyStore` cell receives the typed variant directly.
+/// Pushes `PropertyValue::F64` through the typed-property bus so the
+/// `PropertyStore` cell receives the typed variant directly.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lumen_signal_set_float64(
-    _app: *mut LumenApp,
-    name: *const c_char,
-    value: f64,
-) -> LumenStatus {
+pub unsafe extern "C" fn lumen_signal_set_float64(name: *const c_char, value: f64) -> LumenStatus {
     catch(|| {
         let Some(n) = typed_signal_name(name) else {
             set_last_error("lumen_signal_set_float64: null or non-utf8 name");
@@ -2066,7 +2005,6 @@ pub unsafe extern "C" fn lumen_signal_set_float64(
 /// Read a scalar signal as an IEEE-754 double, typed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_signal_get_float64(
-    _app: *mut LumenApp,
     name: *const c_char,
     out: *mut f64,
 ) -> LumenStatus {
@@ -2095,14 +2033,10 @@ pub unsafe extern "C" fn lumen_signal_get_float64(
 
 /// Set a scalar signal to a boolean, typed.
 ///
-/// Round 4 closure: pushes `PropertyValue::Bool` through the typed-property
-/// bus so the `PropertyStore` cell receives the typed variant directly.
+/// Pushes `PropertyValue::Bool` through the typed-property bus so the
+/// `PropertyStore` cell receives the typed variant directly.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lumen_signal_set_bool(
-    _app: *mut LumenApp,
-    name: *const c_char,
-    value: bool,
-) -> LumenStatus {
+pub unsafe extern "C" fn lumen_signal_set_bool(name: *const c_char, value: bool) -> LumenStatus {
     catch(|| {
         let Some(n) = typed_signal_name(name) else {
             set_last_error("lumen_signal_set_bool: null or non-utf8 name");
@@ -2119,11 +2053,7 @@ pub unsafe extern "C" fn lumen_signal_set_bool(
 
 /// Read a scalar signal as a boolean, typed.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lumen_signal_get_bool(
-    _app: *mut LumenApp,
-    name: *const c_char,
-    out: *mut bool,
-) -> LumenStatus {
+pub unsafe extern "C" fn lumen_signal_get_bool(name: *const c_char, out: *mut bool) -> LumenStatus {
     catch(|| {
         let Some(n) = typed_signal_name(name) else {
             set_last_error("lumen_signal_get_bool: null or non-utf8 name");
@@ -2150,11 +2080,10 @@ pub unsafe extern "C" fn lumen_signal_get_bool(
 /// Set a scalar signal to a 4-byte RGBA color (each channel in 0..=255).
 /// `rgba` must point to at least 4 bytes (`R`, `G`, `B`, `A`).
 ///
-/// Round 4 closure: pushes `PropertyValue::Color` (channels normalised
-/// to `[0, 1]` floats) through the typed-property bus.
+/// Pushes `PropertyValue::Color` (channels normalised to `[0, 1]`
+/// floats) through the typed-property bus.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_signal_set_color(
-    _app: *mut LumenApp,
     name: *const c_char,
     rgba: *const u8,
 ) -> LumenStatus {
@@ -2187,11 +2116,7 @@ pub unsafe extern "C" fn lumen_signal_set_color(
 /// Read a scalar signal as a 4-byte RGBA color. `out` must point to at
 /// least 4 writable bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lumen_signal_get_color(
-    _app: *mut LumenApp,
-    name: *const c_char,
-    out: *mut u8,
-) -> LumenStatus {
+pub unsafe extern "C" fn lumen_signal_get_color(name: *const c_char, out: *mut u8) -> LumenStatus {
     catch(|| {
         let Some(n) = typed_signal_name(name) else {
             set_last_error("lumen_signal_get_color: null or non-utf8 name");
@@ -3792,13 +3717,10 @@ mod tests {
     fn typed_signal_int64_round_trips() {
         unsafe {
             let name = CString::new("typed_int_test").unwrap();
-            assert_eq!(
-                lumen_signal_set_int64(ptr::null_mut(), name.as_ptr(), 1234),
-                LumenStatus::Ok
-            );
+            assert_eq!(lumen_signal_set_int64(name.as_ptr(), 1234), LumenStatus::Ok);
             let mut out: i64 = 0;
             assert_eq!(
-                lumen_signal_get_int64(ptr::null_mut(), name.as_ptr(), &mut out),
+                lumen_signal_get_int64(name.as_ptr(), &mut out),
                 LumenStatus::Ok
             );
             assert_eq!(out, 1234);
@@ -3810,12 +3732,12 @@ mod tests {
         unsafe {
             let name = CString::new("typed_float_test").unwrap();
             assert_eq!(
-                lumen_signal_set_float64(ptr::null_mut(), name.as_ptr(), 2.5),
+                lumen_signal_set_float64(name.as_ptr(), 2.5),
                 LumenStatus::Ok
             );
             let mut out: f64 = 0.0;
             assert_eq!(
-                lumen_signal_get_float64(ptr::null_mut(), name.as_ptr(), &mut out),
+                lumen_signal_get_float64(name.as_ptr(), &mut out),
                 LumenStatus::Ok
             );
             assert_eq!(out, 2.5);
@@ -3826,13 +3748,10 @@ mod tests {
     fn typed_signal_bool_round_trips() {
         unsafe {
             let name = CString::new("typed_bool_test").unwrap();
-            assert_eq!(
-                lumen_signal_set_bool(ptr::null_mut(), name.as_ptr(), true),
-                LumenStatus::Ok
-            );
+            assert_eq!(lumen_signal_set_bool(name.as_ptr(), true), LumenStatus::Ok);
             let mut out = false;
             assert_eq!(
-                lumen_signal_get_bool(ptr::null_mut(), name.as_ptr(), &mut out),
+                lumen_signal_get_bool(name.as_ptr(), &mut out),
                 LumenStatus::Ok
             );
             assert!(out);
@@ -3845,12 +3764,12 @@ mod tests {
             let name = CString::new("typed_color_test").unwrap();
             let rgba = [0xffu8, 0x88, 0x00, 0xff];
             assert_eq!(
-                lumen_signal_set_color(ptr::null_mut(), name.as_ptr(), rgba.as_ptr()),
+                lumen_signal_set_color(name.as_ptr(), rgba.as_ptr()),
                 LumenStatus::Ok
             );
             let mut out = [0u8; 4];
             assert_eq!(
-                lumen_signal_get_color(ptr::null_mut(), name.as_ptr(), out.as_mut_ptr()),
+                lumen_signal_get_color(name.as_ptr(), out.as_mut_ptr()),
                 LumenStatus::Ok
             );
             assert_eq!(out, rgba);
@@ -3862,7 +3781,7 @@ mod tests {
         unsafe {
             let name = CString::new("never_set_typed").unwrap();
             let mut out: i64 = -1;
-            let s = lumen_signal_get_int64(ptr::null_mut(), name.as_ptr(), &mut out);
+            let s = lumen_signal_get_int64(name.as_ptr(), &mut out);
             assert_eq!(s, LumenStatus::ErrBadArg);
         }
     }
@@ -3886,7 +3805,10 @@ mod tests {
         // `PropertyValue` through `lumen_core::property_store`'s external
         // bus. A synthetic drain (running the system against a fresh
         // `PropertyStore` resource) confirms the typed cell lands without
-        // any stringify-on-write round-trip.
+        // any stringify-on-write round-trip. The string setter takes the
+        // same path, so it is asserted here rather than from a second
+        // test: the bus is process-wide, and two tests draining it in
+        // parallel would race for each other's entries.
         use lumen_core::prelude::Schedule;
         use lumen_core::prelude::World;
         use lumen_core::property_store::{
@@ -3896,8 +3818,11 @@ mod tests {
         init_external_properties();
         unsafe {
             let name = CString::new("ffi_pre_run_int").unwrap();
+            assert_eq!(lumen_signal_set_int64(name.as_ptr(), 7777), LumenStatus::Ok);
+            let name = CString::new("ffi_pre_run_str").unwrap();
+            let value = CString::new("seeded").unwrap();
             assert_eq!(
-                lumen_signal_set_int64(ptr::null_mut(), name.as_ptr(), 7777),
+                lumen_signal_set_str(name.as_ptr(), value.as_ptr()),
                 LumenStatus::Ok
             );
         }
@@ -3915,6 +3840,11 @@ mod tests {
             matches!(cell, Some(PropertyValue::I64(7777))),
             "typed FFI setter must land a PropertyValue::I64 in PropertyStore; got {cell:?}"
         );
+        let cell = store.get(&PropertyKey::Global(Arc::<str>::from("ffi_pre_run_str")));
+        assert!(
+            matches!(cell, Some(PropertyValue::Str(s)) if &**s == "seeded"),
+            "the string setter must land a PropertyValue::Str in PropertyStore; got {cell:?}"
+        );
     }
 
     #[test]
@@ -3926,10 +3856,7 @@ mod tests {
         // the bus and the FFI caller hits the cache fallback.
         unsafe {
             let name = CString::new("ffi_cache_fallback_bool").unwrap();
-            assert_eq!(
-                lumen_signal_set_bool(ptr::null_mut(), name.as_ptr(), true),
-                LumenStatus::Ok
-            );
+            assert_eq!(lumen_signal_set_bool(name.as_ptr(), true), LumenStatus::Ok);
         }
         // Forcefully drain the external bus snapshot (no PropertyStore
         // around in this test) by reading once. Subsequent typed reads
@@ -3939,7 +3866,7 @@ mod tests {
             let name = CString::new("ffi_cache_fallback_bool").unwrap();
             let mut out = false;
             assert_eq!(
-                lumen_signal_get_bool(ptr::null_mut(), name.as_ptr(), &mut out),
+                lumen_signal_get_bool(name.as_ptr(), &mut out),
                 LumenStatus::Ok
             );
             assert!(out, "typed read should fall back to cache after bus drain");
@@ -4023,24 +3950,18 @@ mod tests {
     }
 
     #[test]
-    fn string_signal_round_trips_via_get() {
+    fn typed_signal_str_round_trips() {
         unsafe {
-            let name = CString::new("ffi_get_string_test").unwrap();
+            let name = CString::new("ffi_get_str_test").unwrap();
             let value = CString::new("hello world").unwrap();
             assert_eq!(
-                lumen_signal_set_string(name.as_ptr(), value.as_ptr()),
+                lumen_signal_set_str(name.as_ptr(), value.as_ptr()),
                 LumenStatus::Ok
             );
             // Size query: null buffer reports the required capacity.
             let mut needed: usize = 0;
             assert_eq!(
-                lumen_signal_get_string(
-                    ptr::null_mut(),
-                    name.as_ptr(),
-                    ptr::null_mut(),
-                    0,
-                    &mut needed
-                ),
+                lumen_signal_get_str(name.as_ptr(), ptr::null_mut(), 0, &mut needed),
                 LumenStatus::ErrBufferTooSmall
             );
             assert_eq!(needed, "hello world".len() + 1);
@@ -4048,18 +3969,49 @@ mod tests {
             let mut buf = vec![0i8; needed];
             let mut out_len: usize = 0;
             assert_eq!(
-                lumen_signal_get_string(
-                    ptr::null_mut(),
-                    name.as_ptr(),
-                    buf.as_mut_ptr(),
-                    buf.len(),
-                    &mut out_len
-                ),
+                lumen_signal_get_str(name.as_ptr(), buf.as_mut_ptr(), buf.len(), &mut out_len),
                 LumenStatus::Ok
             );
             assert_eq!(out_len, "hello world".len());
             let got = CStr::from_ptr(buf.as_ptr()).to_str().unwrap();
             assert_eq!(got, "hello world");
+        }
+    }
+
+    #[test]
+    fn clear_leaves_an_empty_string_signal() {
+        unsafe {
+            let name = CString::new("ffi_clear_str_test").unwrap();
+            let value = CString::new("filled").unwrap();
+            assert_eq!(
+                lumen_signal_set_str(name.as_ptr(), value.as_ptr()),
+                LumenStatus::Ok
+            );
+            assert_eq!(lumen_signal_clear(name.as_ptr()), LumenStatus::Ok);
+            let mut out_len: usize = 0;
+            let mut buf = [0i8; 8];
+            assert_eq!(
+                lumen_signal_get_str(name.as_ptr(), buf.as_mut_ptr(), buf.len(), &mut out_len),
+                LumenStatus::Ok
+            );
+            assert_eq!(out_len, 0);
+        }
+    }
+
+    #[test]
+    fn typed_getters_reject_a_type_mismatch() {
+        unsafe {
+            let name = CString::new("ffi_mismatch_test").unwrap();
+            let value = CString::new("not a number").unwrap();
+            assert_eq!(
+                lumen_signal_set_str(name.as_ptr(), value.as_ptr()),
+                LumenStatus::Ok
+            );
+            let mut out: i64 = 0;
+            assert_eq!(
+                lumen_signal_get_int64(name.as_ptr(), &mut out),
+                LumenStatus::ErrBadArg
+            );
         }
     }
 
@@ -4122,7 +4074,7 @@ mod tests {
 
             let mut len: usize = 0;
             assert_eq!(
-                lumen_signal_array_len(ptr::null_mut(), name.as_ptr(), &mut len),
+                lumen_signal_array_len(name.as_ptr(), &mut len),
                 LumenStatus::Ok
             );
             assert_eq!(len, 2);
@@ -4131,7 +4083,6 @@ mod tests {
             let mut out_len: usize = 0;
             assert_eq!(
                 lumen_signal_array_get_field(
-                    ptr::null_mut(),
                     name.as_ptr(),
                     1,
                     key.as_ptr(),

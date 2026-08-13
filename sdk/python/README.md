@@ -198,7 +198,7 @@ and a way for the loader to find it.
 4. The system loader's own search paths (`LD_LIBRARY_PATH`, `/usr/lib`, ...).
 
 The loaded library's `lumen_abi_version()` is checked against the version
-this SDK targets, ABI 0.12. A major mismatch or an older minor raises
+this SDK targets, ABI 0.13. A major mismatch or an older minor raises
 `LumenAbiVersionError`.
 
 ## Threading
@@ -223,22 +223,22 @@ cover the two pre-call failures.
 
 ## Appendix - the raw layer (`lumen.raw`)
 
-`lumen.raw.Signal` is the thin, stringly surface every abstraction above is
-built on: each method is exactly one `lumen_signal_*` C call. Reach for it
-only when you need the raw ABI, for example the array setter or the stringly
-text setters `bind-text` reads directly.
+`lumen.raw.Signal` is the thin surface every abstraction above is built
+on: each method is exactly one `lumen_signal_*` C call. Reach for it only
+when you need the raw ABI, for example the array setter.
 
 ```python
 from lumen import raw
 
 raw.Signal.set_int64("count", 5)          # typed scalar setters/getters
 raw.Signal.get_int64("count")             # -> 5
-raw.Signal.set_string("label", "hi")      # stringly text signal
+raw.Signal.set_str("label", "hi")         # string scalar
 raw.Signal.set_array("rows", [{"id": "a", "name": "x"}])   # <for> array
-raw.Signal.get_string("label")            # read back what the FFI last pushed
+raw.Signal.get_str("label")               # read back what the FFI last pushed
 ```
 
-Read-back caveat: `get_string`, `array_len`, and `array_field` return the
-value the *embedder* last pushed through the FFI, not live in-app state. A
-write from the app's own script, or a two-way input binding, is not visible
-here. The typed layer above hides all of this.
+Read-back caveat: `get_str`, `array_len`, and `array_field` return what the
+*embedder* last pushed through the FFI, not live in-app state. A write from
+the app's own script, or a two-way input binding, is not visible through
+them. The number, bool, and color getters do see in-app writes. The typed
+layer above hides all of this.

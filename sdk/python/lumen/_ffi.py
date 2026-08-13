@@ -63,7 +63,7 @@ __all__ = [
 # ============================================================
 
 ABI_MAJOR = 0
-ABI_MINOR = 12
+ABI_MINOR = 13
 ABI_PATCH = 0
 
 
@@ -764,64 +764,58 @@ def _declare_prototypes(lib: ctypes.CDLL) -> None:
     lib.lumen_last_error_global.argtypes = []
     lib.lumen_last_error_global.restype = c.c_char_p
 
-    lib.lumen_signal_set_string.argtypes = [c.c_char_p, c.c_char_p]
-    lib.lumen_signal_set_string.restype = c.c_uint32
-
-    lib.lumen_signal_set_int.argtypes = [c.c_char_p, c.c_int64]
-    lib.lumen_signal_set_int.restype = c.c_uint32
-
-    lib.lumen_signal_set_f64.argtypes = [c.c_char_p, c.c_double]
-    lib.lumen_signal_set_f64.restype = c.c_uint32
-
     lib.lumen_signal_clear.argtypes = [c.c_char_p]
     lib.lumen_signal_clear.restype = c.c_uint32
 
     lib.lumen_signal_set_array.argtypes = [c.c_char_p, P(LumenValue)]
     lib.lumen_signal_set_array.restype = c.c_uint32
 
-    lib.lumen_signal_set_int64.argtypes = [c.c_void_p, c.c_char_p, c.c_int64]
-    lib.lumen_signal_set_int64.restype = c.c_uint32
+    lib.lumen_signal_set_str.argtypes = [c.c_char_p, c.c_char_p]
+    lib.lumen_signal_set_str.restype = c.c_uint32
 
-    lib.lumen_signal_get_int64.argtypes = [c.c_void_p, c.c_char_p, P(c.c_int64)]
-    lib.lumen_signal_get_int64.restype = c.c_uint32
-
-    lib.lumen_signal_set_float64.argtypes = [c.c_void_p, c.c_char_p, c.c_double]
-    lib.lumen_signal_set_float64.restype = c.c_uint32
-
-    lib.lumen_signal_get_float64.argtypes = [c.c_void_p, c.c_char_p, P(c.c_double)]
-    lib.lumen_signal_get_float64.restype = c.c_uint32
-
-    # bool is passed as a single byte on the Rust side (`bool` is
-    # 1-byte, repr matches C `_Bool`/`bool` from <stdbool.h>).
-    lib.lumen_signal_set_bool.argtypes = [c.c_void_p, c.c_char_p, c.c_bool]
-    lib.lumen_signal_set_bool.restype = c.c_uint32
-
-    lib.lumen_signal_get_bool.argtypes = [c.c_void_p, c.c_char_p, P(c.c_bool)]
-    lib.lumen_signal_get_bool.restype = c.c_uint32
-
-    lib.lumen_signal_set_color.argtypes = [c.c_void_p, c.c_char_p, P(c.c_uint8)]
-    lib.lumen_signal_set_color.restype = c.c_uint32
-
-    lib.lumen_signal_get_color.argtypes = [c.c_void_p, c.c_char_p, P(c.c_uint8)]
-    lib.lumen_signal_get_color.restype = c.c_uint32
-
-    # ABI 0.3 string / array read-back getters. `buf` is a char* buffer,
-    # `out_len` a size_t*; LUMEN_ERR_BUFFER_TOO_SMALL (14) sets *out_len
-    # to the required capacity (byte length + 1 for the NUL).
-    lib.lumen_signal_get_string.argtypes = [
-        c.c_void_p,
+    # `buf` is a char* buffer and `out_len` a size_t*;
+    # LUMEN_ERR_BUFFER_TOO_SMALL (14) sets *out_len to the required
+    # capacity (byte length + 1 for the NUL).
+    lib.lumen_signal_get_str.argtypes = [
         c.c_char_p,
         c.c_char_p,
         c.c_size_t,
         P(c.c_size_t),
     ]
-    lib.lumen_signal_get_string.restype = c.c_uint32
+    lib.lumen_signal_get_str.restype = c.c_uint32
 
-    lib.lumen_signal_array_len.argtypes = [c.c_void_p, c.c_char_p, P(c.c_size_t)]
+    lib.lumen_signal_set_int64.argtypes = [c.c_char_p, c.c_int64]
+    lib.lumen_signal_set_int64.restype = c.c_uint32
+
+    lib.lumen_signal_get_int64.argtypes = [c.c_char_p, P(c.c_int64)]
+    lib.lumen_signal_get_int64.restype = c.c_uint32
+
+    lib.lumen_signal_set_float64.argtypes = [c.c_char_p, c.c_double]
+    lib.lumen_signal_set_float64.restype = c.c_uint32
+
+    lib.lumen_signal_get_float64.argtypes = [c.c_char_p, P(c.c_double)]
+    lib.lumen_signal_get_float64.restype = c.c_uint32
+
+    # bool is passed as a single byte on the Rust side (`bool` is
+    # 1-byte, repr matches C `_Bool`/`bool` from <stdbool.h>).
+    lib.lumen_signal_set_bool.argtypes = [c.c_char_p, c.c_bool]
+    lib.lumen_signal_set_bool.restype = c.c_uint32
+
+    lib.lumen_signal_get_bool.argtypes = [c.c_char_p, P(c.c_bool)]
+    lib.lumen_signal_get_bool.restype = c.c_uint32
+
+    lib.lumen_signal_set_color.argtypes = [c.c_char_p, P(c.c_uint8)]
+    lib.lumen_signal_set_color.restype = c.c_uint32
+
+    lib.lumen_signal_get_color.argtypes = [c.c_char_p, P(c.c_uint8)]
+    lib.lumen_signal_get_color.restype = c.c_uint32
+
+    # ABI 0.3 array read-back getters, same buffer convention as
+    # lumen_signal_get_str.
+    lib.lumen_signal_array_len.argtypes = [c.c_char_p, P(c.c_size_t)]
     lib.lumen_signal_array_len.restype = c.c_uint32
 
     lib.lumen_signal_array_get_field.argtypes = [
-        c.c_void_p,
         c.c_char_p,
         c.c_size_t,
         c.c_char_p,
