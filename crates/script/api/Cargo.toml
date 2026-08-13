@@ -25,6 +25,13 @@ thiserror.workspace = true
 # `on_fetch_error(tag, "...built without the http-fetch feature...")`.
 ureq = { workspace = true, optional = true }
 
+[build-dependencies]
+# Reads `builtins.ron` when this crate compiles, so the builtin metadata
+# tables are generated rather than hand-maintained per host. A build
+# dependency, so the parser never reaches a shipped binary.
+ron.workspace = true
+serde.workspace = true
+
 [features]
 # `http-fetch` is on by default so a plain build behaves exactly as
 # before; it exists as a packager knob for size-trimmed lumenc builds
