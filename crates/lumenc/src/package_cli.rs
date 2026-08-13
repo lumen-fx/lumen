@@ -264,6 +264,26 @@ impl Target {
 /// Entry: `lumenc package <app_dir> [<out_dir>] [--name <n>] [--target <t>]
 /// [--lib-dir <dir>] [--no-hooks]`.
 pub fn cmd_package(args: impl Iterator<Item = String>) -> ExitCode {
+    const PACKAGE_USAGE: &str = "lumenc package - assemble a folder to ship
+
+USAGE:
+    lumenc package <app_dir> [<out_dir>] [--name N] [--target T]
+                   [--lib-dir <dir>] [--no-hooks]
+
+Assembles the app executable, the Lumen runtime library where one is
+needed, and the app's files into a folder that runs on a machine with no
+Lumen installation. A markup app is compiled into the executable, pages
+and all; an SDK app is built by its own toolchain and the folder assembled
+around what that produced. <out_dir> defaults to <app_dir>/dist/<name>.
+
+    --name N          Package name (default: the app directory's name).
+    --target T        Package a markup app for another platform
+                      (linux-x86_64 | linux-aarch64 | macos-x86_64 |
+                      macos-aarch64 | windows-x86_64), fetching that
+                      platform's files from the release channel.
+    --lib-dir DIR     Take the platform's files from DIR instead of the
+                      release channel.
+    --no-hooks        Skip the app's prebuild [[hooks]].";
     let mut no_hooks = false;
     let mut name: Option<String> = None;
     let mut lib_dir: Option<PathBuf> = None;
@@ -272,6 +292,10 @@ pub fn cmd_package(args: impl Iterator<Item = String>) -> ExitCode {
     let mut args = args;
     while let Some(a) = args.next() {
         match a.as_str() {
+            h if crate::is_help_flag(h) => {
+                println!("{PACKAGE_USAGE}");
+                return ExitCode::SUCCESS;
+            }
             "--no-hooks" => no_hooks = true,
             "--name" => match args.next() {
                 Some(v) => name = Some(v),

@@ -26,7 +26,8 @@ pub mod builtins;
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::*;
 use lumen_script::{
-    CallOutcome, CommandFn, ScriptCommand, ScriptContext, ScriptError, ScriptHost, ScriptValue,
+    CallOutcome, CommandFn, NativeExternFn, ScriptCommand, ScriptContext, ScriptError, ScriptHost,
+    ScriptValue,
 };
 use parking_lot::Mutex;
 use rhai::{AST, CallFnOptions, Engine, EvalAltResult, Scope};
@@ -3315,6 +3316,29 @@ impl ScriptRhaiPlugin {
     {
         self.extensions.push(Box::new(f));
         self
+    }
+
+    /// Register a host-neutral [`NativeExternFn`] as a global Rhai function.
+    ///
+    /// The same [`NativeExternFn`] registers into the Lua and candela hosts
+    /// through their own `with_native_fn`, so an embedder describes a native
+    /// function once and every host the app runs can call it. Arguments and
+    /// the return value marshal through [`ScriptValue`]; Rhai dispatches on
+    /// the declared arity.
+    #[must_use]
+    pub fn with_native_fn(self, f: NativeExternFn) -> Self {
+        self.with_extension(move |engine: &mut Engine| {
+            let NativeExternFn { name, arity, call } = f;
+            let arg_types: Vec<std::any::TypeId> =
+                std::iter::repeat_with(std::any::TypeId::of::<rhai::Dynamic>)
+                    .take(arity)
+                    .collect();
+            engine.register_raw_fn::<rhai::Dynamic>(name, arg_types, move |_ctx, args| {
+                let vals: Vec<ScriptValue> =
+                    args.iter().map(|d| dynamic_to_script_value(d)).collect();
+                Ok(script_value_to_dynamic(&call(&vals)))
+            });
+        })
     }
 }
 

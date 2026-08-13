@@ -165,7 +165,7 @@ bundle = ["dep:lumen-assets"]
 # they only augment it when `dev-run` has already pulled it.
 # The dev path stays FULL-featured (owner decision): `dev-run` turns on every
 # runtime subsystem so `lumenc run` / `build` / `check` and the integration
-# tests keep audio, MCP, the async bridge, and the lua / candela script hosts.
+# tests keep audio, MCP, the async bridge, and all three script hosts.
 # Per-app trimming is exclusive to `lumenc bundle --static` (which builds
 # `lumen` with its own trimmed feature set), never the dev path.
 dev-run = [
@@ -175,6 +175,7 @@ dev-run = [
     "lumen-runtime/audio",
     "lumen-runtime/mcp",
     "lumen-runtime/async",
+    "lumen-runtime/host-rhai",
     "lumen-runtime/host-lua",
     "lumen-runtime/host-candela",
 ]

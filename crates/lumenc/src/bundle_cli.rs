@@ -20,11 +20,32 @@ use std::process::ExitCode;
 /// Expected argv: `[--static] <app_dir> <out>`. Surfaces `--help` to the
 /// shared usage block.
 pub fn cmd_bundle(args: impl Iterator<Item = String>) -> ExitCode {
+    const BUNDLE_USAGE: &str = "lumenc bundle - pack an app, or build a trimmed runtime for it
+
+USAGE:
+    lumenc bundle <app_dir> <out.lpak> [--no-hooks]
+    lumenc bundle --static <app_dir> <out_dir> [--no-hooks]
+
+Without --static, packs every regular file under <app_dir> into a single
+.lpak archive, skipping dotfiles and `target/` directories. Entries are
+keyed by their path relative to <app_dir>; run against the archive with
+`lumenc run <app_dir> --assets <out.lpak>`.
+
+    --static          Resolve the app's capability set, map it to a cargo
+                      feature list, build the runtime library with only
+                      those subsystems, and copy the result into <out_dir>.
+                      Needs the Lumen source tree; set LUMEN_WORKSPACE_DIR
+                      to point at it.
+    --no-hooks        Skip the app's prebuild [[hooks]].";
     let mut static_build = false;
     let mut no_hooks = false;
     let mut positional: Vec<String> = Vec::new();
     for a in args {
         match a.as_str() {
+            h if crate::is_help_flag(h) => {
+                println!("{BUNDLE_USAGE}");
+                return ExitCode::SUCCESS;
+            }
             "--static" => static_build = true,
             "--no-hooks" => no_hooks = true,
             other => positional.push(other.to_string()),
@@ -155,13 +176,18 @@ fn cmd_bundle_static(src_path: &std::path::Path, out_path: &std::path::Path) -> 
     );
 
     // Locate the Lumen workspace to build the seam from. An in-tree dev build
-    // finds it via the compile-time manifest dir (crates/lumenc/ -> workspace root);
-    // an override lets a relocated toolchain point at the source tree.
+    // walks up from the compile-time manifest dir to the first manifest that
+    // declares a `[workspace]`; an override lets a relocated toolchain point at
+    // the source tree.
     let workspace_dir = std::env::var_os("LUMEN_WORKSPACE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
+            let here = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            here.ancestors()
+                .find(|dir| {
+                    std::fs::read_to_string(dir.join("Cargo.toml"))
+                        .is_ok_and(|manifest| manifest.contains("[workspace]"))
+                })
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."))
         });

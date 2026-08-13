@@ -22,6 +22,10 @@ lumenc --version
 and `-V` print `lumenc <version>` and exit 0. An unknown command prints usage
 on stderr and exits 2.
 
+Every subcommand answers `--help` and `-h` with its own usage block and exits 0,
+for example `lumenc run --help`. A bare `help` is not a subcommand flag, so
+`lumenc new help` still scaffolds a directory named `help`.
+
 ## run
 
 ```

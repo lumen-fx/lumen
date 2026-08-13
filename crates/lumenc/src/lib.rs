@@ -176,6 +176,17 @@ where
     run_app(RunOptions::new(dir).with_rhai_extension(extend))
 }
 
+/// True for the `--help` / `-h` spellings every subcommand answers with its
+/// own usage block.
+///
+/// Deliberately not `help`: a bare word is a positional argument to several
+/// subcommands (`lumenc new help`, `lumenc type help`), and reading it as a
+/// flag would shadow them. The top-level `lumenc help` still prints the full
+/// usage.
+pub fn is_help_flag(arg: &str) -> bool {
+    matches!(arg, "--help" | "-h")
+}
+
 /// Parse + validate an app from source (`lumenc check`), using the compiler's
 /// default parser. See [`lumen_runtime::check_app`].
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]

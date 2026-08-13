@@ -20,7 +20,7 @@
 //! port = 7878                 # default when absent; 0 disables the server
 //!
 //! [profile]
-//! mode = "off"                # off | chrome | stderr
+//! mode = "off"                # off | chrome | tracy | stderr
 //!
 //! [asset_roots]
 //! paths = ["icons", "../shared"]   # extra dirs scanned for relative src=
@@ -177,7 +177,8 @@ pub struct SkinCfg {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct McpCfg {
-    /// TCP port for the introspection server; `None` disables the server.
+    /// TCP port for the introspection server. Absent means port 7878; `0`
+    /// disables the server.
     pub port: Option<u16>,
     /// When `true`, the MCP plugin drains the `SimulateQueue` each tick and injects pointer, key, and scroll events. Defaults to off.
     pub simulate: Option<bool>,
@@ -453,8 +454,8 @@ impl BundleCapabilities {
     /// The cargo `--features` list to compile the trimmed runtime seam with,
     /// passed after `--no-default-features`. `runtime-parse` is intentionally
     /// omitted: a `--bundle` runs from a precompiled AOT artifact, so the
-    /// source parser is dropped too. Rhai (the always-compiled default host)
-    /// contributes no feature.
+    /// source parser is dropped too. Every script host contributes its own
+    /// feature, so a bundle links only the languages the app ships.
     pub fn to_features(&self) -> Vec<String> {
         let mut f: Vec<String> = Vec::new();
         if self.audio {
@@ -471,7 +472,7 @@ impl BundleCapabilities {
         }
         for host in &self.hosts {
             match host {
-                ScriptEngine::Rhai => {}
+                ScriptEngine::Rhai => f.push("host-rhai".into()),
                 ScriptEngine::Lua => f.push("host-lua".into()),
                 ScriptEngine::Candela => f.push("host-candela".into()),
             }
@@ -954,7 +955,7 @@ mod tests {
         // the feature list carries only that host.
         std::fs::write(
             dir.join("main.lmn"),
-            "<root><button on_click=\"inc\">+</button></root>",
+            "<root><button id=\"inc\">+</button></root>",
         )
         .unwrap();
         let cfg = LumenToml::default();
@@ -993,11 +994,14 @@ mod tests {
         assert!(!BundleCapabilities::resolve(&dir, &cfg_no_async).async_rt);
         std::fs::remove_file(dir.join("dialogs.rhai")).unwrap();
 
-        // A .lua file alongside the .rhai one needs both hosts compiled in.
+        // A .lua file alongside the .rhai one needs both hosts compiled in,
+        // and each host names its own feature.
         std::fs::write(dir.join("logic.lua"), "-- lua").unwrap();
         let caps = BundleCapabilities::resolve(&dir, &LumenToml::default());
         assert_eq!(caps.hosts, vec![ScriptEngine::Lua, ScriptEngine::Rhai]);
-        assert!(caps.to_features().contains(&"host-lua".to_string()));
+        let feats = caps.to_features();
+        assert!(feats.contains(&"host-lua".to_string()));
+        assert!(feats.contains(&"host-rhai".to_string()));
 
         // Explicit [script] engine collapses the app onto one host.
         let mut cfg3 = LumenToml::default();

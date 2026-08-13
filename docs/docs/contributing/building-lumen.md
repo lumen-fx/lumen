@@ -115,8 +115,9 @@ all. That is what `lumen-lsp` links, which is why the LSP does not pull wgpu,
 winit, cosmic-text, taffy, or the script hosts.
 
 **`lumen-runtime`** defaults to every subsystem on: `audio`, `mcp`, `async`,
-`host-lua`, `host-candela`, `http-fetch`, `runtime-parse`. The Rhai host is
-always compiled. Per-app trimming happens only on the static bundle path, where
+`host-rhai`, `host-lua`, `host-candela`, `http-fetch`, `runtime-parse`. Each
+script host is its own feature, so a build can carry exactly the languages its
+app ships. Per-app trimming happens only on the static bundle path, where
 `lumenc` selects the exact feature set an app needs; the development path stays
 full featured.
 

@@ -49,12 +49,12 @@ lumen-audio = { path = "../audio", optional = true }
 lumen-layout-taffy = { path = "../backends/layout-taffy" }
 
 # Script hosts. default-features off so the single `http-fetch` knob below
-# controls the scripts' HTTP `fetch()` builtin. Rhai is the always-compiled
-# default host; the alternate hosts (lua / candela) are Part B tree-shaking
-# knobs -- OPTIONAL behind `host-lua` / `host-candela`.
+# controls the scripts' HTTP `fetch()` builtin. Every host is a Part B
+# tree-shaking knob -- OPTIONAL behind `host-rhai` / `host-lua` /
+# `host-candela` -- so a bundle links exactly the languages its app ships.
 lumen-script = { path = "../script/api", default-features = false }
-lumen-script-rhai = { path = "../script/rhai", default-features = false }
-rhai.workspace = true
+lumen-script-rhai = { path = "../script/rhai", default-features = false, optional = true }
+rhai = { workspace = true, optional = true }
 lumen-script-lua = { path = "../script/lua", default-features = false, optional = true }
 lumen-script-candela = { path = "../script/candela", default-features = false, optional = true }
 mlua = { workspace = true, optional = true }
@@ -111,6 +111,7 @@ default = [
     "audio",
     "mcp",
     "async",
+    "host-rhai",
     "host-lua",
     "host-candela",
 ]
@@ -120,18 +121,19 @@ audio = ["dep:lumen-audio"]
 mcp = ["dep:lumen-mcp"]
 # Async spawn/timer (tokio) bridge. Part B tree-shaking knob.
 async = ["dep:lumen-async-tokio"]
-# Alternate script hosts. Rhai is always compiled; these ADD a host so a
-# lua/candela app can be bundled with exactly the one host it uses.
+# Script hosts. Each one ADDS a language, so a bundle can carry exactly the
+# hosts its app uses. All three are on by default.
+host-rhai = ["dep:lumen-script-rhai", "dep:rhai"]
 host-lua = ["dep:lumen-script-lua", "dep:mlua"]
 host-candela = ["dep:lumen-script-candela"]
 # Dev-only in-window devtools overlay (F12). OFF by default.
 devtools = ["dep:lumen-devtools"]
 # Scripts' HTTP `fetch(url, tag)` builtin. On by default; a packager size knob.
-# The alternate-host forwards use the weak `?/` form so enabling `http-fetch`
-# never drags the optional lua/candela hosts back into a trimmed build.
+# The host forwards use the weak `?/` form so enabling `http-fetch` never drags
+# an unselected host back into a trimmed build.
 http-fetch = [
     "lumen-script/http-fetch",
-    "lumen-script-rhai/http-fetch",
+    "lumen-script-rhai?/http-fetch",
     "lumen-script-lua?/http-fetch",
     "lumen-script-candela?/http-fetch",
 ]

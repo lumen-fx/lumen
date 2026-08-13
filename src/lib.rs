@@ -1,8 +1,8 @@
 //! Lumen C-ABI surface.
 //!
 //! Opaque `LumenApp` plus a tagged `LumenValue` union let any language
-//! with C interop embed Lumen. The Rhai script side reaches across the
-//! ABI through callbacks the embedder registers via `lumen_app_expose`.
+//! with C interop embed Lumen. The app's script reaches across the ABI
+//! through callbacks the embedder registers via `lumen_app_expose`.
 //! No Rust panic escapes any `lumen_*` fn - every entry point wraps its
 //! body in `catch_unwind` and stashes a UTF-8 message that
 //! C callers read through `lumen_last_error`.
@@ -26,7 +26,6 @@
 
 #![allow(clippy::missing_safety_doc)]
 
-use std::any::TypeId;
 use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::panic::AssertUnwindSafe;
@@ -40,7 +39,7 @@ use lumen_core::property_store::{
 };
 use lumen_core::signals::{push_external_array, push_external_clear, push_external_signal};
 use lumen_runtime::RunOptions;
-use rhai::{Dynamic, ImmutableString};
+use lumen_script::{NativeExternFn, ScriptValue};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -211,7 +210,7 @@ pub union LumenValueData {
 /// One scalar / container value crossing the C ABI in either
 /// direction. Always pass `kind` consistently with the populated
 /// union field. Pointers are borrowed for the duration of the call;
-/// Lumen copies before returning to Rhai.
+/// Lumen copies before returning to the script.
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct LumenValue {
@@ -389,7 +388,7 @@ pub struct LumenApp {
 }
 
 /// Embedder-supplied opaque pointer carried across the FFI to native
-/// callbacks. The Rhai engine moves the wrapping closure across
+/// callbacks. A script host moves the wrapping closure across
 /// threads, which requires `Send + Sync` - that bound is impossible
 /// to satisfy generically for `*mut c_void`, so this newtype carries
 /// an explicit unsafe impl with the contract spelled out in SAFETY.
@@ -632,10 +631,15 @@ pub unsafe extern "C" fn lumen_app_new_from_lmna(
     }
 }
 
-/// Expose a native callback to Rhai under `name`. `arg_count` is the
-/// arity Rhai will dispatch against (0..=8 sensible). Pointers are
-/// stored by value; the embedder owns `user_data` and must keep it
-/// valid until `lumen_app_run` returns.
+/// Expose a native callback to the app's script under `name`. `arg_count` is
+/// the arity (0..=8 sensible); Rhai dispatches on it, Lua and candela bind the
+/// call variadically. Pointers are stored by value; the embedder owns
+/// `user_data` and must keep it valid until `lumen_app_run` returns.
+///
+/// Every script host the app runs gets the registration. A candela script
+/// declares what it calls, so it reaches an exposed `now_ms` as
+/// `native::now_ms()` after declaring `host "native" { any now_ms(...); }`;
+/// Rhai and Lua scripts call `now_ms()` directly.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_app_expose(
     app: *mut LumenApp,
@@ -675,7 +679,7 @@ pub unsafe extern "C" fn lumen_app_expose(
     })
 }
 
-/// Expose a native callback to Rhai under `name`, using the
+/// Expose a native callback to the app's script under `name`, using the
 /// out-parameter callback convention (ABI 0.3).
 ///
 /// Identical to [`lumen_app_expose`] except `func` is a [`LumenFnV2`]:
@@ -1044,13 +1048,13 @@ pub extern "C" fn lumen_last_error_global() -> *const c_char {
 }
 
 // ============================================================
-// Internal: Rhai <-> LumenValue marshaling
+// Internal: script <-> LumenValue marshaling
 // ============================================================
 
 /// Translate the accumulated [`LumenApp`] configuration into a
-/// [`RunOptions`], installing the exposed-fn Rhai extensions and the
-/// id-scoped native click router. Shared by [`lumen_app_run`] (windowed)
-/// and [`lumen_app_run_headless`].
+/// [`RunOptions`], installing the exposed functions and the id-scoped native
+/// click router. Shared by [`lumen_app_run`] (windowed) and
+/// [`lumen_app_run_headless`].
 fn build_run_options(app: LumenApp) -> RunOptions {
     let LumenApp {
         dir,
@@ -1093,16 +1097,17 @@ fn build_run_options(app: LumenApp) -> RunOptions {
             user_data,
             arg_count,
         } = ef;
-        opts = opts.with_rhai_extension(move |engine| {
-            let arg_types: Vec<TypeId> = std::iter::repeat_with(TypeId::of::<Dynamic>)
-                .take(arg_count)
-                .collect();
-            engine.register_raw_fn::<Dynamic>(name, arg_types, move |_ctx, args| {
+        opts = opts.with_native_fn(NativeExternFn::new(
+            name,
+            arg_count,
+            move |args: &[ScriptValue]| {
                 // Hold temporary CStrings until the call returns so
                 // any string arg pointers stay valid.
                 let mut keep: Vec<CString> = Vec::new();
-                let lvs: Vec<LumenValue> =
-                    args.iter().map(|d| dyn_to_lumen(d, &mut keep)).collect();
+                let lvs: Vec<LumenValue> = args
+                    .iter()
+                    .map(|v| script_value_to_lumen(v, &mut keep))
+                    .collect();
                 let rv = match fn_ptr {
                     ExposedPtr::V1(f) => unsafe {
                         f(lvs.len() as c_int, lvs.as_ptr(), user_data.as_ptr())
@@ -1125,9 +1130,9 @@ fn build_run_options(app: LumenApp) -> RunOptions {
                         out
                     }
                 };
-                Ok(lumen_to_dyn(&rv))
-            });
-        });
+                lumen_to_script_value(&rv)
+            },
+        ));
     }
 
     // Id-scoped native click routing (ABI 0.3). Install a per-tick system
@@ -1294,67 +1299,61 @@ fn classify_runtime_error(msg: &str) -> LumenStatus {
     }
 }
 
-/// Borrow a Rhai `Dynamic` argument into a `LumenValue` for one
-/// callback dispatch. Strings get a temporary `CString` stashed in
-/// `keep` so the C-side pointer stays live for the duration of the
-/// FFI call.
-fn dyn_to_lumen(d: &Dynamic, keep: &mut Vec<CString>) -> LumenValue {
-    if d.is_int() {
-        LumenValue {
+/// Borrow a script argument into a `LumenValue` for one callback dispatch.
+/// Strings get a temporary `CString` stashed in `keep` so the C-side pointer
+/// stays live for the duration of the FFI call.
+///
+/// Array and map arguments arrive as `LUMEN_NIL`: the C side reads borrowed
+/// views, and building one would mean keeping a whole temporary tree alive
+/// across the call. Return values carry both shapes (see
+/// [`lumen_to_script_value`]).
+fn script_value_to_lumen(v: &ScriptValue, keep: &mut Vec<CString>) -> LumenValue {
+    match v {
+        ScriptValue::I64(i) => LumenValue {
             kind: LumenKind::Int,
-            as_: LumenValueData {
-                integer: d.as_int().unwrap(),
-            },
-        }
-    } else if d.is_float() {
-        LumenValue {
+            as_: LumenValueData { integer: *i },
+        },
+        ScriptValue::F64(f) => LumenValue {
             kind: LumenKind::Float,
-            as_: LumenValueData {
-                float_: d.as_float().unwrap(),
-            },
-        }
-    } else if d.is_bool() {
-        LumenValue {
+            as_: LumenValueData { float_: *f },
+        },
+        ScriptValue::Bool(b) => LumenValue {
             kind: LumenKind::Bool,
             as_: LumenValueData {
-                boolean: d.as_bool().unwrap() as c_int,
+                boolean: *b as c_int,
             },
+        },
+        ScriptValue::Str(s) => {
+            let cs = CString::new(s.as_str()).unwrap_or_default();
+            let ptr = cs.as_ptr();
+            keep.push(cs);
+            LumenValue {
+                kind: LumenKind::String,
+                as_: LumenValueData { string: ptr },
+            }
         }
-    } else if d.is_string() {
-        let s = d.clone().into_immutable_string().unwrap_or_default();
-        let cs = CString::new(s.as_str()).unwrap_or_default();
-        let ptr = cs.as_ptr();
-        keep.push(cs);
-        LumenValue {
-            kind: LumenKind::String,
-            as_: LumenValueData { string: ptr },
-        }
-    } else {
-        // Map array, map, and custom argument values to `LumenKind::Nil`.
-        LumenValue {
+        ScriptValue::Unit | ScriptValue::Array(_) | ScriptValue::Map(_) => LumenValue {
             kind: LumenKind::Nil,
             as_: LumenValueData { integer: 0 },
-        }
+        },
     }
 }
 
-/// Copy a `LumenValue` produced by C into an owned Rhai `Dynamic`.
-/// Strings are cloned into `ImmutableString`; arrays / maps recurse;
-/// nothing on the Rust side keeps a pointer into the C-side buffer
-/// after this returns.
-fn lumen_to_dyn(v: &LumenValue) -> Dynamic {
+/// Copy a `LumenValue` produced by C into an owned [`ScriptValue`] the script
+/// host translates into its own value type. Arrays and maps recurse; nothing
+/// on the Rust side keeps a pointer into the C-side buffer after this returns.
+fn lumen_to_script_value(v: &LumenValue) -> ScriptValue {
     match v.kind {
-        LumenKind::Nil => Dynamic::UNIT,
-        LumenKind::Bool => Dynamic::from(unsafe { v.as_.boolean } != 0),
-        LumenKind::Int => Dynamic::from(unsafe { v.as_.integer }),
-        LumenKind::Float => Dynamic::from(unsafe { v.as_.float_ }),
+        LumenKind::Nil => ScriptValue::Unit,
+        LumenKind::Bool => ScriptValue::Bool(unsafe { v.as_.boolean } != 0),
+        LumenKind::Int => ScriptValue::I64(unsafe { v.as_.integer }),
+        LumenKind::Float => ScriptValue::F64(unsafe { v.as_.float_ }),
         LumenKind::String => {
             let p = unsafe { v.as_.string };
             if p.is_null() {
-                Dynamic::from(ImmutableString::new())
+                ScriptValue::Str(String::new())
             } else {
-                let s = unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned();
-                Dynamic::from(ImmutableString::from(s))
+                ScriptValue::Str(unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned())
             }
         }
         LumenKind::Array => {
@@ -1364,8 +1363,7 @@ fn lumen_to_dyn(v: &LumenValue) -> Dynamic {
             } else {
                 unsafe { std::slice::from_raw_parts(view.items, view.len) }
             };
-            let arr: rhai::Array = items.iter().map(lumen_to_dyn).collect();
-            Dynamic::from(arr)
+            ScriptValue::Array(items.iter().map(lumen_to_script_value).collect())
         }
         LumenKind::Map => {
             let view = unsafe { v.as_.map };
@@ -1374,7 +1372,7 @@ fn lumen_to_dyn(v: &LumenValue) -> Dynamic {
             } else {
                 unsafe { std::slice::from_raw_parts(view.entries, view.len) }
             };
-            let mut m = rhai::Map::new();
+            let mut m = HashMap::with_capacity(entries.len());
             for e in entries {
                 let key = if e.key.is_null() {
                     String::new()
@@ -1383,9 +1381,9 @@ fn lumen_to_dyn(v: &LumenValue) -> Dynamic {
                         .to_string_lossy()
                         .into_owned()
                 };
-                m.insert(key.into(), lumen_to_dyn(&e.value));
+                m.insert(key, lumen_to_script_value(&e.value));
             }
-            Dynamic::from(m)
+            ScriptValue::Map(m)
         }
     }
 }

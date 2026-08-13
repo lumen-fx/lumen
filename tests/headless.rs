@@ -8,8 +8,8 @@ use std::ffi::{CString, c_char};
 use std::path::PathBuf;
 
 use lumen::{
-    LumenClickFn, LumenCloseFn, LumenStatus, LumenValue, LumenWatchFn, lumen_app_free,
-    lumen_app_new, lumen_app_on_click, lumen_app_on_close, lumen_app_run_headless,
+    LumenClickFn, LumenCloseFn, LumenFn, LumenStatus, LumenValue, LumenWatchFn, lumen_app_expose,
+    lumen_app_free, lumen_app_new, lumen_app_on_click, lumen_app_on_close, lumen_app_run_headless,
     lumen_last_error, lumen_signal_set_int64, lumen_signal_watch,
 };
 use std::os::raw::c_void;
@@ -263,6 +263,156 @@ fn signal_watch_rejects_null_args() {
         unsafe { lumen_signal_watch(std::ptr::null(), Some(cb), std::ptr::null_mut()) },
         LumenStatus::ErrBadArg
     );
+}
+
+// -- Exposed-callback parity across the three script hosts -----------------
+//
+// `lumen_app_expose` registers into every host, so the same C callback is
+// callable from Rhai, Lua, and candela. Each test writes a one-file app in one
+// language whose `on_start` calls the exposed function twice, feeding the first
+// call's return value back into the second. The callback records the second
+// call's first argument, which proves both directions of the marshaling:
+// arguments reach C, and the returned `LumenValue` reaches the script.
+
+/// Argument the exposed callback last received, one slot per host so the three
+/// tests stay independent under the default parallel test runner.
+static RHAI_ECHO: AtomicI64 = AtomicI64::new(i64::MIN);
+static LUA_ECHO: AtomicI64 = AtomicI64::new(i64::MIN);
+static CANDELA_ECHO: AtomicI64 = AtomicI64::new(i64::MIN);
+
+/// Sum two int arguments, recording the first one into `slot`.
+fn sum_into(slot: &AtomicI64, argc: std::os::raw::c_int, argv: *const LumenValue) -> LumenValue {
+    let args: &[LumenValue] = if argv.is_null() || argc <= 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(argv, argc as usize) }
+    };
+    let int_at = |i: usize| -> i64 { args.get(i).map(|v| unsafe { v.as_.integer }).unwrap_or(0) };
+    slot.store(int_at(0), Ordering::SeqCst);
+    LumenValue {
+        kind: lumen::LumenKind::Int,
+        as_: lumen::LumenValueData {
+            integer: int_at(0) + int_at(1),
+        },
+    }
+}
+
+unsafe extern "C" fn rhai_sum(
+    argc: std::os::raw::c_int,
+    argv: *const LumenValue,
+    _ud: *mut c_void,
+) -> LumenValue {
+    sum_into(&RHAI_ECHO, argc, argv)
+}
+
+unsafe extern "C" fn lua_sum(
+    argc: std::os::raw::c_int,
+    argv: *const LumenValue,
+    _ud: *mut c_void,
+) -> LumenValue {
+    sum_into(&LUA_ECHO, argc, argv)
+}
+
+unsafe extern "C" fn candela_sum(
+    argc: std::os::raw::c_int,
+    argv: *const LumenValue,
+    _ud: *mut c_void,
+) -> LumenValue {
+    sum_into(&CANDELA_ECHO, argc, argv)
+}
+
+/// Write an app whose markup loads `script_name`, and the script itself.
+fn write_script_fixture(name: &str, script_name: &str, script: &str) -> PathBuf {
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("lumen_expose_{name}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[app]\nentry = \"main.lmn\"\n\n[mcp]\nport = 0\n",
+    )
+    .unwrap();
+    let markup = format!(
+        "<root>\n  <label id=\"lbl\" text=\"hi\" />\n  <script src=\"{script_name}\" />\n</root>\n"
+    );
+    std::fs::write(dir.join("main.lmn"), markup).unwrap();
+    std::fs::write(dir.join(script_name), script).unwrap();
+    dir
+}
+
+/// Register `func` under `name` on `dir`'s app and drive it headlessly.
+fn run_exposed(dir: &std::path::Path, name: &str, func: LumenFn) {
+    let cdir = CString::new(dir.to_str().unwrap()).unwrap();
+    let handle = unsafe { lumen_app_new(cdir.as_ptr()) };
+    assert!(!handle.is_null(), "app must construct: {}", last_error());
+    let cname = CString::new(name).unwrap();
+    assert_eq!(
+        unsafe { lumen_app_expose(handle, cname.as_ptr(), 2, Some(func), std::ptr::null_mut()) },
+        LumenStatus::Ok,
+        "expose should succeed: {}",
+        last_error()
+    );
+    assert_eq!(
+        unsafe { lumen_app_run_headless(handle, 3) },
+        LumenStatus::Ok,
+        "headless run should succeed: {}",
+        last_error()
+    );
+}
+
+#[test]
+fn exposed_fn_is_callable_from_rhai() {
+    RHAI_ECHO.store(i64::MIN, Ordering::SeqCst);
+    let dir = write_script_fixture(
+        "rhai",
+        "main.rhai",
+        "fn on_start() {\n    let a = native_sum(20, 22);\n    native_sum(a, 1);\n}\n",
+    );
+    run_exposed(&dir, "native_sum", rhai_sum);
+    assert_eq!(
+        RHAI_ECHO.load(Ordering::SeqCst),
+        42,
+        "the second call must receive the first call's return value"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn exposed_fn_is_callable_from_lua() {
+    LUA_ECHO.store(i64::MIN, Ordering::SeqCst);
+    let dir = write_script_fixture(
+        "lua",
+        "main.lua",
+        "function on_start()\n    local a = native_sum(20, 22)\n    native_sum(a, 1)\nend\n",
+    );
+    run_exposed(&dir, "native_sum", lua_sum);
+    assert_eq!(
+        LUA_ECHO.load(Ordering::SeqCst),
+        42,
+        "the second call must receive the first call's return value"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn exposed_fn_is_callable_from_candela() {
+    CANDELA_ECHO.store(i64::MIN, Ordering::SeqCst);
+    // candela resolves host calls through a declared block, so the script
+    // declares the exposed function and calls it under the `native` namespace.
+    let dir = write_script_fixture(
+        "candela",
+        "main.cdl",
+        "host \"native\" {\n    any native_sum(...);\n}\n\n\
+         fn on_start() {\n    let a = native::native_sum(20, 22);\n    \
+         native::native_sum(as_int(a), 1);\n}\n\nfn main() {}\n",
+    );
+    run_exposed(&dir, "native_sum", candela_sum);
+    assert_eq!(
+        CANDELA_ECHO.load(Ordering::SeqCst),
+        42,
+        "the second call must receive the first call's return value"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

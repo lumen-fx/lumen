@@ -45,9 +45,10 @@ pub mod spawn;
 pub mod window_state;
 
 pub use config::{ConfigError, LumenToml};
+#[cfg(feature = "host-rhai")]
+pub use run::run_with;
 pub use run::{
     AppHook, CheckReport, RunError, RunOptions, build_headless_app, run_app, run_app_headless,
-    run_with,
 };
 #[cfg(feature = "runtime-parse")]
 pub use run::{check_app, compile_app};

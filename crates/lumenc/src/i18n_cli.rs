@@ -39,6 +39,21 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+/// Usage block for `lumenc i18n --help` and `lumenc i18n extract --help`.
+const I18N_USAGE: &str = "lumenc i18n - translation catalogue tooling
+
+USAGE:
+    lumenc i18n extract <app_dir> [--lang en-US]
+
+Scans the app's .lmn, .rhai, .lua and .cdl files for t(\"key\", ...) /
+tr(\"key\", ...) / lumen::t(\"key\", ...) / t!(i18n, \"key\", ...) /
+translatable=\"key\" and writes or merges <app_dir>/locale/<lang>.ftl.
+Idempotent: existing entries are preserved, new keys are appended with
+placeholder values.
+
+    --lang TAG        BCP-47 tag naming the catalogue to write
+                      (default en-US).";
+
 /// Entry point for `lumenc i18n ...`.
 pub fn cmd_i18n(mut args: impl Iterator<Item = String>) -> ExitCode {
     let Some(sub) = args.next() else {
@@ -46,6 +61,10 @@ pub fn cmd_i18n(mut args: impl Iterator<Item = String>) -> ExitCode {
         return ExitCode::from(2);
     };
     match sub.as_str() {
+        h if crate::is_help_flag(h) => {
+            println!("{I18N_USAGE}");
+            ExitCode::SUCCESS
+        }
         "extract" => cmd_extract(args),
         other => {
             eprintln!("lumenc i18n: unknown subcommand `{other}` (expected `extract`)");
@@ -60,6 +79,10 @@ fn cmd_extract(args: impl Iterator<Item = String>) -> ExitCode {
     let mut args = args.peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
+            h if crate::is_help_flag(h) => {
+                println!("{I18N_USAGE}");
+                return ExitCode::SUCCESS;
+            }
             "--lang" => {
                 let Some(v) = args.next() else {
                     eprintln!("lumenc i18n extract: --lang needs a BCP-47 tag");

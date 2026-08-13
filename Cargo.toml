@@ -39,7 +39,6 @@ lumenc = { path = "crates/lumenc", optional = true }
 # reads `Messages<CloseRequest>` through a `MessageCursor`, which
 # `lumen_core::prelude` does not re-export.
 bevy_ecs.workspace = true
-rhai.workspace = true
 crossbeam-channel.workspace = true
 
 [build-dependencies]
@@ -57,6 +56,7 @@ default = [
     "audio",
     "mcp",
     "async",
+    "host-rhai",
     "host-lua",
     "host-candela",
 ]
@@ -69,6 +69,7 @@ http-fetch = ["lumen-runtime/http-fetch"]
 audio = ["lumen-runtime/audio"]
 mcp = ["lumen-runtime/mcp"]
 async = ["lumen-runtime/async"]
+host-rhai = ["lumen-runtime/host-rhai"]
 host-lua = ["lumen-runtime/host-lua"]
 host-candela = ["lumen-runtime/host-candela"]
 

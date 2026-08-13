@@ -19,10 +19,26 @@ pub const ARTIFACT_EXT: &str = "lmna";
 
 /// Entry: `lumenc build <app_dir> <out.lmna> [--no-hooks]`.
 pub fn cmd_build(args: impl Iterator<Item = String>) -> ExitCode {
+    const BUILD_USAGE: &str = "lumenc build - ahead-of-time compile an app
+
+USAGE:
+    lumenc build <app_dir> <out.lmna> [--no-hooks]
+
+Parses main.lmn + main.css once, runs the cascade, and bakes the scripts
+into a precompiled artifact. Run it with
+`lumenc run <dir> --artifact <out.lmna>`; a runtime built with no parser
+loads only this. An SDK app is rerouted to its own toolchain, and the
+<out.lmna> argument does not apply.
+
+    --no-hooks        Skip the app's prebuild [[hooks]].";
     let mut no_hooks = false;
     let mut positional: Vec<String> = Vec::new();
     for a in args {
         match a.as_str() {
+            h if crate::is_help_flag(h) => {
+                println!("{BUILD_USAGE}");
+                return ExitCode::SUCCESS;
+            }
             "--no-hooks" => no_hooks = true,
             other => positional.push(other.to_string()),
         }

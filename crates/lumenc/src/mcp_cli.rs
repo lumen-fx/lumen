@@ -20,6 +20,23 @@ const DEFAULT_PORT: u16 = 7878;
 const CONNECT_TIMEOUT_MS: u64 = 1_000;
 const READ_TIMEOUT_MS: u64 = 5_000;
 
+/// Usage block for `lumenc screenshot --help`.
+const SCREENSHOT_USAGE: &str = "lumenc screenshot - capture the running app to a PNG
+
+USAGE:
+    lumenc screenshot [out.png] [--highlight id1,id2,...] [--lint]
+                      [--bounds map.json] [--port P] [--app D]
+
+Writes the PNG to disk (default lumen-screenshot.png) so the bytes never
+enter an agent's context window.
+
+    --highlight IDS   Draw neon-magenta outlines around these entity ids.
+    --lint            Outline every lint finding instead.
+    --bounds FILE     Also write the entity bounds_map as JSON.
+    --port P          MCP port. Resolution order: --port, LUMEN_MCP_PORT,
+                      lumen.toml [mcp] port (with --app), then 7878.
+    --app DIR         App directory to read [mcp] port from.";
+
 /// `lumenc screenshot [out.png] [--highlight ids] [--lint] [--bounds map.json]`:
 /// capture a PNG, optionally with a neon-marker overlay around the listed
 /// entities (or every lint finding). Writes the PNG to disk so the bytes
@@ -35,6 +52,10 @@ pub fn cmd_screenshot(args: impl Iterator<Item = String>) -> ExitCode {
     let mut args = args.peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
+            h if crate::is_help_flag(h) => {
+                println!("{SCREENSHOT_USAGE}");
+                return ExitCode::SUCCESS;
+            }
             "--highlight" => match args.next() {
                 Some(list) => {
                     for tok in list.split(',') {
@@ -152,6 +173,27 @@ pub fn cmd_screenshot(args: impl Iterator<Item = String>) -> ExitCode {
 /// cascade. The static mode reads `<dir>/main.css` directly - no running
 /// MCP server required.
 pub fn cmd_lint(args: impl Iterator<Item = String>) -> ExitCode {
+    const LINT_USAGE: &str = "lumenc lint - lint the running app, or lint sources offline
+
+USAGE:
+    lumenc lint [--json] [--port P] [--app D]
+    lumenc lint --css-cascade [<dir>] [--json]
+    lumenc lint --signals [<app-dir>] [--json] [--strict]
+
+With no mode flag, runs a snapshot-only lint pass against the running app
+and prints one finding per line. Exits non-zero if any finding is an
+error.
+
+    --css-cascade     Offline static check that flags every rule whose
+                      resolved value flips between the old first-wins
+                      ordering and CSS Cascade-5 last-wins ordering.
+    --signals         Offline signal lint over the app's markup, script,
+                      and [signals] schema.
+    --strict          Upgrade warnings to errors (--signals).
+    --json            One JSON object per finding.
+    --port P          MCP port. Resolution order: --port, LUMEN_MCP_PORT,
+                      lumen.toml [mcp] port (with --app), then 7878.
+    --app DIR         App directory to read [mcp] port from.";
     let mut port: Option<u16> = None;
     let mut app_dir: Option<PathBuf> = None;
     let mut as_json = false;
@@ -161,6 +203,10 @@ pub fn cmd_lint(args: impl Iterator<Item = String>) -> ExitCode {
     let mut args = args.peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
+            h if crate::is_help_flag(h) => {
+                println!("{LINT_USAGE}");
+                return ExitCode::SUCCESS;
+            }
             "--port" => match args.next().and_then(|v| v.parse().ok()) {
                 Some(n) => port = Some(n),
                 None => return usage_err("lumenc lint: --port needs a u16"),
@@ -351,6 +397,18 @@ fn run_signals_lint(dir: &std::path::Path, as_json: bool, strict: bool) -> ExitC
 /// `lumenc diff [tick] [--port P] [--app D] [--json]` - show what changed
 /// since the given tick (or previous tick if omitted).
 pub fn cmd_diff(args: impl Iterator<Item = String>) -> ExitCode {
+    const DIFF_USAGE: &str = "lumenc diff - show what changed in the running app
+
+USAGE:
+    lumenc diff [tick] [--json] [--port P] [--app D]
+
+Prints the entity ids added, removed, and changed since `tick`, or since
+the previous tick when it is omitted.
+
+    --json            Print the raw JSON-RPC result.
+    --port P          MCP port. Resolution order: --port, LUMEN_MCP_PORT,
+                      lumen.toml [mcp] port (with --app), then 7878.
+    --app DIR         App directory to read [mcp] port from.";
     let mut tick: Option<u64> = None;
     let mut port: Option<u16> = None;
     let mut app_dir: Option<PathBuf> = None;
@@ -358,6 +416,10 @@ pub fn cmd_diff(args: impl Iterator<Item = String>) -> ExitCode {
     let mut args = args.peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
+            h if crate::is_help_flag(h) => {
+                println!("{DIFF_USAGE}");
+                return ExitCode::SUCCESS;
+            }
             "--port" => match args.next().and_then(|v| v.parse().ok()) {
                 Some(n) => port = Some(n),
                 None => return usage_err("lumenc diff: --port needs a u16"),
@@ -565,6 +627,41 @@ struct SimulateOpts {
     as_json: bool,
 }
 
+/// Usage block for one of the four `lumen.simulate` subcommands. They share an
+/// argument parser, so they share the shape of their help: the per-command
+/// synopsis first, then the flags every one of them accepts.
+fn simulate_usage(verb: &str) -> String {
+    let head = match verb {
+        "click" => {
+            "lumenc click - inject a click\n\nUSAGE:\n    lumenc click <x> <y> \
+             [--button primary|secondary|middle] [--wait-for R]\n\nCoordinates are \
+             logical pixels."
+        }
+        "type" => {
+            "lumenc type - type a string into the focused element\n\nUSAGE:\n    \
+             lumenc type <text> [--wait-for R]"
+        }
+        "key" => {
+            "lumenc key - inject one key press\n\nUSAGE:\n    lumenc key <name> \
+             [--shift] [--ctrl] [--alt] [--super] [--wait-for R]\n\n<name> is a key \
+             name (Enter | Tab | Escape | a | ...). --cmd is an alias for --super."
+        }
+        _ => {
+            "lumenc scroll - inject a wheel event\n\nUSAGE:\n    lumenc scroll <x> <y> \
+             <dx> <dy> [--wait-for R]\n\nScrolls by (dx, dy) pixels at logical point \
+             (x, y)."
+        }
+    };
+    format!(
+        "{head}\n\nRequires [mcp] simulate = true in the running app's lumen.toml.\n\n    \
+         --wait-for RING   Block until the named event ring records a new entry.\n    \
+         --port P          MCP port. Resolution order: --port, LUMEN_MCP_PORT,\n                      \
+         lumen.toml [mcp] port (with --app), then 7878.\n    \
+         --app DIR         App directory to read [mcp] port from.\n    \
+         --json            Print the raw JSON-RPC result."
+    )
+}
+
 fn parse_simulate_args(
     args: impl Iterator<Item = String>,
     verb: &[&str],
@@ -574,6 +671,10 @@ fn parse_simulate_args(
     let mut args = args.peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
+            h if crate::is_help_flag(h) => {
+                println!("{}", simulate_usage(verb[0]));
+                return Err(ExitCode::SUCCESS);
+            }
             "--port" => match args.next().and_then(|v| v.parse().ok()) {
                 Some(n) => opts.port = Some(n),
                 None => {
@@ -677,9 +778,30 @@ pub fn cmd_find(args: impl Iterator<Item = String>) -> ExitCode {
     let mut port: Option<u16> = None;
     let mut app_dir: Option<PathBuf> = None;
     let mut as_json = false;
+    const FIND_USAGE: &str = "lumenc find - selector search over the live snapshot
+
+USAGE:
+    lumenc find [--text S] [--role R] [--id N] [--limit N] [--json]
+                [--port P] [--app D]
+
+Prints one row per hit (id role label bounds state). Exits non-zero when
+nothing matches.
+
+    --text S          Match elements whose label contains S.
+    --role R          Match elements with this a11y role.
+    --id N            Match one entity id.
+    --limit N         Stop after N hits.
+    --json            Print the raw JSON-RPC result.
+    --port P          MCP port. Resolution order: --port, LUMEN_MCP_PORT,
+                      lumen.toml [mcp] port (with --app), then 7878.
+    --app DIR         App directory to read [mcp] port from.";
     let mut args = args.peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
+            h if crate::is_help_flag(h) => {
+                println!("{FIND_USAGE}");
+                return ExitCode::SUCCESS;
+            }
             "--text" => match args.next() {
                 Some(v) => by_text = Some(v),
                 None => return usage_err("lumenc find: --text needs a string"),
@@ -758,9 +880,24 @@ pub fn cmd_element_at(args: impl Iterator<Item = String>) -> ExitCode {
     let mut port: Option<u16> = None;
     let mut app_dir: Option<PathBuf> = None;
     let mut as_json = false;
+    const ELEMENT_AT_USAGE: &str = "lumenc element-at - topmost element at a point
+
+USAGE:
+    lumenc element-at <x> <y> [--json] [--port P] [--app D]
+
+Coordinates are logical pixels. Exits non-zero when nothing is there.
+
+    --json            Print the raw JSON-RPC result.
+    --port P          MCP port. Resolution order: --port, LUMEN_MCP_PORT,
+                      lumen.toml [mcp] port (with --app), then 7878.
+    --app DIR         App directory to read [mcp] port from.";
     let mut args = args.peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
+            h if crate::is_help_flag(h) => {
+                println!("{ELEMENT_AT_USAGE}");
+                return ExitCode::SUCCESS;
+            }
             "--port" => match args.next().and_then(|v| v.parse().ok()) {
                 Some(n) => port = Some(n),
                 None => return usage_err("lumenc element-at: --port needs a u16"),
@@ -839,9 +976,29 @@ pub fn cmd_snapshot(args: impl Iterator<Item = String>) -> ExitCode {
     let mut port: Option<u16> = None;
     let mut app_dir: Option<PathBuf> = None;
     let mut output = OutputMode::Text;
+    const SNAPSHOT_USAGE: &str = "lumenc snapshot - a11y-tree text dump of the running app
+
+USAGE:
+    lumenc snapshot [--text|--json] [--max-lines N] [--cursor C]
+                    [--include-invisible] [--port P] [--app D]
+
+    --text            Indented text tree (default).
+    --json            Print the raw JSON-RPC result.
+    --max-lines N     Stop after N lines and report a resume cursor.
+    --cursor C        Resume a truncated dump at cursor C.
+    --include-invisible
+                      Include elements the app is not painting.
+                      --no-omit-invisible is an alias.
+    --port P          MCP port. Resolution order: --port, LUMEN_MCP_PORT,
+                      lumen.toml [mcp] port (with --app), then 7878.
+    --app DIR         App directory to read [mcp] port from.";
     let mut args = args.peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
+            h if crate::is_help_flag(h) => {
+                println!("{SNAPSHOT_USAGE}");
+                return ExitCode::SUCCESS;
+            }
             "--text" => output = OutputMode::Text,
             "--json" => output = OutputMode::Json,
             "--max-lines" => match args.next().and_then(|v| v.parse().ok()) {

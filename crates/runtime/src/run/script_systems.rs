@@ -129,9 +129,20 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
     if !has_script {
         bevy_ecs::message::MessageRegistry::register_message::<ScriptCommandEvent>(&mut app.world);
         // No host means `register_script_host_systems` never runs, so install
-        // the DOM-event dispatchers here against the always-compiled Rhai host.
-        // They take an optional host and deliver to C-ABI / SDK native handlers.
+        // the DOM-event dispatchers here against whichever host this build
+        // carries. They take an optional host and deliver to C-ABI / SDK
+        // native handlers, so any compiled host serves; a build with none
+        // installs nothing and delivers no DOM events to native handlers.
+        #[cfg(feature = "host-rhai")]
         register_dom_event_dispatchers::<RhaiHost>(app);
+        #[cfg(all(not(feature = "host-rhai"), feature = "host-candela"))]
+        register_dom_event_dispatchers::<CandelaHost>(app);
+        #[cfg(all(
+            not(feature = "host-rhai"),
+            not(feature = "host-candela"),
+            feature = "host-lua"
+        ))]
+        register_dom_event_dispatchers::<LuaHost>(app);
     }
     app.world
         .insert_resource(crate::run::dom_commands::PendingDomCommands::default());
@@ -400,7 +411,7 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
 /// executor runs.
 ///
 /// Both dispatchers take an optional host, so a script-less app still installs
-/// them (against the always-compiled Rhai host) and delivers to C-ABI / SDK
+/// them (against any host this build compiled) and delivers to C-ABI / SDK
 /// native handlers.
 fn register_dom_event_dispatchers<H: lumen_script::ScriptHost + Resource<Mutability = Mutable>>(
     app: &mut App,

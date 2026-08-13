@@ -178,12 +178,28 @@ pub struct Finding {
 
 /// Entry point: `lumenc lint --signals <app-dir> [--json] [--strict]`.
 pub fn cmd_lint_signals(args: impl Iterator<Item = String>) -> ExitCode {
+    const LINT_SIGNALS_USAGE: &str = "lumenc lint --signals - offline signal lint
+
+USAGE:
+    lumenc lint --signals [<app-dir>] [--json] [--strict]
+
+Reads <app-dir>/main.lmn, the app script (main.cdl / main.rhai /
+main.lua), and the optional [signals] schema in lumen.toml, then flags
+untyped writes, bare {name} interpolation ambiguities, schema mismatches,
+untracked binds, and orphan writes.
+
+    --json            One JSON object per finding.
+    --strict          Upgrade warnings to errors.";
     let mut dir: Option<PathBuf> = None;
     let mut as_json = false;
     let mut strict = false;
     let args = args.peekable();
     for a in args {
         match a.as_str() {
+            h if crate::is_help_flag(h) => {
+                println!("{LINT_SIGNALS_USAGE}");
+                return ExitCode::SUCCESS;
+            }
             "--json" => as_json = true,
             "--strict" => strict = true,
             s if !s.starts_with("--") && dir.is_none() => dir = Some(PathBuf::from(s)),
