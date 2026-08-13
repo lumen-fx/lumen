@@ -343,15 +343,28 @@ callable: a function pointer in Rhai, a function value in Lua, and a function
 *name* in candela, which has no first-class closure value and inlines
 higher-order calls by symbol at compile time.
 
-One host runs per app. The engine is chosen once at startup: an explicit
-declaration in `lumen.toml` wins, otherwise the app directory is scanned for
-script file extensions and resolved by a fixed precedence, candela first, then
-Lua, then Rhai. All of the app's scripts, inline and external, are concatenated
-into one source string before the host sees them, so a directory mixing
-languages feeds the whole blob to whichever host won and fails to compile. Apps
-in that position declare their engine.
+One host runs per language the app ships. Each script file picks its engine
+from its own extension, and the files of one language concatenate into a single
+program. An inline `<script>` has no extension to read, so it joins the app's
+one external language when there is exactly one and falls to the default,
+candela, otherwise.
 
-The chosen host is monomorphised into every scheduling edge. That is
+Two languages mean two hosts running side by side, each driving its own copy of
+the generic systems, so lifecycle and event callbacks reach every host that
+defines them. What the hosts share is the property store, and only that: the
+programs are separate, so no call crosses a language, and a signal one host
+writes reaches the other through the store. That last part costs a second sync
+pass. A cross-host write reaches the store mid-tick and its dirty flag clears
+at the end of the same tick, so with more than one host each mirror refreshes
+again inside that window, or the write would be invisible to the other language
+forever.
+
+`[script] engine` in `lumen.toml` overrides all of it and puts every script on
+one host, whatever the extensions say. A precompiled artifact carries the
+per-engine split the compiler recorded, and is the only source of it, since an
+app's script files do not travel beside its compiled form.
+
+Each host is monomorphised into the scheduling edges it drives. That is
 load-bearing: an ordering constraint naming a different host type resolves
 against an empty system set and silently drops the ordering rather than failing
 to compile.
