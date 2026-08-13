@@ -6,8 +6,12 @@ introduction see [Scripting](../guides/scripting.md). The candela language itsel
 is documented separately at [/candela/](https://docs.lumenfx.dev/candela/); this
 page covers only the Lumen surface.
 
-The same surface in the other hosts: [rhai](scripting-rhai.md),
-[lua](scripting-lua.md).
+The same surface in the other hosts, under the same names:
+[rhai](scripting-rhai.md), [lua](scripting-lua.md). One structural difference
+shapes those names: a candela host function is keyed by name alone and cannot
+be overloaded on arity, so a call with two forms gets two names on every host:
+`page(path)` and `page_current()`, `computed_style(prop)` and
+`computed_style_all()`.
 
 ## Selecting the host
 
@@ -47,7 +51,8 @@ block), the source still compiles, and calling a builtin fails at run time with
 `lumen is not a valid namespace`.
 
 The prelude also declares the `window`, `document`, and `history` namespaces and
-defines the `Node`, `Event`, and `ArraySignal` method wrappers described below.
+defines the `Node`, `Event`, `Signal`, and `ArraySignal` method wrappers
+described below.
 
 Types in signatures are candela types: `int`, `float`, `bool`, `string`, arrays
 (`int[]`), and maps (`{string: float}`). A builtin with no return type returns
@@ -179,6 +184,29 @@ A getter converts across the scalar types: an integer cell read through
 A color signal is a typed cell, not a string: CSS reads it as a color, so
 `signal_set_color("accent", "#ff8800")` recolors everything bound to `accent`.
 
+`signal(name)` wraps the name so the same calls read as methods:
+
+```rust
+import "lumen.cdl";
+
+fn on_start() {
+    let clicks = signal("clicks");
+    clicks.set_int(0);
+}
+
+fn bump(ev) {
+    let clicks = signal("clicks");
+    clicks.set_int(clicks.get_int() + 1);
+}
+
+fn main() {}
+```
+
+Methods: `get`, `set`, `get_int`, `set_int`, `get_float`, `set_float`,
+`get_bool`, `set_bool`, `get_color`, `set_color`. The handle holds only the
+name and calls the builtins above, so it reaches the same cells they do. There
+is no default value: seed a cell by writing it once.
+
 ### Array signals
 
 An array signal is the reactive list `<for each="name">` renders, one element
@@ -309,7 +337,7 @@ Mutations queue a command applied later in the same tick.
 | `lumen::node_class_contains(node: int, class: string)` | `bool` | Whether the class list contains `class`. |
 | `lumen::node_style_get(node: int, prop: string)` | `string` | One inline style override. |
 | `lumen::node_computed_style(node: int, prop: string)` | `string` | One resolved style property after the cascade. |
-| `lumen::node_computed_style_all(node: int)` | `{string: string}` | Every resolved style property. |
+| `lumen::node_computed_style_all(node: int)` | `{string: string}` | Every resolved style property. Spelled apart from `node_computed_style` because a candela host function takes one arity per name. |
 | `lumen::node_inline_style(node: int)` | `{string: string}` | Every inline style override. |
 | `lumen::node_attrs(node: int)` | `{string: string}` | Every attribute. |
 | `lumen::node_classes(node: int)` | `string[]` | The class list. |
@@ -393,8 +421,8 @@ import "lumen.cdl";
 
 fn on_ready() {
     let list = get_by_id("list");
-    let row = spawn("row");
-    row.class_add("item");
+    let row = create("row");
+    row.add_class("item");
     row.set_text("hello");
     list.append(row);
     row.on("click", "handle_row");
@@ -407,22 +435,27 @@ fn handle_row(id) {
 ```
 
 Constructors: `node(handle)`, `event(handle)`, `wrap_nodes(handles)`,
-`spawn(tag)`, `get_by_id(id)`, `document_node()`, `query(selector)`.
+`create(tag)`, `get_by_id(id)`, `document_node()`, `query(selector)`.
 
-`Node` methods mirror the `node_*` builtins with the prefix dropped:
-`exists`, `valid`, `parent`, `first_child`, `last_child`, `next`, `prev`,
-`children`, `closest`, `clone_deep`, `set_attr`, `remove_attr`, `set_id`,
-`set_text`, `set_inner_markup`, `class_add`, `class_remove`, `class_toggle`,
-`set_class`, `set_style`, `style_remove`, `remove`, `append`, `insert_before`,
-`set_parent`, `move_to`, `replace_with`, `get_attr`, `text`, `id`,
-`class_contains`, `style_get`, `computed_style`, `is_visible`, `z_index`,
-`classes`, `components`, `outer_markup`, `inner_markup`, `on`, `on_capture`.
-`exists()` tests the handle against `0`; `valid()` tests it against the current
-snapshot.
+`Node` methods mirror the `node_*` builtins with the prefix dropped, except
+for the class calls and the whole-map style read, which carry the DOM-style
+names every host uses: `exists`, `valid`, `parent`, `first_child`,
+`last_child`, `next`, `prev`, `children`, `closest`, `clone_deep`, `set_attr`,
+`remove_attr`, `set_id`, `set_text`, `set_inner_markup`, `add_class`,
+`remove_class`, `toggle_class`, `set_class`, `set_style`, `style_remove`,
+`remove`, `append`, `insert_before`, `set_parent`, `move_to`, `replace_with`,
+`get_attr`, `text`, `id`, `has_class`, `style_get`, `computed_style`,
+`computed_style_all`, `is_visible`, `z_index`, `classes`, `components`,
+`outer_markup`, `inner_markup`, `on`, `on_capture`. `exists()` tests the
+handle against `0`; `valid()` tests it against the current snapshot.
 
 `ArraySignal` methods mirror the `signal_array_*` builtins with the prefix
 dropped: `set`, `push`, `get`, `all`, `len`, `remove`, `clear`. Construct one
 with `signal_array(name)`.
+
+`Signal` methods mirror the `signal_*` builtins the same way: `get`, `set`,
+`get_int`, `set_int`, `get_float`, `set_float`, `get_bool`, `set_bool`,
+`get_color`, `set_color`. Construct one with `signal(name)`.
 
 `Event` methods: `target`, `current_target`, `event_type`, `key`, `value`,
 `button`, `x`, `y`, `client_x`, `client_y`, `delta_x`, `delta_y`, `shift`,
@@ -435,8 +468,8 @@ One more helper builds a list row in a single call:
 lm_append(parent, tag, cls, text) -> int
 ```
 
-It spawns `tag`, applies `cls` and `text` when they are non-empty, appends the
-result under `parent`, and returns the new handle.
+It creates a `tag` element, applies `cls` and `text` when they are non-empty,
+appends the result under `parent`, and returns the new handle.
 
 ## window, document, history
 
@@ -463,7 +496,7 @@ Each is its own host namespace, declared by the same prelude import.
 | `document::get_by_id(id: string)` | `int` | Element with that `id`, or `0`. |
 | `document::focused()` | `int` | The focused element, or `0`. |
 | `document::hovered()` | `int` | The hovered element, or `0`. |
-| `document::spawn(tag: string)` | `int` | Create a detached element. |
+| `document::create(tag: string)` | `int` | Create a detached element. |
 
 ## Page navigation
 
@@ -521,6 +554,11 @@ See [OS integration](../guides/os-integration.md) for the markup these pair with
 | `lumen::set_class(id: string, classes: string)` | Replace the class list on the element with that `id`. |
 | `lumen::set_root_class(classes: string)` | Replace the class list on the root element, which drives theme-token selectors. |
 | `lumen::set_color_scheme(name: string)` | Switch the color scheme: `"default"` (follow the OS), `"force-light"`, `"force-dark"`, `"prefer-light"`, `"prefer-dark"`. An unknown name is ignored with a warning. |
+
+`lumen::set_class` takes an element id and `Node.set_class` takes none because
+it already has the element. They share a name and do the same thing through
+different routes: reach for the free function when all you have is an id, and
+the method when you are holding a handle.
 
 ## Audio
 

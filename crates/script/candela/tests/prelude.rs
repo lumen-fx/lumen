@@ -225,7 +225,7 @@ fn prelude_grants_web_namespaces() {
 import "lumen.cdl";
 fn go() {
     window::set_title("Waveform");
-    let doc = document::spawn("row");
+    let doc = document::create("row");
 }
 fn main() {}
 "#;
@@ -242,7 +242,7 @@ fn main() {}
         out.commands
             .iter()
             .any(|c| matches!(c, ScriptCommand::Spawn { .. })),
-        "document::spawn reached the sink"
+        "document::create reached the sink"
     );
 }
 

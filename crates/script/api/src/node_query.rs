@@ -544,7 +544,7 @@ pub fn drain_external_dom_commands() -> Vec<ScriptCommand> {
 // chain keeps addressing.
 // ---------------------------------------------------------------------------
 
-/// `spawn(tag)`: mint a reserved token and the backing [`ScriptCommand`].
+/// `create(tag)`: mint a reserved token and the backing [`ScriptCommand`].
 /// Returns `(handle, command)`; the handle is valid for the whole tick.
 pub fn build_spawn(tag: &str) -> (u64, ScriptCommand) {
     let reserved = lumen_core::node::reserve_node_token();

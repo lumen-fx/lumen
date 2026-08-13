@@ -68,11 +68,10 @@ impl BuiltinFn {
     /// Render markdown documentation for hover: a fenced signature line
     /// followed by the doc summary.
     ///
-    /// The fence language is hardcoded to `rhai` today - the LSP only
-    /// highlights Rhai buffers. When a second host lands this becomes
-    /// lang-parameterized.
-    pub fn hover_markdown(&self) -> String {
-        format!("```rhai\n{}\n```\n\n{}", self.signature(), self.doc)
+    /// `lang` is the fence language, so each host labels its own buffers
+    /// (`"rhai"`, `"lua"`, `"candela"`).
+    pub fn hover_markdown(&self, lang: &str) -> String {
+        format!("```{lang}\n{}\n```\n\n{}", self.signature(), self.doc)
     }
 }
 
@@ -89,5 +88,18 @@ mod tests {
             doc: "",
         };
         assert_eq!(b.snippet(), "tick()");
+    }
+
+    #[test]
+    fn hover_fence_takes_the_language() {
+        let b = BuiltinFn {
+            name: "page_current",
+            params: &[],
+            ret: "string",
+            doc: "The active page key.",
+        };
+        assert!(b.hover_markdown("lua").starts_with("```lua\n"));
+        assert!(b.hover_markdown("rhai").starts_with("```rhai\n"));
+        assert!(b.hover_markdown("candela").contains("The active page key."));
     }
 }

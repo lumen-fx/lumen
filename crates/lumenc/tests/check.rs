@@ -56,6 +56,43 @@ fn candela_app_checks_clean() {
     assert!(report.has_script, "candela-smoke has a <script> block");
 }
 
+/// Every scaffold template checks clean as written. `check` compiles the
+/// markup, the CSS, and the script under the host the script's extension
+/// selects, so this is what proves a template a user scaffolds runs: the
+/// candela ones type-check against the real host surface, the Lua and Rhai
+/// ones parse on theirs.
+#[test]
+fn every_template_checks_clean() {
+    for template in lumenc::scaffold::TEMPLATES {
+        let dir = std::env::temp_dir().join(format!(
+            "lumenc_template_check_{}_{}",
+            template.name,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir temp app");
+        for (path, body) in template.files {
+            std::fs::write(dir.join(path), body)
+                .unwrap_or_else(|e| panic!("write {}/{path}: {e}", template.name));
+        }
+
+        let report = lumenc::check_app(&dir)
+            .unwrap_or_else(|e| panic!("template `{}` should check clean: {e}", template.name));
+        assert!(
+            report.element_count > 0,
+            "template `{}` should render at least one element",
+            template.name
+        );
+        assert_eq!(
+            report.has_script,
+            template.name != "blank",
+            "every template but `blank` ships a script"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// An unknown attribute reaches the terminal, at its own severity. The
 /// severity word was hardcoded `info` for every finding, which read as a
 /// style nudge for something that drops what the author wrote.

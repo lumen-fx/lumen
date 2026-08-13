@@ -1,7 +1,7 @@
 // Margin - markdown notes on the candela dynamic DOM API.
 //
 // The sidebar note list and the live preview are built as real elements
-// (spawn / append, the Node method sugar over lumen.cdl's node_spawn /
+// (create / append, the Node method sugar over lumen.cdl's node_spawn /
 // node_append), the way JavaScript uses createElement / appendChild. That is
 // what this app demonstrates; a list of uniform rows would instead use an
 // array signal and <for>. main.lmn ships two empty containers
@@ -89,20 +89,20 @@ fn add_sidebar_row(container, id, cur) {
     if id == cur {
         cls = "note note-active";
     }
-    let col = spawn("column");
+    let col = create("column");
     col.set_attr("class", cls);
     let row_id = "nt|" + id;
     col.set_attr("id", row_id);
     container.append(col);
 
     let title = note_title(id);
-    let title_lbl = spawn("label");
+    let title_lbl = create("label");
     title_lbl.set_attr("class", "note-title");
     title_lbl.set_text(title);
     col.append(title_lbl);
 
     let snip = note_snippet(id);
-    let snip_lbl = spawn("label");
+    let snip_lbl = create("label");
     snip_lbl.set_attr("class", "note-snip");
     snip_lbl.set_text(snip);
     col.append(snip_lbl);
@@ -136,7 +136,7 @@ fn add_preview_block(container, line) {
         return;
     }
     let text = md::md_text(line);
-    let lbl = spawn("label");
+    let lbl = create("label");
     lbl.set_attr("class", cls);
     lbl.set_text(text);
     container.append(lbl);

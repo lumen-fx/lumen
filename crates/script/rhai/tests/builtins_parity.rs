@@ -95,6 +95,7 @@ fn no_untabled_free_functions() {
         "has_class",
         "style_get",
         "computed_style",
+        "computed_style_all",
         // Low-level introspection (phase 5) - receiver methods on a Node.
         "rect",
         "content_rect",
@@ -131,7 +132,6 @@ fn no_untabled_free_functions() {
         "hovered",
         "root",
         "create",
-        "spawn",
         // Event handle accessors (phase 4) - receiver methods on `Event`.
         "target",
         "current_target",

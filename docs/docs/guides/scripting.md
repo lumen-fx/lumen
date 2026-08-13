@@ -9,7 +9,7 @@ talks to the OS.
 Three hosts are available, and an app can use more than one.
 
 **candela** is the default. It is Lumen's own language, statically checked, and
-the one the scaffolds use. One import gives you the whole surface:
+the one most scaffolds are written in. One import gives you the whole surface:
 
 ```rust
 import "lumen.cdl";
@@ -160,7 +160,7 @@ with the DOM API.
 fn on_ready() {
     let list = get_by_id("todos");
     for item in items {
-        let row = spawn("row");
+        let row = create("row");
         row.set_attr("class", "list-row");
         row.set_text(item);
         list.append(row);
@@ -174,12 +174,18 @@ The surface covers:
   selector, and `closest`.
 - **Walking the tree**: `parent`, `children`, `first_child`, `last_child`,
   `next`, `prev`.
-- **Changing the tree**: `spawn`, `clone_deep`, `append`, `insert_before`,
+- **Changing the tree**: `create`, `clone_deep`, `append`, `insert_before`,
   `move_to`, `set_parent`, `replace_with`, `remove`.
 - **Changing a node**: `set_attr`, `remove_attr`, `set_id`, `set_text`,
-  `class_add`, `class_remove`, `class_toggle`, `set_class`, `set_style`.
-- **Reading a node back**: `get_attr`, `text`, `classes`, `style_get`,
-  `computed_style`, `outer_markup`, `inner_markup`, and geometry.
+  `add_class`, `remove_class`, `toggle_class`, `set_class`, `set_style`.
+- **Reading a node back**: `get_attr`, `text`, `classes`, `has_class`,
+  `style_get`, `computed_style`, `outer_markup`, `inner_markup`, and geometry.
+
+These names are the same in every host. Two of them exist in a one-argument
+and a no-argument form, and because candela keys a host function by name
+alone, the no-argument form gets its own name everywhere: `page(path)`
+navigates and `page_current()` reads the active page, `computed_style(prop)`
+reads one property and `computed_style_all()` reads the whole map.
 
 Adding and removing classes is the preferred way to change appearance, because
 the element re-resolves against the stylesheet and keeps every rule and custom

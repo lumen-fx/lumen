@@ -20,6 +20,9 @@ use tower_lsp::lsp_types::{
     Range, SignatureHelp, SignatureInformation,
 };
 
+/// Markdown fence language for hover text in a `.rhai` buffer.
+const FENCE_LANG: &str = "rhai";
+
 /// Compile `src` with a builtin-registered Rhai engine and return any
 /// parse error as a single diagnostic. Returns an empty vec on success.
 pub fn compute_rhai_diagnostics(src: &str) -> Vec<Diagnostic> {
@@ -105,7 +108,7 @@ fn builtin_completion_item(b: &BuiltinFn) -> CompletionItem {
         detail: Some(b.signature()),
         documentation: Some(Documentation::MarkupContent(MarkupContent {
             kind: MarkupKind::Markdown,
-            value: b.hover_markdown(),
+            value: b.hover_markdown(FENCE_LANG),
         })),
         insert_text: Some(b.snippet()),
         insert_text_format: Some(InsertTextFormat::SNIPPET),
@@ -116,7 +119,7 @@ fn builtin_completion_item(b: &BuiltinFn) -> CompletionItem {
 /// Hover markdown for the builtin whose name is under `cursor`, if any.
 pub fn hover(src: &str, cursor: usize) -> Option<String> {
     let name = ident_at(src, cursor)?;
-    builtins::lookup(&name).map(|b| b.hover_markdown())
+    builtins::lookup(&name).map(|b| b.hover_markdown(FENCE_LANG))
 }
 
 /// Expand the identifier token surrounding `cursor` (letters, digits,

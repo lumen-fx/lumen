@@ -290,3 +290,97 @@ fn builtins_parity() {
         panic!("every BUILTINS entry must be a registered host fn: {e}\n{block}")
     });
 }
+
+/// The other direction: every builtin the host registers under the `lumen`
+/// namespace must have a [`BUILTINS`] entry, so the LSP and the reference page
+/// see the whole surface. `builtins_parity` above proves the table is a subset
+/// of the registrations; this proves it is not a strict one.
+///
+/// The registrations are found by scanning the host's own source for the three
+/// forms it uses: a `register_host_fn` / `register_host_fn_variadic` call whose
+/// namespace argument is `HOST_NAMESPACE`, a `mutate!` invocation, and an
+/// `enqueue!` invocation. All three name the builtin with a string literal.
+/// Because the scan reads source text, a fourth registration form added later
+/// is invisible to it: extend `registered_names` when one appears.
+#[test]
+fn every_registered_lumen_fn_is_tabled() {
+    /// The host source, scanned for registration sites.
+    const SRC: &str = include_str!("../src/lib.rs");
+
+    /// Builtins registered from a loop over a `fname` variable rather than a
+    /// string literal, so the scan cannot see them.
+    const LOOP_REGISTERED: &[&str] = &[
+        "pick_file",
+        "pick_files",
+        "pick_folder",
+        "event_on",
+        "event_on_capture",
+    ];
+
+    /// The contents of the first string literal at or after `at`, or `None`
+    /// when the argument in that position is not a literal.
+    fn literal_at(src: &str, at: usize) -> Option<&str> {
+        let rest = src.get(at..)?;
+        let open = rest.find('"')?;
+        // A `)` or `;` before the quote means this argument was a variable.
+        if rest[..open].contains(')') || rest[..open].contains(';') {
+            return None;
+        }
+        let body = &rest[open + 1..];
+        let close = body.find('"')?;
+        Some(&body[..close])
+    }
+
+    /// The offset just past the next non-whitespace character, when it is `c`.
+    fn skip_to(src: &str, from: usize, c: char) -> Option<usize> {
+        let rest = src.get(from..)?;
+        let off = rest.find(|ch: char| !ch.is_whitespace())?;
+        (rest[off..].starts_with(c)).then_some(from + off + c.len_utf8())
+    }
+
+    let mut names: Vec<&str> = LOOP_REGISTERED.to_vec();
+
+    // `register_host_fn(HOST_NAMESPACE, "name", ..)` and its variadic sibling.
+    // Every other occurrence of the constant (its own declaration, the macro
+    // bodies that take the name as `$name`) fails one of the two shape checks.
+    for (idx, _) in SRC.match_indices("HOST_NAMESPACE") {
+        let after = idx + "HOST_NAMESPACE".len();
+        let Some(comma) = skip_to(SRC, after, ',') else {
+            continue;
+        };
+        if let Some(name) = literal_at(SRC, comma) {
+            names.push(name);
+        }
+    }
+
+    // `mutate!("name", ..)` and `enqueue!(engine, sink, "name", ..)`: the first
+    // literal in the invocation is the builtin name in both.
+    for marker in ["mutate!(", "enqueue!("] {
+        for (idx, _) in SRC.match_indices(marker) {
+            if let Some(name) = literal_at(SRC, idx + marker.len()) {
+                names.push(name);
+            }
+        }
+    }
+
+    assert!(
+        names.len() > 100,
+        "the source scan found only {} registrations - the registration form \
+         probably changed and the scan needs updating",
+        names.len()
+    );
+
+    let tabled: std::collections::HashSet<&str> = BUILTINS.iter().map(|b| b.name).collect();
+    let mut missing: Vec<&str> = names
+        .into_iter()
+        .filter(|n| !tabled.contains(n))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    missing.sort_unstable();
+    assert!(
+        missing.is_empty(),
+        "these builtins are registered on the engine but absent from \
+         builtins::BUILTINS: {missing:?}"
+    );
+}

@@ -79,9 +79,10 @@ fn on_click(id) {
 }
 ```
 
-Lua spells these `node:add_class(name)`, `node:remove_class(name)`, and
-`node:toggle_class(name)`; candela uses `lumen::node_class_add(n, name)` and
-its siblings. See [scripting](scripting.md).
+`add_class`, `remove_class`, and `toggle_class` are the names in every host;
+Lua calls them with the colon form, `node:toggle_class(name)`. candela also
+reaches the same effect on a raw handle through `lumen::node_class_toggle(n,
+name)` and its siblings. See [scripting](scripting.md).
 
 Replacing the whole list with `set_class` triggers the same re-run, whether you
 call it on a node or by element id.

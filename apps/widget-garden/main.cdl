@@ -3,7 +3,7 @@
 // Every static showcase widget stays declarative in main.lmn. Only the Lists
 // tab, which the Rhai version drove with signal_array + <for>, is built
 // imperatively: main.lmn ships an empty <column id="todos-list"> and this
-// script fills it with real elements (spawn / append, the Node method sugar
+// script fills it with real elements (create / append, the Node method sugar
 // over lumen.cdl's node_spawn / node_append). Adding a row appends one more
 // element; the per-row layout lives in CSS classes.
 //
@@ -18,7 +18,7 @@ import "lumen.cdl";
 // Spawn a <label class=cls> with text under `row`. node_set_attr splits the
 // class on whitespace, so it also handles multi-class cells.
 fn add_cell(row, cls, text) {
-    let cell = spawn("label");
+    let cell = create("label");
     cell.set_attr("class", cls);
     cell.set_text(text);
     row.append(cell);
@@ -27,7 +27,7 @@ fn add_cell(row, cls, text) {
 // Append one list <row> built element by element. The row flex line and each
 // cell's width / grow come from CSS classes; only class and text are set here.
 fn add_todo_row(container, idx, label, status) {
-    let row = spawn("row");
+    let row = create("row");
     row.set_attr("class", "list-row");
     container.append(row);
     add_cell(row, "li-idx", idx);

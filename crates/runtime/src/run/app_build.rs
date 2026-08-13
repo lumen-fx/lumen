@@ -208,6 +208,12 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
                     engine.register_fn("page", move || -> rhai::ImmutableString {
                         lumen_core::nav::current().into()
                     });
+                    // Explicit spelling of the reader, so the same name works on
+                    // every host: candela keys its host fns by name alone and
+                    // cannot overload `page` on arity.
+                    engine.register_fn("page_current", move || -> rhai::ImmutableString {
+                        lumen_core::nav::current().into()
+                    });
                     // History back/forward (in-memory stack on desktop).
                     engine.register_fn("page_back", lumen_core::nav::back);
                     engine.register_fn("page_forward", lumen_core::nav::forward);
@@ -287,6 +293,15 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
                                     }
                                 },
                             )?,
+                        )?;
+                        // Explicit spelling of the reader, so the same name works
+                        // on every host: candela keys its host fns by name alone
+                        // and cannot overload `page` on arity.
+                        g.set(
+                            "page_current",
+                            lua.create_function(|lua, ()| {
+                                lua.create_string(lumen_core::nav::current())
+                            })?,
                         )?;
                         g.set(
                             "page_back",

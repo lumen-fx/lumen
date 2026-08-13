@@ -260,7 +260,7 @@ host "document" {
     int get_by_id(string);
     int focused();
     int hovered();
-    int spawn(string);
+    int create(string);
 }
 
 // --- Node / Event method sugar ------------------------------------------------
@@ -283,6 +283,41 @@ host "document" {
 
 struct Node { handle: int }
 struct Event { handle: int }
+
+// --- Scalar signals -----------------------------------------------------------
+//
+// `signal("count")` returns a handle to the named reactive cell that `bind-text`
+// and its siblings read. The struct holds only the signal name; every method
+// calls the matching name-keyed builtin above, so the handle and the free
+// functions drive the same store.
+//
+//     let count = signal("count");
+//     count.set_int(count.get_int() + 1);
+//
+// `get` / `set` carry the string form. The typed pairs read and write the same
+// cell as an int, float, bool, or color, converting across the scalar types the
+// way the underlying builtins do. There is no default argument: seed a cell by
+// writing it once, as `signal_array` does.
+
+struct Signal { name: string }
+
+/// Wraps the named reactive cell as a `Signal`.
+fn signal(name) {
+    return Signal { name: name };
+}
+
+impl Signal {
+    fn get(self) { return lumen::signal_get(self.name); }
+    fn set(self, value) { return lumen::signal_set(self.name, value); }
+    fn get_int(self) { return lumen::signal_get_int(self.name); }
+    fn set_int(self, value) { return lumen::signal_set_int(self.name, value); }
+    fn get_float(self) { return lumen::signal_get_float(self.name); }
+    fn set_float(self, value) { return lumen::signal_set_float(self.name, value); }
+    fn get_bool(self) { return lumen::signal_get_bool(self.name); }
+    fn set_bool(self, value) { return lumen::signal_set_bool(self.name, value); }
+    fn get_color(self) { return lumen::signal_get_color(self.name); }
+    fn set_color(self, hex) { return lumen::signal_set_color(self.name, hex); }
+}
 
 // --- Array signals ------------------------------------------------------------
 //
@@ -343,8 +378,8 @@ fn wrap_nodes(handles) {
 
 // -- Node construction / lookup (there is no existing node to call these on) --
 
-/// Spawns a detached `tag` element and returns it, wrapped.
-fn spawn(tag) {
+/// Creates a detached `tag` element and returns it, wrapped.
+fn create(tag) {
     return node(lumen::node_spawn(tag));
 }
 
@@ -383,9 +418,9 @@ impl Node {
     fn set_id(self, id) { return lumen::node_set_id(self.handle, id); }
     fn set_text(self, text) { return lumen::node_set_text(self.handle, text); }
     fn set_inner_markup(self, markup) { return lumen::node_set_inner_markup(self.handle, markup); }
-    fn class_add(self, cls) { return lumen::node_class_add(self.handle, cls); }
-    fn class_remove(self, cls) { return lumen::node_class_remove(self.handle, cls); }
-    fn class_toggle(self, cls) { return lumen::node_class_toggle(self.handle, cls); }
+    fn add_class(self, cls) { return lumen::node_class_add(self.handle, cls); }
+    fn remove_class(self, cls) { return lumen::node_class_remove(self.handle, cls); }
+    fn toggle_class(self, cls) { return lumen::node_class_toggle(self.handle, cls); }
     fn set_class(self, cls) { return lumen::node_set_class(self.handle, cls); }
     fn set_style(self, prop, value) { return lumen::node_set_style(self.handle, prop, value); }
     fn style_remove(self, prop) { return lumen::node_style_remove(self.handle, prop); }
@@ -402,9 +437,10 @@ impl Node {
     fn get_attr(self, key) { return lumen::node_get_attr(self.handle, key); }
     fn text(self) { return lumen::node_text(self.handle); }
     fn id(self) { return lumen::node_id(self.handle); }
-    fn class_contains(self, cls) { return lumen::node_class_contains(self.handle, cls); }
+    fn has_class(self, cls) { return lumen::node_class_contains(self.handle, cls); }
     fn style_get(self, prop) { return lumen::node_style_get(self.handle, prop); }
     fn computed_style(self, prop) { return lumen::node_computed_style(self.handle, prop); }
+    fn computed_style_all(self) { return lumen::node_computed_style_all(self.handle); }
 
     // -- low-level introspection --
     fn is_visible(self) { return lumen::node_is_visible(self.handle); }

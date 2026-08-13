@@ -482,6 +482,11 @@ fn register_introspection(engine: &mut Engine) {
     engine.register_fn("computed_style", |n: &mut Node| -> rhai::Map {
         kv_map(ins::node_computed_style_map(n.handle))
     });
+    // Explicit spelling of the no-arg form, so the whole-map read has one name
+    // on every host (candela cannot overload on arity).
+    engine.register_fn("computed_style_all", |n: &mut Node| -> rhai::Map {
+        kv_map(ins::node_computed_style_map(n.handle))
+    });
     engine.register_fn("inline_style", |n: &mut Node| -> rhai::Map {
         kv_map(ins::node_inline_style(n.handle))
     });

@@ -95,7 +95,7 @@ fn spawn_chain_append_reads_back() {
     let mut h = Harness::new();
     let column = node_query::run_query(".list").unwrap().single().unwrap();
 
-    // spawn("button") + set id / text / class, then append under the column.
+    // create("button") + set id / text / class, then append under the column.
     let (btn, spawn) = build_spawn("button");
     push_external_dom_command(spawn);
     push_external_dom_command(ScriptCommand::SetAttr {

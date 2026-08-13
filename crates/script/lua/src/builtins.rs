@@ -83,6 +83,30 @@ pub const BUILTINS: &[BuiltinFn] = &[
         doc: "Return the document root Node.",
     },
     BuiltinFn {
+        name: "dump_tree",
+        params: &[],
+        ret: "string",
+        doc: "Whole-tree structural dump (id / tag / classes / rect) for debugging.",
+    },
+    BuiltinFn {
+        name: "pointer_state",
+        params: &[],
+        ret: "map",
+        doc: "Pointer position, buttons, and modifiers as a map.",
+    },
+    BuiltinFn {
+        name: "frame_info",
+        params: &[],
+        ret: "map",
+        doc: "Per-frame counters {frame, dt_ms, dirty_count} as a map.",
+    },
+    BuiltinFn {
+        name: "signals_all",
+        params: &[],
+        ret: "map",
+        doc: "The whole signal set as a name -> value map (inspection call).",
+    },
+    BuiltinFn {
         name: "signal",
         params: &[p("name", "string"), p("default", "any")],
         ret: "Signal",

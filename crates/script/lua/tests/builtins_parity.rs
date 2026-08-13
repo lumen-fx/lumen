@@ -61,9 +61,9 @@ fn web_namespaces_are_registered() {
             "`{ns}` must be a namespace table; got {v:?}"
         );
     }
-    // `spawn` create verb is a plain function global.
+    // `create` verb is a plain function global.
     assert!(matches!(
-        globals.get::<Value>("spawn").unwrap(),
+        globals.get::<Value>("create").unwrap(),
         Value::Function(_)
     ));
 }
