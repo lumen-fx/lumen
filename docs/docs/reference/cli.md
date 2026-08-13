@@ -79,6 +79,13 @@ Parses and validates the app without opening a window and without running
 hooks. Prints `<dir>: ok (N elements, script: yes|none)` and exits 0, or
 prints the parse error and exits 1. A missing `<dir>` exits 2.
 
+Every command that compiles markup from source (`check`, `run`, `build`,
+`package`) prints the parse-time findings to stderr as
+`<severity> <file>:<line>:<col> [<kind>] <message>`, with a `hint:` line when
+a fix is machine-applicable. Kinds: `unknown-attribute`, `boolean-attribute`,
+`bare-interpolation`. They are advisory and never change the exit code; run
+[`lumenc lint --signals`](#lint) for the stream a build can gate on.
+
 ## build
 
 ```

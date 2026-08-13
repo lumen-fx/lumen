@@ -391,6 +391,14 @@ pub(crate) fn load_ir(
         }
     }
     ir.combined_stylesheet = Some(combined);
+    // Parse-time lint findings, beside the CSS warnings and on the same
+    // terms: advisory, printed once per load, never fatal. Every path
+    // that loads markup from source comes through here, so `check` and
+    // `run` report the same set. `lumenc lint --signals` is the gate
+    // that can fail a build on them.
+    for f in &ir.lint_findings {
+        eprintln!("{}", f.render(html_path));
+    }
     let script_paths: Vec<PathBuf> = ir.external_scripts.iter().map(|p| dir.join(p)).collect();
     let script_mtimes: Vec<Option<SystemTime>> = script_paths.iter().map(|p| mtime(p)).collect();
     Ok(LoadResult {
