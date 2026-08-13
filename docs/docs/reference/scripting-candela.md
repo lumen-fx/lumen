@@ -660,3 +660,37 @@ Two more write directly to the element tree by id, without a node handle:
 | --- | --- |
 | `lumen::set_text(target_id: string, text: string)` | Replace the text content of the element with that `id`. |
 | `lumen::set_src(target_id: string, path: string)` | Swap the asset path of an `<image>` at run time. Paths are app-relative. |
+
+## Native functions from the embedder
+
+An embedder exposes its own functions to the app's script: over the C ABI with
+`lumen_app_expose` (see [C ABI](ffi.md)), or from Rust with the SDK. They arrive
+in the `native` namespace, and, like every host call in candela, they must be
+declared before the script calls them. There is no prelude for them, because the
+set is per-embedder, so write the block by hand:
+
+```rust
+host "native" {
+    any now_ms(...);
+}
+
+fn on_start() {
+    let t = native::now_ms();
+    print(as_int(t));
+}
+```
+
+Declare each one variadic (`...`) with the `any` return type: the binding passes
+arguments straight through and the return value carries whatever the embedder
+produced. Read it with candela's `as_int` / `as_str` / `as_map` downcasts, the
+same way a `parse_json` result is read.
+
+Declare only what the embedder exposes. candela checks every declared
+host function against a registered implementation at compile time, so a
+declaration with nothing behind it fails the compile. It also means an app
+written for an embedder compiles under that embedder only: `lumenc check` and
+`lumenc run` register no native functions and report the declaration as
+unresolved.
+
+Rhai and Lua receive the same functions as plain globals (`now_ms()`), because
+neither needs a declaration to resolve a call.

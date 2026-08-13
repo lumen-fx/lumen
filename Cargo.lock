@@ -3386,7 +3386,6 @@ dependencies = [
  "lumen-runtime",
  "lumen-script",
  "lumenc",
- "rhai",
 ]
 
 [[package]]

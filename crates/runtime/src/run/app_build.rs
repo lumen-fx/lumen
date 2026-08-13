@@ -6,7 +6,12 @@ use super::*;
 /// reuse the identical build without duplicating the plugin / system
 /// wiring.
 pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> {
+    #[cfg(feature = "host-rhai")]
     let mut rhai_extensions = std::mem::take(&mut opts.rhai_extensions);
+    // Host-neutral native functions (the C-ABI's `lumen_app_expose`, the Rust
+    // SDK). Every host arm below registers the same set, so an exposed
+    // function is callable from whichever languages the app ships.
+    let native_fns = std::mem::take(&mut opts.native_fns);
     let app_hooks = std::mem::take(&mut opts.app_hooks);
     // The injected markup/CSS front-end (the runtime links no parser itself).
     // Shared as an `Arc` so the initial load, the hot-reload resource, and the
@@ -149,13 +154,14 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
         grouped_script_sources(&ir, &dir, &cfg)?
     } else {
         compiled_scripts
-    });
+    })?;
     let has_script = !grouped.is_empty();
     let mut reloaders = ScriptReloaders::default();
     let multi_host = grouped.len() > 1;
     register_script_common(&mut app, has_script);
     for (engine, combined) in grouped {
         match engine {
+            #[cfg(feature = "host-rhai")]
             crate::config::ScriptEngine::Rhai => {
                 let mut plugin = ScriptRhaiPlugin::new(combined);
                 // Built-in `set_color_scheme(name)` extension. Installed before
@@ -211,6 +217,10 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
                 // are inapplicable to an app with no Rhai in it.
                 for ext in std::mem::take(&mut rhai_extensions) {
                     plugin = plugin.with_extension(ext);
+                }
+                // Host-neutral exposed functions: registered into every host.
+                for f in native_fns.iter().cloned() {
+                    plugin = plugin.with_native_fn(f);
                 }
                 app.add_plugin(plugin);
                 register_script_host_systems::<RhaiHost>(&mut app, multi_host);
@@ -294,6 +304,10 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
                         );
                     }
                 });
+                // Host-neutral exposed functions: registered into every host.
+                for f in native_fns.iter().cloned() {
+                    plugin = plugin.with_native_fn(f);
+                }
                 app.add_plugin(plugin);
                 register_script_host_systems::<LuaHost>(&mut app, multi_host);
                 reloaders.push(engine, reload_script::<LuaHost>);
@@ -306,19 +320,32 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
                 // Color scheme and page navigation register inside the host's
                 // own engine build (`lumen-script-candela`), beside the rest
                 // of the prelude surface, so no extension hooks are needed.
-                let plugin =
+                let mut plugin =
                     ScriptCandelaPlugin::new(combined).with_uri(html_path.display().to_string());
+                // Host-neutral exposed functions: registered into every host.
+                // candela reaches them as `native::<name>(...)` after the
+                // script declares `host "native" { ... }`.
+                for f in native_fns.iter().cloned() {
+                    plugin = plugin.with_native_fn(f);
+                }
                 app.add_plugin(plugin);
                 register_script_host_systems::<CandelaHost>(&mut app, multi_host);
                 reloaders.push(engine, reload_script::<CandelaHost>);
             }
-            // A trimmed-out host is remapped onto Rhai by `remap_trimmed_hosts`
-            // above, so its `ScriptEngine` variant can never reach here.
-            #[cfg(not(all(feature = "host-lua", feature = "host-candela")))]
-            _ => unreachable!("a trimmed script host must be remapped to Rhai before this match"),
+            // A trimmed-out host is remapped onto a compiled one by
+            // `remap_trimmed_hosts` above, so its `ScriptEngine` variant can
+            // never reach here.
+            #[cfg(not(all(
+                feature = "host-rhai",
+                feature = "host-lua",
+                feature = "host-candela"
+            )))]
+            _ => unreachable!("a trimmed script host is remapped before this match"),
         }
     }
+    #[cfg(feature = "host-rhai")]
     let _ = &rhai_extensions;
+    let _ = &native_fns;
     app.world.insert_resource(reloaders);
     use crate::spawn::SpawnIntoWorld;
     let root = ir.spawn_into(&mut app.world);
@@ -571,50 +598,54 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
     Ok((app, winit_opts))
 }
 
-/// Fold any group whose host this build trimmed out into the Rhai group.
+/// True when this build compiled the host for `engine`.
+fn host_compiled(engine: crate::config::ScriptEngine) -> bool {
+    match engine {
+        crate::config::ScriptEngine::Candela => cfg!(feature = "host-candela"),
+        crate::config::ScriptEngine::Lua => cfg!(feature = "host-lua"),
+        crate::config::ScriptEngine::Rhai => cfg!(feature = "host-rhai"),
+    }
+}
+
+/// Fold any group whose host this build trimmed out into the first host the
+/// build does carry, in [`crate::config::ScriptEngine::ALL`] order.
 ///
-/// A static `--bundle` compiles only the hosts the app needs (Rhai is always
-/// present; `host-lua` / `host-candela` add the others). `lumenc` derives that
-/// feature list from the same app directory, so a missing host only happens on
-/// a hand-edited misconfig; folding the source onto Rhai keeps the app running
-/// with a warning instead of dropping its script, and makes the trimmed match
-/// arms in [`build_app`] provably unreachable.
-fn remap_trimmed_hosts(grouped: GroupedScripts) -> GroupedScripts {
-    #[cfg(all(feature = "host-lua", feature = "host-candela"))]
-    {
-        grouped
-    }
-    #[cfg(not(all(feature = "host-lua", feature = "host-candela")))]
-    {
-        let mut kept: GroupedScripts = Vec::new();
-        for (engine, source) in grouped {
-            let available = match engine {
-                crate::config::ScriptEngine::Rhai => true,
-                crate::config::ScriptEngine::Lua => cfg!(feature = "host-lua"),
-                crate::config::ScriptEngine::Candela => cfg!(feature = "host-candela"),
+/// A static `--bundle` compiles only the hosts the app needs, and `lumenc`
+/// derives that feature list from the same app directory, so a missing host
+/// only happens on a hand-edited misconfig. Folding the source onto a compiled
+/// host keeps the app running with a warning instead of dropping its script,
+/// and makes the trimmed match arms in [`build_app`] provably unreachable. A
+/// build with no host at all cannot run a script and says so
+/// ([`RunError::NoScriptHostAvailable`]); an app with no script is unaffected.
+pub(crate) fn remap_trimmed_hosts(grouped: GroupedScripts) -> Result<GroupedScripts, RunError> {
+    let mut kept: GroupedScripts = Vec::new();
+    for (engine, source) in grouped {
+        let engine = if host_compiled(engine) {
+            engine
+        } else {
+            let Some(fallback) = crate::config::ScriptEngine::ALL
+                .into_iter()
+                .find(|e| host_compiled(*e))
+            else {
+                return Err(RunError::NoScriptHostAvailable);
             };
-            if !available {
-                tracing::warn!(
-                    "this build was compiled without the {} host; running its \
-                     script under the rhai host instead",
-                    engine.name()
-                );
+            tracing::warn!(
+                "this build was compiled without the {} host; running its \
+                 script under the {} host instead",
+                engine.name(),
+                fallback.name()
+            );
+            fallback
+        };
+        match kept.iter_mut().find(|(e, _)| *e == engine) {
+            Some((_, acc)) => {
+                acc.push('\n');
+                acc.push_str(&source);
             }
-            let engine = if available {
-                engine
-            } else {
-                crate::config::ScriptEngine::Rhai
-            };
-            match kept.iter_mut().find(|(e, _)| *e == engine) {
-                Some((_, acc)) => {
-                    acc.push('\n');
-                    acc.push_str(&source);
-                }
-                None => kept.push((engine, source)),
-            }
+            None => kept.push((engine, source)),
         }
-        kept
     }
+    Ok(kept)
 }
 
 /// Lowercase + dash-only fallback `app-id` when `lumen.toml [app] id`

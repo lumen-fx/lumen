@@ -249,9 +249,11 @@ class App:
     # -- native callbacks --------------------------------------------
 
     def expose(self, name: str, arg_count: int | None = None):
-        """Decorator: expose ``func`` to Rhai as the native builtin
-        ``name``, callable from any ``main.lmn``/``main.rhai`` script
-        in this app as ``name(arg0, arg1, ...)``.
+        """Decorator: expose ``func`` to the app's script as the native
+        builtin ``name``. A Rhai or Lua script calls it as
+        ``name(arg0, arg1, ...)``; a candela script declares
+        ``host "native" { any name(...); }`` and calls
+        ``native::name(arg0, arg1, ...)``.
 
         ``arg_count`` defaults to ``None``, which infers the arity from
         ``func``'s own signature (its number of positional parameters) -
@@ -263,15 +265,16 @@ class App:
         ``func`` receives ``arg_count`` plain Python positional
         arguments (already converted from ``LumenValue`` -- ``None``/
         ``bool``/``int``/``float``/``str``/``list``/``dict``) and may
-        return any of those types (``None`` becomes Rhai's unit type).
+        return any of those types (``None`` becomes the script's unit
+        value).
         An exception raised inside ``func`` is caught, mapped to a nil
         return value so it can't unwind across the FFI boundary as a
         Rust panic, and re-raised into ``sys.excepthook`` via
         ``threading.excepthook``-style reporting is NOT done for you --
         wrap risky code in your own try/except if you need finer
         control; an uncaught exception here is printed via
-        ``traceback.print_exc()`` and swallowed so Rhai always gets a
-        value back.
+        ``traceback.print_exc()`` and swallowed so the script always
+        gets a value back.
 
         Fires on the Lumen script thread -- see the module docstring's
         threading note. Do not block.

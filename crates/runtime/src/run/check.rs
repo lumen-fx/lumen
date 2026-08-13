@@ -126,9 +126,11 @@ pub fn check_app(dir: &Path, parser: &dyn SourceParser) -> Result<CheckReport, R
     // grouping `build_app` runs: the Rhai checker false-fails on the other
     // languages' syntax (a candela `host "lumen" { ... }` block is not valid
     // Rhai), so a mixed app checked as one blob could never pass. A host the
-    // current build trimmed out falls back to the always-present Rhai host.
+    // current build trimmed out falls back to a compiled one, the same way the
+    // run path folds it (`remap_trimmed_hosts`).
     let uri = entry_path.display().to_string();
-    for (engine, source) in grouped_script_sources(&ir, dir, &cfg)? {
+    let grouped = super::app_build::remap_trimmed_hosts(grouped_script_sources(&ir, dir, &cfg)?)?;
+    for (engine, source) in grouped {
         match engine {
             #[cfg(feature = "host-candela")]
             crate::config::ScriptEngine::Candela => {
@@ -142,11 +144,18 @@ pub fn check_app(dir: &Path, parser: &dyn SourceParser) -> Result<CheckReport, R
                     .compile_check(&source, &uri)
                     .map_err(|e| RunError::Script(e.to_string()))?;
             }
-            _ => {
+            #[cfg(feature = "host-rhai")]
+            crate::config::ScriptEngine::Rhai => {
                 RhaiHost::new()
                     .compile_check(&source)
                     .map_err(|e| RunError::Script(e.to_string()))?;
             }
+            #[cfg(not(all(
+                feature = "host-rhai",
+                feature = "host-lua",
+                feature = "host-candela"
+            )))]
+            _ => unreachable!("a trimmed script host is remapped before this match"),
         }
     }
     Ok(CheckReport {

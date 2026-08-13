@@ -41,6 +41,7 @@ use lumen_script::ScriptHost;
 use lumen_script_candela::{CandelaHost, ScriptCandelaPlugin};
 #[cfg(feature = "host-lua")]
 use lumen_script_lua::{LuaHost, ScriptLuaPlugin};
+#[cfg(feature = "host-rhai")]
 use lumen_script_rhai::{RhaiHost, ScriptRhaiPlugin};
 // The host-generic script systems live in `lumen-script` and are
 // re-exported by both host crates. Importing them from the runtime crate
@@ -49,7 +50,7 @@ use lumen_script_rhai::{RhaiHost, ScriptRhaiPlugin};
 // `ScriptSet` is how the host-neutral half orders against them: with several
 // hosts installed, an edge naming one host's system leaves the others outside
 // the one-tick dirty window.
-use lumen_script::{ScriptCommandEvent, ScriptSet, fire_on_ready, reload_script};
+use lumen_script::{NativeExternFn, ScriptCommandEvent, ScriptSet, fire_on_ready, reload_script};
 use lumen_text_cosmic::CosmicShaper;
 use lumen_window_winit::{WinitOptions, run};
 use std::path::{Path, PathBuf};
@@ -63,6 +64,7 @@ use lumen_ir::layout_ir::{Attributes, Element};
 
 /// A single `rhai::Engine` extension callback; factored into an alias to
 /// keep clippy's `type_complexity` lint quiet.
+#[cfg(feature = "host-rhai")]
 type RhaiExtension = Box<dyn FnOnce(&mut rhai::Engine) + Send + 'static>;
 
 /// An embedder callback invoked on the fully-built [`App`] right before
@@ -101,7 +103,20 @@ pub struct RunOptions {
     /// only UI primitives; OS-level integrations live in the embedding
     /// binary (see `apps/sysmon` for a worked example using
     /// `sysinfo`).
+    ///
+    /// Rhai-typed, so these bind to the Rhai host only. Use
+    /// [`Self::native_fns`] for a function every host can call.
+    #[cfg(feature = "host-rhai")]
     pub rhai_extensions: Vec<RhaiExtension>,
+    /// Native functions exposed to the app's script in host-neutral terms.
+    /// Each one is registered into every host the app runs, marshalling
+    /// arguments and results through `lumen_script::ScriptValue`. This is what
+    /// the C-ABI's `lumen_app_expose` builds.
+    ///
+    /// candela resolves host calls through a declared block, so a candela
+    /// script reaches these as `native::<name>(...)` after declaring
+    /// `host "native" { any <name>(...); }`; Rhai and Lua see plain globals.
+    pub native_fns: Vec<NativeExternFn>,
     /// In-memory markup source. When `Some`, the runtime parses this
     /// string instead of reading `<dir>/main.lmn` from disk, and hot
     /// reload is disabled (there is no file to watch). Set by the Rust
@@ -170,7 +185,9 @@ impl RunOptions {
             // app or its active skin defines one.
             clear: lumen_window_winit::DEFAULT_CLEAR,
             hot_reload: true,
+            #[cfg(feature = "host-rhai")]
             rhai_extensions: Vec::new(),
+            native_fns: Vec::new(),
             markup: None,
             css: None,
             app_hooks: Vec::new(),
@@ -205,11 +222,19 @@ impl RunOptions {
 
     /// Builder: install a callback that registers native Rhai
     /// builtins from the embedding binary. See [`RunOptions`].
+    #[cfg(feature = "host-rhai")]
     pub fn with_rhai_extension<F>(mut self, f: F) -> Self
     where
         F: FnOnce(&mut rhai::Engine) + Send + 'static,
     {
         self.rhai_extensions.push(Box::new(f));
+        self
+    }
+
+    /// Builder: expose a native function to the app's script in host-neutral
+    /// terms. See [`Self::native_fns`].
+    pub fn with_native_fn(mut self, f: NativeExternFn) -> Self {
+        self.native_fns.push(f);
         self
     }
 
@@ -286,6 +311,7 @@ fn install_assets(app: &mut App, lpak: Option<&Path>, dir: &Path) -> Result<(), 
 ///     Ok(())
 /// }
 /// ```
+#[cfg(feature = "host-rhai")]
 pub fn run_with<F>(dir: impl Into<PathBuf>, extend: F) -> Result<(), RunError>
 where
     F: FnOnce(&mut rhai::Engine) + Send + 'static,
@@ -345,6 +371,14 @@ pub enum RunError {
     /// The `.lpak` archive named by [`RunOptions::assets`] could not be read.
     #[error("read asset bundle {0}: {1}")]
     Assets(PathBuf, String),
+    /// The app ships a script but this build compiled no script host at all
+    /// (`--no-default-features` with none of `host-rhai` / `host-lua` /
+    /// `host-candela`). Rebuild with the host the app's language needs.
+    #[error(
+        "this runtime was built with no script host; rebuild with one of \
+         --features host-rhai / host-lua / host-candela"
+    )]
+    NoScriptHostAvailable,
 }
 
 /// Read `<dir>/main.lmn` + optional `<dir>/main.css`, build a default

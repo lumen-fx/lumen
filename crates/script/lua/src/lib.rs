@@ -40,7 +40,8 @@ use std::sync::{Arc, RwLock};
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::*;
 use lumen_script::{
-    CallOutcome, CommandFn, ScriptCommand, ScriptContext, ScriptError, ScriptHost, ScriptValue,
+    CallOutcome, CommandFn, NativeExternFn, ScriptCommand, ScriptContext, ScriptError, ScriptHost,
+    ScriptValue,
 };
 use mlua::{
     Function, Lua, MetaMethod, Table, UserData, UserDataMethods, Value as LuaValue, Variadic,
@@ -2735,6 +2736,35 @@ impl ScriptLuaPlugin {
     {
         self.extensions.push(Box::new(f));
         self
+    }
+
+    /// Register a host-neutral [`NativeExternFn`] as a global Lua function.
+    ///
+    /// The same [`NativeExternFn`] registers into the Rhai and candela hosts
+    /// through their own `with_native_fn`, so an embedder describes a native
+    /// function once and every host the app runs can call it. Arguments and
+    /// the return value marshal through [`ScriptValue`]. The Lua binding is
+    /// variadic: the declared arity is not enforced, and a call passing too
+    /// few arguments reaches the function with a shorter slice.
+    #[must_use]
+    pub fn with_native_fn(self, f: NativeExternFn) -> Self {
+        self.with_extension(move |lua: &mut Lua| {
+            let NativeExternFn {
+                name,
+                arity: _,
+                call,
+            } = f;
+            let registered = lua
+                .create_function(move |lua, args: Variadic<LuaValue>| {
+                    let vals: Vec<ScriptValue> =
+                        args.iter().map(lua_value_to_script_value).collect();
+                    script_value_to_lua(lua, &call(&vals))
+                })
+                .and_then(|func| lua.globals().set(name.as_str(), func));
+            if let Err(e) = registered {
+                tracing::warn!("lua: registering native fn `{name}` failed: {e}");
+            }
+        })
     }
 }
 

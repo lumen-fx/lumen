@@ -89,6 +89,34 @@ fn dispatch(cmd: &str, args: Vec<String>) -> ExitCode {
     }
 }
 
+/// Usage block for `lumenc run --help` on the static path.
+#[cfg(feature = "dev-run")]
+const RUN_USAGE: &str = "lumenc run - run an app
+
+USAGE:
+    lumenc run <dir> [--profile chrome|tracy|stderr]
+                     [--headless [--size WxH] [--dpr N] [--ticks N]]
+                     [--artifact <file>] [--assets <file.lpak>]
+                     [--no-hooks]
+
+    --profile MODE    Write a trace (chrome), connect to tracy, or dump
+                      per-system spans to stderr. Needs a lumenc built
+                      with --features profiling.
+    --headless        Automation/CI mode: the full pipeline runs with no
+                      window. Bounded, so the MCP server and the
+                      hot-reload watcher stay off unless lumen.toml sets
+                      [mcp] simulate = true or [runtime] mcp = true.
+    --size WxH        Logical viewport (default: lumen.toml [window] size,
+                      else 960x720).
+    --dpr N           Scale the offscreen target; screenshot pixels are
+                      logical x dpr (default 1.0).
+    --ticks N         Run exactly N ticks, then exit.
+    --artifact FILE   Run a precompiled artifact (lumenc build) instead of
+                      parsing source.
+    --assets FILE     Read the app's assets from a .lpak archive instead of
+                      the loose files in <dir>.
+    --no-hooks        Skip the app's prebuild and prerun [[hooks]].";
+
 /// `lumenc run` on the static path (`dev-run`): parse in-process and drive the
 /// statically-linked runtime, with full state-preserving hot-reload.
 #[cfg(feature = "dev-run")]
@@ -105,6 +133,10 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
     let mut args = args.peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
+            h if lumenc::is_help_flag(h) => {
+                println!("{RUN_USAGE}");
+                return ExitCode::SUCCESS;
+            }
             "--no-hooks" => no_hooks = true,
             "--profile" => {
                 let Some(v) = args.next() else {
@@ -329,6 +361,19 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
 /// to pick up edits. See `docs/design/link-not-embed.md`.
 #[cfg(all(feature = "dlopen-run", not(feature = "dev-run")))]
 fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
+    /// Usage block for `lumenc run --help` on the thin launcher path.
+    const RUN_USAGE: &str = "lumenc run - run an app
+
+USAGE:
+    lumenc run <dir> [--headless [--ticks N]] [--no-hooks]
+
+    --headless        Automation/CI mode: run with no window.
+    --ticks N         Run exactly N ticks, then exit (headless).
+    --no-hooks        Skip the app's prebuild and prerun [[hooks]].
+
+This lumenc is the thin (dlopen) launcher: markup apps only, and no
+--profile / --size / --dpr / --assets. Rebuild with --features dev-run
+for those.";
     let mut dir: Option<String> = None;
     let mut headless = false;
     let mut ticks: Option<u32> = None;
@@ -336,6 +381,10 @@ fn cmd_run(args: impl Iterator<Item = String>) -> ExitCode {
     let mut args = args.peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
+            h if lumenc::is_help_flag(h) => {
+                println!("{RUN_USAGE}");
+                return ExitCode::SUCCESS;
+            }
             "--headless" => headless = true,
             "--no-hooks" => no_hooks = true,
             s if s == "--ticks" || s.starts_with("--ticks=") => {
@@ -569,10 +618,21 @@ fn parse_size(s: &str) -> Option<(u32, u32)> {
 /// With `--check`, exits non-zero when the file would change and leaves the bytes untouched.
 #[cfg(feature = "runtime-parse")]
 fn cmd_fmt(args: impl Iterator<Item = String>) -> ExitCode {
+    const FMT_USAGE: &str = "lumenc fmt - reformat a .lmn markup file
+
+USAGE:
+    lumenc fmt <file> [--check]
+
+    --check           Exit non-zero when <file> would change, and leave the
+                      bytes untouched (CI gate).";
     let mut path: Option<String> = None;
     let mut check_only = false;
     for a in args {
         match a.as_str() {
+            h if lumenc::is_help_flag(h) => {
+                println!("{FMT_USAGE}");
+                return ExitCode::SUCCESS;
+            }
             "--check" => check_only = true,
             other if !other.starts_with("--") => path = Some(other.to_string()),
             other => {
@@ -615,10 +675,22 @@ fn cmd_fmt(args: impl Iterator<Item = String>) -> ExitCode {
 
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 fn cmd_check(mut args: impl Iterator<Item = String>) -> ExitCode {
+    const CHECK_USAGE: &str = "lumenc check - parse an app without opening a window
+
+USAGE:
+    lumenc check <dir>
+
+Parses <dir>/main.lmn (+ optional main.css), applies the cascade, and
+compiles the app's scripts with the same engine settings `run` uses. Runs
+no [[hooks]] and opens no window. Exits non-zero on the first failure.";
     let Some(dir) = args.next() else {
         eprintln!("lumenc check: missing <dir>\n\n{USAGE}");
         return ExitCode::from(2);
     };
+    if lumenc::is_help_flag(&dir) {
+        println!("{CHECK_USAGE}");
+        return ExitCode::SUCCESS;
+    }
     match lumenc::check_app(&PathBuf::from(&dir)) {
         Ok(report) => {
             println!(
@@ -640,11 +712,27 @@ fn cmd_check(mut args: impl Iterator<Item = String>) -> ExitCode {
 /// templates (see [`lumenc::scaffold::TEMPLATES`]); with no template
 /// argument it scaffolds `blank`.
 fn cmd_new(args: impl Iterator<Item = String>) -> ExitCode {
+    const NEW_USAGE: &str = "lumenc new - scaffold an app directory
+
+USAGE:
+    lumenc new <name> [template]
+    lumenc new --list
+
+The template defaults to `blank`, an empty <root> plus lumen.toml. Every
+template ships main.lmn + lumen.toml and a README explaining the concepts
+it demonstrates.
+
+    --list, -l        Print the template gallery with one-line
+                      descriptions.";
     let mut args = args;
     let Some(name) = args.next() else {
         eprintln!("lumenc new: missing <name>\n\n{USAGE}");
         return ExitCode::from(2);
     };
+    if lumenc::is_help_flag(&name) {
+        println!("{NEW_USAGE}");
+        return ExitCode::SUCCESS;
+    }
     if name == "--list" || name == "-l" {
         println!("Available templates:\n");
         let width = lumenc::scaffold::TEMPLATES
@@ -829,10 +917,11 @@ USAGE:
                           Runs `lumen.toml`'s `[[hooks]]` `prebuild` entries
                           first; --no-hooks skips them.
     lumenc bundle <app_dir> <out.lpak> [--no-hooks]
-                          Pack `<app_dir>` (main.lmn / main.css / the
-                          script / images / fonts) into a single
-                          `.lpak` archive. Mirrors GTK's
-                          `glib-compile-resources` + Qt's `rcc`.
+                          Pack every regular file under `<app_dir>` into
+                          a single `.lpak` archive, skipping dotfiles and
+                          `target/` directories. Entries are keyed by
+                          their path relative to `<app_dir>`. Mirrors
+                          GTK's `glib-compile-resources` + Qt's `rcc`.
                           Runs `lumen.toml`'s `[[hooks]]` `prebuild` entries
                           first; --no-hooks skips them.
     lumenc run <dir> --assets <file.lpak>

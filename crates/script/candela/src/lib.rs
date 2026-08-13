@@ -97,8 +97,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::{App, Plugin};
 use lumen_script::{
-    CallOutcome, CommandFn, FileDialogKind, ScriptCommand, ScriptContext, ScriptError, ScriptHost,
-    ScriptValue,
+    CallOutcome, CommandFn, FileDialogKind, NativeExternFn, ScriptCommand, ScriptContext,
+    ScriptError, ScriptHost, ScriptValue,
 };
 
 pub use builtins::{BUILTINS, BuiltinFn, BuiltinParam};
@@ -123,6 +123,12 @@ pub use lumen_script::{
 /// reach a builtin as `lumen::<name>(...)` after declaring it in a
 /// `host "lumen" { ... }` block.
 pub const HOST_NAMESPACE: &str = "lumen";
+
+/// The candela host namespace embedder-exposed native functions are registered
+/// under. candela has no global function namespace, so a native function the
+/// C-ABI or the Rust SDK exposes lands here: the script declares
+/// `host "native" { any my_fn(...); }` and calls `native::my_fn(...)`.
+pub const NATIVE_NAMESPACE: &str = "native";
 
 /// Register a `lumen`-namespace builtin whose whole body is a single
 /// `sink.push(<command>)`. Keeps each builtin's argument list AND its
@@ -2491,6 +2497,48 @@ impl ScriptCandelaPlugin {
     {
         self.extensions.push(Box::new(f));
         self
+    }
+
+    /// Register a host-neutral [`NativeExternFn`] under the
+    /// [`NATIVE_NAMESPACE`] host namespace.
+    ///
+    /// The same [`NativeExternFn`] registers into the Rhai and Lua hosts
+    /// through their own `with_native_fn`, so an embedder describes a native
+    /// function once and every host the app runs can call it. Arguments and
+    /// the return value marshal through [`ScriptValue`].
+    ///
+    /// candela resolves every host call through a declared block, so a script
+    /// that calls one of these declares it first:
+    ///
+    /// ```text
+    /// host "native" {
+    ///     any my_fn(...);
+    /// }
+    ///
+    /// fn on_start() {
+    ///     native::my_fn(1, 2);
+    /// }
+    /// ```
+    ///
+    /// The registration is variadic, which is why the declaration is
+    /// `any my_fn(...)`; the declared arity is not enforced.
+    #[must_use]
+    pub fn with_native_fn(self, f: NativeExternFn) -> Self {
+        self.with_extension(move |engine: &mut candela::Engine| {
+            let NativeExternFn {
+                name,
+                arity: _,
+                call,
+            } = f;
+            engine.register_host_fn_variadic(
+                NATIVE_NAMESPACE,
+                &name,
+                move |args: &[candela::Value]| {
+                    let vals: Vec<ScriptValue> = args.iter().map(candela_value_to_script).collect();
+                    script_value_to_candela(&call(&vals))
+                },
+            );
+        })
     }
 }
 

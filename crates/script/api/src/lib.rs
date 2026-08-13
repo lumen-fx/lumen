@@ -676,6 +676,61 @@ impl ScriptValue {
     }
 }
 
+/// The callable half of a [`NativeExternFn`]: shared so one description can
+/// be registered into several hosts, `Send + Sync` so it can run on any of
+/// their threads.
+pub type NativeFnBody = std::sync::Arc<dyn Fn(&[ScriptValue]) -> ScriptValue + Send + Sync>;
+
+/// One native function an embedder exposes to the app's script, in terms
+/// every host understands.
+///
+/// [`ScriptValue`] is the common currency across the host boundary, so a
+/// function described this way binds into whichever hosts the app runs:
+/// each host crate has a `with_native_fn` builder that marshals its own
+/// value type to and from [`ScriptValue`] and registers the call under
+/// `name`. The C-ABI's `lumen_app_expose` and the Rust SDK build these.
+///
+/// `arity` is the declared argument count. Hosts that dispatch on arity
+/// (Rhai) register exactly that many parameters; hosts that take variadic
+/// arguments (Lua, candela) pass through whatever the script supplies, so a
+/// call with the wrong count reaches the function rather than failing to
+/// resolve.
+///
+/// `call` runs on the script host's thread and must be callable from any of
+/// them, hence `Send + Sync`.
+#[derive(Clone)]
+pub struct NativeExternFn {
+    /// Name the script calls the function by.
+    pub name: String,
+    /// Declared argument count.
+    pub arity: usize,
+    /// The function body.
+    pub call: NativeFnBody,
+}
+
+impl NativeExternFn {
+    /// Build one from a name, an arity, and a closure.
+    pub fn new<F>(name: impl Into<String>, arity: usize, call: F) -> Self
+    where
+        F: Fn(&[ScriptValue]) -> ScriptValue + Send + Sync + 'static,
+    {
+        Self {
+            name: name.into(),
+            arity,
+            call: std::sync::Arc::new(call),
+        }
+    }
+}
+
+impl std::fmt::Debug for NativeExternFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeExternFn")
+            .field("name", &self.name)
+            .field("arity", &self.arity)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Backend-agnostic facade exposing the reactive property store to
 /// script hosts. Mirrors QML's `QQmlContext::setContextProperty` /
 /// `contextProperty()` shape: scripts read + write through a thin layer

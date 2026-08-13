@@ -662,9 +662,7 @@ mod tests {
         ));
         assert!(audio_markers_present("<audio src=\"track.OGG\" />"));
         assert!(audio_markers_present(".mp3"));
-        assert!(!audio_markers_present(
-            "<button on_click=\"inc\">+</button>"
-        ));
+        assert!(!audio_markers_present("<button id=\"inc\">+</button>"));
         assert!(!audio_markers_present(""));
     }
 
@@ -684,7 +682,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let bare = RunOptions::new(&dir)
-            .with_markup("<root><button on_click=\"inc\">+</button></root>".to_string());
+            .with_markup("<root><button id=\"inc\">+</button></root>".to_string());
         let cfg = crate::config::LumenToml::default();
         let usage = SubsystemUsage::detect(&bare, &dir, &cfg, false);
         assert!(!usage.audio, "bare UI app must skip audio init");

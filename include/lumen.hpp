@@ -8,7 +8,7 @@
 //     buffer lifetime (Value owns its strings / arrays / maps; the
 //     temporary LumenValue it materialises borrows from itself for
 //     the duration of one C ABI call)
-//   - Direct signal mutators that don't touch Rhai
+//   - Direct signal mutators that don't touch the script
 //
 // Threading: lumen::Signal::* helpers are thread-safe - the
 // underlying lumen_signal_set_* calls go through a thread-safe
@@ -242,7 +242,7 @@ public:
         return *this;
     }
 
-    // Expose a callable as a Rhai builtin. The callback may capture
+    // Expose a callable to the app's script. The callback may capture
     // freely; we move it onto the heap so the trampoline can find it
     // by `user_data` pointer for the lifetime of this App.
     App& expose(std::string_view name, uint32_t arg_count, Callback cb) {
@@ -322,7 +322,7 @@ private:
 };
 
 // =====================================================================
-// Signal - thread-safe direct mutation, no Rhai needed.
+// Signal - thread-safe direct mutation, no script needed.
 // =====================================================================
 
 namespace Signal {

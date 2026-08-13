@@ -233,10 +233,14 @@ typedef int (*LumenCloseFn)(void* user_data);
  */
 
 /*
- * Expose a native callback to Rhai under `name`. `arg_count` is the
- * arity (0..=8 sensible). `user_data` is stored by value; the
+ * Expose a native callback to the app's script under `name`. `arg_count`
+ * is the arity (0..=8 sensible). `user_data` is stored by value; the
  * embedder owns it and must keep it valid until `lumen_app_run`
  * returns.
+ *
+ * Every script host the app runs gets the registration. Rhai and Lua
+ * scripts call it as a plain global; a candela script declares
+ * `host "native" { any <name>(...); }` and calls `native::<name>(...)`.
  */
 LumenStatus lumen_app_expose(LumenApp* app,
                              const char* name,

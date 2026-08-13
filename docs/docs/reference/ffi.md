@@ -121,8 +121,34 @@ typedef int  (*LumenCloseFn)(void *user_data);
 typedef void (*LumenEventFn)(const LumenEvent *event, void *user_data);
 ```
 
-`lumen_app_expose` registers into the Rhai script engine, so exposed functions
-are callable from an app whose `[script] engine` is `rhai`.
+`lumen_app_expose` registers into every script host the app runs, so an exposed
+function is callable whatever language the app is written in. Arguments and
+return values cross as `LumenValue`.
+
+Rhai and Lua scripts call an exposed `now_ms` as a plain global, `now_ms()`.
+Rhai dispatches on the declared `arg_count`; Lua binds the call variadically, so
+the count is not enforced there.
+
+candela resolves every host call through a declared block, so a candela script
+declares what it calls, once, and reaches it under the `native` namespace:
+
+```rust
+host "native" {
+    any now_ms(...);
+}
+
+fn on_start() {
+    let t = native::now_ms();
+}
+```
+
+Declare each one variadic with the `any` return type, and declare only what the
+embedder exposes: candela checks each declaration against a registered
+implementation at compile time. See
+[candela scripting](scripting-candela.md#native-functions-from-the-embedder).
+
+Array and map arguments reach the callback as `LUMEN_NIL`; scalars and strings
+cross in full. A returned value carries every kind, arrays and maps included.
 
 ## Values
 
