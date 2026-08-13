@@ -207,6 +207,12 @@ fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileErr
         }
     }
     ir.combined_stylesheet = Some(combined);
+    // Parse-time lint findings, same terms as `load_ir`: advisory, on
+    // stderr, never fatal. Both compile paths print them so an app
+    // compiled through the launcher reports what `lumenc check` does.
+    for f in &ir.lint_findings {
+        eprintln!("{}", f.render(&html_path));
+    }
 
     // Bake inline + external `<script>` into one string; strip both from the IR
     // so the parser-free runtime reconstructs the exact script-host input.

@@ -83,10 +83,11 @@ pub fn compile_app(
 /// Parse `<dir>/main.lmn` + optional `<dir>/main.css` and validate them
 /// without spawning a window. Used by CI / pre-commit hooks.
 ///
-/// Parse-time `LayoutIR.lint_findings` (info-level stylistic nudges
-/// like the bare-`{name}` interpolation deprecation) are printed to
-/// stderr but never fail the build - `check` validates AST shape, not
-/// style. Run `lumenc lint --signals <dir>` for the full lint stream.
+/// Parse-time `LayoutIR.lint_findings` (an unknown attribute, a
+/// boolean attribute with an off-list value, bare `{name}`
+/// interpolation) are printed to stderr but never fail the build -
+/// `check` validates AST shape, not style. Run
+/// `lumenc lint --signals <dir>` for the full lint stream.
 ///
 /// Requires the source parser (`runtime-parse` feature).
 #[cfg(feature = "runtime-parse")]
@@ -112,22 +113,8 @@ pub fn check_app(dir: &Path, parser: &dyn SourceParser) -> Result<CheckReport, R
             ..SourceOverrides::default()
         },
     )?;
-    // Surface parse-time lint findings on stderr at info level. We
-    // keep this advisory - `check` validates structure, the dedicated
-    // `lumenc lint --signals` command is the gate.
-    for f in &ir.lint_findings {
-        eprintln!(
-            "info  {file}:{line}:{col}  [{kind}] {msg}",
-            file = entry_path.display(),
-            line = f.line,
-            col = f.col,
-            kind = <&'static str>::from(f.kind),
-            msg = f.message,
-        );
-        if let Some(s) = &f.suggest {
-            eprintln!("       hint: replace with `{s}`");
-        }
-    }
+    // Parse-time lint findings already went to stderr from `load_ir`,
+    // which every compile path shares.
     let has_script = !ir.script_source.trim().is_empty() || !ir.external_scripts.is_empty();
     // RC6: compile the app's scripts with the same engine settings
     // `lumenc run` uses. Compile-only - the top level is never evaluated, so

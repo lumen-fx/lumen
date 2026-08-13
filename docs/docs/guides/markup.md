@@ -29,7 +29,9 @@ The rules are strict and small:
   `<label>Hello</label>` and `<label text="Hello" />` are the same thing.
 
 An unknown tag is an error, so a typo fails at `lumenc check` instead of
-silently rendering nothing. An unknown attribute is ignored.
+silently rendering nothing. An unknown attribute is dropped with a warning
+naming the tag and the attribute, so forward-compatible markup still parses
+and a typo is still reported.
 
 Nesting is capped at 32 levels. A tree that deep is almost always an accident,
 and the cap turns it into an error message rather than a crash.

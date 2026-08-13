@@ -140,9 +140,9 @@ receives an event it can inspect and control, with `target`, `current_target`,
 
 The bindable types are `click`, `dblclick`, `pointerdown`, `pointerup`,
 `pointermove`, `pointerenter`, `pointerleave`, `wheel`, `keydown`, `keyup`,
-`input`, `change`, `focus`, `blur`, `submit`, and `scroll`. Of those, `input`,
-`change`, and `submit` fire when a text field commits rather than on every
-keystroke. `click` is the one type with a default action to prevent: it
+`input`, `change`, `focus`, `blur`, `submit`, and `scroll`. Of those, `input`
+fires on every edit to a text field, while `change` and `submit` wait for the
+field to commit. `click` is the one type with a default action to prevent: it
 suppresses the navigation an `<a href>` would otherwise perform.
 
 ## Reading and writing signals

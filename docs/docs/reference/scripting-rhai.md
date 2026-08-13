@@ -352,9 +352,11 @@ Dispatch runs capture (root down to the target), then the target, then bubble
 (target up to the root). `focus`, `blur`, `pointerenter`, `pointerleave`, and
 `scroll` do not bubble.
 
-`input`, `change`, and `submit` all come from the text-commit signal, so they
-fire on commit rather than per keystroke. Only `click` has a default action
-(link navigation); `prevent_default` on a click skips it.
+`input` fires per keystroke: every edit that changes the text raises one,
+carrying the buffer as it stands after that edit. A caret move raises nothing.
+`change` and `submit` come from the commit signal instead, so they fire when the
+field is committed with Enter. Only `click` has a default action (link
+navigation); `prevent_default` on a click skips it.
 
 ## window, document, history
 

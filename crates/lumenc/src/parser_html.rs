@@ -2636,9 +2636,41 @@ fn apply_attribute(
             }
             attrs.translatable = Some(trimmed.to_string());
         }
-        // Quietly ignore unknown attributes for now; future strict mode can
-        // raise them through ParseError.
-        _ => {}
+        // Window / document metadata read straight off `<root>` in
+        // `parse_html` before this walk: `skin` selects the user-agent
+        // stylesheet, `frameless` drops the OS title bar. Neither is a
+        // layout attribute, so neither has a field in `Attributes`;
+        // they are listed here so the rule below does not call them
+        // unknown.
+        "skin" | "frameless" => {}
+        // An attribute the vocabulary has no meaning for is dropped, and
+        // dropping it silently is how `tect="hi"` or `on_click="inc"`
+        // survives review: the markup parses, the app runs, and nothing
+        // the author wrote takes effect. Warn and carry on; a future
+        // strict mode can promote this to a ParseError.
+        //
+        // Custom widget tags are exempt: `#[derive(Widget)]` reads its
+        // own `#[widget(prop)]` fields out of the raw attribute bag, so
+        // the built-in table cannot say what is and is not meaningful
+        // there.
+        other => {
+            if KNOWN_TAGS.contains(&tag) {
+                let (line, col) = line_col_of(ctx.src, ctx.value_offset);
+                ctx.lint_findings.push(LintFinding {
+                    kind: LintKind::UnknownAttribute,
+                    severity: LintSeverity::Warn,
+                    message: format!(
+                        "`<{tag}>` has no `{other}` attribute; it is ignored. Check the spelling \
+                         against the tag reference."
+                    ),
+                    line,
+                    col,
+                    // Guessing which attribute was meant needs an edit-distance
+                    // table the parser does not carry.
+                    suggest: None,
+                });
+            }
+        }
     }
     Ok(())
 }
