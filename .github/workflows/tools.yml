@@ -94,8 +94,9 @@ jobs:
             dir="$2"
             pattern="$3"
             answer=false
-            # Two of these directories arrive with an open branch. Until one
-            # lands, its job reports skipped instead of red.
+            # A directory the branch does not have leaves its job skipped
+            # rather than red, so a job can be written before or after the
+            # thing it builds.
             if [ -d "$dir" ] && printf '%s\n' "$changed" | grep -Eq "$pattern"; then
               answer=true
             fi
@@ -211,9 +212,6 @@ jobs:
       - name: The plugin is binary compatible with the recommended IDEs
         run: ./gradlew --no-daemon verifyPlugin
 
-  # tools/tree-sitter-lumen and tools/zed-lumen arrive with the editor-coverage
-  # branch. Both jobs skip until that directory exists, and start working the
-  # moment it does.
   tree-sitter:
     name: tree-sitter grammar
     needs: changes
