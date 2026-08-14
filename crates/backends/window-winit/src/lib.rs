@@ -28,11 +28,15 @@ use lumen_a11y_accesskit::accesskit_winit::{
 use lumen_a11y_accesskit::{
     A11yPlugin, entity_click_point, node_to_entity, take_pending_tree_update,
 };
-use lumen_core::input::{CloseRequest, PendingFileDrops, WindowFocused, WindowOccluded};
+use lumen_core::input::{
+    CloseRequest, FocusVisible, PendingFileDrops, WindowFocused, WindowOccluded,
+};
 use lumen_core::prelude::*;
 use lumen_core::text_events::{ImeSurroundingRequested, ImeSurroundingResponse, TextEditRequest};
 use lumen_core::text_model::TextBuffer;
+use lumen_core::window::{MenuModel, WindowGeometry, WindowOptions};
 use lumen_render_wgpu::WalkContext;
+use lumen_text::TextShaper;
 use std::sync::Arc;
 use thiserror::Error;
 use vello::peniko::color::{AlphaColor, Srgb};
@@ -80,91 +84,6 @@ pub enum WinitError {
     /// winit event-loop run terminated with an error.
     #[error("event loop run error: {0}")]
     Run(String),
-}
-
-/// Fallback GPU clear color painted before the very first frame - what a
-/// user sees for an instant during window creation, and behind any pixel
-/// the app's tree doesn't cover. This is the single Rust-side source of
-/// truth for that fallback; `lumen_runtime::run::RunOptions::clear` (the
-/// value that actually reaches every real launch path - CLI, FFI, SDK)
-/// defaults to it too, so the two never drift apart the way they used to.
-///
-/// A resolved `--lumen-window-bg` custom property (from the app's own
-/// `:root` or its active skin) overrides this at build time - see
-/// `lumen_runtime::run::app_build::build_app`. This constant is only what
-/// remains when no layer defines that token, or a caller constructs
-/// [`WinitOptions`] directly without going through `RunOptions` at all.
-pub const DEFAULT_CLEAR: Color = Color::rgb(0.07, 0.07, 0.09);
-
-/// Options for [`run`].
-pub struct WinitOptions {
-    /// Initial window inner size in logical pixels.
-    pub size: (u32, u32),
-    /// Window title.
-    pub title: String,
-    /// Background clear color (writes [`Viewport::clear`] on init). See
-    /// [`DEFAULT_CLEAR`] for the fallback this defaults to.
-    pub clear: Color,
-    /// Optional text shaper. Without it, [`ExtractedText`] is silently skipped.
-    pub text_shaper: Option<Box<dyn lumen_text::TextShaper>>,
-    /// Maximize the window on launch. Useful for full-bleed app demos.
-    pub maximized: bool,
-    /// Suppress OS window chrome (title bar, borders, close/min/max
-    /// buttons). Custom title bars and per-platform window drag must
-    /// be implemented inside the app - see the `<title-bar drag>`
-    /// region (TODO S31).
-    pub frameless: bool,
-    /// Initial outer position in physical pixels. `None` lets the OS
-    /// place the window (the default). Wired up so callers can
-    /// restore the last-known window position from disk (P1.3).
-    pub start_position: Option<(i32, i32)>,
-    /// Callback invoked once per close with the current window
-    /// position, inner size (logical), and maximized flag. `None`
-    /// (the default) disables state persistence. Implementations
-    /// typically serialise to disk via
-    /// `lumenc::window_state::save`.
-    pub on_close_state: Option<Box<dyn FnOnce(WindowGeometry) + Send>>,
-    /// Optional native menu bar spec. Built by the embedder from
-    /// the markup `<menubar>` element. `None` = no menu bar.
-    pub menubar: Option<MenuBarOptions>,
-}
-
-/// Backwards-compatible re-export of the menu types - the real
-/// definitions live in [`lumen_os_menu`] after the W6.3 extract.
-/// `MenuBarOptions` is [`lumen_os_menu::MenuModel`].
-pub type MenuBarOptions = lumen_os_menu::MenuModel;
-/// `MenuOptions` is [`lumen_os_menu::Menu`].
-pub type MenuOptions = lumen_os_menu::Menu;
-/// `MenuEntryOptions` is [`lumen_os_menu::MenuEntry`].
-pub type MenuEntryOptions = lumen_os_menu::MenuEntry;
-
-/// Snapshot of geometry handed to [`WinitOptions::on_close_state`] so
-/// the embedder can persist `(position, size, maximized)` to disk.
-#[derive(Debug, Clone, Copy)]
-pub struct WindowGeometry {
-    /// Outer window position in physical pixels (winit
-    /// `Window::outer_position`).
-    pub position: Option<(i32, i32)>,
-    /// Inner window size in logical pixels.
-    pub size: (u32, u32),
-    /// Last maximized state.
-    pub maximized: bool,
-}
-
-impl Default for WinitOptions {
-    fn default() -> Self {
-        Self {
-            size: (800, 600),
-            title: "Lumen".into(),
-            clear: DEFAULT_CLEAR,
-            text_shaper: None,
-            maximized: false,
-            frameless: false,
-            start_position: None,
-            on_close_state: None,
-            menubar: None,
-        }
-    }
 }
 
 /// Minimum wall interval between two consecutive animation-driven paints
@@ -342,9 +261,7 @@ impl Plugin for WinitPlugin {
         // handler (it just never fires).
         app.register_command::<XdgColorSchemeUpdate, _>(|world, payload| {
             let dark = payload.dark;
-            world
-                .resource_mut::<lumen_core::components::StyleManager>()
-                .set_system_dark(dark);
+            world.resource_mut::<StyleManager>().set_system_dark(dark);
         });
     }
 }
@@ -450,7 +367,17 @@ impl From<A11yEvent> for UserEvent {
 }
 
 /// Run the app on a real winit window. Blocks until the window closes.
-pub fn run(mut app: App, opts: WinitOptions) -> Result<(), WinitError> {
+///
+/// `text_shaper` is the render-side shaper the composition point picked;
+/// without one, [`ExtractedText`] is silently skipped. It rides beside
+/// [`WindowOptions`] rather than inside it because the options are
+/// pure data every launch path resolves, while the shaper is a live
+/// backend object.
+pub fn run(
+    mut app: App,
+    opts: WindowOptions,
+    text_shaper: Option<Box<dyn TextShaper>>,
+) -> Result<(), WinitError> {
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
         .map_err(|e| WinitError::EventLoop(e.to_string()))?;
@@ -575,11 +502,12 @@ pub fn run(mut app: App, opts: WinitOptions) -> Result<(), WinitError> {
     let mut handler = WinitHandler {
         app,
         opts,
+        text_shaper,
         gpu: None,
         adapter: None,
         proxy,
         last_ime: ImeRequest::default(),
-        last_cursor: lumen_core::input::CursorShape::Default,
+        last_cursor: CursorShape::Default,
         close_committed: false,
         last_frame_at: None,
     };
@@ -600,7 +528,10 @@ pub fn run(mut app: App, opts: WinitOptions) -> Result<(), WinitError> {
 
 struct WinitHandler {
     app: App,
-    opts: WinitOptions,
+    opts: WindowOptions,
+    /// Render-side text shaper handed to [`run`]. `None` means text
+    /// draw commands are skipped.
+    text_shaper: Option<Box<dyn TextShaper>>,
     gpu: Option<GpuState>,
     /// AccessKit adapter; constructed once the winit `Window` exists.
     /// Receives every winit `WindowEvent` and posts back through
@@ -616,7 +547,7 @@ struct WinitHandler {
     /// Last cursor shape applied via `Window::set_cursor`. Compared
     /// against the main world's [`lumen_core::input::CursorRequest`]
     /// each frame so the OS call only happens on change.
-    last_cursor: lumen_core::input::CursorShape,
+    last_cursor: CursorShape,
     /// Set by [`WinitHandler::process_close_request`] once a close
     /// request survived the veto tick (no system wrote
     /// `CloseRequest { vetoed: true }`). Read by
@@ -690,7 +621,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
         if let Some(theme) = window.theme() {
             self.app
                 .world
-                .resource_mut::<lumen_core::components::StyleManager>()
+                .resource_mut::<StyleManager>()
                 .set_system_dark(matches!(theme, winit::window::Theme::Dark));
         }
         // Best-effort XDG `org.freedesktop.portal.Settings` listener
@@ -759,7 +690,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
         ));
         // W5.2: tell the a11y tree-build system what the human-readable
         // root label is so it can stop hard-coding "Lumen app". Sourced
-        // from the WinitOptions title; the app passes the same string
+        // from the window options title; the app passes the same string
         // it set on the OS window.
         self.app
             .world
@@ -901,7 +832,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 // source of `system_dark` updates.
                 self.app
                     .world
-                    .resource_mut::<lumen_core::components::StyleManager>()
+                    .resource_mut::<StyleManager>()
                     .set_system_dark(matches!(theme, winit::window::Theme::Dark));
                 if let Some(mut sch) = self.app.world.get_resource_mut::<RedrawScheduler>() {
                     sch.pending = true;
@@ -960,7 +891,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                         gpu,
                         &mut self.app,
                         &mut self.adapter,
-                        self.opts.text_shaper.as_deref_mut(),
+                        self.text_shaper.as_deref_mut(),
                         true,
                     );
                 }
@@ -1025,7 +956,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                     gpu,
                     &mut self.app,
                     &mut self.adapter,
-                    self.opts.text_shaper.as_deref_mut(),
+                    self.text_shaper.as_deref_mut(),
                     true,
                 );
                 if let Some(mut sch) = self.app.world.get_resource_mut::<RedrawScheduler>() {
@@ -1097,10 +1028,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 // (`lumen_primitives::update_cursor_request` writes the
                 // resource; absent when the embedder skipped the
                 // plugin). Change-gated so winit isn't hammered.
-                if let Some(req) = self
-                    .app
-                    .world
-                    .get_resource::<lumen_core::input::CursorRequest>()
+                if let Some(req) = self.app.world.get_resource::<CursorRequest>()
                     && req.0 != self.last_cursor
                 {
                     self.last_cursor = req.0;
@@ -1115,7 +1043,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                     gpu,
                     &mut self.app,
                     &mut self.adapter,
-                    self.opts.text_shaper.as_deref_mut(),
+                    self.text_shaper.as_deref_mut(),
                     false,
                 );
             }
@@ -1564,16 +1492,12 @@ fn handle_a11y_action(world: &mut World, req: &ActionRequest) {
                 && prev != entity
                 && world.get_entity(prev).is_ok()
             {
-                world
-                    .entity_mut(prev)
-                    .remove::<(Focused, lumen_core::input::FocusVisible)>();
+                world.entity_mut(prev).remove::<(Focused, FocusVisible)>();
             }
             if world.get_entity(entity).is_ok() {
                 // Assistive-tech focus counts as keyboard-like for the
                 // `:focus-visible` heuristic (matches browser behavior).
-                world
-                    .entity_mut(entity)
-                    .insert((Focused, lumen_core::input::FocusVisible));
+                world.entity_mut(entity).insert((Focused, FocusVisible));
                 world.resource_mut::<FocusTracker>().0 = Some(entity);
             }
         }
@@ -1582,9 +1506,7 @@ fn handle_a11y_action(world: &mut World, req: &ActionRequest) {
                 && prev == entity
                 && world.get_entity(prev).is_ok()
             {
-                world
-                    .entity_mut(prev)
-                    .remove::<(Focused, lumen_core::input::FocusVisible)>();
+                world.entity_mut(prev).remove::<(Focused, FocusVisible)>();
                 world.resource_mut::<FocusTracker>().0 = None;
             }
         }
@@ -1798,7 +1720,7 @@ impl GpuState {
         // `Rgba8UnormSrgb` view, so an sRGB surface format matches our
         // gamma assumption exactly. Prefer the two sRGB 8-bit variants;
         // fall back to whatever the platform offered first otherwise.
-        // HDR (`Rgba16Float`) opt-in is deferred to W1.8 / WinitOptions.
+        // HDR (`Rgba16Float`) opt-in is deferred to W1.8 / `WindowOptions`.
         let surface_format = [
             wgpu::TextureFormat::Bgra8UnormSrgb,
             wgpu::TextureFormat::Rgba8UnormSrgb,
@@ -1881,8 +1803,7 @@ fn map_modifiers(m: WinitModifiers) -> Modifiers {
 }
 
 /// Map Lumen's cursor-shape request onto winit's OS cursor icon set.
-fn map_cursor_shape(shape: lumen_core::input::CursorShape) -> winit::window::CursorIcon {
-    use lumen_core::input::CursorShape;
+fn map_cursor_shape(shape: CursorShape) -> winit::window::CursorIcon {
     use winit::window::CursorIcon;
     match shape {
         CursorShape::Default => CursorIcon::Default,
@@ -2511,7 +2432,7 @@ fn readback_intermediate(gpu: &GpuState, width: u32, height: u32) -> Result<Vec<
 /// The muda integration that previously lived here moved to
 /// `lumen-os-menu` per W6.3.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn attach_menubar_via_os_menu(window: &Arc<Window>, spec: &MenuBarOptions) {
+fn attach_menubar_via_os_menu(window: &Arc<Window>, spec: &MenuModel) {
     lumen_os_menu::attach_native_menubar(spec, Some(window.as_ref()));
 }
 
@@ -2519,7 +2440,7 @@ fn attach_menubar_via_os_menu(window: &Arc<Window>, spec: &MenuBarOptions) {
 /// takes a unit-typed `&()` instead of a `HasWindowHandle` reference
 /// when the muda dep is absent.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn attach_menubar_via_os_menu(_window: &Arc<Window>, spec: &MenuBarOptions) {
+fn attach_menubar_via_os_menu(_window: &Arc<Window>, spec: &MenuModel) {
     lumen_os_menu::attach_native_menubar(spec, None);
 }
 

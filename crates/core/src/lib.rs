@@ -25,6 +25,7 @@ pub mod text_events;
 pub mod text_model;
 pub mod tick;
 pub mod traits;
+pub mod window;
 pub mod window_state;
 
 /// Crate prelude re-exporting the common types. Glob-import with `use lumen_core::prelude::*;`.

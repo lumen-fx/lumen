@@ -8,13 +8,14 @@
 //! the other. It now resolves from the `--lumen-window-bg` custom property
 //! of the fully-combined stylesheet (Palette, then UA, then skin, then app)
 //! when any layer defines it, falling back to
-//! `lumen_window_winit::DEFAULT_CLEAR` otherwise. See
+//! `lumen_core::window::DEFAULT_CLEAR` otherwise. See
 //! `lumen_runtime::run::app_build::build_app`.
 
+use lumen_core::window::{DEFAULT_CLEAR, WindowOptions};
 use lumenc::RunOptions;
 use lumenc::run::build_headless_app;
 
-fn build(markup: &str, css: &str, lumen_toml: &str) -> lumen_window_winit::WinitOptions {
+fn build(markup: &str, css: &str, lumen_toml: &str) -> WindowOptions {
     // A per-call counter, not a timestamp: these tests run concurrently in
     // one process, and SystemTime's granularity (about a microsecond on
     // macOS) let two of them mint the same directory and read each other's
@@ -31,9 +32,9 @@ fn build(markup: &str, css: &str, lumen_toml: &str) -> lumen_window_winit::Winit
         .with_parser(lumenc::default_parser())
         .with_markup(markup.to_string())
         .with_css(css.to_string());
-    let (_app, winit) = build_headless_app(opts).expect("build_headless_app");
+    let (_app, window) = build_headless_app(opts).expect("build_headless_app");
     let _ = std::fs::remove_dir_all(&dir);
-    winit
+    window.options
 }
 
 fn approx(c: lumen_core::components::Color, want: (f32, f32, f32)) -> bool {
@@ -45,18 +46,14 @@ fn approx(c: lumen_core::components::Color, want: (f32, f32, f32)) -> bool {
 /// every real launch path (`RunOptions::new`) has always rendered.
 #[test]
 fn falls_back_to_the_constant_with_no_token_defined() {
-    let winit = build("<root/>", "", "[mcp]\nport = 0\n");
+    let window = build("<root/>", "", "[mcp]\nport = 0\n");
     assert!(
         approx(
-            winit.clear,
-            (
-                lumen_window_winit::DEFAULT_CLEAR.r,
-                lumen_window_winit::DEFAULT_CLEAR.g,
-                lumen_window_winit::DEFAULT_CLEAR.b,
-            )
+            window.clear,
+            (DEFAULT_CLEAR.r, DEFAULT_CLEAR.g, DEFAULT_CLEAR.b,)
         ),
         "expected the DEFAULT_CLEAR fallback, got {:?}",
-        winit.clear
+        window.clear
     );
 }
 
@@ -65,10 +62,10 @@ fn falls_back_to_the_constant_with_no_token_defined() {
 /// is genuinely CSS-reachable, not just wired to the Rust constant.
 #[test]
 fn resolves_from_an_active_skin() {
-    let winit = build("<root/>", "", "[mcp]\nport = 0\n[skin]\nname = \"linux\"\n");
+    let window = build("<root/>", "", "[mcp]\nport = 0\n[skin]\nname = \"linux\"\n");
     assert!(
         approx(
-            winit.clear,
+            window.clear,
             (
                 0xfa as f32 / 255.0,
                 0xfa as f32 / 255.0,
@@ -76,7 +73,7 @@ fn resolves_from_an_active_skin() {
             )
         ),
         "expected linux.css's light --lumen-window-bg (#fafafb), got {:?}",
-        winit.clear
+        window.clear
     );
 }
 
@@ -84,14 +81,14 @@ fn resolves_from_an_active_skin() {
 /// matching ordinary author-beats-user-agent cascade precedence.
 #[test]
 fn app_root_overrides_the_skins_token() {
-    let winit = build(
+    let window = build(
         "<root/>",
         ":root { --lumen-window-bg: #112233; }",
         "[mcp]\nport = 0\n[skin]\nname = \"linux\"\n",
     );
     assert!(
         approx(
-            winit.clear,
+            window.clear,
             (
                 0x11 as f32 / 255.0,
                 0x22 as f32 / 255.0,
@@ -99,6 +96,6 @@ fn app_root_overrides_the_skins_token() {
             )
         ),
         "app :root override did not win, got {:?}",
-        winit.clear
+        window.clear
     );
 }

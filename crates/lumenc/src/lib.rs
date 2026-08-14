@@ -100,7 +100,7 @@ pub use layout_ir::{
 };
 #[cfg(feature = "dev-run")]
 pub use lumen_runtime::{
-    AppHook, CheckReport, HeadlessOptions, RunError, RunOptions, SourceParser,
+    AppHook, CheckReport, HeadlessOptions, RunError, RunOptions, SourceParser, WindowSetup,
 };
 pub use parser_css::{CssWarning, Stylesheet, apply_css, parse_css};
 #[cfg(feature = "runtime-parse")]
@@ -152,7 +152,7 @@ pub fn run_app_headless(opts: RunOptions, ticks: u32) -> Result<(), RunError> {
 #[cfg(feature = "dev-run")]
 pub fn build_headless_app(
     opts: RunOptions,
-) -> Result<(lumen_core::app::App, lumen_window_winit::WinitOptions), RunError> {
+) -> Result<(lumen_core::app::App, WindowSetup), RunError> {
     lumen_runtime::build_headless_app(with_default_parser(opts))
 }
 

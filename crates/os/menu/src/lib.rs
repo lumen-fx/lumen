@@ -2,14 +2,13 @@
 //!
 //! Wraps `muda` 0.19 behind a [`MenuModel`] / [`MenuBuilder`] +
 //! [`Action`](lumen_os_mime::Action) shape that mirrors `QAction` /
-//! `GAction` (per os-integration audit section 154-164, section 470). Extracted from
-//! `lumen-window-winit::lib.rs:1051-1124` per W6.3.
+//! `GAction` (per os-integration audit section 154-164, section 470).
 //!
 //! - [`MenuModel`] / [`MenuEntry`] are the pure-data tree the markup
-//!   layer hands to the runtime. Backwards-compatible with the old
-//!   `MenuBarOptions` / `MenuOptions` types: those are kept as type
-//!   aliases inside `lumen-window-winit` so the markup wiring keeps
-//!   working unchanged.
+//!   layer hands to the runtime. They are defined in
+//!   [`lumen_core::window`], because the window options every launch
+//!   path resolves carry the menu bar, and re-exported here, where the
+//!   native side of menus lives.
 //! - [`attach_native_menubar`] builds a `muda::Menu` and binds it.
 //!   macOS attaches to the app; Windows attaches to the supplied HWND.
 //!   Linux is a no-op stub (muda's Linux backend depends on
@@ -26,6 +25,7 @@
 
 use lumen_core::input::MenuClicked;
 
+pub use lumen_core::window::{Menu, MenuEntry, MenuModel};
 pub use lumen_os_mime as mime;
 pub use lumen_os_mime::{Action, KeyChord};
 
@@ -33,50 +33,6 @@ pub use lumen_os_mime::{Action, KeyChord};
 /// GAction-style name. Identical type; emitted whenever a native menu
 /// item fires.
 pub type ActionInvoked = MenuClicked;
-
-/// Backend-facing description of the native menu bar (parsed from
-/// markup at the lumenc layer). Backwards-compatible with
-/// `lumen_window_winit::MenuBarOptions`.
-#[derive(Debug, Clone, Default)]
-pub struct MenuModel {
-    /// Top-level submenus, in source order.
-    pub menus: Vec<Menu>,
-}
-
-/// One submenu (`<menu label="File">...</menu>`).
-#[derive(Debug, Clone)]
-pub struct Menu {
-    /// Display label shown in the menu bar.
-    pub label: String,
-    /// Items inside the submenu.
-    pub items: Vec<MenuEntry>,
-}
-
-/// One submenu entry - either a clickable item or a separator.
-#[derive(Debug, Clone)]
-pub enum MenuEntry {
-    /// `<menuitem id label accel?>`.
-    Item {
-        /// `id="..."` - dispatched as `ActionInvoked { id }` to scripts.
-        id: String,
-        /// Display label.
-        label: String,
-        /// Optional accelerator string in muda format.
-        accelerator: Option<String>,
-    },
-    /// `<separator />`.
-    Separator,
-}
-
-impl From<&Action> for MenuEntry {
-    fn from(action: &Action) -> Self {
-        MenuEntry::Item {
-            id: action.id.as_ref().to_string(),
-            label: action.label.as_ref().to_string(),
-            accelerator: action.shortcut.as_ref().map(|c| c.0.as_ref().to_string()),
-        }
-    }
-}
 
 /// Build a [`MenuModel`] imperatively.
 ///
@@ -104,10 +60,13 @@ impl MenuBuilder {
     }
 
     /// Append an [`Action`] as a clickable menu entry. Convenience for
-    /// callers that have an `Action` table already. Thin shim over the
-    /// [`From<&Action>`] impl, preserved for public-API stability.
+    /// callers that have an `Action` table already.
     pub fn action_entry(action: &Action) -> MenuEntry {
-        MenuEntry::from(action)
+        MenuEntry::Item {
+            id: action.id.as_ref().to_string(),
+            label: action.label.as_ref().to_string(),
+            accelerator: action.shortcut.as_ref().map(|c| c.0.as_ref().to_string()),
+        }
     }
 
     /// Finalize the model.
