@@ -1,0 +1,455 @@
+================================================================================
+Virtualized iteration (apps/datagrid/main.lmn)
+================================================================================
+
+<scroll height="100%" class="list-scroll" sensitivity="0.7" inertia="0.32">
+  <for each="visible" key="id" virtualized="true" row-height="56">
+    <row class="list-row">
+      <label class="col-rank" text="{rank}" />
+    </row>
+  </for>
+</scroll>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value))))
+    (element
+      (start_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value))))
+      (element
+        (start_tag
+          (tag_name)
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value))))
+        (element
+          (self_closing_tag
+            (tag_name)
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (interpolation
+                  (identifier))))))
+        (end_tag
+          (tag_name)))
+      (end_tag
+        (tag_name)))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Conditional subtree (apps/datagrid/main.lmn)
+================================================================================
+
+<if signal="empty_visible">
+  <column class="empty">
+    <label class="empty-headline" text="No matching assets" />
+  </column>
+</if>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value))))
+    (element
+      (start_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value))))
+      (element
+        (self_closing_tag
+          (tag_name)
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value)))
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value)))))
+      (end_tag
+        (tag_name)))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Tabs with a disabled tab (apps/widget-garden/main.lmn)
+================================================================================
+
+<tabs bind-value="active_tab">
+  <tab name="primitives" label="Primitives">
+    <column gap="12">
+      <label class="lead" text="Layout primitives." />
+    </column>
+  </tab>
+  <tab name="locked" label="Locked" disabled="true">
+    <column gap="10">
+      <label class="lead" text="Unreachable." />
+    </column>
+  </tab>
+</tabs>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value))))
+    (element
+      (start_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value))))
+      (element
+        (start_tag
+          (tag_name)
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value))))
+        (element
+          (self_closing_tag
+            (tag_name)
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))))
+        (end_tag
+          (tag_name)))
+      (end_tag
+        (tag_name)))
+    (element
+      (start_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value))))
+      (element
+        (start_tag
+          (tag_name)
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value))))
+        (element
+          (self_closing_tag
+            (tag_name)
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))))
+        (end_tag
+          (tag_name)))
+      (end_tag
+        (tag_name)))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Dropdown options (apps/widget-garden/main.lmn)
+================================================================================
+
+<dropdown bind-value="weight" placeholder="Select...">
+  <option value="light" label="Light" />
+  <option value="ultra" label="Ultra" disabled="true" />
+</dropdown>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value))))
+    (element
+      (self_closing_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))))
+    (element
+      (self_closing_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Popup menu (apps/widget-garden/main.lmn)
+================================================================================
+
+<menu id="actions">
+  <menuitem id="rename" label="Rename" />
+  <separator />
+  <menuitem id="delete" label="Delete" />
+</menu>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value))))
+    (element
+      (self_closing_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))))
+    (element
+      (self_closing_tag
+        (tag_name)))
+    (element
+      (self_closing_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Dialog with a default button (apps/widget-garden/main.lmn)
+================================================================================
+
+<dialog id="demo-dialog" open="dialog_open">
+  <column class="card" width="420px" gap="12">
+    <input placeholder="Try typing here" bind-text="dialog_text" width="100%" autofocus="true" />
+    <row gap="10">
+      <button id="dialog-confirm" class="btn-primary" text="Confirm" default="true" />
+    </row>
+  </column>
+</dialog>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value))))
+    (element
+      (start_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value))))
+      (element
+        (self_closing_tag
+          (tag_name)
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value)))
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value)))
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value)))
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value)))))
+      (element
+        (start_tag
+          (tag_name)
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value))))
+        (element
+          (self_closing_tag
+            (tag_name)
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))))
+        (end_tag
+          (tag_name)))
+      (end_tag
+        (tag_name)))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Tooltip wrapping a trigger (apps/widget-garden/main.lmn)
+================================================================================
+
+<tooltip text="Toggle OS-following theme override" delay="300">
+  <button id="theme-toggle" class="btn-ghost" text="Toggle theme" />
+</tooltip>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value))))
+    (element
+      (self_closing_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))))
+    (end_tag
+      (tag_name))))

@@ -1,0 +1,31 @@
+{
+  "name": "tree-sitter-lumen",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for Lumen markup (.lmn)",
+  "license": "MPL-2.0",
+  "repository": "https://github.com/lumen-fx/lumen",
+  "keywords": [
+    "parser",
+    "lexer",
+    "lumen",
+    "tree-sitter"
+  ],
+  "files": [
+    "grammar.js",
+    "queries/*",
+    "src/**"
+  ],
+  "tree-sitter": [
+    {
+      "scope": "source.lumen",
+      "file-types": [
+        "lmn"
+      ],
+      "highlights": "queries/highlights.scm",
+      "injections": "queries/injections.scm"
+    }
+  ],
+  "devDependencies": {
+    "tree-sitter-cli": "^0.25.0"
+  }
+}

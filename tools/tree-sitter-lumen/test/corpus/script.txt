@@ -1,0 +1,147 @@
+================================================================================
+External script (fixtures/multi-host/main.lmn)
+================================================================================
+
+<root>
+  <script src="model.cdl" />
+  <script src="report.lua" />
+</root>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name))
+    (element
+      (script_element
+        (self_closing_tag
+          (tag_name)
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value))))))
+    (element
+      (script_element
+        (self_closing_tag
+          (tag_name)
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value))))))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Inline body (apps/scroll-tiles/main.lmn)
+================================================================================
+
+<root>
+  <script>
+    fn bump(by) {
+      let s = signal("clicks", 0);
+      s.set(s.get() + by);
+    }
+
+    fn on_start() {
+      on("click", "reset", "handle_reset_click");
+    }
+  </script>
+</root>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name))
+    (element
+      (script_element
+        (start_tag
+          (tag_name))
+        (raw_text)
+        (end_tag
+          (tag_name))))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Inline Lua body (fixtures/lua-smoke/main.lmn)
+================================================================================
+
+<root>
+  <script>
+    function on_start()
+        local clicks = signal("clicks", 0)
+        derive("counter_label", { clicks }, function(n)
+            return "Lua host - clicks: " .. n
+        end)
+    end
+  </script>
+</root>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name))
+    (element
+      (script_element
+        (start_tag
+          (tag_name))
+        (raw_text)
+        (end_tag
+          (tag_name))))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Empty body
+================================================================================
+
+<root>
+  <script></script>
+</root>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name))
+    (element
+      (script_element
+        (start_tag
+          (tag_name))
+        (end_tag
+          (tag_name))))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+A tag whose name merely starts with "script"
+================================================================================
+
+<root>
+  <scripted id="x" />
+</root>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name))
+    (element
+      (script_element
+        (self_closing_tag
+          (tag_name)
+          (attribute
+            (attribute_name))
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value))))))
+    (end_tag
+      (tag_name))))
