@@ -95,18 +95,18 @@ npm run compile      # -> out/extension.js
 `@vscode/vsce` is a dev dependency:
 
 ```sh
-npm run package      # -> lumen-vscode-<version>.vsix
+npm run package      # -> lumen-ui-<version>.vsix
 ```
 
 Install with Extensions -> ... -> Install from VSIX, or
-`code --install-extension lumen-vscode-<version>.vsix`. The extension is not
+`code --install-extension lumen-ui-<version>.vsix`. The extension is not
 published to the Marketplace.
 
 To sideload during development, symlink this folder into your extensions
 directory:
 
 ```sh
-ln -s "$PWD" ~/.vscode/extensions/lumen-vscode   # Linux/macOS
+ln -s "$PWD" ~/.vscode/extensions/lumen-ui   # Linux/macOS
 ```
 
 ## Settings
