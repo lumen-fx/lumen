@@ -142,12 +142,15 @@ fn zsh_flags(block: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// The `case` arm for one subcommand in the zsh script.
+/// The `case` arm for one subcommand in the zsh script. Line endings are
+/// normalized first so the exact-boundary search cannot miss on a checkout
+/// that converted the script to CRLF.
 fn zsh_block(command: &str) -> String {
-    let start = ZSH
+    let zsh = ZSH.replace("\r\n", "\n");
+    let start = zsh
         .find(&format!("\n                {command})\n"))
         .unwrap_or_else(|| panic!("zsh completion has no arm for `{command}`"));
-    let rest = &ZSH[start + 1..];
+    let rest = &zsh[start + 1..];
     let end = rest.find("\n                    ;;").unwrap_or(rest.len());
     rest[..end].to_string()
 }
