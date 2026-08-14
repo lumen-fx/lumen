@@ -1,6 +1,6 @@
 {
   "name": "lumen-ui",
-  "displayName": "Lumen",
+  "displayName": "Lumen UI",
   "description": "First-class language support for Lumen: .lmn markup, Lumen CSS, and .rhai scripts - diagnostics, completion, hover, formatting, an in-editor headless live preview, and one-click run/check/build/scaffold via lumenc.",
   "version": "0.4.0",
   "publisher": "lumen-fx",
