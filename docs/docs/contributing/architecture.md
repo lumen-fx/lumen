@@ -88,7 +88,9 @@ tools/             the release plumbing and the editor plugins
   `Widget` implementation, a companion plugin, and the spawn glue.
 - **lumen-assets**: the asset pipeline. Content-addressed cache, decode worker
   pool, SVG parsing, GPU upload cache, disk-change invalidation, and the
-  `.lpak` bundle format.
+  `.lpak` bundle format. Formats and byte sources are registered, so an app
+  adds either without changing the crate; see
+  [Writing plugins](plugins.md#extending-the-asset-server).
 - **lumen-i18n**: translation catalogues over Fluent, plus locale-aware number,
   date, currency, and relative-time formatting over ICU4X.
 
