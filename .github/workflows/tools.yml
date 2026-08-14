@@ -8,6 +8,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # These jobs are required checks, so the merge queue needs them to report;
+  # a queued merge runs every area rather than diffing.
+  merge_group:
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:
@@ -49,7 +52,7 @@ jobs:
             schedule)
               changed=""
               ;;
-            workflow_dispatch)
+            workflow_dispatch | merge_group)
               changed="$(git ls-files)"
               ;;
             *)
