@@ -1,0 +1,54 @@
+<idea-plugin>
+    <id>dev.lumenfx.lumen</id>
+    <name>Lumen</name>
+    <vendor url="https://lumenfx.dev">Lumen</vendor>
+
+    <description><![CDATA[
+        Editor support for the <a href="https://lumenfx.dev">Lumen</a> UI framework:
+        <code>.lmn</code> markup, Lumen CSS, and <code>.rhai</code> scripts.
+        <p>
+        Syntax highlighting ships with the plugin. Diagnostics, completion, hover,
+        signature help, navigation, find usages, rename, structure view, and
+        formatting come from <code>lumen-lsp</code>, the language server built from
+        the Lumen repository, so the editor and the compiler agree on what is valid.
+        Build the server with <code>cargo build --release -p lumen-lsp</code>, then
+        put it on <code>PATH</code> or set its path in Settings under
+        Languages &amp; Frameworks | Lumen.
+        ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.redhat.devtools.lsp4ij</depends>
+    <depends optional="true" config-file="lumen-textmate.xml">org.jetbrains.plugins.textmate</depends>
+
+    <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
+        <server id="lumen"
+                name="Lumen"
+                factoryClass="dev.lumenfx.lumen.LumenServerFactory">
+            <description><![CDATA[
+                <a href="https://lumenfx.dev">Lumen</a> language server for
+                <code>.lmn</code> markup, Lumen CSS, and <code>.rhai</code> scripts.
+                ]]>
+            </description>
+        </server>
+
+        <fileNamePatternMapping patterns="*.lmn"
+                                serverId="lumen"
+                                languageId="lumen-markup"/>
+        <fileNamePatternMapping patterns="*.rhai"
+                                serverId="lumen"
+                                languageId="lumen-rhai"/>
+        <!-- Lumen stylesheets are ordinary .css files, so a stylesheet only
+             reaches the server when it sits in a Lumen app directory. -->
+        <fileNamePatternMapping patterns="*.css"
+                                serverId="lumen"
+                                languageId="lumen-css"
+                                documentMatcher="dev.lumenfx.lumen.LumenCssMatcher"/>
+    </extensions>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <projectConfigurable id="dev.lumenfx.lumen.settings"
+                             parentId="language"
+                             displayName="Lumen"
+                             instance="dev.lumenfx.lumen.LumenConfigurable"/>
+    </extensions>
+</idea-plugin>

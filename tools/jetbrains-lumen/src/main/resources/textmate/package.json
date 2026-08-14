@@ -1,0 +1,50 @@
+{
+  "name": "lumen",
+  "displayName": "Lumen",
+  "version": "0.1.0",
+  "description": "TextMate grammars for Lumen markup, Lumen CSS, and Rhai scripts.",
+  "license": "MPL-2.0",
+  "contributes": {
+    "languages": [
+      {
+        "id": "lumen-markup",
+        "aliases": ["Lumen Markup", "lumen", "lmn"],
+        "extensions": [".lmn"],
+        "configuration": "./language-configuration/lumen.json"
+      },
+      {
+        "id": "lumen-rhai",
+        "aliases": ["Lumen Script", "Rhai"],
+        "extensions": [".rhai"],
+        "configuration": "./language-configuration/rhai.json"
+      },
+      {
+        "id": "lumen-css",
+        "aliases": ["Lumen CSS"],
+        "extensions": [],
+        "configuration": "./language-configuration/lumen-css.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lumen-markup",
+        "scopeName": "text.lumen",
+        "path": "./syntaxes/lumen.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.rhai": "lumen-rhai",
+          "source.css.lumen": "lumen-css"
+        }
+      },
+      {
+        "language": "lumen-css",
+        "scopeName": "source.css.lumen",
+        "path": "./syntaxes/lumen-css.tmLanguage.json"
+      },
+      {
+        "language": "lumen-rhai",
+        "scopeName": "source.rhai",
+        "path": "./syntaxes/rhai.tmLanguage.json"
+      }
+    ]
+  }
+}

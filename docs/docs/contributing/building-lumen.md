@@ -196,6 +196,20 @@ with the `lumen.serverPath` and `lumen.lumencPath` settings, or turn the search
 off entirely. Its live preview drives `lumenc run --headless` and the
 screenshot path, so it never opens a window either.
 
+The JetBrains plugin lives in `tools/jetbrains-lumen` and is Kotlin on Gradle.
+It needs JDK 21:
+
+```sh
+cd tools/jetbrains-lumen
+./gradlew buildPlugin
+./gradlew verifyPlugin
+```
+
+`buildPlugin` writes an installable zip to `build/distributions/`, and
+`verifyPlugin` runs the JetBrains Plugin Verifier over it. `./gradlew runIde`
+starts a sandbox IDE with the plugin loaded. The build copies the TextMate
+grammars out of `tools/vscode-lumen`, so a grammar fix reaches both editors.
+
 ## Documentation
 
 The documentation site is built with Zensical from `docs/`:
