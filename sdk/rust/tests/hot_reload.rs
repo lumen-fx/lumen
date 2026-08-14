@@ -68,7 +68,7 @@ fn debug_source_reads_from_disk_and_hot_reloads() {
     let opts = RunOptions::new(&dir);
     assert!(opts.markup.is_none());
     assert!(opts.hot_reload);
-    let (mut app, _winit) = build_headless_app(opts).expect("build_headless_app");
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
 
     for _ in 0..3 {
         app.tick();

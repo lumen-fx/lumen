@@ -29,7 +29,7 @@ fn candela_smoke_dir() -> std::path::PathBuf {
 #[test]
 fn engine_candela_installs_candela_host_and_runs_script() {
     let opts = RunOptions::new(candela_smoke_dir());
-    let (mut app, _winit) = build_headless_app(opts).expect("build_headless_app");
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
 
     // A few ticks so `on_start` fires, its `signal_set("greeting", ...)` command
     // drains, and the `bind-text` reader mirrors it into the label's

@@ -162,7 +162,7 @@ fn capture_once(
     opts.hot_reload = false;
     opts.size = (VIEW_W, VIEW_H);
 
-    let (mut app, _winit_opts) = build_headless_app(opts).expect("build headless app");
+    let (mut app, _window) = build_headless_app(opts).expect("build headless app");
     app.add_plugin(WgpuRendererPlugin::new(VIEW_W, VIEW_H).with_text_shaper(CosmicShaper::new()));
 
     // Pin every environment-dependent knob before the first tick:

@@ -40,7 +40,7 @@ fn query_mutate_read_back_through_node_handles() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = app_dir(r#"<root id="app"><column id="list" class="list"></column></root>"#);
     let opts = RunOptions::new(&dir);
-    let (mut app, _winit) = build_headless_app(opts).expect("build headless app");
+    let (mut app, _window) = build_headless_app(opts).expect("build headless app");
     settle(&mut app);
 
     // query(".list").single() finds the column.
@@ -92,7 +92,7 @@ fn set_inner_markup_parses_and_replaces_children() {
     let _ = lumen_script::node_query::drain_external_dom_commands();
     let dir = app_dir(r#"<root id="app"><column id="host" class="host"></column></root>"#);
     let opts = RunOptions::new(&dir);
-    let (mut app, _winit) = build_headless_app(opts).expect("build headless app");
+    let (mut app, _window) = build_headless_app(opts).expect("build headless app");
     settle(&mut app);
 
     let host = dom::query(".host").single().expect("one .host");
@@ -120,7 +120,7 @@ fn window_document_history_namespaces() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let dir = app_dir(r#"<root id="app"><column id="list" class="list"></column></root>"#);
     let opts = RunOptions::new(&dir);
-    let (mut app, _winit) = build_headless_app(opts).expect("build headless app");
+    let (mut app, _window) = build_headless_app(opts).expect("build headless app");
     settle(&mut app);
 
     dom::window::set_title("Docs");

@@ -94,7 +94,7 @@ fn introspection_read_side_headless() {
 
     let mut opts = RunOptions::new(&dir).with_artifact_bytes(bytes);
     opts.bounded = true;
-    let (mut app, _winit) = build_headless_app(opts).expect("build headless app");
+    let (mut app, _window) = build_headless_app(opts).expect("build headless app");
     for _ in 0..6 {
         app.tick();
     }

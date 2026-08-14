@@ -65,7 +65,7 @@ impl Harness {
         .unwrap();
         let mut opts = RunOptions::new(&dir).with_artifact_bytes(bytes);
         opts.bounded = true;
-        let (app, _winit) = build_headless_app(opts).expect("build headless app");
+        let (app, _window) = build_headless_app(opts).expect("build headless app");
         let mut h = Harness {
             app,
             _dir: dir,
