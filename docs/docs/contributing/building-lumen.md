@@ -126,6 +126,12 @@ backend Lumen ships. Selecting `audio` alone gives a build whose transport
 works and makes no sound, which is where an embedder supplying its own
 `AudioBackend` starts.
 
+`http-fetch` adds the HTTP client behind the scripts' `fetch()` and `http()`
+builtins, and costs about a megabyte of release text for the TLS stack. A build
+without it still parses and queues both calls, and answers every request with an
+error naming the missing feature; that is where an embedder supplying its own
+`lumen_script::HttpClient` starts.
+
 **`lumen-render-wgpu`** selects one wgpu backend per operating system through
 target-scoped dependencies, so a build compiles the Vulkan, Metal, or DX12
 backend and nothing else. The off-by-default `gl-fallback` feature adds the

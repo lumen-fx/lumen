@@ -72,6 +72,9 @@ tools/             the release plumbing and the editor plugins
   device.
 - **lumen-audio-rodio**: the playback implementation Lumen ships. Decodes wav
   and ogg over a rodio sink, and runs silent when no output device exists.
+- **lumen-http-ureq**: the HTTP client behind the scripts' `fetch()` and
+  `http()` builtins. One blocking request per call over ureq, with a bounded
+  body read.
 - **lumen-a11y-accesskit**: translates the entity tree into AccessKit tree
   updates each tick.
 - **lumen-async-tokio**: the async bridge. A tokio runtime plus a queue that
@@ -99,8 +102,8 @@ tools/             the release plumbing and the editor plugins
 ### Scripting hosts
 
 - **lumen-script**: the host-neutral scripting layer. The `ScriptHost` trait,
-  the script command vocabulary, the host-generic systems, and the DOM query
-  surface.
+  the script command vocabulary, the host-generic systems, the DOM query
+  surface, and the `HttpClient` trait the HTTP builtins run on.
 - **lumen-script-candela**, **lumen-script-rhai**, **lumen-script-lua**: the
   three hosts. Each implements `ScriptHost` and ships a plugin.
 

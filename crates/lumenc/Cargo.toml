@@ -87,7 +87,7 @@ lumen-window-winit = { path = "../backends/window-winit", version = "0.0.3", opt
 
 # link-not-embed launcher: dlopen the shared liblumen (lumen cdylib) and
 # drive a prebuilt LMNA app over the C-ABI. OPTIONAL behind `dlopen-run`; this
-# is the whole point of the thin launcher -- it pulls NO backend crate, only
+# is the whole point of the thin launcher: it pulls NO backend crate, only
 # the dynamic-loader shim.
 libloading = { version = "0.9", optional = true }
 
@@ -123,12 +123,7 @@ lumen-primitives = { path = "../primitives" }
 # binary transitively through lumen-runtime, but a test can only *name*
 # `lumen_script_rhai::RhaiHost` etc. if the crate is a direct dependency - so
 # they live here (test-only) rather than in the thin library's `[dependencies]`.
-# `http-fetch` on so the dev-dep matches the default (dev-run) graph where
-# lumen-runtime already turns it on; without it a thin `--all-targets` test
-# build compiles lumen-script's http request path as dead code.
-lumen-script = { path = "../script/api", default-features = false, features = [
-    "http-fetch",
-] }
+lumen-script = { path = "../script/api", default-features = false }
 lumen-script-rhai = { path = "../script/rhai", default-features = false }
 lumen-script-lua = { path = "../script/lua", default-features = false }
 lumen-script-candela = { path = "../script/candela", default-features = false }
@@ -192,8 +187,8 @@ dlopen-run = ["dep:libloading"]
 # into release / bundle builds. Build with `--features devtools` to get it, and
 # `lumenc run` then serves the overlay for the dev loop.
 devtools = ["lumen-runtime?/devtools"]
-# Scripts' HTTP `fetch(url, tag)` builtin (ureq + rustls + ring). On by
-# default; a packager size knob. Owned by the runtime's script hosts now.
+# The HTTP client behind the scripts' `fetch(url, tag)` builtin (ureq + rustls
+# + ring). On by default; a packager size knob. The runtime selects the client.
 http-fetch = ["lumen-runtime?/http-fetch"]
 # `--profile chrome|stderr` support: compiles the tracing-subscriber /
 # tracing-chrome stack (inside the runtime) and turns on bevy_ecs's `trace`

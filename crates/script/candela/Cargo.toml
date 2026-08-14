@@ -34,10 +34,3 @@ candela = { git = "https://github.com/lumen-fx/candela", branch = "main" }
 serde_json.workspace = true
 # `parse_markdown`: markdown -> block list, matching the Rhai and Lua hosts.
 pulldown-cmark.workspace = true
-
-[features]
-# Mirrors `lumen-script-rhai`: `http-fetch` is on by default and forwards to
-# lumen-script so a plain build ships the `fetch(url, tag)` transport;
-# packagers can size-trim by turning default features off.
-default = ["http-fetch"]
-http-fetch = ["lumen-script/http-fetch"]

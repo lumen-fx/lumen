@@ -19,13 +19,6 @@ lumen-os-dnd = { path = "../../os/dnd", version = "0.0.3" }
 bevy_ecs.workspace = true
 crossbeam-channel.workspace = true
 thiserror.workspace = true
-# Behind the default-on `http-fetch` feature: the scripts' `fetch(url,
-# tag)` builtin's actual HTTP transport. ureq's rustls+ring stack costs
-# ~0.8 MiB of release .text, so packagers who don't ship script HTTP can
-# rebuild with default features off. With the feature off, `fetch()`
-# still parses/queues but every request resolves to
-# `on_fetch_error(tag, "...built without the http-fetch feature...")`.
-ureq = { workspace = true, optional = true }
 
 [build-dependencies]
 # Reads `builtins.ron` when this crate compiles, so the builtin metadata
@@ -33,11 +26,3 @@ ureq = { workspace = true, optional = true }
 # dependency, so the parser never reaches a shipped binary.
 ron.workspace = true
 serde.workspace = true
-
-[features]
-# `http-fetch` is on by default so a plain build behaves exactly as
-# before; it exists as a packager knob for size-trimmed lumenc builds
-# (see the ureq dep comment above). Host crates (lumen-script-rhai)
-# forward their own `http-fetch` feature here.
-default = ["http-fetch"]
-http-fetch = ["dep:ureq"]

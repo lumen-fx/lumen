@@ -23,15 +23,6 @@ parking_lot = "0.12"
 pulldown-cmark.workspace = true
 tracing.workspace = true
 
-[features]
-# `http-fetch` is on by default so a plain build behaves exactly as
-# before; it exists as a packager knob for size-trimmed lumenc builds.
-# The actual ureq dep + `fetch()` transport lives in lumen-script; this
-# feature forwards so existing `lumen-script-rhai/http-fetch` references
-# (lumenc's feature wiring) keep working unchanged.
-default = ["http-fetch"]
-http-fetch = ["lumen-script/http-fetch"]
-
 [dev-dependencies]
 # `metadata` enables `Engine::gen_fn_signatures`, used by the
 # `builtins_parity` test to prove every entry in `builtins::BUILTINS` is

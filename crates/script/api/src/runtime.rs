@@ -46,10 +46,13 @@
 use bevy_ecs::component::Mutable;
 use bevy_ecs::message::{Message, MessageReader, MessageRegistry, MessageWriter};
 use bevy_ecs::prelude::*;
+use lumen_core::net_capture::{self, NetEvent};
 use lumen_core::prelude::*;
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::dnd;
+use crate::http::{DisabledHttpClient, HttpClient, HttpRequest, HttpResponse};
 use crate::{CallOutcome, ScriptCommand, ScriptError, ScriptHost, ScriptValue};
 
 /// One [`ScriptCommand`] flowing through the ECS message bus so app
@@ -218,7 +221,13 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             app.world.insert_resource(OnReadyFired::default());
             app.world.insert_resource(TimerRegistry::default());
             app.world.insert_resource(DueTimers::default());
-            app.world.insert_resource(FetchRegistry::default());
+            // The HTTP client is chosen at the composition point (the runtime
+            // installs `lumen-http-ureq`; an embedder installs its own), so
+            // only fall back to the disabled client when nothing put a
+            // registry in first.
+            if !app.world.contains_resource::<FetchRegistry>() {
+                app.world.insert_resource(FetchRegistry::default());
+            }
             app.world.insert_resource(PendingFetchReplies::default());
             MessageRegistry::register_message::<ScriptCommandEvent>(&mut app.world);
             // Toggle / slider dispatchers below read these messages. In
@@ -706,18 +715,37 @@ pub fn fire_due_timers<H: ScriptHost + Resource<Mutability = Mutable>>(
 /// [`PendingFetchReplies`], and [`fire_fetched_responses`] is the only place a
 /// signal / handler is touched. That worker->UI-thread hand-off mirrors
 /// Slint's `invoke_from_event_loop` marshalling.
+///
+/// The registry also holds the [`HttpClient`] every request runs on. A default
+/// registry carries [`DisabledHttpClient`], so a build with no client installed
+/// answers each request with the "no HTTP client" error instead of hanging or
+/// silently dropping it. The runtime installs the client Lumen ships
+/// (`lumen-http-ureq`) with [`FetchRegistry::with_client`] before the script
+/// plugin builds; an embedder swaps in its own the same way.
 #[derive(Resource)]
 pub struct FetchRegistry {
     sender: crossbeam_channel::Sender<HttpOutcome>,
     receiver: crossbeam_channel::Receiver<HttpOutcome>,
+    client: Arc<dyn HttpClient>,
 }
 
 impl Default for FetchRegistry {
     fn default() -> Self {
+        Self::with_client(Arc::new(DisabledHttpClient))
+    }
+}
+
+impl FetchRegistry {
+    /// Build a registry whose requests run on `client`.
+    ///
+    /// Insert it before the script plugin builds; the plugin only installs its
+    /// own default when no registry is present.
+    pub fn with_client(client: Arc<dyn HttpClient>) -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
         Self {
             sender: tx,
             receiver: rx,
+            client,
         }
     }
 }
@@ -732,26 +760,6 @@ enum DeliveryStyle {
     /// `http()`: fire `on_http(tag, response)` with a structured map;
     /// a non-2xx status is a *completed* reply, not an error.
     Http,
-}
-
-/// A request handed to a worker thread. Method + url + headers + body in:
-/// the input half of the Qt `QNetworkRequest` shape.
-#[cfg_attr(not(feature = "http-fetch"), allow(dead_code))]
-struct HttpRequest {
-    method: String,
-    url: String,
-    headers: Vec<(String, String)>,
-    body: Option<String>,
-    timeout_ms: Option<u64>,
-    tag: String,
-}
-
-/// The reply half of the Qt `QNetworkReply` shape: status + headers +
-/// body out.
-struct HttpResponse {
-    status: u16,
-    headers: Vec<(String, String)>,
-    body: String,
 }
 
 struct HttpOutcome {
@@ -770,7 +778,7 @@ pub fn drain_fetch_commands(
     fetcher: Res<FetchRegistry>,
 ) {
     for ev in events.read() {
-        let (req, style) = match &ev.0 {
+        let (req, tag, style) = match &ev.0 {
             ScriptCommand::Fetch { url, tag } => (
                 HttpRequest {
                     method: "GET".to_string(),
@@ -778,8 +786,8 @@ pub fn drain_fetch_commands(
                     headers: Vec::new(),
                     body: None,
                     timeout_ms: None,
-                    tag: tag.clone(),
                 },
+                tag.clone(),
                 DeliveryStyle::Fetch,
             ),
             ScriptCommand::Http {
@@ -796,8 +804,8 @@ pub fn drain_fetch_commands(
                     headers: headers.clone(),
                     body: body.clone(),
                     timeout_ms: *timeout_ms,
-                    tag: tag.clone(),
                 },
+                tag.clone(),
                 DeliveryStyle::Http,
             ),
             _ => continue,
@@ -805,120 +813,34 @@ pub fn drain_fetch_commands(
         // Dev-tooling capture (no-op unless the devtools sink is installed):
         // report the dispatch so the Network tab shows the in-flight request
         // before its reply lands.
-        lumen_core::net_capture::record(lumen_core::net_capture::NetEvent::Started {
-            tag: req.tag.clone(),
+        net_capture::record(NetEvent::Started {
+            tag: tag.clone(),
             method: req.method.clone(),
             url: req.url.clone(),
         });
         let tx = fetcher.sender.clone();
-        let tag = req.tag.clone();
+        let client = Arc::clone(&fetcher.client);
         std::thread::Builder::new()
             .name(format!("lumen-http:{tag}"))
             .spawn(move || {
-                let result = perform_http(&req);
-                let _ = tx.send(HttpOutcome {
-                    tag: req.tag,
-                    style,
-                    result,
-                });
+                let result = client.send(&req, MAX_HTTP_BODY_BYTES);
+                let _ = tx.send(HttpOutcome { tag, style, result });
             })
             .expect("spawn http thread");
     }
 }
 
-/// Blocking HTTP request -> structured reply. Runs on the per-request
-/// worker thread. A 4xx / 5xx is returned as an `Ok(HttpResponse)` (the
-/// caller decides what a non-2xx means); only transport failures map to
-/// `Err`. Uses the workspace `ureq` dep - no new HTTP client is pulled
-/// in for this.
-/// Hard cap on the response body we buffer into memory, in bytes (16 MiB).
+/// Hard cap on the response body a client may buffer into memory, in bytes
+/// (16 MiB).
+///
 /// A huge or open-ended (chunked / streaming) endpoint must not be able to
 /// OOM the per-request worker: reads past this bound abort with an error
 /// that is surfaced to the script as the reply's `error` field. Callers who
-/// legitimately need larger payloads should stream, not `fetch`.
-#[cfg(feature = "http-fetch")]
+/// legitimately need larger payloads should stream, not `fetch`. The cap is
+/// policy, so it lives here and is passed to every
+/// [`HttpClient::send`](crate::http::HttpClient::send) call rather than being
+/// each client's business.
 const MAX_HTTP_BODY_BYTES: u64 = 16 * 1024 * 1024;
-
-#[cfg(feature = "http-fetch")]
-fn perform_http(req: &HttpRequest) -> Result<HttpResponse, String> {
-    perform_http_capped(req, MAX_HTTP_BODY_BYTES)
-}
-
-#[cfg(feature = "http-fetch")]
-fn perform_http_capped(req: &HttpRequest, body_limit: u64) -> Result<HttpResponse, String> {
-    use std::time::Duration;
-
-    let method = ureq::http::Method::from_bytes(req.method.to_ascii_uppercase().as_bytes())
-        .map_err(|_| format!("invalid HTTP method: {}", req.method))?;
-
-    // `http_status_as_error(false)` = web-`fetch` semantics: a 4xx / 5xx
-    // is a completed reply, not an `Err`. `timeout_global` applies the
-    // per-request deadline (Qt `QNetworkRequest` transfer timeout).
-    let config = ureq::Agent::config_builder()
-        .http_status_as_error(false)
-        .timeout_global(req.timeout_ms.map(Duration::from_millis))
-        .build();
-    let agent: ureq::Agent = config.into();
-
-    let mut builder = ureq::http::Request::builder()
-        .method(method)
-        .uri(req.url.as_str());
-    for (k, v) in &req.headers {
-        builder = builder.header(k, v);
-    }
-
-    // GET-style requests with no body send `()`; anything with an
-    // explicit body sends the string. Both `()` and `String` implement
-    // `AsSendBody`, so `agent.run` accepts either.
-    let reply = match &req.body {
-        Some(b) => agent.run(builder.body(b.clone()).map_err(|e| e.to_string())?),
-        None => agent.run(builder.body(()).map_err(|e| e.to_string())?),
-    };
-    let mut reply = reply.map_err(|e| e.to_string())?;
-
-    let status = reply.status().as_u16();
-    let headers = reply
-        .headers()
-        .iter()
-        .map(|(name, value)| {
-            (
-                name.as_str().to_string(),
-                value.to_str().unwrap_or_default().to_string(),
-            )
-        })
-        .collect();
-    // Bounded read: `Body::read_to_string()` would use ureq's implicit
-    // default; make the cap explicit and named so a body past `body_limit`
-    // deterministically errors (surfaced as the reply's `error`) instead of
-    // relying on the transport's default and risking an OOM if that default
-    // ever changes. `lossy_utf8(true)` preserves the previous non-UTF-8
-    // behaviour (invalid bytes -> `?`).
-    let body = reply
-        .body_mut()
-        .with_config()
-        .limit(body_limit)
-        .lossy_utf8(true)
-        .read_to_string()
-        .map_err(|e| format!("read body (cap {body_limit} bytes): {e}"))?;
-
-    Ok(HttpResponse {
-        status,
-        headers,
-        body,
-    })
-}
-
-/// Size-trimmed builds (`--no-default-features`): every `fetch()` /
-/// `http()` call resolves to the error path with a clear rebuild hint
-/// instead of silently vanishing.
-#[cfg(not(feature = "http-fetch"))]
-fn perform_http(_req: &HttpRequest) -> Result<HttpResponse, String> {
-    Err(
-        "the script runtime was built without the `http-fetch` feature; \
-         fetch() / http() are disabled in this binary"
-            .to_string(),
-    )
-}
 
 /// Build the structured `on_http` response map from a completed request.
 /// Shape is `web`-`fetch`-like / Qt `QNetworkReply`-like:
@@ -975,7 +897,7 @@ pub fn collect_fetch_replies(
             Ok(resp) => (true, resp.status, String::new()),
             Err(err) => (false, 0u16, err.clone()),
         };
-        lumen_core::net_capture::record(lumen_core::net_capture::NetEvent::Completed {
+        net_capture::record(NetEvent::Completed {
             tag: outcome.tag.clone(),
             ok,
             status,
@@ -1690,157 +1612,81 @@ mod http_tests {
         );
     }
 
-    /// End-to-end transport against a loopback server (no external
-    /// endpoint). Verifies method + body round-trip in and status +
-    /// header + body out - the full Qt-`QNetworkReply`-shaped reply.
-    #[cfg(feature = "http-fetch")]
+    /// The registry is the seam: whatever [`HttpClient`] it holds is the one
+    /// a queued `fetch()` runs on, and its reply reaches
+    /// [`PendingFetchReplies`] unchanged. Drives the real systems with a
+    /// recording client, so no socket is opened.
     #[test]
-    fn perform_http_round_trips_over_loopback() {
-        use std::io::{Read, Write};
-        use std::net::TcpListener;
+    fn requests_run_on_the_installed_client() {
+        use std::sync::Mutex;
 
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let addr = listener.local_addr().unwrap();
-
-        // Minimal one-shot HTTP/1.1 server: read the request head + body,
-        // echo the request body back with a custom header and 200.
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            // Read until the header terminator, then keep reading until we
-            // have the full Content-Length body (head + body can arrive in
-            // separate packets).
-            let mut raw: Vec<u8> = Vec::new();
-            let mut chunk = [0u8; 1024];
-            let mut content_len: Option<usize> = None;
-            let body = loop {
-                let n = stream.read(&mut chunk).unwrap();
-                if n == 0 {
-                    break String::new();
-                }
-                raw.extend_from_slice(&chunk[..n]);
-                let text = String::from_utf8_lossy(&raw);
-                if let Some(idx) = text.find("\r\n\r\n") {
-                    if content_len.is_none() {
-                        content_len = text[..idx].lines().find_map(|l| {
-                            l.split_once(':').and_then(|(k, v)| {
-                                k.trim()
-                                    .eq_ignore_ascii_case("content-length")
-                                    .then(|| v.trim().parse::<usize>().ok())
-                                    .flatten()
-                            })
-                        });
-                    }
-                    let body_so_far = text.len() - (idx + 4);
-                    if body_so_far >= content_len.unwrap_or(0) {
-                        break text[idx + 4..].to_string();
-                    }
-                }
-            };
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nX-Echo-Method: POST\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            stream.write_all(resp.as_bytes()).unwrap();
-            stream.flush().unwrap();
-        });
-
-        let req = HttpRequest {
-            method: "post".to_string(), // case-insensitive
-            url: format!("http://{addr}/echo"),
-            headers: vec![("X-Test".to_string(), "1".to_string())],
-            body: Some("hello-body".to_string()),
-            timeout_ms: Some(5000),
-            tag: "t".to_string(),
-        };
-        let resp = perform_http(&req).expect("transport ok");
-        assert_eq!(resp.status, 200);
-        assert_eq!(resp.body, "hello-body");
-        assert!(
-            resp.headers
-                .iter()
-                .any(|(k, v)| k.eq_ignore_ascii_case("x-echo-method") && v == "POST"),
-            "server saw the POST + echoed header: {:?}",
-            resp.headers
-        );
-        server.join().unwrap();
-    }
-
-    /// A connection to a closed loopback port is a transport `Err`, not a
-    /// panic (surfaced to scripts as `error` with `status=0`).
-    #[cfg(feature = "http-fetch")]
-    #[test]
-    fn perform_http_connection_refused_is_err() {
-        // Bind then drop to obtain a port nothing is listening on.
-        let addr = {
-            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            l.local_addr().unwrap()
-        };
-        let req = HttpRequest {
-            method: "GET".to_string(),
-            url: format!("http://{addr}/"),
-            headers: vec![],
-            body: None,
-            timeout_ms: Some(2000),
-            tag: "t".to_string(),
-        };
-        assert!(perform_http(&req).is_err());
-    }
-
-    /// A response body larger than the buffer cap aborts with an `Err`
-    /// (bounded read, no OOM) and, once folded into the structured reply,
-    /// surfaces as `ok=false` with a non-empty `error` - never a panic and
-    /// never an unbounded allocation.
-    #[cfg(feature = "http-fetch")]
-    #[test]
-    fn perform_http_body_over_cap_errors_not_oom() {
-        use std::io::{Read, Write};
-        use std::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let addr = listener.local_addr().unwrap();
-
-        // One-shot server: reads (and discards) the request, replies 200
-        // with a 4 KiB body - comfortably above the tiny test cap below.
-        const BODY_LEN: usize = 4096;
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut scratch = [0u8; 1024];
-            let _ = stream.read(&mut scratch); // consume request head
-            let body = "A".repeat(BODY_LEN);
-            let resp = format!("HTTP/1.1 200 OK\r\nContent-Length: {BODY_LEN}\r\n\r\n{body}");
-            let _ = stream.write_all(resp.as_bytes());
-            let _ = stream.flush();
-        });
-
-        let req = HttpRequest {
-            method: "GET".to_string(),
-            url: format!("http://{addr}/big"),
-            headers: vec![],
-            body: None,
-            timeout_ms: Some(5000),
-            tag: "t".to_string(),
-        };
-
-        // Cap well below the body size: the read must abort with an error.
-        let result = perform_http_capped(&req, 64);
-        assert!(
-            result.is_err(),
-            "body over cap must return Err (bounded read, no OOM), got Ok"
-        );
-
-        // Folded into the script-facing reply it is a clean structured
-        // failure, not a panic.
-        let value = http_response_to_value(&result);
-        let ScriptValue::Map(m) = value else {
-            panic!("expected a map reply");
-        };
-        assert_eq!(m.get("ok"), Some(&ScriptValue::Bool(false)));
-        match m.get("error") {
-            Some(ScriptValue::Str(e)) => assert!(!e.is_empty(), "error message populated"),
-            other => panic!("expected non-empty error string, got {other:?}"),
+        #[derive(Default)]
+        struct RecordingClient {
+            seen: Mutex<Vec<HttpRequest>>,
         }
 
-        let _ = server.join();
+        impl HttpClient for RecordingClient {
+            fn send(&self, request: &HttpRequest, body_limit: u64) -> Result<HttpResponse, String> {
+                self.seen.lock().unwrap().push(request.clone());
+                Ok(HttpResponse {
+                    status: 200,
+                    headers: vec![("X-Cap".to_string(), body_limit.to_string())],
+                    body: format!("{} {}", request.method, request.url),
+                })
+            }
+        }
+
+        let client = Arc::new(RecordingClient::default());
+        let mut world = World::new();
+        world.insert_resource(FetchRegistry::with_client(client.clone()));
+        world.insert_resource(PendingFetchReplies::default());
+        MessageRegistry::register_message::<ScriptCommandEvent>(&mut world);
+        world.write_message(ScriptCommandEvent(ScriptCommand::Fetch {
+            url: "http://example.invalid/thing".to_string(),
+            tag: "t".to_string(),
+        }));
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(drain_fetch_commands);
+        schedule.run(&mut world);
+
+        // The worker thread is the only asynchrony here; poll the collector
+        // until the reply lands rather than sleeping a fixed amount.
+        let mut collect = Schedule::default();
+        collect.add_systems(collect_fetch_replies);
+        for _ in 0..200 {
+            collect.run(&mut world);
+            if !world.resource::<PendingFetchReplies>().0.is_empty() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+
+        let seen = client.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "exactly one request reached the client");
+        assert_eq!(seen[0].method, "GET");
+        assert_eq!(seen[0].url, "http://example.invalid/thing");
+
+        let pending = world.resource::<PendingFetchReplies>();
+        assert_eq!(pending.0.len(), 1, "the reply reached the world thread");
+        let reply = pending.0[0].result.as_ref().expect("client returned Ok");
+        assert_eq!(reply.status, 200);
+        assert_eq!(reply.body, "GET http://example.invalid/thing");
+        // The body cap is policy the runtime passes down, not a client default.
+        assert_eq!(
+            reply.headers[0].1,
+            MAX_HTTP_BODY_BYTES.to_string(),
+            "the client was handed the runtime's body cap"
+        );
+    }
+
+    /// A build with no client installed answers every request with the
+    /// rebuild hint, so `fetch()` never silently does nothing.
+    #[test]
+    fn default_registry_reports_the_missing_client() {
+        let err = DisabledHttpClient
+            .send(&HttpRequest::default(), MAX_HTTP_BODY_BYTES)
+            .expect_err("the disabled client always errors");
+        assert!(err.contains("http-fetch"), "error names the feature: {err}");
     }
 }
