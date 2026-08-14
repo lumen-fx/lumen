@@ -1,4 +1,4 @@
-name: Release
+name: release
 
 # Publishes the Lumen toolchain (lumenc + liblumen + the app launcher stub) to
 # a GitHub release, in the exact shape tools/release/install.sh expects: one

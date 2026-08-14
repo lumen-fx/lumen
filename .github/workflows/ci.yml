@@ -1,4 +1,4 @@
-name: CI
+name: ci
 
 # Build and test the workspace on Linux, macOS, and Windows. The three-OS
 # matrix is also the alpha-release parity matrix: a red mac or windows leg is

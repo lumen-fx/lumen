@@ -1,4 +1,4 @@
-name: Publish packages
+name: publish-packages
 
 # Keeps the OS package managers in step with a GitHub release. The manifests
 # under tools/release/{aur,homebrew,scoop,winget} are rewritten to point at the
