@@ -12,10 +12,11 @@ local M = {}
 local defaults = {
   -- Where the grammar comes from. Point `grammar_path` at a local clone of
   -- the Lumen repository to build the grammar from your checkout; otherwise
-  -- the repository is fetched, and `grammar_revision` pins the commit that
-  -- the installed queries were written against.
+  -- the repository is fetched at `grammar_revision`, which pins the parser
+  -- and the queries to one commit the way the Helix and Zed setups do. Set
+  -- it to a branch name to follow that branch instead.
   grammar_url = 'https://github.com/lumen-fx/lumen',
-  grammar_revision = nil,
+  grammar_revision = '5881829b38e1cb44e8496cafe313b7f897d00077',
   grammar_path = nil,
 
   -- Absolute path to `lumen-lsp`. Unset means: look in the Cargo target

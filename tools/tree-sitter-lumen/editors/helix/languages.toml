@@ -23,7 +23,7 @@ command = "lumen-lsp"
 # `rev` pins the grammar. Bump it after a grammar change.
 [[grammar]]
 name = "lumen"
-source = { git = "https://github.com/lumen-fx/lumen", rev = "3635f67e97d8ece3af0fd0926f9ce10e55750885", subpath = "tools/tree-sitter-lumen" }
+source = { git = "https://github.com/lumen-fx/lumen", rev = "5881829b38e1cb44e8496cafe313b7f897d00077", subpath = "tools/tree-sitter-lumen" }
 
 # Building the grammar from a local checkout instead:
 #
