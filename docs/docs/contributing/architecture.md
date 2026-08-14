@@ -34,7 +34,7 @@ crates/dev/        tools that never ship inside an app
 sdk/               the Rust, C++, and Python SDKs
 apps/              example apps
 fixtures/          small apps the test suite drives
-tools/             the release plumbing and the VS Code extension
+tools/             the release plumbing and the editor plugins
 ```
 
 ## Crate map

@@ -1,0 +1,5 @@
+<idea-plugin>
+    <extensions defaultExtensionNs="com.intellij">
+        <textmate.bundleProvider implementation="dev.lumenfx.lumen.LumenTextMateBundle"/>
+    </extensions>
+</idea-plugin>

@@ -121,6 +121,35 @@ With auto-discovery on, the extension looks for the server in
 `$CARGO_TARGET_DIR`, then in each workspace folder's `target/` directory
 (release before debug), then for `lumen-lsp` on `PATH`.
 
+### JetBrains plugin
+
+The plugin lives in `tools/jetbrains-lumen`. Build it with `./gradlew
+buildPlugin`, then install the zip from `build/distributions/` through
+Settings | Plugins | Install Plugin from Disk. It works in every IntelliJ-based
+IDE from 2024.2 on, Community editions included.
+
+It needs [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij), the LSP
+client it talks to `lumen-lsp` through. Install that from the Marketplace
+first.
+
+The plugin highlights `.lmn` (with embedded script and CSS) and `.rhai` using
+the same TextMate grammars as the VS Code extension. Every other feature is the
+server's: diagnostics, completion, hover, signature help, go to definition,
+find usages, rename, structure view, and reformatting a `.lmn` file. A `.css`
+file reaches the server when it sits next to a `main.lmn`. Server status and
+the LSP traffic are in View | Tool Windows | Language Servers.
+
+Settings, under Settings | Languages & Frameworks | Lumen:
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| Path to `lumen-lsp` | unset | Explicit path to the server binary. |
+| Look for a locally built server | on | Searches `$CARGO_TARGET_DIR` and the project's `target/` directories (release before debug) before falling back to `PATH`. |
+
+Changing either setting restarts the server.
+
+The plugin has no `lumenc` commands and no live preview.
+
 ## MCP server
 
 A running Lumen app exposes its UI over a local JSON-RPC socket. An agent
