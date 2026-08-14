@@ -1,0 +1,74 @@
+name: grammar pins
+
+# Zed and Helix compile the .lmn grammar from a pinned commit of this
+# repository. Repin on each release so a grammar change ships without a
+# hand-edited SHA. The pin target is the last commit that touched the
+# grammar directory, which the repin commit never does, so reruns are
+# no-ops until the grammar changes again.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  repin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          lfs: false
+
+      - name: repin to the last grammar commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          rev="$(git log -1 --format=%H -- tools/tree-sitter-lumen/grammar.js tools/tree-sitter-lumen/src tools/tree-sitter-lumen/queries)"
+          if [ -z "$rev" ]; then
+            echo "no grammar commit found; nothing to pin"
+            exit 0
+          fi
+
+          repin() {
+            file="$1"
+            # Only a 40-hex pin is rewritten; an unpinned config stays as it is.
+            sed -i -E "s/([\"'])[0-9a-f]{40}([\"'])/\\1${rev}\\2/" "$file"
+          }
+          repin tools/zed-lumen/extension.toml
+          repin tools/tree-sitter-lumen/editors/helix/languages.toml
+          repin tools/tree-sitter-lumen/editors/nvim/lumen.lua
+
+          if git diff --quiet; then
+            echo "pins already at ${rev}"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/zed-lumen/extension.toml \
+                  tools/tree-sitter-lumen/editors/helix/languages.toml \
+                  tools/tree-sitter-lumen/editors/nvim/lumen.lua
+          git commit -m "Point the editor grammar pins at ${rev}"
+
+          # Branch protection may refuse a direct push; a pull request is the
+          # fallback, and existing repin branches are reused, not duplicated.
+          if git push origin HEAD:main; then
+            echo "pushed to main"
+            exit 0
+          fi
+          branch="repin-grammar-${rev}"
+          git push -f origin "HEAD:refs/heads/${branch}"
+          if ! gh pr list --head "${branch}" --json number --jq '.[].number' | grep -q .; then
+            gh pr create --head "${branch}" \
+              --title "Point the editor grammar pins at the released grammar" \
+              --body "The release tag found the grammar pins behind tools/tree-sitter-lumen. This repins Zed, Helix, and any pinned Neovim config to ${rev}, the last commit that touched the grammar."
+          fi
