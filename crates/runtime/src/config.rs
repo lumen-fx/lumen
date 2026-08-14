@@ -459,7 +459,9 @@ impl BundleCapabilities {
     pub fn to_features(&self) -> Vec<String> {
         let mut f: Vec<String> = Vec::new();
         if self.audio {
-            f.push("audio".into());
+            // The backend comes with the capability: a bundled app that plays
+            // audio wants sound, not the silent transport.
+            f.push("audio-rodio".into());
         }
         if self.mcp {
             f.push("mcp".into());
@@ -973,7 +975,7 @@ mod tests {
         let caps = BundleCapabilities::resolve(&dir, &cfg);
         assert!(caps.audio && caps.http_fetch);
         let feats = caps.to_features();
-        assert!(feats.contains(&"audio".to_string()));
+        assert!(feats.contains(&"audio-rodio".to_string()));
         assert!(feats.contains(&"http-fetch".to_string()));
 
         // Explicit [capabilities] audio = false overrides the marker.

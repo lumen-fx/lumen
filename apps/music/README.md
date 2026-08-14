@@ -2,7 +2,7 @@
 
 A desktop player shell: a selectable playlist sidebar, a scrolling library
 table, and a now-playing bar whose transport drives audio through
-`lumen-audio` (rodio).
+`lumen-audio-rodio`.
 
 ## Run
 
@@ -11,8 +11,8 @@ cargo run -p lumenc -- run apps/music
 ```
 
 Click a library row (or press Play) to hear a track. On a machine with a
-working audio device you hear the track; on a deviceless box `lumen-audio`
-falls back to a silent null sink and the transport UI still works.
+working audio device you hear the track; on a deviceless box playback runs
+silent and the transport UI still works.
 
 ## Soundtracks
 

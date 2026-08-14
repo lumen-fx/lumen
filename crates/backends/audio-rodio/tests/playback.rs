@@ -1,26 +1,27 @@
 //! Headless pipeline tests - no speakers required.
 //!
-//! These prove the subsystem end-to-end without asserting audible output:
+//! These prove the backend end-to-end without asserting audible output:
 //! we synthesize a WAV, decode it back (asserting sample count / duration),
-//! then drive the [`AudioService`] state machine (play/pause/seek/stop) and
+//! then drive the [`RodioAudio`] state machine (play/pause/seek/stop) and
 //! assert the clock-based position advances and transitions are correct.
-//! They pass whether or not a real output device exists (null mode).
+//! They pass whether or not a real output device exists.
 
 use lumen_audio::synth;
-use lumen_audio::{AudioService, PlaybackState};
+use lumen_audio::{AudioBackend, PlaybackState};
+use lumen_audio_rodio::RodioAudio;
 use std::io::Read;
 use std::time::Duration;
 
-/// Device-less service for the suite.
+/// Device-less backend for the suite.
 ///
 /// Nothing here needs an output device: the assertions cover decoding,
-/// duration, transport state, and the clock, all of which run in null mode.
+/// duration, transport state, and the clock, all of which run without one.
 /// Opening one is what makes the suite unportable, because a machine with no
 /// audio endpoint is not guaranteed to report that cleanly; on a Windows CI
-/// runner the WASAPI backend faults the process instead. [`AudioService::disabled`]
-/// is the same device-less shape [`AudioService::new`] falls back to.
-fn null_audio() -> AudioService {
-    AudioService::disabled()
+/// runner the WASAPI backend faults the process instead. [`RodioAudio::disabled`]
+/// is the same device-less shape [`RodioAudio::new`] falls back to.
+fn null_audio() -> RodioAudio {
+    RodioAudio::disabled()
 }
 
 /// Parse the 16-bit-PCM data-chunk length back out of a generated WAV and
@@ -231,7 +232,7 @@ fn natural_end_edge() {
 
 /// After a track ends naturally (`refresh` cleared the sink), `resume()`
 /// must re-arm a real, playing transport from position 0 - not leave a
-/// phantom clock climbing over a silent/empty sink. Null-mode observable:
+/// phantom clock climbing over a silent/empty sink. Observable without a device:
 /// the load path re-runs (duration re-decoded, position resets, state
 /// Playing), and the restarted track ends again.
 #[test]
@@ -286,7 +287,7 @@ fn resume_after_natural_end_replays() {
 
 /// `stop()` clears the sink but keeps the track loaded (Paused semantics).
 /// A subsequent `resume()` must rebuild the source and play from 0 rather
-/// than seek an empty sink. Null-mode observable: state returns to Playing,
+/// than seek an empty sink. Observable without a device: state returns to Playing,
 /// position advances from 0, duration is preserved via the retained bytes.
 #[test]
 fn resume_after_stop_replays() {

@@ -1,9 +1,9 @@
 //! Tiny offline synthesizer used to generate the committed test tracks.
 //!
-//! These are honest, self-generated, fully decodable PCM WAV files - the
-//! correct way to prove the audio pipeline end-to-end without shipping
-//! copyrighted music. Each generator returns mono `f32` samples in
-//! `-1.0..=1.0`; [`write_wav`] encodes them as 16-bit PCM WAV.
+//! These are self-generated, fully decodable PCM WAV files, which is how the
+//! audio pipeline gets proven end to end without shipping copyrighted music.
+//! Each generator returns mono `f32` samples in `-1.0..=1.0`; [`write_wav`]
+//! encodes them as 16-bit PCM WAV.
 
 use std::f32::consts::TAU;
 use std::io::{self, Write};

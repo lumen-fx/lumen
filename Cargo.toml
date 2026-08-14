@@ -53,7 +53,7 @@ default = [
     "embed-parser",
     "runtime-parse",
     "http-fetch",
-    "audio",
+    "audio-rodio",
     "mcp",
     "async",
     "host-rhai",
@@ -66,7 +66,10 @@ embed-parser = ["dep:lumenc", "runtime-parse"]
 # Forwards to the runtime's Part B tree-shaking knobs.
 runtime-parse = ["lumen-runtime/runtime-parse"]
 http-fetch = ["lumen-runtime/http-fetch"]
+# `audio` compiles the audio subsystem against whichever backend is selected;
+# `audio-rodio` adds the one Lumen ships, and is what the default build picks.
 audio = ["lumen-runtime/audio"]
+audio-rodio = ["lumen-runtime/audio-rodio"]
 mcp = ["lumen-runtime/mcp"]
 async = ["lumen-runtime/async"]
 host-rhai = ["lumen-runtime/host-rhai"]

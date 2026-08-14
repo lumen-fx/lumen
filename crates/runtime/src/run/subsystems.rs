@@ -33,8 +33,8 @@ use super::*;
 /// markers, with `lumen.toml` overrides taking precedence where they exist.
 /// Every signal errs toward ON (see the module contract).
 pub(crate) struct SubsystemUsage {
-    /// Install the full rodio-backed audio service (output device + position
-    /// ticker thread) rather than the inert `AudioService::disabled()`.
+    /// Install the full audio service (output device + position ticker thread)
+    /// rather than an inert, device-less one.
     pub(crate) audio: bool,
     /// Install the global-hotkey OS manager (`OsHotkeyRegistry`) + the
     /// per-tick `poll_hotkeys` drain. The manager opens an X11 connection on
@@ -512,35 +512,55 @@ pub(crate) fn register_os_misc(app: &mut App, cfg: &crate::config::LumenToml) {
         .insert_non_send(InhibitHolder::new().with_app_name(app_name));
 }
 
-/// The rodio-backed audio service (or the inert `disabled()` sink), the player
-/// entity, and the end-of-track flag. GATED on `audio_used`
-/// ([`SubsystemUsage::audio`]).
+/// The audio service, the player entity, and the end-of-track flag. GATED on
+/// `audio_used` ([`SubsystemUsage::audio`]).
 ///
-/// The service is NonSend (rodio's MixerDeviceSink wraps a !Send cpal stream). A
-/// dedicated player entity carries the current `AudioSource` so tracks load
-/// through the same async AssetServer pipeline as images.
+/// The service is NonSend (an output device is rarely Send: rodio's
+/// MixerDeviceSink wraps a !Send cpal stream). A dedicated player entity carries
+/// the current `AudioSource` so tracks load through the same async AssetServer
+/// pipeline as images.
 ///
-/// Startup gating: an app with no detected audio usage gets an inert
-/// `AudioService::disabled()` - no output device is opened and no ticker thread
-/// is spawned - so a pure-UI app (the counter) pays neither. All transport
-/// systems still no-op safely against it. An app that uses audio (the music
-/// demo: `.wav` refs + `audio_*` builtins) or forces it via `[runtime] audio =
-/// true` gets the full service.
+/// Startup gating: an app with no detected audio usage gets an inert backend -
+/// no output device is opened and no ticker thread is spawned - so a pure-UI app
+/// (the counter) pays neither. All transport systems still no-op safely against
+/// it. An app that uses audio (the music demo: `.wav` refs + `audio_*`
+/// builtins) or forces it via `[runtime] audio = true` gets the full service.
 ///
-/// COMPILE-TIME GATE (Part B tree-shaking): the whole subsystem lives behind
-/// the `audio` cargo feature. The full cdylib / dev build compiles it; a
-/// trimmed static `--bundle` for a no-audio app drops `lumen-audio` (rodio +
-/// cpal + symphonia) entirely and this becomes the inert no-op below.
+/// An embedder that ships its own backend replaces this one from an app hook:
+/// hooks run last on the built app, so a NonSend `AudioService::from(MyBackend)`
+/// inserted there wins. Pair it with `[runtime] audio = false` to keep the
+/// default backend from opening a device it will not use.
+///
+/// COMPILE-TIME GATE (Part B tree-shaking): the subsystem lives behind the
+/// `audio` cargo feature and the shipped backend behind `audio-rodio`. The full
+/// cdylib / dev build compiles both; a trimmed static `--bundle` for a no-audio
+/// app drops them entirely and this becomes the inert no-op below.
 #[cfg(feature = "audio")]
 pub(crate) fn register_audio(app: &mut App, audio_used: bool) {
-    app.world.insert_non_send(if audio_used {
-        lumen_audio::AudioService::new()
-    } else {
-        lumen_audio::AudioService::disabled()
-    });
+    app.world.insert_non_send(default_audio_service(audio_used));
     let audio_player = app.world.spawn(()).id();
     app.world.insert_resource(AudioPlayerEntity(audio_player));
     app.world.init_resource::<AudioEndedFlag>();
+}
+
+/// The backend a default build selects: rodio, opening a device only for an app
+/// that uses audio.
+#[cfg(feature = "audio-rodio")]
+fn default_audio_service(audio_used: bool) -> lumen_audio::AudioService {
+    if audio_used {
+        lumen_audio_rodio::RodioAudio::new().into()
+    } else {
+        lumen_audio_rodio::RodioAudio::disabled().into()
+    }
+}
+
+/// With the audio subsystem on and no backend compiled in, playback runs silent:
+/// the transport, the script commands, and the position signals all behave, and
+/// nothing reaches an audio device. This is the build an embedder starts from
+/// when it supplies its own backend.
+#[cfg(all(feature = "audio", not(feature = "audio-rodio")))]
+fn default_audio_service(_audio_used: bool) -> lumen_audio::AudioService {
+    lumen_audio::AudioService::default()
 }
 
 /// Inert audio register unit for a build compiled WITHOUT the `audio` feature:
