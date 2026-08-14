@@ -171,18 +171,11 @@ rather than a gate: what decides a pull request is the suite itself. Doctests
 are outside the measurement, since collecting coverage from them needs a
 nightly toolchain.
 
-The surfaces outside the Cargo workspace are built in CI as well, each gated on
-its own directory so that one tool costs one job: the VS Code extension
-compiles and packages, the JetBrains plugin builds and its descriptor is
-checked, the tree-sitter grammar is regenerated and compared against the
-committed parser, the Zed extension is compiled for wasm, the release shell
-scripts are linted with shellcheck and the package manifests are rewritten
-offline once, the Python SDK runs its tests on the oldest interpreter it
-supports and on a current one, and the C++ SDK examples are compiled against
-the committed headers. None of that needs `liblumen`, so it
-does not wait on an engine build. The one expensive check is the JetBrains
-Plugin Verifier, which downloads a full IDE per IDE it verifies against; it
-runs weekly and on demand rather than per pull request.
+The editor integrations under `tools/`, the release scripts, and the SDKs
+build in a separate workflow, `tools.yml`, gated per directory so a change to
+one tool runs one job. None of it needs `liblumen`. The JetBrains Plugin
+Verifier is the exception to the per-pull-request rule: it downloads a full
+IDE per version it checks, so it runs weekly and on demand.
 
 Golden images are regenerated, not hand-edited. `UPDATE_GOLDENS=1` rewrites the
 software rasterizer baseline in `lumen-render-headless`;
