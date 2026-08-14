@@ -12,7 +12,7 @@
  * `$index`, and `row.field` reference forms.
  *
  * `<script>` bodies are raw text: script source cannot contain `<` or a bare
- * `&` and stay valid XML, so the body token simply runs to the next `<`.
+ * `&` and stay valid XML, so the body token runs to the next `<`.
  */
 
 /// <reference types="tree-sitter-cli/dsl" />

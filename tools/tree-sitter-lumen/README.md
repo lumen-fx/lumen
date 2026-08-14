@@ -9,15 +9,48 @@ It describes the shape of the markup: elements, attributes, text,
 or an attribute actually exists is the compiler's business, and `lumen-lsp`
 reports that from lumenc's own parser.
 
-## Using it
-
-- Neovim: [`editors/nvim`](editors/nvim)
-- Helix: [`editors/helix`](editors/helix)
-- Zed: [`../zed-lumen`](../zed-lumen)
-
 The generated parser is committed, so an editor builds it without the
 tree-sitter CLI. Queries live in [`queries`](queries): `highlights.scm` and
-`injections.scm`.
+`injections.scm`. The Zed extension is separate, at
+[`../zed-lumen`](../zed-lumen).
+
+## Neovim
+
+Needs Neovim 0.11 or newer, `nvim-treesitter`, and a C compiler. Copy
+`editors/nvim/lumen.lua` to `~/.config/nvim/lua/lumen.lua`, call
+`require('lumen').setup()` from your config, install the parser with
+`:TSInstall lumen`, and open a `.lmn` file.
+
+`setup()` takes `grammar_path` (build the grammar from a local Lumen
+checkout instead of fetching it), `grammar_url` and `grammar_revision`
+(where and what to fetch), `server_path` (absolute path to `lumen-lsp`),
+and `treesitter`/`lsp` toggles to skip either half. With `server_path`
+unset the server is found the way the VS Code extension finds it:
+`$CARGO_TARGET_DIR`, then the project's `target/` directory, then `$PATH`.
+
+On the `nvim-treesitter` main branch the queries install with the parser;
+on master, copy them yourself:
+
+```sh
+mkdir -p ~/.config/nvim/queries/lumen
+cp tools/tree-sitter-lumen/queries/*.scm ~/.config/nvim/queries/lumen/
+```
+
+`editors/nvim/lsp/lumen_lsp.lua` is the server definition on its own, in
+the layout `nvim-lspconfig` uses; drop it in `~/.config/nvim/lsp/` and
+enable it with `vim.lsp.enable('lumen_lsp')` to configure the grammar some
+other way.
+
+## Helix
+
+Append `editors/helix/languages.toml` to `~/.config/helix/languages.toml`,
+copy the queries into `~/.config/helix/runtime/queries/lumen/`, then run
+`hx --grammar fetch` and `hx --grammar build`. `hx --health lumen` reports
+what Helix found. `lumen-lsp` has to be on `$PATH`, or named by an absolute
+path in the `[language-server.lumen-lsp]` section.
+
+Both editors highlight an inline `<script>` body as Rhai when a `rhai`
+grammar is installed; without one the body shows as plain text.
 
 ## What it parses
 
