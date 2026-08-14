@@ -1,6 +1,11 @@
 [package]
 name = "lumen-mcp-server"
 description = "Standalone MCP server bridging Claude Code (stdio) to a running Lumen app's JSON-RPC TCP introspection port."
+keywords = ["ui", "gui", "mcp", "introspection", "lumen"]
+categories = ["development-tools", "gui"]
+# Ships with the toolchain rather than from crates.io: this binary talks to
+# a running app over TCP, so nothing depends on it as a library.
+publish = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true

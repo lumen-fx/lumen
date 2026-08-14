@@ -7,13 +7,15 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Scripting backend trait (ScriptHost, StateProxy)."
+keywords = ["ui", "gui", "scripting", "host", "lumen"]
+categories = ["gui"]
 
 [dependencies]
-lumen-core = { path = "../../core" }
-lumen-ir = { path = "../../ir" }
-lumen-input = { path = "../../input" }
-lumen-primitives = { path = "../../primitives" }
-lumen-os-dnd = { path = "../../os/dnd" }
+lumen-core = { path = "../../core", version = "0.0.3" }
+lumen-ir = { path = "../../ir", version = "0.0.3" }
+lumen-input = { path = "../../input", version = "0.0.3" }
+lumen-primitives = { path = "../../primitives", version = "0.0.3" }
+lumen-os-dnd = { path = "../../os/dnd", version = "0.0.3" }
 bevy_ecs.workspace = true
 crossbeam-channel.workspace = true
 thiserror.workspace = true

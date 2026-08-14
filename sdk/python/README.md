@@ -1,7 +1,7 @@
 # Lumen Python SDK
 
-Typed Python bindings for the [Lumen](../../) UI framework, over the C ABI
-(`include/lumen.h`). State is declarative and reactive: you write a
+Typed Python bindings for the [Lumen](https://lumenfx.dev) UI framework, over
+the C ABI (`include/lumen.h`). State is declarative and reactive: you write a
 `Model` whose fields are typed signals, mutate them with plain Python, and the
 runtime keeps the UI in sync.
 
@@ -182,9 +182,14 @@ driving a `<for>` block (array signals).
 pip install -e sdk/python
 ```
 
-Registers the `lumen` package (distribution name `lumenui`). It does not
-build or bundle `liblumen`; you still need `cargo build -p lumen`
-and a way for the loader to find it.
+Registers the `lumen` package; the distribution is named `lumenui`, which is
+also the name it carries on PyPI. The distribution is pure Python: it holds no
+compiled extension and bundles no `liblumen`, so one install works on every
+platform and the runtime it binds is whichever one the machine already has.
+That means something has to provide `liblumen`: either the Lumen toolchain
+install (`curl -fsSL https://lumenfx.dev/install.sh | sh`, which puts the
+library in `~/.lumen/bin` next to `lumenc`) or a checkout you built with
+`cargo build -p lumen`.
 
 ## Locating the library
 
@@ -192,10 +197,17 @@ and a way for the loader to find it.
 
 1. `LUMEN_LIBRARY_PATH` - a direct path to the library file, or a
    directory containing it.
-2. `target/{debug,release}` relative to the current working directory.
-3. `target/{debug,release}` relative to the workspace root (found by
+2. `LUMEN_LIB_DIR` - the same override `lumenc` honours, so one setting
+   points both at the same runtime.
+3. `target/{debug,release}` relative to the current working directory.
+4. `target/{debug,release}` relative to the workspace root (found by
    walking up for the workspace `Cargo.toml`).
-4. The system loader's own search paths (`LD_LIBRARY_PATH`, `/usr/lib`, ...).
+5. An installed toolchain: the directory holding the `lumenc` on `PATH`,
+   then `$LUMEN_PREFIX/bin`, default `~/.lumen/bin`.
+6. The system loader's own search paths (`LD_LIBRARY_PATH`, `/usr/lib`, ...).
+
+A checkout you are working in therefore wins over an installed toolchain, and
+either one is found without setting anything.
 
 The loaded library's `lumen_abi_version()` is checked against the version
 this SDK targets, ABI 0.13. A major mismatch or an older minor raises

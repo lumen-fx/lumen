@@ -7,16 +7,18 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "taffy-backed LayoutEngine impl."
+keywords = ["ui", "gui", "layout", "flexbox", "taffy"]
+categories = ["gui"]
 
 [dependencies]
-lumen-core = { path = "../../core" }
+lumen-core = { path = "../../core", version = "0.0.3" }
 # W2.5: layout-taffy calls CosmicShaper::measure for intrinsic text
 # sizing during taffy's MeasureFunc callback. Adding the dep keeps the
 # wiring concrete (no extra trait indirection); long term, if a second
 # shaper backend lands, we can lift this behind a
 # `LayoutTextMeasurer` trait in `lumen-text`.
-lumen-text = { path = "../../text" }
-lumen-text-cosmic = { path = "../text-cosmic" }
+lumen-text = { path = "../../text", version = "0.0.3" }
+lumen-text-cosmic = { path = "../text-cosmic", version = "0.0.3" }
 bevy_ecs.workspace = true   # needed for #[derive(Resource)] macro expansion path
 glam.workspace = true
 taffy.workspace = true

@@ -7,6 +7,8 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "OS clipboard host (arboard wrapper) for Lumen - MIME-typed read/write, optional PRIMARY selection on Linux."
+keywords = ["ui", "gui", "clipboard", "arboard", "lumen"]
+categories = ["os", "gui"]
 
 [features]
 default = []
@@ -15,5 +17,5 @@ default = []
 linux_primary = []
 
 [dependencies]
-lumen-os-mime = { path = "../mime" }
+lumen-os-mime = { path = "../mime", version = "0.0.3" }
 arboard.workspace = true

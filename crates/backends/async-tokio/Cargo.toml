@@ -7,9 +7,11 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "tokio Spawn + Timer impl."
+keywords = ["ui", "gui", "async", "tokio", "lumen"]
+categories = ["asynchronous", "gui"]
 
 [dependencies]
-lumen-core = { path = "../../core" }
+lumen-core = { path = "../../core", version = "0.0.3" }
 bevy_ecs.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "fs", "net"] }
 crossbeam-channel.workspace = true

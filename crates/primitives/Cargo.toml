@@ -7,11 +7,13 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Headless primitives with per-OS native physics (Scroll, Drag, Press)."
+keywords = ["ui", "gui", "scroll", "gestures", "lumen"]
+categories = ["gui"]
 
 [dependencies]
-lumen-core = { path = "../core" }
-lumen-input = { path = "../input" }
-lumen-widget = { path = "../widget" }
-lumen-widget-macros = { path = "../widget-macros" }
+lumen-core = { path = "../core", version = "0.0.3" }
+lumen-input = { path = "../input", version = "0.0.3" }
+lumen-widget = { path = "../widget", version = "0.0.3" }
+lumen-widget-macros = { path = "../widget-macros", version = "0.0.3" }
 bevy_ecs.workspace = true
 glam.workspace = true

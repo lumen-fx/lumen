@@ -7,11 +7,13 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Focus tracker, hit-test, event dispatch. Consumes WindowBackend events."
+keywords = ["ui", "gui", "input", "events", "focus"]
+categories = ["gui"]
 
 [dependencies]
-lumen-core = { path = "../core" }
-lumen-os-clipboard = { path = "../os/clipboard" }
-lumen-text = { path = "../text" }
+lumen-core = { path = "../core", version = "0.0.3" }
+lumen-os-clipboard = { path = "../os/clipboard", version = "0.0.3" }
+lumen-text = { path = "../text", version = "0.0.3" }
 bevy_ecs.workspace = true
 glam.workspace = true
 

@@ -7,6 +7,8 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Translation + locale-aware formatters (Fluent + ICU4X)."
+keywords = ["ui", "gui", "i18n", "fluent", "icu"]
+categories = ["internationalization", "gui"]
 
 [dependencies]
 bevy_ecs.workspace = true

@@ -389,10 +389,14 @@ app.run()
 ```
 
 Install with `pip install -e sdk/python`, which registers the package but does
-not build the library. `load_library()` looks for `liblumen` under
-`LUMEN_LIBRARY_PATH` (a file or a directory), then `target/debug` and
-`target/release` relative to the working directory and to the workspace root,
-then the system loader's own paths. Examples run straight from a checkout:
+not build the library. The distribution is named `lumenui` and is pure Python,
+so it carries no runtime of its own and loads whichever one the machine has.
+`load_library()` looks for `liblumen` under `LUMEN_LIBRARY_PATH` (a file or a
+directory), then `LUMEN_LIB_DIR`, then `target/debug` and `target/release`
+relative to the working directory and to the workspace root, then an installed
+toolchain (the directory holding the `lumenc` on `PATH`, then
+`$LUMEN_PREFIX/bin`, default `~/.lumen/bin`), then the system loader's own
+paths. Examples run straight from a checkout:
 
 ```sh
 cargo build -p lumen

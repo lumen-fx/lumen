@@ -7,9 +7,11 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Drag-and-drop abstractions for Lumen - DragSource / DropTarget components sharing MimePayload with lumen-os-clipboard."
+keywords = ["ui", "gui", "drag-and-drop", "mime", "lumen"]
+categories = ["os", "gui"]
 
 [dependencies]
-lumen-core = { path = "../../core" }
-lumen-os-mime = { path = "../mime" }
+lumen-core = { path = "../../core", version = "0.0.3" }
+lumen-os-mime = { path = "../mime", version = "0.0.3" }
 bevy_ecs.workspace = true
 glam.workspace = true

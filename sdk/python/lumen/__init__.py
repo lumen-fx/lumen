@@ -33,6 +33,7 @@ can raise, and the package README for install/run instructions.
 """
 
 from . import dom, raw
+from ._version import __version__
 from .api import App, get_library
 from .dom import Event, Listener, Node
 from .model import Field, Model
@@ -85,6 +86,5 @@ __all__ = [
     "LumenPanicError",
     "LumenLibraryNotFoundError",
     "LumenAbiVersionError",
+    "__version__",
 ]
-
-__version__ = "0.1.0.dev0"

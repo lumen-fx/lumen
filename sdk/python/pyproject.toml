@@ -1,32 +1,43 @@
 [build-system]
-requires = ["hatchling"]
+# 1.27 is where hatchling learned PEP 639 license expressions, which is how
+# `license = "MPL-2.0"` below is read.
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
+# The distribution is `lumenui` on every registry that carries the SDK; the
+# import name stays `lumen`, matching the C ABI and the other SDKs.
 name = "lumenui"
-version = "0.1.0.dev0"
 description = "Python SDK for the Lumen UI framework, over its C ABI via ctypes"
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MPL-2.0" }
+license = "MPL-2.0"
 authors = [{ name = "Lumen contributors" }]
 keywords = ["lumen", "ui", "gui", "ctypes", "ffi"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Rust",
     "Topic :: Software Development :: User Interfaces",
 ]
 
 # Deliberately empty: this is a pure ctypes wrapper over a shared
-# library you build with `cargo build -p lumen`. No cffi, no
-# setuptools-rust, no compiled extension of its own -- stdlib only.
+# library you install with the Lumen toolchain. No cffi, no
+# setuptools-rust, no compiled extension of its own; stdlib only.
 dependencies = []
 
+# One place holds the version, and it is the Python source: a wheel built from
+# an sdist has no workspace `Cargo.toml` to read it from. tests/test_version.py
+# is what keeps the two in step.
+dynamic = ["version"]
+
+[tool.hatch.version]
+path = "lumen/_version.py"
+
 [project.urls]
-Homepage = "https://github.com/lumen-fx/lumen"
+Homepage = "https://lumenfx.dev"
+Documentation = "https://docs.lumenfx.dev"
 Repository = "https://github.com/lumen-fx/lumen"
 
 [tool.hatch.build.targets.wheel]
@@ -34,6 +45,11 @@ packages = ["lumen"]
 # Ship the PEP 561 marker so type checkers honour the inline annotations
 # when the wheel is installed.
 artifacts = ["lumen/py.typed"]
+
+# The sdist carries the tests and the runnable examples as well, so a source
+# release is enough to check the package on a platform with no wheel of its own.
+[tool.hatch.build.targets.sdist]
+include = ["lumen", "tests", "examples", "README.md", "pyproject.toml"]
 
 # Optional dev tooling - install with `pip install -e sdk/python[dev]`.
 # The library itself stays dependency-free (pure stdlib ctypes).

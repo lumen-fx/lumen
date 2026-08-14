@@ -7,10 +7,12 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "In-memory RGBA renderer for CI and tests."
+keywords = ["ui", "gui", "rendering", "headless", "testing"]
+categories = ["rendering", "gui"]
 
 [dependencies]
-lumen-core = { path = "../../core" }
-lumen-text = { path = "../../text" }
+lumen-core = { path = "../../core", version = "0.0.3" }
+lumen-text = { path = "../../text", version = "0.0.3" }
 bevy_ecs.workspace = true
 glam.workspace = true
 
