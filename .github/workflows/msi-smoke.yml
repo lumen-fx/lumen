@@ -1,4 +1,4 @@
-name: MSI smoke
+name: msi-smoke
 
 # Installs the Windows package on a Windows machine and checks the four things
 # that can silently break it: where the files land, whether the user PATH picks

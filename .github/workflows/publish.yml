@@ -1,4 +1,4 @@
-name: Publish
+name: publish
 
 # Publishes the Lumen packages to the language registries: `lumenui` on PyPI
 # (the Python SDK) and the Rust crates on crates.io (`lumenui`, `lumenc`, and

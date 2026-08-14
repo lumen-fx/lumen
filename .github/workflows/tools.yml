@@ -1,4 +1,4 @@
-name: tools and SDKs
+name: tools
 
 # Builds what ci.yml does not: the editor integrations under tools/, the
 # release shell scripts, and the Python and C++ SDKs. Nothing here publishes,

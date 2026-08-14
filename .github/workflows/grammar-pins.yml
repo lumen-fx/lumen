@@ -1,4 +1,4 @@
-name: grammar pins
+name: grammar-pins
 
 # Zed and Helix compile the .lmn grammar from a pinned commit of this
 # repository. Repin on each release so a grammar change ships without a
