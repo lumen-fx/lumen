@@ -113,6 +113,41 @@ without `--version` to lift the pin.
 Releases from before `sha256sums.txt` was published cannot be installed this
 way; the installer has nothing to verify them against and stops.
 
+## Continuous integration
+
+A GitHub Actions workflow installs the toolchain with the setup-lumen action
+instead of the script above, which prompts and writes to a shell startup file:
+
+```yaml
+steps:
+  - uses: actions/checkout@v4
+  - uses: lumen-fx/lumen/tools/setup-lumen@main
+  - run: lumenc check .
+```
+
+It runs on Linux, macOS, and Windows runners, downloads the release built for
+the runner, checks it against the release's `sha256sums.txt`, and puts `lumenc`
+on `PATH`. Pass `version` to hold a workflow on a release:
+
+```yaml
+  - uses: lumen-fx/lumen/tools/setup-lumen@main
+    with:
+      version: "0.1.0"
+```
+
+The unpacked toolchain is kept in the workflow cache, keyed on the release and
+the runner's platform, so later runs skip the download.
+
+Two things behave differently in a workflow than on a workstation. The update
+check never runs: a `CI` environment variable turns it off, and an unpacked
+archive has no install receipt to check against in the first place. And
+`lumenc run` loads the runtime library, which on Linux links GTK, ALSA, X11,
+and Wayland; a job that runs an app installs those first, while `check`, `new`,
+and `fmt` need none of them.
+
+The action's own inputs and outputs are documented with it, in
+[tools/setup-lumen](https://github.com/lumen-fx/lumen/tree/main/tools/setup-lumen).
+
 ## Next
 
 - [Write your first app](first-app.md).

@@ -1,0 +1,126 @@
+name: Setup Lumen
+description: Install the Lumen toolchain on a runner and put lumenc on PATH.
+author: Lumen
+
+# A composite action, not a JavaScript one. Everything it does is download,
+# checksum, unpack, and a cache step it can call by name, so a Node build to
+# keep in step with the runner's Node version would buy nothing.
+#
+# The work itself is in setup-lumen.sh next to this file, which runs the same
+# way outside a runner. That is deliberate: the download and checksum path is
+# the part worth being able to try by hand when a release looks wrong.
+#
+# Three steps around one cache. Resolving the release comes first because the
+# cache key contains the release tag, and "latest" is not a key. The install
+# only runs on a miss, and the save only runs after an install that worked, so
+# a failed download never leaves a broken toolchain in the cache under a key
+# that later runs will trust.
+
+branding:
+  icon: package
+  color: purple
+
+inputs:
+  version:
+    description: >-
+      Release to install: a version number such as 0.0.3, a tag such as
+      v0.0.3, or "latest" for the current release.
+    required: false
+    default: latest
+  cache:
+    description: >-
+      Keep the unpacked toolchain in the workflow cache, keyed on the resolved
+      release and the runner's target, so later runs skip the download.
+    required: false
+    default: "true"
+
+outputs:
+  version:
+    description: The release that was installed, without the leading "v".
+    value: ${{ steps.resolve.outputs.version }}
+  tag:
+    description: The release tag that was installed.
+    value: ${{ steps.resolve.outputs.tag }}
+  target:
+    description: The target the toolchain was built for, such as linux-x86_64.
+    value: ${{ steps.resolve.outputs.target }}
+  bin-path:
+    description: The directory holding lumenc, added to PATH.
+    value: ${{ steps.resolve.outputs.bin-dir }}
+  cache-hit:
+    description: Whether the toolchain came back from the cache.
+    value: ${{ steps.restore.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve the release
+      id: resolve
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/setup-lumen.sh" resolve "$LUMEN_VERSION"
+      env:
+        LUMEN_VERSION: ${{ inputs.version }}
+
+    - name: Restore the cached toolchain
+      id: restore
+      if: inputs.cache == 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.resolve.outputs.install-dir }}
+        key: setup-lumen-${{ steps.resolve.outputs.tag }}-${{ steps.resolve.outputs.target }}
+
+    # A restored cache is trusted only as far as the file it is there for. A
+    # run cancelled mid-save, or a key whose contents were pruned, comes back
+    # as a hit over a directory with no lumenc in it, and the download is the
+    # cheaper thing to redo.
+    - name: Decide whether to download
+      id: plan
+      shell: bash
+      run: |
+        set -euo pipefail
+        exe="$INSTALL_DIR/bin/lumenc"
+        if [ "${RUNNER_OS}" = Windows ]; then
+          exe="$exe.exe"
+        fi
+        if [ -f "$exe" ]; then
+          echo "needed=false" >> "$GITHUB_OUTPUT"
+          echo "cached toolchain at $INSTALL_DIR"
+        else
+          echo "needed=true" >> "$GITHUB_OUTPUT"
+        fi
+      env:
+        INSTALL_DIR: ${{ steps.resolve.outputs.install-dir }}
+
+    - name: Download and verify the toolchain
+      if: steps.plan.outputs.needed == 'true'
+      shell: bash
+      run: |
+        bash "$GITHUB_ACTION_PATH/setup-lumen.sh" install \
+          "$LUMEN_TAG" "$LUMEN_TARGET" "$INSTALL_DIR"
+      env:
+        LUMEN_TAG: ${{ steps.resolve.outputs.tag }}
+        LUMEN_TARGET: ${{ steps.resolve.outputs.target }}
+        INSTALL_DIR: ${{ steps.resolve.outputs.install-dir }}
+
+    - name: Cache the toolchain
+      if: inputs.cache == 'true' && steps.plan.outputs.needed == 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.resolve.outputs.install-dir }}
+        key: setup-lumen-${{ steps.resolve.outputs.tag }}-${{ steps.resolve.outputs.target }}
+
+    # GITHUB_PATH is read by the runner, not by bash, so on Windows it wants a
+    # Windows path. Every later step in the job gets the directory on PATH;
+    # this step does not, which is why the check below names the binary.
+    - name: Put lumenc on PATH
+      shell: bash
+      run: |
+        set -euo pipefail
+        dir="$BIN_DIR"
+        if command -v cygpath > /dev/null 2>&1; then
+          dir="$(cygpath -w "$dir")"
+        fi
+        printf '%s\n' "$dir" >> "$GITHUB_PATH"
+        "$BIN_DIR/lumenc" --version
+      env:
+        BIN_DIR: ${{ steps.resolve.outputs.bin-dir }}

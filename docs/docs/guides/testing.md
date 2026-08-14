@@ -105,8 +105,10 @@ at a time.
 
 ## A test in CI
 
-Start the app, wait for it to come up, drive it, assert, and stop it. Put the
-port and the simulate key in `lumen.toml` first:
+Start the app, wait for it to come up, drive it, assert, and stop it. On a
+GitHub Actions runner, [install the toolchain
+first](../getting-started/install.md#continuous-integration). Put the port and
+the simulate key in `lumen.toml`:
 
 ```toml
 [mcp]
