@@ -1,0 +1,100 @@
+name: coverage
+
+# Line coverage for the workspace, measured with cargo-llvm-cov and reported to
+# Codecov. This is a report, not a gate: CI decides whether the suite passes.
+#
+# Scope is the same suite CI runs, with the same feature set (no --all-features:
+# turning every scripting host and backend on at once is a configuration no
+# release ships, and its coverage would not describe the product). The run is
+# headless; the tests that need a display or a real GPU already detect the
+# runner and skip themselves, exactly as they do in ci.yml.
+#
+# Nothing is excluded from instrumentation. Tests that drive a built binary
+# (lumenc's package and check suites) still count: cargo-llvm-cov instruments
+# the binaries too and collects the profiles those child processes write.
+#
+# Doctests are not measured. Collecting coverage from them needs nightly, and
+# the pinned toolchain is stable; ci.yml still runs them.
+#
+# Both push and pull_request get the full workspace. A reduced crate set would
+# be faster, but Codecov compares a pull request's report against main's, and a
+# report missing whole crates reads as a coverage drop in files the change
+# never touched.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    name: llvm-cov
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      # Read here so the upload step can test for it. The secrets context is not
+      # available in an `if`, the env context is.
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    steps:
+      # apps/music/*.ogg is the only LFS content in the repo, and the audio test
+      # fixtures are raw bytes on purpose, so the suite runs without an LFS
+      # fetch. Keep lfs off, as ci.yml does.
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Install pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustup component add llvm-tools-preview
+          rustc --version
+
+      - name: Install Linux system dependencies
+        run: .github/scripts/linux-deps.sh
+
+      # Instrumented builds share nothing with the ordinary CI build, so this
+      # cache is its own key.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Collect coverage
+        run: cargo llvm-cov --workspace --no-fail-fast --lcov --output-path lcov.info
+
+      - name: Upload to Codecov
+        if: env.CODECOV_TOKEN != ''
+        uses: codecov/codecov-action@v7
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
+
+      # Forks and a repo whose Codecov app is not set up yet still get the
+      # measurement in the log; only the upload needs the token.
+      - name: Report a missing token
+        if: env.CODECOV_TOKEN == ''
+        run: |
+          echo "::notice::CODECOV_TOKEN is not set; skipping the Codecov upload." \
+               "Coverage was measured and lcov.info is attached to this run."
+
+      - name: Upload lcov.info as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov
+          path: lcov.info
+          if-no-files-found: error

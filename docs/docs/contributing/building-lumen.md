@@ -160,6 +160,12 @@ cargo test -p lumen-render-wgpu --test smoke
 cargo test -p lumen-layout-taffy --test dirty_invariant
 ```
 
+Coverage is measured on top of the same suite, with `cargo llvm-cov`, on every
+push to `main` and every pull request, and reported to Codecov. It is a report
+rather than a gate: what decides a pull request is the suite itself. Doctests
+are outside the measurement, since collecting coverage from them needs a
+nightly toolchain.
+
 Golden images are regenerated, not hand-edited. `UPDATE_GOLDENS=1` rewrites the
 software rasterizer baseline in `lumen-render-headless`;
 `LUMEN_GOLDEN_UPDATE=1` rewrites the screenshot baselines in `lumenc`. On a

@@ -4,6 +4,8 @@
 
 # Lumen
 
+[![coverage](https://codecov.io/gh/lumen-fx/lumen/branch/main/graph/badge.svg)](https://codecov.io/gh/lumen-fx/lumen)
+
 Lumen is a markup-first UI framework for native desktop apps.
 
 You describe the interface in `.lmn` markup, style it in CSS, and drive it with
