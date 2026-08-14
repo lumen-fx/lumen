@@ -30,6 +30,10 @@ tells you the line to add if you decline. Open a new shell and check:
 lumenc --version
 ```
 
+The install also carries a shell completion script for bash, zsh, and fish
+under `~/.lumen/share`, and prints the one line your shell needs to load it.
+See [shell completions](../reference/cli.md#completions).
+
 ### Installer options
 
 | Option | Effect |

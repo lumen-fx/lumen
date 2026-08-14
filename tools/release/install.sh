@@ -53,8 +53,8 @@
 # the same bin/ directory (see crates/lumenc/src/loader.rs and
 # crates/lumenc/src/package_cli.rs: both look next to the running executable,
 # then an LUMEN_LIB_DIR override, then the platform loader's default search
-# path, and never in a sibling lib/ directory). Every installed path is
-# recorded in a
+# path, and never in a sibling lib/ directory), plus a shell completion script
+# per shell under share/. Every installed path is recorded in a
 # receipt under <prefix>/share/lumen, so a later run can replace an old version
 # exactly and --uninstall can undo it.
 #
@@ -86,7 +86,7 @@ Lumen toolchain installer.
 Usage:
   install.sh [options]
 
-Installs lumenc and the liblumen runtime library.
+Installs lumenc, the liblumen runtime library, and shell completions.
 
 Options:
   --prefix DIR         Install root. Default: ~/.lumen
@@ -607,6 +607,41 @@ if [ "$on_path" -eq 0 ]; then
     say "  $LINE"
   fi
 fi
+
+# --- shell completions -------------------------------------------------------
+#
+# The archive carries a completion script per shell under share/, so the copy
+# loop above already put them in place and the receipt already covers them.
+# What is left is telling the shell where to look, which is the shell's own
+# configuration and so is printed rather than written.
+
+BASH_COMPLETION="$PREFIX/share/bash-completion/completions/lumenc"
+ZSH_COMPLETION_DIR="$PREFIX/share/zsh/site-functions"
+FISH_COMPLETION="$PREFIX/share/fish/vendor_completions.d/lumenc.fish"
+
+case "${SHELL:-/bin/sh}" in
+  */bash)
+    if [ -f "$BASH_COMPLETION" ]; then
+      say ""
+      say "Shell completions are installed. To load them, add to your bash rc file:"
+      say "  source $BASH_COMPLETION"
+    fi
+    ;;
+  */zsh)
+    if [ -f "$ZSH_COMPLETION_DIR/_lumenc" ]; then
+      say ""
+      say "Shell completions are installed. To load them, add above compinit in ~/.zshrc:"
+      say "  fpath=($ZSH_COMPLETION_DIR \$fpath)"
+    fi
+    ;;
+  */fish)
+    if [ -f "$FISH_COMPLETION" ]; then
+      say ""
+      say "Shell completions are installed. To load them:"
+      say "  ln -s $FISH_COMPLETION ~/.config/fish/completions/lumenc.fish"
+    fi
+    ;;
+esac
 
 say ""
 say "Installed under $PREFIX:"

@@ -74,6 +74,9 @@ fn dispatch(cmd: &str, args: Vec<String>) -> ExitCode {
         #[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "package"))]
         "package" => lumenc::package_cli::cmd_package(args),
         "i18n" => lumenc::i18n_cli::cmd_i18n(args),
+        // Ungated: the completion scripts are static text, so every build
+        // shape can print them.
+        "completions" => cmd_completions(args),
         "--help" | "-h" | "help" => {
             println!("{USAGE}");
             ExitCode::SUCCESS
@@ -783,6 +786,57 @@ it demonstrates.
     ExitCode::SUCCESS
 }
 
+/// The three shipped completion scripts, embedded so any installed lumenc can
+/// print them regardless of how it was installed. The same files go into the
+/// release archives under `share/`.
+const COMPLETION_BASH: &str = include_str!("../completions/lumenc.bash");
+const COMPLETION_ZSH: &str = include_str!("../completions/_lumenc");
+const COMPLETION_FISH: &str = include_str!("../completions/lumenc.fish");
+
+/// Handles `lumenc completions <bash|zsh|fish>`: print the script for that
+/// shell on stdout.
+fn cmd_completions(mut args: impl Iterator<Item = String>) -> ExitCode {
+    const COMPLETIONS_USAGE: &str = "lumenc completions - print a shell completion script
+
+USAGE:
+    lumenc completions bash|zsh|fish
+
+Writes the script for <shell> to stdout. Redirect it to where that shell
+looks for completions:
+
+    lumenc completions bash > ~/.local/share/bash-completion/completions/lumenc
+    lumenc completions zsh > ~/.zsh/completions/_lumenc
+    lumenc completions fish > ~/.config/fish/completions/lumenc.fish
+
+The zsh directory has to be on $fpath. A release archive ships the same
+three files under share/, so an installed copy already has them on disk.";
+    let Some(shell) = args.next() else {
+        eprintln!("lumenc completions: missing <shell>\n\n{COMPLETIONS_USAGE}");
+        return ExitCode::from(2);
+    };
+    if lumenc::is_help_flag(&shell) {
+        println!("{COMPLETIONS_USAGE}");
+        return ExitCode::SUCCESS;
+    }
+    let script = match shell.as_str() {
+        "bash" => COMPLETION_BASH,
+        "zsh" => COMPLETION_ZSH,
+        "fish" => COMPLETION_FISH,
+        other => {
+            eprintln!("lumenc completions: unknown shell `{other}` (expected bash, zsh, or fish)");
+            return ExitCode::from(2);
+        }
+    };
+    if let Some(unexpected) = args.next() {
+        eprintln!("lumenc completions: unexpected argument '{unexpected}'");
+        return ExitCode::from(2);
+    }
+    // `print!`, not `println!`: the script is reproduced byte for byte, and it
+    // already ends in a newline.
+    print!("{script}");
+    ExitCode::SUCCESS
+}
+
 const USAGE: &str = "lumenc - Lumen markup runner
 
 USAGE:
@@ -942,6 +996,10 @@ USAGE:
                           `<app_dir>/locale/<lang>.ftl`. Idempotent:
                           existing entries are preserved; new keys
                           are appended with placeholder values.
+    lumenc completions bash|zsh|fish
+                          Print that shell's completion script on stdout.
+                          A release archive ships the same scripts under
+                          share/.
     lumenc --help         Show this help
     lumenc --version      Print version
 

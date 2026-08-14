@@ -261,6 +261,47 @@ prints the total and new key counts.
 `lumenc i18n` with no subcommand, or any subcommand other than `extract`,
 exits 2.
 
+## completions
+
+```
+lumenc completions bash|zsh|fish
+```
+
+Prints that shell's completion script on stdout. The scripts complete
+subcommand names, each subcommand's flags, the fixed value sets (`--profile`
+modes, `--target` platforms, `new` templates, `--button` names), and app
+directories or files where a subcommand takes one.
+
+A missing shell argument, an unknown shell, or an extra argument exits 2.
+
+Redirect the output to where your shell looks for completions:
+
+```sh
+lumenc completions bash > ~/.local/share/bash-completion/completions/lumenc
+lumenc completions zsh > ~/.zsh/completions/_lumenc
+lumenc completions fish > ~/.config/fish/completions/lumenc.fish
+```
+
+The zsh directory has to be on `$fpath`, above `compinit`:
+
+```sh
+fpath=(~/.zsh/completions $fpath)
+```
+
+A release archive ships the same three scripts, so an install from
+[install.sh](../getting-started/install.md) already has them on disk under the
+prefix:
+
+| Shell | Path under the install prefix | Setup |
+| --- | --- | --- |
+| bash | `share/bash-completion/completions/lumenc` | `source` it from your bash rc file. |
+| zsh | `share/zsh/site-functions/_lumenc` | Put the directory on `$fpath`. |
+| fish | `share/fish/vendor_completions.d/lumenc.fish` | Link it into `~/.config/fish/completions/`. |
+
+The installer prints the line for your shell after it runs. The Windows
+installer and the portable zip carry no completion scripts; write them out
+with `lumenc completions` there.
+
 ## Automation commands
 
 These drive an already-running app over its JSON-RPC TCP server. Each opens a

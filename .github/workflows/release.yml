@@ -5,8 +5,9 @@ name: Release
 # lumen-<target>.tar.gz per Unix target and, for Windows,
 # lumen-windows-x86_64.msi as the install channel plus
 # lumen-windows-x86_64.zip as the portable archive. Every one of them holds
-# bin/lumenc, the liblumen shared library, and bin/lumen-launcher. That layout
-# comes from three places, not from guessing:
+# bin/lumenc, the liblumen shared library, and bin/lumen-launcher; the Unix
+# archives also carry the shell completions under share/. That layout comes
+# from three places, not from guessing:
 #
 #   - install.sh requires a top-level bin/ directory in the archive (its
 #     unpack step fails otherwise) and looks up the asset by the exact name
@@ -188,6 +189,16 @@ jobs:
           cp target/release/lumenc dist/bin/
           cp target/release/${{ matrix.libname }} dist/bin/
           cp target/release/lumen-launcher dist/bin/
+          # Shell completions, each under the directory its shell searches, so
+          # a prefix on the usual search paths picks them up as installed. The
+          # same scripts are embedded in lumenc (`lumenc completions <shell>`)
+          # for anyone who installed some other way.
+          mkdir -p dist/share/bash-completion/completions \
+                   dist/share/zsh/site-functions \
+                   dist/share/fish/vendor_completions.d
+          cp crates/lumenc/completions/lumenc.bash dist/share/bash-completion/completions/lumenc
+          cp crates/lumenc/completions/_lumenc dist/share/zsh/site-functions/_lumenc
+          cp crates/lumenc/completions/lumenc.fish dist/share/fish/vendor_completions.d/lumenc.fish
           tar -czf lumen-${{ matrix.target }}.tar.gz -C dist .
 
       - name: Package (Windows)
