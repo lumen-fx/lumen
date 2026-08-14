@@ -24,7 +24,7 @@
     "rhai",
     "gui"
   ],
-  "icon": "icons/lmn.png",
+  "icon": "icons/logo.png",
   "activationEvents": [
     "onLanguage:lumen-markup",
     "onLanguage:lumen-css",
@@ -41,8 +41,8 @@
         "extensions": [".lmn"],
         "configuration": "./language-configuration/lumen.json",
         "icon": {
-          "light": "./icons/lmn.png",
-          "dark": "./icons/lmn.png"
+          "light": "./icons/lmn-file.png",
+          "dark": "./icons/lmn-file.png"
         }
       },
       {
@@ -50,8 +50,8 @@
         "aliases": ["Lumen CSS"],
         "configuration": "./language-configuration/lumen-css.json",
         "icon": {
-          "light": "./icons/lmn.png",
-          "dark": "./icons/lmn.png"
+          "light": "./icons/lmn-file.png",
+          "dark": "./icons/lmn-file.png"
         }
       },
       {
