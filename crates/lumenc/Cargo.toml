@@ -136,11 +136,6 @@ lumen-text-cosmic = { path = "../backends/text-cosmic" }
 # producer publishes (`ShapedText` / `TextGeometry`), so it has to be able
 # to name the crate that defines them.
 lumen-text = { path = "../text" }
-# The integration tests add `WinitPlugin` to a window-free App to get the
-# backend messages and the redraw scheduler. It reaches the binary through
-# lumen-runtime; a test can only *name* it as a direct dependency, and the
-# compiler library itself no longer names the crate at all.
-lumen-window-winit = { path = "../backends/window-winit" }
 # devtools_mount.rs (compiled only under `--features devtools`) names these.
 lumen-mcp = { path = "../mcp" }
 lumen-devtools = { path = "../dev/devtools" }

@@ -78,7 +78,7 @@ fn scaffolded_counter_counts_clicks() {
 
 fn run_case() {
     let dir = scaffolded_counter();
-    let (mut app, _winit) = build_headless_app(RunOptions::new(dir.clone())).expect("build app");
+    let (mut app, _window) = build_headless_app(RunOptions::new(dir.clone())).expect("build app");
 
     // A few ticks so the tree mounts, the candela `on_ready` fires, its
     // `signal_set_int` and event-bind commands drain, and the `bind-text`

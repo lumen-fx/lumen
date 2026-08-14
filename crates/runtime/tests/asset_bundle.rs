@@ -98,7 +98,7 @@ fn assets_resolve_from_a_bundle_when_the_file_is_gone() {
         .with_artifact_bytes(bytes)
         .with_assets(&lpak);
     opts.bounded = true;
-    let (mut app, _winit) = build_headless_app(opts).expect("build headless app");
+    let (mut app, _window) = build_headless_app(opts).expect("build headless app");
 
     let entity = tick_until_decoded(&mut app).expect("the image never resolved");
     assert!(
@@ -123,7 +123,7 @@ fn assets_do_not_resolve_without_the_bundle() {
 
     let mut opts = RunOptions::new(&dir).with_artifact_bytes(bytes);
     opts.bounded = true;
-    let (mut app, _winit) = build_headless_app(opts).expect("build headless app");
+    let (mut app, _window) = build_headless_app(opts).expect("build headless app");
 
     let entity = tick_until_decoded(&mut app).expect("the image never reported an outcome");
     assert!(

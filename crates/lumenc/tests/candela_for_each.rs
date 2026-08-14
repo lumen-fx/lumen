@@ -41,7 +41,7 @@ fn label_text(app: &mut lumen_core::prelude::App, id: &str) -> Option<String> {
 #[test]
 fn an_array_signal_renders_one_element_per_record() {
     let opts = RunOptions::new(app_dir());
-    let (mut app, _winit) = build_headless_app(opts).expect("build_headless_app");
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
 
     // A few ticks so the on_start commands drain, the array lands in the
     // signal store, and the `<for>` block reconciles.
@@ -66,7 +66,7 @@ fn an_array_signal_renders_one_element_per_record() {
 #[test]
 fn removing_a_record_despawns_its_element() {
     let opts = RunOptions::new(app_dir());
-    let (mut app, _winit) = build_headless_app(opts).expect("build_headless_app");
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
     for _ in 0..5 {
         app.tick();
     }

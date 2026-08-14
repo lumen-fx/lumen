@@ -1,4 +1,4 @@
-// Needs `RunOptions` / `build_app`, only available under `dev-run`.
+// Needs `RunOptions` / `build_headless_app`, only available under `dev-run`.
 #![cfg(feature = "dev-run")]
 
 //! Selecting text with the pointer and the keyboard, end to end.
@@ -19,7 +19,7 @@ use lumen_core::input::{
 };
 use lumen_core::text_model::TextCursor;
 use lumenc::RunOptions;
-use lumenc::run::build_app;
+use lumenc::run::build_headless_app;
 
 fn build_and_tick(markup: &str, ticks: u32) -> App {
     let dir = std::env::temp_dir().join(format!("lumenc_text_sel_{}_{}", std::process::id(), {
@@ -31,8 +31,7 @@ fn build_and_tick(markup: &str, ticks: u32) -> App {
     let opts = RunOptions::new(&dir)
         .with_parser(lumenc::default_parser())
         .with_markup(markup.to_string());
-    let (mut app, _winit) = build_app(opts).expect("build_app");
-    app.add_plugin(lumen_window_winit::WinitPlugin);
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
     for _ in 0..ticks {
         app.tick();
     }

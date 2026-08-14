@@ -25,7 +25,7 @@ fn app_dir(name: &str) -> std::path::PathBuf {
 }
 
 fn run_ticks(dir: std::path::PathBuf, ticks: u32) -> App {
-    let (mut app, _winit) = build_headless_app(RunOptions::new(dir)).expect("build_headless_app");
+    let (mut app, _window) = build_headless_app(RunOptions::new(dir)).expect("build_headless_app");
     for _ in 0..ticks {
         app.tick();
     }

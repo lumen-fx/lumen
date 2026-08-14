@@ -1,7 +1,7 @@
 // Drives the REAL pipeline (parse -> spawn -> layout -> shaping producer ->
 // input) rather than hand-built geometry, so the vertical text origin is
 // whatever the app actually renders with. Needs `lumenc::spawn` /
-// `RunOptions` / `build_app`, which only exist under `dev-run`.
+// `RunOptions` / `build_headless_app`, which only exist under `dev-run`.
 #![cfg(feature = "dev-run")]
 
 //! Vertical text-geometry regression tests for multiline fields.
@@ -20,7 +20,7 @@ use lumen_core::components::{TextBlockOrigin, TextInput, Transform};
 use lumen_core::input::{PointerButton, PointerMoved, PointerPressed, PointerState};
 use lumen_core::text_model::TextCursor;
 use lumenc::RunOptions;
-use lumenc::run::build_app;
+use lumenc::run::build_headless_app;
 
 /// Build the full app from inline markup and tick it, exactly like the
 /// `run_pipeline` integration tests do.
@@ -35,8 +35,7 @@ fn build_and_tick(markup: &str, ticks: u32) -> App {
     let opts = RunOptions::new(&dir)
         .with_parser(lumenc::default_parser())
         .with_markup(markup.to_string());
-    let (mut app, _winit) = build_app(opts).expect("build_app");
-    app.add_plugin(lumen_window_winit::WinitPlugin);
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
     for _ in 0..ticks {
         app.tick();
     }

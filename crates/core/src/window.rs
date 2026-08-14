@@ -17,8 +17,8 @@ use crate::components::Color;
 /// user sees for an instant during window creation, and behind any pixel
 /// the app's tree doesn't cover. This is the single Rust-side source of
 /// truth for that fallback; `lumen_runtime::run::RunOptions::clear` (the
-/// value that actually reaches every real launch path - CLI, FFI, SDK)
-/// defaults to it too, so the two never drift apart the way they used to.
+/// value every launch path reaches - CLI, FFI, SDK) defaults to it too,
+/// so the two never drift apart the way they used to.
 ///
 /// A resolved `--lumen-window-bg` custom property (from the app's own
 /// `:root` or its active skin) overrides this at build time - see

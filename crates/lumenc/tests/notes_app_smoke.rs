@@ -1,4 +1,4 @@
-// Needs `RunOptions` / `build_app`, only available under `dev-run`.
+// Needs `RunOptions` / `build_headless_app`, only available under `dev-run`.
 #![cfg(feature = "dev-run")]
 
 //! End-to-end check against the real `apps/notes` sources.
@@ -11,7 +11,7 @@
 use bevy_ecs::prelude::*;
 use lumen_core::components::LumenId;
 use lumenc::RunOptions;
-use lumenc::run::build_app;
+use lumenc::run::build_headless_app;
 
 fn notes_app() -> lumen_core::app::App {
     let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -20,8 +20,7 @@ fn notes_app() -> lumen_core::app::App {
         .expect("crates/lumenc sits two levels below the workspace root")
         .join("apps/notes");
     let opts = RunOptions::new(&dir).with_parser(lumenc::default_parser());
-    let (mut app, _w) = build_app(opts).expect("build_app");
-    app.add_plugin(lumen_window_winit::WinitPlugin);
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
     for _ in 0..8 {
         app.tick();
     }

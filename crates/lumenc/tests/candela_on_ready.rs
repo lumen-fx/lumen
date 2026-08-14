@@ -49,7 +49,7 @@ fn label_text(app: &mut lumen_core::prelude::App, id: &str) -> Option<String> {
 fn on_ready_sees_populated_dom_on_start_does_not() {
     let _isolation = isolate();
     let opts = RunOptions::new(on_ready_dir());
-    let (mut app, _winit) = build_headless_app(opts).expect("build_headless_app");
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
 
     // A few ticks so on_ready fires, both signals drain, and the bind-text
     // readers mirror them into the labels.
@@ -75,7 +75,7 @@ fn on_ready_sees_populated_dom_on_start_does_not() {
 fn rearmed_latch_fires_on_ready_again() {
     let _isolation = isolate();
     let opts = RunOptions::new(on_ready_dir());
-    let (mut app, _winit) = build_headless_app(opts).expect("build_headless_app");
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
     for _ in 0..5 {
         app.tick();
     }

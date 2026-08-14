@@ -144,7 +144,7 @@ fn multi_page_navigation_end_to_end() {
     let dir = scratch_dir();
     let mut opts = RunOptions::new(&dir);
     opts.hot_reload = false; // deterministic: no fs watcher in the test
-    let (mut app, _winit) = build_headless_app(opts).expect("build_headless_app");
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
 
     // Settle the first mount.
     tick_n(&mut app, 4);
@@ -283,7 +283,7 @@ fn auto_discovered_pages_navigate_with_no_config() {
     let dir = auto_scratch_dir();
     let mut opts = RunOptions::new(&dir);
     opts.hot_reload = false;
-    let (mut app, _winit) = build_headless_app(opts).expect("build_headless_app");
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
 
     tick_n(&mut app, 4);
 
@@ -443,7 +443,7 @@ fn multi_page_navigation_from_an_artifact() {
 
     let mut opts = RunOptions::new(&packaged).with_artifact_bytes(bytes);
     opts.hot_reload = false;
-    let (mut app, _winit) = build_headless_app(opts).expect("build from the artifact");
+    let (mut app, _window) = build_headless_app(opts).expect("build from the artifact");
     tick_n(&mut app, 4);
 
     // The entry page mounted, and only it.
@@ -573,7 +573,7 @@ fn page_current_reads_the_active_page_on_every_host() {
 
         let mut opts = RunOptions::new(&dir);
         opts.hot_reload = false;
-        let (mut app, _winit) =
+        let (mut app, _window) =
             build_headless_app(opts).unwrap_or_else(|e| panic!("build {engine} app: {e}"));
         tick_n(&mut app, 6);
 

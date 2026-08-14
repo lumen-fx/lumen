@@ -1,4 +1,4 @@
-// Needs `lumenc::spawn` / `RunOptions` / `build_app`, which only exist
+// Needs `lumenc::spawn` / `RunOptions` / `build_headless_app`, which only
 // under `dev-run`.
 #![cfg(feature = "dev-run")]
 
@@ -14,7 +14,7 @@ use bevy_ecs::prelude::*;
 use lumen_core::app::App;
 use lumen_core::components::{Fill, LumenId, Visuals};
 use lumenc::RunOptions;
-use lumenc::run::build_app;
+use lumenc::run::build_headless_app;
 
 fn build(markup: &str, css: &str) -> App {
     let dir =
@@ -28,8 +28,7 @@ fn build(markup: &str, css: &str) -> App {
         .with_parser(lumenc::default_parser())
         .with_markup(markup.to_string())
         .with_css(css.to_string());
-    let (mut app, _winit) = build_app(opts).expect("build_app");
-    app.add_plugin(lumen_window_winit::WinitPlugin);
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
     for _ in 0..2 {
         app.tick();
     }

@@ -82,7 +82,7 @@ fn run_case() {
     let dir = isolated_kanban();
     let mut opts = RunOptions::new(&dir);
     opts.hot_reload = false; // no notify watcher thread in a test
-    let (mut app, _winit) = build_headless_app(opts).expect("build headless kanban");
+    let (mut app, _window) = build_headless_app(opts).expect("build headless kanban");
 
     // Give layout a real viewport so drop targets get non-zero bounds.
     app.world.resource_mut::<Viewport>().size = Vec2::new(1040.0, 720.0);

@@ -23,7 +23,7 @@ use lumenc::run::{RunOptions, build_headless_app};
 #[test]
 fn devtools_overlay_mounts_and_refreshes() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/devtools_app");
-    let (mut app, _winit) = build_headless_app(RunOptions::new(dir)).expect("build headless app");
+    let (mut app, _window) = build_headless_app(RunOptions::new(dir)).expect("build headless app");
 
     // The overlay root spawned, starts hidden, and is tagged.
     let mut roots = app.world.query_filtered::<&Visible, With<DevtoolsRoot>>();

@@ -20,7 +20,7 @@ use lumen_core::components::LumenId;
 use lumen_core::input::{ClickEvent, PointerButton};
 use lumen_script::ScriptCommand;
 use lumen_script_rhai::RhaiHost;
-use lumenc::run::{ErrorBanner, build_app};
+use lumenc::run::{ErrorBanner, build_app, build_headless_app};
 use lumenc::{RunError, RunOptions};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -74,9 +74,7 @@ mod pipeline_integration_tests {
         let opts = RunOptions::new(&dir)
             .with_parser(lumenc::default_parser())
             .with_markup(markup.to_string());
-        let (mut app, _winit) = build_app(opts).expect("build_app");
-        // Same window-free plugin the headless entry point installs.
-        app.add_plugin(lumen_window_winit::WinitPlugin);
+        let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
         for _ in 0..ticks {
             app.tick();
         }
@@ -518,7 +516,7 @@ mod pipeline_integration_tests {
         );
         // Run agreement: build_app still opens the app (window renders),
         // but records the failure prominently.
-        let (app, _winit) = build_app(RunOptions::new(&dir).with_parser(lumenc::default_parser()))
+        let (app, _window) = build_app(RunOptions::new(&dir).with_parser(lumenc::default_parser()))
             .expect("build_app");
         assert!(
             app.world
@@ -541,7 +539,7 @@ mod pipeline_integration_tests {
         // must accept it.
         let dir = write_app_dir(&nested_expr_script_markup(100));
         lumenc::check_app(&dir).expect("check should accept a 100-deep expression");
-        let (app, _winit) = build_app(RunOptions::new(&dir).with_parser(lumenc::default_parser()))
+        let (app, _window) = build_app(RunOptions::new(&dir).with_parser(lumenc::default_parser()))
             .expect("build_app");
         assert!(
             app.world
@@ -645,8 +643,7 @@ mod feel_wave_tests {
             .with_parser(lumenc::default_parser())
             .with_markup(markup.to_string())
             .with_css(css.to_string());
-        let (mut app, _winit) = build_app(opts).expect("build_app");
-        app.add_plugin(lumen_window_winit::WinitPlugin);
+        let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
         for _ in 0..4 {
             app.tick();
         }
@@ -815,8 +812,7 @@ mod virtualization_tests {
             .with_parser(lumenc::default_parser())
             .with_markup(markup.to_string())
             .with_css(css.to_string());
-        let (mut app, _winit) = build_app(opts).expect("build_app");
-        app.add_plugin(lumen_window_winit::WinitPlugin);
+        let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
         let items: Vec<ArrayItem> = (0..rows)
             .map(|i| {
                 let mut m = ArrayItem::new();
@@ -1180,8 +1176,7 @@ mod aot_roundtrip_tests {
     }
 
     fn build_and_tick(opts: RunOptions, ticks: u32) -> App {
-        let (mut app, _winit) = build_app(opts).expect("build_app");
-        app.add_plugin(lumen_window_winit::WinitPlugin);
+        let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
         for _ in 0..ticks {
             app.tick();
         }

@@ -96,7 +96,7 @@ impl Fixture {
     /// receive an event by the time a test writes one.
     fn app(&self) -> App {
         let opts = RunOptions::new(&self.0).with_markup(MARKUP.to_string());
-        let (mut app, _winit) = build_headless_app(opts).expect("build_headless_app");
+        let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
         for _ in 0..4 {
             app.tick();
         }

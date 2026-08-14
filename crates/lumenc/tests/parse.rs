@@ -1541,7 +1541,7 @@ fn build_ua_test_app(markup: &str, css: Option<&str>) -> lumen_core::app::App {
     if let Some(css) = css {
         opts = opts.with_css(css.to_string());
     }
-    let (app, _winit) = lumenc::run::build_app(opts).expect("build_app");
+    let (app, _window) = lumenc::run::build_app(opts).expect("build_app");
     let _ = std::fs::remove_dir_all(&dir);
     app
 }

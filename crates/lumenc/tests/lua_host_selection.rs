@@ -27,7 +27,7 @@ fn lua_smoke_dir() -> std::path::PathBuf {
 #[test]
 fn engine_lua_installs_lua_host_and_runs_script() {
     let opts = RunOptions::new(lua_smoke_dir());
-    let (mut app, _winit) = build_headless_app(opts).expect("build_headless_app");
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
 
     // A few ticks so `on_start` fires, `derive("counter_label", ...)`
     // registers, and the derivation + bind-text readers run.
