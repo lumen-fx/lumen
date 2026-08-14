@@ -51,6 +51,7 @@ use lumen_script_rhai::{RhaiHost, ScriptRhaiPlugin};
 // hosts installed, an edge naming one host's system leaves the others outside
 // the one-tick dirty window.
 use lumen_script::{NativeExternFn, ScriptCommandEvent, ScriptSet, fire_on_ready, reload_script};
+use lumen_text::{ShaperService, TextShaper};
 use lumen_text_cosmic::CosmicShaper;
 use lumen_window_winit::{WinitOptions, run};
 use std::path::{Path, PathBuf};

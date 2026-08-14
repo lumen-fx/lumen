@@ -238,11 +238,11 @@ pub struct StyleVersion(pub u64);
 pub struct ColorSchemeIntent(pub lumen_core::components::ColorScheme);
 
 /// Per-tick LRU eviction sweep that reads [`MemoryBudget`] and calls each ECS-resident cache's `evict_until` so its `bytes_used` falls below the cap.
-/// `AssetServer` and `CosmicShaper` are handled here; `SceneFragmentCache` lives on `GpuState` and is evicted by the window backend.
+/// `AssetServer` and the text shaper are handled here; `SceneFragmentCache` lives on `GpuState` and is evicted by the window backend.
 pub(crate) fn enforce_budget(
     budget: Res<lumen_core::components::MemoryBudget>,
     mut server: ResMut<lumen_assets::AssetServer>,
-    shaper: Option<NonSendMut<lumen_text_cosmic::CosmicShaper>>,
+    shaper: Option<NonSendMut<ShaperService>>,
 ) {
     let image_cap = (budget.images_mb as usize).saturating_mul(1024 * 1024);
     if server.bytes_used() > image_cap {

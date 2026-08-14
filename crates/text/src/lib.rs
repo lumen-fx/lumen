@@ -196,6 +196,18 @@ impl Default for ShapeOptions {
     }
 }
 
+impl ShapeOptions {
+    /// Line height in the same unit space as `size_px`: the authored CSS
+    /// `line-height` when the caller resolved one, else `size_px` times
+    /// [`DEFAULT_LINE_HEIGHT_MULTIPLIER`]. Shaping, measuring, and
+    /// painting all route through this so one paragraph cannot end up
+    /// with three different line heights.
+    pub fn resolved_line_height(&self, size_px: f32) -> f32 {
+        self.line_height
+            .unwrap_or(size_px * DEFAULT_LINE_HEIGHT_MULTIPLIER)
+    }
+}
+
 /// Re-export of [`lumen_core::components::DEFAULT_LINE_HEIGHT_MULTIPLIER`]
 /// for crates (e.g. `lumen-text-cosmic`) that depend on `lumen-text` but
 /// not directly on `lumen-core`.
@@ -211,6 +223,149 @@ pub trait TextShaper {
     /// (caret / selection prefix measurement, label sizing without
     /// a container width).
     fn shape(&mut self, text: &str, size_px: f32, opts: ShapeOptions) -> Option<ShapedRun>;
+
+    /// Measure a text run for layout. Returns the tight `(width, height)`
+    /// in logical pixels of the shaped paragraph at `size_px` under the
+    /// `wrap` / `max_lines` policy, clamped to `max_width` when `Some`.
+    ///
+    /// The layout engine calls this from taffy's measure callback to size
+    /// text leaves, and the caret-scroll pass calls it to place the caret
+    /// on the shaped prefix.
+    fn measure(
+        &mut self,
+        text: &str,
+        size_px: f32,
+        max_width: Option<f32>,
+        wrap: WrapMode,
+        max_lines: Option<u32>,
+    ) -> (f32, f32) {
+        let opts = ShapeOptions {
+            width: max_width,
+            wrap,
+            max_lines,
+            ..ShapeOptions::default()
+        };
+        let (w, h, _baseline) = self.measure_with_baseline(text, size_px, &opts);
+        (w, h)
+    }
+
+    /// Same as [`Self::measure`], plus the first-line alphabetic baseline
+    /// offset from the top of the leaf box - the y at which Latin,
+    /// Cyrillic, and Greek glyphs sit. `FlexAlign::Baseline` and the
+    /// AccessKit text-position report consume it.
+    ///
+    /// The default walks the shaped glyphs: the width is the widest laid
+    /// out line (taffy's intrinsic content size), the height is the line
+    /// count times [`ShapeOptions::resolved_line_height`], and the
+    /// baseline is `0.8` of that line height, the ratio the common font
+    /// metrics tables produce. Empty input measures `(0, 0, 0)` so the
+    /// leaf collapses. Override it when the backend can answer more
+    /// cheaply or more precisely than by shaping.
+    fn measure_with_baseline(
+        &mut self,
+        text: &str,
+        size_px: f32,
+        opts: &ShapeOptions,
+    ) -> (f32, f32, f32) {
+        if text.is_empty() {
+            return (0.0, 0.0, 0.0);
+        }
+        let max_width = opts.width;
+        let line_height = opts.resolved_line_height(size_px).max(1.0);
+        match self.shape(text, size_px, opts.clone()) {
+            Some(run) => {
+                let mut rows = 1u32;
+                let mut last_y = run.glyphs.first().map(|g| g.y).unwrap_or(0.0);
+                for g in run.glyphs.iter().skip(1) {
+                    if (g.y - last_y).abs() > line_height * 0.5 {
+                        rows += 1;
+                        last_y = g.y;
+                    }
+                }
+                let mut width = run.width;
+                if let Some(cap) = max_width {
+                    width = width.min(cap);
+                }
+                (width, (rows as f32) * line_height, line_height * 0.8)
+            }
+            None => (0.0, 0.0, 0.0),
+        }
+    }
+
+    /// Number of entries the backend currently holds in its shape cache.
+    /// `0` for a backend that caches nothing.
+    fn cache_len(&self) -> usize {
+        0
+    }
+
+    /// Resize the shape cache to the given entry count. The per-tick
+    /// memory-budget sweep calls this when the cache outgrows
+    /// [`lumen_core::components::MemoryBudget`]. No-op for a backend that
+    /// caches nothing.
+    fn set_capacity(&mut self, _entries: usize) {}
+}
+
+/// The text shaper an app runs, held as a `NonSend` resource (font
+/// databases are rarely `Send`).
+///
+/// It derefs to the shaper, so [`TextShaper`] methods work directly on it.
+/// Build one from any backend with `ShaperService::from(backend)`, and
+/// replace the runtime's default by inserting your own in an app hook.
+/// The layout engine reads it for text measurement, so a swapped backend
+/// changes measuring and painting together.
+pub struct ShaperService(Box<dyn TextShaper>);
+
+impl ShaperService {
+    /// Wrap a shaper.
+    pub fn new<S: TextShaper + 'static>(shaper: S) -> Self {
+        Self(Box::new(shaper))
+    }
+}
+
+impl<S: TextShaper + 'static> From<S> for ShaperService {
+    fn from(shaper: S) -> Self {
+        Self::new(shaper)
+    }
+}
+
+impl From<Box<dyn TextShaper>> for ShaperService {
+    fn from(shaper: Box<dyn TextShaper>) -> Self {
+        Self(shaper)
+    }
+}
+
+impl std::ops::Deref for ShaperService {
+    type Target = dyn TextShaper;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+impl std::ops::DerefMut for ShaperService {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut()
+    }
+}
+
+impl Default for ShaperService {
+    fn default() -> Self {
+        Self::new(NullShaper)
+    }
+}
+
+/// The shaper that shapes nothing.
+///
+/// Every run comes back empty, so text measures to a zero-sized box and
+/// no glyph is painted. A build with no text backend selected runs this,
+/// and a layout test that only cares about boxes can use it directly.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NullShaper;
+
+impl TextShaper for NullShaper {
+    fn shape(&mut self, _text: &str, _size_px: f32, _opts: ShapeOptions) -> Option<ShapedRun> {
+        None
+    }
 }
 
 /// Marker trait for a font database / system-font accessor. Currently empty.

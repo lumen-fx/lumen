@@ -20,7 +20,8 @@ use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-/// Default cap for the shape-result LRU; adjustable per-shaper via [`CosmicShaper::set_capacity`].
+/// Default cap for the shape-result LRU; adjustable per-shaper via
+/// [`TextShaper::set_capacity`].
 const SHAPE_CACHE_CAP: usize = 512;
 
 /// Width bucket size in logical pixels; reflows within one bucket share a cache entry.
@@ -64,17 +65,6 @@ impl ShapeParams {
             weight: opts.weight,
         }
     }
-}
-
-/// Effective line-height in logical px for `size_px`: honours a
-/// caller-resolved [`ShapeOptions::line_height`] and otherwise falls back
-/// to CSS `line-height: normal`
-/// ([`lumen_text::DEFAULT_LINE_HEIGHT_MULTIPLIER`]). The single
-/// fallback-consumption point every shape / measure path in this crate
-/// routes through, rather than re-deriving `size_px * 1.2` locally.
-fn effective_line_height(opts: &ShapeOptions, size_px: f32) -> f32 {
-    opts.line_height
-        .unwrap_or(size_px * lumen_text::DEFAULT_LINE_HEIGHT_MULTIPLIER)
 }
 
 /// Owned cache key for [`CosmicShaper::cache`]. Captures every input that
@@ -306,100 +296,6 @@ impl CosmicShaper {
     pub fn clear_cache(&mut self) {
         self.cache.clear();
     }
-
-    /// Resizes the LRU cap at runtime; consulted by [`lumen_core::components::MemoryBudget`] eviction.
-    pub fn set_capacity(&mut self, cap: usize) {
-        if let Some(cap) = NonZeroUsize::new(cap) {
-            self.cache.resize(cap);
-        }
-    }
-
-    /// Current cache occupancy. Useful for memory accounting.
-    pub fn cache_len(&self) -> usize {
-        self.cache.len()
-    }
-
-    /// Measure a text run for layout. Returns the tight `(width, height)`
-    /// in logical pixels of the shaped paragraph at `size_px` under
-    /// `wrap` / `max_lines` policy, clamped to `max_width` when `Some`.
-    ///
-    /// The width is the maximum laid-out line width (taffy treats this as
-    /// the intrinsic content size); the height is `line_count *
-    /// line_height`, where `line_height` is `opts.line_height` (CSS
-    /// `line-height`) when the caller resolved one, else `size_px * 1.2`
-    /// (matches the shape path's [`Metrics`] - see [`effective_line_height`]).
-    /// Empty input returns `(0.0, 0.0)` so taffy collapses the leaf as
-    /// expected. The result flows through the same LRU as [`Self::shape`].
-    ///
-    /// W2.5: the taffy `MeasureFunc` callback in `lumen-layout-taffy`
-    /// calls this to derive text-leaf sizes from cosmic-text shaping,
-    /// killing off the hard-coded widget-height table in
-    /// `crates/lumenc/src/parser_html.rs:1130-1163`.
-    pub fn measure(
-        &mut self,
-        text: &str,
-        size_px: f32,
-        max_width: Option<f32>,
-        wrap: WrapMode,
-        max_lines: Option<u32>,
-    ) -> (f32, f32) {
-        let opts = ShapeOptions {
-            width: max_width,
-            wrap,
-            max_lines,
-            ..ShapeOptions::default()
-        };
-        let (w, h, _baseline) = self.measure_with_baseline(text, size_px, &opts);
-        (w, h)
-    }
-
-    /// Same as [`Self::measure`] but also returns the first-line
-    /// alphabetic baseline y-offset (W5.9). The baseline is the
-    /// y-coordinate at which Latin / Cyrillic / Greek glyph baselines
-    /// sit, measured from the top of the leaf box. Falls back to
-    /// `0.8 * line_height` (the cosmic-text default ratio for the
-    /// font metrics tables it sees) when no glyph can be sampled -
-    /// keeping the FlexAlign::Baseline cross-axis math well-defined
-    /// for empty / fallback text.
-    pub fn measure_with_baseline(
-        &mut self,
-        text: &str,
-        size_px: f32,
-        opts: &ShapeOptions,
-    ) -> (f32, f32, f32) {
-        if text.is_empty() {
-            return (0.0, 0.0, 0.0);
-        }
-        let max_width = opts.width;
-        let line_height = effective_line_height(opts, size_px).max(1.0);
-        match self.shape(text, size_px, opts.clone()) {
-            Some(run) => {
-                let mut rows = 1u32;
-                let mut last_y = run.glyphs.first().map(|g| g.y).unwrap_or(0.0);
-                for g in run.glyphs.iter().skip(1) {
-                    if (g.y - last_y).abs() > line_height * 0.5 {
-                        rows += 1;
-                        last_y = g.y;
-                    }
-                }
-                let mut width = run.width;
-                if let Some(cap) = max_width {
-                    width = width.min(cap);
-                }
-                let height = (rows as f32) * line_height;
-                // First-line baseline. cosmic-text's per-glyph `y` is
-                // already the baseline-relative top-of-cell offset;
-                // the alphabetic baseline sits at `~0.8 * line_height`
-                // below the top of the leaf for the default cosmic-
-                // text metrics. Sample the first glyph's `y` + the
-                // metric ascent when available; otherwise fall back
-                // to the 0.8 ratio.
-                let baseline = line_height * 0.8;
-                (width, height, baseline)
-            }
-            None => (0.0, 0.0, 0.0),
-        }
-    }
 }
 
 impl Default for CosmicShaper {
@@ -409,6 +305,18 @@ impl Default for CosmicShaper {
 }
 
 impl TextShaper for CosmicShaper {
+    /// Cache occupancy of the shape-result LRU.
+    fn cache_len(&self) -> usize {
+        self.cache.len()
+    }
+
+    /// Resize the shape-result LRU at runtime.
+    fn set_capacity(&mut self, entries: usize) {
+        if let Some(cap) = NonZeroUsize::new(entries) {
+            self.cache.resize(cap);
+        }
+    }
+
     fn shape(&mut self, text: &str, size_px: f32, opts: ShapeOptions) -> Option<ShapedRun> {
         if text.is_empty() {
             return None;
@@ -427,7 +335,7 @@ impl TextShaper for CosmicShaper {
             return Some((**cached).clone());
         }
 
-        let metrics = Metrics::new(size_px, effective_line_height(&opts, size_px));
+        let metrics = Metrics::new(size_px, opts.resolved_line_height(size_px));
         if metrics != self.last_metrics {
             self.buffer.set_metrics(metrics);
             self.last_metrics = metrics;

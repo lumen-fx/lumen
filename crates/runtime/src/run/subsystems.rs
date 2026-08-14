@@ -170,6 +170,25 @@ pub(crate) fn file_dialog_markers_present(hay: &str) -> bool {
 // no gate here by design (see the module contract's "never gate the core").
 // -------------------------------------------------------------------------
 
+/// Text shaping. Installs the shaper the layout engine, the editing
+/// systems, and the caret pass all measure with, and hands back a second
+/// shaper for the renderer.
+///
+/// Both come from one backend so the shaped glyphs a frame paints are the
+/// ones layout measured. The render-side shaper shares the layout
+/// shaper's already-scanned font database rather than walking every
+/// system font directory again, which a cold start used to pay twice.
+///
+/// An embedder that wants a different backend replaces the
+/// [`ShaperService`] from an app hook; the layout engine reads whatever
+/// is installed.
+pub(crate) fn register_text(app: &mut App) -> Box<dyn TextShaper> {
+    let layout_shaper = CosmicShaper::new();
+    let render_shaper = CosmicShaper::new_sharing_db(&layout_shaper);
+    app.world.insert_non_send(ShaperService::new(layout_shaper));
+    Box::new(render_shaper)
+}
+
 /// Layout, text-editing, input, and the primitive interaction/visual plugins
 /// (scroll / press / drag / dnd / hover / cursor / controls / form controls /
 /// tooltip / tabs / transitions / validation / assets). The always-on stack.

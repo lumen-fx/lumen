@@ -143,6 +143,10 @@ representation and is neither `Send` nor `Sync`, and GPU device handles are
 non-send on some platforms. A non-send resource pins its systems to the main
 thread, which is the intended trade.
 
+The text shaper is one of these. It lives in `ShaperService`, and a plugin that
+brings its own shaper installs it with `insert_non_send`. Layout measures text
+through whatever is installed, so the swap covers sizing as well as drawing.
+
 `Viewport` exists in both worlds. If your plugin resizes or reconfigures the
 surface, write both copies; layout reads the main-world one and the renderer
 reads the render-world one.

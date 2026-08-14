@@ -60,6 +60,9 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
     // them unused. The OS host-resource units (filedialog / notify / tray /
     // clipboard / launcher / power) are cheap constructors left default-on
     // (see their `TODO(tree-shake)` notes).
+    // Text shaping first: the layout engine measures through the shaper
+    // installed here, and the renderer gets the sibling returned here.
+    let render_shaper = register_text(&mut app);
     register_core(&mut app);
     // Global hotkeys - GATED on `usage.hotkey` (the `register_hotkey` marker);
     // skipping it avoids opening the X11 hotkey manager for a hotkey-free app.
@@ -560,15 +563,6 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
                 })
                 .collect(),
         });
-    // Render-side shaper: share the layout shaper's already-scanned font
-    // database (TaffyLayoutPlugin::build inserted it above) instead of
-    // re-walking every system font directory - the double `fontdb` scan
-    // cost ~12-19 ms of every startup. Identical db contents keep glyph
-    // output byte-for-byte identical to two independent scans.
-    let render_shaper = match app.world.get_non_send::<CosmicShaper>() {
-        Some(layout_shaper) => CosmicShaper::new_sharing_db(layout_shaper),
-        None => CosmicShaper::new(),
-    };
     // `--lumen-window-bg` resolved from the fully-combined (UA + skin +
     // app) stylesheet paints the GPU clear behind the very first frame -
     // what a user sees before the root element itself paints, and behind
@@ -588,7 +582,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
         size,
         title,
         clear,
-        text_shaper: Some(Box::new(render_shaper)),
+        text_shaper: Some(render_shaper),
         maximized,
         frameless: ir.frameless,
         start_position,

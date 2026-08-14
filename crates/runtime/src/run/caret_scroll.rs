@@ -44,7 +44,7 @@ fn caret_scroll_axis(
 /// clip via their UA-default `overflow: hidden`.
 ///
 /// Horizontal: the caret x is the measured width of the caret line's
-/// prefix (same cosmic shaper the layout measure uses, so it agrees
+/// prefix (the same shaper the layout measure uses, so it agrees
 /// with the renderer's glyph positions). Vertical (multiline): logical
 /// line index x the resolved line height
 /// ([`lumen_core::components::resolve_line_height`] - the CSS
@@ -54,7 +54,7 @@ fn caret_scroll_axis(
 #[allow(clippy::type_complexity)]
 pub(crate) fn scroll_caret_into_view(
     mut commands: Commands,
-    shaper: Option<NonSendMut<lumen_text_cosmic::CosmicShaper>>,
+    shaper: Option<NonSendMut<ShaperService>>,
     mut q: Query<
         (
             Entity,

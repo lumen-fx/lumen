@@ -3526,7 +3526,6 @@ dependencies = [
  "glam 0.33.3",
  "lumen-core",
  "lumen-text",
- "lumen-text-cosmic",
  "proptest",
  "taffy",
 ]
@@ -3858,9 +3857,12 @@ dependencies = [
 name = "lumen-text-cosmic"
 version = "0.0.3"
 dependencies = [
+ "bevy_ecs",
  "cosmic-text",
+ "glam 0.33.3",
  "lru",
  "lumen-core",
+ "lumen-layout-taffy",
  "lumen-text",
  "rustc-hash 2.1.3",
 ]
