@@ -1,0 +1,46 @@
+{
+    "##": [
+        "Scoop manifest for the Lumen toolchain. It lives in the bucket",
+        "lumen-fx/scoop-lumen as bucket/lumen.json, which is what",
+        "`scoop install lumen-fx/lumen` reads, and",
+        ".github/workflows/publish-packages.yml pushes this file there on every",
+        "release.",
+        "",
+        "The source is the portable Windows zip, not the MSI: scoop owns where an",
+        "app lives and how it is removed, and the MSI would install a second copy",
+        "beside it with its own entry in Installed apps. The zip also carries no",
+        "receipt under share/lumen, so the built-in update check stays off and",
+        "`scoop update` is the only thing that moves the version.",
+        "",
+        "extract_dir flattens the archive's bin/ directory into the app directory,",
+        "which keeps lumenc.exe, lumen.dll, and lumen-launcher.exe together.",
+        "lumenc loads the runtime library from beside its own executable and",
+        "`lumenc package` looks for the launcher stub there too, so splitting them",
+        "up breaks both."
+    ],
+    "version": "0.0.3",
+    "description": "Toolchain for Lumen, a markup-first UI framework for native desktop apps",
+    "homepage": "https://lumenfx.dev",
+    "license": "MPL-2.0",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/lumen-fx/lumen/releases/download/v0.0.3/lumen-windows-x86_64.zip",
+            "hash": "00970037031eafa4bbd033c15f5d95791bb511bafba6655545377094a7e2fe34"
+        }
+    },
+    "extract_dir": "bin",
+    "bin": "lumenc.exe",
+    "checkver": {
+        "github": "https://github.com/lumen-fx/lumen"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/lumen-fx/lumen/releases/download/v$version/lumen-windows-x86_64.zip"
+            }
+        },
+        "hash": {
+            "url": "$baseurl/sha256sums.txt"
+        }
+    }
+}

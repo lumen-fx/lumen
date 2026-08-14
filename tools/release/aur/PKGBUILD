@@ -1,0 +1,56 @@
+# Arch package for the Lumen toolchain, built from the release archives rather
+# than from source. It lives in the AUR as `lumen-bin`, and
+# .github/workflows/publish-packages.yml pushes this file plus the generated
+# .SRCINFO there on every release.
+#
+# Layout is load-bearing, not taste. lumenc dlopens the runtime library from
+# the directory holding its own executable, and `lumenc package` looks for the
+# launcher stub in that same directory (crates/lumenc/src/loader.rs,
+# crates/lumenc/src/package_cli.rs). All three files therefore live together in
+# /usr/lib/lumen, and /usr/bin/lumenc is a symlink into it: Linux resolves
+# /proc/self/exe through the symlink, so the running lumenc still sees
+# /usr/lib/lumen as its own directory.
+#
+# Nothing here installs a receipt under share/lumen. That file is what marks a
+# copy as installed and turns the built-in update check on
+# (crates/lumenc/src/update_check.rs); without it lumenc never checks for a
+# newer release, which is what you want when pacman owns the version.
+#
+# The `licenses` package already ships the MPL-2.0 text as
+# /usr/share/licenses/spdx/MPL-2.0.txt, so this package does not carry a copy
+# of it.
+#
+# The AUR account that pushes this package owns it; add a
+# `# Maintainer: Name <address>` line above once that account exists.
+
+pkgname=lumen-bin
+pkgver=0.0.3
+pkgrel=1
+pkgdesc="Toolchain for Lumen, a markup-first UI framework for native desktop apps"
+arch=('x86_64' 'aarch64')
+url="https://lumenfx.dev"
+license=('MPL-2.0')
+depends=('gtk3' 'alsa-lib' 'gcc-libs' 'glibc' 'libxkbcommon' 'wayland' 'vulkan-icd-loader')
+optdepends=('vulkan-swrast: software rendering when no GPU driver is installed')
+provides=("lumen=$pkgver")
+conflicts=('lumen')
+# The release archives are already stripped, and there is nothing to compile
+# here, so there is no debug package to split out either.
+options=('!strip' '!debug')
+
+_releases="https://github.com/lumen-fx/lumen/releases/download"
+
+source_x86_64=("lumen-$pkgver-x86_64.tar.gz::$_releases/v$pkgver/lumen-linux-x86_64.tar.gz")
+source_aarch64=("lumen-$pkgver-aarch64.tar.gz::$_releases/v$pkgver/lumen-linux-aarch64.tar.gz")
+
+sha256sums_x86_64=('55a2e50220ecee29aa14b9f1469c3624aba820154b8615e89862260bfdb0a16b')
+sha256sums_aarch64=('3c0d8460af8272918fb3e619fc0fca8fe0a50f084ae43a3b0b767b817477bb8c')
+
+package() {
+  install -Dm755 "$srcdir/bin/lumenc" "$pkgdir/usr/lib/lumen/lumenc"
+  install -Dm755 "$srcdir/bin/liblumen.so" "$pkgdir/usr/lib/lumen/liblumen.so"
+  install -Dm755 "$srcdir/bin/lumen-launcher" "$pkgdir/usr/lib/lumen/lumen-launcher"
+
+  install -d "$pkgdir/usr/bin"
+  ln -s ../lib/lumen/lumenc "$pkgdir/usr/bin/lumenc"
+}
