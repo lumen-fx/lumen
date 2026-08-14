@@ -21,7 +21,6 @@ permissions:
 
 jobs:
   changes:
-    name: what changed
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -54,8 +53,7 @@ jobs:
               changed="$(git ls-files)"
               ;;
             *)
-              # The checkout is shallow, so the commit being compared against
-              # has to be fetched before git can diff the two trees.
+              # shallow checkout: the base must be fetched before diffing
               if [ -n "$BASE" ] &&
                  [ "$BASE" != "0000000000000000000000000000000000000000" ] &&
                  git fetch --no-tags --depth=1 origin "$BASE"; then
@@ -66,6 +64,7 @@ jobs:
               ;;
           esac
 
+          # editing this workflow re-runs every area
           self='^\.github/workflows/tools\.yml$'
 
           area() {
@@ -73,8 +72,7 @@ jobs:
             dir="$2"
             pattern="$3"
             answer=false
-            # A directory the branch does not have leaves its job skipped
-            # rather than red, so a job can be written before it lands.
+            # missing directory = skipped job, not a red one
             if [ -d "$dir" ] && printf '%s\n' "$changed" | grep -Eq "$pattern"; then
               answer=true
             fi
@@ -84,8 +82,7 @@ jobs:
 
           area vscode tools/vscode-lumen \
             "^tools/vscode-lumen/|$self"
-          # The Gradle build copies its TextMate grammars out of the VS Code
-          # extension.
+          # the gradle build copies grammars out of the vscode extension
           area jetbrains tools/jetbrains-lumen \
             "^tools/jetbrains-lumen/|^tools/vscode-lumen/(syntaxes|language-configuration)/|$self"
           area treesitter tools/tree-sitter-lumen \
@@ -96,7 +93,7 @@ jobs:
             "^tools/release/|^tools/setup-lumen/|^\.github/scripts/|$self"
           area python sdk/python \
             "^sdk/python/|$self"
-          # include/ holds the C ABI header the C++ SDK wraps.
+          # include/ is the C ABI header the C++ SDK wraps
           area cpp sdk/cpp \
             "^sdk/cpp/|^include/|$self"
 
@@ -118,17 +115,13 @@ jobs:
         with:
           node-version: 20
 
-      # No lockfile is committed, which rules out `npm ci` and setup-node's
-      # npm cache alike.
+      # no lockfile, so npm ci and the npm cache are out
       - run: npm install --no-audit --no-fund
 
-      - name: The extension compiles
-        run: npm run compile
+      - run: npm run compile
 
-      # vsce reads package.json the way the marketplace does, so a broken
-      # contribution point fails here rather than on someone's install.
-      - name: The extension packages
-        run: npm run package
+      # vsce validates the manifest the way the marketplace does
+      - run: npm run package
 
   jetbrains:
     name: jetbrains plugin
@@ -150,11 +143,9 @@ jobs:
           java-version: "21"
           cache: gradle
 
-      - name: The plugin builds and its descriptor is well formed
-        run: ./gradlew --no-daemon buildPlugin verifyPluginProjectConfiguration verifyPluginStructure
+      - run: ./gradlew --no-daemon buildPlugin verifyPluginProjectConfiguration verifyPluginStructure
 
-  # The Plugin Verifier downloads one full IDE distribution per IDE it checks,
-  # which is tens of minutes. Weekly and on demand instead of per pull request.
+  # downloads a full IDE distribution per IDE checked; too slow for PRs
   jetbrains-verifier:
     name: jetbrains plugin verifier
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -174,8 +165,7 @@ jobs:
           java-version: "21"
           cache: gradle
 
-      - name: The plugin is binary compatible with the recommended IDEs
-        run: ./gradlew --no-daemon verifyPlugin
+      - run: ./gradlew --no-daemon verifyPlugin
 
   tree-sitter:
     name: tree-sitter grammar
@@ -197,15 +187,13 @@ jobs:
 
       - run: npm install --no-audit --no-fund
 
-      # Editors compile the committed parser rather than generating their own,
-      # so a grammar edit that ships without a regenerated src/ fails here.
-      - name: The committed parser is the one the grammar generates
+      # editors compile the committed src/, so it must match grammar.js
+      - name: check committed parser
         run: |
           npx tree-sitter generate
           git diff --exit-code -- src
 
-      - name: The corpus parses
-        run: npx tree-sitter test
+      - run: npx tree-sitter test
 
   zed:
     name: zed extension
@@ -218,9 +206,9 @@ jobs:
         with:
           lfs: false
 
-      # The crate carries its own [workspace], so ci.yml never builds it, and
-      # wasm32-wasip1 is the target Zed compiles it for on install.
-      - name: Install pinned toolchain
+      # own [workspace], so ci.yml never builds it; wasm32-wasip1 is what
+      # Zed compiles extensions for
+      - name: install toolchain
         run: |
           rustup show active-toolchain
           rustup target add wasm32-wasip1
@@ -243,13 +231,11 @@ jobs:
         with:
           lfs: false
 
-      - name: The shell scripts lint clean
-        run: shellcheck tools/release/*.sh tools/setup-lumen/*.sh .github/scripts/*.sh
+      - run: shellcheck tools/release/*.sh tools/setup-lumen/*.sh .github/scripts/*.sh
 
-      # update-package-manifests.sh normally downloads the checksum file a
-      # release publishes. Handing it one written here keeps the rewrite
-      # offline; the checksums are placeholders, the rewriting is the subject.
-      - name: The package manifests survive a rewrite
+      # a local sums file keeps the rewrite offline; the checksums are
+      # placeholders, the version rewrite is what is under test
+      - name: manifest rewrite round-trip
         if: hashFiles('tools/release/update-package-manifests.sh') != ''
         run: |
           set -euo pipefail
@@ -299,11 +285,9 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Every module parses on this interpreter
-        run: python -m compileall -q lumen examples tests
+      - run: python -m compileall -q lumen examples tests
 
-      - name: The tests pass
-        run: python -m unittest discover -s tests -v
+      - run: python -m unittest discover -s tests -v
 
   cpp-sdk:
     name: cpp sdk
@@ -316,10 +300,9 @@ jobs:
         with:
           lfs: false
 
-      # Compiled, not linked: linking would need liblumen. The include order
-      # matches the CMake interface target, SDK header first, and LUMEN_APP_DIR
-      # only ever becomes a string constant.
-      - name: The examples compile against the committed headers
+      # syntax-only: linking would need liblumen. Include order matches the
+      # CMake interface target, SDK header first.
+      - name: compile examples
         run: |
           set -euo pipefail
           for example in sdk/cpp/examples/*.cpp; do
@@ -328,5 +311,4 @@ jobs:
                 -DLUMEN_APP_DIR='"."' "$example"
           done
 
-      - name: The CMake package configures
-        run: cmake -S sdk/cpp -B "$RUNNER_TEMP/cpp-build"
+      - run: cmake -S sdk/cpp -B "$RUNNER_TEMP/cpp-build"
