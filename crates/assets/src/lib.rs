@@ -5,6 +5,8 @@
 //! - On a cold miss, the request is pushed onto a bounded `crossbeam-channel` job queue drained by an N-worker thread pool (`N = available_parallelism().min(4)`).
 //!   Subsequent entities requesting the same path join a pending fan-out list.
 //! - Every request carries a monotonic per-entity `request_id`; results whose id no longer matches the entity's current id are discarded on completion. This kills the stale-decode race after rapid `ScriptCommand::SetSrc` storms.
+//! - What a path decodes *into* is decided by the loader registry: each [`AssetLoader`] claims file extensions and produces one [`AssetKind`], and the built-in image, SVG, and audio paths are ordinary registered loaders. An app or plugin adds a format by registering another one; see [`register_asset_loader`].
+//! - Where the bytes come from is decided by the [`AssetSource`] list, consulted before the job is queued. [`BundleSource`] (`.lpak` archives, `lumen://app/...` URIs) is installed by default.
 //! - [`drain_completed_decodes`] delivers the resulting `Handle` to every still-valid waiter; failures attach [`ImageLoadFailed`] carrying a typed [`LoadErrorKind`].
 //! - Handles are strong [`Arc`]s to decoded data; the cache holds [`Handle<T>`] entries that share identity across consumers.
 //! - The vello GPU upload cache is keyed by the underlying `peniko::Blob` identity, so identical handles short-circuit the upload.
@@ -16,8 +18,14 @@
 #![warn(missing_docs)]
 
 pub mod bundle;
+pub mod loader;
+pub mod loaders;
+pub mod source;
 
 pub use bundle::{BundleError, LumenBundle, parse_lumen_uri};
+pub use loader::{AssetKind, AssetLoader, AssetLoaders, LoadContext, LoadedAsset, asset_extension};
+pub use loaders::{AudioLoader, ImageLoader, SvgLoader};
+pub use source::{AssetSource, BundleSource};
 
 use bevy_ecs::message::MessageWriter;
 use bevy_ecs::prelude::*;
@@ -25,7 +33,8 @@ use crossbeam_channel::{Receiver, Sender};
 use lru::LruCache;
 use lumen_core::prelude::*;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use std::collections::HashMap;
+use std::collections::hash_map::Entry as MapEntry;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -390,6 +399,8 @@ pub struct ExtractedSvg {
 /// - Caches are keyed by source path; entities sharing a path share one decoded `LoadedImage` or `LoadedSvg` (Arc-cheap clones).
 /// - Successful decodes populate the LRU image / SVG caches; decode failures populate the LRU failure cache.
 /// - Entities requesting an in-flight path are appended to `pending` and receive the result via the drain.
+/// - What a path decodes into comes from the [`AssetLoaders`] registry, and where its bytes come from
+///   comes from the registered [`AssetSource`] list; both are replaceable per app.
 /// - Decode jobs run on a bounded N-worker `crossbeam-channel` pool (`N = available_parallelism().min(4)`).
 /// - A `notify::RecommendedWatcher` invalidates cache entries whose backing file changes on disk and fires [`AssetReloadRequested`].
 #[derive(Resource)]
@@ -447,23 +458,21 @@ pub struct AssetServer {
     watch_tx: Sender<notify::Result<notify::Event>>,
     /// Set of paths the watcher is currently subscribed to. Watch ops are idempotent - subscribing a path
     /// twice is cheap and avoids tracking per-path refcounts.
-    watched: std::collections::HashSet<PathBuf>,
+    watched: HashSet<PathBuf>,
     /// Shared cancellation flag handed to workers. Flipping it true at shutdown unblocks any worker that's
     /// already started a decode call so the join handles complete promptly.
     shutdown_flag: Arc<Mutex<bool>>,
-    /// Registered `.lpak` bundles, consulted in registration order when
-    /// an [`ImageSource`] path is a `lumen://app/` URI or resolves under
-    /// [`Self::bundle_root`]. First hit wins. Their internal blob is
-    /// `Arc<[u8]>` so `register_bundle` / `read` clone cheaply. Bundles
-    /// also feed the font-registration path in `lumen-text-cosmic`.
-    bundles: Vec<LumenBundle>,
-    /// Directory the registered bundles' keys are relative to - the app
-    /// directory the archive was packed from. Set alongside the first
-    /// bundle so an ordinary filesystem path (which the markup loader
-    /// has already resolved against the app directory) can be mapped
-    /// back to a bundle key. `None` leaves bundles reachable only
-    /// through `lumen://app/` URIs.
-    bundle_root: Option<PathBuf>,
+    /// Extension-keyed loader registry. Decides which [`AssetLoader`] runs
+    /// for a path and therefore what kind of asset it becomes. Defaults to
+    /// the built-in image / SVG / audio loaders.
+    loaders: AssetLoaders,
+    /// The built-in `.lpak` source. Kept as its own field so
+    /// [`Self::register_bundle`] and the font-registration path in
+    /// `lumen-text-cosmic` can reach the bundles by type.
+    bundle_source: BundleSource,
+    /// Additional byte sources, consulted after the bundles and before the
+    /// filesystem, in registration order.
+    sources: Vec<Arc<dyn AssetSource>>,
 }
 
 struct PendingWaiter {
@@ -480,28 +489,29 @@ struct PendingWaiter {
 /// with transient decodes.
 struct DecodeJob {
     path: PathBuf,
+    /// Loader resolved from the registry at enqueue time, on the main
+    /// thread. Travelling with the job is what keeps loader registration off
+    /// the workers' path: they never read the registry.
+    loader: Arc<dyn AssetLoader>,
     /// Request id snapshot taken at the originating entity's enqueue time. Carried verbatim on the
     /// `DecodeResult` so callers tracing job -> result pairs can correlate by id; the actual stale-waiter
     /// check uses per-waiter ids on the `pending` list.
     request_id: u64,
-    /// Pre-resolved bundle bytes. `Some` when the cache miss was
-    /// satisfied by a registered [`LumenBundle`]; `None` when the path
-    /// is not bundled, and workers fall back to `image::open` /
-    /// `std::fs::read` against `path`.
-    bundle_bytes: Option<Vec<u8>>,
-}
-
-enum DecodedAsset {
-    Image(LoadedImage),
-    Svg(LoadedSvg),
-    Audio(LoadedAudio),
+    /// Bytes an [`AssetSource`] produced for this path, resolved on the
+    /// main thread because a worker cannot see the [`AssetServer`]. `None`
+    /// when no source claimed the path, and the loader reads it itself.
+    resolved_bytes: Option<Vec<u8>>,
 }
 
 struct DecodeResult {
     path: PathBuf,
     /// Request id forwarded from the originating `DecodeJob`; see [`DecodeJob::request_id`].
     request_id: u64,
-    outcome: Result<DecodedAsset, LoadErrorKind>,
+    /// Kind declared by the loader that ran. Used on the failure path to
+    /// pick the failure component, so a load that failed before producing a
+    /// payload still lands as the right kind.
+    kind: AssetKind,
+    outcome: Result<LoadedAsset, LoadErrorKind>,
 }
 
 /// Outcome of a cache lookup for an entity's source path.
@@ -561,11 +571,39 @@ impl AssetServer {
             watcher: None,
             watch_rx,
             watch_tx,
-            watched: std::collections::HashSet::new(),
+            watched: HashSet::new(),
             shutdown_flag,
-            bundles: Vec::new(),
-            bundle_root: None,
+            loaders: AssetLoaders::default(),
+            bundle_source: BundleSource::default(),
+            sources: Vec::new(),
         }
+    }
+
+    /// Teach the pipeline a format. The loader claims the extensions it
+    /// names, replacing whatever held them before, so an app can override a
+    /// built-in decoder as well as add one.
+    ///
+    /// From a plugin's `build`, prefer [`register_asset_loader`], which
+    /// installs the server first if it is not there yet.
+    pub fn register_loader(&mut self, loader: impl AssetLoader) {
+        self.loaders.register(loader);
+    }
+
+    /// The loader registry, for inspecting which loader handles a path.
+    pub fn loaders(&self) -> &AssetLoaders {
+        &self.loaders
+    }
+
+    /// The loader registry, for registering an already shared loader or
+    /// changing the fallback that handles unclaimed extensions.
+    pub fn loaders_mut(&mut self) -> &mut AssetLoaders {
+        &mut self.loaders
+    }
+
+    /// Add a byte source. Sources are consulted in registration order after
+    /// the bundles; a path none of them claims is read from disk.
+    pub fn register_source(&mut self, source: impl AssetSource) {
+        self.sources.push(Arc::new(source));
     }
 
     /// Register a `.lpak` bundle with the server. Subsequent decode
@@ -577,7 +615,7 @@ impl AssetServer {
     /// Set [`Self::set_bundle_root`] as well to serve plain filesystem
     /// paths (`<app_dir>/icons/sun.png`) out of the archive.
     pub fn register_bundle(&mut self, bundle: LumenBundle) {
-        self.bundles.push(bundle);
+        self.bundle_source.register(bundle);
     }
 
     /// Declare the directory registered bundles were packed from. A
@@ -586,21 +624,20 @@ impl AssetServer {
     /// wins over the file on disk, so an app can ship the archive and
     /// leave the loose files behind.
     pub fn set_bundle_root(&mut self, root: impl Into<PathBuf>) {
-        self.bundle_root = Some(root.into());
+        self.bundle_source.set_root(root);
     }
 
     /// Iterate the currently registered bundles. Used by the
     /// font-registration helper in `lumen-text-cosmic`.
     pub fn bundles(&self) -> &[LumenBundle] {
-        &self.bundles
+        self.bundle_source.bundles()
     }
 
     /// Resolve `lumen://app/<rel>` URI strings to bundled bytes. Returns
     /// `None` when no bundle satisfies the URI or when the URI uses an
     /// unknown scheme (callers fall back to disk in that case).
     pub fn resolve_uri(&self, uri: &str) -> Option<Vec<u8>> {
-        let rel = parse_lumen_uri(uri)?;
-        self.read_key(rel)
+        self.bundle_source.read_uri(uri)
     }
 
     /// Resolve an [`ImageSource`]-shaped path out of the registered
@@ -608,27 +645,16 @@ impl AssetServer {
     /// under [`Self::set_bundle_root`] whose remainder is the key.
     /// `None` means "not bundled", and the caller reads from disk.
     pub fn resolve_bundled(&self, path: &Path) -> Option<Vec<u8>> {
-        if self.bundles.is_empty() {
-            return None;
-        }
-        let s = path.to_str()?;
-        if s.starts_with("lumen://") {
-            return self.resolve_uri(s);
-        }
-        let rel = path.strip_prefix(self.bundle_root.as_ref()?).ok()?;
-        // Bundle keys are forward-slash joined at pack time, so rebuild
-        // the key the same way rather than trusting the host separator.
-        let key = rel
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/");
-        self.read_key(&key)
+        self.bundle_source.read(path)
     }
 
-    /// First registered bundle holding `key`, if any.
-    fn read_key(&self, key: &str) -> Option<Vec<u8>> {
-        self.bundles.iter().find_map(|b| b.read(key))
+    /// Bytes for `path` from the first source that claims it: the bundles,
+    /// then anything passed to [`Self::register_source`]. `None` leaves the
+    /// read to the loader, which means the filesystem.
+    fn resolve_source_bytes(&self, path: &Path) -> Option<Vec<u8>> {
+        self.bundle_source
+            .read(path)
+            .or_else(|| self.sources.iter().find_map(|s| s.read(path)))
     }
 
     /// Returns the approximate CPU bytes held by the image and SVG content caches.
@@ -756,28 +782,35 @@ impl AssetServer {
             });
         }
         let request_id = self.current_request_id(entity);
-        // If a registered bundle holds this path, resolve the bytes
-        // synchronously here. The worker thread doesn't see the
-        // `AssetServer` resource, so we have to feed it the payload
-        // upfront.
-        let bundle_bytes = self.resolve_bundled(&path);
+        // Pick the loader here, on the main thread, so the registry is never
+        // read from a worker. A path no loader claims (only possible once
+        // the fallback has been cleared) fails immediately rather than
+        // occupying a worker to reach the same answer.
+        let Some(loader) = self.loaders.resolve(&path) else {
+            return CacheLookup::HitFailed(ImageLoadFailed::new(LoadErrorKind::Unsupported));
+        };
+        // If a source holds this path, resolve the bytes synchronously here.
+        // The worker thread doesn't see the `AssetServer` resource, so we
+        // have to feed it the payload upfront.
+        let resolved_bytes = self.resolve_source_bytes(&path);
         // Reaching here means a cache miss: this call will either enqueue a
         // fresh decode (Vacant) or attach to one already in flight
         // (Occupied - the pool was spawned by that prior enqueue). Either
         // way the worker pool must exist; spawn it lazily now. Idempotent.
         self.ensure_workers();
         match self.pending.entry(path.clone()) {
-            std::collections::hash_map::Entry::Occupied(mut e) => {
+            MapEntry::Occupied(mut e) => {
                 e.get_mut().push(PendingWaiter { entity, request_id });
                 CacheLookup::InFlight
             }
-            std::collections::hash_map::Entry::Vacant(e) => {
+            MapEntry::Vacant(e) => {
                 e.insert(vec![PendingWaiter { entity, request_id }]);
                 if let Some(tx) = self.job_tx.as_ref() {
                     let _ = tx.send(DecodeJob {
                         path,
+                        loader,
                         request_id,
-                        bundle_bytes,
+                        resolved_bytes,
                     });
                 }
                 CacheLookup::Enqueued
@@ -943,9 +976,9 @@ fn clone_kind(k: &LoadErrorKind) -> LoadErrorKind {
     }
 }
 
-/// N-worker decode loop. Reads jobs from the shared `job_rx`, runs the blocking decoder, and forwards the
-/// result. Exits cleanly on `RecvError` (channel disconnected - the only way `AssetServer::shutdown` signals
-/// teardown).
+/// N-worker decode loop. Reads jobs from the shared `job_rx`, runs the loader the job carries, and forwards
+/// the result. Exits cleanly on `RecvError` (channel disconnected - the only way `AssetServer::shutdown`
+/// signals teardown).
 fn worker_loop(
     job_rx: Receiver<DecodeJob>,
     result_tx: Sender<DecodeResult>,
@@ -956,332 +989,15 @@ fn worker_loop(
         if shutdown_flag.lock().map(|g| *g).unwrap_or(false) {
             break;
         }
-        let outcome = decode_blocking(&job.path, job.bundle_bytes.as_deref());
+        let ctx = LoadContext::new(&job.path, job.resolved_bytes.as_deref());
+        let outcome = job.loader.load(&ctx);
+        let kind = job.loader.kind();
         let _ = result_tx.send(DecodeResult {
             path: job.path,
             request_id: job.request_id,
+            kind,
             outcome,
         });
-    }
-}
-
-/// Decode an image or SVG, preferring `bundle_bytes` when supplied
-/// (the path then represents a `lumen://app/...` URI rather than a
-/// real filesystem location).
-fn decode_blocking(
-    path: &std::path::Path,
-    bundle_bytes: Option<&[u8]>,
-) -> Result<DecodedAsset, LoadErrorKind> {
-    let is_svg = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("svg"))
-        .unwrap_or_else(|| {
-            // Fall back to suffix sniffing on the string form for
-            // `lumen://app/...` paths which `Path::extension` may not
-            // resolve correctly (the scheme prefix confuses it).
-            path.to_str()
-                .map(|s| s.to_ascii_lowercase().ends_with(".svg"))
-                .unwrap_or(false)
-        });
-    if is_svg {
-        return decode_svg(path, bundle_bytes).map(DecodedAsset::Svg);
-    }
-    if is_audio_path(path) {
-        return load_audio(path, bundle_bytes).map(DecodedAsset::Audio);
-    }
-    let img = match bundle_bytes {
-        Some(bytes) => image::load_from_memory(bytes)
-            .map_err(|e| LoadErrorKind::DecodeFailed(format!("{path:?}: {e}")))?,
-        None => match image::open(path) {
-            Ok(img) => img,
-            Err(image::ImageError::IoError(io)) => return Err(LoadErrorKind::from(io)),
-            Err(image::ImageError::Unsupported(e)) => {
-                return Err(LoadErrorKind::DecodeFailed(format!("{path:?}: {e}")));
-            }
-            Err(e) => return Err(LoadErrorKind::DecodeFailed(format!("{path:?}: {e}"))),
-        },
-    };
-    let rgba = img.to_rgba8();
-    let (w, h) = rgba.dimensions();
-    let arc: Arc<[u8]> = Arc::from(rgba.into_raw());
-    let blob = vello::peniko::Blob::new(Arc::new(PixBytes(arc.clone())));
-    let data = ImageData {
-        width: w,
-        height: h,
-        rgba: arc,
-        blob,
-    };
-    Ok(DecodedAsset::Image(LoadedImage(data.into())))
-}
-
-fn decode_svg(
-    path: &std::path::Path,
-    bundle_bytes: Option<&[u8]>,
-) -> Result<LoadedSvg, LoadErrorKind> {
-    let bytes = match bundle_bytes {
-        Some(b) => b.to_vec(),
-        None => std::fs::read(path).map_err(LoadErrorKind::from)?,
-    };
-    let source_bytes = bytes.len();
-    let opt = usvg::Options::default();
-    let tree = usvg::Tree::from_data(&bytes, &opt)
-        .map_err(|e| LoadErrorKind::DecodeFailed(format!("{path:?}: {e}")))?;
-    let size = tree.size();
-    let mut scene = vello::Scene::new();
-    svg_walker::render_group(&mut scene, tree.root(), vello::kurbo::Affine::IDENTITY);
-    let data = SvgData {
-        intrinsic: glam::Vec2::new(size.width(), size.height()),
-        scene,
-        source_bytes,
-    };
-    Ok(LoadedSvg(data.into()))
-}
-
-/// Recognized audio container extensions. Only wav + ogg are decodable by
-/// the current rodio feature set, but the pipeline can *carry* any of
-/// these (a decode error surfaces later, on play, as a rodio error) so the
-/// path-classification here stays permissive.
-fn is_audio_path(path: &std::path::Path) -> bool {
-    let ext = path.extension().and_then(|e| e.to_str()).or_else(|| {
-        path.to_str()
-            .and_then(|s| s.rsplit('.').next())
-            .filter(|_| path.to_str().map(|s| s.contains('.')).unwrap_or(false))
-    });
-    matches!(
-        ext.map(|e| e.to_ascii_lowercase()).as_deref(),
-        Some("wav" | "ogg" | "oga" | "mp3" | "flac" | "m4a" | "aac")
-    )
-}
-
-/// Load an audio track's *encoded* bytes off-thread (filesystem read or
-/// bundle fetch) and validate the container magic. Full sample decode is
-/// deferred to rodio on the audio thread - see [`AudioData`].
-fn load_audio(
-    path: &std::path::Path,
-    bundle_bytes: Option<&[u8]>,
-) -> Result<LoadedAudio, LoadErrorKind> {
-    let bytes: Vec<u8> = match bundle_bytes {
-        Some(b) => b.to_vec(),
-        None => std::fs::read(path).map_err(LoadErrorKind::from)?,
-    };
-    // Cheap container probe so a truncated / mislabelled file fails here
-    // (off-thread, cached as a failure) rather than only at play time.
-    if !audio_magic_ok(&bytes) {
-        return Err(LoadErrorKind::DecodeFailed(format!(
-            "{path:?}: unrecognized audio container (expected RIFF/WAVE or OggS)"
-        )));
-    }
-    let arc: Arc<[u8]> = Arc::from(bytes);
-    Ok(LoadedAudio(AudioData { bytes: arc }.into()))
-}
-
-/// True when `bytes` starts with a WAV (`RIFF....WAVE`) or Ogg (`OggS`)
-/// container header. MP3/FLAC/M4A magic is also accepted permissively so
-/// those files can flow through if the decoder features are ever enabled.
-fn audio_magic_ok(bytes: &[u8]) -> bool {
-    if bytes.len() < 12 {
-        return false;
-    }
-    let riff_wave = &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE";
-    let ogg = &bytes[0..4] == b"OggS";
-    let flac = &bytes[0..4] == b"fLaC";
-    let id3 = &bytes[0..3] == b"ID3";
-    let mp3_sync = bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0;
-    let m4a = &bytes[4..8] == b"ftyp";
-    riff_wave || ogg || flac || id3 || mp3_sync || m4a
-}
-
-/// usvg-to-vello bridge.
-///
-/// - Walks groups and emits fills and strokes for paths.
-/// - Honors `<clipPath>` via `push_layer` / `pop_layer`.
-/// - Supports linear and radial gradients; pattern paints are dropped with a `tracing::warn!`.
-/// - Embedded raster images and SVG text nodes are dropped with a `tracing::warn!` rather than panicking.
-mod svg_walker {
-    use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke};
-    use vello::peniko::color::{AlphaColor, Srgb};
-    use vello::peniko::{Brush, Color, ColorStop, Fill, Gradient};
-
-    pub fn render_group(scene: &mut vello::Scene, group: &usvg::Group, parent_xform: Affine) {
-        let xform = parent_xform * to_affine(group.transform());
-
-        // When the group carries a clip-path, wrap its children in a `push_layer` and `pop_layer`.
-        // Masks are not handled here - alpha-mask composition requires a luminance pass that vello does not expose.
-        let clip_pushed = if let Some(clip) = group.clip_path() {
-            let path = clip_path_to_bezpath(clip);
-            scene.push_layer(
-                Fill::NonZero,
-                vello::peniko::BlendMode::default(),
-                1.0,
-                xform,
-                &path,
-            );
-            true
-        } else {
-            false
-        };
-
-        for node in group.children() {
-            match node {
-                usvg::Node::Group(g) => render_group(scene, g, xform),
-                usvg::Node::Path(p) => render_path(scene, p, xform),
-                usvg::Node::Image(_) | usvg::Node::Text(_) => {
-                    // Skip nested rasters and SVG text nodes, emitting one tracing warning per occurrence.
-                    tracing::warn!("svg: dropping unsupported node (Image / Text)");
-                }
-            }
-        }
-
-        if clip_pushed {
-            scene.pop_layer();
-        }
-    }
-
-    /// Walks every path inside a `<clipPath>` body and unions them into a single [`BezPath`].
-    /// Per-path fill rules are treated as NonZero and the clip path's own transform is ignored.
-    fn clip_path_to_bezpath(clip: &usvg::ClipPath) -> BezPath {
-        let mut out = BezPath::new();
-        gather_paths_into(&mut out, clip.root());
-        if out.is_empty() {
-            // Fall back to a large no-op rectangle when the clip body produced no recognisable paths.
-            out.move_to(Point::new(-1.0e6, -1.0e6));
-            out.line_to(Point::new(1.0e6, -1.0e6));
-            out.line_to(Point::new(1.0e6, 1.0e6));
-            out.line_to(Point::new(-1.0e6, 1.0e6));
-            out.close_path();
-        }
-        out
-    }
-
-    fn gather_paths_into(out: &mut BezPath, group: &usvg::Group) {
-        for node in group.children() {
-            match node {
-                usvg::Node::Group(g) => gather_paths_into(out, g),
-                usvg::Node::Path(p) => {
-                    let bez = tinyskia_path_to_bezpath(p.data());
-                    for el in bez.elements() {
-                        out.push(*el);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    fn render_path(scene: &mut vello::Scene, path: &usvg::Path, xform: Affine) {
-        if !path.is_visible() {
-            return;
-        }
-        let bez = tinyskia_path_to_bezpath(path.data());
-        if let Some(fill) = path.fill()
-            && let Some(brush) = paint_to_brush(fill.paint(), fill.opacity().get())
-        {
-            let rule = match fill.rule() {
-                usvg::FillRule::NonZero => Fill::NonZero,
-                usvg::FillRule::EvenOdd => Fill::EvenOdd,
-            };
-            scene.fill(rule, xform, &brush, None, &bez);
-        }
-        if let Some(stroke) = path.stroke()
-            && let Some(brush) = paint_to_brush(stroke.paint(), stroke.opacity().get())
-        {
-            let style = Stroke::new(stroke.width().get() as f64);
-            scene.stroke(&style, xform, &brush, None, &bez);
-        }
-    }
-
-    fn tinyskia_path_to_bezpath(path: &usvg::tiny_skia_path::Path) -> BezPath {
-        let mut out = BezPath::new();
-        for seg in path.segments() {
-            use usvg::tiny_skia_path::PathSegment;
-            match seg {
-                PathSegment::MoveTo(p) => out.move_to(pt(p)),
-                PathSegment::LineTo(p) => out.line_to(pt(p)),
-                PathSegment::QuadTo(c, p) => out.quad_to(pt(c), pt(p)),
-                PathSegment::CubicTo(c1, c2, p) => out.curve_to(pt(c1), pt(c2), pt(p)),
-                PathSegment::Close => out.close_path(),
-            }
-        }
-        out
-    }
-
-    fn pt(p: usvg::tiny_skia_path::Point) -> Point {
-        Point::new(p.x as f64, p.y as f64)
-    }
-
-    fn to_affine(t: usvg::Transform) -> Affine {
-        Affine::new([
-            t.sx as f64,
-            t.ky as f64,
-            t.kx as f64,
-            t.sy as f64,
-            t.tx as f64,
-            t.ty as f64,
-        ])
-    }
-
-    fn paint_to_brush(paint: &usvg::Paint, opacity: f32) -> Option<Brush> {
-        // Maps `usvg::Paint` to a `peniko::Brush`, handling solid color, linear, and radial gradients.
-        // Pattern paints return `None` and emit a `tracing::warn!`.
-        match paint {
-            usvg::Paint::Color(c) => {
-                let a = (opacity.clamp(0.0, 1.0) * 255.0) as u8;
-                Some(Brush::Solid(Color::from(AlphaColor::<Srgb>::from_rgba8(
-                    c.red, c.green, c.blue, a,
-                ))))
-            }
-            usvg::Paint::LinearGradient(g) => {
-                let stops = stops_from(g.stops(), opacity);
-                if stops.is_empty() {
-                    return None;
-                }
-                let start = Point::new(g.x1() as f64, g.y1() as f64);
-                let end = Point::new(g.x2() as f64, g.y2() as f64);
-                Some(Brush::Gradient(
-                    Gradient::new_linear(start, end).with_stops(stops.as_slice()),
-                ))
-            }
-            usvg::Paint::RadialGradient(g) => {
-                let stops = stops_from(g.stops(), opacity);
-                if stops.is_empty() {
-                    return None;
-                }
-                let center = Point::new(g.cx() as f64, g.cy() as f64);
-                let r = g.r().get();
-                Some(Brush::Gradient(
-                    Gradient::new_radial(center, r).with_stops(stops.as_slice()),
-                ))
-            }
-            usvg::Paint::Pattern(_) => {
-                tracing::warn!("svg: dropping pattern paint (unsupported)");
-                None
-            }
-        }
-    }
-
-    /// Maps `usvg::Stop` entries to `peniko::ColorStop`, multiplying each stop's alpha by the supplied `opacity`
-    /// so per-element transparency lands directly in the gradient.
-    fn stops_from(stops: &[usvg::Stop], opacity: f32) -> Vec<ColorStop> {
-        stops
-            .iter()
-            .map(|s| {
-                let alpha = (s.opacity().get() * opacity).clamp(0.0, 1.0);
-                let c = s.color();
-                let color =
-                    AlphaColor::<Srgb>::from_rgba8(c.red, c.green, c.blue, (alpha * 255.0) as u8);
-                ColorStop {
-                    offset: s.offset().get(),
-                    color: color.into(),
-                }
-            })
-            .collect()
-    }
-
-    // Keeps `Rect` in scope so the import compiles when no direct call site references the type.
-    #[allow(dead_code)]
-    fn _ensure_rect_in_scope(r: Rect) -> Rect {
-        r
     }
 }
 
@@ -1290,7 +1006,10 @@ pub struct AssetsPlugin;
 
 impl Plugin for AssetsPlugin {
     fn build(self, app: &mut App) {
-        app.world.insert_resource(AssetServer::default());
+        // Init rather than insert: a plugin installed earlier may already
+        // have created the server to register a loader on it, and replacing
+        // it here would drop that registration.
+        app.world.init_resource::<AssetServer>();
         app.add_message::<AssetReloadRequested>();
         app.add_systems(TickStage::Systems, spawn_pending_decodes);
         // Audio shares the same worker pool + result channel; its spawn
@@ -1317,6 +1036,37 @@ impl Plugin for AssetsPlugin {
         app.add_extract_fn(extract_loaded_images);
         app.add_extract_fn(extract_loaded_svgs);
     }
+}
+
+/// Registers an [`AssetLoader`] from a plugin's `build`, installing the
+/// [`AssetServer`] first if this plugin runs before [`AssetsPlugin`].
+///
+/// ```no_run
+/// # use lumen_core::prelude::*;
+/// # use lumen_assets::{AssetKind, AssetLoader, LoadContext, LoadErrorKind, LoadedAsset};
+/// # struct QoiLoader;
+/// # impl AssetLoader for QoiLoader {
+/// #     fn extensions(&self) -> &[&str] { &["qoi"] }
+/// #     fn kind(&self) -> AssetKind { AssetKind::Image }
+/// #     fn load(&self, _ctx: &LoadContext<'_>) -> Result<LoadedAsset, LoadErrorKind> {
+/// #         Err(LoadErrorKind::Unsupported)
+/// #     }
+/// # }
+/// struct QoiPlugin;
+///
+/// impl Plugin for QoiPlugin {
+///     fn build(self, app: &mut App) {
+///         lumen_assets::register_asset_loader(app, QoiLoader);
+///     }
+/// }
+/// ```
+pub fn register_asset_loader(app: &mut App, loader: impl AssetLoader) {
+    if !app.world.contains_resource::<AssetServer>() {
+        app.world.insert_resource(AssetServer::default());
+    }
+    app.world
+        .resource_mut::<AssetServer>()
+        .register_loader(loader);
 }
 
 // `LruCache::unbounded()` uses `NonZeroUsize::MAX` internally; we never use bounded mode because the byte
@@ -1591,13 +1341,13 @@ pub fn drain_completed_decodes(mut server: ResMut<AssetServer>, mut commands: Co
             continue;
         }
         match result.outcome {
-            Ok(DecodedAsset::Image(img)) => {
+            Ok(LoadedAsset::Image(img)) => {
                 dispatch_decoded!(server, commands, result.path, insert_image, img, surviving);
             }
-            Ok(DecodedAsset::Svg(svg)) => {
+            Ok(LoadedAsset::Svg(svg)) => {
                 dispatch_decoded!(server, commands, result.path, insert_svg, svg, surviving);
             }
-            Ok(DecodedAsset::Audio(audio)) => {
+            Ok(LoadedAsset::Audio(audio)) => {
                 dispatch_decoded!(
                     server,
                     commands,
@@ -1610,7 +1360,9 @@ pub fn drain_completed_decodes(mut server: ResMut<AssetServer>, mut commands: Co
             Err(kind) => {
                 // Attach the failure type matching the asset kind so audio
                 // entities get `AudioLoadFailed` (image/svg get `ImageLoadFailed`).
-                let is_audio = is_audio_path(&result.path);
+                // The kind is the one the selected loader declared, so a
+                // format registered by a plugin fails as its own kind too.
+                let is_audio = result.kind == AssetKind::Audio;
                 let failure = ImageLoadFailed::new(kind);
                 let detail = failure.detail.clone();
                 let kind_copy = clone_kind(&failure.kind);
@@ -1954,23 +1706,37 @@ mod tests {
         w
     }
 
-    #[test]
-    fn audio_path_classification() {
-        assert!(is_audio_path(std::path::Path::new("song.wav")));
-        assert!(is_audio_path(std::path::Path::new("a/b/track.OGG")));
-        assert!(is_audio_path(std::path::Path::new(
-            "lumen://app/assets/x.mp3"
-        )));
-        assert!(!is_audio_path(std::path::Path::new("pic.png")));
-        assert!(!is_audio_path(std::path::Path::new("icon.svg")));
+    /// Runs a loader the way a worker would: the path, plus bytes only when
+    /// a source already produced them.
+    fn load_from_disk(path: &Path) -> Result<LoadedAsset, LoadErrorKind> {
+        let loaders = AssetLoaders::default();
+        let loader = loaders.resolve(path).expect("a loader claims the path");
+        loader.load(&LoadContext::new(path, None))
     }
 
     #[test]
-    fn audio_magic_accepts_wav_rejects_garbage() {
-        assert!(audio_magic_ok(&tiny_wav(4)));
-        assert!(audio_magic_ok(b"OggS\0\0\0\0\0\0\0\0"));
-        assert!(!audio_magic_ok(b"not audio at all"));
-        assert!(!audio_magic_ok(b"RIFFxxxxAVI ")); // RIFF but not WAVE
+    fn default_registry_routes_by_extension() {
+        let kind = |p: &str| AssetLoaders::default().kind_for(Path::new(p));
+        assert_eq!(kind("song.wav"), Some(AssetKind::Audio));
+        assert_eq!(kind("a/b/track.OGG"), Some(AssetKind::Audio));
+        assert_eq!(kind("lumen://app/assets/x.mp3"), Some(AssetKind::Audio));
+        assert_eq!(kind("pic.png"), Some(AssetKind::Image));
+        assert_eq!(kind("icon.svg"), Some(AssetKind::Svg));
+        // Anything unclaimed falls back to the image loader, which is what
+        // the pipeline did before extensions were registered explicitly.
+        assert_eq!(kind("mystery.dat"), Some(AssetKind::Image));
+        assert_eq!(kind("no-extension"), Some(AssetKind::Image));
+    }
+
+    #[test]
+    fn registry_without_fallback_refuses_unclaimed_extensions() {
+        let mut loaders = AssetLoaders::default();
+        loaders.set_fallback(None);
+        assert_eq!(loaders.kind_for(Path::new("mystery.dat")), None);
+        assert_eq!(
+            loaders.kind_for(Path::new("pic.png")),
+            Some(AssetKind::Image)
+        );
     }
 
     #[test]
@@ -1981,7 +1747,10 @@ mod tests {
         let wav = tiny_wav(1000);
         std::fs::write(&path, &wav).unwrap();
 
-        let loaded = load_audio(&path, None).expect("decode audio container");
+        let LoadedAsset::Audio(loaded) = load_from_disk(&path).expect("load audio container")
+        else {
+            panic!("a .wav path must load as audio");
+        };
         assert_eq!(
             loaded.0.bytes.len(),
             wav.len(),
@@ -2009,7 +1778,7 @@ mod tests {
         let path = dir.join("broken.wav");
         std::fs::write(&path, b"RIFFnope").unwrap();
         assert!(matches!(
-            load_audio(&path, None),
+            load_from_disk(&path),
             Err(LoadErrorKind::DecodeFailed(_))
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -2035,8 +1804,9 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("worker produced a decode result");
         assert_eq!(result.path, path);
+        assert_eq!(result.kind, AssetKind::Audio);
         assert!(
-            matches!(result.outcome, Ok(DecodedAsset::Audio(_))),
+            matches!(result.outcome, Ok(LoadedAsset::Audio(_))),
             "audio path decodes to an Audio asset off the worker thread"
         );
         let _ = std::fs::remove_dir_all(&dir);

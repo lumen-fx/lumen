@@ -225,3 +225,70 @@ plugin, so installing the plugin is enough. Registration has to happen before
 the app's markup is parsed. Suppressing the generated plugin also suppresses
 the registration, in which case call the generated `register` function
 yourself.
+
+## Extending the asset server
+
+The asset pipeline decides what a path becomes through a registry of loaders.
+An `AssetLoader` claims file extensions, declares which kind of asset it
+produces, and turns one load into a payload. The built-in image, SVG, and
+audio paths are loaders like any other, registered by default and replaceable.
+
+```rust
+use lumen_assets::{AssetKind, AssetLoader, LoadContext, LoadErrorKind, LoadedAsset};
+
+struct QoiLoader;
+
+impl AssetLoader for QoiLoader {
+    fn extensions(&self) -> &[&str] {
+        &["qoi"]
+    }
+
+    fn kind(&self) -> AssetKind {
+        AssetKind::Image
+    }
+
+    fn load(&self, ctx: &LoadContext<'_>) -> Result<LoadedAsset, LoadErrorKind> {
+        let bytes = ctx.read_bytes()?;
+        let image = decode_qoi(&bytes)?;
+        Ok(LoadedAsset::Image(image))
+    }
+}
+
+struct QoiPlugin;
+
+impl Plugin for QoiPlugin {
+    fn build(self, app: &mut App) {
+        lumen_assets::register_asset_loader(app, QoiLoader);
+    }
+}
+```
+
+Four things about that signature are worth knowing before you write one.
+
+Loading is synchronous, and a loader blocks a thread from the decode pool
+rather than awaiting. Do the expensive work there; that is the point of the
+pool.
+
+A load is a path plus, optionally, bytes that were already resolved. Call
+`read_bytes` when the decoder wants bytes and it does the right thing either
+way; reach for `path` when the decoder wants to open the file itself, as the
+image loader does. A path carrying pre-resolved bytes may be a
+`lumen://app/...` URI rather than a filesystem location, so do not assume you
+can open it.
+
+The loader is chosen on the main thread when the load is queued, and travels
+with the job. Registering a loader while a decode is running is therefore safe
+and affects the next load, not the one in flight.
+
+A later registration wins the extension, so registering `png` replaces the
+built-in image path for PNGs. Paths whose extension nothing claims go to the
+fallback loader, which is the image loader by default;
+`loaders_mut().set_fallback(None)` makes them fail as unsupported instead.
+
+Where the bytes come from is a separate seam. An `AssetSource` answers "do you
+have this path?" with bytes or nothing, and the server asks each one before
+queueing the load. The `.lpak` bundle source is installed by default, which is
+why a packaged app resolves `icons/sun.png` out of its archive; register
+another with `AssetServer::register_source` to serve assets from somewhere
+else, such as bytes embedded in the binary. Sources run on the main thread
+while the load is being queued, so keep them to an index lookup.
