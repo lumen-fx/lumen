@@ -8,7 +8,7 @@ repository = "https://github.com/lumen-fx/lumen"
 
 [grammars.lumen]
 repository = "https://github.com/lumen-fx/lumen"
-rev = "main"
+rev = "3635f67e97d8ece3af0fd0926f9ce10e55750885"
 path = "tools/tree-sitter-lumen"
 
 [language_servers.lumen-lsp]

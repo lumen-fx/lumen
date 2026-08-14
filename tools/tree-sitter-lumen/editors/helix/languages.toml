@@ -20,10 +20,10 @@ language-servers = ["lumen-lsp"]
 [language-server.lumen-lsp]
 command = "lumen-lsp"
 
-# Set `rev` to a commit hash to pin the grammar; a branch name tracks it.
+# `rev` pins the grammar. Bump it after a grammar change.
 [[grammar]]
 name = "lumen"
-source = { git = "https://github.com/lumen-fx/lumen", rev = "main", subpath = "tools/tree-sitter-lumen" }
+source = { git = "https://github.com/lumen-fx/lumen", rev = "3635f67e97d8ece3af0fd0926f9ce10e55750885", subpath = "tools/tree-sitter-lumen" }
 
 # Building the grammar from a local checkout instead:
 #
