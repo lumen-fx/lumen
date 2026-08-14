@@ -3645,6 +3645,13 @@ pub extern "C" fn lumen_event_stop_immediate_propagation() -> LumenStatus {
 mod tests {
     use super::*;
 
+    /// The typed-signal cache, the external property bus, the post-tick
+    /// mirror, and the watcher registry are process-wide. Tests that touch
+    /// them hold this lock: a drain run by one test midway through another
+    /// moves values between the layers `typed_read` consults, and the
+    /// other test reads a value it already overwrote.
+    static SIGNAL_STATE: Mutex<()> = Mutex::new(());
+
     #[test]
     fn abi_version_is_packed_correctly() {
         let v = lumen_abi_version();
@@ -3715,6 +3722,7 @@ mod tests {
 
     #[test]
     fn typed_signal_int64_round_trips() {
+        let _serial = SIGNAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let name = CString::new("typed_int_test").unwrap();
             assert_eq!(lumen_signal_set_int64(name.as_ptr(), 1234), LumenStatus::Ok);
@@ -3729,6 +3737,7 @@ mod tests {
 
     #[test]
     fn typed_signal_float64_round_trips() {
+        let _serial = SIGNAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let name = CString::new("typed_float_test").unwrap();
             assert_eq!(
@@ -3746,6 +3755,7 @@ mod tests {
 
     #[test]
     fn typed_signal_bool_round_trips() {
+        let _serial = SIGNAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let name = CString::new("typed_bool_test").unwrap();
             assert_eq!(lumen_signal_set_bool(name.as_ptr(), true), LumenStatus::Ok);
@@ -3760,6 +3770,7 @@ mod tests {
 
     #[test]
     fn typed_signal_color_round_trips() {
+        let _serial = SIGNAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let name = CString::new("typed_color_test").unwrap();
             let rgba = [0xffu8, 0x88, 0x00, 0xff];
@@ -3778,6 +3789,7 @@ mod tests {
 
     #[test]
     fn typed_signal_get_missing_returns_err_bad_arg() {
+        let _serial = SIGNAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let name = CString::new("never_set_typed").unwrap();
             let mut out: i64 = -1;
@@ -3801,6 +3813,7 @@ mod tests {
 
     #[test]
     fn typed_setter_routes_through_external_property_bus() {
+        let _serial = SIGNAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
         // Round 4 closure: the typed FFI setters push a typed
         // `PropertyValue` through `lumen_core::property_store`'s external
         // bus. A synthetic drain (running the system against a fresh
@@ -3849,6 +3862,7 @@ mod tests {
 
     #[test]
     fn typed_read_falls_back_to_local_cache_when_bus_drained() {
+        let _serial = SIGNAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
         // Once the bus is drained the FFI typed reads still see the
         // value via the local `TYPED_SIGNALS` cache (round 4 keeps the
         // cache as the always-authoritative read-back surface). This
@@ -3877,6 +3891,7 @@ mod tests {
 
     #[test]
     fn signal_watch_registers_additively() {
+        let _serial = SIGNAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
         // Only the success path is exercised here: the null-argument paths
         // call `set_last_error`, which writes the process-global error slot
         // and would race the parallel `last_error_thread_local_then_global`
@@ -3951,6 +3966,7 @@ mod tests {
 
     #[test]
     fn typed_signal_str_round_trips() {
+        let _serial = SIGNAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let name = CString::new("ffi_get_str_test").unwrap();
             let value = CString::new("hello world").unwrap();
@@ -3980,6 +3996,7 @@ mod tests {
 
     #[test]
     fn clear_leaves_an_empty_string_signal() {
+        let _serial = SIGNAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let name = CString::new("ffi_clear_str_test").unwrap();
             let value = CString::new("filled").unwrap();
@@ -4000,6 +4017,7 @@ mod tests {
 
     #[test]
     fn typed_getters_reject_a_type_mismatch() {
+        let _serial = SIGNAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             let name = CString::new("ffi_mismatch_test").unwrap();
             let value = CString::new("not a number").unwrap();
@@ -4017,6 +4035,7 @@ mod tests {
 
     #[test]
     fn array_signal_len_and_field_round_trip() {
+        let _serial = SIGNAL_STATE.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {
             // Build a LUMEN_ARRAY of two LUMEN_MAP rows: [{name:"a"},{name:"b"}].
             let key = CString::new("name").unwrap();
