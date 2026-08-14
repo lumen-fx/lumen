@@ -150,6 +150,45 @@ Changing either setting restarts the server.
 
 The plugin has no `lumenc` commands and no live preview.
 
+### Neovim, Helix, and Zed
+
+These three editors highlight `.lmn` from a tree-sitter grammar, which lives
+in `tools/tree-sitter-lumen` with its queries. Highlighting covers tags,
+attributes, `{interpolation}` placeholders and their `$signal` and `row.field`
+reference forms, comments, and entity references; `<for>`, `<if>`,
+`<template>`, `<use>`, `<slot>`, and `<include>` read as keywords, and
+`bind-*` and `on-*` are distinguished from plain attributes. An inline
+`<script>` body is injected as Rhai, so install a Rhai grammar to highlight
+it. A `<script src="...">` file is opened as its own language, which is where
+Lua and candela scripts belong.
+
+The generated parser is committed, so no editor needs the tree-sitter CLI.
+Every setup below pins a revision of the grammar directory; update that pin
+after the grammar changes.
+
+**Neovim** (0.11 or newer, with `nvim-treesitter`): copy
+`tools/tree-sitter-lumen/editors/nvim/lumen.lua` to
+`~/.config/nvim/lua/lumen.lua` and call `require('lumen').setup()`. It
+registers `.lmn` as the `lumen` filetype, registers the grammar so
+`:TSInstall lumen` builds it, and enables `lumen-lsp`. The server is found the
+way the VS Code extension finds it: `$CARGO_TARGET_DIR`, then the project's
+`target/` directory, then `PATH`, with the `server_path` option overriding all
+of it. Pass `grammar_path` to build the grammar from a local Lumen checkout.
+The same directory also holds `lsp/lumen_lsp.lua`, the server definition on
+its own in the layout `nvim-lspconfig` uses.
+
+**Helix**: append `tools/tree-sitter-lumen/editors/helix/languages.toml` to
+`~/.config/helix/languages.toml`, copy the queries into
+`~/.config/helix/runtime/queries/lumen/`, then run `hx --grammar fetch` and
+`hx --grammar build`. `hx --health lumen` reports what Helix found.
+`lumen-lsp` has to be on `PATH`, or named by an absolute path in the
+`[language-server.lumen-lsp]` section.
+
+**Zed**: the extension is in `tools/zed-lumen`. Install it from the Extensions
+view with "Install Dev Extension", pointed at that directory; Zed builds the
+grammar and the extension itself. `lumen-lsp` is taken from `PATH`, or from
+`lsp.lumen-lsp.binary.path` in your Zed settings.
+
 ## MCP server
 
 A running Lumen app exposes its UI over a local JSON-RPC socket. An agent

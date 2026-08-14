@@ -1,0 +1,32 @@
+# Lumen markup for Helix. Append these sections to
+# ~/.config/helix/languages.toml, then fetch and build the grammar:
+#
+#     hx --grammar fetch
+#     hx --grammar build
+#
+# See README.md in this directory for the query files, which Helix loads from
+# its runtime directory rather than from the grammar.
+
+[[language]]
+name = "lumen"
+scope = "source.lumen"
+injection-regex = "lumen|lmn"
+file-types = ["lmn"]
+roots = ["lumen.toml"]
+block-comment-tokens = { start = "<!--", end = "-->" }
+indent = { tab-width = 2, unit = "  " }
+language-servers = ["lumen-lsp"]
+
+[language-server.lumen-lsp]
+command = "lumen-lsp"
+
+# Set `rev` to a commit hash to pin the grammar; a branch name tracks it.
+[[grammar]]
+name = "lumen"
+source = { git = "https://github.com/lumen-fx/lumen", rev = "main", subpath = "tools/tree-sitter-lumen" }
+
+# Building the grammar from a local checkout instead:
+#
+# [[grammar]]
+# name = "lumen"
+# source = { path = "/path/to/lumen/tools/tree-sitter-lumen" }

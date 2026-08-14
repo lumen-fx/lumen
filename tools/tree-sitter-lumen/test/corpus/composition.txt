@@ -1,0 +1,299 @@
+================================================================================
+Template definition with a slot (apps/pages-demo/layout.lmn)
+================================================================================
+
+<root>
+  <template name="layout">
+    <column padding="20" gap="16" width="100%" height="100%">
+      <row gap="12">
+        <a href="index" text="Home" bg="#2d6cdf" text-color="#ffffff" padding="6 12 6 12" radius="6"/>
+      </row>
+      <column gap="8">
+        <slot/>
+      </column>
+    </column>
+  </template>
+</root>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name))
+    (element
+      (start_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value))))
+      (element
+        (start_tag
+          (tag_name)
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value)))
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value)))
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value)))
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value))))
+        (element
+          (start_tag
+            (tag_name)
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value))))
+          (element
+            (self_closing_tag
+              (tag_name)
+              (attribute
+                (attribute_name)
+                (quoted_attribute_value
+                  (attribute_value)))
+              (attribute
+                (attribute_name)
+                (quoted_attribute_value
+                  (attribute_value)))
+              (attribute
+                (attribute_name)
+                (quoted_attribute_value
+                  (attribute_value)))
+              (attribute
+                (attribute_name)
+                (quoted_attribute_value
+                  (attribute_value)))
+              (attribute
+                (attribute_name)
+                (quoted_attribute_value
+                  (attribute_value)))
+              (attribute
+                (attribute_name)
+                (quoted_attribute_value
+                  (attribute_value)))))
+          (end_tag
+            (tag_name)))
+        (element
+          (start_tag
+            (tag_name)
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value))))
+          (element
+            (self_closing_tag
+              (tag_name)))
+          (end_tag
+            (tag_name)))
+        (end_tag
+          (tag_name)))
+      (end_tag
+        (tag_name)))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Template use with children (apps/pages-demo/settings.lmn)
+================================================================================
+
+<root>
+  <use template="layout">
+    <column gap="8">
+      <label class="title" font-size="24" text="Settings"/>
+    </column>
+  </use>
+</root>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name))
+    (element
+      (start_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value))))
+      (element
+        (start_tag
+          (tag_name)
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value))))
+        (element
+          (self_closing_tag
+            (tag_name)
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))))
+        (end_tag
+          (tag_name)))
+      (end_tag
+        (tag_name)))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Slot with a default value
+================================================================================
+
+<template name="card" title="Untitled">
+  <column>
+    <label text="{title}" />
+    <slot default="empty" />
+  </column>
+</template>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value))))
+    (element
+      (start_tag
+        (tag_name))
+      (element
+        (self_closing_tag
+          (tag_name)
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (interpolation
+                (identifier))))))
+      (element
+        (self_closing_tag
+          (tag_name)
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value)))))
+      (end_tag
+        (tag_name)))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Include directive
+================================================================================
+
+<root>
+  <include src="parts/header.lmn"/>
+  <column />
+</root>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name))
+    (element
+      (self_closing_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))))
+    (element
+      (self_closing_tag
+        (tag_name)))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Menubar
+================================================================================
+
+<root>
+  <menubar>
+    <menu label="File">
+      <menuitem id="open" label="Open" accel="Ctrl+O" />
+      <separator />
+      <menuitem id="quit" label="Quit" />
+    </menu>
+  </menubar>
+</root>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name))
+    (element
+      (start_tag
+        (tag_name))
+      (element
+        (start_tag
+          (tag_name)
+          (attribute
+            (attribute_name)
+            (quoted_attribute_value
+              (attribute_value))))
+        (element
+          (self_closing_tag
+            (tag_name)
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))))
+        (element
+          (self_closing_tag
+            (tag_name)))
+        (element
+          (self_closing_tag
+            (tag_name)
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))
+            (attribute
+              (attribute_name)
+              (quoted_attribute_value
+                (attribute_value)))))
+        (end_tag
+          (tag_name)))
+      (end_tag
+        (tag_name)))
+    (end_tag
+      (tag_name))))

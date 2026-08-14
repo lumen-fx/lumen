@@ -1,0 +1,199 @@
+================================================================================
+Comment above the root element (crates/dev/devtools/src/assets/overlay.lmn)
+================================================================================
+
+<!--
+  Lumen devtools overlay (v1). Authored in Lumen's own markup + CSS
+  pipeline and shipped as an embedded asset.
+-->
+<row class="dt-overlay" width="100%" height="100%" justify="end">
+  <label class="dt-title" text="Lumen devtools" />
+</row>
+
+--------------------------------------------------------------------------------
+
+(document
+  (comment)
+  (element
+    (start_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value))))
+    (element
+      (self_closing_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Comments between siblings (apps/notes/main.lmn)
+================================================================================
+
+<root class="app theme-dark" skin="default">
+  <!-- Note list -->
+  <column class="sidebar" width="248px" />
+
+  <!-- Editor + preview -->
+  <row class="workspace" grow="1" gap="1" />
+</root>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value))))
+    (comment)
+    (element
+      (self_closing_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))))
+    (comment)
+    (element
+      (self_closing_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Numeric character references in an attribute (apps/notes/main.lmn)
+================================================================================
+
+<textarea id="editor" class="editor" grow="1" width="100%"
+          placeholder="# Start writing...&#10;&#10;Markdown renders on the right."
+          bind-text="body" />
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (self_closing_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)
+          (entity)
+          (entity)
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value))))))
+
+================================================================================
+Named entities in an attribute (apps/widget-garden/main.lmn)
+================================================================================
+
+<label class="lead" text="Reactive &lt;for&gt; over an ArraySignal." />
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (self_closing_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)
+          (entity)
+          (attribute_value)
+          (entity)
+          (attribute_value))))))
+
+================================================================================
+Entity in text content
+================================================================================
+
+<root>
+  <label>Reactive &lt;for&gt; over a list</label>
+</root>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name))
+    (element
+      (start_tag
+        (tag_name))
+      (text)
+      (entity)
+      (text)
+      (entity)
+      (text)
+      (end_tag
+        (tag_name)))
+    (end_tag
+      (tag_name))))

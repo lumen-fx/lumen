@@ -1,0 +1,12 @@
+name = "Lumen"
+grammar = "lumen"
+path_suffixes = ["lmn"]
+block_comment = ["<!-- ", " -->"]
+tab_size = 2
+autoclose_before = ">;,"
+brackets = [
+    { start = "<", end = ">", close = false, newline = true, not_in = ["comment", "string"] },
+    { start = ">", end = "</", close = false, newline = true, not_in = ["comment", "string"] },
+    { start = "{", end = "}", close = true, newline = false },
+    { start = "\"", end = "\"", close = true, newline = false, not_in = ["comment"] },
+]

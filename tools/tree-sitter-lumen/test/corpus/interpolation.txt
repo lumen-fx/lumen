@@ -1,0 +1,261 @@
+================================================================================
+Bare placeholder in an attribute value (apps/datagrid/main.lmn)
+================================================================================
+
+<label class="col-rank" text="{rank}" />
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (self_closing_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (interpolation
+            (identifier)))))))
+
+================================================================================
+Placeholder mixed with literal text (apps/datagrid/main.lmn)
+================================================================================
+
+<root>
+  <label class="kpi-label" text="market cap (top {n})" bind-text="cap_sub" />
+  <label class="col-chg chg-{dir_class}" text="{change}" />
+</root>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name))
+    (element
+      (self_closing_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)
+            (interpolation
+              (identifier))
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))))
+    (element
+      (self_closing_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)
+            (interpolation
+              (identifier))))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (interpolation
+              (identifier))))))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Placeholders in ids and paths (apps/weather/main.lmn)
+================================================================================
+
+<column class="day" id="day-{idx}" tab-index="{tab}" width="120px" height="100%">
+  <image class="day-icon" id="day-{idx}-icon" src="icons/{icon}.png" width="56px" height="56px" />
+</column>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)
+          (interpolation
+            (identifier))))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (interpolation
+            (identifier))))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value))))
+    (element
+      (self_closing_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)
+            (interpolation
+              (identifier))
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)
+            (interpolation
+              (identifier))
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (attribute_value)))))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Signal reference forms
+================================================================================
+
+<root>
+  <label>{$count}</label>
+  <label text="{$self.field}" />
+  <label text="{$parent.field}" />
+</root>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name))
+    (element
+      (start_tag
+        (tag_name))
+      (interpolation
+        (signal_reference))
+      (end_tag
+        (tag_name)))
+    (element
+      (self_closing_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (interpolation
+              (signal_reference))))))
+    (element
+      (self_closing_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (interpolation
+              (signal_reference))))))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Iteration scope: row field and row index
+================================================================================
+
+<for each="rows" key="id">
+  <label text="{row.title}" />
+  <label text="{$index}" />
+</for>
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (start_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value)))
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (attribute_value))))
+    (element
+      (self_closing_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (interpolation
+              (row_reference))))))
+    (element
+      (self_closing_tag
+        (tag_name)
+        (attribute
+          (attribute_name)
+          (quoted_attribute_value
+            (interpolation
+              (signal_reference))))))
+    (end_tag
+      (tag_name))))
+
+================================================================================
+Placeholder with surrounding spaces
+================================================================================
+
+<label text="{ count }" />
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (self_closing_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (interpolation
+            (identifier)))))))
+
+================================================================================
+Brace content that is not a placeholder
+================================================================================
+
+<label text="{ k: v }" />
+
+--------------------------------------------------------------------------------
+
+(document
+  (element
+    (self_closing_tag
+      (tag_name)
+      (attribute
+        (attribute_name)
+        (quoted_attribute_value
+          (interpolation
+            (identifier)
+            (interpolation_text)))))))

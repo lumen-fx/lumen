@@ -16,6 +16,16 @@ tools/vscode-lumen/out/
 tools/vscode-lumen/package-lock.json
 tools/vscode-lumen/*.vsix
 
+# Tree-sitter grammar tooling
+tools/tree-sitter-lumen/node_modules/
+tools/tree-sitter-lumen/package-lock.json
+
+# Zed extension build artifacts (Zed compiles the extension in place)
+tools/zed-lumen/target/
+tools/zed-lumen/grammars/
+tools/zed-lumen/Cargo.lock
+tools/zed-lumen/extension.wasm
+
 # C/C++ FFI consumer build dirs
 apps/sysmon/build/
 __pycache__/

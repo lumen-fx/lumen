@@ -1,0 +1,17 @@
+# Standalone crate: Zed compiles it to wasm32-wasip1 when the extension is
+# installed, so it deliberately sits outside the Lumen Cargo workspace.
+[workspace]
+
+[package]
+name = "zed_lumen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MPL-2.0"
+
+[lib]
+path = "src/lumen.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+zed_extension_api = "0.7.0"

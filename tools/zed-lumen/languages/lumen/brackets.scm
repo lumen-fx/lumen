@@ -1,0 +1,19 @@
+(start_tag
+  "<" @open
+  ">" @close)
+
+(self_closing_tag
+  "<" @open
+  "/>" @close)
+
+(end_tag
+  "</" @open
+  ">" @close)
+
+(quoted_attribute_value
+  "\"" @open
+  "\"" @close)
+
+(interpolation
+  "{" @open
+  "}" @close)
