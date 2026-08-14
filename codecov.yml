@@ -1,6 +1,6 @@
-# Coverage is a report, not a gate: the test suite decides whether a pull
-# request passes. Both Codecov statuses are informational, so they measure the
-# change and comment on it without ever failing a pull request.
+# Coverage gates on the change, not the whole tree: the project status is
+# informational, while the patch status is a required check and fails when
+# the diff's new lines are meaningfully less covered than the baseline.
 
 coverage:
   status:
@@ -9,4 +9,5 @@ coverage:
         informational: true
     patch:
       default:
-        informational: true
+        target: auto
+        threshold: "5%"
