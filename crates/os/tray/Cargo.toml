@@ -7,10 +7,12 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "System tray host for Lumen (tray-icon wrapper, MenuModel from lumen-os-menu, TrayClicked / TrayDoubleClicked / TrayMenuClicked messages). QSystemTrayIcon / AppIndicator analog."
+keywords = ["ui", "gui", "tray", "tray-icon", "lumen"]
+categories = ["os", "gui"]
 
 [dependencies]
-lumen-core = { path = "../../core" }
-lumen-os-mime = { path = "../mime" }
+lumen-core = { path = "../../core", version = "0.0.3" }
+lumen-os-mime = { path = "../mime", version = "0.0.3" }
 bevy_ecs.workspace = true
 image.workspace = true
 tracing.workspace = true

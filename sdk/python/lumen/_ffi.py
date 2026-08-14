@@ -20,6 +20,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -569,12 +570,20 @@ def _candidate_paths() -> list[Path]:
 
     1. ``LUMEN_LIBRARY_PATH`` env var - either a direct path to the
        library file, or a directory containing it.
-    2. ``target/{debug,release}`` relative to the current working
+    2. ``LUMEN_LIB_DIR`` - the same override ``lumenc`` itself honours,
+       so one setting points both at the same runtime.
+    3. ``target/{debug,release}`` relative to the current working
        directory (the common case: running from the repo root).
-    3. ``target/{debug,release}`` relative to the repo root, found by
+    4. ``target/{debug,release}`` relative to the repo root, found by
        walking up from this file looking for the workspace
        ``Cargo.toml`` (covers running the example from elsewhere).
-    4. System library search paths (handled separately by
+    5. An installed toolchain: next to the ``lumenc`` on ``PATH``, then
+       ``$LUMEN_PREFIX/bin`` (``~/.lumen/bin`` by default). The
+       installer puts the shared library beside ``lumenc`` rather than
+       in a sibling ``lib/``, and that directory is on ``PATH``, not on
+       the loader's search path, so the system loader in step 6 does not
+       find it on its own.
+    6. System library search paths (handled separately by
        ``ctypes.util.find_library`` as a last resort - see
        ``load_library``).
     """
@@ -582,8 +591,10 @@ def _candidate_paths() -> list[Path]:
     names = _libnames_for_platform()
     candidates: list[Path] = []
 
-    env_path = os.environ.get("LUMEN_LIBRARY_PATH")
-    if env_path:
+    for var in ("LUMEN_LIBRARY_PATH", "LUMEN_LIB_DIR"):
+        env_path = os.environ.get(var)
+        if not env_path:
+            continue
         p = Path(env_path)
         if p.is_file():
             candidates.append(p)
@@ -614,6 +625,16 @@ def _candidate_paths() -> list[Path]:
                     for name in names:
                         candidates.append(ancestor / "target" / profile / name)
                 break
+
+    # An installed toolchain. `lumenc` and the shared library live in the same
+    # bin/ directory, so finding one finds the other.
+    lumenc = shutil.which("lumenc")
+    if lumenc:
+        for name in names:
+            candidates.append(Path(lumenc).resolve().parent / name)
+    prefix = Path(os.environ.get("LUMEN_PREFIX", Path.home() / ".lumen"))
+    for name in names:
+        candidates.append(prefix / "bin" / name)
 
     return candidates
 

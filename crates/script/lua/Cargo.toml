@@ -7,10 +7,12 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Lua (mlua / Lua 5.4) ScriptHost impl - selectable alternative to the Rhai host, same engine-function surface."
+keywords = ["ui", "gui", "scripting", "lua", "mlua"]
+categories = ["gui"]
 
 [dependencies]
-lumen-script = { path = "../api", default-features = false }
-lumen-core = { path = "../../core" }
+lumen-script = { path = "../api", version = "0.0.3", default-features = false }
+lumen-core = { path = "../../core", version = "0.0.3" }
 bevy_ecs.workspace = true
 # Lua 5.4, statically vendored, Send+Sync (see workspace dep comment).
 mlua.workspace = true

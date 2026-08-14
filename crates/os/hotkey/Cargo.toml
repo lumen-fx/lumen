@@ -7,10 +7,12 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Global-hotkey host for Lumen (global-hotkey 0.8 wrapper, HotkeyPressed + HotkeyReleased messages). QShortcut (global) / GtkShortcutController analog."
+keywords = ["ui", "gui", "hotkey", "shortcut", "lumen"]
+categories = ["os", "gui"]
 
 [dependencies]
-lumen-core = { path = "../../core" }
-lumen-os-mime = { path = "../mime" }
+lumen-core = { path = "../../core", version = "0.0.3" }
+lumen-os-mime = { path = "../mime", version = "0.0.3" }
 bevy_ecs.workspace = true
 
 # OS-level global hotkeys. Same crate Tauri ships under

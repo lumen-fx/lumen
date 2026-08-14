@@ -1,6 +1,8 @@
 [package]
 name = "lumen-mcp"
 description = "Runtime introspection plugin for Lumen - exposes a JSON-RPC TCP server for MCP clients."
+keywords = ["ui", "gui", "mcp", "introspection", "lumen"]
+categories = ["development-tools", "gui"]
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,10 +10,10 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-lumen-core = { path = "../core" }
-lumen-primitives = { path = "../primitives" }
-lumen-assets = { path = "../assets" }
-lumen-render-headless = { path = "../backends/render-headless" }
+lumen-core = { path = "../core", version = "0.0.3" }
+lumen-primitives = { path = "../primitives", version = "0.0.3" }
+lumen-assets = { path = "../assets", version = "0.0.3" }
+lumen-render-headless = { path = "../backends/render-headless", version = "0.0.3" }
 bevy_ecs.workspace = true
 glam.workspace = true
 tokio = { version = "1.52", features = ["rt-multi-thread", "net", "io-util", "io-std", "sync", "macros", "time"] }

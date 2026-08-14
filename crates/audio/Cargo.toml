@@ -7,9 +7,11 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Audio playback capability for Lumen: the AudioBackend trait and the transport it drives (Playing/Paused/Stopped, position/duration, seek, volume), plus a silent backend. No audio device, no decoder; lumen-audio-rodio is the shipped implementation."
+keywords = ["ui", "gui", "audio", "playback", "rodio"]
+categories = ["multimedia", "gui"]
 
 [dependencies]
-lumen-core = { path = "../core" }
+lumen-core = { path = "../core", version = "0.0.3" }
 
 [[bin]]
 name = "lumen-gen-test-tracks"

@@ -7,10 +7,12 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Desktop-notification host for Lumen (notify-rust wrapper, Action-based buttons, NotificationActionInvoked message). QSystemTrayIcon::showMessage / GNotification analog."
+keywords = ["ui", "gui", "notification", "desktop", "lumen"]
+categories = ["os", "gui"]
 
 [dependencies]
-lumen-core = { path = "../../core" }
-lumen-os-mime = { path = "../mime" }
+lumen-core = { path = "../../core", version = "0.0.3" }
+lumen-os-mime = { path = "../mime", version = "0.0.3" }
 bevy_ecs.workspace = true
 tracing.workspace = true
 

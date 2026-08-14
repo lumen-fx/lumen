@@ -7,6 +7,8 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "#[derive(Widget)] proc-macro - generates Plugin + spawn glue for lumen-widget."
+keywords = ["ui", "gui", "widgets", "macros", "derive"]
+categories = ["gui", "development-tools"]
 
 [lib]
 proc-macro = true

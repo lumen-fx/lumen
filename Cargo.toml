@@ -10,6 +10,11 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Lumen C-ABI: opaque LumenApp + tagged LumenValue, drives lumenc::run_app from any C-callable language."
+# The engine ships as a shared library through the toolchain installer, not as
+# a crates.io package: the `lumen` name there belongs to an unrelated project,
+# and a cdylib is of no use to a `cargo add` anyway. The Rust-facing package is
+# `lumenui` (sdk/rust); the C-facing one is the installed liblumen.
+publish = false
 
 [lib]
 # The file name of the shared library is the seam: `lumenc`, the launcher
@@ -19,22 +24,22 @@ name = "lumen"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-lumen-core = { path = "crates/core" }
+lumen-core = { path = "crates/core", version = "0.0.3" }
 # Runtime core: `RunOptions` / `run_app` / the default plugin stack.
 # `default-features = false` so the FULL shared cdylib turns every subsystem on
 # via this crate's own default feature set below, while a trimmed static
 # `--bundle` build (`--no-default-features --features "<caps>"`) selects exactly
 # the app's subsystems (Part B).
-lumen-runtime = { path = "crates/runtime", default-features = false }
+lumen-runtime = { path = "crates/runtime", version = "0.0.3", default-features = false }
 # Host-neutral DOM read side (query / traversal over the snapshot) for the
 # LumenNode C-ABI. No host features needed here; the query engine is
 # host-independent.
-lumen-script = { path = "crates/script/api", default-features = false }
+lumen-script = { path = "crates/script/api", version = "0.0.3", default-features = false }
 # Compiler front-end, kept only to inject its parser (`default_parser()`).
 # OPTIONAL behind the default-on `embed-parser` feature: a static `--bundle`
 # runs a prebuilt LMNA artifact with NO parser, so dropping lumenc also drops
 # the feature-unification that would otherwise pull lumen-runtime back to full.
-lumenc = { path = "crates/lumenc", optional = true }
+lumenc = { path = "crates/lumenc", version = "0.0.3", optional = true }
 # Close-hook router (ABI 0.5): the `lumen_app_on_close` dispatch system
 # reads `Messages<CloseRequest>` through a `MessageCursor`, which
 # `lumen_core::prelude` does not re-export.
@@ -110,6 +115,15 @@ license = "MPL-2.0"
 authors = ["Lumen contributors"]
 repository = "https://github.com/lumen-fx/lumen"
 rust-version = "1.85"
+homepage = "https://lumenfx.dev"
+documentation = "https://docs.lumenfx.dev"
+# Registry metadata every crate inherits with `keywords.workspace = true` /
+# `categories.workspace = true`. A crate whose subject is narrower than "the
+# UI framework" (audio, i18n, the OS hosts, the renderers) overrides these in
+# its own manifest; the rest take them as they are. crates.io caps keywords at
+# five, and categories must be slugs it already knows.
+keywords = ["ui", "gui", "framework", "desktop", "lumen"]
+categories = ["gui"]
 
 # Centralized dependency versions. Crates opt in by adding e.g.
 #     bevy_ecs.workspace = true

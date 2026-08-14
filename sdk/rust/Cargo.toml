@@ -7,26 +7,28 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Lumen UI framework Rust SDK: the single dependency for building and embedding Lumen apps in Rust."
+keywords = ["ui", "gui", "framework", "desktop", "sdk"]
+categories = ["gui"]
 
 [dependencies]
 # The runtime core: `RunOptions` / `run_app` / the ~30-system default plugin
 # stack + hot reload. Carved out of `lumenc`; the SDK boots against it directly
 # so it no longer reaches the runtime *through* the compiler.
-lumen-runtime = { path = "../../crates/runtime" }
+lumen-runtime = { path = "../../crates/runtime", version = "0.0.3" }
 # The compiler front-end, kept solely to inject its markup/CSS parser
 # (`default_parser()`) into `RunOptions` for dev source-load + hot reload -
 # `lumen-runtime` links no parser itself.
-lumenc = { path = "../../crates/lumenc" }
+lumenc = { path = "../../crates/lumenc", version = "0.0.3" }
 # App / Plugin / components / PropertyStore / typed Property handles.
-lumen-core = { path = "../../crates/core" }
+lumen-core = { path = "../../crates/core", version = "0.0.3" }
 # The host-neutral dynamic DOM surface (query / traversal / mutation /
 # introspection / events) the `dom` module wraps into safe Rust handles. This
 # is the same surface the C-ABI binds; the Rust SDK reaches it directly rather
 # than round-tripping through C.
-lumen-script = { path = "../../crates/script/api" }
+lumen-script = { path = "../../crates/script/api", version = "0.0.3" }
 # Widget trait + Attributes bag, and the #[derive(Widget)] macro.
-lumen-widget = { path = "../../crates/widget" }
-lumen-widget-macros = { path = "../../crates/widget-macros" }
+lumen-widget = { path = "../../crates/widget", version = "0.0.3" }
+lumen-widget-macros = { path = "../../crates/widget-macros", version = "0.0.3" }
 # ECS surface for the native handler-dispatch systems (Resource derive,
 # MessageReader, Query, World).
 bevy_ecs.workspace = true

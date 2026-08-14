@@ -7,10 +7,12 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Rhai ScriptHost impl."
+keywords = ["ui", "gui", "scripting", "rhai", "lumen"]
+categories = ["gui"]
 
 [dependencies]
-lumen-script = { path = "../api", default-features = false }
-lumen-core = { path = "../../core" }
+lumen-script = { path = "../api", version = "0.0.3", default-features = false }
+lumen-core = { path = "../../core", version = "0.0.3" }
 bevy_ecs.workspace = true
 rhai.workspace = true
 serde_json.workspace = true

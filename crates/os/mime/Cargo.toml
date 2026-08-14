@@ -7,6 +7,8 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Shared MimePayload + Action abstractions for lumen-os-* crates (QMimeData / GdkContentProvider / QAction / GAction analog)."
+keywords = ["ui", "gui", "mime", "clipboard", "lumen"]
+categories = ["os", "gui"]
 
 [dependencies]
 smallvec = "1"

@@ -7,14 +7,27 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "candela ScriptHost impl."
+keywords = ["ui", "gui", "scripting", "candela", "lumen"]
+categories = ["gui"]
 
 [dependencies]
-lumen-script = { path = "../api", default-features = false }
-lumen-core = { path = "../../core" }
+lumen-script = { path = "../api", version = "0.0.3", default-features = false }
+lumen-core = { path = "../../core", version = "0.0.3" }
 bevy_ecs.workspace = true
 # candela embedding API (Engine/Program) lives on the crate's `main` branch.
 # Structured host-fn marshalling (string/int/float/bool/null plus Array/Map),
 # plus the variadic registration that carries dynamically-shaped values.
+#
+# A git dependency with no version is a dependency crates.io will not take, so
+# this crate cannot be published while the line reads like this. Once candela
+# publishes (as `candela-lang`, since the `candela` name on crates.io is an
+# unrelated 2020 crate), this becomes
+#
+#   candela = { package = "candela-lang", git = "...", branch = "main", version = "..." }
+#
+# which keeps the git checkout in a development build and resolves to the
+# release in a published one. tools/release/publish-crates.py checks for the
+# form and reports this crate as blocked until it changes.
 candela = { git = "https://github.com/lumen-fx/candela", branch = "main" }
 # `parse_json`: JSON text -> candela values. Same dep the Rhai and Lua hosts
 # carry for their own `parse_json`.

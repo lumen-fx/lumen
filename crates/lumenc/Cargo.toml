@@ -7,6 +7,8 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Lumen markup compiler + runner: parse main.lmn / main.css, spawn ECS, run."
+keywords = ["ui", "gui", "cli", "compiler", "lumen"]
+categories = ["command-line-utilities", "gui", "development-tools"]
 
 [lib]
 name = "lumenc"
@@ -28,11 +30,11 @@ path = "src/main.rs"
 required-features = ["runtime-parse"]
 
 [dependencies]
-lumen-core = { path = "../core" }
+lumen-core = { path = "../core", version = "0.0.3" }
 # Runtime-shared IR (LayoutIR, CSS AST + Cascade-5 application, value parsers,
 # `var()` resolver, AOT artifact). Extracted from lumenc; the modules are
 # re-exported from `lumenc::lib` so historical `lumenc::...` paths stay valid.
-lumen-ir = { path = "../ir" }
+lumen-ir = { path = "../ir", version = "0.0.3" }
 # The runtime core (run loop, plugin stack, hot reload, config, pages, spawn,
 # app-kind, skins, profiler) plus every heavy backend it drags in
 # (wgpu / vello / winit / cosmic-text / taffy / rodio / mlua / the script
@@ -41,13 +43,13 @@ lumen-ir = { path = "../ir" }
 # `lumen-lsp` links) stays thin. The `lumenc` BINARY keeps it for the CLI
 # `run` / `build` / `check` / `mcp` dev paths and injects its own parser
 # front-end via `LumencParser` (SourceParser).
-lumen-runtime = { path = "../runtime", optional = true, default-features = false }
+lumen-runtime = { path = "../runtime", version = "0.0.3", optional = true, default-features = false }
 # `.lpak` archive packer for `lumenc bundle` (bundle_cli). OPTIONAL behind the
 # default-on `bundle` feature: lumen-assets carries a hard `vello` dependency
 # for its runtime GPU-upload path, so a thin compiler library
 # (`--no-default-features`, as `lumen-lsp` links) drops it - and vello/wgpu with
 # it - while the `lumenc` binary keeps the `bundle` subcommand.
-lumen-assets = { path = "../assets", optional = true }
+lumen-assets = { path = "../assets", version = "0.0.3", optional = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 # Markup (`.lmn`) XML parser. Optional + gated behind the default-on
@@ -63,7 +65,7 @@ bincode.workspace = true
 # Widget tag registry - parser_html consults
 # `lumen_widget::is_widget_tag_registered` to accept `#[derive(Widget)]`
 # custom tags after the built-in KNOWN_TAGS miss.
-lumen-widget = { path = "../widget" }
+lumen-widget = { path = "../widget", version = "0.0.3" }
 
 # `lumenc package --target <another platform>`: fetch that platform's
 # toolchain files from the release channel, check them against the release's
@@ -81,7 +83,7 @@ zip = { workspace = true, optional = true }
 rhai = { workspace = true, optional = true }
 # Named ONLY in the `dev-run`-gated `build_headless_app` return type
 # (`lumen_window_winit::WinitOptions`). Optional, pulled under `dev-run`.
-lumen-window-winit = { path = "../backends/window-winit", optional = true }
+lumen-window-winit = { path = "../backends/window-winit", version = "0.0.3", optional = true }
 
 # link-not-embed launcher: dlopen the shared liblumen (lumen cdylib) and
 # drive a prebuilt LMNA app over the C-ABI. OPTIONAL behind `dlopen-run`; this

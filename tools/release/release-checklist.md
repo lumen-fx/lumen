@@ -138,6 +138,61 @@ after the current command exits, because Windows will not replace a running
 `lumenc.exe`. That URL is fixed, so nothing here has to publish a per-release
 link.
 
+## Publishing to the package registries
+
+The toolchain install channel above is one way to get Lumen; the language
+registries are the other. `.github/workflows/publish.yml` covers them, runs
+when a release is published, and can also be started by hand from the Actions
+tab with a dry-run switch.
+
+| Package                       | Registry  | What it is                    |
+| ----------------------------- | --------- | ----------------------------- |
+| `lumenui`                     | PyPI      | the Python SDK                |
+| `lumenui`                     | crates.io | the Rust SDK                  |
+| `lumenc`                      | crates.io | the CLI, for `cargo install`  |
+| `lumen-*`                     | crates.io | what those two are built from |
+
+The Python distribution is pure Python and ships no binary, so one wheel
+covers every platform; it finds `liblumen` from an installed toolchain or a
+checkout at run time (`sdk/python/README.md` documents the search order).
+
+The crates go out in dependency order, because crates.io resolves each upload
+against what is already published. `tools/release/publish-crates.py` computes
+that order from `cargo metadata`, reports what state each crate is in, and
+publishes them one at a time:
+
+```sh
+tools/release/publish-crates.py --plan      # order and per-crate state
+tools/release/publish-crates.py --dry-run   # package and verify, upload nothing
+tools/release/publish-crates.py --execute   # publish, needs CARGO_REGISTRY_TOKEN
+```
+
+It skips versions already on the registry, so a run interrupted halfway is
+resumed by running it again. crates.io meters publishing (a burst of new
+crates, then a slower drip), and the script waits out those intervals rather
+than failing on them, which is why a first publish of the whole set takes
+hours while a later release takes minutes.
+
+Two things it refuses to start on, and both are worth knowing before a
+release:
+
+- A crate name on crates.io that belongs to another project. The script
+  compares the `repository` field of an existing crate against this one.
+- A dependency taken from git with no version. crates.io accepts no such
+  dependency, so the crate carrying it, and everything above it, cannot be
+  published. `lumen-script-candela` is in that state until candela publishes.
+
+Every workspace crate shares the `[workspace.package]` version, and each
+internal dependency asks for that exact version, so a version bump means
+updating those dependency lines too. The script checks that they agree and
+refuses to publish when they do not.
+
+The setup the workflow needs (a `CRATES_IO_TOKEN` secret, a PyPI trusted
+publisher, a `PYPI_PUBLISH_ENABLED` variable) is listed at the top of
+`.github/workflows/publish.yml`. Each leg checks its own preconditions and
+skips when one is missing, so running the workflow before the setup exists
+reports what is missing instead of failing.
+
 ## Verify
 
 - The release page (`https://github.com/lumen-fx/lumen/releases/tag/vX.Y.Z`)

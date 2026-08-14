@@ -7,6 +7,8 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Lumen runtime-shared IR: LayoutIR, CSS AST + Cascade-5 application, and the AOT compiled-app artifact."
+keywords = ["ui", "gui", "markup", "css", "lumen"]
+categories = ["parser-implementations", "gui"]
 
 [lib]
 name = "lumen_ir"
@@ -15,10 +17,10 @@ path = "src/lib.rs"
 [dependencies]
 # From-impl targets for the IR spec types (LayoutIR conversions into core
 # components + primitives specs). These are dep-light workspace crates.
-lumen-core = { path = "../core" }
-lumen-primitives = { path = "../primitives" }
+lumen-core = { path = "../core", version = "0.0.3" }
+lumen-primitives = { path = "../primitives", version = "0.0.3" }
 # Doc-link targets for `<drag>` / drop-target attribute docs on `Attributes`.
-lumen-os-dnd = { path = "../os/dnd" }
+lumen-os-dnd = { path = "../os/dnd", version = "0.0.3" }
 thiserror.workspace = true
 serde.workspace = true
 # Cascade diagnostics (`tracing::warn!` on unrecognised declarations).
