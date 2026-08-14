@@ -1,0 +1,369 @@
+name: Publish packages
+
+# Keeps the OS package managers in step with a GitHub release. The manifests
+# under tools/release/{aur,homebrew,scoop,winget} are rewritten to point at the
+# release that just went out, and each one is pushed to the repository that
+# serves it:
+#
+#   AUR         ssh://aur@aur.archlinux.org/lumen-bin.git
+#   Homebrew    lumen-fx/homebrew-lumen, Formula/lumen.rb
+#   Scoop       lumen-fx/scoop-lumen, bucket/lumen.json
+#   winget      a pull request against microsoft/winget-pkgs, raised by
+#               wingetcreate
+#
+# Nothing here has to exist for this workflow to be safe to run. Every
+# publishing job checks its own precondition first and, when the secret or the
+# repository is missing, prints a notice and stops without failing. That is
+# what lets the workflow land before any of the accounts below are set up.
+#
+# What the owner creates, and the secret each one needs:
+#
+#   AUR_SSH_PRIVATE_KEY   An AUR account (https://aur.archlinux.org) with an
+#                         SSH public key registered on it. The secret is the
+#                         matching private key, in full, including the header
+#                         and footer lines. The first push creates the
+#                         lumen-bin package under that account; there is
+#                         nothing to create by hand first.
+#   AUR_GIT_NAME          Optional. The name and address on the AUR commits.
+#   AUR_GIT_EMAIL         They default to a generic Lumen identity.
+#
+#   HOMEBREW_TAP_TOKEN    A repository lumen-fx/homebrew-lumen, and a token
+#                         with write access to it. A fine-grained token scoped
+#                         to that one repository with Contents: read and write
+#                         is enough.
+#
+#   SCOOP_BUCKET_TOKEN    A repository lumen-fx/scoop-lumen holding a bucket/
+#                         directory, and a token with write access to it, on
+#                         the same terms as the tap.
+#
+#   WINGET_TOKEN          A classic token with public_repo scope, belonging to
+#                         an account that has forked microsoft/winget-pkgs.
+#                         wingetcreate pushes a branch to that fork and opens
+#                         the pull request from it. The winget job also needs
+#                         the package to exist in winget-pkgs already: submit
+#                         tools/release/winget by hand once, as
+#                         manifests/l/LumenFX/Lumen/<version>/, and every
+#                         release after that is raised automatically. Until
+#                         then the job uploads the manifests it prepared and
+#                         says so.
+#
+# A prerelease, a draft, and a release with no sha256sums.txt asset are all
+# skipped: the first two are not what a package manager should hand people, and
+# the third leaves nothing to write into the manifests.
+
+on:
+  release:
+    types: [published]
+  # Manual trigger, for re-publishing a release whose first run failed, or for
+  # the first run after a secret is added.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish. Defaults to the newest release.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Two releases published close together would otherwise race each other to the
+# same package repositories, and the loser would publish the older version.
+concurrency:
+  group: publish-packages
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: resolve the release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+      version: ${{ steps.pick.outputs.version }}
+      publish: ${{ steps.pick.outputs.publish }}
+    steps:
+      - name: Pick the release to publish
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${EVENT_TAG:-$INPUT_TAG}"
+          if [ -z "$tag" ]; then
+            tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+          view="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,isPrerelease,assets)"
+          if [ "$(echo "$view" | jq -r .isDraft)" = "true" ]; then
+            echo "::notice::$tag is a draft; nothing published"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$(echo "$view" | jq -r .isPrerelease)" = "true" ]; then
+            echo "::notice::$tag is a prerelease; package managers get stable releases only"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! echo "$view" | jq -e '.assets[] | select(.name == "sha256sums.txt")' >/dev/null; then
+            echo "::notice::$tag publishes no sha256sums.txt; there are no checksums to write into the manifests"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "publishing $tag"
+
+  prepare:
+    name: rewrite the manifests
+    needs: release
+    if: needs.release.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Point the manifests at ${{ needs.release.outputs.tag }}
+        run: tools/release/update-package-manifests.sh "${{ needs.release.outputs.version }}"
+
+      # The AUR reads .SRCINFO rather than the PKGBUILD, and only makepkg
+      # writes it. makepkg refuses to run as root, so the container copies the
+      # directory out of the read-only mount and works on it as an ordinary
+      # user.
+      - name: Generate .SRCINFO
+        run: |
+          docker run --rm -v "$PWD/tools/release/aur:/pkg:ro" archlinux:base-devel sh -c '
+            useradd -m build
+            cp -r /pkg /tmp/pkg
+            chown -R build /tmp/pkg
+            cd /tmp/pkg && su build -c "makepkg --printsrcinfo"
+          ' > tools/release/aur/.SRCINFO
+          cat tools/release/aur/.SRCINFO
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-manifests
+          path: |
+            tools/release/aur/PKGBUILD
+            tools/release/aur/.SRCINFO
+            tools/release/homebrew/lumen.rb
+            tools/release/scoop/lumen.json
+            tools/release/winget/
+          # .SRCINFO is a dotfile, and this action drops those unless told not
+          # to. Without this the AUR job would push a package with no metadata.
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  aur:
+    name: aur
+    needs: [release, prepare]
+    if: needs.release.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check the AUR key is set
+        id: gate
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "$AUR_SSH_PRIVATE_KEY" ]; then
+            echo "::notice::AUR_SSH_PRIVATE_KEY is not set; the AUR package was not updated"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        if: steps.gate.outputs.ok == 'true'
+        with:
+          name: package-manifests
+          path: manifests
+
+      - name: Push lumen-bin ${{ needs.release.outputs.version }}
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_GIT_NAME: ${{ secrets.AUR_GIT_NAME }}
+          AUR_GIT_EMAIL: ${{ secrets.AUR_GIT_EMAIL }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          # The AUR publishes no long-lived key fingerprint to pin against, so
+          # the host key is taken on first contact, as every AUR client does.
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes"
+
+          git clone ssh://aur@aur.archlinux.org/lumen-bin.git aur
+          cp manifests/aur/PKGBUILD manifests/aur/.SRCINFO aur/
+          cd aur
+          git config user.name "${AUR_GIT_NAME:-Lumen FX}"
+          git config user.email "${AUR_GIT_EMAIL:-releases@lumenfx.dev}"
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "::notice::the AUR already carries $VERSION"
+            exit 0
+          fi
+          git commit -m "lumen-bin $VERSION"
+          git push origin HEAD:master
+
+  homebrew:
+    name: homebrew
+    needs: [release, prepare]
+    if: needs.release.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check the tap is reachable
+        id: gate
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set; the tap was not updated"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git ls-remote "https://x-access-token:$TOKEN@github.com/lumen-fx/homebrew-lumen.git" >/dev/null 2>&1; then
+            echo "::notice::lumen-fx/homebrew-lumen is not reachable with HOMEBREW_TAP_TOKEN; the tap was not updated"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        if: steps.gate.outputs.ok == 'true'
+        with:
+          name: package-manifests
+          path: manifests
+
+      - name: Push lumen ${{ needs.release.outputs.version }} to the tap
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          git clone "https://x-access-token:$TOKEN@github.com/lumen-fx/homebrew-lumen.git" tap
+          mkdir -p tap/Formula
+          cp manifests/homebrew/lumen.rb tap/Formula/lumen.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/lumen.rb
+          if git diff --cached --quiet; then
+            echo "::notice::the tap already carries $VERSION"
+            exit 0
+          fi
+          git commit -m "lumen $VERSION"
+          git push
+
+  scoop:
+    name: scoop
+    needs: [release, prepare]
+    if: needs.release.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check the bucket is reachable
+        id: gate
+        env:
+          TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::notice::SCOOP_BUCKET_TOKEN is not set; the bucket was not updated"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git ls-remote "https://x-access-token:$TOKEN@github.com/lumen-fx/scoop-lumen.git" >/dev/null 2>&1; then
+            echo "::notice::lumen-fx/scoop-lumen is not reachable with SCOOP_BUCKET_TOKEN; the bucket was not updated"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        if: steps.gate.outputs.ok == 'true'
+        with:
+          name: package-manifests
+          path: manifests
+
+      - name: Push lumen ${{ needs.release.outputs.version }} to the bucket
+        if: steps.gate.outputs.ok == 'true'
+        env:
+          TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          git clone "https://x-access-token:$TOKEN@github.com/lumen-fx/scoop-lumen.git" bucket-repo
+          mkdir -p bucket-repo/bucket
+          cp manifests/scoop/lumen.json bucket-repo/bucket/lumen.json
+          cd bucket-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bucket/lumen.json
+          if git diff --cached --quiet; then
+            echo "::notice::the bucket already carries $VERSION"
+            exit 0
+          fi
+          git commit -m "lumen $VERSION"
+          git push
+
+  winget:
+    name: winget
+    needs: [release, prepare]
+    if: needs.release.outputs.publish == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check the token and the existing package
+        id: gate
+        shell: pwsh
+        env:
+          TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if (-not $env:TOKEN) {
+            Write-Output "::notice::WINGET_TOKEN is not set; no winget pull request was raised"
+            "ok=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            exit 0
+          }
+          $url = "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/l/LumenFX/Lumen"
+          try {
+            # The token is only here to lift the anonymous rate limit, which is
+            # shared by everything on the runner's address.
+            Invoke-WebRequest -Uri $url -UseBasicParsing -ErrorAction Stop `
+              -Headers @{ Authorization = "Bearer $env:TOKEN" } | Out-Null
+          } catch {
+            Write-Output "::notice::LumenFX.Lumen is not in winget-pkgs yet; submit tools/release/winget by hand once (it is on this run as the package-manifests artifact)"
+            "ok=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            exit 0
+          }
+          "ok=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      # wingetcreate reads the installer itself, so it fills in the version,
+      # the checksum, and the product code WiX generated for this build. The
+      # manifests in the repository are the record of what a release looks
+      # like and the set the first submission is made from; they are not what
+      # this step uploads.
+      - name: Raise the winget pull request
+        if: steps.gate.outputs.ok == 'true'
+        shell: pwsh
+        env:
+          TOKEN: ${{ secrets.WINGET_TOKEN }}
+          VERSION: ${{ needs.release.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+          $msi = "https://github.com/lumen-fx/lumen/releases/download/$env:TAG/lumen-windows-x86_64.msi"
+          .\wingetcreate.exe update LumenFX.Lumen `
+            --version $env:VERSION `
+            --urls $msi `
+            --submit `
+            --token $env:TOKEN
+          if ($LASTEXITCODE -ne 0) {
+            throw "wingetcreate exited with $LASTEXITCODE"
+          }

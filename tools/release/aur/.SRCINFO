@@ -1,0 +1,26 @@
+pkgbase = lumen-bin
+	pkgdesc = Toolchain for Lumen, a markup-first UI framework for native desktop apps
+	pkgver = 0.0.3
+	pkgrel = 1
+	url = https://lumenfx.dev
+	arch = x86_64
+	arch = aarch64
+	license = MPL-2.0
+	depends = gtk3
+	depends = alsa-lib
+	depends = gcc-libs
+	depends = glibc
+	depends = libxkbcommon
+	depends = wayland
+	depends = vulkan-icd-loader
+	optdepends = vulkan-swrast: software rendering when no GPU driver is installed
+	provides = lumen=0.0.3
+	conflicts = lumen
+	options = !strip
+	options = !debug
+	source_x86_64 = lumen-0.0.3-x86_64.tar.gz::https://github.com/lumen-fx/lumen/releases/download/v0.0.3/lumen-linux-x86_64.tar.gz
+	sha256sums_x86_64 = 55a2e50220ecee29aa14b9f1469c3624aba820154b8615e89862260bfdb0a16b
+	source_aarch64 = lumen-0.0.3-aarch64.tar.gz::https://github.com/lumen-fx/lumen/releases/download/v0.0.3/lumen-linux-aarch64.tar.gz
+	sha256sums_aarch64 = 3c0d8460af8272918fb3e619fc0fca8fe0a50f084ae43a3b0b767b817477bb8c
+
+pkgname = lumen-bin

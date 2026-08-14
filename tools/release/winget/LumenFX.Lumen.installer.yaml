@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.28.0.schema.json
+
+# The installer half of the winget manifest set.
+#
+# The package is the per-user MSI, the same file the Windows install page
+# points at. It installs under the user profile and needs no elevation, which
+# is what Scope: user records.
+#
+# ProductCode is left out on purpose. WiX generates a fresh one for every
+# build, so no value written here would survive the next release; wingetcreate
+# reads it out of the MSI when it raises the pull request. The UpgradeCode is
+# the opposite: it is fixed for the life of the product (see
+# tools/release/msi/lumen.wxs) and never changes, so winget can correlate an
+# installed Lumen with this package through it.
+#
+# An MSI install does write a receipt under share/lumen, so a copy installed
+# this way still notices a newer release and offers to install it. That is the
+# MSI's own upgrade path, and it leaves winget reporting the version it
+# installed rather than the one on disk until winget catches up.
+
+PackageIdentifier: LumenFX.Lumen
+PackageVersion: 0.0.3
+Platform:
+- Windows.Desktop
+MinimumOSVersion: 10.0.0.0
+InstallerType: msi
+Scope: user
+InstallModes:
+- interactive
+- silent
+- silentWithProgress
+UpgradeBehavior: install
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/lumen-fx/lumen/releases/download/v0.0.3/lumen-windows-x86_64.msi
+  InstallerSha256: 56552DB4C4E4F1937168115D224E97A0589BD65E973376E81B7FCF1D1585586B
+  AppsAndFeaturesEntries:
+  - DisplayName: Lumen
+    Publisher: Lumen FX
+    DisplayVersion: 0.0.3
+    UpgradeCode: '{35DA2664-F179-43DE-BFB6-9B18C7DD5F34}'
+    InstallerType: msi
+ManifestType: installer
+ManifestVersion: 1.28.0

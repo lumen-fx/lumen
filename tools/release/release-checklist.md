@@ -43,8 +43,10 @@ checklist.
 ## One-time setup
 
 - Actions enabled on the repository (already on).
-- No extra secrets: the release job uses the built-in `GITHUB_TOKEN`
-  (`contents: write`, scoped to the release job only).
+- The release itself needs no secrets: the release job uses the built-in
+  `GITHUB_TOKEN` (`contents: write`, scoped to the release job only).
+  Publishing to the package managers afterwards does need credentials, one per
+  channel; see the section on them below.
 
 ## Cutting a release
 
@@ -193,6 +195,44 @@ publisher, a `PYPI_PUBLISH_ENABLED` variable) is listed at the top of
 skips when one is missing, so running the workflow before the setup exists
 reports what is missing instead of failing.
 
+## Publishing to the package managers
+
+Lumen is also published to Homebrew, the AUR, scoop, and winget. The manifests
+live in this directory, one per manager, and
+`.github/workflows/publish-packages.yml` takes them from a published release to
+the repository that serves each one: the AUR over SSH, the tap
+(`lumen-fx/homebrew-lumen`) and the bucket (`lumen-fx/scoop-lumen`) over a
+push, and winget as a pull request against `microsoft/winget-pkgs` raised by
+`wingetcreate`.
+
+The version and checksums in the manifests come from the release's
+`sha256sums.txt`. `tools/release/update-package-manifests.sh <version>` does
+that rewrite and checks the result; run it by hand to see what a release would
+publish, or to repair a manifest that drifted.
+
+Each publishing job checks its secret and its target repository first and stops
+with a notice when either is missing, so the workflow is harmless before the
+accounts exist. The workflow's header comment lists the secrets and the
+repositories to create. Prereleases, drafts, and releases with no
+`sha256sums.txt` are skipped.
+
+Two of the four channels need something once, by hand:
+
+- **winget.** Submit this directory's `tools/release/winget` manifests as
+  `manifests/l/LumenFX/Lumen/<version>/` in a pull request against
+  `microsoft/winget-pkgs`. `wingetcreate` updates an existing package but
+  cannot create one, so every release after the first is automatic.
+- **The tap and the bucket.** Create `lumen-fx/homebrew-lumen` and
+  `lumen-fx/scoop-lumen`. They can be empty; the workflow writes
+  `Formula/lumen.rb` and `bucket/lumen.json` into them.
+
+The AUR needs no manual first step: the first push to
+`ssh://aur@aur.archlinux.org/lumen-bin.git` creates the package.
+
+Only the winget package installs the `.msi`. Homebrew, the AUR, and scoop all
+install from the archives, which carry no receipt, so `lumenc` never offers to
+update itself out from under a package manager that owns the version.
+
 ## Verify
 
 - The release page (`https://github.com/lumen-fx/lumen/releases/tag/vX.Y.Z`)
@@ -259,9 +299,7 @@ real desktop.
   will not replace a running executable, so this path defers the install until
   the process exits and is the one most likely to break silently.
 
-`winget` is the obvious next step for Windows, and it needs a signed package
-plus a manifest submitted to the community repository. Neither exists yet, so
-the `.msi` link is the install channel for now.
+The same two checks cover the winget package, which installs this `.msi`.
 
 ## Current limitations
 
@@ -274,8 +312,9 @@ the `.msi` link is the install channel for now.
   prints the release page link instead of failing); nobody has asked for it
   yet.
 - The MSI is unsigned. Every download trips SmartScreen until there is a
-  code-signing certificate to sign it with, and `winget` will not take an
-  unsigned package either.
+  code-signing certificate to sign it with. The community repository takes an
+  unsigned package, so this does not hold winget up, but a winget install runs
+  the same installer and shows the same dialog.
 - Releases published before `sha256sums.txt` was part of the workflow have no
   checksum file, so `install.sh --version` cannot install them.
 - `tools/release/release-assets.sh` targets a Gitea instance's API and is

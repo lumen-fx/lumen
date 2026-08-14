@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.28.0.schema.json
+
+# The metadata half of the winget manifest set: what `winget show LumenFX.Lumen`
+# prints and what the package is found by.
+
+PackageIdentifier: LumenFX.Lumen
+PackageVersion: 0.0.3
+PackageLocale: en-US
+Publisher: Lumen FX
+PublisherUrl: https://lumenfx.dev
+PublisherSupportUrl: https://github.com/lumen-fx/lumen/issues
+Author: Lumen FX
+PackageName: Lumen
+PackageUrl: https://lumenfx.dev
+License: MPL-2.0
+LicenseUrl: https://github.com/lumen-fx/lumen/blob/main/LICENSE
+Copyright: Copyright (c) Lumen contributors
+Moniker: lumen
+ShortDescription: Toolchain for Lumen, a markup-first UI framework for native desktop apps
+Description: |-
+  Lumen is a markup-first UI framework for native desktop apps. You describe the
+  interface in .lmn markup, style it in CSS, and drive it with a script. The
+  result is a native application on Linux, macOS, and Windows, drawn on the GPU.
+
+  This package installs the toolchain: the lumenc command line, the Lumen
+  runtime library it loads, and the launcher a packaged app is built from.
+  Building an app needs no Rust toolchain.
+Tags:
+- css
+- desktop
+- framework
+- gui
+- markup
+- rust
+- ui
+ReleaseNotesUrl: https://github.com/lumen-fx/lumen/releases/tag/v0.0.3
+ManifestType: defaultLocale
+ManifestVersion: 1.28.0

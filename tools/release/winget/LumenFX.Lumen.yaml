@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.28.0.schema.json
+
+# The version manifest of the three-file set winget expects under
+# manifests/l/LumenFX/Lumen/<version>/ in microsoft/winget-pkgs. Submit this
+# directory by hand once to create the package; after that
+# .github/workflows/publish-packages.yml raises each new version as a pull
+# request with wingetcreate, which regenerates these files from the manifests
+# already in winget-pkgs.
+
+PackageIdentifier: LumenFX.Lumen
+PackageVersion: 0.0.3
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.28.0
