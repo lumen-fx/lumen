@@ -2,7 +2,11 @@
 
 Zed extension for Lumen apps: `.lmn` files get syntax highlighting from the
 Lumen tree-sitter grammar, and `lumen-lsp` supplies diagnostics, completion,
-hover, navigation, and formatting.
+hover, navigation, and formatting. Control-flow and composition tags read as
+keywords, and `bind-*`/`on-*` attributes are distinguished from plain ones.
+An inline `<script>` body is injected as Rhai; install a Rhai extension to
+highlight it, and keep Lua and candela scripts in `<script src="...">`
+files, which Zed opens as their own language.
 
 ## Install
 
@@ -31,18 +35,6 @@ To use a server elsewhere, point Zed at it in settings:
   }
 }
 ```
-
-## What you get
-
-Highlighting covers tags, attributes, `{interpolation}` placeholders and
-their `$signal` and `row.field` reference forms, comments, and entity
-references. Control-flow tags (`<for>`, `<if>`) and composition tags
-(`<template>`, `<use>`, `<slot>`, `<include>`) read as keywords, and reactive
-attributes (`bind-*`, `on-*`) are distinguished from plain ones.
-
-An inline `<script>` body is injected as Rhai. Install a Rhai extension to
-highlight it; without one the body shows as plain text. Keep Lua and candela
-scripts in `<script src="...">` files, which Zed opens as their own language.
 
 ## Grammar
 
