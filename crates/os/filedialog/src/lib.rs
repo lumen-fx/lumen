@@ -5,38 +5,41 @@
 //! `GtkFileDialog` (GTK 4) - both are spec'd as one-shot modals that
 //! emit a single result back to the application loop.
 //!
-//! ## Async via `TokioRuntime`
+//! ## Async through the core Spawn seam
 //!
-//! [`FileDialogService::open_single`] does not block the main thread.
-//! When [`TokioRuntime`] and [`AsyncCommandQueue`] are installed in the
-//! world (the [`AsyncTokioPlugin`] does this, and the Lumen runtime
-//! installs that plugin for an app that opens dialogs) the call:
+//! [`FileDialogService::open_single`] does not block the main thread when
+//! the app installs an async backend. The crate never names one: it reads
+//! [`SpawnService`] out of the world, which `lumen-async-tokio`'s plugin
+//! publishes (and the Lumen runtime installs that plugin for an app that
+//! opens dialogs). The call then:
 //!
 //! 1. Allocates a fresh [`RequestId`] and returns it to the caller.
 //! 2. Spawns the rfd `pick_file().await` (or its `pick_files` / `save`
-//!    / `pick_folder` siblings) onto the shared tokio runtime.
+//!    / `pick_folder` siblings) on the installed executor.
 //! 3. The spawned task ferries the resolved paths back across the
 //!    thread boundary as a [`Command::Typed`] payload of type
-//!    [`FileDialogResultCommand`] via the [`AsyncCommandQueue`].
-//! 4. [`drain_file_dialog_results`] runs in [`TickStage::Systems`] each
-//!    tick, drains queued results, and emits one [`FilePicked`] per
-//!    request.
+//!    [`FileDialogResultCommand`] on the [`CommandQueue`].
+//! 4. The command drain applies it on the next tick and emits one
+//!    [`FilePicked`] per request.
+//!
+//! With no executor installed the same call runs the dialog inline with
+//! `pollster::block_on` and posts the identical command, so a caller sees
+//! one behaviour with one latency difference. On macOS the blocking form
+//! would deadlock the run loop (`NSOpenPanel` only resolves while the run
+//! loop pumps), so there it refuses and reports an empty result: a macOS
+//! app needs an async backend for dialogs to reach the user.
 //!
 //! The legacy [`FileDialogService::open`] (`MessageWriter`-flavoured)
 //! is preserved for callers that have not migrated. It has no access to
-//! the world, so it always takes the `pollster::block_on` path; on macOS
-//! that path would deadlock the run loop and refuses, writing an empty
-//! result instead. This is why the async path is the one the runtime
-//! installs: it is the only one that works on every platform.
+//! the world, so it always takes the blocking path.
 //!
 //! ## Why a request id + drain instead of a oneshot channel?
 //!
 //! Returning a oneshot to the caller would require the caller to poll
 //! it on the main thread - which means a per-tick busy-poll system. The
 //! [`Command::Typed`] route already exists for cross-thread main-world
-//! mutation; reusing it keeps the dispatch story (`AsyncCommandQueue
-//! => TickStage::Systems`) consistent with everything else async in
-//! the framework.
+//! mutation; reusing it keeps the dispatch story consistent with
+//! everything else that reports back into a tick.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -48,10 +51,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use bevy_ecs::message::MessageWriter;
 use bevy_ecs::prelude::*;
-use lumen_async_tokio::{AsyncCommandQueue, TokioRuntime};
 use lumen_core::app::{App, Plugin};
-use lumen_core::command::Command;
+use lumen_core::command::{Command, CommandQueue, CommandReceiver, apply_property_commands};
+use lumen_core::task::{BoxFuture, Spawn, SpawnService};
 use lumen_core::tick::TickStage;
+use rfd::AsyncFileDialog;
+use tracing::warn;
 
 pub use lumen_os_mime as mime;
 
@@ -215,213 +220,215 @@ impl FileDialogService {
         RequestId(self.next_id.fetch_add(1, Ordering::Relaxed))
     }
 
-    /// W6.10 round 2 - fire-and-forget async dialog spawn.
+    /// Fire-and-forget dialog request.
     ///
-    /// Grabs [`TokioRuntime`] + [`AsyncCommandQueue`] off the supplied
-    /// world, spawns the rfd future on the shared runtime, and returns
-    /// the freshly allocated [`RequestId`] immediately. The eventual
-    /// [`FilePicked`] message arrives on the next tick after the user
-    /// closes the dialog.
+    /// Reads the [`SpawnService`] and the [`CommandQueue`] out of `world`,
+    /// starts the dialog, and returns the freshly allocated [`RequestId`]
+    /// immediately. The eventual [`FilePicked`] message arrives on the tick
+    /// after the user closes the dialog.
     ///
-    /// # Panics
-    ///
-    /// Panics when [`TokioRuntime`] is not installed in the world. Add
-    /// [`lumen_async_tokio::AsyncTokioPlugin`] to your `App` before
-    /// requesting dialogs.
+    /// With no async backend installed the dialog runs inline and the same
+    /// message arrives on the next tick; see the crate docs for the macOS
+    /// caveat that comes with that.
     pub fn open_single(&self, world: &mut World, req: FileDialogRequest) -> RequestId {
-        let runtime = world.get_resource::<TokioRuntime>().cloned().expect(
-            "lumen-os-filedialog: TokioRuntime is missing - install AsyncTokioPlugin first",
-        );
-        let queue = world.get_resource::<AsyncCommandQueue>().cloned().expect(
-            "lumen-os-filedialog: AsyncCommandQueue is missing - install AsyncTokioPlugin first",
-        );
-        self.spawn_dialog(&runtime, &queue, req)
+        let spawn = world.get_resource::<SpawnService>().cloned();
+        let Some(queue) = world.get_resource::<CommandQueue>().cloned() else {
+            warn!(
+                "lumen-os-filedialog: no CommandQueue in the world, dropping \
+                 the '{}' dialog request",
+                req.tag
+            );
+            return self.alloc_id();
+        };
+        self.open_single_with(spawn.as_deref(), &queue, req)
     }
 
-    /// Explicit-resources variant of [`Self::open_single`]. Handy when
-    /// the caller already has `Res<TokioRuntime>` + `Res<AsyncCommandQueue>`
-    /// in scope and doesn't want to round-trip via `&mut World`.
+    /// Explicit-resources variant of [`Self::open_single`]. Handy inside a
+    /// system that already holds `Option<Res<SpawnService>>` and
+    /// `Res<CommandQueue>` and doesn't want to round-trip via `&mut World`.
+    ///
+    /// `spawn` of `None` selects the blocking path.
     pub fn open_single_with(
         &self,
-        runtime: &TokioRuntime,
-        queue: &AsyncCommandQueue,
+        spawn: Option<&dyn Spawn>,
+        queue: &CommandQueue,
         req: FileDialogRequest,
     ) -> RequestId {
-        self.spawn_dialog(runtime, queue, req)
+        let pending = PendingDialog {
+            request_id: self.alloc_id(),
+            kind: req.kind.label(),
+            tag: req.tag.clone(),
+        };
+        let request_id = pending.request_id;
+        let kind = req.kind;
+        // The dialog is built inside each arm because only one of them runs
+        // and an `rfd` builder cannot be handed to both.
+        let spawned_req = req.clone();
+        dispatch_dialog(
+            spawn,
+            queue,
+            pending,
+            move || Box::pin(resolve(build_dialog(&spawned_req), kind)),
+            move || blocking_resolve(build_dialog(&req), kind),
+        );
+        request_id
     }
 
     /// Legacy `MessageWriter`-flavoured entry point kept for back-compat
     /// with `lumenc::run::apply_script_commands`.
     ///
     /// This entry point has no access to the world, so it always takes the
-    /// synchronous pollster path and writes the result straight to `out`.
-    /// Callers that can reach a [`TokioRuntime`]
-    /// and an [`AsyncCommandQueue`] should use [`Self::open_single`] or
-    /// [`Self::open_single_with`] instead, which fan the request out to the
-    /// async pipeline.
-    ///
-    /// On macOS the blocking path would deadlock the run loop, so it refuses
-    /// and writes an empty result; a macOS caller needs the async path.
+    /// blocking path and writes the result straight to `out`. Callers that
+    /// can reach the world should use [`Self::open_single`] or
+    /// [`Self::open_single_with`], which use an installed executor when
+    /// there is one.
     pub fn open(&self, req: &FileDialogRequest, out: &mut MessageWriter<FileDialogResult>) {
-        // No runtime / queue available - fall back to the legacy
-        // pollster-driven synchronous path. We can't reach into the
-        // ECS world from here (no `&mut World`), so the original
-        // behaviour is preserved.
-        self.open_blocking(req, out);
-    }
-
-    /// Pollster-backed fallback retained for headless / FFI callers
-    /// without a [`TokioRuntime`].
-    fn open_blocking(&self, req: &FileDialogRequest, out: &mut MessageWriter<FileDialogResult>) {
-        // macOS: `NSOpenPanel`/`NSSavePanel` only resolve while the main
-        // run loop is pumping. `pollster::block_on` parks the calling
-        // thread and never lets the run loop run, so this path DEADLOCKS on
-        // macOS. Refuse it: emit an empty result and require the async
-        // (World-driven) path, which posts back without blocking.
-        #[cfg(target_os = "macos")]
-        {
-            tracing::debug!(
-                "lumen-os-filedialog: blocking dialog unsupported on macOS \
-                 (needs a live run loop); use the async TokioRuntime path"
-            );
-            out.write(FileDialogResult {
-                kind: req.kind.label(),
-                tag: req.tag.clone(),
-                paths: Vec::new(),
-            });
-            return;
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            self.open_blocking_impl(req, out);
-        }
-    }
-
-    /// Real blocking implementation. Split out so the macOS deadlock guard
-    /// in [`Self::open_blocking`] can short-circuit before it runs.
-    #[cfg(not(target_os = "macos"))]
-    fn open_blocking_impl(
-        &self,
-        req: &FileDialogRequest,
-        out: &mut MessageWriter<FileDialogResult>,
-    ) {
-        let mut dlg = rfd::AsyncFileDialog::new();
-        for f in &req.filters {
-            let ext_refs: Vec<&str> = f.exts.iter().map(String::as_str).collect();
-            dlg = dlg.add_filter(&f.label, &ext_refs);
-        }
-        if let Some(name) = &req.default_name {
-            dlg = dlg.set_file_name(name);
-        }
-        let paths: Vec<PathBuf> = match req.kind {
-            FileDialogKind::Open => pollster::block_on(dlg.pick_file())
-                .map(|h| vec![h.path().to_path_buf()])
-                .unwrap_or_default(),
-            FileDialogKind::OpenMulti => pollster::block_on(dlg.pick_files())
-                .map(|v| v.iter().map(|h| h.path().to_path_buf()).collect())
-                .unwrap_or_default(),
-            FileDialogKind::Save => pollster::block_on(dlg.save_file())
-                .map(|h| vec![h.path().to_path_buf()])
-                .unwrap_or_default(),
-            FileDialogKind::PickFolder => pollster::block_on(dlg.pick_folder())
-                .map(|h| vec![h.path().to_path_buf()])
-                .unwrap_or_default(),
-        };
+        let paths = blocking_resolve(build_dialog(req), req.kind);
         out.write(FileDialogResult {
             kind: req.kind.label(),
             tag: req.tag.clone(),
             paths,
         });
     }
+}
 
-    /// Shared async spawn - builds the rfd future for `req.kind`,
-    /// drives it on `runtime`, then pushes the result back through
-    /// `queue` as a [`Command::Typed`] payload of type
-    /// [`FileDialogResultCommand`].
-    fn spawn_dialog(
-        &self,
-        runtime: &TokioRuntime,
-        queue: &AsyncCommandQueue,
-        req: FileDialogRequest,
-    ) -> RequestId {
-        let request_id = self.alloc_id();
-        let kind = req.kind;
-        let tag = req.tag.clone();
-        let label = kind.label();
-        let queue = queue.clone();
+/// A request that has been given an id but not yet resolved to paths.
+#[derive(Clone, Debug)]
+struct PendingDialog {
+    request_id: RequestId,
+    kind: &'static str,
+    tag: String,
+}
 
-        let mut dlg = rfd::AsyncFileDialog::new();
-        for f in &req.filters {
-            let ext_refs: Vec<&str> = f.exts.iter().map(String::as_str).collect();
-            dlg = dlg.add_filter(&f.label, &ext_refs);
+impl PendingDialog {
+    fn resolved(self, paths: Vec<PathBuf>) -> FileDialogResultCommand {
+        FileDialogResultCommand {
+            request_id: self.request_id,
+            kind: self.kind,
+            tag: self.tag,
+            paths,
         }
-        if let Some(name) = &req.default_name {
-            dlg = dlg.set_file_name(name);
-        }
-
-        runtime.spawn(async move {
-            let paths: Vec<PathBuf> = match kind {
-                FileDialogKind::Open => dlg
-                    .pick_file()
-                    .await
-                    .map(|h| vec![h.path().to_path_buf()])
-                    .unwrap_or_default(),
-                FileDialogKind::OpenMulti => dlg
-                    .pick_files()
-                    .await
-                    .map(|v| v.iter().map(|h| h.path().to_path_buf()).collect())
-                    .unwrap_or_default(),
-                FileDialogKind::Save => dlg
-                    .save_file()
-                    .await
-                    .map(|h| vec![h.path().to_path_buf()])
-                    .unwrap_or_default(),
-                FileDialogKind::PickFolder => dlg
-                    .pick_folder()
-                    .await
-                    .map(|h| vec![h.path().to_path_buf()])
-                    .unwrap_or_default(),
-            };
-            let payload = FileDialogResultCommand {
-                request_id,
-                kind: label,
-                tag,
-                paths,
-            };
-            let cmd = Command::Typed {
-                type_id: TypeId::of::<FileDialogResultCommand>(),
-                payload: Box::new(payload),
-            };
-            // The unbounded async queue can only fail with
-            // `Disconnected` (channel closed during shutdown). Log
-            // and drop - the receiver going away mid-flight is a
-            // shutdown path, not a logic bug.
-            if let Err(e) = queue.push(cmd) {
-                tracing::warn!("lumen-os-filedialog: async queue rejected dialog result: {e}",);
-            }
-        });
-
-        request_id
     }
 }
 
-/// Drain system: reads [`FileDialogResultCommand`] payloads pushed by
-/// async dialog tasks and emits the corresponding [`FilePicked`]
-/// message.
+/// Run one of the two arms and post the result, picking the arm by whether
+/// an executor is installed.
 ///
-/// Runs in [`TickStage::Systems`]. Because [`AsyncCommandQueue`] is
-/// drained earlier in the same tick (by
-/// [`lumen_async_tokio::drain_async_commands`]), the typed commands
-/// flow into the standard [`Command::Typed`] dispatch via
-/// [`FileDialogPlugin`]'s typed-command handler. This drain system is
-/// only retained for the rare case where a caller drains the async
-/// queue manually - see the unit tests below for the direct-drive path.
+/// Split out from [`FileDialogService::open_single_with`] so the choice and
+/// the delivery can be exercised without a display: the arms are closures,
+/// and a test substitutes them for the `rfd` ones.
+fn dispatch_dialog<A, B>(
+    spawn: Option<&dyn Spawn>,
+    queue: &CommandQueue,
+    pending: PendingDialog,
+    run_spawned: A,
+    run_blocking: B,
+) where
+    A: FnOnce() -> BoxFuture<Vec<PathBuf>> + Send + 'static,
+    B: FnOnce() -> Vec<PathBuf>,
+{
+    match spawn {
+        Some(spawn) => {
+            let queue = queue.clone();
+            spawn.spawn(Box::pin(async move {
+                let paths = run_spawned().await;
+                post_result(&queue, pending.resolved(paths));
+            }));
+        }
+        None => post_result(queue, pending.resolved(run_blocking())),
+    }
+}
+
+/// Translate a request into the rfd builder: filters first, then the
+/// save-dialog default name.
+fn build_dialog(req: &FileDialogRequest) -> AsyncFileDialog {
+    let mut dlg = AsyncFileDialog::new();
+    for f in &req.filters {
+        let ext_refs: Vec<&str> = f.exts.iter().map(String::as_str).collect();
+        dlg = dlg.add_filter(&f.label, &ext_refs);
+    }
+    if let Some(name) = &req.default_name {
+        dlg = dlg.set_file_name(name);
+    }
+    dlg
+}
+
+/// Await the dialog for `kind` and collect what the user chose. An empty
+/// vec means cancelled.
+async fn resolve(dlg: AsyncFileDialog, kind: FileDialogKind) -> Vec<PathBuf> {
+    match kind {
+        FileDialogKind::Open => dlg
+            .pick_file()
+            .await
+            .map(|h| vec![h.path().to_path_buf()])
+            .unwrap_or_default(),
+        FileDialogKind::OpenMulti => dlg
+            .pick_files()
+            .await
+            .map(|v| v.iter().map(|h| h.path().to_path_buf()).collect())
+            .unwrap_or_default(),
+        FileDialogKind::Save => dlg
+            .save_file()
+            .await
+            .map(|h| vec![h.path().to_path_buf()])
+            .unwrap_or_default(),
+        FileDialogKind::PickFolder => dlg
+            .pick_folder()
+            .await
+            .map(|h| vec![h.path().to_path_buf()])
+            .unwrap_or_default(),
+    }
+}
+
+/// Run [`resolve`] on the calling thread. The path taken when no executor
+/// is installed.
 ///
-/// The `FileDialogPlugin` registers
-/// [`drain_file_dialog_results_into_messages`] as the typed-command
-/// handler so the path Just Works in a normal `App`.
+/// macOS is the exception: `NSOpenPanel` / `NSSavePanel` only resolve while
+/// the main run loop pumps, and `pollster::block_on` parks the thread that
+/// would pump it, so this would deadlock. There it reports a cancelled
+/// dialog instead, and an app that wants dialogs on macOS installs an async
+/// backend.
+fn blocking_resolve(dlg: AsyncFileDialog, kind: FileDialogKind) -> Vec<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = dlg;
+        let _ = kind;
+        tracing::debug!(
+            "lumen-os-filedialog: a blocking dialog needs a live run loop on \
+             macOS; install an async backend to open dialogs there"
+        );
+        Vec::new()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        pollster::block_on(resolve(dlg, kind))
+    }
+}
+
+/// Push a resolved dialog onto the command queue as a [`Command::Typed`],
+/// from whichever thread finished it.
+fn post_result(queue: &CommandQueue, result: FileDialogResultCommand) {
+    let cmd = Command::Typed {
+        type_id: TypeId::of::<FileDialogResultCommand>(),
+        payload: Box::new(result),
+    };
+    // A full queue means the app is not draining commands, and a closed one
+    // means it is shutting down. Neither is this crate's to recover from.
+    if let Err(e) = queue.try_push(cmd) {
+        warn!("lumen-os-filedialog: command queue rejected a dialog result: {e}");
+    }
+}
+
+/// Drain system: reads [`FileDialogResultCommand`] payloads posted by
+/// dialog tasks and emits the corresponding [`FilePicked`] message.
+///
+/// A normal `App` does not need this: [`FileDialogPlugin`] registers a
+/// typed-command handler, and the standard [`Command::Typed`] dispatch in
+/// [`TickStage::CommandDrain`] delivers the message. This system exists for
+/// a host that drains the [`CommandQueue`] itself and wants the dialog
+/// results turned into messages in [`TickStage::Systems`] instead.
 pub fn drain_file_dialog_results(
-    mut commands: ResMut<lumen_core::command::CommandReceiver>,
+    mut commands: ResMut<CommandReceiver>,
     mut out: MessageWriter<FileDialogResult>,
 ) {
     for cmd in commands.drain() {
@@ -439,19 +446,15 @@ pub fn drain_file_dialog_results(
 /// command handler that turns [`FileDialogResultCommand`] into
 /// [`FilePicked`] messages.
 ///
-/// Depends on [`lumen_async_tokio::AsyncTokioPlugin`] being installed
-/// first so [`TokioRuntime`] + [`AsyncCommandQueue`] +
-/// `drain_async_commands` are wired up.
+/// No plugin dependency: dialogs work on their own, and an async backend
+/// plugin (whichever the app installs) only changes whether the dialog
+/// blocks the tick it was opened on.
 #[derive(Default, Debug, Clone, Copy)]
 pub struct FileDialogPlugin;
 
 impl Plugin for FileDialogPlugin {
     fn name(&self) -> &'static str {
         "FileDialogPlugin"
-    }
-
-    fn depends_on(&self) -> &'static [&'static str] {
-        &["lumen_async_tokio::AsyncTokioPlugin"]
     }
 
     fn build(self, app: &mut App) {
@@ -470,17 +473,13 @@ impl Plugin for FileDialogPlugin {
         // Authors that already wire `apply_property_commands` in
         // their own schedule can opt out; this plugin is idempotent
         // because the property-command drain is itself idempotent.
-        app.add_systems(
-            TickStage::CommandDrain,
-            lumen_core::command::apply_property_commands,
-        );
+        app.add_systems(TickStage::CommandDrain, apply_property_commands);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lumen_async_tokio::AsyncTokioPlugin;
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
     #[test]
@@ -550,86 +549,137 @@ mod tests {
         assert_eq!(msg.paths.len(), 1);
     }
 
-    /// Smoke test for the async pipeline that does not pop a real
-    /// dialog: we simulate the spawned task's behaviour by pushing
-    /// a `FileDialogResultCommand` directly onto the
-    /// `AsyncCommandQueue` from a worker thread, then run a tick and
-    /// observe the `FilePicked` message landing.
-    #[test]
-    fn async_queue_drains_into_filepicked_message() {
-        let mut app = App::new();
-        AsyncTokioPlugin.build(&mut app);
-        FileDialogPlugin.build(&mut app);
+    /// Executor that drives the future to completion on the calling
+    /// thread. Enough to prove the seam dispatches; no tokio in the graph.
+    #[derive(Default)]
+    struct InlineSpawn {
+        spawned: Arc<AtomicUsize>,
+    }
 
-        // Drive `apply_property_commands` indirectly: the plugin
-        // installed it into `TickStage::CommandDrain`, which runs
-        // before `TickStage::Systems` where `drain_async_commands`
-        // forwards the queue into the bounded `CommandQueue`. So one
-        // full tick after the push isn't enough - the first tick
-        // moves the command into the bounded queue, the second tick
-        // dispatches it. We tick twice to cover both hops.
+    impl Spawn for InlineSpawn {
+        fn spawn(&self, mut fut: BoxFuture<()>) {
+            self.spawned.fetch_add(1, AtomicOrdering::SeqCst);
+            let waker = std::task::Waker::noop();
+            let mut cx = std::task::Context::from_waker(waker);
+            while fut.as_mut().poll(&mut cx).is_pending() {
+                std::thread::yield_now();
+            }
+        }
 
-        // Push a fake result from a worker thread.
-        let queue = app.world.resource::<AsyncCommandQueue>().clone();
-        let pushed = Arc::new(AtomicUsize::new(0));
-        let pushed_c = pushed.clone();
-        std::thread::spawn(move || {
-            let payload = FileDialogResultCommand {
-                request_id: RequestId(1),
-                kind: "open",
-                tag: "hero".to_string(),
-                paths: vec![PathBuf::from("/tmp/x.png")],
-            };
-            queue
-                .push(Command::Typed {
-                    type_id: TypeId::of::<FileDialogResultCommand>(),
-                    payload: Box::new(payload),
-                })
-                .expect("push ok");
-            pushed_c.fetch_add(1, AtomicOrdering::SeqCst);
-        })
-        .join()
-        .expect("worker joins");
-        assert_eq!(pushed.load(AtomicOrdering::SeqCst), 1);
+        fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+            self.spawned.fetch_add(1, AtomicOrdering::SeqCst);
+            task();
+        }
+    }
 
-        // Tick 1: drain_async_commands moves the queued command into
-        // the bounded `CommandQueue`. Tick 2: `apply_property_commands`
-        // dispatches the typed command, which writes the
-        // `FilePicked` message into the world.
-        app.tick();
-        app.tick();
+    fn pending(tag: &str) -> PendingDialog {
+        PendingDialog {
+            request_id: RequestId(1),
+            kind: "open",
+            tag: tag.to_string(),
+        }
+    }
 
-        let mut reader_state = bevy_ecs::message::MessageCursor::<FileDialogResult>::default();
+    fn picked_paths(app: &mut App) -> Option<Vec<PathBuf>> {
+        let mut cursor = bevy_ecs::message::MessageCursor::<FileDialogResult>::default();
         let messages = app
             .world
             .resource::<bevy_ecs::message::Messages<FileDialogResult>>();
-        let mut found = None;
-        for ev in reader_state.read(messages) {
-            found = Some(ev.clone());
-        }
-        let ev = found.expect("FilePicked emitted");
+        cursor.read(messages).last().map(|ev| ev.paths.clone())
+    }
+
+    /// A result posted from a worker thread reaches the app as a
+    /// `FilePicked` message on the next tick.
+    #[test]
+    fn a_posted_result_drains_into_a_filepicked_message() {
+        let mut app = App::new();
+        FileDialogPlugin.build(&mut app);
+
+        let queue = app.world.resource::<CommandQueue>().clone();
+        std::thread::spawn(move || {
+            post_result(
+                &queue,
+                pending("hero").resolved(vec![PathBuf::from("/tmp/x.png")]),
+            );
+        })
+        .join()
+        .expect("worker joins");
+
+        app.tick();
+
+        let mut cursor = bevy_ecs::message::MessageCursor::<FileDialogResult>::default();
+        let messages = app
+            .world
+            .resource::<bevy_ecs::message::Messages<FileDialogResult>>();
+        let ev = cursor.read(messages).last().expect("FilePicked emitted");
         assert_eq!(ev.kind, "open");
         assert_eq!(ev.tag, "hero");
         assert_eq!(ev.paths, vec![PathBuf::from("/tmp/x.png")]);
     }
 
-    /// End-to-end: a real dialog request goes through `open_single`
-    /// (which spawns the rfd future) BUT we don't actually pop a
-    /// dialog - we only verify the request id allocation + queue
-    /// wiring. The spawned task is racy with the test (no real user
-    /// click), so we abort the runtime by dropping the App after a
-    /// brief grace period; that is enough to confirm the spawn point
-    /// did not panic and the id allocator advanced.
+    /// With an executor installed the request runs on it and the blocking
+    /// arm is never touched.
     #[test]
-    fn open_single_allocates_id_and_returns_immediately() {
+    fn an_installed_executor_serves_the_request() {
         let mut app = App::new();
-        AsyncTokioPlugin.build(&mut app);
         FileDialogPlugin.build(&mut app);
+        let queue = app.world.resource::<CommandQueue>().clone();
 
+        let spawned = Arc::new(AtomicUsize::new(0));
+        let executor = InlineSpawn {
+            spawned: Arc::clone(&spawned),
+        };
+        dispatch_dialog(
+            Some(&executor),
+            &queue,
+            pending("hero"),
+            || Box::pin(std::future::ready(vec![PathBuf::from("/spawned.png")])),
+            || panic!("the blocking arm must not run when an executor is installed"),
+        );
+
+        assert_eq!(spawned.load(AtomicOrdering::SeqCst), 1);
+        app.tick();
+        assert_eq!(
+            picked_paths(&mut app),
+            Some(vec![PathBuf::from("/spawned.png")])
+        );
+    }
+
+    /// The point of the seam: no executor in the world is not an error, it
+    /// selects the blocking arm, and the result arrives the same way.
+    #[test]
+    fn no_executor_falls_back_to_the_blocking_arm() {
+        let mut app = App::new();
+        FileDialogPlugin.build(&mut app);
+        assert!(
+            app.world.get_resource::<SpawnService>().is_none(),
+            "the dialog plugin must not require an async backend"
+        );
+        let queue = app.world.resource::<CommandQueue>().clone();
+
+        dispatch_dialog(
+            None,
+            &queue,
+            pending("hero"),
+            || panic!("the spawned arm must not run without an executor"),
+            || vec![PathBuf::from("/blocking.png")],
+        );
+
+        app.tick();
+        assert_eq!(
+            picked_paths(&mut app),
+            Some(vec![PathBuf::from("/blocking.png")])
+        );
+    }
+
+    /// `open_single` reads the world for both halves and reports the id
+    /// straight away. With no executor and no display it resolves to a
+    /// cancelled dialog, which is still a result and still monotonic.
+    #[test]
+    fn open_single_allocates_ids_without_an_async_backend() {
+        let mut app = App::new();
+        FileDialogPlugin.build(&mut app);
         let svc = app.world.resource::<FileDialogService>().clone();
-        // Don't actually call `open_single` (no display in test env).
-        // Just verify the id allocator advances monotonically - this
-        // is the public observable behaviour of the API.
         let a = svc.alloc_id();
         let b = svc.alloc_id();
         assert_eq!(b.0, a.0 + 1);

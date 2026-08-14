@@ -467,7 +467,7 @@ pub(crate) fn register_os_hotkey(app: &mut App) {
     }
 }
 
-/// File-dialog host resource, plus the async runtime the dialogs resolve on.
+/// File-dialog host resource, plus the executor the dialogs resolve on.
 ///
 /// The service itself is DEFAULT-ON: its constructor is a single `AtomicU64`
 /// (no thread, no device), so an idle app pays nothing and a false negative
@@ -476,10 +476,11 @@ pub(crate) fn register_os_hotkey(app: &mut App) {
 /// `AsyncTokioPlugin` is GATED on [`SubsystemUsage::file_dialog`] because it
 /// builds a multi-threaded tokio runtime. It has to be installed for dialogs
 /// to work at all on macOS: `NSOpenPanel` only resolves while the main run
-/// loop is pumping, so the blocking path deadlocks there and refuses, and
-/// only the async path posts a result back. Installing it here rather than
-/// leaving it to embedders is what makes `pick_file` reach the user on every
-/// platform.
+/// loop is pumping, so a dialog run inline deadlocks there and reports a
+/// cancel. Installing an executor here rather than leaving it to embedders
+/// is what makes `pick_file` reach the user on every platform. The dialog
+/// crate itself names no backend; it reads whichever `SpawnService` this
+/// installs.
 pub(crate) fn register_os_filedialog(app: &mut App, file_dialog_used: bool) {
     app.world.insert_resource(FileDialogService::new());
     #[cfg(feature = "async")]
