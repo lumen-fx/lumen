@@ -25,6 +25,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # codecov/patch is a required check, so the merge queue needs an upload
+  # to grade; without this trigger a queued merge waits on it forever.
+  merge_group:
   workflow_dispatch:
 
 concurrency:
