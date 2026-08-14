@@ -2,14 +2,17 @@
 
 use crate::error::{Error, Result};
 use crate::events::{EventCtx, EventKind, HandlerEntry, install_rust_handlers};
+use lumen_core::app::App as EcsApp;
 use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_runtime::RunOptions;
+use lumen_script::{NativeExternFn, ScriptValue};
 use std::path::PathBuf;
 
 /// Callback applied to the fully-built ECS app before the event loop.
-type ConfigureHook = Box<dyn FnOnce(&mut lumen_core::app::App) + Send + 'static>;
+type ConfigureHook = Box<dyn FnOnce(&mut EcsApp) + Send + 'static>;
 
-/// Rhai engine extension callback (parity with `lumen_app_expose`).
+/// Rhai engine extension callback.
+#[cfg(feature = "host-rhai")]
 type RhaiExtension = Box<dyn FnOnce(&mut rhai::Engine) + Send + 'static>;
 
 /// Entry point for building a Lumen application in Rust.
@@ -47,8 +50,8 @@ impl App {
 /// Collects markup/CSS sources, window options, initial signal values,
 /// and native Rust event handlers, then [`AppBuilder::run`] boots the
 /// exact plugin stack `lumenc run` uses (taffy layout, winit window,
-/// cosmic text, input, primitives, assets, optional Rhai script host,
-/// optional MCP introspection server) and enters the event loop.
+/// cosmic text, input, primitives, assets, a script host per language the
+/// app ships, optional MCP introspection server) and enters the event loop.
 #[derive(Default)]
 pub struct AppBuilder {
     dir: Option<PathBuf>,
@@ -59,6 +62,8 @@ pub struct AppBuilder {
     hot_reload: Option<bool>,
     seeds: Vec<(String, PropertyValue)>,
     handlers: Vec<HandlerEntry>,
+    native_fns: Vec<NativeExternFn>,
+    #[cfg(feature = "host-rhai")]
     rhai_extensions: Vec<RhaiExtension>,
     configure: Vec<ConfigureHook>,
 }
@@ -191,10 +196,40 @@ impl AppBuilder {
         self
     }
 
-    /// Install native functions into the Rhai script engine, for apps
-    /// mixing `<script>` markup with Rust. The native equivalent of the
-    /// C ABI's `lumen_app_expose`:
+    /// Expose a native Rust function to the app's script under `name`, for
+    /// apps mixing `<script>` markup with Rust. The native equivalent of the
+    /// C ABI's `lumen_app_expose`.
+    ///
+    /// The function is registered into every host the app runs, so it is
+    /// callable whatever language the script is written in. Arguments and the
+    /// return value cross as [`ScriptValue`]; `arity` is the declared argument
+    /// count, which Rhai dispatches on and Lua and candela do not enforce.
+    ///
+    /// ```no_run
+    /// use lumenui::simple::App;
+    /// use lumenui::ScriptValue;
+    ///
+    /// # fn demo() -> lumenui::Result<()> {
+    /// App::builder()
+    ///     .dir("app")
+    ///     .native_fn("now_ms", 0, |_args| ScriptValue::I64(42))
+    ///     .run()
+    /// # }
+    /// ```
+    pub fn native_fn<F>(mut self, name: impl Into<String>, arity: usize, f: F) -> Self
+    where
+        F: Fn(&[ScriptValue]) -> ScriptValue + Send + Sync + 'static,
+    {
+        self.native_fns.push(NativeExternFn::new(name, arity, f));
+        self
+    }
+
+    /// Install native functions into the Rhai script engine:
     /// `engine.register_fn("now_ms", || 42_i64)`.
+    ///
+    /// Rhai-typed, so these reach the Rhai host only. [`Self::native_fn`] is
+    /// the host-neutral path and is what an app mixing languages wants.
+    #[cfg(feature = "host-rhai")]
     pub fn rhai_extension<F>(mut self, f: F) -> Self
     where
         F: FnOnce(&mut rhai::Engine) + Send + 'static,
@@ -209,7 +244,7 @@ impl AppBuilder {
     /// wired and before the event loop starts.
     pub fn configure<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut lumen_core::app::App) + Send + 'static,
+        F: FnOnce(&mut EcsApp) + Send + 'static,
     {
         self.configure.push(Box::new(f));
         self
@@ -239,6 +274,8 @@ impl AppBuilder {
         opts.markup = self.markup;
         opts.css = self.css;
         opts.hot_reload = self.hot_reload.unwrap_or(!in_memory);
+        opts.native_fns.extend(self.native_fns);
+        #[cfg(feature = "host-rhai")]
         for ext in self.rhai_extensions {
             opts.rhai_extensions.push(ext);
         }

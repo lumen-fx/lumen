@@ -443,4 +443,28 @@ fn bump_counter(mut clicks: MessageReader<ClickEvent>, mut signals: Signals) {
 }
 ```
 
+For an app that is mostly markup and script with a little Rust behind it,
+`lumenui::simple::App::builder()` assembles one from a directory and runs it.
+`native_fn` on that builder is the Rust counterpart of `lumen_app_expose`: it
+takes a name, an arity, and a closure over `ScriptValue`, and registers into
+every host the app runs, so scripts call it whatever language they are written
+in.
+
+```rust
+use lumenui::ScriptValue;
+use lumenui::simple::App;
+
+fn main() -> lumenui::Result<()> {
+    App::builder()
+        .dir("app")
+        .native_fn("answer", 0, |_args| ScriptValue::I64(42))
+        .run()
+}
+```
+
+`rhai_extension` on the same builder takes a `rhai::Engine` and so reaches the
+Rhai host alone. It is behind the crate's `host-rhai` feature, on by default;
+turning defaults off drops the Rhai dependency and leaves `native_fn` as the
+way to expose a function.
+
 Runnable examples live in `sdk/rust/examples`.

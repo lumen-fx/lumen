@@ -94,7 +94,7 @@ CARGO_PROFILE_DEV_DEBUG=true cargo build -p <crate>
 
 ## Feature flags that matter
 
-Three crates carry flags you will meet while working on the tree.
+A handful of crates carry flags you will meet while working on the tree.
 
 **`lumenc`** builds in two shapes. The default shape statically links
 `lumen-runtime` (feature `dev-run`) so `run`, `build`, `check`, and the
@@ -112,7 +112,17 @@ packer. `devtools` is off by default and compiles the in-window overlay.
 
 Dropping every default feature yields a compiler library with no backends at
 all. That is what `lumen-lsp` links, which is why the LSP does not pull wgpu,
-winit, cosmic-text, taffy, or the script hosts.
+winit, cosmic-text, or taffy.
+
+**`lumen-lsp`** has one flag, `lang-rhai`, on by default. It carries the Rhai
+engine and builtin table the server analyses `.rhai` buffers with. Markup, CSS,
+and the cross-file id features do not depend on it, so a server built without
+it still serves those.
+
+**`lumenui`** (the Rust SDK) has `host-rhai`, on by default. It gates
+`AppBuilder::rhai_extension`, which takes a `rhai::Engine` and so reaches one
+host. `AppBuilder::native_fn` registers into every host and is always
+available.
 
 **`lumen-runtime`** defaults to every subsystem on: `audio-rodio`, `mcp`,
 `async`, `host-rhai`, `host-lua`, `host-candela`, `http-fetch`,
