@@ -214,6 +214,16 @@ uv run zensical build --strict
 `--strict` turns broken links and unknown navigation entries into errors. The
 navigation lives in `docs/zensical.toml`.
 
+The Rust API documentation is separate from that site and comes from the crates
+themselves:
+
+```sh
+cargo doc --workspace --no-deps
+```
+
+The same build is published on every push to `main` and serves the crate docs
+for the current tree at [api.lumenfx.dev](https://api.lumenfx.dev).
+
 Every change that adds, changes, or removes something a user can observe
 updates the matching page in the same commit. That includes tags, attributes,
 CSS properties, `lumen.toml` keys, CLI flags, scripting builtins, defaults, and
