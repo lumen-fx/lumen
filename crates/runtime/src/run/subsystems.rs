@@ -603,6 +603,35 @@ fn default_audio_service(_audio_used: bool) -> lumen_audio::AudioService {
 #[cfg(not(feature = "audio"))]
 pub(crate) fn register_audio(_app: &mut App, _audio_used: bool) {}
 
+/// The HTTP client the scripts' `fetch()` / `http()` builtins run on.
+///
+/// Installed as the `FetchRegistry` the script plugin would otherwise create
+/// for itself, so it has to run before the host plugins are added. The plugin
+/// leaves an existing registry alone, which is also how an embedder swaps in
+/// its own `lumen_script::HttpClient` from an app hook or by inserting the
+/// resource first.
+///
+/// Costs nothing for an app that never fetches: no connection is opened until
+/// a request is queued, and each one runs on its own short-lived worker
+/// thread, so there is no gate on usage here.
+///
+/// COMPILE-TIME GATE (Part B tree-shaking): the shipped client lives behind the
+/// `http-fetch` cargo feature. Without it no registry is installed here and the
+/// builtins answer every request with the "built without `http-fetch`" error.
+#[cfg(feature = "http-fetch")]
+pub(crate) fn register_http_client(app: &mut App) {
+    app.world
+        .insert_resource(lumen_script::FetchRegistry::with_client(
+            std::sync::Arc::new(lumen_http_ureq::UreqHttpClient),
+        ));
+}
+
+/// Inert HTTP register unit for a build compiled WITHOUT `http-fetch`: the
+/// script plugin falls back to the disabled client, so `fetch()` reports the
+/// missing transport instead of silently doing nothing.
+#[cfg(not(feature = "http-fetch"))]
+pub(crate) fn register_http_client(_app: &mut App) {}
+
 /// MCP introspection server. GATED on the resolved run-mode + `[mcp]` config.
 ///
 /// COMPILE-TIME GATE (Part B tree-shaking): behind the `mcp` cargo feature.

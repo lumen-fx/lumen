@@ -163,6 +163,9 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     let has_script = !grouped.is_empty();
     let mut reloaders = ScriptReloaders::default();
     let multi_host = grouped.len() > 1;
+    // The HTTP client for `fetch()` / `http()`. Must precede the host plugins:
+    // the first one to build installs a `FetchRegistry` if none exists yet.
+    register_http_client(&mut app);
     register_script_common(&mut app, has_script);
     for (engine, combined) in grouped {
         match engine {

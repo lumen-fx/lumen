@@ -53,13 +53,16 @@ lumen-audio = { path = "../audio", optional = true }
 # The audio backend Lumen ships (rodio + cpal + symphonia). OPTIONAL behind
 # `audio-rodio`; without it the audio systems run against the silent backend.
 lumen-audio-rodio = { path = "../backends/audio-rodio", optional = true }
+# The HTTP client the scripts' `fetch()` / `http()` builtins run on. OPTIONAL
+# behind `http-fetch`; without it the builtins report that no client is
+# installed, and an embedder can install its own `lumen_script::HttpClient`.
+lumen-http-ureq = { path = "../backends/http-ureq", version = "0.0.3", optional = true }
 lumen-layout-taffy = { path = "../backends/layout-taffy" }
 
 
-# Script hosts. default-features off so the single `http-fetch` knob below
-# controls the scripts' HTTP `fetch()` builtin. Every host is a Part B
-# tree-shaking knob -- OPTIONAL behind `host-rhai` / `host-lua` /
-# `host-candela` -- so a bundle links exactly the languages its app ships.
+# Script hosts. Every host is a Part B tree-shaking knob, OPTIONAL behind
+# `host-rhai` / `host-lua` / `host-candela`, so a bundle links exactly the
+# languages its app ships.
 lumen-script = { path = "../script/api", version = "0.0.3", default-features = false }
 lumen-script-rhai = { path = "../script/rhai", version = "0.0.3", default-features = false, optional = true }
 rhai = { workspace = true, optional = true }
@@ -74,7 +77,7 @@ lumen-window-winit = { path = "../backends/window-winit", version = "0.0.3" }
 # walker as the windowed backend.
 lumen-render-wgpu = { path = "../backends/render-wgpu", version = "0.0.3" }
 # MCP introspection server (tokio + serde_json + http). Part B: OPTIONAL
-# behind `mcp`. Dev-only -- lumenc never infers it into a release bundle.
+# behind `mcp`. Dev-only; lumenc never infers it into a release bundle.
 lumen-mcp = { path = "../mcp", version = "0.0.3", optional = true }
 # Dev-only in-window devtools overlay. Optional + gated behind the off-by-
 # default `devtools` feature.
@@ -141,15 +144,14 @@ host-lua = ["dep:lumen-script-lua", "dep:mlua"]
 host-candela = ["dep:lumen-script-candela"]
 # Dev-only in-window devtools overlay (F12). OFF by default.
 devtools = ["dep:lumen-devtools"]
-# Scripts' HTTP `fetch(url, tag)` builtin. On by default; a packager size knob.
-# The host forwards use the weak `?/` form so enabling `http-fetch` never drags
-# an unselected host back into a trimmed build.
-http-fetch = [
-    "lumen-script/http-fetch",
-    "lumen-script-rhai?/http-fetch",
-    "lumen-script-lua?/http-fetch",
-    "lumen-script-candela?/http-fetch",
-]
+# The HTTP client behind the scripts' `fetch(url, tag)` / `http(#{...})`
+# builtins, and the one the default build selects. On by default; a packager
+# size knob, since ureq's rustls+ring stack is about a megabyte of release
+# .text. Turn it off and both builtins still parse and queue, but every request
+# resolves to `on_fetch_error(tag, "...built without the http-fetch
+# feature...")` - which is also the build an embedder starts from when it
+# installs its own `HttpClient`.
+http-fetch = ["dep:lumen-http-ureq"]
 # Compile the from-source load path (dev source-load + hot reload). ON by
 # default. Unlike the old lumenc feature this carries NO parser dependency -
 # the parser is injected via `SourceParser` - it only gates the load-from-

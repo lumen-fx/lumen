@@ -377,8 +377,9 @@ pub struct CapabilitiesCfg {
     /// from the file-dialog builtins, which resolve on that runtime.
     #[serde(rename = "async")]
     pub async_rt: Option<bool>,
-    /// Force the scripts' HTTP `fetch()` builtin (ureq + rustls + ring)
-    /// into/out of the bundle. `None` = infer from a `fetch(` marker.
+    /// Force the HTTP client behind the scripts' `fetch()` / `http()` builtins
+    /// (ureq + rustls + ring) into/out of the bundle. `None` = infer from a
+    /// `fetch(` marker.
     #[serde(rename = "http-fetch")]
     pub http_fetch: Option<bool>,
 }

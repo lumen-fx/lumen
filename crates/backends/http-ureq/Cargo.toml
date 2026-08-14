@@ -1,0 +1,19 @@
+[package]
+name = "lumen-http-ureq"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "ureq HttpClient impl for Lumen. Blocking request/reply transport with a bounded body read, behind the scripts' fetch() and http() builtins."
+keywords = ["ui", "gui", "http", "ureq", "lumen"]
+categories = ["gui", "web-programming::http-client"]
+
+[dependencies]
+lumen-script = { path = "../../script/api", version = "0.0.3" }
+
+# The transport itself. ureq's rustls+ring stack costs roughly a megabyte of
+# release .text, which is why the runtime hangs this whole crate off a feature:
+# a packager who does not ship script HTTP drops the dependency with it.
+ureq.workspace = true

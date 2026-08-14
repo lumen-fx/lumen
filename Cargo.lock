@@ -3471,6 +3471,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-http-ureq"
+version = "0.0.3"
+dependencies = [
+ "lumen-script",
+ "ureq",
+]
+
+[[package]]
 name = "lumen-i18n"
 version = "0.0.3"
 dependencies = [
@@ -3749,6 +3757,7 @@ dependencies = [
  "lumen-audio-rodio",
  "lumen-core",
  "lumen-devtools",
+ "lumen-http-ureq",
  "lumen-i18n",
  "lumen-input",
  "lumen-ir",
@@ -3799,7 +3808,6 @@ dependencies = [
  "ron",
  "serde",
  "thiserror 2.0.19",
- "ureq",
 ]
 
 [[package]]
