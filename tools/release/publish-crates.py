@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -89,10 +90,11 @@ def cargo_metadata() -> dict:
     out = subprocess.run(
         ["cargo", "metadata", "--format-version", "1", "--no-deps"],
         cwd=REPO,
-        check=True,
         capture_output=True,
         text=True,
     )
+    if out.returncode != 0:
+        raise SystemExit("cargo metadata failed:\n" + out.stderr.strip())
     return json.loads(out.stdout)
 
 
@@ -285,6 +287,23 @@ def rate_limited(output: str) -> bool:
     return "429" in lowered or "too many requests" in lowered or "rate limit" in lowered
 
 
+UNRESOLVED = re.compile(r"failed to select a version for the requirement `([A-Za-z0-9_-]+) ")
+
+
+def waiting_on_a_sibling(output: str, pending: set[str]) -> str | None:
+    """The name of a crate in this same run that a dry run needs published.
+
+    A dry run resolves dependencies against the registry, so verifying a crate
+    whose Lumen dependencies are not published yet cannot succeed however
+    correct the crate is. Before the first release that is most of the list,
+    and it is a fact about the order rather than a fault in the crate.
+    """
+    for match in UNRESOLVED.finditer(output):
+        if match.group(1) in pending:
+            return match.group(1)
+    return None
+
+
 # --------------------------------------------------------------------- main
 
 
@@ -367,6 +386,8 @@ def main() -> int:
 
     new_crates = 0
     published = 0
+    deferred: list[str] = []
+    pending = set(todo)
     for name in todo:
         if args.stop_after and published >= args.stop_after:
             print(f"stopping after {plural(published, 'crate')} as asked; re-run to continue")
@@ -378,6 +399,12 @@ def main() -> int:
             print("    rate limited, waiting before one retry")
             time.sleep(NEW_CRATE_INTERVAL)
             code, output = run_cargo_publish(name, dry_run=False, allow_dirty=args.allow_dirty)
+        if code != 0 and args.dry_run:
+            blocker = waiting_on_a_sibling(output, pending)
+            if blocker:
+                print(f"    not verifiable until {blocker} {version} is published")
+                deferred.append(name)
+                continue
         if code != 0:
             print(output.strip())
             print(f"\nfailed on {name}; fix it and re-run, the crates before it are done",
@@ -389,6 +416,7 @@ def main() -> int:
             continue
 
         published += 1
+        pending.discard(name)
         if not wait_for_version(name, version):
             print(f"\n{name} {version} did not appear on crates.io in time; "
                   f"re-run once it does", file=sys.stderr)
@@ -406,6 +434,9 @@ def main() -> int:
             print(f"    waiting {NEW_VERSION_INTERVAL:.0f}s for the new-version rate limit")
             time.sleep(NEW_VERSION_INTERVAL)
 
+    if deferred:
+        print(f"\n{plural(len(deferred), 'crate')} could not be verified before the crates "
+              f"below them are published: {', '.join(deferred)}")
     print("\ndone")
     return 0
 
