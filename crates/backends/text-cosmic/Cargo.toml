@@ -23,3 +23,8 @@ rustc-hash.workspace = true
 [dev-dependencies]
 # Tests resolve the default `line-height` rather than restating its ratio.
 lumen-core = { path = "../../core" }
+# The layout engine's shaped-text producer is exercised against a real
+# shaper here; nothing in the shipped crate depends on the layout engine.
+lumen-layout-taffy = { path = "../layout-taffy" }
+bevy_ecs.workspace = true
+glam.workspace = true

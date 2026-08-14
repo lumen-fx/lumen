@@ -52,8 +52,10 @@ tools/             the release plumbing and the editor plugins
 ### Backends
 
 - **lumen-layout-taffy**: layout. Dirty propagation, taffy style sync, text
-  intrinsic sizing, and writing absolute coordinates back onto entities.
-- **lumen-text**: the shaping abstraction (`TextShaper`) plus the rope-backed
+  intrinsic sizing through whichever shaper the app installed, and writing
+  absolute coordinates back onto entities.
+- **lumen-text**: the shaping and measuring abstraction (`TextShaper`, and the
+  `ShaperService` resource that holds the installed one) plus the rope-backed
   text editing model.
 - **lumen-text-cosmic**: the cosmic-text shaper implementation, with a shape
   cache.
@@ -292,9 +294,18 @@ compact length representation stores a raw pointer and is neither `Send` nor
 `Sync`.
 
 Text shaping goes through the `TextShaper` trait: a string, a pixel size, and
-shaping options in, a shaped run out, segmented by font and bidi level. The
-cosmic-text implementation caches results, since the same label reshapes every
-frame otherwise.
+shaping options in, a shaped run out, segmented by font and bidi level.
+Measuring is on the same trait, so a text leaf's intrinsic size and its
+painted glyphs always come from one backend; the default measure shapes the
+run and reports its width, height, and first-line baseline, and a backend that
+can answer more cheaply overrides it. The cosmic-text implementation caches
+results, since the same label reshapes every frame otherwise.
+
+The app holds one shaper, as the non-send `ShaperService` resource. Layout,
+the editing systems, and the caret pass all read it, so replacing it from an
+app hook changes measuring and painting together. A build that installs none
+gets `NullShaper`, which shapes nothing and measures every run as an empty
+box.
 
 Rendering walks the retained node tree. The GPU backend encodes each leaf into
 a vello scene, reusing cached fragments for leaves that have not changed, and

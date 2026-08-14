@@ -1670,7 +1670,7 @@ fn build_element(
         // `restore_inline_origin` then re-applied them *over* author CSS
         // after the cascade, so rules like `button { min-width: 40px }`
         // could never win. The label / button height + min-width entries
-        // were dropped outright: the W2.5 `CosmicShaper::measure` wiring
+        // were dropped outright: the `TextShaper::measure` wiring
         // supplies real text intrinsic sizes, which those hardcoded
         // defaults overrode unhelpfully (e.g. a 4-line label forced to
         // 24px).

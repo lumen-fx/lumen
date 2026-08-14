@@ -15,7 +15,7 @@
 //!    against the previous taffy style - W2.6), computes layout for
 //!    every dirty subtree root using `compute_layout_with_measure` so
 //!    text / image leaves report their intrinsic size via
-//!    [`CosmicShaper::measure`] (W2.5), writes absolute coords into
+//!    [`TextShaper::measure`] (W2.5), writes absolute coords into
 //!    [`Transform`] for every descendant, then clears [`DirtyLayout`].
 //!    The system also drops taffy nodes for entities whose [`Style`]
 //!    was removed and whose entity was despawned outright (W2.6
@@ -26,27 +26,30 @@
 //! `taffy::TaffyTree` contains `style::CompactLengthInner` which stores
 //! a `*const ()` (tagged-pointer optimization for
 //! `length`/`percent`/`calc()`). The raw pointer makes the type
-//! `!Send + !Sync`. [`CosmicShaper`] holds a `FontSystem` whose
-//! font-database is also non-`Send`. Both live as `NonSendMut` system
-//! params so the layout system is scheduled on the main thread, no
-//! `unsafe` needed.
+//! `!Send + !Sync`. A [`ShaperService`] wraps a font database, which is
+//! rarely `Send` either. Both live as `NonSendMut` system params so the
+//! layout system is scheduled on the main thread, no `unsafe` needed.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+use bevy_ecs::resource::IsResource;
 use bevy_ecs::system::NonSendMut;
 use glam::Vec2;
 use lumen_core::components::{
     DirtyLayout, EchoMode, Edges as LumenEdges, FlexAlign as LumenAlign,
     FlexDirection as LumenFlexDir, FlexJustify as LumenJustify, ImageComponent, LayoutDirection,
-    Length as LumenLength, Overflow as LumenOverflow, Position as LumenPosition, RelayoutBoundary,
-    ResolvedDirection, Style, TextBlockOrigin, TextContent, TextStyle, TextWrap, Transform,
-    text_block_top,
+    Length as LumenLength, LineHeightSpec, Overflow as LumenOverflow, Position as LumenPosition,
+    RelayoutBoundary, ResolvedDirection, Style, TextBlockOrigin, TextContent, TextStyle, TextWrap,
+    Transform, resolve_line_height, text_block_top,
 };
 use lumen_core::prelude::*;
-use lumen_text::WrapMode;
-use lumen_text_cosmic::CosmicShaper;
-use std::collections::HashMap;
+use lumen_core::text_model::TextBuffer;
+use lumen_text::{
+    ShapeOptions, ShapedText, ShaperService, TextShaper, TextViewport, WrapMode, build_shaped_text,
+};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use taffy::prelude::*;
 
 /// Marker for the taffy-backed [`LayoutEngine`].
@@ -57,17 +60,19 @@ impl lumen_core::traits::LayoutEngine for TaffyLayout {}
 /// Plugin: install the non-send layout state + register the LayoutSync
 /// systems with explicit ordering.
 ///
-/// Also installs a default [`CosmicShaper`] as a non-send resource so
-/// [`sync_layout`] can call [`CosmicShaper::measure`] for text
-/// intrinsic sizing (W2.5). Apps with a pre-existing shaper resource
-/// will have it overwritten - at present nobody else installs one in
-/// the main world (the render-world shaper lives separately).
+/// Text leaves get their intrinsic size from the [`ShaperService`] the
+/// app installed, so whoever composes the app picks the shaping backend
+/// and layout follows it. A build that installed none falls back to the
+/// text-free [`lumen_text::NullShaper`], which measures every run as an
+/// empty box.
 pub struct TaffyLayoutPlugin;
 
 impl Plugin for TaffyLayoutPlugin {
     fn build(self, app: &mut App) {
         app.world.insert_non_send(LayoutResource::new());
-        app.world.insert_non_send(CosmicShaper::new());
+        if app.world.get_non_send::<ShaperService>().is_none() {
+            app.world.insert_non_send(ShaperService::default());
+        }
         app.world.insert_resource(TextMeasureMemo::default());
         app.add_systems(TickStage::LayoutSync, sync_viewport);
         app.add_systems(
@@ -93,7 +98,7 @@ impl Plugin for TaffyLayoutPlugin {
         app.add_systems(
             TickStage::LayoutSync,
             react_to_direction_changes
-                .after(lumen_core::components::resolve_layout_direction)
+                .after(resolve_layout_direction)
                 .before(propagate_dirty_layout),
         );
         app.add_systems(
@@ -114,12 +119,12 @@ impl Plugin for TaffyLayoutPlugin {
             TickStage::LayoutSync,
             sync_layout
                 .after(propagate_dirty_layout)
-                .after(lumen_core::components::resolve_layout_direction),
+                .after(resolve_layout_direction),
         );
         // D4c: shape editable text ONCE per change into a `ShapedText`
         // component the main-world edit / IME systems read next tick. Runs
         // after `sync_layout` so `Transform` (hence the inner box width) is
-        // final. Uses the same main-world `CosmicShaper` installed above.
+        // final. Uses the same main-world `ShaperService` as `sync_layout`.
         app.add_systems(TickStage::LayoutSync, update_shaped_text.after(sync_layout));
     }
 }
@@ -131,8 +136,8 @@ impl Plugin for TaffyLayoutPlugin {
 ///
 /// The shape is versioned on `TextBuffer.version` folded with the shape
 /// inputs (size / inner width+height / wrap / family / weight); an unchanged
-/// entity is skipped, and the `CosmicShaper` LRU makes any accidental
-/// reshape a hit.
+/// entity is skipped, and a caching shaper makes any accidental reshape
+/// a hit.
 ///
 /// The shaped string is the DISPLAYED one: under a concealed
 /// [`EchoMode`] the mask glyphs are shaped, so measuring, hit-testing, and
@@ -145,19 +150,18 @@ impl Plugin for TaffyLayoutPlugin {
 /// SHAPED (soft-wrap aware) line count.
 #[allow(clippy::type_complexity)]
 pub fn update_shaped_text(
-    mut shaper: NonSendMut<CosmicShaper>,
+    mut shaper: NonSendMut<ShaperService>,
     mut commands: Commands,
     q: Query<(
         Entity,
-        &lumen_core::text_model::TextBuffer,
+        &TextBuffer,
         &Transform,
         Option<&TextStyle>,
         Option<&Style>,
         Option<&EchoMode>,
-        Option<&lumen_text::ShapedText>,
+        Option<&ShapedText>,
     )>,
 ) {
-    use lumen_text::{ShapeOptions, TextViewport, build_shaped_text};
     for (e, buf, t, ts, style, echo, existing) in &q {
         let echo = echo.copied().unwrap_or_default();
         let ts = ts.cloned().unwrap_or_default();
@@ -174,7 +178,7 @@ pub fn update_shaped_text(
             .unwrap_or((0.0, 0.0, 0.0, 0.0));
         let inner_w = (t.size.x - pad_l - pad_r).max(0.0);
         let inner_h = (t.size.y - pad_t - pad_b).max(size_px);
-        let line_h = lumen_core::components::resolve_line_height(ts.line_height, size_px);
+        let line_h = resolve_line_height(ts.line_height, size_px);
         let version = shape_version_of(ShapeInputs {
             version: buf.version,
             size_px,
@@ -201,7 +205,7 @@ pub fn update_shaped_text(
         };
         let plain = buf.rope.to_string();
         let display = echo.display_string(&plain);
-        if let Some(st) = build_shaped_text(&mut *shaper, &display, size_px, opts, version) {
+        if let Some(st) = build_shaped_text(&mut **shaper, &display, size_px, opts, version) {
             let stacked = !buf.is_single_line() || st.geometry.line_count() > 1;
             let top = text_block_top(inner_h, line_h, stacked);
             commands.entity(e).insert((
@@ -220,7 +224,7 @@ pub fn update_shaped_text(
 /// rather than passed positionally: most of these are `f32`, so a swapped
 /// pair would still compile and would silently corrupt the cache key.
 struct ShapeInputs<'a> {
-    /// [`lumen_core::text_model::TextBuffer`] content version.
+    /// [`TextBuffer`] content version.
     version: u64,
     /// Font size in logical pixels.
     size_px: f32,
@@ -270,7 +274,8 @@ pub enum NodeContext {
     /// applies when neither dimension is known.
     None,
     /// Text-bearing leaf. The measure callback shapes `TextContent`
-    /// through `CosmicShaper` to derive the tight `(width, height)`.
+    /// through the installed [`TextShaper`] to derive the tight
+    /// `(width, height)`.
     Text(Entity),
     /// Image-bearing leaf. The measure callback returns
     /// `ImageComponent.natural_size` (or `(0, 0)` while the image is
@@ -526,7 +531,7 @@ pub fn propagate_dirty_layout(
 /// Transforms, clear DirtyLayout markers.
 ///
 /// W2.5 wires `compute_layout_with_measure` so text / image leaves get
-/// intrinsic sizes from [`CosmicShaper::measure`] /
+/// intrinsic sizes from [`TextShaper::measure`] /
 /// [`ImageComponent::natural_size`]. W2.6 adds:
 /// - a per-entity [`Style`] diff so taffy's internal cache is not
 ///   pessimistically invalidated every dirty tick;
@@ -536,7 +541,7 @@ pub fn propagate_dirty_layout(
 pub fn sync_layout(
     mut commands: Commands,
     mut layout: NonSendMut<LayoutResource>,
-    mut shaper: NonSendMut<CosmicShaper>,
+    mut shaper: NonSendMut<ShaperService>,
     style_q: Query<(Entity, &Style)>,
     text_q: Query<(&TextContent, Option<&TextStyle>)>,
     image_q: Query<&ImageComponent>,
@@ -548,7 +553,7 @@ pub fn sync_layout(
     // Liveness probe for the stale-node sweep below. Filtered so a freed
     // entity id that has since been handed to a resource entity still reads
     // as dead and its taffy node gets released.
-    all_entities: Query<Entity, Without<bevy_ecs::resource::IsResource>>,
+    all_entities: Query<Entity, Without<IsResource>>,
     // W5.5: per-entity resolved writing direction. Stamped by
     // `resolve_layout_direction` earlier in `LayoutSync`. Absent =>
     // treat as Ltr.
@@ -776,7 +781,7 @@ pub fn sync_layout(
     // measure passes - which pass `known.width = None` - also skip
     // shaping instead of falling through to the exact path).
     let mut lazy_text: HashMap<Entity, f32> = HashMap::new();
-    let scroll_set: std::collections::HashSet<Entity> = scroll_q.iter().map(|(e, _)| e).collect();
+    let scroll_set: HashSet<Entity> = scroll_q.iter().map(|(e, _)| e).collect();
     for (sc, offset) in scroll_q.iter() {
         if !layout.map.contains_key(&sc) {
             continue;
@@ -834,7 +839,7 @@ pub fn sync_layout(
 
     let viewport = layout.viewport;
     layout.solves_last_sync = 0;
-    let shaper: &mut CosmicShaper = &mut shaper;
+    let shaper: &mut dyn TextShaper = &mut **shaper;
     let lazy_text = &lazy_text;
     let memo: &mut TextMeasureMemo = &mut memo;
     let tree: &mut TaffyTree<NodeContext> = &mut layout.tree;
@@ -870,7 +875,7 @@ pub fn sync_layout(
                                 // `lazy_text` set below) gets a cheap height
                                 // estimate - or its memoised exact height if
                                 // it has been shaped before - instead of a
-                                // full cosmic-text shape. Visible text, and
+                                // full shape. Visible text, and
                                 // any text without a definite wrap width,
                                 // always take the exact path, so on-screen
                                 // output is byte-for-byte unchanged.
@@ -901,16 +906,14 @@ pub fn sync_layout(
                                         height: known.height.unwrap_or(h),
                                     };
                                 }
-                                let opts = lumen_text::ShapeOptions {
+                                let line_h = resolve_line_height(t.line_height, t.size_px);
+                                let opts = ShapeOptions {
                                     width: max_width,
                                     wrap: t.wrap,
                                     max_lines: t.max_lines,
                                     family: t.family.clone(),
                                     weight: t.weight,
-                                    line_height: Some(lumen_core::components::resolve_line_height(
-                                        t.line_height,
-                                        t.size_px,
-                                    )),
+                                    line_height: Some(line_h),
                                 };
                                 let (w, h, baseline) =
                                     shaper.measure_with_baseline(&t.text, t.size_px, &opts);
@@ -1054,7 +1057,7 @@ fn collect_text_leaves(
     root: Entity,
     children_q: &Query<&Children>,
     measure_inputs: &HashMap<Entity, MeasureInput>,
-    scroll_stop: &std::collections::HashSet<Entity>,
+    scroll_stop: &HashSet<Entity>,
     out: &mut Vec<Entity>,
 ) {
     let Ok(children) = children_q.get(root) else {
@@ -1125,13 +1128,13 @@ struct TextMeasureInput {
     max_width: Option<f32>,
     /// CSS font-family chain forwarded to the shaper - a family swap
     /// changes metrics, so it must participate in measure.
-    family: Option<std::sync::Arc<str>>,
+    family: Option<Arc<str>>,
     /// CSS font-weight (variable fonts change advance widths per weight).
     weight: u16,
     /// CSS `line-height`, resolved against [`Self::size_px`] just before
     /// the exact (non-lazy) measure call below. `None` => the shaper's own
     /// `line-height: normal` fallback.
-    line_height: Option<lumen_core::components::LineHeightSpec>,
+    line_height: Option<LineHeightSpec>,
 }
 
 fn classify_node_context(
@@ -1857,7 +1860,7 @@ mod tests {
         // in this unit test).
         let mut world = bevy_ecs::world::World::new();
         world.insert_non_send(LayoutResource::new());
-        world.insert_non_send(CosmicShaper::new());
+        world.insert_non_send(ShaperService::default());
         world.insert_resource(TextMeasureMemo::default());
         world.insert_resource(Viewport {
             size: glam::Vec2::new(300.0, 100.0),
@@ -1917,14 +1920,14 @@ mod tests {
     /// invariant that `Style.align = Baseline` != `Style.align =
     /// Stretch`. This test exercises the Style->taffy mapping path
     /// + the layout pass without asserting on subpixel baseline
-    ///   offsets (the cosmic-text font metrics differ by system; we
+    ///   offsets (font metrics differ by system; we
     ///   only check that the items don't stretch).
     #[test]
     fn baseline_align_on_flex_row_does_not_stretch() {
         use lumen_core::components::*;
         let mut world = bevy_ecs::world::World::new();
         world.insert_non_send(LayoutResource::new());
-        world.insert_non_send(CosmicShaper::new());
+        world.insert_non_send(ShaperService::default());
         world.insert_resource(TextMeasureMemo::default());
         world.insert_resource(Viewport {
             size: glam::Vec2::new(400.0, 100.0),
@@ -2222,185 +2225,5 @@ mod css_flex_wave_tests {
         assert_eq!(d.flex_wrap, taffy::style::FlexWrap::NoWrap);
         assert_eq!(d.box_sizing, taffy::style::BoxSizing::BorderBox);
         assert!(d.align_content.is_none());
-    }
-
-    /// D4c: the producer shapes an editable's buffer into a `ShapedText`
-    /// (with usable geometry) plus a `TextViewport`, and skips the reshape
-    /// when nothing changed (stable `shape_version`).
-    #[test]
-    fn update_shaped_text_writes_component_and_versions() {
-        use bevy_ecs::system::RunSystemOnce;
-        use lumen_core::text_model::TextBuffer;
-
-        let mut world = World::new();
-        world.insert_non_send(CosmicShaper::new());
-        let e = world
-            .spawn((
-                TextBuffer::single_line("hello"),
-                Transform::new(Vec2::new(0.0, 0.0), Vec2::new(200.0, 30.0)),
-                TextStyle::default(),
-                Style::default(),
-            ))
-            .id();
-
-        world.run_system_once(update_shaped_text).unwrap();
-        let st = world
-            .get::<lumen_text::ShapedText>(e)
-            .expect("ShapedText produced");
-        let v1 = st.shape_version;
-        // Geometry maps bytes: the end caret sits to the right of the start.
-        assert!(st.geometry.caret_xy(5).0 > st.geometry.caret_xy(0).0);
-        assert!(world.get::<lumen_text::TextViewport>(e).is_some());
-
-        // Re-running with no change keeps the same version (no reshape).
-        world.run_system_once(update_shaped_text).unwrap();
-        let v2 = world
-            .get::<lumen_text::ShapedText>(e)
-            .unwrap()
-            .shape_version;
-        assert_eq!(v1, v2);
-    }
-
-    /// Spawn one editable in a `size` box and run the producer over it.
-    fn shaped_world(
-        text: &str,
-        size: Vec2,
-        echo: Option<EchoMode>,
-        multiline: bool,
-    ) -> (World, Entity) {
-        use bevy_ecs::system::RunSystemOnce;
-        use lumen_core::text_model::TextBuffer;
-
-        let buf = if multiline {
-            TextBuffer::multi_line(text)
-        } else {
-            TextBuffer::single_line(text)
-        };
-        let mut world = World::new();
-        world.insert_non_send(CosmicShaper::new());
-        let mut ent = world.spawn((
-            buf,
-            Transform::new(Vec2::ZERO, size),
-            TextStyle::default(),
-            Style::default(),
-        ));
-        if let Some(mode) = echo {
-            ent.insert(mode);
-        }
-        let e = ent.id();
-        world.run_system_once(update_shaped_text).unwrap();
-        (world, e)
-    }
-
-    /// The producer publishes the vertical origin the drawn baseline and
-    /// the pointer hit test share: a lone line in a single-line field
-    /// centers in the box, a stacked block starts at its top.
-    #[test]
-    fn update_shaped_text_publishes_the_block_origin() {
-        let tall = Vec2::new(200.0, 400.0);
-        let (world, e) = shaped_world("one line", tall, None, false);
-        let top = world.get::<TextBlockOrigin>(e).expect("origin").top;
-        assert!(
-            top > 100.0,
-            "a lone line centers in a 400px box (got {top})"
-        );
-
-        let (world, e) = shaped_world("first\nsecond\nthird", tall, None, true);
-        assert_eq!(
-            world
-                .get::<lumen_text::ShapedText>(e)
-                .unwrap()
-                .geometry
-                .line_count(),
-            3
-        );
-        assert_eq!(
-            world.get::<TextBlockOrigin>(e).expect("origin").top,
-            0.0,
-            "a stacked block starts at the inner box top"
-        );
-    }
-
-    /// A text area stays top-aligned however little it holds, so typing
-    /// the first newline does not make the content jump.
-    #[test]
-    fn a_text_area_stays_top_aligned_while_it_holds_one_line() {
-        let (world, e) = shaped_world("one line", Vec2::new(200.0, 400.0), None, true);
-        assert_eq!(world.get::<TextBlockOrigin>(e).expect("origin").top, 0.0);
-    }
-
-    /// A concealed field shapes its MASK glyphs, so measuring, hit-testing
-    /// and drawing all agree on one run.
-    #[test]
-    fn update_shaped_text_shapes_the_mask_for_a_concealed_field() {
-        let size = Vec2::new(200.0, 30.0);
-        let (plain_world, pe) = shaped_world("WWWWW", size, None, false);
-        let (masked_world, me) = shaped_world("WWWWW", size, Some(EchoMode::Password), false);
-        let plain_w = plain_world
-            .get::<lumen_text::ShapedText>(pe)
-            .unwrap()
-            .run
-            .width;
-        let masked_w = masked_world
-            .get::<lumen_text::ShapedText>(me)
-            .unwrap()
-            .run
-            .width;
-        assert!(
-            masked_w < plain_w,
-            "mask glyphs are narrower than 'W' ({masked_w} vs {plain_w})"
-        );
-
-        // `NoEcho` draws nothing at all.
-        let (world, e) = shaped_world("WWWWW", size, Some(EchoMode::NoEcho), false);
-        assert_eq!(
-            world.get::<lumen_text::ShapedText>(e).unwrap().run.width,
-            0.0
-        );
-    }
-
-    /// `TextViewport::line_h` falls back to `size_px * 1.2` absent a CSS
-    /// `line-height`, and honours an explicit override - the same
-    /// override/fallback shape as every other CSS-supplied value.
-    /// Changing only `line_height` (same buffer / size / width) must also
-    /// bust the shape version so the reshape actually happens.
-    #[test]
-    fn update_shaped_text_honours_line_height_override_and_busts_version() {
-        use bevy_ecs::system::RunSystemOnce;
-        use lumen_core::components::LineHeightSpec;
-        use lumen_core::text_model::TextBuffer;
-
-        let mut world = World::new();
-        world.insert_non_send(CosmicShaper::new());
-        let e = world
-            .spawn((
-                TextBuffer::single_line("hello"),
-                Transform::new(Vec2::new(0.0, 0.0), Vec2::new(200.0, 30.0)),
-                TextStyle::default(),
-                Style::default(),
-            ))
-            .id();
-
-        world.run_system_once(update_shaped_text).unwrap();
-        let default_line_h = world.get::<lumen_text::TextViewport>(e).unwrap().line_h;
-        assert_eq!(default_line_h, 16.0 * 1.2);
-        let v1 = world
-            .get::<lumen_text::ShapedText>(e)
-            .unwrap()
-            .shape_version;
-
-        // Author a CSS `line-height: 40px` override; nothing else changes.
-        world.get_mut::<TextStyle>(e).unwrap().line_height = Some(LineHeightSpec::Px(40.0));
-        world.run_system_once(update_shaped_text).unwrap();
-        let overridden_line_h = world.get::<lumen_text::TextViewport>(e).unwrap().line_h;
-        assert_eq!(overridden_line_h, 40.0);
-        let v2 = world
-            .get::<lumen_text::ShapedText>(e)
-            .unwrap()
-            .shape_version;
-        assert_ne!(
-            v1, v2,
-            "a line-height-only change must bust the shape version"
-        );
     }
 }

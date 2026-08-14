@@ -49,6 +49,8 @@ use lumen_core::input::CloseRequest;
 use lumen_core::prelude::*;
 use lumen_core::render_world::{AnimationsActive, FrameDirty, SurfaceCapture, SurfaceFrame};
 use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin};
+use lumen_text::{ShapeOptions, ShaperService, TextShaper};
+use lumen_text_cosmic::CosmicShaper;
 
 use crate::run::{RunError, RunOptions, build_headless_app};
 
@@ -100,7 +102,7 @@ impl BootTrace {
     fn standalone_fontscan(&self) {
         if self.on {
             let t = Instant::now();
-            let s = lumen_text_cosmic::CosmicShaper::new();
+            let s = CosmicShaper::new();
             let dur = t.elapsed();
             std::hint::black_box(&s);
             self.mark("  |- FontSystem::new (standalone)", dur);
@@ -239,23 +241,20 @@ pub fn run_app_headless_rendered(
     let t_warm = Instant::now();
     {
         const WARMUP: &str = "The quick brown fox jumps over 0123456789.";
-        let warm = |shaper: &mut dyn lumen_text::TextShaper| {
+        let warm = |shaper: &mut dyn TextShaper| {
             for (size, weight) in [(14.0_f32, 400_u16), (16.0, 400), (14.0, 700)] {
                 let _ = shaper.shape(
                     WARMUP,
                     size,
-                    lumen_text::ShapeOptions {
+                    ShapeOptions {
                         weight,
                         ..Default::default()
                     },
                 );
             }
         };
-        if let Some(mut layout_shaper) = app
-            .world
-            .get_non_send_mut::<lumen_text_cosmic::CosmicShaper>()
-        {
-            warm(&mut *layout_shaper);
+        if let Some(mut layout_shaper) = app.world.get_non_send_mut::<ShaperService>() {
+            warm(&mut **layout_shaper);
         }
         if let Some(render_shaper) = winit_opts.text_shaper.as_deref_mut() {
             warm(render_shaper);
@@ -307,8 +306,8 @@ pub fn run_app_headless_rendered(
     // No-op when lumen.toml didn't override the CLI size guess.
     renderer.resize(phys_w, phys_h);
     let mut render_plugin = WgpuRendererPlugin::new(phys_w, phys_h).with_renderer(renderer);
-    // Reuse the text shaper built for the windowed path (CosmicShaper)
-    // so glyph output matches the window byte-for-byte.
+    // Reuse the text shaper built for the windowed path so glyph output
+    // matches the window byte-for-byte.
     if let Some(shaper) = winit_opts.text_shaper.take() {
         render_plugin = render_plugin.with_boxed_text_shaper(shaper);
     }
