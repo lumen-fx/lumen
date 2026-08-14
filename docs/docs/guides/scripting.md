@@ -187,6 +187,10 @@ alone, the no-argument form gets its own name everywhere: `page(path)`
 navigates and `page_current()` reads the active page, `computed_style(prop)`
 reads one property and `computed_style_all()` reads the whole map.
 
+An element a script builds is cascaded, measured and laid out in the same frame
+it joins the tree, so a handler that tears a subtree down and rebuilds it never
+paints a half-styled intermediate.
+
 Adding and removing classes is the preferred way to change appearance, because
 the element re-resolves against the stylesheet and keeps every rule and custom
 property it inherits. Reach for `set_style` only for a value that belongs to

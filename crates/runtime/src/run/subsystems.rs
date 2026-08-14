@@ -397,7 +397,19 @@ pub(crate) fn register_styles(
     // Order in `TickStage::Systems`:
     //   1. `detect_media_change`   - theme / viewport-breakpoint flip -> bump
     //   2. `reapply_styles_on_root_class_change` - root class flip -> bump
-    //   3. `reapply_computed_styles` - consume the bump, re-resolve entities
+    //   3. `apply_dom_commands` - script spawns / class edits -> bump
+    //   4. `reapply_computed_styles` - consume the bump, re-resolve entities
+    //
+    // The `apply_dom_commands` edge is what keeps a scripted DOM edit
+    // single-frame. Every spawn, reparent, class edit and inline-style
+    // write bumps `StyleVersion` at the end of that system, and
+    // `reapply_computed_styles` is the only thing that turns the bump into
+    // real components: a fresh `spawn("label")` carries no cascaded
+    // `TextStyle`, `Visuals` or box `Style` until it runs. Without the
+    // edge the consumer can be scheduled ahead of the producer, so a
+    // script that rebuilds a subtree paints one frame of unstyled,
+    // wrongly-measured nodes before the cascade lands on the next tick -
+    // the whole pane visibly flashes on every edit that rebuilds it.
     app.add_systems(TickStage::Systems, detect_media_change);
     app.add_systems(
         TickStage::Systems,
@@ -405,7 +417,9 @@ pub(crate) fn register_styles(
     );
     app.add_systems(
         TickStage::Systems,
-        reapply_computed_styles.after(reapply_styles_on_root_class_change),
+        reapply_computed_styles
+            .after(reapply_styles_on_root_class_change)
+            .after(crate::run::dom_commands::apply_dom_commands),
     );
 }
 
