@@ -44,8 +44,12 @@ lumen-os-power = { path = "../os/power" }
 # so the run loop installs `AsyncTokioPlugin` for an app that opens them; a
 # trimmed bundle drops the crate and falls back to the blocking path.
 lumen-async-tokio = { path = "../backends/async-tokio", optional = true }
-# Audio (rodio + cpal + symphonia). Part B: OPTIONAL behind `audio`.
+# Audio capability: the transport model + the `AudioBackend` trait, with no
+# device and no decoder behind it. Part B: OPTIONAL behind `audio`.
 lumen-audio = { path = "../audio", optional = true }
+# The audio backend Lumen ships (rodio + cpal + symphonia). OPTIONAL behind
+# `audio-rodio`; without it the audio systems run against the silent backend.
+lumen-audio-rodio = { path = "../backends/audio-rodio", optional = true }
 lumen-layout-taffy = { path = "../backends/layout-taffy" }
 
 # Script hosts. default-features off so the single `http-fetch` knob below
@@ -108,15 +112,20 @@ ctrlc.workspace = true
 default = [
     "http-fetch",
     "runtime-parse",
-    "audio",
+    "audio-rodio",
     "mcp",
     "async",
     "host-rhai",
     "host-lua",
     "host-candela",
 ]
-# Audio subsystem (rodio/cpal/symphonia). Part B tree-shaking knob.
+# Audio subsystem: the transport, the player entity, and the script transport
+# commands, against whichever backend is selected. Part B tree-shaking knob.
 audio = ["dep:lumen-audio"]
+# The audio backend Lumen ships (rodio/cpal/symphonia), and the one the default
+# build selects. Turn it off and the audio subsystem runs silent, which is what
+# an app that supplies its own backend wants.
+audio-rodio = ["audio", "dep:lumen-audio-rodio"]
 # MCP introspection server. Part B tree-shaking knob (dev-only capability).
 mcp = ["dep:lumen-mcp"]
 # Async spawn/timer (tokio) bridge. Part B tree-shaking knob.

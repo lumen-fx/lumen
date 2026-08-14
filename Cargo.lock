@@ -3433,6 +3433,13 @@ name = "lumen-audio"
 version = "0.0.3"
 dependencies = [
  "lumen-core",
+]
+
+[[package]]
+name = "lumen-audio-rodio"
+version = "0.0.3"
+dependencies = [
+ "lumen-audio",
  "rodio",
  "symphonia",
 ]
@@ -3740,6 +3747,7 @@ dependencies = [
  "lumen-assets",
  "lumen-async-tokio",
  "lumen-audio",
+ "lumen-audio-rodio",
  "lumen-core",
  "lumen-devtools",
  "lumen-i18n",

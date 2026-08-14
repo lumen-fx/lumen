@@ -25,7 +25,7 @@ authoritative list is `.github/scripts/linux-deps.sh`, which CI runs verbatim:
 
 - `pkg-config` to resolve the rest.
 - `libgtk-3-dev` for the GTK file dialog behind `lumen-os-filedialog`.
-- `libasound2-dev` for ALSA, reached through cpal under `lumen-audio`.
+- `libasound2-dev` for ALSA, reached through cpal under `lumen-audio-rodio`.
 - `libxkbcommon-dev` and `libwayland-dev` for keyboard and Wayland handling
   under winit.
 - `libvulkan1` for the Vulkan loader, since wgpu builds the Vulkan backend on
@@ -114,12 +114,17 @@ Dropping every default feature yields a compiler library with no backends at
 all. That is what `lumen-lsp` links, which is why the LSP does not pull wgpu,
 winit, cosmic-text, taffy, or the script hosts.
 
-**`lumen-runtime`** defaults to every subsystem on: `audio`, `mcp`, `async`,
-`host-rhai`, `host-lua`, `host-candela`, `http-fetch`, `runtime-parse`. Each
-script host is its own feature, so a build can carry exactly the languages its
-app ships. Per-app trimming happens only on the static bundle path, where
-`lumenc` selects the exact feature set an app needs; the development path stays
-full featured.
+**`lumen-runtime`** defaults to every subsystem on: `audio-rodio`, `mcp`,
+`async`, `host-rhai`, `host-lua`, `host-candela`, `http-fetch`,
+`runtime-parse`. Each script host is its own feature, so a build can carry
+exactly the languages its app ships. Per-app trimming happens only on the
+static bundle path, where `lumenc` selects the exact feature set an app needs;
+the development path stays full featured.
+
+`audio` compiles the audio subsystem, and `audio-rodio` adds the playback
+backend Lumen ships. Selecting `audio` alone gives a build whose transport
+works and makes no sound, which is where an embedder supplying its own
+`AudioBackend` starts.
 
 **`lumen-render-wgpu`** selects one wgpu backend per operating system through
 target-scoped dependencies, so a build compiles the Vulkan, Metal, or DX12

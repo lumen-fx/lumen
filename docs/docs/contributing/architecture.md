@@ -64,6 +64,12 @@ tools/             the release plumbing and the VS Code extension
 - **lumen-window-winit**: the on-screen window. winit event loop, surface and
   device setup, presentation, close-request veto, and hosting the accessibility
   adapter.
+- **lumen-audio**: the playback abstraction (`AudioBackend`) plus the transport
+  it drives: playing, paused, stopped, playhead, duration, seek, and volume. It
+  also carries a silent backend, for a build or a test that must not touch a
+  device.
+- **lumen-audio-rodio**: the playback implementation Lumen ships. Decodes wav
+  and ogg over a rodio sink, and runs silent when no output device exists.
 - **lumen-a11y-accesskit**: translates the entity tree into AccessKit tree
   updates each tick.
 - **lumen-async-tokio**: the async bridge. A tokio runtime plus a queue that
@@ -83,8 +89,6 @@ tools/             the release plumbing and the VS Code extension
 - **lumen-assets**: the asset pipeline. Content-addressed cache, decode worker
   pool, SVG parsing, GPU upload cache, disk-change invalidation, and the
   `.lpak` bundle format.
-- **lumen-audio**: playback over a rodio sink, degrading to a silent device
-  when no output exists.
 - **lumen-i18n**: translation catalogues over Fluent, plus locale-aware number,
   date, currency, and relative-time formatting over ICU4X.
 

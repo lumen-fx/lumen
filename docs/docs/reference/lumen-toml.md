@@ -153,7 +153,7 @@ runtime carrying only the listed subsystems. The shared runtime and
 
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
-| `audio` | bool | inferred from `audio_*` calls and audio files in the app | Compiles the audio subsystem in. |
+| `audio` | bool | inferred from `audio_*` calls and audio files in the app | Compiles the audio subsystem and its playback backend in. |
 | `http-fetch` | bool | inferred from a `fetch(` call in the app | Compiles the scripts' HTTP `fetch()` builtin in. |
 | `mcp` | bool | `false` | Compiles the introspection server in. Never inferred. |
 | `async` | bool | inferred from a file-dialog call in the app | Compiles the async bridge in. File dialogs resolve on it, and on macOS they do not open without it. |
