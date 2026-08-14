@@ -3605,7 +3605,6 @@ name = "lumen-os-filedialog"
 version = "0.0.3"
 dependencies = [
  "bevy_ecs",
- "lumen-async-tokio",
  "lumen-core",
  "lumen-os-mime",
  "pollster",

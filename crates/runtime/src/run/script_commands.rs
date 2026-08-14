@@ -31,17 +31,15 @@ pub(crate) fn apply_script_commands(
     mut store: ResMut<lumen_core::property_store::PropertyStore>,
     mut array_signals: ResMut<lumen_core::signals::ArraySignals>,
     mut style_manager: ResMut<lumen_core::components::StyleManager>,
-    mut picked: MessageWriter<lumen_core::input::FilePicked>,
     mut hotkeys: Option<NonSendMut<OsHotkeyRegistry>>,
     file_dialog: Res<FileDialogService>,
     mut tray: NonSendMut<OsTrayService>,
     hot: Option<Res<HotReloadState>>,
-    // Async file-dialog fast path (Part B tree-shaking): these are only read
-    // when an embedder installed `lumen-async-tokio`'s resources. Compiled out
-    // of a build without the `async` feature; a trimmed bundle then always
-    // takes the blocking `file_dialog.open(..)` path below.
-    #[cfg(feature = "async")] tokio_rt: Option<Res<lumen_async_tokio::TokioRuntime>>,
-    #[cfg(feature = "async")] async_queue: Option<Res<lumen_async_tokio::AsyncCommandQueue>>,
+    // The file dialog runs on the app's executor when one is installed; the
+    // resource is absent in a build with no async backend, and the dialog
+    // then blocks the tick instead.
+    spawn: Option<Res<lumen_core::task::SpawnService>>,
+    command_queue: Res<lumen_core::command::CommandQueue>,
 ) {
     // Asset paths from script (`set_src`) get the same dir-relative
     // resolution as parser-time paths, so authors can write
@@ -180,22 +178,16 @@ pub(crate) fn apply_script_commands(
                         .collect(),
                     default_name: default_name.clone(),
                 };
-                // Prefer the async path when TokioRuntime + AsyncCommandQueue
-                // are available (W6.4): rfd::AsyncFileDialog::pick_file()
-                // runs on the shared tokio runtime; the result lands as a
-                // FileDialogResultCommand -> FilePicked via the typed-command
-                // drain registered by FileDialogPlugin. Falls back to the
-                // pollster::block_on path when those resources are missing
-                // (e.g. headless / no-runtime embedders). The async path is
-                // compiled in only with the `async` feature (Part B).
-                #[cfg(feature = "async")]
-                if let (Some(rt), Some(queue)) = (&tokio_rt, &async_queue) {
-                    file_dialog.open_single_with(rt, queue, req);
-                } else {
-                    file_dialog.open(&req, &mut picked);
-                }
-                #[cfg(not(feature = "async"))]
-                file_dialog.open(&req, &mut picked);
+                // `rfd::AsyncFileDialog::pick_file()` runs on the installed
+                // executor when there is one, and inline when there is not.
+                // Either way the result lands as a FileDialogResultCommand ->
+                // FilePicked through the typed-command drain the
+                // FileDialogPlugin registers.
+                file_dialog.open_single_with(
+                    spawn.as_ref().map(|s| s.as_spawn()),
+                    &command_queue,
+                    req,
+                );
             }
             ScriptCommand::CopyImageToClipboard { path } => {
                 handle_copy_image_to_clipboard(path, &dir);

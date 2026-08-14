@@ -21,6 +21,7 @@ pub mod palette;
 pub mod property_store;
 pub mod render_world;
 pub mod signals;
+pub mod task;
 pub mod text_events;
 pub mod text_model;
 pub mod tick;
@@ -94,6 +95,7 @@ pub mod prelude {
         init_external_signals, push_external_array, push_external_clear, push_external_signal,
         push_textinput_to_signal,
     };
+    pub use crate::task::{BoxFuture, SpawnService, TimerService};
     pub use crate::text_events::{
         Anchor, AppliedKind, CursorMotion, ImeSurroundingRequested, ImeSurroundingResponse,
         MoveMode, RejectReason, TextEditApplied, TextEditRejected, TextEditRequest, TextEditSet,

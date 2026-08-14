@@ -11,17 +11,24 @@
 //!   tick and ferries received items into [`CommandQueue`] (the lumen
 //!   analog of Qt::QueuedConnection / GLib::g_idle_add).
 //! - [`AsyncTokioPlugin`] - registers both resources + the drain system,
-//!   so the host (mcp, future os crates, app code) can call
+//!   so the host (os crates, app code) can call
 //!   `world.resource::<TokioRuntime>().spawn(fut)` and have the result
 //!   land on the main thread.
 //!
 //! ## Why a shared runtime
 //!
-//! Before this crate, `lumen-mcp` built its own current-thread runtime,
-//! `lumen-lsp` got one from `tower-lsp`, and the C-ABI crate had none -
-//! three executors per process. Reusing one multi-threaded runtime
-//! (4 workers max, bounded by available parallelism) cuts the thread
-//! pool footprint and shares I/O reactor state.
+//! One multi-threaded runtime per app (4 workers max, bounded by available
+//! parallelism) instead of one per feature: a smaller thread pool, and one
+//! I/O reactor shared by everything that asks the world for an executor.
+//!
+//! ## The seam
+//!
+//! [`TokioRuntime`] implements [`lumen_core::traits::Spawn`] and
+//! [`lumen_core::traits::Timer`], and the plugin publishes it as
+//! [`SpawnService`] / [`TimerService`]. Consumers read those resources, so
+//! swapping this crate for another executor is a plugin swap and nothing
+//! else. An app that installs no async backend leaves both resources absent,
+//! which consumers read as "take the blocking path".
 
 #![warn(missing_docs)]
 
@@ -33,6 +40,7 @@ use bevy_ecs::prelude::*;
 use crossbeam_channel::{Receiver, Sender, TrySendError, unbounded};
 use lumen_core::app::{App, Plugin};
 use lumen_core::command::{Command, CommandQueue};
+use lumen_core::task::{BoxFuture, SpawnService, TimerService};
 use lumen_core::tick::TickStage;
 use lumen_core::traits::{Spawn, Timer};
 use tokio::runtime::{Builder, Runtime};
@@ -101,11 +109,6 @@ impl TokioRuntime {
     pub fn block_on<F: Future>(&self, fut: F) -> F::Output {
         self.inner.block_on(fut)
     }
-
-    /// Returns a future that completes after `d`.
-    pub fn delay(&self, d: std::time::Duration) -> Pin<Box<dyn Future<Output = ()> + Send>> {
-        Box::pin(tokio::time::sleep(d))
-    }
 }
 
 impl Default for TokioRuntime {
@@ -114,8 +117,25 @@ impl Default for TokioRuntime {
     }
 }
 
-impl Spawn for TokioRuntime {}
-impl Timer for TokioRuntime {}
+impl Spawn for TokioRuntime {
+    fn spawn(&self, fut: BoxFuture<()>) {
+        self.inner.spawn(fut);
+    }
+
+    fn spawn_blocking(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+        self.inner.spawn_blocking(task);
+    }
+}
+
+impl Timer for TokioRuntime {
+    /// The sleep is constructed inside this runtime's context, so a caller
+    /// outside any tokio context still gets a working timer and the future
+    /// can then be awaited anywhere.
+    fn sleep(&self, duration: std::time::Duration) -> BoxFuture<()> {
+        let _guard = self.inner.enter();
+        Box::pin(tokio::time::sleep(duration))
+    }
+}
 
 /// Handle to a spawned future. Wraps [`tokio::task::JoinHandle`]; can
 /// be awaited from any tokio context, or aborted.
@@ -209,7 +229,10 @@ pub fn drain_async_commands(async_q: Res<AsyncCommandQueue>, cmd_q: Res<CommandQ
 }
 
 /// Registers [`TokioRuntime`] + [`AsyncCommandQueue`] + the drain
-/// system. Idempotent on re-add (resources are skipped if present).
+/// system, and publishes the runtime on the async seam as
+/// [`SpawnService`] + [`TimerService`] so crates that only need "some
+/// executor" never name this one. Idempotent on re-add (resources are
+/// skipped if present).
 #[derive(Default, Debug, Clone, Copy)]
 pub struct AsyncTokioPlugin;
 
@@ -220,6 +243,13 @@ impl Plugin for AsyncTokioPlugin {
         }
         if app.world.get_resource::<AsyncCommandQueue>().is_none() {
             app.world.insert_resource(AsyncCommandQueue::new());
+        }
+        let runtime = app.world.resource::<TokioRuntime>().clone();
+        if app.world.get_resource::<SpawnService>().is_none() {
+            app.world.insert_resource(SpawnService::new(runtime.clone()));
+        }
+        if app.world.get_resource::<TimerService>().is_none() {
+            app.world.insert_resource(TimerService::new(runtime));
         }
         app.add_systems(TickStage::Systems, drain_async_commands);
     }
@@ -243,6 +273,56 @@ mod tests {
         let out = rt.block_on(handle).expect("task ok");
         assert_eq!(out, 42);
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn spawn_service_runs_a_boxed_future_on_the_runtime() {
+        let rt = TokioRuntime::new();
+        let service = SpawnService::new(rt.clone());
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        service.spawn(Box::pin(async move {
+            let _ = tx.send(9u32);
+        }));
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok(9),
+            "the spawned future ran on the installed executor"
+        );
+    }
+
+    #[test]
+    fn spawn_service_runs_blocking_work() {
+        let service = SpawnService::new(TokioRuntime::new());
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        service.spawn_blocking(Box::new(move || {
+            let _ = tx.send(());
+        }));
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok(()),
+            "the blocking task ran on the installed executor"
+        );
+    }
+
+    /// The timer future is built outside any tokio context - the seam
+    /// promises that works - and awaited on a second runtime.
+    #[test]
+    fn timer_service_sleep_is_constructed_outside_a_runtime() {
+        let rt = TokioRuntime::new();
+        let service = TimerService::new(rt.clone());
+        let sleep = service.sleep(std::time::Duration::from_millis(5));
+        let start = std::time::Instant::now();
+        rt.block_on(sleep);
+        assert!(start.elapsed() >= std::time::Duration::from_millis(5));
+    }
+
+    #[test]
+    fn plugin_publishes_the_runtime_on_the_seam() {
+        let mut app = App::new();
+        AsyncTokioPlugin.build(&mut app);
+        ensure_tick_compatible(&mut app);
+        assert!(app.world.get_resource::<SpawnService>().is_some());
+        assert!(app.world.get_resource::<TimerService>().is_some());
     }
 
     #[test]

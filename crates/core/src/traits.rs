@@ -18,11 +18,10 @@ pub trait WindowBackend: Send + Sync {}
 /// Marker trait implemented by accessibility bridges. Plugins register systems into [`crate::tick::TickStage::A11ySync`].
 pub trait A11yBackend: Send + Sync {}
 
-/// Marker trait implemented by async-task runtimes.
-pub trait Spawn: Send + Sync {}
-
-/// Marker trait implemented by one-shot timer runtimes.
-pub trait Timer: Send + Sync {}
+// The async seam carries value types (boxed futures, the service resources
+// that hold the selected backend), so it lives in [`crate::task`]. Re-exported
+// here because backends implement it alongside the traits above.
+pub use crate::task::{Spawn, Timer};
 
 /// Declares that a [`Component`] participates in the entity-property bus exposed by [`crate::property_store::PropertyStore`].
 ///
