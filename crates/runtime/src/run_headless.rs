@@ -228,7 +228,7 @@ pub fn run_app_headless_rendered(
         .map_err(|e| RunError::Headless(format!("spawn GPU init thread: {e}")))?;
 
     let t_build = Instant::now();
-    let (mut app, mut winit_opts) = build_headless_app(opts)?;
+    let (mut app, mut window) = build_headless_app(opts)?;
     boot.mark("build_app (parse+ecs+fontscan)", t_build.elapsed());
     boot.standalone_fontscan();
 
@@ -256,7 +256,7 @@ pub fn run_app_headless_rendered(
         if let Some(mut layout_shaper) = app.world.get_non_send_mut::<ShaperService>() {
             warm(&mut **layout_shaper);
         }
-        if let Some(render_shaper) = winit_opts.text_shaper.as_deref_mut() {
+        if let Some(render_shaper) = window.text_shaper.as_deref_mut() {
             warm(render_shaper);
         }
     }
@@ -280,12 +280,12 @@ pub fn run_app_headless_rendered(
     // beats `lumen.toml [window] size` beats the built-in default, exactly
     // like windowed), scale factor from --dpr. Mirrors the pre-loop seed
     // in `lumen_window_winit::run` plus the dpr reconcile `resumed` does.
-    let logical = glam::Vec2::new(winit_opts.size.0 as f32, winit_opts.size.1 as f32);
+    let logical = glam::Vec2::new(window.options.size.0 as f32, window.options.size.1 as f32);
     for world in [&mut app.world, &mut app.render_world] {
         let mut vp = world.resource_mut::<Viewport>();
         vp.size = logical;
         vp.scale_factor = dpr;
-        vp.clear = winit_opts.clear;
+        vp.clear = window.options.clear;
     }
 
     // Offscreen GPU context: join the init thread spawned before
@@ -308,7 +308,7 @@ pub fn run_app_headless_rendered(
     let mut render_plugin = WgpuRendererPlugin::new(phys_w, phys_h).with_renderer(renderer);
     // Reuse the text shaper built for the windowed path so glyph output
     // matches the window byte-for-byte.
-    if let Some(shaper) = winit_opts.text_shaper.take() {
+    if let Some(shaper) = window.text_shaper.take() {
         render_plugin = render_plugin.with_boxed_text_shaper(shaper);
     }
     app.add_plugin(render_plugin);
@@ -372,8 +372,8 @@ pub fn run_app_headless_rendered(
 
     eprintln!(
         "lumenc: headless mode - no window; {}x{} logical @ dpr {dpr}{}",
-        winit_opts.size.0,
-        winit_opts.size.1,
+        window.options.size.0,
+        window.options.size.1,
         match headless.ticks {
             Some(n) => format!(", bounded to {n} tick(s)"),
             None => String::new(),

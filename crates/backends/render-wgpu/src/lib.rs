@@ -1201,7 +1201,7 @@ impl WgpuRendererPlugin {
     /// Attach an already-boxed text shaper (same effect as
     /// [`Self::with_text_shaper`]; avoids double-boxing when the caller
     /// already holds a `Box<dyn TextShaper>` - e.g. the one built for
-    /// `WinitOptions`).
+    /// `WindowOptions`).
     pub fn with_boxed_text_shaper(mut self, shaper: Box<dyn lumen_text::TextShaper>) -> Self {
         self.text_shaper = Some(shaper);
         self

@@ -44,7 +44,9 @@ tools/             the release plumbing and the editor plugins
 - **lumen-core**: the framework kernel. Owns `App`, the `Plugin` trait, the
   tick loop and its stages, the two worlds, the command queue, the ECS
   component vocabulary, the property store, input types, the retained node IR,
-  and every backend capability trait. Depends on no other workspace crate.
+  the window description a launch path resolves (size, title, clear color,
+  chrome, menu bar), and every backend capability trait. Depends on no other
+  workspace crate.
 - **lumen-ir**: the shared data model. The layout IR that markup parses into,
   the CSS abstract syntax tree and cascade application, the shared value
   parsers, the `var()` resolver, and the compiled-artifact container.
@@ -113,7 +115,8 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   primary selection.
 - **lumen-os-dnd**: drag sources, drop targets, and inbound file drops.
 - **lumen-os-filedialog**: open, save, and folder pickers.
-- **lumen-os-menu**: the menu model and native menu bar attachment.
+- **lumen-os-menu**: native menu bar attachment and menu click delivery. The
+  menu model itself is a core type, so window options can carry it.
 - **lumen-os-tray**: tray icon, tooltip, and context menu.
 - **lumen-os-notify**: desktop notifications with action buttons.
 - **lumen-os-hotkey**: global hotkey registration and polling.

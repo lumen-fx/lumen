@@ -1,11 +1,13 @@
 use super::*;
+use lumen_core::window::{Menu, MenuEntry, MenuModel, WindowGeometry};
+use lumen_ir::layout_ir::MenuEntrySpec;
 
-/// Construct the fully-configured [`App`] and the [`WinitOptions`] the
+/// Construct the fully-configured [`App`] and the [`WindowSetup`] the
 /// windowed path would run it with - everything [`run_app`] does short
 /// of entering the event loop. Split out so [`run_app_headless`] can
 /// reuse the identical build without duplicating the plugin / system
 /// wiring.
-pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> {
+pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     #[cfg(feature = "host-rhai")]
     let mut rhai_extensions = std::mem::take(&mut opts.rhai_extensions);
     // Host-neutral native functions (the C-ABI's `lumen_app_expose`, the Rust
@@ -508,8 +510,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
     };
     let mut maximized = true;
     let mut start_position: Option<(i32, i32)> = None;
-    let mut on_close_state: Option<Box<dyn FnOnce(lumen_window_winit::WindowGeometry) + Send>> =
-        None;
+    let mut on_close_state: Option<Box<dyn FnOnce(WindowGeometry) + Send>> = None;
     if cfg.window.remember_state.unwrap_or(false) {
         let app_id = cfg
             .app
@@ -533,43 +534,38 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
             );
         }));
     }
-    let menubar = ir
-        .menubar
-        .as_ref()
-        .map(|spec| lumen_window_winit::MenuBarOptions {
-            menus: spec
-                .menus
-                .iter()
-                .map(|m| lumen_window_winit::MenuOptions {
-                    label: m.label.clone(),
-                    items: m
-                        .items
-                        .iter()
-                        .map(|entry| match entry {
-                            lumen_ir::layout_ir::MenuEntrySpec::Item {
-                                id,
-                                label,
-                                accelerator,
-                            } => lumen_window_winit::MenuEntryOptions::Item {
-                                id: id.clone(),
-                                label: label.clone(),
-                                accelerator: accelerator.clone(),
-                            },
-                            lumen_ir::layout_ir::MenuEntrySpec::Separator => {
-                                lumen_window_winit::MenuEntryOptions::Separator
-                            }
-                        })
-                        .collect(),
-                })
-                .collect(),
-        });
+    let menubar = ir.menubar.as_ref().map(|spec| MenuModel {
+        menus: spec
+            .menus
+            .iter()
+            .map(|m| Menu {
+                label: m.label.clone(),
+                items: m
+                    .items
+                    .iter()
+                    .map(|entry| match entry {
+                        MenuEntrySpec::Item {
+                            id,
+                            label,
+                            accelerator,
+                        } => MenuEntry::Item {
+                            id: id.clone(),
+                            label: label.clone(),
+                            accelerator: accelerator.clone(),
+                        },
+                        MenuEntrySpec::Separator => MenuEntry::Separator,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    });
     // `--lumen-window-bg` resolved from the fully-combined (UA + skin +
     // app) stylesheet paints the GPU clear behind the very first frame -
     // what a user sees before the root element itself paints, and behind
     // any pixel the tree doesn't cover. Only a plain solid color parses
     // (the clear is a single RGBA, not a gradient); an app whose active
     // layers don't define the token - or define it as something else -
-    // falls back to `opts.clear` (`lumen_window_winit::DEFAULT_CLEAR`
+    // falls back to `opts.clear` (`lumen_core::window::DEFAULT_CLEAR`
     // unless the caller overrode it), preserving today's behavior exactly.
     let clear = ir
         .combined_stylesheet
@@ -578,16 +574,18 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
         .and_then(|value| lumen_ir::values::parse_color("<root>", "lumen-window-bg", &value).ok())
         .map(Into::into)
         .unwrap_or(opts.clear);
-    let winit_opts = WinitOptions {
-        size,
-        title,
-        clear,
+    let window = WindowSetup {
+        options: WindowOptions {
+            size,
+            title,
+            clear,
+            maximized,
+            frameless: ir.frameless,
+            start_position,
+            on_close_state,
+            menubar,
+        },
         text_shaper: Some(render_shaper),
-        maximized,
-        frameless: ir.frameless,
-        start_position,
-        on_close_state,
-        menubar,
     };
     // Dev-only in-window devtools overlay (F12). Gated behind the off-by-
     // default `devtools` feature; absent from release / bundle builds. The
@@ -604,7 +602,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WinitOptions), RunError> 
     for hook in app_hooks {
         hook(&mut app);
     }
-    Ok((app, winit_opts))
+    Ok((app, window))
 }
 
 /// True when this build compiled the host for `engine`.

@@ -2382,7 +2382,7 @@ pub struct RootWindowEntity(pub Entity);
 
 /// Optional human-readable label for the AccessKit tree root.
 ///
-/// - Written by the window backend from `WinitOptions.title` once the
+/// - Written by the window backend from `WindowOptions.title` once the
 ///   window exists.
 /// - When absent the translation layer falls back to the legacy
 ///   `"Lumen app"` hard-coded string.

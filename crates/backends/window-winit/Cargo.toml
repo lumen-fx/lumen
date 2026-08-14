@@ -18,9 +18,9 @@ lumen-a11y-accesskit = { path = "../a11y-accesskit", version = "0.0.3" }
 # Reads `lumen_assets::ExtractedSvg` to interleave SVGs into the painter
 # stream; see lumen-render-wgpu for the same justification.
 lumen-assets = { path = "../../assets", version = "0.0.3" }
-# Native menu bar lives in lumen-os-menu after W6.3 - the markup parser
-# still hands `MenuBarOptions` here so the type aliases keep the wiring
-# working.
+# Native menu bar: the menu tree itself is `lumen_core::window::MenuModel`
+# (it arrives inside `WindowOptions`); this crate is here for the muda
+# attach and the click drain.
 lumen-os-menu = { path = "../../os/menu", version = "0.0.3" }
 bevy_ecs.workspace = true
 glam.workspace = true

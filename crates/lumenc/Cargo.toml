@@ -81,10 +81,6 @@ zip = { workspace = true, optional = true }
 # Script host engine handle, named ONLY in the `dev-run`-gated `run_with`
 # wrapper signature (`rhai::Engine`). Optional, pulled under `dev-run`.
 rhai = { workspace = true, optional = true }
-# Named ONLY in the `dev-run`-gated `build_headless_app` return type
-# (`lumen_window_winit::WinitOptions`). Optional, pulled under `dev-run`.
-lumen-window-winit = { path = "../backends/window-winit", version = "0.0.3", optional = true }
-
 # link-not-embed launcher: dlopen the shared liblumen (lumen cdylib) and
 # drive a prebuilt LMNA app over the C-ABI. OPTIONAL behind `dlopen-run`; this
 # is the whole point of the thin launcher -- it pulls NO backend crate, only
@@ -140,6 +136,11 @@ lumen-text-cosmic = { path = "../backends/text-cosmic" }
 # producer publishes (`ShapedText` / `TextGeometry`), so it has to be able
 # to name the crate that defines them.
 lumen-text = { path = "../text" }
+# The integration tests add `WinitPlugin` to a window-free App to get the
+# backend messages and the redraw scheduler. It reaches the binary through
+# lumen-runtime; a test can only *name* it as a direct dependency, and the
+# compiler library itself no longer names the crate at all.
+lumen-window-winit = { path = "../backends/window-winit" }
 # devtools_mount.rs (compiled only under `--features devtools`) names these.
 lumen-mcp = { path = "../mcp" }
 lumen-devtools = { path = "../dev/devtools" }
@@ -173,7 +174,6 @@ bundle = ["dep:lumen-assets"]
 dev-run = [
     "dep:lumen-runtime",
     "dep:rhai",
-    "dep:lumen-window-winit",
     "lumen-runtime/audio",
     "lumen-runtime/mcp",
     "lumen-runtime/async",

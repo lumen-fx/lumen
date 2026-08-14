@@ -18,6 +18,7 @@ use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use lumen_assets::AssetsPlugin;
 use lumen_core::prelude::*;
+use lumen_core::window::{DEFAULT_CLEAR, WindowOptions};
 use lumen_input::InputPlugin;
 use lumen_layout_taffy::TaffyLayoutPlugin;
 #[cfg(feature = "mcp")]
@@ -53,7 +54,7 @@ use lumen_script_rhai::{RhaiHost, ScriptRhaiPlugin};
 use lumen_script::{NativeExternFn, ScriptCommandEvent, ScriptSet, fire_on_ready, reload_script};
 use lumen_text::{ShaperService, TextShaper};
 use lumen_text_cosmic::CosmicShaper;
-use lumen_window_winit::{WinitOptions, run};
+use lumen_window_winit::run;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 // `Duration` / `Instant` are only used by the (gated) hot-reload poll throttle.
@@ -85,6 +86,23 @@ type RhaiExtension = Box<dyn FnOnce(&mut rhai::Engine) + Send + 'static>;
 /// values - `system.chain()` / `system.run_if(..)` box into `!Send`
 /// `ScheduleConfigs`, which a `Send` hook could not capture.
 pub type AppHook = Box<dyn FnOnce(&mut App) + 'static>;
+
+/// The window-facing half of a built app: the resolved
+/// [`WindowOptions`] plus the render-side text shaper the build picked
+/// for it. Returned alongside the [`App`] by [`build_app`] and
+/// [`build_headless_app`], and handed to the window backend by
+/// [`run_app`].
+///
+/// The options are pure data that `lumen-core` owns, so any launch path
+/// and any window backend can name them. The shaper is a live backend
+/// object whose trait lives in `lumen-text`, which is why it sits beside
+/// the options instead of inside them.
+pub struct WindowSetup {
+    /// Size, title, clear color, chrome, and native menu bar.
+    pub options: WindowOptions,
+    /// Shaper used for render-side text. `None` skips text entirely.
+    pub text_shaper: Option<Box<dyn TextShaper>>,
+}
 
 /// Options for `lumenc run`.
 pub struct RunOptions {
@@ -181,10 +199,10 @@ impl RunOptions {
             title: None,
             size: Self::DEFAULT_SIZE,
             // Single source of truth for the fallback: see
-            // `lumen_window_winit::DEFAULT_CLEAR`. `build_app` overrides this
+            // `lumen_core::window::DEFAULT_CLEAR`. `build_app` overrides this
             // with the resolved `--lumen-window-bg` custom property when the
             // app or its active skin defines one.
-            clear: lumen_window_winit::DEFAULT_CLEAR,
+            clear: DEFAULT_CLEAR,
             hot_reload: true,
             #[cfg(feature = "host-rhai")]
             rhai_extensions: Vec::new(),
@@ -386,9 +404,9 @@ pub enum RunError {
 /// `App`, spawn the parsed tree, and enter winit's event loop.
 pub fn run_app(opts: RunOptions) -> Result<(), RunError> {
     let (dir, assets) = (opts.dir.clone(), opts.assets.clone());
-    let (mut app, winit_opts) = build_app(opts)?;
+    let (mut app, window) = build_app(opts)?;
     install_assets(&mut app, assets.as_deref(), &dir)?;
-    run(app, winit_opts).map_err(|e| RunError::Window(e.to_string()))
+    run(app, window.options, window.text_shaper).map_err(|e| RunError::Window(e.to_string()))
 }
 
 /// Build the full app WITHOUT opening a window, then drive `ticks`
@@ -396,8 +414,8 @@ pub fn run_app(opts: RunOptions) -> Result<(), RunError> {
 /// plugin stack, scripts, and reactive bindings as [`run_app`], but no
 /// windowing, input, or GPU rendering - just [`App::tick`] in a loop.
 ///
-/// `ticks == 0` builds-and-drops (validates the app loads). The winit
-/// options (title, size, text shaper) built alongside the app are
+/// `ticks == 0` builds-and-drops (validates the app loads). The window
+/// setup (title, size, text shaper) built alongside the app is
 /// discarded; headless ticks run the main schedule + extract + an empty
 /// render schedule (no GPU renderer plugin is installed off the winit
 /// path), which is sufficient to exercise signal round-trips, script
@@ -406,7 +424,7 @@ pub fn run_app_headless(mut opts: RunOptions, ticks: u32) -> Result<(), RunError
     // Headless / FFI contract: no interactive session, so gate off the MCP
     // server + hot-reload watcher (see [`RunOptions::bounded`]).
     opts.bounded = true;
-    let (mut app, _winit_opts) = build_headless_app(opts)?;
+    let (mut app, _window) = build_headless_app(opts)?;
     for _ in 0..ticks {
         app.tick();
     }
@@ -426,12 +444,12 @@ pub fn run_app_headless(mut opts: RunOptions, ticks: u32) -> Result<(), RunError
 /// offscreen-GPU mode), and the golden-image screenshot suite
 /// (`crates/lumenc/tests/golden.rs`), which installs an offscreen
 /// `WgpuRendererPlugin` on top and reads the framebuffer back.
-pub fn build_headless_app(opts: RunOptions) -> Result<(App, WinitOptions), RunError> {
+pub fn build_headless_app(opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     let (dir, assets) = (opts.dir.clone(), opts.assets.clone());
-    let (mut app, winit_opts) = build_app(opts)?;
+    let (mut app, window) = build_app(opts)?;
     install_assets(&mut app, assets.as_deref(), &dir)?;
     app.add_plugin(lumen_window_winit::WinitPlugin);
-    Ok((app, winit_opts))
+    Ok((app, window))
 }
 
 // -- Submodules (mechanical carve of the former monolithic run.rs) ----------
