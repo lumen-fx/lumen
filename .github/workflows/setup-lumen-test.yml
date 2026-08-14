@@ -1,0 +1,114 @@
+name: setup-lumen
+
+# Exercises tools/setup-lumen against the real release channel on all three
+# runner operating systems: it installs a published toolchain, puts it on
+# PATH, and then uses it.
+#
+# The assertions stop at what a toolchain can do without a display and without
+# system libraries. `lumenc new` and `lumenc check` are pure lumenc, so they
+# run on a bare runner. `lumenc run` is not: it loads the liblumen shared
+# library, which links GTK, ALSA, X11, and Wayland, and a Linux runner has to
+# install those first (.github/scripts/linux-deps.sh). Covering a headless run
+# here would test the runner image more than it tests the action.
+#
+# Two things this workflow depends on outside its own repo state: a published
+# release carrying an archive for every runner target, and the sha256sums.txt
+# published beside it. Both are the release workflow's output, so a red run
+# here can mean the action broke or can mean the newest release is incomplete.
+# The pinned leg says which: it names a release known to have all of them.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - tools/setup-lumen/**
+      - .github/workflows/setup-lumen-test.yml
+  pull_request:
+    paths:
+      - tools/setup-lumen/**
+      - .github/workflows/setup-lumen-test.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  latest:
+    name: latest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - id: lumen
+        uses: ./tools/setup-lumen
+
+      - name: lumenc is on PATH and reports the installed release
+        shell: bash
+        run: |
+          set -euo pipefail
+          lumenc --version
+          got="$(lumenc --version | awk '{ print $2 }')"
+          if [ "$got" != "${{ steps.lumen.outputs.version }}" ]; then
+            echo "lumenc says $got, the action installed ${{ steps.lumen.outputs.version }}" >&2
+            exit 1
+          fi
+          echo "target ${{ steps.lumen.outputs.target }}, tag ${{ steps.lumen.outputs.tag }}"
+
+      - name: the toolchain builds and checks a scaffolded app
+        shell: bash
+        run: |
+          set -euo pipefail
+          lumenc new smoke counter
+          lumenc check smoke
+
+  pinned:
+    name: pinned (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      # A bare version number, which is the form people quote and the form the
+      # tags do not use. Resolving it to the v-prefixed tag is part of what is
+      # under test.
+      - id: lumen
+        uses: ./tools/setup-lumen
+        with:
+          version: "0.0.3"
+
+      - name: the pinned release is the one that got installed
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ "${{ steps.lumen.outputs.version }}" = "0.0.3" ]
+          [ "${{ steps.lumen.outputs.tag }}" = "v0.0.3" ]
+          [ "$(lumenc --version)" = "lumenc 0.0.3" ]
+
+      # Asking for the same release twice must not download it twice. The
+      # second call finds the toolchain where the first one left it and says
+      # so, whether that came from this job or from the cache.
+      - id: again
+        uses: ./tools/setup-lumen
+        with:
+          version: v0.0.3
+
+      - name: the second install resolves to the same place
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ "${{ steps.again.outputs.bin-path }}" = "${{ steps.lumen.outputs.bin-path }}" ]
+          lumenc --version
