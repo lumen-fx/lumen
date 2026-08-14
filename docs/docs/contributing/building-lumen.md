@@ -167,9 +167,9 @@ cargo test -p lumen-layout-taffy --test dirty_invariant
 
 Coverage is measured on top of the same suite, with `cargo llvm-cov`, on every
 push to `main` and every pull request, and reported to Codecov. It is a report
-rather than a gate: what decides a pull request is the suite itself, and the
-two Codecov checks are informational, so they report a change in coverage but
-never fail. Doctests are outside the measurement, since collecting coverage
+rather than a gate: what decides a pull request is the suite itself, and the project-wide Codecov status is informational, while the patch status
+is a required check that fails when the diff drops meaningfully below the
+baseline coverage. Doctests are outside the measurement, since collecting coverage
 from them needs a nightly toolchain.
 
 The editor integrations under `tools/`, the release scripts, and the SDKs
