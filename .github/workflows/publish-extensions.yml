@@ -1,0 +1,72 @@
+name: publish-extensions
+
+# Ships the editor extensions on release: the VS Code extension to the
+# marketplace and Open VSX, the JetBrains plugin to its marketplace. Every
+# publish step checks its token and skips with a notice when it is absent,
+# so the workflow is safe before the accounts exist. The first JetBrains
+# upload is manual by marketplace rule; this takes over from the second.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vscode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: tools/vscode-lumen
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      OVSX_PAT: ${{ secrets.OVSX_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install --no-audit --no-fund
+
+      - run: npx @vscode/vsce package
+
+      - name: publish to the marketplace
+        run: |
+          if [ -z "$VSCE_PAT" ]; then echo "VSCE_PAT absent; skipping"; exit 0; fi
+          npx @vscode/vsce publish --packagePath ./*.vsix -p "$VSCE_PAT"
+
+      - name: publish to open vsx
+        run: |
+          if [ -z "$OVSX_PAT" ]; then echo "OVSX_TOKEN absent; skipping"; exit 0; fi
+          npx ovsx publish ./*.vsix -p "$OVSX_PAT"
+
+  jetbrains:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: tools/jetbrains-lumen
+    env:
+      PUBLISH_TOKEN: ${{ secrets.JETBRAINS_PUBLISH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: publish to the jetbrains marketplace
+        run: |
+          if [ -z "$PUBLISH_TOKEN" ]; then echo "JETBRAINS_PUBLISH_TOKEN absent; skipping"; exit 0; fi
+          ./gradlew --no-daemon publishPlugin

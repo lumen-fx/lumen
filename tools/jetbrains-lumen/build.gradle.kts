@@ -47,6 +47,10 @@ intellijPlatform {
             recommended()
         }
     }
+
+    publishing {
+        token = providers.environmentVariable("PUBLISH_TOKEN")
+    }
 }
 
 // The TextMate grammars and the editor configuration come from the VS Code
