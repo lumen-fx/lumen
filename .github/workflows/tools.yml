@@ -265,17 +265,37 @@ jobs:
             fi
           done
 
-  python-sdk:
-    name: python sdk (${{ matrix.python }})
+  # Two literal jobs, not a matrix: a skipped matrix job never expands, so
+  # its per-version required contexts would wait forever on unrelated PRs.
+  python-sdk-39:
+    name: python sdk (3.9)
     needs: changes
     if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        # 3.9 is the floor pyproject.toml claims.
-        python: ["3.9", "3.13"]
+    defaults:
+      run:
+        working-directory: sdk/python
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      # 3.9 is the floor pyproject.toml claims.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - run: python -m compileall -q lumen examples tests
+
+      - run: python -m unittest discover -s tests -v
+
+  python-sdk-313:
+    name: python sdk (3.13)
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: sdk/python
@@ -286,7 +306,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.13"
 
       - run: python -m compileall -q lumen examples tests
 
