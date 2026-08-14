@@ -171,6 +171,18 @@ rather than a gate: what decides a pull request is the suite itself. Doctests
 are outside the measurement, since collecting coverage from them needs a
 nightly toolchain.
 
+The surfaces outside the Cargo workspace are built in CI as well, each on its
+own directory: the VS Code extension compiles and packages, the JetBrains
+plugin builds and its descriptor is checked, the tree-sitter grammar is
+regenerated and compared against the committed parser, the Zed extension is
+compiled for wasm, the release shell scripts are linted with shellcheck and the
+package manifests are rewritten offline once, the Python SDK runs its tests on
+the oldest and the newest interpreter it supports, and the C++ SDK examples are
+compiled against the committed headers. None of that needs `liblumen`, so it
+does not wait on an engine build. The one expensive check is the JetBrains
+Plugin Verifier, which downloads a full IDE per IDE it verifies against; it
+runs weekly and on demand rather than per pull request.
+
 Golden images are regenerated, not hand-edited. `UPDATE_GOLDENS=1` rewrites the
 software rasterizer baseline in `lumen-render-headless`;
 `LUMEN_GOLDEN_UPDATE=1` rewrites the screenshot baselines in `lumenc`. On a

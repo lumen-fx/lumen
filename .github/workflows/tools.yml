@@ -1,0 +1,386 @@
+name: tools and SDKs
+
+# Everything in the repository that is not the Cargo workspace: the editor
+# integrations under tools/, the release shell scripts, and the Python and C++
+# SDKs. ci.yml covers the workspace and setup-lumen-test.yml covers the action,
+# so without this a change to any of the surfaces below first breaks for the
+# person who installs it.
+#
+# None of these jobs builds liblumen. The SDK legs check what can be checked
+# from the committed headers and pure-Python sources, so the whole workflow
+# finishes in the time one Rust job takes to link.
+#
+# Nothing here publishes. The VS Code extension is packaged and the JetBrains
+# plugin is built because packaging is where a broken manifest shows up, but
+# the artifacts stay on the runner.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # A full JetBrains Plugin Verifier run against the recommended IDE set, which
+  # is too slow to sit on a pull request.
+  schedule:
+    - cron: "0 6 * * 1"
+  # Manual trigger, which re-checks every area regardless of what changed.
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Which areas a run has to check. Each job below is gated on one output, so a
+  # pull request that touches a single tool pays for a single tool.
+  changes:
+    name: what changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      vscode: ${{ steps.areas.outputs.vscode }}
+      jetbrains: ${{ steps.areas.outputs.jetbrains }}
+      treesitter: ${{ steps.areas.outputs.treesitter }}
+      zed: ${{ steps.areas.outputs.zed }}
+      release: ${{ steps.areas.outputs.release }}
+      python: ${{ steps.areas.outputs.python }}
+      cpp: ${{ steps.areas.outputs.cpp }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - id: areas
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$EVENT" in
+            schedule)
+              # The weekly run exists for the plugin verifier alone.
+              changed=""
+              ;;
+            workflow_dispatch)
+              changed="$(git ls-files)"
+              ;;
+            *)
+              # The checkout is shallow, so the commit being compared against
+              # has to be fetched before it can be diffed. Both trees are then
+              # present, which is all `git diff` needs.
+              if [ -n "$BASE" ] &&
+                 [ "$BASE" != "0000000000000000000000000000000000000000" ] &&
+                 git fetch --no-tags --depth=1 origin "$BASE"; then
+                changed="$(git diff --name-only "$BASE" "$HEAD")"
+              else
+                # A first push to a branch, or a force push that left nothing
+                # to compare against. Check everything rather than nothing.
+                changed="$(git ls-files)"
+              fi
+              ;;
+          esac
+
+          # Editing this workflow re-runs every area it describes, so a change
+          # to a job is exercised by the pull request that makes it.
+          self='^\.github/workflows/tools\.yml$'
+
+          area() {
+            name="$1"
+            dir="$2"
+            pattern="$3"
+            answer=false
+            # Two of these directories arrive with an open branch. Until one
+            # lands, its job reports skipped instead of red.
+            if [ -d "$dir" ] && printf '%s\n' "$changed" | grep -Eq "$pattern"; then
+              answer=true
+            fi
+            echo "$name=$answer" >> "$GITHUB_OUTPUT"
+            echo "$name: $answer"
+          }
+
+          area vscode tools/vscode-lumen \
+            "^tools/vscode-lumen/|$self"
+          # The Gradle build copies its TextMate grammars out of the VS Code
+          # extension, so a grammar edit is a JetBrains change as well.
+          area jetbrains tools/jetbrains-lumen \
+            "^tools/jetbrains-lumen/|^tools/vscode-lumen/(syntaxes|language-configuration)/|$self"
+          area treesitter tools/tree-sitter-lumen \
+            "^tools/tree-sitter-lumen/|$self"
+          area zed tools/zed-lumen \
+            "^tools/zed-lumen/|$self"
+          area release tools/release \
+            "^tools/release/|^tools/setup-lumen/|^\.github/scripts/|$self"
+          area python sdk/python \
+            "^sdk/python/|$self"
+          # include/ holds the C ABI header the C++ SDK wraps.
+          area cpp sdk/cpp \
+            "^sdk/cpp/|^include/|$self"
+
+  vscode:
+    name: vscode extension
+    needs: changes
+    if: needs.changes.outputs.vscode == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: tools/vscode-lumen
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # No lockfile is committed, so the dependencies resolve fresh: `npm ci`
+      # and setup-node's npm cache both need one. There are four of them and
+      # they install in seconds.
+      - run: npm install --no-audit --no-fund
+
+      - name: The extension compiles
+        run: npm run compile
+
+      # vsce reads package.json the way the marketplace does. A contribution
+      # point that names a command it does not declare, or a file the manifest
+      # points at and the repository does not have, fails here rather than on
+      # someone's install.
+      - name: The extension packages
+        run: npm run package
+
+  jetbrains:
+    name: jetbrains plugin
+    needs: changes
+    if: needs.changes.outputs.jetbrains == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: tools/jetbrains-lumen
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      # The Gradle cache holds the IDE the plugin compiles against, which is
+      # the download worth keeping between runs.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      # buildPlugin compiles the Kotlin and assembles the distributable zip.
+      # The two verify tasks read the assembled plugin the way the marketplace
+      # does: verifyPluginProjectConfiguration checks the Gradle setup against
+      # the platform it targets, verifyPluginStructure checks plugin.xml and
+      # the archive layout. Binary compatibility against a set of IDEs is the
+      # jetbrains-verifier job below.
+      - name: The plugin builds and its descriptor is well formed
+        run: ./gradlew --no-daemon buildPlugin verifyPluginProjectConfiguration verifyPluginStructure
+
+  # The JetBrains Plugin Verifier downloads one full IDE distribution per IDE
+  # it verifies against, which is tens of minutes of runner time. Weekly and on
+  # demand catches an API that disappears under the plugin without making every
+  # pull request wait for it.
+  jetbrains-verifier:
+    name: jetbrains plugin verifier
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: tools/jetbrains-lumen
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: The plugin is binary compatible with the recommended IDEs
+        run: ./gradlew --no-daemon verifyPlugin
+
+  # tools/tree-sitter-lumen and tools/zed-lumen arrive with the editor-coverage
+  # branch. Both jobs skip until that directory exists, and start working the
+  # moment it does.
+  tree-sitter:
+    name: tree-sitter grammar
+    needs: changes
+    if: needs.changes.outputs.treesitter == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: tools/tree-sitter-lumen
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install --no-audit --no-fund
+
+      # `generate` rewrites src/ from grammar.js. Editors and the Zed extension
+      # compile the committed parser rather than generating their own, so the
+      # diff is the check that the two agree: a grammar edit that ships without
+      # a regenerated parser fails here.
+      - name: The committed parser is the one the grammar generates
+        run: |
+          npx tree-sitter generate
+          git diff --exit-code -- src
+
+      - name: The corpus parses
+        run: npx tree-sitter test
+
+  zed:
+    name: zed extension
+    needs: changes
+    if: needs.changes.outputs.zed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      # Zed compiles the extension to wasm when someone installs it, so that is
+      # the target that has to build. The crate carries its own [workspace], so
+      # it is not covered by the workspace jobs in ci.yml.
+      - name: Install pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustup target add wasm32-wasip1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: zed
+          workspaces: tools/zed-lumen
+
+      - run: cargo check --manifest-path tools/zed-lumen/Cargo.toml --target wasm32-wasip1
+
+  release-scripts:
+    name: release scripts
+    needs: changes
+    if: needs.changes.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      # These scripts run on a user's machine (install.sh) or with a release
+      # token in hand, where a quoting bug is expensive. shellcheck ships on
+      # the runner image.
+      - name: The shell scripts lint clean
+        run: shellcheck tools/release/*.sh tools/setup-lumen/*.sh .github/scripts/*.sh
+
+      # update-package-manifests.sh normally reads the checksum file published
+      # with a release. Handing it one written here makes the rewrite offline
+      # and repeatable: the manifests are rewritten in a copy, and the script's
+      # own post-checks plus the assertions below say every file picked up the
+      # version it was given. The checksums are placeholders; what is under
+      # test is the rewriting, not the release.
+      - name: The package manifests survive a rewrite
+        if: hashFiles('tools/release/update-package-manifests.sh') != ''
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/release"
+          cp -r tools/release "$work"
+          sums="$RUNNER_TEMP/sha256sums.txt"
+          : > "$sums"
+          n=0
+          for asset in lumen-linux-x86_64.tar.gz lumen-linux-aarch64.tar.gz \
+                       lumen-macos-x86_64.tar.gz lumen-macos-aarch64.tar.gz \
+                       lumen-windows-x86_64.zip lumen-windows-x86_64.msi; do
+            n=$((n + 1))
+            printf '%064d  %s\n' "$n" "$asset" >> "$sums"
+          done
+
+          "$work/update-package-manifests.sh" 9.9.9 "$sums"
+
+          cd "$work"
+          for manifest in aur/PKGBUILD homebrew/lumen.rb scoop/lumen.json \
+                          winget/LumenFX.Lumen.installer.yaml; do
+            if ! grep -q '9\.9\.9' "$manifest"; then
+              echo "$manifest did not pick up the version" >&2
+              exit 1
+            fi
+          done
+
+  python-sdk:
+    name: python sdk (${{ matrix.python }})
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor pyproject.toml claims and a current release. The floor is
+        # the one that catches syntax and typing forms the SDK cannot use.
+        python: ["3.9", "3.13"]
+    defaults:
+      run:
+        working-directory: sdk/python
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # The tests import a few modules; this reaches the rest, including the
+      # examples, which are the code people copy first.
+      - name: Every module parses on this interpreter
+        run: python -m compileall -q lumen examples tests
+
+      # The SDK is stdlib-only ctypes, and its tests cover the parts that do
+      # not call into the library, so they need no liblumen and no pytest.
+      - name: The tests pass
+        run: python -m unittest discover -s tests -v
+
+  cpp-sdk:
+    name: cpp sdk
+    needs: changes
+    if: needs.changes.outputs.cpp == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      # Compiled, not linked: linking would need liblumen, and building the
+      # engine to find out that a header no longer parses is a poor trade. The
+      # include order matches the CMake interface target, SDK header first.
+      # LUMEN_APP_DIR is baked into a string constant, so any value does.
+      - name: The examples compile against the committed headers
+        run: |
+          set -euo pipefail
+          for example in sdk/cpp/examples/*.cpp; do
+            echo "$example"
+            g++ -std=c++17 -fsyntax-only -Isdk/cpp/include -Iinclude \
+                -DLUMEN_APP_DIR='"."' "$example"
+          done
+
+      # The SDK is consumed as a CMake package, so the export and install rules
+      # have to configure even though the target itself is header-only.
+      - name: The CMake package configures
+        run: cmake -S sdk/cpp -B "$RUNNER_TEMP/cpp-build"
