@@ -32,6 +32,39 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # Whether the diff can affect the Rust build at all. The test matrix is
+  # skipped step-by-step rather than at the job level: a job-level skip on a
+  # matrix never expands it, and the required test contexts would wait
+  # forever (the same trap the python sdk jobs hit).
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.diff.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rust=true
+          if [ "$EVENT" = "pull_request" ] &&
+             [ -n "$BASE" ] &&
+             git fetch --no-tags --depth=1 origin "$BASE"; then
+            pattern='^(src/|crates/|sdk/rust/|include/|tests/|apps/|fixtures/|Cargo|rust-toolchain|\.github/(workflows/ci\.yml|scripts/))'
+            if ! git diff --name-only "$BASE" "$HEAD" | grep -Eq "$pattern"; then
+              rust=false
+            fi
+          fi
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          echo "rust: $rust"
+
   fmt:
     name: fmt
     runs-on: ubuntu-latest
@@ -70,6 +103,7 @@ jobs:
 
   test:
     name: test (${{ matrix.os }})
+    needs: changes
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -77,20 +111,24 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - if: needs.changes.outputs.rust == 'true'
+        uses: actions/checkout@v4
         with:
           lfs: false
       - name: Install pinned toolchain
+        if: needs.changes.outputs.rust == 'true'
         run: |
           rustup show active-toolchain
           rustc --version
       - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
         run: .github/scripts/linux-deps.sh
-      - uses: Swatinem/rust-cache@v2
+      - if: needs.changes.outputs.rust == 'true'
+        uses: Swatinem/rust-cache@v2
         with:
           key: test
-      - run: cargo build --workspace
+      - if: needs.changes.outputs.rust == 'true'
+        run: cargo build --workspace
       # Runners have no display and no GPU. Every test that needs one probes
       # for an adapter and skips itself, so the suite runs unmodified; on
       # Linux the mesa lavapipe ICD installed above gives wgpu a software
@@ -115,4 +153,5 @@ jobs:
       # --no-fail-fast so one red target does not hide the rest of the suite.
       # This matrix doubles as the release parity check and a partial report
       # per OS is worth much less than a complete one.
-      - run: cargo test --workspace --no-fail-fast
+      - if: needs.changes.outputs.rust == 'true'
+        run: cargo test --workspace --no-fail-fast
