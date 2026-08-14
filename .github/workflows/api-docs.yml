@@ -1,0 +1,122 @@
+name: api-docs
+
+# Builds the workspace's Rust API documentation and publishes it, so the crate
+# docs for the current main are readable without checking the repo out.
+#
+# The build is `cargo doc --workspace --no-deps`: public items of the Lumen
+# crates only, no dependency docs. rustdoc writes no landing page for a
+# multi-crate workspace, so this adds one that redirects to the root crate.
+#
+# The site is served from its own Cloudflare Pages project, in the same shape
+# the site repo uses: create the project if it does not exist, then deploy the
+# directory. The custom domain is attached to the project in the Cloudflare
+# dashboard by the owner; nothing here can do that.
+#
+# Secrets are org-level: CLOUDFLARE_ACCOUNT is the account id and
+# CLOUDFLARE_API_KEY is an API token with Account > Cloudflare Pages > Edit
+# (wrangler reads it as CLOUDFLARE_API_TOKEN). Without them the docs still
+# build and are attached to the run as an artifact.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # The Pages project and the domain it is meant to answer on. Change these two
+  # lines to move the docs somewhere else.
+  PAGES_PROJECT: lumenfx-api
+  API_DOCS_DOMAIN: api.lumenfx.dev
+  # The crate the landing page redirects to: the engine crate at the workspace
+  # root, whose docs are the C ABI and the entry points.
+  ROOT_CRATE: lumen
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    name: build and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Install pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+
+      - name: Install Linux system dependencies
+        run: .github/scripts/linux-deps.sh
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: api-docs
+
+      - name: Build the workspace documentation
+        run: cargo doc --workspace --no-deps
+
+      # rustdoc leaves no root page when it documents more than one crate, so
+      # the deployed root would be a 404. This is that page.
+      - name: Add the landing redirect
+        run: |
+          cat > target/doc/index.html <<HTML
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <meta http-equiv="refresh" content="0; url=${ROOT_CRATE}/index.html">
+              <link rel="canonical" href="${ROOT_CRATE}/index.html">
+              <title>Lumen API documentation</title>
+            </head>
+            <body>
+              <p><a href="${ROOT_CRATE}/index.html">Lumen API documentation</a></p>
+            </body>
+          </html>
+          HTML
+
+      # A Pages deployment holds a bounded number of files, and rustdoc writes
+      # one page per item. Print the count so a run that grows past the limit is
+      # readable in the log rather than a bare wrangler error.
+      - name: Count the pages to deploy
+        run: |
+          echo "files: $(find target/doc -type f | wc -l)" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Deploy to Cloudflare Pages
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        run: |
+          npx --yes wrangler@4 pages project create "$PAGES_PROJECT" --production-branch=main || true
+          npx --yes wrangler@4 pages deploy target/doc --project-name="$PAGES_PROJECT" --branch=main
+          echo "deployed to $PAGES_PROJECT ($API_DOCS_DOMAIN)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report missing Cloudflare credentials
+        if: env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == ''
+        run: |
+          echo "::notice::CLOUDFLARE_ACCOUNT or CLOUDFLARE_API_KEY is not set;" \
+               "skipping the Pages deploy. The built docs are attached to this run."
+
+      # Only as a fallback: when the deploy runs, the published site is the
+      # copy to read, and packing a rustdoc tree into an artifact is slow.
+      - name: Upload the documentation as an artifact
+        if: env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-docs
+          path: target/doc
+          if-no-files-found: error
