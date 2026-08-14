@@ -5,7 +5,7 @@
 //! 1. **Parse errors** - [`lumenc::parse_css`] failing surfaces as an
 //!    error diagnostic.
 //! 2. **Apply-time warnings** - a successfully parsed stylesheet is run
-//!    against a scratch [`LayoutIR`] via [`lumenc::apply_css`], which
+//!    against a scratch [`lumenc::LayoutIR`] via [`lumenc::apply_css`], which
 //!    performs per-declaration recovery and returns [`lumenc::CssWarning`]
 //!    entries for unknown properties / unparseable values. Each becomes a
 //!    warning diagnostic pointed at the offending declaration.

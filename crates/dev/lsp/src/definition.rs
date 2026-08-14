@@ -1,7 +1,7 @@
 //! `textDocument/definition` handler that jumps from a template use site to its `<template name="...">` declaration.
 //!
 //! - Same-file lookup only.
-//! - Locates the tag-name token under the cursor via [`hover::target_at`], scans `src` for `<template name="<tag>"`, and returns the position of the `name="..."` value.
+//! - Locates the tag-name token under the cursor via [`crate::hover::target_at`], scans `src` for `<template name="<tag>"`, and returns the position of the `name="..."` value.
 
 use crate::hover::{HoverTarget, target_at};
 use tower_lsp::lsp_types::{Position, Range};
