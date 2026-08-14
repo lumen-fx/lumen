@@ -76,6 +76,12 @@ is what lets it resolve an id in a script back to the element that defines it.
 Completion triggers on `<`, space, `"`, and `.`; signature help on `(` and
 `,`.
 
+The markup, CSS, and cross-file id features do not depend on a script language.
+The `.rhai` column is the `lang-rhai` build feature, which is on by default; a
+server built without it keeps every other column and answers script requests
+with nothing. candela (`.cdl`) and Lua (`.lua`) buffers have no intelligence
+yet.
+
 ### VS Code extension
 
 The extension lives in `tools/vscode-lumen`. Build it with `npm install &&

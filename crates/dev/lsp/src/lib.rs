@@ -21,7 +21,9 @@ pub mod definition;
 pub mod diagnostics;
 pub mod docs;
 pub mod hover;
+#[cfg(feature = "lang-rhai")]
 pub mod rhai_lsp;
+mod script_lang;
 pub mod server;
 
 pub use server::{Backend, DocKind, compute_diagnostics, position_to_byte};

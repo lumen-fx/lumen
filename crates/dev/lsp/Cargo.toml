@@ -29,12 +29,21 @@ path = "src/main.rs"
 # (wgpu / winit / vello / cosmic-text / taffy / rodio / mlua) out of the LSP.
 lumenc = { path = "../../lumenc", version = "0.0.3", default-features = false, features = ["runtime-parse"] }
 # Source of truth for the Rhai builtins table + a fully-registered
-# engine to compile `.rhai` buffers against.
-lumen-script-rhai = { path = "../../script/rhai", version = "0.0.3" }
-rhai.workspace = true
+# engine to compile `.rhai` buffers against. Optional: only a `lang-rhai`
+# build analyses `.rhai` buffers (see [features]).
+lumen-script-rhai = { path = "../../script/rhai", version = "0.0.3", optional = true }
+rhai = { workspace = true, optional = true }
 tower-lsp.workspace = true
 tokio = { version = "1.52", features = ["rt-multi-thread", "io-util", "io-std", "macros", "sync"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[features]
+default = ["lang-rhai"]
+# Rhai script intelligence: compile-error diagnostics, builtin completion,
+# hover, and signature help for `.rhai` buffers, which need the Rhai engine
+# and the host's builtin table. Everything the server does for markup, CSS,
+# and the cross-file id features is script-language-neutral and stays.
+lang-rhai = ["dep:lumen-script-rhai", "dep:rhai"]

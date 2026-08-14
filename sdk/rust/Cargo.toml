@@ -32,9 +32,15 @@ lumen-widget-macros = { path = "../../crates/widget-macros", version = "0.0.3" }
 # ECS surface for the native handler-dispatch systems (Resource derive,
 # MessageReader, Query, World).
 bevy_ecs.workspace = true
-# Only for the `AppBuilder::rhai_extension` passthrough (parity with the
-# C ABI's `lumen_app_expose`).
-rhai.workspace = true
+# Only for the `AppBuilder::rhai_extension` passthrough (see [features]).
+rhai = { workspace = true, optional = true }
+
+[features]
+default = ["host-rhai"]
+# The `AppBuilder::rhai_extension` passthrough, which takes a `rhai::Engine`
+# and so binds to one host. `AppBuilder::native_fn` exposes a function to
+# every host the app runs and needs no feature.
+host-rhai = ["dep:rhai", "lumen-runtime/host-rhai"]
 
 [dev-dependencies]
 # Tests construct `ClickEvent { position: Vec2, .. }` directly.

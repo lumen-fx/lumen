@@ -228,3 +228,74 @@ fn single_language_app_is_unchanged() {
         Some("candela host - ready"),
     );
 }
+
+/// `set_color_scheme` is a runtime built-in, not a per-language one: an app
+/// gets it whatever language it is written in, and the intent lands on the
+/// same [`StyleManager`] either way.
+///
+/// Rhai and Lua receive it as a host-neutral native function the runtime
+/// registers; candela carries it in its own prelude under the `lumen`
+/// namespace. Three one-file apps, one assertion each, so a host losing the
+/// registration fails here rather than in a themed app.
+#[test]
+fn set_color_scheme_applies_on_every_host() {
+    use lumen_core::components::{ColorScheme, StyleManager};
+
+    let scripts = [
+        (
+            "rhai",
+            "main.rhai",
+            "fn on_ready() { set_color_scheme(\"force-dark\"); }",
+        ),
+        (
+            "lua",
+            "main.lua",
+            "function on_ready() set_color_scheme(\"force-dark\") end",
+        ),
+        (
+            "candela",
+            "main.cdl",
+            "import \"lumen.cdl\";\n\
+             fn on_ready() { lumen::set_color_scheme(\"force-dark\"); }\n\
+             fn main() {}\n",
+        ),
+    ];
+
+    for (engine, script_name, script) in scripts {
+        let dir =
+            std::env::temp_dir().join(format!("lumen_scheme_{engine}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+        std::fs::write(
+            dir.join("main.lmn"),
+            format!(
+                "<root>\n  <label id=\"only\" text=\"scheme\"/>\n  \
+                 <script src=\"{script_name}\"/>\n</root>"
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.join(script_name), script).unwrap();
+
+        let mut opts = RunOptions::new(&dir);
+        opts.hot_reload = false;
+        let (mut app, _winit) =
+            build_headless_app(opts).unwrap_or_else(|e| panic!("build {engine} app: {e}"));
+        for _ in 0..6 {
+            app.tick();
+        }
+
+        let style = *app.world.resource::<StyleManager>();
+        assert_eq!(
+            style.scheme,
+            ColorScheme::ForceDark,
+            "{engine}: set_color_scheme should reach StyleManager"
+        );
+        assert!(
+            style.effective_dark,
+            "{engine}: forcing dark should light up effective_dark"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

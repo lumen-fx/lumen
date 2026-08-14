@@ -29,10 +29,9 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer};
 
-use crate::completion;
-use crate::crossfile;
 use crate::diagnostics::{byte_to_position, diagnostic_from_error};
 use crate::hover::{doc_for, target_at};
+use crate::{completion, crossfile, css, script_lang};
 
 /// Which Lumen source language a document is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,10 +141,10 @@ impl Backend {
                 // include-dropping string path when the URI isn't a file.
                 compute_diagnostics_at(&text, uri.to_file_path().ok().as_deref())
             }
-            DocKind::Rhai => crate::rhai_lsp::compute_rhai_diagnostics(&text),
+            DocKind::Rhai => script_lang::diagnostics(&text),
             DocKind::Css => {
                 let markup = self.sibling_markup(&uri).await;
-                crate::css::compute_css_diagnostics(&text, markup.as_deref())
+                css::compute_css_diagnostics(&text, markup.as_deref())
             }
             DocKind::Other => Vec::new(),
         };
@@ -477,7 +476,7 @@ impl LanguageServer for Backend {
                         .map(id_completion_item)
                         .collect()
                 } else {
-                    crate::rhai_lsp::completions(&src, cursor)
+                    script_lang::completions(&src, cursor)
                 }
             }
             DocKind::Css | DocKind::Other => Vec::new(),
@@ -501,7 +500,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let cursor = position_to_byte(&src, pos);
-        Ok(crate::rhai_lsp::signature_help(&src, cursor))
+        Ok(script_lang::signature_help(&src, cursor))
     }
 
     async fn goto_definition(
@@ -695,7 +694,7 @@ impl LanguageServer for Backend {
                 let target = target_at(&src, cursor);
                 target.and_then(|t| doc_for(&t)).map(|s| s.to_string())
             }
-            DocKind::Rhai => crate::rhai_lsp::hover(&src, cursor),
+            DocKind::Rhai => script_lang::hover(&src, cursor),
             _ => None,
         };
         let Some(md) = md else {

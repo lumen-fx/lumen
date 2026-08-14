@@ -166,6 +166,11 @@ pub use bevy_ecs as ecs;
 /// Typed reactive property store and typed [`Property`] handle.
 pub use lumen_core::property_store::{Property, PropertyStore};
 
+/// The host-neutral description of a native function exposed to script, and
+/// the value type its arguments and result cross as. Build one with
+/// [`simple::AppBuilder::native_fn`].
+pub use lumen_script::{NativeExternFn, ScriptValue};
+
 /// One-stop import: `use lumenui::prelude::*;`.
 ///
 /// Brings in [`App`], the plugin groups, typed [`Signals`], the run-condition

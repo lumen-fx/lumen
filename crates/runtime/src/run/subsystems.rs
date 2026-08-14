@@ -342,11 +342,14 @@ pub(crate) fn register_commands(app: &mut App) {
         lumen_core::property_store::mirror_property_store_to_typed_cache
             .before(lumen_core::property_store::clear_property_store_dirty),
     );
-    // Register a `Command::Typed` handler for the W4.6 `set_color_scheme`
-    // Rhai builtin. The script extension pushes [`ColorSchemeIntent`]
-    // payloads through [`lumen_core::command::CommandQueue`] and the handler
-    // applies them to [`StyleManager::set_scheme`] inside
-    // [`TickStage::CommandDrain`].
+    // Register a `Command::Typed` handler for the `set_color_scheme` script
+    // built-in. The runtime registers that built-in host-neutrally
+    // (`crate::run::builtin_script_fns`), and its body pushes
+    // [`ColorSchemeIntent`] payloads through
+    // [`lumen_core::command::CommandQueue`]; this handler applies them to
+    // [`StyleManager::set_scheme`] inside [`TickStage::CommandDrain`].
+    // candela reaches the same [`StyleManager`] through its own prelude, via
+    // `ScriptCommand::SetColorScheme`.
     //
     // Risk register section "set_root_class based theme demos break" calls out
     // that the legacy migration path was `set_root_class("theme-dark")`;

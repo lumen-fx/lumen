@@ -586,3 +586,55 @@ fn page_current_reads_the_active_page_on_every_host() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// `page_back()` reports whether the step reached the navigation bus, so a
+/// script can branch on it. Rhai and Lua see a boolean; candela's prelude
+/// entry returns nothing, which its reference page states.
+#[test]
+fn page_back_returns_whether_the_step_was_queued() {
+    let scripts = [
+        (
+            "rhai",
+            "main.rhai",
+            "fn on_ready() { signal(\"went\", \"\").set(if page_back() { \"yes\" } else { \"no\" }); }",
+        ),
+        (
+            "lua",
+            "main.lua",
+            "function on_ready() signal(\"went\", \"\"):set(page_back() and \"yes\" or \"no\") end",
+        ),
+    ];
+
+    for (engine, script_name, script) in scripts {
+        let _guard = nav_test_guard();
+        let dir =
+            std::env::temp_dir().join(format!("lumen_page_back_{engine}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+        std::fs::write(
+            dir.join("index.lmn"),
+            format!(
+                "<root>\n  <label id=\"went\" bind-text=\"went\" text=\"(none)\"/>\n  \
+                 <script src=\"{script_name}\"/>\n</root>"
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.join("settings.lmn"), "<root><label text=\"S\"/></root>").unwrap();
+        std::fs::write(dir.join(script_name), script).unwrap();
+
+        let mut opts = RunOptions::new(&dir);
+        opts.hot_reload = false;
+        let (mut app, _winit) =
+            build_headless_app(opts).unwrap_or_else(|e| panic!("build {engine} app: {e}"));
+        tick_n(&mut app, 6);
+
+        assert_eq!(
+            route_signal(&mut app, "went"),
+            "yes",
+            "{engine}: page_back() should hand the script a boolean"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
