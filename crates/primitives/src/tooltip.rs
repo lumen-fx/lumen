@@ -32,8 +32,8 @@ use lumen_core::components::{
 use lumen_core::input::Hovered;
 use lumen_core::prelude::*;
 use lumen_core::render_world::Viewport;
+use lumen_core::time::Instant;
 use lumen_widget_macros::Widget;
-use std::time::Instant;
 
 /// Authored on the trigger via `<tooltip text="..." delay="...">`. The
 /// markup parser attaches this component on the SINGLE child the

@@ -16,7 +16,7 @@ use bevy_ecs::prelude::*;
 use lumen_core::components::{Fill, Visuals};
 use lumen_core::prelude::*;
 use lumen_core::render_world::{ExtractedOutline, build_parent_map, paint_order_of};
-use std::time::Instant;
+use lumen_core::time::Instant;
 
 /// Default-construct a `last_step: Instant` for tween components. The
 /// systems immediately overwrite this with `Tick.now` on the first step,

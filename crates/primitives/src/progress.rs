@@ -28,7 +28,7 @@ use lumen_core::components::{BindValue, Length, Style, Transform, Visible};
 use lumen_core::prelude::*;
 use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_core::render_world::AnimationsActive;
-use std::time::Instant;
+use lumen_core::time::Instant;
 
 /// Runtime fallback for the indeterminate sweep period. The single
 /// Rust-side value; skins route `progress-duration:

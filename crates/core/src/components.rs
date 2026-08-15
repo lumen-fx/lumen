@@ -2,6 +2,7 @@
 //!
 //! Hierarchy components [`ChildOf`] and [`Children`] are re-exported from `bevy_ecs::hierarchy` via [`crate::prelude`].
 
+use crate::time::{Duration, Instant};
 use bevy_ecs::prelude::*;
 use glam::Vec2;
 use std::sync::Arc;
@@ -961,21 +962,21 @@ pub struct CaretBlink {
     pub visible: bool,
     /// Start of the current blink phase; elapsed time against
     /// [`Self::period`] selects the half-cycle.
-    pub phase: std::time::Instant,
+    pub phase: Instant,
     /// Half-cycle duration (visible for one period, hidden for the
     /// next). Qt's default is ~530 ms; this default is the single Rust
     /// fallback for the CSS `caret-blink` property, which overwrites this
     /// field directly (there is no per-entity blink state to route a
     /// per-element override through).
-    pub period: std::time::Duration,
+    pub period: Duration,
 }
 
 impl Default for CaretBlink {
     fn default() -> Self {
         Self {
             visible: true,
-            phase: std::time::Instant::now(),
-            period: std::time::Duration::from_millis(530),
+            phase: Instant::now(),
+            period: Duration::from_millis(530),
         }
     }
 }
@@ -985,7 +986,7 @@ impl CaretBlink {
     /// every edit / caret move so the caret never blinks mid-keystroke).
     pub fn reset(&mut self) {
         self.visible = true;
-        self.phase = std::time::Instant::now();
+        self.phase = Instant::now();
     }
 }
 

@@ -311,6 +311,13 @@ ropey = "1"
 # double-click word selection and grapheme-level cursor movement.
 unicode-segmentation = "1"
 
+# `std::time::Instant` and `SystemTime` panic on wasm32-unknown-unknown, where
+# there is no OS clock to read. Backs `lumen_core::time`, which every crate in
+# the browser-reachable graph imports instead of `std::time`. Target-gated to
+# wasm32 in the crates that use it, so a native build never links it. Already
+# in the tree through winit/wgpu, so this pins the one version they share.
+web-time = "1.1"
+
 # Cross-platform filesystem watch - backs lumen-assets' disk-change
 # invalidation. Wraps inotify / FSEvents / ReadDirectoryChangesW.
 # `RecommendedWatcher` picks the best backend per platform at runtime.

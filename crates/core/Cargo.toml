@@ -36,5 +36,10 @@ unicode-segmentation.workspace = true
 # wgpu and winit, which speak the same version.
 raw-window-handle = "0.6"
 
+# `std::time::Instant::now` panics on wasm32-unknown-unknown, so `crate::time`
+# resolves to this on that target only. Nothing links it on a native build.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-time.workspace = true
+
 [dev-dependencies]
 proptest.workspace = true
