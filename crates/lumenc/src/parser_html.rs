@@ -28,10 +28,10 @@
 //! empty-string substitution until the per-entity consumer system lands.
 
 use crate::layout_ir::{
-    Attributes, BindKind, BindSpec, Element, FlexAlign, FlexAxis, FlexJustify, ImageFitSpec,
-    InterpolationSlot, LayoutIR, LengthSpec, LineHeightSpec, LintFinding, LintKind, LintSeverity,
-    OutlineSpec, OverflowSpec, ParseError, PositionSpec, ScrollAxisSpec, TextAlignSpec,
-    TextWrapSpec, WidgetRole,
+    Attributes, BindKind, BindSpec, DeferredAttr, Element, FlexAlign, FlexAxis, FlexJustify,
+    FragmentUse, ImageFitSpec, InterpolationSlot, LayoutIR, LengthSpec, LineHeightSpec,
+    LintFinding, LintKind, LintSeverity, OutlineSpec, OverflowSpec, ParseError, PositionSpec,
+    ScrollAxisSpec, TextAlignSpec, TextWrapSpec, WidgetRole,
 };
 use crate::values::{bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i32, parse_length};
 // `parse_duration_ms` lives on the CSS cascade side (`lumen_ir::css`)
@@ -39,6 +39,11 @@ use crate::values::{bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i3
 // than re-implementing the `Nms` / `Ns` unit handling for the inline
 // markup mirror of `caret-blink` / `scrollbar-fade-*`.
 use lumen_ir::css::{canonical_style_property, parse_duration_ms};
+use lumen_ir::fragment::{
+    Fragment, FragmentKind, FragmentOrigin, FragmentParam, FragmentTable, SLOT_TAG,
+};
+use std::collections::BTreeSet;
+use std::path::Path;
 
 /// Recognized layout tag names. Unknown tags produce
 /// [`ParseError::UnknownTag`]. `script` is special-cased (collected into
@@ -129,17 +134,27 @@ pub const KNOWN_TAGS: &[&str] = &[
     "time-picker",
 ];
 
+/// A parsed markup file: the tree it describes, and the fragments that were
+/// visible while building it.
+#[derive(Debug)]
+pub struct ParsedMarkup {
+    /// The layout tree, with every fragment use already inlined.
+    pub ir: LayoutIR,
+    /// The fragments this file declared, folded over the ones it was handed.
+    pub fragments: FragmentTable,
+}
+
 /// Parse a Lumen-markup string into a [`LayoutIR`].
 ///
 /// `<script>` tags are collected into `LayoutIR::script_source` and
 /// stripped from the element tree (they are not layout nodes).
 ///
-/// `<template name="X">...body...</template>` blocks define reusable subtrees
-/// (see [`expand_templates`]). Authors instantiate them with `<X k="v"/>`
-/// or `<use template="X" k="v"/>`; `{k}` placeholders inside the template
-/// body are textually substituted at expand-time.
+/// `<template name="X">...body...</template>` blocks declare fragments, which
+/// are instantiated as `<X k="v"/>` or `<use template="X" k="v"/>` and
+/// inlined here. Use [`parse_markup`] to reach the fragments themselves, or
+/// to instantiate ones another file declared.
 pub fn parse_html(src: &str) -> Result<LayoutIR, ParseError> {
-    parse_html_impl(src, std::path::Path::new(""), None)
+    parse_markup(src, Path::new(""), None, &FragmentTable::new()).map(|p| p.ir)
 }
 
 /// Same as [`parse_html`] but resolves `<include src="..."/>` directives
@@ -149,24 +164,40 @@ pub fn parse_html(src: &str) -> Result<LayoutIR, ParseError> {
 /// [`LayoutIR::included_files`] so the runtime can watch them.
 pub fn parse_html_with_loader(
     src: &str,
-    self_path: &std::path::Path,
+    self_path: &Path,
     loader: &dyn crate::resolve::FileLoader,
 ) -> Result<LayoutIR, ParseError> {
-    parse_html_impl(src, self_path, Some(loader))
+    parse_markup(src, self_path, Some(loader), &FragmentTable::new()).map(|p| p.ir)
 }
 
-fn parse_html_impl(
+/// Parse markup that may instantiate fragments declared elsewhere.
+///
+/// `external` holds those fragments; an app collects them from every one of
+/// its `.lmn` files with [`collect_fragments`] so a shared layout is reachable
+/// from any file. A key this file declares itself wins over the one it was
+/// handed, which is what lets a file be both a contributor to the app-wide
+/// table and a parse of its own.
+pub fn parse_markup(
     src: &str,
-    self_path: &std::path::Path,
+    self_path: &Path,
     loader: Option<&dyn crate::resolve::FileLoader>,
-) -> Result<LayoutIR, ParseError> {
+    external: &FragmentTable,
+) -> Result<ParsedMarkup, ParseError> {
     let mut included_files = Vec::new();
     let spliced = crate::resolve::resolve_includes(src, self_path, loader, &mut included_files)?;
-    let expanded = expand_templates(&spliced)?;
-    let doc = roxmltree::Document::parse(&expanded).map_err(|e| ParseError::Xml(e.to_string()))?;
+    let doc = roxmltree::Document::parse(&spliced).map_err(|e| ParseError::Xml(e.to_string()))?;
     let mut script_source = String::new();
     let mut external_scripts = Vec::new();
     let mut lint_findings: Vec<LintFinding> = Vec::new();
+    let fragments = collect_declarations(
+        &doc,
+        &spliced,
+        self_path,
+        external,
+        &mut script_source,
+        &mut external_scripts,
+        &mut lint_findings,
+    )?;
     // `<root skin="...">` is the opt-in surface for the embedded
     // user-agent stylesheet. Pulled before `build_element` because
     // `skin` is not a layout attribute and shouldn't survive in
@@ -175,436 +206,247 @@ fn parse_html_impl(
     let frameless = bool_attribute_of(
         doc.root_element(),
         "frameless",
-        &expanded,
+        &spliced,
         &mut lint_findings,
     );
     // Extract `<menubar>` blocks from the layout tree before
     // `build_element` walks the root - they live in `LayoutIR.menubar`
     // and the window backend builds an OS-native menu from them.
     let menubar = extract_menubar(doc.root_element())?;
-    let root = build_element(
+    let known: BTreeSet<String> = fragments.iter().map(|(k, _)| k.clone()).collect();
+    let mut root = build_element(
         doc.root_element(),
         &mut script_source,
         &mut external_scripts,
-        &expanded,
+        &spliced,
         &mut lint_findings,
+        &FragCtx {
+            known: &known,
+            in_body: false,
+        },
         false,
         0,
     )?;
-    Ok(LayoutIR {
-        root,
-        script_source,
-        external_scripts,
-        skin,
-        frameless,
-        menubar,
-        combined_stylesheet: None,
-        lint_findings,
-        included_files,
+    crate::fragments::inline(&mut root, &fragments, &mut lint_findings)?;
+    Ok(ParsedMarkup {
+        ir: LayoutIR {
+            root,
+            script_source,
+            external_scripts,
+            skin,
+            frameless,
+            menubar,
+            combined_stylesheet: None,
+            lint_findings,
+            included_files,
+        },
+        fragments,
     })
 }
 
-/// Parsed `<template>` block. `defaults` lists every attribute on the
-/// `<template ...>` opening tag besides `name=` - those values fill in
-/// placeholders the use-site omits. `body` is the raw markup between
-/// `<template ...>` and `</template>`.
-type TemplateEntry = (Vec<(String, String)>, String);
-
-/// Two-pass textual template expander.
+/// Read the fragments `src` declares, without building its layout tree.
 ///
-/// 1. Collect every `<template name="X">...</template>` block. The body is
-///    stored verbatim (raw markup) and the block is stripped from the source.
-/// 2. Repeatedly expand `<use template="X" k="v"/>` and `<X k="v"/>`
-///    invocations by substituting `{k}` with the given attribute value
-///    inside the template body. Expansion runs to a fixed point so templates
-///    may reference other templates.
+/// An app-wide table is the union of this over every `.lmn` file the app
+/// ships, which is what makes a fragment declared in one file usable from
+/// another.
+pub fn collect_fragments(
+    src: &str,
+    self_path: &Path,
+    loader: Option<&dyn crate::resolve::FileLoader>,
+) -> Result<FragmentTable, ParseError> {
+    let mut included_files = Vec::new();
+    let spliced = crate::resolve::resolve_includes(src, self_path, loader, &mut included_files)?;
+    let doc = roxmltree::Document::parse(&spliced).map_err(|e| ParseError::Xml(e.to_string()))?;
+    let mut script_source = String::new();
+    let mut external_scripts = Vec::new();
+    let mut lint_findings = Vec::new();
+    collect_declarations(
+        &doc,
+        &spliced,
+        self_path,
+        &FragmentTable::new(),
+        &mut script_source,
+        &mut external_scripts,
+        &mut lint_findings,
+    )
+}
+
+/// Lift every `<template name="X">` in `doc` into a fragment and fold the
+/// result over `external`.
 ///
-/// Both forms accept any attribute name; only `template`/`name` are reserved.
-/// Attributes on the `<template ...>` tag itself (other than `name`) seed
-/// defaults that fill in placeholders the use-site omits.
-/// Unmatched `{placeholder}` markers in the body are left as-is so the
-/// caller can spot typos via downstream parse errors (`bad attribute`).
-fn expand_templates(src: &str) -> Result<String, ParseError> {
-    use std::collections::HashMap;
-    let mut templates: HashMap<String, TemplateEntry> = HashMap::new();
-    let mut working = String::with_capacity(src.len());
-
-    let mut i = 0usize;
-    let bytes = src.as_bytes();
-    while let Some(rel) = src[i..].find("<template") {
-        let start = i + rel;
-        let header_end = src[start..]
-            .find('>')
-            .ok_or_else(|| ParseError::Xml("unterminated <template> tag".into()))?
-            + start;
-        let header = &src[start..=header_end];
-        let name = extract_attr(header, "name")
-            .ok_or_else(|| ParseError::Xml("<template> missing name=\"...\"".into()))?;
-        // Defaults: every other attribute on `<template ...>` seeds a
-        // fallback for the matching placeholder. Use-site attrs win.
-        let defaults: Vec<(String, String)> = extract_all_attrs(header)
-            .into_iter()
-            .filter(|(k, _)| k != "name")
-            .collect();
-        let body_start = header_end + 1;
-        let body_end_rel = src[body_start..]
-            .find("</template>")
-            .ok_or_else(|| ParseError::Xml(format!("unterminated <template name=\"{name}\">")))?;
-        let body_end = body_start + body_end_rel;
-        let body = src[body_start..body_end].trim().to_string();
-        let after_close = body_end + "</template>".len();
-
-        working.push_str(&src[i..start]);
-        templates.insert(name, (defaults, body));
-        i = after_close;
-    }
-    working.push_str(&src[i..]);
-    let _ = bytes; // keep for index sanity
-
-    // Fixed-point expansion of <use template="..."> and <Name .../>.
-    let mut depth = 0;
-    loop {
-        depth += 1;
-        if depth > 32 {
-            return Err(ParseError::Xml(
-                "template expansion exceeded depth 32 (recursive?)".into(),
-            ));
-        }
-        let next = expand_once(&working, &templates)?;
-        if next == working {
-            break;
-        }
-        working = next;
-    }
-
-    Ok(working)
-}
-
-/// Find the byte offset (relative to `s`, which must start at `<`) of the
-/// `>` that closes this tag, skipping any `>` that appears inside a quoted
-/// attribute value (`<Card label="a > b"/>`). Comments swallow everything -
-/// including `>` and quotes - up to their `-->`. Returns `None` if the tag
-/// (or comment) is unterminated.
-fn find_tag_gt(s: &str) -> Option<usize> {
-    if let Some(rest) = s.strip_prefix("<!--") {
-        // Index of the `>` in the closing `-->`.
-        return rest.find("-->").map(|i| "<!--".len() + i + 2);
-    }
-    let bytes = s.as_bytes();
-    let mut in_quote: Option<u8> = None;
-    for (i, &c) in bytes.iter().enumerate() {
-        match in_quote {
-            Some(q) => {
-                if c == q {
-                    in_quote = None;
-                }
-            }
-            None => match c {
-                b'"' | b'\'' => in_quote = Some(c),
-                b'>' => return Some(i),
-                _ => {}
-            },
-        }
-    }
-    None
-}
-
-fn expand_once(
+/// Names are gathered before any body is built: a body may instantiate a
+/// fragment declared further down the file, and the element builder decides
+/// what is a use site from the names it can see.
+#[allow(clippy::too_many_arguments)]
+fn collect_declarations(
+    doc: &roxmltree::Document,
     src: &str,
-    templates: &std::collections::HashMap<String, TemplateEntry>,
-) -> Result<String, ParseError> {
-    let mut out = String::with_capacity(src.len());
-    let mut i = 0;
-    while i < src.len() {
-        let Some(rel) = src[i..].find('<') else {
-            out.push_str(&src[i..]);
-            break;
-        };
-        let lt = i + rel;
-        out.push_str(&src[i..lt]);
-        let gt_rel =
-            find_tag_gt(&src[lt..]).ok_or_else(|| ParseError::Xml("unterminated tag".into()))?;
-        let gt = lt + gt_rel;
-        let raw = &src[lt..=gt]; // includes < and >
-        // Skip comments / closing / processing entities - leave them alone.
-        if raw.starts_with("<!--") || raw.starts_with("</") || raw.starts_with("<?") {
-            out.push_str(raw);
-            i = gt + 1;
-            continue;
-        }
-        // Determine the tag name after `<` up to whitespace or `/` or `>`.
-        let inner = &raw[1..raw.len() - 1];
-        let self_closing = inner.ends_with('/');
-        let stripped = inner.strip_suffix('/').unwrap_or(inner);
-        let tag_end = stripped
-            .find(|c: char| c.is_whitespace() || c == '/')
-            .unwrap_or(stripped.len());
-        let tag_name = &stripped[..tag_end];
-
-        // Resolve which template (if any) this tag instantiates.
-        let template_key = if tag_name == "use" {
-            extract_attr(raw, "template")
-        } else if templates.contains_key(tag_name) {
-            Some(tag_name.to_string())
-        } else {
-            None
-        };
-
-        if let Some(key) = template_key {
-            let (defaults, template_body) = templates
-                .get(&key)
-                .ok_or_else(|| ParseError::Xml(format!("unknown template '{key}'")))?
-                .clone();
-            // Merge use-site attrs first (so they win on placeholder
-            // substitution - `substitute_placeholders` only replaces the
-            // first match; later duplicates are no-ops), then fill in
-            // defaults for keys the use-site omitted.
-            let use_attrs = extract_all_attrs(raw);
-            let mut attrs: Vec<(String, String)> =
-                Vec::with_capacity(use_attrs.len() + defaults.len());
-            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-            for (k, v) in &use_attrs {
-                seen.insert(k.clone());
-                attrs.push((k.clone(), v.clone()));
-            }
-            for (k, v) in &defaults {
-                if !seen.contains(k) {
-                    attrs.push((k.clone(), v.clone()));
-                }
-            }
-            // Self-closing -> no slot content; open -> capture inner XML up
-            // to the matching close tag, supporting nested uses of the
-            // same template name.
-            let (children_xml, advance_to) = if self_closing {
-                (String::new(), gt + 1)
-            } else {
-                let close_name = if tag_name == "use" { "use" } else { tag_name };
-                let (close_lt, close_end) = find_matching_close(src, gt + 1, close_name)?;
-                (src[gt + 1..close_lt].trim().to_string(), close_end)
-            };
-            // Per-instance id prefix. The use's literal `id` attr (after
-            // outer placeholder substitution) seeds a prefix that is
-            // prepended to every `id="..."` inside the template body.
-            // Uses without an `id` get no prefix - single-instance
-            // templates keep their stable ids.
-            let prefix = extract_attr(raw, "id").map(|s| format!("{s}:"));
-            let mut expanded = substitute_placeholders(&template_body, &attrs);
-            if let Some(p) = &prefix {
-                expanded = inject_id_prefix(&expanded, p);
-            }
-            expanded = substitute_slot(&expanded, &children_xml);
-            out.push_str(&expanded);
-            i = advance_to;
-            continue;
-        } else {
-            out.push_str(raw);
-        }
-        i = gt + 1;
+    self_path: &Path,
+    external: &FragmentTable,
+    script_buf: &mut String,
+    external_scripts: &mut Vec<String>,
+    lint_findings: &mut Vec<LintFinding>,
+) -> Result<FragmentTable, ParseError> {
+    let declarations: Vec<roxmltree::Node<'_, '_>> = doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "template")
+        .collect();
+    if declarations.is_empty() {
+        return Ok(external.clone());
     }
-    Ok(out)
-}
-
-/// Scan `src` starting at `start` for the matching `</tag_name>` close,
-/// respecting nested opens of the same name. Returns
-/// `(close_open_offset, advance_past_close_offset)`.
-fn find_matching_close(
-    src: &str,
-    start: usize,
-    tag_name: &str,
-) -> Result<(usize, usize), ParseError> {
-    let mut i = start;
-    let mut depth = 1i32;
-    while i < src.len() {
-        let Some(rel) = src[i..].find('<') else {
-            break;
-        };
-        let lt = i + rel;
-        let gt_rel = find_tag_gt(&src[lt..]).ok_or_else(|| {
-            ParseError::Xml(format!("unterminated tag while seeking </{tag_name}>"))
+    let mut known: BTreeSet<String> = external.iter().map(|(k, _)| k.clone()).collect();
+    for node in &declarations {
+        let name = node.attribute("name").ok_or_else(|| {
+            ParseError::Xml(format!(
+                "<template> at byte {} requires a name=\"...\" attribute",
+                node.range().start
+            ))
         })?;
-        let gt = lt + gt_rel;
-        let raw = &src[lt..=gt];
-        if raw.starts_with("<!--") || raw.starts_with("<?") {
-            i = gt + 1;
-            continue;
-        }
-        let is_close = raw.starts_with("</");
-        let inner = &raw[if is_close { 2 } else { 1 }..raw.len() - 1];
-        let self_closing = inner.ends_with('/');
-        let stripped = inner.strip_suffix('/').unwrap_or(inner);
-        let tag_end = stripped
-            .find(|c: char| c.is_whitespace() || c == '/')
-            .unwrap_or(stripped.len());
-        let this_name = &stripped[..tag_end];
-        if this_name == tag_name {
-            if is_close {
-                depth -= 1;
-                if depth == 0 {
-                    return Ok((lt, gt + 1));
-                }
-            } else if !self_closing {
-                depth += 1;
+        known.insert(name.to_string());
+    }
+
+    let file = self_path.display().to_string();
+    let mut own = FragmentTable::new();
+    for node in &declarations {
+        let key = node.attribute("name").unwrap_or_default().to_string();
+        let mut params: Vec<FragmentParam> = node
+            .attributes()
+            .filter(|a| a.name() != "name")
+            .map(|a| FragmentParam {
+                name: a.name().to_string(),
+                default: Some(a.value().to_string()),
+            })
+            .collect();
+        let ctx = FragCtx {
+            known: &known,
+            in_body: true,
+        };
+        let mut body = Vec::new();
+        let mut attrs = Attributes::default();
+        let mut slots = Vec::new();
+        build_children(
+            *node,
+            &mut attrs,
+            &mut body,
+            &mut slots,
+            script_buf,
+            external_scripts,
+            src,
+            lint_findings,
+            &ctx,
+            false,
+            1,
+        )?;
+        // A marker the body reads is a parameter whether or not the
+        // declaration named it: the use site is free to bind any of them, and
+        // one it leaves alone falls through to the global signal scope.
+        for name in body_markers(&body) {
+            if !params.iter().any(|p| p.name == name) {
+                params.push(FragmentParam {
+                    name,
+                    default: None,
+                });
             }
         }
-        i = gt + 1;
-    }
-    Err(ParseError::Xml(format!(
-        "unterminated template use <{tag_name}>"
-    )))
-}
-
-/// Prepend `prefix` to every `id="..."` attribute value in `body`.
-/// Boundary check: the byte preceding `id=` must be whitespace, `<`, or a
-/// recognized attribute separator, so substrings like `mid="..."` are not
-/// rewritten. Existing prefixes compose: `id="b"` under a prefix `"a:"`
-/// becomes `id="a:b"`; on a subsequent expansion that uses the resulting
-/// `id="a:b"` as a use-site prefix, inner ids stack to `a:b:c`.
-fn inject_id_prefix(body: &str, prefix: &str) -> String {
-    let mut out = String::with_capacity(body.len() + prefix.len() * 4);
-    let mut i = 0;
-    while i < body.len() {
-        let Some(rel) = body[i..].find("id=\"") else {
-            out.push_str(&body[i..]);
-            break;
-        };
-        let pos = i + rel;
-        let before = if pos == 0 {
-            None
-        } else {
-            body.as_bytes().get(pos - 1).copied()
-        };
-        let is_boundary =
-            pos == 0 || matches!(before, Some(b' ' | b'\t' | b'\n' | b'\r' | b'<' | b'/'));
-        if !is_boundary {
-            out.push_str(&body[i..pos + 4]);
-            i = pos + 4;
-            continue;
+        let names: BTreeSet<&str> = params.iter().map(|p| p.name.as_str()).collect();
+        for el in &mut body {
+            bind_markers(el, &names);
         }
-        out.push_str(&body[i..pos + 4]);
-        let val_start = pos + 4;
-        let Some(end_rel) = body[val_start..].find('"') else {
-            out.push_str(&body[val_start..]);
-            break;
-        };
-        out.push_str(prefix);
-        out.push_str(&body[val_start..val_start + end_rel]);
-        i = val_start + end_rel;
+        let (line, col) = line_col_of(src, node.range().start);
+        own.insert(Fragment {
+            key,
+            params,
+            body,
+            origins: vec![FragmentOrigin {
+                file: file.clone(),
+                line: line as u32,
+                col: col as u32,
+            }],
+            kind: FragmentKind::Template,
+        })
+        .map_err(|e| ParseError::Xml(e.to_string()))?;
     }
-    out
-}
 
-/// Replace every `<slot/>` / `<slot></slot>` / `<slot default="..."/>` in
-/// `body` with `children` (template caller's inner XML). If `children` is
-/// empty, fall back to the slot's `default=""` attribute, then to the
-/// `<slot>...</slot>` inner content, then to empty.
-fn substitute_slot(body: &str, children: &str) -> String {
-    let mut out = String::with_capacity(body.len());
-    let mut i = 0;
-    while i < body.len() {
-        let Some(rel) = body[i..].find("<slot") else {
-            out.push_str(&body[i..]);
-            break;
-        };
-        let lt = i + rel;
-        // Boundary check - must be `<slot` followed by space, `/`, or `>`.
-        let after = body.as_bytes().get(lt + 5).copied();
-        if !matches!(after, Some(b' ' | b'\t' | b'\n' | b'/' | b'>')) {
-            out.push_str(&body[i..lt + 5]);
-            i = lt + 5;
-            continue;
+    let mut table = own;
+    for (key, fragment) in external.iter() {
+        if table.get(key).is_none() {
+            table
+                .insert(fragment.clone())
+                .map_err(|e| ParseError::Xml(e.to_string()))?;
         }
-        out.push_str(&body[i..lt]);
-        let Some(gt_rel) = body[lt..].find('>') else {
-            out.push_str(&body[lt..]);
-            break;
-        };
-        let gt = lt + gt_rel;
-        let opening = &body[lt..=gt];
-        let opening_inner = &opening[1..opening.len() - 1];
-        let self_closing = opening_inner.ends_with('/');
-        let default_val = extract_attr(opening, "default").unwrap_or_default();
-
-        let (slot_default_inner, advance_to) = if self_closing {
-            (String::new(), gt + 1)
-        } else if let Some(close_rel) = body[gt + 1..].find("</slot>") {
-            let close_start = gt + 1 + close_rel;
-            (
-                body[gt + 1..close_start].trim().to_string(),
-                close_start + "</slot>".len(),
-            )
-        } else {
-            (String::new(), gt + 1)
-        };
-
-        if !children.is_empty() {
-            out.push_str(children);
-        } else if !default_val.is_empty() {
-            out.push_str(&default_val);
-        } else {
-            out.push_str(&slot_default_inner);
-        }
-        i = advance_to;
     }
-    out
+    Ok(table)
 }
 
-/// Pull a single attribute value out of a raw tag string (`<foo a="b" />`).
-fn extract_attr(tag: &str, name: &str) -> Option<String> {
-    let needle = format!("{name}=\"");
-    let start = tag.find(&needle)? + needle.len();
-    let end_rel = tag[start..].find('"')?;
-    Some(tag[start..start + end_rel].to_string())
-}
-
-/// Yield every `key="value"` pair in the raw tag string in source order.
-fn extract_all_attrs(tag: &str) -> Vec<(String, String)> {
+/// Every global marker name the body reads, in first-appearance order.
+fn body_markers(body: &[Element]) -> Vec<String> {
+    fn walk(el: &Element, out: &mut Vec<String>) {
+        for slot in &el.interpolations {
+            if let InterpolationSlot::Global(name) = slot
+                && !out.iter().any(|n| n == name)
+            {
+                out.push(name.clone());
+            }
+        }
+        for child in &el.children {
+            walk(child, out);
+        }
+    }
     let mut out = Vec::new();
-    let inner = tag.trim_start_matches('<').trim_end_matches('>');
-    let inner = inner.trim_end_matches('/');
-    let mut chars = inner.char_indices().peekable();
-    // skip tag name
-    while let Some((_, c)) = chars.peek() {
-        if c.is_whitespace() {
-            break;
-        }
-        chars.next();
-    }
-    let mut buf = String::new();
-    let mut state = 0u8; // 0 = looking for name, 1 = inside name, 2 = inside value
-    let mut current_name = String::new();
-    while let Some((_, c)) = chars.next() {
-        match state {
-            0 if !c.is_whitespace() && c != '=' => {
-                buf.push(c);
-                state = 1;
-            }
-            1 => {
-                if c == '=' {
-                    current_name = std::mem::take(&mut buf);
-                    state = 2;
-                } else if c.is_whitespace() {
-                    buf.clear();
-                    state = 0;
-                } else {
-                    buf.push(c);
-                }
-            }
-            2 if c == '"' || c == '\'' => {
-                let quote = c;
-                let mut val = String::new();
-                for (_, vc) in chars.by_ref() {
-                    if vc == quote {
-                        break;
-                    }
-                    val.push(vc);
-                }
-                out.push((current_name.clone(), val));
-                state = 0;
-            }
-            _ => {}
-        }
+    for el in body {
+        walk(el, &mut out);
     }
     out
+}
+
+/// Re-scope every marker in `el` that names a parameter, so instantiation
+/// resolves it from the arguments instead of the global signal map.
+fn bind_markers(el: &mut Element, params: &BTreeSet<&str>) {
+    for slot in &mut el.interpolations {
+        if let InterpolationSlot::Global(name) = slot
+            && params.contains(name.as_str())
+        {
+            *slot = InterpolationSlot::Arg(std::mem::take(name));
+        }
+    }
+    for child in &mut el.children {
+        bind_markers(child, params);
+    }
+}
+
+/// What the element builder needs to know about fragments as it walks.
+pub(crate) struct FragCtx<'a> {
+    /// Every key a use site may name: what the app handed this parse, plus
+    /// what the file declares itself.
+    pub(crate) known: &'a BTreeSet<String>,
+    /// Set while building a fragment body.
+    pub(crate) in_body: bool,
+}
+
+impl FragCtx<'_> {
+    /// The fragment `tag` instantiates, if it instantiates one.
+    ///
+    /// Inside a body an unrecognized tag is a use site rather than an error:
+    /// the table a body instantiates against is assembled from the whole app,
+    /// so a name this file has never seen may still be declared elsewhere.
+    /// The lookup that decides is [`crate::fragments::inline`], which runs
+    /// with the full table in hand.
+    fn use_key(&self, node: roxmltree::Node, tag: &str) -> Option<String> {
+        if tag == "use" {
+            return Some(node.attribute("template").unwrap_or_default().to_string());
+        }
+        if self.known.contains(tag) {
+            return Some(tag.to_string());
+        }
+        if self.in_body
+            && !KNOWN_TAGS.contains(&tag)
+            && !matches!(tag, SLOT_TAG | "script" | "menubar" | "template")
+            && !lumen_widget::is_widget_tag_registered(tag)
+        {
+            return Some(tag.to_string());
+        }
+        None
+    }
 }
 
 /// Normalise `$`-prefixed signal references inside `{interpolation}`
@@ -801,7 +643,7 @@ fn reject_arg_binding(tag: &str, name: &str, value: &str) -> Result<(), ParseErr
 /// Append `slot` to `slots` only if no equal slot is already present.
 /// Keeps the per-element slot list deduplicated so the spawner doesn't
 /// re-resolve the same placeholder more than once per row.
-fn push_unique(slots: &mut Vec<InterpolationSlot>, slot: InterpolationSlot) {
+pub(crate) fn push_unique(slots: &mut Vec<InterpolationSlot>, slot: InterpolationSlot) {
     if !slots.iter().any(|s| s == &slot) {
         slots.push(slot);
     }
@@ -940,23 +782,6 @@ impl AttrCtx<'_> {
     }
 }
 
-/// Replace every `{name}` token in `body` with the matching attribute
-/// value. Unknown placeholders are left intact so misuse fails loudly
-/// downstream rather than silently producing an attribute named `{x}`.
-fn substitute_placeholders(body: &str, attrs: &[(String, String)]) -> String {
-    let mut out = body.to_string();
-    for (k, v) in attrs {
-        if k == "template" {
-            continue;
-        }
-        let pat = format!("{{{k}}}");
-        if out.contains(&pat) {
-            out = out.replace(&pat, v);
-        }
-    }
-    out
-}
-
 /// Scan the top-level `<root>` children for a single `<menubar>`
 /// block and parse its contents into a `MenuBarSpec`. The block is
 /// stripped from the layout tree by `build_element` (it skips
@@ -1054,6 +879,7 @@ fn build_composed_widget(
     external_scripts: &mut Vec<String>,
     src: &str,
     lint_findings: &mut Vec<LintFinding>,
+    frag: &FragCtx<'_>,
     in_for_body: bool,
     depth: u32,
 ) -> Result<Option<Element>, ParseError> {
@@ -1088,6 +914,7 @@ fn build_composed_widget(
             external_scripts,
             src,
             lint_findings,
+            frag,
             in_for_body,
             depth + 1,
         )?;
@@ -1188,6 +1015,7 @@ fn build_composed_widget(
                     external_scripts,
                     src,
                     lint_findings,
+                    frag,
                     in_for_body,
                     depth + 1,
                 )?);
@@ -1765,12 +1593,14 @@ fn synthesize_widget_parts(
 /// left inline would hold that stack at all 32 levels.
 const MAX_ELEMENT_DEPTH: u32 = 32;
 
+#[allow(clippy::too_many_arguments)]
 fn build_element(
     node: roxmltree::Node,
     script_buf: &mut String,
     external_scripts: &mut Vec<String>,
     src: &str,
     lint_findings: &mut Vec<LintFinding>,
+    frag: &FragCtx<'_>,
     in_for_body: bool,
     depth: u32,
 ) -> Result<Element, ParseError> {
@@ -1781,6 +1611,40 @@ fn build_element(
         )));
     }
     let tag = node.tag_name().name().to_string();
+    // A use site stands in for the fragment it names until the tree is
+    // inlined, so it never reaches the tag vocabulary below.
+    if let Some(key) = frag.use_key(node, &tag) {
+        if key.is_empty() {
+            return Err(ParseError::Xml(format!(
+                "<use> at byte {} requires a template=\"...\" attribute",
+                node.range().start
+            )));
+        }
+        return build_fragment_use(
+            node,
+            tag,
+            key,
+            script_buf,
+            external_scripts,
+            src,
+            lint_findings,
+            frag,
+            in_for_body,
+            depth,
+        );
+    }
+    if frag.in_body && tag == SLOT_TAG {
+        return build_slot(
+            node,
+            script_buf,
+            external_scripts,
+            src,
+            lint_findings,
+            frag,
+            in_for_body,
+            depth,
+        );
+    }
     // Built-in tags first; fall back to the lumen-widget runtime
     // registry so `#[derive(Widget)] #[widget(tag="my-thing")]` widgets
     // that called `MyThing::register()` at startup are accepted instead
@@ -1800,6 +1664,7 @@ fn build_element(
         external_scripts,
         src,
         lint_findings,
+        frag,
         in_for_body,
         depth,
     )? {
@@ -1925,6 +1790,19 @@ fn build_element(
             "class" => class_off = Some(off),
             _ => {}
         }
+        // A fragment body writes markers into any attribute, and a value
+        // like `tab-index="{n}"` is not an integer until an argument
+        // replaces the marker. Hold the text and parse it per use site.
+        if frag.in_body && a.value().contains('{') && !interpolated_attribute(a.name()) {
+            let (line, col) = line_col_of(src, off);
+            attrs.deferred.push(DeferredAttr {
+                name: a.name().to_string(),
+                value: a.value().to_string(),
+                line,
+                col,
+            });
+            continue;
+        }
         let mut ctx = AttrCtx {
             src,
             value_offset: off,
@@ -2021,6 +1899,59 @@ fn build_element(
     // iteration-scope reference.
     let child_in_for = in_for_body || tag == "for";
     let mut children = Vec::new();
+    build_children(
+        node,
+        &mut attrs,
+        &mut children,
+        &mut slots,
+        script_buf,
+        external_scripts,
+        src,
+        lint_findings,
+        frag,
+        child_in_for,
+        depth,
+    )?;
+
+    // `<button default="true">` gains the `default` class here - after
+    // the whole attribute loop, so a later `class="..."` attr can't
+    // clobber it - letting skins style `button.default` through the
+    // compile-time cascade.
+    if attrs.default_button && !attrs.classes.iter().any(|c| c == "default") {
+        attrs.classes.push("default".to_string());
+    }
+
+    synthesize_widget_parts(node, &tag, &mut attrs, &mut children)?;
+
+    Ok(Element {
+        tag,
+        attrs,
+        children,
+        interpolations: slots,
+        ..Default::default()
+    })
+}
+
+/// Walk `node`'s children into `children`, taking the element's own text
+/// content, its inline scripts, and the tags that never become layout nodes
+/// on the way.
+///
+/// `in_for_body` is already the value the children see: the caller decides
+/// whether it is opening a `<for>` body.
+#[allow(clippy::too_many_arguments)]
+fn build_children(
+    node: roxmltree::Node,
+    attrs: &mut Attributes,
+    children: &mut Vec<Element>,
+    slots: &mut Vec<InterpolationSlot>,
+    script_buf: &mut String,
+    external_scripts: &mut Vec<String>,
+    src: &str,
+    lint_findings: &mut Vec<LintFinding>,
+    frag: &FragCtx<'_>,
+    in_for_body: bool,
+    depth: u32,
+) -> Result<(), ParseError> {
     for child in node.children() {
         if child.is_text() {
             // Element text content (e.g. `<label>Hi</label>`) becomes the
@@ -2039,7 +1970,7 @@ fn build_element(
                     off,
                     src,
                     lint_findings,
-                    &mut slots,
+                    slots,
                     in_for_body,
                 ));
             }
@@ -2051,10 +1982,11 @@ fn build_element(
             //   shared script buffer (still useful for tiny snippets that
             //   don't contain XML-illegal characters).
             // `<menubar>` is stripped from the layout tree by
-            // `extract_menubar` before `build_element` runs; skipping
-            // here keeps unknown-tag checks happy and prevents the
-            // menubar's authoring nesting from being layout-spawned.
-            if child.tag_name().name() == "menubar" {
+            // `extract_menubar`, and `<template>` by the fragment collection
+            // pass, both before the walk reaches them; skipping here keeps
+            // unknown-tag checks happy and prevents their authoring nesting
+            // from being layout-spawned.
+            if matches!(child.tag_name().name(), "menubar" | "template") {
                 continue;
             }
             if child.tag_name().name() == "script" {
@@ -2074,24 +2006,196 @@ fn build_element(
                 external_scripts,
                 src,
                 lint_findings,
-                child_in_for,
+                frag,
+                in_for_body,
                 depth + 1,
             )?);
         }
     }
+    Ok(())
+}
 
-    // `<button default="true">` gains the `default` class here - after
-    // the whole attribute loop, so a later `class="..."` attr can't
-    // clobber it - letting skins style `button.default` through the
-    // compile-time cascade.
-    if attrs.default_button && !attrs.classes.iter().any(|c| c == "default") {
-        attrs.classes.push("default".to_string());
+/// Write an attribute a fragment body held back, now that its markers are
+/// resolved.
+///
+/// `line` / `col` are where the value was written, which is a different file
+/// from the one being parsed whenever the fragment came from elsewhere, so
+/// any finding the value raises is repositioned onto them.
+pub(crate) fn apply_deferred_attribute(
+    tag: &str,
+    attr: &DeferredAttr,
+    value: &str,
+    attrs: &mut Attributes,
+    lint_findings: &mut Vec<LintFinding>,
+) -> Result<(), ParseError> {
+    let mut raised = Vec::new();
+    let mut ctx = AttrCtx {
+        src: "",
+        value_offset: 0,
+        lint_findings: &mut raised,
+    };
+    let applied = apply_attribute(tag, &attr.name, value, attrs, &mut ctx)?;
+    for mut finding in raised {
+        finding.line = attr.line;
+        finding.col = attr.col;
+        lint_findings.push(finding);
     }
+    if applied && let Some(property) = canonical_style_property(&attr.name) {
+        attrs
+            .markup_styles
+            .push((property.to_string(), value.to_string()));
+    }
+    Ok(())
+}
 
-    synthesize_widget_parts(node, &tag, &mut attrs, &mut children)?;
+/// Classify the `{marker}` sites in a value the compiler produced rather
+/// than read from a file, normalizing `{$name}` to `{name}` the same way an
+/// authored value is normalized.
+pub(crate) fn classify_markers(value: &str) -> (String, Vec<InterpolationSlot>) {
+    let mut slots = Vec::new();
+    let mut discarded = Vec::new();
+    let text = normalize_dollar_interpolation(value, 0, "", &mut discarded, &mut slots, false);
+    (text, slots)
+}
 
+/// Does this attribute hold text that `{marker}` resolution reads?
+///
+/// The rest of the vocabulary parses its value into typed layout data, so a
+/// marker in one of those is held back and parsed per use site instead. See
+/// [`Attributes::deferred`](crate::layout_ir::Attributes::deferred).
+fn interpolated_attribute(name: &str) -> bool {
+    matches!(name, "text" | "placeholder" | "src" | "id" | "class")
+}
+
+/// Build the element that stands in for a fragment until the tree is
+/// inlined.
+///
+/// Every attribute except the `<use template=>` selector becomes an argument,
+/// `id` included: it seeds the per-instance id prefix and is bindable like any
+/// other. The use site's own children ride along as the content its `<slot>`
+/// receives.
+#[allow(clippy::too_many_arguments)]
+fn build_fragment_use(
+    node: roxmltree::Node,
+    tag: String,
+    key: String,
+    script_buf: &mut String,
+    external_scripts: &mut Vec<String>,
+    src: &str,
+    lint_findings: &mut Vec<LintFinding>,
+    frag: &FragCtx<'_>,
+    in_for_body: bool,
+    depth: u32,
+) -> Result<Element, ParseError> {
+    let args: Vec<(String, String)> = node
+        .attributes()
+        .filter(|a| !(tag == "use" && a.name() == "template"))
+        .map(|a| (a.name().to_string(), a.value().to_string()))
+        .collect();
+    let mut slots = Vec::new();
+    let mut attrs = Attributes::default();
+    if let Some(a) = node.attributes().find(|a| a.name() == "id") {
+        attrs.id = Some(normalize_dollar_interpolation(
+            a.value(),
+            a.range_value().start,
+            src,
+            lint_findings,
+            &mut slots,
+            in_for_body,
+        ));
+    }
+    let mut children = Vec::new();
+    build_children(
+        node,
+        &mut attrs,
+        &mut children,
+        &mut slots,
+        script_buf,
+        external_scripts,
+        src,
+        lint_findings,
+        frag,
+        in_for_body,
+        depth,
+    )?;
+    let slot_children = !children.is_empty() || attrs.text.is_some();
     Ok(Element {
         tag,
+        attrs,
+        children,
+        interpolations: slots,
+        frag_use: Some(Box::new(FragmentUse {
+            key,
+            args,
+            slot_children,
+        })),
+    })
+}
+
+/// Build the marker a fragment body writes where the use site's content
+/// lands.
+///
+/// The fallback is resolved here rather than at instantiation: a non-empty
+/// `default` wins over the marker's own content, and both are known now. A
+/// default that carries tags is markup; one that does not is text for the
+/// element holding the marker.
+///
+/// `name` says which slot this is; a marker without one is the default slot,
+/// which is the only one markup can hand content to.
+#[allow(clippy::too_many_arguments)]
+fn build_slot(
+    node: roxmltree::Node,
+    script_buf: &mut String,
+    external_scripts: &mut Vec<String>,
+    src: &str,
+    lint_findings: &mut Vec<LintFinding>,
+    frag: &FragCtx<'_>,
+    in_for_body: bool,
+    depth: u32,
+) -> Result<Element, ParseError> {
+    let mut attrs = Attributes {
+        slot_name: node.attribute("name").map(|n| n.to_string()),
+        ..Attributes::default()
+    };
+    let mut children = Vec::new();
+    let mut slots = Vec::new();
+    let default = node.attribute("default").unwrap_or_default();
+    if default.is_empty() {
+        build_children(
+            node,
+            &mut attrs,
+            &mut children,
+            &mut slots,
+            script_buf,
+            external_scripts,
+            src,
+            lint_findings,
+            frag,
+            in_for_body,
+            depth,
+        )?;
+    } else if default.contains('<') {
+        let wrapped = format!("<{SLOT_TAG}>{default}</{SLOT_TAG}>");
+        let doc =
+            roxmltree::Document::parse(&wrapped).map_err(|e| ParseError::Xml(e.to_string()))?;
+        build_children(
+            doc.root_element(),
+            &mut attrs,
+            &mut children,
+            &mut slots,
+            script_buf,
+            external_scripts,
+            &wrapped,
+            lint_findings,
+            frag,
+            in_for_body,
+            depth,
+        )?;
+    } else {
+        attrs.text = Some(default.to_string());
+    }
+    Ok(Element {
+        tag: SLOT_TAG.to_string(),
         attrs,
         children,
         interpolations: slots,
@@ -2868,21 +2972,6 @@ mod include_tests {
         assert!(ir.included_files.is_empty());
         assert_eq!(ir.root.children.len(), 1);
         assert_eq!(ir.root.children[0].tag, "label");
-    }
-
-    #[test]
-    fn find_tag_gt_skips_gt_in_quoted_attr() {
-        // A `>` inside a quoted attribute value must not close the tag early.
-        let s = r#"<Card label="a > b"/>rest"#;
-        let gt = find_tag_gt(s).expect("closing gt");
-        assert_eq!(&s[..=gt], r#"<Card label="a > b"/>"#);
-    }
-
-    #[test]
-    fn find_tag_gt_swallows_comment_body() {
-        let s = "<!-- a > \"b\" --><next>";
-        let gt = find_tag_gt(s).expect("comment end");
-        assert_eq!(&s[..=gt], "<!-- a > \"b\" -->");
     }
 
     #[test]

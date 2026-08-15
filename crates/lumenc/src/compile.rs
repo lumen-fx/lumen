@@ -147,7 +147,15 @@ fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileErr
     };
 
     // Includes are already spliced away, so the string-only parser suffices.
-    let mut ir = crate::parse_html(&spliced).map_err(|e| CompileError::ParseHtml(e.to_string()))?;
+    let parsed = crate::parse_markup(
+        &spliced,
+        &html_path,
+        None,
+        &lumen_ir::fragment::FragmentTable::new(),
+    )
+    .map_err(|e| CompileError::ParseHtml(e.to_string()))?;
+    let fragments = parsed.fragments;
+    let mut ir = parsed.ir;
     ir.included_files = include_paths;
 
     // Rewrite `<image src>` relative paths absolute against the app dir.
@@ -228,9 +236,7 @@ fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileErr
         // This path covers the single entry page (see the module comment);
         // `lumenc build` and `lumenc package` are what compile a page set.
         pages: None,
-        // Fragment declarations reach the artifact once the parser collects
-        // them; the tree this path builds names none yet.
-        fragments: lumen_ir::fragment::FragmentTable::new(),
+        fragments,
     })
 }
 

@@ -31,6 +31,10 @@ pub mod compile;
 /// Markup formatter - requires `roxmltree`, gated with the parser stack.
 #[cfg(feature = "runtime-parse")]
 pub mod formatter;
+/// Fragment instantiation, gated with the parser stack that produces the
+/// use sites it resolves.
+#[cfg(feature = "runtime-parse")]
+mod fragments;
 pub mod i18n_cli;
 /// Static signal lint - walks the source parser (`runtime-parse`) and reads
 /// `lumen.toml` config (`lumen-runtime`, `dev-run`).
@@ -90,7 +94,7 @@ pub use lumen_runtime::{
 // historical names so every `lumenc::{artifact,layout_ir,values,css_vars}::...`
 // path (internal `crate::...` refs and external consumers alike) resolves
 // unchanged after the extraction.
-pub use lumen_ir::{artifact, css_vars, layout_ir, values};
+pub use lumen_ir::{artifact, css_vars, fragment, layout_ir, values};
 
 pub use artifact::{ArtifactError, CompiledApp};
 #[cfg(feature = "dev-run")]
@@ -104,7 +108,9 @@ pub use lumen_runtime::{
 };
 pub use parser_css::{CssWarning, Stylesheet, apply_css, parse_css};
 #[cfg(feature = "runtime-parse")]
-pub use parser_html::{parse_html, parse_html_with_loader};
+pub use parser_html::{
+    ParsedMarkup, collect_fragments, parse_html, parse_html_with_loader, parse_markup,
+};
 #[cfg(feature = "runtime-parse")]
 pub use resolve::{FileLoader, FsLoader};
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]

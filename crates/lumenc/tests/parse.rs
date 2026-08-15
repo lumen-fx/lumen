@@ -268,6 +268,225 @@ fn template_slot_supports_nested_same_name() {
 }
 
 #[test]
+fn template_id_prefixes_stack_through_nesting() {
+    // Two levels of instantiation stack their prefixes, so the innermost
+    // button answers to `outer:inner:save`.
+    let ir = parse_html(
+        r##"<root>
+            <template name="inner">
+              <column><button id="save"/></column>
+            </template>
+            <template name="outer">
+              <row><inner id="inner"/></row>
+            </template>
+            <outer id="outer"/>
+           </root>"##,
+    )
+    .expect("parse");
+    let row = &ir.root.children[0];
+    let column = &row.children[0];
+    assert_eq!(
+        column.children[0].attrs.id.as_deref(),
+        Some("outer:inner:save")
+    );
+}
+
+#[test]
+fn template_nested_use_passes_its_own_markers_through() {
+    // The outer body instantiates another fragment and forwards one of its
+    // own parameters as that use site's argument.
+    let ir = parse_html(
+        r##"<root>
+            <template name="badge">
+              <label text="{tone}-badge"/>
+            </template>
+            <template name="card">
+              <column><badge tone="{tone}"/></column>
+            </template>
+            <card tone="danger"/>
+           </root>"##,
+    )
+    .expect("parse");
+    let column = &ir.root.children[0];
+    assert_eq!(
+        column.children[0].attrs.text.as_deref(),
+        Some("danger-badge")
+    );
+}
+
+#[test]
+fn template_use_before_declaration_resolves() {
+    // Declaration order does not matter: the file's fragments are collected
+    // before its tree is built.
+    let ir = parse_html(
+        r##"<root>
+            <card text="early"/>
+            <template name="card"><tile text="{text}"/></template>
+           </root>"##,
+    )
+    .expect("parse");
+    assert_eq!(ir.root.children.len(), 1);
+    assert_eq!(ir.root.children[0].attrs.text.as_deref(), Some("early"));
+}
+
+#[test]
+fn template_marker_substitutes_at_every_occurrence() {
+    let ir = parse_html(
+        r##"<root>
+            <template name="pair">
+              <tile id="{n}-a" class="{n}" text="{n} and {n}"/>
+            </template>
+            <pair n="x"/>
+           </root>"##,
+    )
+    .expect("parse");
+    let tile = &ir.root.children[0];
+    assert_eq!(tile.attrs.id.as_deref(), Some("x-a"));
+    assert_eq!(tile.attrs.classes, vec!["x".to_string()]);
+    assert_eq!(tile.attrs.text.as_deref(), Some("x and x"));
+}
+
+#[test]
+fn template_marker_in_a_typed_attribute_resolves_per_use() {
+    // `tab-index` parses to an integer, which `{n}` is not until the use
+    // site binds it. Two instances get their own value.
+    let ir = parse_html(
+        r##"<root>
+            <template name="row">
+              <button tab-index="{n}" width="{w}px"/>
+            </template>
+            <row n="2" w="40"/>
+            <row n="3" w="60"/>
+           </root>"##,
+    )
+    .expect("parse");
+    assert_eq!(ir.root.children[0].attrs.tab_index, Some(2));
+    assert_eq!(ir.root.children[1].attrs.tab_index, Some(3));
+    assert!(matches!(
+        ir.root.children[0].attrs.width,
+        Some(lumenc::LengthSpec::Px(w)) if (w - 40.0).abs() < f32::EPSILON
+    ));
+}
+
+#[test]
+fn template_marker_the_use_site_leaves_alone_stays_a_signal() {
+    // An unbound marker keeps its place in the text and resolves against the
+    // global signal scope at runtime, exactly as one written in place does.
+    let ir = parse_html(
+        r##"<root>
+            <template name="card"><label text="{count}"/></template>
+            <card/>
+           </root>"##,
+    )
+    .expect("parse");
+    let label = &ir.root.children[0];
+    assert_eq!(label.attrs.text.as_deref(), Some("{count}"));
+    assert!(label.interpolations.iter().any(|s| matches!(
+        s,
+        lumenc::layout_ir::InterpolationSlot::Global(name) if name == "count"
+    )));
+    assert!(
+        ir.lint_findings
+            .iter()
+            .any(|f| f.kind == lumenc::LintKind::BareInterpolation),
+        "the bare-marker lint still fires on the declaration"
+    );
+}
+
+#[test]
+fn template_argument_carrying_a_signal_keeps_its_scope() {
+    // A signal reference passed through an argument lands on the element it
+    // was substituted into, with the slot the runtime resolves it from.
+    let ir = parse_html(
+        r##"<root>
+            <template name="card"><label text="{title}"/></template>
+            <card title="{$headline}"/>
+           </root>"##,
+    )
+    .expect("parse");
+    let label = &ir.root.children[0];
+    assert_eq!(label.attrs.text.as_deref(), Some("{headline}"));
+    assert!(label.interpolations.iter().any(|s| matches!(
+        s,
+        lumenc::layout_ir::InterpolationSlot::Global(name) if name == "headline"
+    )));
+}
+
+#[test]
+fn template_slot_falls_back_to_its_default_then_its_content() {
+    // Content at the use site wins; then `default="..."`; then the slot's own
+    // children.
+    let markup = r##"<root>
+        <template name="frame">
+          <column class="frame"><slot default="&lt;label text=&quot;from-default&quot;/&gt;"><label text="from-content"/></slot></column>
+        </template>
+        <template name="plain">
+          <column class="plain"><slot><label text="from-content"/></slot></column>
+        </template>
+        <frame/>
+        <plain/>
+        <plain><label text="from-use"/></plain>
+       </root>"##;
+    let ir = parse_html(markup).expect("parse");
+    assert_eq!(
+        ir.root.children[0].children[0].attrs.text.as_deref(),
+        Some("from-default"),
+        "a default beats the slot's own content"
+    );
+    assert_eq!(
+        ir.root.children[1].children[0].attrs.text.as_deref(),
+        Some("from-content"),
+        "with no default the slot's own content stands in"
+    );
+    assert_eq!(
+        ir.root.children[2].children[0].attrs.text.as_deref(),
+        Some("from-use"),
+        "content at the use site wins over both"
+    );
+}
+
+#[test]
+fn unknown_fragment_name_errors() {
+    let err = parse_html(r##"<root><use template="nope"/></root>"##)
+        .expect_err("no fragment by that name is declared");
+    assert!(
+        err.to_string().contains("nope"),
+        "the error names the fragment: {err}"
+    );
+}
+
+#[test]
+fn template_cycle_errors() {
+    let err = parse_html(
+        r##"<root>
+            <template name="a"><column><b/></column></template>
+            <template name="b"><column><a/></column></template>
+            <a/>
+           </root>"##,
+    )
+    .expect_err("a fragment that reaches itself is an error");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("a -> b -> a") || msg.contains("b -> a -> b"),
+        "the error names the cycle: {msg}"
+    );
+}
+
+#[test]
+fn marker_in_tag_position_errors() {
+    // Markers resolve in attribute values and text. One written where a tag
+    // name goes fails the parse rather than reshaping the tree.
+    let err = parse_html(
+        r##"<root>
+            <template name="card"><{kind} text="hi"/></template>
+            <card kind="tile"/>
+           </root>"##,
+    )
+    .expect_err("a marker in tag position is not markup");
+    assert!(matches!(err, lumenc::ParseError::Xml(_)), "{err}");
+}
+
+#[test]
 fn css_hover_pseudo_routes_to_hover_bg() {
     let mut ir = parse_html(r##"<root><tile class="t" bg="#000000"/></root>"##).expect("html");
     let css = lumenc::parse_css(".t:hover { bg: #ff0000; }").expect("css");
