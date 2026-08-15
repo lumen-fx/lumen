@@ -146,3 +146,37 @@ pub trait Bindable: Component {
     /// Writes a bus value into the component.
     fn write(&mut self, v: Self::Value);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{FrameRequest, SurfaceError};
+
+    /// The default frame request asks for nothing. A window backend fills
+    /// it in from what the tick reported, so a default that leaned the
+    /// other way would repaint every frame of an idle app.
+    #[test]
+    fn the_default_frame_request_asks_for_nothing() {
+        let request = FrameRequest::default();
+        assert!(!request.dirty);
+        assert!(!request.force_full);
+    }
+
+    /// Surface errors are printed to a person whose app just failed to
+    /// start or failed to draw, so each one has to say which of the two
+    /// happened and carry the backend's own reason.
+    #[test]
+    fn surface_errors_say_what_failed() {
+        assert_eq!(
+            SurfaceError::Init("no adapter".into()).to_string(),
+            "surface init failed: no adapter",
+        );
+        assert_eq!(
+            SurfaceError::Present("device lost".into()).to_string(),
+            "present failed: device lost",
+        );
+        assert_eq!(
+            SurfaceError::Detached.to_string(),
+            "renderer is not attached to a window",
+        );
+    }
+}

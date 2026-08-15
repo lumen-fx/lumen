@@ -429,6 +429,28 @@ mod tests {
         );
     }
 
+    /// Blurring a control that does not hold focus leaves the tracker
+    /// alone: a stale request from an assistive technology must not clear
+    /// focus out from under whatever holds it now. An action the app has
+    /// no answer for is ignored rather than treated as a failure.
+    #[test]
+    fn stale_and_unknown_requests_change_nothing() {
+        let mut world = world_with_focus();
+        let focused = world.spawn_empty().id();
+        let other = world.spawn_empty().id();
+
+        handle_action(&mut world, &request(focused, Action::Focus));
+        handle_action(&mut world, &request(other, Action::Blur));
+        assert_eq!(
+            world.resource::<FocusTracker>().0,
+            Some(focused),
+            "blurring a control that is not focused leaves focus where it is",
+        );
+
+        handle_action(&mut world, &request(focused, Action::CustomAction));
+        assert_eq!(world.resource::<FocusTracker>().0, Some(focused));
+    }
+
     /// Setting a value covers both shapes an assistive technology sends:
     /// a number for a slider and a string for a text control. Both mark
     /// the entity dirty so the next sync reports what the app now holds.
