@@ -39,6 +39,7 @@
 //! textual form. The magic + version prefix lets the loader reject a stale or
 //! foreign file cleanly instead of failing deep inside the decoder.
 
+use crate::fragment::FragmentTable;
 use crate::layout_ir::LayoutIR;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -73,15 +74,18 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// [`CompiledApp::pages`] carries a multi-page app's page set so navigation
 /// works without the page files on disk.
 ///
-/// `5`: the web target's three additions, which land together because one
-/// bump costs the same as three. [`crate::layout_ir::Attributes`] gains
-/// `markup_styles`, the styling attributes an element was given in markup, so
-/// a surface where CSS outranks markup can replay them and keep Lumen's
-/// precedence; `widget`, the authored widget an element desugared from, so an
-/// emitter can write the semantic form back; and `alt`, an image's own
-/// alternative text. [`CompiledScript`] gains `bytecode`, the compiled
-/// `.cdlb` image of a candela program, so a runtime without the compiler can
-/// run it.
+/// `5`: the web target's three additions and the fragment table, which land
+/// together because one bump costs the same as four.
+/// [`crate::layout_ir::Attributes`] gains `markup_styles`, the styling
+/// attributes an element was given in markup, so a surface where CSS outranks
+/// markup can replay them and keep Lumen's precedence; `widget`, the authored
+/// widget an element desugared from, so an emitter can write the semantic
+/// form back; and `alt`, an image's own alternative text. [`CompiledScript`]
+/// gains `bytecode`, the compiled `.cdlb` image of a candela program, so a
+/// runtime without the compiler can run it. [`CompiledApp::fragments`]
+/// carries the app's declared fragments, and [`crate::layout_ir::Element`]
+/// gains the fragment-use slot that names one, so a shipped app instantiates
+/// a fragment without the declaring source.
 pub const FORMAT_VERSION: u16 = 5;
 
 /// The navigable page set of a compiled multi-page app.
@@ -151,6 +155,11 @@ pub struct CompiledApp {
     /// The page set, for an app with more than one page. `None` for a
     /// single-page app, which needs no routing at all.
     pub pages: Option<CompiledPages>,
+    /// Every fragment the app declares, from markup `<template>` elements
+    /// and from `lmn!` blocks alike. The tree in [`Self::ir`] names them at
+    /// its use sites, so the table travels with it. Empty for an app that
+    /// declares none.
+    pub fragments: FragmentTable,
 }
 
 /// Errors from (de)serializing or reading/writing an artifact.
@@ -244,10 +253,81 @@ pub fn read_bytes(bytes: &[u8]) -> Result<CompiledApp, ArtifactError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fragment::{Fragment, FragmentKind, FragmentOrigin, FragmentParam};
+    use crate::layout_ir::{Attributes, Element, FragmentUse, InterpolationSlot};
+
+    fn fragments() -> FragmentTable {
+        let mut table = FragmentTable::new();
+        table
+            .insert(Fragment {
+                key: "card".to_string(),
+                params: vec![
+                    FragmentParam {
+                        name: "title".to_string(),
+                        default: None,
+                    },
+                    FragmentParam {
+                        name: "tone".to_string(),
+                        default: Some("plain".to_string()),
+                    },
+                ],
+                body: vec![Element {
+                    tag: "label".to_string(),
+                    attrs: Attributes {
+                        text: Some("{title}".to_string()),
+                        ..Attributes::default()
+                    },
+                    interpolations: vec![InterpolationSlot::Arg("title".to_string())],
+                    ..Element::default()
+                }],
+                origins: vec![
+                    FragmentOrigin {
+                        file: "main.lmn".to_string(),
+                        line: 12,
+                        col: 3,
+                    },
+                    FragmentOrigin {
+                        file: "parts.lmn".to_string(),
+                        line: 4,
+                        col: 1,
+                    },
+                ],
+                kind: FragmentKind::Template,
+            })
+            .expect("card is the first declaration");
+        table
+            .insert(Fragment {
+                key: "badge".to_string(),
+                params: Vec::new(),
+                body: vec![Element {
+                    tag: "tile".to_string(),
+                    ..Element::default()
+                }],
+                origins: vec![FragmentOrigin {
+                    file: "app.cdl".to_string(),
+                    line: 30,
+                    col: 9,
+                }],
+                kind: FragmentKind::Markup,
+            })
+            .expect("badge takes its own key");
+        table
+    }
 
     fn sample() -> CompiledApp {
+        let mut ir = LayoutIR::default();
+        ir.root.tag = "root".to_string();
+        ir.root.children = vec![Element {
+            tag: "card".to_string(),
+            frag_use: Some(Box::new(FragmentUse {
+                key: "card".to_string(),
+                args: vec![("title".to_string(), "Inbox".to_string())],
+                slot_children: true,
+            })),
+            ..Element::default()
+        }];
         CompiledApp {
-            ir: LayoutIR::default(),
+            ir,
             script_source: "let x = 1;".to_string(),
             scripts: vec![
                 CompiledScript {
@@ -265,6 +345,7 @@ mod tests {
                 entry: "index".to_string(),
                 keys: vec!["settings".to_string(), "index".to_string()],
             }),
+            fragments: fragments(),
         }
     }
 
@@ -286,6 +367,56 @@ mod tests {
         let pages = back.pages.expect("the page set round-trips");
         assert_eq!(pages.entry, "index");
         assert_eq!(pages.keys.len(), 2);
+    }
+
+    #[test]
+    fn fragments_round_trip() {
+        let bytes = serialize(&sample()).expect("serialize");
+        let back = deserialize(&bytes).expect("deserialize");
+
+        assert_eq!(back.fragments.len(), 2);
+        let card = back.fragments.get("card").expect("card survives the codec");
+        assert_eq!(card.kind, FragmentKind::Template);
+        assert_eq!(card.params.len(), 2);
+        assert_eq!(card.params[1].default.as_deref(), Some("plain"));
+        assert_eq!(card.origins.len(), 2);
+        assert_eq!(card.origins[1].file, "parts.lmn");
+        assert_eq!(
+            card.body[0].interpolations,
+            vec![InterpolationSlot::Arg("title".to_string())]
+        );
+
+        let badge = back.fragments.get("badge").expect("badge survives too");
+        assert_eq!(badge.kind, FragmentKind::Markup);
+        assert!(badge.params.is_empty());
+
+        let used = back.ir.root.children[0]
+            .frag_use
+            .as_ref()
+            .expect("the use site survives");
+        assert_eq!(used.key, "card");
+        assert_eq!(used.args, vec![("title".to_string(), "Inbox".to_string())]);
+        assert!(used.slot_children);
+    }
+
+    #[test]
+    fn encoding_is_deterministic() {
+        let first = serialize(&sample()).expect("serialize");
+        let second = serialize(&sample()).expect("serialize again");
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn rejects_the_previous_version() {
+        let mut bytes = serialize(&sample()).expect("serialize");
+        bytes[4..6].copy_from_slice(&4u16.to_le_bytes());
+        assert!(matches!(
+            deserialize(&bytes),
+            Err(ArtifactError::Version {
+                found: 4,
+                expected: FORMAT_VERSION
+            })
+        ));
     }
 
     #[test]

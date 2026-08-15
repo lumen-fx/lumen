@@ -228,6 +228,9 @@ fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileErr
         // This path covers the single entry page (see the module comment);
         // `lumenc build` and `lumenc package` are what compile a page set.
         pages: None,
+        // Fragment declarations reach the artifact once the parser collects
+        // them; the tree this path builds names none yet.
+        fragments: lumen_ir::fragment::FragmentTable::new(),
     })
 }
 
