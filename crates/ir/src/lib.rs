@@ -10,6 +10,9 @@
 //!   Cascade-5 application / re-application logic. The hand-rolled front-end
 //!   that *parses* CSS text into a [`Stylesheet`](css::Stylesheet) still lives
 //!   in `lumenc::parser_css`; this crate owns the data + the cascade.
+//! - [`fragment`] - [`Fragment`](fragment::Fragment), the named reusable
+//!   markup subtree, and the [`FragmentTable`](fragment::FragmentTable) an
+//!   app declares.
 //! - [`values`] - shared attribute/property value parsers.
 //! - [`css_vars`] - the `var(--name [, fallback])` resolver.
 //! - [`artifact`] - the AOT compiled-app container (`lumenc build` output).
@@ -23,6 +26,7 @@
 pub mod artifact;
 pub mod css;
 pub mod css_vars;
+pub mod fragment;
 pub mod layout_ir;
 pub mod values;
 
