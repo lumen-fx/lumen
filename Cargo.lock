@@ -3937,6 +3937,7 @@ dependencies = [
 name = "lumen-web-runtime"
 version = "0.0.3"
 dependencies = [
+ "bevy_ecs",
  "js-sys",
  "lumen-core",
  "lumen-script",

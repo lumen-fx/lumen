@@ -18,6 +18,11 @@ use std::path::Path;
 const FIXTURES: &[&str] = &["smoke", "unbound"];
 
 fn main() {
+    // The fixtures are candela, and the suite that loads them runs only when
+    // that host is compiled in.
+    if env::var_os("CARGO_FEATURE_HOST_CANDELA").is_none() {
+        return;
+    }
     let out_dir = env::var("OUT_DIR").expect("cargo sets OUT_DIR");
     for stem in FIXTURES {
         let source_path = Path::new("fixtures").join(format!("{stem}.cdl"));

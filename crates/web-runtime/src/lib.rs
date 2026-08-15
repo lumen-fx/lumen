@@ -9,38 +9,45 @@
 //! No layout backend is installed and the extract list is emptied, because the
 //! page's own CSS engine is the layout engine and the DOM is the scene.
 //!
-//! Scripts run as precompiled candela bytecode on `candela-vm`. The compiler
-//! stays out of the page: an app's `.cdl` is built to a `.cdlb` image ahead of
-//! time, and the image's `host` declarations bind by name against the builtins
-//! this module registers.
+//! Scripts run on the host for the engine the app's manifest names. Each host
+//! is a feature (`host-candela`), and candela is the one on by default: it runs
+//! as precompiled bytecode, so no compiler reaches the page. An engine no
+//! compiled-in host answers for is reported when the app boots.
 //!
-//! This is the first step of that runtime. It boots an app from a `.cdlb`,
-//! ticks it, and exposes the script's signal writes and load failures to the
-//! page. Adopting prerendered HTML, projecting the ECS onto real elements, and
-//! routing DOM events all come later.
+//! This is the first step of that runtime. It boots an app from its compiled
+//! script, ticks it, and exposes the script's signal writes and load failures
+//! to the page. Adopting prerendered HTML, projecting the ECS onto real
+//! elements, and routing DOM events all come later.
 //!
 //! ```js
 //! import init, { LumenWebApp } from "./lumen_web_runtime.js";
 //!
 //! await init();
-//! const app = new LumenWebApp(await (await fetch("app.cdlb")).arrayBuffer());
+//! const manifest = await (await fetch("lumen.web.json")).json();
+//! const script = manifest.scripts[0];
+//! const program = await (await fetch(script.path)).arrayBuffer();
+//! const app = LumenWebApp.withUri(script.engine, program, script.path);
 //! if (app.scriptError()) console.error(app.scriptError());
 //! app.startFrameLoop();
 //! ```
 
 #![warn(missing_docs)]
 
+mod hosts;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use lumen_core::prelude::App;
-use lumen_script::{ScriptHost, ScriptLoadFailure, ScriptValue};
-use lumen_script_candela::{CandelaVmHost, ScriptCandelaVmPlugin};
+use lumen_script::{ScriptLoadFailure, ScriptValue};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
-/// Name the load failure reports when the page supplies no better one.
-const DEFAULT_ARTIFACT_URI: &str = "app.cdlb";
+use crate::hosts::ScriptHostAccess;
+
+/// Name the load failure reports when the page supplies no better one. A page
+/// has one: the manifest records the path every script was emitted to.
+const DEFAULT_SCRIPT_URI: &str = "<script>";
 
 /// The self-re-arming animation-frame callback. Aliased to keep clippy's
 /// `type_complexity` lint quiet.
@@ -48,36 +55,47 @@ type FrameCallback = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
 
 /// A booted Lumen app, driven from the page.
 ///
-/// Construct one with the app's `.cdlb` bytes, then either drive it yourself
-/// with [`Self::tick`] or hand it to [`Self::start_frame_loop`] and let the
-/// browser's frame clock drive it.
+/// Construct one with the engine the app declares and its compiled script,
+/// then either drive it yourself with [`Self::tick`] or hand it to
+/// [`Self::start_frame_loop`] and let the browser's frame clock drive it.
 #[wasm_bindgen]
 pub struct LumenWebApp {
     app: App,
+    host: ScriptHostAccess,
 }
 
 #[wasm_bindgen]
 impl LumenWebApp {
-    /// Boot an app over the candela bytecode in `artifact`.
+    /// Boot an app, running `program` on the host for `engine`.
+    ///
+    /// `engine` and the bytes come from the manifest's script entry, so the app
+    /// picks its own language rather than this module assuming one.
     ///
     /// A script that fails to load never throws: the app comes back and
     /// [`Self::script_error`] carries the reason, so a page can report a dead
     /// script instead of losing the module with it.
+    ///
+    /// # Errors
+    ///
+    /// This runtime was built with no host for `engine`.
     #[wasm_bindgen(constructor)]
-    #[must_use]
-    pub fn new(artifact: &[u8]) -> Self {
-        Self::with_uri(artifact, DEFAULT_ARTIFACT_URI)
+    pub fn new(engine: &str, program: &[u8]) -> Result<LumenWebApp, JsError> {
+        Self::with_uri(engine, program, DEFAULT_SCRIPT_URI)
     }
 
-    /// Boot an app, naming the artifact in any load error.
+    /// Boot an app, naming the script in any load error.
+    ///
+    /// # Errors
+    ///
+    /// This runtime was built with no host for `engine`.
     #[wasm_bindgen(js_name = withUri)]
-    #[must_use]
-    pub fn with_uri(artifact: &[u8], uri: &str) -> Self {
+    pub fn with_uri(engine: &str, program: &[u8], uri: &str) -> Result<LumenWebApp, JsError> {
         let mut app = App::new();
         // The page lays out and paints; nothing here extracts a scene.
         app.extract_fns.clear();
-        app.add_plugin(ScriptCandelaVmPlugin::new(artifact.to_vec()).with_uri(uri));
-        Self { app }
+        let host = hosts::install(&mut app, engine, program, uri)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(Self { app, host })
     }
 
     /// Run one tick of the app: the script's timers, derivations, and event
@@ -90,8 +108,7 @@ impl LumenWebApp {
     /// the script never wrote it.
     #[must_use]
     pub fn signal(&self, name: &str) -> Option<String> {
-        self.host()
-            .and_then(|h| h.mirror_get(name))
+        (self.host.signal)(&self.app.world, name)
             .as_ref()
             .map(ScriptValue::stringify)
     }
@@ -99,28 +116,23 @@ impl LumenWebApp {
     /// Call an exported script function by name with no arguments, returning
     /// its result as text.
     ///
-    /// Returns `undefined` when the artifact exports no such function.
-    /// Commands the call queued are put back so the next tick carries them,
-    /// exactly as the app's own dispatchers do.
+    /// Returns `undefined` when the script exports no such function. Commands
+    /// the call queued are put back so the next tick carries them, exactly as
+    /// the app's own dispatchers do.
     ///
     /// # Errors
     ///
     /// The call raised a script runtime error, or no script is loaded.
     pub fn call(&mut self, name: &str) -> Result<Option<String>, JsError> {
-        let Some(mut host) = self.app.world.get_resource_mut::<CandelaVmHost>() else {
-            return Err(JsError::new("no script is loaded"));
-        };
-        let outcome = host
-            .call(name, &[])
-            .map_err(|e| JsError::new(&e.to_string()))?;
-        host.push_commands(outcome.commands);
-        Ok(outcome.ret.filter(|_| outcome.found).map(|v| v.stringify()))
+        (self.host.call)(&mut self.app.world, name)
+            .map(|ret| ret.map(|v| v.stringify()))
+            .map_err(|e| JsError::new(&e.to_string()))
     }
 
-    /// The names of every function the loaded artifact exports.
+    /// The names of every function the loaded script exports.
     #[must_use]
     pub fn exports(&self) -> Vec<String> {
-        self.host().map(CandelaVmHost::exports).unwrap_or_default()
+        (self.host.exports)(&self.app.world)
     }
 
     /// Why the script failed to load, or `undefined` when it loaded cleanly.
@@ -165,11 +177,6 @@ impl LumenWebApp {
         // Handed to the browser, which now owns the callback chain.
         std::mem::forget(armed);
         Ok(())
-    }
-
-    /// The script host, once one is installed.
-    fn host(&self) -> Option<&CandelaVmHost> {
-        self.app.world.get_resource::<CandelaVmHost>()
     }
 }
 
