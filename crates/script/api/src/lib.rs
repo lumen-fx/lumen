@@ -550,6 +550,30 @@ pub enum ScriptCommand {
         /// Markup fragment to parse and spawn as the new children.
         markup: String,
     },
+    /// Instantiate the compiled fragment `key` into a fresh detached
+    /// subtree. `reserved` is the token the host minted for the instance
+    /// root, so the same tick's `Insert` attaches it.
+    ///
+    /// `args` binds the fragment's parameters, in use-site order; a
+    /// parameter absent here takes its declared default, and one with
+    /// neither resolves empty. Arguments substitute once, at instantiation:
+    /// a value that changes while the app runs belongs in a `bind-*`
+    /// attribute inside the fragment body.
+    ///
+    /// `children` maps a slot name to a node that already exists, which the
+    /// applier moves into that slot. Passing live handles is what keeps the
+    /// applier off the script VM: a caller composing nested fragments
+    /// instantiates the inner ones first and passes their roots in.
+    SpawnFragment {
+        /// Key of the fragment to instantiate.
+        key: String,
+        /// Arguments as `(parameter name, value)` pairs.
+        args: Vec<(String, String)>,
+        /// Slot content as `(slot name, node handle)` pairs.
+        children: Vec<(String, u64)>,
+        /// Reserved spawn token for the instance root.
+        reserved: u64,
+    },
 
     // -- dynamic DOM: events (phase 4) ---------------------------------
     /// Bind an event handler to a node. `token` is the off token the host

@@ -21,6 +21,14 @@ use crate::layout_ir::Element;
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 
+/// Tag of the element that marks where a use site's children land inside a
+/// fragment body.
+pub const SLOT_TAG: &str = "slot";
+
+/// Slot name a `<slot>` with no `name` attribute occupies, and the name a
+/// use site's unnamed children are passed under.
+pub const DEFAULT_SLOT: &str = "default";
+
 /// Which authoring form declared a fragment.
 ///
 /// The distinction is kept because diagnostics point back at source: a

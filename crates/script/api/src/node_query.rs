@@ -564,6 +564,26 @@ pub fn build_clone(source: u64) -> (u64, ScriptCommand) {
     (reserved, ScriptCommand::CloneNode { source, reserved })
 }
 
+/// Instantiate the fragment `key`: mint a reserved token for the instance
+/// root and the backing [`ScriptCommand`]. `args` binds parameters,
+/// `children` fills slots with nodes that already exist.
+pub fn build_spawn_fragment(
+    key: &str,
+    args: Vec<(String, String)>,
+    children: Vec<(String, u64)>,
+) -> (u64, ScriptCommand) {
+    let reserved = lumen_core::node::reserve_node_token();
+    (
+        reserved,
+        ScriptCommand::SpawnFragment {
+            key: key.to_string(),
+            args,
+            children,
+            reserved,
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

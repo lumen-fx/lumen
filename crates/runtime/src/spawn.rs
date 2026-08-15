@@ -1256,6 +1256,14 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             lumen_primitives::SliderThumb,
         ));
     }
+    // A `<slot>` in a fragment body stands in for content the use site
+    // passes; the instantiation path swaps the marked entity for the node it
+    // was handed. An unfilled slot keeps whatever the body wrote inside it.
+    if let Some(name) = crate::fragments::slot_name_of(el) {
+        world
+            .entity_mut(id)
+            .insert(crate::fragments::SlotPlaceholder(name));
+    }
     // `<for each="...">` blocks attach a [`ForMarker`] to the spawned entity
     // and DEFER child spawning to the reconciler - children are the
     // body template, instantiated per-item against the named

@@ -125,7 +125,12 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         css_import_mtimes,
         scripts: compiled_scripts,
         pages: compiled_pages,
+        fragments,
     } = loaded;
+    // The app's declared fragments, reachable by key for the rest of the
+    // run: a script instantiates one, and the applier builds it here.
+    app.world
+        .insert_resource(crate::fragments::FragmentLibrary::new(fragments));
     // Hot-reload watch fields are only consumed by the (feature-gated)
     // watcher below; in a parser-free build they are always empty.
     #[cfg(not(feature = "runtime-parse"))]

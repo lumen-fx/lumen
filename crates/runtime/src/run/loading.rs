@@ -27,6 +27,9 @@ pub(crate) struct LoadResult {
     /// path, which discovers the pages from the directory, and for any
     /// single-page app.
     pub(crate) pages: Option<lumen_ir::artifact::CompiledPages>,
+    /// Every fragment the app declares, for the runtime to instantiate by
+    /// key.
+    pub(crate) fragments: lumen_ir::fragment::FragmentTable,
 }
 
 /// Produce a [`LoadResult`] for [`build_app`] from whichever source the
@@ -128,6 +131,7 @@ fn load_result_from_compiled(compiled: lumen_ir::artifact::CompiledApp, dir: &Pa
     let pages = compiled.pages;
     LoadResult {
         ir,
+        fragments: compiled.fragments,
         html_mtime: None,
         css_mtime: None,
         script_paths: Vec::new(),
@@ -416,6 +420,7 @@ pub(crate) fn load_ir(
         // set from the directory listing.
         scripts: Vec::new(),
         pages: None,
+        fragments: lumen_ir::fragment::FragmentTable::new(),
     })
 }
 
