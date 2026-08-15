@@ -83,7 +83,9 @@ lumenc build myapp myapp.lmna
 
 It parses `main.lmn` and the stylesheet, runs the whole cascade, splices
 includes and imports, records which engine runs each part of the script, and
-writes one artifact. Run it back with:
+writes one artifact. A candela script is compiled to bytecode as well, and both
+forms go in: the artifact runs the same either way, and the bytecode is what a
+runtime shipped without the candela compiler loads. Run it back with:
 
 ```sh
 lumenc run myapp --artifact myapp.lmna

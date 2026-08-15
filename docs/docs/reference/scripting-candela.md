@@ -113,6 +113,18 @@ event bindings are preserved; the recompiled program picks them up.
 Each event dispatches to a global handler function named below. Handlers are
 optional.
 
+Annotate a handler's parameters with the types the table gives:
+
+```rust
+fn on_toggle(id: string, checked: bool) { }
+```
+
+Running from source works either way, because the compiler takes a bare
+parameter's type from the first call. A compiled app has no compiler to do
+that, so it records a call trampoline for each handler at build time and only
+records one where every parameter is annotated. A handler left bare compiles,
+ships, and is then never called.
+
 | Handler | Arguments |
 | --- | --- |
 | `on_click(id)` | Element id. Suppressed when a double-click fires on the same element in the same tick. |

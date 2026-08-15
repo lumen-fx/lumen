@@ -213,12 +213,12 @@ fn on_ready() {
 
 // A handler is called with the event id. Wrap it with `event(ev)` to read the
 // event itself: `event(ev).target()`, `.shift()`, `.prevent_default()`.
-fn on_bump(ev) {
+fn on_bump(ev: int) {
     let n = lumen::signal_get_int("clicks");
     lumen::signal_set_int("clicks", n + 1);
 }
 
-fn on_reset(ev) {
+fn on_reset(ev: int) {
     lumen::signal_set_int("clicks", 0);
 }
 
@@ -345,9 +345,9 @@ fn on_start() {
     refresh_status();
 }
 
-fn on_text_input(id, text) { refresh_status(); }
-fn on_toggle(id, on) { refresh_status(); }
-fn on_slider(id, value) { refresh_status(); }
+fn on_text_input(id: string, text: string) { refresh_status(); }
+fn on_toggle(id: string, on: bool) { refresh_status(); }
+fn on_slider(id: string, value: float) { refresh_status(); }
 
 fn main() {}
 "##,
@@ -557,7 +557,7 @@ fn on_start() {
     write_rows(rows);
 }
 
-fn add_todo(id) {
+fn add_todo(id: string) {
     let draft = signal("draft").get();
     if draft == "" { return; }
     let next = signal("next_id");
@@ -570,7 +570,7 @@ fn add_todo(id) {
 }
 
 // candela has no closure value, so a filter is an explicit loop.
-fn clear_done(id) {
+fn clear_done(id: string) {
     let kept = [];
     let rows = current_rows();
     for r in rows {
@@ -582,7 +582,7 @@ fn clear_done(id) {
 
 // Per-row buttons carry interpolated ids ("tg|<id>", "rm|<id>"); the global
 // on_click fallback splits the prefix off.
-fn on_click(id) {
+fn on_click(id: string) {
     let parts = id.split("|");
     if parts.len() != 2 { return; }
     let kind = parts[0];
@@ -953,7 +953,8 @@ slider:focus     { outline: 2 var(--color-accent); }
 // no closure value, so the recompute body is a named function and its
 // parameters arrive as the current dep values, in `deps` order.
 
-fn calc_summary(theme, density, scale, email, push, sound, dnd) {
+fn calc_summary(theme: string, density: string, scale: float,
+                email: bool, push: bool, sound: bool, dnd: bool) {
     let chan = "";
     if email { chan = chan + "email "; }
     if push { chan = chan + "push "; }
@@ -984,7 +985,7 @@ fn on_start() {
         "calc_summary");
 }
 
-fn on_slider(id, value) {
+fn on_slider(id: string, value: float) {
     if id == "scale" {
         // Round to one decimal for the caption.
         let tenths = (value * 10.0).round() / 10.0;

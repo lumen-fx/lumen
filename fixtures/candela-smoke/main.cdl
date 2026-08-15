@@ -12,7 +12,7 @@ fn on_start() {
 }
 
 // Per-id click handler: the runtime dispatches with the element id string.
-fn handle_bump(id) {
+fn handle_bump(id: string) {
     lumen::signal_set("greeting", "candela host - clicked");
 }
 

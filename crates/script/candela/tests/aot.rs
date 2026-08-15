@@ -1,0 +1,147 @@
+//! Compiling a script ahead of time and running the result without the
+//! compiler.
+//!
+//! `compile_bytecode` is the build-time half of the candela host: it produces
+//! the `.cdlb` image a runtime that links only `candela-vm` loads. These tests
+//! drive that image through the VM the way such a runtime would, so the two
+//! halves are held to the same contract from one place.
+
+use lumen_script::ScriptError;
+use lumen_script_candela::candela::{HostRegistry, LoadError, Value, load_program};
+use lumen_script_candela::{HOST_NAMESPACE, compile_bytecode};
+
+/// A program with no `host` block, so an empty registry is enough to load it.
+const STANDALONE: &str = r#"
+fn double(n: int) -> int {
+    return n * 2;
+}
+
+fn undeclared(n) {
+    return n;
+}
+
+fn main() {}
+"#;
+
+#[test]
+fn a_compiled_program_runs_under_the_vm_alone() {
+    let bytes = compile_bytecode(STANDALONE, "standalone.cdl").expect("the program compiles");
+    let hosts = HostRegistry::new();
+    let mut program = load_program(&bytes, &hosts).expect("the image loads");
+    program.run();
+
+    let value = program
+        .call("double", &[Value::Int(21)])
+        .expect("an exported function is callable by name");
+    assert_eq!(value, Value::Int(42));
+}
+
+#[test]
+fn only_an_annotated_function_is_callable_by_name() {
+    let bytes = compile_bytecode(STANDALONE, "standalone.cdl").expect("the program compiles");
+    let hosts = HostRegistry::new();
+    let program = load_program(&bytes, &hosts).expect("the image loads");
+    let exports: Vec<&str> = program.exports().collect();
+
+    assert!(
+        exports.contains(&"double"),
+        "a function that annotates every parameter is exported: {exports:?}"
+    );
+    assert!(
+        !exports.contains(&"undeclared"),
+        "a bare parameter has no declared type to check a host's argument \
+         against, so the function is not exported: {exports:?}"
+    );
+    assert!(
+        !exports.contains(&"main"),
+        "main is the entry point, not an entry: {exports:?}"
+    );
+}
+
+/// The parameter types Lumen's own handlers are written with, one function
+/// each. An event handler takes the event token as an `int`, an id-routed
+/// handler takes the element id as a `string`, and a control handler takes
+/// the id beside the value the control carries.
+#[test]
+fn every_handler_shape_lumen_dispatches_is_exportable() {
+    const HANDLERS: &str = r#"
+fn on_event(ev: int) {}
+fn on_click(id: string) {}
+fn on_toggle(id: string, checked: bool) {}
+fn on_slider(id: string, value: float) {}
+fn on_text_input(id: string, text: string) {}
+fn on_derive(theme: string, scale: float, quiet: bool) -> string { return theme; }
+fn on_ready() {}
+
+fn main() {}
+"#;
+    let bytes = compile_bytecode(HANDLERS, "handlers.cdl").expect("the handlers compile");
+    let program = load_program(&bytes, &HostRegistry::new()).expect("the image loads");
+    let exports: Vec<&str> = program.exports().collect();
+
+    for handler in [
+        "on_event",
+        "on_click",
+        "on_toggle",
+        "on_slider",
+        "on_text_input",
+        "on_derive",
+        "on_ready",
+    ] {
+        assert!(
+            exports.contains(&handler),
+            "`{handler}` must be callable by name: {exports:?}"
+        );
+    }
+}
+
+#[test]
+fn the_prelude_binds_its_host_functions_by_name() {
+    // What the fixture script itself reaches for. The prelude declares the
+    // whole Lumen surface, so a load that registers only these two must still
+    // fail - but it must fail naming the rest, never these.
+    let source = r#"
+import "lumen.cdl";
+
+fn on_start() {
+    lumen::signal_set("greeting", "ready");
+}
+
+fn main() {}
+"#;
+    let bytes = compile_bytecode(source, "smoke.cdl").expect("the program compiles");
+
+    let mut hosts = HostRegistry::new();
+    hosts.register_host_fn(
+        HOST_NAMESPACE,
+        "signal_set",
+        |_name: String, _value: String| {},
+    );
+
+    let Err(error) = load_program(&bytes, &hosts) else {
+        panic!("the rest of the surface is unregistered, so the load fails");
+    };
+    let LoadError::HostBinding(binding) = error else {
+        panic!("the image decodes and only its host bindings are missing: {error}");
+    };
+    let text = binding.to_string();
+    assert!(
+        !text.contains("`signal_set`"),
+        "a registered closure binds to its declaration by name: {text}"
+    );
+    assert!(
+        text.contains("signal_get"),
+        "the ones with no closure behind them are what it names: {text}"
+    );
+}
+
+#[test]
+fn a_program_that_does_not_compile_reports_where() {
+    let error = compile_bytecode("fn main() { let x = ", "broken.cdl")
+        .expect_err("an unfinished statement is a compile error");
+    let ScriptError::Compile { uri, line, .. } = error else {
+        panic!("a build tool gets the position, not just a message: {error:?}");
+    };
+    assert_eq!(uri, "broken.cdl");
+    assert!(line > 0, "the line is the user's own, not the prelude's");
+}

@@ -55,14 +55,18 @@ pub fn compile_app(
     // rediscover it later: a shipped app carries no `.lua` / `.rhai` files for
     // the directory scan to read, and the flattened source above has no
     // language boundary left in it.
-    let scripts = grouped_script_sources(&loaded.ir, dir, &cfg)?
-        .into_iter()
-        .map(|(engine, source)| lumen_ir::artifact::CompiledScript {
+    let uri = html_path.display().to_string();
+    let mut scripts = Vec::new();
+    for (engine, source) in grouped_script_sources(&loaded.ir, dir, &cfg)? {
+        scripts.push(lumen_ir::artifact::CompiledScript {
             engine: engine.name().to_string(),
+            // An engine with an ahead-of-time form compiles here, so the
+            // artifact carries the program a compiler-free runtime can run.
+            // The others have none, and are run from the source beside it.
+            bytecode: compiled_bytecode(engine, &source, &uri)?,
             source,
-            bytecode: None,
-        })
-        .collect();
+        });
+    }
     // Routing data for a multi-page app. The pages themselves are already in
     // the tree, each behind its gate; this is the part the runtime would
     // otherwise rediscover by listing `.lmn` files.
@@ -79,6 +83,29 @@ pub fn compile_app(
         scripts,
         pages,
     })
+}
+
+/// The compiled bytecode image for one engine's program, or `None` for an
+/// engine that has no ahead-of-time form.
+///
+/// candela is the one that does: its `.cdlb` image is what `candela-vm` runs
+/// where the compiler is absent. A build without the candela host trimmed in
+/// cannot produce one, and writes the source alone.
+#[cfg(feature = "runtime-parse")]
+fn compiled_bytecode(
+    engine: crate::config::ScriptEngine,
+    source: &str,
+    uri: &str,
+) -> Result<Option<Vec<u8>>, RunError> {
+    #[cfg(feature = "host-candela")]
+    if engine == crate::config::ScriptEngine::Candela {
+        return lumen_script_candela::compile_bytecode(source, uri)
+            .map(Some)
+            .map_err(|e| RunError::Script(e.to_string()));
+    }
+    #[cfg(not(feature = "host-candela"))]
+    let _ = (engine, source, uri);
+    Ok(None)
 }
 
 /// Parse `<dir>/main.lmn` + optional `<dir>/main.css` and validate them
