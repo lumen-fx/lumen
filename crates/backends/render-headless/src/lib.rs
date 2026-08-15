@@ -102,7 +102,14 @@ impl HeadlessRenderer {
         let mut rects = world.query::<&ExtractedRect>();
         let painted: Vec<(Vec2, Vec2, Color, f32)> = rects
             .iter(world)
-            .map(|rect| (rect.origin, rect.size, representative_color(rect), rect.radius))
+            .map(|rect| {
+                (
+                    rect.origin,
+                    rect.size,
+                    representative_color(rect),
+                    rect.radius,
+                )
+            })
             .collect();
         for (origin, size, color, radius) in painted {
             self.fill_rect(origin, size, color, radius);

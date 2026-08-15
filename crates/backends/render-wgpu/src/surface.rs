@@ -52,10 +52,7 @@ fn gpu_init_deadline_ms() -> u64 {
 
 /// Spawn a watchdog thread that panics if `flag` is not lit within
 /// `deadline_ms` milliseconds.
-fn spawn_gpu_init_watchdog(
-    deadline_ms: u64,
-    flag: Arc<AtomicBool>,
-) -> std::thread::JoinHandle<()> {
+fn spawn_gpu_init_watchdog(deadline_ms: u64, flag: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("lumen-gpu-init-watchdog".into())
         .spawn(move || {
@@ -454,8 +451,9 @@ impl GpuState {
             // The shaper is a render-world service, so a build with no text
             // backend simply has none installed and text is skipped.
             let mut shaper = render_world.get_non_send_mut::<ShaperService>();
-            let shaper_ref: Option<&mut dyn TextShaper> =
-                shaper.as_deref_mut().map(|s| &mut **s as &mut dyn TextShaper);
+            let shaper_ref: Option<&mut dyn TextShaper> = shaper
+                .as_deref_mut()
+                .map(|s| &mut **s as &mut dyn TextShaper);
             if let Some(root) = retained_root.as_ref() {
                 let mut ctx = WalkContext::new_with_dpr(
                     &mut self.vello_scene,

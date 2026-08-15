@@ -299,8 +299,8 @@ pub fn handle_action(world: &mut World, req: &ActionRequest) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use accesskit::TreeId;
     use crate::entity_to_node;
+    use accesskit::TreeId;
     use lumen_core::components::Transform;
 
     fn world_with_focus() -> World {
