@@ -44,9 +44,14 @@ pub const GPU_INIT_DEADLINE_ENV: &str = "LUMEN_GPU_INIT_DEADLINE_MS";
 pub const GPU_INIT_DEADLINE_DEFAULT_MS: u64 = 5000;
 
 fn gpu_init_deadline_ms() -> u64 {
-    std::env::var(GPU_INIT_DEADLINE_ENV)
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
+    parse_deadline_ms(std::env::var(GPU_INIT_DEADLINE_ENV).ok().as_deref())
+}
+
+/// The deadline an environment value asks for. Anything unset or
+/// unparsable falls back to the default rather than failing the launch,
+/// since a mistyped tuning knob should not stop an app from starting.
+fn parse_deadline_ms(raw: Option<&str>) -> u64 {
+    raw.and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(GPU_INIT_DEADLINE_DEFAULT_MS)
 }
 
@@ -700,6 +705,7 @@ fn make_intermediate(
 mod tests {
     use super::*;
     use lumen_core::node_ir::{PreviousScene, RetainedScene};
+    use vello::wgpu::rwh::HasWindowHandle;
 
     fn render_world() -> World {
         let mut world = World::new();
@@ -792,6 +798,96 @@ mod tests {
                 force_full: false,
             }
         ));
+    }
+
+    /// A render world missing the scene resources belongs to a non-standard
+    /// embed. The diff cannot say anything about it, so it must claim
+    /// damage rather than let the window keep a frame that may be stale.
+    #[test]
+    fn a_world_without_scene_resources_always_reports_damage() {
+        let mut world = World::new();
+        world.insert_resource(Viewport::default());
+        assert!(scene_has_damage(&world));
+        // Nor is a missing screenshot channel an error.
+        assert!(!capture_requested(&world));
+    }
+
+    /// The init deadline is a tuning knob, not a validated setting: a
+    /// missing or malformed value falls back to the default so a typo in
+    /// the environment cannot stop an app from starting.
+    #[test]
+    fn a_malformed_deadline_falls_back_to_the_default() {
+        assert_eq!(parse_deadline_ms(Some("250")), 250);
+        assert_eq!(parse_deadline_ms(None), GPU_INIT_DEADLINE_DEFAULT_MS);
+        assert_eq!(parse_deadline_ms(Some("")), GPU_INIT_DEADLINE_DEFAULT_MS);
+        assert_eq!(
+            parse_deadline_ms(Some("soon please")),
+            GPU_INIT_DEADLINE_DEFAULT_MS
+        );
+        assert_eq!(parse_deadline_ms(Some("-1")), GPU_INIT_DEADLINE_DEFAULT_MS);
+        // The env-backed reader agrees with the parser on an unset var.
+        assert!(gpu_init_deadline_ms() > 0);
+    }
+
+    /// The watchdog exists to turn a wedged driver into a diagnostic. It
+    /// stands down when init finishes in time, and takes the process down
+    /// with a message when it does not: a panic on that thread is the
+    /// visible failure, where the alternative is a window that never
+    /// appears and a process that never exits.
+    #[test]
+    fn the_init_watchdog_stands_down_or_fires() {
+        let done = Arc::new(AtomicBool::new(false));
+        let watchdog = spawn_gpu_init_watchdog(60_000, done.clone());
+        done.store(true, Ordering::Release);
+        assert!(
+            watchdog.join().is_ok(),
+            "init finished in time, so the watchdog must exit quietly",
+        );
+
+        // Nothing ever lights the flag: the watchdog fires.
+        let never = Arc::new(AtomicBool::new(false));
+        let watchdog = spawn_gpu_init_watchdog(1, never);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| watchdog.join()));
+        assert!(
+            matches!(outcome, Ok(Err(_))),
+            "a deadline that passes with init unfinished must panic the watchdog thread",
+        );
+    }
+
+    /// The display handle the renderer hands to wgpu delegates to the
+    /// window and reports its size, so a window that cannot produce a
+    /// handle yet surfaces as an error instead of a wrong handle.
+    #[test]
+    fn the_display_target_delegates_to_the_window() {
+        let target = DisplayTarget(Arc::new(SizedWindow { size: (1280, 720) }));
+        assert!(target.display_handle().is_err());
+        assert!(target.0.window_handle().is_err());
+        assert!(format!("{target:?}").contains("1280"));
+    }
+
+    /// A window that knows its size and nothing else. The tests that use
+    /// it never dereference a handle, which is the point: everything below
+    /// the GPU calls can be exercised with no display attached.
+    struct SizedWindow {
+        size: (u32, u32),
+    }
+
+    impl HasWindowHandle for SizedWindow {
+        fn window_handle(&self) -> Result<vello::wgpu::rwh::WindowHandle<'_>, HandleError> {
+            Err(HandleError::Unavailable)
+        }
+    }
+
+    impl HasDisplayHandle for SizedWindow {
+        fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+            Err(HandleError::Unavailable)
+        }
+    }
+
+    impl RenderTarget for SizedWindow {
+        fn physical_size(&self) -> (u32, u32) {
+            self.size
+        }
     }
 
     /// A single opaque rect, the smallest tree the diff reports damage for.

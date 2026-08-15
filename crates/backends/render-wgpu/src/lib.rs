@@ -1356,3 +1356,43 @@ pub(crate) fn folded(mut c: LumenColor, opacity: f32) -> LumenColor {
     }
     c
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lumen_text::NullShaper;
+
+    /// The plugin's builders are the composition point's only say over
+    /// text: a plugin built without a shaper renders none, and either
+    /// builder attaches one, so a caller already holding a boxed shaper
+    /// does not have to unbox it.
+    #[test]
+    fn the_plugin_takes_a_shaper_boxed_or_not() {
+        let plain = WgpuRendererPlugin::new(320, 200);
+        assert_eq!((plain.width, plain.height), (320, 200));
+        assert!(
+            plain.text_shaper.is_none(),
+            "no shaper means text is skipped, not defaulted",
+        );
+
+        let with_value = WgpuRendererPlugin::default().with_text_shaper(NullShaper);
+        assert!(with_value.text_shaper.is_some());
+
+        let boxed: Box<dyn TextShaper> = Box::new(NullShaper);
+        let with_box = WgpuRendererPlugin::new(8, 8).with_boxed_text_shaper(boxed);
+        assert!(with_box.text_shaper.is_some());
+    }
+
+    /// Alpha folding is how an inherited `opacity` reaches every leaf
+    /// emitter, so it must leave a fully opaque parent alone, scale the
+    /// child's alpha otherwise, and clamp rather than produce a negative or
+    /// over-bright alpha.
+    #[test]
+    fn opacity_folds_into_alpha() {
+        let color = LumenColor::rgba(1.0, 0.0, 0.0, 0.8);
+        assert_eq!(folded(color, 1.0).a, 0.8);
+        assert!((folded(color, 0.5).a - 0.4).abs() < 1e-6);
+        assert_eq!(folded(color, -1.0).a, 0.0);
+        assert_eq!(folded(color, 2.0).a, 0.8);
+    }
+}

@@ -320,8 +320,13 @@ mod tests {
     #[test]
     fn attach_adopts_size_and_resize_coalesces() {
         let mut renderer = HeadlessRenderer::new(1, 1);
+        let window = FakeWindow { size: (64, 32) };
+        assert!(
+            window.window_handle().is_err() && window.display_handle().is_err(),
+            "the software renderer asks a window for its size and nothing else",
+        );
         renderer
-            .attach(Arc::new(FakeWindow { size: (64, 32) }))
+            .attach(Arc::new(window))
             .expect("software renderer attaches without a display");
         assert_eq!(renderer.size(), (64, 32));
         assert!(renderer.resize(80, 40));
@@ -356,6 +361,74 @@ mod tests {
         capture.request();
         world.insert_resource(capture);
         assert!(renderer.wants_present(&mut world, FrameRequest::default()));
+    }
+
+    /// Gradients have no place in a deterministic baseline, so each one
+    /// paints as its first stop. A gradient with no stops at all falls back
+    /// to the default color rather than dropping the rect.
+    #[test]
+    fn a_gradient_paints_as_its_first_stop() {
+        let stops: Arc<[(f32, Color)]> = Arc::from(
+            [
+                (0.0, Color::rgba(0.0, 1.0, 0.0, 1.0)),
+                (1.0, Color::rgba(0.0, 0.0, 1.0, 1.0)),
+            ]
+            .as_slice(),
+        );
+        let first = Color::rgba(0.0, 1.0, 0.0, 1.0);
+        for brush in [
+            Brush::Linear {
+                angle_deg: 45.0,
+                stops: stops.clone(),
+            },
+            Brush::Radial {
+                radius: 1.0,
+                stops: stops.clone(),
+            },
+            Brush::Conic {
+                from_deg: 0.0,
+                stops: stops.clone(),
+            },
+        ] {
+            let rect = ExtractedRect {
+                origin: Vec2::ZERO,
+                size: Vec2::splat(4.0),
+                brush,
+                radius: 0.0,
+                corner_radii: None,
+                order: 0,
+            };
+            assert_eq!(representative_color(&rect).to_rgba8(), first.to_rgba8());
+        }
+
+        let empty = ExtractedRect {
+            origin: Vec2::ZERO,
+            size: Vec2::splat(4.0),
+            brush: Brush::Linear {
+                angle_deg: 0.0,
+                stops: Arc::from([].as_slice()),
+            },
+            radius: 0.0,
+            corner_radii: None,
+            order: 0,
+        };
+        assert_eq!(
+            representative_color(&empty).to_rgba8(),
+            Color::default().to_rgba8()
+        );
+    }
+
+    /// A window can report a zero dimension while it is being mapped. The
+    /// framebuffer clamps to one pixel rather than allocating nothing and
+    /// indexing into it.
+    #[test]
+    fn a_zero_sized_window_clamps_to_one_pixel() {
+        let mut renderer = HeadlessRenderer::new(4, 4);
+        renderer
+            .attach(Arc::new(FakeWindow { size: (0, 0) }))
+            .expect("a zero-sized window is not an error");
+        assert_eq!(renderer.size(), (1, 1));
+        assert_eq!(renderer.framebuffer().len(), 4);
     }
 
     /// Presenting rasterises the extracted scene and hands the pixels to a

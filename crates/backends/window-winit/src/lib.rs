@@ -1757,7 +1757,243 @@ fn try_spawn_xdg_color_scheme_listener(world: &mut World) {
 
 #[cfg(test)]
 mod tests {
-    use super::RedrawScheduler;
+    use super::{RedrawScheduler, present_frame};
+    use bevy_ecs::world::World;
+    use lumen_core::prelude::{
+        A11yBackend, AnimationsActive, App, FrameDirty, FrameRequest, RenderTarget, SurfaceError,
+        SurfaceRenderer, Viewport,
+    };
+    use raw_window_handle::{DisplayHandle, HandleError, WindowHandle};
+    use std::any::Any;
+    use std::sync::Arc;
+
+    /// A renderer that records what it was asked for and answers whatever
+    /// the test tells it to, so the frame gate can be exercised with no
+    /// display and no GPU.
+    #[derive(Default)]
+    struct FakeRenderer {
+        /// What `wants_present` should answer.
+        answer: bool,
+        /// Every request the gate passed down.
+        asked: Vec<FrameRequest>,
+        presents: usize,
+        /// When set, `present` fails with it instead of succeeding.
+        fail: Option<&'static str>,
+        attached: bool,
+        size: (u32, u32),
+    }
+
+    impl lumen_core::traits::Renderer for FakeRenderer {}
+
+    impl SurfaceRenderer for FakeRenderer {
+        fn attach(&mut self, target: Arc<dyn RenderTarget>) -> Result<(), SurfaceError> {
+            self.size = target.physical_size();
+            self.attached = true;
+            Ok(())
+        }
+
+        fn resize(&mut self, width: u32, height: u32) -> bool {
+            let changed = self.size != (width, height);
+            self.size = (width, height);
+            changed
+        }
+
+        fn wants_present(&mut self, _render_world: &mut World, request: FrameRequest) -> bool {
+            self.asked.push(request);
+            self.answer
+        }
+
+        fn present(&mut self, _render_world: &mut World) -> Result<(), SurfaceError> {
+            self.presents += 1;
+            match self.fail {
+                Some(why) => Err(SurfaceError::Present(why.to_string())),
+                None => Ok(()),
+            }
+        }
+
+        fn detach(&mut self) {
+            self.attached = false;
+        }
+    }
+
+    /// An accessibility bridge that only counts the calls it receives.
+    #[derive(Default)]
+    struct FakeA11y {
+        published: usize,
+    }
+
+    impl A11yBackend for FakeA11y {
+        fn window_event(&mut self, _event: &dyn Any) {}
+
+        fn pump(&mut self, _world: &mut World) {}
+
+        fn publish(&mut self, _world: &mut World) {
+            self.published += 1;
+        }
+    }
+
+    fn app_with_frame_state(dirty: bool) -> App {
+        let mut app = App::new();
+        app.world.insert_resource(FrameDirty { dirty });
+        app.world.insert_resource(RedrawScheduler::default());
+        app.render_world.insert_resource(Viewport::default());
+        app
+    }
+
+    /// A window that reports a size and no handles. The renderer under
+    /// test never dereferences one, which is what makes the seam
+    /// exercisable with no display attached.
+    struct SizedWindow {
+        size: (u32, u32),
+    }
+
+    impl raw_window_handle::HasWindowHandle for SizedWindow {
+        fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+            Err(HandleError::Unavailable)
+        }
+    }
+
+    impl raw_window_handle::HasDisplayHandle for SizedWindow {
+        fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+            Err(HandleError::Unavailable)
+        }
+    }
+
+    impl RenderTarget for SizedWindow {
+        fn physical_size(&self) -> (u32, u32) {
+            self.size
+        }
+    }
+
+    /// The sequence the event loop performs on the renderer, through the
+    /// trait object it holds: bind to the window that just appeared, adopt
+    /// each new size once, and release everything before the platform
+    /// connection closes. The window backend never learns which renderer
+    /// it got, so this is the whole of what it can rely on.
+    #[test]
+    fn the_window_lifecycle_dispatches_through_the_trait() {
+        let mut renderer = FakeRenderer::default();
+        let seam: &mut dyn SurfaceRenderer = &mut renderer;
+
+        seam.attach(Arc::new(SizedWindow { size: (1024, 768) }))
+            .expect("attaching to a live window");
+        assert!(!seam.resize(1024, 768), "the same size is not a resize");
+        assert!(seam.resize(800, 600), "a new size is");
+        seam.detach();
+
+        assert!(!renderer.attached);
+        assert_eq!(renderer.size, (800, 600));
+    }
+
+    /// A tick that changed nothing asks the renderer anyway - only the
+    /// renderer knows whether its buffers still hold a valid frame - and
+    /// presents nothing when the answer is no. The accessibility tree is
+    /// published either way, because a tree change and a visual change are
+    /// not the same event.
+    #[test]
+    fn a_clean_tick_publishes_the_tree_and_presents_nothing() {
+        let mut app = app_with_frame_state(false);
+        let mut renderer = FakeRenderer::default();
+        let mut a11y = FakeA11y::default();
+
+        present_frame(&mut app, &mut renderer, Some(&mut a11y), false);
+
+        assert_eq!(renderer.presents, 0);
+        assert_eq!(a11y.published, 1);
+        assert_eq!(renderer.asked.len(), 1);
+        assert!(!renderer.asked[0].dirty);
+        assert!(!renderer.asked[0].force_full);
+    }
+
+    /// A dirty tick the renderer accepts presents once, and the dirty flag
+    /// is consumed so the follow-up re-arm below does not spin the loop on
+    /// a frame that was already painted.
+    #[test]
+    fn a_dirty_tick_presents_once_and_consumes_the_flag() {
+        let mut app = app_with_frame_state(true);
+        let mut renderer = FakeRenderer {
+            answer: true,
+            ..FakeRenderer::default()
+        };
+
+        present_frame(&mut app, &mut renderer, None, false);
+
+        assert_eq!(renderer.presents, 1);
+        assert!(renderer.asked[0].dirty);
+        assert!(!app.world.resource::<FrameDirty>().dirty);
+        assert!(!app.world.resource::<RedrawScheduler>().pending);
+    }
+
+    /// A recreated surface is passed down as a forced full frame, so the
+    /// renderer repaints even though the scene may be identical to the one
+    /// it last put up.
+    #[test]
+    fn a_recreated_surface_forces_a_full_frame() {
+        let mut app = app_with_frame_state(true);
+        let mut renderer = FakeRenderer {
+            answer: true,
+            ..FakeRenderer::default()
+        };
+
+        present_frame(&mut app, &mut renderer, None, true);
+
+        assert!(renderer.asked[0].force_full);
+        assert_eq!(renderer.presents, 1);
+    }
+
+    /// A failed present is reported and dropped: the loop keeps running,
+    /// the flags are still consumed, and the next frame tries again.
+    #[test]
+    fn a_failed_present_does_not_wedge_the_loop() {
+        let mut app = app_with_frame_state(true);
+        let mut renderer = FakeRenderer {
+            answer: true,
+            fail: Some("device lost"),
+            ..FakeRenderer::default()
+        };
+
+        present_frame(&mut app, &mut renderer, None, false);
+
+        assert_eq!(renderer.presents, 1);
+        assert!(!app.world.resource::<FrameDirty>().dirty);
+    }
+
+    /// An animation still in flight re-arms the redraw. Nothing else wakes
+    /// the loop once the event queue drains, so without this a tween stops
+    /// halfway until unrelated input arrives.
+    #[test]
+    fn a_running_animation_rearms_the_redraw() {
+        let mut app = app_with_frame_state(true);
+        app.world.insert_resource(AnimationsActive::default());
+        app.world.resource::<AnimationsActive>().request();
+        let mut renderer = FakeRenderer {
+            answer: true,
+            ..FakeRenderer::default()
+        };
+
+        present_frame(&mut app, &mut renderer, None, false);
+
+        assert!(
+            app.world.resource::<RedrawScheduler>().pending,
+            "an animation mid-flight must schedule the next frame",
+        );
+    }
+
+    /// A renderer answering yes to a clean tick still gets its frame: a
+    /// pending screenshot is the renderer's own business, and the gate
+    /// must not second-guess it.
+    #[test]
+    fn the_renderer_has_the_last_word_on_a_clean_tick() {
+        let mut app = app_with_frame_state(false);
+        let mut renderer = FakeRenderer {
+            answer: true,
+            ..FakeRenderer::default()
+        };
+
+        present_frame(&mut app, &mut renderer, None, false);
+
+        assert_eq!(renderer.presents, 1);
+    }
 
     /// The pump-gate policy: only occlusion parks the loop. Focus is not a
     /// factor, so a visible-but-unfocused window (Hyprland/sway, where an
