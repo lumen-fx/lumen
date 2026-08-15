@@ -10,6 +10,16 @@ description = "candela ScriptHost impl."
 keywords = ["ui", "gui", "scripting", "candela", "lumen"]
 categories = ["gui"]
 
+[features]
+default = ["compiler"]
+# The candela compiler front-end: `CandelaHost`, `ScriptCandelaPlugin`,
+# `compile_bytecode`, and with them source compilation, hot reload, and
+# `lumenc check`. Off, the crate keeps the builtin surface, the prelude, and
+# `CandelaVmHost`, which runs a precompiled `.cdlb` on `candela-vm` alone. That
+# is what a shipped app and the browser target want, and it is the difference
+# between linking a compiler and not.
+compiler = ["dep:candela"]
+
 [dependencies]
 lumen-script = { path = "../api", version = "0.0.3", default-features = false }
 lumen-core = { path = "../../core", version = "0.0.3" }
@@ -22,7 +32,12 @@ bevy_ecs.workspace = true
 # name on crates.io is an unrelated 2020 crate); its library keeps the
 # `candela` import name. The git source drives a development build, and the
 # version resolves to the release in a published one.
-candela = { package = "candela-lang", git = "https://github.com/lumen-fx/candela", branch = "main", version = "0.0.4" }
+candela = { package = "candela-lang", git = "https://github.com/lumen-fx/candela", branch = "main", version = "0.0.4", optional = true }
+# The runtime half of the same toolchain: the executor, the value marshalling,
+# and the `.cdlb` load/call API. Always present - the builtin surface and the
+# artifact host are written against it, and `candela` re-exports it, so the two
+# hosts share one implementation of both.
+candela-vm = { git = "https://github.com/lumen-fx/candela", branch = "main", version = "0.0.4" }
 # `parse_json`: JSON text -> candela values. Same dep the Rhai and Lua hosts
 # carry for their own `parse_json`.
 serde_json.workspace = true

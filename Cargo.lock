@@ -3855,6 +3855,7 @@ version = "0.0.3"
 dependencies = [
  "bevy_ecs",
  "candela-lang",
+ "candela-vm",
  "lumen-core",
  "lumen-script",
  "pulldown-cmark",
