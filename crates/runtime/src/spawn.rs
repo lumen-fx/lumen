@@ -10,6 +10,7 @@
 //! * Every spawned entity carries [`DirtyLayout`] so taffy runs on first tick.
 //! * Children link to parents via [`ChildOf`].
 
+use lumen_core::signals::signal_is_truthy;
 use lumen_ir::layout_ir::{Attributes, BindKind, Element, InterpolationSlot, LayoutIR};
 
 /// `<if mode="...">` policy. `Render` despawn/respawns the subtree on
@@ -1304,18 +1305,12 @@ pub fn reconcile_if_blocks(
     )>,
     mut commands: bevy_ecs::system::Commands,
 ) {
-    fn truthy(v: Option<&str>) -> bool {
-        match v {
-            None | Some("") | Some("false") | Some("0") => false,
-            Some(_) => true,
-        }
-    }
     for (parent_id, mut marker, children) in markers.iter_mut() {
         let value: Option<std::sync::Arc<str>> = store.get_global_str(&marker.signal_name);
         let value_str: Option<&str> = value.as_deref();
         let now_truthy = match &marker.eq {
             Some(expected) => value_str == Some(expected.as_str()),
-            None => truthy(value_str),
+            None => value_str.is_some_and(signal_is_truthy),
         };
         match marker.mode {
             IfMode::Render => {
