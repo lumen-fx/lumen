@@ -8,8 +8,8 @@
 //!
 //! One thing crosses back over: a style the author wrote on the element
 //! itself. Lumen ranks that above every rule and a browser does not, so those
-//! declarations come back as an inline [`markup_style`] to be ranked the same
-//! way on both.
+//! declarations come back as an inline [`markup_style`], rewritten by
+//! [`style`](crate::style) and ranked the same way on both.
 //!
 //! A few Lumen states have no HTML attribute to land on. A `<toggle>` is a
 //! button, not a checkbox, so it has no `:checked`; a `<div>` cannot be
@@ -21,6 +21,7 @@ use lumen_core::components::LayoutDirection;
 use lumen_ir::layout_ir::Attributes;
 
 use crate::contract::{DATA_LM_CHECKED, DATA_LM_DISABLED};
+use crate::style::{Emission, rewrite_property};
 use crate::tags::{html_tag_for, lm_class};
 
 /// HTML elements that take a `disabled` attribute.
@@ -178,24 +179,35 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
 /// `!important` inline declarations is what makes the browser rank them the
 /// way Lumen does, so a page looks the same on both.
 ///
-/// Property names come out in Lumen's own spelling, which is what the IR
-/// records. Turning `bg` into `background` is the CSS emitter's rewrite, and
-/// it owns that map; this writes the declarations, not their final names.
+/// The declarations are written the way a browser reads them, through the
+/// same rewrite the stylesheet goes through: `bg="#101014"` arrives as
+/// `background: #101014`, and `padding="8"` as `padding: 8px`.
+///
+/// A value that stands for a state has nowhere to land: an inline style
+/// cannot carry `:hover`. Those are left out, so a hover fill written as an
+/// attribute has to be written as a rule instead.
 pub fn markup_style(attrs: &Attributes) -> Option<String> {
     if attrs.markup_styles.is_empty() {
         return None;
     }
     let mut out = String::new();
     for (property, value) in &attrs.markup_styles {
-        if !out.is_empty() {
-            out.push(' ');
+        let decls = match rewrite_property(property, value) {
+            Emission::Plain(decls) => decls,
+            Emission::CustomProp(decl) => vec![decl],
+            Emission::StateRule { .. } | Emission::Drop(_) => continue,
+        };
+        for decl in decls {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(&decl.name);
+            out.push_str(": ");
+            out.push_str(&decl.value);
+            out.push_str(" !important;");
         }
-        out.push_str(property);
-        out.push_str(": ");
-        out.push_str(value.trim());
-        out.push_str(" !important;");
     }
-    Some(out)
+    (!out.is_empty()).then_some(out)
 }
 
 /// Write a number the way markup does: no trailing `.0` on whole values.
@@ -294,11 +306,25 @@ mod tests {
         ];
         assert_eq!(
             markup_style(&a).as_deref(),
-            Some("bg: #101014 !important; padding: 8 !important;")
+            Some("background: #101014 !important; padding: 8px !important;")
         );
         assert_eq!(
             find(&html_attrs("tile", &a), "style"),
-            Some("bg: #101014 !important; padding: 8 !important;")
+            Some("background: #101014 !important; padding: 8px !important;")
+        );
+    }
+
+    #[test]
+    fn a_state_style_written_on_the_element_has_nowhere_inline_to_land() {
+        let mut a = attrs();
+        a.markup_styles = vec![("hover-bg".into(), "#222".into())];
+        assert_eq!(markup_style(&a), None);
+
+        a.markup_styles.push(("bg".into(), "#111".into()));
+        assert_eq!(
+            markup_style(&a).as_deref(),
+            Some("background: #111 !important;"),
+            "the rest of the element's styles still land"
         );
     }
 

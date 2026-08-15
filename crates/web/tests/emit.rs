@@ -5,8 +5,10 @@ use std::collections::HashMap;
 use lumen_html::contract::{
     DEFAULT_CSS_FILE, DEFAULT_MANIFEST_FILE, LM_CONTRACT_VERSION, Manifest, Seed, SeedValue,
 };
-use lumen_ir::layout_ir::{Attributes, Element, IfModeSpec, LayoutIR};
-use lumen_web::{EmitError, LocaleSpec, PageSpec, SignalEnv, Site, SiteSpec, WebSpec, emit};
+use lumen_ir::layout_ir::{Attributes, Element, FragmentUse, IfModeSpec, LayoutIR};
+use lumen_web::{
+    EmitError, HostRewrite, LocaleSpec, PageSpec, SignalEnv, Site, SiteSpec, WebSpec, emit,
+};
 
 fn element(tag: &str, attrs: Attributes, children: Vec<Element>) -> Element {
     Element {
@@ -147,6 +149,7 @@ fn a_site_is_a_document_per_page_plus_the_stylesheet_and_the_manifest() {
         vec![
             "index.html",
             "settings.html",
+            "404.html",
             DEFAULT_CSS_FILE,
             DEFAULT_MANIFEST_FILE
         ]
@@ -298,7 +301,7 @@ fn a_void_element_has_no_end_tag() {
         )),
     );
     let html = page_html(&site(vec![page]), "index.html");
-    assert!(html.contains(r#"<img class="lm-image" src="logo.png" alt="Lumen" data-lm="0.0">"#));
+    assert!(html.contains(r#"<img class="lm-image" src="/logo.png" alt="Lumen" data-lm="0.0">"#));
     assert!(!html.contains("</img>"));
     assert!(!html.contains("</input>"));
     assert_well_formed(&html);
@@ -326,7 +329,7 @@ fn a_style_written_in_markup_outranks_the_stylesheet() {
     );
     let html = page_html(&site(vec![page]), "index.html");
     assert!(
-        html.contains(r#"style="bg: #101014 !important; gap: 8 !important;""#),
+        html.contains(r#"style="background: #101014 !important; gap: 8px !important;""#),
         "{html}"
     );
     assert_well_formed(&html);
@@ -540,4 +543,222 @@ fn a_site_needs_pages_with_distinct_keys() {
     )]);
     spec.web.entry = String::new();
     assert_eq!(emit(&spec), Err(EmitError::EmptyPageKey));
+}
+
+#[test]
+fn the_entry_page_is_the_document_a_server_hands_out_for_the_site() {
+    let mut spec = site(vec![
+        PageSpec::new("main", ir(element("root", Attributes::default(), vec![]))),
+        PageSpec::new(
+            "settings",
+            ir(element("root", Attributes::default(), vec![])),
+        ),
+    ]);
+    spec.web.entry = "main".into();
+    let site = emitted(&spec);
+    let paths: Vec<&str> = site.files.iter().map(|f| f.path.as_str()).collect();
+    assert!(paths.contains(&"index.html"), "{paths:?}");
+    assert!(!paths.contains(&"main.html"), "{paths:?}");
+
+    let manifest: Manifest =
+        serde_json::from_str(&site.file(DEFAULT_MANIFEST_FILE).expect("manifest").contents)
+            .expect("manifest parses");
+    assert_eq!(
+        manifest.pages.get("main").map(String::as_str),
+        Some("index.html")
+    );
+
+    // Two pages cannot both be the site's front door.
+    let mut clash = site_spec_with_index_and_main();
+    clash.web.entry = "main".into();
+    assert_eq!(
+        emit(&clash),
+        Err(EmitError::DuplicateDocument("index.html".into()))
+    );
+}
+
+/// A site keyed both `index` and `main`, which only collides once `main` is
+/// the entry.
+fn site_spec_with_index_and_main() -> SiteSpec {
+    site(vec![
+        PageSpec::new("main", ir(element("root", Attributes::default(), vec![]))),
+        simple_page(),
+    ])
+}
+
+#[test]
+fn a_link_to_a_page_points_at_the_document_it_was_emitted_as() {
+    let mut spec = site(vec![
+        simple_page(),
+        PageSpec::new(
+            "settings",
+            ir(element("root", Attributes::default(), vec![])),
+        ),
+    ]);
+    spec.web.base_path = "/docs".into();
+    let html = page_html(&spec, "index.html");
+    assert!(html.contains(r#"href="/docs/settings.html""#), "{html}");
+}
+
+#[test]
+fn every_site_carries_the_shell_a_deep_path_falls_back_to() {
+    let mut page = simple_page();
+    page.signals = SignalEnv::new().with_global("route.path", "index");
+    page.ir.root.children.push(element(
+        "if",
+        Attributes {
+            if_signal: Some("route.path".into()),
+            if_eq: Some("index".into()),
+            ..Attributes::default()
+        },
+        vec![element("label", labelled("Only on the page"), Vec::new())],
+    ));
+    let site = emitted(&site(vec![page]));
+    let shell = site
+        .file("404.html")
+        .expect("the shell is emitted")
+        .contents
+        .clone();
+    // The shell shows no page: which one it is comes from the address bar.
+    assert!(!shell.contains("Only on the page"), "{shell}");
+    assert!(shell.contains(r#"data-lm-page="index""#));
+    assert!(
+        site.file("index.html")
+            .expect("index")
+            .contents
+            .contains("Only on the page")
+    );
+}
+
+#[test]
+fn a_host_that_can_rewrite_gets_the_file_that_tells_it_to() {
+    let mut spec = site(vec![simple_page()]);
+    spec.web.base_path = "/docs".into();
+    spec.web.host = HostRewrite::Netlify;
+    assert_eq!(
+        emitted(&spec)
+            .file("_redirects")
+            .expect("rewrites")
+            .contents,
+        "/docs/*  /docs/404.html  200\n"
+    );
+
+    spec.web.host = HostRewrite::Vercel;
+    assert!(
+        emitted(&spec)
+            .file("vercel.json")
+            .expect("rewrites")
+            .contents
+            .contains("\"destination\": \"/docs/404.html\"")
+    );
+
+    spec.web.host = HostRewrite::Static;
+    assert!(emitted(&spec).file("_redirects").is_none());
+    assert!(emitted(&spec).file("vercel.json").is_none());
+}
+
+#[test]
+fn a_locale_tree_sits_under_its_tag_and_shares_the_site_s_files() {
+    let mut spec = site(vec![
+        simple_page(),
+        PageSpec::new(
+            "settings",
+            ir(element("root", Attributes::default(), vec![])),
+        ),
+    ]);
+    spec.web.url = Some("https://example.com".into());
+    spec.locale = LocaleSpec {
+        default_locale: "en-US".into(),
+        alternates: vec!["en-US".into()],
+        ..LocaleSpec::new("de-DE")
+    };
+    let site = emitted(&spec);
+    let paths: Vec<&str> = site.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec!["de-DE/index.html", "de-DE/settings.html", "de-DE/404.html"]
+    );
+
+    let html = site
+        .file("de-DE/index.html")
+        .expect("the German home page")
+        .contents
+        .clone();
+    // Its own links stay in its own tree; the stylesheet is the site's.
+    assert!(html.contains(r#"href="/de-DE/settings.html""#), "{html}");
+    assert!(html.contains(r#"href="/styles.css""#), "{html}");
+    assert!(
+        html.contains(r#"<link rel="canonical" href="https://example.com/de-DE/index.html">"#),
+        "{html}"
+    );
+    assert!(
+        html.contains(r#"hreflang="en-US" href="https://example.com/index.html""#),
+        "{html}"
+    );
+    assert!(
+        html.contains(r#"hreflang="x-default" href="https://example.com/index.html""#),
+        "{html}"
+    );
+}
+
+#[test]
+fn a_site_with_a_url_lists_its_pages_for_a_crawler() {
+    let mut spec = site(vec![
+        simple_page(),
+        PageSpec::new(
+            "settings",
+            ir(element("root", Attributes::default(), vec![])),
+        ),
+    ]);
+    spec.web.url = Some("https://example.com".into());
+    spec.web.sitemap = true;
+    let sitemap = emitted(&spec)
+        .file("sitemap.xml")
+        .expect("a sitemap")
+        .contents
+        .clone();
+    assert!(
+        sitemap.contains("<loc>https://example.com/index.html</loc>"),
+        "{sitemap}"
+    );
+    assert!(
+        sitemap.contains("<loc>https://example.com/settings.html</loc>"),
+        "{sitemap}"
+    );
+
+    spec.web.sitemap = false;
+    assert!(emitted(&spec).file("sitemap.xml").is_none());
+}
+
+#[test]
+fn a_site_emitted_without_the_runtime_loads_nothing() {
+    let mut spec = site(vec![simple_page()]);
+    spec.web.runtime = false;
+    let html = page_html(&spec, "index.html");
+    assert!(!html.contains("<script"), "{html}");
+    assert!(!html.contains("lumen-web.wasm"), "{html}");
+    // The page itself is all there, which is the point of the mode.
+    assert!(html.contains("Hello"));
+    assert!(html.contains(r#"href="/styles.css""#));
+}
+
+#[test]
+fn a_fragment_that_was_never_expanded_is_an_error() {
+    let mut placeholder = element("column", Attributes::default(), Vec::new());
+    placeholder.frag_use = Some(Box::new(FragmentUse {
+        key: "card".into(),
+        args: Vec::new(),
+        slot_children: false,
+    }));
+    let page = PageSpec::new(
+        "index",
+        ir(element("root", Attributes::default(), vec![placeholder])),
+    );
+    assert_eq!(
+        emit(&site(vec![page])),
+        Err(EmitError::UnexpandedFragment {
+            page: "index".into(),
+            key: "card".into(),
+        })
+    );
 }
