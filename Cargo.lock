@@ -949,9 +949,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "candela"
+name = "candela-lang"
 version = "0.0.4"
-source = "git+https://github.com/lumen-fx/candela?branch=main#7513cb83c53aef9f46c3755d53e5deccb02db74a"
+source = "git+https://github.com/lumen-fx/candela?branch=main#5732761bd3df0ec10fad14b052bc9ed1e0d47844"
 dependencies = [
  "ariadne",
  "candela-vm",
@@ -970,7 +970,7 @@ dependencies = [
 [[package]]
 name = "candela-vm"
 version = "0.0.4"
-source = "git+https://github.com/lumen-fx/candela?branch=main#7513cb83c53aef9f46c3755d53e5deccb02db74a"
+source = "git+https://github.com/lumen-fx/candela?branch=main#5732761bd3df0ec10fad14b052bc9ed1e0d47844"
 dependencies = [
  "ariadne",
  "getrandom 0.3.4",
@@ -2085,7 +2085,7 @@ dependencies = [
  "libc",
  "log",
  "rustversion",
- "windows-link 0.2.1",
+ "windows-link 0.1.3",
  "windows-result 0.4.1",
 ]
 
@@ -3815,7 +3815,7 @@ name = "lumen-script-candela"
 version = "0.0.3"
 dependencies = [
  "bevy_ecs",
- "candela",
+ "candela-lang",
  "lumen-core",
  "lumen-script",
  "pulldown-cmark",
