@@ -252,11 +252,8 @@ fn next_document_order(world: &mut World) -> u32 {
 /// The text an element spawns with.
 ///
 /// Without `translatable="key"` this is just the authored `text`. With it,
-/// the key is resolved against the app's loaded catalogue; a key the
-/// catalogue does not carry falls back to the authored text, and an
-/// element with neither renders the key. That ordering means an app whose
-/// translations are missing still shows its source strings, and a
-/// `translatable` element with no text is never blank.
+/// the key is resolved against the app's loaded catalogue, and what happens
+/// on a miss is [`lumen_i18n::translated_or_authored`]'s rule.
 fn resolve_text(world: &World, el: &Element) -> Option<String> {
     let Some(key) = &el.attrs.translatable else {
         return el.attrs.text.clone();
@@ -264,11 +261,11 @@ fn resolve_text(world: &World, el: &Element) -> Option<String> {
     let translated = world
         .get_resource::<lumen_i18n::SharedI18n>()
         .and_then(|i18n| i18n.try_t(key));
-    Some(
-        translated
-            .or_else(|| el.attrs.text.clone())
-            .unwrap_or_else(|| key.clone()),
-    )
+    Some(lumen_i18n::translated_or_authored(
+        translated,
+        el.attrs.text.as_deref(),
+        key,
+    ))
 }
 
 /// Alpha multiplier applied to a disabled entity when neither
