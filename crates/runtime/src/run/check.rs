@@ -82,6 +82,9 @@ pub fn compile_app(
         script_source,
         scripts,
         pages,
+        // Fragment declarations reach the artifact once the parser collects
+        // them; the tree this path builds names none yet.
+        fragments: lumen_ir::fragment::FragmentTable::new(),
     })
 }
 
