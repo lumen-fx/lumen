@@ -20,5 +20,13 @@ coverage:
 # excludes whole paths only, so the file goes with it. The parts that need
 # no device (the present gate, the damage diff, the init watchdog) are
 # still tested and still run under `cargo test`.
+#
+# The browser module's entry points are the same case for a different reason:
+# every function in that file is an export a page calls, so it runs on
+# wasm32 and nowhere else, while coverage is measured on the host. The suite
+# that drives it runs in a real browser, in its own CI job, on the target
+# llvm-cov does not instrument here. The host-selection code beside it needs
+# no browser and stays graded.
 ignore:
   - "crates/backends/render-wgpu/src/surface.rs"
+  - "crates/web-runtime/src/lib.rs"
