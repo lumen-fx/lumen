@@ -5,10 +5,10 @@
 //!
 //! Every `.lmn` file in the app directory is a page, keyed by its filename
 //! stem. The home page is `index.lmn` (falling back to the `[app] entry`
-//! stem, then `main.lmn` for single-file compat). All pages load up front;
-//! `<template>` blocks found in ANY page file are hoisted into a global
-//! preamble so a shared `layout.lmn` template (with a `<slot>`) is usable
-//! from every page.
+//! stem, then `main.lmn` for single-file compat). All pages load up front,
+//! and the fragments declared in ANY of the app's files are merged into one
+//! table every page parses against, so a shared `layout.lmn` template (with
+//! a `<slot>`) is usable from every page.
 //!
 //! Rendering reuses the existing `<if>` reconciler with ZERO new machinery:
 //! the assembled tree is the entry `<root>` holding one synthetic
@@ -46,6 +46,8 @@ use lumen_core::property_store::PropertyStore;
 use std::path::{Path, PathBuf};
 
 use crate::config::LumenToml;
+#[cfg(feature = "runtime-parse")]
+use lumen_ir::fragment::FragmentTable;
 use lumen_ir::layout_ir::{Attributes, Element, IfModeSpec, LayoutIR};
 
 /// Navigation target attached to a spawned `<a href="...">` element. A click
@@ -75,11 +77,11 @@ pub struct PagePlan {
     pub entry_file: PathBuf,
     /// All navigable pages, entry first. Excludes the shared `layout.lmn`.
     pub pages: Vec<PageFile>,
-    /// Every `.lmn` file that contributes `<template>` blocks to the global
-    /// preamble: all pages plus the shared `layout.lmn`. Read by
-    /// [`collect_preamble`]; wider than [`Self::pages`] so `layout.lmn`
-    /// (which is not itself a page) still shares its template app-wide.
-    pub template_files: Vec<PathBuf>,
+    /// Every `.lmn` file that contributes fragments to the app-wide table:
+    /// all pages plus the shared `layout.lmn`. Read by
+    /// [`collect_fragments`]; wider than [`Self::pages`] so `layout.lmn`
+    /// (which is not itself a page) still shares its fragments app-wide.
+    pub fragment_files: Vec<PathBuf>,
     /// App directory the pages live in.
     pub dir: PathBuf,
 }
@@ -137,7 +139,7 @@ impl RouteHistory {
 /// single-file load path runs unchanged - the compat guarantee.
 pub fn discover(dir: &Path, cfg: &LumenToml) -> PagePlan {
     // 1. Scan the directory once for every `.lmn` file. This set feeds the
-    //    global `<template>` preamble (so a shared `layout.lmn` is usable from
+    //    app-wide fragment table (so a shared `layout.lmn` is usable from
     //    every page) and, absent an explicit `[pages] include`, the navigable
     //    page set.
     let mut all_lmn: Vec<PageFile> = Vec::new();
@@ -155,7 +157,7 @@ pub fn discover(dir: &Path, cfg: &LumenToml) -> PagePlan {
     all_lmn.sort_by(|a, b| a.key.cmp(&b.key));
 
     // 2. Navigable pages. `layout.lmn` is the shared layout, not a page: it
-    //    contributes its template to the preamble but never gets its own
+    //    contributes its fragments to the table but never gets its own
     //    `<if>` gate or a navigable key. An explicit `[pages] include` lists
     //    the navigable set verbatim; otherwise every non-layout `.lmn` is a
     //    page.
@@ -213,13 +215,13 @@ pub fn discover(dir: &Path, cfg: &LumenToml) -> PagePlan {
         // default so the caller still resolves `main.lmn`.
         .unwrap_or_else(|| dir.join(cfg.app.entry.as_deref().unwrap_or("main.lmn")));
 
-    // Every `.lmn` in the dir contributes templates (pages plus `layout.lmn`).
-    let template_files: Vec<PathBuf> = all_lmn.iter().map(|f| f.path.clone()).collect();
+    // Every `.lmn` in the dir contributes fragments (pages plus `layout.lmn`).
+    let fragment_files: Vec<PathBuf> = all_lmn.iter().map(|f| f.path.clone()).collect();
 
-    // The multi-page / template pipeline runs whenever the app has more than
-    // one `.lmn` file. A lone `index.lmn` beside a `layout.lmn` counts, so the
-    // page still picks up the shared template; a single-file app does not and
-    // takes the untouched legacy path.
+    // The multi-page pipeline runs whenever the app has more than one `.lmn`
+    // file. A lone `index.lmn` beside a `layout.lmn` counts, so the page still
+    // picks up the shared fragments; a single-file app does not and takes the
+    // untouched legacy path.
     let multipage = cfg.pages.enabled.unwrap_or(all_lmn.len() > 1);
 
     PagePlan {
@@ -227,13 +229,13 @@ pub fn discover(dir: &Path, cfg: &LumenToml) -> PagePlan {
         entry_key,
         entry_file,
         pages: files,
-        template_files,
+        fragment_files,
         dir: dir.to_path_buf(),
     }
 }
 
 /// Reserved filename stem for the shared layout. `layout.lmn` contributes its
-/// `<template>` to every page but is not itself a navigable page.
+/// fragments to every page but is not itself a navigable page.
 const LAYOUT_STEM: &str = "layout";
 
 fn stem(name: &str) -> String {
@@ -246,10 +248,10 @@ fn stem(name: &str) -> String {
 // -- IR assembly (graft pages under `<if>` gates) ----------------------------
 
 /// Graft every page in `plan` into `ir` (parsed from the entry file) as
-/// sibling `<if signal="route.path" eq="<key>">` gates, hoisting all
-/// `<template>` blocks into a global preamble and merging every page's
-/// scripts. Returns the extra page-file paths to add to the hot-reload watch
-/// set (all non-entry pages).
+/// sibling `<if signal="route.path" eq="<key>">` gates, parsing each page
+/// against the app-wide `fragments` table and merging every page's scripts.
+/// Returns the extra page-file paths to add to the hot-reload watch set (all
+/// non-entry pages).
 ///
 /// Must run BEFORE asset-path resolution / the CSS cascade so the assembled
 /// tree flows through the existing pipeline uniformly.
@@ -257,11 +259,9 @@ fn stem(name: &str) -> String {
 pub fn assemble(
     ir: &mut LayoutIR,
     plan: &PagePlan,
+    fragments: &FragmentTable,
     parser: &dyn crate::source_parser::SourceParser,
 ) -> Result<Vec<PathBuf>, String> {
-    // Global template preamble: every `<template>` block from every page.
-    let preamble = collect_preamble(plan);
-
     let mut gates: Vec<Element> = Vec::new();
     let mut script_source = String::new();
     let mut external_scripts: Vec<String> = Vec::new();
@@ -270,9 +270,8 @@ pub fn assemble(
     for page in &plan.pages {
         let raw = std::fs::read_to_string(&page.path)
             .map_err(|e| format!("read page {}: {e}", page.path.display()))?;
-        let src = format!("{preamble}{raw}");
         let pir = parser
-            .parse_html_with_loader(&src, &page.path)
+            .parse_html_with_loader(&raw, &page.path, fragments)
             .map_err(|e| format!("parse page {}: {e}", page.path.display()))?;
 
         // A synthetic `<if>` gate keyed on the reserved active-page signal.
@@ -305,9 +304,9 @@ pub fn assemble(
         }
     }
 
-    // Watch every template-only file too (the shared `layout.lmn`), so editing
+    // Watch every fragment-only file too (the shared `layout.lmn`), so editing
     // the layout hot-reloads even though it is not a navigable page.
-    for tf in &plan.template_files {
+    for tf in &plan.fragment_files {
         if tf != &plan.entry_file && !plan.pages.iter().any(|p| &p.path == tf) {
             watch.push(tf.clone());
         }
@@ -322,102 +321,30 @@ pub fn assemble(
     Ok(watch)
 }
 
-/// Collect the global `<template>` preamble: every `<template>` block from
-/// every page file, concatenated. Prepended to each page (and the entry) at
-/// parse time so a shared `layout.lmn` template is usable app-wide.
-pub fn collect_preamble(plan: &PagePlan) -> String {
-    let mut preamble = String::new();
-    for path in &plan.template_files {
-        if let Ok(src) = std::fs::read_to_string(path) {
-            for block in extract_template_blocks(&src) {
-                preamble.push_str(&block);
-                preamble.push('\n');
-            }
-        }
+/// Merge the fragments every one of the app's `.lmn` files declares into the
+/// one table each page parses against. This is what makes a `<template>` in
+/// `layout.lmn` reachable from every page.
+///
+/// Two files declaring the same name with different bodies is an error: the
+/// table is app-wide, so either answer would silently change what half the
+/// use sites render.
+#[cfg(feature = "runtime-parse")]
+pub fn collect_fragments(
+    plan: &PagePlan,
+    parser: &dyn crate::source_parser::SourceParser,
+) -> Result<FragmentTable, String> {
+    let mut table = FragmentTable::new();
+    for path in &plan.fragment_files {
+        let src =
+            std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        let declared = parser
+            .collect_fragments(&src, path)
+            .map_err(|e| format!("parse {}: {e}", path.display()))?;
+        table
+            .merge(declared)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
     }
-    preamble
-}
-
-/// Extract every top-level `<template ...>...</template>` block (inclusive) from
-/// `src`, balancing nested opens so a template body containing the literal
-/// text does not truncate the capture. Text inside XML comments is skipped, so
-/// a comment that mentions the literal `<template>` (as `layout.lmn`'s own
-/// docs do) never derails the scan.
-fn extract_template_blocks(src: &str) -> Vec<String> {
-    const OPEN: &[u8] = b"<template";
-    const CLOSE: &[u8] = b"</template>";
-    const COMMENT_OPEN: &[u8] = b"<!--";
-    const COMMENT_CLOSE: &[u8] = b"-->";
-    // Scan on ASCII-lowercased BYTES so a multibyte char (e.g. an em-dash) in a
-    // template body never trips the byte cursor. The `<` / `>` tag delimiters
-    // are ASCII, so the recorded start/end indices are always char
-    // boundaries; `src[start..end]` slices cleanly.
-    let lower = src.to_ascii_lowercase();
-    let lb = lower.as_bytes();
-    let mut blocks = Vec::new();
-    let mut i = 0;
-    while i < lb.len() {
-        // Skip whole comments before looking for the next `<template`, so a
-        // commented-out or merely-mentioned template does not match.
-        if lb[i..].starts_with(COMMENT_OPEN) {
-            match find_sub(&lb[i + COMMENT_OPEN.len()..], COMMENT_CLOSE) {
-                Some(rel) => {
-                    i += COMMENT_OPEN.len() + rel + COMMENT_CLOSE.len();
-                    continue;
-                }
-                None => break, // unterminated comment: nothing more to extract
-            }
-        }
-        if !lb[i..].starts_with(OPEN) {
-            i += 1;
-            continue;
-        }
-        let start = i;
-        let after = start + OPEN.len();
-        // Confirm a tag boundary (`<template` followed by space / `>` / `/`).
-        let ok = lb
-            .get(after)
-            .is_none_or(|b| b.is_ascii_whitespace() || *b == b'>' || *b == b'/');
-        if !ok {
-            i = after;
-            continue;
-        }
-        // Balance nested `<template ...>` opens up to the matching close.
-        let mut depth = 0usize;
-        let mut j = start;
-        let mut end = None;
-        while j < lb.len() {
-            if lb[j..].starts_with(OPEN) {
-                depth += 1;
-                j += OPEN.len();
-            } else if lb[j..].starts_with(CLOSE) {
-                depth -= 1;
-                j += CLOSE.len();
-                if depth == 0 {
-                    end = Some(j);
-                    break;
-                }
-            } else {
-                j += 1;
-            }
-        }
-        match end {
-            Some(e) => {
-                blocks.push(src[start..e].to_string());
-                i = e;
-            }
-            None => break,
-        }
-    }
-    blocks
-}
-
-/// First index of subslice `needle` within `haystack`, or `None`.
-fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return None;
-    }
-    (0..=haystack.len() - needle.len()).find(|&k| &haystack[k..k + needle.len()] == needle)
+    Ok(table)
 }
 
 // -- runtime wiring ----------------------------------------------------------
@@ -561,26 +488,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extracts_balanced_template_blocks() {
-        let src = "<root/>\n<template name=\"a\"><column><slot/></column></template>\n\
-                   <template name=\"b\"><label/></template>";
-        let blocks = extract_template_blocks(src);
-        assert_eq!(blocks.len(), 2);
-        assert!(blocks[0].contains("name=\"a\""));
-        assert!(blocks[1].contains("name=\"b\""));
-    }
-
-    #[test]
-    fn multibyte_chars_do_not_break_the_scanner() {
-        // An em dash (`\u{2014}`, 3 UTF-8 bytes) inside a template body must
-        // not trip the byte cursor onto a non-char-boundary.
-        let src = "<template name=\"x\"><label text=\"a \u{2014} b \u{2014} c\"/></template>";
-        let blocks = extract_template_blocks(src);
-        assert_eq!(blocks.len(), 1);
-        assert!(blocks[0].contains("\u{2014} b \u{2014}"));
-    }
-
-    #[test]
     fn keys_are_longest_first() {
         let plan = PagePlan {
             multipage: true,
@@ -600,22 +507,10 @@ mod tests {
                     path: PathBuf::new(),
                 },
             ],
-            template_files: Vec::new(),
+            fragment_files: Vec::new(),
             dir: PathBuf::new(),
         };
         let keys = plan.keys();
         assert_eq!(keys[0], "settings"); // longest first
-    }
-
-    #[test]
-    fn comment_mentioning_template_is_skipped() {
-        // A comment that mentions the literal `<template>` (as `layout.lmn`'s
-        // own docs do) must not derail the scan or swallow the real block.
-        let src = "<root>\n<!-- this `<template>` is documented here -->\n\
-                   <template name=\"layout\"><column><slot/></column></template>\n</root>";
-        let blocks = extract_template_blocks(src);
-        assert_eq!(blocks.len(), 1);
-        assert!(blocks[0].contains("name=\"layout\""));
-        assert!(blocks[0].contains("<slot/>"));
     }
 }

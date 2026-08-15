@@ -22,7 +22,10 @@ pub fn install(app: &mut App, parser: &dyn crate::source_parser::SourceParser) {
     app.add_plugin(lumen_devtools::DevtoolsPlugin);
 
     // Parse the embedded `.lmn` + `.css` with the injected front-end.
-    let mut ir = match parser.parse_html(lumen_devtools::OVERLAY_LMN) {
+    let mut ir = match parser.parse_html(
+        lumen_devtools::OVERLAY_LMN,
+        &lumen_ir::fragment::FragmentTable::new(),
+    ) {
         Ok(ir) => ir,
         Err(e) => {
             tracing::warn!("devtools: overlay markup failed to parse: {e}");

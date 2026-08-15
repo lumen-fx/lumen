@@ -154,8 +154,9 @@ pub(crate) struct SourceOverrides<'a> {
     pub(crate) markup: Option<&'a str>,
     pub(crate) css: Option<&'a str>,
     /// File-based-pages plan. When `Some(_).multipage`, the loader grafts
-    /// every sibling `.lmn` page under `<if>` gates and hoists the global
-    /// `<template>` preamble. `None` / single-page keeps the legacy path.
+    /// every sibling `.lmn` page under `<if>` gates and parses each against
+    /// the app-wide fragment table. `None` / single-page keeps the legacy
+    /// path.
     pub(crate) plan: Option<&'a crate::pages::PagePlan>,
 }
 
@@ -265,25 +266,28 @@ pub(crate) fn load_ir(
         }
         resolution.output
     };
-    // File-based pages: prepend the global `<template>` preamble so the entry
+    // File-based pages: collect the app-wide fragment table so the entry
     // page's own `<use template="...">` references (e.g. a shared `layout`)
     // resolve during THIS parse too - not just for the sibling pages grafted
-    // in `pages::assemble` below.
-    let html = if sources.markup.is_none() && plan.is_some_and(|p| p.multipage) {
-        let preamble = crate::pages::collect_preamble(plan.unwrap());
-        format!("{preamble}\n{html}")
-    } else {
-        html
+    // in `pages::assemble` below. Collected per load, so editing a fragment
+    // file and hot-reloading picks the new body up.
+    let fragments = match plan {
+        Some(plan) if sources.markup.is_none() && plan.multipage => {
+            crate::pages::collect_fragments(plan, parser).map_err(RunError::ParseHtml)?
+        }
+        _ => lumen_ir::fragment::FragmentTable::new(),
     };
     // Includes are already spliced away, so the string-only parser suffices.
-    let mut ir = parser.parse_html(&html).map_err(RunError::ParseHtml)?;
+    let mut ir = parser
+        .parse_html(&html, &fragments)
+        .map_err(RunError::ParseHtml)?;
     // Carry the resolved include list on the IR for parity with
     // `external_scripts` (used by hot reload + inspectable by consumers).
     ir.included_files = include_paths.clone();
     // File-based pages: graft every sibling `.lmn` page under a synthetic
     // `<if signal="route.path" eq="<key>">` gate (reusing the `<if>`
-    // reconciler), hoist global `<template>`s, and merge every page's
-    // scripts - all BEFORE asset resolution + the CSS cascade so the
+    // reconciler), parse each against the app-wide fragment table, and merge
+    // every page's scripts - all BEFORE asset resolution + the CSS cascade so the
     // assembled tree flows through the rest of the pipeline uniformly. Only
     // for a real multi-page disk app; in-memory (`markup`) sources and
     // single-file apps keep the untouched legacy path.
@@ -291,7 +295,8 @@ pub(crate) fn load_ir(
         && let Some(plan) = plan
         && plan.multipage
     {
-        let extra = crate::pages::assemble(&mut ir, plan, parser).map_err(RunError::ParseHtml)?;
+        let extra = crate::pages::assemble(&mut ir, plan, &fragments, parser)
+            .map_err(RunError::ParseHtml)?;
         // Watch + mtime-track every page file so editing any page hot-reloads.
         for p in extra {
             let m = mtime(&p);

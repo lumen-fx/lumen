@@ -30,9 +30,9 @@ pub fn find_definition(src: &str, cursor: usize) -> Option<DefinitionHit> {
     locate_template(src, &tag)
 }
 
-/// Linear scan for `<template name="<tag>"`. The parser already
-/// supports both `<X />` use-sites and explicit `<use template="X" />`,
-/// so a hit on the *declaration* serves both.
+/// Linear scan for `<template name="<tag>"`. Both use-site spellings,
+/// `<X />` and `<use template="X" />`, name the same declaration, so a hit
+/// on it serves both.
 pub fn locate_template(src: &str, tag: &str) -> Option<DefinitionHit> {
     let needle = format!("name=\"{tag}\"");
     let mut search_from = 0usize;
