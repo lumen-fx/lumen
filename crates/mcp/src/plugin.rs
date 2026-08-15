@@ -3,12 +3,10 @@
 
 use std::sync::{Arc, RwLock};
 
-use base64::Engine as _;
 use bevy_ecs::hierarchy::{ChildOf, Children};
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::message::MessageWriter;
 use bevy_ecs::prelude::*;
-use bevy_ecs::system::NonSend;
 use lumen_core::app::{App, Plugin};
 use lumen_core::components::{
     BindText, Fill, LumenClasses, LumenId, LumenTag, Opacity, SliderValue, Style, TabIndex,
@@ -20,18 +18,18 @@ use lumen_core::input::{
     PointerReleased, PointerState, Pressed, Scroll, ScrollAxis, ScrollOffset,
 };
 use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
+use lumen_core::task::TimerService;
 
 use crate::simulate::{SimulateKind, SimulateQueue};
 use lumen_core::render_world::{
     ExtractedRect, ExtractedText, RenderStage, SurfaceCapture, Viewport,
 };
 use lumen_core::tick::TickStage;
-use lumen_render_headless::HeadlessRenderer;
 
 use lumen_assets::{ImageSource, LoadedImage, LoadedSvg};
 use lumen_primitives::Interaction;
 
-use crate::server::{serve_stdio, serve_tcp};
+use crate::server::{ServerCtx, TokioTimer, serve_stdio, serve_tcp};
 use crate::snapshot::{
     ColorView, EntityFingerprint, EntityInspect, EntityView, ExtractedRectView, ExtractedTextView,
     FillView, FocusOutlineView, FocusView, HISTORY_RING_CAP, HistorySnapshot, InteractionView,
@@ -505,27 +503,26 @@ impl Plugin for LumenMcpPlugin {
 
         // Spawn the server on a dedicated thread. TCP and stdio share
         // the same dispatch - the transport just picks the byte path.
+        // The handlers wait on the app's timer when it installed one, so a
+        // poll loop here uses the same clock as the rest of the app.
+        let timer = app
+            .world
+            .get_resource::<TimerService>()
+            .map(TimerService::handle)
+            .unwrap_or_else(|| Arc::new(TokioTimer));
         let transport = self.transport;
-        let server_handle = handle.0.clone();
-        let server_surface = surface_capture;
-        let server_simulate = simulate_queue;
-        let simulate_enabled = self.simulate_enabled;
+        let ctx = ServerCtx {
+            snapshot: handle.0.clone(),
+            surface_capture: Some(surface_capture),
+            simulate_queue,
+            simulate_enabled: self.simulate_enabled,
+            timer,
+        };
         std::thread::Builder::new()
             .name("lumen-mcp-server".into())
             .spawn(move || match transport {
-                McpTransport::Tcp(port) => serve_tcp(
-                    port,
-                    server_handle,
-                    Some(server_surface),
-                    server_simulate,
-                    simulate_enabled,
-                ),
-                McpTransport::Stdio => serve_stdio(
-                    server_handle,
-                    Some(server_surface),
-                    server_simulate,
-                    simulate_enabled,
-                ),
+                McpTransport::Tcp(port) => serve_tcp(port, ctx),
+                McpTransport::Stdio => serve_stdio(ctx),
             })
             .expect("lumen-mcp: failed to spawn server thread");
     }
@@ -1104,7 +1101,6 @@ fn write_render_snapshot(
     handle: Res<SnapshotHandle>,
     rects: Query<&ExtractedRect>,
     texts: Query<&ExtractedText>,
-    headless: Option<NonSend<HeadlessRenderer>>,
 ) {
     let Ok(mut snap) = handle.0.write() else {
         return;
@@ -1142,26 +1138,6 @@ fn write_render_snapshot(
             fill: ColorView::from(t.fill),
         })
         .collect();
-
-    snap.screenshot_png_base64 = headless.and_then(|h| {
-        let (w, hpx) = h.size();
-        let fb = h.framebuffer();
-        encode_png_base64(w, hpx, fb)
-    });
-}
-
-fn encode_png_base64(width: u32, height: u32, rgba8: &[u8]) -> Option<String> {
-    use image::ImageEncoder;
-    use image::codecs::png::PngEncoder;
-    let mut out: Vec<u8> = Vec::with_capacity(rgba8.len() / 2);
-    let encoder = PngEncoder::new(&mut out);
-    if encoder
-        .write_image(rgba8, width, height, image::ExtendedColorType::Rgba8)
-        .is_err()
-    {
-        return None;
-    }
-    Some(base64::engine::general_purpose::STANDARD.encode(&out))
 }
 
 impl From<Modifiers> for ModifiersView {

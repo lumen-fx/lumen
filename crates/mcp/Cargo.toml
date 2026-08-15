@@ -13,7 +13,6 @@ repository.workspace = true
 lumen-core = { path = "../core", version = "0.0.3" }
 lumen-primitives = { path = "../primitives", version = "0.0.3" }
 lumen-assets = { path = "../assets", version = "0.0.3" }
-lumen-render-headless = { path = "../backends/render-headless", version = "0.0.3" }
 bevy_ecs.workspace = true
 glam.workspace = true
 tokio = { version = "1.52", features = ["rt-multi-thread", "net", "io-util", "io-std", "sync", "macros", "time"] }
