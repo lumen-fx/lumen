@@ -31,7 +31,9 @@
 //!
 //! `--target` packages for a platform other than the one you are on. The
 //! toolchain files for another platform come from the release channel and are
-//! cached per version.
+//! cached per version. Finding a prebuilt file that ships with the toolchain
+//! lives here too, so a web build and a package look in the same places for
+//! the same reasons.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -51,6 +53,20 @@ const FOOTER_MAGIC: &[u8; 8] = b"LMNAPACK";
 /// Name of the launcher stub as the release channel and a workspace build
 /// both produce it.
 const STUB_STEM: &str = "lumen-launcher";
+
+/// The prebuilt wasm runtime a web build serves, and the module that
+/// instantiates it, under the names the release channel and a workspace build
+/// both produce.
+const WEB_WASM: &str = "lumen-web.wasm";
+const WEB_JS: &str = "lumen-web.js";
+
+/// Cache key for the web runtime, in the slot a target name takes: it is the
+/// same pair on every platform, so it is filed under the component rather
+/// than under any one of them.
+const WEB_COMPONENT: &str = "web";
+
+/// Release asset holding the web runtime, named like the per-target archives.
+const WEB_ARCHIVE: &str = "lumen-web.tar.gz";
 
 /// The C wrapper used for a macOS package built on macOS. It is compiled with
 /// `-sectcreate __LUMEN __lmna <artifact>`, which puts the artifact in a
@@ -771,64 +787,154 @@ struct Toolchain {
 /// source tree. A package for another platform comes from the per-version
 /// cache, and is fetched from the release channel when the cache is empty.
 fn locate_toolchain(target: Target, lib_dir: Option<&Path>) -> Result<Toolchain, String> {
-    let mut probed: Vec<PathBuf> = Vec::new();
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    if let Some(dir) = lib_dir {
-        dirs.push(dir.to_path_buf());
-    }
-    if target == Target::host() {
-        if let Ok(exe) = std::env::current_exe()
-            && let Some(dir) = exe.parent()
-        {
-            dirs.push(dir.to_path_buf());
-        }
-        if let Some(dir) = std::env::var_os("LUMEN_LIB_DIR") {
-            dirs.push(PathBuf::from(dir));
-        }
-    }
-    if let Some(dir) = cache_dir(target) {
-        dirs.push(dir);
-    }
+    let wanted = [target.stub_name(), target.lib_name().to_string()];
+    let cache = cache_dir(target);
+    let dirs = search_dirs(lib_dir, target == Target::host(), cache.clone());
 
-    for dir in &dirs {
-        let stub = dir.join(target.stub_name());
-        let lib = dir.join(target.lib_name());
-        if stub.is_file() && lib.is_file() {
-            return Ok(Toolchain { stub, lib });
-        }
-        probed.push(dir.clone());
-    }
-
-    if target != Target::host()
-        && let Some(dir) = cache_dir(target)
-    {
-        fetch_toolchain(target, &dir)?;
+    if let Some(dir) = first_dir_with(&dirs, &wanted) {
         return Ok(Toolchain {
-            stub: dir.join(target.stub_name()),
-            lib: dir.join(target.lib_name()),
+            stub: dir.join(&wanted[0]),
+            lib: dir.join(&wanted[1]),
+        });
+    }
+    // Another platform's files are not on this machine until they are
+    // fetched; this machine's own come with the installation, so an empty
+    // search there is a real failure rather than a cache miss.
+    if target != Target::host()
+        && let Some(dir) = cache
+    {
+        fetch_release_files(
+            &target.archive_name(),
+            &wanted,
+            &dir,
+            &format!(
+                "A release older than app packaging ships no launcher; build the {} files \
+                 yourself and pass --lib-dir instead.",
+                target.name
+            ),
+        )?;
+        return Ok(Toolchain {
+            stub: dir.join(&wanted[0]),
+            lib: dir.join(&wanted[1]),
         });
     }
 
-    let list: Vec<String> = probed.iter().map(|p| p.display().to_string()).collect();
     Err(format!(
         "cannot find {} and {} for {}. Looked in: {}. Set LUMEN_LIB_DIR (or pass \
          --lib-dir) to the directory holding them; in a Lumen source tree that is \
          target/release after `cargo build --release -p lumen-launcher -p lumen`.",
-        target.stub_name(),
-        target.lib_name(),
+        wanted[0],
+        wanted[1],
         target.name,
-        if list.is_empty() {
-            "nowhere".to_string()
-        } else {
-            list.join(", ")
-        }
+        searched(&dirs)
     ))
 }
 
-/// Where another platform's toolchain files are kept between runs: under the
-/// platform cache directory, keyed by Lumen version and target so an upgrade
-/// never reuses the old ones.
-fn cache_dir(target: Target) -> Option<PathBuf> {
+/// The prebuilt runtime a web build copies beside the pages it emits.
+pub struct WebRuntimeFiles {
+    /// The wasm runtime that loads the app's compiled artifact in a browser.
+    pub wasm: PathBuf,
+    /// The module glue that instantiates it.
+    pub js: PathBuf,
+}
+
+/// Find the prebuilt web runtime through the same search [`locate_toolchain`]
+/// runs for the launcher stub and the shared library: `--lib-dir` first, then
+/// the files shipped with the running `lumenc`, then `LUMEN_LIB_DIR`, then the
+/// per-version cache, which is filled from the release channel when it is
+/// empty.
+///
+/// The runtime is one prebuilt pair for every app and every platform, so
+/// unlike a package there is no target to pick: a web build on any machine
+/// wants the same two files.
+pub fn locate_web_runtime(lib_dir_flag: Option<&Path>) -> Result<WebRuntimeFiles, String> {
+    let wanted = [WEB_WASM.to_string(), WEB_JS.to_string()];
+    let cache = cache_dir_for(WEB_COMPONENT);
+    let dirs = search_dirs(lib_dir_flag, true, cache.clone());
+
+    if let Some(dir) = first_dir_with(&dirs, &wanted) {
+        return Ok(WebRuntimeFiles {
+            wasm: dir.join(&wanted[0]),
+            js: dir.join(&wanted[1]),
+        });
+    }
+    if let Some(dir) = cache {
+        fetch_release_files(
+            WEB_ARCHIVE,
+            &wanted,
+            &dir,
+            "A release older than the web target ships no web runtime; build it yourself \
+             and pass --lib-dir instead.",
+        )?;
+        return Ok(WebRuntimeFiles {
+            wasm: dir.join(&wanted[0]),
+            js: dir.join(&wanted[1]),
+        });
+    }
+
+    Err(format!(
+        "cannot find {WEB_WASM} and {WEB_JS}. Looked in: {}. Set LUMEN_LIB_DIR (or pass \
+         --lib-dir) to the directory holding them.",
+        searched(&dirs)
+    ))
+}
+
+/// The directories a toolchain artifact is looked for in, in order: the
+/// `--lib-dir` flag, the directory holding the running `lumenc`,
+/// `LUMEN_LIB_DIR`, then the per-version cache. The middle two are skipped
+/// when `installed` is false, which is another platform's files: an
+/// installation carries its own platform's, never a second one's.
+fn search_dirs(lib_dir: Option<&Path>, installed: bool, cache: Option<PathBuf>) -> Vec<PathBuf> {
+    let exe_dir = installed
+        .then(|| std::env::current_exe().ok())
+        .flatten()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let env_dir = installed
+        .then(|| std::env::var_os("LUMEN_LIB_DIR"))
+        .flatten()
+        .map(PathBuf::from);
+    ordered_dirs(lib_dir, exe_dir, env_dir, cache)
+}
+
+/// The search order itself, with the two directories [`search_dirs`] reads
+/// from the process environment passed in.
+fn ordered_dirs(
+    lib_dir: Option<&Path>,
+    exe_dir: Option<PathBuf>,
+    env_dir: Option<PathBuf>,
+    cache: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    [lib_dir.map(Path::to_path_buf), exe_dir, env_dir, cache]
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// The first of `dirs` holding every one of `names`. A directory carrying
+/// some of them is passed over: a half-populated one cannot assemble
+/// anything, and a later directory may be complete.
+fn first_dir_with(dirs: &[PathBuf], names: &[String]) -> Option<PathBuf> {
+    dirs.iter()
+        .find(|dir| names.iter().all(|name| dir.join(name).is_file()))
+        .cloned()
+}
+
+/// The searched directories as an error message names them.
+fn searched(dirs: &[PathBuf]) -> String {
+    if dirs.is_empty() {
+        return "nowhere".to_string();
+    }
+    dirs.iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Where files that did not come with this installation are kept between
+/// runs: under the platform cache directory, keyed by Lumen version and by
+/// `component` (a target name, or the web runtime) so an upgrade never
+/// reuses the old ones.
+fn cache_dir_for(component: &str) -> Option<PathBuf> {
     let base = if cfg!(target_os = "windows") {
         std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
     } else if cfg!(target_os = "macos") {
@@ -842,8 +948,13 @@ fn cache_dir(target: Target) -> Option<PathBuf> {
         base.join("lumen")
             .join("toolchain")
             .join(env!("CARGO_PKG_VERSION"))
-            .join(target.name),
+            .join(component),
     )
+}
+
+/// Where another platform's toolchain files are kept between runs.
+fn cache_dir(target: Target) -> Option<PathBuf> {
+    cache_dir_for(target.name)
 }
 
 /// Copy a file and make it executable on Unix, since a copy keeps the source
@@ -1026,19 +1137,21 @@ fn holds(dir: &Path, inner: &Path) -> bool {
 // Fetching another platform's toolchain files
 // ============================================================
 
-/// Download this Lumen version's release archive for `target`, check it
-/// against the checksums published with the release, and put the launcher
-/// stub and the shared library in `dest`.
-fn fetch_toolchain(target: Target, dest: &Path) -> Result<(), String> {
+/// Download this Lumen version's release `archive`, check it against the
+/// checksums published with the release, and put the `wanted` members of it
+/// in `dest`. `hint` closes the message when the release does not carry them,
+/// and says how to supply them by hand instead.
+fn fetch_release_files(
+    archive: &str,
+    wanted: &[String],
+    dest: &Path,
+    hint: &str,
+) -> Result<(), String> {
     let repo = std::env::var("LUMEN_GH_REPO").unwrap_or_else(|_| "lumen-fx/lumen".to_string());
     let version = env!("CARGO_PKG_VERSION");
     let base = format!("https://github.com/{repo}/releases/download/v{version}");
-    let archive = target.archive_name();
 
-    println!(
-        "lumenc package: fetching the {} toolchain from {base}",
-        target.name
-    );
+    println!("lumenc: fetching {archive} from {base}");
 
     let sums = http_get(&format!("{base}/sha256sums.txt"))?;
     let sums = String::from_utf8(sums).map_err(|_| {
@@ -1053,8 +1166,7 @@ fn fetch_toolchain(target: Target, dest: &Path) -> Result<(), String> {
         .ok_or_else(|| {
             format!(
                 "the v{version} release publishes no checksum for {archive}, so it cannot be \
-                 verified. Build the toolchain files for {} yourself and pass --lib-dir.",
-                target.name
+                 verified. {hint}"
             )
         })?;
 
@@ -1073,17 +1185,14 @@ fn fetch_toolchain(target: Target, dest: &Path) -> Result<(), String> {
     }
 
     std::fs::create_dir_all(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
-    let wanted = [target.stub_name(), target.lib_name().to_string()];
-    let found = match target.os {
-        Os::Windows => extract_zip(&bytes, &wanted, dest)?,
-        _ => extract_tar_gz(&bytes, &wanted, dest)?,
+    let found = if archive.ends_with(".zip") {
+        extract_zip(&bytes, wanted, dest)?
+    } else {
+        extract_tar_gz(&bytes, wanted, dest)?
     };
-    for name in &wanted {
+    for name in wanted {
         if !found.contains(name) {
-            return Err(format!(
-                "{archive} carries no {name}. A release older than app packaging ships no \
-                 launcher; package with --lib-dir instead."
-            ));
+            return Err(format!("{archive} carries no {name}. {hint}"));
         }
     }
     Ok(())
@@ -1188,6 +1297,84 @@ mod tests {
         assert_eq!(windows.stub_name(), "lumen-launcher.exe");
         let linux = Target::parse("linux-x86_64").expect("known target");
         assert_eq!(linux.exe_name("Notes"), "Notes");
+    }
+
+    /// The order every toolchain artifact is looked for in. A flag beats an
+    /// installation, an installation beats an environment override, and the
+    /// cache is the last resort because reaching it can mean a download.
+    #[test]
+    fn the_search_order_runs_flag_installation_environment_cache() {
+        let dirs = ordered_dirs(
+            Some(Path::new("/flag")),
+            Some(PathBuf::from("/beside-lumenc")),
+            Some(PathBuf::from("/env")),
+            Some(PathBuf::from("/cache")),
+        );
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("/flag"),
+                PathBuf::from("/beside-lumenc"),
+                PathBuf::from("/env"),
+                PathBuf::from("/cache"),
+            ]
+        );
+        assert!(ordered_dirs(None, None, None, None).is_empty());
+    }
+
+    /// Another platform's files never come from this installation, so the
+    /// flag and the cache are the only places they can be.
+    #[test]
+    fn a_cross_target_search_skips_this_machines_own_files() {
+        let cache = PathBuf::from("/cache");
+        assert_eq!(
+            search_dirs(None, false, Some(cache.clone())),
+            vec![cache.clone()]
+        );
+        assert_eq!(
+            search_dirs(Some(Path::new("/flag")), false, Some(cache.clone())),
+            vec![PathBuf::from("/flag"), cache]
+        );
+    }
+
+    /// A directory carrying one of the two files cannot assemble anything,
+    /// so the search goes on to the next one instead of stopping there.
+    #[test]
+    fn a_half_populated_directory_is_passed_over() {
+        let tmp = std::env::temp_dir().join(format!("lumen-web-probe-{}", std::process::id()));
+        let partial = tmp.join("partial");
+        let full = tmp.join("full");
+        std::fs::create_dir_all(&partial).expect("mkdir");
+        std::fs::create_dir_all(&full).expect("mkdir");
+        std::fs::write(partial.join(WEB_WASM), b"wasm").expect("write");
+        std::fs::write(full.join(WEB_WASM), b"wasm").expect("write");
+        std::fs::write(full.join(WEB_JS), b"js").expect("write");
+
+        let wanted = [WEB_WASM.to_string(), WEB_JS.to_string()];
+        assert_eq!(
+            first_dir_with(&[partial.clone(), full.clone()], &wanted),
+            Some(full.clone())
+        );
+
+        // `--lib-dir` names a complete directory, so the search ends there
+        // and never reaches the cache or the release channel.
+        let found = locate_web_runtime(Some(&full)).expect("the flagged directory has both");
+        assert_eq!(found.wasm, full.join(WEB_WASM));
+        assert_eq!(found.js, full.join(WEB_JS));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The web runtime is the same pair everywhere, so it caches under its
+    /// own component name rather than under a platform's.
+    #[test]
+    fn the_web_runtime_caches_beside_the_per_target_toolchains() {
+        let Some(dir) = cache_dir_for(WEB_COMPONENT) else {
+            return;
+        };
+        let text = dir.to_string_lossy();
+        assert!(text.contains(env!("CARGO_PKG_VERSION")));
+        assert!(text.ends_with("web"));
     }
 
     #[test]
