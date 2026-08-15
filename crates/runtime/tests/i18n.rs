@@ -26,7 +26,7 @@ fn label(text: Option<&str>, translatable: Option<&str>) -> Element {
             ..Default::default()
         },
         children: Vec::new(),
-        interpolations: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -86,7 +86,7 @@ fn marked_markup_spawns_translated() {
             // Only en-US carries this one: the fallback chain resolves it.
             label(Some("Goodbye!"), Some("bye")),
         ],
-        interpolations: Vec::new(),
+        ..Default::default()
     };
     let mut app = build(&dir, root);
     let texts = texts(&mut app);
@@ -111,7 +111,7 @@ fn untranslated_falls_back_to_authored_text_then_key() {
             label(Some("Source text"), Some("absent-key")),
             label(None, Some("no-text-key")),
         ],
-        interpolations: Vec::new(),
+        ..Default::default()
     };
     let mut app = build(&dir, root);
     let texts = texts(&mut app);
@@ -136,7 +136,7 @@ fn script_translator_hook_resolves_the_catalogue() {
             tag: "root".to_string(),
             attrs: Attributes::default(),
             children: Vec::new(),
-            interpolations: Vec::new(),
+            ..Default::default()
         },
     );
     assert_eq!(lumen_core::i18n::translate("greet"), "Hallo!");
@@ -161,7 +161,7 @@ fn catalogue_reload_replaces_strings() {
             tag: "root".to_string(),
             attrs: Attributes::default(),
             children: Vec::new(),
-            interpolations: Vec::new(),
+            ..Default::default()
         },
     );
     let shared = app.world.resource::<lumen_i18n::SharedI18n>().clone();

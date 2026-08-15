@@ -41,7 +41,7 @@ fn el(tag: &str, id: Option<&str>, children: Vec<Element>) -> Element {
             ..Default::default()
         },
         children,
-        interpolations: Vec::new(),
+        ..Default::default()
     }
 }
 

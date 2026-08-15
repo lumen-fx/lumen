@@ -41,14 +41,14 @@ fn image_app(dir: &std::path::Path) -> Vec<u8> {
             ..Default::default()
         },
         children: Vec::new(),
-        interpolations: Vec::new(),
+        ..Default::default()
     };
     let ir = LayoutIR {
         root: Element {
             tag: "root".to_string(),
             attrs: Attributes::default(),
             children: vec![image],
-            interpolations: Vec::new(),
+            ..Default::default()
         },
         ..Default::default()
     };
