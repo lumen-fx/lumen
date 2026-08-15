@@ -18,7 +18,7 @@ use super::*;
 use lumen_i18n::{I18nPlugin, SharedI18n};
 
 /// Directory holding an app's `.ftl` catalogues.
-pub(crate) fn locale_dir(app_dir: &Path) -> PathBuf {
+pub fn locale_dir(app_dir: &Path) -> PathBuf {
     app_dir.join("locale")
 }
 

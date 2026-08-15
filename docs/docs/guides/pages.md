@@ -161,3 +161,10 @@ described above.
 
 The one difference is that a shipped app has no page files to reload, so adding
 a page means rebuilding. See [packaging](packaging.md).
+
+On the web the model is the same one it was designed for. `lumenc web` emits
+each page as its own HTML document, and each `<a href>` becomes an ordinary
+link to it, so a page has a URL a visitor can share and a crawler can index. A
+path with parameters keeps the shape you wrote: `/user/42` stays `/user/42`,
+and `route.segment` reads the leftover part in the browser exactly as it does
+here. See [putting an app on the web](web.md).

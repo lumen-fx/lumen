@@ -11,7 +11,7 @@
 
 # Every subcommand lumenc dispatches. Kept in step with `lumenc --help` by
 # crates/lumenc/tests/completions.rs.
-_lumenc_commands="run check build new fmt snapshot find element-at click type key scroll lint diff screenshot bundle package i18n completions"
+_lumenc_commands="run check build new fmt snapshot find element-at click type key scroll lint diff screenshot web bundle package i18n completions"
 
 _lumenc() {
     local cur prev cmd i word
@@ -47,6 +47,10 @@ _lumenc() {
             mapfile -t COMPREPLY < <(compgen -W "primary secondary middle" -- "$cur")
             return
             ;;
+        "web --prerender")
+            mapfile -t COMPREPLY < <(compgen -W "seeds none" -- "$cur")
+            return
+            ;;
         "package --target")
             mapfile -t COMPREPLY < <(compgen -W "linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64 windows-x86_64" -- "$cur")
             return
@@ -55,11 +59,12 @@ _lumenc() {
             mapfile -t COMPREPLY < <(compgen -f -- "$cur")
             return
             ;;
-        *" --app" | "package --lib-dir")
+        *" --app" | "package --lib-dir" | "web --out" | "web --lib-dir")
             mapfile -t COMPREPLY < <(compgen -d -- "$cur")
             return
             ;;
         "run --size" | "run --dpr" | "run --ticks" | "i18n --lang" | "package --name" | \
+        "web --base" | "web --locale" | "web --port" | \
         "find --text" | "find --role" | "find --id" | "find --limit" | \
         "snapshot --max-lines" | "snapshot --cursor" | "screenshot --highlight" | \
         *" --port" | *" --wait-for")
@@ -84,6 +89,7 @@ _lumenc() {
         lint) flags="--css-cascade --signals --strict --json --port --app" ;;
         diff) flags="--json --port --app" ;;
         screenshot) flags="--highlight --lint --bounds --port --app" ;;
+        web) flags="--out --base --locale --prerender --no-hooks --lib-dir --strict --serve --port" ;;
         bundle) flags="--static --no-hooks" ;;
         package) flags="--name --target --lib-dir --no-hooks" ;;
         i18n) flags="--lang" ;;
@@ -108,7 +114,7 @@ _lumenc() {
     local count=$((${#positionals[@]} - 1))
 
     case "$cmd" in
-        run | check | lint)
+        run | check | lint | web)
             mapfile -t COMPREPLY < <(compgen -d -- "$cur")
             ;;
         build | bundle | package)

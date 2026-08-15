@@ -42,6 +42,7 @@ nav = [
      "guides/i18n.md",
      "guides/accessibility.md",
      "guides/packaging.md",
+     "guides/web.md",
      "guides/testing.md",
   ]},
   {"Reference" = [

@@ -36,7 +36,7 @@
 //! Parse failures surface as [`ConfigError`]; the caller decides whether to abort or fall back to defaults.
 
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 /// Parsed `lumen.toml` config, all fields optional.
@@ -67,6 +67,8 @@ pub struct LumenToml {
     /// `[capabilities]` section - per-app COMPILE-TIME subsystem trim toggles
     /// for the static `--bundle` build (Part B tree-shaking).
     pub capabilities: CapabilitiesCfg,
+    /// `[web]` section - how `lumenc web` emits the app as a static site.
+    pub web: WebCfg,
     /// `[[hooks]]` array - project-declared build/setup commands, run at the
     /// `prebuild` / `prerun` trigger points by `lumenc run` / `build` /
     /// `bundle`. See [`crate::hooks`] for the execution semantics (ordering,
@@ -515,6 +517,200 @@ pub fn infer_script_hosts(dir: &Path, cfg: &LumenToml) -> Vec<ScriptEngine> {
     }
     found.sort();
     found
+}
+
+/// `[web]` block - how `lumenc web` emits the app as a static site.
+///
+/// The rest of `lumen.toml` still describes the app: `[window] title` is the
+/// documents' title, `[app] id` / `entry` / `locale`, `[pages]`,
+/// `[asset_roots]` and `[script] engine` all apply. This block covers what
+/// only a site has: where it is served from, what a crawler is told, and
+/// which locales it is emitted in.
+///
+/// `[capabilities]` does not apply. A desktop build compiles a runtime per
+/// app; a site loads one prebuilt runtime that ships with the toolchain, so
+/// there is nothing per-app to trim.
+///
+/// ```toml
+/// [web]
+/// out_dir   = "dist/web"       # where the site is written
+/// base_path = "/"              # URL prefix the site is served under
+/// url = "https://example.com"  # absolute site URL; canonical + sitemap need it
+/// description = "A Lumen app"  # used by any page without its own
+/// locales = ["en-US", "de-DE"] # one tree per locale
+/// host = "netlify"             # also write that host's deep-path rewrite file
+///
+/// [web.seed]
+/// count = 3                    # signal values the pages are rendered with
+///
+/// [web.pages.settings]
+/// title = "Settings"
+/// ```
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WebCfg {
+    /// Directory the site is written to, relative to the app dir unless
+    /// absolute. Defaults to `dist/web`.
+    pub out_dir: Option<String>,
+    /// URL prefix the site is served under, such as `/` or `/docs/`. Every
+    /// link and asset reference in the documents hangs off it.
+    pub base_path: Option<String>,
+    /// Absolute site URL, such as `https://example.com`. The canonical link,
+    /// the social metadata and the sitemap need it; without it they are left
+    /// out.
+    pub url: Option<String>,
+    /// Description used by any page that does not set its own.
+    pub description: Option<String>,
+    /// Image for social previews, relative to the site root or absolute.
+    pub og_image: Option<String>,
+    /// Absolute URL the pages declare as canonical, for a site published at
+    /// more than one address. Defaults to [`Self::url`].
+    pub canonical: Option<String>,
+    /// Every locale the site is emitted in, one document tree each. Absent
+    /// emits the default locale alone.
+    pub locales: Option<Vec<String>>,
+    /// The locale whose tree sits at the site root; the others sit under
+    /// `/<tag>/`. Defaults to `[app] locale`, then `en-US`.
+    pub default_locale: Option<String>,
+    /// Skin the site is styled with. Defaults to `[skin] name`, then
+    /// `default`. `auto` is not read here: it means "the machine's OS", and
+    /// a site is served to every OS.
+    pub skin: Option<String>,
+    /// How the pages are styled.
+    pub css: WebCssMode,
+    /// Which shape a widget the parser built out of smaller elements is
+    /// emitted as.
+    pub widgets: WebWidgets,
+    /// Where the state the pages are rendered with comes from.
+    pub prerender: WebPrerender,
+    /// Add a content hash to asset file names, so a cache can hold them
+    /// forever. A build does not apply this yet.
+    pub hash_assets: Option<bool>,
+    /// Write the extra `data-lm-*` attributes that name what an element came
+    /// from. A build does not write them yet.
+    pub debug_attrs: Option<bool>,
+    /// What an app menu bar becomes in a document.
+    pub menubar: WebMenubar,
+    /// Write `sitemap.xml`. Needs [`Self::url`]. Defaults to on when a URL is
+    /// configured.
+    pub sitemap: Option<bool>,
+    /// Host the site is deployed to, which decides the rewrite file that
+    /// makes a deep path serve the app instead of the host's own 404.
+    pub host: WebHost,
+    /// How a link to another page of the same site is followed.
+    pub navigation: WebNavigation,
+    /// `[web.seed]` - signal values every page is rendered with.
+    pub seed: BTreeMap<String, WebSeedValue>,
+    /// `[web.pages.<key>]` - per-page title and description.
+    pub pages: BTreeMap<String, WebPageCfg>,
+}
+
+/// `[web.pages.<key>]` block - what one page says about itself.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WebPageCfg {
+    /// Title for this page. Falls back to `[window] title`.
+    pub title: Option<String>,
+    /// Description for this page. Falls back to `[web] description`.
+    pub description: Option<String>,
+}
+
+/// One `[web.seed]` value.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum WebSeedValue {
+    /// A boolean. Ahead of the number arms: TOML tells the two apart, and
+    /// serde tries untagged arms in order.
+    Bool(bool),
+    /// A whole number.
+    Int(i64),
+    /// A number with a fraction.
+    Float(f64),
+    /// Text.
+    Str(String),
+}
+
+/// `[web] css` - how a page's styling reaches the browser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WebCssMode {
+    /// As a stylesheet, with the selectors, states and media queries the app
+    /// was written with.
+    #[default]
+    Sheet,
+    /// As the values Lumen's own cascade resolved, written onto each element
+    /// as an inline style. Nothing is left to match on, which is what makes
+    /// it the thing to compare the stylesheet against.
+    Computed,
+}
+
+/// `[web] widgets` - which shape a composed widget is emitted as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WebWidgets {
+    /// As the HTML element that carries the same meaning, so a screen reader
+    /// and a crawler read a dropdown as a dropdown.
+    #[default]
+    Semantic,
+    /// As the elements the parser built the widget out of.
+    Verbatim,
+}
+
+/// `[web] prerender` - where the state a page is rendered with comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WebPrerender {
+    /// Boot the app once per page and snapshot the state it settles into.
+    Run,
+    /// The values `[web.seed]` and the markup itself declare.
+    #[default]
+    Seeds,
+    /// None: a branch is not taken and a list has no rows until the browser
+    /// runs the app.
+    None,
+}
+
+/// `[web] menubar` - what an app menu bar becomes in a document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WebMenubar {
+    /// Left out. A desktop menu bar is the window's, and a page has no
+    /// window.
+    #[default]
+    Omit,
+    /// A `<nav>` holding the top-level items.
+    Nav,
+}
+
+/// `[web] host` - where the site is deployed, and so which rewrite file lets
+/// a deep path reach the app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WebHost {
+    /// A plain file server, which serves `404.html` for a path it has no
+    /// file for. That is what the emitted `404.html` is there for.
+    #[default]
+    Static,
+    /// Netlify: also write `_redirects`.
+    Netlify,
+    /// Vercel: also write `vercel.json`.
+    Vercel,
+    /// Apache: also write `.htaccess`.
+    Apache,
+    /// nginx: also write `nginx.conf`, to include from a server block.
+    Nginx,
+}
+
+/// `[web] navigation` - how a link to another page of the same site is
+/// followed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WebNavigation {
+    /// The runtime intercepts the click and swaps the page in place.
+    #[default]
+    Soft,
+    /// The browser loads the target document.
+    Hard,
 }
 
 /// One `[[hooks]]` entry: an app-declared build/setup command.

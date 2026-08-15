@@ -165,6 +165,61 @@ wins.
 The script host is selected by `[script] engine` or inferred from the app's
 script files, not here.
 
+## [web]
+
+What `lumenc web` needs that only a site has. The rest of the file still
+describes the app: `[window] title` is the documents' title, `[app]` gives the
+entry file and the locale, `[pages]` the page set, `[asset_roots]` where an
+asset comes from, and `[script] engine` which engine runs the app's code.
+
+`[capabilities]` does not apply. A site loads one prebuilt runtime that ships
+with the toolchain, so there is nothing per-app to compile or trim.
+
+| Key | Type | Default | Effect |
+|-----|------|---------|--------|
+| `out_dir` | string | `dist/web` | Where the site is written, relative to the app directory unless absolute. |
+| `base_path` | string | `/` | URL prefix the site is served under. Every link and asset reference hangs off it. |
+| `url` | string | none | Absolute site URL. The canonical link, the social metadata and the sitemap need it; without it they are left out. |
+| `description` | string | none | Description any page without one of its own carries. |
+| `og_image` | string | none | Image for social previews, relative to the site root or absolute. |
+| `canonical` | string | `url` | Absolute URL the pages declare as canonical, for a site published at more than one address. |
+| `locales` | array of BCP-47 tags | the app's locale | Emit one document tree per locale. |
+| `default_locale` | BCP-47 tag | `[app] locale`, else `en-US` | The locale served from the site root; the others sit under `/<tag>/`. |
+| `skin` | string | `[skin] name`, else `default` | Skin the site is styled with. `auto` is not read here: it means the machine's own OS, and a site is served to every OS. |
+| `css` | `"sheet"`, `"computed"` | `sheet` | `sheet` emits the stylesheet the app was written with. `computed` writes the values Lumen's cascade resolved onto each element instead, which answers what Lumen resolved but loses states, media queries and anything created later. |
+| `widgets` | `"semantic"`, `"verbatim"` | `semantic` | Which shape a widget the parser built out of smaller elements is emitted as. Today both emit the parts. |
+| `prerender` | `"seeds"`, `"none"`, `"run"` | `seeds` | Where the state the pages are rendered with comes from. `run`, which boots the app once per page, is not implemented yet and is refused. |
+| `hash_assets` | bool | `false` | Add a content hash to asset file names. Not applied yet. |
+| `debug_attrs` | bool | `false` | Write the extra `data-lm-*` attributes naming what an element came from. Not written yet. |
+| `menubar` | `"omit"`, `"nav"` | `omit` | What an app menu bar becomes in a document. |
+| `sitemap` | bool | on when `url` is set | Write `sitemap.xml`. |
+| `host` | `"static"`, `"netlify"`, `"vercel"`, `"apache"`, `"nginx"` | `static` | Where the site is deployed. A named host also gets the file that makes it serve a deep path with a 200 (`_redirects`, `vercel.json`, `.htaccess`, `nginx.conf`); `static` relies on the emitted `404.html`, which every host serves. |
+| `navigation` | `"soft"`, `"hard"` | `soft` | Whether a link to another page of the same site is swapped in place or loaded by the browser. |
+
+```toml
+[web]
+out_dir   = "dist/web"
+base_path = "/"
+url  = "https://example.com"
+host = "netlify"
+locales = ["en-US", "de-DE"]
+
+[web.seed]
+count = 3
+greeting = "Hello"
+
+[web.pages.settings]
+title = "Settings"
+description = "Everything you can change"
+```
+
+`[web.seed]` gives the signals the pages are rendered with, and the same
+values are handed to the runtime so it starts where the page left off. A value
+is a string, a number or a boolean. `[web.pages.<key>]` sets one page's
+`title` and `description`; both fall back to the site's.
+
+See [the web guide](../guides/web.md).
+
 ## [[hooks]]
 
 Build and setup commands the app declares for itself. Each `[[hooks]]` entry

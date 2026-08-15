@@ -68,6 +68,16 @@ pub mod scaffold;
 /// trait (`dev-run`).
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub mod source_parser;
+/// `lumenc web` - emit an app as a static site. Compiles the app the way
+/// `build` does, so it needs the same parser (`runtime-parse`) and runtime
+/// (`dev-run`), plus the emitter behind the default-on `web` feature.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "web"))]
+pub mod web_cli;
+/// The loopback HTTP server behind `lumenc web --serve`. A browser needs a
+/// real origin and real content types to load a site; this is that, for one
+/// directory on one machine.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "web"))]
+pub mod web_serve;
 
 // The runtime core - the winit/ECS run loop, `RunOptions`/`RunError`,
 // `build_app`, hot reload, the default plugin stack, file-based pages,
@@ -199,4 +209,14 @@ pub fn check_app(dir: &std::path::Path) -> Result<CheckReport, RunError> {
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub fn compile_app(dir: &std::path::Path) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
     lumen_runtime::compile_app(dir, &source_parser::LumencParser)
+}
+
+/// AOT-compile an app from source with the skin named outright, which is what
+/// `lumenc web` builds a site with. See [`lumen_runtime::compile_app_with_skin`].
+#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
+pub fn compile_app_with_skin(
+    dir: &std::path::Path,
+    skin: Option<&str>,
+) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
+    lumen_runtime::compile_app_with_skin(dir, &source_parser::LumencParser, skin)
 }
