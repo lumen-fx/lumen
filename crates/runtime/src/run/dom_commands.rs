@@ -530,7 +530,7 @@ fn apply_inner_markup(world: &mut World, entity: Entity, markup: &str) -> bool {
     // bare text run) parse under one element the front-end accepts; only the
     // wrapper's children are spawned.
     let wrapped = format!("<div>{markup}</div>");
-    let ir = match parser.parse_html(&wrapped) {
+    let ir = match parser.parse_html(&wrapped, &lumen_ir::fragment::FragmentTable::new()) {
         Ok(ir) => ir,
         Err(e) => {
             eprintln!("set_inner_markup: parse error: {e}");

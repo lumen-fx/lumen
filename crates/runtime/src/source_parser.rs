@@ -13,6 +13,7 @@
 
 use bevy_ecs::prelude::Resource;
 use lumen_ir::css::Stylesheet;
+use lumen_ir::fragment::FragmentTable;
 use lumen_ir::layout_ir::LayoutIR;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,8 +27,8 @@ use std::sync::Arc;
 /// types) so the trait carries no dependency on the parser's error model.
 pub trait SourceParser: Send + Sync {
     /// Parse markup text (with `<include>` directives already spliced away)
-    /// into a [`LayoutIR`].
-    fn parse_html(&self, src: &str) -> Result<LayoutIR, String>;
+    /// into a [`LayoutIR`], instantiating any of `fragments` it names.
+    fn parse_html(&self, src: &str, fragments: &FragmentTable) -> Result<LayoutIR, String>;
 
     /// Parse CSS text into a [`Stylesheet`].
     fn parse_css(&self, src: &str) -> Result<Stylesheet, String>;
@@ -54,7 +55,17 @@ pub trait SourceParser: Send + Sync {
     /// Parse markup, resolving `<include>` directives against `self_path`'s
     /// directory via the real-filesystem loader (the file-based-pages
     /// assembly path).
-    fn parse_html_with_loader(&self, src: &str, self_path: &Path) -> Result<LayoutIR, String>;
+    fn parse_html_with_loader(
+        &self,
+        src: &str,
+        self_path: &Path,
+        fragments: &FragmentTable,
+    ) -> Result<LayoutIR, String>;
+
+    /// Read the fragments `src` declares, without building its tree. An app
+    /// collects these from every one of its `.lmn` files so a fragment
+    /// declared in one is usable from all of them.
+    fn collect_fragments(&self, src: &str, self_path: &Path) -> Result<FragmentTable, String>;
 }
 
 /// World-resource wrapper so the hot-reload system (a `&mut World` system that

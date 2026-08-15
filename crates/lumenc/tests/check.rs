@@ -154,3 +154,81 @@ fn unknown_attribute_prints_a_warning_on_check() {
         "an unknown attribute is not an info nudge: {stderr}"
     );
 }
+
+/// Walk `el` and its descendants, collecting every `id`.
+fn ids(el: &lumenc::Element, out: &mut Vec<String>) {
+    if let Some(id) = &el.attrs.id {
+        out.push(id.clone());
+    }
+    for child in &el.children {
+        ids(child, out);
+    }
+}
+
+/// The weather app's `<template name="day">` is the widest fragment in the
+/// tree: seven instances, markers in `id`, `src`, `text`, and in `tab-index`,
+/// which is an integer by the time it reaches the IR.
+#[test]
+fn weather_app_expands_its_day_fragment() {
+    let dir = workspace_root().join("apps").join("weather");
+    let compiled = lumenc::compile_app(&dir).expect("apps/weather compiles");
+
+    let mut found = Vec::new();
+    ids(&compiled.ir.root, &mut found);
+    for day in 0..7 {
+        assert!(
+            found.iter().any(|id| id == &format!("day-{day}")),
+            "one instance per day: {found:?}"
+        );
+        assert!(found.iter().any(|id| id == &format!("day-{day}-name")));
+    }
+
+    let day = compiled
+        .fragments
+        .get("day")
+        .expect("the artifact carries the declaration");
+    assert!(
+        day.params.iter().any(|p| p.name == "idx"),
+        "the markers the body reads are its parameters"
+    );
+
+    // `tab-index="{tab}"` is a marker in a typed attribute: it parses per
+    // instance, and each day lands on its own tab stop.
+    let mut stops: Vec<i32> = Vec::new();
+    fn tab_stops(el: &lumenc::Element, out: &mut Vec<i32>) {
+        if el.attrs.classes.iter().any(|c| c == "day")
+            && let Some(index) = el.attrs.tab_index
+        {
+            out.push(index);
+        }
+        for child in &el.children {
+            tab_stops(child, out);
+        }
+    }
+    tab_stops(&compiled.ir.root, &mut stops);
+    assert_eq!(stops, vec![2, 3, 4, 5, 6, 7, 8]);
+}
+
+/// The pages demo puts its frame in `layout.lmn`, which is not a page: every
+/// page instantiates it through the app-wide table.
+#[test]
+fn pages_demo_wraps_every_page_in_the_shared_layout() {
+    let dir = workspace_root().join("apps").join("pages-demo");
+    let compiled = lumenc::compile_app(&dir).expect("apps/pages-demo compiles");
+
+    let gates = &compiled.ir.root.children;
+    assert!(gates.len() >= 3, "one gate per page: {}", gates.len());
+    for gate in gates {
+        assert_eq!(gate.tag, "if");
+        let frame = &gate.children[0];
+        assert_eq!(frame.tag, "column", "each page opens with the shared frame");
+        assert_eq!(
+            frame.children[0].tag, "row",
+            "the frame's nav bar renders ahead of the page's own content"
+        );
+    }
+    assert!(
+        compiled.fragments.get("layout").is_some(),
+        "the artifact carries the layout declaration"
+    );
+}

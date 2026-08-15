@@ -693,3 +693,97 @@ fn page_with_no_arguments_reads_the_active_page() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// The fragment table is app-wide, not per-file: a `<template>` declared in
+/// one page is instantiable from another, the same way `layout.lmn`'s is.
+#[test]
+fn a_fragment_declared_in_one_page_is_usable_from_another() {
+    let _guard = nav_test_guard();
+    let dir = std::env::temp_dir().join(format!("lumen_pages_shared_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+    std::fs::write(
+        dir.join("index.lmn"),
+        r#"<root>
+  <template name="chip"><label class="chip" text="{label}"/></template>
+  <label text="INDEX_PAGE"/>
+</root>"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("settings.lmn"),
+        r#"<root>
+  <label text="SETTINGS_PAGE"/>
+  <chip label="FROM_INDEX"/>
+</root>"#,
+    )
+    .unwrap();
+
+    let mut opts = RunOptions::new(&dir);
+    opts.hot_reload = false;
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
+    tick_n(&mut app, 4);
+
+    lumen_core::nav::navigate("settings");
+    tick_n(&mut app, 5);
+    assert!(
+        texts(&mut app).iter().any(|t| t == "FROM_INDEX"),
+        "settings.lmn instantiates the fragment index.lmn declares: {:?}",
+        texts(&mut app)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A fragment file is read on every load, so editing the shared layout and
+/// reloading renders the new body. Caching the table at boot is what this
+/// guards against: hot reload reuses the boot-time page plan.
+#[test]
+fn editing_a_fragment_file_renders_the_new_body() {
+    let _guard = nav_test_guard();
+    let dir = std::env::temp_dir().join(format!("lumen_pages_reload_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+    let layout = dir.join("layout.lmn");
+    std::fs::write(
+        &layout,
+        r#"<root>
+  <template name="layout"><column><label text="LAYOUT_V1"/><slot/></column></template>
+</root>"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("index.lmn"),
+        r#"<root><use template="layout"><label text="INDEX_PAGE"/></use></root>"#,
+    )
+    .unwrap();
+
+    let mut opts = RunOptions::new(&dir);
+    opts.hot_reload = false;
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
+    tick_n(&mut app, 4);
+    assert!(texts(&mut app).iter().any(|t| t == "LAYOUT_V1"));
+
+    std::fs::write(
+        &layout,
+        r#"<root>
+  <template name="layout"><column><label text="LAYOUT_V2"/><slot/></column></template>
+</root>"#,
+    )
+    .unwrap();
+
+    let mut opts = RunOptions::new(&dir);
+    opts.hot_reload = false;
+    let (mut app, _window) = build_headless_app(opts).expect("rebuild after the edit");
+    tick_n(&mut app, 4);
+    let rendered = texts(&mut app);
+    assert!(
+        rendered.iter().any(|t| t == "LAYOUT_V2"),
+        "the edited layout body should render: {rendered:?}"
+    );
+    assert!(rendered.iter().any(|t| t == "INDEX_PAGE"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
