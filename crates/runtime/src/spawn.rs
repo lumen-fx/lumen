@@ -2374,6 +2374,12 @@ fn resolve_placeholders(body: &str, slots: &[InterpolationSlot], ctx: &RowCtx<'_
                 );
                 Some(String::new())
             }
+            // A fragment argument only has a value at the use site that
+            // passed it, which this resolver cannot see: it runs over the
+            // tree a fragment already expanded into. Binding arguments is
+            // the instantiation path's job, so an `Arg` still standing here
+            // is a parameter nothing bound, and it resolves to empty.
+            InterpolationSlot::Arg(_) => Some(String::new()),
         };
         // Honour the recorded slot list when present so authoring
         // intent wins over the legacy `{k}` substring rule: if the
@@ -2608,9 +2614,7 @@ mod body_spawn_tests {
     fn el(tag: &str) -> Element {
         Element {
             tag: tag.to_string(),
-            attrs: Attributes::default(),
-            children: Vec::new(),
-            interpolations: Vec::new(),
+            ..Element::default()
         }
     }
 
@@ -3195,9 +3199,7 @@ mod css_spawn_wiring_tests {
     fn el(tag: &str) -> Element {
         Element {
             tag: tag.to_string(),
-            attrs: Attributes::default(),
-            children: Vec::new(),
-            interpolations: Vec::new(),
+            ..Element::default()
         }
     }
 

@@ -285,7 +285,7 @@ pub fn assemble(
                 ..Attributes::default()
             },
             children: pir.root.children.clone(),
-            interpolations: Vec::new(),
+            ..Element::default()
         };
         gates.push(gate);
 

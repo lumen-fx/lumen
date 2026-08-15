@@ -1154,7 +1154,7 @@ fn build_element(
                     ..Attributes::default()
                 },
                 children: Vec::new(),
-                interpolations: Vec::new(),
+                ..Default::default()
             };
             btn.attrs.text = Some(tab_label);
             btn.attrs.classes = vec!["tab-btn".to_string()];
@@ -1186,7 +1186,7 @@ fn build_element(
                 tag: "if".to_string(),
                 attrs: Attributes::default(),
                 children: body_children,
-                interpolations: Vec::new(),
+                ..Default::default()
             };
             if_block.attrs.if_signal = Some(signal_name.clone());
             if_block.attrs.if_eq = Some(tab_name);
@@ -1207,7 +1207,7 @@ fn build_element(
                 ..Attributes::default()
             },
             children: tab_buttons,
-            interpolations: Vec::new(),
+            ..Default::default()
         };
         strip.attrs.classes = vec!["tab-strip".to_string()];
         strip.attrs.gap = Some(4.0);
@@ -1219,7 +1219,7 @@ fn build_element(
                 ..Attributes::default()
             },
             children: std::iter::once(strip).chain(tab_bodies).collect(),
-            interpolations: Vec::new(),
+            ..Default::default()
         };
         column.attrs.classes = vec!["tabs".to_string()];
         if let Some(default) = first_name {
@@ -1312,7 +1312,7 @@ fn build_element(
                     ..Attributes::default()
                 },
                 children: Vec::new(),
-                interpolations: Vec::new(),
+                ..Default::default()
             };
             opt_btn.attrs.text = Some(label);
             opt_btn.attrs.classes = vec!["dropdown-option".to_string()];
@@ -1343,7 +1343,7 @@ fn build_element(
                 ..Attributes::default()
             },
             children: Vec::new(),
-            interpolations: Vec::new(),
+            ..Default::default()
         };
         header.attrs.text = Some(placeholder);
         header.attrs.classes = vec!["dropdown-button".to_string()];
@@ -1382,7 +1382,7 @@ fn build_element(
                 ..Attributes::default()
             },
             children: options,
-            interpolations: Vec::new(),
+            ..Default::default()
         };
         panel.attrs.classes = vec!["dropdown-panel".to_string()];
         // Tag the panel so the runtime can dismiss it on an outside
@@ -1395,7 +1395,7 @@ fn build_element(
             tag: "if".to_string(),
             attrs: Attributes::default(),
             children: vec![panel],
-            interpolations: Vec::new(),
+            ..Default::default()
         };
         panel_if.attrs.if_signal = Some(open_signal.clone());
         panel_if.attrs.if_eq = Some("true".to_string());
@@ -1409,7 +1409,7 @@ fn build_element(
                 ..Attributes::default()
             },
             children: vec![header, panel_if],
-            interpolations: Vec::new(),
+            ..Default::default()
         };
         column.attrs.classes = vec!["dropdown".to_string()];
         // Seed the open-panel signal to "false" so the panel hides at
@@ -1475,7 +1475,7 @@ fn build_element(
                             ..Attributes::default()
                         },
                         children: Vec::new(),
-                        interpolations: Vec::new(),
+                        ..Default::default()
                     };
                     btn.attrs.text = Some(label);
                     btn.attrs.classes = vec!["menu-item".to_string()];
@@ -1494,7 +1494,7 @@ fn build_element(
                             ..Attributes::default()
                         },
                         children: Vec::new(),
-                        interpolations: Vec::new(),
+                        ..Default::default()
                     };
                     sep.attrs.classes = vec!["menu-separator".to_string()];
                     body.push(sep);
@@ -1533,7 +1533,7 @@ fn build_element(
                 ..Attributes::default()
             },
             children: body,
-            interpolations: Vec::new(),
+            ..Default::default()
         };
         panel.attrs.classes = vec!["menu-panel".to_string()];
         panel.attrs.id = Some(menu_id);
@@ -1545,7 +1545,7 @@ fn build_element(
             tag: "if".to_string(),
             attrs: Attributes::default(),
             children: vec![panel],
-            interpolations: Vec::new(),
+            ..Default::default()
         };
         if_block.attrs.if_signal = Some(open_signal.clone());
         if_block.attrs.if_eq = Some("true".to_string());
@@ -1604,7 +1604,7 @@ fn build_element(
                 ..Attributes::default()
             },
             children: Vec::new(),
-            interpolations: Vec::new(),
+            ..Default::default()
         };
         input.attrs.placeholder = Some(placeholder);
         input.attrs.id = id;
@@ -1951,7 +1951,7 @@ fn build_element(
                 ..Attributes::default()
             },
             children: Vec::new(),
-            interpolations: Vec::new(),
+            ..Default::default()
         };
         indicator.attrs.classes = vec![box_class.to_string()];
         let mut synthesized = vec![indicator];
@@ -1960,7 +1960,7 @@ fn build_element(
                 tag: "label".to_string(),
                 attrs: Attributes::default(),
                 children: Vec::new(),
-                interpolations: Vec::new(),
+                ..Default::default()
             };
             lbl.attrs.text = Some(label);
             lbl.attrs.classes = vec![label_class.to_string()];
@@ -1996,7 +1996,7 @@ fn build_element(
                 ..Attributes::default()
             },
             children: Vec::new(),
-            interpolations: Vec::new(),
+            ..Default::default()
         };
         fill.attrs.classes = vec!["progress-fill".to_string()];
         children.insert(0, fill);
@@ -2007,6 +2007,7 @@ fn build_element(
         attrs,
         children,
         interpolations: slots,
+        ..Default::default()
     })
 }
 

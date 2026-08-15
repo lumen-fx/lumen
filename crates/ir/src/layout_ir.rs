@@ -288,19 +288,44 @@ pub struct Element {
     /// attribute set; duplicates inside the same element collapse to one
     /// entry. Empty for elements with no interpolation sites.
     pub interpolations: Vec<InterpolationSlot>,
+    /// Set when this element instantiates a fragment rather than rendering
+    /// itself. `None` on every ordinary element, which is nearly all of
+    /// them; boxed so carrying the possibility costs one pointer on an
+    /// element the `<for>` reconciler deep-clones per row.
+    pub frag_use: Option<Box<FragmentUse>>,
+}
+
+/// A fragment instantiation, recorded on the element that stands in for the
+/// fragment's body until the tree is expanded.
+///
+/// The declaration side is [`crate::fragment::Fragment`], looked up by
+/// [`Self::key`] in the app's [`crate::fragment::FragmentTable`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FragmentUse {
+    /// Key of the fragment being instantiated.
+    pub key: String,
+    /// Arguments the use site passes, as `(parameter name, value)` pairs in
+    /// source order. A parameter absent here takes its declared default.
+    pub args: Vec<(String, String)>,
+    /// Whether the use site supplies children of its own for the fragment's
+    /// slot. The children themselves stay on [`Element::children`]; this
+    /// says they are slot content rather than the element's own subtree.
+    pub slot_children: bool,
 }
 
 impl Default for Element {
     /// Empty element with no tag, default attrs, no children, no
-    /// interpolation slots. Synthetic-element constructors in the
-    /// parser (`<tabs>`, `<dropdown>`, ...) use `..Default::default()`
-    /// to fill in `interpolations: Vec::new()` automatically.
+    /// interpolation slots, no fragment use. Synthetic-element
+    /// constructors in the parser (`<tabs>`, `<dropdown>`, ...) use
+    /// `..Default::default()` to fill in the trailing fields
+    /// automatically.
     fn default() -> Self {
         Self {
             tag: String::new(),
             attrs: Attributes::default(),
             children: Vec::new(),
             interpolations: Vec::new(),
+            frag_use: None,
         }
     }
 }
@@ -357,6 +382,12 @@ pub fn relativize_asset_paths(el: &mut Element, root: &Path, outside: &mut Vec<S
 /// - `SelfField("f")` / `ParentField("f")` - `{$self.f}` / `{$parent.f}`.
 ///   Stub today; the per-entity consumer system lands in a follow-up
 ///   wave. Substitutes empty string and emits a debug trace.
+/// - `Arg("name")` - a fragment parameter, resolved from the arguments the
+///   use site passed. Only a fragment body carries these: the classifier
+///   below cannot produce one, because telling a parameter from a global
+///   needs the enclosing fragment's parameter list, which it cannot see.
+///   The fragment builder rewrites `Global` to `Arg` for each declared
+///   parameter once that scope is known.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum InterpolationSlot {
     /// `{$name}` or `{name}` legacy shorthand - global signal lookup.
@@ -369,6 +400,9 @@ pub enum InterpolationSlot {
     SelfField(String),
     /// `{$parent.field}` - parent-entity field lookup. Stubbed today.
     ParentField(String),
+    /// A fragment parameter, resolved from the instantiating
+    /// [`FragmentUse::args`] or the parameter's declared default.
+    Arg(String),
 }
 
 impl From<&str> for InterpolationSlot {
@@ -381,6 +415,10 @@ impl From<&str> for InterpolationSlot {
     /// - `"$parent.<f>"` -> [`InterpolationSlot::ParentField`].
     /// - `"row.<f>"` -> [`InterpolationSlot::Row`].
     /// - `"$name"` / `"name"` -> [`InterpolationSlot::Global`].
+    ///
+    /// [`InterpolationSlot::Arg`] is never produced here: a parameter
+    /// reference is spelled the same as a global, and only the enclosing
+    /// fragment's parameter list separates them.
     fn from(inner: &str) -> Self {
         let trimmed = inner.trim();
         // `idx` is the legacy row-index alias; only meaningful inside
@@ -2017,5 +2055,44 @@ mod tests {
             vec![elsewhere.to_string_lossy().into_owned()],
             "a file outside the app directory keeps the path it had"
         );
+    }
+
+    /// A placeholder's spelling alone decides its scope, and adding the
+    /// fragment-parameter scope does not change that: `{$name}` and the bare
+    /// `{name}` stay global lookups, because nothing in the text says which
+    /// of the two a name is. Only a fragment's declared parameter list can
+    /// turn one into [`InterpolationSlot::Arg`].
+    #[test]
+    fn placeholder_classification_is_by_spelling() {
+        let cases = [
+            ("$name", InterpolationSlot::Global("name".to_string())),
+            ("name", InterpolationSlot::Global("name".to_string())),
+            (" $name ", InterpolationSlot::Global("name".to_string())),
+            ("$index", InterpolationSlot::RowIndex),
+            ("idx", InterpolationSlot::RowIndex),
+            ("row.title", InterpolationSlot::Row("title".to_string())),
+            ("$self.x", InterpolationSlot::SelfField("x".to_string())),
+            ("$parent.y", InterpolationSlot::ParentField("y".to_string())),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(InterpolationSlot::from(text), expected, "`{text}`");
+        }
+    }
+
+    /// The slot list is part of the artifact, so every variant has to make
+    /// the round trip, the new one included.
+    #[test]
+    fn placeholder_slots_round_trip() {
+        let slots = vec![
+            InterpolationSlot::Global("count".to_string()),
+            InterpolationSlot::Row("title".to_string()),
+            InterpolationSlot::RowIndex,
+            InterpolationSlot::SelfField("x".to_string()),
+            InterpolationSlot::ParentField("y".to_string()),
+            InterpolationSlot::Arg("tone".to_string()),
+        ];
+        let bytes = bincode::serialize(&slots).expect("slots encode");
+        let back: Vec<InterpolationSlot> = bincode::deserialize(&bytes).expect("slots decode");
+        assert_eq!(back, slots);
     }
 }
