@@ -2986,3 +2986,31 @@ fn an_image_carries_its_own_alt() {
     );
     assert_eq!(kids[2].attrs.alt, None);
 }
+
+/// The parser caps nesting at 32 levels and reports anything deeper as a
+/// parse error. The cap only holds if 32 levels parse: the walker recurses,
+/// so a document at the cap has to fit in the stack of an ordinary thread
+/// rather than dying in a SIGSEGV the cap exists to prevent.
+#[test]
+fn markup_parses_at_the_nesting_cap() {
+    // 31 wrappers puts the innermost label on level 32, the deepest the
+    // parser accepts.
+    let depth = 31;
+    let mut src = String::from("<root>");
+    for _ in 0..depth {
+        src.push_str("<column>");
+    }
+    src.push_str(r#"<label text="deep"/>"#);
+    for _ in 0..depth {
+        src.push_str("</column>");
+    }
+    src.push_str("</root>");
+
+    let ir = parse_html(&src).expect("a document at the nesting cap parses");
+    let mut el = &ir.root;
+    for _ in 0..depth {
+        el = &el.children[0];
+        assert_eq!(el.tag, "column");
+    }
+    assert_eq!(el.children[0].attrs.text.as_deref(), Some("deep"));
+}

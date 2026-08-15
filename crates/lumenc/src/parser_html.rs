@@ -1015,38 +1015,28 @@ fn extract_menubar(
     Ok(Some(bar))
 }
 
-/// Maximum element-tree nesting depth. Past this, `build_element` returns a
-/// `ParseError` instead of recursing - a deeply nested (even well-formed)
-/// `.lmn` would otherwise overflow the stack (a SIGSEGV, not a catchable
-/// panic). Kept consistent with the template-expansion cap.
-const MAX_ELEMENT_DEPTH: u32 = 32;
-
-fn build_element(
+/// Collapse an authoring tag that stands for a composed widget - `<tooltip>`,
+/// `<tabs>`, `<dropdown>`, `<menu>`, `<date-picker>`, `<time-picker>` - into
+/// the primitive subtree it means, and reject the child tags that are only
+/// legal inside one of them. `None` means the tag spawns as itself and the
+/// caller builds it directly.
+///
+/// Separate from [`build_element`] because that function recurses once per
+/// level of markup. An unoptimized build gives every local in these branches
+/// its own stack slot whether or not the branch runs, so leaving them inline
+/// puts the whole widget catalog on the stack at every depth, and a document
+/// nested a few levels deep runs the thread out of stack.
+#[allow(clippy::too_many_arguments)]
+fn build_composed_widget(
     node: roxmltree::Node,
+    tag: &str,
     script_buf: &mut String,
     external_scripts: &mut Vec<String>,
     src: &str,
     lint_findings: &mut Vec<LintFinding>,
     in_for_body: bool,
     depth: u32,
-) -> Result<Element, ParseError> {
-    if depth > MAX_ELEMENT_DEPTH {
-        return Err(ParseError::Xml(format!(
-            "element nesting exceeded depth {MAX_ELEMENT_DEPTH} at byte {} (too deeply nested)",
-            node.range().start
-        )));
-    }
-    let tag = node.tag_name().name().to_string();
-    // Built-in tags first; fall back to the lumen-widget runtime
-    // registry so `#[derive(Widget)] #[widget(tag="my-thing")]` widgets
-    // that called `MyThing::register()` at startup are accepted instead
-    // of rejected as `UnknownTag`. The Widget derive populates the
-    // registry; lumenc itself only consults it.
-    if !KNOWN_TAGS.contains(&tag.as_str()) && !lumen_widget::is_widget_tag_registered(tag.as_str())
-    {
-        return Err(ParseError::UnknownTag(tag, node.range().start));
-    }
-
+) -> Result<Option<Element>, ParseError> {
     // `<tooltip text="..." delay="...">...trigger...</tooltip>` flattens to
     // the trigger child with a `TooltipSpec` attached. The trigger
     // must be a single layout element; multi-child tooltips are
@@ -1087,7 +1077,7 @@ fn build_element(
             offset,
         });
         elem.attrs.widget = Some(WidgetRole::Tooltip);
-        return Ok(elem);
+        return Ok(Some(elem));
     }
 
     // `<tabs bind-value="active_tab">` collapses into a column with a
@@ -1226,7 +1216,7 @@ fn build_element(
             column.attrs.signal_seed = Some((signal_name, default));
         }
         column.attrs.widget = Some(WidgetRole::Tabs);
-        return Ok(column);
+        return Ok(Some(column));
     }
 
     // `<tab>` outside of `<tabs>` is meaningless - collapsing it to
@@ -1416,7 +1406,7 @@ fn build_element(
         // startup.
         column.attrs.signal_seed = Some((open_signal, "false".to_string()));
         column.attrs.widget = Some(WidgetRole::Dropdown);
-        return Ok(column);
+        return Ok(Some(column));
     }
 
     // `<option>` outside of `<dropdown>` is meaningless - same
@@ -1552,10 +1542,10 @@ fn build_element(
         if_block.attrs.if_mode = crate::layout_ir::IfModeSpec::Hide;
         if_block.attrs.signal_seed = Some((open_signal, "false".to_string()));
         if_block.attrs.widget = Some(WidgetRole::Menu);
-        return Ok(if_block);
+        return Ok(Some(if_block));
     }
 
-    if matches!(tag.as_str(), "menuitem" | "separator") {
+    if matches!(tag, "menuitem" | "separator") {
         return Err(ParseError::Xml(format!(
             "<{tag}> at byte {} may only appear inside <menu> or <menubar>",
             node.range().start
@@ -1564,7 +1554,7 @@ fn build_element(
 
     // Collapse `<date-picker>` and `<time-picker>` into a validated `<input>` with a built-in pattern that enforces the shape.
     // Form validation mirrors the value into `valid:<id>`; authors hook the existing `text-input` commit dispatch on submit.
-    if matches!(tag.as_str(), "date-picker" | "time-picker") {
+    if matches!(tag, "date-picker" | "time-picker") {
         let is_time = tag == "time-picker";
         let signal_name = node
             .attribute("bind-value")
@@ -1619,7 +1609,181 @@ fn build_element(
         } else {
             WidgetRole::DatePicker
         });
-        return Ok(input);
+        return Ok(Some(input));
+    }
+
+    Ok(None)
+}
+
+/// Synthesize the part children a widget tag paints itself out of, after the
+/// generic attribute pass so the parts see the finished attribute bag.
+/// `<checkbox>` and `<radio>` gain an indicator tile and a caption label;
+/// `<progress>` gains its fill tile. Every part is class-tagged so its
+/// visuals stay CSS-reachable.
+///
+/// Separate from [`build_element`] for the reason [`build_composed_widget`]
+/// is: these locals would otherwise hold stack in every recursive frame,
+/// including the ones building a tag that has no parts.
+fn synthesize_widget_parts(
+    node: roxmltree::Node,
+    tag: &str,
+    attrs: &mut Attributes,
+    children: &mut Vec<Element>,
+) -> Result<(), ParseError> {
+    // `<checkbox>` / `<radio>` desugar (W5): the tag itself stays the
+    // root (a centred row carrying the control component at spawn);
+    // the parser synthesizes the visual part children so every visual
+    // is CSS-reachable - `.checkbox-box` / `.radio-dot` for the
+    // indicator tile, `.checkbox-label` / `.radio-label` for the
+    // caption. Runs AFTER the generic attribute pass so the full attr
+    // surface (id, class, bind-*, disabled, sizing...) applies to the
+    // root unchanged.
+    if tag == "checkbox" || tag == "radio" {
+        if tag == "radio" {
+            let (Some(group), Some(value)) = (&attrs.radio_group, &attrs.radio_value) else {
+                return Err(ParseError::Xml(format!(
+                    "<radio> at byte {} requires group=\"signal\" and value=\"...\"",
+                    node.range().start
+                )));
+            };
+            // `checked="true"` seeds the group signal (first spawned
+            // checked member wins; the runtime falls back to the first
+            // enabled member when no one is checked).
+            if attrs.checked == Some(true) {
+                attrs.signal_seed = Some((group.clone(), value.clone()));
+            }
+        }
+        if attrs.align.is_none() {
+            attrs.align = Some(FlexAlign::Center);
+        }
+        if attrs.gap.is_none() {
+            attrs.gap = Some(8.0);
+        }
+        let (part, box_class, label_class) = if tag == "checkbox" {
+            (
+                crate::layout_ir::WidgetPart::CheckboxBox,
+                "checkbox-box",
+                "checkbox-label",
+            )
+        } else {
+            (
+                crate::layout_ir::WidgetPart::RadioDot,
+                "radio-dot",
+                "radio-label",
+            )
+        };
+        let mut indicator = Element {
+            tag: "tile".to_string(),
+            attrs: Attributes {
+                part: Some(part),
+                shrink: Some(0.0),
+                ..Attributes::default()
+            },
+            children: Vec::new(),
+            ..Default::default()
+        };
+        indicator.attrs.classes = vec![box_class.to_string()];
+        let mut synthesized = vec![indicator];
+        if let Some(label) = attrs.text.take() {
+            let mut lbl = Element {
+                tag: "label".to_string(),
+                attrs: Attributes::default(),
+                children: Vec::new(),
+                ..Default::default()
+            };
+            lbl.attrs.text = Some(label);
+            lbl.attrs.classes = vec![label_class.to_string()];
+            synthesized.push(lbl);
+        }
+        // Synthesized parts paint first (indicator leads the caption);
+        // any authored children follow.
+        synthesized.append(children);
+        *children = synthesized;
+    }
+
+    // `<progress>` desugar (W5): the track stays the root; a single
+    // absolute-positioned `.progress-fill` tile child is synthesized.
+    // The runtime (`lumen_primitives::sync_progress_fill`) drives its
+    // width (determinate) or sweep offset (indeterminate); everything
+    // else - colors, radius, track height, sweep period - is CSS.
+    if tag == "progress" {
+        let mut fill = Element {
+            tag: "tile".to_string(),
+            attrs: Attributes {
+                part: Some(crate::layout_ir::WidgetPart::ProgressFill),
+                position: Some(PositionSpec::Absolute),
+                inset: Some(crate::layout_ir::Edges {
+                    left: 0.0,
+                    top: 0.0,
+                    // NaN = auto: the explicit width / 100% height must
+                    // not be over-constrained by the far edges (same
+                    // convention as the toggle-knob seed style).
+                    right: f32::NAN,
+                    bottom: f32::NAN,
+                    ..crate::layout_ir::Edges::default()
+                }),
+                ..Attributes::default()
+            },
+            children: Vec::new(),
+            ..Default::default()
+        };
+        fill.attrs.classes = vec!["progress-fill".to_string()];
+        children.insert(0, fill);
+    }
+
+    Ok(())
+}
+
+/// Maximum element-tree nesting depth. Past this, `build_element` returns a
+/// `ParseError` instead of recursing - a deeply nested (even well-formed)
+/// `.lmn` would otherwise overflow the stack (a SIGSEGV, not a catchable
+/// panic). Kept consistent with the template-expansion cap.
+///
+/// The cap only holds if a `build_element` frame stays small, which is why
+/// the widget branches live in their own functions: an unoptimized build
+/// reserves a slot for every local in the function, and a tag-specific branch
+/// left inline would hold that stack at all 32 levels.
+const MAX_ELEMENT_DEPTH: u32 = 32;
+
+fn build_element(
+    node: roxmltree::Node,
+    script_buf: &mut String,
+    external_scripts: &mut Vec<String>,
+    src: &str,
+    lint_findings: &mut Vec<LintFinding>,
+    in_for_body: bool,
+    depth: u32,
+) -> Result<Element, ParseError> {
+    if depth > MAX_ELEMENT_DEPTH {
+        return Err(ParseError::Xml(format!(
+            "element nesting exceeded depth {MAX_ELEMENT_DEPTH} at byte {} (too deeply nested)",
+            node.range().start
+        )));
+    }
+    let tag = node.tag_name().name().to_string();
+    // Built-in tags first; fall back to the lumen-widget runtime
+    // registry so `#[derive(Widget)] #[widget(tag="my-thing")]` widgets
+    // that called `MyThing::register()` at startup are accepted instead
+    // of rejected as `UnknownTag`. The Widget derive populates the
+    // registry; lumenc itself only consults it.
+    if !KNOWN_TAGS.contains(&tag.as_str()) && !lumen_widget::is_widget_tag_registered(tag.as_str())
+    {
+        return Err(ParseError::UnknownTag(tag, node.range().start));
+    }
+
+    // An authoring tag that stands for a composed widget collapses into the
+    // primitive subtree it means before anything else looks at the node.
+    if let Some(composed) = build_composed_widget(
+        node,
+        &tag,
+        script_buf,
+        external_scripts,
+        src,
+        lint_findings,
+        in_for_body,
+        depth,
+    )? {
+        return Ok(composed);
     }
 
     let mut attrs = Attributes {
@@ -1901,106 +2065,7 @@ fn build_element(
         attrs.classes.push("default".to_string());
     }
 
-    // `<checkbox>` / `<radio>` desugar (W5): the tag itself stays the
-    // root (a centred row carrying the control component at spawn);
-    // the parser synthesizes the visual part children so every visual
-    // is CSS-reachable - `.checkbox-box` / `.radio-dot` for the
-    // indicator tile, `.checkbox-label` / `.radio-label` for the
-    // caption. Runs AFTER the generic attribute pass so the full attr
-    // surface (id, class, bind-*, disabled, sizing...) applies to the
-    // root unchanged.
-    if tag == "checkbox" || tag == "radio" {
-        if tag == "radio" {
-            let (Some(group), Some(value)) = (&attrs.radio_group, &attrs.radio_value) else {
-                return Err(ParseError::Xml(format!(
-                    "<radio> at byte {} requires group=\"signal\" and value=\"...\"",
-                    node.range().start
-                )));
-            };
-            // `checked="true"` seeds the group signal (first spawned
-            // checked member wins; the runtime falls back to the first
-            // enabled member when no one is checked).
-            if attrs.checked == Some(true) {
-                attrs.signal_seed = Some((group.clone(), value.clone()));
-            }
-        }
-        if attrs.align.is_none() {
-            attrs.align = Some(FlexAlign::Center);
-        }
-        if attrs.gap.is_none() {
-            attrs.gap = Some(8.0);
-        }
-        let (part, box_class, label_class) = if tag == "checkbox" {
-            (
-                crate::layout_ir::WidgetPart::CheckboxBox,
-                "checkbox-box",
-                "checkbox-label",
-            )
-        } else {
-            (
-                crate::layout_ir::WidgetPart::RadioDot,
-                "radio-dot",
-                "radio-label",
-            )
-        };
-        let mut indicator = Element {
-            tag: "tile".to_string(),
-            attrs: Attributes {
-                part: Some(part),
-                shrink: Some(0.0),
-                ..Attributes::default()
-            },
-            children: Vec::new(),
-            ..Default::default()
-        };
-        indicator.attrs.classes = vec![box_class.to_string()];
-        let mut synthesized = vec![indicator];
-        if let Some(label) = attrs.text.take() {
-            let mut lbl = Element {
-                tag: "label".to_string(),
-                attrs: Attributes::default(),
-                children: Vec::new(),
-                ..Default::default()
-            };
-            lbl.attrs.text = Some(label);
-            lbl.attrs.classes = vec![label_class.to_string()];
-            synthesized.push(lbl);
-        }
-        // Synthesized parts paint first (indicator leads the caption);
-        // any authored children follow.
-        synthesized.append(&mut children);
-        children = synthesized;
-    }
-
-    // `<progress>` desugar (W5): the track stays the root; a single
-    // absolute-positioned `.progress-fill` tile child is synthesized.
-    // The runtime (`lumen_primitives::sync_progress_fill`) drives its
-    // width (determinate) or sweep offset (indeterminate); everything
-    // else - colors, radius, track height, sweep period - is CSS.
-    if tag == "progress" {
-        let mut fill = Element {
-            tag: "tile".to_string(),
-            attrs: Attributes {
-                part: Some(crate::layout_ir::WidgetPart::ProgressFill),
-                position: Some(PositionSpec::Absolute),
-                inset: Some(crate::layout_ir::Edges {
-                    left: 0.0,
-                    top: 0.0,
-                    // NaN = auto: the explicit width / 100% height must
-                    // not be over-constrained by the far edges (same
-                    // convention as the toggle-knob seed style).
-                    right: f32::NAN,
-                    bottom: f32::NAN,
-                    ..crate::layout_ir::Edges::default()
-                }),
-                ..Attributes::default()
-            },
-            children: Vec::new(),
-            ..Default::default()
-        };
-        fill.attrs.classes = vec!["progress-fill".to_string()];
-        children.insert(0, fill);
-    }
+    synthesize_widget_parts(node, &tag, &mut attrs, &mut children)?;
 
     Ok(Element {
         tag,
