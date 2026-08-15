@@ -139,9 +139,12 @@ impl A11yBackend for WinitA11yBridge {
             match pending {
                 Pending::InitialTree => {
                     // The handshake arrives before any tick has run
-                    // `sync_a11y_tree`, so drive a full build here: every
-                    // entity is forced dirty, so the system skips its
-                    // early-out and emits the whole tree.
+                    // `sync_a11y_tree`, so drive a full build here. The
+                    // update is always produced: the forced build clears
+                    // the cached focus, which is one of the two conditions
+                    // the sync skips on, and marks an entity dirty, which
+                    // is the other. Platform adapters hold a placeholder
+                    // tree until this lands, so it has to be a full one.
                     sync_a11y_tree_initial(world);
                     if let Some(update) = take_pending_tree_update(world) {
                         self.adapter.update_if_active(|| update);
@@ -430,6 +433,32 @@ mod tests {
         assert_eq!(
             world.resource::<A11yContextMenuRequests>().targets,
             vec![entity]
+        );
+    }
+
+    /// The initial-tree handshake always has an answer. It arrives before
+    /// the first tick, and platform adapters sit on a placeholder tree
+    /// until a full one lands, so the forced build must publish one even
+    /// on a world that has never synced and has nothing focused.
+    #[test]
+    fn the_initial_handshake_publishes_a_full_tree() {
+        use lumen_core::components::{A11yLabel, Transform};
+
+        let mut world = world_with_focus();
+        world.spawn((
+            Transform {
+                absolute: glam::Vec2::ZERO,
+                size: glam::Vec2::new(80.0, 24.0),
+                ..Default::default()
+            },
+            A11yLabel("Save".into()),
+        ));
+
+        sync_a11y_tree_initial(&mut world);
+        let update = take_pending_tree_update(&mut world).expect("handshake publishes a tree");
+        assert!(
+            !update.nodes.is_empty(),
+            "the published tree must carry nodes, not just a focus pointer",
         );
     }
 
