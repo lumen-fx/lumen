@@ -1818,6 +1818,87 @@ fn virtualized_for_inserts_style_only_when_changed() {
     );
 }
 
+/// `ScenePolicy` defaults to what the reconciler has always done, so a world
+/// carrying the default policy must reconcile exactly like a world carrying no
+/// policy at all. `Virtualization::HostManaged` is the opt-out: it sends a
+/// `virtualized="true"` block down the plain path, which mounts every row and
+/// never pins the block's height.
+#[test]
+fn scene_policy_defaults_to_the_reconciler_doing_the_work() {
+    use bevy_ecs::prelude::*;
+    use bevy_ecs::system::RunSystemOnce;
+    use lumen_core::components::{Length, Style};
+    use lumenc::spawn::{ScenePolicy, Virtualization};
+
+    fn reconcile_once(policy: Option<ScenePolicy>) -> (Style, usize) {
+        let mut world = World::new();
+        let mut arrays = lumen_core::signals::ArraySignals::default();
+        let rows: Vec<lumen_core::signals::ArrayItem> = (0..3)
+            .map(|i| {
+                let mut m = lumen_core::signals::ArrayItem::default();
+                m.insert("label".to_string(), format!("row {i}"));
+                m
+            })
+            .collect();
+        arrays.set("rows", rows);
+        world.insert_resource(arrays);
+        world.insert_resource(lumen_core::property_store::PropertyStore::default());
+        if let Some(policy) = policy {
+            world.insert_resource(policy);
+        }
+
+        let row_tmpl = lumenc::layout_ir::Element {
+            tag: "row".to_string(),
+            ..Default::default()
+        };
+        let for_block = world
+            .spawn((
+                Style::default(),
+                lumenc::spawn::ForMarker {
+                    array_name: "rows".into(),
+                    body: vec![row_tmpl],
+                    key_field: None,
+                    cached_keys: Vec::new(),
+                    virtualized: true,
+                    row_height: 20.0,
+                    win_rows: Vec::new(),
+                    cascaded_body: None,
+                },
+            ))
+            .id();
+        world
+            .run_system_once(lumenc::spawn::reconcile_for_blocks)
+            .unwrap();
+
+        let rows = world
+            .entity(for_block)
+            .get::<Children>()
+            .map(|c| c.len())
+            .unwrap_or(0);
+        (world.get::<Style>(for_block).cloned().unwrap(), rows)
+    }
+
+    let unpoliced = reconcile_once(None);
+    assert_eq!(
+        reconcile_once(Some(ScenePolicy::default())),
+        unpoliced,
+        "the default policy must reconcile exactly as no policy does"
+    );
+    assert_eq!(unpoliced.0.height, Length::Px(60.0));
+    assert_eq!(unpoliced.1, 3);
+
+    let host_managed = reconcile_once(Some(ScenePolicy {
+        virtualization: Virtualization::HostManaged,
+        ..ScenePolicy::default()
+    }));
+    assert_eq!(
+        host_managed.0,
+        Style::default(),
+        "a host that windows its own lists gets no pinned for-block height"
+    );
+    assert_eq!(host_managed.1, 3);
+}
+
 /// RC5 / spec section 8: a standalone `<menu>` desugars to a *vertical,
 /// absolutely-positioned* overlay panel. The synthesized panel used to
 /// carry default attrs (flex: Row, in-flow), so menu items laid out

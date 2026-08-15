@@ -269,6 +269,10 @@ pub(crate) fn register_reactive(app: &mut App) {
         TickStage::Systems,
         lumen_core::signals::drain_external_signals,
     );
+    // What the reconcilers must do themselves rather than leave to the
+    // presentation layer. A host that windows long lists or cascades CSS on
+    // its own replaces this before the app runs.
+    app.world.init_resource::<crate::spawn::ScenePolicy>();
     app.add_systems(TickStage::Systems, crate::spawn::reconcile_for_blocks);
     app.add_systems(TickStage::Systems, crate::spawn::reconcile_if_blocks);
     // W5 dialog contract (Qt QDialog):
