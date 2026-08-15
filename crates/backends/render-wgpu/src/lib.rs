@@ -1383,6 +1383,64 @@ mod tests {
         assert!(with_box.text_shaper.is_some());
     }
 
+    /// A text run with the fields a plain label carries, so each test
+    /// only states the ones it is about.
+    fn label(text: &str) -> ExtractedText {
+        ExtractedText {
+            origin: glam::Vec2::new(10.0, 20.0),
+            text: text.to_string(),
+            size_px: 16.0,
+            fill: LumenColor::rgba(0.0, 0.0, 0.0, 1.0),
+            caret: None,
+            selection: None,
+            selection_color: None,
+            selection_foreground: None,
+            caret_color: None,
+            order: 0,
+            container_width: 200.0,
+            align: lumen_core::components::TextAlign::Start,
+            wrap: lumen_core::components::TextWrap::None,
+            max_lines: None,
+            family: None,
+            weight: 400,
+            line_height_px: 20.0,
+            caret_width_px: 1.0,
+        }
+    }
+
+    /// A build with no text backend shapes nothing, and a label then
+    /// paints nothing rather than a placeholder box.
+    #[test]
+    fn a_label_with_no_shaper_paints_nothing() {
+        let mut scene = vello::Scene::new();
+
+        draw_text_into_vello(&mut NullShaper, &mut scene, &label("Save"), 1.0, 1.0);
+
+        assert!(
+            scene.encoding().is_empty(),
+            "no shaped glyphs means no geometry, not an empty rectangle",
+        );
+    }
+
+    /// The caret does not come from the shaper, so a focused field still
+    /// shows one when the run shapes to nothing: an empty input, or a
+    /// build with no text backend. Without this the cursor disappears
+    /// exactly where the user is about to type.
+    #[test]
+    fn a_caret_paints_without_a_shaped_run() {
+        let mut scene = vello::Scene::new();
+        let mut field = label("");
+        field.caret = Some(0);
+        field.selection = Some((0, 0));
+
+        draw_text_into_vello(&mut NullShaper, &mut scene, &field, 2.0, 1.0);
+
+        assert!(
+            !scene.encoding().is_empty(),
+            "the caret is painted from the field origin, not from glyphs",
+        );
+    }
+
     /// Alpha folding is how an inherited `opacity` reaches every leaf
     /// emitter, so it must leave a fully opaque parent alone, scale the
     /// child's alpha otherwise, and clamp rather than produce a negative or
