@@ -1234,6 +1234,32 @@ pub struct Attributes {
     /// ([`crate::fragment::DEFAULT_SLOT`]), and absent on anything else
     /// means the element is not a slot at all.
     pub slot_name: Option<String>,
+    /// Attributes whose value carries a fragment parameter, held back until
+    /// a use site supplies the arguments.
+    ///
+    /// Most attribute values parse into typed layout data, which a
+    /// `{parameter}` marker is not, so a fragment body keeps the authored
+    /// text here instead and the compiler applies it once per instantiation.
+    /// Empty on every element outside a fragment body, and emptied on the
+    /// copy that reaches the tree.
+    pub deferred: Vec<DeferredAttr>,
+}
+
+/// One attribute of a fragment body element, kept as authored.
+///
+/// See [`Attributes::deferred`]. The position is the value's own place in
+/// the file that declared the fragment, so a diagnostic raised while
+/// instantiating still points at where the value was written.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DeferredAttr {
+    /// Attribute name as authored.
+    pub name: String,
+    /// Attribute value as authored, parameter markers included.
+    pub value: String,
+    /// 1-based line of the value in the declaring file.
+    pub line: usize,
+    /// 1-based column of the value in the declaring file.
+    pub col: usize,
 }
 
 impl Attributes {
