@@ -778,6 +778,26 @@ fn normalize_dollar_interpolation(
     out
 }
 
+/// Reject a `bind-*` value naming a fragment argument.
+///
+/// A fragment argument substitutes once, when the instance is built, so
+/// nothing drives a binding from one yet. The syntax is claimed here rather
+/// than left to fall through to the named-signal form, where `$arg.title`
+/// would silently read a global signal called `arg.title`.
+fn reject_arg_binding(tag: &str, name: &str, value: &str) -> Result<(), ParseError> {
+    if value.trim().starts_with("$arg.") {
+        return Err(bad(
+            tag,
+            name,
+            value,
+            "binding to a fragment argument is not supported yet; arguments are substituted \
+             once at instantiation, so bind to a signal instead"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Append `slot` to `slots` only if no equal slot is already present.
 /// Keeps the per-element slot list deduplicated so the spawner doesn't
 /// re-resolve the same placeholder more than once per row.
@@ -2294,6 +2314,7 @@ fn apply_attribute(
         // element (those share the single `attrs.bind` slot).
         "bind-disabled" => {
             let trimmed = value.trim();
+            reject_arg_binding(tag, name, value)?;
             if trimmed.starts_with("$self.") || trimmed.starts_with("$parent.") {
                 return Err(bad(
                     tag,
@@ -2316,6 +2337,7 @@ fn apply_attribute(
         // components sharing the single `attrs.bind` slot.
         "bind-scroll" => {
             let trimmed = value.trim();
+            reject_arg_binding(tag, name, value)?;
             if trimmed.starts_with("$self.") || trimmed.starts_with("$parent.") {
                 return Err(bad(
                     tag,
@@ -2351,6 +2373,7 @@ fn apply_attribute(
                 }
             };
             let trimmed = value.trim();
+            reject_arg_binding(tag, name, value)?;
             if let Some(rest) = trimmed.strip_prefix("$self.") {
                 let field = rest.trim().to_string();
                 if field.is_empty() {

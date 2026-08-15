@@ -29,6 +29,12 @@ use site. Markers work anywhere in the body, including inside `id`, `class`, and
 `src` values, which is how the example above gives each instance a distinct id
 and image.
 
+A marker is substituted once, when the instance is created, and the value stays
+put after that. For text that changes while the app runs, bind inside the
+template body (`bind-text="$status"`, see
+[reactivity](reactivity.md)) rather than passing the value through a marker; a
+`bind-*` attribute cannot read a marker, and the `$arg.<name>` form is refused.
+
 The `<template>` block itself never renders. It is stripped from the tree, so
 where you put it in the file does not matter.
 

@@ -308,6 +308,24 @@ fn bind_per_kind_form() {
 }
 
 #[test]
+fn binding_to_a_fragment_argument_is_rejected() {
+    for markup in [
+        r##"<root><label bind-text="$arg.title"/></root>"##,
+        r##"<root><button bind-disabled="$arg.locked"/></root>"##,
+        r##"<root><scroll bind-scroll="$arg.offset"/></root>"##,
+    ] {
+        let err = parse_html(markup).expect_err("a `$arg.` binding is refused");
+        let lumenc::ParseError::BadAttribute { reason, .. } = err else {
+            panic!("expected a bad-attribute error, got {err:?}");
+        };
+        assert!(
+            reason.contains("not supported yet"),
+            "the error says the syntax is claimed but unimplemented: {reason}"
+        );
+    }
+}
+
+#[test]
 fn dialog_desugars_to_absolute_if_with_hide_mode() {
     let ir =
         parse_html(r##"<root><dialog open="show_settings"><label text="hi"/></dialog></root>"##)
