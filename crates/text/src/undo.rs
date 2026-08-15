@@ -12,10 +12,9 @@
 
 #![allow(missing_docs)]
 
-use std::time::Instant;
-
 use bevy_ecs::prelude::*;
 use lumen_core::text_model::{TextBuffer, TextCursor, TextPos};
+use lumen_core::time::Instant;
 
 /// What kind of delta one entry encodes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
