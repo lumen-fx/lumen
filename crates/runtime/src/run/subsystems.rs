@@ -195,6 +195,11 @@ pub(crate) fn register_text(app: &mut App) -> Box<dyn TextShaper> {
 pub(crate) fn register_core(app: &mut App) {
     app.add_plugin(TaffyLayoutPlugin);
     app.add_plugin(InputPlugin);
+    // Accessibility: the world-side half, which walks the tree once per
+    // tick in `TickStage::A11ySync` and leaves an update for whatever
+    // platform bridge is listening. It runs headless too, so an app under
+    // test reports the same tree it would to a screen reader.
+    app.add_plugin(lumen_a11y_accesskit::A11yPlugin);
     // W2 Qt-polish (text-editing core): attaches TextBuffer / TextCursor /
     // UndoStack to every `<input>` / `<textarea>`, applies the pointer ->
     // caret / drag-select / double-click requests lumen-input produces

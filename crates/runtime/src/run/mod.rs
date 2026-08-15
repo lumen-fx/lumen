@@ -57,7 +57,8 @@ use lumen_script_rhai::{RhaiHost, ScriptRhaiPlugin};
 use lumen_script::{NativeExternFn, ScriptCommandEvent, ScriptSet, fire_on_ready, reload_script};
 use lumen_text::{ShaperService, TextShaper};
 use lumen_text_cosmic::CosmicShaper;
-use lumen_window_winit::run;
+use lumen_render_wgpu::WgpuSurfaceRenderer;
+use lumen_window_winit::{A11yBridgeFactory, run};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 // `Duration` / `Instant` are only used by the (gated) hot-reload poll throttle.
@@ -93,13 +94,14 @@ pub type AppHook = Box<dyn FnOnce(&mut App) + 'static>;
 /// The window-facing half of a built app: the resolved
 /// [`WindowOptions`] plus the render-side text shaper the build picked
 /// for it. Returned alongside the [`App`] by [`build_app`] and
-/// [`build_headless_app`], and handed to the window backend by
-/// [`run_app`].
+/// [`build_headless_app`].
 ///
 /// The options are pure data that `lumen-core` owns, so any launch path
 /// and any window backend can name them. The shaper is a live backend
 /// object whose trait lives in `lumen-text`, which is why it sits beside
-/// the options instead of inside them.
+/// the options instead of inside them; whichever launch path runs installs
+/// it into the render world as a [`ShaperService`] for the renderer to
+/// read.
 pub struct WindowSetup {
     /// Size, title, clear color, chrome, and native menu bar.
     pub options: WindowOptions,
@@ -409,7 +411,17 @@ pub fn run_app(opts: RunOptions) -> Result<(), RunError> {
     let (dir, assets) = (opts.dir.clone(), opts.assets.clone());
     let (mut app, window) = build_app(opts)?;
     install_assets(&mut app, assets.as_deref(), &dir)?;
-    run(app, window.options, window.text_shaper).map_err(|e| RunError::Window(e.to_string()))
+    // The render-side shaper is a render-world service, so the renderer -
+    // this one or a replacement - finds it in one place. Without one, text
+    // is skipped.
+    if let Some(shaper) = window.text_shaper {
+        app.render_world.insert_non_send(ShaperService::from(shaper));
+    }
+    // Backend selection happens here, at the composition point: the window
+    // backend drives both of these through their traits and names neither.
+    let renderer = Box::new(WgpuSurfaceRenderer::new());
+    let a11y: A11yBridgeFactory = Box::new(lumen_a11y_accesskit::winit_bridge);
+    run(app, window.options, renderer, Some(a11y)).map_err(|e| RunError::Window(e.to_string()))
 }
 
 /// Build the full app WITHOUT opening a window, then drive `ticks`

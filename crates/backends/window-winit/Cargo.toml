@@ -12,12 +12,6 @@ categories = ["gui", "os"]
 
 [dependencies]
 lumen-core = { path = "../../core", version = "0.0.3" }
-lumen-text = { path = "../../text", version = "0.0.3" }
-lumen-render-wgpu = { path = "../render-wgpu", version = "0.0.3" }
-lumen-a11y-accesskit = { path = "../a11y-accesskit", version = "0.0.3" }
-# Reads `lumen_assets::ExtractedSvg` to interleave SVGs into the painter
-# stream; see lumen-render-wgpu for the same justification.
-lumen-assets = { path = "../../assets", version = "0.0.3" }
 # Native menu bar: the menu tree itself is `lumen_core::window::MenuModel`
 # (it arrives inside `WindowOptions`); this crate is here for the muda
 # attach and the click drain.
@@ -25,7 +19,8 @@ lumen-os-menu = { path = "../../os/menu", version = "0.0.3" }
 bevy_ecs.workspace = true
 glam.workspace = true
 winit.workspace = true
-vello.workspace = true
+# Hands the window to the renderer as a `lumen_core::traits::RenderTarget`.
+raw-window-handle = "0.6"
 pollster = "1.0"
 thiserror.workspace = true
 tracing.workspace = true
@@ -39,11 +34,7 @@ tracing.workspace = true
 # the dependency tree via tokio's `signal` feature.
 signal-hook = { version = "0.4", default-features = false, features = ["iterator"] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-raw-window-handle = "0.6"
-
 [target.'cfg(target_os = "windows")'.dependencies]
-raw-window-handle = "0.6"
 # Ctrl+C / Ctrl+Break / console-close -> graceful close request, mirroring
 # the Unix SIGINT/SIGTERM watcher (SetConsoleCtrlHandler under the hood).
 ctrlc = { workspace = true }

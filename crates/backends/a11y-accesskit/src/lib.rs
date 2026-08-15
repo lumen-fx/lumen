@@ -1,11 +1,14 @@
-//! AccessKit-backed accessibility translation layer.
+//! AccessKit-backed accessibility bridge.
 //!
 //! - Converts ECS state into an [`accesskit::TreeUpdate`] each tick.
-//! - The platform adapter ([`accesskit_winit::Adapter`]) is hosted in `lumen-window-winit`; this crate provides only the translation logic.
 //! - Maps each [`Entity`] to a [`NodeId`] via `Entity::to_bits()`, yielding a stable accessibility identity per ECS entity.
+//! - [`winit_bridge`] binds the translation to a live winit window and implements [`lumen_core::traits::A11yBackend`], the trait a window backend drives it through.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+
+pub mod winit_bridge;
+pub use winit_bridge::{WinitA11yBridge, handle_action, winit_bridge};
 
 use accesskit::{Action, Node, NodeId, Rect, Role, Tree, TreeId, TreeUpdate};
 use bevy_ecs::prelude::*;
@@ -226,9 +229,9 @@ fn role_for(
     Role::GenericContainer
 }
 
-/// Re-exports of the underlying `accesskit` and `accesskit_winit` crates so backend crates can construct adapters and process platform events through this dependency.
+/// Re-export of the underlying `accesskit` crate, so an app that wants to
+/// emit its own nodes speaks the same version this crate translates into.
 pub use accesskit;
-pub use accesskit_winit;
 
 // --- New tree-build system (lives alongside the legacy `build_tree_update`) ---
 //
@@ -1205,6 +1208,27 @@ pub fn entity_click_point(world: &World, entity: Entity) -> glam::Vec2 {
     }
 }
 
+/// Drain [`lumen_core::components::A11yContextMenuRequests`] each tick and
+/// emit a typed [`ShowContextMenu`] message, so apps and scripts can
+/// subscribe with `MessageReader<ShowContextMenu>` instead of reading the
+/// raw resource.
+///
+/// Registered by [`A11yPlugin`] in [`TickStage::Systems`] so the message
+/// arrives before any later tick stage reads it.
+///
+/// [`ShowContextMenu`]: lumen_core::input::ShowContextMenu
+pub fn forward_a11y_context_menu_requests(
+    mut requests: ResMut<lumen_core::components::A11yContextMenuRequests>,
+    mut msgs: bevy_ecs::message::MessageWriter<lumen_core::input::ShowContextMenu>,
+) {
+    if requests.targets.is_empty() {
+        return;
+    }
+    for entity in requests.targets.drain(..) {
+        msgs.write(lumen_core::input::ShowContextMenu { entity });
+    }
+}
+
 /// Lumen plugin registering [`flag_a11y_changes`] and [`sync_a11y_tree`]
 /// in [`TickStage::A11ySync`].
 /// Apps install this once at startup via `app.add_plugin(A11yPlugin)`.
@@ -1223,6 +1247,7 @@ impl lumen_core::app::Plugin for A11yPlugin {
             .init_resource::<lumen_core::components::A11yContextMenuRequests>();
         app.add_systems(TickStage::A11ySync, flag_a11y_changes);
         app.add_systems(TickStage::A11ySync, sync_a11y_tree.after(flag_a11y_changes));
+        app.add_systems(TickStage::Systems, forward_a11y_context_menu_requests);
     }
 }
 

@@ -29,6 +29,12 @@ smallvec = "1"
 ropey.workspace = true
 # W3.1: grapheme cluster iteration for TextPos.
 unicode-segmentation.workspace = true
+# Window/display handle vocabulary for the `RenderTarget` seam: the window
+# backend hands the renderer a handle, and both sides name these types
+# instead of each other. Types and two traits only, no platform code and no
+# graphics API, so the "no backend deps" rule holds. Already in the tree via
+# wgpu and winit, which speak the same version.
+raw-window-handle = "0.6"
 
 [dev-dependencies]
 proptest.workspace = true

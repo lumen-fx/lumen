@@ -73,9 +73,13 @@ mlua = { workspace = true, optional = true }
 lumen-text-cosmic = { path = "../backends/text-cosmic", version = "0.0.3" }
 lumen-text = { path = "../text", version = "0.0.3" }
 lumen-window-winit = { path = "../backends/window-winit", version = "0.0.3" }
-# `run --headless`: offscreen wgpu/vello renderer driven by the same Node-IR
-# walker as the windowed backend.
+# The renderer, on screen and off: the windowed path attaches the surface
+# renderer to the winit window, and `run --headless` drives the offscreen one
+# through the same Node-IR walker.
 lumen-render-wgpu = { path = "../backends/render-wgpu", version = "0.0.3" }
+# Accessibility. The window backend drives whatever bridge it is handed;
+# picking AccessKit is this crate's call, as the composition point.
+lumen-a11y-accesskit = { path = "../backends/a11y-accesskit", version = "0.0.3" }
 # MCP introspection server (tokio + serde_json + http). Part B: OPTIONAL
 # behind `mcp`. Dev-only; lumenc never infers it into a release bundle.
 lumen-mcp = { path = "../mcp", version = "0.0.3", optional = true }

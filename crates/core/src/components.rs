@@ -2405,8 +2405,8 @@ pub struct A11yScrollIntoViewRequests {
 
 /// Queue of entities the assistive tech requested context menus for.
 ///
-/// - Written by `handle_a11y_action` in `lumen-window-winit` when an
-///   `Action::ShowContextMenu` arrives.
+/// - Written by the accessibility bridge (`lumen-a11y-accesskit`) when a
+///   context-menu request arrives from an assistive technology.
 /// - Drained by a system in the application; mirrored to the
 ///   [`crate::input::ShowContextMenu`] message bus by
 ///   `forward_a11y_context_menu_requests` so script handlers and
