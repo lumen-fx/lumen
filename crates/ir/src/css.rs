@@ -2358,6 +2358,56 @@ fn join_selectors(sels: &[SelectorBuf]) -> String {
         .join(", ")
 }
 
+/// Serialize a [`MediaQuery`] back to the condition text that follows
+/// `@media`, the at-rule counterpart of [`selector_to_css`]. Features keep
+/// the spelling the parser accepts and are `and`-joined in source order, so
+/// the result parses back to the same query.
+///
+/// A query with no features serializes to `all`: the condition that always
+/// matches, which is what [`MediaQuery::matches`] answers for an empty
+/// feature list.
+pub fn media_query_to_css(mq: &MediaQuery) -> String {
+    fn feature(f: &MediaFeature) -> String {
+        match f {
+            MediaFeature::PrefersColorScheme(v) => {
+                let v = match v {
+                    ColorSchemePreference::Dark => "dark",
+                    ColorSchemePreference::Light => "light",
+                    ColorSchemePreference::NoPreference => "no-preference",
+                };
+                format!("(prefers-color-scheme: {v})")
+            }
+            MediaFeature::PrefersReducedMotion(v) => {
+                let v = match v {
+                    MotionPreference::Reduce => "reduce",
+                    MotionPreference::NoPreference => "no-preference",
+                };
+                format!("(prefers-reduced-motion: {v})")
+            }
+            MediaFeature::PrefersContrast(v) => {
+                let v = match v {
+                    ContrastPreference::More => "more",
+                    ContrastPreference::Less => "less",
+                    ContrastPreference::Custom => "custom",
+                    ContrastPreference::NoPreference => "no-preference",
+                };
+                format!("(prefers-contrast: {v})")
+            }
+            MediaFeature::MinWidth(px) => format!("(min-width: {px}px)"),
+            MediaFeature::MaxWidth(px) => format!("(max-width: {px}px)"),
+            MediaFeature::Width(px) => format!("(width: {px}px)"),
+        }
+    }
+    if mq.features.is_empty() {
+        return "all".to_string();
+    }
+    mq.features
+        .iter()
+        .map(feature)
+        .collect::<Vec<_>>()
+        .join(" and ")
+}
+
 /// One stylesheet rule that matched an element, with its cascade
 /// provenance, for the dynamic DOM `matched_rules()` inspection getter.
 #[derive(Debug, Clone)]
@@ -3021,6 +3071,150 @@ fn apply_decl_for_pseudo(
         // (not routable yet) - matches the pre-existing behavior.
         _ => Ok(true),
     }
+}
+
+/// Every property name [`apply_declaration`] applies, in the canonical
+/// spelling its match arms use; alias spellings reach this list through
+/// [`canonical_property_name`]. A property added to the cascade is added
+/// here in the same change, or a consumer that sorts declarations by kind
+/// takes it for something the cascade ignores.
+const STYLE_PROPERTIES: &[&str] = &[
+    "width",
+    "height",
+    "bg",
+    "radius",
+    "border-top-left-radius",
+    "border-top-right-radius",
+    "border-bottom-right-radius",
+    "border-bottom-left-radius",
+    "padding",
+    "margin",
+    "text-color",
+    "selection-color",
+    "caret-color",
+    "selection-text-color",
+    "caret-width",
+    "caret-blink",
+    "password-character",
+    "hover-bg",
+    "scroll",
+    "sensitivity",
+    "inertia",
+    "tab-index",
+    "draggable",
+    "press-bg",
+    "font-size",
+    "font-family",
+    "font-weight",
+    "line-height",
+    "gap",
+    "row-gap",
+    "column-gap",
+    "grow",
+    "flex-shrink",
+    "flex-basis",
+    "flex-wrap",
+    "align-content",
+    "flex-direction",
+    "flex",
+    "z-index",
+    "border",
+    "border-width",
+    "border-color",
+    "border-top-color",
+    "border-right-color",
+    "border-bottom-color",
+    "border-left-color",
+    "border-top",
+    "border-right",
+    "border-bottom",
+    "border-left",
+    "border-style",
+    "border-top-width",
+    "border-right-width",
+    "border-bottom-width",
+    "border-left-width",
+    "box-sizing",
+    "hover-border",
+    "focus-border",
+    "focus-outline",
+    "outline-offset",
+    "knob-color",
+    "knob-inset",
+    "thumb-size",
+    "popup-gap",
+    "display",
+    "grid-template-rows",
+    "grid-template-columns",
+    "grid-row",
+    "grid-column",
+    "align",
+    "align-items",
+    "align-self",
+    "justify-items",
+    "justify-self",
+    "justify",
+    "text-align",
+    "wrap",
+    "max-lines",
+    "progress-duration",
+    "progress-chunk",
+    "text-overflow",
+    "position",
+    "inset",
+    "min-width",
+    "min-height",
+    "max-width",
+    "max-height",
+    "aspect-ratio",
+    "opacity",
+    "disabled-opacity",
+    "shadow",
+    "box-shadow",
+    "fit",
+    "transition",
+    "transition-property",
+    "transition-delay",
+    "transition-duration",
+    "transition-timing-function",
+    "scrollbar-color",
+    "scrollbar-width",
+    "scrollbar-thickness",
+    "scrollbar-thickness-thin",
+    "scrollbar-margin",
+    "scrollbar-min-thumb",
+    "scrollbar-track-hover",
+    "scrollbar-hover-boost",
+    "scrollbar-fade-delay",
+    "scrollbar-fade-duration",
+    "padding-inline-start",
+    "padding-inline-end",
+    "padding-block-start",
+    "padding-block-end",
+    "margin-inline-start",
+    "margin-inline-end",
+    "margin-block-start",
+    "margin-block-end",
+    "inset-inline-start",
+    "inset-inline-end",
+    "inset-block-start",
+    "inset-block-end",
+    "border-inline-start-width",
+    "border-inline-end-width",
+    "border-block-start-width",
+    "border-block-end-width",
+    "overflow",
+    "overflow-x",
+    "overflow-y",
+    "layout-boundary",
+];
+
+/// `true` when `name` is a style property the cascade applies, under either
+/// its Lumen spelling or its standard-CSS one. Consumers that sort authored
+/// declarations by kind ask this before they hand one to the cascade;
+/// anything else in a rule (a `--custom` property, a typo) answers `false`.
+pub fn is_style_property(name: &str) -> bool {
+    STYLE_PROPERTIES.contains(&canonical_property_name(name))
 }
 
 /// Map standard CSS property names onto Lumen's native slots so real-world
@@ -5319,5 +5513,126 @@ mod palette_root_css_tests {
         let (light_part, dark_part) = css.split_once("@media").expect("has a dark block");
         assert!(light_part.contains("--window-bg-color: #fafafbff"));
         assert!(dark_part.contains("--window-bg-color: #222226ff"));
+    }
+}
+
+#[cfg(test)]
+mod media_query_text_tests {
+    use super::*;
+
+    #[test]
+    fn every_feature_serializes_to_the_spelling_the_parser_reads() {
+        let mq = MediaQuery {
+            features: vec![
+                MediaFeature::PrefersColorScheme(ColorSchemePreference::Dark),
+                MediaFeature::PrefersReducedMotion(MotionPreference::Reduce),
+                MediaFeature::PrefersContrast(ContrastPreference::More),
+                MediaFeature::MinWidth(600.0),
+                MediaFeature::MaxWidth(1200.5),
+                MediaFeature::Width(800.0),
+            ],
+        };
+        assert_eq!(
+            media_query_to_css(&mq),
+            "(prefers-color-scheme: dark) and (prefers-reduced-motion: reduce) and \
+             (prefers-contrast: more) and (min-width: 600px) and (max-width: 1200.5px) and \
+             (width: 800px)"
+        );
+    }
+
+    #[test]
+    fn the_no_preference_values_keep_their_own_spelling() {
+        let one = |f: MediaFeature| media_query_to_css(&MediaQuery { features: vec![f] });
+        assert_eq!(
+            one(MediaFeature::PrefersColorScheme(
+                ColorSchemePreference::NoPreference
+            )),
+            "(prefers-color-scheme: no-preference)"
+        );
+        assert_eq!(
+            one(MediaFeature::PrefersColorScheme(
+                ColorSchemePreference::Light
+            )),
+            "(prefers-color-scheme: light)"
+        );
+        assert_eq!(
+            one(MediaFeature::PrefersReducedMotion(
+                MotionPreference::NoPreference
+            )),
+            "(prefers-reduced-motion: no-preference)"
+        );
+        assert_eq!(
+            one(MediaFeature::PrefersContrast(ContrastPreference::Less)),
+            "(prefers-contrast: less)"
+        );
+        assert_eq!(
+            one(MediaFeature::PrefersContrast(ContrastPreference::Custom)),
+            "(prefers-contrast: custom)"
+        );
+        assert_eq!(
+            one(MediaFeature::PrefersContrast(
+                ContrastPreference::NoPreference
+            )),
+            "(prefers-contrast: no-preference)"
+        );
+    }
+
+    /// A featureless query matches everything, and `all` is how CSS says so.
+    #[test]
+    fn a_query_with_no_features_is_all() {
+        let mq = MediaQuery { features: vec![] };
+        assert!(mq.matches(&MediaContext::default()));
+        assert_eq!(media_query_to_css(&mq), "all");
+    }
+}
+
+#[cfg(test)]
+mod style_property_tests {
+    use super::*;
+
+    /// The table answers for the cascade, so every name in it must reach a
+    /// match arm. A rejected value is fine (the name was recognized); only
+    /// `Ok(false)`, the unknown-property answer, means the two disagree.
+    #[test]
+    fn style_property_table_matches_the_cascade() {
+        for &name in STYLE_PROPERTIES {
+            let mut attrs = Attributes::default();
+            let applied = apply_declaration("test", name, "1", &mut attrs);
+            assert!(
+                !matches!(applied, Ok(false)),
+                "`{name}` is in STYLE_PROPERTIES but the cascade does not apply it"
+            );
+            assert!(
+                is_style_property(name),
+                "`{name}` is in STYLE_PROPERTIES but is_style_property says otherwise"
+            );
+        }
+    }
+
+    #[test]
+    fn standard_css_spellings_answer_for_their_lumen_slot() {
+        for name in [
+            "color",
+            "background",
+            "background-color",
+            "border-radius",
+            "flex-grow",
+            "justify-content",
+            "object-fit",
+            "shrink",
+            "white-space",
+        ] {
+            assert!(is_style_property(name), "`{name}` is a style property");
+        }
+    }
+
+    #[test]
+    fn anything_the_cascade_ignores_is_not_a_style_property() {
+        for name in ["--brand", "float", "content", "", "bg-color"] {
+            assert!(
+                !is_style_property(name),
+                "`{name}` is not a property the cascade applies"
+            );
+        }
     }
 }
