@@ -2081,9 +2081,9 @@ pub fn reconcile_for_blocks(
                     continue;
                 }
                 let item = &items[*i];
-                let ctx = RowCtx {
-                    item,
-                    idx: *i,
+                let ctx = SubstCtx {
+                    row: Some(RowScope { item, idx: *i }),
+                    args: None,
                     store: &store,
                     parent_id,
                 };
@@ -2145,9 +2145,9 @@ pub fn reconcile_for_blocks(
         // Append-only: new = cached + tail. Spawn just the tail.
         if cached.len() < new_keys.len() && new_keys[..cached.len()] == cached[..] {
             for (i, item) in items.iter().enumerate().skip(cached.len()) {
-                let ctx = RowCtx {
-                    item,
-                    idx: i,
+                let ctx = SubstCtx {
+                    row: Some(RowScope { item, idx: i }),
+                    args: None,
                     store: &store,
                     parent_id,
                 };
@@ -2184,9 +2184,9 @@ pub fn reconcile_for_blocks(
             }
         }
         for (i, item) in items.iter().enumerate() {
-            let ctx = RowCtx {
-                item,
-                idx: i,
+            let ctx = SubstCtx {
+                row: Some(RowScope { item, idx: i }),
+                args: None,
                 store: &store,
                 parent_id,
             };
@@ -2199,24 +2199,40 @@ pub fn reconcile_for_blocks(
     }
 }
 
-/// Row substitution context bundled together so the wave-C placeholder
-/// walker can resolve each [`InterpolationSlot`] against the right
-/// scope without threading 5 arguments through every recursion step.
+/// One iteration of a `<for>` body: the record its placeholders read and
+/// the index they count from.
+pub(crate) struct RowScope<'a> {
+    /// The current iteration's row record. `InterpolationSlot::Row(field)`
+    /// lookups hit this map.
+    pub(crate) item: &'a lumen_core::signals::ArrayItem,
+    /// 0-based iteration index, stringified for `RowIndex`.
+    pub(crate) idx: usize,
+}
+
+/// Substitution context bundled together so the placeholder walker can
+/// resolve each [`InterpolationSlot`] against the right scope without
+/// threading the scopes through every recursion step.
 ///
-/// - `item` - the current iteration's row record. Field lookups via
-///   `InterpolationSlot::Row(field)` hit this map.
-/// - `idx` - 0-based iteration index, stringified for `RowIndex`.
+/// One context serves both substituting callers, and each carries only the
+/// scopes it has: a `<for>` row brings [`Self::row`], a fragment
+/// instantiation brings [`Self::args`], and a `<for>` inside a fragment
+/// body meets both in turn. A placeholder whose scope is absent is left in
+/// the string verbatim, so the walk that owns that scope resolves it later.
+///
+/// - `row` - the iteration in progress, absent outside a `<for>` body.
+/// - `args` - the arguments a fragment instance was built with, already
+///   folded over the declared defaults. Absent outside a fragment body.
 /// - `store` - global property store. `InterpolationSlot::Global` reads
-///   from here (wave-D - pre wave-D this was the legacy `Signals` resource).
+///   from here.
 /// - `parent_id` - the for-block entity, used only as the
 ///   one-shot-warn discriminator for missing row fields. We don't have
 ///   a per-row entity id at substitution time (the row hasn't spawned
 ///   yet), so the for-block entity stands in.
-struct RowCtx<'a> {
-    item: &'a lumen_core::signals::ArrayItem,
-    idx: usize,
-    store: &'a lumen_core::property_store::PropertyStore,
-    parent_id: Entity,
+pub(crate) struct SubstCtx<'a> {
+    pub(crate) row: Option<RowScope<'a>>,
+    pub(crate) args: Option<&'a std::collections::BTreeMap<String, String>>,
+    pub(crate) store: &'a lumen_core::property_store::PropertyStore,
+    pub(crate) parent_id: Entity,
 }
 
 /// Walk an [`Element`] subtree, replacing every `{...}` placeholder in
@@ -2253,9 +2269,9 @@ fn cascade_element_tree(el: &mut Element, sheet: &lumen_ir::css::Stylesheet) {
     }
 }
 
-fn substitute_in_element_with_css(
+pub(crate) fn substitute_in_element_with_css(
     template: &Element,
-    ctx: &RowCtx<'_>,
+    ctx: &SubstCtx<'_>,
     css: Option<&lumen_ir::css::Stylesheet>,
 ) -> Element {
     let mut clone = template.clone();
@@ -2287,11 +2303,17 @@ fn substitute_in_element_with_css(
 /// substitute the result into the element's string-valued attrs.
 ///
 /// Resolution rules (wave-C contract):
-/// - [`InterpolationSlot::Row`] - `ctx.item.get(field)`. Missing field
+/// - [`InterpolationSlot::Row`] - `ctx.row`'s record. Missing field
 ///   -> empty string + a single `tracing::warn!` (deduplicated per
 ///   `(parent_id, field)` pair so a missing field on a 1000-row list
-///   doesn't spam the log).
-/// - [`InterpolationSlot::RowIndex`] - `ctx.idx.to_string()`.
+///   doesn't spam the log). No row scope -> left verbatim for the
+///   `<for>` walk that has one.
+/// - [`InterpolationSlot::RowIndex`] - the iteration index, or left
+///   verbatim outside a row scope.
+/// - [`InterpolationSlot::Arg`] - the instantiating argument, else the
+///   parameter's declared default, else empty. A `Global` naming a
+///   declared parameter resolves the same way, which is how a fragment
+///   argument shadows a global signal of that name.
 /// - [`InterpolationSlot::Global`] - `ctx.store.get_global_str(name)`.
 ///   Missing -> empty string, no warn (matches the global-signal-not-set
 ///   semantics elsewhere).
@@ -2307,7 +2329,7 @@ fn substitute_in_element_with_css(
 /// `<row>` containers wraps the slot-bearing leaves several levels
 /// deep, and the parser only attaches slots to the bearing leaves
 /// (not their ancestors).
-fn substitute_in_attrs_text(el: &mut Element, ctx: &RowCtx<'_>) {
+fn substitute_in_attrs_text(el: &mut Element, ctx: &SubstCtx<'_>) {
     let sub = |s: &str| -> String { resolve_placeholders(s, &el.interpolations, ctx) };
     if let Some(t) = &el.attrs.text {
         el.attrs.text = Some(sub(t));
@@ -2336,7 +2358,7 @@ fn substitute_in_attrs_text(el: &mut Element, ctx: &RowCtx<'_>) {
 /// fall through to the legacy "replace `{k}` with `item[k]`" rule so
 /// pre-wave-C for-bodies (no `interpolations` populated on their
 /// elements) still work.
-fn resolve_placeholders(body: &str, slots: &[InterpolationSlot], ctx: &RowCtx<'_>) -> String {
+fn resolve_placeholders(body: &str, slots: &[InterpolationSlot], ctx: &SubstCtx<'_>) -> String {
     let mut out = String::with_capacity(body.len());
     let mut i = 0;
     while i < body.len() {
@@ -2353,16 +2375,22 @@ fn resolve_placeholders(body: &str, slots: &[InterpolationSlot], ctx: &RowCtx<'_
         let gt = lt + end_rel;
         let inner = &body[lt + 1..gt];
         let trimmed = inner.trim();
-        let slot = InterpolationSlot::from(trimmed);
+        let slot = claim_arg(InterpolationSlot::from(trimmed), slots, ctx);
         let resolved = match &slot {
-            InterpolationSlot::Row(field) => match ctx.item.get(field) {
-                Some(v) => Some(v.clone()),
-                None => {
-                    warn_missing_row_field_once(ctx.parent_id, field);
-                    Some(String::new())
-                }
+            InterpolationSlot::Row(field) => match &ctx.row {
+                Some(row) => match row.item.get(field) {
+                    Some(v) => Some(v.clone()),
+                    None => {
+                        warn_missing_row_field_once(ctx.parent_id, field);
+                        Some(String::new())
+                    }
+                },
+                None => None,
             },
-            InterpolationSlot::RowIndex => Some(ctx.idx.to_string()),
+            InterpolationSlot::RowIndex => ctx.row.as_ref().map(|row| row.idx.to_string()),
+            InterpolationSlot::Arg(name) => ctx
+                .args
+                .map(|args| args.get(name).cloned().unwrap_or_default()),
             InterpolationSlot::Global(name) => {
                 ctx.store.get_global_str(name).map(|s| s.to_string())
             }
@@ -2374,12 +2402,6 @@ fn resolve_placeholders(body: &str, slots: &[InterpolationSlot], ctx: &RowCtx<'_
                 );
                 Some(String::new())
             }
-            // A fragment argument only has a value at the use site that
-            // passed it, which this resolver cannot see: it runs over the
-            // tree a fragment already expanded into. Binding arguments is
-            // the instantiation path's job, so an `Arg` still standing here
-            // is a parameter nothing bound, and it resolves to empty.
-            InterpolationSlot::Arg(_) => Some(String::new()),
         };
         // Honour the recorded slot list when present so authoring
         // intent wins over the legacy `{k}` substring rule: if the
@@ -2397,11 +2419,13 @@ fn resolve_placeholders(body: &str, slots: &[InterpolationSlot], ctx: &RowCtx<'_
             // above; `Row(field)` already consulted the item.
             if matches!(
                 slot,
-                InterpolationSlot::RowIndex | InterpolationSlot::Row(_)
+                InterpolationSlot::RowIndex | InterpolationSlot::Row(_) | InterpolationSlot::Arg(_)
             ) {
                 return None;
             }
-            ctx.item.get(trimmed).cloned()
+            ctx.row
+                .as_ref()
+                .and_then(|row| row.item.get(trimmed).cloned())
         });
         // Suppress wave-C participation when the slot list explicitly
         // doesn't claim this placeholder. `slots.is_empty()` means
@@ -2422,6 +2446,32 @@ fn resolve_placeholders(body: &str, slots: &[InterpolationSlot], ctx: &RowCtx<'_
         i = gt + 1;
     }
     out
+}
+
+/// Re-read a placeholder as a fragment argument when the surrounding
+/// fragment scope claims its name.
+///
+/// A parameter reference is spelled exactly like a global signal
+/// reference, so the classifier that sees only the token always says
+/// `Global`. Two things separate them, and either is enough: the compiler
+/// records an [`InterpolationSlot::Arg`] on the element when it knows the
+/// enclosing parameter list, and the instance's argument map holds every
+/// declared parameter. Inside a fragment body the parameter wins, which is
+/// what makes an argument shadow a global signal of the same name.
+fn claim_arg(
+    slot: InterpolationSlot,
+    slots: &[InterpolationSlot],
+    ctx: &SubstCtx<'_>,
+) -> InterpolationSlot {
+    let InterpolationSlot::Global(name) = &slot else {
+        return slot;
+    };
+    let claimed = slots.contains(&InterpolationSlot::Arg(name.clone()))
+        || ctx.args.is_some_and(|args| args.contains_key(name));
+    if claimed {
+        return InterpolationSlot::Arg(name.clone());
+    }
+    slot
 }
 
 /// Emit a `tracing::warn!` for a missing row field, deduplicated per
@@ -2597,6 +2647,152 @@ fn is_relayout_boundary(style: &Style, el: &Element) -> bool {
         return true;
     }
     matches!(style.width, Length::Px(_)) && matches!(style.height, Length::Px(_))
+}
+
+#[cfg(test)]
+mod substitution_tests {
+    //! One context, two scopes. A `<for>` row brings the row record, a
+    //! fragment instance brings the arguments, and a `<for>` inside a
+    //! fragment body meets both: each walk resolves what its own scope
+    //! knows and leaves the rest of the placeholders standing.
+    use super::*;
+    use lumen_core::property_store::PropertyStore;
+    use lumen_core::signals::ArrayItem;
+    use std::collections::BTreeMap;
+
+    fn args(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    fn item(pairs: &[(&str, &str)]) -> ArrayItem {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    fn resolve(
+        body: &str,
+        slots: &[InterpolationSlot],
+        row: Option<(&ArrayItem, usize)>,
+        args: Option<&BTreeMap<String, String>>,
+        store: &PropertyStore,
+    ) -> String {
+        let ctx = SubstCtx {
+            row: row.map(|(item, idx)| RowScope { item, idx }),
+            args,
+            store,
+            parent_id: Entity::PLACEHOLDER,
+        };
+        resolve_placeholders(body, slots, &ctx)
+    }
+
+    #[test]
+    fn an_argument_resolves_from_the_instance_binding() {
+        let store = PropertyStore::default();
+        let bound = args(&[("title", "Recent")]);
+        let out = resolve(
+            "{$title}!",
+            &[InterpolationSlot::Arg("title".to_string())],
+            None,
+            Some(&bound),
+            &store,
+        );
+        assert_eq!(out, "Recent!");
+    }
+
+    #[test]
+    fn an_argument_beats_a_global_of_the_same_name() {
+        let mut store = PropertyStore::default();
+        store.set_global_str("title", "from the signal");
+        let bound = args(&[("title", "from the argument")]);
+        let out = resolve("{$title}", &[], None, Some(&bound), &store);
+        assert_eq!(out, "from the argument");
+    }
+
+    #[test]
+    fn a_global_outside_the_parameter_list_still_reads_the_store() {
+        let mut store = PropertyStore::default();
+        store.set_global_str("theme", "dark");
+        let bound = args(&[("title", "Recent")]);
+        let out = resolve("{$theme}", &[], None, Some(&bound), &store);
+        assert_eq!(out, "dark");
+    }
+
+    #[test]
+    fn row_placeholders_survive_the_argument_walk() {
+        let store = PropertyStore::default();
+        let bound = args(&[("prefix", "Row")]);
+        let slots = [
+            InterpolationSlot::Arg("prefix".to_string()),
+            InterpolationSlot::Row("name".to_string()),
+        ];
+        let out = resolve(
+            "{$prefix}: {row.name} #{$index}",
+            &slots,
+            None,
+            Some(&bound),
+            &store,
+        );
+        assert_eq!(
+            out, "Row: {row.name} #{$index}",
+            "the walk with no row scope leaves the row placeholders for the reconciler"
+        );
+    }
+
+    #[test]
+    fn the_row_walk_finishes_what_the_argument_walk_left() {
+        let store = PropertyStore::default();
+        let row = item(&[("name", "alpha")]);
+        let slots = [
+            InterpolationSlot::Arg("prefix".to_string()),
+            InterpolationSlot::Row("name".to_string()),
+        ];
+        let out = resolve(
+            "Row: {row.name} #{$index}",
+            &slots,
+            Some((&row, 2)),
+            None,
+            &store,
+        );
+        assert_eq!(out, "Row: alpha #2");
+    }
+
+    #[test]
+    fn both_scopes_resolve_in_one_walk() {
+        let store = PropertyStore::default();
+        let bound = args(&[("prefix", "Row")]);
+        let row = item(&[("name", "alpha")]);
+        let slots = [
+            InterpolationSlot::Arg("prefix".to_string()),
+            InterpolationSlot::Row("name".to_string()),
+        ];
+        let out = resolve(
+            "{$prefix}: {row.name} #{$index}",
+            &slots,
+            Some((&row, 0)),
+            Some(&bound),
+            &store,
+        );
+        assert_eq!(out, "Row: alpha #0");
+    }
+
+    #[test]
+    fn a_parameter_nothing_bound_resolves_empty() {
+        let store = PropertyStore::default();
+        let bound = args(&[("title", "")]);
+        let out = resolve(
+            "[{$title}]",
+            &[InterpolationSlot::Arg("title".to_string())],
+            None,
+            Some(&bound),
+            &store,
+        );
+        assert_eq!(out, "[]");
+    }
 }
 
 #[cfg(test)]
