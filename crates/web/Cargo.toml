@@ -1,0 +1,27 @@
+[package]
+name = "lumen-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Emits a Lumen app as a static site: one HTML document per page, plus the manifest the browser runtime boots from."
+keywords = ["ui", "gui", "html", "web", "lumen"]
+categories = ["web-programming", "gui"]
+
+[lib]
+name = "lumen_web"
+path = "src/lib.rs"
+
+[dependencies]
+# The contract the emitted documents are written against.
+lumen-html = { path = "../html", version = "0.0.3" }
+# The IR a page is emitted from.
+lumen-ir = { path = "../ir", version = "0.0.3" }
+lumen-core = { path = "../core", version = "0.0.3" }
+# Locale parsing, so a document's writing direction is decided the same way
+# the desktop runtime decides it.
+lumen-i18n = { path = "../i18n", version = "0.0.3" }
+serde.workspace = true
+serde_json.workspace = true

@@ -50,6 +50,11 @@ tools/             the release plumbing and the editor plugins
 - **lumen-ir**: the shared data model. The layout IR that markup parses into,
   the CSS abstract syntax tree and cascade application, the shared value
   parsers, the `var()` resolver, and the compiled-artifact container.
+- **lumen-html**: what a Lumen app looks like as HTML. The element each markup
+  tag becomes, the class and `data-lm-*` attributes an element carries, the
+  node paths that name a node, and the manifest and seed types a site ships.
+  The web emitter and the browser runtime both read it, so the page one writes
+  is the page the other expects.
 
 ### Backends
 
@@ -136,6 +141,9 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
 - **lumenc**: the compiler front end and the CLI. Markup and CSS parsers, the
   include and import resolver, the formatter, the scaffolder, and the
   `check` / `run` / `build` / `bundle` / `package` subcommands.
+- **lumen-web**: the web target's emitter. Turns an app into a static site:
+  one HTML document per page with the markup already in it, plus the manifest
+  the browser runtime boots from. It emits into memory and touches no files.
 - **lumen**: the engine crate at the workspace root. It exports the C ABI, an
   opaque app handle, a tagged value type, and the node binding, and builds as
   the shared `liblumen` plus a static library.
