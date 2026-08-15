@@ -32,6 +32,7 @@ use bevy_ecs::prelude::*;
 use crossbeam_channel::{Receiver, Sender};
 use lru::LruCache;
 use lumen_core::prelude::*;
+use lumen_core::time::Instant;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::hash_map::Entry as MapEntry;
 use std::collections::{HashMap, HashSet};
@@ -39,7 +40,6 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Instant;
 
 /// Implements `Deref` for a single-field `Handle` newtype so field access
 /// flows through to the inner decoded payload. Every `Loaded*` wrapper shares

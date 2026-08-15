@@ -20,9 +20,9 @@ use lumen_core::input::{FocusTracker, FocusedKey, KeyPressed, PendingFileDrops};
 use lumen_core::prelude::*;
 use lumen_core::text_events::TextEditRequest;
 use lumen_core::text_model::{TextBuffer, TextCursor, TextEditable, TextPos};
+use lumen_core::time::Instant;
 use lumen_text::{UndoStack, hit_test_text, select_line_at_byte, select_word_at_byte};
 use std::sync::Arc;
-use std::time::Instant;
 
 /// Backwards-compatible re-export. Lives in `lumen-os-clipboard` now -
 /// extracted per the W6.1 OS-integration refactor.

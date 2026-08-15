@@ -25,9 +25,9 @@ use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::*;
 use lumen_core::text_events::AppliedKind;
+use lumen_core::time::Instant;
 use std::ops::Range;
 use std::sync::Arc;
-use std::time::Instant;
 use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 
 /// Query data for [`text_attach_buffer`]: `TextInput` entities that haven't
