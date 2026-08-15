@@ -86,6 +86,13 @@ The same mode is what app authors use for automated testing; see
 `wasm32-unknown-unknown` target, which `rust-toolchain.toml` lists, so `rustup`
 installs it with the rest of the toolchain.
 
+The module carries one script host per `host-<engine>` feature, and the default
+build carries candela (`host-candela`). It is the only host that runs in a
+browser today: rhai is not wired up for this target yet, and lua's C core does
+not build for `wasm32-unknown-unknown` at all. An app names its engine in the
+manifest, so a module built without a host for that engine refuses to boot the
+app and says which engine it was asked for.
+
 Two more tools, neither a cargo dependency:
 
 - `wasm-bindgen-cli`, which turns the raw module into one a browser can import

@@ -164,8 +164,10 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   prebuilt module serves every app: a page loads it, hands it the app's
   compiled data, and it runs the same tick a desktop app runs. It installs no
   layout backend and extracts no scene, because the page's own CSS engine lays
-  out and the DOM is the scene. Scripts run as precompiled candela bytecode, so
-  no compiler reaches the page.
+  out and the DOM is the scene. Scripts run on the host for the engine the app's
+  manifest names; each host is a feature of the crate, and candela is the one
+  the default build carries. It runs precompiled bytecode, so no compiler
+  reaches the page.
 - **lumen**: the engine crate at the workspace root. It exports the C ABI, an
   opaque app handle, a tagged value type, and the node binding, and builds as
   the shared `liblumen` plus a static library.

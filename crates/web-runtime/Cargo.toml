@@ -19,9 +19,11 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 lumen-core = { path = "../core", version = "0.0.3" }
 lumen-script = { path = "../script/api", version = "0.0.3", default-features = false }
-# The artifact half only: the browser runs precompiled `.cdlb` bytecode, so the
-# candela compiler never reaches the page.
-lumen-script-candela = { path = "../script/candela", version = "0.0.3", default-features = false }
+# The candela host, behind `host-candela`. The artifact half only: the browser
+# runs precompiled `.cdlb` bytecode, so the candela compiler never reaches the
+# page.
+lumen-script-candela = { path = "../script/candela", version = "0.0.3", default-features = false, optional = true }
+bevy_ecs.workspace = true
 wasm-bindgen.workspace = true
 js-sys.workspace = true
 # Explicit interface list, not a blanket enable: every named interface is
@@ -38,3 +40,12 @@ lumen-script-candela = { path = "../script/candela", version = "0.0.3" }
 
 [dev-dependencies]
 wasm-bindgen-test.workspace = true
+
+[features]
+# The script hosts this module carries. A host is a language, and each one is a
+# feature, so a page pays for the languages its app ships and nothing else.
+# candela is on by default because it is the only host that runs in a browser
+# today: rhai has yet to be wired up here, and lua's C core does not build for
+# `wasm32-unknown-unknown` at all.
+default = ["host-candela"]
+host-candela = ["dep:lumen-script-candela"]
