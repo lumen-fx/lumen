@@ -300,6 +300,26 @@ impl From<I18n> for SharedI18n {
     }
 }
 
+/// The text a `translatable="key"` element shows.
+///
+/// The catalogue's string wins; without one the authored text stands in; with
+/// neither, the key itself. That ordering is what keeps an app whose
+/// translations are missing showing its source strings, and keeps a
+/// `translatable` element with no text from rendering blank.
+///
+/// Both the desktop spawner and the web emitter resolve an element's text
+/// through this, so a page built for a locale reads the same as the app run
+/// in it.
+pub fn translated_or_authored(
+    translated: Option<String>,
+    authored: Option<&str>,
+    key: &str,
+) -> String {
+    translated
+        .or_else(|| authored.map(str::to_string))
+        .unwrap_or_else(|| key.to_string())
+}
+
 /// RTL languages list. Lifted straight from the i18n audit spec
 /// (`docs/audits/i18n.md` "Rewrite spec section 1") so the plugin agrees with
 /// whatever `LayoutDirection::DefaultLayoutDirection` ends up doing in
