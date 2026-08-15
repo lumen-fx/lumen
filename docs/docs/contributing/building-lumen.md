@@ -186,7 +186,10 @@ push to `main` and every pull request, and reported to Codecov. It is a report
 rather than a gate: what decides a pull request is the suite itself, and the project-wide Codecov status is informational, while the patch status
 is a required check that fails when the diff drops meaningfully below the
 baseline coverage. Doctests are outside the measurement, since collecting coverage
-from them needs a nightly toolchain.
+from them needs a nightly toolchain. The on-screen presentation path
+(`lumen-render-wgpu`'s `surface.rs`) is left out of the report as well: it only
+runs against a real GPU, and the tests that reach it skip themselves on a
+runner. `codecov.yml` holds that exclusion.
 
 The editor integrations under `tools/`, the release scripts, and the SDKs
 build in a separate workflow, `tools.yml`, gated per directory so a change to

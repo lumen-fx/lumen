@@ -11,3 +11,14 @@ coverage:
       default:
         target: auto
         threshold: "5%"
+
+# Measured and tested, but not graded. Presenting to a window needs a real
+# adapter, a real swap chain, and a window to own them, none of which a CI
+# runner has; the GPU tests that do exist skip themselves there anyway,
+# since all it offers is a software rasterizer. The device-bound half of
+# this file therefore reads as uncovered whatever the suite does. Codecov
+# excludes whole paths only, so the file goes with it. The parts that need
+# no device (the present gate, the damage diff, the init watchdog) are
+# still tested and still run under `cargo test`.
+ignore:
+  - "crates/backends/render-wgpu/src/surface.rs"
