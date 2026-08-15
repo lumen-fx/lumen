@@ -17,8 +17,10 @@
 //!   [`McpTransport::Stdio`] at plugin construction.
 
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use lumen_core::render_world::SurfaceCapture;
+use lumen_core::task::{BoxFuture, Timer};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
@@ -30,27 +32,41 @@ use crate::snapshot::Snapshot;
 
 /// Bundle of cross-thread handles the JSON-RPC handler needs.
 ///
-/// Cheap to clone (two `Arc`s + an Arc-wrapped capture coordinator). The
-/// snapshot lock is acquired for one read per request; the surface capture
-/// flag is touched per `lumen.screenshot` call and never holds the snapshot
-/// lock while waiting for the GPU.
+/// Cheap to clone (a few `Arc`s). The snapshot lock is acquired for one read
+/// per request; the surface capture flag is touched per `lumen.screenshot`
+/// call and never holds the snapshot lock while waiting for the GPU.
 #[derive(Clone)]
 pub(crate) struct ServerCtx {
     pub snapshot: Arc<RwLock<Snapshot>>,
     pub surface_capture: Option<SurfaceCapture>,
     pub simulate_queue: SimulateQueue,
     pub simulate_enabled: bool,
+    /// What the request handlers wait on while they poll for a frame, a
+    /// committed signal, or a finished tick. The app's `TimerService` when
+    /// it installed one, [`TokioTimer`] otherwise.
+    pub timer: Arc<dyn Timer>,
+}
+
+/// Timer of last resort: the one this crate's own runtime provides.
+///
+/// The server drives its transport on a tokio runtime it owns, so a tokio
+/// sleep is always available even in an app that installed no async backend.
+pub(crate) struct TokioTimer;
+
+impl Timer for TokioTimer {
+    fn sleep(&self, duration: Duration) -> BoxFuture<()> {
+        Box::pin(tokio::time::sleep(duration))
+    }
 }
 
 /// Block the current thread on a tokio current-thread runtime running the
 /// TCP server forever. Called from inside the plugin's spawned OS thread.
-pub fn serve_tcp(
-    port: u16,
-    snapshot: Arc<RwLock<Snapshot>>,
-    surface_capture: Option<SurfaceCapture>,
-    simulate_queue: SimulateQueue,
-    simulate_enabled: bool,
-) {
+///
+/// The runtime is this crate's own: the transport is written against tokio's
+/// networking, and the [`Spawn`](lumen_core::task::Spawn) seam carries no
+/// promise that an installed executor drives a tokio reactor. Timing is a
+/// different matter, and goes through [`ServerCtx::timer`].
+pub fn serve_tcp(port: u16, ctx: ServerCtx) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -61,45 +77,14 @@ pub fn serve_tcp(
             return;
         }
     };
-    let ctx = ServerCtx {
-        snapshot,
-        surface_capture,
-        simulate_queue,
-        simulate_enabled,
-    };
     rt.block_on(run_tcp(port, ctx));
-}
-
-/// Back-compat alias for [`serve_tcp`]. Kept for one minor version
-/// because an external embedder may still call it by name.
-#[deprecated(note = "use serve_tcp; W6.11 added stdio transport and renamed for clarity")]
-#[allow(dead_code)]
-pub fn serve(
-    port: u16,
-    snapshot: Arc<RwLock<Snapshot>>,
-    surface_capture: Option<SurfaceCapture>,
-    simulate_queue: SimulateQueue,
-    simulate_enabled: bool,
-) {
-    serve_tcp(
-        port,
-        snapshot,
-        surface_capture,
-        simulate_queue,
-        simulate_enabled,
-    );
 }
 
 /// MCP-over-stdio. Reads newline-delimited JSON-RPC requests from
 /// `stdin`, writes responses to `stdout`. Blocks until stdin closes.
 /// Intended for tools that launch lumen as a subprocess and pipe MCP
 /// over stdio (the canonical MCP transport per the spec).
-pub fn serve_stdio(
-    snapshot: Arc<RwLock<Snapshot>>,
-    surface_capture: Option<SurfaceCapture>,
-    simulate_queue: SimulateQueue,
-    simulate_enabled: bool,
-) {
+pub fn serve_stdio(ctx: ServerCtx) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -109,12 +94,6 @@ pub fn serve_stdio(
             warn!("lumen-mcp: failed to build stdio tokio runtime: {e}");
             return;
         }
-    };
-    let ctx = ServerCtx {
-        snapshot,
-        surface_capture,
-        simulate_queue,
-        simulate_enabled,
     };
     rt.block_on(run_stdio(ctx));
 }
@@ -564,28 +543,25 @@ fn compute_bounds_and_highlights(
     (bounds, highlights)
 }
 
-/// Acquire raw RGBA8 + dimensions, preferring the on-screen `SurfaceCapture`
-/// path. Falls back to decoding the headless snapshot PNG (already
-/// base64-encoded - one decode hop, only paid when highlights are needed).
+/// Acquire raw RGBA8 + dimensions from the renderer through `SurfaceCapture`.
+///
+/// Asks for a fresh frame and waits for it. If the wait runs out (nothing in
+/// the render world services capture requests, or the app is stalled) the
+/// last frame the store holds is returned instead, tagged `surface-stale` so
+/// a client can tell it is looking at an older frame.
 async fn capture_raw(ctx: &ServerCtx) -> Option<(Vec<u8>, u32, u32, &'static str)> {
-    if let Some(capture) = ctx.surface_capture.clone() {
-        capture.request();
-        for _ in 0..32 {
-            if !capture.is_requested()
-                && let Some(frame) = capture.read()
-            {
-                return Some((frame.rgba8, frame.width, frame.height, "wgpu-surface"));
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(16)).await;
+    let capture = ctx.surface_capture.clone()?;
+    capture.request();
+    for _ in 0..32 {
+        if !capture.is_requested()
+            && let Some(frame) = capture.read()
+        {
+            return Some((frame.rgba8, frame.width, frame.height, "surface"));
         }
+        ctx.timer.sleep(Duration::from_millis(16)).await;
     }
-    let snap = ctx.snapshot.read().ok()?;
-    let b64 = snap.screenshot_png_base64.as_ref()?;
-    use base64::Engine as _;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
-    let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
-    let (w, h) = (img.width(), img.height());
-    Some((img.into_raw(), w, h, "headless"))
+    let frame = capture.read()?;
+    Some((frame.rgba8, frame.width, frame.height, "surface-stale"))
 }
 
 fn encode_png_base64(width: u32, height: u32, rgba8: &[u8]) -> Option<String> {
@@ -738,7 +714,7 @@ async fn run_set_signal(ctx: &ServerCtx, params: Option<&Value>) -> Value {
     // RedrawScheduler) so the bus drains this frame.
     ctx.simulate_queue.wake();
 
-    const WAIT_DEADLINE: std::time::Duration = std::time::Duration::from_millis(500);
+    const WAIT_DEADLINE: Duration = Duration::from_millis(500);
     let wait_start = std::time::Instant::now();
     let (committed, observed_value, frames_waited) = loop {
         let (frame_now, observed) = match ctx.snapshot.read() {
@@ -758,7 +734,7 @@ async fn run_set_signal(ctx: &ServerCtx, params: Option<&Value>) -> Value {
         if wait_start.elapsed() >= WAIT_DEADLINE {
             break (false, observed, frames);
         }
-        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        ctx.timer.sleep(Duration::from_millis(1)).await;
     };
 
     json!({
@@ -833,8 +809,8 @@ async fn run_simulate(ctx: &ServerCtx, params: Option<&Value>) -> Value {
     // jitter out of externally reconstructed frame intervals. Bounded
     // at 2 ms of cooperative yields per call, so a stalled app costs
     // the runtime thread nothing measurable before the sleep fallback.
-    const SPIN_WINDOW: std::time::Duration = std::time::Duration::from_millis(2);
-    const WAIT_DEADLINE: std::time::Duration = std::time::Duration::from_millis(500);
+    const SPIN_WINDOW: Duration = Duration::from_millis(2);
+    const WAIT_DEADLINE: Duration = Duration::from_millis(500);
     let wait_start = std::time::Instant::now();
     let (waited_frames, ring_growth, tick_done) = loop {
         let (frame_now, ring_now) = snapshot_metrics(ctx, wait_for.as_deref());
@@ -849,7 +825,7 @@ async fn run_simulate(ctx: &ServerCtx, params: Option<&Value>) -> Value {
         if elapsed < SPIN_WINDOW {
             tokio::task::yield_now().await;
         } else {
-            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            ctx.timer.sleep(Duration::from_millis(1)).await;
         }
     };
 
@@ -962,5 +938,107 @@ mod overlay_tests {
         let mut buf = vec![0u8; (w * h * 4) as usize];
         // Out-of-bounds rect must not panic / write past end.
         draw_neon_rect(&mut buf, w, h, -5, -5, 20, 20);
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+    use lumen_core::render_world::SurfaceFrame;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Timer that returns instantly and counts the waits, so the capture
+    /// poll loop runs its full 32 rounds in microseconds.
+    struct CountingTimer(Arc<AtomicUsize>);
+
+    impl Timer for CountingTimer {
+        fn sleep(&self, _duration: Duration) -> BoxFuture<()> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(std::future::ready(()))
+        }
+    }
+
+    fn ctx_with(capture: Option<SurfaceCapture>, waits: &Arc<AtomicUsize>) -> ServerCtx {
+        ServerCtx {
+            snapshot: Arc::new(RwLock::new(Snapshot::default())),
+            surface_capture: capture,
+            simulate_queue: SimulateQueue::default(),
+            simulate_enabled: false,
+            timer: Arc::new(CountingTimer(Arc::clone(waits))),
+        }
+    }
+
+    fn frame(width: u32, height: u32, value: u8) -> SurfaceFrame {
+        SurfaceFrame {
+            width,
+            height,
+            rgba8: vec![value; (width * height * 4) as usize],
+        }
+    }
+
+    /// Timer that stands in for a render frame passing: each wait services
+    /// a pending capture the way a renderer would.
+    struct ServicingTimer {
+        capture: SurfaceCapture,
+        frame: SurfaceFrame,
+    }
+
+    impl Timer for ServicingTimer {
+        fn sleep(&self, _duration: Duration) -> BoxFuture<()> {
+            if self.capture.is_requested() {
+                self.capture.write(self.frame.clone());
+                self.capture.clear_request();
+            }
+            Box::pin(std::future::ready(()))
+        }
+    }
+
+    /// A renderer that services the request hands back the fresh frame.
+    #[tokio::test]
+    async fn a_serviced_request_returns_the_captured_frame() {
+        let waits = Arc::new(AtomicUsize::new(0));
+        let capture = SurfaceCapture::default();
+        let mut ctx = ctx_with(Some(capture.clone()), &waits);
+        ctx.timer = Arc::new(ServicingTimer {
+            capture,
+            frame: frame(2, 2, 7),
+        });
+
+        let (rgba8, width, height, source) = capture_raw(&ctx).await.expect("a frame");
+        assert_eq!((width, height), (2, 2));
+        assert_eq!(rgba8, vec![7u8; 16]);
+        assert_eq!(source, "surface");
+    }
+
+    /// Nothing services the request: the handler waits, gives up, and
+    /// answers with the frame already in the store, marked stale.
+    #[tokio::test]
+    async fn an_unserviced_request_falls_back_to_the_last_frame() {
+        let waits = Arc::new(AtomicUsize::new(0));
+        let capture = SurfaceCapture::default();
+        capture.write(frame(1, 1, 3));
+        let ctx = ctx_with(Some(capture), &waits);
+
+        let (rgba8, width, height, source) = capture_raw(&ctx).await.expect("a stale frame");
+        assert_eq!((width, height), (1, 1));
+        assert_eq!(rgba8, vec![3u8; 4]);
+        assert_eq!(source, "surface-stale");
+        assert_eq!(
+            waits.load(Ordering::SeqCst),
+            32,
+            "the poll loop waits on the installed timer, not on tokio directly"
+        );
+    }
+
+    /// No frame was ever captured: the screenshot call reports that rather
+    /// than inventing pixels.
+    #[tokio::test]
+    async fn no_frame_at_all_reports_unavailable() {
+        let waits = Arc::new(AtomicUsize::new(0));
+        let ctx = ctx_with(Some(SurfaceCapture::default()), &waits);
+        assert!(capture_raw(&ctx).await.is_none());
+
+        let response = run_screenshot(&ctx, None).await;
+        assert_eq!(response["available"], serde_json::json!(false));
     }
 }

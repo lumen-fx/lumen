@@ -207,8 +207,13 @@ Rust.
 
 - **Do not add backend dependencies to `lumen-core`.** If your plugin needs a
   type in core to talk about, add the type, not the dependency. That is why the
-  renderer, layout, and window roles are marker traits there and the concrete
-  crates live outside.
+  renderer, layout, window, spawner, and timer roles are traits there and the
+  concrete crates live outside.
+- **Reach a backend through its service resource, not its crate.** Text goes
+  through `ShaperService`, async work through `SpawnService` and
+  `TimerService`. A plugin that names an implementation crate to get at one has
+  chosen the app's backend for it, and an app that swaps that backend then
+  runs two of them.
 - **Provide an alternative.** A backend trait needs at least one default
   implementation and one other path, so removing the default does not break the
   build. A headless or stub implementation counts.

@@ -538,9 +538,6 @@ pub struct Snapshot {
     pub mouse_wheel: MessageRing<RecordedMouseWheel>,
     /// FocusedKey ring.
     pub focused_key: MessageRing<RecordedFocusedKey>,
-    /// Most recent headless screenshot as base64-encoded PNG. `None` if the
-    /// `HeadlessRenderer` resource is absent.
-    pub screenshot_png_base64: Option<String>,
     /// Per-entity fingerprints from the most recent snap tick. Compared
     /// against [`Self::history`] entries to compute `lumen.diff_since`.
     pub fingerprints: std::collections::HashMap<u64, EntityFingerprint>,

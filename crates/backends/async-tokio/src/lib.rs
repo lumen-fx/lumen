@@ -246,7 +246,8 @@ impl Plugin for AsyncTokioPlugin {
         }
         let runtime = app.world.resource::<TokioRuntime>().clone();
         if app.world.get_resource::<SpawnService>().is_none() {
-            app.world.insert_resource(SpawnService::new(runtime.clone()));
+            app.world
+                .insert_resource(SpawnService::new(runtime.clone()));
         }
         if app.world.get_resource::<TimerService>().is_none() {
             app.world.insert_resource(TimerService::new(runtime));

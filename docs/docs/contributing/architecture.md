@@ -79,8 +79,9 @@ tools/             the release plumbing and the editor plugins
   body read.
 - **lumen-a11y-accesskit**: translates the entity tree into AccessKit tree
   updates each tick.
-- **lumen-async-tokio**: the async bridge. A tokio runtime plus a queue that
-  carries results from tasks back into the main world.
+- **lumen-async-tokio**: the async bridge. A tokio runtime published as the
+  app's `SpawnService` and `TimerService`, plus a queue that carries results
+  from tasks back into the main world.
 
 ### Interaction and content
 
@@ -148,7 +149,8 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
 - **lumen-devtools**: the in-window overlay, itself authored in Lumen markup
   and CSS.
 - **lumen-mcp**: in-app introspection. Per-tick snapshots, message rings,
-  screenshots, and a local JSON-RPC server.
+  screenshots read back from whichever renderer the app runs, and a local
+  JSON-RPC server.
 - **lumen-mcp-server**: a standalone binary bridging stdio JSON-RPC to a
   running app's port.
 - **lumen-lsp**: the language server for markup, CSS, and scripts.
@@ -327,16 +329,23 @@ the manifest level, one per operating system.
 ## Pluggable backends
 
 Every backend role is a trait, and the trait lives away from any
-implementation of it. Marker traits in `lumen-core` name the roles: renderer,
-layout engine, window backend, accessibility bridge, task spawner, timer. The
-shaping trait lives in `lumen-text`, the scripting trait in `lumen-script`, the
-parser trait in `lumen-runtime`.
+implementation of it. `lumen-core` names the roles: renderer, layout engine,
+window backend, accessibility bridge, task spawner, timer. The shaping trait
+lives in `lumen-text`, the scripting trait in `lumen-script`, the parser trait
+in `lumen-runtime`.
 
 An implementation crate depends on the trait crate and ships a plugin that
 installs itself. Nothing depends on an implementation crate except the assembly
 layer that chooses one, which is why the software rasterizer and the GPU
 renderer are interchangeable behind the same render stage, and why a shaper or
 a script host can be swapped the same way.
+
+A consumer reaches the installed implementation through a resource rather than
+by naming a crate: `ShaperService` for text, `SpawnService` and `TimerService`
+for async work. Absence is part of the contract. An app that installs no async
+backend leaves both async resources unset, and a consumer reads that as "do it
+inline": that is why a file dialog still opens in a build with no executor,
+blocking the tick it was opened on.
 
 `CONTRIBUTING.md` states the rule that keeps the seam usable: every backend
 trait needs at least one default implementation and one alternative path, so
