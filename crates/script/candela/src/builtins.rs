@@ -1,9 +1,9 @@
-//! The Lumen script builtins exposed on the candela
-//! [`Engine`](candela::Engine) by [`crate::CandelaHost`].
+//! The Lumen script builtins a candela program can call.
 //!
-//! Every host function registered via `engine.register_host_fn("lumen", ...)`
-//! in [`crate::CandelaHost::build_engine`] has a matching entry in
-//! [`BUILTINS`]. Unlike the Rhai host (where builtins are bare global
+//! Every host function the crate registers under the `lumen` namespace has a
+//! matching entry in [`BUILTINS`]. Both candela hosts register the same list,
+//! so the table describes what a compiled program and a `.cdlb` artifact each
+//! reach. Unlike the Rhai host (where builtins are bare global
 //! functions), candela reaches them through a typed `host "lumen" { ... }`
 //! block the script declares; the declaration is type-checked against the
 //! registered closure at compile time. The table is consumed by:

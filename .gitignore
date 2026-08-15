@@ -1,4 +1,6 @@
 /target
+# Where `wasm-bindgen` puts the browser runtime module and its JS glue.
+/web-dist
 **/*.rs.bk
 Cargo.lock.bak
 .DS_Store

@@ -80,6 +80,63 @@ running anything, which is the quickest gate while editing an app.
 The same mode is what app authors use for automated testing; see
 [Testing](../guides/testing.md).
 
+## Building for the browser
+
+`crates/web-runtime` builds the wasm module a Lumen page loads. It needs the
+`wasm32-unknown-unknown` target, which `rust-toolchain.toml` lists, so `rustup`
+installs it with the rest of the toolchain.
+
+Two more tools, neither a cargo dependency:
+
+- `wasm-bindgen-cli`, which turns the raw module into one a browser can import
+  and generates the JavaScript glue beside it. Its version must match the
+  `wasm-bindgen` version the workspace pins, or it refuses the module:
+  `cargo install wasm-bindgen-cli --version <the pinned version>`.
+- `wasm-opt`, from a [binaryen](https://github.com/WebAssembly/binaryen)
+  release. Optional locally; CI runs it, and the size gate measures its output.
+
+Build the module, generate the bindings, and shrink it:
+
+```sh
+cargo build -p lumen-web-runtime --target wasm32-unknown-unknown --profile wasm-release
+wasm-bindgen --target web --no-typescript --out-dir web-dist \
+  target/wasm32-unknown-unknown/wasm-release/lumen_web_runtime.wasm
+wasm-opt -Oz --enable-bulk-memory --enable-bulk-memory-opt \
+  --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals \
+  --enable-reference-types --enable-multivalue \
+  web-dist/lumen_web_runtime_bg.wasm -o web-dist/lumen_web_runtime_bg.wasm
+```
+
+`wasm-opt` validates against the features it is told about, and the ones rustc
+emits for this target are not all on by default, which is what the long flag
+list is for.
+
+The `wasm-release` profile is where the size settings live. A page downloads
+this module, so it optimises for size over speed and aborts on panic, which
+wasm32 does anyway for want of an unwinder. CI records the byte size on every
+run and fails when it passes the budget named in `.github/workflows/ci.yml`.
+
+### Running the browser tests
+
+The browser runtime's tests run in a real browser, driven over WebDriver. A DOM
+shim is not an option: this target exists because the browser is the layout
+engine, so a fake one would pass on things a page rejects.
+
+Install Chrome and a `chromedriver` of the same major version, then:
+
+```sh
+cargo test -p lumen-web-runtime --target wasm32-unknown-unknown
+```
+
+`.cargo/config.toml` sets the runner that makes that work: a `.wasm` file is
+not executable, so cargo hands it to `wasm-bindgen-test-runner`, which serves
+it to the browser. Set `CHROMEDRIVER` to the binary if it is not on `PATH`.
+
+The same config file carries the `getrandom` backend flag every wasm build of
+the workspace needs. `getrandom` has no default for a target that names no
+operating system, so it asks to be told, and the flag points it at the
+browser's crypto interface.
+
 ## Debug info in dev builds
 
 Dev builds keep line tables for the workspace crates, so panic backtraces
@@ -131,6 +188,13 @@ exactly the languages its app ships. Per-app trimming happens only on the
 static bundle path, where `lumenc` selects the exact feature set an app needs;
 the development path stays full featured.
 
+**`lumen-script-candela`** has `compiler`, on by default. It carries the
+candela compiler, and with it source compilation, hot reload, `lumenc check`,
+and `compile_bytecode`, the build step that produces a `.cdlb` image. Off, the
+crate keeps the whole builtin surface and the host that runs such an image, and
+the compiler front end leaves the dependency graph. That is what the browser
+runtime builds against.
+
 `audio` compiles the audio subsystem, and `audio-rodio` adds the playback
 backend Lumen ships. Selecting `audio` alone gives a build whose transport
 works and makes no sound, which is where an embedder supplying its own
@@ -180,6 +244,18 @@ cargo test -p lumen-render-headless --test golden_rects
 cargo test -p lumen-render-wgpu --test smoke
 cargo test -p lumen-layout-taffy --test dirty_invariant
 ```
+
+Two more gates cover the browser target. The first keeps the crates the web
+runtime shares with the desktop build compiling for the web, so a native-only
+API reintroduced into one of them fails on the pull request that adds it:
+
+```sh
+cargo check --target wasm32-unknown-unknown \
+  -p lumen-core -p lumen-ir -p lumen-html -p lumen-script -p lumen-script-candela
+```
+
+The second builds the module, measures it against the size budget, and runs the
+browser suite; see [Building for the browser](#building-for-the-browser).
 
 Coverage is measured on top of the same suite, with `cargo llvm-cov`, on every
 push to `main` and every pull request, and reported to Codecov. It is a report

@@ -12,13 +12,13 @@
 //!
 //! A candela program reaches Lumen either way it is shipped:
 //!
-//! - [`CandelaHost`] compiles source with [`candela::Engine`] and runs it. It
+//! - `CandelaHost` compiles source with candela's `Engine` and runs it. It
 //!   carries the compiler, so a script can be edited and hot-reloaded while the
 //!   app is up, and `lumenc check` can report a compile error without running
 //!   anything.
 //! - [`CandelaVmHost`] loads a precompiled `.cdlb` image on `candela-vm`. No
 //!   compiler is in the process, which is what a shipped app and the browser
-//!   target want; [`compile_bytecode`] is the build step that produces the
+//!   target want; `compile_bytecode` is the build step that produces the
 //!   image.
 //!
 //! Both register the identical builtin list, written once in `host_fns` behind
@@ -34,7 +34,7 @@
 //!
 //! # Builtin surface + remaining gaps
 //!
-//! candela's embedding [`Value`](candela::Value) carries `Array` and `Map`
+//! candela's embedding `Value` carries `Array` and `Map`
 //! variants alongside string / int / float / bool / null, and the host-fn
 //! marshalling (candela's `FromHostValue` / `IntoHostValue`) accepts / returns
 //! `Vec<T>` and `{string: T}` maps. So [`ScriptValue`](lumen_script::ScriptValue)

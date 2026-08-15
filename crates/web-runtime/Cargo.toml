@@ -1,0 +1,40 @@
+[package]
+name = "lumen-web-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's browser runtime: boots a Lumen app in a page and runs its candela bytecode."
+keywords = ["ui", "gui", "web", "wasm", "lumen"]
+categories = ["gui", "wasm"]
+publish = false
+
+[lib]
+# `cdylib` is the artifact `wasm-bindgen` post-processes into the module a page
+# loads; `rlib` is what the browser test harness links against.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lumen-core = { path = "../core", version = "0.0.3" }
+lumen-script = { path = "../script/api", version = "0.0.3", default-features = false }
+# The artifact half only: the browser runs precompiled `.cdlb` bytecode, so the
+# candela compiler never reaches the page.
+lumen-script-candela = { path = "../script/candela", version = "0.0.3", default-features = false }
+wasm-bindgen.workspace = true
+js-sys.workspace = true
+# Explicit interface list, not a blanket enable: every named interface is
+# generated into the module, so this list is a size lever. Add one only when
+# something calls it.
+web-sys = { workspace = true, features = ["Window", "console"] }
+
+[build-dependencies]
+# Compiles the test fixtures to `.cdlb` at build time, on the host, so the
+# artifact the browser loads is always the one this toolchain produces. Build
+# dependencies are resolved for the host and never linked into the wasm module,
+# so the compiler feature here does not reach the page.
+lumen-script-candela = { path = "../script/candela", version = "0.0.3" }
+
+[dev-dependencies]
+wasm-bindgen-test.workspace = true

@@ -35,7 +35,7 @@ use unicode_segmentation::UnicodeSegmentation;
 ///   validation, syntax) can be invalidated without `Changed<T>` overuse.
 /// - `kind` selects single-line vs multi-line semantics - single-line
 ///   buffers reject `\n` at insert time (matches Qt's `QLineEdit::setText`).
-#[derive(Component, Clone, Debug)]
+#[derive(Component, Clone, Debug, Default)]
 pub struct TextBuffer {
     /// The rope. Use [`Self::as_str`] / [`Self::slice`] for read access;
     /// mutate only through `lumen-text-edit::text_apply_edits`.
@@ -44,16 +44,6 @@ pub struct TextBuffer {
     pub version: u64,
     /// Single-line vs multiline policy.
     pub kind: TextBufferKind,
-}
-
-impl Default for TextBuffer {
-    fn default() -> Self {
-        Self {
-            rope: Rope::new(),
-            version: 0,
-            kind: TextBufferKind::default(),
-        }
-    }
 }
 
 impl TextBuffer {

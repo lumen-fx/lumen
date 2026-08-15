@@ -1,0 +1,13 @@
+// Declares a `lumen` function the runtime does not register, which is what a
+// script written against a newer builtin surface than the page carries looks
+// like. It compiles; the failure is at load, where the declaration finds no
+// closure behind it.
+host "lumen" {
+    no_such_builtin(string);
+}
+
+fn main() {}
+
+fn on_start() {
+    lumen::no_such_builtin("x");
+}

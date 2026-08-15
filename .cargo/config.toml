@@ -1,0 +1,18 @@
+# getrandom 0.3 has no default backend for `wasm32-unknown-unknown`: the target
+# names no operating system, so the crate refuses to guess and asks for the
+# backend to be named. `wasm_js` routes it at `crypto.getRandomValues`, which is
+# what a browser provides. Without this flag every wasm build of the shared
+# graph fails to compile, so the flag lives here rather than in a script, and
+# CI and a local `cargo build --target wasm32-unknown-unknown` both pick it up.
+#
+# `runner` is what makes `cargo test --target wasm32-unknown-unknown` work: a
+# `.wasm` file is not executable, so cargo hands it to
+# `wasm-bindgen-test-runner`, which serves it to a headless browser over
+# WebDriver. Install it with `cargo install wasm-bindgen-cli`, matching the
+# `wasm-bindgen` version the workspace pins.
+[target.wasm32-unknown-unknown]
+runner = "wasm-bindgen-test-runner"
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+
+[alias]
+xtask = "run --package xtask --"

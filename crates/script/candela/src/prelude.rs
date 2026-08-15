@@ -1,13 +1,14 @@
 //! The Lumen candela prelude: a single `import "lumen.cdl";` line pulls in the
-//! whole [`CandelaHost`](crate::CandelaHost) builtin surface, so a `.cdl` app never
-//! has to hand-write a `host "lumen" { ... }` block.
+//! whole Lumen builtin surface, so a `.cdl` app never has to hand-write a
+//! `host "lumen" { ... }` block.
 //!
 //! candela's own `import "name.cdl";` reads a file off disk, next to the
 //! importing source with a fallback to the embedder's import search path. Lumen
-//! resolves the prelude ahead of that: the [`CandelaHost`](crate::CandelaHost)
-//! source-preparation step ([`resolve_prelude`]) detects the sentinel import
-//! statement and splices the embedded host block in before the source reaches
-//! [`candela::Engine::compile`], so candela only ever sees the `host` block.
+//! resolves the prelude ahead of that: [`resolve_prelude`] detects the sentinel
+//! import statement and splices the embedded host block in before the source
+//! reaches the compiler, so candela only ever sees the `host` block. Every path
+//! that compiles Lumen candela goes through it, so a program built to a `.cdlb`
+//! declares exactly what a program compiled in process does.
 //!
 //! Opt-in is preserved: a source without the import gets no builtins. candela
 //! resolves host fns lazily, so such a source still loads; calling
@@ -20,7 +21,7 @@ use std::borrow::Cow;
 pub const PRELUDE_MODULE: &str = "lumen.cdl";
 
 /// The embedded prelude source: a `host "lumen" { ... }` block declaring every
-/// builtin [`CandelaHost`](crate::CandelaHost) registers. Kept in lock-step with
+/// builtin the crate registers. Kept in lock-step with
 /// [`BUILTINS`](crate::BUILTINS) by the `prelude_declares_every_builtin` test.
 pub const PRELUDE_SOURCE: &str = include_str!("../prelude/lumen.cdl");
 

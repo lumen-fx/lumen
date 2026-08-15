@@ -32,7 +32,7 @@ pub const NATIVE_NAMESPACE: &str = "native";
 /// A surface that binds candela `host` declarations to Rust closures.
 ///
 /// Implemented by `candela_vm::HostRegistry` (the artifact path) and, with the
-/// `compiler` feature, by [`candela::Engine`] (the from-source path). Both
+/// `compiler` feature, by candela's `Engine` (the from-source path). Both
 /// derive a closure's signature the same way and check it against the same
 /// declaration, so a builtin registered through this trait behaves identically
 /// whichever host runs it.
