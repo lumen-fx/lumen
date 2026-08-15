@@ -5,7 +5,8 @@ with different values, and includes, for splitting one long file into several.
 
 ## Templates
 
-Define a template once, then instantiate it wherever you need it:
+A `<template>` declares a named subtree with parameters. Declare it once, then
+instantiate it wherever you need it:
 
 ```html
 <root>
@@ -24,10 +25,10 @@ Define a template once, then instantiate it wherever you need it:
 </root>
 ```
 
-Each `{name}` marker in the body is replaced by the matching attribute from the
-use site. Markers work anywhere in the body, including inside `id`, `class`, and
-`src` values, which is how the example above gives each instance a distinct id
-and image.
+Each `{name}` marker in the body takes the value the use site binds to that
+name. Markers work in any attribute value and in text, which is how the example
+above gives each instance its own id and image. A marker written where a tag
+name goes is not markup, and fails the build.
 
 A marker is substituted once, when the instance is created, and the value stays
 put after that. For text that changes while the app runs, bind inside the
@@ -36,7 +37,11 @@ template body (`bind-text="$status"`, see
 `bind-*` attribute cannot read a marker, and the `$arg.<name>` form is refused.
 
 The `<template>` block itself never renders. It is stripped from the tree, so
-where you put it in the file does not matter.
+where you put it in the file does not matter, and a use site may come before
+the declaration.
+
+A template and a markup block in a script are the same thing: both declare a
+fragment, and both instantiate the same way.
 
 ### Two ways to instantiate
 
@@ -48,10 +53,11 @@ prefer for a shared page layout.
 Do not name a template after a built-in tag. A template named `button` takes
 over every `<button>` in the app.
 
-### Defaults
+### Parameters and defaults
 
-Attributes on the `<template>` tag, other than `name`, fill in markers the use
-site leaves out:
+Every marker the body reads is a parameter. Attributes on the `<template>` tag,
+other than `name`, give a parameter its default, which fills in wherever the use
+site leaves that name unbound:
 
 ```html
 <template name="chip" icon="dot" tone="neutral">
@@ -65,9 +71,10 @@ site leaves out:
 <chip label="Failed" tone="danger" icon="warning"/>
 ```
 
-Supply every marker either at the use site or as a default. A marker with no
-value is left in the markup as written, and shows up later as a parse error or
-as literal text.
+Bind every marker either at the use site or as a default. A marker with neither
+stays in the markup as written, where it reads as a
+[global signal](reactivity.md) like any other `{marker}` in the tree, and shows
+up as literal text when no signal by that name is set.
 
 ### Slots
 
@@ -88,8 +95,8 @@ This is what makes a shared frame possible:
 </card>
 ```
 
-When the use site is self-closing, or has no children, the slot falls back to
-its own content:
+When the use site is self-closing, or has no content, the slot falls back to
+its own:
 
 ```html
 <slot><label text="Empty"/></slot>
@@ -121,14 +128,13 @@ answer to the same id.
 
 ### Templates using templates
 
-A template body can instantiate other templates. Expansion repeats until nothing
-is left to expand, so order of definition does not matter. A template that
-instantiates itself, directly or through a chain, fails the build rather than
-looping.
+A template body can instantiate other templates, up to 64 levels deep. A
+template that instantiates itself, directly or through a chain, fails the build
+with the chain named.
 
 ### Where templates are visible
 
-A template is visible to the whole file it is defined in, and to any file that
+A template is visible to the whole file it is declared in, and to any file that
 includes it.
 
 In a [multi-page app](pages.md), templates are visible app-wide: a
@@ -164,6 +170,10 @@ Every page then wraps its content in it:
 </root>
 ```
 
+Two files declaring the same template name with different bodies fails the
+build: the set is app-wide, so either answer would change what half the use
+sites render.
+
 ## Includes
 
 An include splices another file's markup into this one at that exact spot:
@@ -181,8 +191,8 @@ The included file holds bare markup, not a document; it does not need its own
 `<root>`. Paths are relative to the file doing the including, includes may
 nest, and a cycle fails the build with the whole chain named.
 
-Includes are resolved before templates are expanded, so a `<template>` defined
-in an included file is usable in the file that included it. This is the way to
+Includes are resolved before anything else, so a `<template>` declared in an
+included file is usable in the file that included it. This is the way to
 keep a component library in its own file:
 
 ```html

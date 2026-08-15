@@ -136,8 +136,8 @@ Included files are watched, so editing a fragment reloads the running app.
 </root>
 ```
 
-Includes are resolved before templates are expanded, which means a
-`<template>` defined in an included file is usable from every file in the app.
+Includes are resolved before parsing, which means a `<template>` declared in
+an included file is usable from every file in the app.
 For reusable parameterised chunks, see [Composition](composition.md).
 
 ## Attaching a script

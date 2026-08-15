@@ -57,7 +57,7 @@ Multi-page navigation. See [Pages](../guides/pages.md).
 | `include` | array of strings | directory discovery | Explicit ordered page-file list. When set, only these files are pages. |
 
 Without `include`, every `.lmn` file in the app directory is a page except
-`layout.lmn`, which contributes its `<template>` preamble to every page
+`layout.lmn`, which contributes its `<template>` declarations to every page
 instead of becoming one.
 
 The entry key resolves in this order: `[pages] entry` when it names an

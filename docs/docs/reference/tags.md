@@ -11,7 +11,8 @@ unknown attribute is dropped with a warning, so forward-compatible markup
 still parses and a typo is still reported. Attributes on a custom widget tag
 are exempt: the widget reads its own props out of them.
 
-Element nesting is capped at 32 levels, as is template-expansion depth.
+Element nesting is capped at 32 levels; a template instantiating other
+templates is capped at 64 levels of nesting.
 
 ## Value forms
 
@@ -57,8 +58,9 @@ Bare `{name}` still works; the compiler emits an informational lint
 suggesting the explicit form. Placeholders that match nothing resolve to
 an empty string.
 
-`{k}` placeholders inside a `<template>` body are a separate, textual
-substitution performed at expansion time. See [Composition](../guides/composition.md).
+A `{k}` placeholder inside a `<template>` body reads the parameter `k`, and
+falls back to the global signal `k` when no use site binds it. See
+[Composition](../guides/composition.md).
 
 ## Common attributes
 
@@ -515,29 +517,30 @@ Mounts its children conditionally.
 
 ### `<template>`, `<use>`, and `<slot>`
 
-`<template name="Card">...</template>` defines a reusable subtree.
+`<template name="Card">...</template>` declares a reusable subtree.
 Instantiate it as `<Card k="v"/>` or `<use template="Card" k="v"/>`.
-`{k}` placeholders in the body are replaced with the matching attribute
-value. Attributes on the `<template>` tag itself (other than `name`) are
-defaults for placeholders the use site omits.
+Every `{k}` placeholder in the body is a parameter, and takes the value
+the use site binds to `k`. Attributes on the `<template>` tag itself
+(other than `name`) are defaults for the parameters a use site leaves
+unbound; a parameter with neither reads the global signal `k`.
+Placeholders resolve in attribute values and text, not in tag names.
 
-`<slot/>` inside a template body is replaced with the children of the use
-site. When the use site has no children, the slot falls back to its
+`<slot/>` inside a template body is replaced with the content of the use
+site. When the use site has none, the slot falls back to its
 `default="..."` attribute and then to its own inner content.
 
-Giving the use site an `id` prefixes every `id` inside the expanded body
-with it, so multiple instances keep distinct ids. Expansion runs to a
-fixed point, so templates may use other templates, up to 32 levels.
+Giving the use site an `id` prefixes every `id` inside the instantiated
+body with it, so multiple instances keep distinct ids. Templates may
+instantiate other templates, up to 64 levels; a cycle is an error.
 
-Templates are expanded before parsing, so a template defined in an
-included file is usable everywhere.
+A declaration is visible to the whole file, wherever it sits in it, to any
+file that includes that file, and app-wide in a multi-page app.
 
 ### `<include>`
 
 `<include src="parts/header.lmn"/>` splices another file's markup in
 place. Paths are relative to the including file. Includes resolve before
-template expansion and before parsing, they nest, and a cycle is an
-error. Included files are watched for hot reload.
+parsing, they nest, and a cycle is an error. Included files are watched for hot reload.
 
 ### `<script>`
 
