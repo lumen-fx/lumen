@@ -30,6 +30,7 @@ _lumenc_commands() {
         'lint:Lint the running app, or lint sources offline'
         'diff:Show what changed in the running app'
         'screenshot:Capture the running app to a PNG'
+        'web:Emit the app as a static site'
         'bundle:Pack an app, or build a trimmed runtime for it'
         'package:Assemble a folder to ship'
         'i18n:Translation catalogue tooling'
@@ -176,6 +177,20 @@ _lumenc() {
                         '--bounds[Also write the entity bounds map as JSON]:file:_files' \
                         '--help[Show help]' \
                         '1:output png:_files -g "*.png"'
+                    ;;
+                web)
+                    _arguments \
+                        '--out[Where the site is written]:directory:_directories' \
+                        '--base[URL prefix the site is served under]:path:' \
+                        '*--locale[Locale to emit a document tree for]:tag:' \
+                        '--prerender[Where the rendered state comes from]:mode:(seeds none)' \
+                        '--no-hooks[Skip the prebuild hooks]' \
+                        '--lib-dir[Directory holding the browser runtime]:directory:_directories' \
+                        '--strict[Fail the build on any warning]' \
+                        '--serve[Serve the site and print the URL]' \
+                        '--port[Port to serve on]:port:' \
+                        '--help[Show help]' \
+                        '1:app directory:_directories'
                     ;;
                 bundle)
                     _arguments \

@@ -66,6 +66,11 @@ fn dispatch(cmd: &str, args: Vec<String>) -> ExitCode {
         "diff" => lumenc::mcp_cli::cmd_diff(args),
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
         "screenshot" => lumenc::mcp_cli::cmd_screenshot(args),
+        // `web` compiles the app in-process the way `build` does, then emits
+        // it as a site, so it carries the same parser + runtime gates plus
+        // its own.
+        #[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "web"))]
+        "web" => lumenc::web_cli::cmd_web(args),
         #[cfg(feature = "bundle")]
         "bundle" => lumenc::bundle_cli::cmd_bundle(args),
         // `package` compiles the app in-process, so it needs the same parser +
@@ -968,6 +973,26 @@ USAGE:
                           platform's files from the release channel into a
                           per-version cache; --lib-dir points at a directory
                           holding them instead.
+                          Runs `lumen.toml`'s `[[hooks]]` `prebuild` entries
+                          first; --no-hooks skips them.
+    lumenc web <app_dir> [--out DIR] [--base PATH] [--locale TAG]...
+                         [--prerender seeds|none] [--no-hooks]
+                         [--lib-dir DIR] [--strict] [--serve [--port N]]
+                          Emit the app as a static site: one HTML document
+                          per page with the markup already in it, the
+                          stylesheet, the compiled app, the browser runtime
+                          and the app's assets.
+                          --out sets where the site is written (default:
+                          lumen.toml [web] out_dir, else dist/web);
+                          --base is the URL prefix it is served under;
+                          --locale emits a document tree per locale, the
+                          first at the site root; --prerender says where
+                          the state the pages are rendered with comes from;
+                          --lib-dir points at a directory holding
+                          lumen-web.wasm and lumen-web.js; --strict fails
+                          the build on any warning; --serve serves the
+                          result on 127.0.0.1 and prints the URL, with
+                          --port to choose the port (0 picks a free one).
                           Runs `lumen.toml`'s `[[hooks]]` `prebuild` entries
                           first; --no-hooks skips them.
     lumenc bundle <app_dir> <out.lpak> [--no-hooks]

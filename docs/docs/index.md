@@ -101,7 +101,7 @@ anything you depend on.
   [OS integration](guides/os-integration.md),
   [internationalisation](guides/i18n.md),
   [accessibility](guides/accessibility.md), [packaging](guides/packaging.md),
-  and [testing](guides/testing.md).
+  [the web](guides/web.md), and [testing](guides/testing.md).
 - **Reference** is for lookup once you know what you are doing: every
   [tag](reference/tags.md), every [CSS form](reference/css.md), every
   [config key](reference/lumen-toml.md), every

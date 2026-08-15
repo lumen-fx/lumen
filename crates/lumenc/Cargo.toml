@@ -67,6 +67,16 @@ bincode.workspace = true
 # custom tags after the built-in KNOWN_TAGS miss.
 lumen-widget = { path = "../widget", version = "0.0.3" }
 
+# `lumenc web` - the static-site emitter and the HTML contract it writes
+# against. OPTIONAL behind the default-on `web` feature; both are small and
+# pull nothing heavier than serde, but a thin compiler library that emits no
+# site drops them.
+lumen-html = { path = "../html", version = "0.0.3", optional = true }
+lumen-web = { path = "../web", version = "0.0.3", optional = true }
+# `lumenc web` resolves an app's translations at build time, so a page reads
+# in its language with nothing running.
+lumen-i18n = { path = "../i18n", version = "0.0.3", optional = true }
+
 # `lumenc package --target <another platform>`: fetch that platform's
 # toolchain files from the release channel, check them against the release's
 # published checksums, and read the two files needed out of the archive.
@@ -107,11 +117,6 @@ image.workspace = true
 # driven fully in-process - never a real window. Test-only, so these never
 # reach `lumen-lsp` or the release binary.
 [dev-dependencies]
-# web_css.rs checks the web target's stylesheet against the two things it
-# has to agree with and cannot see from inside: the per-tag defaults the
-# markup parser bakes in, and the skins this crate parses.
-lumen-html = { path = "../html" }
-lumen-web = { path = "../web" }
 lumen-render-wgpu = { path = "../backends/render-wgpu" }
 lumen-core = { path = "../core" }
 lumen-os-dnd = { path = "../os/dnd" }
@@ -143,7 +148,11 @@ bevy_ecs.workspace = true
 glam.workspace = true
 
 [features]
-default = ["http-fetch", "runtime-parse", "dev-run", "bundle", "package"]
+default = ["http-fetch", "runtime-parse", "dev-run", "bundle", "package", "web"]
+# `lumenc web` - emit the app as a static site. ON by default. It finds the
+# prebuilt browser runtime through the same release-channel search `package`
+# uses, so it turns that on too.
+web = ["dep:lumen-html", "dep:lumen-web", "dep:lumen-i18n", "package"]
 # `lumenc package` - assemble a shippable app folder (launcher stub + the
 # app's compiled artifact + liblumen + the app's files). ON by default. The
 # deps it pulls are for `--target`, which fetches another platform's toolchain

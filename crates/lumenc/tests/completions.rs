@@ -215,6 +215,7 @@ fn every_completed_flag_exists_in_that_subcommand_s_help() {
         "lint",
         "diff",
         "screenshot",
+        "web",
         "bundle",
         "package",
         "i18n",

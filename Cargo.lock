@@ -3982,6 +3982,7 @@ dependencies = [
  "lumen-core",
  "lumen-devtools",
  "lumen-html",
+ "lumen-i18n",
  "lumen-ir",
  "lumen-mcp",
  "lumen-os-dnd",

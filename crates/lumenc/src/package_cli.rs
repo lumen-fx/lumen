@@ -847,6 +847,10 @@ pub struct WebRuntimeFiles {
 /// The runtime is one prebuilt pair for every app and every platform, so
 /// unlike a package there is no target to pick: a web build on any machine
 /// wants the same two files.
+///
+/// A `--lib-dir` says where the files are, so a build that names one and
+/// comes up empty is answered rather than fetched: the caller already
+/// decided which copy it wants.
 pub fn locate_web_runtime(lib_dir_flag: Option<&Path>) -> Result<WebRuntimeFiles, String> {
     let wanted = [WEB_WASM.to_string(), WEB_JS.to_string()];
     let cache = cache_dir_for(WEB_COMPONENT);
@@ -857,6 +861,12 @@ pub fn locate_web_runtime(lib_dir_flag: Option<&Path>) -> Result<WebRuntimeFiles
             wasm: dir.join(&wanted[0]),
             js: dir.join(&wanted[1]),
         });
+    }
+    if let Some(dir) = lib_dir_flag {
+        return Err(format!(
+            "cannot find {WEB_WASM} and {WEB_JS} in {}.",
+            dir.display()
+        ));
     }
     if let Some(dir) = cache {
         fetch_release_files(

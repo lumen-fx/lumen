@@ -28,6 +28,7 @@ complete -c lumenc -n __fish_use_subcommand -a scroll -d 'Inject a wheel event'
 complete -c lumenc -n __fish_use_subcommand -a lint -d 'Lint the running app, or lint sources offline'
 complete -c lumenc -n __fish_use_subcommand -a diff -d 'Show what changed in the running app'
 complete -c lumenc -n __fish_use_subcommand -a screenshot -d 'Capture the running app to a PNG'
+complete -c lumenc -n __fish_use_subcommand -a web -d 'Emit the app as a static site'
 complete -c lumenc -n __fish_use_subcommand -a bundle -d 'Pack an app, or build a trimmed runtime for it'
 complete -c lumenc -n __fish_use_subcommand -a package -d 'Assemble a folder to ship'
 complete -c lumenc -n __fish_use_subcommand -a i18n -d 'Translation catalogue tooling'
@@ -110,6 +111,19 @@ complete -c lumenc -n '__fish_seen_subcommand_from screenshot' -F
 complete -c lumenc -n '__fish_seen_subcommand_from screenshot' -l highlight -x -d 'Outline these entity ids'
 complete -c lumenc -n '__fish_seen_subcommand_from screenshot' -l lint -d 'Outline every lint finding'
 complete -c lumenc -n '__fish_seen_subcommand_from screenshot' -l bounds -rF -d 'Also write the entity bounds map as JSON'
+
+# --- web ---------------------------------------------------------------------
+
+complete -c lumenc -n '__fish_seen_subcommand_from web' -a '(__fish_complete_directories)'
+complete -c lumenc -n '__fish_seen_subcommand_from web' -l out -xa '(__fish_complete_directories)' -d 'Where the site is written'
+complete -c lumenc -n '__fish_seen_subcommand_from web' -l base -x -d 'URL prefix the site is served under'
+complete -c lumenc -n '__fish_seen_subcommand_from web' -l locale -x -d 'Locale to emit a document tree for'
+complete -c lumenc -n '__fish_seen_subcommand_from web' -l prerender -x -a 'seeds none' -d 'Where the rendered state comes from'
+complete -c lumenc -n '__fish_seen_subcommand_from web' -l no-hooks -d 'Skip the prebuild hooks'
+complete -c lumenc -n '__fish_seen_subcommand_from web' -l lib-dir -xa '(__fish_complete_directories)' -d 'Directory holding the browser runtime'
+complete -c lumenc -n '__fish_seen_subcommand_from web' -l strict -d 'Fail the build on any warning'
+complete -c lumenc -n '__fish_seen_subcommand_from web' -l serve -d 'Serve the site and print the URL'
+complete -c lumenc -n '__fish_seen_subcommand_from web' -l port -x -d 'Port to serve on'
 
 # --- bundle -------------------------------------------------------------------
 

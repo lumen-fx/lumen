@@ -25,6 +25,22 @@ pub fn compile_app(
     dir: &Path,
     parser: &dyn SourceParser,
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
+    compile_app_with_skin(dir, parser, None)
+}
+
+/// [`compile_app`] with the skin named outright instead of read from
+/// `lumen.toml`.
+///
+/// One caller needs that: a site is built once and served to every OS, so it
+/// cannot let `[skin] name = "auto"` resolve against whichever machine ran
+/// the build. Everything else compiles an app for the machine it will run
+/// on and calls [`compile_app`].
+#[cfg(feature = "runtime-parse")]
+pub fn compile_app_with_skin(
+    dir: &Path,
+    parser: &dyn SourceParser,
+    skin: Option<&str>,
+) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
     // The same discovery the run path does, so compiling sees the app the way
     // running it does: the entry file it would open, and every sibling page.
@@ -32,7 +48,7 @@ pub fn compile_app(
     let html_path = plan.entry_file.clone();
     let css_path = dir.join("main.css");
     let asset_roots = cfg.resolved_asset_roots(dir);
-    let skin_override = cfg.skin.name.clone();
+    let skin_override = skin.map(str::to_string).or_else(|| cfg.skin.name.clone());
     let loaded = load_ir(
         parser,
         &html_path,
