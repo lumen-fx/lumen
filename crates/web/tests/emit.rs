@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use lumen_html::contract::{DEFAULT_MANIFEST_FILE, LM_CONTRACT_VERSION, Manifest, Seed, SeedValue};
+use lumen_html::contract::{
+    DEFAULT_CSS_FILE, DEFAULT_MANIFEST_FILE, LM_CONTRACT_VERSION, Manifest, Seed, SeedValue,
+};
 use lumen_ir::layout_ir::{Attributes, Element, IfModeSpec, LayoutIR};
 use lumen_web::{EmitError, LocaleSpec, PageSpec, SignalEnv, Site, SiteSpec, WebSpec, emit};
 
@@ -131,7 +133,7 @@ fn assert_well_formed(html: &str) {
 }
 
 #[test]
-fn a_site_is_a_document_per_page_and_one_manifest() {
+fn a_site_is_a_document_per_page_plus_the_stylesheet_and_the_manifest() {
     let site = emitted(&site(vec![
         simple_page(),
         PageSpec::new(
@@ -142,7 +144,12 @@ fn a_site_is_a_document_per_page_and_one_manifest() {
     let paths: Vec<&str> = site.files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(
         paths,
-        vec!["index.html", "settings.html", DEFAULT_MANIFEST_FILE]
+        vec![
+            "index.html",
+            "settings.html",
+            DEFAULT_CSS_FILE,
+            DEFAULT_MANIFEST_FILE
+        ]
     );
 
     let manifest: Manifest =

@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use lumen_core::components::Color;
 use lumen_core::property_store::PropertyValue;
+use lumen_ir::css::WebNames;
 use serde::{Deserialize, Serialize};
 
 /// Version of the emitter/runtime contract: node paths, `data-lm-*`
@@ -88,6 +89,23 @@ pub const DEFAULT_WASM_FILE: &str = "lumen-web.wasm";
 
 /// File name of the JavaScript module that loads the wasm runtime.
 pub const DEFAULT_JS_FILE: &str = "lumen-web.js";
+
+/// The names a selector written for a browser needs, gathered for
+/// [`lumen_ir::css::selector_to_web`].
+///
+/// A stylesheet reaches the browser through `lumen-ir`, which cannot
+/// depend on this crate and so cannot know that a `<row>` is `.lm-row` or
+/// that `:selected` is an attribute here. Hand it this rather than writing
+/// the names out a second time.
+pub fn web_names() -> WebNames<'static> {
+    WebNames {
+        tag_class_prefix: crate::tags::LM_CLASS_PREFIX,
+        selected: DATA_LM_SELECTED,
+        checked: DATA_LM_CHECKED,
+        disabled: DATA_LM_DISABLED,
+        drag_over: DATA_LM_DRAG_OVER,
+    }
+}
 
 /// One step of a [`NodePath`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -625,6 +643,20 @@ mod tests {
         assert!(!block.contains('<'));
         let from_block: Seed = serde_json::from_str(&block).expect("deserializes");
         assert_eq!(from_block, seed);
+    }
+
+    /// `lumen-ir` keeps a copy of these names in its own tests, because it
+    /// cannot depend on this crate to read them. This is the assertion
+    /// that the copy is still the same set.
+    #[test]
+    fn the_names_a_web_selector_needs_are_the_ones_a_document_carries() {
+        let names = web_names();
+        assert_eq!(names.tag_class_prefix, "lm-");
+        assert_eq!(names.selected, DATA_LM_SELECTED);
+        assert_eq!(names.checked, DATA_LM_CHECKED);
+        assert_eq!(names.disabled, DATA_LM_DISABLED);
+        assert_eq!(names.drag_over, DATA_LM_DRAG_OVER);
+        assert_eq!(crate::tags::lm_class("row"), "lm-row");
     }
 
     #[test]

@@ -2291,53 +2291,70 @@ pub fn computed_style_map(attrs: &Attributes) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The names a browser knows a Lumen element by.
+///
+/// Two things Lumen spells in the selector itself have no browser
+/// equivalent: an element's tag, which survives into the document only as
+/// a class, and the four states no CSS pseudo-class covers. The web target
+/// owns both names, and this crate must not depend on it, so
+/// [`selector_to_web`] takes them from the caller. Hand it
+/// `lumen_html::web_names()` rather than writing the strings out again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebNames<'a> {
+    /// Prefix of the class every element carries for its tag: with
+    /// `lm-`, a `<row>` is `.lm-row`.
+    pub tag_class_prefix: &'a str,
+    /// Attribute mirroring `:selected`.
+    pub selected: &'a str,
+    /// Attribute mirroring `:checked` on an element that is not a real
+    /// HTML checkbox.
+    pub checked: &'a str,
+    /// Attribute mirroring `:disabled` on an element that takes no HTML
+    /// `disabled`.
+    pub disabled: &'a str,
+    /// Attribute mirroring `:drag-over`.
+    pub drag_over: &'a str,
+}
+
+/// Which spelling of a selector [`write_selector`] writes.
+enum Spelling<'a> {
+    /// Lumen's own, as authored.
+    Lumen,
+    /// The browser's, for the web target.
+    Web(WebNames<'a>),
+}
+
 /// Serialize a compiled [`SelectorBuf`] back to CSS-ish text for the
 /// dynamic DOM `matched_rules()` provenance view. Reconstructs
 /// `tag#id.class:pseudo` compounds joined by their combinators. Pseudo
 /// arguments (`:nth-child(2n)`, `:is(...)`) render their canonical form.
 pub fn selector_to_css(sel: &SelectorBuf) -> String {
-    fn pseudo(p: &PseudoClass) -> String {
-        match p {
-            PseudoClass::Hover => ":hover".into(),
-            PseudoClass::Focus => ":focus".into(),
-            PseudoClass::FocusVisible => ":focus-visible".into(),
-            PseudoClass::Active => ":active".into(),
-            PseudoClass::Disabled => ":disabled".into(),
-            PseudoClass::Checked => ":checked".into(),
-            PseudoClass::Selected => ":selected".into(),
-            PseudoClass::DragOver => ":drag-over".into(),
-            PseudoClass::Root => ":root".into(),
-            PseudoClass::FirstChild => ":first-child".into(),
-            PseudoClass::LastChild => ":last-child".into(),
-            PseudoClass::OnlyChild => ":only-child".into(),
-            PseudoClass::Empty => ":empty".into(),
-            PseudoClass::NthChild(anb) => format!(":nth-child({}n+{})", anb.a, anb.b),
-            PseudoClass::Is(args) => format!(":is({})", join_selectors(args)),
-            PseudoClass::Where(args) => format!(":where({})", join_selectors(args)),
-            PseudoClass::Not(args) => format!(":not({})", join_selectors(args)),
-        }
-    }
-    fn compound(c: &CompoundSelector) -> String {
-        let mut s = String::new();
-        if let Some(tag) = &c.tag {
-            s.push_str(tag);
-        } else if c.id.is_none() && c.classes.is_empty() && c.pseudo_classes.is_empty() {
-            s.push('*');
-        }
-        if let Some(id) = &c.id {
-            s.push('#');
-            s.push_str(id);
-        }
-        for class in &c.classes {
-            s.push('.');
-            s.push_str(class);
-        }
-        for p in &c.pseudo_classes {
-            s.push_str(&pseudo(p));
-        }
-        s
-    }
     let mut out = String::new();
+    write_selector(&mut out, sel, &Spelling::Lumen);
+    out
+}
+
+/// Serialize a compiled [`SelectorBuf`] as the selector that picks the
+/// same elements out of an emitted HTML document.
+///
+/// Three things change and nothing else does. A tag becomes the class the
+/// document carries it as, wrapped in `:where()` so it keeps contributing
+/// nothing to specificity: Lumen orders a tag rule under a class rule, and
+/// without the wrapper the shift from `row` to `.lm-row` would invert that.
+/// The four states the browser has no selector for become the attributes
+/// the runtime mirrors them onto. `:checked` and `:disabled` become
+/// `:is(<the real one>, <the mirror>)`, because a real checkbox is checked
+/// in the browser's own eyes and a `<toggle>` is not.
+///
+/// Everything else, structural pseudo-classes and selector-list arguments
+/// included, is the same text [`selector_to_css`] writes.
+pub fn selector_to_web(sel: &SelectorBuf, names: &WebNames<'_>) -> String {
+    let mut out = String::new();
+    write_selector(&mut out, sel, &Spelling::Web(*names));
+    out
+}
+
+fn write_selector(out: &mut String, sel: &SelectorBuf, spelling: &Spelling<'_>) {
     for (comb, comp) in &sel.chain {
         match comb {
             Combinator::Subject => {}
@@ -2346,16 +2363,114 @@ pub fn selector_to_css(sel: &SelectorBuf) -> String {
             Combinator::AdjacentSibling => out.push_str(" + "),
             Combinator::GeneralSibling => out.push_str(" ~ "),
         }
-        out.push_str(&compound(comp));
+        write_compound(out, comp, spelling);
     }
-    out
 }
 
-fn join_selectors(sels: &[SelectorBuf]) -> String {
-    sels.iter()
-        .map(selector_to_css)
-        .collect::<Vec<_>>()
-        .join(", ")
+fn write_compound(out: &mut String, c: &CompoundSelector, spelling: &Spelling<'_>) {
+    if let Some(tag) = &c.tag {
+        match spelling {
+            Spelling::Lumen => out.push_str(tag),
+            Spelling::Web(names) => {
+                out.push_str(":where(.");
+                out.push_str(names.tag_class_prefix);
+                out.push_str(tag);
+                out.push(')');
+            }
+        }
+    } else if c.id.is_none() && c.classes.is_empty() && c.pseudo_classes.is_empty() {
+        out.push('*');
+    }
+    if let Some(id) = &c.id {
+        out.push('#');
+        out.push_str(id);
+    }
+    for class in &c.classes {
+        out.push('.');
+        out.push_str(class);
+    }
+    for p in &c.pseudo_classes {
+        write_pseudo(out, p, spelling);
+    }
+}
+
+fn write_pseudo(out: &mut String, p: &PseudoClass, spelling: &Spelling<'_>) {
+    let names = match spelling {
+        Spelling::Lumen => None,
+        Spelling::Web(names) => Some(names),
+    };
+    match p {
+        PseudoClass::Hover => out.push_str(":hover"),
+        PseudoClass::Focus => out.push_str(":focus"),
+        PseudoClass::FocusVisible => out.push_str(":focus-visible"),
+        PseudoClass::Active => out.push_str(":active"),
+        PseudoClass::Disabled => match names {
+            Some(names) => {
+                out.push_str(":is(:disabled, [");
+                out.push_str(names.disabled);
+                out.push_str("])");
+            }
+            None => out.push_str(":disabled"),
+        },
+        PseudoClass::Checked => match names {
+            Some(names) => {
+                out.push_str(":is(:checked, [");
+                out.push_str(names.checked);
+                out.push_str("])");
+            }
+            None => out.push_str(":checked"),
+        },
+        PseudoClass::Selected => match names {
+            Some(names) => {
+                out.push('[');
+                out.push_str(names.selected);
+                out.push(']');
+            }
+            None => out.push_str(":selected"),
+        },
+        PseudoClass::DragOver => match names {
+            Some(names) => {
+                out.push('[');
+                out.push_str(names.drag_over);
+                out.push(']');
+            }
+            None => out.push_str(":drag-over"),
+        },
+        PseudoClass::Root => out.push_str(":root"),
+        PseudoClass::FirstChild => out.push_str(":first-child"),
+        PseudoClass::LastChild => out.push_str(":last-child"),
+        PseudoClass::OnlyChild => out.push_str(":only-child"),
+        PseudoClass::Empty => out.push_str(":empty"),
+        PseudoClass::NthChild(anb) => {
+            out.push_str(":nth-child(");
+            out.push_str(&anb_to_css(*anb));
+            out.push(')');
+        }
+        PseudoClass::Is(args) => write_pseudo_list(out, ":is(", args, spelling),
+        PseudoClass::Where(args) => write_pseudo_list(out, ":where(", args, spelling),
+        PseudoClass::Not(args) => write_pseudo_list(out, ":not(", args, spelling),
+    }
+}
+
+fn write_pseudo_list(out: &mut String, open: &str, args: &[SelectorBuf], spelling: &Spelling<'_>) {
+    out.push_str(open);
+    for (i, arg) in args.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        write_selector(out, arg, spelling);
+    }
+    out.push(')');
+}
+
+/// `an+b` as CSS writes it: no `n` term when `a` is zero, and a negative
+/// `b` written as the subtraction it is rather than as `+-`.
+fn anb_to_css(anb: AnB) -> String {
+    if anb.a == 0 {
+        return anb.b.to_string();
+    }
+    let sign = if anb.b < 0 { '-' } else { '+' };
+    format!("{}n{sign}{}", anb.a, anb.b.unsigned_abs())
 }
 
 /// Serialize a [`MediaQuery`] back to the condition text that follows
@@ -3078,7 +3193,11 @@ fn apply_decl_for_pseudo(
 /// [`canonical_property_name`]. A property added to the cascade is added
 /// here in the same change, or a consumer that sorts declarations by kind
 /// takes it for something the cascade ignores.
-const STYLE_PROPERTIES: &[&str] = &[
+///
+/// Names here are canonical, so a consumer walking the list to prove it
+/// handles every property runs its own input through
+/// [`canonical_property_name`] first.
+pub const STYLE_PROPERTIES: &[&str] = &[
     "width",
     "height",
     "bg",
@@ -3232,7 +3351,7 @@ pub fn canonical_style_property(name: &str) -> Option<&'static str> {
 
 /// Map standard CSS property names onto Lumen's native slots so real-world
 /// stylesheets work as written. The Lumen short names stay accepted.
-fn canonical_property_name(name: &str) -> &str {
+pub fn canonical_property_name(name: &str) -> &str {
     match name {
         "color" => "text-color",
         "background" | "background-color" => "bg",
@@ -5647,5 +5766,124 @@ mod style_property_tests {
                 "`{name}` is not a property the cascade applies"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod selector_text_tests {
+    use super::*;
+
+    /// The names `lumen-html` hands in. They are spelled out again here so
+    /// a change on either side shows up as a failing test on the other;
+    /// the crate that owns them checks this copy against its constants.
+    const WEB: WebNames<'static> = WebNames {
+        tag_class_prefix: "lm-",
+        selected: "data-lm-selected",
+        checked: "data-lm-checked",
+        disabled: "data-lm-disabled",
+        drag_over: "data-lm-drag-over",
+    };
+
+    fn one(src: &str) -> SelectorBuf {
+        parse_selector_list(src)
+            .unwrap_or_else(|e| panic!("`{src}` does not parse: {e}"))
+            .remove(0)
+    }
+
+    fn web(src: &str) -> String {
+        selector_to_web(&one(src), &WEB)
+    }
+
+    /// The universal selector has no authored form the parser accepts on
+    /// its own, so it is built rather than parsed.
+    fn universal() -> SelectorBuf {
+        SelectorBuf {
+            chain: vec![(Combinator::Subject, CompoundSelector::default())],
+        }
+    }
+
+    #[test]
+    fn the_universal_selector_is_a_star_in_both_spellings() {
+        assert_eq!(selector_to_css(&universal()), "*");
+        assert_eq!(selector_to_web(&universal(), &WEB), "*");
+    }
+
+    #[test]
+    fn lumen_spelling_round_trips_what_was_authored() {
+        for src in [
+            "button",
+            "button#save.primary:hover",
+            ".outer .inner > .x",
+            ".a + .b ~ .c",
+            ".row:not(.list > .row)",
+            ":is(button, a):focus-visible",
+        ] {
+            assert_eq!(selector_to_css(&one(src)), src);
+        }
+    }
+
+    #[test]
+    fn a_tag_becomes_its_class_at_no_specificity() {
+        assert_eq!(web("button"), ":where(.lm-button)");
+        assert_eq!(web("root"), ":where(.lm-root)");
+        assert_eq!(web("row > label"), ":where(.lm-row) > :where(.lm-label)");
+        // The wrapper is what keeps a tag rule under a class rule: the
+        // tag counts as `c` here and would count as a class without it.
+        assert_eq!(
+            one("button").specificity(),
+            Specificity { a: 0, b: 0, c: 1 }
+        );
+    }
+
+    #[test]
+    fn classes_ids_and_structural_pseudos_are_left_alone() {
+        assert_eq!(web("#save"), "#save");
+        assert_eq!(web(".card:first-child"), ".card:first-child");
+        assert_eq!(
+            web("tile.card#main:hover"),
+            ":where(.lm-tile)#main.card:hover"
+        );
+        for src in [":focus", ":focus-visible", ":active", ":empty", ":root"] {
+            assert_eq!(web(&format!(".x{src}")), format!(".x{src}"));
+        }
+    }
+
+    #[test]
+    fn the_states_the_browser_cannot_see_become_their_mirrors() {
+        assert_eq!(web(".tab:selected"), ".tab[data-lm-selected]");
+        assert_eq!(web(".drop:drag-over"), ".drop[data-lm-drag-over]");
+        // A real checkbox is checked in the browser's own eyes; a
+        // `<toggle>` is a button, and only the mirror says so.
+        assert_eq!(web(".t:checked"), ".t:is(:checked, [data-lm-checked])");
+        assert_eq!(web(".t:disabled"), ".t:is(:disabled, [data-lm-disabled])");
+    }
+
+    #[test]
+    fn selector_list_arguments_are_rewritten_too() {
+        assert_eq!(
+            web(":is(button, a)"),
+            ":is(:where(.lm-button), :where(.lm-a))"
+        );
+        assert_eq!(
+            web(".row:not(.list > row:selected)"),
+            ".row:not(.list > :where(.lm-row)[data-lm-selected])"
+        );
+        assert_eq!(
+            web(":where(:not(label))"),
+            ":where(:not(:where(.lm-label)))"
+        );
+    }
+
+    #[test]
+    fn nth_child_is_written_the_way_css_reads_it() {
+        assert_eq!(web(":nth-child(2n+1)"), ":nth-child(2n+1)");
+        assert_eq!(web(":nth-child(odd)"), ":nth-child(2n+1)");
+        assert_eq!(web(":nth-child(3)"), ":nth-child(3)");
+        // `2n+-1` is not something a browser reads.
+        assert_eq!(web(":nth-child(2n-1)"), ":nth-child(2n-1)");
+        assert_eq!(
+            selector_to_css(&one(":nth-child(2n-1)")),
+            ":nth-child(2n-1)"
+        );
     }
 }

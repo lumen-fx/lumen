@@ -70,14 +70,18 @@ pub const MAPPED_TAGS: &[&str] = &[
     "slider",
 ];
 
+/// Prefix of the class an element carries for its tag.
+pub const LM_CLASS_PREFIX: &str = "lm-";
+
 /// True when `html_name` is an HTML void element.
 pub fn is_void(html_name: &str) -> bool {
     VOID_ELEMENTS.contains(&html_name)
 }
 
-/// The class every element of `ir_tag` carries, `lm-` plus the tag name.
+/// The class every element of `ir_tag` carries, [`LM_CLASS_PREFIX`] plus
+/// the tag name.
 pub fn lm_class(ir_tag: &str) -> String {
-    format!("lm-{ir_tag}")
+    format!("{LM_CLASS_PREFIX}{ir_tag}")
 }
 
 /// The HTML element `ir_tag` becomes, or `None` for a tag with no mapping.

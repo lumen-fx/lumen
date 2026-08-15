@@ -107,6 +107,11 @@ image.workspace = true
 # driven fully in-process - never a real window. Test-only, so these never
 # reach `lumen-lsp` or the release binary.
 [dev-dependencies]
+# web_css.rs checks the web target's stylesheet against the two things it
+# has to agree with and cannot see from inside: the per-tag defaults the
+# markup parser bakes in, and the skins this crate parses.
+lumen-html = { path = "../html" }
+lumen-web = { path = "../web" }
 lumen-render-wgpu = { path = "../backends/render-wgpu" }
 lumen-core = { path = "../core" }
 lumen-os-dnd = { path = "../os/dnd" }

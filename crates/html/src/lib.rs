@@ -16,6 +16,7 @@
 pub mod attrs;
 pub mod contract;
 pub mod escape;
+pub mod style;
 pub mod tags;
 
 pub use attrs::{class_list, html_attrs, markup_style};
@@ -25,7 +26,10 @@ pub use contract::{
     DATA_LM_WIDGET, DEFAULT_ARTIFACT_FILE, DEFAULT_CSS_FILE, DEFAULT_JS_FILE,
     DEFAULT_MANIFEST_FILE, DEFAULT_WASM_FILE, Dir, LM_CONTRACT_VERSION, Manifest, NavigationMode,
     NodePath, PathError, PathStep, SEED_SCRIPT_ID, ScriptFormat, ScriptRef, Seed, SeedValue,
-    UnsupportedSeedValue,
+    UnsupportedSeedValue, web_names,
 };
 pub use escape::{escape_attr, escape_text};
-pub use tags::{HtmlTag, MAPPED_TAGS, VOID_ELEMENTS, html_tag_for, is_void, lm_class};
+pub use style::{Emission, WebDecl, rewrite_property};
+pub use tags::{
+    HtmlTag, LM_CLASS_PREFIX, MAPPED_TAGS, VOID_ELEMENTS, html_tag_for, is_void, lm_class,
+};
