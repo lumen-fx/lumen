@@ -253,6 +253,16 @@ impl AppBuilder {
     /// Boot the app and enter the window event loop. Blocks until the
     /// window closes; returns any setup or runtime error.
     pub fn run(self) -> Result<()> {
+        let opts = self.into_run_options()?;
+        lumen_runtime::run_app(opts).map_err(Error::Run)
+    }
+
+    /// Fold the builder into the [`RunOptions`] the runtime boots from.
+    ///
+    /// Separate from [`Self::run`] because everything above the event loop is
+    /// a pure mapping, and a caller (or a test) can look at the result without
+    /// opening a window.
+    fn into_run_options(self) -> Result<RunOptions> {
         let in_memory = self.markup.is_some();
         let dir = match self.dir {
             Some(d) => d,
@@ -305,7 +315,84 @@ impl AppBuilder {
 
         // Inject the compiler's front-end so the runtime can parse the app's
         // markup / CSS from source (it links no parser itself).
-        opts = opts.with_parser(lumenc::default_parser());
-        lumen_runtime::run_app(opts).map_err(Error::Run)
+        Ok(opts.with_parser(lumenc::default_parser()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A directory-backed app carries its sources and window settings into the
+    /// options the runtime boots from.
+    #[test]
+    fn the_builder_folds_into_run_options() {
+        let opts = App::builder()
+            .dir("some/app")
+            .title("Demo")
+            .size(320, 240)
+            .configure(|_app| {})
+            .into_run_options()
+            .expect("a directory is enough to build options");
+
+        assert_eq!(opts.title.as_deref(), Some("Demo"));
+        assert_eq!(opts.size, (320, 240));
+        assert!(opts.hot_reload, "an on-disk app watches its sources");
+    }
+
+    /// In-memory markup disables hot reload: there is no file to watch.
+    #[test]
+    fn embedded_markup_turns_hot_reload_off() {
+        let opts = App::builder()
+            .markup("<root/>")
+            .css("#a { color: #fff; }")
+            .into_run_options()
+            .expect("markup alone resolves against the current directory");
+
+        assert_eq!(opts.markup.as_deref(), Some("<root/>"));
+        assert!(opts.css.is_some());
+        assert!(!opts.hot_reload);
+    }
+
+    /// Neither a directory nor markup is an error, and the message says what
+    /// to call.
+    #[test]
+    fn an_app_with_no_source_is_rejected() {
+        let Err(err) = App::builder().into_run_options() else {
+            panic!("an app with neither a directory nor markup has nothing to render");
+        };
+        assert!(
+            format!("{err}").contains("no UI source"),
+            "unexpected message: {err}"
+        );
+    }
+
+    /// `native_fn` reaches `RunOptions::native_fns`, the channel every script
+    /// host registers from, with the name and arity the caller declared and a
+    /// body that runs.
+    #[test]
+    fn native_fns_reach_the_host_neutral_channel() {
+        let opts = App::builder()
+            .dir("some/app")
+            .native_fn("answer", 0, |_args| ScriptValue::I64(42))
+            .native_fn("shout", 1, |args| {
+                ScriptValue::Str(args[0].stringify().to_uppercase())
+            })
+            .into_run_options()
+            .expect("build options");
+
+        let names: Vec<(&str, usize)> = opts
+            .native_fns
+            .iter()
+            .map(|f| (f.name.as_str(), f.arity))
+            .collect();
+        assert_eq!(names, vec![("answer", 0), ("shout", 1)]);
+
+        let shout = &opts.native_fns[1];
+        assert_eq!(
+            (shout.call)(&[ScriptValue::Str("hi".into())]),
+            ScriptValue::Str("HI".into()),
+            "the closure the caller passed is the one that runs"
+        );
     }
 }
