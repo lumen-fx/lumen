@@ -371,12 +371,6 @@ and applied on the main thread, in the tick that paints their result.
 ## Pluggable backends
 
 Every backend role is a trait, and the trait lives away from any
-<<<<<<< HEAD
-implementation of it. `lumen-core` names the roles: renderer, layout engine,
-window backend, accessibility bridge, task spawner, timer. The shaping trait
-lives in `lumen-text`, the scripting trait in `lumen-script`, the parser trait
-in `lumen-runtime`.
-=======
 implementation of it. The traits in `lumen-core` name the roles: renderer,
 layout engine, window backend, accessibility bridge, task spawner, timer. Some
 are markers that only identify a role; `SurfaceRenderer` and `A11yBackend` also
@@ -384,7 +378,6 @@ declare what a window backend calls on them each frame, which is what lets one
 window backend drive any renderer and any accessibility bridge. The shaping
 trait lives in `lumen-text`, the scripting trait in `lumen-script`, the parser
 trait in `lumen-runtime`.
->>>>>>> 58c2d1d3 (Document the presentation and accessibility seams)
 
 An implementation crate depends on the trait crate and ships a plugin that
 installs itself. Nothing depends on an implementation crate except the assembly
