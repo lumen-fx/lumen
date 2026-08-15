@@ -23,7 +23,7 @@ fluent.workspace = true
 fluent-bundle.workspace = true
 unic-langid.workspace = true
 
-# ICU4X umbrella with `experimental` (currency + relative-time),
+# ICU4X umbrella with `unstable` (currency + relative-time),
 # `sync` (Arc-backed DataPayloads so formatters are Send + Sync for
 # bevy_ecs Resource). Round-7 consolidation: replaces individual
 # icu_decimal / icu_datetime / icu_calendar / icu_locale_core /
@@ -32,9 +32,6 @@ icu.workspace = true
 # Decimal::try_from_f64 needs fixed_decimal's `ryu` feature; the
 # umbrella doesn't expose it.
 fixed_decimal.workspace = true
-# CurrencyCode wraps a `TinyAsciiStr<3>`; we construct it from "USD" /
-# "EUR" / ... literals. icu doesn't re-export tinystr.
-tinystr.workspace = true
 
 # System locale detection. cosmic-text already pulls sys-locale transitively;
 # we depend on it directly so the i18n plugin can seed `I18n.current` at boot.
