@@ -3,14 +3,16 @@
 use std::collections::BTreeSet;
 
 use lumen_html::contract::{DEFAULT_MANIFEST_FILE, LM_CONTRACT_VERSION, Manifest};
+use lumen_ir::css::Stylesheet;
 
+use crate::css;
 use crate::error::EmitError;
 use crate::html;
 use crate::seo;
 use crate::spec::{OutputFile, PageSpec, Site, SiteSpec};
 use crate::urls;
 
-/// Emit the site: one document per page, plus the manifest.
+/// Emit the site: one document per page, the stylesheet, and the manifest.
 ///
 /// Nothing is written to disk. The same spec always emits the same bytes,
 /// so a build can be compared against the one before it.
@@ -31,10 +33,14 @@ pub fn emit(spec: &SiteSpec) -> Result<Site, EmitError> {
         return Err(EmitError::UnknownEntry(spec.web.entry.clone()));
     }
 
-    let mut files = Vec::with_capacity(spec.pages.len() + 1);
+    let mut files = Vec::with_capacity(spec.pages.len() + 2);
     for page in &spec.pages {
         files.push(OutputFile::new(page.document(), document(page, spec)?));
     }
+    files.push(OutputFile::new(
+        spec.web.css.clone(),
+        css::styles_css(stylesheet(spec), spec.web.css_mode),
+    ));
     let manifest = serde_json::to_string_pretty(&manifest(spec))?;
     files.push(OutputFile::new(
         DEFAULT_MANIFEST_FILE,
@@ -51,9 +57,23 @@ pub fn emit(spec: &SiteSpec) -> Result<Site, EmitError> {
 pub fn document(page: &PageSpec, spec: &SiteSpec) -> Result<String, EmitError> {
     let mut out = String::new();
     seo::open_document(&mut out, page, spec)?;
-    out.push_str(&html::emit_tree(page)?);
+    out.push_str(&html::emit_tree(page, spec.web.css_mode)?);
     seo::close_document(&mut out, spec);
     Ok(out)
+}
+
+/// The stylesheet the site is styled by.
+///
+/// One app has one stylesheet: its pages are separate documents but they
+/// were compiled from the same CSS, so the entry page's copy is the
+/// site's. A site whose entry page has none is emitted with the reset
+/// alone.
+fn stylesheet(spec: &SiteSpec) -> Option<&Stylesheet> {
+    spec.pages
+        .iter()
+        .find(|page| page.key == spec.web.entry)
+        .or_else(|| spec.pages.first())
+        .and_then(|page| page.ir.combined_stylesheet.as_ref())
 }
 
 /// The manifest the browser runtime reads before it loads anything else.

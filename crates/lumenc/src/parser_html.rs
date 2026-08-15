@@ -43,7 +43,7 @@ use lumen_ir::css::{canonical_style_property, parse_duration_ms};
 /// Recognized layout tag names. Unknown tags produce
 /// [`ParseError::UnknownTag`]. `script` is special-cased (collected into
 /// `LayoutIR::script_source`, not a layout node).
-const KNOWN_TAGS: &[&str] = &[
+pub const KNOWN_TAGS: &[&str] = &[
     // Layout primitives. Direction is encoded in the tag - no separate
     // `flex="row|column"` attribute; pick `<row>` / `<column>` /
     // `<spacer>`.
@@ -1787,7 +1787,10 @@ fn build_element(
     }
 
     let mut attrs = Attributes {
-        // Apply tag defaults that act like CSS user-agent styles.
+        // Apply tag defaults that act like CSS user-agent styles. The web
+        // target carries the same defaults as real CSS in
+        // crates/web/src/reset.css, which has to change with these;
+        // crates/lumenc/tests/web_css.rs is what notices when it does not.
         // `<scroll>` and `<root>` are columns by default; the horizontal
         // axis is opt-in via `scroll="x"` (handled in apply_attribute,
         // which then also flips `flex` so the children stack left->right).

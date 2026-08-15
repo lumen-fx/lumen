@@ -12,25 +12,29 @@
 use std::collections::BTreeSet;
 
 use lumen_html::contract::{DATA_LM, DATA_LM_HIDDEN, NodePath};
+use lumen_html::style::{Emission, rewrite_property};
 use lumen_html::{escape_attr, escape_text, html_attrs, html_tag_for};
-use lumen_ir::layout_ir::{Element, IfModeSpec};
+use lumen_ir::css::computed_style_map;
+use lumen_ir::layout_ir::{Attributes, Element, IfModeSpec};
 
 use crate::error::EmitError;
-use crate::spec::{PageSpec, SignalEnv};
+use crate::spec::{CssMode, PageSpec, SignalEnv};
 
 /// What the walk needs to know that is not the element itself.
 struct Walk<'a> {
     page: &'a str,
     signals: &'a SignalEnv,
+    css_mode: CssMode,
     seen: BTreeSet<String>,
 }
 
 /// Write the page's element tree, starting at the page root.
-pub fn emit_tree(page: &PageSpec) -> Result<String, EmitError> {
+pub fn emit_tree(page: &PageSpec, css_mode: CssMode) -> Result<String, EmitError> {
     let mut out = String::new();
     let mut walk = Walk {
         page: &page.key,
         signals: &page.signals,
+        css_mode,
         seen: BTreeSet::new(),
     };
     emit_element(&mut out, &page.ir.root, &NodePath::root(), &mut walk)?;
@@ -77,6 +81,12 @@ fn emit_element(
         write_attr(out, name, &value);
     }
     write_attr(out, DATA_LM, &path_text);
+    if walk.css_mode == CssMode::Computed {
+        let style = computed_style(&element.attrs);
+        if !style.is_empty() {
+            write_attr(out, "style", &style);
+        }
+    }
     if hidden {
         write_attr(out, DATA_LM_HIDDEN, "");
     }
@@ -99,6 +109,29 @@ fn emit_element(
     out.push_str(tag.name);
     out.push('>');
     Ok(())
+}
+
+/// What Lumen's cascade resolved for this element, as an inline style.
+///
+/// Only what a browser can be told this way survives: a value that stands
+/// for a state (a hover fill) or for a knob with no CSS property behind it
+/// has nowhere to land on an element.
+fn computed_style(attrs: &Attributes) -> String {
+    let mut out = String::new();
+    for (name, value) in computed_style_map(attrs) {
+        let Emission::Plain(decls) = rewrite_property(&name, &value) else {
+            continue;
+        };
+        for decl in decls {
+            if !out.is_empty() {
+                out.push(';');
+            }
+            out.push_str(&decl.name);
+            out.push(':');
+            out.push_str(&decl.value);
+        }
+    }
+    out
 }
 
 /// Whether an `<if>` block's condition holds in the state being rendered.

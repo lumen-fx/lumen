@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod css;
 pub mod error;
 pub mod html;
 pub mod seo;
@@ -23,6 +24,9 @@ pub mod site;
 pub mod spec;
 pub mod urls;
 
+pub use css::{RESET_CSS, rules_css, styles_css};
 pub use error::EmitError;
 pub use site::emit;
-pub use spec::{AssetRef, LocaleSpec, OutputFile, PageSpec, SignalEnv, Site, SiteSpec, WebSpec};
+pub use spec::{
+    AssetRef, CssMode, LocaleSpec, OutputFile, PageSpec, SignalEnv, Site, SiteSpec, WebSpec,
+};

@@ -100,6 +100,24 @@ impl PageSpec {
     }
 }
 
+/// How a page's styling reaches the browser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CssMode {
+    /// As a stylesheet, with the selectors, states and media queries the
+    /// app was written with. This is how a site ships: the browser runs
+    /// the cascade, so a rule still applies to a row that appears later.
+    #[default]
+    Sheet,
+    /// As the values Lumen's own cascade resolved, written onto each
+    /// element as an inline style.
+    ///
+    /// Nothing is left to match on: a state, a media query and an element
+    /// created after the page loaded all lose their styling. It is here to
+    /// answer what Lumen resolved, which makes it the thing to compare the
+    /// stylesheet against when the two disagree.
+    Computed,
+}
+
 /// Site-wide settings: where it is served from, what it is called, and which
 /// runtime files the documents point at.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,6 +139,8 @@ pub struct WebSpec {
     pub artifact: String,
     /// Stylesheet, relative to the site root.
     pub css: String,
+    /// How the pages are styled.
+    pub css_mode: CssMode,
     /// Wasm runtime, relative to the site root.
     pub wasm: String,
     /// JavaScript module that loads the runtime, relative to the site root.
@@ -142,6 +162,7 @@ impl Default for WebSpec {
             og_image: None,
             artifact: DEFAULT_ARTIFACT_FILE.to_string(),
             css: DEFAULT_CSS_FILE.to_string(),
+            css_mode: CssMode::default(),
             wasm: DEFAULT_WASM_FILE.to_string(),
             js: DEFAULT_JS_FILE.to_string(),
             navigation: NavigationMode::default(),

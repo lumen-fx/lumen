@@ -509,3 +509,107 @@ scrollbar.
 | `sensitivity` | number | `1.0` |
 | `inertia` | number | `0.4` |
 | `tab-index` | integer | from the tag |
+
+## Web target mapping
+
+Built for the web, an app ships its stylesheet as real CSS and the
+browser runs the cascade. Most of what you write arrives unchanged; this
+section is the rest.
+
+### Selectors
+
+A tag selector becomes the class the element carries in the document,
+inside `:where()`: `button` is emitted as `:where(.lm-button)`. The
+wrapper keeps the tag weighing nothing, so it still loses to a class the
+way it does everywhere else.
+
+The four states no browser selector covers are mirrored onto attributes:
+
+| Lumen | Emitted as |
+| --- | --- |
+| `:selected` | `[data-lm-selected]` |
+| `:checked` | `:is(:checked, [data-lm-checked])` |
+| `:disabled` | `:is(:disabled, [data-lm-disabled])` |
+| `:drag-over` | `[data-lm-drag-over]` |
+
+`:checked` and `:disabled` keep the browser's own state beside the
+mirror, because a `<checkbox>` is a real checkbox there and a `<toggle>`
+is a button. Every other selector, `:hover` and the structural
+pseudo-classes included, is emitted as written.
+
+Rules are written out in the order Lumen's cascade puts them in, so where
+the browser cannot tell two rules apart it picks the one Lumen picks.
+
+### Property names
+
+The Lumen short names are emitted under their standard spelling:
+
+| Lumen | Emitted as |
+| --- | --- |
+| `bg` | `background` |
+| `text-color` | `color` |
+| `radius` | `border-radius` |
+| `grow` | `flex-grow` |
+| `justify` | `justify-content` |
+| `fit` | `object-fit` |
+| `shadow` | `box-shadow` |
+| `align` | `align-items` |
+| `wrap` | `white-space` and `overflow-wrap` |
+| `scroll` | `overflow-x`, `overflow-y` |
+| `max-lines` | the `-webkit-line-clamp` block |
+
+`justify: between`, `around`, and `evenly` are emitted as
+`space-between`, `space-around`, and `space-evenly`.
+
+### States written as properties
+
+A property that names a state becomes a rule of its own, written beside
+the rule it came from:
+
+| Property | Emitted as |
+| --- | --- |
+| `hover-bg` | `:hover { background }` |
+| `press-bg` | `:active { background }` |
+| `hover-border` | `:hover { border }` |
+| `focus-border` | `:focus { border }` |
+| `focus-outline` | `:focus { outline }` |
+| `selection-color` | `::selection { background }` |
+| `selection-text-color` | `::selection { color }` |
+
+### Lengths
+
+A bare number is pixels in Lumen and nothing at all in CSS, so
+`padding: 8 16` is emitted as `padding: 8px 16px`. A length that reaches
+a property through `var()` is emitted as written, so give a custom
+property holding a length an explicit unit: `--gap: 8px`, not `--gap: 8`.
+Gradient stop positions travel as written; write them as percentages.
+
+### Properties with no browser equivalent
+
+The knobs that reach widget parts no selector can address are emitted as
+custom properties, `--lm-` plus the property name: `knob-color` becomes
+`--lm-knob-color`. The browser ignores them and Lumen reads them back off
+the element, so they keep working, and you can read one yourself with
+`var(--lm-knob-color)`.
+
+This covers `knob-color`, `knob-inset`, `thumb-size`, `popup-gap`,
+`caret-width`, `caret-blink`, `password-character`, `disabled-opacity`,
+`progress-duration`, `progress-chunk`, `sensitivity`, `inertia`, and the
+`scrollbar-*` geometry and timing properties. `scrollbar-color` and
+`scrollbar-width` are standard CSS and are emitted as themselves; a
+`scrollbar-color` naming only a thumb gains `transparent` for the track,
+which CSS requires.
+
+### What is not emitted
+
+| Property | Why |
+| --- | --- |
+| `tab-index` | The document already carries it as `tabindex`. |
+| `draggable` | The document already carries it as `draggable`. |
+| `transition-delay` | Lumen ignores it: a transition starts on the tick the value changes. |
+| `layout-boundary` | A hint to Lumen's layout engine; the browser lays the page out itself. |
+
+Selector matching differs in one way worth knowing. Lumen's matcher takes
+the nearest candidate for each step and does not reconsider, and a
+browser's does; a selector that relies on that difference matches more
+elements on the web than it does on the desktop.
