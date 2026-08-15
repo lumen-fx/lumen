@@ -2,6 +2,8 @@
 //! ECS spawning so multiple backends can consume it (runtime spawn, AOT
 //! codegen, typed Rust struct emission, FFI bytecode).
 
+use std::path::{Path, PathBuf};
+
 use thiserror::Error;
 
 // `From` impls below convert each IR spec type into its lumen_core
@@ -130,7 +132,7 @@ pub struct LayoutIR {
     /// loader. The runtime (`lumenc::run`) adds these to the hot-reload
     /// watch set so editing an included file re-triggers a reload, exactly
     /// like [`external_scripts`].
-    pub included_files: Vec<std::path::PathBuf>,
+    pub included_files: Vec<PathBuf>,
 }
 
 /// Severity tier for a parse-time [`LintFinding`].
@@ -216,7 +218,7 @@ impl LintFinding {
     /// plus a `hint:` line when the rule carries a machine-applicable
     /// fix. Every path that compiles markup from source calls this, so
     /// `check`, `run` and `build` cannot drift apart on the wording.
-    pub fn render(&self, file: &std::path::Path) -> String {
+    pub fn render(&self, file: &Path) -> String {
         let mut out = format!(
             "{sev:<5} {file}:{line}:{col}  [{kind}] {msg}",
             sev = <&'static str>::from(self.severity),
@@ -300,6 +302,42 @@ impl Default for Element {
             children: Vec::new(),
             interpolations: Vec::new(),
         }
+    }
+}
+
+/// Rewrite every `<image src>` under `el` that points inside `root` to a
+/// path relative to it, recording in `outside` the ones that point
+/// elsewhere.
+///
+/// The inverse of the compiler's asset resolution, which makes every `src`
+/// absolute against the app directory on the machine that compiles. That is
+/// the right answer for running the app in place and the wrong one for an
+/// artifact that travels, so anything shipping an IR elsewhere (a packaged
+/// folder, a web build) puts the paths back first.
+///
+/// Rewritten paths are joined with forward slashes whatever the compiling
+/// machine uses: every platform's loader accepts them, so an artifact built
+/// for another platform names its files in a way that platform can follow.
+pub fn relativize_asset_paths(el: &mut Element, root: &Path, outside: &mut Vec<String>) {
+    if el.tag == "image"
+        && let Some(path) = &el.attrs.src
+    {
+        let p = Path::new(path);
+        if p.is_absolute() {
+            match p.strip_prefix(root) {
+                Ok(rel) => {
+                    let parts: Vec<String> = rel
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                        .collect();
+                    el.attrs.src = Some(parts.join("/"));
+                }
+                Err(_) => outside.push(path.clone()),
+            }
+        }
+    }
+    for child in &mut el.children {
+        relativize_asset_paths(child, root, outside);
     }
 }
 
@@ -1874,5 +1912,58 @@ mod bughunt_tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].duration_ms, 0);
         assert_eq!(out[0].easing, EasingIr::CubicBezier(0.25, 0.1, 0.25, 1.0));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Asset paths come out of the compiler resolved against the machine
+    /// that compiled and have to leave relative to the app, or a copied
+    /// package looks for its images in a directory that only exists there.
+    #[test]
+    fn asset_paths_leave_relative_to_the_app() {
+        // Absolute on every platform, and with each family's own separators:
+        // a literal POSIX path is relative on Windows, where the rewrite would
+        // have nothing to do and the test would pass without testing anything.
+        let app = std::env::temp_dir().join("notes");
+        let inside = app.join("icons").join("save.png");
+        let elsewhere = std::env::temp_dir().join("pixmaps").join("other.png");
+
+        let image = |path: &Path| Element {
+            tag: "image".to_string(),
+            attrs: Attributes {
+                src: Some(path.to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut root = Element {
+            tag: "root".to_string(),
+            children: vec![image(&inside), image(&elsewhere)],
+            ..Default::default()
+        };
+
+        let mut outside = Vec::new();
+        relativize_asset_paths(&mut root, &app, &mut outside);
+
+        // Compared as a path, not as text: the separator between `icons` and
+        // the file name is the platform's own.
+        let rewritten = root.children[0]
+            .attrs
+            .src
+            .as_deref()
+            .expect("the asset keeps a path");
+        assert_eq!(Path::new(rewritten), Path::new("icons").join("save.png"));
+        assert!(
+            Path::new(rewritten).is_relative(),
+            "a packaged asset path must be relative to the app: {rewritten}"
+        );
+        assert_eq!(
+            outside,
+            vec![elsewhere.to_string_lossy().into_owned()],
+            "a file outside the app directory keeps the path it had"
+        );
     }
 }

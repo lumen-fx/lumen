@@ -36,6 +36,8 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use lumen_ir::layout_ir::relativize_asset_paths;
+
 use crate::app_kind::AppKind;
 
 /// Conventional extension for a compiled-app artifact, matching
@@ -745,7 +747,7 @@ fn build_artifact(
     src: &Path,
 ) -> Result<Vec<u8>, String> {
     let mut outside: Vec<String> = Vec::new();
-    relativize_assets(&mut compiled.ir.root, src, &mut outside);
+    relativize_asset_paths(&mut compiled.ir.root, src, &mut outside);
     for path in &outside {
         eprintln!(
             "lumenc package: warning: {path} is outside the app directory, so it is not \
@@ -753,35 +755,6 @@ fn build_artifact(
         );
     }
     lumen_ir::artifact::serialize(&compiled).map_err(|e| e.to_string())
-}
-
-/// Rewrite every `<image src>` that points inside `src` to a path relative to
-/// it, recording the ones that point elsewhere.
-fn relativize_assets(el: &mut lumen_ir::layout_ir::Element, src: &Path, outside: &mut Vec<String>) {
-    if el.tag == "image"
-        && let Some(path) = &el.attrs.src
-    {
-        let p = Path::new(path);
-        if p.is_absolute() {
-            match p.strip_prefix(src) {
-                // Joined with forward slashes whatever the packaging machine
-                // uses: every platform's loader accepts them, so an artifact
-                // built for another platform names its files in a way that
-                // platform can follow.
-                Ok(rel) => {
-                    let parts: Vec<String> = rel
-                        .components()
-                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                        .collect();
-                    el.attrs.src = Some(parts.join("/"));
-                }
-                Err(_) => outside.push(path.clone()),
-            }
-        }
-    }
-    for child in &mut el.children {
-        relativize_assets(child, src, outside);
-    }
 }
 
 /// The two toolchain files a package is assembled from.
@@ -1243,57 +1216,5 @@ mod tests {
         assert!(image.starts_with(b"stub"));
 
         let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    /// Asset paths come out of the compiler resolved against this machine and
-    /// have to leave relative to the app, or a copied package looks for its
-    /// images in a directory that only exists on the packaging machine.
-    #[test]
-    fn asset_paths_leave_relative_to_the_app() {
-        use lumen_ir::layout_ir::{Attributes, Element};
-
-        // Absolute on every platform, and with each family's own separators:
-        // a literal POSIX path is relative on Windows, where the rewrite would
-        // have nothing to do and the test would pass without testing anything.
-        let app = std::env::temp_dir().join("notes");
-        let inside = app.join("icons").join("save.png");
-        let elsewhere = std::env::temp_dir().join("pixmaps").join("other.png");
-
-        let image = |path: &Path| Element {
-            tag: "image".to_string(),
-            attrs: Attributes {
-                src: Some(path.to_string_lossy().into_owned()),
-                ..Default::default()
-            },
-            children: Vec::new(),
-            interpolations: Vec::new(),
-        };
-        let mut root = Element {
-            tag: "root".to_string(),
-            attrs: Attributes::default(),
-            children: vec![image(&inside), image(&elsewhere)],
-            interpolations: Vec::new(),
-        };
-
-        let mut outside = Vec::new();
-        relativize_assets(&mut root, &app, &mut outside);
-
-        // Compared as a path, not as text: the separator between `icons` and
-        // the file name is the platform's own.
-        let rewritten = root.children[0]
-            .attrs
-            .src
-            .as_deref()
-            .expect("the asset keeps a path");
-        assert_eq!(Path::new(rewritten), Path::new("icons").join("save.png"));
-        assert!(
-            Path::new(rewritten).is_relative(),
-            "a packaged asset path must be relative to the app: {rewritten}"
-        );
-        assert_eq!(
-            outside,
-            vec![elsewhere.to_string_lossy().into_owned()],
-            "a file outside the app directory keeps the path it had"
-        );
     }
 }
