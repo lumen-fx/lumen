@@ -72,7 +72,17 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// under one host per language after compilation, and
 /// [`CompiledApp::pages`] carries a multi-page app's page set so navigation
 /// works without the page files on disk.
-pub const FORMAT_VERSION: u16 = 4;
+///
+/// `5`: the web target's three additions, which land together because one
+/// bump costs the same as three. [`crate::layout_ir::Attributes`] gains
+/// `markup_styles`, the styling attributes an element was given in markup, so
+/// a surface where CSS outranks markup can replay them and keep Lumen's
+/// precedence; `widget`, the authored widget an element desugared from, so an
+/// emitter can write the semantic form back; and `alt`, an image's own
+/// alternative text. [`CompiledScript`] gains `bytecode`, the compiled
+/// `.cdlb` image of a candela program, so a runtime without the compiler can
+/// run it.
+pub const FORMAT_VERSION: u16 = 5;
 
 /// The navigable page set of a compiled multi-page app.
 ///
@@ -105,6 +115,15 @@ pub struct CompiledScript {
     pub engine: String,
     /// Every source file that engine owns, concatenated in source order.
     pub source: String,
+    /// The same program compiled to bytecode, for an engine that has an
+    /// ahead-of-time form. Today that is candela, whose `.cdlb` image the
+    /// compiler-free `candela-vm` runtime loads directly; every other engine
+    /// leaves this `None` and is run from [`Self::source`].
+    ///
+    /// The source is kept beside it rather than replaced. A host that links
+    /// the full compiler still runs from source so scripts stay reloadable,
+    /// and the bytecode is what a host that ships without one uses.
+    pub bytecode: Option<Vec<u8>>,
 }
 
 /// The precompiled application: everything the runtime needs to spawn the UI
@@ -230,10 +249,18 @@ mod tests {
         CompiledApp {
             ir: LayoutIR::default(),
             script_source: "let x = 1;".to_string(),
-            scripts: vec![CompiledScript {
-                engine: "rhai".to_string(),
-                source: "let x = 1;".to_string(),
-            }],
+            scripts: vec![
+                CompiledScript {
+                    engine: "rhai".to_string(),
+                    source: "let x = 1;".to_string(),
+                    bytecode: None,
+                },
+                CompiledScript {
+                    engine: "candela".to_string(),
+                    source: "fn main() {}".to_string(),
+                    bytecode: Some(vec![0xCD, 0x1B, 0x00, 0xFF]),
+                },
+            ],
             pages: Some(CompiledPages {
                 entry: "index".to_string(),
                 keys: vec!["settings".to_string(), "index".to_string()],
@@ -248,8 +275,14 @@ mod tests {
         assert_eq!(&bytes[0..4], &MAGIC);
         let back = deserialize(&bytes).expect("deserialize");
         assert_eq!(back.script_source, app.script_source);
-        assert_eq!(back.scripts.len(), 1);
+        assert_eq!(back.scripts.len(), 2);
         assert_eq!(back.scripts[0].engine, "rhai");
+        assert_eq!(back.scripts[0].bytecode, None);
+        assert_eq!(
+            back.scripts[1].bytecode.as_deref(),
+            Some([0xCD, 0x1B, 0x00, 0xFF].as_slice()),
+            "a compiled candela image survives the round trip byte for byte"
+        );
         let pages = back.pages.expect("the page set round-trips");
         assert_eq!(pages.entry, "index");
         assert_eq!(pages.keys.len(), 2);

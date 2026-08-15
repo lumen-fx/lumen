@@ -31,14 +31,14 @@ use crate::layout_ir::{
     Attributes, BindKind, BindSpec, Element, FlexAlign, FlexAxis, FlexJustify, ImageFitSpec,
     InterpolationSlot, LayoutIR, LengthSpec, LineHeightSpec, LintFinding, LintKind, LintSeverity,
     OutlineSpec, OverflowSpec, ParseError, PositionSpec, ScrollAxisSpec, TextAlignSpec,
-    TextWrapSpec,
+    TextWrapSpec, WidgetRole,
 };
 use crate::values::{bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i32, parse_length};
 // `parse_duration_ms` lives on the CSS cascade side (`lumen_ir::css`)
 // because it's shared with `transition-duration`; reused here rather
 // than re-implementing the `Nms` / `Ns` unit handling for the inline
 // markup mirror of `caret-blink` / `scrollbar-fade-*`.
-use lumen_ir::css::parse_duration_ms;
+use lumen_ir::css::{canonical_style_property, parse_duration_ms};
 
 /// Recognized layout tag names. Unknown tags produce
 /// [`ParseError::UnknownTag`]. `script` is special-cased (collected into
@@ -1086,6 +1086,7 @@ fn build_element(
             delay_ms,
             offset,
         });
+        elem.attrs.widget = Some(WidgetRole::Tooltip);
         return Ok(elem);
     }
 
@@ -1224,6 +1225,7 @@ fn build_element(
         if let Some(default) = first_name {
             column.attrs.signal_seed = Some((signal_name, default));
         }
+        column.attrs.widget = Some(WidgetRole::Tabs);
         return Ok(column);
     }
 
@@ -1413,6 +1415,7 @@ fn build_element(
         // Seed the open-panel signal to "false" so the panel hides at
         // startup.
         column.attrs.signal_seed = Some((open_signal, "false".to_string()));
+        column.attrs.widget = Some(WidgetRole::Dropdown);
         return Ok(column);
     }
 
@@ -1548,6 +1551,7 @@ fn build_element(
         if_block.attrs.if_eq = Some("true".to_string());
         if_block.attrs.if_mode = crate::layout_ir::IfModeSpec::Hide;
         if_block.attrs.signal_seed = Some((open_signal, "false".to_string()));
+        if_block.attrs.widget = Some(WidgetRole::Menu);
         return Ok(if_block);
     }
 
@@ -1610,6 +1614,11 @@ fn build_element(
         });
         input.attrs.pattern = Some(pattern.to_string());
         input.attrs.classes = vec![class.to_string()];
+        input.attrs.widget = Some(if is_time {
+            WidgetRole::TimePicker
+        } else {
+            WidgetRole::DatePicker
+        });
         return Ok(input);
     }
 
@@ -1735,7 +1744,18 @@ fn build_element(
             // Reborrow: the sink outlives every attribute in the loop.
             lint_findings: &mut *lint_findings,
         };
-        apply_attribute(&tag, a.name(), a.value(), &mut attrs, &mut ctx)?;
+        let applied = apply_attribute(&tag, a.name(), a.value(), &mut attrs, &mut ctx)?;
+        // Which surface set a value is not recoverable from the fields
+        // `apply_attribute` just wrote, and a target that ranks a rule above
+        // an attribute needs to know. Record the styling ones under the
+        // spelling the cascade files them under; anything else on the element
+        // (`id`, `text`, `bind-value`) is not a style and is skipped, as is an
+        // attribute the vocabulary has no meaning for and dropped.
+        if applied && let Some(property) = canonical_style_property(a.name()) {
+            attrs
+                .markup_styles
+                .push((property.to_string(), a.value().to_string()));
+        }
     }
 
     // Normalise `{$name}` -> `{name}` in string-valued attrs that may
@@ -1990,13 +2010,18 @@ fn build_element(
     })
 }
 
+/// Write one authored attribute into `attrs`, reporting whether the markup
+/// vocabulary has a meaning for it. `false` means the value was dropped, which
+/// is what keeps a dropped value out of the record of what the element was
+/// styled with.
 fn apply_attribute(
     tag: &str,
     name: &str,
     value: &str,
     attrs: &mut Attributes,
     ctx: &mut AttrCtx<'_>,
-) -> Result<(), ParseError> {
+) -> Result<bool, ParseError> {
+    let mut recognised = true;
     match name {
         "width" => attrs.width = Some(parse_length(tag, name, value)?),
         "height" => attrs.height = Some(parse_length(tag, name, value)?),
@@ -2105,6 +2130,10 @@ fn apply_attribute(
             attrs.layout_boundary = ctx.bool_value(tag, name, value);
         }
         "src" => attrs.src = Some(value.to_string()),
+        // Kept even when empty: `alt=""` is how an author marks an image as
+        // decorative, and dropping it would leave the image unlabelled
+        // instead of deliberately unlabelled.
+        "alt" if tag == "image" => attrs.alt = Some(value.to_string()),
         "font-size" => attrs.font_size = Some(parse_f32(tag, name, value)?),
         "font-family" => attrs.font_family = Some(value.trim().to_string()),
         "font-weight" => {
@@ -2654,6 +2683,7 @@ fn apply_attribute(
         // the built-in table cannot say what is and is not meaningful
         // there.
         other => {
+            recognised = false;
             if KNOWN_TAGS.contains(&tag) {
                 let (line, col) = line_col_of(ctx.src, ctx.value_offset);
                 ctx.lint_findings.push(LintFinding {
@@ -2672,7 +2702,7 @@ fn apply_attribute(
             }
         }
     }
-    Ok(())
+    Ok(recognised)
 }
 
 #[cfg(test)]

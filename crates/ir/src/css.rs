@@ -3214,7 +3214,20 @@ const STYLE_PROPERTIES: &[&str] = &[
 /// declarations by kind ask this before they hand one to the cascade;
 /// anything else in a rule (a `--custom` property, a typo) answers `false`.
 pub fn is_style_property(name: &str) -> bool {
-    STYLE_PROPERTIES.contains(&canonical_property_name(name))
+    canonical_style_property(name).is_some()
+}
+
+/// The one spelling the cascade files `name` under, or `None` when it is not
+/// a style property at all.
+///
+/// A property has two accepted spellings whenever Lumen's short name and the
+/// standard CSS one differ (`bg` / `background`, `radius` / `border-radius`).
+/// Both answer with the same string here, so a consumer recording what an
+/// element was styled with records one name per property rather than whichever
+/// the author happened to type.
+pub fn canonical_style_property(name: &str) -> Option<&'static str> {
+    let canonical = canonical_property_name(name);
+    STYLE_PROPERTIES.iter().copied().find(|p| *p == canonical)
 }
 
 /// Map standard CSS property names onto Lumen's native slots so real-world

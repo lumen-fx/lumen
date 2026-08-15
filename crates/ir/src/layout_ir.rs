@@ -685,6 +685,12 @@ pub struct Attributes {
     /// decode via `lumen-assets`. The entity gets a `LoadedImage`
     /// once the bytes are ready.
     pub src: Option<String>,
+    /// `alt="a cat asleep on a keyboard"` on `<image>` - what the image
+    /// shows, for a reader who is not looking at it. Screen readers announce
+    /// it and the web target writes it out as the `alt` attribute. An
+    /// `alt=""` an author wrote deliberately is kept as an empty string,
+    /// which is how a decorative image is marked.
+    pub alt: Option<String>,
     /// `href="settings"` on `<a>` - the target page path for file-based
     /// navigation. The spawner attaches an `Anchor` component so a click
     /// on the element navigates the active page. Resolved by longest
@@ -883,6 +889,12 @@ pub struct Attributes {
     /// a child element (`.checkbox-box` / `.radio-dot` /
     /// `.progress-fill`).
     pub part: Option<WidgetPart>,
+    /// The authored widget this element came out of, for the desugars that
+    /// replace a widget tag with plain boxes ([`WidgetRole`]). A surface that
+    /// can express the widget directly reads this and writes the widget back;
+    /// the runtime spawner ignores it, because the boxes beside it are already
+    /// the widget it would build.
+    pub widget: Option<WidgetRole>,
     /// `:checked { bg: ... }` CSS - track fill shown while a `<toggle>`
     /// is checked. Absent = the built-in accent fill.
     pub checked_bg: Option<Rgba>,
@@ -1165,6 +1177,20 @@ pub struct Attributes {
     /// itself, in milliseconds. Accepts `Nms` or `Ns`. Absent = the
     /// runtime's own duration constant.
     pub scrollbar_fade_duration_ms: Option<u32>,
+    /// Every styling attribute the element was given in markup, as
+    /// `(property, value)` in the order they were written. The property is
+    /// the one spelling the cascade files it under
+    /// ([`crate::css::canonical_style_property`]); the value is the text the
+    /// author wrote, unparsed.
+    ///
+    /// The fields above hold the *result* of the cascade and say nothing
+    /// about where a value came from, so this is the record of which surface
+    /// set what. It exists because the two surfaces do not rank the same way
+    /// everywhere: in Lumen a styling attribute outranks any rule that
+    /// targets the element, while on the web a rule outranks nothing but an
+    /// inline declaration. A target with the web's ranking replays these as
+    /// inline declarations so the author's markup keeps winning.
+    pub markup_styles: Vec<(String, String)>,
 }
 
 impl Attributes {
@@ -1426,6 +1452,32 @@ pub enum WidgetPart {
     RadioDot,
     /// The `.progress-fill` tile inside `<progress>`.
     ProgressFill,
+}
+
+/// A widget tag that the parser replaces with plain boxes - see
+/// [`Attributes::widget`].
+///
+/// These seven tags never reach the IR under their own name: the parser
+/// expands each into the rows, buttons and gates that draw it, because the
+/// runtime has no widget layer below the box layer. The expansion is lossy in
+/// one direction only, and this is what records the loss, so a surface with a
+/// widget of its own to offer can rebuild the authored one instead of drawing
+/// the boxes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum WidgetRole {
+    /// `<tabs>` - a strip of buttons over one panel per tab.
+    Tabs,
+    /// `<dropdown>` - a header button over a panel of options.
+    Dropdown,
+    /// `<menu>` - a panel of items shown while its signal is set.
+    Menu,
+    /// `<date-picker>` - a text entry holding a date.
+    DatePicker,
+    /// `<time-picker>` - a text entry holding a time of day.
+    TimePicker,
+    /// `<tooltip>` - text shown beside whatever it wraps. The marker lands
+    /// on the wrapped element, which is what survives the expansion.
+    Tooltip,
 }
 
 /// CSS `text-overflow` - what to do with text that overflows its box.

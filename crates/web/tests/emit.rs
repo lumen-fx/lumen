@@ -298,6 +298,57 @@ fn a_void_element_has_no_end_tag() {
 }
 
 #[test]
+fn a_style_written_in_markup_outranks_the_stylesheet() {
+    let page = PageSpec::new(
+        "index",
+        ir(element(
+            "root",
+            Attributes::default(),
+            vec![element(
+                "tile",
+                Attributes {
+                    markup_styles: vec![
+                        ("bg".into(), "#101014".into()),
+                        ("gap".into(), "8".into()),
+                    ],
+                    ..Attributes::default()
+                },
+                Vec::new(),
+            )],
+        )),
+    );
+    let html = page_html(&site(vec![page]), "index.html");
+    assert!(
+        html.contains(r#"style="bg: #101014 !important; gap: 8 !important;""#),
+        "{html}"
+    );
+    assert_well_formed(&html);
+}
+
+#[test]
+fn an_image_carries_the_alt_its_author_wrote() {
+    let page = PageSpec::new(
+        "index",
+        ir(element(
+            "root",
+            Attributes::default(),
+            vec![element(
+                "image",
+                Attributes {
+                    src: Some("logo.png".into()),
+                    alt: Some("The Lumen logo".into()),
+                    ..Attributes::default()
+                },
+                Vec::new(),
+            )],
+        )),
+    );
+    let html = page_html(&site(vec![page]), "index.html");
+    assert!(html.contains(r#"alt="The Lumen logo""#), "{html}");
+    assert_well_formed(&html);
+}
+
+#[test]
 fn a_hidden_branch_stays_in_the_document() {
     let branch = element(
         "if",

@@ -2890,3 +2890,99 @@ fn pickers_carry_a_shape_pattern() {
     assert_eq!(time.attrs.pattern.as_deref(), Some("shape:time"));
     assert_eq!(time.attrs.placeholder.as_deref(), Some("HH:MM"));
 }
+
+#[test]
+fn a_styling_attribute_is_recorded_under_the_name_the_cascade_uses() {
+    let ir = parse_html(
+        r##"<root><tile id="card" bg="#101014" padding="8" gap="4"
+                       text="hi" class="wide"/></root>"##,
+    )
+    .expect("html");
+    let tile = &ir.root.children[0];
+    assert_eq!(
+        tile.attrs.markup_styles,
+        vec![
+            ("bg".to_string(), "#101014".to_string()),
+            ("padding".to_string(), "8".to_string()),
+            ("gap".to_string(), "4".to_string()),
+        ],
+        "styles are recorded in the order they were written; id / text / \
+         class are not styles"
+    );
+}
+
+#[test]
+fn an_attribute_the_markup_dropped_is_not_recorded_as_a_style() {
+    // `background` is the stylesheet's spelling of `bg`. The markup
+    // vocabulary does not take it, so the value never reaches the element,
+    // and claiming it did would put a declaration on the web that the
+    // desktop never drew.
+    let ir = parse_html(r##"<root><tile background="#202028"/></root>"##).expect("html");
+    let tile = &ir.root.children[0];
+    assert_eq!(tile.attrs.bg, None);
+    assert!(tile.attrs.markup_styles.is_empty());
+}
+
+#[test]
+fn an_element_styled_only_by_css_records_nothing() {
+    let ir = parse_html(r##"<root><tile id="card"/></root>"##).expect("html");
+    assert!(ir.root.children[0].attrs.markup_styles.is_empty());
+}
+
+#[test]
+fn a_desugared_widget_says_what_it_was() {
+    use lumenc::layout_ir::WidgetRole;
+
+    let ir = parse_html(
+        r##"<root>
+                <tabs bind-value="active"><tab name="one" label="One"/></tabs>
+                <dropdown bind-value="pick"><option value="a" label="A"/></dropdown>
+                <menu id="ctx" bind-open="menu_open"><menuitem id="cut" label="Cut"/></menu>
+                <date-picker bind-value="due"/>
+                <time-picker bind-value="at"/>
+                <tooltip text="Save"><button id="save" text="Save"/></tooltip>
+            </root>"##,
+    )
+    .expect("html");
+    let roles: Vec<Option<WidgetRole>> = ir
+        .root
+        .children
+        .iter()
+        .map(|child| child.attrs.widget)
+        .collect();
+    assert_eq!(
+        roles,
+        vec![
+            Some(WidgetRole::Tabs),
+            Some(WidgetRole::Dropdown),
+            Some(WidgetRole::Menu),
+            Some(WidgetRole::DatePicker),
+            Some(WidgetRole::TimePicker),
+            Some(WidgetRole::Tooltip),
+        ]
+    );
+    assert_eq!(
+        ir.root.attrs.widget, None,
+        "an element the parser did not expand carries no role"
+    );
+}
+
+#[test]
+fn an_image_carries_its_own_alt() {
+    let ir = parse_html(
+        r##"<root>
+                <image src="logo.png" alt="The Lumen logo"/>
+                <image src="rule.png" alt=""/>
+                <image src="plain.png"/>
+            </root>"##,
+    )
+    .expect("html");
+    let kids = &ir.root.children;
+    assert_eq!(kids[0].attrs.alt.as_deref(), Some("The Lumen logo"));
+    assert_eq!(
+        kids[1].attrs.alt.as_deref(),
+        Some(""),
+        "an empty alt marks a decorative image and is kept"
+    );
+    assert_eq!(kids[2].attrs.alt, None);
+}

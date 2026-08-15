@@ -6,6 +6,11 @@
 //! the browser as CSS instead, because a value that arrives as CSS keeps the
 //! precedence the author wrote.
 //!
+//! One thing crosses back over: a style the author wrote on the element
+//! itself. Lumen ranks that above every rule and a browser does not, so those
+//! declarations come back as an inline [`markup_style`] to be ranked the same
+//! way on both.
+//!
 //! A few Lumen states have no HTML attribute to land on. A `<toggle>` is a
 //! button, not a checkbox, so it has no `:checked`; a `<div>` cannot be
 //! `disabled`. Those states are mirrored onto the `data-lm-*` attributes in
@@ -73,10 +78,12 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
         if let Some(src) = &attrs.src {
             out.push(("src", src.clone()));
         }
-        // The IR has no `alt` of its own yet, so an image that carries text
-        // lends it. An image with neither gets no `alt`.
-        if let Some(text) = &attrs.text {
-            out.push(("alt", text.clone()));
+        // An `alt` the author wrote is what the image says it is. Without
+        // one, an image that carries text lends it, which is what a Lumen
+        // app written before `alt` existed relies on. An image with neither
+        // gets no `alt`.
+        if let Some(alt) = attrs.alt.as_ref().or(attrs.text.as_ref()) {
+            out.push(("alt", alt.clone()));
         }
     }
     if let Some(tooltip) = &attrs.tooltip {
@@ -155,7 +162,40 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
     if let Some(lang) = &attrs.lang {
         out.push(("lang", lang.clone()));
     }
+    if let Some(style) = markup_style(attrs) {
+        out.push(("style", style));
+    }
     out
+}
+
+/// The `style` value that keeps a styling attribute outranking the
+/// stylesheet, or `None` for an element the author styled only through CSS.
+///
+/// The two surfaces disagree about which wins. In Lumen an attribute written
+/// on the element beats every rule that targets it, `!important` included; in
+/// a browser a rule beats everything but an inline declaration, and an
+/// `!important` inline declaration beats that too. Replaying the attributes as
+/// `!important` inline declarations is what makes the browser rank them the
+/// way Lumen does, so a page looks the same on both.
+///
+/// Property names come out in Lumen's own spelling, which is what the IR
+/// records. Turning `bg` into `background` is the CSS emitter's rewrite, and
+/// it owns that map; this writes the declarations, not their final names.
+pub fn markup_style(attrs: &Attributes) -> Option<String> {
+    if attrs.markup_styles.is_empty() {
+        return None;
+    }
+    let mut out = String::new();
+    for (property, value) in &attrs.markup_styles {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(property);
+        out.push_str(": ");
+        out.push_str(value.trim());
+        out.push_str(" !important;");
+    }
+    Some(out)
 }
 
 /// Write a number the way markup does: no trailing `.0` on whole values.
@@ -224,6 +264,48 @@ mod tests {
         let pairs = html_attrs("image", &a);
         assert_eq!(find(&pairs, "src"), Some("logo.png"));
         assert_eq!(find(&pairs, "alt"), Some("Lumen"));
+    }
+
+    #[test]
+    fn an_authored_alt_wins_over_the_borrowed_one() {
+        let mut a = attrs();
+        a.src = Some("logo.png".into());
+        a.text = Some("Lumen".into());
+        a.alt = Some("The Lumen logo".into());
+        assert_eq!(
+            find(&html_attrs("image", &a), "alt"),
+            Some("The Lumen logo")
+        );
+
+        a.alt = Some(String::new());
+        assert_eq!(
+            find(&html_attrs("image", &a), "alt"),
+            Some(""),
+            "an empty alt marks a decorative image and is not a missing one"
+        );
+    }
+
+    #[test]
+    fn markup_styles_come_back_as_an_important_inline_style() {
+        let mut a = attrs();
+        a.markup_styles = vec![
+            ("bg".into(), "#101014".into()),
+            ("padding".into(), " 8 ".into()),
+        ];
+        assert_eq!(
+            markup_style(&a).as_deref(),
+            Some("bg: #101014 !important; padding: 8 !important;")
+        );
+        assert_eq!(
+            find(&html_attrs("tile", &a), "style"),
+            Some("bg: #101014 !important; padding: 8 !important;")
+        );
+    }
+
+    #[test]
+    fn an_element_styled_only_by_css_gets_no_style_attribute() {
+        assert_eq!(markup_style(&attrs()), None);
+        assert_eq!(find(&html_attrs("tile", &attrs()), "style"), None);
     }
 
     #[test]
