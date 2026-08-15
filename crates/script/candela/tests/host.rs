@@ -304,8 +304,9 @@ fn builtins_parity() {
 /// is invisible to it: extend `registered_names` when one appears.
 #[test]
 fn every_registered_lumen_fn_is_tabled() {
-    /// The host source, scanned for registration sites.
-    const SRC: &str = include_str!("../src/lib.rs");
+    /// The builtin list, scanned for registration sites. One file: both hosts
+    /// register from it.
+    const SRC: &str = include_str!("../src/host_fns.rs");
 
     /// Builtins registered from a loop over a `fname` variable rather than a
     /// string literal, so the scan cannot see them.

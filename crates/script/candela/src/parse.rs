@@ -1,7 +1,7 @@
 //! Text-to-value parsers behind the `parse_json` and `parse_markdown`
 //! builtins.
 //!
-//! Both hand back a candela [`Value`](candela::Value) rather than a string, so a
+//! Both hand back a candela [`Value`] rather than a string, so a
 //! script indexes the result directly. They are registered variadically: a
 //! fixed host-fn signature must name one concrete return type, and neither
 //! result has one (JSON is a map, an array, or a scalar; a markdown block mixes
@@ -14,32 +14,31 @@
 
 use std::collections::BTreeMap;
 
+use candela_vm::Value;
+
 /// Parse `src` as JSON into a candela value. Objects become maps, arrays become
 /// arrays, and scalars keep their JSON type. Malformed input yields null.
 #[must_use]
-pub fn json(src: &str) -> candela::Value {
+pub fn json(src: &str) -> Value {
     match serde_json::from_str::<serde_json::Value>(src) {
         Ok(v) => json_value(&v),
-        Err(_) => candela::Value::Null,
+        Err(_) => Value::Null,
     }
 }
 
-/// Recursive [`serde_json::Value`] -> [`candela::Value`] projection. A JSON
+/// Recursive [`serde_json::Value`] -> [`Value`] projection. A JSON
 /// number lands as an int when it is integral and as a float otherwise, so
 /// `as_int` works on `5` and `as_float` on `5.5`.
-fn json_value(v: &serde_json::Value) -> candela::Value {
+fn json_value(v: &serde_json::Value) -> Value {
     match v {
-        serde_json::Value::Null => candela::Value::Null,
-        serde_json::Value::Bool(b) => candela::Value::Bool(*b),
-        serde_json::Value::Number(n) => n.as_i64().map_or_else(
-            || candela::Value::Float(n.as_f64().unwrap_or_default()),
-            candela::Value::Int,
-        ),
-        serde_json::Value::String(s) => candela::Value::String(s.clone()),
-        serde_json::Value::Array(items) => {
-            candela::Value::Array(items.iter().map(json_value).collect())
-        }
-        serde_json::Value::Object(fields) => candela::Value::Map(
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(b) => Value::Bool(*b),
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .map_or_else(|| Value::Float(n.as_f64().unwrap_or_default()), Value::Int),
+        serde_json::Value::String(s) => Value::String(s.clone()),
+        serde_json::Value::Array(items) => Value::Array(items.iter().map(json_value).collect()),
+        serde_json::Value::Object(fields) => Value::Map(
             fields
                 .iter()
                 .map(|(k, val)| (k.clone(), json_value(val)))
@@ -78,21 +77,15 @@ impl BlockKind {
 }
 
 /// Build one block record: `{ id, kind, level, text, lang }`.
-fn block(
-    counter: &mut usize,
-    kind: &str,
-    level: i64,
-    text: String,
-    lang: String,
-) -> candela::Value {
+fn block(counter: &mut usize, kind: &str, level: i64, text: String, lang: String) -> Value {
     let id = format!("blk-{counter}");
     *counter += 1;
-    candela::Value::Map(BTreeMap::from([
-        ("id".to_owned(), candela::Value::String(id)),
-        ("kind".to_owned(), candela::Value::String(kind.to_owned())),
-        ("level".to_owned(), candela::Value::Int(level)),
-        ("text".to_owned(), candela::Value::String(text)),
-        ("lang".to_owned(), candela::Value::String(lang)),
+    Value::Map(BTreeMap::from([
+        ("id".to_owned(), Value::String(id)),
+        ("kind".to_owned(), Value::String(kind.to_owned())),
+        ("level".to_owned(), Value::Int(level)),
+        ("text".to_owned(), Value::String(text)),
+        ("lang".to_owned(), Value::String(lang)),
     ]))
 }
 
@@ -103,10 +96,10 @@ fn block(
 /// delimiters in the block text rather than being dropped. Links flatten to
 /// their text.
 #[must_use]
-pub fn markdown(src: &str) -> candela::Value {
+pub fn markdown(src: &str) -> Value {
     use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 
-    let mut out: Vec<candela::Value> = Vec::new();
+    let mut out: Vec<Value> = Vec::new();
     let mut counter: usize = 0;
     let mut cur_kind: Option<BlockKind> = None;
     let mut cur_text = String::new();
@@ -176,33 +169,30 @@ pub fn markdown(src: &str) -> candela::Value {
             _ => {}
         }
     }
-    candela::Value::Array(out)
+    Value::Array(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn field<'a>(v: &'a candela::Value, key: &str) -> Option<&'a candela::Value> {
+    fn field<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
         v.as_map().and_then(|m| m.get(key))
     }
 
     #[test]
     fn json_keeps_scalar_types() {
         let v = json(r#"{"n": 5, "f": 2.5, "b": true, "s": "x", "z": null}"#);
-        assert_eq!(field(&v, "n"), Some(&candela::Value::Int(5)));
-        assert_eq!(field(&v, "f"), Some(&candela::Value::Float(2.5)));
-        assert_eq!(field(&v, "b"), Some(&candela::Value::Bool(true)));
-        assert_eq!(
-            field(&v, "s"),
-            Some(&candela::Value::String("x".to_owned()))
-        );
-        assert_eq!(field(&v, "z"), Some(&candela::Value::Null));
+        assert_eq!(field(&v, "n"), Some(&Value::Int(5)));
+        assert_eq!(field(&v, "f"), Some(&Value::Float(2.5)));
+        assert_eq!(field(&v, "b"), Some(&Value::Bool(true)));
+        assert_eq!(field(&v, "s"), Some(&Value::String("x".to_owned())));
+        assert_eq!(field(&v, "z"), Some(&Value::Null));
     }
 
     #[test]
     fn json_malformed_is_null() {
-        assert_eq!(json("{"), candela::Value::Null);
+        assert_eq!(json("{"), Value::Null);
     }
 
     #[test]
@@ -212,24 +202,24 @@ mod tests {
         assert_eq!(blocks.len(), 4);
         assert_eq!(
             field(&blocks[0], "kind"),
-            Some(&candela::Value::String("h".to_owned()))
+            Some(&Value::String("h".to_owned()))
         );
-        assert_eq!(field(&blocks[0], "level"), Some(&candela::Value::Int(1)));
+        assert_eq!(field(&blocks[0], "level"), Some(&Value::Int(1)));
         assert_eq!(
             field(&blocks[1], "kind"),
-            Some(&candela::Value::String("p".to_owned()))
+            Some(&Value::String("p".to_owned()))
         );
         assert_eq!(
             field(&blocks[2], "lang"),
-            Some(&candela::Value::String("rust".to_owned()))
+            Some(&Value::String("rust".to_owned()))
         );
         assert_eq!(
             field(&blocks[3], "kind"),
-            Some(&candela::Value::String("hr".to_owned()))
+            Some(&Value::String("hr".to_owned()))
         );
         assert_eq!(
             field(&blocks[0], "id"),
-            Some(&candela::Value::String("blk-0".to_owned()))
+            Some(&Value::String("blk-0".to_owned()))
         );
     }
 }
