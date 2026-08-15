@@ -41,7 +41,33 @@ fn toolchain_present() -> bool {
     build_dir().join(stub_name()).is_file() && build_dir().join(lib_name()).is_file()
 }
 
-fn scratch(name: &str) -> PathBuf {
+/// A scratch directory that removes itself when the test ends. A packaged app
+/// is a few hundred megabytes, and the name carries the process id, so a run
+/// that leaves its directories behind leaves a fresh set every time and fills
+/// the temp filesystem.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for Scratch {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+fn scratch(name: &str) -> Scratch {
     let dir = std::env::temp_dir().join(format!(
         "lumenc_package_{name}_{}_{}",
         std::process::id(),
@@ -52,7 +78,7 @@ fn scratch(name: &str) -> PathBuf {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create scratch dir");
-    dir
+    Scratch(dir)
 }
 
 /// A one-page app with an external Rhai script and a file the markup names.
