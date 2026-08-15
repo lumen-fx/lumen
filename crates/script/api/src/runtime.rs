@@ -52,7 +52,10 @@ use lumen_core::time::Instant;
 use std::sync::Arc;
 
 use crate::dnd;
-use crate::http::{DisabledHttpClient, HttpClient, HttpRequest, HttpResponse};
+use crate::http::{
+    DisabledHttpClient, HttpClient, HttpDispatch, HttpDone, HttpRequest, HttpResponse,
+    ThreadDispatch,
+};
 use crate::{CallOutcome, ScriptCommand, ScriptError, ScriptHost, ScriptValue};
 
 /// One [`ScriptCommand`] flowing through the ECS message bus so app
@@ -701,32 +704,32 @@ pub fn fire_due_timers<H: ScriptHost + Resource<Mutability = Mutable>>(
 // HTTP fetch
 // ---------------------------------------------------------------------
 
-/// HTTP plumbing: spawn off-thread requests, marshal the completed
-/// reply back onto the ECS/UI thread, and surface it to the script.
-/// One std::thread per request - fine for the typical "a few API calls
-/// per UI action" workload; can move to a pool later if it becomes a
-/// bottleneck.
+/// HTTP plumbing: start requests away from the world thread, marshal the
+/// completed reply back onto the ECS/UI thread, and surface it to the script.
 ///
 /// Both `fetch(url, tag)` (simple sugar) and `http(#{...})` (general form)
-/// flow through this single registry, worker pool discipline, and
-/// completion channel - there is exactly one async delivery mechanism.
-/// The worker only ever *sends* the outcome down the channel;
-/// [`collect_fetch_replies`], running on the world thread, moves it into
-/// [`PendingFetchReplies`], and [`fire_fetched_responses`] is the only place a
-/// signal / handler is touched. That worker->UI-thread hand-off mirrors
-/// Slint's `invoke_from_event_loop` marshalling.
+/// flow through this single registry, dispatcher, and completion channel -
+/// there is exactly one async delivery mechanism. The worker only ever *sends*
+/// the outcome down the channel; [`collect_fetch_replies`], running on the
+/// world thread, moves it into [`PendingFetchReplies`], and
+/// [`fire_fetched_responses`] is the only place a signal / handler is touched.
+/// That worker->UI-thread hand-off mirrors Slint's `invoke_from_event_loop`
+/// marshalling.
 ///
-/// The registry also holds the [`HttpClient`] every request runs on. A default
-/// registry carries [`DisabledHttpClient`], so a build with no client installed
-/// answers each request with the "no HTTP client" error instead of hanging or
-/// silently dropping it. The runtime installs the client Lumen ships
+/// The registry holds the [`HttpDispatch`] every request runs on, which in turn
+/// holds the [`HttpClient`]. A default registry dispatches
+/// [`DisabledHttpClient`] onto a worker thread, so a build with no client
+/// installed answers each request with the "no HTTP client" error instead of
+/// hanging or silently dropping it. The runtime installs the client Lumen ships
 /// (`lumen-http-ureq`) with [`FetchRegistry::with_client`] before the script
-/// plugin builds; an embedder swaps in its own the same way.
+/// plugin builds; an embedder swaps in its own the same way, and a platform
+/// with no thread to block swaps the dispatcher itself with
+/// [`FetchRegistry::with_dispatch`].
 #[derive(Resource)]
 pub struct FetchRegistry {
     sender: crossbeam_channel::Sender<HttpOutcome>,
     receiver: crossbeam_channel::Receiver<HttpOutcome>,
-    client: Arc<dyn HttpClient>,
+    dispatch: Arc<dyn HttpDispatch>,
 }
 
 impl Default for FetchRegistry {
@@ -736,16 +739,23 @@ impl Default for FetchRegistry {
 }
 
 impl FetchRegistry {
-    /// Build a registry whose requests run on `client`.
+    /// Build a registry whose requests run on `client`, one worker thread per
+    /// request.
     ///
     /// Insert it before the script plugin builds; the plugin only installs its
     /// own default when no registry is present.
     pub fn with_client(client: Arc<dyn HttpClient>) -> Self {
+        Self::with_dispatch(Arc::new(ThreadDispatch::new(client)))
+    }
+
+    /// Build a registry whose requests run on `dispatch`, for a platform where
+    /// a blocked worker thread is not how a request completes.
+    pub fn with_dispatch(dispatch: Arc<dyn HttpDispatch>) -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
         Self {
             sender: tx,
             receiver: rx,
-            client,
+            dispatch,
         }
     }
 }
@@ -770,8 +780,8 @@ struct HttpOutcome {
     result: Result<HttpResponse, String>,
 }
 
-/// Read `Fetch` / `Http` commands the script emitted this tick and start
-/// an off-thread request for each. Other variants are no-ops here (they
+/// Read `Fetch` / `Http` commands the script emitted this tick and hand each
+/// to the registry's dispatcher. Other variants are no-ops here (they
 /// flow to apply_script_commands and timer drains separately).
 pub fn drain_fetch_commands(
     mut events: MessageReader<ScriptCommandEvent>,
@@ -819,14 +829,13 @@ pub fn drain_fetch_commands(
             url: req.url.clone(),
         });
         let tx = fetcher.sender.clone();
-        let client = Arc::clone(&fetcher.client);
-        std::thread::Builder::new()
-            .name(format!("lumen-http:{tag}"))
-            .spawn(move || {
-                let result = client.send(&req, MAX_HTTP_BODY_BYTES);
-                let _ = tx.send(HttpOutcome { tag, style, result });
-            })
-            .expect("spawn http thread");
+        let label = tag.clone();
+        let done: HttpDone = Box::new(move |result| {
+            let _ = tx.send(HttpOutcome { tag, style, result });
+        });
+        fetcher
+            .dispatch
+            .dispatch(&label, req, MAX_HTTP_BODY_BYTES, done);
     }
 }
 

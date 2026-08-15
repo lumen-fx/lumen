@@ -106,7 +106,8 @@ tools/             the release plumbing and the editor plugins
 
 - **lumen-script**: the host-neutral scripting layer. The `ScriptHost` trait,
   the script command vocabulary, the host-generic systems, the DOM query
-  surface, and the `HttpClient` trait the HTTP builtins run on.
+  surface, and the `HttpClient` and `HttpDispatch` traits the HTTP builtins run
+  on: one says how a request is performed, the other who performs it.
 - **lumen-script-candela**, **lumen-script-rhai**, **lumen-script-lua**: the
   three hosts. Each implements `ScriptHost` and ships a plugin.
 

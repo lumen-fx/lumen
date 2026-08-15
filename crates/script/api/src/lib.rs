@@ -38,9 +38,10 @@ pub mod dom_events;
 /// `on_drag_start`). See the module docs.
 pub mod dnd;
 
-/// The HTTP transport seam behind `fetch()` / `http()`: the
-/// [`HttpClient`](http::HttpClient) trait plus its request and response
-/// types. `lumen-http-ureq` is the client Lumen ships.
+/// The HTTP seam behind `fetch()` / `http()`: the
+/// [`HttpClient`](http::HttpClient) trait and its request and response types,
+/// plus the [`HttpDispatch`](http::HttpDispatch) trait that decides who runs a
+/// request. `lumen-http-ureq` is the client Lumen ships.
 pub mod http;
 
 /// Host-generic ECS driver: dispatchers, derivation fixed-point, mirror
@@ -55,7 +56,10 @@ use thiserror::Error;
 pub use builtins::{BuiltinFn, BuiltinParam};
 pub use dnd::{dispatch_drag_start_to_script, dispatch_drops_to_script};
 pub use dom_events::{dispatch_pointer_and_key_events, dispatch_state_events};
-pub use http::{DisabledHttpClient, HttpClient, HttpRequest, HttpResponse};
+pub use http::{
+    DisabledHttpClient, HttpClient, HttpDispatch, HttpDone, HttpRequest, HttpResponse,
+    ThreadDispatch,
+};
 pub use runtime::*;
 
 /// Errors a [`ScriptHost`] can surface from `load` or `tick`.
