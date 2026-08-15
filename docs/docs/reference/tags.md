@@ -217,6 +217,11 @@ and `$parent.<field>` to read a per-entity property bag instead of a
 global signal. `bind-disabled` and `bind-scroll` accept named signals
 only.
 
+No `bind-*` accepts `$arg.<name>`, the form that names a template
+argument; it is refused with an error. An argument is substituted once,
+when the instance is created, so a value that changes while the app runs
+belongs in a signal the body binds to.
+
 A widget seeds its bound signal from the authored value on first spawn if
 the signal is not already set.
 
