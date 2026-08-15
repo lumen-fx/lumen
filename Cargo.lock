@@ -3458,6 +3458,7 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.19",
  "unicode-segmentation",
+ "web-time",
 ]
 
 [[package]]

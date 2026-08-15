@@ -36,6 +36,7 @@ use crate::render_world::{
     roll_up_frame_dirty, stash_hidden_entities,
 };
 use crate::tick::TickStage;
+use crate::time::Instant;
 use bevy_ecs::message::{Message, MessageRegistry};
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::ScheduleLabel;
@@ -85,17 +86,17 @@ impl std::fmt::Debug for EventLoopWaker {
 /// headless boot-trace prints). Absent in embedders that never call
 /// [`mark_process_start`], in which case first-frame timing is simply not
 /// reported and the marker carries no `startup_ms:`.
-static PROCESS_START: OnceLock<std::time::Instant> = OnceLock::new();
+static PROCESS_START: OnceLock<Instant> = OnceLock::new();
 
 /// Record the process-start instant. Idempotent - only the first call
 /// wins, so calling it as the first statement of `main` captures the
 /// earliest reachable moment. A no-op if already set.
 pub fn mark_process_start() {
-    let _ = PROCESS_START.set(std::time::Instant::now());
+    let _ = PROCESS_START.set(Instant::now());
 }
 
 /// The process-start instant recorded by [`mark_process_start`], if any.
-pub fn process_start() -> Option<std::time::Instant> {
+pub fn process_start() -> Option<Instant> {
     PROCESS_START.get().copied()
 }
 

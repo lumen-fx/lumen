@@ -18,7 +18,7 @@ use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::*;
 use lumen_core::render_world::AnimationsActive;
-use std::time::{Duration, Instant};
+use lumen_core::time::{Duration, Instant};
 
 /// Default long-press threshold. Matches the W3C touch UI guideline.
 pub const DEFAULT_LONG_PRESS_MS: u64 = 500;

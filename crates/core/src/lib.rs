@@ -25,6 +25,7 @@ pub mod task;
 pub mod text_events;
 pub mod text_model;
 pub mod tick;
+pub mod time;
 pub mod traits;
 pub mod window;
 pub mod window_state;

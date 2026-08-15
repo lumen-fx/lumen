@@ -48,8 +48,8 @@ use bevy_ecs::message::{Message, MessageReader, MessageRegistry, MessageWriter};
 use bevy_ecs::prelude::*;
 use lumen_core::net_capture::{self, NetEvent};
 use lumen_core::prelude::*;
+use lumen_core::time::Instant;
 use std::sync::Arc;
-use std::time::Instant;
 
 use crate::dnd;
 use crate::http::{DisabledHttpClient, HttpClient, HttpRequest, HttpResponse};

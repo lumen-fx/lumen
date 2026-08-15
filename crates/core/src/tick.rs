@@ -4,8 +4,8 @@
 //! - Ordering is enforced by `.chain()` in [`crate::app::App::new`].
 //! - The render schedule runs after the main schedule and the extract step; see [`crate::render_world`].
 
+use crate::time::{Duration, Instant};
 use bevy_ecs::prelude::*;
-use std::time::{Duration, Instant};
 
 /// The five ordered main-world stages of a Lumen tick.
 #[derive(SystemSet, Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -28,7 +28,7 @@ pub enum TickStage {
 /// - [`Self::dt`] is `now - previous_now` (zero on the first tick).
 /// - [`Self::frame`] is a monotonic counter incremented once per tick (starts at 0; reaches 1 on the first tick).
 ///
-/// Wave 1 migrates the animation primitives off `std::time::Instant::now()` to read this resource so headless tests can
+/// Wave 1 migrates the animation primitives off [`Instant::now`] to read this resource so headless tests can
 /// drive deterministic frame clocks; foundation only installs and updates the resource.
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct Tick {

@@ -19,7 +19,7 @@
 use bevy_ecs::prelude::*;
 use lumen_core::components::{Color, Fill, Opacity, Visuals};
 use lumen_core::prelude::{Tick, TickStage};
-use std::time::{Duration, Instant};
+use lumen_core::time::{Duration, Instant};
 
 /// Tween-able value. Implementations should return a linear interpolation
 /// between `self` and `other` at fraction `t` in `[0, 1]`. Implementations

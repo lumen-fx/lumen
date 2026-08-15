@@ -45,7 +45,7 @@ use bevy_ecs::prelude::*;
 use lumen_core::components::{Disabled, DocumentOrder};
 use lumen_core::input::{FocusVisible, Key, KeyPressed, NamedKey};
 use lumen_core::prelude::*;
-use std::time::{Duration, Instant};
+use lumen_core::time::{Duration, Instant};
 
 use crate::popup::PopupPanel;
 use crate::tabs::{DropdownButton, DropdownOptionButton, MenuItemButton};
