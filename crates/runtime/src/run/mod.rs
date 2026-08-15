@@ -17,6 +17,7 @@ use bevy_ecs::component::Mutable;
 use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use lumen_assets::AssetsPlugin;
+use lumen_core::input::FilePicked;
 use lumen_core::prelude::*;
 use lumen_core::window::{DEFAULT_CLEAR, WindowOptions};
 use lumen_input::InputPlugin;
@@ -24,7 +25,9 @@ use lumen_layout_taffy::TaffyLayoutPlugin;
 #[cfg(feature = "mcp")]
 use lumen_mcp::LumenMcpPlugin;
 use lumen_os_clipboard::ClipboardHost;
-use lumen_os_filedialog::{FileDialogKind, FileDialogRequest, FileDialogService};
+use lumen_os_filedialog::{
+    FileDialogKind, FileDialogRequest, FileDialogResultCommand, FileDialogService,
+};
 use lumen_os_hotkey::HotkeyRegistry as OsHotkeyRegistry;
 use lumen_os_launcher::Launcher;
 use lumen_os_notify::NotificationService;

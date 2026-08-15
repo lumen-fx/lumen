@@ -483,6 +483,13 @@ pub(crate) fn register_os_hotkey(app: &mut App) {
 /// installs.
 pub(crate) fn register_os_filedialog(app: &mut App, file_dialog_used: bool) {
     app.world.insert_resource(FileDialogService::new());
+    // A resolved dialog comes back as a typed command from whichever thread
+    // ran it. Without a handler for that payload the command drain discards
+    // it and the script's `on_file_picked` never fires, so this registration
+    // is what closes the loop between `pick_file(...)` and the callback.
+    app.register_command::<FileDialogResultCommand, _>(|world, payload| {
+        world.write_message(FilePicked::from(*payload));
+    });
     #[cfg(feature = "async")]
     if file_dialog_used {
         app.add_plugin(lumen_async_tokio::AsyncTokioPlugin);
