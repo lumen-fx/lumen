@@ -60,6 +60,7 @@ pub fn compile_app(
         .map(|(engine, source)| lumen_ir::artifact::CompiledScript {
             engine: engine.name().to_string(),
             source,
+            bytecode: None,
         })
         .collect();
     // Routing data for a multi-page app. The pages themselves are already in

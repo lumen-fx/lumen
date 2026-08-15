@@ -282,6 +282,9 @@ fn grouped_script_sources(
             None => out.push(lumen_ir::artifact::CompiledScript {
                 engine: engine.to_string(),
                 source: body.to_string(),
+                // This path has no script host to compile with (see the module
+                // doc comment); the runtime runs it from source.
+                bytecode: None,
             }),
         }
     };

@@ -37,7 +37,8 @@ any of this changes.
 
 The practical consequence: a control that shows only an image has no accessible
 name. Give it a `text` as well, or pair it with a `label` that says what it
-does.
+does. An `<image alt="...">` is recorded and travels with the compiled app, but
+the accessibility tree does not read it yet, so it is not a substitute.
 
 ## Keyboard navigation
 
