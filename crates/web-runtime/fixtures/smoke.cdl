@@ -1,0 +1,24 @@
+// Reaches for the whole builtin surface through the prelude, so the image only
+// loads if every declaration binds to a registered closure.
+import "lumen.cdl";
+
+fn main() {}
+
+fn on_start() {
+    lumen::signal_set("greeting", "hello from candela");
+    lumen::derive("shout", ["greeting"], "compute_shout");
+}
+
+// The derived signal's body. The runtime recomputes it on the tick after it is
+// registered, so a page that ticks sees `shout` without ever calling it.
+fn compute_shout(greeting: string) -> string {
+    return greeting + "!";
+}
+
+// Exported: every parameter is annotated - here, none - so the runtime can
+// call it by name.
+fn bump() -> int {
+    let next = lumen::signal_get_int("count") + 1;
+    lumen::signal_set_int("count", next);
+    return next;
+}

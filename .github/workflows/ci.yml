@@ -57,7 +57,7 @@ jobs:
           if [ "$EVENT" = "pull_request" ] &&
              [ -n "$BASE" ] &&
              git fetch --no-tags --depth=1 origin "$BASE"; then
-            pattern='^(src/|crates/|sdk/rust/|include/|tests/|apps/|fixtures/|Cargo|rust-toolchain|\.github/(workflows/ci\.yml|scripts/))'
+            pattern='^(src/|crates/|sdk/rust/|include/|tests/|apps/|fixtures/|Cargo|rust-toolchain|\.cargo/|\.github/(workflows/ci\.yml|scripts/))'
             if ! git diff --name-only "$BASE" "$HEAD" | grep -Eq "$pattern"; then
               rust=false
             fi
@@ -155,3 +155,132 @@ jobs:
       # per OS is worth much less than a complete one.
       - if: needs.changes.outputs.rust == 'true'
         run: cargo test --workspace --no-fail-fast
+
+  # The crates the browser runtime shares with the desktop build must keep
+  # compiling for the web. A native-only API reintroduced into any of them
+  # breaks here, on the pull request that adds it, rather than months later
+  # when someone next builds the web target.
+  wasm:
+    name: wasm
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - if: needs.changes.outputs.rust == 'true'
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Install pinned toolchain
+        if: needs.changes.outputs.rust == 'true'
+        run: |
+          rustup show active-toolchain
+          rustc --version
+          rustup target list --installed
+      - if: needs.changes.outputs.rust == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm
+      - if: needs.changes.outputs.rust == 'true'
+        run: |
+          cargo check --target wasm32-unknown-unknown \
+            -p lumen-core \
+            -p lumen-ir \
+            -p lumen-html \
+            -p lumen-script \
+            -p lumen-script-candela
+
+  # The browser runtime, end to end: build the module a page loads, measure it,
+  # and run the suite in a real headless browser. A DOM shim is not an option
+  # here - the browser is the layout engine this target is built around, so a
+  # fake one would pass on things a page rejects.
+  web:
+    name: web
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # The size a page pays for the runtime. Set from the first measurement
+      # plus twenty percent, and meant to be lowered: as the target matures the
+      # measurement moves and this follows it down. Raising it is a decision,
+      # not a fix.
+      WASM_SIZE_BUDGET_BYTES: 1960000
+      # `wasm-opt` is not published as a crate; the binaryen release carries it.
+      BINARYEN_VERSION: version_123
+    steps:
+      - if: needs.changes.outputs.rust == 'true'
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Install pinned toolchain
+        if: needs.changes.outputs.rust == 'true'
+        run: |
+          rustup show active-toolchain
+          rustc --version
+      # The command-line tool refuses an artifact built against a different
+      # `wasm-bindgen` version, so this pin tracks the workspace dependency.
+      - if: needs.changes.outputs.rust == 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@0.2.127
+      - name: Install wasm-opt
+        if: needs.changes.outputs.rust == 'true'
+        run: |
+          set -euo pipefail
+          url="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VERSION/binaryen-$BINARYEN_VERSION-x86_64-linux.tar.gz"
+          curl -fsSL "$url" | tar xz
+          echo "$PWD/binaryen-$BINARYEN_VERSION/bin" >> "$GITHUB_PATH"
+      - if: needs.changes.outputs.rust == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: web
+      - name: Build the browser runtime
+        if: needs.changes.outputs.rust == 'true'
+        run: cargo build -p lumen-web-runtime --target wasm32-unknown-unknown --profile wasm-release
+      # `wasm-opt` validates against the features it is told about, and the
+      # ones rustc emits for this target are not all on by default.
+      - name: Generate the JS bindings and optimise
+        if: needs.changes.outputs.rust == 'true'
+        run: |
+          set -euo pipefail
+          wasm-bindgen --target web --no-typescript --out-dir web-dist \
+            target/wasm32-unknown-unknown/wasm-release/lumen_web_runtime.wasm
+          wasm-opt -Oz \
+            --enable-bulk-memory \
+            --enable-bulk-memory-opt \
+            --enable-nontrapping-float-to-int \
+            --enable-sign-ext \
+            --enable-mutable-globals \
+            --enable-reference-types \
+            --enable-multivalue \
+            web-dist/lumen_web_runtime_bg.wasm \
+            -o web-dist/lumen_web_runtime_bg.wasm
+      - name: Record the module size
+        if: needs.changes.outputs.rust == 'true'
+        run: |
+          set -euo pipefail
+          bytes=$(stat -c%s web-dist/lumen_web_runtime_bg.wasm)
+          gzipped=$(gzip -9 -c web-dist/lumen_web_runtime_bg.wasm | wc -c)
+          {
+            echo "| lumen-web-runtime | bytes |"
+            echo "| --- | --- |"
+            echo "| wasm | $bytes |"
+            echo "| wasm, gzipped | $gzipped |"
+            echo "| budget | $WASM_SIZE_BUDGET_BYTES |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$bytes" -gt "$WASM_SIZE_BUDGET_BYTES" ]; then
+            echo "the module is $bytes bytes, over the $WASM_SIZE_BUDGET_BYTES budget" >&2
+            exit 1
+          fi
+      - if: needs.changes.outputs.rust == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumen-web-runtime
+          path: web-dist/
+      # The runner ships Chrome and a matching chromedriver;
+      # `wasm-bindgen-test-runner` drives the browser over WebDriver.
+      - name: Run the browser suite
+        if: needs.changes.outputs.rust == 'true'
+        run: |
+          set -euo pipefail
+          export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver"
+          cargo test -p lumen-web-runtime --target wasm32-unknown-unknown

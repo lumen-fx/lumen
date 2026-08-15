@@ -288,7 +288,7 @@ impl ScriptHost for CandelaVmHost {
 /// fires `on_start`, installs the host resource, and registers the dispatcher /
 /// derivation / timer / fetch system set.
 ///
-/// Selectable alternative to [`ScriptCandelaPlugin`](crate::ScriptCandelaPlugin)
+/// Selectable alternative to `ScriptCandelaPlugin`
 /// for a target that ships no compiler.
 pub struct ScriptCandelaVmPlugin {
     /// The `.cdlb` image loaded on app start.

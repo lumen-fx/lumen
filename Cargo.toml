@@ -101,6 +101,7 @@ members = [
     "crates/runtime",
     "crates/text",
     "crates/web",
+    "crates/web-runtime",
     "crates/widget",
     "crates/widget-macros",
     "crates/backends/*",
@@ -318,6 +319,17 @@ unicode-segmentation = "1"
 # in the tree through winit/wgpu, so this pins the one version they share.
 web-time = "1.1"
 
+# The browser boundary (lumen-web-runtime). `web-sys` ships one cargo feature
+# per Web IDL interface and generates nothing that is not named, so every
+# consumer lists the interfaces it calls rather than enabling a group; the
+# generated glue is what a page downloads. The three versions move together and
+# are pinned here so one `wasm-bindgen` CLI matches the whole workspace: the
+# command-line tool refuses an artifact built against a different version.
+wasm-bindgen = "0.2.127"
+wasm-bindgen-test = "0.3"
+js-sys = "0.3"
+web-sys = { version = "0.3", default-features = false }
+
 # Cross-platform filesystem watch - backs lumen-assets' disk-change
 # invalidation. Wraps inotify / FSEvents / ReadDirectoryChangesW.
 # `RecommendedWatcher` picks the best backend per platform at runtime.
@@ -386,6 +398,19 @@ opt-level = "s"
 lto = "fat"
 codegen-units = 1
 debug = false
+strip = "symbols"
+
+# The wasm module a page downloads, so size beats everything: "z" over "s",
+# and `panic = "abort"` because wasm32-unknown-unknown has no unwinder to
+# generate landing pads for. Build the browser runtime with
+# `--profile wasm-release --target wasm32-unknown-unknown`; `wasm-opt -Oz`
+# runs after, on the wasm-bindgen output.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
 strip = "symbols"
 
 # Speed up dev builds of heavy backend crates while keeping our own crates

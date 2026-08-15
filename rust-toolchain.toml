@@ -4,3 +4,8 @@
 [toolchain]
 channel = "1.97.0"
 components = ["rustfmt", "clippy"]
+# The browser runtime (crates/web-runtime) and the wasm compile gate over the
+# crates it shares with the desktop build. Listed here so `rustup` installs the
+# standard library for it on checkout, in CI and locally alike, rather than
+# every wasm command failing until someone runs `rustup target add`.
+targets = ["wasm32-unknown-unknown"]

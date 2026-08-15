@@ -121,6 +121,15 @@ tools/             the release plumbing and the editor plugins
 - **lumen-script-candela**, **lumen-script-rhai**, **lumen-script-lua**: the
   three hosts. Each implements `ScriptHost` and ships a plugin.
 
+The candela crate carries two hosts, because a candela program reaches Lumen
+two ways. One compiles source and can reload it while the app runs; the other
+loads a precompiled `.cdlb` image and carries no compiler, which is what a
+shipped app and the browser want. Both register the same builtin list, written
+once against a registration sink the compiler's engine and the runtime's host
+registry each implement, so a builtin added for one is bound by the other. The
+compiler half sits behind the crate's default-on `compiler` feature; turning it
+off leaves the artifact host and drops the front end from the graph.
+
 ### Operating system surfaces
 
 Each `os-*` crate owns one capability, so an app links only what it uses.
@@ -151,6 +160,12 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
 - **lumen-web**: the web target's emitter. Turns an app into a static site:
   one HTML document per page with the markup already in it, plus the manifest
   the browser runtime boots from. It emits into memory and touches no files.
+- **lumen-web-runtime**: the browser runtime, built as a wasm module. One
+  prebuilt module serves every app: a page loads it, hands it the app's
+  compiled data, and it runs the same tick a desktop app runs. It installs no
+  layout backend and extracts no scene, because the page's own CSS engine lays
+  out and the DOM is the scene. Scripts run as precompiled candela bytecode, so
+  no compiler reaches the page.
 - **lumen**: the engine crate at the workspace root. It exports the C ABI, an
   opaque app handle, a tagged value type, and the node binding, and builds as
   the shared `liblumen` plus a static library.
