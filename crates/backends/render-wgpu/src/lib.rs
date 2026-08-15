@@ -1,14 +1,17 @@
 //! WGPU + vello renderer backend.
 //!
-//! - Registers a render-world system in [`RenderStage::Render`] that queries [`ExtractedRect`] and [`ExtractedText`], encodes them into a [`vello::Scene`], and renders into an `Rgba8Unorm` texture.
-//! - Offscreen-texture path; tests read back the framebuffer to CPU for cross-platform parity.
-//! - The on-screen winit-surface path lives in `lumen-window-winit` and reuses [`translate_rects`] and [`draw_text_into_vello`] with its own surface texture view.
+//! Two entry points share one scene walker and one set of emitters:
+//!
+//! - [`WgpuRenderer`], an offscreen renderer that draws into an `Rgba8Unorm` texture. Tests read the framebuffer back to CPU for cross-platform parity.
+//! - [`WgpuSurfaceRenderer`], the on-screen path. It presents into whatever window a window backend attaches, through [`lumen_core::traits::SurfaceRenderer`], so the window backend never names wgpu or vello.
 
 #![warn(missing_docs)]
 
 pub mod scene_cache;
+pub mod surface;
 pub mod walker;
 pub use scene_cache::{CacheStats, FragmentKey, SceneFragmentCache, append_translated};
+pub use surface::{GPU_INIT_DEADLINE_DEFAULT_MS, GPU_INIT_DEADLINE_ENV, WgpuSurfaceRenderer};
 pub use walker::{
     ClipStack, WalkContext, damage_union, diff_retained_scenes, walk_node, walk_retained_scene,
 };
@@ -18,6 +21,9 @@ use bevy_ecs::system::NonSendMut;
 use lumen_core::components::Color as LumenColor;
 use lumen_core::prelude::*;
 use lumen_core::render_world::DEFAULT_SELECTION_BG;
+use lumen_text::{
+    SelectionBand, ShapeOptions, ShapedRun, ShaperService, TextGeometry, TextShaper, WrapMode,
+};
 use thiserror::Error;
 use vello::peniko;
 use vello::peniko::color::{AlphaColor, Srgb};
@@ -913,14 +919,14 @@ fn font_blob(font_id: u64, font_data: &std::sync::Arc<Vec<u8>>) -> Blob<u8> {
 /// walker never has to deep-clone the run (String and all) per node.
 ///
 /// W3.6/W5.6: shapes the run ONCE per frame; caret + selection x
-/// positions come from the same shape via [`lumen_text::TextGeometry`].
+/// positions come from the same shape via [`TextGeometry`].
 /// Multi-segment paths (Latin + Arabic + ...) issue one `draw_glyphs`
 /// call per segment so each font is bound to the right glyph slice;
 /// selection highlights emit one rectangle per maximal contiguous-
 /// level slice the range intersects (HTML / Qt / macOS convention).
 /// The pre-W3.6 baseline triggered three additional reshape passes per
 /// frame (one for caret prefix, two for selection ends).
-pub fn draw_text_into_vello<S: lumen_text::TextShaper + ?Sized>(
+pub fn draw_text_into_vello<S: TextShaper + ?Sized>(
     shaper: &mut S,
     vello_scene: &mut vello::Scene,
     text: &ExtractedText,
@@ -928,7 +934,6 @@ pub fn draw_text_into_vello<S: lumen_text::TextShaper + ?Sized>(
     opacity: f32,
 ) {
     use lumen_core::components::TextAlign;
-    use lumen_text::{ShapeOptions, WrapMode};
     // The walker passes the un-scaled `ExtractedText` by reference plus the
     // running dpr + opacity; we fold both in here rather than deep-cloning
     // the run (String included) per node just to mutate a few scalars.
@@ -962,26 +967,26 @@ pub fn draw_text_into_vello<S: lumen_text::TextShaper + ?Sized>(
     // The geometry index is only consumed by the caret + selection branches;
     // building it for every text node (the common no-caret label) wasted a
     // per-node pass. Build it lazily only when one of those is present.
-    // W3.6/D4: this is now `lumen_text::TextGeometry` (relocated from the
+    // W3.6/D4: this is now `TextGeometry` (relocated from the
     // former private `ShapedRunSegmentIndex`); the render draw path still
     // reshapes here; the D4-R render-consume dedup is separate.
     let run_index = if text.caret.is_some() || text.selection.is_some() {
-        shaped.as_ref().map(lumen_text::TextGeometry::from)
+        shaped.as_ref().map(TextGeometry::from)
     } else {
         None
     };
     // Selection bands, shared by the highlight fill below and the
     // selected-glyph foreground over-paint further down. BiDi-correct:
-    // [`lumen_text::TextGeometry::selection_bands`] returns one band per
+    // [`TextGeometry::selection_bands`] returns one band per
     // line-portion of each maximal contiguous-level slice - matches HTML /
     // Qt / macOS selection visualisation. Each band carries its own
     // baseline, so a selection running across a line break paints on both
     // lines instead of collapsing onto the first one.
-    let sel_bands: Vec<lumen_text::SelectionBand> = match (text.selection, &run_index) {
+    let sel_bands: Vec<SelectionBand> = match (text.selection, &run_index) {
         (Some((s, e)), Some(idx)) if e > s => idx.selection_bands(s, e),
         _ => Vec::new(),
     };
-    let band_y = |b: &lumen_text::SelectionBand| {
+    let band_y = |b: &SelectionBand| {
         let base = origin.y as f64 + b.baseline_y as f64;
         (base - size_px as f64 * 0.9, base + size_px as f64 * 0.15)
     };
@@ -1103,7 +1108,7 @@ pub fn draw_text_into_vello<S: lumen_text::TextShaper + ?Sized>(
 /// vello's glyph-atlas cache (keyed on `Blob` identity) stays warm.
 fn draw_glyph_run(
     vello_scene: &mut vello::Scene,
-    run: &lumen_text::ShapedRun,
+    run: &ShapedRun,
     size_px: f32,
     draw_x: f32,
     baseline_y: f32,
@@ -1142,26 +1147,21 @@ fn safe_prefix(text: &str, byte_offset: usize) -> &str {
     }
 }
 
-/// Holder for a boxed text shaper kept as a non-send render-world resource.
-///
-/// Renderer system pulls this if present and draws [`ExtractedText`] via it.
-/// Absent = text silently skipped (current behavior of the offscreen path
-/// when constructed without a shaper).
-pub struct WgpuTextShaper(pub Box<dyn lumen_text::TextShaper>);
-
 /// Plugin: installs the offscreen [`WgpuRenderer`] into the render world and
 /// registers the render-world system in [`RenderStage::Render`].
 ///
-/// Optionally accepts a [`lumen_text::TextShaper`] via
+/// Optionally accepts a [`TextShaper`] via
 /// [`WgpuRendererPlugin::with_text_shaper`]; without it, text draw commands
-/// are skipped.
+/// are skipped. The shaper is installed as a render-world [`ShaperService`],
+/// the same holder the on-screen path reads, so both render paths find the
+/// shaper in one place.
 pub struct WgpuRendererPlugin {
     /// Initial offscreen target width.
     pub width: u32,
     /// Initial offscreen target height.
     pub height: u32,
     /// Optional text shaper; installed as a non-send render-world resource.
-    pub text_shaper: Option<Box<dyn lumen_text::TextShaper>>,
+    pub text_shaper: Option<Box<dyn TextShaper>>,
     /// Optional pre-initialised renderer. When set, `build` installs it
     /// instead of creating one, letting callers surface GPU-init failure
     /// as a `Result` (via [`WgpuRenderer::new_offscreen`]) rather than the
@@ -1193,7 +1193,7 @@ impl WgpuRendererPlugin {
     }
 
     /// Attach a text shaper. Required to render [`ExtractedText`].
-    pub fn with_text_shaper<S: lumen_text::TextShaper + 'static>(mut self, shaper: S) -> Self {
+    pub fn with_text_shaper<S: TextShaper + 'static>(mut self, shaper: S) -> Self {
         self.text_shaper = Some(Box::new(shaper));
         self
     }
@@ -1202,7 +1202,7 @@ impl WgpuRendererPlugin {
     /// [`Self::with_text_shaper`]; avoids double-boxing when the caller
     /// already holds a `Box<dyn TextShaper>` - e.g. the one built for
     /// `WindowOptions`).
-    pub fn with_boxed_text_shaper(mut self, shaper: Box<dyn lumen_text::TextShaper>) -> Self {
+    pub fn with_boxed_text_shaper(mut self, shaper: Box<dyn TextShaper>) -> Self {
         self.text_shaper = Some(shaper);
         self
     }
@@ -1228,7 +1228,7 @@ impl Plugin for WgpuRendererPlugin {
         app.render_world
             .insert_resource(SceneFragmentCache::default());
         if let Some(shaper) = self.text_shaper {
-            app.render_world.insert_non_send(WgpuTextShaper(shaper));
+            app.render_world.insert_non_send(ShaperService::from(shaper));
         }
         app.add_render_systems(RenderStage::Render, wgpu_render_system);
     }
@@ -1249,7 +1249,7 @@ impl Plugin for WgpuRendererPlugin {
 fn wgpu_render_system(
     mut renderer: NonSendMut<WgpuRenderer>,
     mut cache: Option<ResMut<SceneFragmentCache>>,
-    shaper: Option<NonSendMut<WgpuTextShaper>>,
+    shaper: Option<NonSendMut<ShaperService>>,
     viewport: Res<Viewport>,
     retained: Res<lumen_core::node_ir::RetainedScene>,
     mut previous: ResMut<lumen_core::node_ir::PreviousScene>,
@@ -1295,9 +1295,9 @@ fn wgpu_render_system(
         renderer.scene.reset();
         {
             let mut shaper_opt = shaper;
-            let shaper_ref: Option<&mut dyn lumen_text::TextShaper> = shaper_opt
+            let shaper_ref: Option<&mut dyn TextShaper> = shaper_opt
                 .as_deref_mut()
-                .map(|w| &mut *w.0 as &mut dyn lumen_text::TextShaper);
+                .map(|s| &mut **s as &mut dyn TextShaper);
             let mut ctx = WalkContext::new_with_dpr(
                 &mut renderer.scene,
                 cache.as_deref_mut(),

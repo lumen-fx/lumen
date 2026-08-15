@@ -1,72 +1,37 @@
-//! winit 0.30 on-screen window + WGPU/vello presentation.
+//! winit 0.30 on-screen window + input.
 //!
-//! Vello's compute pipeline binds the render target as a storage texture
-//! with format hard-pinned to `Rgba8Unorm`. Most swap-chain surfaces expose
-//! `Bgra8Unorm` / `Bgra8UnormSrgb`. To stay portable we render into an
-//! `Rgba8Unorm` intermediate texture, then blit it onto the surface with
-//! `wgpu::util::TextureBlitter` (handles channel/sRGB conversion).
+//! This crate owns the window, the event loop, and the translation of
+//! platform events into Lumen messages. It owns no pixels and no
+//! accessibility tree: a [`SurfaceRenderer`] presents frames and an
+//! [`A11yBackend`] talks to the platform accessibility API, both behind
+//! traits from `lumen-core`, so the window backend compiles without naming
+//! a graphics API or an accessibility library.
 //!
 //! Lifecycle:
-//!   resumed -> window + instance + surface + device + vello + intermediate
-//!             + TextureBlitter for the surface format
-//!   Resized -> reconfigure surface + recreate intermediate
-//!   RedrawRequested -> app.tick(), build vello scene from render world,
-//!             vello -> intermediate, blit intermediate -> surface, present
+//!   resumed -> window + accessibility bridge + renderer attach
+//!   Resized -> renderer resize + viewport rewrite + synchronous repaint
+//!   RedrawRequested -> pump accessibility requests, app.tick(), present
 //!   CloseRequested / SIGINT / SIGTERM -> emit CloseRequest, run one veto
 //!             tick (script `on_close` / `lumen_app_on_close` / app
 //!             systems), then exit unless vetoed; `exiting` persists
-//!             window state and drops the GPU state while the platform
+//!             window state and detaches the renderer while the platform
 //!             connection is still alive
 
 #![warn(missing_docs)]
 
 use bevy_ecs::message::Messages;
-use lumen_a11y_accesskit::accesskit::ActionRequest;
-use lumen_a11y_accesskit::accesskit_winit::{
-    Adapter as A11yAdapter, Event as A11yEvent, WindowEvent as A11yWindowEvent,
-};
-use lumen_a11y_accesskit::{
-    A11yPlugin, entity_click_point, node_to_entity, take_pending_tree_update,
-};
-use lumen_core::input::{
-    CloseRequest, FocusVisible, PendingFileDrops, WindowFocused, WindowOccluded,
-};
+use lumen_core::input::{CloseRequest, PendingFileDrops, WindowFocused, WindowOccluded};
 use lumen_core::prelude::*;
 use lumen_core::text_events::{ImeSurroundingRequested, ImeSurroundingResponse, TextEditRequest};
 use lumen_core::text_model::TextBuffer;
+use lumen_core::traits::{A11yBackend, FrameRequest, RenderTarget, SurfaceRenderer};
 use lumen_core::window::{MenuModel, WindowGeometry, WindowOptions};
-use lumen_render_wgpu::WalkContext;
-use lumen_text::TextShaper;
+use raw_window_handle::{
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
+};
+use std::any::Any;
 use std::sync::Arc;
 use thiserror::Error;
-use vello::peniko::color::{AlphaColor, Srgb};
-use vello::wgpu;
-use vello::wgpu::util::TextureBlitter;
-use vello::{AaConfig, RenderParams, RendererOptions};
-
-/// The single GPU backend this per-OS build compiles and probes (Part A of
-/// runtime-tree-shaking). Mirrors `lumen_render_wgpu`'s constant: the wgpu
-/// feature set is trimmed to one backend per OS at the manifest level, and the
-/// winit surface instance is pinned to the same bit so no compiled-out backend
-/// is probed. Unknown OSes fall back to Vulkan.
-const NATIVE_BACKENDS: wgpu::Backends = {
-    #[cfg(target_os = "linux")]
-    {
-        wgpu::Backends::VULKAN
-    }
-    #[cfg(target_os = "macos")]
-    {
-        wgpu::Backends::METAL
-    }
-    #[cfg(target_os = "windows")]
-    {
-        wgpu::Backends::DX12
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        wgpu::Backends::VULKAN
-    }
-};
 use winit::application::ApplicationHandler;
 use winit::event::{
     ElementState, Ime as WinitIme, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent,
@@ -240,19 +205,6 @@ impl Plugin for WinitPlugin {
         // also write to it (W3.5 IME commit-with-replacement).
         app.add_message::<TextEditRequest>();
         app.world.insert_resource(RedrawScheduler::default());
-        // Install the AccessKit tree-build system inside
-        // [`TickStage::A11ySync`]. After W5.2 the redraw path no longer
-        // calls `build_tree_update`; instead, every winit-backed app
-        // runs `sync_a11y_tree` once per logical tick and the
-        // `RedrawRequested` handler only forwards the `PendingA11yUpdate`
-        // resource to `Adapter::update_if_active`. See
-        // `docs/audits/a11y.md` "rebuilt every frame" P1.
-        app.add_plugin(A11yPlugin);
-        // Also install the W5.3 inbound-action consumer that mirrors
-        // `A11yContextMenuRequests` onto the typed
-        // [`lumen_core::input::ShowContextMenu`] message bus so
-        // apps / scripts can subscribe via `MessageReader`.
-        app.add_systems(TickStage::Systems, forward_a11y_context_menu_requests);
         // Register a typed-command handler so the (Linux-only) XDG
         // portal listener can push `XdgColorSchemeUpdate { dark }`
         // through [`lumen_core::command::Command::Typed`] and have it
@@ -274,79 +226,18 @@ pub struct XdgColorSchemeUpdate {
     pub dark: bool,
 }
 
-/// Environment variable controlling the GPU adapter / device init
-/// deadline (milliseconds). Defaults to 5000 when unset or unparsable.
-/// When exceeded, [`GpuState::new`] panics with a diagnostic.
-pub const GPU_INIT_DEADLINE_ENV: &str = "LUMEN_GPU_INIT_DEADLINE_MS";
-
-/// Default GPU init deadline, in milliseconds. Surfaces driver hangs
-/// (eg. broken Vulkan loader, blocked Wayland compositor) within a
-/// bounded wall-clock budget instead of leaving the process frozen.
-pub const GPU_INIT_DEADLINE_DEFAULT_MS: u64 = 5000;
-
-fn gpu_init_deadline_ms() -> u64 {
-    std::env::var(GPU_INIT_DEADLINE_ENV)
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(GPU_INIT_DEADLINE_DEFAULT_MS)
-}
-
-/// Spawn a watchdog thread that panics if `flag` is not lit within
-/// `deadline_ms` milliseconds. Used to surface driver hangs in
-/// `GpuState::new` (real async kickoff is W6.10 / future work).
-fn spawn_gpu_init_watchdog(
-    deadline_ms: u64,
-    flag: Arc<std::sync::atomic::AtomicBool>,
-) -> std::thread::JoinHandle<()> {
-    std::thread::Builder::new()
-        .name("lumen-gpu-init-watchdog".into())
-        .spawn(move || {
-            let start = std::time::Instant::now();
-            let deadline = std::time::Duration::from_millis(deadline_ms);
-            // Sleep in 50 ms slices so we wake promptly on success.
-            while start.elapsed() < deadline {
-                if flag.load(std::sync::atomic::Ordering::Acquire) {
-                    return;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            if !flag.load(std::sync::atomic::Ordering::Acquire) {
-                // We panic from the watchdog thread; this aborts the
-                // process via the default panic-hook, which is the
-                // useful failure mode here - the main thread is wedged
-                // inside `pollster::block_on` waiting for a driver
-                // callback that will never come.
-                panic!(
-                    "lumen-window-winit: GPU init exceeded {} ms deadline (\
-                     set {}=<ms> to tune). This usually means the GPU \
-                     adapter / device request is blocked at the driver \
-                     level (Vulkan loader, Wayland compositor handshake, \
-                     or device reset). Re-run with `LUMEN_GPU_INIT_TRACE=1` \
-                     and a tracing subscriber to narrow the stage.",
-                    deadline_ms, GPU_INIT_DEADLINE_ENV,
-                );
-            }
-        })
-        .expect("spawn lumen-gpu-init-watchdog")
-}
-
-/// User-event envelope for the winit loop. Two independent producers need
-/// to interrupt a parked loop from off the main thread:
+/// User-event envelope for the winit loop. Everything that needs to
+/// interrupt a parked loop from off the main thread posts one of these:
 ///
-/// - `accesskit_winit`'s adapter, forwarding AT actions / tree requests.
-/// - An explicit, payload-less wakeup ([`UserEvent::Wake`]) that backs
-///   [`lumen_core::app::EventLoopWaker`] - `lumen-mcp`'s `SimulateQueue`
+/// - A payload-less wakeup ([`UserEvent::Wake`]) backing
+///   [`lumen_core::app::EventLoopWaker`]. `lumen-mcp`'s `SimulateQueue`
 ///   (and anything else with the same cross-thread-queue shape) calls it
-///   after pushing so the tick that drains the queue runs promptly instead
-///   of waiting for an unrelated OS event.
-///
-/// `accesskit_winit::Adapter::with_event_loop_proxy` is generic over any
-/// `T: From<Event> + Send + 'static`, so wrapping its event type here
-/// costs nothing at the adapter boundary - only this crate needs to know
-/// the envelope exists.
+///   after pushing, so the tick that drains the queue runs promptly
+///   instead of waiting for an unrelated OS event. The accessibility
+///   bridge uses the same handle when an assistive technology queues a
+///   request from its own thread.
+/// - A close request from a signal handler.
 enum UserEvent {
-    /// Forwarded from `accesskit_winit`'s adapter.
-    A11y(A11yEvent),
     /// Cross-thread nudge: something was pushed onto a queue the tick
     /// loop doesn't otherwise observe until the next `RedrawRequested`.
     /// Carries no payload - the tick re-reads whatever resource changed.
@@ -360,23 +251,56 @@ enum UserEvent {
     CloseRequested,
 }
 
-impl From<A11yEvent> for UserEvent {
-    fn from(e: A11yEvent) -> Self {
-        UserEvent::A11y(e)
+/// Builds the accessibility bridge once the window exists.
+///
+/// The window backend does not name an accessibility library: the
+/// composition point passes this factory in, and whatever it returns is
+/// driven through [`A11yBackend`]. The third argument wakes a parked event
+/// loop, which the bridge calls when an assistive technology queues a
+/// request from its own thread. Pass `None` to [`run`] to run without
+/// accessibility.
+pub type A11yBridgeFactory =
+    Box<dyn Fn(&ActiveEventLoop, Arc<Window>, Arc<dyn Fn() + Send + Sync>) -> Box<dyn A11yBackend>>;
+
+/// The winit window, shared with the renderer as a [`RenderTarget`].
+///
+/// The renderer holds one of these for as long as it has a surface, so the
+/// window outlives every GPU object bound to it.
+struct WinitTarget(Arc<Window>);
+
+impl HasWindowHandle for WinitTarget {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+        self.0.window_handle()
+    }
+}
+
+impl HasDisplayHandle for WinitTarget {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+        self.0.display_handle()
+    }
+}
+
+impl RenderTarget for WinitTarget {
+    fn physical_size(&self) -> (u32, u32) {
+        let size = self.0.inner_size();
+        (size.width.max(1), size.height.max(1))
     }
 }
 
 /// Run the app on a real winit window. Blocks until the window closes.
 ///
-/// `text_shaper` is the render-side shaper the composition point picked;
-/// without one, [`ExtractedText`] is silently skipped. It rides beside
-/// [`WindowOptions`] rather than inside it because the options are
-/// pure data every launch path resolves, while the shaper is a live
-/// backend object.
+/// `renderer` presents the frames; it is attached to the window once the
+/// window exists and detached before the platform connection closes.
+/// `a11y` builds the accessibility bridge at the same moment, or is
+/// `None` for a run without one. Both ride beside [`WindowOptions`]
+/// rather than inside it: the options are pure data every launch path
+/// resolves, while these are live backend objects the composition point
+/// chose.
 pub fn run(
     mut app: App,
     opts: WindowOptions,
-    text_shaper: Option<Box<dyn TextShaper>>,
+    renderer: Box<dyn SurfaceRenderer>,
+    a11y: Option<A11yBridgeFactory>,
 ) -> Result<(), WinitError> {
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
@@ -502,9 +426,10 @@ pub fn run(
     let mut handler = WinitHandler {
         app,
         opts,
-        text_shaper,
-        gpu: None,
-        adapter: None,
+        renderer,
+        a11y_factory: a11y,
+        a11y: None,
+        window: None,
         proxy,
         last_ime: ImeRequest::default(),
         last_cursor: CursorShape::Default,
@@ -529,16 +454,22 @@ pub fn run(
 struct WinitHandler {
     app: App,
     opts: WindowOptions,
-    /// Render-side text shaper handed to [`run`]. `None` means text
-    /// draw commands are skipped.
-    text_shaper: Option<Box<dyn TextShaper>>,
-    gpu: Option<GpuState>,
-    /// AccessKit adapter; constructed once the winit `Window` exists.
-    /// Receives every winit `WindowEvent` and posts back through
-    /// `a11y_proxy` for InitialTreeRequested / ActionRequested.
-    adapter: Option<A11yAdapter>,
-    /// EventLoop proxy handed to [`A11yAdapter::with_event_loop_proxy`];
-    /// also cloned in [`run`] to back [`lumen_core::app::EventLoopWaker`].
+    /// Presents the frames. Attached to the window in
+    /// [`ApplicationHandler::resumed`] and detached in
+    /// [`ApplicationHandler::exiting`].
+    renderer: Box<dyn SurfaceRenderer>,
+    /// Builds [`Self::a11y`] once the window exists. `None` runs without
+    /// accessibility.
+    a11y_factory: Option<A11yBridgeFactory>,
+    /// Accessibility bridge; receives every winit `WindowEvent` and hands
+    /// queued assistive-technology requests to the world each frame.
+    a11y: Option<Box<dyn A11yBackend>>,
+    /// The window itself. `None` until `resumed` creates it; every event
+    /// arm gates on it, so nothing touches the platform after `exiting`
+    /// drops it.
+    window: Option<Arc<Window>>,
+    /// EventLoop proxy backing [`lumen_core::app::EventLoopWaker`] and the
+    /// signal watchers.
     proxy: EventLoopProxy<UserEvent>,
     /// Last IME control values applied to the window. Compared against the
     /// current [`ImeRequest`] resource each frame to avoid hammering
@@ -563,35 +494,9 @@ struct WinitHandler {
     last_frame_at: Option<std::time::Instant>,
 }
 
-struct GpuState {
-    window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
-    surface_config: wgpu::SurfaceConfiguration,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    vello: vello::Renderer,
-    vello_scene: vello::Scene,
-    /// Vello sub-scene fragment cache; position-independent encoded paths for rects, shadows, and outlines keyed by appearance hash.
-    /// `Scene::append(&frag, Some(translate))` reuses each encoded fragment across every position it appears at; lives on `GpuState` because the encodings are renderer-specific.
-    fragment_cache: lumen_render_wgpu::SceneFragmentCache,
-    /// Rgba8Unorm intermediate (storage-binding compatible). Vello writes
-    /// here; TextureBlitter samples it via [`intermediate_view_srgb`] which
-    /// re-interprets the bytes as sRGB-encoded, so a final blit into an sRGB
-    /// surface format does not double-encode.
-    intermediate: wgpu::Texture,
-    /// Linear view used by vello as a storage write target.
-    intermediate_view_linear: wgpu::TextureView,
-    /// sRGB view of the same texture, used by the blitter as the sample
-    /// source. Bytes are identical to what vello wrote; the GPU re-reads
-    /// them through the sRGB-to-linear lookup, which exactly cancels the
-    /// final linear-to-sRGB encode the surface applies.
-    intermediate_view_srgb: wgpu::TextureView,
-    blitter: TextureBlitter,
-}
-
 impl ApplicationHandler<UserEvent> for WinitHandler {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.gpu.is_some() {
+        if self.window.is_some() {
             return;
         }
         let mut attrs = WindowAttributes::default()
@@ -681,13 +586,17 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 vp.monitor_name = name.clone();
             }
         }
-        // Accessibility adapter must be constructed before the first
-        // RedrawRequested so InitialTreeRequested arrives in time.
-        self.adapter = Some(A11yAdapter::with_event_loop_proxy(
-            event_loop,
-            &window,
-            self.proxy.clone(),
-        ));
+        // The accessibility bridge must exist before the first
+        // RedrawRequested so the platform's initial-tree handshake arrives
+        // in time. It queues requests from assistive-technology threads and
+        // wakes the loop through the same proxy everything else uses.
+        if let Some(factory) = self.a11y_factory.as_ref() {
+            let wake_proxy = self.proxy.clone();
+            let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                let _ = wake_proxy.send_event(UserEvent::Wake);
+            });
+            self.a11y = Some(factory(event_loop, window.clone(), wake));
+        }
         // W5.2: tell the a11y tree-build system what the human-readable
         // root label is so it can stop hard-coding "Lumen app". Sourced
         // from the window options title; the app passes the same string
@@ -701,82 +610,52 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
         if let Some(spec) = self.opts.menubar.take() {
             attach_menubar_via_os_menu(&window, &spec);
         }
-        match GpuState::new(window) {
-            Ok(state) => self.gpu = Some(state),
-            Err(e) => {
-                eprintln!("lumen-window-winit: wgpu init failed: {e}");
-                event_loop.exit();
-            }
+        if let Err(e) = self.renderer.attach(Arc::new(WinitTarget(window.clone()))) {
+            eprintln!("lumen-window-winit: renderer init failed: {e}");
+            event_loop.exit();
+            return;
         }
+        self.window = Some(window);
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         // Persist final window geometry through whatever the caller
         // wired up (typically `lumenc::window_state::save`).
-        if let (Some(cb), Some(gpu)) = (self.opts.on_close_state.take(), self.gpu.as_ref()) {
-            let inner = gpu.window.inner_size();
-            let scale = gpu.window.scale_factor();
+        if let (Some(cb), Some(window)) = (self.opts.on_close_state.take(), self.window.as_ref()) {
+            let inner = window.inner_size();
+            let scale = window.scale_factor();
             let logical_w = (inner.width as f64 / scale).round().max(1.0) as u32;
             let logical_h = (inner.height as f64 / scale).round().max(1.0) as u32;
-            let position = gpu.window.outer_position().ok().map(|p| (p.x, p.y));
+            let position = window.outer_position().ok().map(|p| (p.x, p.y));
             cb(WindowGeometry {
                 position,
                 size: (logical_w, logical_h),
-                maximized: gpu.window.is_maximized(),
+                maximized: window.is_maximized(),
             });
         }
-        // Stop redraw scheduling - nothing may touch the GPU past this
+        // Stop redraw scheduling - nothing may touch the window past this
         // point (`about_to_wait` / `window_event` both gate on
-        // `self.gpu`).
+        // `self.window`).
         if let Some(mut sch) = self.app.world.get_resource_mut::<RedrawScheduler>() {
             sch.pending = false;
         }
-        // Release the accessibility adapter before the window it wraps.
-        self.adapter = None;
-        // Orderly GPU teardown WHILE the platform connection is still
-        // alive. `event_loop.run_app` consumes the `EventLoop`, so once
-        // it returns the Wayland/X11 connection is already gone - and
-        // dropping `GpuState` at that point makes the wgpu `Instance`'s
-        // GLES backend call `eglTerminate` against a dead `wl_display`,
-        // which segfaults (observed: exit 139 on every close under
-        // Hyprland/EGL). Dropping here runs the surface -> device ->
-        // instance drop chain inside `exiting`, where the display
-        // connection is still valid. Field order in `GpuState` keeps
-        // the surface ahead of the device/instance.
-        self.gpu = None;
+        // Release the accessibility bridge before the window it wraps.
+        self.a11y = None;
+        // Orderly renderer teardown WHILE the platform connection is still
+        // alive. `event_loop.run_app` consumes the `EventLoop`, so once it
+        // returns the Wayland/X11 connection is already gone - and
+        // releasing a wgpu surface at that point makes the GLES backend
+        // call `eglTerminate` against a dead `wl_display`, which segfaults
+        // (observed: exit 139 on every close under Hyprland/EGL).
+        // Detaching here runs the whole release chain while the display
+        // connection is still valid, and drops the renderer's handle on
+        // the window so the window itself goes last.
+        self.renderer.detach();
+        self.window = None;
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
-            UserEvent::A11y(event) => {
-                let Some(adapter) = self.adapter.as_mut() else {
-                    return;
-                };
-                match event.window_event {
-                    A11yWindowEvent::InitialTreeRequested => {
-                        // The initial-tree handshake fires before the first
-                        // tick has a chance to run the `sync_a11y_tree` system,
-                        // so we drive it directly here. Force a DirtyA11y on
-                        // every entity so `sync_a11y_tree` skips its early-out
-                        // and emits a full tree. Falls back to the legacy
-                        // walker if for any reason the new system did not
-                        // produce a payload - guards the handshake against an
-                        // empty response that would leave AT-SPI/UIA with no
-                        // tree at all.
-                        lumen_a11y_accesskit::sync_a11y_tree_initial(&mut self.app.world);
-                        #[allow(deprecated)]
-                        let update =
-                            take_pending_tree_update(&mut self.app.world).unwrap_or_else(|| {
-                                lumen_a11y_accesskit::build_tree_update(&mut self.app.world)
-                            });
-                        adapter.update_if_active(|| update);
-                    }
-                    A11yWindowEvent::ActionRequested(req) => {
-                        handle_a11y_action(&mut self.app.world, &req);
-                    }
-                    A11yWindowEvent::AccessibilityDeactivated => {}
-                }
-            }
             UserEvent::Wake => {
                 // Cross-thread producer (e.g. `lumen-mcp`'s
                 // `SimulateQueue::push`) nudged the loop after pushing
@@ -809,10 +688,14 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
-        if let (Some(gpu), Some(adapter)) = (self.gpu.as_ref(), self.adapter.as_mut()) {
-            adapter.process_event(&gpu.window, &event);
+        // The accessibility bridge sees every event before the app does,
+        // as its platform adapter requires.
+        if let Some(a11y) = self.a11y.as_mut() {
+            a11y.window_event(&event as &dyn Any);
         }
-        let Some(gpu) = self.gpu.as_mut() else {
+        // Clone the handle rather than borrowing `self`: the arms below
+        // need the window and the app at the same time.
+        let Some(window) = self.window.clone() else {
             return;
         };
         match event {
@@ -840,7 +723,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
             }
             WindowEvent::Resized(new_size) => {
                 // Resize-flood coalescing: a live drag delivers many
-                // `Resized` events. `gpu.resize` returns `false` when the
+                // `Resized` events. The renderer returns `false` when the
                 // physical size is unchanged, so we skip the surface
                 // recreate + viewport rewrite + relayout + paint that a
                 // duplicate event would otherwise force. Only a genuine
@@ -848,13 +731,13 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 // exactly one synchronous paint.
                 if new_size.width > 0
                     && new_size.height > 0
-                    && gpu.resize(new_size.width, new_size.height)
+                    && self.renderer.resize(new_size.width, new_size.height)
                 {
                     // `Viewport.size` carries LOGICAL pixels (see
                     // `lumen_core::render_world::Viewport::size`). winit
                     // delivers `new_size` as `PhysicalSize`; convert via
                     // the window's current scale factor before writing.
-                    let scale_factor = gpu.window.scale_factor() as f32;
+                    let scale_factor = window.scale_factor() as f32;
                     let logical = new_size.to_logical::<f32>(scale_factor as f64);
                     let size = glam::Vec2::new(logical.width, logical.height);
                     tracing::debug!(
@@ -864,8 +747,6 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                         scale = scale_factor,
                         logical_w = size.x,
                         logical_h = size.y,
-                        surface_w = gpu.surface_config.width,
-                        surface_h = gpu.surface_config.height,
                         "resize",
                     );
                     for vp in [
@@ -888,10 +769,9 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                     // Resize recreated the intermediate texture - force a full
                     // repaint even if this tick's tree matches the last one.
                     present_frame(
-                        gpu,
                         &mut self.app,
-                        &mut self.adapter,
-                        self.text_shaper.as_deref_mut(),
+                        self.renderer.as_mut(),
+                        self.a11y.as_deref_mut(),
                         true,
                     );
                 }
@@ -933,7 +813,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 // size - winit guarantees the change is synchronous so
                 // a subsequent `Resized` may not fire on every backend
                 // before the next `RedrawRequested`.
-                gpu.resize(new_w.max(1), new_h.max(1));
+                self.renderer.resize(new_w.max(1), new_h.max(1));
                 // Update Viewport. Logical stays put; scale_factor flips
                 // to the new value.
                 for vp in [
@@ -953,10 +833,9 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 // DPI change recreated the intermediate texture - force a full
                 // repaint.
                 present_frame(
-                    gpu,
                     &mut self.app,
-                    &mut self.adapter,
-                    self.text_shaper.as_deref_mut(),
+                    self.renderer.as_mut(),
+                    self.a11y.as_deref_mut(),
                     true,
                 );
                 if let Some(mut sch) = self.app.world.get_resource_mut::<RedrawScheduler>() {
@@ -965,7 +844,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
             }
             WindowEvent::Moved(_) => {
                 // Re-sample the current monitor on window-position changes and mirror the values into both worlds' [`Viewport`].
-                if let Some(monitor) = gpu.window.current_monitor() {
+                if let Some(monitor) = window.current_monitor() {
                     let scale = monitor.scale_factor() as f32;
                     let mon_size = monitor.size();
                     let size = glam::Vec2::new(mon_size.width as f32, mon_size.height as f32);
@@ -992,12 +871,12 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 {
                     let req = *self.app.world.resource::<ImeRequest>();
                     if req.allowed != self.last_ime.allowed {
-                        gpu.window.set_ime_allowed(req.allowed);
+                        window.set_ime_allowed(req.allowed);
                     }
                     if let Some((origin, size)) = req.cursor_area
                         && req.cursor_area != self.last_ime.cursor_area
                     {
-                        gpu.window.set_ime_cursor_area(
+                        window.set_ime_cursor_area(
                             winit::dpi::PhysicalPosition::new(origin.x as f64, origin.y as f64),
                             winit::dpi::PhysicalSize::new(size.x as f64, size.y as f64),
                         );
@@ -1009,6 +888,12 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 // Linux (muda dep absent). Implementation moved to
                 // `lumen-os-menu` per W6.3.
                 lumen_os_menu::poll_native_menu_events(&mut self.app.world);
+                // Apply anything an assistive technology queued from its
+                // own thread, for the same reason: a screen reader's click
+                // lands in the tick that paints its result.
+                if let Some(a11y) = self.a11y.as_mut() {
+                    a11y.pump(&mut self.app.world);
+                }
                 self.app.tick();
                 // Consume any title-bar press -> request a native
                 // window drag. Cleared after the call so a single
@@ -1020,7 +905,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                     && req.0
                 {
                     req.0 = false;
-                    if let Err(e) = gpu.window.drag_window() {
+                    if let Err(e) = window.drag_window() {
                         eprintln!("lumen-window-winit: drag_window failed: {e}");
                     }
                 }
@@ -1032,18 +917,17 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                     && req.0 != self.last_cursor
                 {
                     self.last_cursor = req.0;
-                    gpu.window.set_cursor(map_cursor_shape(req.0));
+                    window.set_cursor(map_cursor_shape(req.0));
                 }
-                // Forward the pre-built AccessKit tree, then encode +
-                // present when FrameDirty / a capture requires it, and
-                // clear the dirty + pending flags. Shared with the
-                // synchronous live-resize paint in the `Resized` /
-                // `ScaleFactorChanged` arms.
+                // Publish the tree the A11ySync stage built, then present
+                // when FrameDirty / a capture requires it, and clear the
+                // dirty + pending flags. Shared with the synchronous
+                // live-resize paint in the `Resized` / `ScaleFactorChanged`
+                // arms.
                 present_frame(
-                    gpu,
                     &mut self.app,
-                    &mut self.adapter,
-                    self.text_shaper.as_deref_mut(),
+                    self.renderer.as_mut(),
+                    self.a11y.as_deref_mut(),
                     false,
                 );
             }
@@ -1051,7 +935,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 // winit delivers `PhysicalPosition`; convert to logical so
                 // layout, hit-test, and pointer-routed primitives all share
                 // one coordinate space with `Viewport.size`.
-                let scale_factor = gpu.window.scale_factor();
+                let scale_factor = window.scale_factor();
                 let logical = position.to_logical::<f32>(scale_factor);
                 let p = glam::Vec2::new(logical.x, logical.y);
                 self.app.world.resource_mut::<PointerState>().position = Some(p);
@@ -1331,7 +1215,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
             event_loop.exit();
             return;
         }
-        if let Some(gpu) = self.gpu.as_ref() {
+        if let Some(window) = self.window.as_ref() {
             let should_paint = self
                 .app
                 .world
@@ -1341,8 +1225,8 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
             // A pending off-thread screenshot request must be serviced even
             // when the scheduler is paused (occluded window - the common case
             // on a headless X server, or any minimized/covered window).
-            // `render_frame` performs the GPU->CPU readback that fulfils the
-            // request; without forcing a paint here the request sits unhandled
+            // The renderer performs the readback that fulfils the request
+            // while it presents; without forcing a paint here it sits unhandled
             // until it times out ("no SurfaceCapture wired"). Reading the flag
             // is a single atomic load, so this stays free on ordinary frames.
             let capture_pending = self
@@ -1354,7 +1238,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
             // Off-thread screenshot requests bypass animation pacing so MCP
             // introspection stays prompt: request the redraw now.
             if capture_pending {
-                gpu.window.request_redraw();
+                window.request_redraw();
                 event_loop.set_control_flow(ControlFlow::Wait);
             } else if should_paint {
                 // Pace the self-re-armed animation redraw against a deadline
@@ -1371,7 +1255,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 match deadline {
                     Some(d) if d > now => event_loop.set_control_flow(ControlFlow::WaitUntil(d)),
                     _ => {
-                        gpu.window.request_redraw();
+                        window.request_redraw();
                         event_loop.set_control_flow(ControlFlow::Wait);
                     }
                 }
@@ -1433,17 +1317,11 @@ impl WinitHandler {
     }
 }
 
-/// Apply an [`accesskit::ActionRequest`] (e.g. a screen reader asking
-/// to focus or click a node) to the ECS world. Maps the requested
-/// `NodeId` back to its `Entity` and dispatches to the matching ECS
-/// channel: focus marker swap, click event, slider mutation, expand /
-/// collapse marker, scroll request, or context-menu request.
 /// W3.5: build an [`ImeSurroundingResponse`] for the currently focused
 /// editable and push it onto the message bus so any OS-bound forwarder
 /// (Wayland text-input-v3, IBus) can ship it to the IME. No-op when no
 /// editable is focused; cheap when one is (a single rope->String snapshot).
 fn push_ime_surrounding_response(world: &mut World) {
-    use std::sync::Arc;
     let Some(focused) = world.resource::<FocusTracker>().0 else {
         return;
     };
@@ -1479,318 +1357,6 @@ fn push_ime_surrounding_response(world: &mut World) {
         anchor_byte,
         cursor_byte,
     });
-}
-
-fn handle_a11y_action(world: &mut World, req: &ActionRequest) {
-    use lumen_a11y_accesskit::accesskit::{Action, ActionData};
-    let Some(entity) = node_to_entity(req.target_node) else {
-        return;
-    };
-    match req.action {
-        Action::Focus => {
-            if let Some(prev) = world.resource::<FocusTracker>().0
-                && prev != entity
-                && world.get_entity(prev).is_ok()
-            {
-                world.entity_mut(prev).remove::<(Focused, FocusVisible)>();
-            }
-            if world.get_entity(entity).is_ok() {
-                // Assistive-tech focus counts as keyboard-like for the
-                // `:focus-visible` heuristic (matches browser behavior).
-                world.entity_mut(entity).insert((Focused, FocusVisible));
-                world.resource_mut::<FocusTracker>().0 = Some(entity);
-            }
-        }
-        Action::Blur => {
-            if let Some(prev) = world.resource::<FocusTracker>().0
-                && prev == entity
-                && world.get_entity(prev).is_ok()
-            {
-                world.entity_mut(prev).remove::<(Focused, FocusVisible)>();
-                world.resource_mut::<FocusTracker>().0 = None;
-            }
-        }
-        Action::Click => {
-            // Use the entity centre point, not Vec2::ZERO. Downstream
-            // hit-test / hover / scroll consumers route on world-space
-            // coordinates.
-            let pos = entity_click_point(world, entity);
-            if let Some(mut msgs) = world.get_resource_mut::<Messages<ClickEvent>>() {
-                msgs.write(ClickEvent {
-                    entity,
-                    position: pos,
-                    button: PointerButton::Primary,
-                });
-            }
-        }
-        Action::Increment | Action::Decrement => {
-            // Step the SliderValue by its A11yValue.step (or a default of
-            // (max-min)/100). Slider primitives reach this through
-            // change-detection on SliderValue.
-            let dir = if matches!(req.action, Action::Increment) {
-                1.0
-            } else {
-                -1.0
-            };
-            if let Some(mut sv) = world.get_mut::<lumen_core::components::SliderValue>(entity) {
-                let span = (sv.max - sv.min).abs();
-                let step = if span > 0.0 { span / 100.0 } else { 1.0 };
-                let next = (sv.value + dir * step).clamp(sv.min, sv.max);
-                sv.value = next;
-            }
-            if world.get_entity(entity).is_ok() {
-                world
-                    .entity_mut(entity)
-                    .insert(lumen_core::components::DirtyA11y);
-            }
-        }
-        Action::SetValue => match &req.data {
-            Some(ActionData::NumericValue(v)) => {
-                if let Some(mut sv) = world.get_mut::<lumen_core::components::SliderValue>(entity) {
-                    sv.value = (*v as f32).clamp(sv.min, sv.max);
-                }
-                if world.get_entity(entity).is_ok() {
-                    world
-                        .entity_mut(entity)
-                        .insert(lumen_core::components::DirtyA11y);
-                }
-            }
-            Some(ActionData::Value(s)) => {
-                if let Some(mut tc) = world.get_mut::<lumen_core::components::TextContent>(entity) {
-                    tc.0 = s.to_string();
-                }
-                if world.get_entity(entity).is_ok() {
-                    world
-                        .entity_mut(entity)
-                        .insert(lumen_core::components::DirtyA11y);
-                }
-            }
-            _ => {}
-        },
-        Action::ReplaceSelectedText => {
-            if let Some(ActionData::Value(s)) = &req.data
-                && let Some(mut tc) = world.get_mut::<lumen_core::components::TextContent>(entity)
-            {
-                tc.0 = s.to_string();
-            }
-        }
-        Action::ScrollIntoView => {
-            // Mark the entity for primitive scroll consumers to bring into
-            // the visible area on the next tick. Primitives read
-            // `A11yScrollIntoViewRequests` from a shared resource owned
-            // by lumen-core so the primitives crate (which has no
-            // window-winit dep) can consume it.
-            world
-                .get_resource_or_insert_with::<lumen_core::components::A11yScrollIntoViewRequests>(
-                    Default::default,
-                )
-                .targets
-                .push(entity);
-        }
-        Action::Expand | Action::Collapse => {
-            // Flip the EXPANDED bit on the entity's A11yState so primitives
-            // (disclosure triangles, tree items, comboboxes) can react.
-            let want = matches!(req.action, Action::Expand);
-            if let Some(mut st) = world.get_mut::<lumen_core::components::A11yState>(entity) {
-                if want {
-                    st.insert(lumen_core::components::A11yState::EXPANDED);
-                } else {
-                    st.remove(lumen_core::components::A11yState::EXPANDED);
-                }
-            } else if world.get_entity(entity).is_ok() {
-                let mut st = lumen_core::components::A11yState::default();
-                if want {
-                    st |= lumen_core::components::A11yState::EXPANDED;
-                }
-                world.entity_mut(entity).insert(st);
-            }
-            if world.get_entity(entity).is_ok() {
-                world
-                    .entity_mut(entity)
-                    .insert(lumen_core::components::DirtyA11y);
-            }
-        }
-        Action::ShowContextMenu => {
-            world
-                .get_resource_or_insert_with::<lumen_core::components::A11yContextMenuRequests>(
-                    Default::default,
-                )
-                .targets
-                .push(entity);
-        }
-        _ => {}
-    }
-}
-
-/// W5.3 mirror: drain
-/// [`lumen_core::components::A11yContextMenuRequests`] each tick and
-/// emit a typed [`ShowContextMenu`] message on the bus so apps and
-/// scripts can subscribe via `MessageReader<ShowContextMenu>` without
-/// touching the raw resource.
-///
-/// Registered by [`WinitPlugin`] in [`TickStage::Systems`] so the
-/// message arrives before any downstream tick stage reads it.
-pub fn forward_a11y_context_menu_requests(
-    mut requests: ResMut<lumen_core::components::A11yContextMenuRequests>,
-    mut msgs: bevy_ecs::message::MessageWriter<lumen_core::input::ShowContextMenu>,
-) {
-    if requests.targets.is_empty() {
-        return;
-    }
-    for entity in requests.targets.drain(..) {
-        msgs.write(lumen_core::input::ShowContextMenu { entity });
-    }
-}
-
-impl GpuState {
-    fn new(window: Arc<Window>) -> Result<Self, String> {
-        // Wrap the adapter + device requests in a tracing span so users
-        // running with `LUMEN_GPU_INIT_TRACE=1` (or any
-        // `tracing_subscriber` consumer of the `lumen::window::gpu_init`
-        // target) can see where the few-hundred-ms launch freeze comes
-        // from. Real async kickoff is W6.10; this only narrates the
-        // existing pollster::block_on.
-        let _init_span = tracing::info_span!(
-            target: "lumen::window::gpu_init",
-            "lumen_gpu_init",
-        )
-        .entered();
-        // Watchdog: lit by `done.store(true, ...)` once both adapter and
-        // device requests resolve. If `LUMEN_GPU_INIT_DEADLINE_MS`
-        // (default 5000) elapses with the flag still unset, the
-        // watchdog thread panics with a diagnostic so a wedged driver
-        // is visible instead of a silently frozen window. This is the
-        // W1.8 modest improvement; real async kickoff via the tokio
-        // runtime is deferred (the runtime is W6.10, plumbing into
-        // `resumed` is a follow-up).
-        let init_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let watchdog = spawn_gpu_init_watchdog(gpu_init_deadline_ms(), init_done.clone());
-        let size = window.inner_size();
-        // wgpu 29 moved the platform display connection into the instance
-        // descriptor. This path presents to a real surface, so hand it the
-        // window's own display: it is what GLES needs to present on Wayland,
-        // and it must be the same handle `create_surface` below receives.
-        // Vulkan / Metal / DX12 ignore it.
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: NATIVE_BACKENDS,
-            ..wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone()))
-        });
-        let surface = instance
-            .create_surface(window.clone())
-            .map_err(|e| format!("create_surface: {e:?}"))?;
-        let adapter = {
-            let _span = tracing::info_span!(
-                target: "lumen::window::gpu_init",
-                "request_adapter",
-            )
-            .entered();
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            }))
-            .map_err(|e| format!("request_adapter: {e:?}"))?
-        };
-        let limits = adapter.limits();
-        let (device, queue) = {
-            let _span = tracing::info_span!(
-                target: "lumen::window::gpu_init",
-                "request_device",
-            )
-            .entered();
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("lumen-window-winit device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: limits,
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                memory_hints: wgpu::MemoryHints::default(),
-                trace: wgpu::Trace::Off,
-            }))
-            .map_err(|e| format!("request_device: {e:?}"))?
-        };
-        // Release: tell the watchdog we crossed the line cleanly so it
-        // exits without panicking. `join` waits for the thread to wake
-        // from its 50 ms sleep slice and observe the flag.
-        init_done.store(true, std::sync::atomic::Ordering::Release);
-        let _ = watchdog.join();
-
-        let caps = surface.get_capabilities(&adapter);
-        // Surface-format negotiation (window-backend.md section Bug 5). We render
-        // into an `Rgba8Unorm` intermediate then blit through an
-        // `Rgba8UnormSrgb` view, so an sRGB surface format matches our
-        // gamma assumption exactly. Prefer the two sRGB 8-bit variants;
-        // fall back to whatever the platform offered first otherwise.
-        // HDR (`Rgba16Float`) opt-in is deferred to W1.8 / `WindowOptions`.
-        let surface_format = [
-            wgpu::TextureFormat::Bgra8UnormSrgb,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
-        ]
-        .into_iter()
-        .find(|f| caps.formats.contains(f))
-        .or_else(|| caps.formats.first().copied())
-        .ok_or_else(|| "no surface formats".to_string())?;
-
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
-            // Input latency: cap the swap-chain to a single in-flight frame
-            // so a freshly-encoded frame reaches the screen at the next
-            // vblank instead of queueing behind a second buffered frame.
-            // Trades a little GPU/CPU overlap headroom for lower click->pixel
-            // latency, which is the right call for a UI toolkit (Qt/GTK
-            // compositors present at depth 1). Present mode stays AutoVsync.
-            desired_maximum_frame_latency: 1,
-            alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
-        };
-        surface.configure(&device, &surface_config);
-
-        let vello = vello::Renderer::new(&device, RendererOptions::default())
-            .map_err(|e| format!("{e:?}"))?;
-
-        let (intermediate, intermediate_view_linear, intermediate_view_srgb) =
-            make_intermediate(&device, surface_config.width, surface_config.height);
-
-        let blitter = TextureBlitter::new(&device, surface_format);
-
-        Ok(Self {
-            window,
-            surface,
-            surface_config,
-            device,
-            queue,
-            vello,
-            vello_scene: vello::Scene::new(),
-            fragment_cache: lumen_render_wgpu::SceneFragmentCache::default(),
-            intermediate,
-            intermediate_view_linear,
-            intermediate_view_srgb,
-            blitter,
-        })
-    }
-
-    /// Reconfigure the surface + intermediate for a new physical size.
-    /// Returns `true` when the size actually changed (surface + textures
-    /// were recreated); `false` when the requested size matches the
-    /// current config, so callers can skip the redundant relayout +
-    /// paint that a duplicate `Resized` event would otherwise trigger
-    /// (resize-flood coalescing - see the `WindowEvent::Resized` arm).
-    fn resize(&mut self, width: u32, height: u32) -> bool {
-        if width == self.surface_config.width && height == self.surface_config.height {
-            return false;
-        }
-        self.surface_config.width = width;
-        self.surface_config.height = height;
-        self.surface.configure(&self.device, &self.surface_config);
-        let (intermediate, linear, srgb) = make_intermediate(&self.device, width, height);
-        self.intermediate = intermediate;
-        self.intermediate_view_linear = linear;
-        self.intermediate_view_srgb = srgb;
-        true
-    }
 }
 
 fn map_modifiers(m: WinitModifiers) -> Modifiers {
@@ -1937,98 +1503,6 @@ fn map_button(b: MouseButton) -> PointerButton {
     }
 }
 
-fn make_intermediate(
-    device: &wgpu::Device,
-    width: u32,
-    height: u32,
-) -> (wgpu::Texture, wgpu::TextureView, wgpu::TextureView) {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("lumen vello intermediate"),
-        size: wgpu::Extent3d {
-            width: width.max(1),
-            height: height.max(1),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        // COPY_SRC enables the on-demand readback that `lumen-mcp` uses to
-        // surface screenshots; the no-screenshot path pays no runtime cost.
-        usage: wgpu::TextureUsages::STORAGE_BINDING
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
-        // Allow a second view in the sRGB variant so the blit input can
-        // re-decode the bytes vello wrote.
-        view_formats: &[wgpu::TextureFormat::Rgba8UnormSrgb],
-    });
-    let linear = texture.create_view(&wgpu::TextureViewDescriptor {
-        label: Some("lumen intermediate (linear write)"),
-        format: Some(wgpu::TextureFormat::Rgba8Unorm),
-        // Storage-bindable view used by vello.
-        usage: Some(wgpu::TextureUsages::STORAGE_BINDING),
-        ..Default::default()
-    });
-    let srgb = texture.create_view(&wgpu::TextureViewDescriptor {
-        label: Some("lumen intermediate (sRGB sample)"),
-        format: Some(wgpu::TextureFormat::Rgba8UnormSrgb),
-        // sRGB doesn't support STORAGE; this view is sample-only.
-        usage: Some(wgpu::TextureUsages::TEXTURE_BINDING),
-        ..Default::default()
-    });
-    (texture, linear, srgb)
-}
-
-/// Present the current world state: push the pre-built AccessKit tree to
-/// the adapter, then (when [`FrameDirty`] is set or a screenshot capture
-/// is pending) encode + submit + present one frame and clear the dirty +
-/// pending flags.
-///
-/// Shared by the `RedrawRequested` arm (normal cadence) and the
-/// `Resized` / `ScaleFactorChanged` arms (synchronous live-resize paint).
-/// Doing the paint *inside* the resize event - instead of only requesting
-/// a deferred redraw - is what gives smooth live resize on Wayland /
-/// macOS, where the compositor expects a correctly-sized buffer committed
-/// in response to each configure rather than a round-trip later (content
-/// otherwise stretches / lags behind the drag). Assumes `app.tick()` has
-/// already run this iteration so `FrameDirty` and the extracted scene are
-/// current.
-/// Returns `true` when the retained Node IR differs visually from the last
-/// painted frame (a non-empty damage region), so a repaint is required.
-///
-/// Diffs `PreviousScene` (the last painted tree) against `RetainedScene` (this
-/// tick's freshly-built tree) via the shared renderer diff. The first frame -
-/// `PreviousScene.root == None` - reports damage so the initial paint always
-/// runs. The result gates the on-screen encode: an empty region means the
-/// current window contents already match this tick's scene.
-///
-/// Conservative: the diff assumes-changed for any leaf it cannot compare
-/// (images, SVGs, native), so it never under-reports the dirty region.
-fn retained_scene_has_damage(app: &App) -> bool {
-    use lumen_core::node_ir::{PreviousScene, RetainedScene};
-    use lumen_core::render_world::{FrameDamage, Rect};
-
-    let previous = app.render_world.get_resource::<PreviousScene>();
-    let retained = app.render_world.get_resource::<RetainedScene>();
-    let (Some(previous), Some(retained)) = (previous, retained) else {
-        // Resources missing (non-standard embed) - never skip.
-        return true;
-    };
-    let size = app.render_world.resource::<Viewport>().size;
-    let viewport_rect = Rect {
-        origin: glam::Vec2::ZERO,
-        size,
-    };
-    let mut damage = FrameDamage::default();
-    lumen_render_wgpu::diff_retained_scenes(
-        previous.root.as_ref(),
-        retained.root.as_ref(),
-        viewport_rect,
-        &mut damage,
-    );
-    !damage.is_empty()
-}
-
 /// Emit the one-time startup marker on the first on-screen present.
 ///
 /// Off unless `LUMEN_BOOT_TRACE` is set, so a normal run prints nothing:
@@ -2067,62 +1541,50 @@ fn emit_first_frame_marker() {
     let _ = out.flush();
 }
 
+/// Present the current world state: publish the accessibility tree, then
+/// ask the renderer for a frame when this tick produced one, and clear the
+/// dirty + pending flags.
+///
+/// Shared by the `RedrawRequested` arm (normal cadence) and the `Resized` /
+/// `ScaleFactorChanged` arms (synchronous live-resize paint). Doing the
+/// paint inside the resize event - instead of only requesting a deferred
+/// redraw - is what gives smooth live resize on Wayland and macOS, where
+/// the compositor expects a correctly sized buffer committed in response to
+/// each configure rather than a round trip later (content otherwise
+/// stretches and lags behind the drag). Assumes `app.tick()` has already
+/// run this iteration, so `FrameDirty` and the extracted scene are current.
+///
+/// `force_full` tells the renderer its buffers were just recreated, so it
+/// must repaint even when the scene is unchanged.
 fn present_frame(
-    gpu: &mut GpuState,
     app: &mut App,
-    adapter: &mut Option<A11yAdapter>,
-    shaper: Option<&mut (dyn lumen_text::TextShaper + 'static)>,
+    renderer: &mut dyn SurfaceRenderer,
+    a11y: Option<&mut dyn A11yBackend>,
     force_full: bool,
 ) {
-    // W5.2: the AccessKit tree is built in `TickStage::A11ySync`; here we
-    // only forward the pre-built update. `None` => nothing a11y-relevant
-    // changed, so we skip the AT-SPI / UIA / NSAccessibility wake-up.
-    if adapter.is_some()
-        && let Some(update) = take_pending_tree_update(&mut app.world)
-        && let Some(adapter) = adapter.as_mut()
-    {
-        adapter.update_if_active(|| update);
+    // The accessibility tree is built in `TickStage::A11ySync`; this only
+    // publishes it, and does nothing when the tick produced no update.
+    if let Some(a11y) = a11y {
+        a11y.publish(&mut app.world);
     }
-    // Two-level partial-repaint gate.
-    //
-    // Level 1 - `FrameDirty` (coarse): `roll_up_frame_dirty` folds every
-    // render-relevant `Changed<T>` / property write - including
-    // `Viewport::is_changed()` on resize - into a single bool. A clear flag
-    // means the tick left the render world untouched, so there is nothing new
-    // to paint.
-    //
-    // Level 2 - `FrameDamage` (precise): `FrameDirty` over-approximates. It is
-    // raised by writes that leave the *painted* tree byte-for-byte identical -
-    // a signal re-set to the same value, a hover class whose style resolves to
-    // the same visuals, a caret tick landing on the same pixel. Before
-    // committing a full GPU frame we diff the retained Node IR against the last
-    // painted tree; an empty dirty region means the last presented frame is
-    // still correct, so we skip encode + submit + present entirely and leave it
-    // on screen. This mirrors Qt `QWidget::update()` collapsing to no
-    // backing-store flush on an empty region, and GTK's damage-region
-    // coalescing (`gdk_surface_queue_render` with nothing invalidated).
-    //
-    // `force_full` overrides Level 2: after a resize / DPI change the
-    // intermediate texture was just recreated and holds no valid pixels, so we
-    // must repaint even if the logical tree happens to be identical.
-    //
-    // MCP / introspection screenshot requests also bypass the retain: the
-    // readback runs inside `render_frame`, so a pending capture forces a fresh
-    // encode.
+    // `FrameDirty` folds every render-relevant `Changed<T>` and property
+    // write - including `Viewport::is_changed()` on resize - into a single
+    // bool. It over-approximates: a signal re-set to the same value or a
+    // hover class that resolves to the same visuals raises it while leaving
+    // the painted tree identical. The renderer applies whatever finer test
+    // it has (the retained-scene diff, for the GPU path) and answers
+    // whether a frame is actually worth putting up.
     let frame_dirty = app
         .world
         .get_resource::<FrameDirty>()
         .map(|f| f.dirty)
         .unwrap_or(true);
-    let capture_requested = app
-        .render_world
-        .get_resource::<SurfaceCapture>()
-        .map(|c| c.is_requested())
-        .unwrap_or(false);
-    let should_render =
-        capture_requested || (frame_dirty && (force_full || retained_scene_has_damage(app)));
-    if should_render {
-        match render_frame(gpu, app, shaper) {
+    let request = FrameRequest {
+        dirty: frame_dirty,
+        force_full,
+    };
+    if renderer.wants_present(&mut app.render_world, request) {
+        match renderer.present(&mut app.render_world) {
             // First real on-screen present: emit the startup marker (once,
             // env-gated). This is the windowed analog of the headless
             // boot-trace's exec->first-frame line, and gives the benchmark
@@ -2177,254 +1639,6 @@ fn present_frame(
     if work_pending && let Some(mut sch) = app.world.get_resource_mut::<RedrawScheduler>() {
         sch.pending = true;
     }
-}
-
-fn render_frame(
-    gpu: &mut GpuState,
-    app: &mut App,
-    shaper: Option<&mut (dyn lumen_text::TextShaper + 'static)>,
-) -> Result<(), String> {
-    // W2.2: the retained Node IR replaces the flat Extracted* sort-and-emit dance. We walk the
-    // [`RetainedScene`] root via the shared lumen_render_wgpu walker. The walker dispatches each
-    // variant onto the right cached or uncached emitter, honouring opacity/transform/clip
-    // composition.
-    //
-    // Image / SVG leaves: lumen-assets emits `ImageBlob` / `SvgPayload` sidecars on the extracted
-    // entities, and `transform_extracted_to_nodes` splices the type-erased payloads into
-    // `Node::Image.blob` / `Node::Svg.payload`. The walker downcasts those payloads back to the
-    // concrete vello types and dispatches to `draw_image_into_vello` / `emit_svg` inline - no
-    // auxiliary post-walk loop is needed any more.
-    let retained = app
-        .render_world
-        .resource::<lumen_core::node_ir::RetainedScene>();
-    // Carve a local Arc of the tree so the borrow on `render_world` releases before we hand mutable
-    // refs to the walker.
-    let retained_root = retained.root.clone();
-    // Walker coords are logical pixels (matching layout-taffy / Transform.absolute).
-    // The vello surface is physical pixels. Seed the root transform with
-    // `scale(scale_factor)` so logical coords land at the right physical pixels -
-    // without this, on hi-DPI the layout draws into the top-left `1/dpr x 1/dpr`
-    // of the surface only (the "search bar missing, only a quarter of the screen
-    // rendered" symptom).
-    let dpr = app
-        .render_world
-        .resource::<Viewport>()
-        .scale_factor
-        .max(0.01);
-
-    gpu.vello_scene.reset();
-    // Split-borrow `GpuState` so the walker can mutate both the vello scene
-    // and the fragment cache without re-borrowing `gpu` afterwards. The
-    // inner scope drops the &mut borrow before the readback / present
-    // path reads `gpu.vello_scene` for submission.
-    //
-    // Hi-DPI: the Node IR stays in LOGICAL pixels end-to-end
-    // (`transform_extracted_to_nodes` does not pre-scale). The walker
-    // scales every leaf *and clip shape* by `ctx.dpr` at emit time
-    // (`WalkContext::new_with_dpr` below), producing physical-pixel
-    // vello geometry that matches the surface texture.
-    {
-        let vello_scene = &mut gpu.vello_scene;
-        let fragment_cache = &mut gpu.fragment_cache;
-        let shaper_local = shaper;
-        if let Some(root) = retained_root.as_ref() {
-            let shaper_ref: Option<&mut dyn lumen_text::TextShaper> =
-                shaper_local.map(|s| s as &mut dyn lumen_text::TextShaper);
-            let mut ctx =
-                WalkContext::new_with_dpr(vello_scene, Some(fragment_cache), shaper_ref, dpr);
-            lumen_render_wgpu::walk_node(&mut ctx, root);
-        }
-    }
-    // The legacy `translate_rects` / `translate_outlines` helpers remain public for external embedders; this fn drives the painter-order stream above.
-
-    // Park the just-walked tree as PreviousScene for next frame's diff.
-    {
-        let mut previous = app
-            .render_world
-            .resource_mut::<lumen_core::node_ir::PreviousScene>();
-        previous.root = retained_root;
-    }
-
-    let clear = app.render_world.resource::<Viewport>().clear;
-    let [r, g, b, a] = clear.to_rgba8();
-    let params = RenderParams {
-        base_color: AlphaColor::<Srgb>::from_rgba8(r, g, b, a),
-        width: gpu.surface_config.width,
-        height: gpu.surface_config.height,
-        antialiasing_method: AaConfig::Area,
-    };
-    gpu.vello
-        .render_to_texture(
-            &gpu.device,
-            &gpu.queue,
-            &gpu.vello_scene,
-            &gpu.intermediate_view_linear,
-            &params,
-        )
-        .map_err(|e| format!("vello render: {e:?}"))?;
-
-    // Cheap one-load check first; the readback path (allocate buffer + GPU
-    // copy + map_async + memcpy) only fires when an MCP client has set the
-    // request flag. The no-screenshot path is just an atomic load.
-    if let Some(capture) = app.render_world.get_resource::<SurfaceCapture>().cloned()
-        && capture.is_requested()
-    {
-        let width = gpu.surface_config.width;
-        let height = gpu.surface_config.height;
-        match readback_intermediate(gpu, width, height) {
-            Ok(rgba8) => {
-                capture.write(SurfaceFrame {
-                    width,
-                    height,
-                    rgba8,
-                });
-                capture.clear_request();
-            }
-            Err(e) => {
-                eprintln!("lumen-window-winit: surface readback failed: {e}");
-                // Clear the flag so we don't spin forever on a persistent
-                // GPU error.
-                capture.clear_request();
-            }
-        }
-    }
-
-    // Acquire the next swap-chain texture. wgpu 29 replaced the
-    // `Result<SurfaceTexture, SurfaceError>` with an enum whose non-success
-    // arms each say what to do:
-    //   - Suboptimal: a usable texture, but the swap chain no longer matches
-    //     the surface (resize race, Wayland scale change). Reconfigure and
-    //     skip, which is what the old `Outdated` arm did for the same
-    //     situation; the next `RedrawRequested` retries against the fresh
-    //     configuration.
-    //   - Outdated: same, minus the usable texture.
-    //   - Lost: device-reset (suspend, GPU driver crash). Reconfigure + skip;
-    //     if the device itself is gone, the next attempt surfaces it again.
-    //   - Timeout: compositor stall. Skip and let vsync / `request_redraw`
-    //     deliver another `RedrawRequested`.
-    //   - Occluded: minimized or fully covered. Nothing is wrong, so skip
-    //     without reconfiguring and wait for the window to come back.
-    //   - Validation: a validation error was raised and captured. Surface it
-    //     to the caller rather than looping on it.
-    // OutOfMemory is no longer an acquire outcome in wgpu 29 - allocation
-    // failure now arrives through the device error scope - so the old panic
-    // arm has no equivalent here.
-    let frame = match gpu.surface.get_current_texture() {
-        wgpu::CurrentSurfaceTexture::Success(f) => f,
-        wgpu::CurrentSurfaceTexture::Suboptimal(_)
-        | wgpu::CurrentSurfaceTexture::Outdated
-        | wgpu::CurrentSurfaceTexture::Lost => {
-            tracing::debug!(
-                target: "lumen::window",
-                "surface texture suboptimal, outdated or lost; reconfiguring + skipping frame",
-            );
-            gpu.surface.configure(&gpu.device, &gpu.surface_config);
-            return Ok(());
-        }
-        wgpu::CurrentSurfaceTexture::Timeout => {
-            tracing::debug!(
-                target: "lumen::window",
-                "surface acquire timed out; skipping frame",
-            );
-            return Ok(());
-        }
-        wgpu::CurrentSurfaceTexture::Occluded => {
-            tracing::debug!(
-                target: "lumen::window",
-                "window occluded; skipping frame",
-            );
-            return Ok(());
-        }
-        wgpu::CurrentSurfaceTexture::Validation => {
-            return Err("get_current_texture: validation error".to_string());
-        }
-    };
-    let surface_view = frame
-        .texture
-        .create_view(&wgpu::TextureViewDescriptor::default());
-    let mut encoder = gpu
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("lumen blit encoder"),
-        });
-    gpu.blitter.copy(
-        &gpu.device,
-        &mut encoder,
-        &gpu.intermediate_view_srgb,
-        &surface_view,
-    );
-    gpu.queue.submit(Some(encoder.finish()));
-    frame.present();
-    Ok(())
-}
-
-/// Copy the post-vello intermediate texture to CPU as tightly-packed RGBA8.
-///
-/// Mirrors `lumen_render_wgpu::WgpuRenderer::read_rgba8_async`: padded rows
-/// (256-aligned `bytes_per_row`) on the GPU side, unpadded on the CPU side.
-/// No color conversion: the bytes are exactly what vello wrote into the
-/// `Rgba8Unorm` storage texture, which is the same payload the surface
-/// blitter samples through its sRGB view.
-fn readback_intermediate(gpu: &GpuState, width: u32, height: u32) -> Result<Vec<u8>, String> {
-    let unpadded = width as usize * 4;
-    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
-    let padded = unpadded.div_ceil(align) * align;
-    let size = (padded * height as usize) as u64;
-
-    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("lumen surface readback"),
-        size,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-
-    let mut encoder = gpu
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("lumen surface readback encoder"),
-        });
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &gpu.intermediate,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded as u32),
-                rows_per_image: Some(height),
-            },
-        },
-        wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-    gpu.queue.submit(Some(encoder.finish()));
-
-    let slice = buffer.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |r| {
-        let _ = tx.send(r);
-    });
-    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
-    rx.recv()
-        .map_err(|_| "map channel dropped".to_string())?
-        .map_err(|e| format!("{e:?}"))?;
-
-    let raw = slice.get_mapped_range();
-    let mut out = Vec::with_capacity(unpadded * height as usize);
-    for row in 0..height as usize {
-        let start = row * padded;
-        out.extend_from_slice(&raw[start..start + unpadded]);
-    }
-    drop(raw);
-    buffer.unmap();
-    Ok(out)
 }
 
 /// Thin shim adapting the winit `Arc<Window>` to the

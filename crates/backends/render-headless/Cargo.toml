@@ -20,3 +20,6 @@ glam.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }
 lumen-layout-taffy = { path = "../layout-taffy" }
 glam.workspace = true
+# Stand-in window for the `SurfaceRenderer` tests: it reports a size and no
+# handles, which is all a software renderer ever asks a window for.
+raw-window-handle = "0.6"

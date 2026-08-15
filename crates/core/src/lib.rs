@@ -106,7 +106,8 @@ pub mod prelude {
     };
     pub use crate::tick::{Tick, TickStage};
     pub use crate::traits::{
-        A11yBackend, Bindable, LayoutEngine, Renderer, Spawn, Timer, WindowBackend,
+        A11yBackend, Bindable, FrameRequest, LayoutEngine, RenderTarget, Renderer, Spawn,
+        SurfaceError, SurfaceRenderer, Timer, WindowBackend,
     };
 
     // Re-export the bevy_ecs hierarchy components used across the crate.
