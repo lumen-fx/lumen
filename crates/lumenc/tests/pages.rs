@@ -638,3 +638,58 @@ fn page_back_returns_whether_the_step_was_queued() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// The no-argument `page()` reader resolves as its own call, beside the
+/// one-argument `page(path)` that navigates. Both are registered over a single
+/// body and told apart by how many arguments arrive, so this checks the host
+/// actually dispatches the empty call rather than falling through to the
+/// navigating one. candela is absent because a candela host function takes one
+/// arity per name; `page_current()` is its spelling, covered above.
+#[test]
+fn page_with_no_arguments_reads_the_active_page() {
+    let scripts = [
+        (
+            "rhai",
+            "main.rhai",
+            "fn on_ready() { signal(\"seen\", \"\").set(page()); }",
+        ),
+        (
+            "lua",
+            "main.lua",
+            "function on_ready() signal(\"seen\", \"\"):set(page()) end",
+        ),
+    ];
+
+    for (engine, script_name, script) in scripts {
+        let _guard = nav_test_guard();
+        let dir =
+            std::env::temp_dir().join(format!("lumen_page_noarg_{engine}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+        std::fs::write(
+            dir.join("index.lmn"),
+            format!(
+                "<root>\n  <label id=\"seen\" bind-text=\"seen\" text=\"(none)\"/>\n  \
+                 <script src=\"{script_name}\"/>\n</root>"
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.join("settings.lmn"), "<root><label text=\"S\"/></root>").unwrap();
+        std::fs::write(dir.join(script_name), script).unwrap();
+
+        let mut opts = RunOptions::new(&dir);
+        opts.hot_reload = false;
+        let (mut app, _winit) =
+            build_headless_app(opts).unwrap_or_else(|e| panic!("build {engine} app: {e}"));
+        tick_n(&mut app, 6);
+
+        assert_eq!(
+            route_signal(&mut app, "seen"),
+            "index",
+            "{engine}: page() with no argument should read the active page key"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

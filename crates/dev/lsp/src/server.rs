@@ -124,17 +124,19 @@ impl Backend {
         self.read_project_file(&markup).await
     }
 
-    async fn publish_diagnostics(&self, uri: Url) {
-        let Some((text, kind)) = self
+    /// The diagnostics an open document has, routed by its kind. `None` when
+    /// nothing is open under `uri`.
+    ///
+    /// Split out of [`Self::publish_diagnostics`] so the routing can be read
+    /// without a client on the other end of the socket.
+    async fn diagnostics_for(&self, uri: &Url) -> Option<Vec<Diagnostic>> {
+        let (text, kind) = self
             .docs
             .lock()
             .await
-            .get(&uri)
-            .map(|d| (d.text.clone(), d.kind))
-        else {
-            return;
-        };
-        let diags = match kind {
+            .get(uri)
+            .map(|d| (d.text.clone(), d.kind))?;
+        Some(match kind {
             DocKind::Markup => {
                 // Resolve `<include>` against the on-disk project so missing
                 // files and cycles surface as diagnostics. Falls back to the
@@ -143,10 +145,16 @@ impl Backend {
             }
             DocKind::Rhai => script_lang::diagnostics(&text),
             DocKind::Css => {
-                let markup = self.sibling_markup(&uri).await;
+                let markup = self.sibling_markup(uri).await;
                 css::compute_css_diagnostics(&text, markup.as_deref())
             }
             DocKind::Other => Vec::new(),
+        })
+    }
+
+    async fn publish_diagnostics(&self, uri: Url) {
+        let Some(diags) = self.diagnostics_for(&uri).await else {
+            return;
         };
         self.client.publish_diagnostics(uri, diags, None).await;
     }
@@ -784,6 +792,8 @@ fn full_document_range(src: &str) -> Range {
 
 #[cfg(test)]
 mod tests {
+    use tower_lsp::lsp_types::{TextDocumentIdentifier, TextDocumentPositionParams};
+
     use super::*;
 
     #[test]
@@ -855,5 +865,193 @@ mod tests {
         // cursor inside "click" (event, not id).
         let at = rhai.find("click").unwrap() + 1;
         assert_eq!(id_under_cursor(DocKind::Rhai, rhai, at), None);
+    }
+
+    /// A server with one document open, ready to answer requests about it.
+    ///
+    /// `LspService::new` is the only way to obtain a [`Client`], and it hands
+    /// back the socket the server would write notifications to. The request
+    /// handlers answer in band, so the socket only has to stay alive.
+    async fn open(
+        kind: DocKind,
+        name: &str,
+        text: &str,
+    ) -> (tower_lsp::LspService<Backend>, tower_lsp::ClientSocket, Url) {
+        let (service, socket) = tower_lsp::LspService::new(Backend::new);
+        let uri = Url::parse(&format!("file:///proj/{name}")).unwrap();
+        service
+            .inner()
+            .store(uri.clone(), text.to_string(), kind)
+            .await;
+        (service, socket, uri)
+    }
+
+    /// The end of `src`, as the position a client would send.
+    fn end_of(src: &str) -> Position {
+        byte_to_position(src, src.len())
+    }
+
+    /// Each document kind reaches its own analyser: a `.rhai` buffer goes
+    /// through the script-language seam, a `.css` buffer through the
+    /// stylesheet path, and a kind with no analyser answers with an empty
+    /// list, which is what clears a client's stale squiggles. A URI with
+    /// nothing open answers with nothing at all.
+    #[tokio::test]
+    async fn each_document_kind_gets_its_own_diagnostics() {
+        let (svc, _sock, uri) =
+            open(DocKind::Rhai, "main.rhai", "fn broken( {\n let x = ;\n}").await;
+        let script = svc
+            .inner()
+            .diagnostics_for(&uri)
+            .await
+            .expect("the script is open");
+        #[cfg(feature = "lang-rhai")]
+        assert!(
+            script.iter().any(|d| d.message.starts_with("Rhai:")),
+            "the syntax error should surface: {script:?}"
+        );
+        #[cfg(not(feature = "lang-rhai"))]
+        assert!(
+            script.is_empty(),
+            "without the language a script analyses to an empty list"
+        );
+
+        let (svc, _sock, uri) = open(DocKind::Css, "main.css", "#a { color: ").await;
+        assert!(
+            !svc.inner()
+                .diagnostics_for(&uri)
+                .await
+                .expect("the stylesheet is open")
+                .is_empty(),
+            "an unterminated declaration block should be reported"
+        );
+
+        let (svc, _sock, uri) = open(DocKind::Other, "notes.txt", "plain text").await;
+        assert_eq!(
+            svc.inner().diagnostics_for(&uri).await,
+            Some(Vec::new()),
+            "an unanalysed kind still answers, with nothing in it"
+        );
+
+        let absent = Url::parse("file:///proj/never-opened.lmn").unwrap();
+        assert!(
+            svc.inner().diagnostics_for(&absent).await.is_none(),
+            "a document that was never opened has no answer"
+        );
+    }
+
+    /// Completion in a script buffer that is not inside an id argument falls
+    /// to the script language's builtin list.
+    #[tokio::test]
+    async fn completion_in_a_script_offers_builtins() {
+        let src = "set_t";
+        let (svc, _sock, uri) = open(DocKind::Rhai, "main.rhai", src).await;
+        let resp = svc
+            .inner()
+            .completion(CompletionParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri },
+                    position: end_of(src),
+                },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+                context: None,
+            })
+            .await
+            .expect("completion answers");
+        let Some(CompletionResponse::Array(items)) = resp else {
+            panic!("the server answers with a plain array");
+        };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+
+        #[cfg(feature = "lang-rhai")]
+        assert!(
+            labels.contains(&"set_timeout"),
+            "expected set_timeout in {labels:?}"
+        );
+        #[cfg(not(feature = "lang-rhai"))]
+        assert!(labels.is_empty(), "no language, no builtin list");
+    }
+
+    /// Hover over a script buffer documents the builtin under the cursor.
+    #[tokio::test]
+    async fn hover_in_a_script_documents_the_builtin() {
+        let src = "notify(\"a\", \"b\");";
+        let (svc, _sock, uri) = open(DocKind::Rhai, "main.rhai", src).await;
+        let hovered = svc
+            .inner()
+            .hover(HoverParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri },
+                    position: byte_to_position(src, 2),
+                },
+                work_done_progress_params: Default::default(),
+            })
+            .await
+            .expect("hover answers");
+
+        #[cfg(feature = "lang-rhai")]
+        {
+            let Some(Hover {
+                contents: HoverContents::Markup(md),
+                ..
+            }) = hovered
+            else {
+                panic!("a builtin under the cursor has markdown documentation");
+            };
+            assert!(
+                md.value.contains("notify"),
+                "the documentation names the builtin: {}",
+                md.value
+            );
+        }
+        #[cfg(not(feature = "lang-rhai"))]
+        assert!(hovered.is_none(), "no language, no documentation");
+    }
+
+    /// Signature help follows the call being typed in a script buffer, and
+    /// answers nothing for a kind that has no calls.
+    #[tokio::test]
+    async fn signature_help_follows_the_call_being_typed() {
+        let src = "set_timeout(\"tick\", ";
+        let (svc, _sock, uri) = open(DocKind::Rhai, "main.rhai", src).await;
+        let help = svc
+            .inner()
+            .signature_help(SignatureHelpParams {
+                context: None,
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri },
+                    position: end_of(src),
+                },
+                work_done_progress_params: Default::default(),
+            })
+            .await
+            .expect("signature help answers");
+
+        #[cfg(feature = "lang-rhai")]
+        assert_eq!(
+            help.expect("a call in progress has a signature")
+                .active_parameter,
+            Some(1),
+            "the cursor sits on the second argument"
+        );
+        #[cfg(not(feature = "lang-rhai"))]
+        assert!(help.is_none(), "no language, no signature");
+
+        let markup = "<root/>";
+        let (svc, _sock, uri) = open(DocKind::Markup, "index.lmn", markup).await;
+        let help = svc
+            .inner()
+            .signature_help(SignatureHelpParams {
+                context: None,
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri },
+                    position: end_of(markup),
+                },
+                work_done_progress_params: Default::default(),
+            })
+            .await
+            .expect("signature help answers");
+        assert!(help.is_none(), "markup has no call signatures");
     }
 }
