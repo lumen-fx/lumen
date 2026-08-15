@@ -1316,6 +1316,41 @@ mod tests {
         (app, root)
     }
 
+    /// A context-menu request from an assistive technology reaches apps
+    /// and scripts as a typed message, not as a resource they would have
+    /// to know to poll. The queue is drained in the same tick, so a second
+    /// tick does not announce the menu again.
+    #[test]
+    fn context_menu_requests_reach_the_message_bus() {
+        use bevy_ecs::message::Messages;
+        use lumen_core::input::ShowContextMenu;
+
+        let (mut app, _root) = app_with_root();
+        app.add_message::<ShowContextMenu>();
+        let target = app.world.spawn_empty().id();
+        app.world
+            .resource_mut::<A11yContextMenuRequests>()
+            .targets
+            .push(target);
+
+        drive_one_tick(&mut app);
+
+        let seen: Vec<Entity> = app
+            .world
+            .resource::<Messages<ShowContextMenu>>()
+            .iter_current_update_messages()
+            .map(|m| m.entity)
+            .collect();
+        assert_eq!(seen, vec![target]);
+        assert!(
+            app.world
+                .resource::<A11yContextMenuRequests>()
+                .targets
+                .is_empty(),
+            "the queue drains, so the menu is not announced twice",
+        );
+    }
+
     #[test]
     fn a11y_state_change_propagates_to_pending_update_in_one_tick() {
         let mut app = App::new();

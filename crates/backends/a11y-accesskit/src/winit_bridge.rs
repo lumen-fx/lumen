@@ -135,23 +135,8 @@ impl A11yBackend for WinitA11yBridge {
     }
 
     fn pump(&mut self, world: &mut World) {
-        for pending in self.inbox.drain() {
-            match pending {
-                Pending::InitialTree => {
-                    // The handshake arrives before any tick has run
-                    // `sync_a11y_tree`, so drive a full build here. The
-                    // update is always produced: the forced build clears
-                    // the cached focus, which is one of the two conditions
-                    // the sync skips on, and marks an entity dirty, which
-                    // is the other. Platform adapters hold a placeholder
-                    // tree until this lands, so it has to be a full one.
-                    sync_a11y_tree_initial(world);
-                    if let Some(update) = take_pending_tree_update(world) {
-                        self.adapter.update_if_active(|| update);
-                    }
-                }
-                Pending::Action(request) => handle_action(world, &request),
-            }
+        for update in apply_requests(world, self.inbox.drain()) {
+            self.adapter.update_if_active(|| update);
         }
     }
 
@@ -163,6 +148,35 @@ impl A11yBackend for WinitA11yBridge {
             self.adapter.update_if_active(|| update);
         }
     }
+}
+
+/// Apply queued requests to the world, returning the tree updates the
+/// platform must be told about afterwards.
+///
+/// Split from [`WinitA11yBridge::pump`] so the world-side half runs, and
+/// is tested, without a window: everything above this line is the platform
+/// adapter, everything below is ECS state.
+fn apply_requests(world: &mut World, pending: Vec<Pending>) -> Vec<TreeUpdate> {
+    let mut updates = Vec::new();
+    for request in pending {
+        match request {
+            Pending::InitialTree => {
+                // The handshake arrives before any tick has run
+                // `sync_a11y_tree`, so drive a full build here. The update
+                // is always produced: the forced build clears the cached
+                // focus, which is one of the two conditions the sync skips
+                // on, and marks an entity dirty, which is the other.
+                // Platform adapters hold a placeholder tree until this
+                // lands, so it has to be a full one.
+                sync_a11y_tree_initial(world);
+                if let Some(update) = take_pending_tree_update(world) {
+                    updates.push(update);
+                }
+            }
+            Pending::Action(request) => handle_action(world, &request),
+        }
+    }
+    updates
 }
 
 /// Apply an [`accesskit::ActionRequest`] (a screen reader asking to focus
@@ -415,6 +429,64 @@ mod tests {
         );
     }
 
+    /// Setting a value covers both shapes an assistive technology sends:
+    /// a number for a slider and a string for a text control. Both mark
+    /// the entity dirty so the next sync reports what the app now holds.
+    #[test]
+    fn set_value_writes_numbers_to_sliders_and_strings_to_text() {
+        let mut world = world_with_focus();
+        let slider = world
+            .spawn(SliderValue {
+                value: 10.0,
+                min: 0.0,
+                max: 50.0,
+                step: None,
+            })
+            .id();
+        let field = world.spawn(TextContent("before".into())).id();
+
+        let mut numeric = request(slider, Action::SetValue);
+        numeric.data = Some(ActionData::NumericValue(999.0));
+        handle_action(&mut world, &numeric);
+        assert_eq!(
+            world.get::<SliderValue>(slider).unwrap().value,
+            50.0,
+            "a value past the maximum clamps rather than escaping the range",
+        );
+        assert!(world.get::<DirtyA11y>(slider).is_some());
+
+        let mut text = request(field, Action::SetValue);
+        text.data = Some(ActionData::Value("after".into()));
+        handle_action(&mut world, &text);
+        assert_eq!(world.get::<TextContent>(field).unwrap().0, "after");
+        assert!(world.get::<DirtyA11y>(field).is_some());
+
+        // A value request carrying nothing changes nothing.
+        let empty = request(field, Action::SetValue);
+        handle_action(&mut world, &empty);
+        assert_eq!(world.get::<TextContent>(field).unwrap().0, "after");
+    }
+
+    /// Replacing the selection is how dictation and braille input arrive.
+    /// It rewrites the text and, unlike `SetValue`, says nothing about
+    /// entities that carry no text.
+    #[test]
+    fn replacing_selected_text_rewrites_the_field() {
+        let mut world = world_with_focus();
+        let field = world.spawn(TextContent("old".into())).id();
+        let bare = world.spawn_empty().id();
+
+        let mut replace = request(field, Action::ReplaceSelectedText);
+        replace.data = Some(ActionData::Value("new".into()));
+        handle_action(&mut world, &replace);
+        assert_eq!(world.get::<TextContent>(field).unwrap().0, "new");
+
+        let mut on_bare = request(bare, Action::ReplaceSelectedText);
+        on_bare.data = Some(ActionData::Value("ignored".into()));
+        handle_action(&mut world, &on_bare);
+        assert!(world.get::<TextContent>(bare).is_none());
+    }
+
     /// Scroll-into-view and context-menu requests land in the shared
     /// core resources the primitives crate drains, rather than in anything
     /// backend-specific.
@@ -434,6 +506,72 @@ mod tests {
             world.resource::<A11yContextMenuRequests>().targets,
             vec![entity]
         );
+    }
+
+    /// An inbox that counts the wakes it sends, standing in for the event
+    /// loop the real one nudges.
+    fn counting_inbox() -> (Inbox, Arc<std::sync::atomic::AtomicUsize>) {
+        let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = wakes.clone();
+        let inbox = Inbox {
+            queue: Arc::new(Mutex::new(Vec::new())),
+            wake: Arc::new(move || {
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }),
+        };
+        (inbox, wakes)
+    }
+
+    /// Assistive technologies call in on their own threads, so every
+    /// handler queues its request and wakes the loop rather than touching
+    /// the world. The initial-tree ask answers `None` on the spot and is
+    /// honoured from the queue instead, which is the asynchronous path
+    /// AccessKit documents for an app that cannot build a tree off-thread.
+    #[test]
+    fn platform_callbacks_queue_and_wake_instead_of_touching_the_world() {
+        let (mut inbox, wakes) = counting_inbox();
+        let entity = Entity::from_raw_u32(7).expect("valid entity id");
+
+        assert!(inbox.request_initial_tree().is_none());
+        inbox.do_action(request(entity, Action::Click));
+        inbox.deactivate_accessibility();
+
+        assert_eq!(wakes.load(std::sync::atomic::Ordering::Relaxed), 2);
+        let drained = inbox.drain();
+        assert_eq!(drained.len(), 2);
+        assert!(matches!(drained[0], Pending::InitialTree));
+        assert!(matches!(drained[1], Pending::Action(_)));
+        // Draining empties the queue, so the next frame does not replay it.
+        assert!(inbox.drain().is_empty());
+    }
+
+    /// Draining applies the actions to the world and hands back the tree
+    /// updates the platform still needs, keeping the two halves of a pump
+    /// separable: world mutation here, adapter calls at the call site.
+    #[test]
+    fn draining_applies_actions_and_returns_the_handshake_tree() {
+        use lumen_core::components::Transform;
+
+        let mut world = world_with_focus();
+        let entity = world
+            .spawn(Transform {
+                absolute: glam::Vec2::ZERO,
+                size: glam::Vec2::new(30.0, 30.0),
+                ..Default::default()
+            })
+            .id();
+
+        let updates = apply_requests(
+            &mut world,
+            vec![
+                Pending::Action(request(entity, Action::Focus)),
+                Pending::InitialTree,
+            ],
+        );
+
+        assert_eq!(world.resource::<FocusTracker>().0, Some(entity));
+        assert_eq!(updates.len(), 1, "only the handshake produces a tree");
+        assert!(!updates[0].nodes.is_empty());
     }
 
     /// The initial-tree handshake always has an answer. It arrives before
