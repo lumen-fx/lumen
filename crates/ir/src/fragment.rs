@@ -51,8 +51,9 @@ pub enum FragmentKind {
 pub struct FragmentParam {
     /// Parameter name, without sigil.
     pub name: String,
-    /// Value used when the use site passes no argument. `None` makes the
-    /// parameter required.
+    /// Value used when the use site passes no argument. A parameter with
+    /// `None` that the use site leaves out keeps its marker in the tree,
+    /// where the global signal scope resolves it at runtime.
     pub default: Option<String>,
 }
 
