@@ -127,8 +127,62 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{COMPILED_ENGINES, install};
+    use super::{COMPILED_ENGINES, ScriptHostAccess, install};
+    use bevy_ecs::prelude::World;
     use lumen_core::prelude::App;
+    use lumen_script::{ScriptError, ScriptValue};
+
+    /// The image the build script compiled, the same one the browser suite
+    /// loads.
+    #[cfg(feature = "host-candela")]
+    const SMOKE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/smoke.cdlb"));
+
+    /// Every entry is a function pointer resolved before the host it names is
+    /// installed, so the table answers rather than panics when the resource is
+    /// absent.
+    #[cfg(feature = "host-candela")]
+    #[test]
+    fn reaching_a_host_that_was_never_installed_is_reported_not_a_panic() {
+        use lumen_script_candela::CandelaVmHost;
+
+        let mut world = World::new();
+        let access = ScriptHostAccess::of::<CandelaVmHost>(|_| Vec::new());
+
+        assert_eq!((access.signal)(&world, "greeting"), None);
+        let Err(ScriptError::Runtime(message)) = (access.call)(&mut world, "bump") else {
+            panic!("calling into a world with no host resource is a failure the page can show");
+        };
+        assert!(message.contains("no script is loaded"), "{message}");
+    }
+
+    #[cfg(feature = "host-candela")]
+    #[test]
+    fn the_installed_host_answers_for_the_program_the_app_shipped() {
+        let mut app = App::new();
+        app.extract_fns.clear();
+        let host =
+            install(&mut app, "candela", SMOKE, "smoke.cdlb").expect("this build carries candela");
+
+        assert!(
+            (host.exports)(&app.world).iter().any(|e| e == "bump"),
+            "the export list comes from the loaded image, not from a fixed list"
+        );
+        assert_eq!(
+            (host.signal)(&app.world, "greeting"),
+            Some(ScriptValue::Str("hello from candela".to_owned())),
+            "on_start ran during the install and its write reads back through the table"
+        );
+        assert_eq!(
+            (host.call)(&mut app.world, "bump").expect("an exported name runs"),
+            Some(ScriptValue::I64(1)),
+            "the call returns through the table"
+        );
+        assert_eq!(
+            (host.call)(&mut app.world, "on_click").expect("a miss is not an error"),
+            None,
+            "a name the image does not export answers with nothing rather than failing"
+        );
+    }
 
     #[test]
     fn an_engine_no_host_answers_for_is_refused_by_name() {
