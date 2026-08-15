@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use lumen_core::signals::ArrayItem;
+use lumen_core::signals::{ArrayItem, signal_is_truthy};
 use lumen_html::contract::{
     DEFAULT_ARTIFACT_FILE, DEFAULT_CSS_FILE, DEFAULT_JS_FILE, DEFAULT_WASM_FILE, Dir,
     NavigationMode, ScriptRef, Seed,
@@ -58,14 +58,11 @@ impl SignalEnv {
 
     /// Whether a signal counts as true.
     ///
-    /// Unset, empty, `false` and `0` are false and everything else is true.
-    /// The desktop reconciler decides it the same way, and a page rendered
-    /// on a different rule would disagree with the runtime that adopts it.
+    /// The rule lives in [`lumen_core::signals::signal_is_truthy`], which is
+    /// where the reconciler reads it too. A page rendered on a different rule
+    /// would disagree with the runtime that adopts it.
     pub fn is_truthy(&self, name: &str) -> bool {
-        !matches!(
-            self.global(name),
-            None | Some("") | Some("false") | Some("0")
-        )
+        self.global(name).is_some_and(signal_is_truthy)
     }
 }
 

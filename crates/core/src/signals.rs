@@ -649,6 +649,20 @@ pub fn push_scroll_to_signal(
     }
 }
 
+/// Whether a signal's stringified value counts as true.
+///
+/// Empty, `"false"` and `"0"` are false; anything else is true. This is the
+/// rule an `<if>` gate evaluates. Anything that decides the same branch
+/// somewhere else, such as a build step rendering it ahead of the runtime,
+/// applies this rule rather than one of its own.
+///
+/// A signal that was never written is false. Callers holding an
+/// `Option<&str>` spell that out with `is_some_and`, which keeps the missing
+/// case visible at the call site.
+pub fn signal_is_truthy(value: &str) -> bool {
+    !matches!(value, "" | "false" | "0")
+}
+
 /// One row of a reactive array; field name -> stringified value.
 pub type ArrayItem = HashMap<String, String>;
 
@@ -802,6 +816,21 @@ pub fn drain_external_signals(mut arrays: ResMut<ArraySignals>) {
                 arrays.set(name, Vec::new());
             }
             Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::signal_is_truthy;
+
+    #[test]
+    fn only_empty_false_and_zero_are_falsy() {
+        for value in ["", "false", "0"] {
+            assert!(!signal_is_truthy(value), "`{value}` should be falsy");
+        }
+        for value in ["true", "1", "yes", "no", "False", "0.0", "00", " "] {
+            assert!(signal_is_truthy(value), "`{value}` should be truthy");
         }
     }
 }
