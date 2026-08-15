@@ -16,6 +16,8 @@ bevy_ecs.workspace = true
 glam.workspace = true
 accesskit.workspace = true
 accesskit_winit.workspace = true
-# winit must match accesskit_winit's pin so adapter::new(&Window) accepts
-# the same Window type the host backend uses.
+# The bridge binds AccessKit to a live window, so it names winit directly
+# rather than the window backend naming AccessKit. The pin must match both
+# accesskit_winit's and the window backend's, or the `Window` handed over at
+# the seam is a different type on each side.
 winit.workspace = true
