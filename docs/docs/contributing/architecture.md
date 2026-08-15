@@ -62,12 +62,16 @@ tools/             the release plumbing and the editor plugins
 - **lumen-text-cosmic**: the cosmic-text shaper implementation, with a shape
   cache.
 - **lumen-render-wgpu**: the GPU renderer. Encodes the retained node tree into
-  a vello scene and renders it.
+  a vello scene and renders it, either into an offscreen texture or into a
+  window's swap chain.
 - **lumen-render-headless**: a deterministic software rasterizer used by golden
-  tests, with no GPU or display dependency.
-- **lumen-window-winit**: the on-screen window. winit event loop, surface and
-  device setup, presentation, close-request veto, and hosting the accessibility
-  adapter.
+  tests, with no GPU or display dependency. It can also stand in for the GPU
+  renderer on a window, which is how a windowed run stays reproducible.
+- **lumen-window-winit**: the on-screen window. winit event loop, input
+  translation, redraw pacing, and the close-request veto. It owns no pixels: a
+  renderer and an accessibility bridge are handed to it, and it drives both
+  through their traits, so it compiles without naming a graphics API or an
+  accessibility library.
 - **lumen-audio**: the playback abstraction (`AudioBackend`) plus the transport
   it drives: playing, paused, stopped, playhead, duration, seek, and volume. It
   also carries a silent backend, for a build or a test that must not touch a
@@ -77,8 +81,9 @@ tools/             the release plumbing and the editor plugins
 - **lumen-http-ureq**: the HTTP client behind the scripts' `fetch()` and
   `http()` builtins. One blocking request per call over ureq, with a bounded
   body read.
-- **lumen-a11y-accesskit**: translates the entity tree into AccessKit tree
-  updates each tick.
+- **lumen-a11y-accesskit**: accessibility. Translates the entity tree into
+  AccessKit tree updates each tick, and binds them to a live window for the
+  platform's screen readers.
 - **lumen-async-tokio**: the async bridge. A tokio runtime published as the
   app's `SpawnService` and `TimerService`, plus a queue that carries results
   from tasks back into the main world.
@@ -309,30 +314,51 @@ run and reports its width, height, and first-line baseline, and a backend that
 can answer more cheaply overrides it. The cosmic-text implementation caches
 results, since the same label reshapes every frame otherwise.
 
-The app holds one shaper, as the non-send `ShaperService` resource. Layout,
-the editing systems, and the caret pass all read it, so replacing it from an
-app hook changes measuring and painting together. A build that installs none
-gets `NullShaper`, which shapes nothing and measures every run as an empty
-box.
+The app holds one shaper per world, as the non-send `ShaperService` resource.
+Layout, the editing systems, and the caret pass read the main world's; the
+renderer reads the render world's. Replacing either from an app hook changes
+what that half does. A build that installs none gets `NullShaper`, which shapes
+nothing and measures every run as an empty box, and a renderer with no shaper
+paints no text.
 
 Rendering walks the retained node tree. The GPU backend encodes each leaf into
 a vello scene, reusing cached fragments for leaves that have not changed, and
 diffs against the previous frame's tree; an empty diff skips encode and submit
 entirely and leaves the last frame on screen.
 
-The window backend owns presentation. Vello's compute pipeline pins its render
-target to a linear RGBA format, while most swap chains expose a BGRA sRGB
-surface, so Lumen renders into an intermediate texture of the required format
-and blits that onto the surface. Which GPU backend is compiled is decided at
-the manifest level, one per operating system.
+Presentation belongs to the renderer, behind the `SurfaceRenderer` trait. The
+window backend attaches a window to it, reports resizes, and asks for a frame;
+everything from the retained tree to the pixels stays on the renderer's side of
+that line, so no scene or device type is ever named by the window backend.
+Vello's compute pipeline pins its render target to a linear RGBA format, while
+most swap chains expose a BGRA sRGB surface, so the GPU renderer draws into an
+intermediate texture of the required format and blits that onto the surface.
+Which GPU backend is compiled is decided at the manifest level, one per
+operating system.
+
+Accessibility splits along the same line. The world-side half walks the tree
+once per tick in `A11ySync` and leaves an update behind; the platform half,
+behind the `A11yBackend` trait, publishes it and carries requests the other
+way. Screen readers arrive on their own threads, so those requests are queued
+and applied on the main thread, in the tick that paints their result.
 
 ## Pluggable backends
 
 Every backend role is a trait, and the trait lives away from any
+<<<<<<< HEAD
 implementation of it. `lumen-core` names the roles: renderer, layout engine,
 window backend, accessibility bridge, task spawner, timer. The shaping trait
 lives in `lumen-text`, the scripting trait in `lumen-script`, the parser trait
 in `lumen-runtime`.
+=======
+implementation of it. The traits in `lumen-core` name the roles: renderer,
+layout engine, window backend, accessibility bridge, task spawner, timer. Some
+are markers that only identify a role; `SurfaceRenderer` and `A11yBackend` also
+declare what a window backend calls on them each frame, which is what lets one
+window backend drive any renderer and any accessibility bridge. The shaping
+trait lives in `lumen-text`, the scripting trait in `lumen-script`, the parser
+trait in `lumen-runtime`.
+>>>>>>> 58c2d1d3 (Document the presentation and accessibility seams)
 
 An implementation crate depends on the trait crate and ships a plugin that
 installs itself. Nothing depends on an implementation crate except the assembly
@@ -457,6 +483,9 @@ These are load-bearing. Breaking one is a bug, not a style question.
 - **`lumen-core` imports no implementation crate.** It carries `bevy_ecs`,
   `bevy_tasks`, and small utility crates, and nothing else. No renderer, no
   windowing, no shaper, no layout engine, no script engine. CI checks this.
+  `raw-window-handle` is on the allowed side of that line: it is the handle
+  vocabulary a window backend and a renderer use to describe a window to each
+  other, and it contains no platform code.
 - **The runtime links no parser.** `lumen-runtime` reaches the front end only
   through the injected `SourceParser`. The edge runs the other way: `lumenc`
   depends on `lumen-runtime`.

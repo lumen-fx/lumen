@@ -54,10 +54,10 @@ use lumen_script_rhai::{RhaiHost, ScriptRhaiPlugin};
 // `ScriptSet` is how the host-neutral half orders against them: with several
 // hosts installed, an edge naming one host's system leaves the others outside
 // the one-tick dirty window.
+use lumen_render_wgpu::WgpuSurfaceRenderer;
 use lumen_script::{NativeExternFn, ScriptCommandEvent, ScriptSet, fire_on_ready, reload_script};
 use lumen_text::{ShaperService, TextShaper};
 use lumen_text_cosmic::CosmicShaper;
-use lumen_render_wgpu::WgpuSurfaceRenderer;
 use lumen_window_winit::{A11yBridgeFactory, run};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -415,7 +415,8 @@ pub fn run_app(opts: RunOptions) -> Result<(), RunError> {
     // this one or a replacement - finds it in one place. Without one, text
     // is skipped.
     if let Some(shaper) = window.text_shaper {
-        app.render_world.insert_non_send(ShaperService::from(shaper));
+        app.render_world
+            .insert_non_send(ShaperService::from(shaper));
     }
     // Backend selection happens here, at the composition point: the window
     // backend drives both of these through their traits and names neither.

@@ -1228,7 +1228,8 @@ impl Plugin for WgpuRendererPlugin {
         app.render_world
             .insert_resource(SceneFragmentCache::default());
         if let Some(shaper) = self.text_shaper {
-            app.render_world.insert_non_send(ShaperService::from(shaper));
+            app.render_world
+                .insert_non_send(ShaperService::from(shaper));
         }
         app.add_render_systems(RenderStage::Render, wgpu_render_system);
     }

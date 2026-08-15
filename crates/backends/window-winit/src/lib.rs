@@ -57,7 +57,7 @@ pub enum WinitError {
 /// tweens, opacity transitions) against a deadline anchored at the current
 /// frame's start.
 ///
-/// On a real display `wgpu`'s `AutoVsync` present blocks in the
+/// On a real display the renderer's present blocks in the
 /// `RedrawRequested` handler until the compositor's vsync, so by the time
 /// `about_to_wait` runs the deadline has already passed and the redraw is
 /// requested immediately - the pacing is a no-op and vsync stays the sole
@@ -644,7 +644,7 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
         // Orderly renderer teardown WHILE the platform connection is still
         // alive. `event_loop.run_app` consumes the `EventLoop`, so once it
         // returns the Wayland/X11 connection is already gone - and
-        // releasing a wgpu surface at that point makes the GLES backend
+        // releasing a GPU surface at that point makes a GLES driver
         // call `eglTerminate` against a dead `wl_display`, which segfaults
         // (observed: exit 139 on every close under Hyprland/EGL).
         // Detaching here runs the whole release chain while the display
@@ -1283,13 +1283,13 @@ impl WinitHandler {
     /// `QCloseEvent::ignore()` / GTK4's `close-request -> TRUE`. When
     /// nothing vetoes, `close_committed` is set and `about_to_wait`
     /// exits the loop; [`ApplicationHandler::exiting`] then persists
-    /// window state and tears the GPU down in order.
+    /// window state and releases the renderer in order.
     ///
     /// Runs synchronously in the event arm (the same pattern as the
     /// live-resize paint in `Resized`) rather than deferring to the next
     /// `RedrawRequested`, so the close also works while the
     /// [`RedrawScheduler`] is paused (unfocused / occluded window) and
-    /// before the GPU exists.
+    /// before the window exists.
     fn process_close_request(&mut self) {
         if self.close_committed {
             return;
