@@ -145,6 +145,47 @@ pub struct ForMarker {
     /// matching depends on per-row substitution results.
     pub cascaded_body: Option<std::sync::Arc<Vec<Element>>>,
 }
+
+/// Who mounts the rows of a virtualized `<for>`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Virtualization {
+    /// The reconciler windows the rows itself: it reads the nearest
+    /// `<scroll>` ancestor, mounts the visible band plus an overscan buffer,
+    /// and absolute-positions each row. What a desktop app does.
+    #[default]
+    Enabled,
+    /// The presentation layer already windows long lists, so the reconciler
+    /// mounts every row and leaves `virtualized="true"` to it.
+    HostManaged,
+}
+
+/// Who resolves the styles of a `<for>` row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RowStyle {
+    /// The reconciler runs the CSS cascade over each row it builds, so the
+    /// spawned entities carry resolved values. What a desktop app does.
+    #[default]
+    Cascade,
+    /// The presentation layer has its own cascade over the same stylesheet,
+    /// so the reconciler leaves row markup unresolved rather than doing the
+    /// work twice.
+    HostStyled,
+}
+
+/// What the presentation layer under this scene already does for itself, so
+/// [`reconcile_for_blocks`] can stop doing it.
+///
+/// The defaults are what a desktop app needs, and a world with no policy
+/// resource behaves as the defaults do. A host that brings its own windowing
+/// or its own cascade inserts a policy saying so.
+#[derive(bevy_ecs::resource::Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScenePolicy {
+    /// Who mounts the rows of a virtualized `<for>`.
+    pub virtualization: Virtualization,
+    /// Who resolves the styles of a `<for>` row.
+    pub row_style: RowStyle,
+}
+
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::*;
 use lumen_core::signals::ArrayItem;
@@ -1841,10 +1882,17 @@ pub fn reconcile_for_blocks(
     >,
     styles: bevy_ecs::system::Query<&lumen_core::components::Style>,
     stylesheet: Option<bevy_ecs::system::Res<LumenStylesheet>>,
+    policy: Option<bevy_ecs::system::Res<ScenePolicy>>,
 ) {
     let _ = world_helper;
-    let css = stylesheet.as_ref().map(|s| &s.0);
+    let policy = policy.map(|p| *p).unwrap_or_default();
     let css_changed = stylesheet.as_ref().map(|s| s.is_changed()).unwrap_or(false);
+    // Under `RowStyle::HostStyled` the rows reach a cascade of their own, so
+    // every substitution below hands the template on unresolved.
+    let row_css = match policy.row_style {
+        RowStyle::Cascade => stylesheet.as_ref().map(|s| &s.0),
+        RowStyle::HostStyled => None,
+    };
     for (parent_id, mut marker, children) in markers.iter_mut() {
         // Borrow the array in place - the old `.to_vec()` deep-cloned
         // every `ArrayItem` HashMap (5 000 rows x per-field Strings) on
@@ -1865,7 +1913,7 @@ pub fn reconcile_for_blocks(
         // spawn and rows leaving it despawn. Pre-fix, every 1-row shift
         // despawned + respawned the ENTIRE band (with a full per-row CSS
         // cascade), which is what made 5k-row wheel scrolling lag.
-        if marker.virtualized {
+        if marker.virtualized && policy.virtualization == Virtualization::Enabled {
             let row_h = marker.row_height.max(1.0);
             // Walk ChildOf upward from the for-block looking for an
             // ancestor with a `Scroll` component. Read its scroll
@@ -2012,7 +2060,7 @@ pub fn reconcile_for_blocks(
             // `{...}` placeholders (selector matching would then depend on
             // the substituted values).
             let per_row_cascade = body_has_dynamic_selector_attrs(&marker.body);
-            let template: std::sync::Arc<Vec<Element>> = match (per_row_cascade, css) {
+            let template: std::sync::Arc<Vec<Element>> = match (per_row_cascade, row_css) {
                 (true, _) | (false, None) => std::sync::Arc::new(marker.body.clone()),
                 (false, Some(_)) if marker.cascaded_body.is_some() => {
                     marker.cascaded_body.clone().expect("checked above")
@@ -2050,7 +2098,7 @@ pub fn reconcile_for_blocks(
                     let mut inst = substitute_in_element_with_css(
                         tmpl,
                         &ctx,
-                        if per_row_cascade { css } else { None },
+                        if per_row_cascade { row_css } else { None },
                     );
                     // Override the row's positioning so it lands at the
                     // correct absolute slot inside the for-block.
@@ -2109,7 +2157,7 @@ pub fn reconcile_for_blocks(
                     parent_id,
                 };
                 for tmpl in &marker.body {
-                    let inst = substitute_in_element_with_css(tmpl, &ctx, css);
+                    let inst = substitute_in_element_with_css(tmpl, &ctx, row_css);
                     spawn_body_child(&mut commands, &inst, parent_id);
                 }
             }
@@ -2148,7 +2196,7 @@ pub fn reconcile_for_blocks(
                 parent_id,
             };
             for tmpl in &marker.body {
-                let inst = substitute_in_element_with_css(tmpl, &ctx, css);
+                let inst = substitute_in_element_with_css(tmpl, &ctx, row_css);
                 spawn_body_child(&mut commands, &inst, parent_id);
             }
         }
