@@ -18,23 +18,36 @@ use lumen_ir::css::computed_style_map;
 use lumen_ir::layout_ir::{Attributes, Element, IfModeSpec};
 
 use crate::error::EmitError;
-use crate::spec::{CssMode, PageSpec, SignalEnv};
+use crate::spec::{CssMode, PageSpec, SignalEnv, SiteSpec};
+use crate::urls;
 
 /// What the walk needs to know that is not the element itself.
 struct Walk<'a> {
     page: &'a str,
     signals: &'a SignalEnv,
     css_mode: CssMode,
+    /// Site base path, which is what the shared files hang off.
+    base: String,
+    /// Base path of this locale's documents, which a link hangs off.
+    tree: String,
+    /// Page keys, longest first, for resolving a link.
+    keys: Vec<String>,
+    entry: &'a str,
     seen: BTreeSet<String>,
 }
 
 /// Write the page's element tree, starting at the page root.
-pub fn emit_tree(page: &PageSpec, css_mode: CssMode) -> Result<String, EmitError> {
+pub fn emit_tree(page: &PageSpec, spec: &SiteSpec) -> Result<String, EmitError> {
     let mut out = String::new();
+    let base = urls::normalize_base(&spec.web.base_path);
     let mut walk = Walk {
         page: &page.key,
         signals: &page.signals,
-        css_mode,
+        css_mode: spec.web.css_mode,
+        tree: urls::join(&base, &spec.locale.prefix()),
+        base,
+        keys: spec.keys(),
+        entry: &spec.web.entry,
         seen: BTreeSet::new(),
     };
     emit_element(&mut out, &page.ir.root, &NodePath::root(), &mut walk)?;
@@ -47,6 +60,17 @@ fn emit_element(
     path: &NodePath,
     walk: &mut Walk<'_>,
 ) -> Result<(), EmitError> {
+    // A fragment use site stands in for a body that lives in the app's
+    // fragment table. Expanding it is the compiler's step, not the
+    // emitter's; a tree that still carries one has not been through it, and
+    // writing the placeholder out would put an element in the page that the
+    // app does not have.
+    if let Some(frag) = &element.frag_use {
+        return Err(EmitError::UnexpandedFragment {
+            page: walk.page.to_string(),
+            key: frag.key.clone(),
+        });
+    }
     let tag = html_tag_for(&element.tag).ok_or_else(|| EmitError::UnknownTag {
         page: walk.page.to_string(),
         tag: element.tag.clone(),
@@ -78,7 +102,19 @@ fn emit_element(
         write_attr(out, name, value);
     }
     for (name, value) in html_attrs(&element.tag, &element.attrs) {
-        write_attr(out, name, &value);
+        // A link and an asset reference are written as the IR holds them,
+        // which is a page key and a path relative to the site root. Both
+        // become URLs here, where the site's base path and page set are
+        // known.
+        match name {
+            "href" => write_attr(
+                out,
+                name,
+                &urls::page_href(&value, &walk.tree, &walk.keys, walk.entry),
+            ),
+            "src" => write_attr(out, name, &urls::asset_src(&value, &walk.base)),
+            _ => write_attr(out, name, &value),
+        }
     }
     write_attr(out, DATA_LM, &path_text);
     if walk.css_mode == CssMode::Computed {

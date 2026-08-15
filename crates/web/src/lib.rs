@@ -26,7 +26,8 @@ pub mod urls;
 
 pub use css::{RESET_CSS, rules_css, styles_css};
 pub use error::EmitError;
-pub use site::emit;
+pub use site::{NOT_FOUND_FILE, SITEMAP_FILE, emit};
 pub use spec::{
-    AssetRef, CssMode, LocaleSpec, OutputFile, PageSpec, SignalEnv, Site, SiteSpec, WebSpec,
+    AssetRef, CssMode, HostRewrite, LocaleSpec, OutputFile, PageSpec, SignalEnv, Site, SiteSpec,
+    WebSpec, document_name,
 };

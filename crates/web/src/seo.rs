@@ -22,10 +22,14 @@ pub fn open_document(out: &mut String, page: &PageSpec, spec: &SiteSpec) -> Resu
     let base = urls::normalize_base(&web.base_path);
     let title = page.title.clone().unwrap_or_else(|| web.title.clone());
     let description = page.description.as_ref().or(web.description.as_ref());
-    let canonical = web
-        .url
-        .as_ref()
-        .map(|url| urls::absolute(url, &base, &page.document()));
+    let document = page.document(&web.entry);
+    // This tree's documents hang off the locale prefix; the site's shared
+    // files do not.
+    let tree = urls::join(&base, &spec.locale.prefix());
+    // A site published at more than one address declares one of them as the
+    // canonical one; without that, it is the address it is served from.
+    let origin = web.canonical.as_ref().or(web.url.as_ref());
+    let canonical = origin.map(|url| urls::absolute(url, &tree, &document));
 
     out.push_str("<!doctype html>\n<html");
     attr(out, "lang", &spec.locale.locale);
@@ -73,42 +77,46 @@ pub fn open_document(out: &mut String, page: &PageSpec, spec: &SiteSpec) -> Resu
     }
 
     // Alternates need absolute URLs to be worth anything to a crawler, so a
-    // site with no URL configured gets none.
-    if let Some(url) = &web.url {
-        for locale in &spec.locale.alternates {
-            let href = urls::absolute(url, &base, &format!("{locale}/{}", page.document()));
+    // site with no URL configured gets none. Every locale is listed,
+    // this one included, which is what tells a crawler the set is complete;
+    // `x-default` points at the locale served from the site root.
+    if let Some(url) = origin
+        && !spec.locale.alternates.is_empty()
+    {
+        let mut alternate = |hreflang: &str, locale: &str| {
+            let path = format!("{}{document}", spec.locale.prefix_of(locale));
+            let href = urls::absolute(url, &base, &path);
             out.push_str("<link rel=\"alternate\"");
-            attr(out, "hreflang", locale);
+            attr(out, "hreflang", hreflang);
             attr(out, "href", &href);
             out.push_str(">\n");
+        };
+        for locale in spec.locale.all() {
+            alternate(&locale, &locale);
         }
-        if !spec.locale.alternates.is_empty()
-            && let Some(canonical) = &canonical
-        {
-            out.push_str("<link rel=\"alternate\" hreflang=\"x-default\"");
-            attr(out, "href", canonical);
-            out.push_str(">\n");
-        }
+        alternate("x-default", &spec.locale.default_locale);
     }
 
     out.push_str("<link rel=\"stylesheet\"");
     attr(out, "href", &urls::join(&base, &web.css));
     out.push_str(">\n");
-    out.push_str("<link rel=\"modulepreload\"");
-    attr(out, "href", &urls::join(&base, &web.js));
-    out.push_str(">\n");
-    out.push_str("<link rel=\"preload\" as=\"fetch\" type=\"application/wasm\" crossorigin");
-    attr(out, "href", &urls::join(&base, &web.wasm));
-    out.push_str(">\n");
-    out.push_str("<link rel=\"preload\" as=\"fetch\" crossorigin");
-    attr(out, "href", &urls::join(&base, &web.artifact));
-    out.push_str(">\n");
+    if web.runtime {
+        out.push_str("<link rel=\"modulepreload\"");
+        attr(out, "href", &urls::join(&base, &web.js));
+        out.push_str(">\n");
+        out.push_str("<link rel=\"preload\" as=\"fetch\" type=\"application/wasm\" crossorigin");
+        attr(out, "href", &urls::join(&base, &web.wasm));
+        out.push_str(">\n");
+        out.push_str("<link rel=\"preload\" as=\"fetch\" crossorigin");
+        attr(out, "href", &urls::join(&base, &web.artifact));
+        out.push_str(">\n");
 
-    out.push_str("<script type=\"application/json\"");
-    attr(out, "id", SEED_SCRIPT_ID);
-    out.push('>');
-    out.push_str(&page.seed.to_script_json()?);
-    out.push_str("</script>\n");
+        out.push_str("<script type=\"application/json\"");
+        attr(out, "id", SEED_SCRIPT_ID);
+        out.push('>');
+        out.push_str(&page.seed.to_script_json()?);
+        out.push_str("</script>\n");
+    }
     out.push_str("</head>\n<body>\n");
     Ok(())
 }
@@ -118,6 +126,10 @@ pub fn open_document(out: &mut String, page: &PageSpec, spec: &SiteSpec) -> Resu
 /// The script is the same on every page of a site: it loads the runtime,
 /// which reads the page it landed on out of the document.
 pub fn close_document(out: &mut String, spec: &SiteSpec) {
+    if !spec.web.runtime {
+        out.push_str("\n</body>\n</html>\n");
+        return;
+    }
     let base = urls::normalize_base(&spec.web.base_path);
     out.push_str("\n<script type=\"module\">import init, { boot } from \"");
     out.push_str(&escape_text(&urls::join(&base, &spec.web.js)));

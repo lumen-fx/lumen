@@ -94,10 +94,43 @@ impl PageSpec {
         }
     }
 
-    /// The document this page is emitted as.
-    pub fn document(&self) -> String {
-        format!("{}.html", self.key)
+    /// The document this page is emitted as, given the site's entry key.
+    ///
+    /// The entry page is `index.html` whatever it is keyed as, because that
+    /// is the file a server hands out for the directory itself.
+    pub fn document(&self, entry: &str) -> String {
+        document_name(&self.key, entry)
     }
+}
+
+/// The document a page key is emitted as. See [`PageSpec::document`].
+pub fn document_name(key: &str, entry: &str) -> String {
+    if key == entry {
+        "index.html".to_string()
+    } else {
+        format!("{key}.html")
+    }
+}
+
+/// Where a site is deployed, and so what it takes for a deep path to reach
+/// the app instead of the host's own not-found page.
+///
+/// Every site is emitted with a `404.html` holding the app shell, which is
+/// all a plain file server needs. A host that can rewrite instead gets the
+/// file that tells it to, so the visitor's URL is served with a 200.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HostRewrite {
+    /// A plain file server: the `404.html` alone.
+    #[default]
+    Static,
+    /// Netlify: `_redirects`.
+    Netlify,
+    /// Vercel: `vercel.json`.
+    Vercel,
+    /// Apache: `.htaccess`.
+    Apache,
+    /// nginx: `nginx.conf`, to include from a server block.
+    Nginx,
 }
 
 /// How a page's styling reaches the browser.
@@ -127,6 +160,9 @@ pub struct WebSpec {
     /// Absolute site URL, such as `https://example.com`. Canonical and
     /// social metadata need it; without it they are left out.
     pub url: Option<String>,
+    /// Absolute URL the pages declare as canonical, for a site published at
+    /// more than one address. Falls back to [`Self::url`].
+    pub canonical: Option<String>,
     /// Page key the site opens on.
     pub entry: String,
     /// Title used by any page that does not set its own.
@@ -149,6 +185,17 @@ pub struct WebSpec {
     pub navigation: NavigationMode,
     /// Scripts the runtime loads at boot, in order.
     pub scripts: Vec<ScriptRef>,
+    /// Where the site is deployed, which decides the deep-path rewrite file.
+    pub host: HostRewrite,
+    /// Whether the documents load the browser runtime.
+    ///
+    /// A site emitted without it is the degraded mode: the pages read, the
+    /// links work as ordinary links, and nothing runs. The documents then
+    /// say so by carrying no boot script at all, rather than pointing at a
+    /// runtime that is not there.
+    pub runtime: bool,
+    /// Write `sitemap.xml`. Needs [`Self::url`].
+    pub sitemap: bool,
 }
 
 impl Default for WebSpec {
@@ -156,6 +203,7 @@ impl Default for WebSpec {
         Self {
             base_path: "/".to_string(),
             url: None,
+            canonical: None,
             entry: "index".to_string(),
             title: String::new(),
             description: None,
@@ -167,23 +215,36 @@ impl Default for WebSpec {
             js: DEFAULT_JS_FILE.to_string(),
             navigation: NavigationMode::default(),
             scripts: Vec::new(),
+            host: HostRewrite::default(),
+            runtime: true,
+            sitemap: false,
         }
     }
 }
 
 /// The locale one tree of documents is emitted for.
+///
+/// A site emitted in more than one locale is one tree per locale. The
+/// default locale's tree sits at the site root and every other one sits
+/// under its own tag, so `/settings.html` and `/de-DE/settings.html` are the
+/// same page in two languages. What the whole site shares - the stylesheet,
+/// the compiled app, the runtime, the assets - stays at the root and is
+/// referenced from every tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocaleSpec {
     /// Locale tag, such as `en-US`.
     pub locale: String,
     /// Base writing direction.
     pub dir: Dir,
+    /// The locale whose tree sits at the site root.
+    pub default_locale: String,
     /// The other locales the site is emitted in, for `hreflang` links.
     pub alternates: Vec<String>,
 }
 
 impl LocaleSpec {
-    /// A locale whose direction is read from the language.
+    /// A locale whose direction is read from the language, alone at the site
+    /// root.
     ///
     /// A tag that does not parse is treated as left to right, which is what
     /// an unknown language falls back to everywhere else in Lumen.
@@ -194,10 +255,42 @@ impl LocaleSpec {
             _ => Dir::Ltr,
         };
         Self {
+            default_locale: locale.clone(),
             locale,
             dir,
             alternates: Vec::new(),
         }
+    }
+
+    /// True when this tree is the one at the site root.
+    pub fn is_root(&self) -> bool {
+        self.locale == self.default_locale
+    }
+
+    /// What every document of `locale` hangs off, under the site's base
+    /// path: nothing for the default locale, `<tag>/` for the rest.
+    pub fn prefix_of(&self, locale: &str) -> String {
+        if locale == self.default_locale {
+            String::new()
+        } else {
+            format!("{locale}/")
+        }
+    }
+
+    /// This tree's own prefix. See [`Self::prefix_of`].
+    pub fn prefix(&self) -> String {
+        self.prefix_of(&self.locale)
+    }
+
+    /// Every locale the site is emitted in, this tree's first.
+    pub fn all(&self) -> Vec<String> {
+        let mut locales = vec![self.locale.clone()];
+        for alternate in &self.alternates {
+            if !locales.contains(alternate) {
+                locales.push(alternate.clone());
+            }
+        }
+        locales
     }
 }
 
@@ -237,6 +330,21 @@ pub struct SiteSpec {
     pub locale: LocaleSpec,
     /// Files the pages refer to.
     pub assets: Vec<AssetRef>,
+}
+
+impl SiteSpec {
+    /// The document a page key is emitted as.
+    pub fn document_for(&self, key: &str) -> String {
+        document_name(key, &self.web.entry)
+    }
+
+    /// Every page key, longest first, which is the order a path is resolved
+    /// against by [`lumen_core::nav::resolve_path`].
+    pub fn keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = self.pages.iter().map(|page| page.key.clone()).collect();
+        keys.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+        keys
+    }
 }
 
 /// One emitted file.

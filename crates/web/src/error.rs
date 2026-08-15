@@ -14,6 +14,16 @@ pub enum EmitError {
     DuplicatePage(String),
     /// The entry page is not one of the site's pages.
     UnknownEntry(String),
+    /// Two pages would be written to the same file.
+    DuplicateDocument(String),
+    /// A page holds an element that stands in for a fragment whose body was
+    /// never put in its place.
+    UnexpandedFragment {
+        /// Page the use site was found in.
+        page: String,
+        /// The fragment it names.
+        key: String,
+    },
     /// A page holds a tag with no HTML mapping. Custom widget tags reach the
     /// IR under their own name and have no meaning to the emitter.
     UnknownTag {
@@ -41,6 +51,13 @@ impl fmt::Display for EmitError {
             EmitError::EmptyPageKey => f.write_str("a page has an empty key"),
             EmitError::DuplicatePage(key) => write!(f, "two pages share the key `{key}`"),
             EmitError::UnknownEntry(key) => write!(f, "entry page `{key}` is not in the site"),
+            EmitError::DuplicateDocument(name) => {
+                write!(f, "two pages are both emitted as `{name}`")
+            }
+            EmitError::UnexpandedFragment { page, key } => write!(
+                f,
+                "page `{page}` still stands in for fragment `{key}` instead of holding its body"
+            ),
             EmitError::UnknownTag { page, tag } => {
                 write!(
                     f,
