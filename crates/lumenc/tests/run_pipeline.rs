@@ -1223,4 +1223,62 @@ mod aot_roundtrip_tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// A compiled candela app carries the bytecode image beside its source,
+    /// and that image is what a runtime without the compiler loads. The load
+    /// here registers only what the fixture calls, so it fails - but it must
+    /// fail on the rest of the host surface, which proves the image decoded
+    /// and bound the ones that were there.
+    #[test]
+    fn a_compiled_candela_app_carries_a_loadable_image() {
+        use lumen_script_candela::HOST_NAMESPACE;
+        use lumen_script_candela::candela::{HostRegistry, LoadError, load_program};
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/candela-smoke")
+            .canonicalize()
+            .expect("fixtures/candela-smoke exists");
+        let compiled = lumenc::compile_app(&dir).expect("compile_app");
+        let bytes = lumenc::artifact::serialize(&compiled).expect("serialize");
+        let decoded = lumenc::artifact::deserialize(&bytes).expect("deserialize");
+
+        let script = decoded
+            .scripts
+            .iter()
+            .find(|s| s.engine == "candela")
+            .expect("the fixture's script is candela");
+        let image = script
+            .bytecode
+            .as_deref()
+            .expect("a candela program compiles ahead of time");
+        assert_eq!(
+            image,
+            compiled.scripts[0]
+                .bytecode
+                .as_deref()
+                .expect("the image was there before the round trip"),
+            "the image survives the artifact codec byte for byte"
+        );
+
+        let mut hosts = HostRegistry::new();
+        hosts.register_host_fn(HOST_NAMESPACE, "signal_set", |_n: String, _v: String| {});
+        hosts.register_host_fn(
+            HOST_NAMESPACE,
+            "on",
+            |_event: String, _id: String, _handler: String| {},
+        );
+        let Err(error) = load_program(image, &hosts) else {
+            panic!("the rest of the Lumen host surface is unregistered here");
+        };
+        let LoadError::HostBinding(binding) = error else {
+            panic!("the image itself is sound; only its bindings are missing: {error}");
+        };
+        let text = binding.to_string();
+        for bound in ["`signal_set`", "`on`"] {
+            assert!(
+                !text.contains(bound),
+                "a registered closure binds by name: {text}"
+            );
+        }
+    }
 }

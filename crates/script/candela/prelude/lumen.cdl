@@ -280,6 +280,14 @@ host "document" {
 // chain like `container.first_child().next()` never drops back to a bare
 // int. The field is named `handle`, not `id`, so `.id()` stays free to mean
 // the element's `id` attribute (`node_id`), matching the DOM property name.
+//
+// The free functions below annotate their parameters and the methods do not.
+// A compiled `.cdlb` carries an export table of the functions a host may call
+// by name, and a function earns an entry there by annotating every parameter
+// with a type a host value can be. A method's first parameter is the struct
+// it hangs off, which a host has no way to build, so a method never qualifies
+// however it is written. The free functions do, and the annotation is what
+// their arguments are checked against.
 
 struct Node { handle: int }
 struct Event { handle: int }
@@ -302,7 +310,7 @@ struct Event { handle: int }
 struct Signal { name: string }
 
 /// Wraps the named reactive cell as a `Signal`.
-fn signal(name) {
+fn signal(name: string) {
     return Signal { name: name };
 }
 
@@ -342,7 +350,7 @@ impl Signal {
 struct ArraySignal { name: string }
 
 /// Wraps the named reactive array as an `ArraySignal`.
-fn signal_array(name) {
+fn signal_array(name: string) {
     return ArraySignal { name: name };
 }
 
@@ -357,18 +365,18 @@ impl ArraySignal {
 }
 
 /// Wraps a raw node handle (e.g. the return of `lumen::node_spawn(...)`) as a `Node`.
-fn node(handle) {
+fn node(handle: int) {
     return Node { handle: handle };
 }
 
 /// Wraps a raw event id (the value an event handler receives as its argument)
 /// as an `Event`.
-fn event(handle) {
+fn event(handle: int) {
     return Event { handle: handle };
 }
 
 /// Wraps every handle in `handles` as a `Node`, preserving order.
-fn wrap_nodes(handles) {
+fn wrap_nodes(handles: int[]) {
     let out = [];
     for h in handles {
         out.push(node(h));
@@ -379,13 +387,13 @@ fn wrap_nodes(handles) {
 // -- Node construction / lookup (there is no existing node to call these on) --
 
 /// Creates a detached `tag` element and returns it, wrapped.
-fn create(tag) {
+fn create(tag: string) {
     return node(lumen::node_spawn(tag));
 }
 
 /// Looks up an element by its `id` attribute. Returns a `Node` with handle 0
 /// when nothing matches; check with `.exists()`.
-fn get_by_id(id) {
+fn get_by_id(id: string) {
     return node(lumen::node_get_by_id(id));
 }
 
@@ -395,7 +403,7 @@ fn document_node() {
 }
 
 /// Every element matching a CSS-style selector, wrapped.
-fn query(selector) {
+fn query(selector: string) {
     return wrap_nodes(lumen::node_query(selector));
 }
 
@@ -490,7 +498,7 @@ impl Event {
 // lists are built node by node. lm_append spawns a `tag` element, gives it a
 // class and text, appends it under `parent`, and returns the new node id, so a
 // row is one call instead of five. Pass "" for cls or text to skip that step.
-fn lm_append(parent, tag, cls, text) {
+fn lm_append(parent: int, tag: string, cls: string, text: string) {
     let e = lumen::node_spawn(tag);
     if cls != "" { lumen::node_class_add(e, cls); }
     if text != "" { lumen::node_set_text(e, text); }

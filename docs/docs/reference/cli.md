@@ -95,6 +95,7 @@ lumenc build <app_dir> <out.lmna> [--no-hooks]
 Compiles the app ahead of time into a `.lmna` artifact: parses the entry
 `.lmn` file and `main.css` once, runs the cascade, resolves asset and include
 paths, bakes the script source, and records which engine runs each part of it.
+A candela script is also compiled to bytecode and stored beside its source.
 Prints the element count, the output path, and the artifact size.
 
 Runs the app's `prebuild` hooks first unless `--no-hooks` is given.

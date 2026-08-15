@@ -93,6 +93,32 @@ fn every_template_checks_clean() {
     }
 }
 
+/// Every candela template also compiles ahead of time, to an image a runtime
+/// without the compiler can decode.
+///
+/// `check` proves a template compiles; this proves the compiled form is one
+/// the VM accepts. The registry here is empty, so the load stops at the host
+/// functions the prelude declares, which is the one failure this cannot avoid
+/// and the one that says nothing about the image. Anything else means the
+/// image itself is wrong.
+#[test]
+fn every_candela_template_builds_an_image_the_vm_accepts() {
+    use lumen_script_candela::candela::{HostRegistry, LoadError, load_program};
+    use lumen_script_candela::compile_bytecode;
+
+    for template in lumenc::scaffold::TEMPLATES {
+        let Some((_, source)) = template.files.iter().find(|(p, _)| *p == "main.cdl") else {
+            continue;
+        };
+        let bytes = compile_bytecode(source, "main.cdl")
+            .unwrap_or_else(|e| panic!("template `{}` compiles: {e}", template.name));
+        match load_program(&bytes, &HostRegistry::new()) {
+            Ok(_) | Err(LoadError::HostBinding(_)) => {}
+            Err(e) => panic!("template `{}` image is not loadable: {e}", template.name),
+        }
+    }
+}
+
 /// An unknown attribute reaches the terminal, at its own severity. The
 /// severity word was hardcoded `info` for every finding, which read as a
 /// style nudge for something that drops what the author wrote.

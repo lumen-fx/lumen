@@ -2375,6 +2375,44 @@ fn array_to_rows(items: &[ScriptValue]) -> Vec<HashMap<String, String>> {
         .collect()
 }
 
+/// Compile a candela program to the `.cdlb` bytecode image a compiler-free
+/// runtime loads, with the `lumen.cdl` prelude spliced in exactly as
+/// [`CandelaHost::load`] splices it.
+///
+/// This is the ahead-of-time counterpart to
+/// [`compile_check`](ScriptHost::compile_check): same source, same prelude,
+/// same diagnostics, but the product is an image rather than a verdict. A
+/// build step calls it so a shipped app carries the compiled program beside
+/// its source, and a host that links `candela-vm` without the compiler has
+/// something to run.
+///
+/// The image binds its `host "lumen" { ... }` declarations by name at load,
+/// so the runtime that loads it registers the same closures
+/// [`CandelaHost`] does or the load fails naming what is missing.
+///
+/// # Errors
+///
+/// [`ScriptError::Compile`] when the program does not compile, carrying the
+/// line and column in the user's own source, and [`ScriptError::Runtime`]
+/// when a compiled program cannot be serialized.
+pub fn compile_bytecode(source: &str, uri: &str) -> Result<Vec<u8>, ScriptError> {
+    let resolved = prelude::resolve_prelude(source);
+    // candela reports a compile error by unwinding into the diagnostic sink
+    // `collect_diagnostic` installs. Without the sink the same error ends the
+    // process, which a build tool must not do to the shell it was run from.
+    candela::collect_diagnostic(|| candela::build_bytecode(resolved.to_string(), uri))
+        .map_err(|d| {
+            let (line, col) = span_line_col(resolved.as_ref(), d.span.start);
+            ScriptError::Compile {
+                uri: uri.to_owned(),
+                line,
+                col,
+                message: d.message,
+            }
+        })?
+        .map_err(ScriptError::Runtime)
+}
+
 /// Byte-span -> `(line, col)` over an arbitrary source (used by
 /// `compile_check`, which has no stored source). `(0, 0)` for the
 /// unknown-position sentinel.
