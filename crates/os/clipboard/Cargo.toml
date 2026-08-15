@@ -18,4 +18,10 @@ linux_primary = []
 
 [dependencies]
 lumen-os-mime = { path = "../mime", version = "0.0.3" }
+
+# arboard speaks to X11, Wayland, NSPasteboard, and the Win32 clipboard, none
+# of which exist in a browser, and it is the one dependency that stops the
+# lumen-core -> lumen-script-candela graph from building for wasm32. The host
+# still exists on that target; it just reports the backend as unavailable.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 arboard.workspace = true

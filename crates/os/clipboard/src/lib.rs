@@ -15,11 +15,18 @@
 //!
 //! `arboard::Clipboard` is `!Send` on Linux/Wayland - store as a
 //! `NonSend` ECS resource (see [`InstallExt::install_clipboard_host`]).
+//!
+//! On `wasm32` there is no OS clipboard to wrap, so [`ClipboardHost::try_new`]
+//! reports the backend as unavailable exactly as it does on a headless Linux
+//! box, and the accessors answer as an absent clipboard does.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use lumen_os_mime::{MimeKind, MimePayload};
+#[cfg(not(target_arch = "wasm32"))]
+use lumen_os_mime::MimeKind;
+use lumen_os_mime::MimePayload;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
 
 pub use lumen_os_mime as mime;
@@ -34,6 +41,7 @@ pub use lumen_os_mime as mime;
 /// state without locking it, so two threads reaching the clipboard at
 /// once corrupts memory there rather than returning an error.
 pub struct ClipboardHost {
+    #[cfg(not(target_arch = "wasm32"))]
     inner: Mutex<arboard::Clipboard>,
 }
 
@@ -41,10 +49,17 @@ impl ClipboardHost {
     /// Try to initialize the OS clipboard. Returns `None` if the
     /// backend (Wayland with no compositor, headless CI, X11 without a
     /// running window manager) refuses.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn try_new() -> Option<Self> {
         arboard::Clipboard::new().ok().map(|cb| Self {
             inner: Mutex::new(cb),
         })
+    }
+
+    /// Try to initialize the OS clipboard - no backend on wasm32.
+    #[cfg(target_arch = "wasm32")]
+    pub fn try_new() -> Option<Self> {
+        None
     }
 
     /// Lock the inner clipboard, recovering from a poisoned mutex.
@@ -54,6 +69,7 @@ impl ClipboardHost {
     /// dropped to the empty/`false` fallback on poison - permanently and
     /// silently bricking clipboard access with no diagnostic. Here we log
     /// once and carry on.
+    #[cfg(not(target_arch = "wasm32"))]
     fn guard(&self) -> std::sync::MutexGuard<'_, arboard::Clipboard> {
         self.inner.lock().unwrap_or_else(|e| {
             eprintln!("lumen-os-clipboard: recovered poisoned clipboard lock");
@@ -64,6 +80,7 @@ impl ClipboardHost {
     /// Read the current clipboard contents as a multi-format
     /// [`MimePayload`]. Tries text first, then image; returns an empty
     /// payload when neither is available.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn read(&self) -> MimePayload {
         let mut payload = MimePayload::new();
         let mut cb = self.guard();
@@ -86,9 +103,16 @@ impl ClipboardHost {
         payload
     }
 
+    /// Read the current clipboard contents - no backend on wasm32.
+    #[cfg(target_arch = "wasm32")]
+    pub fn read(&self) -> MimePayload {
+        MimePayload::new()
+    }
+
     /// Write a [`MimePayload`] onto the system clipboard. Picks the
     /// first MIME kind arboard understands (text/plain -> `set_text`).
     /// Returns `true` on success.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn write(&self, payload: &MimePayload) -> bool {
         let mut cb = self.guard();
         // Prefer text/plain; arboard's API only exposes text + image.
@@ -102,30 +126,59 @@ impl ClipboardHost {
         false
     }
 
+    /// Write a [`MimePayload`] onto the system clipboard - no backend on
+    /// wasm32.
+    #[cfg(target_arch = "wasm32")]
+    pub fn write(&self, _payload: &MimePayload) -> bool {
+        false
+    }
+
     /// Convenience: write a plain-text payload. Same as `write` with a
     /// `MimePayload::from(&str)` but avoids the allocation when callers
     /// only have a `&str` (the text editor's copy / cut path).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn write_text(&self, text: &str) -> bool {
         let mut cb = self.guard();
         cb.set_text(text.to_string()).is_ok()
     }
 
+    /// Convenience: write a plain-text payload - no backend on wasm32.
+    #[cfg(target_arch = "wasm32")]
+    pub fn write_text(&self, _text: &str) -> bool {
+        false
+    }
+
     /// Convenience: read the current clipboard text. Returns an empty
     /// string when no text payload is available.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn read_text(&self) -> String {
         let mut cb = self.guard();
         cb.get_text().unwrap_or_default()
     }
 
+    /// Convenience: read the current clipboard text - no backend on wasm32.
+    #[cfg(target_arch = "wasm32")]
+    pub fn read_text(&self) -> String {
+        String::new()
+    }
+
     /// Clear the clipboard. Returns `true` on success.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn clear(&self) -> bool {
         let mut cb = self.guard();
         cb.clear().is_ok()
     }
 
+    /// Clear the clipboard - no backend on wasm32.
+    #[cfg(target_arch = "wasm32")]
+    pub fn clear(&self) -> bool {
+        false
+    }
+
     /// Write the supplied RGBA8 image (`width x height x 4` bytes) to
     /// the system clipboard. Preserves the API the previous
     /// `ClipboardResource` exposed for the `copy_image` Rhai builtin.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_rgba8_image(&self, width: u32, height: u32, rgba: Vec<u8>) -> bool {
         let img = arboard::ImageData {
             width: width as usize,
@@ -135,12 +188,25 @@ impl ClipboardHost {
         self.guard().set_image(img).is_ok()
     }
 
+    /// Write an RGBA8 image to the system clipboard - no backend on wasm32.
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_rgba8_image(&self, _width: u32, _height: u32, _rgba: Vec<u8>) -> bool {
+        false
+    }
+
     /// Read the current clipboard image as RGBA8. Returns
     /// `(width, height, rgba_bytes)` when an image is present.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn get_rgba8_image(&self) -> Option<(u32, u32, Vec<u8>)> {
         let mut cb = self.guard();
         let img = cb.get_image().ok()?;
         Some((img.width as u32, img.height as u32, img.bytes.into_owned()))
+    }
+
+    /// Read the current clipboard image as RGBA8 - no backend on wasm32.
+    #[cfg(target_arch = "wasm32")]
+    pub fn get_rgba8_image(&self) -> Option<(u32, u32, Vec<u8>)> {
+        None
     }
 
     /// Read the X11 PRIMARY selection (Linux-only). On other platforms
@@ -189,6 +255,7 @@ impl ClipboardHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_os_mime::MimeKind;
 
     // We can't unit-test against the real arboard backend in CI (no
     // display server). Cover the MIME round-trip helpers instead.
