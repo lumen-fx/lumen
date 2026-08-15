@@ -1229,6 +1229,11 @@ pub struct Attributes {
     /// inline declaration. A target with the web's ranking replays these as
     /// inline declarations so the author's markup keeps winning.
     pub markup_styles: Vec<(String, String)>,
+    /// `name` on a `<slot>` inside a fragment body: which of the use site's
+    /// children lands here. Absent on a `<slot>` names the default slot
+    /// ([`crate::fragment::DEFAULT_SLOT`]), and absent on anything else
+    /// means the element is not a slot at all.
+    pub slot_name: Option<String>,
 }
 
 impl Attributes {

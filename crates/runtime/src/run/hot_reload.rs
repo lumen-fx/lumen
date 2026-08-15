@@ -252,6 +252,7 @@ pub(crate) fn hot_reload(world: &mut World) {
         // the page set both come off the files themselves.
         scripts: _,
         pages: _,
+        fragments,
     } = match load_ir(
         &*parser,
         &html_path,
@@ -301,6 +302,9 @@ pub(crate) fn hot_reload(world: &mut World) {
     if let Some(sheet) = ir.combined_stylesheet.clone() {
         world.insert_resource(RuntimeStylesheet(sheet));
     }
+    // Same for the fragment set: an instantiation after the reload builds
+    // from the edited declaration.
+    world.insert_resource(crate::fragments::FragmentLibrary::new(fragments));
     use crate::spawn::SpawnIntoWorld;
     let new_root = ir.spawn_into(world);
     restore_stateful_components(world, &preserved);

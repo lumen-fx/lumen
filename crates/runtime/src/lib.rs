@@ -22,6 +22,8 @@ pub mod app_kind;
 pub mod config;
 #[cfg(feature = "devtools")]
 pub mod devtools_mount;
+/// The app's compiled fragments and what an instance of one carries.
+pub mod fragments;
 /// `[[hooks]]` runner - executes an app's declared `prebuild` / `prerun`
 /// build/setup commands. See [`config::HookCfg`] for the schema.
 pub mod hooks;

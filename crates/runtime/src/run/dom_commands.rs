@@ -49,6 +49,7 @@ fn is_dom_command(cmd: &ScriptCommand) -> bool {
             | ScriptCommand::RemoveNode { .. }
             | ScriptCommand::CloneNode { .. }
             | ScriptCommand::SetInnerMarkup { .. }
+            | ScriptCommand::SpawnFragment { .. }
             | ScriptCommand::BindEvent { .. }
             | ScriptCommand::UnbindEvent { .. }
             | ScriptCommand::WindowSetTitle { .. }
@@ -128,14 +129,22 @@ pub(crate) fn apply_dom_commands(world: &mut World) {
                     resolve(world, &reserved, old),
                     resolve(world, &reserved, new),
                 ) {
-                    if let Some(parent) = world.get::<ChildOf>(old).map(|c| c.parent()) {
-                        let index = child_index(world, parent, old);
-                        attach(world, parent, new, None);
-                        if let Some(i) = index {
-                            world.entity_mut(parent).insert_child(i, new);
-                        }
-                    }
-                    world.entity_mut(old).despawn();
+                    replace_node(world, old, new);
+                    style_dirty = true;
+                }
+            }
+            ScriptCommand::SpawnFragment {
+                key,
+                args,
+                children,
+                reserved: tok,
+            } => {
+                let children: Vec<(String, Entity)> = children
+                    .into_iter()
+                    .filter_map(|(slot, handle)| Some((slot, resolve(world, &reserved, handle)?)))
+                    .collect();
+                if let Some(entity) = spawn_fragment(world, &key, &args, &children) {
+                    reserved.insert(tok, entity);
                     style_dirty = true;
                 }
             }
@@ -245,6 +254,110 @@ fn resolve(world: &World, reserved: &HashMap<u64, Entity>, handle: u64) -> Optio
     }
     let entity = lumen_core::node::NodeHandle::unpack(handle)?.entity;
     world.entities().contains(entity).then_some(entity)
+}
+
+/// Move `new` into `old`'s place among its siblings, then despawn `old`
+/// and its subtree. A detached `old` has no place to take, so `new` stays
+/// where it is and only the despawn happens.
+fn replace_node(world: &mut World, old: Entity, new: Entity) {
+    if let Some(parent) = world.get::<ChildOf>(old).map(|c| c.parent()) {
+        let index = child_index(world, parent, old);
+        attach(world, parent, new, None);
+        if let Some(i) = index {
+            world.entity_mut(parent).insert_child(i, new);
+        }
+    }
+    world.entity_mut(old).despawn();
+}
+
+/// Instantiate the fragment `key` into a fresh detached subtree and return
+/// its root, or report why it could not and return `None`.
+///
+/// The body is cloned and its placeholders resolved against the bound
+/// arguments before anything spawns, so the tree that reaches the world is
+/// already the instance's own. Each `<slot>` the caller passed a child for
+/// is replaced by that child, in place; a slot nothing filled keeps the
+/// fallback content the body wrote inside it.
+///
+/// The result is detached, the way `Spawn` is: a following `Insert` puts it
+/// in the tree.
+fn spawn_fragment(
+    world: &mut World,
+    key: &str,
+    args: &[(String, String)],
+    children: &[(String, Entity)],
+) -> Option<Entity> {
+    use crate::fragments::{
+        FragmentFault, FragmentInstance, FragmentLibrary, SlotPlaceholder, bind_args,
+        instance_body, report_once,
+    };
+
+    // An app built without a library declares nothing, which the key lookup
+    // below reports the same way as a key nobody wrote.
+    let library = world
+        .get_resource::<FragmentLibrary>()
+        .cloned()
+        .unwrap_or_default();
+    let Some(fragment) = library.get(key) else {
+        report_once(key, &FragmentFault::UnknownKey);
+        return None;
+    };
+    let body = match instance_body(fragment) {
+        Ok(body) => body,
+        Err(fault) => {
+            report_once(key, &fault);
+            return None;
+        }
+    };
+    let bound = bind_args(fragment, args);
+
+    let instance = {
+        let empty = lumen_core::property_store::PropertyStore::default();
+        let store = world
+            .get_resource::<lumen_core::property_store::PropertyStore>()
+            .unwrap_or(&empty);
+        let ctx = crate::spawn::SubstCtx {
+            row: None,
+            args: Some(&bound),
+            store,
+            parent_id: Entity::PLACEHOLDER,
+        };
+        crate::spawn::substitute_in_element_with_css(body, &ctx, None)
+    };
+    let root = crate::spawn::spawn_subtree(world, &instance, None);
+
+    if !children.is_empty() {
+        let slots: Vec<(String, Entity)> = descendants(world, root)
+            .into_iter()
+            .filter_map(|e| Some((world.get::<SlotPlaceholder>(e)?.0.clone(), e)))
+            .collect();
+        for (name, child) in children {
+            match slots.iter().find(|(slot, _)| slot == name) {
+                Some((_, slot)) => replace_node(world, *slot, *child),
+                None => report_once(key, &FragmentFault::UnknownSlot(name.clone())),
+            }
+        }
+    }
+
+    world.entity_mut(root).insert(FragmentInstance {
+        key: key.to_string(),
+        args: bound,
+    });
+    Some(root)
+}
+
+/// Every entity under `root`, `root` itself included, parents before
+/// children.
+fn descendants(world: &World, root: Entity) -> Vec<Entity> {
+    let mut out = vec![root];
+    let mut i = 0;
+    while i < out.len() {
+        if let Some(kids) = world.get::<Children>(out[i]) {
+            out.extend(kids.iter());
+        }
+        i += 1;
+    }
+    out
 }
 
 /// Attach `node` under `parent`, before `before` when given (else append).

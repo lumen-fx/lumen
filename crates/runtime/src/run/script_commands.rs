@@ -267,6 +267,7 @@ pub(crate) fn apply_script_commands(
             | ScriptCommand::RemoveNode { .. }
             | ScriptCommand::CloneNode { .. }
             | ScriptCommand::SetInnerMarkup { .. }
+            | ScriptCommand::SpawnFragment { .. }
             | ScriptCommand::BindEvent { .. }
             | ScriptCommand::UnbindEvent { .. }
             | ScriptCommand::WindowSetTitle { .. }
@@ -418,6 +419,7 @@ pub(crate) fn apply_os_script_commands(
             | ScriptCommand::RemoveNode { .. }
             | ScriptCommand::CloneNode { .. }
             | ScriptCommand::SetInnerMarkup { .. }
+            | ScriptCommand::SpawnFragment { .. }
             | ScriptCommand::BindEvent { .. }
             | ScriptCommand::UnbindEvent { .. }
             | ScriptCommand::WindowSetTitle { .. }
