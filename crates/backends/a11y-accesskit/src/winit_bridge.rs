@@ -429,6 +429,56 @@ mod tests {
         );
     }
 
+    /// A control that already carries accessibility state keeps the
+    /// component it had: expanding sets the bit beside whatever else is
+    /// there rather than starting from a fresh default, so a disclosure
+    /// that was already marked busy or selected stays that way.
+    #[test]
+    fn expanding_a_stateful_control_keeps_its_other_bits() {
+        let mut world = world_with_focus();
+        let entity = world.spawn(A11yState::SELECTED).id();
+
+        handle_action(&mut world, &request(entity, Action::Expand));
+
+        let state = *world.get::<A11yState>(entity).expect("state survives");
+        assert!(state.contains(A11yState::EXPANDED));
+        assert!(
+            state.contains(A11yState::SELECTED),
+            "expanding must not drop the state the control already had",
+        );
+        assert!(world.get::<DirtyA11y>(entity).is_some());
+    }
+
+    /// An assistive technology calls in on its own thread, and a panic
+    /// there poisons the queue lock. The app must survive that: the next
+    /// push and drain answer normally instead of propagating the poison
+    /// onto the main thread, at the cost of the batch that was in flight.
+    #[test]
+    fn a_panicking_platform_thread_does_not_wedge_the_queue() {
+        let (inbox, wakes) = counting_inbox();
+        let entity = Entity::from_raw_u32(11).expect("valid entity id");
+
+        // Poison the lock the way a platform callback dying under a held
+        // guard would. The unwind is caught here so the harness only sees
+        // the poisoned mutex, which is the state under test.
+        let poisoner = inbox.clone();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = poisoner.queue.lock().expect("a fresh lock is not poisoned");
+            panic!("platform callback died holding the queue");
+        }));
+
+        inbox.push(Pending::Action(request(entity, Action::Click)));
+        assert_eq!(
+            wakes.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "the loop is still woken so the frame after the failure runs",
+        );
+        assert!(
+            inbox.drain().is_empty(),
+            "a poisoned queue drains empty rather than panicking the main thread",
+        );
+    }
+
     /// Blurring a control that does not hold focus leaves the tracker
     /// alone: a stale request from an assistive technology must not clear
     /// focus out from under whatever holds it now. An action the app has
