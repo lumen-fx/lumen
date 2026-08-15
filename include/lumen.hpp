@@ -284,33 +284,32 @@ private:
         if (raw_) { lumen_app_free(raw_); raw_ = nullptr; }
     }
 
-    static LumenValue trampoline(int argc, const LumenValue* argv, void* user) noexcept {
+    static void trampoline(LumenValue* out, int argc, const LumenValue* argv,
+                           void* user) noexcept {
         try {
             auto* cb = reinterpret_cast<Callback*>(user);
-            Value out = (*cb)(Args{argc, argv});
-            // Build a borrowed LumenValue. The arenas live until this
-            // function returns - Lumen copies before we unwind, so
-            // the borrowed pointers are valid for the call's lifetime.
-            // We stash the owned `Value` plus arenas in a static
-            // thread_local so the LumenValue we return can reference
-            // their memory until the C ABI side finishes copying.
-            // Two-buffer ping-pong handles the rare case of a callback
-            // being called twice without Lumen copying in between
-            // (it doesn't, today, but defensive).
+            Value result = (*cb)(Args{argc, argv});
+            // Write a borrowed LumenValue through `out`. The arenas
+            // outlive this call - Lumen copies before it unwinds, so the
+            // borrowed pointers are valid for the call's lifetime. We
+            // stash the owned `Value` plus arenas in a thread_local so
+            // the value we write can reference their memory until the C
+            // ABI side finishes copying. Two-buffer ping-pong handles
+            // the rare case of a callback being called twice without
+            // Lumen copying in between (it doesn't, today, but
+            // defensive).
             thread_local Value owners[2];
             thread_local std::vector<std::vector<LumenValue>> view_arenas[2];
             thread_local std::vector<std::vector<LumenMapEntry>> entry_arenas[2];
             thread_local unsigned slot = 0;
             slot ^= 1;
-            owners[slot] = std::move(out);
+            owners[slot] = std::move(result);
             view_arenas[slot].clear();
             entry_arenas[slot].clear();
-            return owners[slot].view(view_arenas[slot], entry_arenas[slot]);
+            *out = owners[slot].view(view_arenas[slot], entry_arenas[slot]);
         } catch (...) {
-            LumenValue nil{};
-            nil.kind = LUMEN_NIL;
-            nil.as_.integer = 0;
-            return nil;
+            out->kind = LUMEN_NIL;
+            out->as_.integer = 0;
         }
     }
 

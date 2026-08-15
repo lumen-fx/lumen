@@ -106,7 +106,7 @@ cargo build -p lumen --release  # release -> target/release/liblumen.{so,a}
 
 The C ABI header lives at `include/lumen.h`, with the
 cbindgen-generated `lumen_simple.h` beside it. Both are committed, so there is
-no generation step to consume them. This SDK targets ABI 0.13. The
+no generation step to consume them. This SDK targets ABI 0.14. The
 compatibility check, `abi_compatible()`, compares the cbindgen-generated
 `LUMEN_ABI_VERSION` (the constant `lumen_abi_version()` itself returns)
 against the loaded library, so it tracks the library exactly rather than the
@@ -190,7 +190,7 @@ FFI frames is undefined behavior.
 | Area | C++ | Wraps |
 | --- | --- | --- |
 | ABI | `abi_compatible()`, `header_abi_version()`, `runtime_abi_version()` | `LUMEN_API_VERSION`, `lumen_abi_version` |
-| Lifecycle | `lumen::App` - ctor `Options`, `title`, `size`, `expose`, `on_click`, `on_close`, `run`, `run_checked`, `run_headless` | `lumen_app_new/set_title/set_size/expose_v2/on_click/on_close/run/run_headless/free` |
+| Lifecycle | `lumen::App` - ctor `Options`, `title`, `size`, `expose`, `on_click`, `on_close`, `run`, `run_checked`, `run_headless` | `lumen_app_new/set_title/set_size/expose/on_click/on_close/run/run_headless/free` |
 | Signals | `lumen::Signal<T>` - ctor, `get`/`set`, `operator= * += -=`, `watch` | `lumen_signal_set_str/_int64/_float64/_bool/_color`, the matching getters, `lumen_signal_watch` |
 | Dynamic DOM | `lumen::dom` - `spawn`, `get_by_id`, `query`, `Node`, `Event`, `Listener` | `lumen_node_*`, `lumen_dom_*` |
 | Colors | `lumen::Color` - `from_hex`, `to_hex` | RGBA bytes |

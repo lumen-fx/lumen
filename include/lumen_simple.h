@@ -108,8 +108,14 @@
  [`lumen_signal_array_len`] / [`lumen_signal_array_get_field`]. Kept
  names changed arity, so embedders rebuild against the new header
  rather than relinking.
+
+ 0.14 unified exposed-callback registration the same way: `LumenFn` is
+ now the out-parameter callback, [`lumen_app_expose`] takes it, and the
+ by-value callback type along with `lumen_app_expose_v2` are removed.
+ Existing callbacks change signature, so embedders rebuild against the
+ new header rather than relinking.
  */
-#define LUMEN_ABI_MINOR 13
+#define LUMEN_ABI_MINOR 14
 
 /*
  Patch ABI version. Bump on non-API metadata changes (docs, code, etc.).

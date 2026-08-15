@@ -67,9 +67,10 @@ blocking callback stalls rendering, input, and timers.
 
 **Ownership.** Pointers passed into a callback are borrowed for the duration of
 the call; Lumen copies immediately, so you may free your buffers as soon as the
-call returns. Values you return from a callback must stay valid until the
-callback returns. Lists and strings Lumen returns are owned by you and released
-with the matching free function.
+call returns. Lumen reads the value a callback writes through its out-pointer
+once the callback returns, so pointers that value carries must outlive the call
+rather than point into the callback's own frame. Lists and strings Lumen returns
+are owned by you and released with the matching free function.
 
 **`user_data`.** The opaque pointer you register is stored verbatim and handed
 back to your callback. Lumen never dereferences it. Keeping the referent alive,
@@ -105,7 +106,6 @@ size, then again to fill.
 | Function | Behaviour |
 | --- | --- |
 | `LumenStatus lumen_app_expose(LumenApp *app, const char *name, uint32_t arg_count, LumenFn func, void *user_data)` | Expose a native function to the app's script under `name`, with the given arity. |
-| `LumenStatus lumen_app_expose_v2(...)` | Same, with a `LumenFnV2` that writes its result through an out-pointer instead of returning a `LumenValue` by value. Prefer this from bindings that cannot express an aggregate return, such as ctypes and libffi. |
 | `LumenStatus lumen_app_on_click(LumenApp *app, const char *id, LumenClickFn cb, void *user_data)` | Route clicks on the element with that `id` to a native callback. A second registration for the same id replaces the first. Register before `lumen_app_run`. Not delivered under `lumen_app_run_headless`, which injects no input. |
 | `LumenStatus lumen_app_on_close(LumenApp *app, LumenCloseFn cb, void *user_data)` | Register a close hook. It fires on an OS close request before teardown; return non-zero to allow the close, `0` to veto. A second registration replaces the first. On Unix a second SIGINT or SIGTERM bypasses the hook. Does not fire under `lumen_app_run_headless`. |
 | `LumenStatus lumen_signal_watch(const char *name, LumenWatchFn cb, void *user_data)` | Subscribe to changes of a global signal. Fires once per tick in which the value commits, plus once with the current value on the first tick after registration. Registration is global, independent of any app handle, and additive: a second watch on the same name adds a second watcher. Fires only while the app runs. |
@@ -113,8 +113,7 @@ size, then again to fill.
 Callback types:
 
 ```c
-typedef LumenValue (*LumenFn)(int argc, const LumenValue *argv, void *user_data);
-typedef void (*LumenFnV2)(LumenValue *out, int argc, const LumenValue *argv, void *user_data);
+typedef void (*LumenFn)(LumenValue *out, int argc, const LumenValue *argv, void *user_data);
 typedef void (*LumenClickFn)(const char *id, void *user_data);
 typedef void (*LumenWatchFn)(const char *name, const LumenValue *value, void *user_data);
 typedef int  (*LumenCloseFn)(void *user_data);
@@ -123,7 +122,14 @@ typedef void (*LumenEventFn)(const LumenEvent *event, void *user_data);
 
 `lumen_app_expose` registers into every script host the app runs, so an exposed
 function is callable whatever language the app is written in. Arguments and
-return values cross as `LumenValue`.
+results cross as `LumenValue`.
+
+A `LumenFn` writes its result through the `out` pointer it receives first,
+rather than returning a `LumenValue`. `out` is never null and points to a
+writable value Lumen has pre-set to `LUMEN_NIL`, so a callback with nothing to
+return may leave it alone. The out-parameter is what keeps the callback
+expressible from bindings that cannot form an aggregate (`sret`) return, such
+as ctypes and libffi.
 
 Rhai and Lua scripts call an exposed `now_ms` as a plain global, `now_ms()`.
 Rhai dispatches on the declared `arg_count`; Lua binds the call variadically, so
@@ -148,7 +154,8 @@ implementation at compile time. See
 [candela scripting](scripting-candela.md#native-functions-from-the-embedder).
 
 Array and map arguments reach the callback as `LUMEN_NIL`; scalars and strings
-cross in full. A returned value carries every kind, arrays and maps included.
+cross in full. The value a callback writes carries every kind, arrays and maps
+included.
 
 ## Values
 

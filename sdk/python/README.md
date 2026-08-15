@@ -210,7 +210,7 @@ A checkout you are working in therefore wins over an installed toolchain, and
 either one is found without setting anything.
 
 The loaded library's `lumen_abi_version()` is checked against the version
-this SDK targets, ABI 0.13. A major mismatch or an older minor raises
+this SDK targets, ABI 0.14. A major mismatch or an older minor raises
 `LumenAbiVersionError`.
 
 ## Threading

@@ -88,9 +88,7 @@ exclude = [
     # cbindgen doesn't emit a conflicting declaration (the callback-typed
     # ones render `Option<extern fn>` as an `Option_*` struct cbindgen
     # can't reconcile with the real function-pointer signature).
-    "LumenFnV2",
     "LumenClickFn",
-    "lumen_app_expose_v2",
     "lumen_app_on_click",
     "lumen_app_run_headless",
     "lumen_signal_array_len",

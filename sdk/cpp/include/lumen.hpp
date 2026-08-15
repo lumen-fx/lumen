@@ -485,8 +485,8 @@ public:
         void* ud = owned.get();
         callbacks_.push_back(std::move(owned));
         std::string z(name);
-        detail::check(lumen_app_expose_v2(raw_, z.c_str(), arg_count, &App::trampoline, ud),
-                      "lumen_app_expose_v2");
+        detail::check(lumen_app_expose(raw_, z.c_str(), arg_count, &App::trampoline, ud),
+                      "lumen_app_expose");
         return *this;
     }
 
@@ -624,9 +624,9 @@ private:
         return *this;
     }
 
-    // C-callable bridge, ABI 0.3 out-parameter form (LumenFnV2): writes
-    // the result through `out` instead of returning by value, so the
-    // callback ABI carries no aggregate (`sret`) return. NEVER lets a
+    // C-callable bridge (LumenFn): writes the result through `out`
+    // instead of returning by value, so the callback ABI carries no
+    // aggregate (`sret`) return. NEVER lets a
     // C++ exception escape into the Rust FFI frames (that would be UB);
     // degrades to a nil result instead.
     static void trampoline(LumenValue* out, int argc, const LumenValue* argv,

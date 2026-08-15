@@ -64,7 +64,7 @@ __all__ = [
 # ============================================================
 
 ABI_MAJOR = 0
-ABI_MINOR = 13
+ABI_MINOR = 14
 ABI_PATCH = 0
 
 
@@ -307,41 +307,28 @@ class LumenEvent(ctypes.Structure):
 # through make_event_callback below.
 _LumenEventFnRaw = ctypes.CFUNCTYPE(None, ctypes.POINTER(LumenEvent), ctypes.c_void_p)
 
-# Signature of an exposed callback. As of ABI 0.3 the SDK targets the
-# out-parameter variant, ``LumenFnV2``:
+# Signature of an exposed callback, ``LumenFn``:
 #
-#   type LumenFnV2 = unsafe extern "C" fn(out: *mut LumenValue, argc: c_int,
+#   type LumenFn = unsafe extern "C" fn(out: *mut LumenValue, argc: c_int,
 #       argv: *const LumenValue, user_data: *mut c_void);   // no return value
 #
-# The callback writes its result through ``out`` instead of returning a
-# ``LumenValue`` by value. This is a *first-class, documented* ABI
-# signature, not a workaround: it exists precisely so ctypes / libffi
-# bindings don't have to hand-encode a platform's aggregate-return
-# (``sret``) convention.
-#
-# This matters because ctypes cannot build a callback whose ``restype``
-# is a Structure/Union at all (``TypeError: invalid result type for
-# callback function``), and ``LumenValue`` is 24 bytes -- past the SysV
-# x86-64 16-byte register-pair threshold -- so the by-value ``LumenFn``
-# (v1) return has to travel through a hidden ABI-implicit sret pointer
-# that we'd otherwise have to reconstruct per target. ``LumenFnV2``'s
-# explicit leading ``out`` pointer *is* that pointer, made part of the
-# contract, so ``restype=None`` here is exactly right on every platform
-# rather than only on x86_64 Linux by luck. We register through
-# ``lumen_app_expose_v2`` accordingly. The v1 ``lumen_app_expose`` +
-# by-value ``LumenFn`` path is intentionally not used by this SDK.
-_LumenFnV2Raw = ctypes.CFUNCTYPE(
+# The callback writes its result through ``out`` rather than returning a
+# ``LumenValue``. That shape is what makes the callback expressible from
+# ctypes at all: ctypes cannot build a callback whose ``restype`` is a
+# Structure/Union (``TypeError: invalid result type for callback
+# function``), and ``LumenValue`` is 24 bytes, past the SysV x86-64
+# 16-byte register-pair threshold, so a by-value return would travel
+# through a hidden ABI-implicit sret pointer we'd have to reconstruct per
+# target. The explicit leading ``out`` pointer *is* that pointer, made
+# part of the contract, so ``restype=None`` here is right on every
+# platform rather than on x86_64 Linux by luck.
+_LumenFnRaw = ctypes.CFUNCTYPE(
     None,
     ctypes.POINTER(LumenValue),  # out: caller-allocated result slot (ABI-explicit)
     ctypes.c_int,
     ctypes.POINTER(LumenValue),
     ctypes.c_void_p,
 )
-
-# Backwards-compatible alias: older code / tests referred to the raw
-# callback factory as ``_LumenFnRaw``. Same shape (the v1 sret hack and
-# the v2 out-param have identical ctypes signatures), now the v2 ABI.
-_LumenFnRaw = _LumenFnV2Raw
 
 # Id-scoped native click callback (ABI 0.3):
 #   type LumenClickFn = unsafe extern "C" fn(id: *const c_char,
@@ -361,17 +348,17 @@ _LumenWatchFnRaw = ctypes.CFUNCTYPE(
 def make_callback(func):
     """Wrap ``func(argc: int, argv: POINTER(LumenValue), user_data: int) ->
     LumenValue`` into the actual ctypes callback object passed to
-    ``lumen_app_expose_v2`` (the out-parameter ABI variant). Keep the
-    return value referenced by the caller (e.g. in ``App._callbacks``)
-    for as long as the callback might still be invoked -- see the module
-    docstring.
+    ``lumen_app_expose``, writing the result through the out-parameter.
+    Keep the return value referenced by the caller (e.g. in
+    ``App._callbacks``) for as long as the callback might still be
+    invoked; see the module docstring.
     """
 
     def raw(out, argc, argv, user_data):
         result = func(argc, argv, user_data)
         out[0] = result
 
-    return _LumenFnV2Raw(raw)
+    return _LumenFnRaw(raw)
 
 
 def make_click_callback(func):
@@ -741,18 +728,6 @@ def _declare_prototypes(lib: ctypes.CDLL) -> None:
         c.c_void_p,
     ]
     lib.lumen_app_expose.restype = c.c_uint32
-
-    # ABI 0.3 out-parameter callback registration (LumenFnV2). Same arg
-    # shape as v1; the difference is entirely in the callback's own
-    # signature (out-pointer instead of by-value return).
-    lib.lumen_app_expose_v2.argtypes = [
-        c.c_void_p,
-        c.c_char_p,
-        c.c_uint32,
-        c.c_void_p,
-        c.c_void_p,
-    ]
-    lib.lumen_app_expose_v2.restype = c.c_uint32
 
     # ABI 0.3 id-scoped native click hook + headless run driver.
     lib.lumen_app_on_click.argtypes = [c.c_void_p, c.c_char_p, c.c_void_p, c.c_void_p]

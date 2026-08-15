@@ -136,7 +136,7 @@ class App:
         # must stay referenced for as long as Lumen might call it --
         # ctypes doesn't keep the callback trampoline alive on the C
         # side, only on the Python side. This list is that anchor.
-        self._callbacks: list[_ffi.LumenFn] = []
+        self._callbacks: list[_ffi._LumenFnRaw] = []
 
         # element_id -> python handler, one dict per event kind. Built
         # lazily: the first `@app.on_click(...)` (etc.) installs a
@@ -311,22 +311,21 @@ class App:
                 lv._lumen_keepalive = keepalive  # type: ignore[attr-defined]
                 return lv
 
-            # `_ffi.make_callback` builds the ABI 0.3 out-parameter
-            # callback (LumenFnV2). We register through
-            # `lumen_app_expose_v2`, so there is no by-value struct
-            # return crossing the boundary and no hand-encoded sret
-            # convention -- the out-pointer is part of the ABI contract
+            # `_ffi.make_callback` builds a `LumenFn`, which writes its
+            # result through an out-pointer. No by-value struct return
+            # crosses the boundary and no sret convention has to be
+            # hand-encoded; the out-pointer is part of the ABI contract
             # and portable to every target, not just x86_64 Linux.
             c_callback = _ffi.make_callback(trampoline)
             self._callbacks.append(c_callback)
-            status = self._lib.lumen_app_expose_v2(
+            status = self._lib.lumen_app_expose(
                 self._ptr,
                 name.encode("utf-8"),
                 resolved_argc,
                 ctypes.cast(c_callback, ctypes.c_void_p),
                 None,
             )
-            _raise_for_status(self._lib, status, f"lumen_app_expose_v2({name!r})")
+            _raise_for_status(self._lib, status, f"lumen_app_expose({name!r})")
             return func
 
         return decorator
