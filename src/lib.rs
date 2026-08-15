@@ -134,7 +134,13 @@ pub const LUMEN_ABI_MAJOR: u32 = 0;
 /// [`lumen_signal_array_len`] / [`lumen_signal_array_get_field`]. Kept
 /// names changed arity, so embedders rebuild against the new header
 /// rather than relinking.
-pub const LUMEN_ABI_MINOR: u32 = 13;
+///
+/// 0.14 unified exposed-callback registration the same way: `LumenFn` is
+/// now the out-parameter callback, [`lumen_app_expose`] takes it, and the
+/// by-value callback type along with `lumen_app_expose_v2` are removed.
+/// Existing callbacks change signature, so embedders rebuild against the
+/// new header rather than relinking.
+pub const LUMEN_ABI_MINOR: u32 = 14;
 /// Patch ABI version. Bump on non-API metadata changes (docs, code, etc.).
 pub const LUMEN_ABI_PATCH: u32 = 0;
 
@@ -288,32 +294,26 @@ pub enum LumenStatus {
     ErrBufferTooSmall = 14,
 }
 
-/// Signature of an exposed callback. `argv` is borrowed for the
-/// duration of the call; the returned `LumenValue` (and any pointers
-/// it carries) must stay valid until this function returns - Lumen
-/// copies into a `Dynamic` before unwinding.
-pub type LumenFn = unsafe extern "C" fn(
-    argc: c_int,
-    argv: *const LumenValue,
-    user_data: *mut c_void,
-) -> LumenValue;
-
-/// Out-parameter callback variant of [`LumenFn`] (ABI 0.3).
+/// Signature of an exposed callback. Register with [`lumen_app_expose`].
 ///
-/// Instead of returning a [`LumenValue`] by value - which forces every
-/// non-Rust binding to hand-encode the platform's aggregate-return
-/// (SysV `sret`) convention because `LumenValue` is larger than the
-/// 16-byte register-pair threshold - the callback writes its result
-/// through `out`. Lumen copies `*out` into a `Dynamic` before this
-/// function returns, exactly as it does for the value `LumenFn` returns.
+/// The result travels through the `out` pointer rather than a by-value
+/// return. `LumenValue` is larger than the 16-byte register-pair
+/// threshold, so returning it by value forces every non-Rust binding to
+/// hand-encode the platform's aggregate-return (SysV `sret`) convention;
+/// an out-parameter is expressible in `ctypes`, `libffi`, and every other
+/// binding layer without target-specific code.
 ///
 /// `out` is never null when Lumen invokes the callback, and points to a
-/// single writable, uninitialised [`LumenValue`]. A callback that wants
-/// to return nil may leave it untouched (Lumen zero-initialises the slot
-/// to `LumenKind::Nil` first) or set `kind = LUMEN_NIL` explicitly. Any
-/// pointers the written value carries must stay valid until the callback
-/// returns. Register with [`lumen_app_expose_v2`].
-pub type LumenFnV2 = unsafe extern "C" fn(
+/// single writable [`LumenValue`] that Lumen has zero-initialised to
+/// `LumenKind::Nil`, so a callback that wants to return nil may leave it
+/// untouched.
+///
+/// `argv` is borrowed for the duration of the call. Lumen reads `*out`
+/// into a `Dynamic` once the callback returns, so any pointers the
+/// written value carries must outlive the call rather than point into
+/// the callback's own frame; static or heap storage the callback owns
+/// works, a local buffer does not.
+pub type LumenFn = unsafe extern "C" fn(
     out: *mut LumenValue,
     argc: c_int,
     argv: *const LumenValue,
@@ -447,17 +447,9 @@ impl UserData {
 unsafe impl Send for UserData {}
 unsafe impl Sync for UserData {}
 
-/// The native callback backing one [`ExposedFn`] - either the classic
-/// by-value [`LumenFn`] (v1) or the out-parameter [`LumenFnV2`] (v2).
-#[derive(Copy, Clone)]
-enum ExposedPtr {
-    V1(LumenFn),
-    V2(LumenFnV2),
-}
-
 struct ExposedFn {
     name: String,
-    fn_ptr: ExposedPtr,
+    fn_ptr: LumenFn,
     /// Embedder-supplied opaque pointer. See [`UserData`] for the
     /// Send/Sync rationale and embedder contract.
     user_data: UserData,
@@ -645,6 +637,9 @@ pub unsafe extern "C" fn lumen_app_new_from_lmna(
 /// call variadically. Pointers are stored by value; the embedder owns
 /// `user_data` and must keep it valid until `lumen_app_run` returns.
 ///
+/// `func` is a [`LumenFn`]: it writes its result through the `out` pointer
+/// it receives as its first argument. See that type for the full contract.
+///
 /// Every script host the app runs gets the registration. A candela script
 /// declares what it calls, so it reaches an exposed `now_ms` as
 /// `native::now_ms()` after declaring `host "native" { any now_ms(...); }`;
@@ -680,56 +675,7 @@ pub unsafe extern "C" fn lumen_app_expose(
         };
         app.exposed.push(ExposedFn {
             name: name_str,
-            fn_ptr: ExposedPtr::V1(func),
-            user_data: UserData::from_raw(user_data),
-            arg_count: arg_count as usize,
-        });
-        LumenStatus::Ok
-    })
-}
-
-/// Expose a native callback to the app's script under `name`, using the
-/// out-parameter callback convention (ABI 0.3).
-///
-/// Identical to [`lumen_app_expose`] except `func` is a [`LumenFnV2`]:
-/// it receives a `*mut LumenValue` out-pointer as its first argument and
-/// writes its result there instead of returning a `LumenValue` by value.
-/// This lets `ctypes` / `libffi`-only bindings register callbacks
-/// without hand-encoding the platform's aggregate-return (`sret`)
-/// convention. Prefer this over [`lumen_app_expose`] for non-Rust
-/// embedders; v1 is retained for source compatibility.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lumen_app_expose_v2(
-    app: *mut LumenApp,
-    name: *const c_char,
-    arg_count: u32,
-    func: Option<LumenFnV2>,
-    user_data: *mut c_void,
-) -> LumenStatus {
-    catch(|| {
-        let Some(func) = func else {
-            set_last_error("null fn");
-            return LumenStatus::ErrBadArg;
-        };
-        if app.is_null() {
-            set_last_error("null app");
-            return LumenStatus::ErrInvalidHandle;
-        }
-        if name.is_null() {
-            set_last_error("null name");
-            return LumenStatus::ErrBadArg;
-        }
-        let app = unsafe { &mut *app };
-        let name_str = match unsafe { CStr::from_ptr(name) }.to_str() {
-            Ok(s) => s.to_owned(),
-            Err(_) => {
-                set_last_error("name not utf-8");
-                return LumenStatus::ErrBadArg;
-            }
-        };
-        app.exposed.push(ExposedFn {
-            name: name_str,
-            fn_ptr: ExposedPtr::V2(func),
+            fn_ptr: func,
             user_data: UserData::from_raw(user_data),
             arg_count: arg_count as usize,
         });
@@ -1117,29 +1063,21 @@ fn build_run_options(app: LumenApp) -> RunOptions {
                     .iter()
                     .map(|v| script_value_to_lumen(v, &mut keep))
                     .collect();
-                let rv = match fn_ptr {
-                    ExposedPtr::V1(f) => unsafe {
-                        f(lvs.len() as c_int, lvs.as_ptr(), user_data.as_ptr())
-                    },
-                    ExposedPtr::V2(f) => {
-                        // Zero-initialise the out slot to nil so a callback
-                        // that leaves it untouched returns unit.
-                        let mut out = LumenValue {
-                            kind: LumenKind::Nil,
-                            as_: LumenValueData { integer: 0 },
-                        };
-                        unsafe {
-                            f(
-                                &mut out,
-                                lvs.len() as c_int,
-                                lvs.as_ptr(),
-                                user_data.as_ptr(),
-                            );
-                        }
-                        out
-                    }
+                // Zero-initialise the out slot to nil so a callback that
+                // leaves it untouched returns unit.
+                let mut out = LumenValue {
+                    kind: LumenKind::Nil,
+                    as_: LumenValueData { integer: 0 },
                 };
-                lumen_to_script_value(&rv)
+                unsafe {
+                    fn_ptr(
+                        &mut out,
+                        lvs.len() as c_int,
+                        lvs.as_ptr(),
+                        user_data.as_ptr(),
+                    );
+                }
+                lumen_to_script_value(&out)
             },
         ));
     }

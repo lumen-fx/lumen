@@ -66,7 +66,7 @@ typedef struct LumenApp LumenApp;
  * top 24 bits (major+minor) is a hard incompatibility.
  */
 #define LUMEN_API_VERSION_MAJOR 0u
-#define LUMEN_API_VERSION_MINOR 13u
+#define LUMEN_API_VERSION_MINOR 14u
 #define LUMEN_API_VERSION_PATCH 0u
 #define LUMEN_API_VERSION                                                          \
     ((LUMEN_API_VERSION_MAJOR << 16) | (LUMEN_API_VERSION_MINOR << 8) |            \
@@ -157,31 +157,28 @@ struct LumenMapEntry {
 };
 
 /*
- * Signature of an exposed callback. `argv` is borrowed for the
- * duration of the call; the returned LumenValue must stay valid
- * until this function returns.
- */
-typedef LumenValue (*LumenFn)(int argc,
-                              const LumenValue* argv,
-                              void* user_data);
-
-/*
- * Out-parameter callback variant of LumenFn (ABI 0.3).
+ * Signature of an exposed callback. Register with lumen_app_expose().
  *
- * Writes its result through `out` instead of returning a LumenValue by
- * value. Because LumenValue (24 bytes) exceeds the SysV x86-64 16-byte
- * register-pair return threshold, a by-value return forces every
- * non-Rust binding to hand-encode the platform's aggregate-return
- * (`sret`) convention; this variant sidesteps that entirely. `out` is
- * never NULL and points to a single writable LumenValue that Lumen has
- * zero-initialised to LUMEN_NIL - a callback returning nil may leave it
- * untouched. Any pointers the written value carries must stay valid
- * until the callback returns. Register with lumen_app_expose_v2().
+ * The result travels through `out` rather than a by-value return.
+ * LumenValue (24 bytes) exceeds the SysV x86-64 16-byte register-pair
+ * return threshold, so a by-value return forces every non-C binding to
+ * hand-encode the platform's aggregate-return (`sret`) convention; an
+ * out-parameter needs no target-specific code anywhere.
+ *
+ * `out` is never NULL and points to a single writable LumenValue that
+ * Lumen has zero-initialised to LUMEN_NIL, so a callback returning nil
+ * may leave it untouched.
+ *
+ * `argv` is borrowed for the duration of the call. Lumen reads `*out`
+ * once the callback returns, so any pointers the written value carries
+ * must outlive the call rather than point into the callback's own frame;
+ * static or heap storage the callback owns works, a local buffer does
+ * not.
  */
-typedef void (*LumenFnV2)(LumenValue* out,
-                          int argc,
-                          const LumenValue* argv,
-                          void* user_data);
+typedef void (*LumenFn)(LumenValue* out,
+                        int argc,
+                        const LumenValue* argv,
+                        void* user_data);
 
 /*
  * Id-scoped native click callback (ABI 0.3). Registered with
@@ -237,6 +234,9 @@ typedef int (*LumenCloseFn)(void* user_data);
  * embedder owns it and must keep it valid until `lumen_app_run`
  * returns.
  *
+ * `func` writes its result through the LumenValue out-pointer it
+ * receives as its first argument; see LumenFn for the full contract.
+ *
  * Every script host the app runs gets the registration. Rhai and Lua
  * scripts call it as a plain global; a candela script declares
  * `host "native" { any <name>(...); }` and calls `native::<name>(...)`.
@@ -246,20 +246,6 @@ LumenStatus lumen_app_expose(LumenApp* app,
                              uint32_t arg_count,
                              LumenFn func,
                              void* user_data);
-
-/*
- * Out-parameter callback registration (ABI 0.3). Identical to
- * lumen_app_expose() except `func` is a LumenFnV2 that writes its result
- * through an out-pointer instead of returning a LumenValue by value.
- * Prefer this for ctypes / libffi-only bindings that cannot easily
- * express an aggregate (`sret`) return. lumen_app_expose() (v1) is
- * retained for source compatibility.
- */
-LumenStatus lumen_app_expose_v2(LumenApp* app,
-                                const char* name,
-                                uint32_t arg_count,
-                                LumenFnV2 func,
-                                void* user_data);
 
 /*
  * Register an id-scoped native click handler (ABI 0.3). `cb` fires once

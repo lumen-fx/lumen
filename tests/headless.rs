@@ -4,16 +4,16 @@
 //! test module because they build a real app (plugin stack, script host)
 //! from an on-disk fixture.
 
-use std::ffi::{CString, c_char};
+use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::path::PathBuf;
 
 use lumen::{
-    LumenClickFn, LumenCloseFn, LumenFn, LumenKind, LumenStatus, LumenValue, LumenWatchFn,
-    lumen_app_expose, lumen_app_free, lumen_app_new, lumen_app_on_click, lumen_app_on_close,
-    lumen_app_run_headless, lumen_last_error, lumen_signal_get_str, lumen_signal_set_int64,
-    lumen_signal_set_str, lumen_signal_watch,
+    LumenArrayView, LumenClickFn, LumenCloseFn, LumenFn, LumenKind, LumenMapEntry, LumenMapView,
+    LumenStatus, LumenValue, LumenValueData, LumenWatchFn, lumen_app_expose, lumen_app_free,
+    lumen_app_new, lumen_app_on_click, lumen_app_on_close, lumen_app_run_headless,
+    lumen_last_error, lumen_signal_get_str, lumen_signal_set_int64, lumen_signal_set_str,
+    lumen_signal_watch,
 };
-use std::os::raw::c_void;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -179,7 +179,7 @@ fn on_click_registration_replaces_and_rejects_nulls() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-extern "C" fn allow_close(_ud: *mut c_void) -> std::os::raw::c_int {
+extern "C" fn allow_close(_ud: *mut c_void) -> c_int {
     1
 }
 
@@ -397,45 +397,56 @@ static RHAI_ECHO: AtomicI64 = AtomicI64::new(i64::MIN);
 static LUA_ECHO: AtomicI64 = AtomicI64::new(i64::MIN);
 static CANDELA_ECHO: AtomicI64 = AtomicI64::new(i64::MIN);
 
-/// Sum two int arguments, recording the first one into `slot`.
-fn sum_into(slot: &AtomicI64, argc: std::os::raw::c_int, argv: *const LumenValue) -> LumenValue {
-    let args: &[LumenValue] = if argv.is_null() || argc <= 0 {
+/// Borrow the argument vector a [`LumenFn`] was handed.
+fn args_of<'a>(argc: c_int, argv: *const LumenValue) -> &'a [LumenValue] {
+    if argv.is_null() || argc <= 0 {
         &[]
     } else {
         unsafe { std::slice::from_raw_parts(argv, argc as usize) }
-    };
+    }
+}
+
+/// Sum two int arguments through the out-parameter, recording the first
+/// one into `slot`.
+fn sum_into(slot: &AtomicI64, out: *mut LumenValue, argc: c_int, argv: *const LumenValue) {
+    let args = args_of(argc, argv);
     let int_at = |i: usize| -> i64 { args.get(i).map(|v| unsafe { v.as_.integer }).unwrap_or(0) };
     slot.store(int_at(0), Ordering::SeqCst);
-    LumenValue {
-        kind: lumen::LumenKind::Int,
-        as_: lumen::LumenValueData {
-            integer: int_at(0) + int_at(1),
-        },
+    unsafe {
+        *out = LumenValue {
+            kind: LumenKind::Int,
+            as_: LumenValueData {
+                integer: int_at(0) + int_at(1),
+            },
+        };
     }
 }
 
 unsafe extern "C" fn rhai_sum(
-    argc: std::os::raw::c_int,
+    out: *mut LumenValue,
+    argc: c_int,
     argv: *const LumenValue,
     _ud: *mut c_void,
-) -> LumenValue {
-    sum_into(&RHAI_ECHO, argc, argv)
+) {
+    sum_into(&RHAI_ECHO, out, argc, argv);
 }
 
 unsafe extern "C" fn lua_sum(
-    argc: std::os::raw::c_int,
+    out: *mut LumenValue,
+    argc: c_int,
     argv: *const LumenValue,
     _ud: *mut c_void,
-) -> LumenValue {
-    sum_into(&LUA_ECHO, argc, argv)
+) {
+    sum_into(&LUA_ECHO, out, argc, argv);
 }
 
 unsafe extern "C" fn candela_sum(
-    argc: std::os::raw::c_int,
+    out: *mut LumenValue,
+    argc: c_int,
     argv: *const LumenValue,
     _ud: *mut c_void,
-) -> LumenValue {
-    sum_into(&CANDELA_ECHO, argc, argv)
+) {
+    sum_into(&CANDELA_ECHO, out, argc, argv);
 }
 
 /// Write an app whose markup loads `script_name`, and the script itself.
@@ -457,24 +468,40 @@ fn write_script_fixture(name: &str, script_name: &str, script: &str) -> PathBuf 
     dir
 }
 
-/// Register `func` under `name` on `dir`'s app and drive it headlessly.
-fn run_exposed(dir: &std::path::Path, name: &str, func: LumenFn) {
+/// Register every `(name, arity, func)` on `dir`'s app and drive it
+/// headlessly.
+fn run_exposed_many(dir: &std::path::Path, funcs: &[(&str, u32, LumenFn)]) {
     let cdir = CString::new(dir.to_str().unwrap()).unwrap();
     let handle = unsafe { lumen_app_new(cdir.as_ptr()) };
     assert!(!handle.is_null(), "app must construct: {}", last_error());
-    let cname = CString::new(name).unwrap();
-    assert_eq!(
-        unsafe { lumen_app_expose(handle, cname.as_ptr(), 2, Some(func), std::ptr::null_mut()) },
-        LumenStatus::Ok,
-        "expose should succeed: {}",
-        last_error()
-    );
+    for (name, arity, func) in funcs {
+        let cname = CString::new(*name).unwrap();
+        assert_eq!(
+            unsafe {
+                lumen_app_expose(
+                    handle,
+                    cname.as_ptr(),
+                    *arity,
+                    Some(*func),
+                    std::ptr::null_mut(),
+                )
+            },
+            LumenStatus::Ok,
+            "expose should succeed: {}",
+            last_error()
+        );
+    }
     assert_eq!(
         unsafe { lumen_app_run_headless(handle, 3) },
         LumenStatus::Ok,
         "headless run should succeed: {}",
         last_error()
     );
+}
+
+/// Register `func` under `name` with arity 2 and drive the app headlessly.
+fn run_exposed(dir: &std::path::Path, name: &str, func: LumenFn) {
+    run_exposed_many(dir, &[(name, 2, func)]);
 }
 
 #[test]
@@ -528,6 +555,176 @@ fn exposed_fn_is_callable_from_candela() {
         CANDELA_ECHO.load(Ordering::SeqCst),
         42,
         "the second call must receive the first call's return value"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// -- Every value kind through the out-parameter ----------------------------
+//
+// One callback writes a value of a requested kind through `out`; a second
+// callback receives what the script made of it and records a description.
+// Between them the pair covers each `LumenKind` the marshaling handles,
+// plus the "callback leaves `out` untouched" case, which must reach the
+// script as unit.
+
+/// Description of each value the receiving callback saw, in call order.
+static OBSERVED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Allocate a NUL-terminated copy of `s` for the rest of the process.
+///
+/// Lumen reads the value the callback wrote after the callback returns, so
+/// a pointer into the callback's own frame would dangle. A test-lifetime
+/// allocation is the smallest thing that honours the contract.
+fn leak_cstr(s: &str) -> *const c_char {
+    CString::new(s).unwrap().into_raw()
+}
+
+fn int_value(i: i64) -> LumenValue {
+    LumenValue {
+        kind: LumenKind::Int,
+        as_: LumenValueData { integer: i },
+    }
+}
+
+fn str_value(s: &str) -> LumenValue {
+    LumenValue {
+        kind: LumenKind::String,
+        as_: LumenValueData {
+            string: leak_cstr(s),
+        },
+    }
+}
+
+/// Write a value of the kind named by the first argument through `out`.
+unsafe extern "C" fn make_kind(
+    out: *mut LumenValue,
+    argc: c_int,
+    argv: *const LumenValue,
+    _ud: *mut c_void,
+) {
+    let code = args_of(argc, argv)
+        .first()
+        .map(|v| unsafe { v.as_.integer })
+        .unwrap_or(-1);
+    let value = match code {
+        0 => LumenValue {
+            kind: LumenKind::Nil,
+            as_: LumenValueData { integer: 0 },
+        },
+        1 => LumenValue {
+            kind: LumenKind::Bool,
+            as_: LumenValueData { boolean: 1 },
+        },
+        2 => int_value(7),
+        3 => LumenValue {
+            kind: LumenKind::Float,
+            as_: LumenValueData { float_: 1.5 },
+        },
+        4 => str_value("lumen"),
+        5 => {
+            let items: &'static [LumenValue; 2] =
+                Box::leak(Box::new([int_value(7), str_value("lumen")]));
+            LumenValue {
+                kind: LumenKind::Array,
+                as_: LumenValueData {
+                    array: LumenArrayView {
+                        items: items.as_ptr(),
+                        len: items.len(),
+                    },
+                },
+            }
+        }
+        _ => {
+            let entries: &'static [LumenMapEntry; 1] = Box::leak(Box::new([LumenMapEntry {
+                key: leak_cstr("n"),
+                value: int_value(9),
+            }]));
+            LumenValue {
+                kind: LumenKind::Map,
+                as_: LumenValueData {
+                    map: LumenMapView {
+                        entries: entries.as_ptr(),
+                        len: entries.len(),
+                    },
+                },
+            }
+        }
+    };
+    unsafe { *out = value };
+}
+
+/// Record a description of the first argument, and deliberately leave
+/// `out` alone: the caller must see unit.
+unsafe extern "C" fn take_value(
+    _out: *mut LumenValue,
+    argc: c_int,
+    argv: *const LumenValue,
+    _ud: *mut c_void,
+) {
+    let described = match args_of(argc, argv).first() {
+        None => "missing".to_owned(),
+        Some(v) => unsafe {
+            match v.kind {
+                LumenKind::Nil => "nil".to_owned(),
+                LumenKind::Bool => format!("bool:{}", v.as_.boolean != 0),
+                LumenKind::Int => format!("int:{}", v.as_.integer),
+                LumenKind::Float => format!("float:{}", v.as_.float_),
+                LumenKind::String => {
+                    format!("str:{}", CStr::from_ptr(v.as_.string).to_string_lossy())
+                }
+                LumenKind::Array => "array".to_owned(),
+                LumenKind::Map => "map".to_owned(),
+            }
+        },
+    };
+    OBSERVED.lock().unwrap().push(described);
+}
+
+#[test]
+fn exposed_callback_round_trips_every_value_kind() {
+    OBSERVED.lock().unwrap().clear();
+    let dir = write_script_fixture(
+        "kinds",
+        "main.rhai",
+        "fn on_start() {\n\
+        \x20   native_take(native_make(0));\n\
+        \x20   native_take(native_make(1));\n\
+        \x20   native_take(native_make(2));\n\
+        \x20   native_take(native_make(3));\n\
+        \x20   native_take(native_make(4));\n\
+        \x20   let arr = native_make(5);\n\
+        \x20   native_take(arr[0]);\n\
+        \x20   native_take(arr[1]);\n\
+        \x20   let m = native_make(6);\n\
+        \x20   native_take(m.n);\n\
+        \x20   native_take(type_of(native_take(2)));\n\
+        }\n",
+    );
+    run_exposed_many(
+        &dir,
+        &[
+            ("native_make", 1, make_kind),
+            ("native_take", 1, take_value),
+        ],
+    );
+    let observed = OBSERVED.lock().unwrap().clone();
+    assert_eq!(
+        observed,
+        vec![
+            "nil",
+            "bool:true",
+            "int:7",
+            "float:1.5",
+            "str:lumen",
+            "int:7",
+            "str:lumen",
+            "int:9",
+            // The inner `native_take` left `out` untouched, so the script
+            // saw unit; the outer call reports what its type was.
+            "int:2",
+            "str:()",
+        ],
+        "each kind must survive the trip out through `out` and back as an argument"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
