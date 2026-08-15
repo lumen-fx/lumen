@@ -9,10 +9,17 @@
 //!   calendar is implicit; non-Gregorian calendars (e.g. `ja-u-ca-japanese`)
 //!   come along automatically when the locale tag asks for them.
 //! - Currency - CLDR-driven via [`icu::experimental::dimension::currency::formatter::CurrencyFormatter`]
-//!   (round-7 upgrade: gated behind the `icu` umbrella's `experimental`
-//!   feature; previously a hand-rolled ISO-4217-code suffix).
+//!   (round-7 upgrade: gated behind the `icu` umbrella's `unstable`
+//!   feature; previously a hand-rolled ISO-4217-code suffix). A
+//!   `CurrencyFormatter` is bound to one ISO-4217 code, so
+//!   [`LocaleFormatter`] builds them on demand and keeps them in a
+//!   per-locale cache.
 //! - Relative time - CLDR-driven via [`icu::experimental::relativetime::RelativeTimeFormatter`]
 //!   (round-7 upgrade: previously a hand-rolled English/German stub).
+
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::sync::{Mutex, PoisonError};
 
 use bevy_ecs::resource::Resource;
 use fixed_decimal::FloatPrecision;
@@ -23,15 +30,16 @@ use icu::datetime::input::{DateTime as IcuDateTime, Time as IcuTime};
 use icu::decimal::DecimalFormatter;
 use icu::decimal::input::Decimal;
 use icu::decimal::options::DecimalFormatterOptions;
-use icu::experimental::dimension::currency::CurrencyCode;
-use icu::experimental::dimension::currency::formatter::CurrencyFormatter;
+use icu::experimental::dimension::currency::CurrencyType;
+use icu::experimental::dimension::currency::formatter::{
+    CurrencyFormatter, CurrencyFormatterPreferences,
+};
 use icu::experimental::dimension::currency::options::CurrencyFormatterOptions;
 use icu::experimental::relativetime::{
     RelativeTimeFormatter, RelativeTimeFormatterOptions, options::Numeric,
 };
 use icu::locale::Locale;
 use thiserror::Error;
-use tinystr::TinyAsciiStr;
 use unic_langid::LanguageIdentifier;
 
 /// Errors surfaced by [`LocaleFormatter`] construction or formatting.
@@ -112,9 +120,14 @@ pub struct LocaleFormatter {
     pub time: DateTimeFormatter<fieldsets::T>,
     /// Date + time formatter (medium length).
     pub datetime: DateTimeFormatter<fieldsets::YMDT>,
-    /// Currency formatter (round-7: real ICU4X CLDR-driven, not the
-    /// hand-rolled ISO-4217 suffix stub).
-    pub currency: CurrencyFormatter,
+    /// Currency preferences for `lang`, kept so per-code formatters can
+    /// be built after construction.
+    currency_prefs: CurrencyFormatterPreferences,
+    /// Currency formatters keyed by ISO-4217 code. ICU4X binds the code
+    /// at construction, so one formatter cannot serve every currency;
+    /// the cache keeps construction to once per (locale, code) rather
+    /// than once per [`LocaleFormatter::format_currency`] call.
+    currency: Mutex<HashMap<CurrencyType, CurrencyFormatter<DecimalFormatter>>>,
     /// Per-unit relative-time formatters (round-7: real ICU4X
     /// CLDR-driven, not the hand-rolled en/de stub). One formatter per
     /// unit because ICU4X 2.x `icu_experimental` exposes per-unit
@@ -168,10 +181,9 @@ impl LocaleFormatter {
             .map_err(|e| FormatterError::Load(format!("time: {e}")))?;
         let datetime = DateTimeFormatter::try_new(loc.clone().into(), fieldsets::YMDT::medium())
             .map_err(|e| FormatterError::Load(format!("datetime: {e}")))?;
-        // Currency formatter - CLDR-driven (round-7).
-        let currency =
-            CurrencyFormatter::try_new(loc.clone().into(), CurrencyFormatterOptions::default())
-                .map_err(|e| FormatterError::Load(format!("currency: {e}")))?;
+        // Currency formatters are built per ISO-4217 code on first use;
+        // all we need up front is the locale's preferences.
+        let currency_prefs = CurrencyFormatterPreferences::from(loc.clone());
         // Per-unit relative-time formatters - CLDR-driven (round-7).
         // ICU4X 2.x `icu_experimental` exposes per-unit constructors
         // rather than a single multi-unit one; we instantiate Long
@@ -200,7 +212,8 @@ impl LocaleFormatter {
             date,
             time,
             datetime,
-            currency,
+            currency_prefs,
+            currency: Mutex::new(HashMap::new()),
             relative_second,
             relative_minute,
             relative_hour,
@@ -229,23 +242,44 @@ impl LocaleFormatter {
     }
 
     /// Format `amount` as a CLDR-driven currency string. `currency` is
-    /// a 3-character ISO-4217 code (`"USD"`, `"EUR"`, `"JPY"`, ...); the
-    /// formatter picks the right symbol position + spacing per locale
-    /// (en-US: `$1,234.56`; de-DE: `1.234,56` with a trailing euro sign;
-    /// ja-JP: a leading yen sign).
+    /// a 3-character ISO-4217 code (`"USD"`, `"EUR"`, `"JPY"`, ...,
+    /// case-insensitive); the formatter picks the symbol position and
+    /// spacing the locale wants (en-US: `$1,234.56`; de-DE: `1.234,56`
+    /// with a trailing euro sign; ja-JP: a leading yen sign) and rounds
+    /// to the currency's own fraction digits (two for USD and EUR, none
+    /// for JPY).
     ///
-    /// Round-7 upgrade: replaces the hand-rolled `<number> <code>`
-    /// suffix with `icu_experimental`'s `CurrencyFormatter`.
+    /// The short (standard) symbol is used, not the narrow symbol and
+    /// not the ISO code. An unusable code falls back to
+    /// `<number> <code>`.
     pub fn format_currency(&self, amount: f64, currency: &str) -> String {
         let d = match Decimal::try_from_f64(amount, FloatPrecision::RoundTrip) {
             Ok(d) => d,
             Err(_) => return amount.to_string(),
         };
-        let code = match TinyAsciiStr::<3>::try_from_str(currency) {
-            Ok(s) => CurrencyCode(s),
+        let code = match CurrencyType::try_from_str(currency) {
+            Ok(c) => c,
             Err(_) => return format!("{} {}", self.format_number(amount), currency),
         };
-        self.currency.format_fixed_decimal(&d, &code).to_string()
+        let mut cache = self.currency.lock().unwrap_or_else(PoisonError::into_inner);
+        let formatter = match cache.entry(code) {
+            Entry::Occupied(slot) => slot.into_mut(),
+            Entry::Vacant(slot) => {
+                let built = CurrencyFormatter::try_new_symbol(
+                    self.currency_prefs,
+                    code,
+                    CurrencyFormatterOptions::default(),
+                );
+                match built {
+                    Ok(f) => slot.insert(f),
+                    Err(e) => {
+                        tracing::warn!(?e, currency, "currency formatter load failed");
+                        return format!("{} {}", self.format_number(amount), currency);
+                    }
+                }
+            }
+        };
+        formatter.format_fixed_decimal(&d).to_string()
     }
 
     /// Format the date part of `when`. Medium length (e.g.
@@ -359,6 +393,45 @@ mod tests {
         assert!(de_s.contains('\u{20ac}'), "de-DE euro present: {de_s}");
         assert!(en_s.contains("1,234"), "en-US comma grouping: {en_s}");
         assert!(de_s.contains("1.234"), "de-DE dot grouping: {de_s}");
+    }
+
+    #[test]
+    fn currency_uses_the_currency_fraction_digits() {
+        // USD and EUR round to two digits, JPY to none, per CLDR's
+        // currency fraction data.
+        let f = LocaleFormatter::new(lang("en-US"));
+        assert_eq!(f.format_currency(1234.5, "USD"), "$1,234.50");
+        assert_eq!(f.format_currency(1234.5, "JPY"), "\u{a5}1,235");
+    }
+
+    #[test]
+    fn currency_code_is_case_insensitive() {
+        let f = LocaleFormatter::new(lang("en-US"));
+        assert_eq!(
+            f.format_currency(9.99, "usd"),
+            f.format_currency(9.99, "USD")
+        );
+    }
+
+    #[test]
+    fn currency_bad_code_falls_back_to_number_and_code() {
+        let f = LocaleFormatter::new(lang("en-US"));
+        // Not three ASCII letters, so there is no ISO-4217 code to look up.
+        assert_eq!(f.format_currency(1234.5, "US"), "1,234.5 US");
+        assert_eq!(f.format_currency(1234.5, "US1"), "1,234.5 US1");
+    }
+
+    #[test]
+    fn currency_cache_keeps_codes_apart() {
+        // One `LocaleFormatter` serves many codes; the second lookup of a
+        // code must come back with that code's symbol, not the first one's.
+        let f = LocaleFormatter::new(lang("en-US"));
+        let usd = f.format_currency(1234.5, "USD");
+        let eur = f.format_currency(1234.5, "EUR");
+        assert_eq!(usd, "$1,234.50");
+        assert_eq!(eur, "\u{20ac}1,234.50");
+        assert_eq!(f.format_currency(1234.5, "USD"), usd);
+        assert_eq!(f.format_currency(1234.5, "EUR"), eur);
     }
 
     #[test]

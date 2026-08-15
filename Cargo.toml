@@ -340,16 +340,18 @@ cssparser = "0.37"
 fluent = "0.17"
 fluent-bundle = "0.16"
 unic-langid = "0.9"
-icu = { version = "2.2", features = ["unstable", "sync"] }
+# Exact pin, on purpose. `unstable` pulls `icu_experimental`, which makes
+# no API promise and which the umbrella tracks with a `~` requirement, so
+# a caret range here lets an unlocked build (`cargo install --git`, which
+# ignores Cargo.lock) pick up an experimental release the source does not
+# compile against. Bump deliberately, with the currency / relative-time
+# call sites in lumen-i18n.
+icu = { version = "=2.3.0", features = ["unstable", "sync"] }
 # Separate pin so the `ryu` feature on `fixed_decimal` is enabled -
 # the icu umbrella doesn't re-export it, and Decimal::try_from_f64 is
 # gated behind it. Both icu_decimal and this pin resolve to the same
 # fixed_decimal 0.7.x major.
 fixed_decimal = { version = "0.7", features = ["ryu"] }
-# Tiny inline ASCII strings - backs ICU4X's CurrencyCode (3-char ISO-4217).
-# Already a transitive dep via every icu_* crate; exposed at workspace
-# level so lumen-i18n can construct CurrencyCode directly.
-tinystr = "0.8"
 # System locale detection - already a transitive dep via cosmic-text.
 # Declaring it at workspace level so lumen-i18n can grab the same pin.
 sys-locale = "0.3"
