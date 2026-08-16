@@ -3749,6 +3749,7 @@ dependencies = [
  "lumen-core",
  "lumen-html",
  "lumen-input",
+ "lumen-ir",
  "lumen-primitives",
  "lumen-scene",
  "lumen-script",

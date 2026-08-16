@@ -35,6 +35,17 @@ bevy_ecs.workspace = true
 # the compiler feature here does not reach a shipped runtime.
 lumen-script-candela = { path = "../script/candela", version = "0.0.3" }
 
+[dev-dependencies]
+# The compiled app the boot benchmark reads. A running app never needs the
+# artifact container, only what came out of it.
+lumen-ir = { path = "../ir", version = "0.0.3" }
+
+[[bench]]
+name = "boot"
+# The benchmark takes compiled apps on the command line, which libtest's
+# harness would swallow as filters.
+harness = false
+
 [features]
 # The script hosts this assembly carries. A host is a language, and each one is
 # a feature, so a build pays for the languages its app ships and nothing else.
