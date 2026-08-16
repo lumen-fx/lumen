@@ -7,6 +7,7 @@
 //! ([`crate::vm_host`]) runs the same builtins without a compiler.
 
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 
 use bevy_ecs::prelude::*;
 use candela_vm::Value;
@@ -17,6 +18,7 @@ use lumen_script::{
 };
 
 use crate::host_fns::{NATIVE_NAMESPACE, Registries, register_lumen_host_fns};
+use crate::lmn;
 use crate::prelude;
 use crate::value::{candela_value_to_script, script_value_to_candela};
 
@@ -92,6 +94,13 @@ impl CandelaHost {
         &mut self.vm.engine
     }
 
+    /// Record what `source` declares, so the `lmn!` expander can map a
+    /// component's props onto the function it names. Every compile path calls
+    /// this on the source it is about to hand candela.
+    fn index_source(&self, source: &str) {
+        *self.registries.fn_index.lock().unwrap() = lmn::FnIndex::scan(source);
+    }
+
     /// Map a candela compile-phase [`Diagnostic`](candela::Diagnostic) to the
     /// structured [`ScriptError::Compile`], resolving `(line, col)`.
     fn compile_error(&self, d: &candela::Diagnostic, uri: &str) -> ScriptError {
@@ -107,9 +116,21 @@ impl CandelaHost {
 
 /// Build an [`Engine`](candela::Engine) carrying the whole builtin surface,
 /// each closure closing over `r`'s registries.
+/// The `lmn!` expander: a markup block becomes the candela call that
+/// instantiates it, against whatever `index` last recorded.
+fn lmn_expander(
+    index: Arc<Mutex<lmn::FnIndex>>,
+) -> impl Fn(&str) -> Result<String, candela::macros::MacroError> + 'static {
+    move |body: &str| {
+        let index = index.lock().unwrap();
+        lmn::expand(body, &index).map_err(|e| candela::macros::MacroError::at(e.message, e.offset))
+    }
+}
+
 fn build_engine(r: &Registries) -> candela::Engine {
     let mut engine = candela::Engine::new();
     register_lumen_host_fns(&mut engine, r);
+    engine.register_macro(lmn::MACRO_NAME, lmn_expander(r.fn_index.clone()));
     engine
 }
 
@@ -130,6 +151,7 @@ impl ScriptHost for CandelaHost {
         // Splice the `host "lumen" { ... }` prelude in for a sentinel import; the
         // splice is single-line, so `span_line_col` still resolves user lines.
         let resolved = prelude::resolve_prelude(source);
+        *scratch.fn_index.lock().unwrap() = lmn::FnIndex::scan(resolved.as_ref());
         engine
             .compile(resolved.as_ref(), uri)
             .map(|_| ())
@@ -146,6 +168,7 @@ impl ScriptHost for CandelaHost {
 
     fn load(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
         let resolved = prelude::resolve_prelude(source);
+        self.index_source(resolved.as_ref());
         let program = self
             .vm
             .engine
@@ -168,6 +191,7 @@ impl ScriptHost for CandelaHost {
         self.registries.event_handlers.write().unwrap().clear();
 
         let resolved = prelude::resolve_prelude(source);
+        self.index_source(resolved.as_ref());
         match self.vm.engine.compile(resolved.as_ref(), uri) {
             Ok(program) => {
                 self.source = source.to_owned();
@@ -398,10 +422,20 @@ impl ScriptContext for CandelaScriptContext<'_> {
 /// when a compiled program cannot be serialized.
 pub fn compile_bytecode(source: &str, uri: &str) -> Result<Vec<u8>, ScriptError> {
     let resolved = prelude::resolve_prelude(source);
+    // `build_bytecode` is a free function with no engine behind it, so the
+    // `lmn!` expander comes from an environment installed for this compile.
+    let mut macros = candela::macros::MacroEnv::new();
+    macros.register(
+        lmn::MACRO_NAME,
+        lmn_expander(Arc::new(Mutex::new(lmn::FnIndex::scan(resolved.as_ref())))),
+    );
     // candela reports a compile error by unwinding into the diagnostic sink
     // `collect_diagnostic` installs. Without the sink the same error ends the
     // process, which a build tool must not do to the shell it was run from.
-    candela::collect_diagnostic(|| candela::build_bytecode(resolved.to_string(), uri))
+    macros
+        .scope(|| {
+            candela::collect_diagnostic(|| candela::build_bytecode(resolved.to_string(), uri))
+        })
         .map_err(|d| {
             let (line, col) = span_line_col(resolved.as_ref(), d.span.start);
             ScriptError::Compile {

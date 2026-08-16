@@ -69,4 +69,8 @@ impl lumen_runtime::SourceParser for LumencParser {
         crate::collect_fragments(src, self_path, Some(&crate::resolve::FsLoader))
             .map_err(|e| e.to_string())
     }
+
+    fn script_fragments(&self, src: &str, uri: &str) -> Result<FragmentTable, String> {
+        crate::lmn::script_fragments(src, uri)
+    }
 }

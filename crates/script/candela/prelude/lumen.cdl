@@ -121,6 +121,11 @@ host "lumen" {
     node_move_to(int, int);
     node_replace_with(int, int);
 
+    // fragments: instantiate a compiled markup subtree by key. `lmn!` blocks
+    // expand to fragment_spawn; mount puts what one returns at the app root.
+    int fragment_spawn(string, string[], int[]);
+    mount(int);
+
     // DOM read-backs on a single node.
     string node_get_attr(int, string);
     string node_text(int);

@@ -812,6 +812,20 @@
             doc: "Create a detached element; the handle is valid for the rest of the tick.",
         ),
         (
+            name: "fragment_spawn",
+            hosts: [Candela],
+            params: [("key", "string"), ("args", "string[]"), ("children", "int[]")],
+            ret: "int",
+            doc: "Instantiate the compiled fragment `key` into a detached node. `args` is flattened name/value pairs; `children` are the nodes its slots take, in slot order. What an `lmn!` block expands to.",
+        ),
+        (
+            name: "mount",
+            hosts: [Candela],
+            params: [("node", "int")],
+            ret: "()",
+            doc: "Put `node` at the app root.",
+        ),
+        (
             name: "node_clone_deep",
             hosts: [Candela],
             params: [("source", "int")],

@@ -1,7 +1,8 @@
 # Composition
 
-Two ways to avoid repeating markup: templates, for a subtree you use many times
-with different values, and includes, for splitting one long file into several.
+Three ways to avoid repeating markup: templates, for a subtree you use many
+times with different values; components, for a piece of markup a script builds
+and places; and includes, for splitting one long file into several.
 
 ## Templates
 
@@ -40,8 +41,9 @@ The `<template>` block itself never renders. It is stripped from the tree, so
 where you put it in the file does not matter, and a use site may come before
 the declaration.
 
-A template and a markup block in a script are the same thing: both declare a
-fragment, and both instantiate the same way.
+A template and an `lmn!` block in a script are the same thing: both declare a
+fragment, and both instantiate the same way. See
+[components](#components) for the script side.
 
 ### Two ways to instantiate
 
@@ -174,6 +176,114 @@ Two files declaring the same template name with different bodies fails the
 build: the set is app-wide, so either answer would change what half the use
 sites render.
 
+## Components
+
+A component is a candela function that returns markup. Write the markup in an
+`lmn!` block and the logic around it in candela:
+
+```rust
+import "lumen.cdl";
+
+fn Home(name) {
+    return lmn!(<label class="home" text="home for $name"/>);
+}
+
+fn App() {
+    return lmn!(
+        <column id="app">
+            <Home name="bob"/>
+        </column>
+    );
+}
+
+fn on_ready() {
+    lumen::mount(App());
+}
+
+fn main() {}
+```
+
+`lmn!` is a markup block, not candela: tags, attributes, `$name`
+interpolation, and elements naming another component. Everything else in the
+function is ordinary candela, so a component decides what to render with `if`
+and loops and then hands back one piece of markup.
+
+A block is the same entity a `<template>` is. It compiles to a fragment when
+the app is built, and the call instantiates that fragment by key, so a shipped
+app carries the compiled markup and parses nothing while it runs. `lumenc
+check` reads every block, and a malformed one fails the check with the file and
+line it was written on.
+
+A call returns a node handle, valid for the tick it was minted in. Attach it
+with `lumen::mount(handle)` to put it at the app root, or with any of the
+tree-mutating builtins in the
+[candela reference](../reference/scripting-candela.md) to put it somewhere
+else.
+
+Write components in a `.cdl` file. An inline `<script>` block is read as XML
+like the rest of the markup, so a block written in one has to sit inside a
+`<![CDATA[ ... ]]>` section for its tags to survive.
+
+### Arguments
+
+`$name` reads the candela value of that name where the block was written, and
+substitutes it once, when the instance is built. A value that changes while the
+app runs belongs in a `bind-*` attribute inside the block, exactly as in a
+template body:
+
+```rust
+fn Counter(label) {
+    return lmn!(<label text="$label" bind-text="count"/>);
+}
+```
+
+`{name}` keeps its markup meaning inside a block: it is a
+[signal reference](reactivity.md), resolved from the global scope every time
+that signal changes. Write `$name` for something the surrounding candela knows
+and `{name}` for something the app's signals hold.
+
+Write `$$` for a literal `$`.
+
+### Components inside components
+
+An element whose tag starts with a capital letter is a call to the candela
+function of that name. Props map to that function's parameters by name, in any
+order; a parameter no prop names is passed the empty string. A prop naming a
+parameter the function does not declare fails the compile, naming the
+component.
+
+```rust
+fn Row(title, tone) {
+    return lmn!(<row class="row row-$tone"><label text="$title"/></row>);
+}
+
+fn List() {
+    return lmn!(
+        <column>
+            <Row title="First" tone="warm"/>
+            <Row tone="cool" title="Second"/>
+        </column>
+    );
+}
+```
+
+A prop value that is one `$name` and nothing else passes that value through
+with its own type, so `<Row count="$n"/>` hands `Row` the number. Anything else
+is text, with each `$name` in it rendered into the string.
+
+The child is built first and its node is placed where its element stood, so
+`List` above never calls back into the script while the tree is being built.
+
+### What a block may not do
+
+- **One root element.** A block returns one node, so a body with no root or
+  several fails the build.
+- **No markup children on a component element.** `<Row title="x"/>` is a call;
+  `<Row><label/></Row>` is refused. Pass what the component renders as a prop,
+  or give the component its own `<slot/>` and instantiate it as a template.
+- **`lmn-` is reserved.** Names starting with `lmn-` belong to what a block
+  generates.
+
 ## Includes
 
 An include splices another file's markup into this one at that exact spot:
@@ -207,6 +317,7 @@ keep a component library in its own file:
 - The same subtree appearing several times, with different text or images: a
   template.
 - Content that needs a frame around it: a template with a `<slot/>`.
+- Markup a script decides on and places: a component.
 - One long page you want to read in pieces, each appearing once: includes.
 - A stylesheet growing too large: `@import` in `main.css`. See
   [styling](styling.md).

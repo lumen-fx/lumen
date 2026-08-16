@@ -45,9 +45,6 @@ pub fn compile_app_with_skin(
     // The same discovery the run path does, so compiling sees the app the way
     // running it does: the entry file it would open, and every sibling page.
     let plan = crate::pages::discover(dir, &cfg);
-    // Every fragment the app declares, whether or not this build instantiates
-    // it: the artifact carries the declarations, not just their expansions.
-    let fragments = crate::pages::collect_fragments(&plan, parser).map_err(RunError::ParseHtml)?;
     let html_path = plan.entry_file.clone();
     let css_path = dir.join("main.css");
     let asset_roots = cfg.resolved_asset_roots(dir);
@@ -101,7 +98,10 @@ pub fn compile_app_with_skin(
         script_source,
         scripts,
         pages,
-        fragments,
+        // Every fragment the app declares, whether or not this build
+        // instantiates it: the artifact carries the declarations, not just
+        // their expansions.
+        fragments: loaded.fragments,
     })
 }
 

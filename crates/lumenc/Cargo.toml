@@ -66,6 +66,13 @@ bincode.workspace = true
 # `lumen_widget::is_widget_tag_registered` to accept `#[derive(Widget)]`
 # custom tags after the built-in KNOWN_TAGS miss.
 lumen-widget = { path = "../widget", version = "0.0.3" }
+# The candela host, for the one module that decides what an `lmn!` block
+# means: the fragment key, the argument sites, the component elements, and the
+# candela the macro expands to. `lumenc` reads the same module the expander
+# does, so the ahead-of-time extraction and the compiled call cannot disagree.
+# OPTIONAL and pulled in by `runtime-parse`, which is the feature that carries
+# the markup front-end each block body compiles through.
+lumen-script-candela = { path = "../script/candela", version = "0.0.3", optional = true }
 
 # `lumenc web` - the static-site emitter and the HTML contract it writes
 # against. OPTIONAL behind the default-on `web` feature; both are small and
@@ -214,4 +221,4 @@ profiling-tracy = ["profiling", "lumen-runtime?/profiling-tracy"]
 # `roxmltree`) AND, when the runtime is present, the runtime's from-source load
 # path (weak forward - a no-op in a thin build). Mirrors Qt's `qmlcachegen`
 # and Slint's compile-.slint-to-Rust model.
-runtime-parse = ["dep:roxmltree", "lumen-runtime?/runtime-parse"]
+runtime-parse = ["dep:roxmltree", "dep:lumen-script-candela", "lumen-runtime?/runtime-parse"]

@@ -387,7 +387,15 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         }
         // One watcher system for the whole app: it respawns the tree once and
         // then reloads each active host through the `ScriptReloaders` table.
-        app.add_systems(TickStage::Systems, hot_reload);
+        //
+        // Ordered before the DOM index publish: the respawn replaces the root,
+        // and `on_ready` re-fires on this same tick. A publish that ran first
+        // would hand that dispatch the despawned root, so a script that mounts
+        // into the document would attach to nothing.
+        app.add_systems(
+            TickStage::Systems,
+            hot_reload.before(crate::run::script_systems::build_dom_index),
+        );
     }
 
     // RunOptions (set by the CLI / embedder) overrides lumen.toml,

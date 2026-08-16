@@ -34,8 +34,9 @@ instead.
 buttons, text fields, toggles, switches, sliders, checkboxes, radios, progress
 bars, tabs, dropdowns, menus, dialogs, tooltips, date and time pickers, and
 scrollable regions. Layout is flexbox, with CSS grid where a two-dimensional
-arrangement fits better. Reusable subtrees come from `<template>`, and larger
-apps split across files with `<include>`.
+arrangement fits better. Reusable subtrees come from `<template>` or from an
+`lmn!` block a script returns, and larger apps split across files with
+`<include>`.
 
 **Styling.** Selectors, the cascade, specificity, pseudo-classes, and custom
 properties, all behaving the way they do on the web. Skins supply a platform

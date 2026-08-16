@@ -66,6 +66,12 @@ pub trait SourceParser: Send + Sync {
     /// collects these from every one of its `.lmn` files so a fragment
     /// declared in one is usable from all of them.
     fn collect_fragments(&self, src: &str, self_path: &Path) -> Result<FragmentTable, String>;
+
+    /// Read the fragments the `lmn!` blocks in one candela script declare.
+    /// `uri` is where the script came from, and lands on each fragment's
+    /// origin. An app collects these alongside what its markup declares, so a
+    /// shipped artifact carries every fragment and parses no markup itself.
+    fn script_fragments(&self, src: &str, uri: &str) -> Result<FragmentTable, String>;
 }
 
 /// World-resource wrapper so the hot-reload system (a `&mut World` system that

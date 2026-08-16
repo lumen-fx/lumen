@@ -1,0 +1,41 @@
+// Components on candela: a function returns markup, the markup compiles to a
+// fragment at build time, and the call instantiates it.
+import "lumen.cdl";
+
+// One argument, read once when the instance is built.
+fn Home(name) {
+    return lmn!(<label class="home" text="home for $name"/>);
+}
+
+// A `<for>` inside a block meets two scopes: `$prefix` is the argument the
+// instance was built with, `{row.title}` is the record the reconciler renders.
+fn Rows(prefix) {
+    return lmn!(
+        <column class="rows">
+            <for each="rows" key="id">
+                <label class="row" text="$prefix: {row.title}"/>
+            </for>
+        </column>
+    );
+}
+
+// A component element leaves a slot behind, and the node the component
+// returns fills it. Both children are built before this block is.
+fn App() {
+    return lmn!(
+        <column id="app">
+            <Home name="bob"/>
+            <Rows prefix="Row"/>
+        </column>
+    );
+}
+
+fn on_ready() {
+    lumen::signal_array_set("rows", [
+        {"id": "a", "title": "Alpha"},
+        {"id": "b", "title": "Beta"}
+    ]);
+    lumen::mount(App());
+}
+
+fn main() {}
