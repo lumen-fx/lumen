@@ -664,8 +664,88 @@ fn is_bare_interpolation_token(s: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-')
 }
 
+/// Build the fragment one `lmn!` block declares.
+///
+/// `markup` is the block body rewritten for the markup parser: an argument
+/// site is a `{name}` marker and every component element is a `<slot>`.
+/// `params` names the arguments, so a marker the block did not write with `$`
+/// stays a signal reference the global scope resolves.
+///
+/// This is the `<template>` path's other authoring form, and it ends in the
+/// same [`Fragment`]: the body compiles through the same element builder, and
+/// [`FragmentKind::Markup`] is all that distinguishes the result.
+///
+/// # Errors
+///
+/// [`ParseError`] when the body is not well-formed markup, or when it has
+/// anything other than one root element to instantiate.
+pub fn fragment_from_markup(
+    markup: &str,
+    key: &str,
+    params: &[String],
+    origin: FragmentOrigin,
+) -> Result<Fragment, ParseError> {
+    let wrapped = format!("<template>{markup}</template>");
+    let doc = roxmltree::Document::parse(&wrapped).map_err(|e| ParseError::Xml(e.to_string()))?;
+    let known = BTreeSet::new();
+    let ctx = FragCtx {
+        known: &known,
+        in_body: true,
+    };
+    let mut body = Vec::new();
+    let mut attrs = Attributes::default();
+    let mut slots = Vec::new();
+    let mut script_buf = String::new();
+    let mut external_scripts = Vec::new();
+    let mut lint_findings = Vec::new();
+    build_children(
+        doc.root_element(),
+        &mut attrs,
+        &mut body,
+        &mut slots,
+        &mut script_buf,
+        &mut external_scripts,
+        &wrapped,
+        &mut lint_findings,
+        &ctx,
+        false,
+        1,
+    )?;
+    let names: BTreeSet<&str> = params.iter().map(String::as_str).collect();
+    for el in &mut body {
+        bind_markers(el, &names);
+    }
+    match body.as_slice() {
+        [root] if root.tag != SLOT_TAG => {}
+        [_] => {
+            return Err(ParseError::Xml(
+                "an lmn! block whose root is a slot leaves nothing to return".to_string(),
+            ));
+        }
+        other => {
+            return Err(ParseError::Xml(format!(
+                "an lmn! block has one root element; this one has {}",
+                other.len()
+            )));
+        }
+    }
+    Ok(Fragment {
+        key: key.to_string(),
+        params: params
+            .iter()
+            .map(|name| FragmentParam {
+                name: name.clone(),
+                default: None,
+            })
+            .collect(),
+        body,
+        origins: vec![origin],
+        kind: FragmentKind::Markup,
+    })
+}
+
 /// Map a byte offset in `src` to a 1-based (line, col).
-fn line_col_of(src: &str, offset: usize) -> (usize, usize) {
+pub(crate) fn line_col_of(src: &str, offset: usize) -> (usize, usize) {
     let mut line = 1usize;
     let mut col = 1usize;
     let offset = offset.min(src.len());

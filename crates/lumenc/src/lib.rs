@@ -40,6 +40,11 @@ pub mod i18n_cli;
 /// `lumen.toml` config (`lumen-runtime`, `dev-run`).
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub mod lint_signals_cli;
+/// Ahead-of-time extraction of `lmn!` markup blocks from candela scripts, so
+/// a shipped app carries the fragments they name and parses no markup at run
+/// time. Gated with the parser stack it compiles bodies through.
+#[cfg(feature = "runtime-parse")]
+pub mod lmn;
 /// dlopen loader for the link-not-embed launcher: discover + open the shared
 /// liblumen, verify its ABI, and drive a prebuilt LMNA app across the C-ABI.
 /// The crate's only `unsafe`: dynamic symbol resolution and FFI calls, audited

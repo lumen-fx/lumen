@@ -203,6 +203,12 @@ sets one.
 app compiled with `lumenc build` ships without it, so build those subtrees
 element by element if you plan to precompile. See [Packaging](packaging.md).
 
+A candela script has a second way to write a subtree: an `lmn!` block, which is
+markup a function returns. Blocks compile to fragments when the app is built,
+so they work in a precompiled app where `set_inner_markup` does not, and they
+read as markup rather than as a sequence of calls. See
+[components](composition.md#components).
+
 ## Timers
 
 ```rust
@@ -260,6 +266,7 @@ in the new source replaces it. Rename in two saves, or restart.
 - Every builtin, per host: [candela](../reference/scripting-candela.md),
   [Rhai](../reference/scripting-rhai.md), [Lua](../reference/scripting-lua.md)
 - Signals, `bind-*`, `<for>`, and `<if>`: [Reactivity](reactivity.md)
+- Markup a function returns: [Composition](composition.md#components)
 - `[script]` and the rest of the config:
   [lumen.toml](../reference/lumen-toml.md)
 - Calling Lumen from Rust, C, C++, or Python: [FFI and SDKs](../reference/ffi.md)

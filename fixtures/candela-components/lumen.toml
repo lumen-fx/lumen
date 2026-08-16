@@ -1,0 +1,8 @@
+# Proof fixture for candela components: `lmn!` markup blocks in main.cdl,
+# compiled to fragments ahead of time and instantiated from `on_ready`.
+[script]
+engine = "candela"
+
+# No introspection server, so a headless CI run binds no port.
+[mcp]
+port = 0

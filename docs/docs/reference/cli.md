@@ -79,6 +79,11 @@ Parses and validates the app without opening a window and without running
 hooks. Prints `<dir>: ok (N elements, script: yes|none)` and exits 0, or
 prints the parse error and exits 1. A missing `<dir>` exits 2.
 
+The check covers the markup, the stylesheet, and every script, including the
+`lmn!` markup blocks a candela script writes: a block with no single root, a
+component element the script declares no function for, or a prop naming a
+parameter that function does not have all fail here.
+
 Every command that compiles markup from source (`check`, `run`, `build`,
 `package`) prints the parse-time findings to stderr as
 `<severity> <file>:<line>:<col> [<kind>] <message>`, with a `hint:` line when
@@ -97,6 +102,10 @@ Compiles the app ahead of time into a `.lmna` artifact: parses the entry
 paths, bakes the script source, and records which engine runs each part of it.
 A candela script is also compiled to bytecode and stored beside its source.
 Prints the element count, the output path, and the artifact size.
+
+The artifact carries every fragment the app declares, both the `<template>`
+blocks in its markup and the `lmn!` blocks in its candela scripts, so the
+compiled app instantiates them with no parser present.
 
 Runs the app's `prebuild` hooks first unless `--no-hooks` is given.
 

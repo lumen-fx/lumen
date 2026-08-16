@@ -339,6 +339,44 @@ Mutations queue a command applied later in the same tick.
 | `lumen::node_replace_with(old: int, new: int)` | | Replace `old` with `new`, despawning `old`'s subtree. |
 | `lumen::node_remove(node: int)` | | Detach and despawn the element and its subtree. |
 
+## Markup blocks
+
+An `lmn!( ... )` block is markup a candela function returns. It compiles to a
+fragment when the app is built, and the call instantiates that fragment, so a
+running app parses no markup. For what goes inside a block and how components
+compose, see [composition](../guides/composition.md#components).
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `lumen::fragment_spawn(key: string, args: string[], children: int[])` | `int` | Instantiate the compiled fragment `key` into a detached node. `args` is flattened name/value pairs; `children` are the nodes its slots take, in slot order. This is what an `lmn!` block expands to; call it directly only against a key you know. |
+| `lumen::mount(node: int)` | | Put `node` at the app root. |
+
+The block itself is the surface to write against:
+
+```rust
+fn Home(name) {
+    return lmn!(<label class="home" text="home for $name"/>);
+}
+
+fn on_ready() {
+    lumen::mount(Home("bob"));
+}
+
+fn main() {}
+```
+
+A block obeys three rules the compiler enforces:
+
+- **One root element.** A call returns one node.
+- **Arguments are static.** `$name` substitutes once, when the instance is
+  built. Something that changes while the app runs is a `bind-*` attribute
+  inside the block.
+- **A handle is valid for the tick it was minted in.** Attach what a component
+  returns before the tick ends, the same as a `node_spawn` handle.
+
+`lumenc check` and `lumenc build` both read every block in the app's scripts, so
+a malformed one fails ahead of the run.
+
 ## Read element state
 
 | Builtin | Returns | Behaviour |

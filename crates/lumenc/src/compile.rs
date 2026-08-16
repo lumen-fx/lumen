@@ -154,7 +154,7 @@ fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileErr
         &lumen_ir::fragment::FragmentTable::new(),
     )
     .map_err(|e| CompileError::ParseHtml(e.to_string()))?;
-    let fragments = parsed.fragments;
+    let mut fragments = parsed.fragments;
     let mut ir = parsed.ir;
     ir.included_files = include_paths;
 
@@ -226,6 +226,11 @@ fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileErr
     // so the parser-free runtime reconstructs the exact script-host input.
     let script_source = combined_script_source(&ir, dir)?;
     let scripts = grouped_script_sources(&ir, dir)?;
+    // The `lmn!` blocks the app's candela scripts write, so the artifact
+    // carries the fragments they instantiate.
+    fragments
+        .merge(script_fragments(&ir, dir, &html_path)?)
+        .map_err(|e| CompileError::ParseHtml(e.to_string()))?;
     ir.script_source = String::new();
     ir.external_scripts.clear();
 
@@ -238,6 +243,36 @@ fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileErr
         pages: None,
         fragments,
     })
+}
+
+/// The fragments the app's candela scripts declare through `lmn!`: the inline
+/// `<script>` block plus every `.cdl` file the markup names.
+fn script_fragments(
+    ir: &lumen_ir::layout_ir::LayoutIR,
+    dir: &Path,
+    html_path: &Path,
+) -> Result<lumen_ir::fragment::FragmentTable, CompileError> {
+    let mut table = lumen_ir::fragment::FragmentTable::new();
+    let mut fold = |source: &str, uri: &str| -> Result<(), CompileError> {
+        let declared =
+            crate::lmn::script_fragments(source, uri).map_err(CompileError::ParseHtml)?;
+        table
+            .merge(declared)
+            .map_err(|e| CompileError::ParseHtml(e.to_string()))
+    };
+    if !ir.script_source.trim().is_empty() {
+        fold(&ir.script_source, &html_path.display().to_string())?;
+    }
+    for rel in &ir.external_scripts {
+        if engine_for(Path::new(rel)) != Some("candela") {
+            continue;
+        }
+        let path = dir.join(rel);
+        let body =
+            std::fs::read_to_string(&path).map_err(|e| CompileError::Read(path.clone(), e))?;
+        fold(&body, &path.display().to_string())?;
+    }
+    Ok(table)
 }
 
 /// The engine name a script file's extension selects. Mirror of

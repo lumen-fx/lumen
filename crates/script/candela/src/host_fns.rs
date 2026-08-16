@@ -137,6 +137,9 @@ pub(crate) struct Registries {
     /// referenced by name; the dispatcher looks the name up by token and calls
     /// it.
     pub(crate) event_handlers: Arc<RwLock<HashMap<u64, String>>>,
+    /// What the source being compiled declares, for the `lmn!` expander.
+    /// Written before each compile, read while candela parses.
+    pub(crate) fn_index: Arc<Mutex<crate::lmn::FnIndex>>,
 }
 
 /// The registry-only half of the [`ScriptHost`](lumen_script::ScriptHost)
@@ -323,6 +326,53 @@ impl Registries {
         });
     }
 }
+/// Register the fragment surface: instantiate a compiled fragment by key, and
+/// put a node at the app root.
+///
+/// `fragment_spawn` is what an `lmn!` block expands to. Its arguments arrive
+/// flattened as `[name, value, name, value, ...]` because a candela host
+/// signature names one concrete type per position; the child handles arrive in
+/// the order their slots were generated, which is the order
+/// [`crate::lmn::slot_name`] names them.
+///
+/// The returned id addresses the instance for the rest of the tick, the way
+/// `node_spawn`'s does, so the caller can insert it or hand it to another
+/// instantiation without waiting for a round trip.
+fn register_fragments<S: HostFnSink>(engine: &mut S, r: &Registries) {
+    use lumen_script::node_query;
+
+    let sink = r.sink.clone();
+    engine.register_host_fn(
+        HOST_NAMESPACE,
+        "fragment_spawn",
+        move |key: String, args: Vec<String>, children: Vec<i64>| -> i64 {
+            let args: Vec<(String, String)> = args
+                .chunks_exact(2)
+                .map(|pair| (pair[0].clone(), pair[1].clone()))
+                .collect();
+            let children: Vec<(String, u64)> = children
+                .iter()
+                .enumerate()
+                .filter_map(|(i, id)| Some((crate::lmn::slot_name(i), cd_id_to_raw(*id)?)))
+                .collect();
+            let (handle, cmd) = node_query::build_spawn_fragment(&key, args, children);
+            sink.lock().unwrap().push(cmd);
+            cd_intern_raw(handle)
+        },
+    );
+
+    let sink = r.sink.clone();
+    engine.register_host_fn(HOST_NAMESPACE, "mount", move |node: i64| {
+        if let (Some(node), Some(parent)) = (cd_id_to_raw(node), node_query::run_document()) {
+            sink.lock().unwrap().push(ScriptCommand::Insert {
+                parent,
+                node,
+                before: 0,
+            });
+        }
+    });
+}
+
 /// Register every Lumen builtin into `sink`, each closure closing over `r`'s
 /// registries.
 ///
@@ -332,6 +382,7 @@ impl Registries {
 /// which binds the declarations a `.cdlb` image recorded. A builtin added here
 /// reaches both.
 pub(crate) fn register_lumen_host_fns<S: HostFnSink>(engine: &mut S, r: &Registries) {
+    register_fragments(engine, r);
     // -- app-command emitters ----------------------------------------
     enqueue!(engine, r.sink, "add_clicks", |n: i64| {
         ScriptCommand::AddClicks(n as i32)

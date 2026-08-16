@@ -115,6 +115,7 @@ pub mod builtins;
 #[cfg(feature = "compiler")]
 mod engine_host;
 mod host_fns;
+pub mod lmn;
 pub mod parse;
 pub mod prelude;
 mod value;
