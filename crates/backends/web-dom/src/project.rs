@@ -19,7 +19,8 @@ use lumen_core::components::{
 use lumen_html::contract::{
     DATA_LM_CHECKED, DATA_LM_DISABLED, DATA_LM_HIDDEN, DATA_LM_SELECTED, DIALOG_OPEN,
 };
-use web_sys::Element;
+use wasm_bindgen::JsCast;
+use web_sys::{Element, HtmlInputElement, HtmlTextAreaElement};
 
 use crate::nodes::NodeTable;
 
@@ -60,8 +61,21 @@ pub(crate) fn style_value(style: &InlineStyle) -> String {
 }
 
 /// An element's own text is the text node before its children, which is
-/// where the emitter wrote it.
+/// where the emitter wrote it. A form control is the exception: its text is
+/// its value, and it has no children to hold one.
 fn set_text(element: &Element, text: &str) {
+    if let Some(input) = element.dyn_ref::<HtmlInputElement>() {
+        if input.value() != text {
+            input.set_value(text);
+        }
+        return;
+    }
+    if let Some(area) = element.dyn_ref::<HtmlTextAreaElement>() {
+        if area.value() != text {
+            area.set_value(text);
+        }
+        return;
+    }
     match element.first_child() {
         // A text node already there is the one to update.
         Some(node) if node.node_type() == web_sys::Node::TEXT_NODE => {

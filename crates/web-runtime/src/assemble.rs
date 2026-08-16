@@ -2,9 +2,12 @@
 //!
 //! This is the browser's composition point, the counterpart of what
 //! `lumen-runtime` does for a window. It installs the parts of Lumen that
-//! have no platform in them (widget behaviour, focus, text editing, the
-//! reconcilers, the two-way bindings) and leaves out the parts the browser
-//! already is (layout, paint, accessibility, the font stack).
+//! have no platform in them (widget behaviour, focus, the reconcilers, the
+//! two-way bindings) and leaves out the parts the browser already is: layout,
+//! paint, accessibility, the font stack, and text editing. The last one is
+//! easy to miss. A `<input>` in a page is edited by the browser, which owns
+//! the caret, the selection and the IME; Lumen's rope-backed editor would be
+//! a second one writing over the same text.
 //!
 //! The ordering edges below are the ones the desktop registers, and they are
 //! not decoration: every dirty-gated binding reader has to run after the
@@ -40,7 +43,6 @@ pub fn portable_app() -> App {
     app.world.init_resource::<ArraySignals>();
 
     app.add_plugin(lumen_input::InputPlugin);
-    app.add_plugin(lumen_text::TextEditPlugin);
     app.add_plugin(PressPlugin::default());
     app.add_plugin(ControlsPlugin);
     app.add_plugin(CheckboxPlugin);
@@ -93,6 +95,20 @@ fn install_bindings(app: &mut App) {
         commit_external_properties
             .after(ScriptSet::Dispatch)
             .before(ScriptSet::Derivations),
+    );
+    // What a script writes reaches the world here. The edges are the desktop's:
+    // a derivation and a binding reader are both gated on the one tick a write
+    // is dirty for, so applying after either is applying where neither looks.
+    app.add_systems(
+        TickStage::Systems,
+        lumen_scene::script_commands::apply_scene_script_commands
+            .after(ScriptSet::Tick)
+            .after(ScriptSet::Dispatch)
+            .before(ScriptSet::Derivations)
+            .before(apply_text_bindings)
+            .before(apply_checked_bindings)
+            .before(apply_value_bindings)
+            .before(spawn::reconcile_for_blocks),
     );
     app.add_systems(
         TickStage::Systems,
