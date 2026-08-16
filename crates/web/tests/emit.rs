@@ -386,6 +386,55 @@ fn a_hidden_branch_stays_in_the_document() {
 }
 
 #[test]
+fn a_dialog_is_open_when_the_signal_it_names_is_true() {
+    let dialog = element(
+        "dialog",
+        Attributes {
+            if_signal: Some("dialog_open".into()),
+            if_mode: IfModeSpec::Hide,
+            ..Attributes::default()
+        },
+        vec![element("label", labelled("Confirm?"), Vec::new())],
+    );
+    let page = PageSpec::new(
+        "index",
+        ir(element("root", Attributes::default(), vec![dialog])),
+    );
+    let mut spec = site(vec![page]);
+
+    let closed = page_html(&spec, "index.html");
+    assert!(
+        closed.contains(r#"<dialog class="lm-dialog" data-lm="0.0" data-lm-hidden="">"#),
+        "a dialog whose signal is false is neither open nor shown: {closed}"
+    );
+    assert!(closed.contains(">Confirm?<"), "its body stays mounted");
+
+    spec.pages[0].signals = SignalEnv::new().with_global("dialog_open", "true");
+    let shown = page_html(&spec, "index.html");
+    assert!(
+        shown.contains(r#"<dialog class="lm-dialog" data-lm="0.0" open="">"#),
+        "{shown}"
+    );
+    assert!(!shown.contains("data-lm-hidden"));
+}
+
+#[test]
+fn a_dialog_with_no_signal_is_always_open() {
+    let dialog = element(
+        "dialog",
+        Attributes::default(),
+        vec![element("label", labelled("Always"), Vec::new())],
+    );
+    let page = PageSpec::new(
+        "index",
+        ir(element("root", Attributes::default(), vec![dialog])),
+    );
+    let html = page_html(&site(vec![page]), "index.html");
+    assert!(html.contains(r#"open="""#), "{html}");
+    assert!(!html.contains("data-lm-hidden"));
+}
+
+#[test]
 fn a_rendered_branch_is_there_only_when_its_signal_holds() {
     let branch = element(
         "if",

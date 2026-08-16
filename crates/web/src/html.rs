@@ -11,7 +11,7 @@
 
 use std::collections::BTreeSet;
 
-use lumen_html::contract::{DATA_LM, DATA_LM_HIDDEN, NodePath};
+use lumen_html::contract::{DATA_LM, DATA_LM_HIDDEN, DIALOG_OPEN, NodePath};
 use lumen_html::style::{Emission, rewrite_property};
 use lumen_html::{escape_attr, escape_text, html_attrs, html_tag_for};
 use lumen_ir::css::computed_style_map;
@@ -84,6 +84,7 @@ fn emit_element(
     }
 
     let mut hidden = false;
+    let mut open = false;
     let mut children_are_content = true;
     match element.tag.as_str() {
         "if" => match element.attrs.if_mode {
@@ -92,6 +93,18 @@ fn emit_element(
             IfModeSpec::Hide => hidden = !branch_taken(element, walk.signals),
             IfModeSpec::Render => children_are_content = branch_taken(element, walk.signals),
         },
+        // `<dialog open="signal">` is an `<if mode="hide">` that is also a
+        // real dialog: `open` names the signal, not the state. The state is
+        // what a browser reads, so it is resolved here. A dialog with no
+        // signal is always showing, which is what it does on the desktop.
+        "dialog" => {
+            open = element
+                .attrs
+                .if_signal
+                .as_ref()
+                .is_none_or(|_| branch_taken(element, walk.signals));
+            hidden = !open;
+        }
         "for" => children_are_content = false,
         _ => {}
     }
@@ -122,6 +135,9 @@ fn emit_element(
         if !style.is_empty() {
             write_attr(out, "style", &style);
         }
+    }
+    if open {
+        write_attr(out, DIALOG_OPEN, "");
     }
     if hidden {
         write_attr(out, DATA_LM_HIDDEN, "");
