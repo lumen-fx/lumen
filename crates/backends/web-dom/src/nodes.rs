@@ -10,6 +10,10 @@
 //! and again whenever a reconciler mounts something. It binds what it has not
 //! bound yet and leaves the rest alone, so an `<if>` branch that turns on an
 //! hour later adopts the markup that was prerendered for it.
+//!
+//! What the first walk does take out of the page is a `<for>` row the app
+//! does not have. A list has a length, so a row past it belongs to no one and
+//! would sit in the page for as long as it is open.
 
 use std::collections::HashMap;
 
@@ -17,7 +21,7 @@ use bevy_ecs::prelude::*;
 use lumen_core::components::{
     InlineStyle, LumenAttributes, LumenClasses, LumenId, LumenTag, TextContent,
 };
-use lumen_html::contract::{DATA_LM, NodePath};
+use lumen_html::contract::{DATA_LM, NodePath, PathStep};
 use lumen_html::tags::{html_tag_for, lm_class};
 use lumen_scene::spawn::ForMarker;
 use wasm_bindgen::{JsCast, JsValue};
@@ -35,6 +39,10 @@ pub struct HydrationReport {
     pub adopted: u32,
     /// Nodes the walk built, because no element carried their path.
     pub created: u32,
+    /// Prerendered elements taken out of the page, because they stood for
+    /// `<for>` rows the app does not have. Anything other than zero means
+    /// the page was rendered from a longer list than the one running.
+    pub removed: u32,
 }
 
 /// The binding between the world and the document.
@@ -52,6 +60,10 @@ pub struct NodeTable {
     by_path: HashMap<String, Entity>,
     /// Prerendered elements no entity has claimed yet, by node path.
     unclaimed: HashMap<String, Element>,
+    /// How many row slots each bound `<for>` block has, by the block's node
+    /// path. A block's children are entirely the reconciler's to decide, so a
+    /// prerendered row past this count belongs to no one.
+    for_rows: HashMap<String, u32>,
     report: HydrationReport,
     /// True until the first walk finishes. During it, a node the page has no
     /// element for is a disagreement between the emitter and the runtime and
@@ -89,6 +101,7 @@ impl NodeTable {
             by_entity: HashMap::new(),
             by_path: HashMap::new(),
             unclaimed,
+            for_rows: HashMap::new(),
             report: HydrationReport::default(),
             hydrating: true,
         }
@@ -157,11 +170,70 @@ pub fn bind_new_nodes(
     );
     if table.hydrating {
         table.hydrating = false;
-        let HydrationReport { adopted, created } = table.report;
+        // After the walk, not before: an element is only an orphan once the
+        // reconcilers have said what the page holds.
+        sweep_orphan_rows(&mut table);
+        let HydrationReport {
+            adopted,
+            created,
+            removed,
+        } = table.report;
         web_sys::console::info_1(&JsValue::from_str(&format!(
-            "lumen: hydrated {adopted} nodes, built {created}"
+            "lumen: hydrated {adopted} nodes, built {created}, removed {removed}"
         )));
     }
+}
+
+/// Take out of the page every prerendered element standing for a `<for>` row
+/// the app does not have.
+///
+/// A document rendered from a three-row list and adopted by an app holding
+/// two would otherwise show the third row for as long as the page is open:
+/// nothing claims it, so nothing ever takes it away.
+///
+/// Only rows. An `<if>` branch that is not mounted yet keeps its markup,
+/// because a branch has no count to be past: the signal can turn true at any
+/// point and the runtime adopts what the page already has.
+fn sweep_orphan_rows(table: &mut NodeTable) {
+    let orphans: Vec<String> = table
+        .unclaimed
+        .keys()
+        .filter(|path| is_orphan_row(table, path))
+        .cloned()
+        .collect();
+    for path in orphans {
+        let Some(element) = table.unclaimed.remove(&path) else {
+            continue;
+        };
+        element.remove();
+        table.report.removed += 1;
+    }
+}
+
+/// True when `path` is a row slot, or sits inside one, that its `<for>` block
+/// does not have.
+fn is_orphan_row(table: &NodeTable, path: &str) -> bool {
+    let Ok(path) = path.parse::<NodePath>() else {
+        return false;
+    };
+    let mut prefix = NodePath::root();
+    // The first step is the page root, which `prefix` already is.
+    for step in path.steps().iter().skip(1) {
+        match step {
+            PathStep::Child(index) => prefix = prefix.child(*index),
+            PathStep::Row(index) => {
+                if table
+                    .for_rows
+                    .get(&prefix.to_string())
+                    .is_some_and(|slots| index >= slots)
+                {
+                    return true;
+                }
+                prefix = prefix.row(*index);
+            }
+        }
+    }
+    false
 }
 
 /// Bind every child of `entity`, then their children, depth first.
@@ -174,12 +246,20 @@ fn bind_children(
     children: &Query<&Children>,
     rows: &Query<&ForMarker>,
 ) {
-    let Ok(kids) = children.get(entity) else {
-        return;
-    };
     // A `<for>` block's children are its rows, and a row's path says so.
     // Everything else counts children.
     let is_for = rows.get(entity).is_ok();
+    let kids = children.get(entity).ok();
+    if is_for {
+        // Recorded even when the block has no children at all, which is a
+        // block whose list is empty and whose prerendered rows are all
+        // orphans.
+        let slots = kids.map_or(0, |kids| kids.len());
+        table.for_rows.insert(path.to_string(), slots as u32);
+    }
+    let Some(kids) = kids else {
+        return;
+    };
     // Where a newly built element goes: after the last sibling that has one.
     let mut previous: Option<Element> = None;
     for (index, child) in kids.iter().enumerate() {

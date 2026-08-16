@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use lumen_core::nav::{PATH_SIGNAL, SEGMENT_SIGNAL, resolve_path};
+use lumen_core::signals::ArrayItem;
 use lumen_html::contract::{
     DEFAULT_ARTIFACT_FILE, NavigationMode, ScriptFormat, ScriptRef, Seed, SeedValue,
 };
@@ -468,6 +469,11 @@ fn page_spec(
         .insert(SEGMENT_SIGNAL.to_string(), SeedValue::Str(String::new()));
     if prerender != WebPrerender::None {
         for (name, value) in seed {
+            if let WebSeedValue::Rows(rows) = value {
+                signals = signals.with_array(name.clone(), rows.iter().map(row_item).collect());
+                page_seed.arrays.insert(name.clone(), rows.clone());
+                continue;
+            }
             signals = signals.with_global(name.clone(), seed_text(value));
             page_seed
                 .globals
@@ -514,24 +520,35 @@ fn collect_signal_seeds(element: &Element, seed: &mut BTreeMap<String, WebSeedVa
     }
 }
 
-/// A seed value as the markup reads it: signals hold text.
+/// A seed value as the markup reads it: signals hold text. Rows are not a
+/// signal's value; [`page_spec`] puts them in the page's arrays instead.
 fn seed_text(value: &WebSeedValue) -> String {
     match value {
         WebSeedValue::Str(text) => text.clone(),
         WebSeedValue::Int(number) => number.to_string(),
         WebSeedValue::Float(number) => number.to_string(),
         WebSeedValue::Bool(flag) => flag.to_string(),
+        WebSeedValue::Rows(_) => String::new(),
     }
 }
 
-/// A seed value as the runtime reads it, with its type intact.
+/// A seed value as the runtime reads it, with its type intact. Rows go
+/// through [`Seed::arrays`], which keeps their shape.
 fn seed_value(value: WebSeedValue) -> SeedValue {
     match value {
         WebSeedValue::Str(text) => SeedValue::Str(text),
         WebSeedValue::Int(number) => SeedValue::I64(number),
         WebSeedValue::Float(number) => SeedValue::F64(number),
         WebSeedValue::Bool(flag) => SeedValue::Bool(flag),
+        WebSeedValue::Rows(_) => SeedValue::Str(String::new()),
     }
+}
+
+/// One `[web.seed]` row as the reconciler reads a row: a record of fields.
+fn row_item(row: &BTreeMap<String, String>) -> ArrayItem {
+    row.iter()
+        .map(|(field, value)| (field.clone(), value.clone()))
+        .collect()
 }
 
 /// The app's tree with every `translatable` element's text resolved for

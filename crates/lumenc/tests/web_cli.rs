@@ -463,3 +463,42 @@ fn the_command_says_what_it_cannot_do() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn a_list_named_in_the_config_is_in_the_document() {
+    let scratch = scratch("seed-rows");
+    let app = scratch.join("app");
+    std::fs::create_dir_all(&app).expect("create the app directory");
+    std::fs::write(
+        app.join("main.lmn"),
+        "<root>\n  <for each=\"todos\" key=\"id\">\n    <label class=\"todo\" \
+         text=\"{row.title}\" />\n  </for>\n</root>\n",
+    )
+    .expect("write the markup");
+    std::fs::write(
+        app.join("lumen.toml"),
+        "[app]\nid = \"com.lumen.tests.seed-rows\"\n\n[[web.seed.todos]]\ntitle = \"write it \
+         down\"\n\n[[web.seed.todos]]\ntitle = \"do it\"\n",
+    )
+    .expect("write the config");
+
+    let out = scratch.join("site");
+    web(app.to_str().expect("a scratch path is text"), &out, &[]);
+
+    let index = read(&out, "index.html");
+    check_documents(&out, "/");
+    assert!(
+        index.contains("write it down") && index.contains("do it"),
+        "the rows the config names are in the page: {index}"
+    );
+    assert!(
+        index.contains(r#"data-lm="0.0::0""#) && index.contains(r#"data-lm="0.0::1""#),
+        "each row carries the path the runtime looks it up by: {index}"
+    );
+    // The runtime starts from the same list the document shows, so the rows
+    // are adopted rather than built a second time.
+    assert!(
+        index.contains(r#""todos":[{"title":"write it down"}"#),
+        "{index}"
+    );
+}
