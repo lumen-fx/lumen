@@ -10,7 +10,7 @@
 //! status a static host would send.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 
 /// Longest request line and header block accepted, which is well past any
@@ -246,7 +246,15 @@ fn write_response(
     if !head_only {
         stream.write_all(body)?;
     }
-    stream.flush()
+    stream.flush()?;
+    // Say the response is over by closing this side, rather than by dropping
+    // the socket. Windows answers a close that still has unread bytes in its
+    // receive queue with a reset, and a peer reading the response then sees
+    // the connection fail instead of ending.
+    let _ = stream.shutdown(Shutdown::Write);
+    let mut rest = [0u8; 1024];
+    while matches!(stream.read(&mut rest), Ok(n) if n > 0) {}
+    Ok(())
 }
 
 /// A base path with the slashes it needs: one at each end.
