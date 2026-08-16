@@ -55,6 +55,12 @@ tools/             the release plumbing and the editor plugins
   node paths that name a node, and the manifest and seed types a site ships.
   The web emitter and the browser runtime both read it, so the page one writes
   is the page the other expects.
+- **lumen-scene**: the scene layer, with no host in it. Spawns the element tree
+  from the IR, reconciles the parts that depend on state (`<for>` rows, `<if>`
+  branches, dialogs), instantiates fragments, and resolves navigation between
+  pages. It registers nothing itself; a host adds the systems its own pipeline
+  needs. `lumen-runtime` re-exports it, and the browser runtime uses it
+  directly, which is what lets one scene run in a window and in a document.
 
 ### Backends
 
@@ -92,6 +98,11 @@ tools/             the release plumbing and the editor plugins
 - **lumen-async-tokio**: the async bridge. A tokio runtime published as the
   app's `SpawnService` and `TimerService`, plus a queue that carries results
   from tasks back into the main world.
+- **lumen-web-dom**: the browser as a render backend. Binds each entity to a
+  real element (adopting the one the prerendered page already has for it, or
+  building one where the page has none), projects what the world changes onto
+  the document, and turns DOM events into the messages a window backend would
+  have produced. It never lays out or paints: the page does both.
 
 ### Interaction and content
 
@@ -152,7 +163,7 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
 ### Assembly and tooling
 
 - **lumen-runtime**: the runtime core. The run loop, `RunOptions`, the default
-  plugin stack, hot reload, file-based pages, `lumen.toml` config, the skins,
+  plugin stack, hot reload, page discovery, `lumen.toml` config, the skins,
   and the loaders for both compiled artifacts and source. Links no parser.
 - **lumenc**: the compiler front end and the CLI. Markup and CSS parsers, the
   include and import resolver, the formatter, the scaffolder, and the
@@ -167,7 +178,8 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   out and the DOM is the scene. Scripts run on the host for the engine the app's
   manifest names; each host is a feature of the crate, and candela is the one
   the default build carries. It runs precompiled bytecode, so no compiler
-  reaches the page.
+  reaches the page. `boot()` is the whole entry point: it reads the document,
+  fetches what the manifest names, and starts the app.
 - **lumen**: the engine crate at the workspace root. It exports the C ABI, an
   opaque app handle, a tagged value type, and the node binding, and builds as
   the shared `liblumen` plus a static library.

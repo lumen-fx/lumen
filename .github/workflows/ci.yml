@@ -189,8 +189,10 @@ jobs:
             -p lumen-core \
             -p lumen-ir \
             -p lumen-html \
+            -p lumen-scene \
             -p lumen-script \
-            -p lumen-script-candela
+            -p lumen-script-candela \
+            -p lumen-web-dom
 
   # The browser runtime, end to end: build the module a page loads, measure it,
   # and run the suite in a real headless browser. A DOM shim is not an option
@@ -241,12 +243,19 @@ jobs:
         run: cargo build -p lumen-web-runtime --target wasm32-unknown-unknown --profile wasm-release
       # `wasm-opt` validates against the features it is told about, and the
       # ones rustc emits for this target are not all on by default.
+      #
+      # The pair comes out under the names a site refers to them by, because
+      # that is what a toolchain ships and what `lumenc web --lib-dir` looks
+      # for. The page tells the module where its wasm is, so renaming it past
+      # the loader's default costs nothing.
       - name: Generate the JS bindings and optimise
         if: needs.changes.outputs.rust == 'true'
         run: |
           set -euo pipefail
-          wasm-bindgen --target web --no-typescript --out-dir web-dist \
+          wasm-bindgen --target web --no-typescript --out-name lumen-web \
+            --out-dir web-dist \
             target/wasm32-unknown-unknown/wasm-release/lumen_web_runtime.wasm
+          mv web-dist/lumen-web_bg.wasm web-dist/lumen-web.wasm
           wasm-opt -Oz \
             --enable-bulk-memory \
             --enable-bulk-memory-opt \
@@ -255,14 +264,14 @@ jobs:
             --enable-mutable-globals \
             --enable-reference-types \
             --enable-multivalue \
-            web-dist/lumen_web_runtime_bg.wasm \
-            -o web-dist/lumen_web_runtime_bg.wasm
+            web-dist/lumen-web.wasm \
+            -o web-dist/lumen-web.wasm
       - name: Record the module size
         if: needs.changes.outputs.rust == 'true'
         run: |
           set -euo pipefail
-          bytes=$(stat -c%s web-dist/lumen_web_runtime_bg.wasm)
-          gzipped=$(gzip -9 -c web-dist/lumen_web_runtime_bg.wasm | wc -c)
+          bytes=$(stat -c%s web-dist/lumen-web.wasm)
+          gzipped=$(gzip -9 -c web-dist/lumen-web.wasm | wc -c)
           {
             echo "| lumen-web-runtime | bytes |"
             echo "| --- | --- |"
@@ -287,3 +296,12 @@ jobs:
           set -euo pipefail
           export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver"
           cargo test -p lumen-web-runtime --target wasm32-unknown-unknown
+          cargo test -p lumen-web-dom --target wasm32-unknown-unknown
+      # Both halves at once: emit an app with the runtime built above, serve
+      # it, and open it in a browser. Neither crate's own tests can see a
+      # disagreement between the emitter and the runtime, because neither has
+      # the other; this step is where a page that loads to a console error
+      # instead of an app stops being indistinguishable from one that works.
+      - name: Open an emitted app in a browser
+        if: needs.changes.outputs.rust == 'true'
+        run: .github/scripts/web-page-smoke.sh web-dist

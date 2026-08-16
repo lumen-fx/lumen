@@ -54,6 +54,12 @@ building them again, so nothing moves when it starts. From then on the app
 behaves as it does on the desktop, and a row or a branch that appears later
 is built from the same compiled app the desktop reads.
 
+Input comes from the browser and behaviour stays Lumen's. A click on a tab, a
+toggle or a checkbox reaches the same widget code a desktop app runs, and what
+it changes reaches the page as an attribute the stylesheet already matches.
+Typing in a bound `<input>` writes its signal, so a `bind-text` label next to
+it follows along.
+
 The browser runtime is not published yet. Until it is, a build says so and
 emits the site without it: the pages read, the links work, and nothing runs.
 Point `--lib-dir` at a directory holding `lumen-web.wasm` and `lumen-web.js`
@@ -163,6 +169,14 @@ means anything without an absolute address.
 - A list built with `<for>` emits its anchor and no rows; the rows are built
   when the app runs.
 - A script written in Rhai or Lua does not run in the browser. candela does.
+- A candela script loads and runs, but what it writes does not reach the page
+  yet: a signal a handler sets, a value a `derive()` computes, and an element a
+  script creates all stay inside the script. Markup-driven state, the widget
+  primitives and `bind-*` work.
+- Keyboard input other than typing into a focused field does not reach the app,
+  so a keyboard shortcut and arrow-key navigation between tabs do not work.
+- Following a link loads the next document. Soft navigation, which swaps the
+  page in place and keeps the app running, is not wired up.
 
 ## Reference
 

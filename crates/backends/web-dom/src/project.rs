@@ -175,11 +175,23 @@ pub fn project_control_state(
             set_flag(element, name, on);
         }
     };
+    // What Lumen calls selected is what a radio calls checked, and the markup
+    // wrote a starting value there. Moving both keeps the mark from claiming
+    // a control is on after the one beside it took over.
+    let select = |entity: Entity, on: bool| {
+        let Some(element) = table.element(entity) else {
+            return;
+        };
+        set_flag(element, DATA_LM_SELECTED, on);
+        if matches!(element.get_attribute("type").as_deref(), Some("radio")) {
+            set_flag(element, DATA_LM_CHECKED, on);
+        }
+    };
     for entity in &selected {
-        flag(entity, DATA_LM_SELECTED, true);
+        select(entity, true);
     }
     for entity in unselected.read() {
-        flag(entity, DATA_LM_SELECTED, false);
+        select(entity, false);
     }
     for entity in &disabled {
         flag(entity, DATA_LM_DISABLED, true);
