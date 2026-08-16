@@ -19,11 +19,14 @@ use bevy_ecs::prelude::*;
 use lumen_core::components::{LumenClasses, SliderValue, TextContent, Visible};
 use lumen_core::prelude::{App, TickStage};
 use lumen_core::property_store::PropertyStore;
+use lumen_core::signals::{ArrayItem, ArraySignals};
 use lumen_html::contract::{DATA_LM, DATA_LM_HIDDEN};
-use lumen_ir::layout_ir::{Attributes, Element as IrElement, IfModeSpec, LayoutIR};
+use lumen_ir::layout_ir::{
+    Attributes, Element as IrElement, IfModeSpec, InterpolationSlot, LayoutIR,
+};
 use lumen_scene::spawn;
 use lumen_scene::spawn::SpawnIntoWorld;
-use lumen_web::{PageSpec, SiteSpec, WebSpec};
+use lumen_web::{PageSpec, SignalEnv, SiteSpec, WebSpec};
 use lumen_web_dom::{NodeTable, WebDomPlugin};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
@@ -68,15 +71,24 @@ fn tree() -> LayoutIR {
 
 /// Emit `ir` the way `lumenc web` would, and put the result in the document.
 fn prerender(ir: LayoutIR) -> Element {
+    prerender_with(ir, SignalEnv::new())
+}
+
+/// The same, for a page rendered with state in it.
+fn prerender_with(ir: LayoutIR, signals: SignalEnv) -> Element {
+    let mut page = PageSpec::new("index", ir);
+    page.signals = signals;
     let spec = SiteSpec {
-        pages: vec![PageSpec::new("index", ir)],
+        pages: vec![page],
         web: WebSpec {
             runtime: false,
             ..WebSpec::default()
         },
         ..SiteSpec::default()
     };
-    let html = lumen_web::html::emit_tree(&spec.pages[0], &spec).expect("the tree emits");
+    let mut warnings = Vec::new();
+    let html =
+        lumen_web::html::emit_tree(&spec.pages[0], &spec, &mut warnings).expect("the tree emits");
 
     let document = web_sys::window().unwrap().document().unwrap();
     let host = document.create_element("div").unwrap();
@@ -99,6 +111,11 @@ fn hydrate(ir: LayoutIR, root: Element) -> App {
 fn report(app: &App) -> (u32, u32) {
     let table = app.world.non_send::<NodeTable>();
     (table.report().adopted, table.report().created)
+}
+
+/// What the walk took out of the page because nothing claimed it.
+fn removed(app: &App) -> u32 {
+    app.world.non_send::<NodeTable>().report().removed
 }
 
 #[wasm_bindgen_test]
@@ -405,4 +422,168 @@ fn record_clicks(
     for click in clicks.read() {
         seen.0 = Some(click.entity);
     }
+}
+
+/// A label whose text is the row's `name`, which is what a row template is
+/// in nearly every list an app writes.
+fn row_label(text: &str) -> IrElement {
+    let mut label = element("label", Some(text), Vec::new());
+    label.interpolations = vec![
+        InterpolationSlot::Row("name".to_string()),
+        InterpolationSlot::RowIndex,
+    ];
+    label
+}
+
+/// A page whose only content is a `<for>` over `items` with `body` as its
+/// row template.
+fn list_tree(body: Vec<IrElement>) -> LayoutIR {
+    let mut block = element("for", None, body);
+    block.attrs.each = Some("items".to_string());
+    LayoutIR {
+        root: element("root", None, vec![block]),
+        ..LayoutIR::default()
+    }
+}
+
+/// The rows of the `items` array, one `name` field each.
+fn rows(names: &[&str]) -> Vec<ArrayItem> {
+    names
+        .iter()
+        .map(|name| ArrayItem::from([("name".to_string(), (*name).to_string())]))
+        .collect()
+}
+
+/// Spawn `ir` into an app holding `names` in `items`, reconcile its rows, and
+/// settle it.
+fn hydrate_list(ir: LayoutIR, root: Element, names: &[&str]) -> App {
+    let mut app = App::new();
+    app.extract_fns.clear();
+    app.world.init_resource::<PropertyStore>();
+    app.world.init_resource::<ArraySignals>();
+    app.world
+        .resource_mut::<ArraySignals>()
+        .set("items", rows(names));
+    let root_entity = ir.spawn_into(&mut app.world);
+    app.add_plugin(WebDomPlugin { root, root_entity });
+    app.add_systems(TickStage::Systems, spawn::reconcile_for_blocks);
+    app.tick();
+    app
+}
+
+/// The text of every element the `<for>` block holds, in page order.
+fn row_texts(root: &Element) -> Vec<String> {
+    let block = root
+        .query_selector(".lm-for")
+        .unwrap()
+        .expect("the block is in the page");
+    let mut texts = Vec::new();
+    let mut child = block.first_element_child();
+    while let Some(element) = child {
+        texts.push(element.text_content().unwrap_or_default());
+        child = element.next_element_sibling();
+    }
+    texts
+}
+
+#[wasm_bindgen_test]
+fn the_rows_a_page_was_rendered_with_are_adopted_untouched() {
+    let signals = SignalEnv::new().with_array("items", rows(&["one", "two", "three"]));
+    let root = prerender_with(list_tree(vec![row_label("{row.name}")]), signals);
+    let before = root.outer_html();
+
+    let app = hydrate_list(
+        list_tree(vec![row_label("{row.name}")]),
+        root.clone(),
+        &["one", "two", "three"],
+    );
+
+    assert_eq!(
+        report(&app),
+        (5, 0),
+        "the root, the block and one label per row all bound to markup already in the page"
+    );
+    assert_eq!(removed(&app), 0, "and nothing was left over");
+    assert_eq!(
+        root.outer_html(),
+        before,
+        "adopting the rows changed nothing in the page"
+    );
+    assert_eq!(row_texts(&root), vec!["one", "two", "three"]);
+}
+
+#[wasm_bindgen_test]
+fn a_shorter_list_takes_the_rows_the_page_has_too_many_of_out() {
+    let signals = SignalEnv::new().with_array("items", rows(&["one", "two", "three"]));
+    let root = prerender_with(list_tree(vec![row_label("{row.name}")]), signals);
+
+    let app = hydrate_list(
+        list_tree(vec![row_label("{row.name}")]),
+        root.clone(),
+        &["one", "two"],
+    );
+
+    assert_eq!(
+        report(&app),
+        (4, 0),
+        "the two rows the app has were adopted"
+    );
+    assert_eq!(removed(&app), 1, "and the third was taken out of the page");
+    assert_eq!(
+        row_texts(&root),
+        vec!["one", "two"],
+        "no orphan is left showing a row the app does not have"
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_longer_list_builds_the_rows_the_page_is_missing_in_order() {
+    let signals = SignalEnv::new().with_array("items", rows(&["one", "two", "three"]));
+    let root = prerender_with(list_tree(vec![row_label("{row.name}")]), signals);
+
+    let app = hydrate_list(
+        list_tree(vec![row_label("{row.name}")]),
+        root.clone(),
+        &["one", "two", "three", "four"],
+    );
+
+    assert_eq!(report(&app), (5, 1), "the fourth row is the one built");
+    assert_eq!(removed(&app), 0);
+    assert_eq!(
+        row_texts(&root),
+        vec!["one", "two", "three", "four"],
+        "the built row goes after the last adopted one, not ahead of it"
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_two_element_row_body_adopts_both_elements_of_every_row() {
+    let body = vec![row_label("{row.name}"), row_label("#{$index}")];
+    let signals = SignalEnv::new().with_array("items", rows(&["one", "two"]));
+    let root = prerender_with(list_tree(body.clone()), signals);
+    let before = root.outer_html();
+
+    let app = hydrate_list(list_tree(body), root.clone(), &["one", "two"]);
+
+    assert_eq!(
+        report(&app),
+        (6, 0),
+        "a row is as many elements as its template, and every one of them was adopted"
+    );
+    assert_eq!(removed(&app), 0);
+    assert_eq!(
+        root.outer_html(),
+        before,
+        "which is what a row's identity being its flat slot means: 0.0::2 is row two's first \
+         element, not row two"
+    );
+    assert_eq!(row_texts(&root), vec!["one", "#0", "two", "#1"]);
+    assert_eq!(
+        root.query_selector(&format!("[{DATA_LM}=\"0.0::2\"]"))
+            .unwrap()
+            .expect("the third slot")
+            .text_content()
+            .as_deref(),
+        Some("two")
+    );
 }

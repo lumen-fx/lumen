@@ -628,6 +628,10 @@ pub enum WebSeedValue {
     Float(f64),
     /// Text.
     Str(String),
+    /// The rows of an array signal, written as an array of tables. This is
+    /// what puts a list in a page that nothing has run yet: a `<for>` over
+    /// this name is emitted with these rows in it.
+    Rows(Vec<BTreeMap<String, String>>),
 }
 
 /// `[web] css` - how a page's styling reaches the browser.

@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use lumen_html::contract::{
     DEFAULT_CSS_FILE, DEFAULT_MANIFEST_FILE, LM_CONTRACT_VERSION, Manifest, Seed, SeedValue,
 };
-use lumen_ir::layout_ir::{Attributes, Element, FragmentUse, IfModeSpec, LayoutIR};
+use lumen_ir::layout_ir::{
+    Attributes, Element, FragmentUse, IfModeSpec, InterpolationSlot, LayoutIR,
+};
 use lumen_web::{
     EmitError, HostRewrite, LocaleSpec, PageSpec, SignalEnv, Site, SiteSpec, WebSpec, emit,
 };
@@ -500,8 +502,19 @@ fn a_rendered_branch_is_there_only_when_its_signal_holds() {
     assert_eq!(node_paths(&taken), vec!["0", "0.0", "0.0.0"]);
 }
 
-#[test]
-fn a_for_block_emits_its_anchor_and_no_rows() {
+/// A row template that reads the row's `name` and the iteration index.
+fn row_label(text: &str) -> Element {
+    let mut label = element("label", labelled(text), Vec::new());
+    label.interpolations = vec![
+        InterpolationSlot::Row("name".to_string()),
+        InterpolationSlot::RowIndex,
+    ];
+    label
+}
+
+/// A page whose root holds a `<for>` over `items` with `body` as its row
+/// template.
+fn list_page(body: Vec<Element>) -> PageSpec {
     let block = element(
         "for",
         Attributes {
@@ -509,19 +522,131 @@ fn a_for_block_emits_its_anchor_and_no_rows() {
             key: Some("id".into()),
             ..Attributes::default()
         },
-        vec![element("label", labelled("{row.name}"), Vec::new())],
+        body,
+    );
+    PageSpec::new(
+        "index",
+        ir(element("root", Attributes::default(), vec![block])),
+    )
+}
+
+/// The `items` rows, one `name` field each.
+fn items(names: &[&str]) -> Vec<HashMap<String, String>> {
+    names
+        .iter()
+        .map(|name| HashMap::from([("name".to_string(), (*name).to_string())]))
+        .collect()
+}
+
+#[test]
+fn a_for_block_with_nothing_to_show_emits_its_anchor_alone() {
+    let spec = site(vec![list_page(vec![row_label("{row.name}")])]);
+    let html = page_html(&spec, "index.html");
+    assert!(html.contains(r#"<div class="lm-for" data-lm="0.0"></div>"#));
+    assert!(!html.contains("row.name"));
+}
+
+#[test]
+fn the_rows_a_page_is_rendered_with_are_in_the_document() {
+    let mut spec = site(vec![list_page(vec![row_label("{row.name} #{$index}")])]);
+    spec.pages[0].signals = SignalEnv::new().with_array("items", items(&["one", "two"]));
+
+    let html = page_html(&spec, "index.html");
+
+    assert!(
+        html.contains(r#"<span class="lm-label" data-lm="0.0::0">one #0</span>"#),
+        "the row's own value and its index are both written in: {html}"
+    );
+    assert!(html.contains(r#"<span class="lm-label" data-lm="0.0::1">two #1</span>"#));
+    assert_eq!(node_paths(&html), vec!["0", "0.0", "0.0::0", "0.0::1"]);
+    assert_well_formed(&html);
+}
+
+#[test]
+fn a_row_element_is_numbered_by_its_flat_slot() {
+    let body = vec![row_label("{row.name}"), row_label("#{$index}")];
+    let mut spec = site(vec![list_page(body)]);
+    spec.pages[0].signals = SignalEnv::new().with_array("items", items(&["one", "two"]));
+
+    let html = page_html(&spec, "index.html");
+
+    assert_eq!(
+        node_paths(&html),
+        vec!["0", "0.0", "0.0::0", "0.0::1", "0.0::2", "0.0::3"],
+        "a row is as many slots as its template has elements, so row two starts at slot 2"
+    );
+    assert!(html.contains(r#"data-lm="0.0::2">two<"#));
+    assert!(html.contains(r#"data-lm="0.0::3">#1<"#));
+}
+
+#[test]
+fn a_row_value_is_escaped_like_any_other_text() {
+    let mut spec = site(vec![list_page(vec![row_label("{row.name}")])]);
+    spec.pages[0].signals =
+        SignalEnv::new().with_array("items", items(&["<script>alert(\"x\")</script>"]));
+
+    let html = page_html(&spec, "index.html");
+
+    assert!(!html.contains("<script>alert"), "no row value is markup");
+    assert!(html.contains("&lt;script&gt;alert(\"x\")&lt;/script&gt;"));
+    assert_well_formed(&html);
+}
+
+#[test]
+fn a_virtualized_block_emits_no_rows_and_says_so() {
+    let block = element(
+        "for",
+        Attributes {
+            each: Some("items".into()),
+            virtualized: true,
+            ..Attributes::default()
+        },
+        vec![row_label("{row.name}")],
     );
     let page = PageSpec::new(
         "index",
         ir(element("root", Attributes::default(), vec![block])),
     );
-    let rows = vec![HashMap::from([("name".to_string(), "one".to_string())])];
     let mut spec = site(vec![page]);
-    spec.pages[0].signals = SignalEnv::new().with_array("items", rows);
+    spec.pages[0].signals = SignalEnv::new().with_array("items", items(&["one", "two"]));
 
-    let html = page_html(&spec, "index.html");
-    assert!(html.contains(r#"<div class="lm-for" data-lm="0.0"></div>"#));
-    assert!(!html.contains("row.name"));
+    let site = emitted(&spec);
+    let html = site
+        .file("index.html")
+        .expect("the page emits")
+        .contents
+        .clone();
+
+    assert_eq!(
+        node_paths(&html),
+        vec!["0", "0.0"],
+        "which rows are in view is not known until the page is scrolled"
+    );
+    assert!(
+        site.warnings
+            .iter()
+            .any(|warning| warning.contains("virtualized")),
+        "and the build says the list is empty on purpose: {:?}",
+        site.warnings
+    );
+}
+
+#[test]
+fn a_row_field_the_records_do_not_carry_is_reported() {
+    let mut label = element("label", labelled("{row.title}"), Vec::new());
+    label.interpolations = vec![InterpolationSlot::Row("title".to_string())];
+    let mut spec = site(vec![list_page(vec![label])]);
+    spec.pages[0].signals = SignalEnv::new().with_array("items", items(&["one"]));
+
+    let site = emitted(&spec);
+
+    assert!(
+        site.warnings
+            .iter()
+            .any(|warning| warning.contains("title")),
+        "a field no record carries is a build warning: {:?}",
+        site.warnings
+    );
 }
 
 #[test]

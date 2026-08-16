@@ -9,6 +9,7 @@ use lumen_html::contract::{
     NavigationMode, ScriptRef, Seed,
 };
 use lumen_i18n::LanguageIdentifier;
+use lumen_ir::interpolate::Globals;
 use lumen_ir::layout_ir::LayoutIR;
 
 /// The signal state a page is rendered with.
@@ -63,6 +64,14 @@ impl SignalEnv {
     /// would disagree with the runtime that adopts it.
     pub fn is_truthy(&self, name: &str) -> bool {
         self.global(name).is_some_and(signal_is_truthy)
+    }
+}
+
+/// A `<for>` row's placeholders read the same globals the rest of the page
+/// does, through the resolver both halves of the web target share.
+impl Globals for SignalEnv {
+    fn global(&self, name: &str) -> Option<String> {
+        self.globals.get(name).cloned()
     }
 }
 
