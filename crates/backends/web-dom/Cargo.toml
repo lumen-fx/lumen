@@ -36,6 +36,7 @@ web-sys = { workspace = true, features = [
     "Element",
     "Event",
     "EventTarget",
+    "HtmlDialogElement",
     "HtmlElement",
     "HtmlInputElement",
     "HtmlTextAreaElement",
@@ -54,3 +55,7 @@ web-sys = { workspace = true, features = [
 # copy would agree with itself while the two halves drifted apart.
 lumen-web = { path = "../../web", version = "0.0.3" }
 wasm-bindgen-test.workspace = true
+# A test raises an event the way the browser raises it, which takes a
+# dictionary nothing in the crate itself constructs. Naming it here keeps it
+# out of the module a page loads.
+web-sys = { workspace = true, features = ["EventInit"] }

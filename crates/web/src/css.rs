@@ -13,10 +13,12 @@
 //! What each property becomes is [`lumen_html::style`]'s to say. This
 //! module decides where the result goes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use lumen_core::palette::Palette;
-use lumen_html::style::{Emission, WebDecl, rewrite_property};
+use lumen_html::style::{
+    Emission, WebDecl, is_bare_number, is_length_property, lengths, rewrite_property,
+};
 use lumen_html::web_names;
 use lumen_ir::css::{
     Origin, Rule, Specificity, Stylesheet, media_query_to_css, palette_root_css, selector_to_web,
@@ -51,9 +53,41 @@ pub fn styles_css(sheet: Option<&Stylesheet>, mode: CssMode) -> String {
     out
 }
 
+/// What a sheet's own custom properties leave the emitter unable to write
+/// out correctly.
+///
+/// A token the sheet uses as a length in one place and as a plain number in
+/// another has no one value that reads right in both, so it is written as it
+/// was authored and the length uses are the ones that break.
+#[must_use]
+pub fn token_warnings(sheet: Option<&Stylesheet>, mode: CssMode) -> Vec<String> {
+    if mode == CssMode::Computed {
+        return Vec::new();
+    }
+    let Some(sheet) = sheet else {
+        return Vec::new();
+    };
+    Tokens::of(sheet)
+        .ambiguous
+        .iter()
+        .map(|name| {
+            format!(
+                "`{name}` is used both where a bare number means pixels and where it means a \
+                 plain number, so it is written out as authored; give the two uses their own \
+                 tokens, or write this one with a unit"
+            )
+        })
+        .collect()
+}
+
 /// Every rule of `sheet`, in cascade order.
 pub fn rules_css(sheet: &Stylesheet) -> String {
-    let mut blocks: Vec<Block> = sheet.rules.iter().flat_map(blocks_for).collect();
+    let tokens = Tokens::of(sheet);
+    let mut blocks: Vec<Block> = sheet
+        .rules
+        .iter()
+        .flat_map(|rule| blocks_for(rule, &tokens))
+        .collect();
     blocks.sort_by_key(|block| block.key);
 
     let mut out = String::new();
@@ -99,12 +133,134 @@ struct Block {
 /// separated by the order they are written in, which is this.
 type SortKey = (Origin, Specificity, usize, usize);
 
+/// The custom properties of one sheet that hold a length.
+///
+/// Lumen reads a bare number in a length as pixels, so an app writes
+/// `--radius: 16` and means 16 pixels. A browser reads the same declaration
+/// as the number 16, and drops `border-radius: var(--radius)` as invalid.
+/// The unit has to go on somewhere, and the definition is the only place it
+/// can go: a use site is `var(--radius)` whatever the token holds, and the
+/// same token reaches inline styles and the nodes the browser runtime builds,
+/// none of which the stylesheet can reach back into.
+///
+/// A token counts as a length when the sheet uses it in a property whose
+/// bare numbers are pixels, and never in one whose are not. A token used
+/// both ways cannot be both, so it is left alone and reported: whichever
+/// unit went on would be wrong somewhere.
+#[derive(Debug, Default)]
+pub struct Tokens {
+    lengths: BTreeSet<String>,
+    /// Tokens the sheet uses as a length in one place and as a plain number
+    /// in another.
+    pub ambiguous: BTreeSet<String>,
+}
+
+impl Tokens {
+    /// Read `sheet` for the custom properties that hold a length.
+    #[must_use]
+    pub fn of(sheet: &Stylesheet) -> Self {
+        let mut lengths = BTreeSet::new();
+        let mut others = BTreeSet::new();
+        // Only a token written as a bare number is in question at all: a
+        // colour or a value that already carries its unit reads the same
+        // wherever it lands.
+        let mut bare: BTreeSet<String> = BTreeSet::new();
+        let mut united: BTreeSet<String> = BTreeSet::new();
+        // `--a: var(--b)` passes whatever `--a` is on to `--b`, and the use
+        // that decides `--a` may be read after this definition, so the two
+        // sets are grown to a fixed point rather than in one pass.
+        let mut aliases: Vec<(String, Vec<String>)> = Vec::new();
+        for rule in &sheet.rules {
+            for declaration in &rule.declarations {
+                let referenced = var_names(&declaration.value);
+                if declaration.name.starts_with("--") {
+                    if !referenced.is_empty() {
+                        aliases.push((declaration.name.clone(), referenced));
+                    }
+                    let set = if is_bare_number(&declaration.value) {
+                        &mut bare
+                    } else {
+                        &mut united
+                    };
+                    set.insert(declaration.name.clone());
+                    continue;
+                }
+                let set = if is_length_property(&declaration.name) {
+                    &mut lengths
+                } else {
+                    &mut others
+                };
+                set.extend(referenced);
+            }
+        }
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (name, referenced) in &aliases {
+                for set in [&mut lengths, &mut others] {
+                    if !set.contains(name) {
+                        continue;
+                    }
+                    for target in referenced {
+                        changed |= set.insert(target.clone());
+                    }
+                }
+            }
+        }
+        // A token defined twice, once bare and once with a unit, is already
+        // written the way its author meant it in one of the two places; only
+        // one written bare everywhere is missing anything.
+        let candidates: BTreeSet<String> = bare.difference(&united).cloned().collect();
+        let ambiguous: BTreeSet<String> = lengths
+            .intersection(&others)
+            .filter(|name| candidates.contains(*name))
+            .cloned()
+            .collect();
+        Self {
+            lengths: lengths
+                .difference(&others)
+                .filter(|name| candidates.contains(*name))
+                .cloned()
+                .collect(),
+            ambiguous,
+        }
+    }
+
+    /// The value `declaration` is written with: a token that holds a length
+    /// gains the unit its numbers were written without.
+    fn value_of(&self, name: &str, value: &str) -> String {
+        if self.lengths.contains(name) {
+            lengths(value)
+        } else {
+            value.to_string()
+        }
+    }
+}
+
+/// The custom properties `value` reads, in the order they appear.
+fn var_names(value: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut rest = value;
+    while let Some(at) = rest.find("var(") {
+        rest = &rest[at + "var(".len()..];
+        let end = rest
+            .find(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+            .unwrap_or(rest.len());
+        let (name, tail) = rest.split_at(end);
+        if name.starts_with("--") {
+            names.push(name.to_string());
+        }
+        rest = tail;
+    }
+    names
+}
+
 /// The blocks one source rule becomes.
 ///
 /// A rule whose selectors do not all weigh the same is split, one block
 /// per weight, because a single position in the file cannot stand for two
 /// places in the cascade. Selectors that do weigh the same stay together.
-fn blocks_for(rule: &Rule) -> Vec<Block> {
+fn blocks_for(rule: &Rule, tokens: &Tokens) -> Vec<Block> {
     let names = web_names();
     let mut groups: BTreeMap<Specificity, Vec<String>> = BTreeMap::new();
     let mut order: Vec<Specificity> = Vec::new();
@@ -120,7 +276,7 @@ fn blocks_for(rule: &Rule) -> Vec<Block> {
     }
 
     let media = rule.media.as_ref().map(media_query_to_css);
-    let (plain, states) = split_declarations(rule);
+    let (plain, states) = split_declarations(rule, tokens);
     order
         .into_iter()
         .enumerate()
@@ -159,7 +315,10 @@ fn blocks_for(rule: &Rule) -> Vec<Block> {
 /// ones that need a rule of their own, each keeping source order.
 type Declarations = Vec<(WebDecl, bool)>;
 
-fn split_declarations(rule: &Rule) -> (Declarations, Vec<(&'static str, Declarations)>) {
+fn split_declarations(
+    rule: &Rule,
+    tokens: &Tokens,
+) -> (Declarations, Vec<(&'static str, Declarations)>) {
     let mut plain: Declarations = Vec::new();
     let mut states: Vec<(&'static str, Declarations)> = Vec::new();
     for decl in &rule.declarations {
@@ -167,7 +326,10 @@ fn split_declarations(rule: &Rule) -> (Declarations, Vec<(&'static str, Declarat
             Emission::Plain(written) => {
                 plain.extend(written.into_iter().map(|d| (d, decl.important)));
             }
-            Emission::CustomProp(written) => plain.push((written, decl.important)),
+            Emission::CustomProp(mut written) => {
+                written.value = tokens.value_of(&written.name, &written.value);
+                plain.push((written, decl.important));
+            }
             Emission::StateRule { pseudo, decls } => {
                 let written = decls.into_iter().map(|d| (d, decl.important));
                 match states.iter_mut().find(|(p, _)| *p == pseudo) {

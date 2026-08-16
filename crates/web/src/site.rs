@@ -43,6 +43,7 @@ pub fn emit(spec: &SiteSpec) -> Result<Site, EmitError> {
     // Documents sit under this tree's locale prefix; what the whole site
     // shares sits at the root and is emitted with the root tree.
     let prefix = spec.locale.prefix();
+    let mut warnings = Vec::new();
     let mut files = Vec::with_capacity(spec.pages.len() + 4);
     for page in &spec.pages {
         files.push(OutputFile::new(
@@ -59,6 +60,7 @@ pub fn emit(spec: &SiteSpec) -> Result<Site, EmitError> {
             spec.web.css.clone(),
             css::styles_css(stylesheet(spec), spec.web.css_mode),
         ));
+        warnings.extend(css::token_warnings(stylesheet(spec), spec.web.css_mode));
         let manifest = serde_json::to_string_pretty(&manifest(spec))?;
         files.push(OutputFile::new(
             DEFAULT_MANIFEST_FILE,
@@ -75,6 +77,7 @@ pub fn emit(spec: &SiteSpec) -> Result<Site, EmitError> {
     Ok(Site {
         files,
         assets: spec.assets.clone(),
+        warnings,
     })
 }
 

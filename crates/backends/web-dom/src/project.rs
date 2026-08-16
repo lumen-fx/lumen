@@ -16,11 +16,10 @@ use lumen_core::components::{
     Disabled, InlineStyle, LumenAttributes, LumenClasses, LumenTag, Selected, SliderValue,
     TextContent, Toggleable, Visible,
 };
-use lumen_html::contract::{
-    DATA_LM_CHECKED, DATA_LM_DISABLED, DATA_LM_HIDDEN, DATA_LM_SELECTED, DIALOG_OPEN,
-};
+use lumen_html::contract::{DATA_LM_CHECKED, DATA_LM_DISABLED, DATA_LM_HIDDEN, DATA_LM_SELECTED};
+use lumen_html::is_disableable;
 use wasm_bindgen::JsCast;
-use web_sys::{Element, HtmlInputElement, HtmlTextAreaElement};
+use web_sys::{Element, HtmlDialogElement, HtmlInputElement, HtmlTextAreaElement};
 
 use crate::nodes::NodeTable;
 
@@ -154,22 +153,43 @@ pub fn project_inline_style(
 /// Project whether a node is shown.
 ///
 /// A hidden node keeps its markup and loses its box, which is what an
-/// `<if mode="hide">` branch and a closed dialog both are. A dialog says it
-/// twice: the attribute the stylesheet matches, and the `open` a browser and
-/// a screen reader read.
+/// `<if mode="hide">` branch is.
+///
+/// A dialog is the browser's own: showing it modally is what puts it in the
+/// top layer over everything else on the page, makes the rest of the
+/// document inert, and gives Escape somewhere to land. All of that is what a
+/// Lumen dialog is on the desktop, so none of it is written here; the
+/// element is told to show or to close and it maintains its own `open`.
 pub fn project_visibility(
     table: NonSend<NodeTable>,
-    changed: Query<(Entity, &Visible, &LumenTag), Changed<Visible>>,
+    changed: Query<(Entity, &Visible), Changed<Visible>>,
 ) {
-    for (entity, visible, tag) in &changed {
+    for (entity, visible) in &changed {
         let Some(element) = table.element(entity) else {
             continue;
         };
-        set_flag(element, DATA_LM_HIDDEN, !visible.0);
-        if &*tag.0 == "dialog" {
-            set_flag(element, DIALOG_OPEN, visible.0);
+        match element.dyn_ref::<HtmlDialogElement>() {
+            Some(dialog) => show_dialog(dialog, visible.0),
+            None => set_flag(element, DATA_LM_HIDDEN, !visible.0),
         }
     }
+}
+
+/// Show a dialog modally, or close it.
+///
+/// A page rendered with the dialog already showing carries a plain `open`,
+/// because static markup has no way to say modal. Showing it modally is
+/// refused while it is open at all, so the one the document came with is
+/// closed first; on every later show there is nothing to close.
+fn show_dialog(dialog: &HtmlDialogElement, show: bool) {
+    if !show {
+        dialog.close();
+        return;
+    }
+    if dialog.open() {
+        dialog.close();
+    }
+    let _ = dialog.show_modal();
 }
 
 /// Project the states a Lumen widget carries as components and a browser
@@ -207,11 +227,24 @@ pub fn project_control_state(
     for entity in unselected.read() {
         select(entity, false);
     }
+    // A control the browser knows how to disable is disabled, which is what
+    // takes it out of the tab order and stops it answering a click at all.
+    // The mark beside it is the one the stylesheet reads, and every other
+    // kind of element has only that.
+    let disable = |entity: Entity, on: bool| {
+        let Some(element) = table.element(entity) else {
+            return;
+        };
+        set_flag(element, DATA_LM_DISABLED, on);
+        if is_disableable(&element.tag_name().to_ascii_lowercase()) {
+            set_flag(element, "disabled", on);
+        }
+    };
     for entity in &disabled {
-        flag(entity, DATA_LM_DISABLED, true);
+        disable(entity, true);
     }
     for entity in enabled.read() {
-        flag(entity, DATA_LM_DISABLED, false);
+        disable(entity, false);
     }
     for (entity, toggle) in &toggled {
         flag(entity, DATA_LM_CHECKED, toggle.checked);
@@ -222,8 +255,21 @@ pub fn project_control_state(
         }
     }
     for (entity, value) in &values {
-        if let Some(element) = table.element(entity) {
-            set_attribute(element, "value", Some(&value.value.to_string()));
+        let Some(element) = table.element(entity) else {
+            continue;
+        };
+        let text = value.value.to_string();
+        // A range input stops reading its `value` attribute the moment the
+        // visitor moves it, so what a script writes afterwards has to go to
+        // the value the browser is actually showing. A `<progress>` has no
+        // such value and reads the attribute always.
+        match element.dyn_ref::<HtmlInputElement>() {
+            Some(input) => {
+                if input.value() != text {
+                    input.set_value(&text);
+                }
+            }
+            None => set_attribute(element, "value", Some(&text)),
         }
     }
 }

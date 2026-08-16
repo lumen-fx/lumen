@@ -404,8 +404,13 @@ fn a_dialog_is_open_when_the_signal_it_names_is_true() {
 
     let closed = page_html(&spec, "index.html");
     assert!(
-        closed.contains(r#"<dialog class="lm-dialog" data-lm="0.0" data-lm-hidden="">"#),
-        "a dialog whose signal is false is neither open nor shown: {closed}"
+        closed.contains(r#"<dialog class="lm-dialog" data-lm="0.0">"#),
+        "a dialog whose signal is false is not open: {closed}"
+    );
+    assert!(
+        !closed.contains("data-lm-hidden"),
+        "a closed dialog is hidden by the absence of `open`, not by a second \
+         attribute saying the same thing: {closed}"
     );
     assert!(closed.contains(">Confirm?<"), "its body stays mounted");
 

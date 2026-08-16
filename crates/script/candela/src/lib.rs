@@ -124,7 +124,7 @@ mod vm_host;
 pub use builtins::{BUILTINS, BuiltinFn, BuiltinParam};
 pub use host_fns::{HOST_NAMESPACE, HostFnSink, NATIVE_NAMESPACE};
 pub use prelude::{PRELUDE_MODULE, PRELUDE_SOURCE, resolve_prelude};
-pub use vm_host::{CandelaVmHost, ScriptCandelaVmPlugin};
+pub use vm_host::{CandelaVmHost, ScriptCandelaVmPlugin, image_exports};
 
 #[cfg(feature = "compiler")]
 pub use engine_host::{CandelaHost, CandelaScriptContext, ScriptCandelaPlugin, compile_bytecode};

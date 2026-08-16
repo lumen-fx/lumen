@@ -226,7 +226,7 @@ fn handle_pick(id: any) {
     lumen::pick_file("garden-open");
 }
 
-fn on_file_picked(tag: any, path: any) {
+fn on_file_picked(tag: string, path: string) {
     if path == "" {
         lumen::signal_set("picked", "(cancelled)");
     } else {
@@ -239,12 +239,12 @@ fn handle_open_menu(id: any) {
     lumen::open_menu("actions");
 }
 
-fn handle_menu_action(id: any) {
+fn handle_menu_action(id: string) {
     let msg = "Menu item fired: " + id;
     lumen::notify("Lumen Widget Garden", msg);
 }
 
-fn handle_hotkey_save(name: any) {
+fn handle_hotkey_save(name: string) {
     let fired = "Hotkey fired (" + name + ")";
     lumen::notify("Lumen", fired);
     let c = lumen::signal_get_int("hotkey_count");

@@ -126,8 +126,8 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
     // registers that message only when a script is installed, so a
     // script-less app must self-register it here or the reader fails
     // parameter validation.
+    lumen_script::runtime::register_script_commands(&mut app.world);
     if !has_script {
-        bevy_ecs::message::MessageRegistry::register_message::<ScriptCommandEvent>(&mut app.world);
         // No host means `register_script_host_systems` never runs, so install
         // the DOM-event dispatchers here against whichever host this build
         // carries. They take an optional host and deliver to C-ABI / SDK

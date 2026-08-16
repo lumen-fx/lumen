@@ -29,6 +29,13 @@ const DISABLEABLE: &[&str] = &[
     "button", "input", "textarea", "select", "fieldset", "option",
 ];
 
+/// True when the browser can disable `html_name` itself, which takes the
+/// element out of the tab order and stops it answering events.
+#[must_use]
+pub fn is_disableable(html_name: &str) -> bool {
+    DISABLEABLE.contains(&html_name)
+}
+
 /// The `class` value for an element: its tag class, then author classes.
 ///
 /// The tag class comes first so a stylesheet can rely on it being there, and
@@ -94,7 +101,7 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
         out.push(("tabindex", index.to_string()));
     }
     if attrs.disabled {
-        if DISABLEABLE.contains(&name) {
+        if is_disableable(name) {
             out.push(("disabled", String::new()));
         }
         out.push((DATA_LM_DISABLED, String::new()));

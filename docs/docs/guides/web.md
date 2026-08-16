@@ -57,8 +57,26 @@ is built from the same compiled app the desktop reads.
 Input comes from the browser and behaviour stays Lumen's. A click on a tab, a
 toggle or a checkbox reaches the same widget code a desktop app runs, and what
 it changes reaches the page as an attribute the stylesheet already matches.
-Typing in a bound `<input>` writes its signal, so a `bind-text` label next to
-it follows along.
+Typing in a bound `<input>` writes its signal, and so does moving a bound
+`<slider>`, so a `bind-text` label next to either follows along.
+
+## What the browser does itself
+
+Where a browser already implements a behaviour Lumen gives the same meaning
+to, the page gets the browser's rather than a copy driven from the runtime.
+
+A `<dialog>` is the clearest case. It opens as a real modal: it sits over the
+whole page with no stacking order to arrange, the rest of the document stops
+answering clicks and tab stops while it is up, focus lands on the element
+marked `autofocus` when it opens, and Escape dismisses it. A dismissal writes
+the signal named in `open="..."`, so a script sees the same close it would see
+from a Cancel button and the dialog reports the same rejected verdict it
+reports on the desktop.
+
+The browser's own dialog chrome is taken back off. A native dialog is a
+bordered card with its own fill and an inch of padding; a Lumen dialog is the
+whole window with the app's surface centred inside it, and that is what the
+page shows.
 
 A script runs the same way. Its `on_start` publishes the signals the markup
 binds to, a handler bound with `on("click", ...)` runs when that element is
@@ -73,10 +91,14 @@ fn calc_greeting(who: string) {
 }
 ```
 
-That covers handlers, `derive()` bodies and lifecycle functions. A function
-with an unannotated parameter is not callable from the runtime and its
-handler silently does nothing, which is the one thing that behaves
-differently here than on the desktop.
+That covers handlers, `derive()` bodies and lifecycle functions. Annotate a
+parameter with the type it arrives as rather than `any` where the body does
+arithmetic on it or joins it to a string; a value typed `any` cannot do
+either, and `str(n)` is how a number joins a string in any case.
+
+`lumenc web` names every function the app calls by name that the compiled
+program does not export, so a handler that would have done nothing is a
+warning at build time rather than a blank in the page.
 
 The browser runtime is not published yet. Until it is, a build says so and
 emits the site without it: the pages read, the links work, and nothing runs.
@@ -187,11 +209,17 @@ means anything without an absolute address.
 - A list built with `<for>` emits its anchor and no rows; the rows are built
   when the app runs.
 - A script written in Rhai or Lua does not run in the browser. candela does.
+  An app written in one of them is still emitted and still reads: the pages
+  show the state they were built with, and nothing runs.
+- A `<checkbox>` or a `<radio>` written with a `label` shows its box without
+  the caption. The caption is a second element on the desktop and an HTML
+  checkbox takes no children.
 - An element a script creates does not appear, and neither does a class it
   sets with `set_class` or `set_root_class`. Signals, arrays and `set_text`
   do.
 - Keyboard input other than typing into a focused field does not reach the app,
   so a keyboard shortcut and arrow-key navigation between tabs do not work.
+  Escape on an open dialog is the exception; the browser closes it.
 - Following a link loads the next document. Soft navigation, which swaps the
   page in place and keeps the app running, is not wired up.
 - A `<input>` is edited by the browser, so Lumen's own caret, selection and

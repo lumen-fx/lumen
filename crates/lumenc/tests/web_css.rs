@@ -16,7 +16,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use lumen_html::html_tag_for;
-use lumen_html::style::{Emission, WebDecl, rewrite_property};
+use lumen_html::style::{Emission, UNKNOWN_PROPERTY, WebDecl, rewrite_property};
 use lumen_ir::css::STYLE_PROPERTIES;
 use lumen_web::{RESET_CSS, rules_css};
 use lumenc::parse_css;
@@ -124,6 +124,28 @@ fn no_shipped_skin_leaves_a_lumen_property_in_the_output() {
                 !lumen_only.contains(&property),
                 "`{name}` emits `{property}`, which only Lumen reads"
             );
+        }
+    }
+}
+
+/// A property the rewriter has no answer for is dropped silently, so a
+/// missing rewrite costs a whole declaration and says nothing about it. The
+/// focus rings every skin writes went that way once.
+#[test]
+fn no_shipped_skin_writes_a_property_the_rewriter_has_no_answer_for() {
+    for (name, source) in skins() {
+        let sheet = parse_css(&source).unwrap_or_else(|e| panic!("`{name}` parses: {e}"));
+        for rule in &sheet.rules {
+            for decl in &rule.declarations {
+                assert!(
+                    !matches!(
+                        rewrite_property(&decl.name, &decl.value),
+                        Emission::Drop(UNKNOWN_PROPERTY)
+                    ),
+                    "`{name}` writes `{}`, which reaches no browser and says so nowhere",
+                    decl.name
+                );
+            }
         }
     }
 }

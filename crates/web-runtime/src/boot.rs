@@ -5,6 +5,8 @@
 //! where from, which engine runs the scripts and what state the markup shows
 //! all come out of the document and the manifest beside it.
 
+use std::sync::Once;
+
 use lumen_html::contract::DATA_LM;
 use lumen_scene::spawn::SpawnIntoWorld;
 use lumen_web_dom::WebDomPlugin;
@@ -37,6 +39,7 @@ use crate::{LumenWebApp, hosts};
 /// silently does nothing is the failure this exists to make visible.
 #[wasm_bindgen]
 pub async fn boot(manifest: JsValue) -> Result<(), JsError> {
+    report_panics();
     match start(manifest.as_string()).await {
         Ok(()) => Ok(()),
         Err(error) => {
@@ -45,6 +48,22 @@ pub async fn boot(manifest: JsValue) -> Result<(), JsError> {
             Err(JsError::new(&message))
         }
     }
+}
+
+/// Send Rust panics to the page's console.
+///
+/// A panic compiled to wasm reaches the browser as `unreachable`, with the
+/// message nowhere: what went wrong is only knowable if the hook says so
+/// before the trap. Installed once, whatever calls [`boot`].
+fn report_panics() {
+    static INSTALLED: Once = Once::new();
+    INSTALLED.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            web_sys::console::error_1(&JsValue::from_str(&format!("lumen: {info}")));
+            previous(info);
+        }));
+    });
 }
 
 /// Everything [`boot`] does, in terms that report their own failures.

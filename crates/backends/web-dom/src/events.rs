@@ -16,9 +16,11 @@ use std::cell::RefCell;
 
 use bevy_ecs::message::MessageWriter;
 use bevy_ecs::prelude::*;
-use lumen_core::components::{TextContent, Toggleable};
+use lumen_core::components::{SliderValue, TextContent, Toggleable};
 use lumen_core::input::{ClickEvent, FocusTracker, Focused, PointerButton};
+use lumen_core::property_store::PropertyStore;
 use lumen_html::contract::DATA_LM;
+use lumen_scene::spawn::IfMarker;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{Element, Event, HtmlInputElement, HtmlTextAreaElement, MouseEvent};
@@ -65,6 +67,11 @@ thread_local! {
     /// one. The page is single threaded, which is what makes this the whole
     /// of the synchronisation.
     static QUEUE: RefCell<Vec<PendingEvent>> = const { RefCell::new(Vec::new()) };
+
+    /// Node paths of the dialogs the browser has dismissed since the last
+    /// tick. Their own queue because what they need from the world is a
+    /// different set of things entirely.
+    static DISMISSED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The node path of the element an event landed on, or of the nearest
@@ -109,6 +116,22 @@ fn on(root: &Element, kind: &str, handler: Closure<dyn FnMut(Event)>) -> Result<
     Ok(())
 }
 
+/// Attach a listener that also sees events which do not bubble.
+///
+/// The capture phase runs from the document down to the target whatever the
+/// event is, so one listener on the root catches an event fired at a
+/// descendant that would never travel back up. A dialog's dismissal is one
+/// of those.
+fn on_capture(
+    root: &Element,
+    kind: &str,
+    handler: Closure<dyn FnMut(Event)>,
+) -> Result<(), JsValue> {
+    root.add_event_listener_with_callback_and_bool(kind, handler.as_ref().unchecked_ref(), true)?;
+    handler.forget();
+    Ok(())
+}
+
 /// Start listening on `root` for the events that drive an app.
 pub(crate) fn listen(root: &Element) -> Result<(), JsValue> {
     on(
@@ -142,6 +165,18 @@ pub(crate) fn listen(root: &Element) -> Result<(), JsValue> {
             }
         }) as Box<dyn FnMut(Event)>),
     )?;
+    // Escape on a showing dialog is the browser's to handle, and `cancel` is
+    // how it says so. Letting it run closes the element; what the world still
+    // has to learn is that the signal behind it is now false.
+    on_capture(
+        root,
+        "cancel",
+        Closure::wrap(Box::new(move |event: Event| {
+            if let Some(path) = path_of(&event) {
+                DISMISSED.with_borrow_mut(|queue| queue.push(path));
+            }
+        }) as Box<dyn FnMut(Event)>),
+    )?;
     for (kind, gained) in [("focusin", true), ("focusout", false)] {
         on(
             root,
@@ -164,6 +199,7 @@ pub fn drain_dom_events(
     mut clicks: MessageWriter<ClickEvent>,
     mut texts: Query<&mut TextContent>,
     mut toggles: Query<&mut Toggleable>,
+    mut sliders: Query<&mut SliderValue>,
     focus: Option<ResMut<FocusTracker>>,
 ) {
     let pending = QUEUE.with_borrow_mut(std::mem::take);
@@ -204,6 +240,18 @@ pub fn drain_dom_events(
                 if let Some(tracker) = focus.as_mut() {
                     tracker.0 = Some(entity);
                 }
+                // A range input reports its position as text and the world
+                // keeps it as a number, which is what the binding behind it
+                // publishes. The browser has already clamped it to the
+                // bounds the markup gave the control.
+                if let Ok(mut slider) = sliders.get_mut(entity) {
+                    if let Ok(moved) = value.parse::<f32>()
+                        && slider.value != moved
+                    {
+                        slider.value = moved;
+                    }
+                    continue;
+                }
                 if let Ok(mut text) = texts.get_mut(entity)
                     && text.0 != value
                 {
@@ -240,6 +288,28 @@ pub fn drain_dom_events(
                     }
                 }
             }
+        }
+    }
+}
+
+/// Follow the dialogs the browser dismissed back into the world.
+///
+/// The element is already closed by the time this runs. What is left is the
+/// signal named in `open="..."`, which is what stops the reconciler showing
+/// the dialog again and what a script watching the close reads. It is the
+/// same write a Cancel button makes, so the dialog's own lifecycle resolves
+/// the close as a rejection either way.
+pub fn drain_dismissed_dialogs(
+    table: NonSend<crate::nodes::NodeTable>,
+    branches: Query<&IfMarker>,
+    mut store: ResMut<PropertyStore>,
+) {
+    for path in DISMISSED.with_borrow_mut(std::mem::take) {
+        let Some(entity) = table.entity_at(&path) else {
+            continue;
+        };
+        if let Ok(branch) = branches.get(entity) {
+            store.set_global_str(branch.signal_name.as_str(), "");
         }
     }
 }

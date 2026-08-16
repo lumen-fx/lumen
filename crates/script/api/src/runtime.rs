@@ -44,7 +44,7 @@
 //! a host that does not define the handler ignores the call.
 
 use bevy_ecs::component::Mutable;
-use bevy_ecs::message::{Message, MessageReader, MessageRegistry, MessageWriter};
+use bevy_ecs::message::{Message, MessageReader, MessageRegistry, MessageWriter, Messages};
 use bevy_ecs::prelude::*;
 use lumen_core::net_capture::{self, NetEvent};
 use lumen_core::prelude::*;
@@ -62,6 +62,20 @@ use crate::{CallOutcome, ScriptCommand, ScriptError, ScriptHost, ScriptValue};
 /// systems can read it via `MessageReader<ScriptCommandEvent>`.
 #[derive(Message, Clone, Debug)]
 pub struct ScriptCommandEvent(pub ScriptCommand);
+
+/// Make sure the [`ScriptCommandEvent`] stream exists in `world`.
+///
+/// A script host registers it when it is installed, and an app without one
+/// still runs the appliers: the C ABI, the SDKs and the browser runtime write
+/// to the same stream, and a reader whose message type was never registered
+/// fails parameter validation, which ends the tick. Registering the same
+/// message twice would age its buffer twice a tick and drop a message a tick
+/// early, so every registration goes through here.
+pub fn register_script_commands(world: &mut World) {
+    if !world.contains_resource::<Messages<ScriptCommandEvent>>() {
+        MessageRegistry::register_message::<ScriptCommandEvent>(world);
+    }
+}
 
 /// Inserted by [`ScriptPlugin::build`] when the initial script failed to
 /// compile or evaluate. Embedders (lumenc's `run`) surface it
@@ -232,7 +246,7 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
                 app.world.insert_resource(FetchRegistry::default());
             }
             app.world.insert_resource(PendingFetchReplies::default());
-            MessageRegistry::register_message::<ScriptCommandEvent>(&mut app.world);
+            register_script_commands(&mut app.world);
             // Toggle / slider dispatchers below read these messages. In
             // production `lumen-primitives::ControlsPlugin` registers them
             // first; we self-register defensively so tests that drive the

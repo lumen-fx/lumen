@@ -287,6 +287,48 @@ fn a_candela_app_ships_the_program_the_browser_runs() {
 }
 
 #[test]
+fn a_function_the_program_cannot_be_called_by_is_named() {
+    // candela exports a function only when every parameter it takes is
+    // annotated. One written without an annotation compiles and ships and is
+    // then never called, and on the desktop it works anyway, because the
+    // compiler is in the process there. The build has to say so.
+    let scratch = scratch("exports");
+    let app = scratch.join("app");
+    std::fs::create_dir_all(&app).expect("create the app directory");
+    std::fs::write(
+        app.join("lumen.toml"),
+        "[app]\nentry = \"main.lmn\"\nid = \"lumen.test.exports\"\n\n[script]\nengine = \
+         \"candela\"\n",
+    )
+    .expect("write lumen.toml");
+    std::fs::write(
+        app.join("main.lmn"),
+        "<root>\n  <label bind-text=\"label\" />\n  <script src=\"main.cdl\" />\n</root>\n",
+    )
+    .expect("write the markup");
+    std::fs::write(
+        app.join("main.cdl"),
+        "import \"lumen.cdl\";\n\nfn calc_label(n) { return \"seen\"; }\n\nfn on_start() {\n    \
+         lumen::derive(\"label\", [\"count\"], \"calc_label\");\n}\n\nfn main() {}\n",
+    )
+    .expect("write the script");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_lumenc"))
+        .arg("web")
+        .arg(&app)
+        .arg("--out")
+        .arg(scratch.join("site"))
+        .arg("--lib-dir")
+        .arg(runtime_dir(&scratch))
+        .output()
+        .expect("running lumenc web");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("`calc_label`"), "{stderr}");
+    assert!(stderr.contains("does not export it"), "{stderr}");
+}
+
+#[test]
 fn a_base_path_roots_every_reference() {
     let scratch = scratch("base");
     let out = scratch.join("site");

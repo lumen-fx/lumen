@@ -579,9 +579,20 @@ the rule it came from:
 ### Lengths
 
 A bare number is pixels in Lumen and nothing at all in CSS, so
-`padding: 8 16` is emitted as `padding: 8px 16px`. A length that reaches
-a property through `var()` is emitted as written, so give a custom
-property holding a length an explicit unit: `--gap: 8px`, not `--gap: 8`.
+`padding: 8 16` is emitted as `padding: 8px 16px`.
+
+A length that reaches a property through `var()` is `var(--gap)` whatever
+the token holds, so the unit goes on the definition instead: a custom
+property the stylesheet uses only in places where a bare number means
+pixels is emitted with `px` on it, and `--gap: 8` becomes `--gap: 8px`.
+Writing the unit yourself is still clearer, and a token that already has
+one is left alone.
+
+A token used both where a number means pixels and where it means a plain
+number cannot be both, so it is emitted as authored and `lumenc web`
+names it in a warning. Split it into two tokens, or write the unit on the
+one that needs it.
+
 Gradient stop positions travel as written; write them as percentages.
 
 ### Properties with no browser equivalent
@@ -595,10 +606,19 @@ the element, so they keep working, and you can read one yourself with
 This covers `knob-color`, `knob-inset`, `thumb-size`, `popup-gap`,
 `caret-width`, `caret-blink`, `password-character`, `disabled-opacity`,
 `progress-duration`, `progress-chunk`, `sensitivity`, `inertia`, and the
-`scrollbar-*` geometry and timing properties. `scrollbar-color` and
-`scrollbar-width` are standard CSS and are emitted as themselves; a
-`scrollbar-color` naming only a thumb gains `transparent` for the track,
-which CSS requires.
+`scrollbar-*` geometry and timing properties. The ones measured in pixels
+carry `px` like any other length. `scrollbar-color` and `scrollbar-width`
+are standard CSS and are emitted as themselves; a `scrollbar-color`
+naming only a thumb gains `transparent` for the track, which CSS
+requires.
+
+`knob-color`, `knob-inset` and `thumb-size` are also what the emitted
+stylesheet draws a control's parts from. A `<toggle>`, a `<switch>` and a
+`<slider>` are one element in a page and a track plus a knob on the
+desktop, so the knob is drawn as a pseudo-element from those three
+values, and a `<checkbox>`, a `<radio>` and a `<progress>` are drawn from
+the state the runtime marks them with. Anything an app's own CSS says
+about the control still wins.
 
 ### What is not emitted
 
