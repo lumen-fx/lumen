@@ -134,9 +134,22 @@ title = "do it"
 A `<for each="todos">` is then emitted with those two rows in it, and the app
 starts from the same list.
 
-A browser that cannot run the runtime is not left with a blank page: a link is
-an ordinary `<a href>`, and following it loads the next document. That
-degraded mode needs no configuration.
+## What the pages carry
+
+`[web] render` says whether the documents load the runtime. Both values write
+the whole markup tree, so what a reader and a crawler get does not change; what
+changes is what happens once the page is open.
+
+`csr`, the default, writes the runtime, the compiled app and the manifest
+beside the pages, and the pages load them. The runtime adopts the markup the
+page arrived with and runs the app from there.
+
+`static` writes the pages, the stylesheet and the assets, and nothing else. No
+runtime, no compiled app, no manifest, and no boot script in the documents.
+
+Either way a link is an ordinary `<a href>`, so a browser that does not run the
+runtime, or a site that carries none, follows links by loading the next
+document. That needs no configuration.
 
 ## Links and deep paths
 
