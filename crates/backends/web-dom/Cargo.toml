@@ -1,0 +1,52 @@
+[package]
+name = "lumen-web-dom"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's browser render backend: adopts a prerendered document, projects the world onto it, and turns DOM events into Lumen events."
+keywords = ["ui", "gui", "web", "wasm", "lumen"]
+categories = ["gui", "wasm"]
+
+[dependencies]
+lumen-core = { path = "../../core", version = "0.0.3" }
+lumen-ir = { path = "../../ir", version = "0.0.3" }
+# The contract the emitter wrote the document against: node paths, the
+# `data-lm-*` attributes, the tag map. Hand-rolling any of it here would put
+# the two halves on different rules.
+lumen-html = { path = "../../html", version = "0.0.3" }
+# The scene this backend projects: the spawner that built it and the markers
+# the reconcilers maintain.
+lumen-scene = { path = "../../scene", version = "0.0.3" }
+bevy_ecs.workspace = true
+glam.workspace = true
+# Not target-gated. The crate is a browser backend and only a browser runs it,
+# but building it for the host is what puts it under the workspace's own
+# clippy and type check rather than only under the wasm one.
+wasm-bindgen.workspace = true
+js-sys.workspace = true
+# Explicit interface list, not a blanket enable: every named interface is
+# generated into the module, so this list is a size lever. Add one only when
+# something calls it.
+web-sys = { workspace = true, features = [
+    "Document",
+    "DomTokenList",
+    "Element",
+    "Event",
+    "EventTarget",
+    "HtmlElement",
+    "HtmlInputElement",
+    "HtmlTextAreaElement",
+    "InputEvent",
+    "MouseEvent",
+    "Node",
+    "NodeList",
+    "Text",
+    "Window",
+    "console",
+] }
+
+[dev-dependencies]
+wasm-bindgen-test.workspace = true

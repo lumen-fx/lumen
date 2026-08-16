@@ -14,26 +14,25 @@
 //! as precompiled bytecode, so no compiler reaches the page. An engine no
 //! compiled-in host answers for is reported when the app boots.
 //!
-//! This is the first step of that runtime. It boots an app from its compiled
-//! script, ticks it, and exposes the script's signal writes and load failures
-//! to the page. Adopting prerendered HTML, projecting the ECS onto real
-//! elements, and routing DOM events all come later.
+//! A page starts an app with [`boot`], which is what every document
+//! `lumenc web` emits calls and the only thing it needs to know:
 //!
 //! ```js
-//! import init, { LumenWebApp } from "./lumen_web_runtime.js";
-//!
-//! await init();
-//! const manifest = await (await fetch("lumen.web.json")).json();
-//! const script = manifest.scripts[0];
-//! const program = await (await fetch(script.path)).arrayBuffer();
-//! const app = LumenWebApp.withUri(script.engine, program, script.path);
-//! if (app.scriptError()) console.error(app.scriptError());
-//! app.startFrameLoop();
+//! import init, { boot } from "/lumen-web.js";
+//! init().then(boot);
 //! ```
+//!
+//! [`boot`] reads the document, fetches the manifest, the compiled app and
+//! its scripts, adopts the prerendered markup, and starts the frame loop.
+//! [`LumenWebApp`] is the surface underneath it, for a page that assembles
+//! those steps itself.
 
 #![warn(missing_docs)]
 
+mod assemble;
+mod boot;
 mod hosts;
+mod load;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -44,6 +43,8 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
 use crate::hosts::ScriptHostAccess;
+
+pub use boot::boot;
 
 /// Name the load failure reports when the page supplies no better one. A page
 /// has one: the manifest records the path every script was emitted to.
@@ -177,6 +178,20 @@ impl LumenWebApp {
         // Handed to the browser, which now owns the callback chain.
         std::mem::forget(armed);
         Ok(())
+    }
+}
+
+impl LumenWebApp {
+    /// Take over an app that is already assembled and whose host, if it has
+    /// one, is already installed.
+    ///
+    /// `engine` names the host to read signals and call exports through. An
+    /// app with no script has none, and the accessors answer with nothing.
+    pub(crate) fn from_parts(app: App, engine: Option<String>) -> Self {
+        let host = engine
+            .and_then(|engine| hosts::access(&engine))
+            .unwrap_or_else(ScriptHostAccess::absent);
+        Self { app, host }
     }
 }
 

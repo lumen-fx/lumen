@@ -11,7 +11,7 @@
 
 use std::collections::BTreeSet;
 
-use lumen_html::contract::{DATA_LM, DATA_LM_HIDDEN, DIALOG_OPEN, NodePath};
+use lumen_html::contract::{DATA_LM, DATA_LM_HIDDEN, DATA_LM_SELECTED, DIALOG_OPEN, NodePath};
 use lumen_html::style::{Emission, rewrite_property};
 use lumen_html::{escape_attr, escape_text, html_attrs, html_tag_for};
 use lumen_ir::css::computed_style_map;
@@ -138,6 +138,15 @@ fn emit_element(
     }
     if open {
         write_attr(out, DIALOG_OPEN, "");
+    }
+    // Which tab is current is a signal, and the strip button that matches it
+    // is the one Lumen calls `:selected`. The runtime maintains this mark; the
+    // page needs it too, or the current tab is unmarked until the runtime
+    // loads and unmarked forever without it.
+    if let Some((signal, value)) = &element.attrs.tab_strip
+        && walk.signals.global(signal) == Some(value.as_str())
+    {
+        write_attr(out, DATA_LM_SELECTED, "");
     }
     if hidden {
         write_attr(out, DATA_LM_HIDDEN, "");

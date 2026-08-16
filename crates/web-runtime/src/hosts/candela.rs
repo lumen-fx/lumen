@@ -17,6 +17,11 @@ pub(crate) const ENGINE: &str = "candela";
 /// Install the host over the `.cdlb` image `program`.
 pub(crate) fn install(app: &mut App, program: &[u8], uri: &str) -> ScriptHostAccess {
     app.add_plugin(ScriptCandelaVmPlugin::new(program.to_vec()).with_uri(uri));
+    access()
+}
+
+/// Reach a host that is already installed.
+pub(crate) fn access() -> ScriptHostAccess {
     ScriptHostAccess::of::<CandelaVmHost>(exports)
 }
 

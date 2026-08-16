@@ -125,6 +125,10 @@ pub fn open_document(out: &mut String, page: &PageSpec, spec: &SiteSpec) -> Resu
 ///
 /// The script is the same on every page of a site: it loads the runtime,
 /// which reads the page it landed on out of the document.
+///
+/// The module is told where its wasm is rather than left to guess. The site
+/// is what names these files, and a loader that resolved a name of its own
+/// would be a second answer to the same question.
 pub fn close_document(out: &mut String, spec: &SiteSpec) {
     if !spec.web.runtime {
         out.push_str("\n</body>\n</html>\n");
@@ -133,7 +137,9 @@ pub fn close_document(out: &mut String, spec: &SiteSpec) {
     let base = urls::normalize_base(&spec.web.base_path);
     out.push_str("\n<script type=\"module\">import init, { boot } from \"");
     out.push_str(&escape_text(&urls::join(&base, &spec.web.js)));
-    out.push_str("\";init().then(boot);</script>\n</body>\n</html>\n");
+    out.push_str("\";init({ module_or_path: \"");
+    out.push_str(&escape_text(&urls::join(&base, &spec.web.wasm)));
+    out.push_str("\" }).then(boot);</script>\n</body>\n</html>\n");
 }
 
 fn attr(out: &mut String, name: &str, value: &str) {

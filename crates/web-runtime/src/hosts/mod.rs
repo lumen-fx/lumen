@@ -68,6 +68,16 @@ pub(crate) struct ScriptHostAccess {
 }
 
 impl ScriptHostAccess {
+    /// The table an app with no script answers through: every entry reports
+    /// nothing rather than the caller having to ask whether there is a host.
+    pub(crate) fn absent() -> Self {
+        Self {
+            signal: |_, _| None,
+            call: |_, _| Err(ScriptError::Runtime("no script is loaded".to_owned())),
+            exports: |_| Vec::new(),
+        }
+    }
+
     /// Access table for a host stored as the resource `H`. `exports` comes from
     /// the host module: [`ScriptHost`] carries no export list, and what counts
     /// as an exported name is the host's own rule, so a host without one
@@ -82,6 +92,18 @@ impl ScriptHostAccess {
             call: call_of::<H>,
             exports,
         }
+    }
+}
+
+/// The access table for an engine, without installing anything.
+///
+/// For a caller that installed the host as part of assembling an app and
+/// now wants to read through it.
+pub(crate) fn access(engine: &str) -> Option<ScriptHostAccess> {
+    match engine {
+        #[cfg(feature = "host-candela")]
+        candela::ENGINE => Some(candela::access()),
+        _ => None,
     }
 }
 
