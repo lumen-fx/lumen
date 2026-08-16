@@ -23,7 +23,7 @@ pub mod config;
 #[cfg(feature = "devtools")]
 pub mod devtools_mount;
 /// The app's compiled fragments and what an instance of one carries.
-pub mod fragments;
+pub use lumen_scene::fragments;
 /// `[[hooks]]` runner - executes an app's declared `prebuild` / `prerun`
 /// build/setup commands. See [`config::HookCfg`] for the schema.
 pub mod hooks;
@@ -42,7 +42,7 @@ pub mod skins;
 /// The injected markup/CSS parser boundary. See [`SourceParser`].
 pub mod source_parser;
 /// IR -> ECS spawner and the `<for>` / `<if>` reconcilers.
-pub mod spawn;
+pub use lumen_scene::spawn;
 /// Windowed geometry persistence (`[window] remember_state`).
 pub mod window_state;
 

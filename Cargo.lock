@@ -3818,6 +3818,7 @@ dependencies = [
  "lumen-os-tray",
  "lumen-primitives",
  "lumen-render-wgpu",
+ "lumen-scene",
  "lumen-script",
  "lumen-script-candela",
  "lumen-script-lua",
@@ -3837,6 +3838,22 @@ dependencies = [
  "tracing-chrome",
  "tracing-subscriber",
  "tracing-tracy",
+]
+
+[[package]]
+name = "lumen-scene"
+version = "0.0.3"
+dependencies = [
+ "bevy_ecs",
+ "glam 0.33.3",
+ "lumen-assets",
+ "lumen-core",
+ "lumen-i18n",
+ "lumen-ir",
+ "lumen-os-dnd",
+ "lumen-primitives",
+ "lumen-script",
+ "tracing",
 ]
 
 [[package]]
@@ -3931,6 +3948,21 @@ dependencies = [
  "lumen-ir",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lumen-web-dom"
+version = "0.0.3"
+dependencies = [
+ "bevy_ecs",
+ "js-sys",
+ "lumen-core",
+ "lumen-html",
+ "lumen-ir",
+ "lumen-scene",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
+ "web-sys",
 ]
 
 [[package]]
