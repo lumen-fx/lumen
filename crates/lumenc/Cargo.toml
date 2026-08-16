@@ -139,7 +139,7 @@ lumen-primitives = { path = "../primitives" }
 lumen-script = { path = "../script/api", default-features = false }
 lumen-script-rhai = { path = "../script/rhai", default-features = false }
 lumen-script-lua = { path = "../script/lua", default-features = false }
-lumen-script-candela = { path = "../script/candela", default-features = false }
+lumen-script-candela = { path = "../script/candela", default-features = false, features = ["compiler"] }
 # os_integration.rs names the tray config / menu types directly, to assert a
 # script-supplied menu spec reaches them.
 lumen-os-tray = { path = "../os/tray" }

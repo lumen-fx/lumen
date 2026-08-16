@@ -67,7 +67,7 @@ lumen-script = { path = "../script/api", version = "0.0.3", default-features = f
 lumen-script-rhai = { path = "../script/rhai", version = "0.0.3", default-features = false, optional = true }
 rhai = { workspace = true, optional = true }
 lumen-script-lua = { path = "../script/lua", version = "0.0.3", default-features = false, optional = true }
-lumen-script-candela = { path = "../script/candela", version = "0.0.3", default-features = false, optional = true }
+lumen-script-candela = { path = "../script/candela", version = "0.0.3", default-features = false, features = ["compiler"], optional = true }
 mlua = { workspace = true, optional = true }
 
 lumen-text-cosmic = { path = "../backends/text-cosmic", version = "0.0.3" }
