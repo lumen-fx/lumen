@@ -99,6 +99,7 @@ members = [
     "crates/mcp",
     "crates/primitives",
     "crates/runtime",
+    "crates/scene",
     "crates/text",
     "crates/web",
     "crates/web-runtime",

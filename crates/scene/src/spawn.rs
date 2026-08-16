@@ -855,7 +855,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     if el.tag == "a"
         && let Some(href) = &el.attrs.href
     {
-        entity.insert(crate::pages::Anchor(href.clone()));
+        entity.insert(crate::routing::Anchor(href.clone()));
     }
     if !el.attrs.classes.is_empty() {
         entity.insert(LumenClasses::from(el.attrs.classes.clone()));
@@ -2206,12 +2206,12 @@ pub fn reconcile_for_blocks(
 
 /// One iteration of a `<for>` body: the record its placeholders read and
 /// the index they count from.
-pub(crate) struct RowScope<'a> {
+pub struct RowScope<'a> {
     /// The current iteration's row record. `InterpolationSlot::Row(field)`
     /// lookups hit this map.
-    pub(crate) item: &'a lumen_core::signals::ArrayItem,
+    pub item: &'a lumen_core::signals::ArrayItem,
     /// 0-based iteration index, stringified for `RowIndex`.
-    pub(crate) idx: usize,
+    pub idx: usize,
 }
 
 /// Substitution context bundled together so the placeholder walker can
@@ -2233,11 +2233,17 @@ pub(crate) struct RowScope<'a> {
 ///   one-shot-warn discriminator for missing row fields. We don't have
 ///   a per-row entity id at substitution time (the row hasn't spawned
 ///   yet), so the for-block entity stands in.
-pub(crate) struct SubstCtx<'a> {
-    pub(crate) row: Option<RowScope<'a>>,
-    pub(crate) args: Option<&'a std::collections::BTreeMap<String, String>>,
-    pub(crate) store: &'a lumen_core::property_store::PropertyStore,
-    pub(crate) parent_id: Entity,
+pub struct SubstCtx<'a> {
+    /// The iteration in progress, absent outside a `<for>` body.
+    pub row: Option<RowScope<'a>>,
+    /// The arguments a fragment instance was built with, absent outside a
+    /// fragment body.
+    pub args: Option<&'a std::collections::BTreeMap<String, String>>,
+    /// Global property store, which is what a global placeholder reads.
+    pub store: &'a lumen_core::property_store::PropertyStore,
+    /// The for-block entity, the discriminator for the missing-row-field
+    /// warning.
+    pub parent_id: Entity,
 }
 
 /// Walk an [`Element`] subtree, replacing every `{...}` placeholder in
@@ -2274,7 +2280,13 @@ fn cascade_element_tree(el: &mut Element, sheet: &lumen_ir::css::Stylesheet) {
     }
 }
 
-pub(crate) fn substitute_in_element_with_css(
+/// Substitute the placeholders in a template subtree against `ctx`, then
+/// re-run the cascade over the result when a stylesheet is given.
+///
+/// The cascade has to come after substitution for a template whose `id` or
+/// `class` holds a placeholder: what a rule matches depends on the value
+/// that landed there.
+pub fn substitute_in_element_with_css(
     template: &Element,
     ctx: &SubstCtx<'_>,
     css: Option<&lumen_ir::css::Stylesheet>,
@@ -2591,7 +2603,7 @@ fn mount_fade_bundle(
 ///   shorthand-only `overflow: visible`, instead of losing to it as the
 ///   current behavior requires - so this checks the fully-resolved
 ///   `attrs` directly instead.
-pub(crate) fn apply_ua_style_defaults(tag: &str, attrs: &Attributes, style: &mut Style) {
+pub fn apply_ua_style_defaults(tag: &str, attrs: &Attributes, style: &mut Style) {
     if tag == "switch" && attrs.width.is_none() && attrs.min_width.is_none() {
         style.min_width = Length::Px(52.0);
     }

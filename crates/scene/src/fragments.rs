@@ -66,7 +66,7 @@ pub struct FragmentInstance {
 pub struct SlotPlaceholder(pub String);
 
 /// The slot name an element occupies, or `None` when it is not a slot.
-pub(crate) fn slot_name_of(el: &Element) -> Option<String> {
+pub fn slot_name_of(el: &Element) -> Option<String> {
     if el.tag != SLOT_TAG {
         return None;
     }
@@ -80,7 +80,7 @@ pub(crate) fn slot_name_of(el: &Element) -> Option<String> {
 
 /// Why a fragment could not be instantiated.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum FragmentFault {
+pub enum FragmentFault {
     /// No fragment is declared under the requested key.
     UnknownKey,
     /// The body has a number of roots other than one.
@@ -115,7 +115,7 @@ impl std::fmt::Display for FragmentFault {
 }
 
 /// The element an instance spawns from, or why it cannot.
-pub(crate) fn instance_body(fragment: &Fragment) -> Result<&Element, FragmentFault> {
+pub fn instance_body(fragment: &Fragment) -> Result<&Element, FragmentFault> {
     let [root] = fragment.body.as_slice() else {
         return Err(FragmentFault::RootCount(fragment.body.len()));
     };
@@ -129,10 +129,7 @@ pub(crate) fn instance_body(fragment: &Fragment) -> Result<&Element, FragmentFau
 /// default, then the use site's arguments override. An argument naming
 /// something the fragment does not declare is kept, so a body written
 /// against a wider parameter list than its declaration still resolves.
-pub(crate) fn bind_args(
-    fragment: &Fragment,
-    args: &[(String, String)],
-) -> BTreeMap<String, String> {
+pub fn bind_args(fragment: &Fragment, args: &[(String, String)]) -> BTreeMap<String, String> {
     let mut bound: BTreeMap<String, String> = fragment
         .params
         .iter()
@@ -147,7 +144,7 @@ pub(crate) fn bind_args(
 /// Report a fragment fault once per `(key, fault)` pair. A command issued
 /// every tick reports the first time and stays quiet after, so a broken key
 /// is visible without flooding the log.
-pub(crate) fn report_once(key: &str, fault: &FragmentFault) {
+pub fn report_once(key: &str, fault: &FragmentFault) {
     use std::collections::HashSet;
     use std::sync::{Mutex, OnceLock};
     static SEEN: OnceLock<Mutex<HashSet<(String, String)>>> = OnceLock::new();

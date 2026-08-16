@@ -1,0 +1,37 @@
+[package]
+name = "lumen-scene"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's scene layer: spawning the element tree from IR, reconciling for/if blocks and dialogs, fragments, and page routing."
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "lumen_scene"
+path = "src/lib.rs"
+
+[dependencies]
+lumen-core = { path = "../core", version = "0.0.3" }
+lumen-ir = { path = "../ir", version = "0.0.3" }
+# Widget behaviour components the spawner attaches: toggles, sliders,
+# dropdowns, tab strips, popups.
+lumen-primitives = { path = "../primitives", version = "0.0.3" }
+# `translatable="..."` resolves against the app's catalogue as an element
+# spawns.
+lumen-i18n = { path = "../i18n", version = "0.0.3" }
+# `<image src>` attaches an asset request; the loader behind it is the
+# host's.
+lumen-assets = { path = "../assets", version = "0.0.3" }
+# `draggable` / `drop-accept` attach the transport components; the platform
+# that fills them is the host's.
+lumen-os-dnd = { path = "../os/dnd", version = "0.0.3" }
+# One call: an anchor click honours a handler that prevented the click's
+# default action.
+lumen-script = { path = "../script/api", version = "0.0.3", default-features = false }
+bevy_ecs.workspace = true
+glam.workspace = true
+tracing.workspace = true
