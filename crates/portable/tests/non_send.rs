@@ -19,12 +19,12 @@ use lumen_core::prelude::App;
 use lumen_portable::portable_app;
 
 /// The image the build script compiled, a program that publishes a signal and
-/// registers a derivation, so the host is carrying real state when the app is
-/// dropped.
+/// registers a derivation, so the host is carrying state of its own when the
+/// app is dropped.
 #[cfg(feature = "host-candela")]
 const SMOKE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/smoke.cdlb"));
 
-/// Every non-send slot in `world` that something was actually put into.
+/// Every non-send slot in `world` that something was put into.
 ///
 /// A slot on its own means nothing: a system taking `Option<NonSendMut<T>>`
 /// reserves one for a `T` that may never arrive, and an empty slot binds
