@@ -17,6 +17,7 @@ use lumen_core::components::{
     TextContent, Toggleable, Visible,
 };
 use lumen_html::contract::{DATA_LM_CHECKED, DATA_LM_DISABLED, DATA_LM_HIDDEN, DATA_LM_SELECTED};
+use lumen_html::is_disableable;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, HtmlDialogElement, HtmlInputElement, HtmlTextAreaElement};
 
@@ -226,11 +227,24 @@ pub fn project_control_state(
     for entity in unselected.read() {
         select(entity, false);
     }
+    // A control the browser knows how to disable is disabled, which is what
+    // takes it out of the tab order and stops it answering a click at all.
+    // The mark beside it is the one the stylesheet reads, and every other
+    // kind of element has only that.
+    let disable = |entity: Entity, on: bool| {
+        let Some(element) = table.element(entity) else {
+            return;
+        };
+        set_flag(element, DATA_LM_DISABLED, on);
+        if is_disableable(&element.tag_name().to_ascii_lowercase()) {
+            set_flag(element, "disabled", on);
+        }
+    };
     for entity in &disabled {
-        flag(entity, DATA_LM_DISABLED, true);
+        disable(entity, true);
     }
     for entity in enabled.read() {
-        flag(entity, DATA_LM_DISABLED, false);
+        disable(entity, false);
     }
     for (entity, toggle) in &toggled {
         flag(entity, DATA_LM_CHECKED, toggle.checked);
@@ -241,8 +255,21 @@ pub fn project_control_state(
         }
     }
     for (entity, value) in &values {
-        if let Some(element) = table.element(entity) {
-            set_attribute(element, "value", Some(&value.value.to_string()));
+        let Some(element) = table.element(entity) else {
+            continue;
+        };
+        let text = value.value.to_string();
+        // A range input stops reading its `value` attribute the moment the
+        // visitor moves it, so what a script writes afterwards has to go to
+        // the value the browser is actually showing. A `<progress>` has no
+        // such value and reads the attribute always.
+        match element.dyn_ref::<HtmlInputElement>() {
+            Some(input) => {
+                if input.value() != text {
+                    input.set_value(&text);
+                }
+            }
+            None => set_attribute(element, "value", Some(&text)),
         }
     }
 }
