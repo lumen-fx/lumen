@@ -57,8 +57,8 @@ is built from the same compiled app the desktop reads.
 Input comes from the browser and behaviour stays Lumen's. A click on a tab, a
 toggle or a checkbox reaches the same widget code a desktop app runs, and what
 it changes reaches the page as an attribute the stylesheet already matches.
-Typing in a bound `<input>` writes its signal, so a `bind-text` label next to
-it follows along.
+Typing in a bound `<input>` writes its signal, and so does moving a bound
+`<slider>`, so a `bind-text` label next to either follows along.
 
 ## What the browser does itself
 

@@ -16,7 +16,7 @@
 #![cfg(target_arch = "wasm32")]
 
 use bevy_ecs::prelude::*;
-use lumen_core::components::{LumenClasses, TextContent, Visible};
+use lumen_core::components::{LumenClasses, SliderValue, TextContent, Visible};
 use lumen_core::prelude::{App, TickStage};
 use lumen_core::property_store::PropertyStore;
 use lumen_html::contract::{DATA_LM, DATA_LM_HIDDEN};
@@ -243,6 +243,45 @@ fn a_click_reaches_the_entity_the_element_stands_for() {
         app.world.resource::<Clicked>().0,
         Some(expected),
         "the click landed on the entity whose element it was dispatched on"
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_slider_the_visitor_moves_moves_in_the_world_too() {
+    let mut slider = element("slider", None, Vec::new());
+    slider.attrs.min = Some(0.0);
+    slider.attrs.max = Some(100.0);
+    slider.attrs.value = Some(42.0);
+    let ir = LayoutIR {
+        root: element("root", None, vec![slider]),
+        ..LayoutIR::default()
+    };
+    let root = prerender(ir.clone());
+    let mut app = hydrate(ir, root.clone());
+    lumen_web_dom::listen(&root).expect("the page takes listeners");
+
+    let range: web_sys::HtmlInputElement = root
+        .query_selector("input[type=range]")
+        .unwrap()
+        .expect("the emitter wrote a range input")
+        .unchecked_into();
+    range.set_value("75");
+    let init = web_sys::EventInit::new();
+    init.set_bubbles(true);
+    let moved_it = web_sys::Event::new_with_event_init_dict("input", &init).unwrap();
+    range.dispatch_event(&moved_it).unwrap();
+    app.tick();
+
+    let moved = app
+        .world
+        .query::<&SliderValue>()
+        .iter(&app.world)
+        .map(|slider| slider.value)
+        .next()
+        .expect("the tree has a slider");
+    assert_eq!(
+        moved, 75.0,
+        "where the visitor left the control is where the world has it"
     );
 }
 

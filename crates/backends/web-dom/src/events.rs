@@ -16,7 +16,7 @@ use std::cell::RefCell;
 
 use bevy_ecs::message::MessageWriter;
 use bevy_ecs::prelude::*;
-use lumen_core::components::{TextContent, Toggleable};
+use lumen_core::components::{SliderValue, TextContent, Toggleable};
 use lumen_core::input::{ClickEvent, FocusTracker, Focused, PointerButton};
 use lumen_core::property_store::PropertyStore;
 use lumen_html::contract::DATA_LM;
@@ -199,6 +199,7 @@ pub fn drain_dom_events(
     mut clicks: MessageWriter<ClickEvent>,
     mut texts: Query<&mut TextContent>,
     mut toggles: Query<&mut Toggleable>,
+    mut sliders: Query<&mut SliderValue>,
     focus: Option<ResMut<FocusTracker>>,
 ) {
     let pending = QUEUE.with_borrow_mut(std::mem::take);
@@ -238,6 +239,18 @@ pub fn drain_dom_events(
                 commands.entity(entity).insert(Focused);
                 if let Some(tracker) = focus.as_mut() {
                     tracker.0 = Some(entity);
+                }
+                // A range input reports its position as text and the world
+                // keeps it as a number, which is what the binding behind it
+                // publishes. The browser has already clamped it to the
+                // bounds the markup gave the control.
+                if let Ok(mut slider) = sliders.get_mut(entity) {
+                    if let Ok(moved) = value.parse::<f32>()
+                        && slider.value != moved
+                    {
+                        slider.value = moved;
+                    }
+                    continue;
                 }
                 if let Ok(mut text) = texts.get_mut(entity)
                     && text.0 != value
