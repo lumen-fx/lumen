@@ -76,6 +76,22 @@ pub mod layout_direction_serde {
     }
 }
 
+/// The `<script>` elements one markup source carries, read without building
+/// its tree.
+///
+/// The blocks a candela script writes become fragments, and markup names one
+/// of those by writing the function as a tag, so the scripts have to be known
+/// before the tree is built. Reading them is a walk of the `<script>`
+/// elements, which is all this carries; the tree build collects the same set
+/// into [`LayoutIR::script_source`] and [`LayoutIR::external_scripts`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScriptRefs {
+    /// Body text of every inline block, in source order, newline separated.
+    pub inline: String,
+    /// `src` of every external block, in source order.
+    pub external: Vec<String>,
+}
+
 /// Top of the IR. Single root element; multi-rooted markup is illegal.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct LayoutIR {

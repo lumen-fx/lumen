@@ -168,6 +168,7 @@ mod tests {
             body,
             origins: Vec::new(),
             kind: FragmentKind::Template,
+            components: Vec::new(),
         }
     }
 

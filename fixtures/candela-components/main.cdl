@@ -1,5 +1,7 @@
 // Components on candela: a function returns markup, the markup compiles to a
-// fragment at build time, and the call instantiates it.
+// fragment at build time, and the call instantiates it. `main.lmn` writes
+// `<Home name="bob"/>` too, which reaches the same block through the
+// function's name.
 import "lumen.cdl";
 
 // One argument, read once when the instance is built.
@@ -30,12 +32,20 @@ fn App() {
     );
 }
 
+// The other direction: a block instantiates a `<template>` the markup
+// declares. A template and a block are one entity, so either authoring form
+// reaches the other.
+fn Wrap() {
+    return lmn!(<column id="wrap"><card title="from a block"/></column>);
+}
+
 fn on_ready() {
     lumen::signal_array_set("rows", [
         {"id": "a", "title": "Alpha"},
         {"id": "b", "title": "Beta"}
     ]);
     lumen::mount(App());
+    lumen::mount(Wrap());
 }
 
 fn main() {}

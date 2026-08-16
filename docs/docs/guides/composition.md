@@ -274,6 +274,35 @@ is text, with each `$name` in it rendered into the string.
 The child is built first and its node is placed where its element stood, so
 `List` above never calls back into the script while the tree is being built.
 
+### Naming a component from markup
+
+A `.lmn` file writes a component as a tag, the way it writes a template:
+
+```html
+<root>
+  <column id="app">
+    <Home name="bob"/>
+  </column>
+  <script src="main.cdl"/>
+</root>
+```
+
+Markup is compiled before the app runs, with no script host in the loop, so a
+use site here instantiates the block `Home` returns rather than calling `Home`.
+The two spellings differ in that one place: `<Home name="bob"/>` inside another
+`lmn!` block runs the function and places the node it hands back, while the same
+element in a `.lmn` file takes the block and nothing else. Props are markup
+attribute values, so `name="bob"` reaches the block's `$name` as text.
+
+That is why a function has to be a single `return lmn!(...)` to be named from
+markup. One that returns a block from two branches has no one block to stand in
+for the call, and a use site naming it fails the build with the function named.
+Call that function from a block instead.
+
+Component names and `<template name="...">` names share one namespace, and it
+is app-wide. Two declarations claiming one name fail the build with both sites
+named; rename either.
+
 ### What a block may not do
 
 - **One root element.** A block returns one node, so a body with no root or
@@ -318,6 +347,8 @@ keep a component library in its own file:
   template.
 - Content that needs a frame around it: a template with a `<slot/>`.
 - Markup a script decides on and places: a component.
+- A subtree whose logic lives in candela but whose place in the page is fixed:
+  a component, named as a tag from the `.lmn` file.
 - One long page you want to read in pieces, each appearing once: includes.
 - A stylesheet growing too large: `@import` in `main.css`. See
   [styling](styling.md).

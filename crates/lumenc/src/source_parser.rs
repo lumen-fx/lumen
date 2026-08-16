@@ -14,7 +14,7 @@
 
 use lumen_ir::css::Stylesheet;
 use lumen_ir::fragment::FragmentTable;
-use lumen_ir::layout_ir::LayoutIR;
+use lumen_ir::layout_ir::{LayoutIR, ScriptRefs};
 use std::path::{Path, PathBuf};
 
 /// Zero-sized [`SourceParser`](lumen_runtime::SourceParser) backed by
@@ -72,5 +72,15 @@ impl lumen_runtime::SourceParser for LumencParser {
 
     fn script_fragments(&self, src: &str, uri: &str) -> Result<FragmentTable, String> {
         crate::lmn::script_fragments(src, uri)
+    }
+
+    fn script_refs(&self, src: &str, self_path: &Path) -> Result<ScriptRefs, String> {
+        crate::collect_script_refs(src, self_path, Some(&crate::resolve::FsLoader))
+            .map_err(|e| e.to_string())
+    }
+
+    fn link_fragments(&self, mut table: FragmentTable) -> Result<FragmentTable, String> {
+        crate::fragments::link(&mut table).map_err(|e| e.to_string())?;
+        Ok(table)
     }
 }

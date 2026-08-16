@@ -13,7 +13,7 @@
 //! [`Fragment`](lumen_ir::fragment::Fragment) through the same element builder
 //! a `<template>` goes through.
 
-use lumen_ir::fragment::{FragmentOrigin, FragmentTable};
+use lumen_ir::fragment::{FragmentComponent, FragmentOrigin, FragmentTable};
 use lumen_ir::layout_ir::ParseError;
 use lumen_script_candela::lmn;
 
@@ -25,15 +25,20 @@ use lumen_script_candela::lmn;
 /// A block that is a single component element declares no fragment: it stands
 /// for that component's own call.
 ///
+/// A block written as the whole body of a capitalized function carries that
+/// function's name, which is what lets markup write the function as a tag.
+///
 /// # Errors
 ///
 /// A rendered message when a block is malformed, naming the file, line, and
 /// column the block was written at.
 pub fn script_fragments(source: &str, uri: &str) -> Result<FragmentTable, String> {
     let mut table = FragmentTable::new();
-    for (body, at) in lmn::regions(source) {
-        let block =
-            lmn::analyze(body).map_err(|e| located(source, at + e.offset, uri, &e.message))?;
+    let index = lmn::FnIndex::scan(source);
+    for region in lmn::regions(source) {
+        let at = region.body_start;
+        let block = lmn::analyze(region.body)
+            .map_err(|e| located(source, at + e.offset, uri, &e.message))?;
         if block.lone_component {
             continue;
         }
@@ -43,13 +48,19 @@ pub fn script_fragments(source: &str, uri: &str) -> Result<FragmentTable, String
             line: line as u32,
             col: col as u32,
         };
-        let fragment = crate::parser_html::fragment_from_markup(
+        let mut fragment = crate::parser_html::fragment_from_markup(
             &block.markup,
             &block.key,
             &block.args,
             origin,
         )
         .map_err(|e| located(source, at, uri, &render(&e)))?;
+        if let Some(component) = lmn::component_at(source, &region.span, &index) {
+            fragment.components.push(FragmentComponent {
+                name: component.name,
+                inlinable: component.inlinable,
+            });
+        }
         table
             .insert(fragment)
             .map_err(|e| located(source, at, uri, &e.to_string()))?;

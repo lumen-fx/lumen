@@ -31,7 +31,7 @@ use crate::layout_ir::{
     Attributes, BindKind, BindSpec, DeferredAttr, Element, FlexAlign, FlexAxis, FlexJustify,
     FragmentUse, ImageFitSpec, InterpolationSlot, LayoutIR, LengthSpec, LineHeightSpec,
     LintFinding, LintKind, LintSeverity, OutlineSpec, OverflowSpec, ParseError, PositionSpec,
-    ScrollAxisSpec, TextAlignSpec, TextWrapSpec, WidgetRole,
+    ScriptRefs, ScrollAxisSpec, TextAlignSpec, TextWrapSpec, WidgetRole,
 };
 use crate::values::{bad, parse_bg, parse_color, parse_edges, parse_f32, parse_i32, parse_length};
 // `parse_duration_ms` lives on the CSS cascade side (`lumen_ir::css`)
@@ -213,7 +213,7 @@ pub fn parse_markup(
     // `build_element` walks the root - they live in `LayoutIR.menubar`
     // and the window backend builds an OS-native menu from them.
     let menubar = extract_menubar(doc.root_element())?;
-    let known: BTreeSet<String> = fragments.iter().map(|(k, _)| k.clone()).collect();
+    let known = fragments.names();
     let mut root = build_element(
         doc.root_element(),
         &mut script_source,
@@ -242,6 +242,43 @@ pub fn parse_markup(
         },
         fragments,
     })
+}
+
+/// Read the `<script>` elements `src` names, without building its layout
+/// tree.
+///
+/// Markup names a candela component by writing the function as a tag, and
+/// that function lives in a script the markup itself points at, so the
+/// scripts are read first and their blocks are in the fragment table before
+/// the tree is built.
+///
+/// # Errors
+///
+/// [`ParseError`] when an `<include>` cannot be resolved or the markup is not
+/// well-formed XML.
+pub fn collect_script_refs(
+    src: &str,
+    self_path: &Path,
+    loader: Option<&dyn crate::resolve::FileLoader>,
+) -> Result<ScriptRefs, ParseError> {
+    let mut included_files = Vec::new();
+    let spliced = crate::resolve::resolve_includes(src, self_path, loader, &mut included_files)?;
+    let doc = roxmltree::Document::parse(&spliced).map_err(|e| ParseError::Xml(e.to_string()))?;
+    let mut refs = ScriptRefs::default();
+    for node in doc.descendants() {
+        if !node.is_element() || node.tag_name().name() != "script" {
+            continue;
+        }
+        if let Some(path) = node.attribute("src") {
+            refs.external.push(path.to_string());
+        } else if let Some(body) = node.text() {
+            if !refs.inline.is_empty() {
+                refs.inline.push('\n');
+            }
+            refs.inline.push_str(body);
+        }
+    }
+    Ok(refs)
 }
 
 /// Read the fragments `src` declares, without building its layout tree.
@@ -294,7 +331,7 @@ fn collect_declarations(
     if declarations.is_empty() {
         return Ok(external.clone());
     }
-    let mut known: BTreeSet<String> = external.iter().map(|(k, _)| k.clone()).collect();
+    let mut known = external.names();
     for node in &declarations {
         let name = node.attribute("name").ok_or_else(|| {
             ParseError::Xml(format!(
@@ -363,6 +400,9 @@ fn collect_declarations(
                 col: col as u32,
             }],
             kind: FragmentKind::Template,
+            // A `<template>` is reached by the name it declares, which is its
+            // own key.
+            components: Vec::new(),
         })
         .map_err(|e| ParseError::Xml(e.to_string()))?;
     }
@@ -741,6 +781,9 @@ pub fn fragment_from_markup(
         body,
         origins: vec![origin],
         kind: FragmentKind::Markup,
+        // Filled by the extractor, which is what knows the function the block
+        // was written in.
+        components: Vec::new(),
     })
 }
 

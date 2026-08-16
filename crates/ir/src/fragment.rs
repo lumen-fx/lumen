@@ -18,8 +18,8 @@
 //! bytes.
 
 use crate::layout_ir::Element;
-use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Tag of the element that marks where a use site's children land inside a
 /// fragment body.
@@ -41,6 +41,26 @@ pub enum FragmentKind {
     Template,
     /// Declared by an `lmn!` block in a script.
     Markup,
+}
+
+/// A candela function name that reaches a fragment.
+///
+/// A candela function returns an `lmn!` block, and markup names that function
+/// as a tag. Markup is compiled with no script host in the loop, so the use
+/// site instantiates the block the function returns instead of calling it,
+/// which means the name has to reach the fragment the block declared.
+///
+/// `inlinable` is whether it can. A function whose body is one
+/// `return lmn!(...)` has a single block to stand in for the call; a function
+/// with several blocks, or one that returns a block conditionally, has none,
+/// and the name is kept anyway so a use site naming it gets that message
+/// rather than "unknown tag".
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FragmentComponent {
+    /// The candela function's name, as markup writes it.
+    pub name: String,
+    /// Whether markup can instantiate the block through this name.
+    pub inlinable: bool,
 }
 
 /// One declared parameter of a fragment.
@@ -89,6 +109,9 @@ pub struct Fragment {
     pub origins: Vec<FragmentOrigin>,
     /// Which authoring form declared it.
     pub kind: FragmentKind,
+    /// Candela function names that reach this fragment. Empty for a
+    /// `<template>`, which is reached by its own key.
+    pub components: Vec<FragmentComponent>,
 }
 
 /// Failures from building a [`FragmentTable`].
@@ -156,6 +179,11 @@ impl FragmentTable {
                         existing.origins.push(origin);
                     }
                 }
+                for component in fragment.components {
+                    if !existing.components.contains(&component) {
+                        existing.components.push(component);
+                    }
+                }
                 Ok(())
             }
         }
@@ -169,6 +197,39 @@ impl FragmentTable {
     /// Every fragment, in key order.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Fragment)> {
         self.fragments.iter()
+    }
+
+    /// Every fragment, in key order, for a pass that rewrites bodies.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Fragment> {
+        self.fragments.values_mut()
+    }
+
+    /// The fragment a candela component name reaches, with whether markup can
+    /// inline it.
+    ///
+    /// A name no component carries yields `None`, which the caller reports as
+    /// an unknown tag; a name carried by a function with no single block
+    /// yields `false`, which the caller reports against that function.
+    pub fn by_component(&self, name: &str) -> Option<(&Fragment, bool)> {
+        self.fragments.values().find_map(|fragment| {
+            fragment
+                .components
+                .iter()
+                .find(|component| component.name == name)
+                .map(|component| (fragment, component.inlinable))
+        })
+    }
+
+    /// Every name a use site may write: each fragment key, plus each candela
+    /// component name.
+    pub fn names(&self) -> BTreeSet<String> {
+        let mut names: BTreeSet<String> = self.fragments.keys().cloned().collect();
+        for fragment in self.fragments.values() {
+            for component in &fragment.components {
+                names.insert(component.name.clone());
+            }
+        }
+        names
     }
 
     /// How many fragments are declared.
@@ -251,6 +312,7 @@ mod tests {
             body: body(text),
             origins,
             kind: FragmentKind::Template,
+            components: Vec::new(),
         }
     }
 
@@ -329,6 +391,44 @@ mod tests {
         left.merge(right).expect("compatible tables merge");
         assert_eq!(left.len(), 2);
         assert_eq!(left.get("card").expect("card").origins.len(), 2);
+    }
+
+    #[test]
+    fn a_component_name_reaches_the_fragment_it_is_on() {
+        let mut table = FragmentTable::new();
+        let mut fragment = fragment("79114ba6b591efb1", "hi", vec![origin("main.cdl", 3)]);
+        fragment.kind = FragmentKind::Markup;
+        fragment.components.push(FragmentComponent {
+            name: "Home".to_string(),
+            inlinable: true,
+        });
+        table.insert(fragment).expect("first declaration");
+
+        let (found, inlinable) = table.by_component("Home").expect("Home reaches it");
+        assert_eq!(found.key, "79114ba6b591efb1");
+        assert!(inlinable);
+        assert!(table.by_component("Away").is_none());
+        assert_eq!(
+            table.names(),
+            ["79114ba6b591efb1".to_string(), "Home".to_string()].into()
+        );
+    }
+
+    #[test]
+    fn one_body_written_by_two_functions_carries_both_names() {
+        let mut table = FragmentTable::new();
+        for name in ["Home", "Away"] {
+            let mut fragment = fragment("shared", "hi", vec![origin("main.cdl", 3)]);
+            fragment.components.push(FragmentComponent {
+                name: name.to_string(),
+                inlinable: true,
+            });
+            table.insert(fragment).expect("the same body merges");
+        }
+
+        assert_eq!(table.len(), 1);
+        assert!(table.by_component("Home").is_some());
+        assert!(table.by_component("Away").is_some());
     }
 
     #[test]

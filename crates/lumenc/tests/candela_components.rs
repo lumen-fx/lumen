@@ -8,6 +8,10 @@
 //! to a fragment ahead of time, and instantiating it at run time builds the
 //! same tree whether the app runs from source or from an artifact.
 //!
+//! Both authoring forms reach the one fragment, so both directions are
+//! covered: markup writes a candela function as a tag, and a block writes a
+//! `<template>` the markup declares.
+//!
 //! The artifact runs with no parser installed, so an identical tree is the
 //! proof that nothing parses markup while the app is running.
 
@@ -97,12 +101,15 @@ fn settle(app: &mut App) {
 const EXPECTED: &str = "\
 root
   column#stage
+    label.home = home for bob
   column#app
     label.home = home for bob
     column.rows
       for
         label.row = Row: Alpha
         label.row = Row: Beta
+  column#wrap
+    label.card = from a block
 ";
 
 #[test]
@@ -115,7 +122,8 @@ fn a_component_tree_builds_from_source() {
 
 /// The same app, compiled and run from the artifact with no parser installed.
 /// An identical tree is the proof that the fragments travelled compiled and
-/// nothing parsed markup at run time.
+/// nothing parsed markup at run time. That covers the markup use site as well:
+/// `<Home name="bob"/>` is already the block's body in the compiled tree.
 #[test]
 fn the_artifact_builds_the_same_tree_with_no_parser() {
     let _serial = isolate();
@@ -127,6 +135,22 @@ fn the_artifact_builds_the_same_tree_with_no_parser() {
             .iter()
             .any(|(_, f)| f.kind == lumen_ir::fragment::FragmentKind::Markup),
         "the artifact carries the blocks the script wrote"
+    );
+    assert!(
+        compiled.fragments.by_component("Home").is_some(),
+        "the artifact carries the name markup writes the component under"
+    );
+    let stage = compiled
+        .ir
+        .root
+        .children
+        .iter()
+        .find(|e| e.attrs.id.as_deref() == Some("stage"))
+        .expect("the stage is in the compiled tree");
+    assert_eq!(
+        stage.children[0].attrs.text.as_deref(),
+        Some("home for bob"),
+        "the markup use site is already the block's body"
     );
     let bytes = lumen_ir::artifact::serialize(&compiled).expect("artifact serializes");
 
@@ -211,6 +235,131 @@ fn a_for_inside_a_block_resolves_rows_and_arguments() {
     assert!(tree.contains("label.row = Row: Beta"), "{tree}");
 }
 
+/// Markup writes a candela function as a tag, and the argument it passes
+/// reaches the block's `$name` slot.
+#[test]
+fn markup_instantiates_a_component_with_an_argument() {
+    let _serial = isolate();
+    let (mut app, _window) = build_headless_app(RunOptions::new(fixture())).expect("headless app");
+    settle(&mut app);
+
+    let tree = dump(&mut app);
+    let stage = tree
+        .lines()
+        .skip_while(|line| line.trim() != "column#stage")
+        .nth(1)
+        .expect("the stage has a child");
+    assert_eq!(stage.trim(), "label.home = home for bob", "{tree}");
+}
+
+/// One component reached both ways builds one subtree. The markup use site
+/// inlines the block, the `lmn!` call site instantiates it, and neither is a
+/// different entity.
+#[test]
+fn a_component_builds_the_same_subtree_from_markup_and_from_a_block() {
+    let _serial = isolate();
+    let (mut app, _window) = build_headless_app(RunOptions::new(fixture())).expect("headless app");
+    settle(&mut app);
+
+    let tree = dump(&mut app);
+    let built: Vec<&str> = tree
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("label.home"))
+        .collect();
+    assert_eq!(
+        built,
+        ["label.home = home for bob", "label.home = home for bob"],
+        "{tree}"
+    );
+}
+
+/// A block instantiates a `<template>` the markup declares, and the argument
+/// it passes reaches the template's marker.
+#[test]
+fn a_block_instantiates_a_markup_template() {
+    let _serial = isolate();
+    let (mut app, _window) = build_headless_app(RunOptions::new(fixture())).expect("headless app");
+    settle(&mut app);
+
+    let tree = dump(&mut app);
+    assert!(tree.contains("label.card = from a block"), "{tree}");
+}
+
+/// Write an app directory under a name of its own and check it.
+fn check(name: &str, markup: &str, script: &str) -> Result<(), String> {
+    let dir = std::env::temp_dir().join(format!("lumen_lmn_{name}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp app dir");
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[script]\nengine = \"candela\"\n\n[mcp]\nport = 0\n",
+    )
+    .expect("write lumen.toml");
+    std::fs::write(dir.join("main.lmn"), markup).expect("write main.lmn");
+    std::fs::write(dir.join("main.cdl"), script).expect("write main.cdl");
+    let result = lumenc::check_app(&dir)
+        .map(|_| ())
+        .map_err(|e| e.to_string());
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
+/// Markup inlines the block a component returns, so a function that returns
+/// more than one has nothing to inline. The compiler says so instead of
+/// picking a branch.
+#[test]
+fn a_component_with_two_blocks_cannot_be_used_from_markup() {
+    let _serial = isolate();
+    let err = check(
+        "two_blocks",
+        "<root><column id=\"app\"><Toggle on=\"yes\"/></column>\
+         <script src=\"main.cdl\"/></root>",
+        "import \"lumen.cdl\";\n\
+         fn Toggle(on) {\n\
+             if on == \"yes\" { return lmn!(<label text=\"on\"/>); }\n\
+             return lmn!(<label text=\"off\"/>);\n\
+         }\n\
+         fn main() {}\n",
+    )
+    .expect_err("Toggle has no single block to inline");
+    assert!(err.contains("Toggle"), "{err}");
+    assert!(err.contains("single `return lmn!(...)`"), "{err}");
+}
+
+/// A `<template>` and a candela component claiming one name leaves a use site
+/// with nothing to pick between. Both declarations are named.
+#[test]
+fn a_component_colliding_with_a_template_is_reported_against_both() {
+    let _serial = isolate();
+    let err = check(
+        "collision",
+        "<root><template name=\"Home\"><label text=\"from markup\"/></template>\
+         <column id=\"app\"><Home/></column><script src=\"main.cdl\"/></root>",
+        "import \"lumen.cdl\";\n\
+         fn Home() { return lmn!(<label text=\"from a block\"/>); }\n\
+         fn main() {}\n",
+    )
+    .expect_err("two declarations claim `Home`");
+    assert!(err.contains("`Home` is declared twice"), "{err}");
+    // Both sites, each with the position that finds it.
+    assert!(err.contains("main.lmn:1:"), "{err}");
+    assert!(err.contains("main.cdl:2:"), "{err}");
+}
+
+/// A capitalized tag naming nothing is still an error, not an empty node.
+#[test]
+fn a_capital_tag_naming_no_component_still_errors() {
+    let _serial = isolate();
+    let err = check(
+        "unknown",
+        "<root><column id=\"app\"><Nowhere/></column><script src=\"main.cdl\"/></root>",
+        "import \"lumen.cdl\";\nfn main() {}\n",
+    )
+    .expect_err("Nowhere names nothing");
+    assert!(err.contains("Nowhere"), "{err}");
+}
+
 /// Editing the script re-extracts its blocks and re-mounts what they build.
 #[test]
 fn a_hot_reload_re_extracts_and_re_mounts() {
@@ -243,9 +392,12 @@ fn a_hot_reload_re_extracts_and_re_mounts() {
         tree = dump(&mut app);
     }
 
-    assert!(
-        tree.contains("welcome, bob"),
-        "the edited block re-mounted: {tree}"
+    // Both use sites, the one in the markup and the one in the block, come
+    // from the edited fragment.
+    assert_eq!(
+        tree.matches("welcome, bob").count(),
+        2,
+        "the edited block re-mounted everywhere it is named: {tree}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

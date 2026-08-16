@@ -10,11 +10,14 @@
 //! the tree holds no use site. That order is what makes per-instance ids
 //! stack: an outer instance prefixes the id of the inner use site before the
 //! inner one expands, so a body two levels down answers to `outer:inner:name`.
+//!
+//! [`link`] runs the same expansion over the table itself, so every body is
+//! the whole subtree it stands for by the time it travels in an artifact.
 
 use crate::layout_ir::{DeferredAttr, Element, InterpolationSlot, LintFinding, ParseError};
 use crate::parser_html::{apply_deferred_attribute, classify_markers, push_unique};
 use lumen_ir::fragment::{DEFAULT_SLOT, Fragment, FragmentTable, SLOT_TAG};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// How many expansion passes a tree gets. One pass resolves one level of
 /// nesting, so this is the deepest chain of fragments-inside-fragments a
@@ -49,10 +52,45 @@ pub(crate) fn inline(
     table: &FragmentTable,
     lint_findings: &mut Vec<LintFinding>,
 ) -> Result<(), ParseError> {
-    reject_cycles(table)?;
+    check(table)?;
+    let mut list = std::mem::take(&mut root.children);
+    let result = expand_until_settled(&mut list, table, lint_findings);
+    root.children = list;
+    result
+}
+
+/// Expand the use sites the fragment bodies themselves hold, so every body in
+/// the table is the whole subtree it stands for.
+///
+/// A body reaches this pass with use sites left in it: an `lmn!` block writes
+/// `<card/>` for a `<template>` the markup declares, and the block is read
+/// before the markup is. Resolving them here is what lets the table travel in
+/// the artifact and instantiate with nothing else in hand.
+///
+/// # Errors
+///
+/// [`ParseError`] when a body names a fragment the table does not hold, or
+/// when the table itself is malformed.
+pub fn link(table: &mut FragmentTable) -> Result<(), ParseError> {
+    check(table)?;
+    let declared = table.clone();
+    let mut lint_findings = Vec::new();
+    for fragment in table.iter_mut() {
+        expand_until_settled(&mut fragment.body, &declared, &mut lint_findings)?;
+    }
+    Ok(())
+}
+
+/// Expand `list` one level of nesting per pass until nothing is left to
+/// expand.
+fn expand_until_settled(
+    list: &mut Vec<Element>,
+    table: &FragmentTable,
+    lint_findings: &mut Vec<LintFinding>,
+) -> Result<(), ParseError> {
     for _ in 0..MAX_PASSES {
         let mut expanded = false;
-        inline_list(&mut root.children, table, lint_findings, &mut expanded)?;
+        inline_list(list, table, lint_findings, &mut expanded)?;
         if !expanded {
             return Ok(());
         }
@@ -91,12 +129,7 @@ fn instantiate(
     lint_findings: &mut Vec<LintFinding>,
 ) -> Result<Vec<Element>, ParseError> {
     let use_site = *site.frag_use.take().expect("caller checked the site");
-    let fragment = table.get(&use_site.key).ok_or_else(|| {
-        ParseError::Xml(format!(
-            "unknown fragment `{}`: no <template name=\"{}\"> is declared",
-            use_site.key, use_site.key
-        ))
-    })?;
+    let fragment = lookup(table, &use_site.key)?;
 
     // The use site binds first, so an argument it passes wins over the
     // declared default for the same name.
@@ -125,6 +158,30 @@ fn instantiate(
     };
     let _ = fill_slots(&mut body, &fill);
     Ok(body)
+}
+
+/// The fragment a use site naming `name` stands for.
+///
+/// One lookup for both spellings a use site has: a `<template>` name, which is
+/// the table key itself, and a candela component name, which the fragment the
+/// function returns carries. A component whose function has no single block to
+/// inline is named here rather than resolved, so the message says what to do
+/// about it.
+fn lookup<'a>(table: &'a FragmentTable, name: &str) -> Result<&'a Fragment, ParseError> {
+    if let Some(fragment) = table.get(name) {
+        return Ok(fragment);
+    }
+    match table.by_component(name) {
+        Some((fragment, true)) => Ok(fragment),
+        Some((_, false)) => Err(ParseError::Xml(format!(
+            "component `{name}` cannot be used from markup: markup instantiates the block a \
+             component returns, so its body has to be a single `return lmn!(...)`"
+        ))),
+        None => Err(ParseError::Xml(format!(
+            "unknown fragment `{name}`: no <template name=\"{name}\"> and no candela `fn {name}` \
+             returning an lmn! block is declared"
+        ))),
+    }
 }
 
 /// Classify one argument value the way an authored attribute value is
@@ -288,6 +345,65 @@ fn fill_slots(list: &mut Vec<Element>, fill: &Fill) -> Option<String> {
     text
 }
 
+/// Everything that has to hold of a table before anything expands against it.
+fn check(table: &FragmentTable) -> Result<(), ParseError> {
+    reject_name_collisions(table)?;
+    reject_cycles(table)
+}
+
+/// Reject a name two declarations both answer to.
+///
+/// A use site writes one name, so a candela component sharing a name with a
+/// `<template>`, or with another component, leaves nothing to pick between
+/// them. Both declarations are named in the message; renaming either settles
+/// it.
+///
+/// Only a component markup can inline claims a name. A function with several
+/// blocks contributes one entry per block under its own name, and none of
+/// them answers a use site, so those are the same declaration rather than
+/// competing ones.
+fn reject_name_collisions(table: &FragmentTable) -> Result<(), ParseError> {
+    let mut claimed: BTreeMap<&str, &Fragment> = BTreeMap::new();
+    for (key, fragment) in table.iter() {
+        for component in fragment.components.iter().filter(|c| c.inlinable) {
+            if let Some(other) = table.get(&component.name)
+                && other.key != *key
+            {
+                return Err(collision(&component.name, other, fragment));
+            }
+            match claimed.insert(component.name.as_str(), fragment) {
+                Some(other) if other.key != *key => {
+                    return Err(collision(&component.name, other, fragment));
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The message for one contested name, pointing at both declarations.
+fn collision(name: &str, first: &Fragment, second: &Fragment) -> ParseError {
+    ParseError::Xml(format!(
+        "`{name}` is declared twice: {} and {}. A use site writes one name, so rename one of them",
+        origins(first),
+        origins(second)
+    ))
+}
+
+/// Where a fragment was declared, for a message about it.
+fn origins(fragment: &Fragment) -> String {
+    if fragment.origins.is_empty() {
+        return "<generated>".to_string();
+    }
+    fragment
+        .origins
+        .iter()
+        .map(|o| format!("{}:{}:{}", o.file, o.line, o.col))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Reject a fragment that instantiates itself, directly or through a chain.
 ///
 /// Checked on the table rather than during expansion: the whole cycle is
@@ -302,14 +418,25 @@ fn reject_cycles(table: &FragmentTable) -> Result<(), ParseError> {
     Ok(())
 }
 
-/// Depth-first walk of what `key` instantiates. `chain` is the path that
-/// reached it, which is the cycle itself when `key` turns up on it again.
+/// Depth-first walk of what `name` instantiates. `chain` is the path that
+/// reached it, which is the cycle itself when it turns up on the path again.
+///
+/// The walk travels on fragment keys rather than on the names use sites write,
+/// so a component reached under its function name and under its key is the one
+/// node it is.
 fn visit<'a>(
-    key: &'a str,
+    name: &str,
     table: &'a FragmentTable,
     chain: &mut Vec<&'a str>,
     done: &mut BTreeSet<&'a str>,
 ) -> Result<(), ParseError> {
+    let Some(fragment) = table
+        .get(name)
+        .or_else(|| table.by_component(name).map(|(f, _)| f))
+    else {
+        return Ok(());
+    };
+    let key = fragment.key.as_str();
     if done.contains(key) {
         return Ok(());
     }
@@ -321,9 +448,6 @@ fn visit<'a>(
             cycle.join(" -> ")
         )));
     }
-    let Some(fragment) = table.get(key) else {
-        return Ok(());
-    };
     chain.push(key);
     for used in uses(fragment) {
         visit(used, table, chain, done)?;

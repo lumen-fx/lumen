@@ -82,7 +82,9 @@ prints the parse error and exits 1. A missing `<dir>` exits 2.
 The check covers the markup, the stylesheet, and every script, including the
 `lmn!` markup blocks a candela script writes: a block with no single root, a
 component element the script declares no function for, or a prop naming a
-parameter that function does not have all fail here.
+parameter that function does not have all fail here. So does markup naming a
+component it cannot instantiate: a function whose body is not a single
+`return lmn!(...)`, or a name a `<template>` already claims.
 
 Every command that compiles markup from source (`check`, `run`, `build`,
 `package`) prints the parse-time findings to stderr as
