@@ -52,6 +52,27 @@ unsafe impl Send for VmState {}
 // SAFETY: see the `VmState` doc comment.
 unsafe impl Sync for VmState {}
 
+/// The names a `.cdlb` image can be called by.
+///
+/// The image is loaded and nothing in it is run, so this is safe to ask at
+/// build time: a build tool has to know what an app will and will not be able
+/// to call before it ships the app, and the export table is the answer.
+///
+/// # Errors
+///
+/// The bytes are not a `.cdlb` image this runtime can load, or the image
+/// declares a builtin nothing here answers for.
+pub fn image_exports(image: &[u8]) -> Result<Vec<String>, ScriptError> {
+    let registries = Registries::default();
+    let mut registry = HostRegistry::new();
+    register_lumen_host_fns(&mut registry, &registries);
+    let program =
+        load_program(image, &registry).map_err(|e| ScriptError::Runtime(e.to_string()))?;
+    let mut names: Vec<String> = program.exports().map(str::to_owned).collect();
+    names.sort();
+    Ok(names)
+}
+
 /// A candela [`ScriptHost`] that runs a `.cdlb` image on `candela-vm`.
 #[derive(Resource)]
 pub struct CandelaVmHost {

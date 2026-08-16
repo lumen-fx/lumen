@@ -105,9 +105,9 @@ fn seed_week() {
 
 // Derived display signals. The recompute body is referenced by function name;
 // its parameter arrives as the current string value of the declared dep signal.
-fn calc_total_label(n) { return n + " checks logged this week"; }
-fn calc_pct_label(n) { return n + "%"; }
-fn calc_goal_label(n) { return n + " / 28"; }
+fn calc_total_label(n: any) { return str(n) + " checks logged this week"; }
+fn calc_pct_label(n: any) { return str(n) + "%"; }
+fn calc_goal_label(n: any) { return str(n) + " / 28"; }
 
 fn on_start() {
     lumen::signal_set("settings_open", "");
@@ -128,10 +128,10 @@ fn on_start() {
     lumen::register_hotkey("open-settings", "CommandOrControl+,");
 }
 
-fn open_settings(id) { lumen::signal_set("settings_open", "1"); }
-fn close_settings(id) { lumen::signal_set("settings_open", ""); }
+fn open_settings(id: any) { lumen::signal_set("settings_open", "1"); }
+fn close_settings(id: any) { lumen::signal_set("settings_open", ""); }
 
-fn reset_week(id) {
+fn reset_week(id: any) {
     let h = 0;
     while h < 4 {
         clear_habit(h);
@@ -140,11 +140,11 @@ fn reset_week(id) {
     recompute_stats();
 }
 
-fn on_toggle(id, checked) {
+fn on_toggle(id: any, checked: any) {
     recompute_stats();
 }
 
-fn on_slider(id, value) {
+fn on_slider(id: string, value: float) {
     if id == "goal" {
         let goal = int(value);
         lumen::signal_set_int("goal", goal);
@@ -152,7 +152,7 @@ fn on_slider(id, value) {
     }
 }
 
-fn on_hotkey(name) {
+fn on_hotkey(name: any) {
     if name == "open-settings" {
         lumen::signal_set("settings_open", "1");
     }

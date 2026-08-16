@@ -170,7 +170,7 @@ fn load_note(id) {
 // on_text_input(id, text); write the new text back into the current note and
 // rebuild the preview and sidebar. This is the event-driven live preview: there
 // is no tick watcher.
-fn on_text_input(id, text) {
+fn on_text_input(id: string, text: string) {
     if id != "editor" {
         return;
     }
@@ -184,7 +184,7 @@ fn on_text_input(id, text) {
     rebuild_sidebar();
 }
 
-fn new_note(clicked_id) {
+fn new_note(clicked_id: any) {
     let n = lumen::signal_get_int("next_id");
     let next = n + 1;
     lumen::signal_set_int("next_id", next);
@@ -197,7 +197,7 @@ fn new_note(clicked_id) {
     load_note(new_id);
 }
 
-fn toggle_theme(clicked_id) {
+fn toggle_theme(clicked_id: any) {
     let theme = lumen::signal_get("theme");
     if theme == "dark" {
         lumen::signal_set("theme", "light");
@@ -212,7 +212,7 @@ fn toggle_theme(clicked_id) {
 
 // Sidebar rows carry the id "nt|<note>"; no per-id handler is registered for
 // them, so their clicks fall through to on_click.
-fn on_click(id) {
+fn on_click(id: string) {
     if id.starts_with("nt|") {
         let note_id = id[3..id.len()];
         load_note(note_id);
