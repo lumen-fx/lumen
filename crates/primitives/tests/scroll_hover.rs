@@ -21,7 +21,7 @@ fn test_app() -> App {
     let mut app = App::new();
     app.world
         .init_resource::<lumen_core::components::A11yScrollIntoViewRequests>();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     app.add_plugin(ScrollPlugin);
     app
 }

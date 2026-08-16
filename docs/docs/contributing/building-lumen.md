@@ -297,6 +297,26 @@ software rasterizer baseline in `lumen-render-headless`;
 mismatch the screenshot suite writes the actual and diff images under a
 `lumen-golden-failures` directory inside `CARGO_TARGET_DIR`.
 
+## Measuring how long an app takes to start
+
+`lumen-portable` carries a benchmark for the sequence every host runs to start
+an app: build the app, install its script host, spawn the tree, tick until the
+state stops moving, read that state, drop the app. It matters wherever an app
+is started more than once, such as once per rendered page.
+
+It takes compiled apps rather than directories, because compiling is not part
+of starting one:
+
+```sh
+cargo run -p lumenc --release -- build apps/tracker /tmp/tracker.lmna
+cargo bench -p lumen-portable --bench boot -- /tmp/tracker.lmna
+```
+
+Each phase is reported on its own, since what a slow start costs is only
+actionable if you know which phase is slow. The run is also reported in
+tenths, so a cost that grows with the number of starts shows as a trend
+instead of disappearing into one number. `--iterations` sets the sample count.
+
 ## Language server and editor extension
 
 The language server is a normal workspace binary:

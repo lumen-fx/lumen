@@ -1,13 +1,15 @@
-//! Building the app a page runs.
+//! Building the app, without the platform it runs on.
 //!
-//! This is the browser's composition point, the counterpart of what
-//! `lumen-runtime` does for a window. It installs the parts of Lumen that
-//! have no platform in them (widget behaviour, focus, the reconcilers, the
-//! two-way bindings) and leaves out the parts the browser already is: layout,
-//! paint, accessibility, the font stack, and text editing. The last one is
-//! easy to miss. A `<input>` in a page is edited by the browser, which owns
-//! the caret, the selection and the IME; Lumen's rope-backed editor would be
-//! a second one writing over the same text.
+//! This is the composition point for everything that is not a window, the
+//! counterpart of what `lumen-runtime` does for one. It installs the parts of
+//! Lumen that have no platform in them (widget behaviour, focus, the
+//! reconcilers, the two-way bindings) and leaves out layout, paint,
+//! accessibility, the font stack, and text editing.
+//!
+//! Text editing is the one that is easy to miss. In a browser, an `<input>`
+//! is edited by the browser, which owns the caret, the selection and the IME;
+//! Lumen's rope-backed editor would be a second one writing over the same
+//! text.
 //!
 //! The ordering edges below are the ones the desktop registers, and they are
 //! not decoration: every dirty-gated binding reader has to run after the
@@ -38,17 +40,19 @@ use lumen_script::runtime::register_script_commands;
 /// desktop uses too.
 pub fn portable_app() -> App {
     let mut app = App::new();
-    // The page lays out and paints; nothing here extracts a scene.
+    // Whatever this app is put into lays out and paints it; no extract here.
     app.extract_fns.clear();
     app.world.init_resource::<PropertyStore>();
     app.world.init_resource::<ArraySignals>();
     // The scene applier below reads the script command stream whether or not
-    // a host is installed. A page whose app is written in a language no host
-    // in this build answers for still ticks; it just has nothing writing to
-    // the stream. A host installed later finds this already registered.
+    // a host is installed. An app written in a language no host in this build
+    // answers for still ticks; it just has nothing writing to the stream. A
+    // host installed later finds this already registered.
     register_script_commands(&mut app.world);
 
-    app.add_plugin(lumen_input::InputPlugin);
+    // No clipboard: it is the one non-send resource the input layer installs,
+    // and this app has to run wherever it is put.
+    app.add_plugin(lumen_input::InputPlugin { clipboard: false });
     app.add_plugin(PressPlugin::default());
     app.add_plugin(ControlsPlugin);
     app.add_plugin(CheckboxPlugin);

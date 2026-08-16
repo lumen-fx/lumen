@@ -63,7 +63,7 @@ fn click_count(world: &World) -> usize {
 #[test]
 fn pointer_over_button_inserts_hovered() {
     let mut app = App::new();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     let button = spawn_button(
         &mut app.world,
         glam::Vec2::new(10.0, 10.0),
@@ -88,7 +88,7 @@ fn pointer_over_button_inserts_hovered() {
 #[test]
 fn press_release_inside_emits_click() {
     let mut app = App::new();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     let button = spawn_button(
         &mut app.world,
         glam::Vec2::new(0.0, 0.0),
@@ -116,7 +116,7 @@ fn press_release_inside_emits_click() {
 #[test]
 fn press_then_leave_does_not_click() {
     let mut app = App::new();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     let _button = spawn_button(
         &mut app.world,
         glam::Vec2::new(0.0, 0.0),
@@ -144,7 +144,7 @@ fn press_then_leave_does_not_click() {
 #[test]
 fn tab_cycles_focus_across_two_tabindex_entities() {
     let mut app = App::new();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     let a = spawn_button(
         &mut app.world,
         glam::Vec2::new(0.0, 0.0),
@@ -218,7 +218,7 @@ fn tab_cycles_focus_across_two_tabindex_entities() {
 #[test]
 fn tab_cycle_with_equal_tabindex_follows_document_order_not_entity_order() {
     let mut app = App::new();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
 
     let third = app.world.spawn((TabIndex(0), DocumentOrder(2))).id();
     let first = app.world.spawn((TabIndex(0), DocumentOrder(0))).id();
@@ -316,7 +316,7 @@ fn cursor_of(world: &World, e: Entity) -> usize {
 #[test]
 fn ctrl_left_jumps_to_previous_word_start() {
     let mut app = App::new();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     let e = spawn_focused_input(&mut app.world, "hello world", 11);
 
     write_key(&mut app.world, Key::Named(NamedKey::ArrowLeft), true, false);
@@ -351,7 +351,7 @@ fn ctrl_left_jumps_to_previous_word_start() {
 #[test]
 fn ctrl_right_jumps_to_next_word_end() {
     let mut app = App::new();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     let e = spawn_focused_input(&mut app.world, "hello world", 0);
 
     write_key(
@@ -371,7 +371,7 @@ fn ctrl_right_jumps_to_next_word_end() {
 #[test]
 fn ctrl_shift_left_extends_selection_by_word() {
     let mut app = App::new();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     let e = spawn_focused_input(&mut app.world, "hello world", 11);
 
     write_key(&mut app.world, Key::Named(NamedKey::ArrowLeft), true, true);
@@ -388,7 +388,7 @@ fn ctrl_shift_left_extends_selection_by_word() {
 #[test]
 fn ctrl_backspace_deletes_previous_word() {
     let mut app = App::new();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     let e = spawn_focused_input(&mut app.world, "hello world", 11);
 
     write_key(&mut app.world, Key::Named(NamedKey::Backspace), true, false);
@@ -400,7 +400,7 @@ fn ctrl_backspace_deletes_previous_word() {
 #[test]
 fn ctrl_delete_deletes_next_word() {
     let mut app = App::new();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     let e = spawn_focused_input(&mut app.world, "hello world", 0);
 
     write_key(&mut app.world, Key::Named(NamedKey::Delete), true, false);
@@ -412,7 +412,7 @@ fn ctrl_delete_deletes_next_word() {
 #[test]
 fn ctrl_left_respects_multibyte_char_boundaries() {
     let mut app = App::new();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     // "h\u{e9}llo w\u{f6}rld" - the accented letters are each 2 bytes.
     let text = "h\u{e9}llo w\u{f6}rld";
     let e = spawn_focused_input(&mut app.world, text, text.len());
@@ -430,7 +430,7 @@ fn ctrl_left_respects_multibyte_char_boundaries() {
 #[test]
 fn disabled_entity_neither_presses_nor_clicks() {
     let mut app = App::new();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     let button = spawn_button(
         &mut app.world,
         glam::Vec2::new(0.0, 0.0),
@@ -461,7 +461,7 @@ fn disabled_entity_neither_presses_nor_clicks() {
 #[test]
 fn tab_cycle_skips_disabled_entities() {
     let mut app = App::new();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     let a = spawn_button(
         &mut app.world,
         glam::Vec2::new(0.0, 0.0),
@@ -536,7 +536,7 @@ fn tally_clicks(mut tally: ResMut<ClickTally>, mut clicks: MessageReader<ClickEv
 #[test]
 fn same_tick_press_release_emits_exactly_one_click() {
     let mut app = App::new();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     app.world.init_resource::<ClickTally>();
     app.add_systems(
         lumen_core::tick::TickStage::Systems,
@@ -592,7 +592,7 @@ fn same_tick_press_release_emits_exactly_one_click() {
 #[test]
 fn four_same_tick_clicks_deliver_four_times() {
     let mut app = App::new();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     app.world.init_resource::<ClickTally>();
     app.add_systems(
         lumen_core::tick::TickStage::Systems,

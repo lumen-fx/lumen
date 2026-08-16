@@ -1,9 +1,9 @@
 //! The candela host, behind the `host-candela` feature.
 //!
 //! The program it runs is a precompiled `.cdlb` image: the compiler stays out
-//! of the page, so an app's `.cdl` is built to bytecode ahead of time and the
-//! image's `host` declarations bind by name against the builtins the artifact
-//! host registers.
+//! of the runtime, so an app's `.cdl` is built to bytecode ahead of time and
+//! the image's `host` declarations bind by name against the builtins the
+//! artifact host registers.
 
 use bevy_ecs::prelude::World;
 use lumen_core::prelude::App;
