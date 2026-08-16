@@ -11,7 +11,8 @@
 //! * Children link to parents via [`ChildOf`].
 
 use lumen_core::signals::signal_is_truthy;
-use lumen_ir::layout_ir::{Attributes, BindKind, Element, InterpolationSlot, LayoutIR};
+use lumen_ir::interpolate::{Scope, substitute_element};
+use lumen_ir::layout_ir::{Attributes, BindKind, Element, LayoutIR};
 
 /// `<if mode="...">` policy. `Render` despawn/respawns the subtree on
 /// each transition (default; cheap state-wise but loses focus / scroll
@@ -1894,6 +1895,10 @@ pub fn reconcile_for_blocks(
         RowStyle::HostStyled => None,
     };
     for (parent_id, mut marker, children) in markers.iter_mut() {
+        // The row has no entity yet, so the block stands in as the
+        // discriminator that keeps a typo'd field on a 1000-row list to one
+        // warning.
+        let report_missing = |field: &str| warn_missing_row_field_once(parent_id, field);
         // Borrow the array in place - the old `.to_vec()` deep-cloned
         // every `ArrayItem` HashMap (5 000 rows x per-field Strings) on
         // EVERY tick, dominating the idle reconcile cost on big grids.
@@ -2086,18 +2091,15 @@ pub fn reconcile_for_blocks(
                     continue;
                 }
                 let item = &items[*i];
-                let ctx = SubstCtx {
-                    row: Some(RowScope { item, idx: *i }),
-                    args: None,
-                    store: &store,
-                    parent_id,
-                };
+                let scope = Scope::new(&*store)
+                    .with_row(item, *i)
+                    .reporting_to(&report_missing);
                 for tmpl in template.iter() {
                     // Substitute placeholders; run the cascade only on
                     // the per-row fallback path (pre-cascaded otherwise).
                     let mut inst = substitute_in_element_with_css(
                         tmpl,
-                        &ctx,
+                        &scope,
                         if per_row_cascade { row_css } else { None },
                     );
                     // Override the row's positioning so it lands at the
@@ -2150,14 +2152,11 @@ pub fn reconcile_for_blocks(
         // Append-only: new = cached + tail. Spawn just the tail.
         if cached.len() < new_keys.len() && new_keys[..cached.len()] == cached[..] {
             for (i, item) in items.iter().enumerate().skip(cached.len()) {
-                let ctx = SubstCtx {
-                    row: Some(RowScope { item, idx: i }),
-                    args: None,
-                    store: &store,
-                    parent_id,
-                };
+                let scope = Scope::new(&*store)
+                    .with_row(item, i)
+                    .reporting_to(&report_missing);
                 for tmpl in &marker.body {
-                    let inst = substitute_in_element_with_css(tmpl, &ctx, row_css);
+                    let inst = substitute_in_element_with_css(tmpl, &scope, row_css);
                     spawn_body_child(&mut commands, &inst, parent_id);
                 }
             }
@@ -2189,14 +2188,11 @@ pub fn reconcile_for_blocks(
             }
         }
         for (i, item) in items.iter().enumerate() {
-            let ctx = SubstCtx {
-                row: Some(RowScope { item, idx: i }),
-                args: None,
-                store: &store,
-                parent_id,
-            };
+            let scope = Scope::new(&*store)
+                .with_row(item, i)
+                .reporting_to(&report_missing);
             for tmpl in &marker.body {
-                let inst = substitute_in_element_with_css(tmpl, &ctx, row_css);
+                let inst = substitute_in_element_with_css(tmpl, &scope, row_css);
                 spawn_body_child(&mut commands, &inst, parent_id);
             }
         }
@@ -2204,54 +2200,6 @@ pub fn reconcile_for_blocks(
     }
 }
 
-/// One iteration of a `<for>` body: the record its placeholders read and
-/// the index they count from.
-pub struct RowScope<'a> {
-    /// The current iteration's row record. `InterpolationSlot::Row(field)`
-    /// lookups hit this map.
-    pub item: &'a lumen_core::signals::ArrayItem,
-    /// 0-based iteration index, stringified for `RowIndex`.
-    pub idx: usize,
-}
-
-/// Substitution context bundled together so the placeholder walker can
-/// resolve each [`InterpolationSlot`] against the right scope without
-/// threading the scopes through every recursion step.
-///
-/// One context serves both substituting callers, and each carries only the
-/// scopes it has: a `<for>` row brings [`Self::row`], a fragment
-/// instantiation brings [`Self::args`], and a `<for>` inside a fragment
-/// body meets both in turn. A placeholder whose scope is absent is left in
-/// the string verbatim, so the walk that owns that scope resolves it later.
-///
-/// - `row` - the iteration in progress, absent outside a `<for>` body.
-/// - `args` - the arguments a fragment instance was built with, already
-///   folded over the declared defaults. Absent outside a fragment body.
-/// - `store` - global property store. `InterpolationSlot::Global` reads
-///   from here.
-/// - `parent_id` - the for-block entity, used only as the
-///   one-shot-warn discriminator for missing row fields. We don't have
-///   a per-row entity id at substitution time (the row hasn't spawned
-///   yet), so the for-block entity stands in.
-pub struct SubstCtx<'a> {
-    /// The iteration in progress, absent outside a `<for>` body.
-    pub row: Option<RowScope<'a>>,
-    /// The arguments a fragment instance was built with, absent outside a
-    /// fragment body.
-    pub args: Option<&'a std::collections::BTreeMap<String, String>>,
-    /// Global property store, which is what a global placeholder reads.
-    pub store: &'a lumen_core::property_store::PropertyStore,
-    /// The for-block entity, the discriminator for the missing-row-field
-    /// warning.
-    pub parent_id: Entity,
-}
-
-/// Walk an [`Element`] subtree, replacing every `{...}` placeholder in
-/// its attribute string values and inline text with the resolved
-/// value from the appropriate scope (iteration row, row index, global
-/// signal, ...). Unmatched placeholders are left intact so authoring
-/// typos surface as parse / runtime errors downstream rather than
-/// silently rendering empty strings.
 /// True when any element in the template tree carries a `{...}` placeholder
 /// inside a selector-relevant attr (`id` or `class`). Such templates must
 /// run the CSS cascade per row (post-substitution) because rule matching
@@ -2280,7 +2228,7 @@ fn cascade_element_tree(el: &mut Element, sheet: &lumen_ir::css::Stylesheet) {
     }
 }
 
-/// Substitute the placeholders in a template subtree against `ctx`, then
+/// Substitute the placeholders in a template subtree against `scope`, then
 /// re-run the cascade over the result when a stylesheet is given.
 ///
 /// The cascade has to come after substitution for a template whose `id` or
@@ -2288,207 +2236,14 @@ fn cascade_element_tree(el: &mut Element, sheet: &lumen_ir::css::Stylesheet) {
 /// that landed there.
 pub fn substitute_in_element_with_css(
     template: &Element,
-    ctx: &SubstCtx<'_>,
+    scope: &Scope<'_>,
     css: Option<&lumen_ir::css::Stylesheet>,
 ) -> Element {
-    let mut clone = template.clone();
-    substitute_in_attrs_text(&mut clone, ctx);
+    let mut instance = substitute_element(template, scope);
     if let Some(sheet) = css {
-        let _ = lumen_ir::css::reapply_single(&mut clone, sheet);
+        cascade_element_tree(&mut instance, sheet);
     }
-    clone.children = clone
-        .children
-        .into_iter()
-        .map(|c| {
-            let mut child = c;
-            substitute_in_attrs_text(&mut child, ctx);
-            if let Some(sheet) = css {
-                let _ = lumen_ir::css::reapply_single(&mut child, sheet);
-            }
-            child.children = child
-                .children
-                .iter()
-                .map(|gc| substitute_in_element_with_css(gc, ctx, css))
-                .collect();
-            child
-        })
-        .collect();
-    clone
-}
-
-/// Resolve every placeholder slot recorded on `el` against `ctx` and
-/// substitute the result into the element's string-valued attrs.
-///
-/// Resolution rules (wave-C contract):
-/// - [`InterpolationSlot::Row`] - `ctx.row`'s record. Missing field
-///   -> empty string + a single `tracing::warn!` (deduplicated per
-///   `(parent_id, field)` pair so a missing field on a 1000-row list
-///   doesn't spam the log). No row scope -> left verbatim for the
-///   `<for>` walk that has one.
-/// - [`InterpolationSlot::RowIndex`] - the iteration index, or left
-///   verbatim outside a row scope.
-/// - [`InterpolationSlot::Arg`] - the instantiating argument, else the
-///   parameter's declared default, else empty. A `Global` naming a
-///   declared parameter resolves the same way, which is how a fragment
-///   argument shadows a global signal of that name.
-/// - [`InterpolationSlot::Global`] - `ctx.store.get_global_str(name)`.
-///   Missing -> empty string, no warn (matches the global-signal-not-set
-///   semantics elsewhere).
-/// - [`InterpolationSlot::SelfField`] / [`InterpolationSlot::ParentField`]:
-///   empty string + a `tracing::debug!`. The per-entity consumer
-///   system lands in a follow-up wave.
-///
-/// Crucially: when an element has no `interpolations` recorded
-/// (synthetic elements, elements outside `<for>` bodies parsed before
-/// wave-C, etc.) we **fall back** to the legacy "replace every
-/// `{field}` token with the matching record field" pass so existing
-/// for-blocks keep working. Both paths run because a `<for>` with
-/// `<row>` containers wraps the slot-bearing leaves several levels
-/// deep, and the parser only attaches slots to the bearing leaves
-/// (not their ancestors).
-fn substitute_in_attrs_text(el: &mut Element, ctx: &SubstCtx<'_>) {
-    let sub = |s: &str| -> String { resolve_placeholders(s, &el.interpolations, ctx) };
-    if let Some(t) = &el.attrs.text {
-        el.attrs.text = Some(sub(t));
-    }
-    if let Some(id) = &el.attrs.id {
-        el.attrs.id = Some(sub(id));
-    }
-    if let Some(src) = &el.attrs.src {
-        el.attrs.src = Some(sub(src));
-    }
-    if let Some(role) = &el.attrs.style_role {
-        el.attrs.style_role = Some(sub(role));
-    }
-    if let Some(placeholder) = &el.attrs.placeholder {
-        el.attrs.placeholder = Some(sub(placeholder));
-    }
-    if let Some(payload) = &el.attrs.drag_payload {
-        el.attrs.drag_payload = Some(sub(payload));
-    }
-    el.attrs.classes = el.attrs.classes.iter().map(|c| sub(c)).collect();
-}
-
-/// Single-pass placeholder resolver. Replaces every `{...}` token in
-/// `body` with the wave-C scope-aware result for the matching
-/// [`InterpolationSlot`]. Tokens that don't classify as a known slot
-/// fall through to the legacy "replace `{k}` with `item[k]`" rule so
-/// pre-wave-C for-bodies (no `interpolations` populated on their
-/// elements) still work.
-fn resolve_placeholders(body: &str, slots: &[InterpolationSlot], ctx: &SubstCtx<'_>) -> String {
-    let mut out = String::with_capacity(body.len());
-    let mut i = 0;
-    while i < body.len() {
-        let Some(rel) = body[i..].find('{') else {
-            out.push_str(&body[i..]);
-            break;
-        };
-        let lt = i + rel;
-        out.push_str(&body[i..lt]);
-        let Some(end_rel) = body[lt..].find('}') else {
-            out.push_str(&body[lt..]);
-            break;
-        };
-        let gt = lt + end_rel;
-        let inner = &body[lt + 1..gt];
-        let trimmed = inner.trim();
-        let slot = claim_arg(InterpolationSlot::from(trimmed), slots, ctx);
-        let resolved = match &slot {
-            InterpolationSlot::Row(field) => match &ctx.row {
-                Some(row) => match row.item.get(field) {
-                    Some(v) => Some(v.clone()),
-                    None => {
-                        warn_missing_row_field_once(ctx.parent_id, field);
-                        Some(String::new())
-                    }
-                },
-                None => None,
-            },
-            InterpolationSlot::RowIndex => ctx.row.as_ref().map(|row| row.idx.to_string()),
-            InterpolationSlot::Arg(name) => ctx
-                .args
-                .map(|args| args.get(name).cloned().unwrap_or_default()),
-            InterpolationSlot::Global(name) => {
-                ctx.store.get_global_str(name).map(|s| s.to_string())
-            }
-            InterpolationSlot::SelfField(field) | InterpolationSlot::ParentField(field) => {
-                tracing::debug!(
-                    target: "lumenc::spawn::row",
-                    "$self / $parent field `{field}` substituted as empty - \
-                     per-entity property store consumer lands in a follow-up wave"
-                );
-                Some(String::new())
-            }
-        };
-        // Honour the recorded slot list when present so authoring
-        // intent wins over the legacy `{k}` substring rule: if the
-        // parser classified this brace as e.g. `Row("name")` we use
-        // the row lookup result even when `slots` doesn't carry a
-        // matching entry (synthetic / cloned elements). When the slot
-        // resolution returned `None` (Global with no signal set), fall
-        // back to the legacy lookup so legacy `<for>` markup that
-        // referenced `{field}` as a synonym for the row field keeps
-        // working - wave-C records that as Global but the row item
-        // may still carry the field.
-        let final_value = resolved.or_else(|| {
-            // Skip the legacy fallback for slots that should never
-            // accidentally hit the row record. `RowIndex` resolved
-            // above; `Row(field)` already consulted the item.
-            if matches!(
-                slot,
-                InterpolationSlot::RowIndex | InterpolationSlot::Row(_) | InterpolationSlot::Arg(_)
-            ) {
-                return None;
-            }
-            ctx.row
-                .as_ref()
-                .and_then(|row| row.item.get(trimmed).cloned())
-        });
-        // Suppress wave-C participation when the slot list explicitly
-        // doesn't claim this placeholder. `slots.is_empty()` means
-        // the parser didn't attach any slots to this element (older
-        // IR or synthetic), in which case the legacy substring rule
-        // governs the fallthrough.
-        let _ = slots;
-        match final_value {
-            Some(v) => out.push_str(&v),
-            None => {
-                // No resolution - preserve the placeholder verbatim
-                // so downstream errors point at the literal `{x}`.
-                out.push('{');
-                out.push_str(inner);
-                out.push('}');
-            }
-        }
-        i = gt + 1;
-    }
-    out
-}
-
-/// Re-read a placeholder as a fragment argument when the surrounding
-/// fragment scope claims its name.
-///
-/// A parameter reference is spelled exactly like a global signal
-/// reference, so the classifier that sees only the token always says
-/// `Global`. Two things separate them, and either is enough: the compiler
-/// records an [`InterpolationSlot::Arg`] on the element when it knows the
-/// enclosing parameter list, and the instance's argument map holds every
-/// declared parameter. Inside a fragment body the parameter wins, which is
-/// what makes an argument shadow a global signal of the same name.
-fn claim_arg(
-    slot: InterpolationSlot,
-    slots: &[InterpolationSlot],
-    ctx: &SubstCtx<'_>,
-) -> InterpolationSlot {
-    let InterpolationSlot::Global(name) = &slot else {
-        return slot;
-    };
-    let claimed = slots.contains(&InterpolationSlot::Arg(name.clone()))
-        || ctx.args.is_some_and(|args| args.contains_key(name));
-    if claimed {
-        return InterpolationSlot::Arg(name.clone());
-    }
-    slot
+    instance
 }
 
 /// Emit a `tracing::warn!` for a missing row field, deduplicated per
@@ -2664,152 +2419,6 @@ fn is_relayout_boundary(style: &Style, el: &Element) -> bool {
         return true;
     }
     matches!(style.width, Length::Px(_)) && matches!(style.height, Length::Px(_))
-}
-
-#[cfg(test)]
-mod substitution_tests {
-    //! One context, two scopes. A `<for>` row brings the row record, a
-    //! fragment instance brings the arguments, and a `<for>` inside a
-    //! fragment body meets both: each walk resolves what its own scope
-    //! knows and leaves the rest of the placeholders standing.
-    use super::*;
-    use lumen_core::property_store::PropertyStore;
-    use lumen_core::signals::ArrayItem;
-    use std::collections::BTreeMap;
-
-    fn args(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-            .collect()
-    }
-
-    fn item(pairs: &[(&str, &str)]) -> ArrayItem {
-        pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-            .collect()
-    }
-
-    fn resolve(
-        body: &str,
-        slots: &[InterpolationSlot],
-        row: Option<(&ArrayItem, usize)>,
-        args: Option<&BTreeMap<String, String>>,
-        store: &PropertyStore,
-    ) -> String {
-        let ctx = SubstCtx {
-            row: row.map(|(item, idx)| RowScope { item, idx }),
-            args,
-            store,
-            parent_id: Entity::PLACEHOLDER,
-        };
-        resolve_placeholders(body, slots, &ctx)
-    }
-
-    #[test]
-    fn an_argument_resolves_from_the_instance_binding() {
-        let store = PropertyStore::default();
-        let bound = args(&[("title", "Recent")]);
-        let out = resolve(
-            "{$title}!",
-            &[InterpolationSlot::Arg("title".to_string())],
-            None,
-            Some(&bound),
-            &store,
-        );
-        assert_eq!(out, "Recent!");
-    }
-
-    #[test]
-    fn an_argument_beats_a_global_of_the_same_name() {
-        let mut store = PropertyStore::default();
-        store.set_global_str("title", "from the signal");
-        let bound = args(&[("title", "from the argument")]);
-        let out = resolve("{$title}", &[], None, Some(&bound), &store);
-        assert_eq!(out, "from the argument");
-    }
-
-    #[test]
-    fn a_global_outside_the_parameter_list_still_reads_the_store() {
-        let mut store = PropertyStore::default();
-        store.set_global_str("theme", "dark");
-        let bound = args(&[("title", "Recent")]);
-        let out = resolve("{$theme}", &[], None, Some(&bound), &store);
-        assert_eq!(out, "dark");
-    }
-
-    #[test]
-    fn row_placeholders_survive_the_argument_walk() {
-        let store = PropertyStore::default();
-        let bound = args(&[("prefix", "Row")]);
-        let slots = [
-            InterpolationSlot::Arg("prefix".to_string()),
-            InterpolationSlot::Row("name".to_string()),
-        ];
-        let out = resolve(
-            "{$prefix}: {row.name} #{$index}",
-            &slots,
-            None,
-            Some(&bound),
-            &store,
-        );
-        assert_eq!(
-            out, "Row: {row.name} #{$index}",
-            "the walk with no row scope leaves the row placeholders for the reconciler"
-        );
-    }
-
-    #[test]
-    fn the_row_walk_finishes_what_the_argument_walk_left() {
-        let store = PropertyStore::default();
-        let row = item(&[("name", "alpha")]);
-        let slots = [
-            InterpolationSlot::Arg("prefix".to_string()),
-            InterpolationSlot::Row("name".to_string()),
-        ];
-        let out = resolve(
-            "Row: {row.name} #{$index}",
-            &slots,
-            Some((&row, 2)),
-            None,
-            &store,
-        );
-        assert_eq!(out, "Row: alpha #2");
-    }
-
-    #[test]
-    fn both_scopes_resolve_in_one_walk() {
-        let store = PropertyStore::default();
-        let bound = args(&[("prefix", "Row")]);
-        let row = item(&[("name", "alpha")]);
-        let slots = [
-            InterpolationSlot::Arg("prefix".to_string()),
-            InterpolationSlot::Row("name".to_string()),
-        ];
-        let out = resolve(
-            "{$prefix}: {row.name} #{$index}",
-            &slots,
-            Some((&row, 0)),
-            Some(&bound),
-            &store,
-        );
-        assert_eq!(out, "Row: alpha #0");
-    }
-
-    #[test]
-    fn a_parameter_nothing_bound_resolves_empty() {
-        let store = PropertyStore::default();
-        let bound = args(&[("title", "")]);
-        let out = resolve(
-            "[{$title}]",
-            &[InterpolationSlot::Arg("title".to_string())],
-            None,
-            Some(&bound),
-            &store,
-        );
-        assert_eq!(out, "[]");
-    }
 }
 
 #[cfg(test)]

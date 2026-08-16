@@ -316,13 +316,8 @@ fn spawn_fragment(
         let store = world
             .get_resource::<lumen_core::property_store::PropertyStore>()
             .unwrap_or(&empty);
-        let ctx = crate::spawn::SubstCtx {
-            row: None,
-            args: Some(&bound),
-            store,
-            parent_id: Entity::PLACEHOLDER,
-        };
-        crate::spawn::substitute_in_element_with_css(body, &ctx, None)
+        let scope = lumen_ir::interpolate::Scope::new(store).with_args(&bound);
+        crate::spawn::substitute_in_element_with_css(body, &scope, None)
     };
     let root = crate::spawn::spawn_subtree(world, &instance, None);
 
