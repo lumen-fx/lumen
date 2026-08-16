@@ -50,7 +50,9 @@ pub fn portable_app() -> App {
     // host installed later finds this already registered.
     register_script_commands(&mut app.world);
 
-    app.add_plugin(lumen_input::InputPlugin);
+    // No clipboard: it is the one non-send resource the input layer installs,
+    // and this app has to run wherever it is put.
+    app.add_plugin(lumen_input::InputPlugin { clipboard: false });
     app.add_plugin(PressPlugin::default());
     app.add_plugin(ControlsPlugin);
     app.add_plugin(CheckboxPlugin);

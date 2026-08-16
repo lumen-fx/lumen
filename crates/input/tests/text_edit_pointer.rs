@@ -25,7 +25,7 @@ const ADVANCE: f32 = 16.0 * 0.55;
 
 fn app() -> App {
     let mut app = App::new();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     app.add_plugin(TextEditPlugin);
     app
 }

@@ -26,7 +26,7 @@ fn test_app() -> App {
     // `apply_a11y_scroll_into_view` consumer requires it.
     app.world
         .init_resource::<lumen_core::components::A11yScrollIntoViewRequests>();
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     app.add_plugin(ScrollPlugin);
     app.add_plugin(DragPlugin::default());
     app.add_plugin(ControlsPlugin);
