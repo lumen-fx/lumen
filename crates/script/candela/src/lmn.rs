@@ -10,8 +10,8 @@
 //! same block into a [`Fragment`](lumen_ir::fragment::Fragment) the artifact
 //! carries. They agree because both read this module: [`key_of`] decides the
 //! fragment key, [`analyze`] decides which `$name` sites are arguments and
-//! which elements are components, and [`slot_name`] decides where a component's
-//! node lands.
+//! which elements are components, and [`component_at`] decides whether a
+//! component's block can stand in for calling it.
 //!
 //! # What a block becomes
 //!
@@ -21,17 +21,32 @@
 //! ```
 //!
 //! `Home`'s block is a fragment with one parameter, `name`. `App`'s block is a
-//! fragment whose body has a `<slot>` where `<Home/>` stood; the expansion
-//! calls `Home("bob")` first and passes the node it returns in as that slot's
-//! content, so the applier never calls back into the script.
+//! fragment whose body holds `<Home name="bob"/>` as a use site naming `Home`.
+//!
+//! # Bake, then fill
+//!
+//! Nothing parses markup while an app runs, so every block in the app is a
+//! compiled fragment before it starts. What a use site becomes depends on
+//! whether the function it names has anything left to do:
+//!
+//! - **The build can stand in for the call.** `Home` returns its block and
+//!   nothing else, and every value in that block is one its caller passed, so
+//!   instantiating the fragment with those arguments is what calling `Home`
+//!   would have produced. The build does exactly that, and `App`'s body holds
+//!   the label from the first frame. No call.
+//! - **The function has to run.** It works a value out, or picks between
+//!   blocks. Every block it may return is still compiled, and what stands at
+//!   the use site is a marker the runtime fills by calling the function and
+//!   putting the node it returns in the marker's place. That happens on the
+//!   first tick, before the tree is drawn.
+//!
+//! [`component_at`] draws that line. Either way the tree is baked ahead and
+//! only values are worked out while the app runs.
 //!
 //! # Naming a component from markup
 //!
-//! A `.lmn` file writes `<Home name="bob"/>` too. Markup compiles with no
-//! script host in the loop, so that use site instantiates the block `Home`
-//! returns instead of calling `Home`. [`component_at`] decides which functions
-//! markup may name: the name starts with a capital, and the body is one
-//! `return lmn!(...)`, so there is a single block to stand in for the call.
+//! A `.lmn` file writes `<Home name="bob"/>` too, and it means the same use
+//! site. Markup carries no candela scope, so a prop there is text.
 //!
 //! # Restrictions
 //!
@@ -55,7 +70,11 @@ pub const RESERVED_PREFIX: &str = "lmn-";
 /// How many hex characters a fragment key has.
 pub const KEY_LEN: usize = 16;
 
-/// The slot a body's `index`-th component element leaves behind.
+/// The slot `lumen::fragment_spawn` gives its `index`-th positional child.
+///
+/// The builtin takes slot content as a list of nodes and a fragment declares
+/// its slots by name, so the two meet on this naming. A `<template>` writing
+/// `<slot/>` names the default slot instead, which markup fills by nesting.
 #[must_use]
 pub fn slot_name(index: usize) -> String {
     format!("{RESERVED_PREFIX}child-{index}")
@@ -95,10 +114,8 @@ impl std::error::Error for LmnError {}
 /// An element in a block that names a candela function.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Component {
-    /// The candela function the element calls.
+    /// The candela function the element names.
     pub name: String,
-    /// The slot its node fills in the enclosing fragment.
-    pub slot: String,
     /// Props as written, in source order: attribute name and raw value.
     pub props: Vec<(String, String)>,
     /// Byte offset of the element in the body.
@@ -111,15 +128,13 @@ pub struct Block {
     /// Lookup key of the fragment the block declares.
     pub key: String,
     /// The body as markup: `$name` rewritten to the marker a fragment
-    /// parameter uses, and every component element replaced by its slot.
+    /// parameter uses. A component element stays where it stands, as an
+    /// element naming the function, which is what makes it a use site.
     pub markup: String,
     /// Argument names the body reads, in first-appearance order.
     pub args: Vec<String>,
     /// Component elements, in source order.
     pub components: Vec<Component>,
-    /// Whether the body is one component element and nothing else, in which
-    /// case the block is that component's call and declares no fragment.
-    pub lone_component: bool,
 }
 
 /// Fold line endings and trim the outer whitespace, so the same markup written
@@ -177,34 +192,51 @@ pub fn regions(src: &str) -> Vec<LmnRegion<'_>> {
 pub struct ComponentFn {
     /// The function's name, as markup writes it.
     pub name: String,
-    /// Whether markup can instantiate the block through the name.
+    /// The function's parameters, in declaration order. Props reach them by
+    /// name, and a call passes them in this order.
+    pub params: Vec<String>,
+    /// Whether instantiating the block is the same as calling the function.
     pub inlinable: bool,
 }
 
 /// The component the function around `span` declares, if markup may name it.
 ///
 /// A candela function is a component when its name starts with a capital, the
-/// way a component element in a block is spelled. Markup compiles with no
-/// script host in the loop, so a use site instantiates the block the function
-/// returns rather than calling the function, and
-/// [`inlinable`](ComponentFn::inlinable) is set only for a body that is one
-/// `return lmn!(...)`: the one shape with a single block to stand in for the
-/// call, and the one where nothing the function would have run is dropped.
+/// way a component element in a block is spelled.
 ///
-/// A function of any other shape still yields its name, with `inlinable`
-/// clear, so a use site naming it can be told why rather than being told the
-/// tag is unknown.
+/// [`inlinable`](ComponentFn::inlinable) is whether the block can stand in for
+/// the call outright, which holds when two things do:
+///
+/// - the function's whole body is that one `return lmn!(...)`, so nothing else
+///   it would have run is skipped; and
+/// - every `$name` the block reads is one of the function's own parameters, so
+///   every value in the block is one the caller passed rather than one the
+///   function worked out.
+///
+/// Both together mean the block with its arguments bound is exactly what the
+/// call returns, so the build can put it in the tree and no call is needed.
+/// A function that fails either still yields its name: markup names it the
+/// same way, and what stands in the tree is filled by calling it.
 #[must_use]
-pub fn component_at(src: &str, span: &Range<usize>, index: &FnIndex) -> Option<ComponentFn> {
+pub fn component_at(
+    src: &str,
+    span: &Range<usize>,
+    index: &FnIndex,
+    reads: &[String],
+) -> Option<ComponentFn> {
     let (name, body) = index.enclosing(span.start)?;
     if !name.starts_with(|c: char| c.is_ascii_uppercase()) {
         return None;
     }
+    let params: Vec<String> = index.params(name).unwrap_or_default().to_vec();
     let before = src.get(body.start..span.start)?.trim();
     let after = src.get(span.end..body.end)?.trim();
+    let whole_body = before == "return" && matches!(after, "" | ";");
+    let forwarded = reads.iter().all(|read| params.contains(read));
     Some(ComponentFn {
         name: name.to_string(),
-        inlinable: before == "return" && matches!(after, "" | ";"),
+        params,
+        inlinable: whole_body && forwarded,
     })
 }
 
@@ -220,14 +252,17 @@ pub fn analyze(body: &str) -> Result<Block, LmnError> {
         key: key_of(body),
         markup: scan.markup,
         args: scan.args,
-        lone_component: scan.lone_component,
         components: scan.components,
     })
 }
 
-/// The candela source one block expands to: a call that instantiates the
-/// fragment, or, for a body that is one component element, that component's
-/// own call.
+/// The candela source one block expands to: the call that instantiates the
+/// fragment the block declares.
+///
+/// A component element inside the block is not part of that call. It is a use
+/// site in the fragment's body, which the build resolves against the component
+/// it names: a component the build can stand in for is already in the body,
+/// and one that has to run is filled where it stands when the app runs.
 ///
 /// The result is a single line. candela parses an expansion as its own
 /// expression and reports every span it produces against the invocation, so
@@ -239,30 +274,27 @@ pub fn analyze(body: &str) -> Result<Block, LmnError> {
 /// does not know or a prop naming a parameter that function does not declare.
 pub fn expand(body: &str, index: &FnIndex) -> Result<String, LmnError> {
     let block = analyze(body)?;
-    if block.lone_component {
-        return call_of(&block.components[0], index);
+    for component in &block.components {
+        check_props(component, index)?;
     }
     let mut args = Vec::with_capacity(block.args.len() * 2);
     for name in &block.args {
         args.push(format!("\"{name}\""));
         args.push(format!("str({name})"));
     }
-    let mut children = Vec::with_capacity(block.components.len());
-    for component in &block.components {
-        children.push(call_of(component, index)?);
-    }
     Ok(format!(
-        "lumen::fragment_spawn(\"{}\", [{}], [{}])",
+        "lumen::fragment_spawn(\"{}\", [{}], [])",
         block.key,
-        args.join(", "),
-        children.join(", ")
+        args.join(", ")
     ))
 }
 
-/// The call one component element stands for. Props map to the function's
-/// parameters by name; a parameter no prop names is passed the empty string,
-/// which is what an omitted fragment argument resolves to.
-fn call_of(component: &Component, index: &FnIndex) -> Result<String, LmnError> {
+/// Check a component element against the function it names.
+///
+/// Props reach the function by parameter name, so one naming a parameter the
+/// function does not declare would go nowhere. Caught here, where the writer
+/// is looking at the block.
+fn check_props(component: &Component, index: &FnIndex) -> Result<(), LmnError> {
     let Some(params) = index.params(&component.name) else {
         return Err(LmnError::new(
             format!(
@@ -285,93 +317,7 @@ fn call_of(component: &Component, index: &FnIndex) -> Result<String, LmnError> {
             ));
         }
     }
-    let args: Vec<String> = params
-        .iter()
-        .map(
-            |param| match component.props.iter().find(|(p, _)| p == param) {
-                Some((_, value)) => value_expr(value),
-                None => "\"\"".to_string(),
-            },
-        )
-        .collect();
-    Ok(format!("{}({})", component.name, args.join(", ")))
-}
-
-/// A prop value as a candela expression. A value that is one `$name` and
-/// nothing else passes that value through with its own type; anything else is
-/// text, with each `$name` in it rendered by `str`.
-fn value_expr(value: &str) -> String {
-    let parts = split_refs(value);
-    if let [Piece::Ref(name)] = parts.as_slice() {
-        return name.clone();
-    }
-    if parts.is_empty() {
-        return "\"\"".to_string();
-    }
-    parts
-        .iter()
-        .map(|piece| match piece {
-            Piece::Text(text) => quote(text),
-            Piece::Ref(name) => format!("str({name})"),
-        })
-        .collect::<Vec<_>>()
-        .join(" + ")
-}
-
-/// A candela string literal holding `text`.
-fn quote(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 2);
-    out.push('"');
-    for ch in text.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            other => out.push(other),
-        }
-    }
-    out.push('"');
-    out
-}
-
-/// A prop value split into literal text and `$name` references.
-#[derive(Debug, PartialEq, Eq)]
-enum Piece {
-    Text(String),
-    Ref(String),
-}
-
-fn split_refs(value: &str) -> Vec<Piece> {
-    let bytes = value.as_bytes();
-    let mut out: Vec<Piece> = Vec::new();
-    let mut text = String::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'$' {
-            if bytes.get(i + 1) == Some(&b'$') {
-                text.push('$');
-                i += 2;
-                continue;
-            }
-            if let Some(end) = ident_end(bytes, i + 1) {
-                if !text.is_empty() {
-                    out.push(Piece::Text(std::mem::take(&mut text)));
-                }
-                out.push(Piece::Ref(value[i + 1..end].to_string()));
-                i = end;
-                continue;
-            }
-        }
-        let ch = value[i..].chars().next().unwrap_or('\0');
-        text.push(ch);
-        i += ch.len_utf8();
-    }
-    if !text.is_empty() {
-        out.push(Piece::Text(text));
-    }
-    out
+    Ok(())
 }
 
 /// End of the identifier starting at `start`, or `None` when nothing there
@@ -393,15 +339,16 @@ struct Scan {
     markup: String,
     args: Vec<String>,
     components: Vec<Component>,
-    lone_component: bool,
 }
 
 /// Rewrite the body into markup and collect what the emission needs.
 ///
 /// One pass. `$name` outside a `{...}` marker is an argument and becomes the
 /// marker a fragment parameter uses; `$$` is a literal `$`. An element whose
-/// tag starts with a capital is a component, and leaves a `<slot>` behind.
-/// Comments pass through untouched, so nothing inside one is a site.
+/// tag starts with a capital is a component: it is read for its props and left
+/// standing, so the markup carries an element naming the function and the
+/// fragment gets a use site there. Comments pass through untouched, so nothing
+/// inside one is a site.
 #[allow(clippy::too_many_lines)]
 fn scan(body: &str) -> Result<Scan, LmnError> {
     if let Some(at) = body.find(RESERVED_PREFIX) {
@@ -416,7 +363,6 @@ fn scan(body: &str) -> Result<Scan, LmnError> {
     let mut markup = String::with_capacity(body.len());
     let mut args: Vec<String> = Vec::new();
     let mut components: Vec<Component> = Vec::new();
-    let mut elements = 0usize;
     let mut i = 0;
     while i < bytes.len() {
         if body[i..].starts_with("<!--") {
@@ -449,58 +395,43 @@ fn scan(body: &str) -> Result<Scan, LmnError> {
                 continue;
             }
         }
+        // A component element is read for its props and its shape, then left
+        // for the walk to copy like any other element: what the markup needs
+        // is the element itself, so the fragment gets a use site naming the
+        // function, and `$name` inside a prop is rewritten on the way past.
         if bytes[i] == b'<' && bytes.get(i + 1).is_some_and(u8::is_ascii_uppercase) {
-            let element = read_component(body, i, components.len())?;
-            elements += 1;
-            markup.push_str(&format!("<slot name=\"{}\"/>", element.component.slot));
-            components.push(element.component);
-            i = element.end;
-            continue;
-        }
-        if bytes[i] == b'<' && bytes.get(i + 1).is_some_and(u8::is_ascii_alphabetic) {
-            elements += 1;
+            components.push(read_component(body, i)?);
         }
         let ch = body[i..].chars().next().unwrap_or('\0');
         markup.push(ch);
         i += ch.len_utf8();
     }
-    let lone_component = components.len() == 1
-        && elements == 1
-        && normalize(&markup) == format!("<slot name=\"{}\"/>", components[0].slot);
     Ok(Scan {
         markup,
         args,
         components,
-        lone_component,
     })
 }
 
-/// One component element, read.
-struct ReadComponent {
-    component: Component,
-    /// Byte offset just past the element.
-    end: usize,
-}
-
 /// Read the component element that opens at `start`.
-fn read_component(body: &str, start: usize, index: usize) -> Result<ReadComponent, LmnError> {
+///
+/// # Errors
+///
+/// [`LmnError`] when the element has no name, is never closed, or was given
+/// markup children.
+fn read_component(body: &str, start: usize) -> Result<Component, LmnError> {
     let bytes = body.as_bytes();
     let name_end = ident_end(bytes, start + 1)
         .ok_or_else(|| LmnError::new("a component element needs a name", start))?;
     let name = body[start + 1..name_end].to_string();
     let tag = read_tag(body, name_end, start)?;
-    let props = parse_props(&body[name_end..tag.attrs_end], name_end)?;
     let component = Component {
         name: name.clone(),
-        slot: slot_name(index),
-        props,
+        props: parse_props(&body[name_end..tag.attrs_end], name_end)?,
         offset: start,
     };
     if tag.self_closing {
-        return Ok(ReadComponent {
-            component,
-            end: tag.end,
-        });
+        return Ok(component);
     }
     let close = format!("</{name}");
     let at = body[tag.end..]
@@ -514,14 +445,7 @@ fn read_component(body: &str, start: usize, index: usize) -> Result<ReadComponen
             start,
         ));
     }
-    let rest = tag.end + at + close.len();
-    let close_end = body[rest..]
-        .find('>')
-        .map_or(body.len(), |at| rest + at + 1);
-    Ok(ReadComponent {
-        component,
-        end: close_end,
-    })
+    Ok(component)
 }
 
 /// Where a start tag ends, and whether it closed itself.
@@ -874,34 +798,43 @@ mod tests {
         assert!(err.message.contains("reserved"), "{}", err.message);
     }
 
+    /// A component element stays in the markup, which is what makes the
+    /// fragment carry a use site naming the function.
     #[test]
-    fn a_component_becomes_a_slot() {
+    fn a_component_stays_where_it_stands() {
         let block = analyze("<column><Home name=\"bob\"/></column>").expect("a block");
-        assert_eq!(
-            block.markup,
-            "<column><slot name=\"lmn-child-0\"/></column>"
-        );
+        assert_eq!(block.markup, "<column><Home name=\"bob\"/></column>");
         assert_eq!(block.components.len(), 1);
         assert_eq!(block.components[0].name, "Home");
-        assert_eq!(block.components[0].slot, "lmn-child-0");
         assert_eq!(
             block.components[0].props,
             [("name".to_string(), "bob".to_string())]
         );
-        assert!(!block.lone_component);
     }
 
+    /// A prop reading `$name` puts that name on the block, so the enclosing
+    /// instance's argument reaches the use site.
     #[test]
-    fn a_body_that_is_one_component_is_that_component() {
+    fn a_component_prop_reads_the_block_argument() {
+        let block = analyze("<column><Inner t=\"$t\"/></column>").expect("a block");
+        assert_eq!(block.markup, "<column><Inner t=\"{t}\"/></column>");
+        assert_eq!(block.args, ["t"]);
+    }
+
+    /// A body that is one component element is a fragment whose root is that
+    /// use site, so markup naming the enclosing function reaches it.
+    #[test]
+    fn a_body_that_is_one_component_is_a_use_site() {
         let block = analyze("<Home name=\"bob\"/>").expect("a block");
-        assert!(block.lone_component);
+        assert_eq!(block.markup, "<Home name=\"bob\"/>");
+        assert_eq!(block.components.len(), 1);
     }
 
     #[test]
-    fn components_number_their_slots_in_source_order() {
+    fn components_are_listed_in_source_order() {
         let block = analyze("<column><A/><B/></column>").expect("a block");
-        let slots: Vec<&str> = block.components.iter().map(|c| c.slot.as_str()).collect();
-        assert_eq!(slots, ["lmn-child-0", "lmn-child-1"]);
+        let names: Vec<&str> = block.components.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["A", "B"]);
     }
 
     #[test]
@@ -917,10 +850,8 @@ mod tests {
     #[test]
     fn an_empty_component_body_is_the_same_as_self_closing() {
         let block = analyze("<column><Card></Card></column>").expect("a block");
-        assert_eq!(
-            block.markup,
-            "<column><slot name=\"lmn-child-0\"/></column>"
-        );
+        assert_eq!(block.components.len(), 1);
+        assert_eq!(block.components[0].name, "Card");
     }
 
     #[test]
@@ -945,55 +876,43 @@ mod tests {
         assert!(!source.contains('\n'), "an expansion is one line");
     }
 
+    /// A component element is a use site in the fragment, not a call in the
+    /// expansion: the build resolves it against the component it names.
     #[test]
-    fn an_expansion_calls_a_child_component_first() {
+    fn an_expansion_names_no_child_component() {
         let index = index("fn Home(name) { return 0; }");
-        let source = expand("<column><Home name=\"bob\"/></column>", &index).expect("expands");
-        assert!(source.contains("[Home(\"bob\")]"), "{source}");
-    }
-
-    #[test]
-    fn a_body_that_is_one_component_expands_to_its_call() {
-        let index = index("fn Home(name) { return 0; }");
+        let body = "<column><Home name=\"bob\"/></column>";
         assert_eq!(
-            expand("<Home name=\"bob\"/>", &index).expect("expands"),
-            "Home(\"bob\")"
+            expand(body, &index).expect("expands"),
+            format!("lumen::fragment_spawn(\"{}\", [], [])", key_of(body))
         );
     }
 
+    /// A body that is one component element expands to its own fragment, whose
+    /// single root is the use site. That is what markup naming the enclosing
+    /// function reaches.
     #[test]
-    fn a_prop_that_is_one_reference_passes_the_value_through() {
+    fn a_body_that_is_one_component_expands_to_its_fragment() {
+        let index = index("fn Home(name) { return 0; }");
+        let body = "<Home name=\"bob\"/>";
+        assert_eq!(
+            expand(body, &index).expect("expands"),
+            format!("lumen::fragment_spawn(\"{}\", [], [])", key_of(body))
+        );
+    }
+
+    /// A prop reading `$n` puts `n` on the enclosing block, so the value the
+    /// caller passed reaches the use site through the instance's arguments.
+    #[test]
+    fn a_prop_reference_travels_as_a_block_argument() {
         let index = index("fn Home(count) { return 0; }");
+        let body = "<Home count=\"$n\"/>";
         assert_eq!(
-            expand("<Home count=\"$n\"/>", &index).expect("expands"),
-            "Home(n)"
-        );
-    }
-
-    #[test]
-    fn a_mixed_prop_renders_its_references() {
-        let index = index("fn Home(label) { return 0; }");
-        assert_eq!(
-            expand("<Home label=\"hi $who\"/>", &index).expect("expands"),
-            "Home(\"hi \" + str(who))"
-        );
-    }
-
-    #[test]
-    fn a_parameter_no_prop_names_is_passed_empty() {
-        let index = index("fn Home(a, b) { return 0; }");
-        assert_eq!(
-            expand("<Home b=\"x\"/>", &index).expect("expands"),
-            "Home(\"\", \"x\")"
-        );
-    }
-
-    #[test]
-    fn props_map_by_name_not_by_position() {
-        let index = index("fn Home(first, second) { return 0; }");
-        assert_eq!(
-            expand("<Home second=\"2\" first=\"1\"/>", &index).expect("expands"),
-            "Home(\"1\", \"2\")"
+            expand(body, &index).expect("expands"),
+            format!(
+                "lumen::fragment_spawn(\"{}\", [\"n\", str(n)], [])",
+                key_of(body)
+            )
         );
     }
 
@@ -1050,15 +969,16 @@ mod tests {
         assert_eq!(&src[region.span.clone()], "lmn!(<b/>)");
     }
 
-    /// The one shape markup can stand in for: the whole body is the return.
+    /// One component, read: the block is the whole body and every value in it
+    /// came from a parameter, so the build can stand in for the call.
     #[test]
-    fn a_single_return_is_the_component_markup_may_name() {
+    fn a_forwarded_block_stands_in_for_the_call() {
         let src = "fn Home(name) { return lmn!(<label text=\"$name\"/>); }";
-        let region = &regions(src)[0];
         assert_eq!(
-            component_at(src, &region.span, &index(src)),
+            read_component_fn(src),
             Some(ComponentFn {
                 name: "Home".to_string(),
+                params: vec!["name".to_string()],
                 inlinable: true,
             })
         );
@@ -1067,43 +987,51 @@ mod tests {
     #[test]
     fn a_return_without_a_trailing_semicolon_is_still_the_whole_body() {
         let src = "fn Home() { return lmn!(<label/>) }";
-        let region = &regions(src)[0];
-        assert!(
-            component_at(src, &region.span, &index(src))
-                .expect("Home")
-                .inlinable
-        );
+        assert!(read_component_fn(src).expect("Home").inlinable);
+    }
+
+    /// A value the function worked out is not one the caller passed, so the
+    /// block cannot stand in for the call and the function has to run.
+    #[test]
+    fn a_computed_value_needs_the_function_to_run() {
+        let src = "fn Greet(n) { let u = upper(n); return lmn!(<label text=\"$u\"/>); }";
+        let component = read_component_fn(src).expect("Greet");
+        assert_eq!(component.params, ["n"]);
+        assert!(!component.inlinable);
     }
 
     #[test]
-    fn two_returns_leave_no_single_block_to_inline() {
+    fn two_returns_leave_no_one_block_to_stand_in() {
         let src = "fn Toggle(on) {\n\
                        if on { return lmn!(<label text=\"on\"/>); }\n\
                        return lmn!(<label text=\"off\"/>);\n\
                    }";
+        let index = index(src);
         for region in regions(src) {
-            let component = component_at(src, &region.span, &index(src)).expect("Toggle");
+            let args = analyze(region.body).expect("a block").args;
+            let component = component_at(src, &region.span, &index, &args).expect("Toggle");
             assert_eq!(component.name, "Toggle");
             assert!(!component.inlinable, "{region:?}");
         }
     }
 
     #[test]
-    fn a_statement_before_the_return_leaves_no_block_to_inline() {
+    fn a_statement_before_the_return_leaves_no_block_to_stand_in() {
         let src = "fn Home() { let x = 1; return lmn!(<label/>); }";
-        let region = &regions(src)[0];
-        assert!(
-            !component_at(src, &region.span, &index(src))
-                .expect("Home")
-                .inlinable
-        );
+        assert!(!read_component_fn(src).expect("Home").inlinable);
     }
 
     #[test]
     fn a_lowercase_function_is_not_a_component() {
         let src = "fn home() { return lmn!(<label/>); }";
+        assert_eq!(read_component_fn(src), None);
+    }
+
+    /// The component the first block in `src` belongs to.
+    fn read_component_fn(src: &str) -> Option<ComponentFn> {
         let region = &regions(src)[0];
-        assert_eq!(component_at(src, &region.span, &index(src)), None);
+        let args = analyze(region.body).expect("a block").args;
+        component_at(src, &region.span, &index(src), &args)
     }
 
     #[test]

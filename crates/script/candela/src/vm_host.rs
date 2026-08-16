@@ -126,6 +126,10 @@ impl CandelaVmHost {
 }
 
 impl ScriptHost for CandelaVmHost {
+    // `lmn!` is candela's macro, so a component marker in the tree names a
+    // function in this program and no other host should answer for it.
+    const FILLS_COMPONENTS: bool = true;
+
     /// candela references a function by name, so a derivation body is the
     /// script function's name, exactly as on the compiler host.
     type Closure = String;
