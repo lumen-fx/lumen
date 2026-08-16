@@ -239,6 +239,66 @@ fn a_page_of_the_app_becomes_a_document_of_the_site() {
 }
 
 #[test]
+fn a_static_site_is_the_same_pages_with_nothing_to_run_them() {
+    let scratch = scratch("static");
+    let out = scratch.join("site");
+    // No `--lib-dir`: a static site is asked for the pages alone, so there is
+    // nothing for the build to go looking for.
+    let output = Command::new(env!("CARGO_BIN_EXE_lumenc"))
+        .args(["web"])
+        .arg(repo().join("apps/pages-demo"))
+        .arg("--out")
+        .arg(&out)
+        .args(["--render", "static"])
+        .output()
+        .expect("running lumenc web");
+    let printed = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.status.success(), "{printed}");
+    // A missing runtime is what a `csr` build warns about, and this one was
+    // never looking for one.
+    assert!(
+        !printed.contains("nothing runs in the browser"),
+        "{printed}"
+    );
+
+    let files = files(&out);
+    for expected in ["index.html", "settings.html", "404.html", "styles.css"] {
+        assert!(files.contains(expected), "no `{expected}` in {files:?}");
+    }
+    for absent in [
+        "lumen-web.wasm",
+        "lumen-web.js",
+        "lumen.web.json",
+        "app.lmna",
+    ] {
+        assert!(!files.contains(absent), "`{absent}` in {files:?}");
+    }
+    check_documents(&out, "/");
+
+    // The markup is all there; what is gone is everything that would run it.
+    let index = read(&out, "index.html");
+    assert!(
+        index.contains("Welcome to the file-based pages demo."),
+        "{index}"
+    );
+    assert!(index.contains(r#"href="/settings.html""#), "{index}");
+    assert!(!index.contains("<script"), "{index}");
+}
+
+#[test]
+fn a_static_site_says_a_runtime_it_was_handed_has_nowhere_to_go() {
+    let scratch = scratch("static-lib");
+    let out = scratch.join("site");
+    let printed = web("apps/pages-demo", &out, &["--render", "static"]);
+    assert!(printed.contains("--lib-dir"), "{printed}");
+    assert!(!files(&out).contains("lumen-web.wasm"), "{:?}", files(&out));
+}
+
+#[test]
 fn the_shell_answers_for_a_path_with_no_document() {
     let scratch = scratch("shell");
     let out = scratch.join("site");
@@ -446,8 +506,8 @@ fn the_command_says_what_it_cannot_do() {
         assert!(stderr.contains(expected), "{args:?}: {stderr}");
     }
 
-    // Rendering a page by booting the app is not implemented; say so rather
-    // than quietly rendering it some other way.
+    // A mode the build does not have is named back rather than swapped for
+    // one it does, whichever mode is asked for.
     let output = Command::new(env!("CARGO_BIN_EXE_lumenc"))
         .args(["web"])
         .arg(repo().join("apps/pages-demo"))
@@ -458,7 +518,7 @@ fn the_command_says_what_it_cannot_do() {
         .expect("running lumenc web");
     assert_eq!(output.status.code(), Some(2));
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("not implemented yet"),
+        String::from_utf8_lossy(&output.stderr).contains("unknown --prerender mode `run`"),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );

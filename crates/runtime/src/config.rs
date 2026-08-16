@@ -581,6 +581,8 @@ pub struct WebCfg {
     /// Which shape a widget the parser built out of smaller elements is
     /// emitted as.
     pub widgets: WebWidgets,
+    /// Whether the documents carry the browser runtime.
+    pub render: WebRender,
     /// Where the state the pages are rendered with comes from.
     pub prerender: WebPrerender,
     /// Add a content hash to asset file names, so a cache can hold them
@@ -660,12 +662,30 @@ pub enum WebWidgets {
     Verbatim,
 }
 
+/// `[web] render` - whether the documents carry the browser runtime.
+///
+/// This says what a page does once it is open, not what is in it: every mode
+/// writes the whole markup tree, so a reader and a crawler get the same
+/// document either way. [`WebPrerender`] is the other half, and says which
+/// state that markup is written with.
+///
+/// A value for a site rendered per request joins these when the server lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WebRender {
+    /// Files and nothing else: no runtime, no scripts, links followed as the
+    /// browser follows any link. A directory to upload and leave alone.
+    Static,
+    /// The pages load the runtime, which adopts the markup they arrived with
+    /// and runs the app from there.
+    #[default]
+    Csr,
+}
+
 /// `[web] prerender` - where the state a page is rendered with comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WebPrerender {
-    /// Boot the app once per page and snapshot the state it settles into.
-    Run,
     /// The values `[web.seed]` and the markup itself declare.
     #[default]
     Seeds,
