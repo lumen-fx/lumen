@@ -22,6 +22,11 @@ dom=$(mktemp)
 port=8799
 chrome="${CHROME_BIN:-google-chrome}"
 
+# Build before serving. Backgrounding `cargo run` backgrounds the compile
+# with it, and on a cold cache the wait below expires while the compiler is
+# still working, which reads as a server that never came up.
+cargo build -p lumenc
+
 cargo run -p lumenc -- web "$app" --out "$out" --lib-dir "$lib_dir" \
   --serve --port "$port" &
 server=$!
