@@ -29,6 +29,7 @@ mod project;
 
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::{App, Plugin, TickStage};
+use lumen_core::property_store::PropertyStore;
 use web_sys::Element;
 
 pub use nodes::{HydrationReport, NodeTable};
@@ -55,10 +56,16 @@ impl Plugin for WebDomPlugin {
     fn build(self, app: &mut App) {
         let table = NodeTable::adopting(self.root, self.root_entity);
         app.world.insert_non_send(table);
+        // A dialog the browser dismisses writes the signal it hangs off, so
+        // the store has to be there before the first event is drained.
+        app.world.init_resource::<PropertyStore>();
 
         // Reading the browser comes first, so a click this frame is a message
         // the app's own systems see this frame.
-        app.add_systems(TickStage::Input, events::drain_dom_events);
+        app.add_systems(
+            TickStage::Input,
+            (events::drain_dom_events, events::drain_dismissed_dialogs),
+        );
         // Projecting it comes last, after every system that could have
         // changed what the page should show.
         app.add_systems(

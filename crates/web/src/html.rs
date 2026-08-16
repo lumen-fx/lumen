@@ -97,13 +97,15 @@ fn emit_element(
         // real dialog: `open` names the signal, not the state. The state is
         // what a browser reads, so it is resolved here. A dialog with no
         // signal is always showing, which is what it does on the desktop.
+        // Whether it shows is the `open` attribute alone; a browser hides a
+        // closed dialog itself and the reset makes that rule one an author
+        // sheet cannot outrank.
         "dialog" => {
             open = element
                 .attrs
                 .if_signal
                 .as_ref()
                 .is_none_or(|_| branch_taken(element, walk.signals));
-            hidden = !open;
         }
         "for" => children_are_content = false,
         _ => {}

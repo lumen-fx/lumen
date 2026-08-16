@@ -60,6 +60,24 @@ it changes reaches the page as an attribute the stylesheet already matches.
 Typing in a bound `<input>` writes its signal, so a `bind-text` label next to
 it follows along.
 
+## What the browser does itself
+
+Where a browser already implements a behaviour Lumen gives the same meaning
+to, the page gets the browser's rather than a copy driven from the runtime.
+
+A `<dialog>` is the clearest case. It opens as a real modal: it sits over the
+whole page with no stacking order to arrange, the rest of the document stops
+answering clicks and tab stops while it is up, focus lands on the element
+marked `autofocus` when it opens, and Escape dismisses it. A dismissal writes
+the signal named in `open="..."`, so a script sees the same close it would see
+from a Cancel button and the dialog reports the same rejected verdict it
+reports on the desktop.
+
+The browser's own dialog chrome is taken back off. A native dialog is a
+bordered card with its own fill and an inch of padding; a Lumen dialog is the
+whole window with the app's surface centred inside it, and that is what the
+page shows.
+
 A script runs the same way. Its `on_start` publishes the signals the markup
 binds to, a handler bound with `on("click", ...)` runs when that element is
 clicked, and a `derive()` recomputes when one of its dependencies changes.
@@ -201,6 +219,7 @@ means anything without an absolute address.
   do.
 - Keyboard input other than typing into a focused field does not reach the app,
   so a keyboard shortcut and arrow-key navigation between tabs do not work.
+  Escape on an open dialog is the exception; the browser closes it.
 - Following a link loads the next document. Soft navigation, which swaps the
   page in place and keeps the app running, is not wired up.
 - A `<input>` is edited by the browser, so Lumen's own caret, selection and
