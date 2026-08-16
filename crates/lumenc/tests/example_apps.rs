@@ -37,12 +37,17 @@ const TICKS: &str = "6";
 
 /// Every stderr line a clean headless run is allowed to print.
 ///
-/// The first three are the environment talking: a runner has no display, so
-/// the clipboard and global-hotkey backends report themselves absent, and
-/// the runner announces the mode it was put in. `[script]` is an app's own
-/// `print`. `info` and its `hint:` continuation are lint findings, which are
-/// style nudges rather than defects. The last is rodio saying an audio sink
-/// went away when the music app shut down.
+/// Most of these are the environment talking: a runner has no display and no
+/// sound card, so the clipboard, global-hotkey and audio backends report
+/// themselves absent, ALSA prints its own search for a card, and the runner
+/// announces the mode it was put in. `[script]` is an app's own `print`.
+/// `info` and its `hint:` continuation are lint findings, which are style
+/// nudges rather than defects. The last is rodio saying an audio sink went
+/// away when the music app shut down.
+///
+/// A backend reporting itself absent is the environment, not the app. A
+/// backend reporting a failure while it is present is the app, and there is
+/// no entry for that.
 ///
 /// A line outside this set fails the run it appeared in. Anything the
 /// runtime prints while an app is starting means the app got less than it
@@ -55,6 +60,8 @@ const ALLOWED_STDERR: &[&str] = &[
     "info  ",
     "      hint: ",
     "Dropping DeviceSink,",
+    "ALSA lib ",
+    "lumen-audio-rodio: no output device",
 ];
 
 fn workspace_root() -> PathBuf {
