@@ -12,8 +12,9 @@
 //! happens is the unit: Lumen reads a bare number in a length as pixels
 //! and CSS reads it as nothing at all, so `padding: 8 16` is written
 //! `padding: 8px 16px`. A length that reaches a property through `var()`
-//! keeps whatever the custom property holds, so give those an explicit
-//! unit.
+//! holds whatever its custom property holds, which is why the emitter puts
+//! the unit on the definition instead; [`is_length_property`] is what it
+//! asks to tell a length's numbers from a plain one's.
 
 use lumen_ir::css::canonical_property_name;
 
@@ -234,29 +235,53 @@ const PLAIN: &[(&str, &str, Value)] = &[
 ];
 
 /// Knobs with no CSS property behind them. Each becomes `--lm-` plus its
-/// own name, which is where the browser runtime reads it back.
-const KNOBS: &[&str] = &[
-    "knob-color",
-    "knob-inset",
-    "thumb-size",
-    "popup-gap",
-    "caret-width",
-    "caret-blink",
-    "password-character",
-    "disabled-opacity",
-    "progress-duration",
-    "progress-chunk",
-    "sensitivity",
-    "inertia",
-    "scrollbar-thickness",
-    "scrollbar-thickness-thin",
-    "scrollbar-margin",
-    "scrollbar-min-thumb",
-    "scrollbar-track-hover",
-    "scrollbar-hover-boost",
-    "scrollbar-fade-delay",
-    "scrollbar-fade-duration",
+/// own name, which is where the stylesheet and the browser runtime read it
+/// back. A knob measured in pixels is written as a length like any other, so
+/// whatever reads it gets something it can put in a `top` or a `width`.
+const KNOBS: &[(&str, Value)] = &[
+    ("knob-color", Value::AsIs),
+    ("knob-inset", Value::Length),
+    ("thumb-size", Value::Length),
+    ("popup-gap", Value::Length),
+    ("caret-width", Value::Length),
+    ("caret-blink", Value::AsIs),
+    ("password-character", Value::AsIs),
+    ("disabled-opacity", Value::AsIs),
+    ("progress-duration", Value::AsIs),
+    ("progress-chunk", Value::AsIs),
+    ("sensitivity", Value::AsIs),
+    ("inertia", Value::AsIs),
+    ("scrollbar-thickness", Value::Length),
+    ("scrollbar-thickness-thin", Value::Length),
+    ("scrollbar-margin", Value::Length),
+    ("scrollbar-min-thumb", Value::Length),
+    ("scrollbar-track-hover", Value::AsIs),
+    ("scrollbar-hover-boost", Value::AsIs),
+    ("scrollbar-fade-delay", Value::AsIs),
+    ("scrollbar-fade-duration", Value::AsIs),
 ];
+
+/// True when a bare number in this property's value means pixels.
+///
+/// The emitter asks this of a use site to decide what a custom property
+/// holding a bare number is: a length written without its unit, which a
+/// browser drops, or a plain number that has to stay one.
+#[must_use]
+pub fn is_length_property(name: &str) -> bool {
+    let name = canonical_property_name(name);
+    if matches!(
+        name,
+        "hover-border" | "focus-border" | "focus-outline" | "outline"
+    ) {
+        return true;
+    }
+    if let Some((_, _, form)) = PLAIN.iter().find(|(lumen, _, _)| *lumen == name) {
+        return *form == Value::Length;
+    }
+    KNOBS
+        .iter()
+        .any(|(knob, form)| *knob == name && *form == Value::Length)
+}
 
 /// What `name: value` becomes on the web.
 ///
@@ -306,7 +331,11 @@ pub fn rewrite_property(name: &str, value: &str) -> Emission {
                 };
                 return Emission::one(css, value);
             }
-            if KNOBS.contains(&name) {
+            if let Some((_, form)) = KNOBS.iter().find(|(knob, _)| *knob == name) {
+                let value = match form {
+                    Value::AsIs => value.to_string(),
+                    Value::Length => lengths(value),
+                };
                 return Emission::CustomProp(WebDecl::new(
                     format!("{LM_PROPERTY_PREFIX}{name}"),
                     value,
@@ -463,6 +492,15 @@ fn push_term(out: &mut String, term: &mut String) {
         out.push_str("px");
     }
     term.clear();
+}
+
+/// True when every term of `value` is a decimal number with no unit on it,
+/// which is how Lumen writes a length and how CSS writes a plain number. An
+/// empty value is not one.
+#[must_use]
+pub fn is_bare_number(value: &str) -> bool {
+    let mut terms = value.split_whitespace().peekable();
+    terms.peek().is_some() && terms.all(is_number)
 }
 
 /// True for a decimal number with no unit on it.
@@ -725,10 +763,10 @@ mod tests {
         ("draggable", "true", "drop"),
         ("layout-boundary", "true", "drop"),
         ("knob-color", "#ebebf0", "--lm-knob-color: #ebebf0"),
-        ("knob-inset", "4", "--lm-knob-inset: 4"),
-        ("thumb-size", "16", "--lm-thumb-size: 16"),
-        ("popup-gap", "4", "--lm-popup-gap: 4"),
-        ("caret-width", "2", "--lm-caret-width: 2"),
+        ("knob-inset", "4", "--lm-knob-inset: 4px"),
+        ("thumb-size", "16", "--lm-thumb-size: 16px"),
+        ("popup-gap", "4", "--lm-popup-gap: 4px"),
+        ("caret-width", "2", "--lm-caret-width: 2px"),
         ("caret-blink", "530ms", "--lm-caret-blink: 530ms"),
         ("password-character", "*", "--lm-password-character: *"),
         ("disabled-opacity", "0.5", "--lm-disabled-opacity: 0.5"),
@@ -736,14 +774,18 @@ mod tests {
         ("progress-chunk", "0.3", "--lm-progress-chunk: 0.3"),
         ("sensitivity", "1.0", "--lm-sensitivity: 1.0"),
         ("inertia", "0.4", "--lm-inertia: 0.4"),
-        ("scrollbar-thickness", "8", "--lm-scrollbar-thickness: 8"),
+        ("scrollbar-thickness", "8", "--lm-scrollbar-thickness: 8px"),
         (
             "scrollbar-thickness-thin",
             "4",
-            "--lm-scrollbar-thickness-thin: 4",
+            "--lm-scrollbar-thickness-thin: 4px",
         ),
-        ("scrollbar-margin", "2", "--lm-scrollbar-margin: 2"),
-        ("scrollbar-min-thumb", "24", "--lm-scrollbar-min-thumb: 24"),
+        ("scrollbar-margin", "2", "--lm-scrollbar-margin: 2px"),
+        (
+            "scrollbar-min-thumb",
+            "24",
+            "--lm-scrollbar-min-thumb: 24px",
+        ),
         (
             "scrollbar-track-hover",
             "#22222240",
