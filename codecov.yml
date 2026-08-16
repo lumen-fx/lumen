@@ -21,12 +21,15 @@ coverage:
 # no device (the present gate, the damage diff, the init watchdog) are
 # still tested and still run under `cargo test`.
 #
-# The browser module's entry points are the same case for a different reason:
-# every function in that file is an export a page calls, so it runs on
-# wasm32 and nowhere else, while coverage is measured on the host. The suite
-# that drives it runs in a real browser, in its own CI job, on the target
-# llvm-cov does not instrument here. The host-selection code beside it needs
-# no browser and stays graded.
+# The browser crates are the same case for a different reason: they call the
+# DOM, so they run on wasm32 and nowhere else, while coverage is measured on
+# the host. What drives them is a suite in a real browser and a test that
+# opens an emitted page, both in the web job, on a target llvm-cov does not
+# instrument here. Reading them as uncovered says nothing about whether they
+# are tested. Everything they are built on stays graded: the scene layer, the
+# emitter, the contract types, and the host-neutral scripting layer are all
+# ordinary crates that run under `cargo test`.
 ignore:
   - "crates/backends/render-wgpu/src/surface.rs"
-  - "crates/web-runtime/src/lib.rs"
+  - "crates/backends/web-dom"
+  - "crates/web-runtime"

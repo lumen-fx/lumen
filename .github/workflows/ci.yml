@@ -204,11 +204,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      # The size a page pays for the runtime. Set from the first measurement
-      # plus twenty percent, and meant to be lowered: as the target matures the
-      # measurement moves and this follows it down. Raising it is a decision,
-      # not a fix.
-      WASM_SIZE_BUDGET_BYTES: 1960000
+      # The size a page pays for the runtime, with room to move above the
+      # current measurement. Raising it is a decision, not a fix: it went up
+      # once, when the module stopped being a script host alone and gained the
+      # scene layer, the DOM backend and the input and widget behaviour the
+      # page shares with a desktop app. Trimming what a page does not use is
+      # its own piece of work, and this follows the measurement back down when
+      # that lands.
+      WASM_SIZE_BUDGET_BYTES: 3000000
       # `wasm-opt` is not published as a crate; the binaryen release carries it.
       BINARYEN_VERSION: version_123
     steps:
