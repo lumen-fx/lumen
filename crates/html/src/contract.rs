@@ -71,6 +71,11 @@ pub const DATA_LM_DRAG_OVER: &str = "data-lm-drag-over";
 /// `<if mode="hide">` does.
 pub const DATA_LM_HIDDEN: &str = "data-lm-hidden";
 
+/// The attribute a `<dialog>` carries while it is showing. Lumen writes the
+/// name of a signal there and the browser wants the state, so both halves
+/// resolve the signal and write this.
+pub const DIALOG_OPEN: &str = "open";
+
 /// `id` of the inline `<script type="application/json">` block holding the
 /// page's [`Seed`].
 pub const SEED_SCRIPT_ID: &str = "lm-seed";
