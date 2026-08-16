@@ -29,6 +29,7 @@ use lumen_primitives::{
 };
 use lumen_scene::spawn;
 use lumen_script::ScriptSet;
+use lumen_script::runtime::register_script_commands;
 
 /// An app with everything installed that runs the same on every platform.
 ///
@@ -41,6 +42,11 @@ pub fn portable_app() -> App {
     app.extract_fns.clear();
     app.world.init_resource::<PropertyStore>();
     app.world.init_resource::<ArraySignals>();
+    // The scene applier below reads the script command stream whether or not
+    // a host is installed. A page whose app is written in a language no host
+    // in this build answers for still ticks; it just has nothing writing to
+    // the stream. A host installed later finds this already registered.
+    register_script_commands(&mut app.world);
 
     app.add_plugin(lumen_input::InputPlugin);
     app.add_plugin(PressPlugin::default());
