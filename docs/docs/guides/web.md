@@ -73,10 +73,14 @@ fn calc_greeting(who: string) {
 }
 ```
 
-That covers handlers, `derive()` bodies and lifecycle functions. A function
-with an unannotated parameter is not callable from the runtime and its
-handler silently does nothing, which is the one thing that behaves
-differently here than on the desktop.
+That covers handlers, `derive()` bodies and lifecycle functions. Annotate a
+parameter with the type it arrives as rather than `any` where the body does
+arithmetic on it or joins it to a string; a value typed `any` cannot do
+either, and `str(n)` is how a number joins a string in any case.
+
+`lumenc web` names every function the app calls by name that the compiled
+program does not export, so a handler that would have done nothing is a
+warning at build time rather than a blank in the page.
 
 The browser runtime is not published yet. Until it is, a build says so and
 emits the site without it: the pages read, the links work, and nothing runs.
@@ -187,6 +191,11 @@ means anything without an absolute address.
 - A list built with `<for>` emits its anchor and no rows; the rows are built
   when the app runs.
 - A script written in Rhai or Lua does not run in the browser. candela does.
+  An app written in one of them is still emitted and still reads: the pages
+  show the state they were built with, and nothing runs.
+- A `<checkbox>` or a `<radio>` written with a `label` shows its box without
+  the caption. The caption is a second element on the desktop and an HTML
+  checkbox takes no children.
 - An element a script creates does not appear, and neither does a class it
   sets with `set_class` or `set_root_class`. Signals, arrays and `set_text`
   do.
