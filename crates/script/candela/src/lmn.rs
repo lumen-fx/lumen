@@ -25,6 +25,14 @@
 //! calls `Home("bob")` first and passes the node it returns in as that slot's
 //! content, so the applier never calls back into the script.
 //!
+//! # Naming a component from markup
+//!
+//! A `.lmn` file writes `<Home name="bob"/>` too. Markup compiles with no
+//! script host in the loop, so that use site instantiates the block `Home`
+//! returns instead of calling `Home`. [`component_at`] decides which functions
+//! markup may name: the name starts with a capital, and the body is one
+//! `return lmn!(...)`, so there is a single block to stand in for the call.
+//!
 //! # Restrictions
 //!
 //! - A block has exactly one root element.
@@ -36,6 +44,7 @@
 //! - Names this module generates start with [`RESERVED_PREFIX`].
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 
 /// The macro name a markup block is written under.
 pub const MACRO_NAME: &str = "lmn";
@@ -133,19 +142,70 @@ pub fn key_of(body: &str) -> String {
     format!("{hash:016x}")
 }
 
-/// Every `lmn!( ... )` invocation in a candela source, as `(body, byte offset
-/// of the body)`.
+/// One `lmn!( ... )` invocation in a candela source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LmnRegion<'a> {
+    /// The block body, the text between the parentheses.
+    pub body: &'a str,
+    /// Byte offset of `body` in the source it was scanned from.
+    pub body_start: usize,
+    /// Byte range of the whole invocation, `lmn!` through the closing
+    /// parenthesis.
+    pub span: Range<usize>,
+}
+
+/// Every `lmn!( ... )` invocation in a candela source, in source order.
 ///
 /// The scan is candela's own, so a region written inside a string literal or a
 /// comment is not one. It is also the compiler's, which makes this the one
 /// item in the module a build without the compiler does not carry.
 #[cfg(feature = "compiler")]
 #[must_use]
-pub fn regions(src: &str) -> Vec<(&str, usize)> {
+pub fn regions(src: &str) -> Vec<LmnRegion<'_>> {
     candela::macros::scan_regions(src, MACRO_NAME)
         .into_iter()
-        .map(|region| (region.body, region.body_start))
+        .map(|region| LmnRegion {
+            body: region.body,
+            body_start: region.body_start,
+            span: region.span,
+        })
         .collect()
+}
+
+/// A candela function markup may name as a tag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentFn {
+    /// The function's name, as markup writes it.
+    pub name: String,
+    /// Whether markup can instantiate the block through the name.
+    pub inlinable: bool,
+}
+
+/// The component the function around `span` declares, if markup may name it.
+///
+/// A candela function is a component when its name starts with a capital, the
+/// way a component element in a block is spelled. Markup compiles with no
+/// script host in the loop, so a use site instantiates the block the function
+/// returns rather than calling the function, and
+/// [`inlinable`](ComponentFn::inlinable) is set only for a body that is one
+/// `return lmn!(...)`: the one shape with a single block to stand in for the
+/// call, and the one where nothing the function would have run is dropped.
+///
+/// A function of any other shape still yields its name, with `inlinable`
+/// clear, so a use site naming it can be told why rather than being told the
+/// tag is unknown.
+#[must_use]
+pub fn component_at(src: &str, span: &Range<usize>, index: &FnIndex) -> Option<ComponentFn> {
+    let (name, body) = index.enclosing(span.start)?;
+    if !name.starts_with(|c: char| c.is_ascii_uppercase()) {
+        return None;
+    }
+    let before = src.get(body.start..span.start)?.trim();
+    let after = src.get(span.end..body.end)?.trim();
+    Some(ComponentFn {
+        name: name.to_string(),
+        inlinable: before == "return" && matches!(after, "" | ";"),
+    })
 }
 
 /// Read one block.
@@ -562,13 +622,25 @@ fn extend_attr_name(bytes: &[u8], mut end: usize) -> usize {
     end
 }
 
-/// The `fn NAME(params)` declarations of one candela source.
+/// One `fn` declaration, as the index reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FnDecl {
+    /// Parameter names, in order.
+    params: Vec<String>,
+    /// Byte range of the body, between the braces. Empty when the
+    /// declaration has no body the scan could delimit.
+    body: Range<usize>,
+}
+
+/// The `fn NAME(params) { body }` declarations of one candela source.
 ///
 /// A component element is a call to one of these, and props map to parameters
 /// by name, so the emission needs each function's parameter list in order.
+/// Markup names one as a tag, and whether it may depends on the shape of the
+/// body, so the body's extent is read here too.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FnIndex {
-    fns: BTreeMap<String, Vec<String>>,
+    fns: BTreeMap<String, FnDecl>,
 }
 
 impl FnIndex {
@@ -579,7 +651,7 @@ impl FnIndex {
     #[must_use]
     pub fn scan(src: &str) -> Self {
         let bytes = src.as_bytes();
-        let mut fns = BTreeMap::new();
+        let mut fns: BTreeMap<String, FnDecl> = BTreeMap::new();
         let mut i = 0;
         while i < bytes.len() {
             match bytes[i] {
@@ -623,7 +695,14 @@ impl FnIndex {
             let Some(close) = src[k..].find(')').map(|at| k + at) else {
                 break;
             };
-            fns.insert(name, split_params(&src[k + 1..close]));
+            let body = body_span(bytes, close + 1);
+            fns.insert(
+                name,
+                FnDecl {
+                    params: split_params(&src[k + 1..close]),
+                    body,
+                },
+            );
             i = close + 1;
         }
         Self { fns }
@@ -632,8 +711,62 @@ impl FnIndex {
     /// The parameters `name` declares, in order.
     #[must_use]
     pub fn params(&self, name: &str) -> Option<&[String]> {
-        self.fns.get(name).map(Vec::as_slice)
+        self.fns.get(name).map(|decl| decl.params.as_slice())
     }
+
+    /// The function whose body holds `offset`, with that body's byte range.
+    ///
+    /// A declaration written inside another one is indexed too, so the
+    /// narrowest body wins: that is the function the offset is written in.
+    #[must_use]
+    pub fn enclosing(&self, offset: usize) -> Option<(&str, Range<usize>)> {
+        self.fns
+            .iter()
+            .filter(|(_, decl)| decl.body.contains(&offset))
+            .min_by_key(|(_, decl)| decl.body.len())
+            .map(|(name, decl)| (name.as_str(), decl.body.clone()))
+    }
+}
+
+/// Byte range between the braces of the body that opens at or after `from`,
+/// or an empty range when there is no body there.
+///
+/// Braces inside a string literal or a `//` comment do not nest, matching what
+/// [`FnIndex::scan`] itself skips.
+fn body_span(bytes: &[u8], from: usize) -> Range<usize> {
+    let mut i = from;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    if bytes.get(i) != Some(&b'{') {
+        return from..from;
+    }
+    let start = i + 1;
+    let mut depth = 0u32;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                i = skip_string(bytes, i);
+                continue;
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return start..i;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    from..from
 }
 
 /// Parameter names out of a declaration's argument text, dropping any type
@@ -902,14 +1035,86 @@ mod tests {
         let src = "fn a() { return lmn!(<b/>); }\n\
                    fn b() { let s = \"lmn!(<c/>)\"; }\n\
                    // lmn!(<d/>)\n";
-        let found: Vec<&str> = regions(src).into_iter().map(|(body, _)| body).collect();
+        let found: Vec<&str> = regions(src).into_iter().map(|r| r.body).collect();
         assert_eq!(found, ["<b/>"]);
     }
 
     #[test]
     fn a_region_offset_points_into_the_source() {
         let src = "fn a() { return lmn!(<b/>); }";
-        let (body, at) = regions(src)[0];
-        assert_eq!(&src[at..at + body.len()], "<b/>");
+        let region = &regions(src)[0];
+        assert_eq!(
+            &src[region.body_start..region.body_start + region.body.len()],
+            "<b/>"
+        );
+        assert_eq!(&src[region.span.clone()], "lmn!(<b/>)");
+    }
+
+    /// The one shape markup can stand in for: the whole body is the return.
+    #[test]
+    fn a_single_return_is_the_component_markup_may_name() {
+        let src = "fn Home(name) { return lmn!(<label text=\"$name\"/>); }";
+        let region = &regions(src)[0];
+        assert_eq!(
+            component_at(src, &region.span, &index(src)),
+            Some(ComponentFn {
+                name: "Home".to_string(),
+                inlinable: true,
+            })
+        );
+    }
+
+    #[test]
+    fn a_return_without_a_trailing_semicolon_is_still_the_whole_body() {
+        let src = "fn Home() { return lmn!(<label/>) }";
+        let region = &regions(src)[0];
+        assert!(
+            component_at(src, &region.span, &index(src))
+                .expect("Home")
+                .inlinable
+        );
+    }
+
+    #[test]
+    fn two_returns_leave_no_single_block_to_inline() {
+        let src = "fn Toggle(on) {\n\
+                       if on { return lmn!(<label text=\"on\"/>); }\n\
+                       return lmn!(<label text=\"off\"/>);\n\
+                   }";
+        for region in regions(src) {
+            let component = component_at(src, &region.span, &index(src)).expect("Toggle");
+            assert_eq!(component.name, "Toggle");
+            assert!(!component.inlinable, "{region:?}");
+        }
+    }
+
+    #[test]
+    fn a_statement_before_the_return_leaves_no_block_to_inline() {
+        let src = "fn Home() { let x = 1; return lmn!(<label/>); }";
+        let region = &regions(src)[0];
+        assert!(
+            !component_at(src, &region.span, &index(src))
+                .expect("Home")
+                .inlinable
+        );
+    }
+
+    #[test]
+    fn a_lowercase_function_is_not_a_component() {
+        let src = "fn home() { return lmn!(<label/>); }";
+        let region = &regions(src)[0];
+        assert_eq!(component_at(src, &region.span, &index(src)), None);
+    }
+
+    #[test]
+    fn the_index_reads_the_body_a_declaration_encloses() {
+        let src = "fn a() { let s = \"}\"; } // }\nfn b() { }\n";
+        let index = index(src);
+        let (name, body) = index
+            .enclosing(src.find("let").expect("the statement"))
+            .expect("a encloses it");
+        assert_eq!(name, "a");
+        assert_eq!(src[body].trim(), "let s = \"}\";");
+        assert_eq!(index.enclosing(0), None);
     }
 }

@@ -22,7 +22,9 @@
 //! Both are compiled with `lumenc check`, which is the same front end
 //! `lumenc run` uses. A markup document gets a stub written for every file
 //! its `src` attributes name, so what fails is the block rather than the
-//! files a page cannot ship.
+//! files a page cannot ship. A script stub declares a component for every
+//! tag the document writes with a capital, since a document naming one is
+//! naming a function beside it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -151,7 +153,8 @@ fn report(failures: Vec<String>, checked: usize, what: &str) {
 
 /// Files a markup document names but a page cannot ship. A stub keeps the
 /// failure about the block.
-fn stubs_for(body: &str) -> Vec<(String, &'static str)> {
+fn stubs_for(body: &str) -> Vec<(String, String)> {
+    let script = candela_stub(body);
     let mut stubs = Vec::new();
     for src in body
         .split("src=\"")
@@ -163,15 +166,49 @@ fn stubs_for(body: &str) -> Vec<(String, &'static str)> {
             continue;
         }
         let stub = match Path::new(src).extension().and_then(|e| e.to_str()) {
-            Some("lmn") => "<label text=\"stub\"/>\n",
-            Some("cdl") => "import \"lumen.cdl\";\n\nfn main() {}\n",
-            Some("rhai" | "lua") => "\n",
+            Some("lmn") => "<label text=\"stub\"/>\n".to_string(),
+            Some("cdl") => script.clone(),
+            Some("rhai" | "lua") => "\n".to_string(),
             // An image is read when it is drawn, not when it is compiled.
             _ => continue,
         };
         stubs.push((src.to_string(), stub));
     }
     stubs
+}
+
+/// The candela stub for a document, declaring a component for every tag the
+/// document writes with a capital. A page showing `<Home name="bob"/>` is
+/// showing markup that names a function beside it, so the stub has to declare
+/// one or the block fails on the missing script rather than on itself.
+fn candela_stub(body: &str) -> String {
+    let declared: Vec<&str> = body
+        .split("<template name=\"")
+        .skip(1)
+        .filter_map(|s| s.split('"').next())
+        .collect();
+    let mut named: Vec<&str> = Vec::new();
+    for open in body.split('<').skip(1) {
+        let name = open
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .next()
+            .unwrap_or_default();
+        if !name.starts_with(|c: char| c.is_ascii_uppercase())
+            || declared.contains(&name)
+            || named.contains(&name)
+        {
+            continue;
+        }
+        named.push(name);
+    }
+    let mut stub = String::from("import \"lumen.cdl\";\n\n");
+    for name in named {
+        stub.push_str(&format!(
+            "fn {name}() {{ return lmn!(<label text=\"stub\"/>); }}\n\n"
+        ));
+    }
+    stub.push_str("fn main() {}\n");
+    stub
 }
 
 /// Every complete candela script in the documentation compiles.
@@ -212,7 +249,11 @@ fn every_whole_markup_snippet_compiles() {
         }
         let stubs = stubs_for(body);
         let mut files: Vec<(&str, &str)> = vec![("main.lmn", &block.body)];
-        files.extend(stubs.iter().map(|(rel, stub)| (rel.as_str(), *stub)));
+        files.extend(
+            stubs
+                .iter()
+                .map(|(rel, stub)| (rel.as_str(), stub.as_str())),
+        );
         checked += 1;
         if let Err(e) = check_app(&block.origin, &files) {
             failures.push(e);

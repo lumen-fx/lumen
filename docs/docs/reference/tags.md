@@ -536,6 +536,13 @@ instantiate other templates, up to 64 levels; a cycle is an error.
 A declaration is visible to the whole file, wherever it sits in it, to any
 file that includes that file, and app-wide in a multi-page app.
 
+The name of a candela component instantiates the same way: `<Home name="bob"/>`
+takes the `lmn!` block the function `Home` returns. The function's body has to
+be a single `return lmn!(...)`, since markup takes the block rather than
+calling the function. Component names and `<template>` names share one
+namespace, and two declarations claiming one name are an error. See
+[composition](../guides/composition.md#naming-a-component-from-markup).
+
 ### `<include>`
 
 `<include src="parts/header.lmn"/>` splices another file's markup in

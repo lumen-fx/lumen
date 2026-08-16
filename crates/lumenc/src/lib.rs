@@ -34,7 +34,7 @@ pub mod formatter;
 /// Fragment instantiation, gated with the parser stack that produces the
 /// use sites it resolves.
 #[cfg(feature = "runtime-parse")]
-mod fragments;
+pub mod fragments;
 pub mod i18n_cli;
 /// Static signal lint - walks the source parser (`runtime-parse`) and reads
 /// `lumen.toml` config (`lumen-runtime`, `dev-run`).
@@ -124,7 +124,8 @@ pub use lumen_runtime::{
 pub use parser_css::{CssWarning, Stylesheet, apply_css, parse_css};
 #[cfg(feature = "runtime-parse")]
 pub use parser_html::{
-    ParsedMarkup, collect_fragments, parse_html, parse_html_with_loader, parse_markup,
+    ParsedMarkup, collect_fragments, collect_script_refs, parse_html, parse_html_with_loader,
+    parse_markup,
 };
 #[cfg(feature = "runtime-parse")]
 pub use resolve::{FileLoader, FsLoader};

@@ -86,7 +86,11 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// carries the app's declared fragments, and [`crate::layout_ir::Element`]
 /// gains the fragment-use slot that names one, so a shipped app instantiates
 /// a fragment without the declaring source.
-pub const FORMAT_VERSION: u16 = 5;
+///
+/// `6`: [`crate::fragment::Fragment`] gains `components`, the candela function
+/// names that reach a fragment, so a `.lmn` file can write a component as a
+/// tag.
+pub const FORMAT_VERSION: u16 = 6;
 
 /// The navigable page set of a compiled multi-page app.
 ///
@@ -293,6 +297,7 @@ mod tests {
                     },
                 ],
                 kind: FragmentKind::Template,
+                components: Vec::new(),
             })
             .expect("card is the first declaration");
         table
@@ -309,6 +314,10 @@ mod tests {
                     col: 9,
                 }],
                 kind: FragmentKind::Markup,
+                components: vec![crate::fragment::FragmentComponent {
+                    name: "Badge".to_string(),
+                    inlinable: true,
+                }],
             })
             .expect("badge takes its own key");
         table
@@ -389,6 +398,12 @@ mod tests {
         let badge = back.fragments.get("badge").expect("badge survives too");
         assert_eq!(badge.kind, FragmentKind::Markup);
         assert!(badge.params.is_empty());
+        // The component name travels too, so a use site that wrote the candela
+        // function as a tag still resolves with no source in hand.
+        assert_eq!(
+            back.fragments.by_component("Badge").map(|(f, _)| &f.key),
+            Some(&"badge".to_string())
+        );
 
         let used = back.ir.root.children[0]
             .frag_use

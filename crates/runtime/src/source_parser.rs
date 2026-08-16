@@ -14,7 +14,7 @@
 use bevy_ecs::prelude::Resource;
 use lumen_ir::css::Stylesheet;
 use lumen_ir::fragment::FragmentTable;
-use lumen_ir::layout_ir::LayoutIR;
+use lumen_ir::layout_ir::{LayoutIR, ScriptRefs};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -72,6 +72,18 @@ pub trait SourceParser: Send + Sync {
     /// origin. An app collects these alongside what its markup declares, so a
     /// shipped artifact carries every fragment and parses no markup itself.
     fn script_fragments(&self, src: &str, uri: &str) -> Result<FragmentTable, String>;
+
+    /// Read the `<script>` elements `src` names, without building its tree.
+    /// Markup names a candela component by writing the function as a tag, so
+    /// the scripts are read before the tree and their blocks are in the table
+    /// the parse instantiates against.
+    fn script_refs(&self, src: &str, self_path: &Path) -> Result<ScriptRefs, String>;
+
+    /// Expand the use sites the fragment bodies hold against each other, so
+    /// every body is the whole subtree it stands for. An artifact carries the
+    /// linked table, which is what lets a shipped app instantiate with no
+    /// parser.
+    fn link_fragments(&self, table: FragmentTable) -> Result<FragmentTable, String>;
 }
 
 /// World-resource wrapper so the hot-reload system (a `&mut World` system that

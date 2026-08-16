@@ -61,6 +61,7 @@ fn fragment(key: &str, params: Vec<FragmentParam>, body: Vec<Element>) -> Fragme
         body,
         origins: Vec::new(),
         kind: FragmentKind::Template,
+        components: Vec::new(),
     }
 }
 

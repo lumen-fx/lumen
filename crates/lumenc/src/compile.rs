@@ -146,14 +146,13 @@ fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileErr
         resolution.output
     };
 
+    // The `lmn!` blocks the app's candela scripts write, read before the tree:
+    // markup names a candela component by writing the function as a tag, so
+    // the blocks are in the table this parse instantiates against.
+    let scripted = script_fragments(&spliced, &html_path, dir)?;
     // Includes are already spliced away, so the string-only parser suffices.
-    let parsed = crate::parse_markup(
-        &spliced,
-        &html_path,
-        None,
-        &lumen_ir::fragment::FragmentTable::new(),
-    )
-    .map_err(|e| CompileError::ParseHtml(e.to_string()))?;
+    let parsed = crate::parse_markup(&spliced, &html_path, None, &scripted)
+        .map_err(|e| CompileError::ParseHtml(e.to_string()))?;
     let mut fragments = parsed.fragments;
     let mut ir = parsed.ir;
     ir.included_files = include_paths;
@@ -226,11 +225,9 @@ fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileErr
     // so the parser-free runtime reconstructs the exact script-host input.
     let script_source = combined_script_source(&ir, dir)?;
     let scripts = grouped_script_sources(&ir, dir)?;
-    // The `lmn!` blocks the app's candela scripts write, so the artifact
-    // carries the fragments they instantiate.
-    fragments
-        .merge(script_fragments(&ir, dir, &html_path)?)
-        .map_err(|e| CompileError::ParseHtml(e.to_string()))?;
+    // Expand the use sites the fragment bodies hold against each other, so
+    // every body the artifact carries is the whole subtree it stands for.
+    crate::fragments::link(&mut fragments).map_err(|e| CompileError::ParseHtml(e.to_string()))?;
     ir.script_source = String::new();
     ir.external_scripts.clear();
 
@@ -247,11 +244,17 @@ fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileErr
 
 /// The fragments the app's candela scripts declare through `lmn!`: the inline
 /// `<script>` block plus every `.cdl` file the markup names.
+///
+/// Read from the markup text rather than from a parsed tree, because the parse
+/// needs the result: markup names a candela component by writing the function
+/// as a tag.
 fn script_fragments(
-    ir: &lumen_ir::layout_ir::LayoutIR,
-    dir: &Path,
+    html: &str,
     html_path: &Path,
+    dir: &Path,
 ) -> Result<lumen_ir::fragment::FragmentTable, CompileError> {
+    let refs = crate::collect_script_refs(html, html_path, None)
+        .map_err(|e| CompileError::ParseHtml(e.to_string()))?;
     let mut table = lumen_ir::fragment::FragmentTable::new();
     let mut fold = |source: &str, uri: &str| -> Result<(), CompileError> {
         let declared =
@@ -260,10 +263,10 @@ fn script_fragments(
             .merge(declared)
             .map_err(|e| CompileError::ParseHtml(e.to_string()))
     };
-    if !ir.script_source.trim().is_empty() {
-        fold(&ir.script_source, &html_path.display().to_string())?;
+    if !refs.inline.trim().is_empty() {
+        fold(&refs.inline, &html_path.display().to_string())?;
     }
-    for rel in &ir.external_scripts {
+    for rel in &refs.external {
         if engine_for(Path::new(rel)) != Some("candela") {
             continue;
         }

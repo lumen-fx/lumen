@@ -271,12 +271,22 @@ pub(crate) fn load_ir(
     // resolve during THIS parse too - not just for the sibling pages grafted
     // in `pages::assemble` below. Collected per load, so editing a fragment
     // file and hot-reloading picks the new body up.
-    let fragments = match plan {
+    let mut fragments = match plan {
         Some(plan) if sources.markup.is_none() && plan.multipage => {
             crate::pages::collect_fragments(plan, parser).map_err(RunError::ParseHtml)?
         }
         _ => lumen_ir::fragment::FragmentTable::new(),
     };
+    // The `lmn!` blocks the app's candela scripts write, read before the tree.
+    // Markup names a candela component by writing the function as a tag, so
+    // the blocks are in the table this parse instantiates against. Compiled
+    // here so a run from source instantiates the same fragments a built
+    // artifact carries, and so a malformed block fails the load rather than
+    // the window.
+    let scripted = script_fragments(&html, html_path, dir, plan, parser)?;
+    fragments
+        .merge(scripted.clone())
+        .map_err(|e| RunError::Script(e.to_string()))?;
     // Everything the app declares, whether or not this parse instantiates it:
     // the runtime instantiates by key, so the table it gets holds every
     // `<template>` in the directory, not only the ones the entry page reached.
@@ -284,8 +294,22 @@ pub(crate) fn load_ir(
         Some(plan) if sources.markup.is_none() => {
             crate::pages::collect_fragments(plan, parser).map_err(RunError::ParseHtml)?
         }
-        _ => fragments.clone(),
+        _ => parser
+            .collect_fragments(&html, html_path)
+            .map_err(RunError::ParseHtml)?,
     };
+    declared
+        .merge(scripted)
+        .map_err(|e| RunError::Script(e.to_string()))?;
+    // Expand the use sites the fragment bodies hold against each other, so
+    // every body the runtime instantiates is the whole subtree it stands for.
+    // An `lmn!` block writing a `<template>` the markup declares is what needs
+    // it: the block is read before the markup, so the two meet here. Ahead of
+    // the tree because this table is the one that knows which file each
+    // declaration came from, so a contested name is reported against both.
+    let declared = parser
+        .link_fragments(declared)
+        .map_err(RunError::ParseHtml)?;
     // Includes are already spliced away, so the string-only parser suffices.
     let mut ir = parser
         .parse_html(&html, &fragments)
@@ -417,12 +441,6 @@ pub(crate) fn load_ir(
     for f in &ir.lint_findings {
         eprintln!("{}", f.render(html_path));
     }
-    // The `lmn!` blocks the app's scripts write. Compiled here so a run from
-    // source instantiates the same fragments a built artifact carries, and so
-    // a malformed block fails the load rather than the first instantiation.
-    declared
-        .merge(script_fragments(&ir, dir, html_path, parser)?)
-        .map_err(|e| RunError::Script(e.to_string()))?;
     let script_paths: Vec<PathBuf> = ir.external_scripts.iter().map(|p| dir.join(p)).collect();
     let script_mtimes: Vec<Option<SystemTime>> = script_paths.iter().map(|p| mtime(p)).collect();
     Ok(LoadResult {
@@ -446,38 +464,65 @@ pub(crate) fn load_ir(
 
 /// The fragments the app's candela scripts declare through `lmn!`.
 ///
-/// The inline `<script>` block and every `.cdl` file the markup names are
-/// scanned; a script in another language writes no `lmn!` block. Reading the
-/// files here rather than taking them from the caller keeps the ahead-of-time
-/// compile, the from-source run, and each hot reload on one code path.
+/// The inline `<script>` block and every `.cdl` file the app's markup names
+/// are scanned; a script in another language writes no `lmn!` block. A
+/// multi-page app scans every one of its `.lmn` files, the same set the
+/// `<template>` table is collected from, so a component declared beside one
+/// page is usable from another.
+///
+/// Reading the files here rather than taking them from the caller keeps the
+/// ahead-of-time compile, the from-source run, and each hot reload on one code
+/// path.
 #[cfg(feature = "runtime-parse")]
 fn script_fragments(
-    ir: &lumen_ir::layout_ir::LayoutIR,
-    dir: &Path,
+    html: &str,
     html_path: &Path,
+    dir: &Path,
+    plan: Option<&crate::pages::PagePlan>,
     parser: &dyn SourceParser,
 ) -> Result<lumen_ir::fragment::FragmentTable, RunError> {
-    let mut table = lumen_ir::fragment::FragmentTable::new();
-    if !ir.script_source.trim().is_empty() {
-        let declared = parser
-            .script_fragments(&ir.script_source, &html_path.display().to_string())
-            .map_err(RunError::Script)?;
-        table
-            .merge(declared)
-            .map_err(|e| RunError::Script(e.to_string()))?;
-    }
-    for rel in &ir.external_scripts {
-        if ScriptEngine::from_path(Path::new(rel)) != Some(ScriptEngine::Candela) {
-            continue;
+    let mut markup: Vec<(String, PathBuf)> = vec![(html.to_string(), html_path.to_path_buf())];
+    if let Some(plan) = plan {
+        for path in &plan.fragment_files {
+            if path == html_path {
+                continue;
+            }
+            let src = std::fs::read_to_string(path).map_err(|e| RunError::Read(path.clone(), e))?;
+            markup.push((src, path.clone()));
         }
-        let path = dir.join(rel);
-        let body = std::fs::read_to_string(&path).map_err(|e| RunError::Read(path.clone(), e))?;
+    }
+
+    let mut table = lumen_ir::fragment::FragmentTable::new();
+    let mut seen: Vec<PathBuf> = Vec::new();
+    let fold = |table: &mut lumen_ir::fragment::FragmentTable,
+                src: &str,
+                uri: &str|
+     -> Result<(), RunError> {
         let declared = parser
-            .script_fragments(&body, &path.display().to_string())
+            .script_fragments(src, uri)
             .map_err(RunError::Script)?;
         table
             .merge(declared)
-            .map_err(|e| RunError::Script(e.to_string()))?;
+            .map_err(|e| RunError::Script(e.to_string()))
+    };
+    for (src, path) in &markup {
+        let refs = parser.script_refs(src, path).map_err(RunError::ParseHtml)?;
+        if !refs.inline.trim().is_empty() {
+            fold(&mut table, &refs.inline, &path.display().to_string())?;
+        }
+        for rel in &refs.external {
+            if ScriptEngine::from_path(Path::new(rel)) != Some(ScriptEngine::Candela) {
+                continue;
+            }
+            let script = dir.join(rel);
+            if seen.contains(&script) {
+                continue;
+            }
+            let body =
+                std::fs::read_to_string(&script).map_err(|e| RunError::Read(script.clone(), e))?;
+            fold(&mut table, &body, &script.display().to_string())?;
+            seen.push(script);
+        }
     }
     Ok(table)
 }
