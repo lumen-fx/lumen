@@ -1170,11 +1170,12 @@ fn on_ready() {
     get_by_id("notify-now").on("click", Fn("send_notification"));
     get_by_id("clear-log").on("click", Fn("clear_log"));
     arm();
-    // Tray icons need a real icon asset; ship one at icons/tray.png to
-    // light this up. The last argument is the macOS template flag: true
-    // for a monochrome icon the menu bar should recolour.
-    tray_icon_menu("main", "icons/tray.png", "Lumen hotkeys demo",
-                   "ping:Say hello|-|clear:Clear the log", false);
+    // A tray entry needs an icon asset. Drop one at icons/tray.png and
+    // uncomment the call to light it up; the last argument is the macOS
+    // template flag, true for a monochrome icon the menu bar recolours.
+    // Picks from the menu reach on_menu below.
+    // tray_icon_menu("main", "icons/tray.png", "Lumen hotkeys demo",
+    //                "ping:Say hello|-|clear:Clear the log", false);
     log_event("ready", "hotkeys armed - try Ctrl/Cmd+Shift+L from another window");
 }
 
@@ -1259,7 +1260,8 @@ Concepts demonstrated:
   armed" toggle registers and unregisters live.
 - **`tray_icon_menu(id, icon_path, tooltip, menu, template)`** - system
   tray entry with a right-click menu whose picks reach `on_menu(id)`.
-  Ship an icon at `icons/tray.png` to light it up.
+  Ship an icon at `icons/tray.png` and uncomment the call in `main.rhai`
+  to light it up.
 - **`notify_ex(id, title, body, options, actions)`** - a notification
   carrying a button; a press reaches
   `on_notification_action(id, action_id)`.

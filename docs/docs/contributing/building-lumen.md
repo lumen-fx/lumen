@@ -234,6 +234,17 @@ Tests run on Linux, macOS, and Windows. That three-way matrix is also the
 release parity check, so a red macOS or Windows leg is a portability gap to
 fix, not a platform to drop.
 
+The suite also runs every app the repository ships. Each directory under
+`apps/` and `fixtures/`, and each app `lumenc new` scaffolds, is run headless
+for a few ticks and has to exit clean with nothing on stderr beyond the lines
+a runner is expected to print. A silent failure this catches: when a script
+fails to compile the runtime prints a banner and keeps going with every
+handler disabled, so the process still exits zero. `apps/sysmon` is a CMake
+project rather than a markup app, and the suite asserts that the markup runner
+turns it away. These cases run on Linux, since the set of lines a clean run
+prints is what makes the check sharp and that set is per environment; the app
+sources are the same everywhere.
+
 Two families of test skip themselves rather than fail when the machine cannot
 support them, printing the reason:
 
