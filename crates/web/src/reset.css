@@ -2,12 +2,14 @@
  * lumen-web reset - the defaults an emitted document needs before any of
  * the app's own CSS runs.
  *
- * Two things live here. One is the handful of browser defaults Lumen does
- * not share: a Lumen element is a flex box, a page fills its window, and
- * a control inherits its text rather than picking its own. The other is
- * the per-tag defaults Lumen bakes into markup instead of into a
+ * Three things live here. One is the handful of browser defaults Lumen
+ * does not share: a Lumen element is a flex box, a page fills its window,
+ * and a control inherits its text rather than picking its own. The second
+ * is the per-tag defaults Lumen bakes into markup instead of into a
  * stylesheet - a `<column>` stacking downwards, an `<overlay>` covering
- * its parent, a `<spacer>` eating the space that is left.
+ * its parent, a `<spacer>` eating the space that is left. The third is
+ * the parts a control is painted out of - a knob, a thumb, a tick, a
+ * fill - which the desktop draws from entities that never reach the IR.
  *
  * That second half is a copy, and the original is `build_element` in
  * crates/lumenc/src/parser_html.rs, which sets the same defaults on
@@ -105,6 +107,181 @@
 :where(.lm-a) {
   color: inherit;
   text-decoration: none;
+}
+
+/* Text with no family named. Lumen shapes it with the platform's
+   sans-serif; a browser's own default is a serif. */
+:where(body) {
+  font-family: sans-serif;
+}
+
+/* --- Widget parts ---------------------------------------------------
+ *
+ * A control is one element in a page and two or three on the desktop: a
+ * `<toggle>` is a track with a knob inside it, a `<checkbox>` is a row
+ * with an indicator and a caption. Some of those parts are entities the
+ * runtime spawns and no markup carries, and the rest cannot live inside
+ * the HTML control the tag maps to, which takes no children. Either way
+ * there is nothing here for the emitter to write, so the browser draws
+ * the part instead.
+ *
+ * Each is drawn from the value the desktop draws it from: `knob-color`,
+ * `knob-inset` and `thumb-size` arrive as `--lm-` custom properties, and
+ * the fallback beside each one is the constant in
+ * `lumen_primitives::controls` that the desktop falls back to when no CSS
+ * sets it. Change one and change the other.
+ *
+ * What the app says still wins: these weigh nothing, and a skin's own
+ * rule for the same thing is an ordinary class selector.
+ */
+
+/* `<switch>`'s width floor is set in `apply_ua_style_defaults` rather
+   than in ua.css, because it applies only when no width was authored. */
+:where(.lm-switch) {
+  min-width: 52px;
+}
+
+:where(.lm-toggle, .lm-switch) {
+  position: relative;
+}
+
+/* The knob: a circle inset from every edge of the track, parked at the
+   near end. Its diameter is what the inset leaves of the track's height,
+   which is how the desktop sizes it. */
+:where(.lm-toggle, .lm-switch)::after {
+  content: "";
+  position: absolute;
+  top: var(--lm-knob-inset, 4px);
+  bottom: var(--lm-knob-inset, 4px);
+  left: var(--lm-knob-inset, 4px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--lm-knob-color, #ebebf0);
+}
+
+/* Checked parks it at the far end. Both ends are written as `left` so
+   what lies between them is a position a slide can pass through. */
+:where(.lm-toggle:is(:checked, [data-lm-checked]))::after,
+:where(.lm-switch:is(:checked, [data-lm-checked]))::after {
+  left: calc(100% - var(--lm-knob-inset, 4px));
+  translate: -100% 0;
+}
+
+/* A switch's thumb slides between the ends and a toggle's knob snaps,
+   which is what each does on the desktop. */
+:where(.lm-switch)::after {
+  transition:
+    left 140ms ease-out,
+    translate 140ms ease-out;
+}
+
+/* A range input paints its own track and thumb. The element is the track
+   here and already carries the app's fill, so only the thumb is drawn.
+   The two engines name the thumb differently and neither reads the
+   other's name, so this is the same rule twice. */
+:where(.lm-slider) {
+  appearance: none;
+}
+
+:where(.lm-slider)::-webkit-slider-thumb {
+  appearance: none;
+  width: var(--lm-thumb-size, 16px);
+  height: var(--lm-thumb-size, 16px);
+  border-radius: 50%;
+  background: var(--lm-knob-color, #ebebf0);
+}
+
+:where(.lm-slider)::-moz-range-thumb {
+  width: var(--lm-thumb-size, 16px);
+  height: var(--lm-thumb-size, 16px);
+  border: 0;
+  border-radius: 50%;
+  background: var(--lm-knob-color, #ebebf0);
+}
+
+/* A progress bar is a track with a fill, and the element is the track.
+   The fill is the `.progress-fill` tile on the desktop, which an HTML
+   `<progress>` has no room for. */
+:where(.lm-progress) {
+  appearance: none;
+}
+
+:where(.lm-progress)::-webkit-progress-bar {
+  background: transparent;
+}
+
+:where(.lm-progress)::-webkit-progress-value {
+  border-radius: inherit;
+  background: var(--lumen-accent, #33a8b3);
+}
+
+:where(.lm-progress)::-moz-progress-bar {
+  border-radius: inherit;
+  background: var(--lumen-accent, #33a8b3);
+}
+
+/* A checkbox and a radio are their own indicator here: the tile the
+   desktop puts the mark in is a child, and an `<input>` takes none. The
+   caption beside it has nowhere to go at all, so a checkbox written with
+   a `label` shows the box without the words. */
+:where(.lm-checkbox, .lm-radio) {
+  appearance: none;
+  flex: none;
+  margin: 0;
+  background: #545454;
+}
+
+/* The tap-target floor ua.css puts on a `<checkbox>` is the height of the
+   row it is on the desktop, where the indicator is a child of that row.
+   Here the element is the indicator itself, so the floor has to be
+   overruled rather than grown into, which takes weight the rest of this
+   file does not carry. An app rule for the same size still outranks it. */
+.lm-checkbox,
+.lm-radio {
+  width: 18px;
+  min-width: 18px;
+  height: 18px;
+  min-height: 18px;
+}
+
+:where(.lm-checkbox) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--lm-knob-color, #ffffff);
+}
+
+:where(.lm-radio) {
+  border-radius: 50%;
+}
+
+/* The state fill a skinless app still needs; a skin's `:checked { bg }`
+   outweighs it. */
+:where(.lm-checkbox:is(:checked, [data-lm-checked])),
+:where(.lm-radio:is(:checked, [data-lm-checked], [data-lm-selected])) {
+  background: #33a8b3;
+}
+
+/* The mark itself, which the desktop draws as text in the box. */
+:where(.lm-checkbox)::after {
+  content: "";
+}
+
+:where(.lm-checkbox:is(:checked, [data-lm-checked]))::after {
+  content: "\2713";
+}
+
+:where(.lm-checkbox:indeterminate)::after {
+  content: "\2013";
+}
+
+/* A control the app disabled. The amount is `disabled-opacity`, which
+   the skins set on the tags that have one. */
+:where([data-lm-disabled]) {
+  opacity: var(--lm-disabled-opacity, 1);
 }
 
 /* A branch that is mounted but not shown. This one outweighs the rules it
