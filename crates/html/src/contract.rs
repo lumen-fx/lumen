@@ -72,8 +72,10 @@ pub const DATA_LM_DRAG_OVER: &str = "data-lm-drag-over";
 pub const DATA_LM_HIDDEN: &str = "data-lm-hidden";
 
 /// The attribute a `<dialog>` carries while it is showing. Lumen writes the
-/// name of a signal there and the browser wants the state, so both halves
-/// resolve the signal and write this.
+/// name of a signal there and the browser wants the state, so the emitter
+/// resolves the signal and writes this into the page. From then on the
+/// attribute is the browser's: the runtime shows and closes the element and
+/// the element maintains it.
 pub const DIALOG_OPEN: &str = "open";
 
 /// `id` of the inline `<script type="application/json">` block holding the

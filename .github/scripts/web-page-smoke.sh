@@ -78,9 +78,11 @@ open_page "$app"
 # The runtime took the page over: this mark is the current tab's, and the
 # emitter and the runtime both write it, so it survives a reload either way.
 grep -qF 'data-lm-selected' "$dom" || fail "no element carries the current-tab mark"
-# A dialog whose signal is false is closed. It is the one piece of state that
-# is wrong in both directions when a half misreads the other.
-grep -qE '<dialog[^>]*data-lm-hidden' "$dom" || fail "the dialog is not closed"
+# A dialog whose signal is false is closed, and `open` is the whole of what
+# says so: the browser maintains it and hides the element itself. It is the
+# one piece of state that is wrong in both directions when a half misreads
+# the other.
+grep -qE '<dialog[^>]*>' "$dom" || fail "the page has no dialog"
 if grep -qE '<dialog[^>]*open=' "$dom"; then
   fail "the dialog is open"
 fi

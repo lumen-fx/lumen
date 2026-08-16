@@ -55,16 +55,40 @@
   flex-direction: row;
 }
 
-/* An overlay and a dialog float out of the flow and cover the nearest
-   positioned ancestor. */
-:where(.lm-overlay, .lm-dialog) {
+/* An overlay floats out of the flow and covers the nearest positioned
+   ancestor. */
+:where(.lm-overlay) {
   position: absolute;
   inset: 0;
 }
 
+/* A `<dialog>` is the whole window: the element is the scrim and the app's
+   own surface sits inside it, centred. A browser's dialog is the opposite,
+   a card that fits its contents, and it brings a border, a page-coloured
+   fill, an inch of padding and, once it is modal, a size cap and its own
+   scrollbar. None of that is the box Lumen hands the app, so all of it is
+   taken back off here. */
 :where(.lm-dialog) {
+  position: fixed;
+  inset: 0;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  overflow: visible;
   align-items: center;
   justify-content: center;
+}
+
+/* The dim behind a modal is the dialog's own fill, which the skin sets, so
+   the layer the browser paints under it has nothing left to say. */
+:where(.lm-dialog)::backdrop {
+  background: none;
 }
 
 :where(.lm-scroll) {
@@ -287,5 +311,14 @@
 /* A branch that is mounted but not shown. This one outweighs the rules it
    hides, or it would not hide them. */
 [data-lm-hidden] {
+  display: none;
+}
+
+/* A dialog that is not showing. Whether it is showing is the `open`
+   attribute, which the browser maintains, and the browser's own rule for
+   hiding a closed one loses to every author rule including the one above
+   that makes each element a flex box. So the same rule is written here,
+   where it can win. */
+.lm-dialog:not([open]) {
   display: none;
 }

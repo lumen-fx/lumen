@@ -18,8 +18,10 @@
 use bevy_ecs::prelude::*;
 use lumen_core::components::{LumenClasses, TextContent, Visible};
 use lumen_core::prelude::{App, TickStage};
+use lumen_core::property_store::PropertyStore;
 use lumen_html::contract::{DATA_LM, DATA_LM_HIDDEN};
-use lumen_ir::layout_ir::{Attributes, Element as IrElement, LayoutIR};
+use lumen_ir::layout_ir::{Attributes, Element as IrElement, IfModeSpec, LayoutIR};
+use lumen_scene::spawn;
 use lumen_scene::spawn::SpawnIntoWorld;
 use lumen_web::{PageSpec, SiteSpec, WebSpec};
 use lumen_web_dom::{NodeTable, WebDomPlugin};
@@ -242,6 +244,105 @@ fn a_click_reaches_the_entity_the_element_stands_for() {
         Some(expected),
         "the click landed on the entity whose element it was dispatched on"
     );
+}
+
+/// A page whose only content is a dialog gated on `dialog_open`.
+fn dialog_tree() -> LayoutIR {
+    let mut dialog = element(
+        "dialog",
+        None,
+        vec![element("label", Some("sure?"), vec![])],
+    );
+    dialog.attrs.if_signal = Some("dialog_open".to_string());
+    dialog.attrs.if_mode = IfModeSpec::Hide;
+    LayoutIR {
+        root: element("root", None, vec![dialog]),
+        ..LayoutIR::default()
+    }
+}
+
+/// Spawn `ir` into an app that also reconciles its branches, and settle it.
+fn hydrate_reactive(ir: LayoutIR, root: Element) -> App {
+    let mut app = App::new();
+    app.extract_fns.clear();
+    app.world.init_resource::<PropertyStore>();
+    let root_entity = ir.spawn_into(&mut app.world);
+    app.add_plugin(WebDomPlugin { root, root_entity });
+    app.add_systems(TickStage::Systems, spawn::reconcile_if_blocks);
+    app.tick();
+    app
+}
+
+/// Write a global signal and run a tick.
+fn set_signal(app: &mut App, name: &str, value: &str) {
+    app.world
+        .resource_mut::<PropertyStore>()
+        .set_global_str(name, value);
+    app.tick();
+}
+
+#[wasm_bindgen_test]
+fn a_dialog_opens_and_closes_as_the_browser_s_own() {
+    let root = prerender(dialog_tree());
+    let mut app = hydrate_reactive(dialog_tree(), root.clone());
+    let dialog: web_sys::HtmlDialogElement = root
+        .query_selector("dialog")
+        .unwrap()
+        .expect("the emitter wrote a dialog")
+        .unchecked_into();
+
+    assert!(
+        !dialog.open(),
+        "a dialog whose signal is false starts closed"
+    );
+
+    set_signal(&mut app, "dialog_open", "1");
+    assert!(dialog.open(), "the signal turning true showed it");
+    assert!(
+        dialog.matches(":modal").unwrap(),
+        "and showed it modally, which is what puts it over the page"
+    );
+    assert!(
+        !dialog.has_attribute(DATA_LM_HIDDEN),
+        "whether it shows is `open` alone"
+    );
+
+    set_signal(&mut app, "dialog_open", "");
+    assert!(!dialog.open(), "the signal turning false closed it");
+}
+
+#[wasm_bindgen_test]
+fn a_dialog_the_browser_dismisses_takes_its_signal_with_it() {
+    let root = prerender(dialog_tree());
+    let mut app = hydrate_reactive(dialog_tree(), root.clone());
+    lumen_web_dom::listen(&root).expect("the page takes listeners");
+    let dialog: web_sys::HtmlDialogElement = root
+        .query_selector("dialog")
+        .unwrap()
+        .expect("the emitter wrote a dialog")
+        .unchecked_into();
+
+    set_signal(&mut app, "dialog_open", "1");
+    assert!(dialog.open());
+
+    // What Escape on a showing dialog does: the browser closes the element
+    // and says so.
+    dialog.close();
+    dialog
+        .dispatch_event(&web_sys::Event::new("cancel").unwrap())
+        .unwrap();
+    app.tick();
+
+    assert_eq!(
+        app.world
+            .resource::<PropertyStore>()
+            .get_global_str("dialog_open")
+            .as_deref(),
+        Some(""),
+        "the signal the dialog hangs off followed it closed"
+    );
+    app.tick();
+    assert!(!dialog.open(), "and nothing showed it again");
 }
 
 /// The entity whose text is `text`.
