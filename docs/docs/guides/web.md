@@ -235,8 +235,8 @@ means anything without an absolute address.
   document, so a crawler does not see them.
 - A `<for virtualized="true">` emits no rows. Which rows a virtualized list
   shows comes from how far its scroll container has been scrolled, which a
-  build cannot know, so the runtime mounts them when the page opens. A build
-  says so.
+  build cannot know, so the runtime mounts them when the page opens. The
+  build warns when it emits one.
 - A list whose rows only exist once a script has run is emitted empty, the way
   every other piece of script-made state is. `[web.seed]` is how a list
   reaches the document without anything running.

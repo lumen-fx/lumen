@@ -36,7 +36,7 @@ struct Walk<'a> {
     keys: Vec<String>,
     entry: &'a str,
     seen: BTreeSet<String>,
-    /// What the page could not be written the way the app meant it.
+    /// Where the page could not be written the way the app meant it.
     warnings: &'a mut Vec<String>,
 }
 
