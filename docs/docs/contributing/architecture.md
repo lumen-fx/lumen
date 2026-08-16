@@ -162,6 +162,12 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
 
 ### Assembly and tooling
 
+- **lumen-portable**: the app every platform starts from. It installs the parts
+  of Lumen that do not depend on where the app runs (widget behaviour, focus,
+  the reconcilers, the two-way bindings, the script command stream) and the
+  script host for the engine an app names, and leaves out layout, paint,
+  windowing and the OS surface. Nothing it installs is bound to one thread, so
+  the app it builds can be built, ticked and dropped anywhere.
 - **lumen-runtime**: the runtime core. The run loop, `RunOptions`, the default
   plugin stack, hot reload, page discovery, `lumen.toml` config, the skins,
   and the loaders for both compiled artifacts and source. Links no parser.
@@ -175,8 +181,8 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   prebuilt module serves every app: a page loads it, hands it the app's
   compiled data, and it runs the same tick a desktop app runs. It installs no
   layout backend and extracts no scene, because the page's own CSS engine lays
-  out and the DOM is the scene. Scripts run on the host for the engine the app's
-  manifest names; each host is a feature of the crate, and candela is the one
+  out and the DOM is the scene. The app itself and its script hosts come from
+  `lumen-portable`; each host is a feature of the crate, and candela is the one
   the default build carries. It runs precompiled bytecode, so no compiler
   reaches the page. `boot()` is the whole entry point: it reads the document,
   fetches what the manifest names, and starts the app.

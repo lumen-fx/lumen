@@ -97,6 +97,7 @@ members = [
     "crates/launcher",
     "crates/lumenc",
     "crates/mcp",
+    "crates/portable",
     "crates/primitives",
     "crates/runtime",
     "crates/scene",

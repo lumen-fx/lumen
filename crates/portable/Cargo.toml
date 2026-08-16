@@ -1,0 +1,44 @@
+[package]
+name = "lumen-portable"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's platform-free app assembly: the plugins, reconcilers and script hosts that run the same wherever an app runs."
+keywords = ["ui", "gui", "lumen", "wasm", "server"]
+categories = ["gui"]
+publish = false
+
+[dependencies]
+lumen-core = { path = "../core", version = "0.0.3" }
+# The emitter/runtime contract, for the seed a rendered document carries.
+lumen-html = { path = "../html", version = "0.0.3" }
+# The IR-to-ECS spawner and the reconcilers, shared with the desktop runtime.
+lumen-scene = { path = "../scene", version = "0.0.3" }
+# The widget behaviour and the focus layer, unchanged from the desktop: what a
+# tab strip does when it is clicked is not a per-platform question.
+lumen-input = { path = "../input", version = "0.0.3" }
+lumen-primitives = { path = "../primitives", version = "0.0.3" }
+lumen-script = { path = "../script/api", version = "0.0.3", default-features = false }
+# The candela host, behind `host-candela`. The artifact half only: this
+# assembly runs precompiled `.cdlb` bytecode, so the candela compiler never
+# reaches whatever loads it.
+lumen-script-candela = { path = "../script/candela", version = "0.0.3", default-features = false, optional = true }
+bevy_ecs.workspace = true
+
+[build-dependencies]
+# Compiles the test fixtures to `.cdlb` at build time, on the host, so the
+# artifact a host loads is always the one this toolchain produces. Build
+# dependencies are resolved for the host and never linked into the library, so
+# the compiler feature here does not reach a shipped runtime.
+lumen-script-candela = { path = "../script/candela", version = "0.0.3" }
+
+[features]
+# The script hosts this assembly carries. A host is a language, and each one is
+# a feature, so a build pays for the languages its app ships and nothing else.
+# candela is on by default because it is the only host that runs from bytecode
+# alone: rhai and lua have yet to be wired up here.
+default = ["host-candela"]
+host-candela = ["dep:lumen-script-candela"]
