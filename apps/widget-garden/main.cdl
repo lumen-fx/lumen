@@ -59,26 +59,26 @@ fn render_todos() {
 
 // --- Derived display labels ---
 
-fn calc_email_valid(s) {
+fn calc_email_valid(s: string) {
     if s.contains("@") { return "OK: valid"; }
     return "needs @";
 }
 
-fn calc_telemetry_status(v) {
+fn calc_telemetry_status(v: any) {
     if v { return "on"; }
     return "off";
 }
 
-fn calc_click_label(n) {
+fn calc_click_label(n: any) {
     return "clicks: " + str(n);
 }
 
-fn calc_greeting(s) {
+fn calc_greeting(s: string) {
     if s == "" { return "(nobody yet)"; }
     return "hi, " + s + "!";
 }
 
-fn calc_toggle_status(v) {
+fn calc_toggle_status(v: any) {
     if v { return "dark mode"; }
     return "light mode";
 }
@@ -153,25 +153,25 @@ fn on_ready() {
 
 // --- Handlers ---
 
-fn handle_bump(id) {
+fn handle_bump(id: any) {
     let n = lumen::signal_get_int("clicks");
     let m = n + 1;
     lumen::signal_set_int("clicks", m);
 }
 
-fn handle_reset(id) {
+fn handle_reset(id: any) {
     lumen::signal_set_int("clicks", 0);
 }
 
-fn handle_danger(id) {
+fn handle_danger(id: any) {
     lumen::notify("Lumen", "Pretend this was destructive.");
 }
 
-fn handle_notify(id) {
+fn handle_notify(id: any) {
     lumen::notify("Lumen Widget Garden", "Native toast via notify-rust.");
 }
 
-fn handle_theme_toggle(id) {
+fn handle_theme_toggle(id: any) {
     let now = lumen::signal_get_bool("dark");
     if now {
         lumen::signal_set_bool("dark", false);
@@ -184,7 +184,7 @@ fn handle_theme_toggle(id) {
     }
 }
 
-fn handle_add_todo(id) {
+fn handle_add_todo(id: any) {
     let container = get_by_id("todos-list");
     if !container.exists() { return; }
     let n = lumen::signal_get_int("todo_next");
@@ -196,15 +196,15 @@ fn handle_add_todo(id) {
     update_todo_count();
 }
 
-fn handle_open_dialog(id) {
+fn handle_open_dialog(id: any) {
     lumen::signal_set("dialog_open", "1");
 }
 
-fn handle_dialog_close(id) {
+fn handle_dialog_close(id: any) {
     lumen::signal_set("dialog_open", "");
 }
 
-fn handle_dialog_accepted(id) {
+fn handle_dialog_accepted(id: any) {
     let n = lumen::signal_get_int("accept_count");
     let m = n + 1;
     lumen::signal_set_int("accept_count", m);
@@ -213,7 +213,7 @@ fn handle_dialog_accepted(id) {
     lumen::signal_set("dialog_verdict", msg);
 }
 
-fn handle_dialog_rejected(id) {
+fn handle_dialog_rejected(id: any) {
     let n = lumen::signal_get_int("reject_count");
     let m = n + 1;
     lumen::signal_set_int("reject_count", m);
@@ -222,11 +222,11 @@ fn handle_dialog_rejected(id) {
     lumen::signal_set("dialog_verdict", msg);
 }
 
-fn handle_pick(id) {
+fn handle_pick(id: any) {
     lumen::pick_file("garden-open");
 }
 
-fn on_file_picked(tag, path) {
+fn on_file_picked(tag: any, path: any) {
     if path == "" {
         lumen::signal_set("picked", "(cancelled)");
     } else {
@@ -235,16 +235,16 @@ fn on_file_picked(tag, path) {
     }
 }
 
-fn handle_open_menu(id) {
+fn handle_open_menu(id: any) {
     lumen::open_menu("actions");
 }
 
-fn handle_menu_action(id) {
+fn handle_menu_action(id: any) {
     let msg = "Menu item fired: " + id;
     lumen::notify("Lumen Widget Garden", msg);
 }
 
-fn handle_hotkey_save(name) {
+fn handle_hotkey_save(name: any) {
     let fired = "Hotkey fired (" + name + ")";
     lumen::notify("Lumen", fired);
     let c = lumen::signal_get_int("hotkey_count");

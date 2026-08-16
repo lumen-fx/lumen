@@ -196,6 +196,14 @@ pub fn drain_dom_events(
                 let Some(entity) = table.entity_at(&path) else {
                     continue;
                 };
+                // A field being edited is a field with focus, whether or not
+                // the focus event that says so has arrived. Without the
+                // marker the signal-to-text binding treats the edit as stale
+                // and writes the old value back over it.
+                commands.entity(entity).insert(Focused);
+                if let Some(tracker) = focus.as_mut() {
+                    tracker.0 = Some(entity);
+                }
                 if let Ok(mut text) = texts.get_mut(entity)
                     && text.0 != value
                 {

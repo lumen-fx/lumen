@@ -60,6 +60,24 @@ it changes reaches the page as an attribute the stylesheet already matches.
 Typing in a bound `<input>` writes its signal, so a `bind-text` label next to
 it follows along.
 
+A script runs the same way. Its `on_start` publishes the signals the markup
+binds to, a handler bound with `on("click", ...)` runs when that element is
+clicked, and a `derive()` recomputes when one of its dependencies changes.
+The one thing to know is that the browser runs your script as bytecode, with
+no compiler behind it, so a function the runtime calls by name has to declare
+its parameters and their types:
+
+```
+fn calc_greeting(who: string) {
+    return "hi, " + who + "!";
+}
+```
+
+That covers handlers, `derive()` bodies and lifecycle functions. A function
+with an unannotated parameter is not callable from the runtime and its
+handler silently does nothing, which is the one thing that behaves
+differently here than on the desktop.
+
 The browser runtime is not published yet. Until it is, a build says so and
 emits the site without it: the pages read, the links work, and nothing runs.
 Point `--lib-dir` at a directory holding `lumen-web.wasm` and `lumen-web.js`
@@ -169,14 +187,15 @@ means anything without an absolute address.
 - A list built with `<for>` emits its anchor and no rows; the rows are built
   when the app runs.
 - A script written in Rhai or Lua does not run in the browser. candela does.
-- A candela script loads and runs, but what it writes does not reach the page
-  yet: a signal a handler sets, a value a `derive()` computes, and an element a
-  script creates all stay inside the script. Markup-driven state, the widget
-  primitives and `bind-*` work.
+- An element a script creates does not appear, and neither does a class it
+  sets with `set_class` or `set_root_class`. Signals, arrays and `set_text`
+  do.
 - Keyboard input other than typing into a focused field does not reach the app,
   so a keyboard shortcut and arrow-key navigation between tabs do not work.
 - Following a link loads the next document. Soft navigation, which swaps the
   page in place and keeps the app running, is not wired up.
+- A `<input>` is edited by the browser, so Lumen's own caret, selection and
+  IME handling are not in play; what an app sees is the value after each edit.
 
 ## Reference
 

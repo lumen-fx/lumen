@@ -18,4 +18,5 @@
 
 pub mod fragments;
 pub mod routing;
+pub mod script_commands;
 pub mod spawn;
