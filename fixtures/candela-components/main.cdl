@@ -21,8 +21,8 @@ fn Rows(prefix) {
     );
 }
 
-// A component element leaves a slot behind, and the node the component
-// returns fills it. Both children are built before this block is.
+// A component element is a use site. Both of these are baked into this
+// block's body at build time, so the tree is whole from the first frame.
 fn App() {
     return lmn!(
         <column id="app">
@@ -30,6 +30,36 @@ fn App() {
             <Rows prefix="Row"/>
         </column>
     );
+}
+
+// Two levels, with the prop forwarded down. Neither function has anything to
+// work out, so both are baked and `<Outer t="x"/>` needs no call.
+fn Inner(t) {
+    return lmn!(<label class="inner" text="in $t"/>);
+}
+
+fn Outer(t) {
+    return lmn!(<column class="outer"><Inner t="$t"/></column>);
+}
+
+// A body that is one component element: this block is a fragment whose single
+// root is that use site, which is what markup naming `Passthru` reaches.
+fn Passthru(t) {
+    return lmn!(<Inner t="$t"/>);
+}
+
+// Works a value out, so the block cannot stand in for the call. What the build
+// leaves is a marker, and the runtime fills it by calling this.
+fn Shout(who) {
+    let loud = who + "!";
+    return lmn!(<label class="shout" text="hey $loud"/>);
+}
+
+// Picks between blocks. Both are compiled and travel in the artifact; the call
+// decides which one is used.
+fn Pick(on) {
+    if on == "yes" { return lmn!(<label class="arm" text="on"/>); }
+    return lmn!(<label class="arm" text="off"/>);
 }
 
 // The other direction: a block instantiates a `<template>` the markup

@@ -331,6 +331,19 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     if let Some(v) = Option::<Visuals>::from(&el.attrs) {
         entity.insert(v);
     }
+    // A use site the build could not finish: the script fills it by calling
+    // the function this names. Arguments arrive in parameter order, laid out
+    // when the tree was linked.
+    if let Some(use_site) = &el.frag_use {
+        entity.insert(lumen_core::components::PendingFill {
+            function: use_site.key.clone(),
+            args: use_site
+                .args
+                .iter()
+                .map(|(_, value)| value.clone())
+                .collect(),
+        });
+    }
     if let Some(text) = &text {
         entity.insert(TextContent(text.clone()));
     }

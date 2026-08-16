@@ -870,6 +870,15 @@ pub trait ScriptHost: Send + Sync + 'static {
     /// Host-native handle to a script closure (a `derive(...)` body).
     type Closure: Clone + Send + Sync + 'static;
 
+    /// Whether this host is the one a component marker in the tree names a
+    /// function in.
+    ///
+    /// A marker is what the build leaves where a component has to run, and
+    /// markup blocks are one language's macro, so exactly one host answers
+    /// for them. Every other host leaves a marker alone rather than reporting
+    /// a function it was never going to have.
+    const FILLS_COMPONENTS: bool = false;
+
     // -- lifecycle -----------------------------------------------------
 
     /// Compile-only, side-effect free, with the exact engine settings

@@ -2,6 +2,11 @@
   <template name="card"><label class="card" text="{$title}"/></template>
   <column id="stage">
     <Home name="bob" />
+    <Outer t="x" />
+    <Passthru t="y" />
+    <Shout who="ann" />
+    <Pick on="yes" />
+    <Pick on="no" />
   </column>
   <script src="main.cdl" />
 </root>

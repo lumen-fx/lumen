@@ -102,6 +102,10 @@ fn expand_until_settled(
 
 /// Expand the use sites in `list` and recurse into everything else. A body
 /// spliced in here keeps its own use sites for the next pass.
+///
+/// A use site naming a component the build cannot stand in for is left where
+/// it is, with its arguments put in the function's parameter order. That
+/// element is the marker the runtime fills by calling the function.
 fn inline_list(
     list: &mut Vec<Element>,
     table: &FragmentTable,
@@ -110,15 +114,92 @@ fn inline_list(
 ) -> Result<(), ParseError> {
     let mut out: Vec<Element> = Vec::with_capacity(list.len());
     for mut el in std::mem::take(list) {
-        if el.frag_use.is_some() {
-            out.extend(instantiate(el, table, lint_findings)?);
-            *expanded = true;
-        } else {
-            inline_list(&mut el.children, table, lint_findings, expanded)?;
-            out.push(el);
+        match site(&el, table)? {
+            Site::Finished => {
+                out.extend(instantiate(el, table, lint_findings)?);
+                *expanded = true;
+            }
+            Site::Fill(component) => {
+                normalize_fill_args(&mut el, component)?;
+                out.push(el);
+            }
+            Site::Plain => {
+                inline_list(&mut el.children, table, lint_findings, expanded)?;
+                out.push(el);
+            }
         }
     }
     *list = out;
+    Ok(())
+}
+
+/// What one element is to this pass.
+enum Site<'a> {
+    /// Not a use site; walk into it.
+    Plain,
+    /// A use site whose whole subtree the build knows, so it expands here.
+    Finished,
+    /// A use site naming a component that has to run. It stays in the tree as
+    /// the marker the runtime fills.
+    Fill(&'a lumen_ir::fragment::FragmentComponent),
+}
+
+/// Classify `el` for this pass.
+fn site<'a>(el: &Element, table: &'a FragmentTable) -> Result<Site<'a>, ParseError> {
+    let Some(use_site) = &el.frag_use else {
+        return Ok(Site::Plain);
+    };
+    let name = use_site.key.as_str();
+    if table.get(name).is_some() {
+        return Ok(Site::Finished);
+    }
+    match table.component(name) {
+        Some(component) if component.inlinable => Ok(Site::Finished),
+        Some(component) => Ok(Site::Fill(component)),
+        None => Err(ParseError::Xml(format!(
+            "unknown fragment `{name}`: no <template name=\"{name}\"> and no candela `fn {name}` \
+             returning an lmn! block is declared"
+        ))),
+    }
+}
+
+/// Put a fill marker's arguments in the order the call passes them.
+///
+/// A use site binds props by name and the call is positional, so the values
+/// are laid out against the function's parameters here, while the parameter
+/// list is still in hand. A parameter no prop names is passed empty, matching
+/// what an omitted fragment argument resolves to.
+///
+/// # Errors
+///
+/// [`ParseError`] when a prop names no parameter of the function, which would
+/// otherwise reach nothing.
+fn normalize_fill_args(
+    el: &mut Element,
+    component: &lumen_ir::fragment::FragmentComponent,
+) -> Result<(), ParseError> {
+    let use_site = el.frag_use.as_mut().expect("caller checked the site");
+    for (prop, _) in &use_site.args {
+        if prop != "id" && !component.params.iter().any(|p| p == prop) {
+            return Err(ParseError::Xml(format!(
+                "component `{}` has no parameter `{prop}`; it declares ({})",
+                component.name,
+                component.params.join(", ")
+            )));
+        }
+    }
+    use_site.args = component
+        .params
+        .iter()
+        .map(|param| {
+            let value = use_site
+                .args
+                .iter()
+                .find(|(name, _)| name == param)
+                .map_or("", |(_, value)| value.as_str());
+            (param.clone(), value.to_string())
+        })
+        .collect();
     Ok(())
 }
 
@@ -164,24 +245,17 @@ fn instantiate(
 ///
 /// One lookup for both spellings a use site has: a `<template>` name, which is
 /// the table key itself, and a candela component name, which the fragment the
-/// function returns carries. A component whose function has no single block to
-/// inline is named here rather than resolved, so the message says what to do
-/// about it.
+/// function returns carries.
 fn lookup<'a>(table: &'a FragmentTable, name: &str) -> Result<&'a Fragment, ParseError> {
-    if let Some(fragment) = table.get(name) {
-        return Ok(fragment);
-    }
-    match table.by_component(name) {
-        Some((fragment, true)) => Ok(fragment),
-        Some((_, false)) => Err(ParseError::Xml(format!(
-            "component `{name}` cannot be used from markup: markup instantiates the block a \
-             component returns, so its body has to be a single `return lmn!(...)`"
-        ))),
-        None => Err(ParseError::Xml(format!(
-            "unknown fragment `{name}`: no <template name=\"{name}\"> and no candela `fn {name}` \
-             returning an lmn! block is declared"
-        ))),
-    }
+    table
+        .get(name)
+        .or_else(|| table.by_component(name).map(|(fragment, _)| fragment))
+        .ok_or_else(|| {
+            ParseError::Xml(format!(
+                "unknown fragment `{name}`: no <template name=\"{name}\"> and no candela \
+                 `fn {name}` returning an lmn! block is declared"
+            ))
+        })
 }
 
 /// Classify one argument value the way an authored attribute value is
@@ -358,18 +432,25 @@ fn check(table: &FragmentTable) -> Result<(), ParseError> {
 /// them. Both declarations are named in the message; renaming either settles
 /// it.
 ///
-/// Only a component markup can inline claims a name. A function with several
-/// blocks contributes one entry per block under its own name, and none of
-/// them answers a use site, so those are the same declaration rather than
-/// competing ones.
+/// A `<template>` sharing a name with any component is a collision: a use
+/// site would reach the template and the function would never run.
+///
+/// Two fragments claiming one component name are only a collision when the
+/// build can stand in for the call, because that is when the body picked
+/// decides what renders. A function with several blocks contributes one entry
+/// per block under its own name and is reached by that name either way, so
+/// those are the same declaration rather than competing ones.
 fn reject_name_collisions(table: &FragmentTable) -> Result<(), ParseError> {
     let mut claimed: BTreeMap<&str, &Fragment> = BTreeMap::new();
     for (key, fragment) in table.iter() {
-        for component in fragment.components.iter().filter(|c| c.inlinable) {
+        for component in &fragment.components {
             if let Some(other) = table.get(&component.name)
                 && other.key != *key
             {
                 return Err(collision(&component.name, other, fragment));
+            }
+            if !component.inlinable {
+                continue;
             }
             match claimed.insert(component.name.as_str(), fragment) {
                 Some(other) if other.key != *key => {
@@ -402,6 +483,16 @@ fn origins(fragment: &Fragment) -> String {
         .map(|o| format!("{}:{}:{}", o.file, o.line, o.col))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// What to call a fragment in a message: the component name a reader wrote,
+/// or the key when nothing named it. A block's own key is a content hash,
+/// which says nothing to the person who has to break the cycle.
+fn readable<'a>(table: &'a FragmentTable, key: &'a str) -> &'a str {
+    table
+        .get(key)
+        .and_then(|fragment| fragment.components.first())
+        .map_or(key, |component| component.name.as_str())
 }
 
 /// Reject a fragment that instantiates itself, directly or through a chain.
@@ -443,9 +534,11 @@ fn visit<'a>(
     if let Some(at) = chain.iter().position(|k| *k == key) {
         let mut cycle: Vec<&str> = chain[at..].to_vec();
         cycle.push(key);
+        let named: Vec<&str> = cycle.iter().map(|k| readable(table, k)).collect();
         return Err(ParseError::Xml(format!(
-            "fragment `{key}` instantiates itself: {}",
-            cycle.join(" -> ")
+            "fragment `{}` instantiates itself: {}",
+            readable(table, key),
+            named.join(" -> ")
         )));
     }
     chain.push(key);

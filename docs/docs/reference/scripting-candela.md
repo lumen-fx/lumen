@@ -374,6 +374,14 @@ A block obeys three rules the compiler enforces:
 - **A handle is valid for the tick it was minted in.** Attach what a component
   returns before the tick ends, the same as a `node_spawn` handle.
 
+A component element inside a block is a use site, not a call: the build
+resolves it against the component it names. Where that component returns its
+block and nothing else, and reads only its own parameters, the block is put in
+the tree at build time. Where it works a value out or picks between blocks, the
+build leaves a marker and the runtime fills it by calling the function on the
+first tick, before the tree is drawn. A `.lmn` file writes the same element and means the same thing; see
+[composition](../guides/composition.md#when-the-subtree-appears).
+
 `lumenc check` and `lumenc build` both read every block in the app's scripts, so
 a malformed one fails ahead of the run.
 

@@ -1,8 +1,9 @@
 # Composition
 
 Three ways to avoid repeating markup: templates, for a subtree you use many
-times with different values; components, for a piece of markup a script builds
-and places; and includes, for splitting one long file into several.
+times with different values; components, for markup a script decides on, usable
+from a script or straight from the tree; and includes, for splitting one long
+file into several.
 
 ## Templates
 
@@ -246,11 +247,10 @@ Write `$$` for a literal `$`.
 
 ### Components inside components
 
-An element whose tag starts with a capital letter is a call to the candela
-function of that name. Props map to that function's parameters by name, in any
-order; a parameter no prop names is passed the empty string. A prop naming a
-parameter the function does not declare fails the compile, naming the
-component.
+An element whose tag starts with a capital letter names the candela function of
+that name. Props map to that function's parameters by name, in any order; a
+parameter no prop names is passed the empty string. A prop naming a parameter
+the function does not declare fails the compile, naming the component.
 
 ```rust
 fn Row(title, tone) {
@@ -267,12 +267,14 @@ fn List() {
 }
 ```
 
-A prop value that is one `$name` and nothing else passes that value through
-with its own type, so `<Row count="$n"/>` hands `Row` the number. Anything else
-is text, with each `$name` in it rendered into the string.
+A prop is text. `$name` in a prop value reads the candela value of that name
+where the element was written and renders it into the string, so `Row` above
+receives `"First"` and `"warm"`. A component that wants a number parses it.
 
-The child is built first and its node is placed where its element stood, so
-`List` above never calls back into the script while the tree is being built.
+A component element means the same thing in a block as in a `.lmn` file: the
+build resolves it against the component it names, rather than the block
+expanding to a call. `List` above builds `Row` twice at compile time and
+carries the result.
 
 ### Naming a component from markup
 
@@ -287,21 +289,51 @@ A `.lmn` file writes a component as a tag, the way it writes a template:
 </root>
 ```
 
-Markup is compiled before the app runs, with no script host in the loop, so a
-use site here instantiates the block `Home` returns rather than calling `Home`.
-The two spellings differ in that one place: `<Home name="bob"/>` inside another
-`lmn!` block runs the function and places the node it hands back, while the same
-element in a `.lmn` file takes the block and nothing else. Props are markup
-attribute values, so `name="bob"` reaches the block's `$name` as text.
-
-That is why a function has to be a single `return lmn!(...)` to be named from
-markup. One that returns a block from two branches has no one block to stand in
-for the call, and a use site naming it fails the build with the function named.
-Call that function from a block instead.
+Props there are markup attribute values, so `name="bob"` reaches the block's
+`$name` as text. Any component can be named this way; the section below is what
+that costs.
 
 Component names and `<template name="...">` names share one namespace, and it
 is app-wide. Two declarations claiming one name fail the build with both sites
-named; rename either.
+named; rename either. A component that reaches itself, directly or through
+another, fails the build with the chain named.
+
+### When the subtree appears
+
+Nothing parses markup while an app runs, so the tree a use site stands for is
+built before the app starts. What that takes depends on the component:
+
+- **The build can stand in for the call.** `Home` above returns its block and
+  nothing else, and every value in the block came from a parameter. The build
+  puts the block at the use site with the arguments already substituted, which
+  is exactly what calling `Home` would have produced. The subtree is on screen
+  in the first frame, and the function is never called.
+- **The function has to run.** It works a value out, or picks between blocks:
+
+  ```rust
+  fn Greet(who) {
+      let loud = who + "!";
+      return lmn!(<label text="hello $loud"/>);
+  }
+
+  fn Pick(on) {
+      if on == "yes" { return lmn!(<label text="on"/>); }
+      return lmn!(<label text="off"/>);
+  }
+  ```
+
+  Every block either one may return is still compiled into the app. What
+  stands at the use site is a marker; the runtime calls the function with the
+  props as arguments and puts the node it returns in the marker's place.
+  `Pick` picks its arm there, from blocks that are already built.
+
+Both are on screen in the first frame. The fill runs on the first tick, before
+the tree is drawn, so a component that has to run costs the time that run takes
+rather than a frame the reader sees empty. A component doing real work at that
+moment does delay that first frame; move it behind a signal if it is slow.
+
+A function the loaded program does not declare is reported once, naming the
+component, rather than leaving an empty element behind.
 
 ### What a block may not do
 
