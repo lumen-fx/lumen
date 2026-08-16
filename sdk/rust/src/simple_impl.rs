@@ -1,5 +1,11 @@
 //! High-level application builder mirroring the `lumenc run` boot path.
 
+// The engine's copy of each crate this module names. The re-export block in
+// lib.rs says why they come from there rather than from a dependency.
+#[cfg(feature = "host-rhai")]
+use crate::rhai;
+use crate::{lumen_core, lumen_runtime, lumen_script, lumenc};
+
 use crate::error::{Error, Result};
 use crate::events::{EventCtx, EventKind, HandlerEntry, install_rust_handlers};
 use lumen_core::app::App as EcsApp;

@@ -352,7 +352,7 @@ pub struct RuntimeCfg {
 ///
 /// Every field is `Option<bool>`: `None` lets lumenc infer the capability from a
 /// bounded source scan (err toward on, see [`BundleCapabilities::resolve`]);
-/// `Some(v)` forces it. Ignored by the shared dlopen'd cdylib and the dev
+/// `Some(v)` forces it. Ignored by the shared dlopen'd library and the dev
 /// `lumenc run` path, which always ship every subsystem.
 ///
 /// ```toml

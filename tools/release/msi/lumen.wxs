@@ -76,6 +76,17 @@
       </Component>
 
       <!--
+        The shared Rust standard library lumen.dll was linked against. The
+        library records a dependency on this exact file name, so it installs
+        beside it; without it lumen.dll does not load and nothing runs. The
+        name changes with the compiler, so build-msi.ps1 finds it in the stage
+        and passes it in.
+      -->
+      <Component Id="SharedStdDll" Directory="BINFOLDER">
+        <File Id="SharedStdDll" Source="$(var.StageDir)\bin\$(var.SharedStd)" KeyPath="yes" />
+      </Component>
+
+      <!--
         The stub `lumenc package` copies to make an app executable. It sits
         beside lumenc.exe because that is where crates/lumenc/src/package_cli.rs
         looks for it, the same directory rule the library above follows.

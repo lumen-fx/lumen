@@ -42,6 +42,10 @@
 //! [`App`]: crate::App
 //! [`App::add_plugins`]: crate::App::add_plugins
 
+// The engine's copy of each crate this module names. The re-export block in
+// lib.rs says why they come from there rather than from a dependency.
+use crate::lumen_core;
+
 use crate::app::App;
 use lumen_core::app::{App as EcsApp, Plugin};
 use std::any::TypeId;

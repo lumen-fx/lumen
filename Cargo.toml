@@ -11,9 +11,9 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Lumen C-ABI: opaque LumenApp + tagged LumenValue, drives lumenc::run_app from any C-callable language."
 # The engine ships as a shared library through the toolchain installer, not as
-# a crates.io package: the `lumen` name there belongs to an unrelated project,
-# and a cdylib is of no use to a `cargo add` anyway. The Rust-facing package is
-# `lumenui` (sdk/rust); the C-facing one is the installed liblumen.
+# a crates.io package: the `lumen` name there belongs to an unrelated project.
+# The Rust-facing package is `lumenui` (sdk/rust), which depends on this crate
+# and re-exports it; the C-facing one is the installed liblumen.
 publish = false
 
 [lib]
@@ -21,12 +21,21 @@ publish = false
 # stub, and the C++/Python SDKs all look for `liblumen.{so,dylib}` /
 # `lumen.dll`. Renaming this renames all of them.
 name = "lumen"
-crate-type = ["lib", "cdylib", "staticlib"]
+# `dylib` rather than `cdylib`, so the one shared library serves both seams.
+# A Rust dylib still exports its `#[unsafe(no_mangle)] extern "C"` symbols, so
+# every C caller (the launcher, the C++ and Python SDKs) opens it exactly as
+# before; on top of that it carries Rust metadata, which is what lets the Rust
+# SDK link the engine instead of compiling its own copy. An app picks the
+# dynamic form by building with `-C prefer-dynamic`; without that flag cargo
+# takes the `lib` (rlib) and links statically, which is what `bundle --static`
+# and the workspace's own tests want. cargo rejects `dylib` and `cdylib` on
+# one target, so this is a choice, not an addition.
+crate-type = ["lib", "dylib", "staticlib"]
 
 [dependencies]
 lumen-core = { path = "crates/core", version = "0.0.3" }
 # Runtime core: `RunOptions` / `run_app` / the default plugin stack.
-# `default-features = false` so the FULL shared cdylib turns every subsystem on
+# `default-features = false` so the FULL shared library turns every subsystem on
 # via this crate's own default feature set below, while a trimmed static
 # `--bundle` build (`--no-default-features --features "<caps>"`) selects exactly
 # the app's subsystems (Part B).
@@ -40,6 +49,16 @@ lumen-script = { path = "crates/script/api", version = "0.0.3", default-features
 # runs a prebuilt LMNA artifact with NO parser, so dropping lumenc also drops
 # the feature-unification that would otherwise pull lumen-runtime back to full.
 lumenc = { path = "crates/lumenc", version = "0.0.3", optional = true }
+# Widget trait, `Attributes`, and the `#[derive(Widget)]` macro. Not used by
+# the C ABI itself; carried so the Rust SDK reaches them through this one
+# library rather than compiling a second copy beside it (see the `sdk`
+# re-export module in src/lib.rs).
+lumen-widget = { path = "crates/widget", version = "0.0.3" }
+lumen-widget-macros = { path = "crates/widget-macros", version = "0.0.3" }
+# Same reason: the Rust SDK's `AppBuilder::rhai_extension` takes a
+# `rhai::Engine`, so the type has to come from here to be the same type.
+# Follows the `host-rhai` feature, which is what compiles that host at all.
+rhai = { workspace = true, optional = true }
 # Close-hook router (ABI 0.5): the `lumen_app_on_close` dispatch system
 # reads `Messages<CloseRequest>` through a `MessageCursor`, which
 # `lumen_core::prelude` does not re-export.
@@ -50,7 +69,7 @@ crossbeam-channel.workspace = true
 cbindgen.workspace = true
 
 [features]
-# The DEFAULT cdylib/staticlib is FULL-featured: one shared library serves
+# The DEFAULT shared/static library is FULL-featured: one shared library serves
 # every app (the whole point of link-not-embed). Per-app trimming applies ONLY
 # to the static `--bundle` path, built `--no-default-features --features
 # "<resolved capabilities>"` by lumenc.
@@ -77,7 +96,7 @@ audio = ["lumen-runtime/audio"]
 audio-rodio = ["lumen-runtime/audio-rodio"]
 mcp = ["lumen-runtime/mcp"]
 async = ["lumen-runtime/async"]
-host-rhai = ["lumen-runtime/host-rhai"]
+host-rhai = ["lumen-runtime/host-rhai", "dep:rhai"]
 host-lua = ["lumen-runtime/host-lua"]
 host-candela = ["lumen-runtime/host-candela"]
 

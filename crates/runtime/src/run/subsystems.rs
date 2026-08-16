@@ -586,7 +586,7 @@ pub(crate) fn register_os_misc(app: &mut App, cfg: &crate::config::LumenToml) {
 ///
 /// COMPILE-TIME GATE (Part B tree-shaking): the subsystem lives behind the
 /// `audio` cargo feature and the shipped backend behind `audio-rodio`. The full
-/// cdylib / dev build compiles both; a trimmed static `--bundle` for a no-audio
+/// shared / dev build compiles both; a trimmed static `--bundle` for a no-audio
 /// app drops them entirely and this becomes the inert no-op below.
 #[cfg(feature = "audio")]
 pub(crate) fn register_audio(app: &mut App, audio_used: bool) {

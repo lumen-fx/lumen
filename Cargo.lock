@@ -3418,7 +3418,10 @@ dependencies = [
  "lumen-core",
  "lumen-runtime",
  "lumen-script",
+ "lumen-widget",
+ "lumen-widget-macros",
  "lumenc",
+ "rhai",
 ]
 
 [[package]]
@@ -4079,15 +4082,8 @@ dependencies = [
 name = "lumenui"
 version = "0.0.3"
 dependencies = [
- "bevy_ecs",
  "glam 0.33.3",
- "lumen-core",
- "lumen-runtime",
- "lumen-script",
- "lumen-widget",
- "lumen-widget-macros",
- "lumenc",
- "rhai",
+ "lumen",
 ]
 
 [[package]]

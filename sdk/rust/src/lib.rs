@@ -150,6 +150,19 @@ pub mod simple {
     pub use crate::simple_impl::{App, AppBuilder};
 }
 
+// -- The crates behind the engine ---------------------------------------------
+
+// Every Lumen crate this SDK is written against, taken from the engine library
+// rather than depended on again. An app that links the engine dynamically gets
+// one copy of each of these, shared with the runtime already inside the
+// library; naming them here is what keeps it that way. Submodules reach them
+// as `crate::lumen_core`, `crate::bevy_ecs`, and so on.
+#[cfg(feature = "host-rhai")]
+pub use lumen::sdk::rhai;
+pub use lumen::sdk::{
+    bevy_ecs, lumen_core, lumen_runtime, lumen_script, lumen_widget, lumen_widget_macros, lumenc,
+};
+
 // -- Advanced re-exports ------------------------------------------------------
 
 /// The lumen-core ECS app and [`Plugin`](lumen_core::app::Plugin) trait that
@@ -178,6 +191,8 @@ pub use lumen_script::{NativeExternFn, ScriptValue};
 /// `bevy_ecs` items systems need (`Query`, `Res`, `ResMut`, `Commands`,
 /// `MessageReader`, `.chain()` / `.run_if()` via `IntoScheduleConfigs`).
 pub mod prelude {
+    use crate::{bevy_ecs, lumen_core, lumen_widget, lumen_widget_macros};
+
     pub use crate::{App, Error, Result};
     pub use crate::{EventCtx, EventKind};
     pub use crate::{on_change, on_click, on_toggle};

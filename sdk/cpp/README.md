@@ -31,7 +31,7 @@ int main() {
 
 A runnable set of examples covering the whole surface (hello, counter,
 signals, handlers, expose, list, dom) lives in [`examples/`](examples/). Each
-is a self-contained program that links the cdylib and runs headless; see
+is a self-contained program that links the shared library and runs headless; see
 [`examples/README.md`](examples/README.md).
 
 ## Dynamic DOM
@@ -95,7 +95,9 @@ accordingly.
 ## Requirements
 
 - A C++17 compiler (tested with g++ and clang++).
-- The Lumen C library, `liblumen`, built as a `cdylib` or `staticlib`.
+- The Lumen C library, `liblumen`, built as a shared library or a static one.
+  The shared build is a Rust `dylib`, so a copy of the shared Rust standard
+  library sits beside it and has to stay there.
 
 Build the C library from the workspace root:
 

@@ -5,8 +5,9 @@ name: release
 # lumen-<target>.tar.gz per Unix target and, for Windows,
 # lumen-windows-x86_64.msi as the install channel plus
 # lumen-windows-x86_64.zip as the portable archive. Every one of them holds
-# bin/lumenc, the liblumen shared library, and bin/lumen-launcher; the Unix
-# archives also carry the shell completions under share/. That layout comes
+# bin/lumenc, the liblumen shared library, the shared Rust standard library
+# that library was built against, and bin/lumen-launcher; the Unix archives
+# also carry the shell completions under share/. That layout comes
 # from three places, not from guessing:
 #
 #   - install.sh requires a top-level bin/ directory in the archive (its
@@ -138,18 +139,26 @@ jobs:
           - target: linux-x86_64
             os: ubuntu-latest
             libname: liblumen.so
+            dynamic_rustflags: -C prefer-dynamic -C link-arg=-Wl,-rpath,$ORIGIN
           - target: linux-aarch64
             os: ubuntu-24.04-arm
             libname: liblumen.so
+            dynamic_rustflags: -C prefer-dynamic -C link-arg=-Wl,-rpath,$ORIGIN
           - target: macos-aarch64
             os: macos-latest
             libname: liblumen.dylib
+            dynamic_rustflags: -C prefer-dynamic -C link-arg=-Wl,-rpath,@loader_path
           - target: macos-x86_64
             os: macos-26-intel
             libname: liblumen.dylib
+            dynamic_rustflags: -C prefer-dynamic -C link-arg=-Wl,-rpath,@loader_path
           - target: windows-x86_64
             os: windows-latest
             libname: lumen.dll
+            # Windows resolves a DLL's own dependencies from the directory of
+            # the executable that loaded it, which is where the shared standard
+            # library ends up, so there is no rpath to set.
+            dynamic_rustflags: -C prefer-dynamic
     steps:
       - uses: actions/checkout@v4
         with:
@@ -168,16 +177,29 @@ jobs:
         with:
           key: release-${{ matrix.target }}
 
-      # Three crates, three artifacts: the lumenc binary, the liblumen cdylib
+      # Three crates, three artifacts: the lumenc binary, the liblumen shared library
       # (crate lumen), and the launcher stub `lumenc package` turns into a
       # shipped app. None of them depends on another at compile time - lumenc
       # and the stub both dlopen liblumen at run time - so each is its own
       # build.
       - name: Build lumenc
         run: cargo build --release -p lumenc
+        env:
+          # The engine is fetched and built by lumenc's build script only when
+          # it is installed from outside a checkout; say so explicitly here so
+          # a workspace change can never turn a release build into a download.
+          LUMEN_SKIP_ENGINE_BUILD: "1"
 
-      - name: Build liblumen (lumen cdylib)
+      # Built to be linked as well as opened. `-C prefer-dynamic` is what lets
+      # a Rust SDK app take this library as a dependency instead of compiling
+      # its own engine, and it makes the library share one copy of the Rust
+      # standard library with the app rather than each carrying its own. That
+      # shared copy is a file, so it is published in the archive too, and the
+      # rpath is what lets it sit beside the library.
+      - name: Build liblumen (the shared engine)
         run: cargo build --release -p lumen
+        env:
+          RUSTFLAGS: ${{ matrix.dynamic_rustflags }}
 
       - name: Build the app launcher stub
         run: cargo build --release -p lumen-launcher
@@ -189,6 +211,18 @@ jobs:
           cp target/release/lumenc dist/bin/
           cp target/release/${{ matrix.libname }} dist/bin/
           cp target/release/lumen-launcher dist/bin/
+          # The shared standard library liblumen was linked against. The
+          # engine needs it to load at all, and a Rust SDK app links the same
+          # copy, so it ships beside them rather than being expected on the
+          # machine that runs the app. A toolchain without one would produce
+          # an archive whose engine cannot load, so this is a hard failure.
+          libdir="$(rustc --print target-libdir)"
+          shared_std="$(ls "$libdir"/libstd-*.so "$libdir"/libstd-*.dylib 2>/dev/null | head -1)"
+          if [ -z "$shared_std" ]; then
+            echo "no shared Rust standard library in $libdir" >&2
+            exit 1
+          fi
+          cp "$shared_std" dist/bin/
           # Shell completions, each under the directory its shell searches, so
           # a prefix on the usual search paths picks them up as installed. The
           # same scripts are embedded in lumenc (`lumenc completions <shell>`)
@@ -209,6 +243,15 @@ jobs:
           Copy-Item target\release\lumenc.exe dist\bin\
           Copy-Item target\release\${{ matrix.libname }} dist\bin\
           Copy-Item target\release\lumen-launcher.exe dist\bin\
+          # The shared standard library the engine was linked against; see the
+          # Unix step for why it travels.
+          $libdir = & rustc --print target-libdir
+          $sharedStd = Get-ChildItem -Path "$libdir\std-*.dll" | Select-Object -First 1
+          if (-not $sharedStd) {
+            Write-Error "no shared Rust standard library in $libdir"
+            exit 1
+          }
+          Copy-Item $sharedStd.FullName dist\bin\
           Compress-Archive -Path dist\* -DestinationPath lumen-${{ matrix.target }}.zip
 
       # The MSI payload is staged separately from dist\, and only after the

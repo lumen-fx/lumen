@@ -120,7 +120,7 @@ signal-hook.workspace = true
 ctrlc.workspace = true
 
 [features]
-# The DEFAULT set is FULL: the shared dlopen'd `liblumen` cdylib and the
+# The DEFAULT set is FULL: the shared dlopen'd `liblumen` and the
 # dev `lumenc run` path build with every subsystem so one shared library serves
 # every app. Per-app trimming happens ONLY on the static `--bundle` path, where
 # lumenc selects `--no-default-features --features "<resolved capabilities>"`.

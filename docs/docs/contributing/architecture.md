@@ -182,13 +182,22 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   fetches what the manifest names, and starts the app.
 - **lumen**: the engine crate at the workspace root. It exports the C ABI, an
   opaque app handle, a tagged value type, and the node binding, and builds as
-  the shared `liblumen` plus a static library.
+  the shared `liblumen` plus a static library. The shared form is a Rust
+  `dylib` rather than a `cdylib`, which serves both seams from one file: C
+  callers open it and dlsym the same exported symbols, and the Rust SDK links
+  it instead of compiling a second engine. Building an app with
+  `-C prefer-dynamic` is what selects that form; without the flag cargo takes
+  the static one. The flag reaches the standard library too, so a shared copy
+  of that ships beside `liblumen` everywhere it goes.
 - **lumen-launcher**: the executable stub `lumenc package` turns into a shipped
   app. It reads the artifact packaging put inside it, opens the shared runtime
   library beside it, and runs. It links the dlopen seam and nothing else, so it
   carries no renderer, window backend, or script host of its own.
 - **lumenui** (in `sdk/rust`): the Rust SDK. Plugin groups, typed signals, safe
-  node handles, and event-condition helpers.
+  node handles, and event-condition helpers. It depends on `lumen` alone and
+  re-exports what it needs from `lumen::sdk`; a second path to `lumen-core` or
+  `bevy_ecs` would put a second copy of those types in an app that links the
+  shared engine, and two copies do not share a signal store.
 - **lumen-devtools**: the in-window overlay, itself authored in Lumen markup
   and CSS.
 - **lumen-mcp**: in-app introspection. Per-tick snapshots, message rings,

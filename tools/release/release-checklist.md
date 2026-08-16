@@ -32,7 +32,7 @@ regression specific to either one only shows up when a release is cut, not on
 every pull request.
 
 There is one component, `lumen`, meaning `lumenc`, the `liblumen` runtime
-library (the `lumen` crate, built as a cdylib), and `lumen-launcher`, the
+library (the `lumen` crate, built as a shared library), and `lumen-launcher`, the
 stub `lumenc package` copies to make an app executable. Lumen's candela
 scripting support is compiled into `liblumen` directly; there is no separate
 candela binary and nothing here builds or ships one. The standalone candela
@@ -69,7 +69,8 @@ checklist.
      `[profile.release]` already strips symbols, so there is no separate
      strip step);
    - packages `bin/lumenc` (`lumenc.exe` on Windows), the liblumen shared
-     library, and `bin/lumen-launcher` into one archive, all in the *same*
+     library, the shared Rust standard library it was built against, and
+     `bin/lumen-launcher` into one archive, all in the *same*
      `bin/` directory. See the note on `crates/lumenc/src/loader.rs` below;
    - on Windows, also stages an install receipt and builds
      `lumen-windows-x86_64.msi` from `tools/release/msi/lumen.wxs`. The
@@ -95,13 +96,16 @@ then the platform loader's default search path. It does not look in a
 sibling `lib/` directory. A prebuilt install that put `lumenc` in `bin/`
 and `liblumen.*` in `lib/` would install a `lumenc` that cannot find its
 own runtime. `lumenc package` looks for the launcher stub the same way, so it
-belongs in `bin/` too. The archive therefore puts all three files there:
+belongs in `bin/` too. `liblumen` in turn depends on a shared copy of the Rust
+standard library, named after the compiler that built it, and the loader finds
+that one beside `liblumen` itself. The archive therefore puts all four files
+there:
 
-| Platform | Files in `bin/`                                 |
-| -------- | ----------------------------------------------- |
-| Linux    | `lumenc`, `liblumen.so`, `lumen-launcher`       |
-| macOS    | `lumenc`, `liblumen.dylib`, `lumen-launcher`    |
-| Windows  | `lumenc.exe`, `lumen.dll`, `lumen-launcher.exe` |
+| Platform | Files in `bin/`                                                             |
+| -------- | --------------------------------------------------------------------------- |
+| Linux    | `lumenc`, `liblumen.so`, `libstd-<hash>.so`, `lumen-launcher`                |
+| macOS    | `lumenc`, `liblumen.dylib`, `libstd-<hash>.dylib`, `lumen-launcher`          |
+| Windows  | `lumenc.exe`, `lumen.dll`, `std-<hash>.dll`, `lumen-launcher.exe`            |
 
 ## Publishing to the install channel
 

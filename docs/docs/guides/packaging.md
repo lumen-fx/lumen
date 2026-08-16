@@ -22,11 +22,25 @@ same relative paths your markup names them by. Copy that folder to another
 machine, run the executable, and the app starts. Nobody needs Lumen installed,
 and nobody needs a compiler.
 
+Two shared libraries sit in the folder next to the executable: the Lumen
+runtime, and the Rust standard library it was built against. Both belong to
+the app; keep them together when you move it.
+
 Choose the name and the destination yourself:
 
 ```sh
 lumenc package myapp build/Notes --name Notes
 ```
+
+To hand the result to someone rather than run it, ask for an archive as well:
+
+```sh
+lumenc package myapp --zip
+```
+
+That writes `myapp/dist/myapp.zip` beside the folder, holding the folder
+itself, so unpacking it gives the same directory back rather than scattering an
+executable and its libraries.
 
 The markup, the stylesheet, and the scripts are compiled into the executable,
 so none of them appear in the folder; a [multi-page app](pages.md) compiles
@@ -46,8 +60,9 @@ lumenc package myapp --target windows-x86_64
 ```
 
 The targets are `linux-x86_64`, `linux-aarch64`, `macos-x86_64`,
-`macos-aarch64`, and `windows-x86_64`. Packaging is file assembly rather than
-compilation, so any host can produce any of them.
+`macos-aarch64`, and `windows-x86_64`. For a markup app packaging is file
+assembly rather than compilation, so any host can produce any of them; an SDK
+app is compiled, and [what that needs](#cross-packaging-an-sdk-app) is below.
 
 The runtime library and the launcher for the other platform come from the
 Lumen release matching your `lumenc`, downloaded once and kept in a cache
@@ -238,28 +253,47 @@ produced, so packaging one is the same command:
 lumenc package myapp
 ```
 
-What lands in the folder follows how the language reaches Lumen:
+Every kind produces an executable, and the runtime library goes beside it, the
+same as for a markup app. How the executable is produced is what differs:
 
 - **Rust.** `cargo build --release` runs, and the binary it reports is copied
-  in under your app's name. A Rust app links the runtime into itself, so
-  nothing else is needed beside it.
+  in under your app's name. A Rust app links the runtime library rather than
+  compiling a copy of the engine into itself, so the executable is small and
+  the engine is the file beside it.
 - **C++.** CMake configures and builds, and the executable from the build tree
-  is copied in. A C++ app calls Lumen through the C ABI, so the runtime library
-  travels with it. If the project builds more than one executable, the most
-  recent one is packaged and the others are named on the way past; give the app
-  its own directory to keep that unambiguous.
-- **Python.** There is nothing to compile and so no executable to build a
-  package around. Ship the app directory as it is, together with the runtime
-  library, and start it with `python3` on a machine that has Python.
+  is copied in. If the project builds more than one executable, the most recent
+  one is packaged and the others are named on the way past; give the app its
+  own directory to keep that unambiguous.
+- **Python.** The app is frozen into an executable with
+  [PyInstaller](https://pyinstaller.org), which bundles the interpreter and the
+  app's modules into one file. Install it first (`pip install pyinstaller`).
 
 Unlike a markup app, an SDK app reads its markup, stylesheet, and scripts at
 run time, so those files travel with it. What stays behind is the source it was
 compiled from and the build tree that compile left.
 
-`--target` is for markup apps. Cross-compilation belongs to the SDK's own
-toolchain, which owns the target triples, sysroots, and linkers, so package an
-SDK app on a machine of the platform you are shipping to, or use the
-cross-compilation support the language already has.
+### Cross-packaging an SDK app
+
+`--target` works here too, and the SDK's own toolchain does the compiling:
+
+```sh
+lumenc package myapp --target linux-aarch64
+```
+
+For a Rust app the target triple is passed to cargo, so
+`rustup target add aarch64-unknown-linux-gnu` is what makes it work. For a C++
+app, set `CMAKE_TOOLCHAIN_FILE` to a toolchain file for that platform; there is
+nothing Lumen can supply in its place, so packaging says so rather than
+building this machine's binary under another platform's name. A Python app is
+frozen against the interpreter doing the freezing and can only be packaged for
+the platform you are on.
+
+A cross-packaged Rust app has one extra requirement. The app links the engine
+as a Rust library, and two Rust binaries only link together when the same
+compiler built them, so the app has to be built with the Rust version that
+built the Lumen release you are packaging against. When it is not, packaging
+stops and names both versions rather than writing a folder that would not
+start.
 
 Every flag on every command here is in the [CLI
 reference](../reference/cli.md).

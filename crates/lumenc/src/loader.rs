@@ -1,7 +1,7 @@
 //! dlopen loader for the link-not-embed launcher (`dlopen-run`).
 //!
 //! Instead of static-linking `lumen-runtime`, the thin launcher discovers and
-//! `dlopen`s the shared liblumen (`lumen` built as a cdylib), verifies its
+//! `dlopen`s the shared liblumen (the `lumen` shared library), verifies its
 //! ABI, and drives a prebuilt LMNA app across the C-ABI. See
 //! `docs/design/link-not-embed.md`.
 //!
@@ -71,7 +71,7 @@ pub enum LoaderError {
     },
 }
 
-/// Platform-specific shared-library file name for the liblumen cdylib. The
+/// Platform-specific file name for the liblumen shared library. The
 /// crate is `lumen`, so the produced file is `liblumen.{so,dylib}` /
 /// `lumen.dll`: the same name the C++ / Python SDKs load.
 fn soname() -> &'static str {
@@ -114,7 +114,7 @@ fn open() -> Result<Library, LoaderError> {
     let mut last = String::from("(none tried)");
     for cand in candidates() {
         // SAFETY: opening a shared library runs its initializers; liblumen is a
-        // first-party cdylib with no hostile init. The handle is leaked for the
+        // first-party library with no hostile init. The handle is leaked for the
         // process lifetime by the caller.
         match unsafe { Library::new(&cand) } {
             Ok(lib) => return Ok(lib),

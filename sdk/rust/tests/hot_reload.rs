@@ -21,7 +21,7 @@ use lumenui::runtime::RunOptions;
 // `build_headless_app` via the compiler wrapper so the injected parser is
 // wired (the bare `lumen_runtime` entry links no parser and would return
 // `ParserDisabled` on a from-source load).
-use lumenc::build_headless_app;
+use lumenui::lumenc::build_headless_app;
 use std::path::PathBuf;
 use std::time::Duration;
 

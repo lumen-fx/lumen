@@ -15,6 +15,10 @@
 //! Prefer [`Property`] handles (via the macro) when the same signal is touched
 //! from several systems; prefer [`Signals`] for one-off reads and writes.
 
+// The engine's copy of each crate this module names. The re-export block in
+// lib.rs says why they come from there rather than from a dependency.
+use crate::{bevy_ecs, lumen_core};
+
 use bevy_ecs::system::{ResMut, SystemParam};
 use lumen_core::property_store::{Property, PropertyKey, PropertyStore, PropertyValue};
 
@@ -35,7 +39,7 @@ impl<T> Signal for T where T: TryFrom<PropertyValue> + Into<PropertyValue> + Clo
 ///     let n = signals.get_or::<i64>("count", 0) + 1;
 ///     signals.set("count", n);
 /// }
-/// # bevy_ecs::system::assert_is_system(bump);
+/// # lumenui::bevy_ecs::system::assert_is_system(bump);
 /// ```
 #[derive(SystemParam)]
 pub struct Signals<'w> {
@@ -80,7 +84,7 @@ impl Signals<'_> {
     /// fn bump(mut signals: Signals) {
     ///     signals.update::<i64>("count", |n| n + 1);
     /// }
-    /// # bevy_ecs::system::assert_is_system(bump);
+    /// # lumenui::bevy_ecs::system::assert_is_system(bump);
     /// ```
     pub fn update<T: Signal + Default>(&mut self, name: &str, f: impl FnOnce(T) -> T) {
         let next = f(self.get_or_default::<T>(name));

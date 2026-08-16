@@ -80,6 +80,25 @@ Each release also publishes `lumen-windows-x86_64.zip`, a portable archive you
 can unpack anywhere. A portable copy never checks for updates; you replace it
 by unpacking a newer zip.
 
+## Platforms with no build
+
+Releases cover Linux and macOS on x86_64 and aarch64, and Windows on x86_64.
+On anything else - Windows on ARM, for instance - install from source:
+
+```sh
+cargo install lumenc
+```
+
+This needs a Rust toolchain. It builds `lumenc`, then fetches the matching
+Lumen source and builds the runtime library and the launcher from it, putting
+both beside the installed `lumenc` so packaging an app works the same as it
+does from a release. Expect it to take a while: it is compiling the engine.
+
+Set `LUMEN_SKIP_ENGINE_BUILD=1` to install only the compiler, if you are
+building the other two yourself. `lumenc run`, `build`, and `check` work
+without them; `lumenc package` is the command that needs them, and it says so
+and names the directory to put them in.
+
 ## Staying up to date
 
 An installed `lumenc` looks for a newer release at most once a day and prints a
