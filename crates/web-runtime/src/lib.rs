@@ -29,9 +29,7 @@
 
 #![warn(missing_docs)]
 
-mod assemble;
 mod boot;
-mod hosts;
 mod load;
 
 use std::cell::RefCell;
@@ -45,6 +43,10 @@ use wasm_bindgen::prelude::*;
 use crate::hosts::ScriptHostAccess;
 
 pub use boot::boot;
+// The app itself is not a browser thing: the same assembly runs in a window
+// and on a server. Re-exported rather than wrapped so a page and a server
+// reach one implementation.
+pub use lumen_portable::{assemble, hosts};
 
 /// Name the load failure reports when the page supplies no better one. A page
 /// has one: the manifest records the path every script was emitted to.

@@ -27,17 +27,11 @@ lumen-scene = { path = "../scene", version = "0.0.3" }
 # The browser as a render backend: adopting the prerendered document, keeping
 # it in step with the world, and turning DOM events into Lumen events.
 lumen-web-dom = { path = "../backends/web-dom", version = "0.0.3" }
-# The widget behaviour and the focus / text-edit layer, unchanged from the
-# desktop: what a tab strip does when it is clicked is not a per-platform
-# question.
-lumen-input = { path = "../input", version = "0.0.3" }
-lumen-primitives = { path = "../primitives", version = "0.0.3" }
+# The app a page runs, and the script hosts that run its scripts: everything
+# about a Lumen app that is not about the platform it runs on.
+lumen-portable = { path = "../portable", version = "0.0.3", default-features = false }
 lumen-text = { path = "../text", version = "0.0.3" }
 lumen-script = { path = "../script/api", version = "0.0.3", default-features = false }
-# The candela host, behind `host-candela`. The artifact half only: the browser
-# runs precompiled `.cdlb` bytecode, so the candela compiler never reaches the
-# page.
-lumen-script-candela = { path = "../script/candela", version = "0.0.3", default-features = false, optional = true }
 bevy_ecs.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
@@ -72,4 +66,4 @@ wasm-bindgen-test.workspace = true
 # today: rhai has yet to be wired up here, and lua's C core does not build for
 # `wasm32-unknown-unknown` at all.
 default = ["host-candela"]
-host-candela = ["dep:lumen-script-candela"]
+host-candela = ["lumen-portable/host-candela"]
