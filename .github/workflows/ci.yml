@@ -224,6 +224,11 @@ jobs:
         run: |
           rustup show active-toolchain
           rustc --version
+      # The page test builds the compiler, and the compiler links the desktop
+      # libraries a native app needs. The wasm build alone does not.
+      - name: Install Linux system dependencies
+        if: needs.changes.outputs.rust == 'true'
+        run: .github/scripts/linux-deps.sh
       # The command-line tool refuses an artifact built against a different
       # `wasm-bindgen` version, so this pin tracks the workspace dependency.
       - if: needs.changes.outputs.rust == 'true'
