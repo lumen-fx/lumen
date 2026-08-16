@@ -303,6 +303,11 @@ pub fn rewrite_property(name: &str, value: &str) -> Emission {
         // `focus-outline` is the short way to write `:focus { outline }`,
         // so it lands where a rule written that way lands.
         "focus-outline" => state(":focus", "outline", &outline(value)),
+        // The long way. Lumen reads `outline` only inside a `:focus` or
+        // `:focus-visible` rule, and the selector already carries the state
+        // by the time the value gets here, so it stays on the rule it was
+        // written on.
+        "outline" => Emission::one("outline", outline(value)),
         "selection-color" => state("::selection", "background", value),
         "selection-text-color" => state("::selection", "color", value),
         // Values that pick the property.
@@ -662,6 +667,7 @@ mod tests {
         ),
         ("border-left-color", "#1c4666", "border-left-color: #1c4666"),
         ("outline-offset", "2", "outline-offset: 2px"),
+        ("outline", "2 #33c7ce", "outline: 2px solid #33c7ce"),
         (
             "focus-outline",
             "2 #33c7ce",
