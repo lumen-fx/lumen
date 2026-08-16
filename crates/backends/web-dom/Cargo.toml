@@ -49,4 +49,8 @@ web-sys = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
+# The other half of the contract. The tests emit their fixtures with the real
+# emitter rather than checking against a copy of what it writes, because a
+# copy would agree with itself while the two halves drifted apart.
+lumen-web = { path = "../../web", version = "0.0.3" }
 wasm-bindgen-test.workspace = true

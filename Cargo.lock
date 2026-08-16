@@ -3961,6 +3961,7 @@ dependencies = [
  "lumen-html",
  "lumen-ir",
  "lumen-scene",
+ "lumen-web",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "web-sys",
