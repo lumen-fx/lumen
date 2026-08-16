@@ -57,7 +57,10 @@ jobs:
           if [ "$EVENT" = "pull_request" ] &&
              [ -n "$BASE" ] &&
              git fetch --no-tags --depth=1 origin "$BASE"; then
-            pattern='^(src/|crates/|sdk/rust/|include/|tests/|apps/|fixtures/|Cargo|rust-toolchain|\.cargo/|\.github/(workflows/ci\.yml|scripts/))'
+            # docs/docs/ is in the list because the suite compiles the
+            # complete programs the documentation shows, so a page can turn
+            # the test job red on its own.
+            pattern='^(src/|crates/|sdk/rust/|include/|tests/|apps/|fixtures/|docs/docs/|Cargo|rust-toolchain|\.cargo/|\.github/(workflows/ci\.yml|scripts/))'
             if ! git diff --name-only "$BASE" "$HEAD" | grep -Eq "$pattern"; then
               rust=false
             fi

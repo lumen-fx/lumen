@@ -126,6 +126,8 @@ import "lumen.cdl";
 fn on_click(id) {
     lumen::set_root_class("theme-light");
 }
+
+fn main() {}
 ```
 
 Toggling a class is the idiomatic way to express selection, validity, expanded
