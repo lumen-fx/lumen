@@ -9,10 +9,12 @@
 # building the workspace needs a Rust toolchain the formula would otherwise
 # have to pull in.
 #
-# The three files stay in one directory because lumenc dlopens the runtime
-# library from beside its own executable, and `lumenc package` looks for the
+# The archive's files stay in one directory because lumenc dlopens the runtime
+# library from beside its own executable, `lumenc package` looks for the
 # launcher stub in that same directory (crates/lumenc/src/loader.rs,
-# crates/lumenc/src/package_cli.rs). libexec holds all three and bin gets a
+# crates/lumenc/src/package_cli.rs), and the runtime library in turn finds the
+# shared Rust standard library it needs beside itself. libexec takes the whole
+# bin/ directory rather than a named list, and bin gets a
 # script that execs the real lumenc, so the running executable is the one in
 # libexec no matter how it was invoked. A plain symlink in bin would not do:
 # macOS reports the path used to launch, not the resolved one, and the library

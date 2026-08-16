@@ -17,6 +17,10 @@
 //! event fired - the same same-tick guarantee the Rhai path gets from
 //! `commit_external_properties`.
 
+// The engine's copy of each crate this module names. The re-export block in
+// lib.rs says why they come from there rather than from a dependency.
+use crate::{bevy_ecs, lumen_core};
+
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::*;
 use lumen_core::components::LumenId;

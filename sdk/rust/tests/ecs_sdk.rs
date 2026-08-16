@@ -1,6 +1,9 @@
 //! Integration tests for the ECS-first SDK surface: plugin-group composition,
 //! bare-app assembly, and the typed `Signals` param.
 
+// `#[derive(Resource)]` expands to `bevy_ecs` paths, and the SDK's copy of the
+// crate is the one the engine library carries.
+use lumenui::bevy_ecs;
 use lumenui::ecs_app::{App as EcsApp, Plugin};
 use lumenui::plugins::PluginGroupBuilder;
 use lumenui::prelude::*;

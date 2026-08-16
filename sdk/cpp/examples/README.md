@@ -1,7 +1,7 @@
 # Lumen C++ SDK - examples
 
 Small, self-contained programs that each compile and link against the built
-`lumen` cdylib and run headless, with no window and no display, so they
+`lumen` shared library and run headless, with no window and no display, so they
 double as smoke tests. They mirror the Python SDK's examples so the two SDKs
 feel consistent.
 
@@ -21,7 +21,7 @@ From this directory (`sdk/cpp/examples`):
 
 ```sh
 cmake -B build
-cmake --build build          # builds the cdylib if stale, then every example
+cmake --build build          # builds the library if stale, then every example
 ```
 
 To rebuild just the examples once the library exists, use the aggregate

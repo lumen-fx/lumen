@@ -559,18 +559,20 @@ def _candidate_paths() -> list[Path]:
        library file, or a directory containing it.
     2. ``LUMEN_LIB_DIR`` - the same override ``lumenc`` itself honours,
        so one setting points both at the same runtime.
-    3. ``target/{debug,release}`` relative to the current working
+    3. The directory holding the running executable, when the app has
+       been frozen into one by ``lumenc package``.
+    4. ``target/{debug,release}`` relative to the current working
        directory (the common case: running from the repo root).
-    4. ``target/{debug,release}`` relative to the repo root, found by
+    5. ``target/{debug,release}`` relative to the repo root, found by
        walking up from this file looking for the workspace
        ``Cargo.toml`` (covers running the example from elsewhere).
-    5. An installed toolchain: next to the ``lumenc`` on ``PATH``, then
+    6. An installed toolchain: next to the ``lumenc`` on ``PATH``, then
        ``$LUMEN_PREFIX/bin`` (``~/.lumen/bin`` by default). The
        installer puts the shared library beside ``lumenc`` rather than
        in a sibling ``lib/``, and that directory is on ``PATH``, not on
-       the loader's search path, so the system loader in step 6 does not
+       the loader's search path, so the system loader in step 7 does not
        find it on its own.
-    6. System library search paths (handled separately by
+    7. System library search paths (handled separately by
        ``ctypes.util.find_library`` as a last resort - see
        ``load_library``).
     """
@@ -589,6 +591,16 @@ def _candidate_paths() -> list[Path]:
             # Treat as a directory containing the library.
             for name in names:
                 candidates.append(p / name)
+
+    # A packaged app: the library sits beside the executable, which is where
+    # `lumenc package` puts it. `sys.frozen` is what a freezer sets to say the
+    # interpreter is running inside a bundled executable rather than from a
+    # checkout, so this only applies to a shipped app and never shadows a
+    # developer's own build.
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        for name in names:
+            candidates.append(exe_dir / name)
 
     cwd = Path.cwd()
     for profile in ("debug", "release"):

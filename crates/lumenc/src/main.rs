@@ -1011,7 +1011,7 @@ USAGE:
                           resolve the app's `[capabilities]` (lumen.toml +
                           source scan), map to a cargo `--features` set, and
                           build `lumen` with only those subsystems. The
-                          shared cdylib / dev path stay full-featured.
+                          shared library / dev path stay full-featured.
     lumenc i18n extract <app_dir> [--lang en-US]
                           Scan `.lmn`, `.rhai`, `.lua` and `.cdl` files
                           for `t(\"key\", ...)` / `tr(\"key\", ...)` /

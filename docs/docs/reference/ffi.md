@@ -26,6 +26,14 @@ cargo build -p lumen             # target/debug/liblumen.{so,dylib,dll,a}
 cargo build -p lumen --release
 ```
 
+The shared library is a Rust `dylib`, which exports the C ABI exactly as a
+`cdylib` would and additionally lets the [Rust SDK](#rust-sdk) link it rather
+than compile a second engine. One consequence reaches C and Python callers
+too: the library depends on a shared copy of the Rust standard library, so
+that file sits beside it in a release archive and in every packaged app. A
+release build adds `-C prefer-dynamic`; see the release workflow for the exact
+flags.
+
 The build also renders a `lumen.pc` file into the crate's output directory.
 Install it where pkg-config looks and `pkg-config --cflags --libs lumen`
 resolves the include path and `-llumen`.
@@ -399,11 +407,12 @@ Install with `pip install -e sdk/python`, which registers the package but does
 not build the library. The distribution is named `lumenui` and is pure Python,
 so it carries no runtime of its own and loads whichever one the machine has.
 `load_library()` looks for `liblumen` under `LUMEN_LIBRARY_PATH` (a file or a
-directory), then `LUMEN_LIB_DIR`, then `target/debug` and `target/release`
-relative to the working directory and to the workspace root, then an installed
-toolchain (the directory holding the `lumenc` on `PATH`, then
-`$LUMEN_PREFIX/bin`, default `~/.lumen/bin`), then the system loader's own
-paths. Examples run straight from a checkout:
+directory), then `LUMEN_LIB_DIR`, then, in a packaged app, the directory
+holding the executable, then `target/debug` and `target/release` relative to
+the working directory and to the workspace root, then an installed toolchain
+(the directory holding the `lumenc` on `PATH`, then `$LUMEN_PREFIX/bin`,
+default `~/.lumen/bin`), then the system loader's own paths. Examples run
+straight from a checkout:
 
 ```sh
 cargo build -p lumen
@@ -418,6 +427,28 @@ The `lumenui` crate in `sdk/rust` is the Rust entry point. It does not go
 through the C ABI: it links the runtime directly and exposes it in its native
 ECS shape, so a handler is an ordinary `bevy_ecs` system scheduled beside the
 framework's own.
+
+`lumenui` depends on the `lumen` library and nothing else of Lumen's, and
+re-exports everything an app writes against. That is what lets a packaged Rust
+app link the shared library beside it instead of compiling the engine into
+itself: one copy of each Lumen type exists, the one inside the library, so a
+signal set through the SDK and one set by a script are the same signal.
+
+### Linking the shared library
+
+`lumenc build` and `lumenc package` compile a Rust app with `-C
+prefer-dynamic`, which is what makes cargo take the shared form of the engine
+rather than the static one beside it. Building the app yourself with plain
+`cargo build` is fine and links the engine statically instead; the app behaves
+the same and is simply bigger.
+
+The flag also applies to the Rust standard library, so an app and the engine
+share one copy of that too. A packaged app therefore carries two shared
+libraries, and the standard library is named after the compiler that produced
+it, which has one consequence worth knowing: a Rust app and the Lumen release
+it links have to be built by the same Rust version. `rust-toolchain.toml` in
+the Lumen source names the one a release was built with, and `lumenc package`
+compares them and stops rather than assembling a folder that would not start.
 
 The surface is `App` for assembly, `LumenDefaultPlugins` for the standard stack
 (decomposable, so you can disable parts or compose your own group), `Signals`

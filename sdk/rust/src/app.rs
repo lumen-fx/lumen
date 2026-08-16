@@ -1,5 +1,9 @@
 //! The ECS-first [`App`] - Lumen's bevy-shaped entry point.
 
+// The engine's copy of each crate this module names. The re-export block in
+// lib.rs says why they come from there rather than from a dependency.
+use crate::{bevy_ecs, lumen_core, lumen_runtime, lumenc};
+
 use crate::error::{Error, Result};
 use crate::events::{EventCtx, EventKind, HandlerEntry, install_rust_handlers};
 use crate::plugins::{AppPlugins, BootConfig, WindowMode};

@@ -270,6 +270,18 @@ impl Target {
         }
     }
 
+    /// The Rust target triple for this platform, for an SDK app whose own
+    /// toolchain does the cross-compiling.
+    fn rust_triple(self) -> &'static str {
+        match self.name {
+            "linux-x86_64" => "x86_64-unknown-linux-gnu",
+            "linux-aarch64" => "aarch64-unknown-linux-gnu",
+            "macos-x86_64" => "x86_64-apple-darwin",
+            "macos-aarch64" => "aarch64-apple-darwin",
+            _ => "x86_64-pc-windows-msvc",
+        }
+    }
+
     /// Release asset holding this target's toolchain files.
     fn archive_name(self) -> String {
         match self.os {
@@ -286,23 +298,27 @@ pub fn cmd_package(args: impl Iterator<Item = String>) -> ExitCode {
 
 USAGE:
     lumenc package <app_dir> [<out_dir>] [--name N] [--target T]
-                   [--lib-dir <dir>] [--no-hooks]
+                   [--lib-dir <dir>] [--zip] [--no-hooks]
 
-Assembles the app executable, the Lumen runtime library where one is
-needed, and the app's files into a folder that runs on a machine with no
-Lumen installation. A markup app is compiled into the executable, pages
-and all; an SDK app is built by its own toolchain and the folder assembled
-around what that produced. <out_dir> defaults to <app_dir>/dist/<name>.
+Assembles the app executable, the Lumen runtime library, and the app's
+files into a folder that runs on a machine with no Lumen installation. A
+markup app is compiled into the executable, pages and all; an SDK app is
+built by its own toolchain and the folder assembled around what that
+produced. <out_dir> defaults to <app_dir>/dist/<name>.
 
     --name N          Package name (default: the app directory's name).
-    --target T        Package a markup app for another platform
-                      (linux-x86_64 | linux-aarch64 | macos-x86_64 |
-                      macos-aarch64 | windows-x86_64), fetching that
-                      platform's files from the release channel.
+    --target T        Package for another platform (linux-x86_64 |
+                      linux-aarch64 | macos-x86_64 | macos-aarch64 |
+                      windows-x86_64), fetching that platform's files
+                      from the release channel. An SDK app's own
+                      toolchain does the cross-compiling.
     --lib-dir DIR     Take the platform's files from DIR instead of the
                       release channel.
+    --zip             Also write <out_dir>.zip, the whole folder in one
+                      file to hand to someone.
     --no-hooks        Skip the app's prebuild [[hooks]].";
     let mut no_hooks = false;
+    let mut want_zip = false;
     let mut name: Option<String> = None;
     let mut lib_dir: Option<PathBuf> = None;
     let mut target = Target::host();
@@ -315,6 +331,7 @@ around what that produced. <out_dir> defaults to <app_dir>/dist/<name>.
                 return ExitCode::SUCCESS;
             }
             "--no-hooks" => no_hooks = true,
+            "--zip" => want_zip = true,
             "--name" => match args.next() {
                 Some(v) => name = Some(v),
                 None => return usage_error("--name needs a value"),
@@ -355,25 +372,15 @@ around what that produced. <out_dir> defaults to <app_dir>/dist/<name>.
     let cfg = crate::LumenToml::load_or_default(&src_path).unwrap_or_default();
     let kind = crate::app_kind::resolve(&src_path, cfg.app.kind);
 
-    // An SDK app's own toolchain owns cross-compilation: it decides target
-    // triples, sysroots, and linkers, none of which packaging can stand in for.
-    if kind != AppKind::Markup && target != Target::host() {
+    // Freezing a Python app runs the interpreter's own machinery against the
+    // interpreter it is running under, which is this machine's. There is no
+    // flag that makes it emit another platform's executable.
+    if kind == AppKind::Python && target != Target::host() {
         eprintln!(
-            "lumenc package: --target packages a markup app for another platform. A {} \
-             app is cross-compiled by its own toolchain: build it for that platform \
-             first, then package on a machine of that platform, or use its own \
-             cross-compilation support.",
-            language_of(kind)
-        );
-        return ExitCode::from(2);
-    }
-    // Python has no compile step and so produces nothing to package around.
-    if kind == AppKind::Python {
-        eprintln!(
-            "lumenc package: a Python app is not compiled, so there is no executable to \
-             assemble a package around. Ship the app directory itself together with the \
-             Lumen runtime library, and start it with `python3 <entry>.py` on a machine \
-             that has Python. `lumenc run {src}` runs it here."
+            "lumenc package: a Python app is frozen against the interpreter doing the \
+             freezing, so it can only be packaged for the platform you are on. Package \
+             it on a {} machine.",
+            target.name
         );
         return ExitCode::from(2);
     }
@@ -415,16 +422,25 @@ around what that produced. <out_dir> defaults to <app_dir>/dist/<name>.
             kind,
         ),
     };
-    match assembled {
-        Ok(summary) => {
-            println!("lumenc package: {summary}");
-            ExitCode::SUCCESS
-        }
+    let summary = match assembled {
+        Ok(summary) => summary,
         Err(e) => {
             eprintln!("lumenc package: {e}");
-            ExitCode::FAILURE
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("lumenc package: {summary}");
+
+    if want_zip {
+        match zip_package(&out_dir) {
+            Ok(archive) => println!("lumenc package: wrote {}", archive.display()),
+            Err(e) => {
+                eprintln!("lumenc package: {e}");
+                return ExitCode::FAILURE;
+            }
         }
     }
+    ExitCode::SUCCESS
 }
 
 /// The language a kind is written in, for messages.
@@ -454,11 +470,13 @@ fn unknown_target(name: &str) -> ExitCode {
 /// Build an SDK app with its own toolchain, then assemble the same folder
 /// shape around what that build produced. Returns the summary to print.
 ///
-/// The two compiled kinds differ in how they reach the runtime, and the
-/// package differs with them: a Rust app links `lumen-runtime` into its own
-/// executable and needs nothing beside it, while a C++ app links the C ABI and
-/// needs the shared library there. Both read their markup, stylesheet, and
-/// scripts at run time, so unlike a markup app those files travel.
+/// Every kind ships the shared Lumen library beside its executable, because
+/// every kind reaches the engine through it: C++ and Python call the C ABI,
+/// and a Rust app links the same library rather than compiling the engine into
+/// itself. A Rust app additionally carries the shared Rust standard library,
+/// which is the other half of linking the engine dynamically. All three read
+/// their markup, stylesheet, and scripts at run time, so unlike a markup app
+/// those files travel.
 fn package_sdk(
     src: &Path,
     out: &Path,
@@ -468,61 +486,190 @@ fn package_sdk(
     kind: AppKind,
 ) -> Result<String, String> {
     let built = match kind {
-        AppKind::Rust => build_rust_app(src)?,
-        AppKind::Cpp => build_cpp_app(src)?,
-        // Cross-packaging and Python are turned away before this point.
-        _ => return Err(format!("{} apps are not packaged here", language_of(kind))),
+        AppKind::Rust => build_rust_app(src, target)?,
+        AppKind::Cpp => build_cpp_app(src, target)?,
+        AppKind::Python => build_python_app(src, app_name, out)?,
+        AppKind::Markup => return Err("markup apps are not packaged here".to_string()),
     };
 
     std::fs::create_dir_all(out).map_err(|e| format!("create {}: {e}", out.display()))?;
     let exe_path = out.join(target.exe_name(app_name));
     copy_executable(&built, &exe_path)?;
 
-    // A C++ app calls the C ABI through the shared library, so it travels. A
-    // Rust app has the runtime linked in already.
-    let mut carried_lib = false;
-    if kind == AppKind::Cpp {
-        let toolchain = locate_toolchain(target, lib_dir)?;
-        let lib_dest = out.join(target.lib_name());
-        std::fs::copy(&toolchain.lib, &lib_dest).map_err(|e| {
-            format!(
-                "copy {} -> {}: {e}",
-                toolchain.lib.display(),
-                lib_dest.display()
-            )
-        })?;
-        carried_lib = true;
+    let toolchain = locate_toolchain(target, lib_dir)?;
+    // A Rust app links the engine, so the copy of the standard library it
+    // compiled against has to be the engine's own; every other kind opens the
+    // engine through the C ABI and only needs whichever copy the engine wants.
+    let check_app_compiler = kind == AppKind::Rust;
+    copy_engine_libraries(out, target, &toolchain, check_app_compiler)?;
+
+    // The freezer's own scratch directories sit under the output so they never
+    // touch the app; the package itself has no use for them.
+    if kind == AppKind::Python {
+        let _ = std::fs::remove_dir_all(out.join(".build"));
     }
 
     let copied = copy_app_files(src, out, CopyRules::sdk(kind))?;
     Ok(format!(
-        "wrote {} from the {} build ({} app file{} beside it{})",
+        "wrote {} from the {} build ({} app file{} beside it, with the runtime library)",
         exe_path.display(),
         language_of(kind),
         copied,
         if copied == 1 { "" } else { "s" },
-        if carried_lib {
-            ", with the runtime library"
-        } else {
-            ""
-        }
     ))
+}
+
+/// Copy the two shared libraries every packaged app runs on: the engine, and
+/// the Rust standard library the engine was built against.
+///
+/// The engine is a Rust library, and a Rust library links the standard library
+/// as a file of its own rather than absorbing it. That file is named after the
+/// compiler that produced it, so it cannot be assumed to exist on the machine
+/// the app lands on and travels with the app instead.
+///
+/// `match_app_compiler` is set when the app itself is Rust, which is the case
+/// where the two have to be the same copy rather than merely present.
+fn copy_engine_libraries(
+    out: &Path,
+    target: Target,
+    toolchain: &Toolchain,
+    match_app_compiler: bool,
+) -> Result<(), String> {
+    let lib_dest = out.join(target.lib_name());
+    std::fs::copy(&toolchain.lib, &lib_dest).map_err(|e| {
+        format!(
+            "copy {} -> {}: {e}",
+            toolchain.lib.display(),
+            lib_dest.display()
+        )
+    })?;
+
+    let Some(std_lib) = shared_std_library(target, &toolchain.lib, match_app_compiler)? else {
+        return Ok(());
+    };
+    let dest = out.join(std_lib.file_name().unwrap_or_default());
+    std::fs::copy(&std_lib, &dest)
+        .map_err(|e| format!("copy {} -> {}: {e}", std_lib.display(), dest.display()))
+        .map(|_| ())
+}
+
+/// The shared Rust standard library a packaged app ships beside the engine,
+/// or `None` when it needs none.
+///
+/// The engine is a Rust library, so a copy of the standard library is a file
+/// it depends on rather than something absorbed into it, and that file carries
+/// the identity of the compiler that produced it in its name. The copy that
+/// belongs in the package is therefore the engine's own, found beside it.
+///
+/// `match_app_compiler` is set when the app is Rust and so links the engine
+/// rather than opening it. Then the two have to be the same copy, and the
+/// compiler about to build the app is asked which one it produces: a mismatch
+/// would assemble a folder that does not start, so it is reported instead.
+fn shared_std_library(
+    target: Target,
+    engine_lib: &Path,
+    match_app_compiler: bool,
+) -> Result<Option<PathBuf>, String> {
+    let (prefix, ext) = match target.os {
+        Os::Windows => ("std-", "dll"),
+        Os::Macos => ("libstd-", "dylib"),
+        Os::Linux => ("libstd-", "so"),
+    };
+    let beside_engine = engine_lib
+        .parent()
+        .and_then(|dir| find_shared_std(dir, prefix, ext));
+
+    if !match_app_compiler {
+        return match beside_engine {
+            Some(found) => Ok(Some(found)),
+            // No copy beside it means one of two things, and neither needs a
+            // file here: an engine that carries the standard library inside
+            // itself, or one built here, where the compiler that produced it
+            // is this machine's and its copy is already on the loader's path.
+            // Reaching for another platform's copy through this machine's
+            // compiler would be neither.
+            None if target != Target::host() => Ok(None),
+            None => Ok(local_shared_std(target, prefix, ext)?),
+        };
+    }
+
+    let from_compiler = local_shared_std(target, prefix, ext)?.ok_or_else(|| {
+        format!(
+            "the Rust compiler here has no shared standard library for {}. A Rust app \
+             links the engine, which needs one.",
+            target.name
+        )
+    })?;
+    match beside_engine {
+        Some(wanted) if wanted.file_name() != from_compiler.file_name() => Err(format!(
+            "{} was built against {}, and the compiler here produces {}. A Rust app and \
+             the engine it links share one standard library, so both have to come from \
+             the same compiler: build the app with the Rust version this Lumen release \
+             was built with (rust-toolchain.toml in the Lumen source names it).",
+            engine_lib.display(),
+            wanted.file_name().unwrap_or_default().to_string_lossy(),
+            from_compiler
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy(),
+        )),
+        Some(wanted) => Ok(Some(wanted)),
+        None => Ok(Some(from_compiler)),
+    }
+}
+
+/// The shared standard library this machine's Rust compiler holds for
+/// `target`, asking `rustc` where its own target libraries live rather than
+/// guessing at a sysroot layout.
+fn local_shared_std(target: Target, prefix: &str, ext: &str) -> Result<Option<PathBuf>, String> {
+    let mut command = std::process::Command::new("rustc");
+    command.arg("--print").arg("target-libdir");
+    if target != Target::host() {
+        command.arg("--target").arg(target.rust_triple());
+    }
+    let output = command.output().map_err(|e| {
+        format!("cannot run rustc: {e}. Packaging asks it where its shared standard library is.")
+    })?;
+    if !output.status.success() {
+        return Err(format!(
+            "rustc does not have the {} standard library installed. Add it with \
+             `rustup target add {}`.",
+            target.name,
+            target.rust_triple()
+        ));
+    }
+    let dir = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    Ok(find_shared_std(&dir, prefix, ext))
+}
+
+/// The shared standard library in `dir`, if it holds one.
+fn find_shared_std(dir: &Path, prefix: &str, ext: &str) -> Option<PathBuf> {
+    std::fs::read_dir(dir).ok()?.flatten().find_map(|entry| {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        (name.starts_with(prefix) && name.ends_with(ext)).then(|| entry.path())
+    })
 }
 
 /// Build a Rust SDK app and return the executable cargo produced.
 ///
-/// The build command is the one `lumenc build` uses; the extra flag makes
-/// cargo report where the executable landed, which cannot be worked out from
-/// the app directory alone because a workspace puts it under the workspace
-/// root rather than the app.
-fn build_rust_app(src: &Path) -> Result<PathBuf, String> {
+/// The build command is the one `lumenc build` uses, in the environment that
+/// makes the app link the shared engine library rather than compile the engine
+/// into itself. The extra flag makes cargo report where the executable landed,
+/// which cannot be worked out from the app directory alone because a workspace
+/// puts it under the workspace root rather than the app.
+fn build_rust_app(src: &Path, target: Target) -> Result<PathBuf, String> {
+    let cross = (target != Target::host()).then(|| target.rust_triple());
     let mut command = std::process::Command::new("cargo");
     command
         .current_dir(src)
         .arg("build")
         .arg("--release")
         .arg("--message-format=json-render-diagnostics")
+        .envs(lumen_runtime::app_kind::rust_dynamic_env(cross))
         .stderr(std::process::Stdio::inherit());
+    if let Some(triple) = cross {
+        command.arg("--target").arg(triple);
+    }
     eprintln!("lumenc: cargo build --release (in {})", src.display());
     let output = command
         .output()
@@ -550,7 +697,7 @@ fn build_rust_app(src: &Path) -> Result<PathBuf, String> {
     // workspace puts it under the workspace root rather than the app. Fall
     // back to the conventional location for the cases where that path does not
     // resolve here, such as a cargo that builds somewhere else.
-    conventional_cargo_executable(src).ok_or_else(|| {
+    conventional_cargo_executable(src, cross).ok_or_else(|| {
         format!(
             "the cargo build in {} produced no executable to package. A packaged app needs \
              a binary target; a library crate has nothing to ship.",
@@ -560,21 +707,26 @@ fn build_rust_app(src: &Path) -> Result<PathBuf, String> {
 }
 
 /// The release binary at the layout a single-crate cargo project uses:
-/// `target/release/<package name>`, with the package name read from the
-/// manifest.
-fn conventional_cargo_executable(src: &Path) -> Option<PathBuf> {
+/// `target/release/<package name>`, or `target/<triple>/release/<name>` when
+/// cross-compiling, with the package name read from the manifest.
+fn conventional_cargo_executable(src: &Path, cross: Option<&str>) -> Option<PathBuf> {
     let manifest = std::fs::read_to_string(src.join("Cargo.toml")).ok()?;
     let value = toml::from_str::<toml::Value>(&manifest).ok()?;
     let name = value
         .get("package")
         .and_then(|p| p.get("name"))
         .and_then(|n| n.as_str())?;
-    let exe = if cfg!(target_os = "windows") {
+    let windows = cross.map_or(cfg!(target_os = "windows"), |t| t.contains("windows"));
+    let exe = if windows {
         format!("{name}.exe")
     } else {
         name.to_string()
     };
-    let candidate = src.join("target").join("release").join(exe);
+    let mut candidate = src.join("target");
+    if let Some(triple) = cross {
+        candidate.push(triple);
+    }
+    let candidate = candidate.join("release").join(exe);
     candidate.is_file().then_some(candidate)
 }
 
@@ -583,7 +735,18 @@ fn conventional_cargo_executable(src: &Path) -> Option<PathBuf> {
 /// CMake names the binary in the project's own `CMakeLists.txt`, so there is
 /// nothing to read it off; the build tree is searched for the executable it
 /// wrote instead, and an ambiguous result is reported rather than guessed at.
-fn build_cpp_app(src: &Path) -> Result<PathBuf, String> {
+fn build_cpp_app(src: &Path, target: Target) -> Result<PathBuf, String> {
+    // CMake reads `CMAKE_TOOLCHAIN_FILE` from the environment, which is how a
+    // cross build is configured; there is nothing for packaging to invent
+    // here, so say plainly what is missing rather than running a build that
+    // would quietly produce this machine's binary.
+    if target != Target::host() && std::env::var_os("CMAKE_TOOLCHAIN_FILE").is_none() {
+        return Err(format!(
+            "cross-compiling a C++ app to {} needs a CMake toolchain file for that \
+             platform. Set CMAKE_TOOLCHAIN_FILE to it and run this again.",
+            target.name
+        ));
+    }
     let specs = crate::app_kind::dispatch(AppKind::Cpp, src, crate::app_kind::Mode::Build)
         .map_err(|e| e.to_string())?;
     for spec in &specs {
@@ -641,6 +804,64 @@ fn build_cpp_app(src: &Path) -> Result<PathBuf, String> {
             Ok(chosen)
         }
     }
+}
+
+/// Freeze a Python SDK app into an executable and return it.
+///
+/// A Python app has no compiler of its own, so the executable comes from
+/// PyInstaller: it bundles the interpreter, the app's modules, and their
+/// dependencies into one file. Everything else about the package is the same
+/// as for the other kinds - the shared Lumen library goes beside it, and the
+/// app's markup and stylesheet travel, because a Python app reads those at run
+/// time exactly as a C++ one does.
+///
+/// The build directories PyInstaller wants land under the output directory
+/// rather than in the app, so freezing an app twice leaves nothing behind in
+/// the source tree.
+fn build_python_app(src: &Path, app_name: &str, out: &Path) -> Result<PathBuf, String> {
+    let entry = crate::app_kind::python_entry(src)?;
+    let work = out.join(".build");
+    std::fs::create_dir_all(&work).map_err(|e| format!("create {}: {e}", work.display()))?;
+
+    eprintln!(
+        "lumenc: pyinstaller --onefile {entry} (in {})",
+        src.display()
+    );
+    let status = std::process::Command::new("pyinstaller")
+        .current_dir(src)
+        .arg("--noconfirm")
+        .arg("--onefile")
+        .arg("--name")
+        .arg(app_name)
+        .arg("--distpath")
+        .arg(work.join("dist"))
+        .arg("--workpath")
+        .arg(work.join("work"))
+        .arg("--specpath")
+        .arg(&work)
+        .arg(&entry)
+        .status()
+        .map_err(|e| {
+            format!(
+                "cannot run pyinstaller: {e}. A Python app is frozen into an executable \
+                 with it; install it with `pip install pyinstaller`."
+            )
+        })?;
+    if !status.success() {
+        return Err("the pyinstaller build failed".to_string());
+    }
+
+    let dist = work.join("dist");
+    for name in [app_name.to_string(), format!("{app_name}.exe")] {
+        let candidate = dist.join(&name);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    Err(format!(
+        "pyinstaller wrote no executable into {}. Check its output above.",
+        dist.display()
+    ))
 }
 
 /// Every executable a CMake build tree holds, ignoring CMake's own machinery
@@ -728,14 +949,7 @@ fn package(
         }
     }
 
-    let lib_dest = out.join(target.lib_name());
-    std::fs::copy(&toolchain.lib, &lib_dest).map_err(|e| {
-        format!(
-            "copy {} -> {}: {e}",
-            toolchain.lib.display(),
-            lib_dest.display()
-        )
-    })?;
+    copy_engine_libraries(out, target, &toolchain, false)?;
 
     let copied = copy_app_files(src, out, CopyRules::markup())?;
 
@@ -1069,6 +1283,14 @@ impl CopyRules {
                 skip_exts: &["cpp", "cc", "cxx", "h", "hpp"],
                 skip_files: &["CMakeLists.txt"],
             },
+            // The frozen executable carries the modules, so the sources stay
+            // behind along with the interpreter's caches and the freezer's
+            // recipe file.
+            AppKind::Python => Self {
+                skip_dirs: &["build", "dist", "__pycache__", ".venv", "venv"],
+                skip_exts: &["py", "pyc", "spec"],
+                skip_files: &["pyproject.toml", "requirements.txt"],
+            },
             _ => Self {
                 skip_dirs: &["target", "src"],
                 skip_exts: &["rs"],
@@ -1132,6 +1354,61 @@ fn copy_app_files(src: &Path, out: &Path, rules: CopyRules) -> Result<usize, Str
         }
     }
     Ok(count)
+}
+
+/// Write the finished package into a single `.zip` beside it, and return
+/// where it landed.
+///
+/// A folder is what runs; a zip is what gets sent. The archive holds the
+/// folder itself, so unpacking it gives back the same directory rather than
+/// scattering an executable and its libraries into whatever the reader had
+/// open. The executable bit is recorded, which matters on Linux and macOS
+/// where a lost permission is the difference between an app and a file that
+/// will not start.
+fn zip_package(out: &Path) -> Result<PathBuf, String> {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+
+    let name = out
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "package".to_string());
+    let archive_path = out.with_extension("zip");
+    let file = std::fs::File::create(&archive_path)
+        .map_err(|e| format!("create {}: {e}", archive_path.display()))?;
+    let mut zip = zip::ZipWriter::new(file);
+
+    let mut stack = vec![out.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries =
+            std::fs::read_dir(&dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let Ok(rel) = path.strip_prefix(out) else {
+                continue;
+            };
+            let inside = Path::new(&name).join(rel);
+            let options =
+                SimpleFileOptions::default().unix_permissions(if is_executable_file(&path) {
+                    0o755
+                } else {
+                    0o644
+                });
+            zip.start_file(inside.to_string_lossy(), options)
+                .map_err(|e| format!("write {}: {e}", archive_path.display()))?;
+            let bytes =
+                std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+            zip.write_all(&bytes)
+                .map_err(|e| format!("write {}: {e}", archive_path.display()))?;
+        }
+    }
+    zip.finish()
+        .map_err(|e| format!("finish {}: {e}", archive_path.display()))?;
+    Ok(archive_path)
 }
 
 /// Whether `dir` is `inner` or holds it, comparing resolved paths so a

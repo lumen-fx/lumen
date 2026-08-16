@@ -56,8 +56,18 @@ jobs:
         with:
           key: msi-smoke
 
-      - name: Build lumenc, liblumen, and the launcher stub
-        run: cargo build -p lumenc -p lumen -p lumen-launcher
+      - name: Build lumenc and the launcher stub
+        run: cargo build -p lumenc -p lumen-launcher
+        env:
+          LUMEN_SKIP_ENGINE_BUILD: "1"
+
+      # Same flags release.yml uses, so the payload staged here is the shape
+      # the published one has: a shared engine plus the standard library it
+      # was linked against.
+      - name: Build liblumen (the shared engine)
+        run: cargo build -p lumen
+        env:
+          RUSTFLAGS: -C prefer-dynamic
 
       # Mirrors release.yml: the zip closes first, and only then does the MSI
       # stage gain the receipt. Step "the portable zip carries no receipt"
@@ -70,6 +80,13 @@ jobs:
           Copy-Item target\debug\lumenc.exe dist\bin\
           Copy-Item target\debug\lumen.dll dist\bin\
           Copy-Item target\debug\lumen-launcher.exe dist\bin\
+          $libdir = & rustc --print target-libdir
+          $sharedStd = Get-ChildItem -Path "$libdir\std-*.dll" | Select-Object -First 1
+          if (-not $sharedStd) {
+            Write-Error "no shared Rust standard library in $libdir"
+            exit 1
+          }
+          Copy-Item $sharedStd.FullName dist\bin\
           Compress-Archive -Path dist\* -DestinationPath lumen-windows-x86_64.zip -Force
           Copy-Item dist\bin\* msi-stage\bin\
 

@@ -4,9 +4,9 @@
 //! compiler wrapper (so the injected parser is present) and reads back through
 //! the same `Node` handles a caller would use.
 
-use lumenc::build_headless_app;
 use lumenui::dom::{self, Node};
 use lumenui::ecs_app::App as EcsApp;
+use lumenui::lumenc::build_headless_app;
 use lumenui::runtime::RunOptions;
 use std::path::PathBuf;
 
@@ -89,7 +89,7 @@ fn query_mutate_read_back_through_node_handles() {
 #[test]
 fn set_inner_markup_parses_and_replaces_children() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let _ = lumen_script::node_query::drain_external_dom_commands();
+    let _ = lumenui::lumen_script::node_query::drain_external_dom_commands();
     let dir = app_dir(r#"<root id="app"><column id="host" class="host"></column></root>"#);
     let opts = RunOptions::new(&dir);
     let (mut app, _window) = build_headless_app(opts).expect("build headless app");

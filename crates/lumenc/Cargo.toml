@@ -98,7 +98,7 @@ zip = { workspace = true, optional = true }
 # Script host engine handle, named ONLY in the `dev-run`-gated `run_with`
 # wrapper signature (`rhai::Engine`). Optional, pulled under `dev-run`.
 rhai = { workspace = true, optional = true }
-# link-not-embed launcher: dlopen the shared liblumen (lumen cdylib) and
+# link-not-embed launcher: dlopen the shared liblumen and
 # drive a prebuilt LMNA app over the C-ABI. OPTIONAL behind `dlopen-run`; this
 # is the whole point of the thin launcher: it pulls NO backend crate, only
 # the dynamic-loader shim.
@@ -222,3 +222,13 @@ profiling-tracy = ["profiling", "lumen-runtime?/profiling-tracy"]
 # path (weak forward - a no-op in a thin build). Mirrors Qt's `qmlcachegen`
 # and Slint's compile-.slint-to-Rust model.
 runtime-parse = ["dep:roxmltree", "dep:lumen-script-candela", "lumen-runtime?/runtime-parse"]
+
+[build-dependencies]
+# A source install (`cargo install lumenc`) fetches the matching tagged source
+# and builds the engine and the launcher stub from it, because those two are
+# release files rather than cargo artifacts and `lumenc package` cannot
+# assemble a folder without them. See build.rs; in a Lumen checkout the script
+# does nothing and none of this runs.
+ureq.workspace = true
+tar.workspace = true
+flate2.workspace = true

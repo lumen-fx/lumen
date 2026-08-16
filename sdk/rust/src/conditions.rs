@@ -20,6 +20,10 @@
 //! external bus) and cleared at end of tick - a signal a peer system writes
 //! later in the same stage is observed on the following tick.
 
+// The engine's copy of each crate this module names. The re-export block in
+// lib.rs says why they come from there rather than from a dependency.
+use crate::{bevy_ecs, lumen_core};
+
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::system::{Query, Res};
 use lumen_core::components::{LumenId, Toggleable};

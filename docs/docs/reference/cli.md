@@ -177,15 +177,15 @@ A missing `<app_dir>`, an unknown flag, or a mode neither `--render` nor
 
 ```
 lumenc package <app_dir> [<out_dir>] [--name <name>] [--target <target>]
-                         [--lib-dir <dir>] [--no-hooks]
+                         [--lib-dir <dir>] [--zip] [--no-hooks]
 ```
 
 Assembles a folder that runs on a machine with no Lumen installation: the app
-executable, the Lumen runtime library where the app needs one, `lumen.toml`,
-and every other file from `<app_dir>` at the same relative path. Dotfiles, the
-output directory, and the app's build inputs and build tree are skipped. Prints
-one line naming the executable it wrote and how many app files travelled with
-it.
+executable, the Lumen runtime library, the Rust standard library that library
+was built against, `lumen.toml`, and every other file from `<app_dir>` at the
+same relative path. Dotfiles, the output directory, and the app's build inputs
+and build tree are skipped. Prints one line naming the executable it wrote and
+how many app files travelled with it.
 
 For a markup app the executable is the launcher with the compiled app inside
 it, and the markup, stylesheet, and scripts are compiled in rather than copied.
@@ -194,11 +194,11 @@ A multi-page app packages whole, routing included.
 For an SDK app the app's own toolchain builds it first, exactly as `lumenc
 build` would, and the folder is assembled around what that produced:
 
-| Kind | Executable | Runtime library | Detected from |
-|------|-----------|-----------------|---------------|
-| Rust | the binary `cargo build --release` reports | linked in, not copied | `Cargo.toml` depending on `lumen` |
-| C++ | the executable in the CMake build tree | copied beside it | `CMakeLists.txt` |
-| Python | none; exits 2 saying to ship the directory with the runtime library | - | a `.py` importing `lumen` |
+| Kind | Executable | Detected from |
+|------|-----------|---------------|
+| Rust | the binary `cargo build --release` reports | `Cargo.toml` depending on `lumenui` |
+| C++ | the executable in the CMake build tree | `CMakeLists.txt` |
+| Python | the one `pyinstaller --onefile` writes | a `.py` importing `lumen` |
 
 `[app] kind` in `lumen.toml` overrides detection. An SDK app's markup,
 stylesheet, and scripts are read at run time rather than compiled in, so those
@@ -211,12 +211,23 @@ the most recent and names the rest.
 | `--name` | string | the app directory's name | Names the executable, and the default output directory. |
 | `--target` | see below | this machine's platform | Packages for another platform. |
 | `--lib-dir` | path | none | Directory holding the launcher stub and the runtime library to use, instead of looking them up. |
+| `--zip` | - | off | Also writes `<out_dir>.zip`, holding the folder itself. |
 | `--no-hooks` | - | off | Skips the `prebuild` hooks. |
 
 Targets are `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`,
-and `windows-x86_64`. Any host can package a markup app for any of them. An
-unrecognised name exits 2 and lists the ones that exist, and `--target` with an
-SDK app exits 2: cross-compilation belongs to that app's own toolchain.
+and `windows-x86_64`. An unrecognised name exits 2 and lists the ones that
+exist. Any host can package a markup app for any of them, because that is file
+assembly rather than compilation. For an SDK app the target triple goes to that
+app's own toolchain: a Rust app needs the target installed
+(`rustup target add`), a C++ app needs `CMAKE_TOOLCHAIN_FILE` pointing at a
+toolchain file for that platform and exits 1 without one, and a Python app is
+frozen against the interpreter doing the freezing and exits 2 for any target
+but this machine's.
+
+A Rust app links the engine as a Rust library, which only works when one
+compiler built both. Packaging compares the standard library the app's compiler
+produces with the one the engine was built against and exits 1 naming both when
+they differ.
 
 The launcher stub and the runtime library are looked up in this order:
 `--lib-dir`, then, for this machine's own platform, the directory holding the

@@ -10,7 +10,7 @@
 //!   cargo `--features` list, and builds the per-app static runtime seam
 //!   (`lumen`) with `--no-default-features --features "<set>"` so the
 //!   binary carries only the subsystems that app uses. The shared dlopen'd
-//!   cdylib and the dev `lumenc run` path stay full-featured and untrimmed.
+//!   shared library and the dev `lumenc run` path stay full-featured and untrimmed.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -201,7 +201,7 @@ fn cmd_bundle_static(src_path: &std::path::Path, out_path: &std::path::Path) -> 
         return ExitCode::FAILURE;
     }
 
-    // Build the per-app static seam (lumen cdylib) with exactly this app's
+    // Build the per-app static seam with exactly this app's
     // features. `panic = unwind` is preserved by the workspace release profile
     // (the C-ABI's catch_unwind depends on it).
     let mut cmd = std::process::Command::new("cargo");

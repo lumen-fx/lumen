@@ -44,6 +44,36 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 // ============================================================
+// The Rust surface behind the shared library
+// ============================================================
+
+/// The Rust crates this library is built from, re-exported so a Rust program
+/// can reach them through it.
+///
+/// A Rust app that links the engine dynamically has to name every Lumen type
+/// through this one library. Depending on `lumen-core` (or any other piece)
+/// as well would compile a second copy of it into the app, and the two copies
+/// would be different types to the compiler and hold different globals - a
+/// signal set through one would not be visible through the other. Reaching
+/// everything through here keeps one copy, the one inside the shared library.
+///
+/// The Rust SDK (`lumenui`) is the intended reader; it re-exports what an app
+/// author actually writes against, so app code names neither this module nor
+/// the crates under it.
+pub mod sdk {
+    pub use bevy_ecs;
+    pub use lumen_core;
+    pub use lumen_runtime;
+    pub use lumen_script;
+    pub use lumen_widget;
+    pub use lumen_widget_macros;
+    #[cfg(feature = "embed-parser")]
+    pub use lumenc;
+    #[cfg(feature = "host-rhai")]
+    pub use rhai;
+}
+
+// ============================================================
 // ABI version
 // ============================================================
 

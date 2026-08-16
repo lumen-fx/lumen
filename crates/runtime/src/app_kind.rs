@@ -254,11 +254,49 @@ pub fn dispatch(kind: AppKind, dir: &Path, mode: Mode) -> Result<Vec<CommandSpec
 /// Rust: `cargo run` (Run) / `cargo build --release` (Build), in the app dir.
 /// The Rust bin reaches the Lumen runtime through the `lumen` crate itself.
 fn rust_specs(dir: &Path, mode: Mode) -> Vec<CommandSpec> {
-    let spec = match mode {
+    let mut spec = match mode {
         Mode::Run => CommandSpec::new("cargo", dir).arg("run"),
         Mode::Build => CommandSpec::new("cargo", dir).arg("build").arg("--release"),
     };
+    for (key, value) in rust_dynamic_env(None) {
+        spec = spec.envv(key, value);
+    }
     vec![spec]
+}
+
+/// The environment a Rust app is compiled in so that it links the shared Lumen
+/// library instead of compiling a copy of the engine into itself.
+///
+/// Two flags do it. `-C prefer-dynamic` tells the compiler to take the shared
+/// form of a crate wherever one exists, which is what makes the app pick
+/// `liblumen` over the static library beside it; it also applies to the Rust
+/// standard library, so the app and the engine end up sharing one copy of that
+/// too rather than each carrying its own. The second flag adds the app's own
+/// directory to the list the loader searches, so the shared libraries sitting
+/// beside a packaged executable are found without a `LD_LIBRARY_PATH` in front
+/// of it. Windows already searches the executable's directory and needs
+/// nothing.
+///
+/// `target` is a Rust target triple to cross-compile for, or `None` for this
+/// machine. Anything already in `RUSTFLAGS` is kept and these are added after
+/// it, because setting the variable at all makes cargo ignore the `rustflags`
+/// an app's own config may have set.
+pub fn rust_dynamic_env(target: Option<&str>) -> Vec<(String, String)> {
+    let (is_macos, is_windows) = match target {
+        Some(triple) => (triple.contains("apple"), triple.contains("windows")),
+        None => (cfg!(target_os = "macos"), cfg!(target_os = "windows")),
+    };
+    let mut flags = String::from("-C prefer-dynamic");
+    if is_macos {
+        flags.push_str(" -C link-arg=-Wl,-rpath,@loader_path");
+    } else if !is_windows {
+        flags.push_str(" -C link-arg=-Wl,-rpath,$ORIGIN");
+    }
+    let combined = match std::env::var("RUSTFLAGS") {
+        Ok(existing) if !existing.trim().is_empty() => format!("{existing} {flags}"),
+        _ => flags,
+    };
+    vec![("RUSTFLAGS".to_string(), combined)]
 }
 
 /// C++: drive CMake. Configure then build; the Release toggle switches the
@@ -303,7 +341,7 @@ fn python_program() -> &'static str {
 
 /// Locate the Python entry script in `dir`. Prefers conventional names, then
 /// falls back to the sole `.py` that imports `lumen`.
-fn python_entry(dir: &Path) -> Result<String, String> {
+pub fn python_entry(dir: &Path) -> Result<String, String> {
     for candidate in ["main.py", "app.py", "__main__.py", "run.py"] {
         if dir.join(candidate).is_file() {
             return Ok(candidate.to_string());

@@ -296,6 +296,65 @@ fn cross_packaging_assembles_each_platform() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// `--zip` writes the folder into one file, rooted at the folder itself so
+/// unpacking it gives the directory back rather than loose files.
+#[test]
+fn the_zip_holds_the_folder() {
+    let root = scratch("zip");
+    let app = root.join("demo");
+    std::fs::create_dir_all(&app).expect("create app dir");
+    write_app(&app);
+
+    let libs = root.join("libs");
+    std::fs::create_dir_all(&libs).expect("create lib dir");
+    for name in [
+        "lumen-launcher",
+        "lumen-launcher.exe",
+        "liblumen.so",
+        "liblumen.dylib",
+        "lumen.dll",
+    ] {
+        std::fs::write(libs.join(name), b"stand-in toolchain file").expect("write stand-in");
+    }
+
+    let other = if cfg!(target_os = "windows") {
+        "linux-x86_64"
+    } else {
+        "windows-x86_64"
+    };
+    let out = root.join("Demo");
+    let result = run_package(&[
+        app.to_str().expect("utf-8 path"),
+        out.to_str().expect("utf-8 path"),
+        "--name",
+        "Demo",
+        "--target",
+        other,
+        "--lib-dir",
+        libs.to_str().expect("utf-8 path"),
+        "--zip",
+    ]);
+    assert!(
+        result.status.success(),
+        "packaging failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    let archive = root.join("Demo.zip");
+    assert!(archive.is_file(), "the archive was not written");
+    let bytes = std::fs::read(&archive).expect("read the archive");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("read as a zip");
+    let names: Vec<String> = (0..zip.len())
+        .map(|i| zip.by_index(i).expect("member").name().to_string())
+        .collect();
+    assert!(
+        names.iter().all(|n| n.starts_with("Demo/")),
+        "every member sits under the folder: {names:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A name no release covers is rejected before anything is compiled.
 #[test]
 fn an_unknown_target_is_refused() {
@@ -402,39 +461,16 @@ fn a_packaged_multi_page_app_runs() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// A Python app has no compile step, so there is no executable to build a
-/// package around. The refusal has to say what to ship instead.
+/// A Python app is frozen against the interpreter doing the freezing, so it
+/// packages for this machine only. Asking for another platform says so rather
+/// than producing this machine's executable under that platform's name.
 #[test]
-fn a_python_app_is_told_what_to_ship() {
+fn a_python_app_packages_for_this_machine_only() {
     let root = scratch("python");
     let app = root.join("demo");
     std::fs::create_dir_all(&app).expect("create app dir");
     std::fs::write(app.join("main.py"), "import lumen\n").expect("write entry");
     std::fs::write(app.join("main.lmn"), "<root/>").expect("write markup");
-
-    let result = run_package(&[app.to_str().expect("utf-8 path")]);
-    assert!(!result.status.success());
-    let message = String::from_utf8_lossy(&result.stderr);
-    assert!(
-        message.contains("Python") && message.contains("runtime library"),
-        "the refusal should name the kind and what to ship: {message}"
-    );
-
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-/// Cross-compilation belongs to the SDK's own toolchain, so `--target` and an
-/// SDK app do not combine.
-#[test]
-fn cross_packaging_an_sdk_app_is_refused() {
-    let root = scratch("sdk-target");
-    let app = root.join("demo");
-    std::fs::create_dir_all(&app).expect("create app dir");
-    std::fs::write(
-        app.join("Cargo.toml"),
-        "[package]\nname = \"demo\"\n\n[dependencies]\nlumen = \"0.1\"\n",
-    )
-    .expect("write manifest");
 
     let other = if cfg!(target_os = "windows") {
         "linux-x86_64"
@@ -445,8 +481,35 @@ fn cross_packaging_an_sdk_app_is_refused() {
     assert!(!result.status.success());
     let message = String::from_utf8_lossy(&result.stderr);
     assert!(
-        message.contains("Rust") && message.contains("cross-compil"),
-        "the refusal should say whose job cross-compilation is: {message}"
+        message.contains("frozen") && message.contains(other),
+        "the refusal should say why and name the platform: {message}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Cross-compiling a C++ app is CMake's job and needs a toolchain file for the
+/// other platform, which nothing here can stand in for. Without one, say so
+/// instead of building this machine's binary.
+#[test]
+fn cross_packaging_a_cpp_app_needs_a_toolchain_file() {
+    let root = scratch("sdk-target");
+    let app = root.join("demo");
+    std::fs::create_dir_all(&app).expect("create app dir");
+    std::fs::write(app.join("CMakeLists.txt"), "project(demo)\n").expect("write manifest");
+    std::fs::write(app.join("main.lmn"), "<root/>").expect("write markup");
+
+    let other = if cfg!(target_os = "windows") {
+        "linux-x86_64"
+    } else {
+        "windows-x86_64"
+    };
+    let result = run_package(&[app.to_str().expect("utf-8 path"), "--target", other]);
+    assert!(!result.status.success());
+    let message = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        message.contains("CMAKE_TOOLCHAIN_FILE") && message.contains(other),
+        "the refusal should name what is missing and the platform: {message}"
     );
 
     let _ = std::fs::remove_dir_all(&root);

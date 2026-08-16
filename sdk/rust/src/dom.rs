@@ -16,6 +16,10 @@
 //! drains once per tick, so a `spawn` plus its chained edits materialize
 //! together on the next tick. Read a value back after the app has ticked.
 
+// The engine's copy of each crate this module names. The re-export block in
+// lib.rs says why they come from there rather than from a dependency.
+use crate::{lumen_core, lumen_script};
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -677,7 +681,7 @@ pub fn signals_all() -> HashMap<String, String> {
 
 /// The `document` namespace (design 4.8): document-scoped entry points.
 pub mod document {
-    use super::{Node, NodeQuery, get_by_id as g, query as q, spawn as s};
+    use super::{Node, NodeQuery, get_by_id as g, lumen_script, query as q, spawn as s};
 
     /// The root element (`document.documentElement`).
     pub fn root() -> Option<Node> {
@@ -712,6 +716,8 @@ pub mod document {
 
 /// The `window` namespace (design 4.8): navigation + window state.
 pub mod window {
+    use super::lumen_core;
+
     /// Navigate to a page path (`window.location.href = ...`).
     pub fn set_href(path: &str) {
         lumen_core::nav::navigate(path);
@@ -755,6 +761,8 @@ pub mod window {
 
 /// The `history` namespace (design 4.8).
 pub mod history {
+    use super::lumen_core;
+
     /// Step back one entry.
     pub fn back() {
         lumen_core::nav::back();

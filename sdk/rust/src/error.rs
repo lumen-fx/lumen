@@ -1,5 +1,9 @@
 //! SDK error surface.
 
+// The engine's copy of each crate this module names. The re-export block in
+// lib.rs says why they come from there rather than from a dependency.
+use crate::lumen_runtime;
+
 /// Errors returned by [`App::run`](crate::App::run) /
 /// [`App::run_headless`](crate::App::run_headless) and the
 /// [`simple::AppBuilder::run`](crate::simple::AppBuilder::run) facade.
