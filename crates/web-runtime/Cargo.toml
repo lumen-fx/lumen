@@ -18,6 +18,21 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 lumen-core = { path = "../core", version = "0.0.3" }
+# The compiled artifact a page fetches, and the emitter/runtime contract that
+# says what the files beside it are called.
+lumen-ir = { path = "../ir", version = "0.0.3" }
+lumen-html = { path = "../html", version = "0.0.3" }
+# The IR-to-ECS spawner and the reconcilers, shared with the desktop runtime.
+lumen-scene = { path = "../scene", version = "0.0.3" }
+# The browser as a render backend: adopting the prerendered document, keeping
+# it in step with the world, and turning DOM events into Lumen events.
+lumen-web-dom = { path = "../backends/web-dom", version = "0.0.3" }
+# The widget behaviour and the focus / text-edit layer, unchanged from the
+# desktop: what a tab strip does when it is clicked is not a per-platform
+# question.
+lumen-input = { path = "../input", version = "0.0.3" }
+lumen-primitives = { path = "../primitives", version = "0.0.3" }
+lumen-text = { path = "../text", version = "0.0.3" }
 lumen-script = { path = "../script/api", version = "0.0.3", default-features = false }
 # The candela host, behind `host-candela`. The artifact half only: the browser
 # runs precompiled `.cdlb` bytecode, so the candela compiler never reaches the
@@ -25,11 +40,20 @@ lumen-script = { path = "../script/api", version = "0.0.3", default-features = f
 lumen-script-candela = { path = "../script/candela", version = "0.0.3", default-features = false, optional = true }
 bevy_ecs.workspace = true
 wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
 js-sys.workspace = true
+serde_json.workspace = true
 # Explicit interface list, not a blanket enable: every named interface is
 # generated into the module, so this list is a size lever. Add one only when
 # something calls it.
-web-sys = { workspace = true, features = ["Window", "console"] }
+web-sys = { workspace = true, features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "Response",
+    "console",
+] }
 
 [build-dependencies]
 # Compiles the test fixtures to `.cdlb` at build time, on the host, so the

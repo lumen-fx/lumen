@@ -3955,6 +3955,7 @@ name = "lumen-web-dom"
 version = "0.0.3"
 dependencies = [
  "bevy_ecs",
+ "glam 0.33.3",
  "js-sys",
  "lumen-core",
  "lumen-html",
@@ -3972,9 +3973,18 @@ dependencies = [
  "bevy_ecs",
  "js-sys",
  "lumen-core",
+ "lumen-html",
+ "lumen-input",
+ "lumen-ir",
+ "lumen-primitives",
+ "lumen-scene",
  "lumen-script",
  "lumen-script-candela",
+ "lumen-text",
+ "lumen-web-dom",
+ "serde_json",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
 ]

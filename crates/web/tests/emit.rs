@@ -419,6 +419,41 @@ fn a_dialog_is_open_when_the_signal_it_names_is_true() {
 }
 
 #[test]
+fn the_current_tab_is_marked_in_the_page() {
+    let button = |value: &str| {
+        element(
+            "button",
+            Attributes {
+                tab_strip: Some(("active".into(), value.into())),
+                ..labelled(value)
+            },
+            Vec::new(),
+        )
+    };
+    let page = PageSpec::new(
+        "index",
+        ir(element(
+            "root",
+            Attributes::default(),
+            vec![button("one"), button("two")],
+        )),
+    );
+    let mut spec = site(vec![page]);
+    spec.pages[0].signals = SignalEnv::new().with_global("active", "two");
+
+    let html = page_html(&spec, "index.html");
+    assert!(
+        html.contains(r#"data-lm="0.1" data-lm-selected="""#),
+        "the strip button the signal names carries the mark: {html}"
+    );
+    assert_eq!(
+        html.matches("data-lm-selected").count(),
+        1,
+        "and no other button does: {html}"
+    );
+}
+
+#[test]
 fn a_dialog_with_no_signal_is_always_open() {
     let dialog = element(
         "dialog",
@@ -541,7 +576,7 @@ fn every_page_boots_the_same_way() {
         simple_page(),
         PageSpec::new("about", ir(element("root", Attributes::default(), vec![]))),
     ]));
-    let boot = r#"<script type="module">import init, { boot } from "/lumen-web.js";init().then(boot);</script>"#;
+    let boot = r#"<script type="module">import init, { boot } from "/lumen-web.js";init({ module_or_path: "/lumen-web.wasm" }).then(boot);</script>"#;
     for file in site.files.iter().filter(|f| f.path.ends_with(".html")) {
         assert!(file.contents.contains(boot), "{} has no boot", file.path);
     }
