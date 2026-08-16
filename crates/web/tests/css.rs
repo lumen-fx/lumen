@@ -213,6 +213,89 @@ fn a_custom_property_travels_unchanged_and_a_knob_becomes_one() {
 }
 
 #[test]
+fn a_token_holding_a_length_gains_the_unit_it_was_written_without() {
+    // Lumen reads `16` as 16 pixels; a browser reads `border-radius: 16` as
+    // nothing and drops it. The use site cannot be fixed, so the definition is.
+    assert_eq!(
+        css(vec![
+            rule(":root", &[("--radius-md", "16")]),
+            rule(".card", &[("radius", "var(--radius-md)")]),
+        ]),
+        ":root {\n  --radius-md: 16px;\n}\n.card {\n  border-radius: var(--radius-md);\n}\n"
+    );
+}
+
+#[test]
+fn a_token_that_already_carries_its_unit_is_left_alone() {
+    assert_eq!(
+        css(vec![
+            rule(":root", &[("--radius-md", "16px"), ("--tint", "#0a3358")]),
+            rule(
+                ".card",
+                &[("radius", "var(--radius-md)"), ("bg", "var(--tint)")]
+            ),
+        ]),
+        ":root {\n  --radius-md: 16px;\n  --tint: #0a3358;\n}\n.card {\n  border-radius: \
+         var(--radius-md);\n  background: var(--tint);\n}\n"
+    );
+}
+
+#[test]
+fn a_token_the_sheet_only_ever_reads_as_a_number_keeps_being_one() {
+    let emitted = css(vec![
+        rule(":root", &[("--weight", "2")]),
+        rule(".card", &[("grow", "var(--weight)")]),
+    ]);
+    assert!(emitted.contains("--weight: 2;"), "{emitted}");
+}
+
+#[test]
+fn a_token_read_both_ways_is_left_as_authored_and_reported() {
+    let sheet = sheet(vec![
+        rule(":root", &[("--n", "2")]),
+        rule(".card", &[("radius", "var(--n)"), ("grow", "var(--n)")]),
+    ]);
+    let emitted = rules_css(&sheet);
+    assert!(emitted.contains("--n: 2;"), "{emitted}");
+    let warnings = lumen_web::token_warnings(Some(&sheet), CssMode::Sheet);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("--n"), "{warnings:?}");
+}
+
+#[test]
+fn a_token_that_stands_for_another_is_fixed_where_the_number_is() {
+    let emitted = css(vec![
+        rule(":root", &[("--base", "8"), ("--gap", "var(--base)")]),
+        rule(".card", &[("gap", "var(--gap)")]),
+    ]);
+    assert!(emitted.contains("--base: 8px;"), "{emitted}");
+    assert!(emitted.contains("--gap: var(--base);"), "{emitted}");
+}
+
+#[test]
+fn a_knob_measured_in_pixels_is_written_as_a_length() {
+    assert_eq!(
+        css(vec![rule("toggle", &[("knob-inset", "4")])]),
+        ":where(.lm-toggle) {\n  --lm-knob-inset: 4px;\n}\n"
+    );
+}
+
+#[test]
+fn the_reset_draws_the_parts_a_control_has_no_element_for() {
+    let emitted = styles_css(None, CssMode::Sheet);
+    // The knob a `<toggle>` and a `<switch>` are painted with, from the same
+    // properties the desktop reads.
+    assert!(emitted.contains("var(--lm-knob-color"), "{emitted}");
+    assert!(emitted.contains("var(--lm-knob-inset"), "{emitted}");
+    assert!(emitted.contains("var(--lm-thumb-size"), "{emitted}");
+    // The states the runtime marks an element with, which decide where the
+    // knob sits and whether the tick is drawn.
+    assert!(emitted.contains("[data-lm-checked]"), "{emitted}");
+    assert!(emitted.contains("[data-lm-selected]"), "{emitted}");
+    assert!(emitted.contains("[data-lm-disabled]"), "{emitted}");
+}
+
+#[test]
 fn a_rule_left_with_nothing_to_say_is_not_written() {
     assert_eq!(css(vec![rule(".card", &[("tab-index", "0")])]), "");
 }

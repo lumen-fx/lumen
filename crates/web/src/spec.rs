@@ -373,6 +373,8 @@ pub struct Site {
     pub files: Vec<OutputFile>,
     /// The files to copy in.
     pub assets: Vec<AssetRef>,
+    /// What the emitter could not write out the way the app meant it.
+    pub warnings: Vec<String>,
 }
 
 impl Site {

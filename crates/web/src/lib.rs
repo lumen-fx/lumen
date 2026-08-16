@@ -24,7 +24,7 @@ pub mod site;
 pub mod spec;
 pub mod urls;
 
-pub use css::{RESET_CSS, rules_css, styles_css};
+pub use css::{RESET_CSS, rules_css, styles_css, token_warnings};
 pub use error::EmitError;
 pub use site::{NOT_FOUND_FILE, SITEMAP_FILE, emit};
 pub use spec::{
