@@ -195,13 +195,13 @@ fn select_playlist(key, label) {
 
 // Derived display signals. The recompute body is referenced by function name;
 // its parameters arrive as the current values of the declared dep signals.
-fn calc_position(p, d) {
+fn calc_position(p: float, d: float) {
     if d > 0.5 { return (p / d) * 100.0; }
     return 0.0;
 }
-fn calc_elapsed(p) { return fmt_time(p); }
-fn calc_total(d) { return fmt_time(d); }
-fn calc_glyph(playing) {
+fn calc_elapsed(p: float) { return fmt_time(p); }
+fn calc_total(d: float) { return fmt_time(d); }
+fn calc_glyph(playing: any) {
     if playing == "true" { return "Pause"; }
     return "Play";
 }
@@ -247,7 +247,7 @@ fn on_ready() {
     render_playlist();
 }
 
-fn toggle_play(id) {
+fn toggle_play(id: any) {
     let playing = lumen::signal_get("audio_playing");
     if playing == "true" {
         lumen::audio_pause();
@@ -262,17 +262,17 @@ fn toggle_play(id) {
     }
 }
 
-fn handle_next(id) { step_track(1); }
-fn handle_prev(id) { step_track(-1); }
-fn sel_tones(id) { select_playlist("tones", "Featured"); }
-fn sel_pure(id) { select_playlist("pure", "Pure Tones"); }
-fn sel_moving(id) { select_playlist("moving", "Moving Tones"); }
+fn handle_next(id: any) { step_track(1); }
+fn handle_prev(id: any) { step_track(-1); }
+fn sel_tones(id: any) { select_playlist("tones", "Featured"); }
+fn sel_pure(id: any) { select_playlist("pure", "Pure Tones"); }
+fn sel_moving(id: any) { select_playlist("moving", "Moving Tones"); }
 
 // Auto-advance: the host calls this when a track reaches its end.
 fn on_audio_end() { step_track(1); }
 
 // Manual seek + volume drags land here with the slider value as a float.
-fn on_slider(id, value) {
+fn on_slider(id: string, value: float) {
     if id == "seek" {
         let dur = lumen::signal_get_float("audio_duration");
         let target = (value / 100.0) * dur;
@@ -285,7 +285,7 @@ fn on_slider(id, value) {
 
 // Clicks on library rows carry the row id "tr|<track>"; no per-id handler is
 // registered for them, so they fall through to on_click.
-fn on_click(id) {
+fn on_click(id: string) {
     if id.starts_with("tr|") {
         let track_id = id[3..id.len()];
         play_track(track_id);

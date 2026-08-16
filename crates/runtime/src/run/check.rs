@@ -128,6 +128,33 @@ fn compiled_bytecode(
     Ok(None)
 }
 
+/// The names a compiled program can be called by.
+///
+/// `None` for a program with no ahead-of-time form, and for a build with no
+/// host that can read one back: neither knows what the program exports, and
+/// neither can say anything is missing from it.
+///
+/// A build tool asks this to tell a function the app calls by name from one
+/// it will only appear to call: candela exports a function only when every
+/// parameter it takes is annotated, and a shipped runtime carries no compiler
+/// to fall back on.
+#[cfg(feature = "runtime-parse")]
+#[must_use]
+pub fn script_exports(
+    script: &lumen_ir::artifact::CompiledScript,
+) -> Option<Result<Vec<String>, String>> {
+    let bytecode = script.bytecode.as_deref()?;
+    #[cfg(feature = "host-candela")]
+    {
+        Some(lumen_script_candela::image_exports(bytecode).map_err(|e| e.to_string()))
+    }
+    #[cfg(not(feature = "host-candela"))]
+    {
+        let _ = bytecode;
+        None
+    }
+}
+
 /// Parse `<dir>/main.lmn` + optional `<dir>/main.css` and validate them
 /// without spawning a window. Used by CI / pre-commit hooks.
 ///

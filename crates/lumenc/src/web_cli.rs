@@ -286,6 +286,7 @@ fn build(options: &Options) -> Result<Report, String> {
     };
 
     let scripts = script_refs(&compiled, &mut warnings);
+    check_exports(&compiled, &mut warnings);
     let locales = locales(options, &cfg);
     let web = WebSpec {
         base_path: base.clone(),
@@ -353,6 +354,7 @@ fn build(options: &Options) -> Result<Report, String> {
         }
         if index == 0 {
             pages_written = spec.pages.len();
+            warnings.extend(site.warnings);
         }
     }
 
@@ -669,6 +671,87 @@ fn script_refs(compiled: &CompiledApp, warnings: &mut Vec<String>) -> Vec<Script
         }
     }
     refs
+}
+
+/// Warn about a function the app calls by name that its compiled program
+/// cannot be called by.
+///
+/// candela exports a function only when every parameter it takes is
+/// annotated. One written with a bare parameter still compiles and still
+/// ships; it is simply never called, because the runtime asks the artifact for
+/// it by name and the artifact has no such name. The desktop hides this: the
+/// compiler is in the process there and answers from the source, so the same
+/// app works on a desktop and shows a blank where the value should be in a
+/// browser.
+fn check_exports(compiled: &CompiledApp, warnings: &mut Vec<String>) {
+    for script in &compiled.scripts {
+        let Some(read_back) = lumen_runtime::run::script_exports(script) else {
+            continue;
+        };
+        let exports = match read_back {
+            Ok(exports) => exports,
+            // The browser loads the program the same way this reads it, so a
+            // program that will not load here will not load there either.
+            Err(error) => {
+                warnings.push(format!(
+                    "the compiled {} program does not load: {error}. The pages are emitted, but \
+                     the app's script will not run in a browser",
+                    script.engine
+                ));
+                continue;
+            }
+        };
+        for name in called_by_name(&script.source) {
+            if !exports.contains(&name) {
+                warnings.push(format!(
+                    "`{name}` is called by name and the compiled program does not export it, so \
+                     nothing happens when it is called; annotate every parameter it takes, as in \
+                     `fn {name}(id: any)`"
+                ));
+            }
+        }
+    }
+}
+
+/// Every function `source` defines that something calls by name: a handler
+/// bound by name, a derivation body, or one of the `on_` names Lumen calls
+/// when the thing they stand for happens.
+fn called_by_name(source: &str) -> BTreeSet<String> {
+    let quoted: BTreeSet<&str> = source
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .filter(|text| is_identifier(text))
+        .collect();
+    defined_functions(source)
+        .into_iter()
+        .filter(|name| name.starts_with("on_") || quoted.contains(name.as_str()))
+        .collect()
+}
+
+/// The names of the functions `source` declares.
+fn defined_functions(source: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for line in source.lines() {
+        let Some(rest) = line.trim_start().strip_prefix("fn ") else {
+            continue;
+        };
+        let Some((name, _)) = rest.split_once('(') else {
+            continue;
+        };
+        let name = name.trim();
+        if is_identifier(name) {
+            names.insert(name.to_string());
+        }
+    }
+    names
+}
+
+/// True for a name a script could declare a function under.
+fn is_identifier(text: &str) -> bool {
+    !text.is_empty()
+        && !text.starts_with(|c: char| c.is_ascii_digit())
+        && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Write the compiled candela program beside the pages, when the app has one.

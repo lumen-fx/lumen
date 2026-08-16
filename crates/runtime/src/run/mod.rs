@@ -518,7 +518,7 @@ pub use check::CheckReport;
 // The app's catalogue directory, so a build that resolves translations
 // ahead of time reads them from where the runtime would.
 #[cfg(feature = "runtime-parse")]
-pub use check::{check_app, compile_app, compile_app_with_skin};
+pub use check::{check_app, compile_app, compile_app_with_skin, script_exports};
 #[cfg(feature = "runtime-parse")]
 pub(crate) use hot_reload::HotReloadDriver;
 pub use i18n::locale_dir;
