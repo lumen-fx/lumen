@@ -137,7 +137,9 @@ pub fn key_of(body: &str) -> String {
 /// of the body)`.
 ///
 /// The scan is candela's own, so a region written inside a string literal or a
-/// comment is not one.
+/// comment is not one. It is also the compiler's, which makes this the one
+/// item in the module a build without the compiler does not carry.
+#[cfg(feature = "compiler")]
 #[must_use]
 pub fn regions(src: &str) -> Vec<(&str, usize)> {
     candela::macros::scan_regions(src, MACRO_NAME)
