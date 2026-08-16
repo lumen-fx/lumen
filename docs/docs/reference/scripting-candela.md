@@ -444,6 +444,8 @@ fn handle_row(id) {
     let ev = event(id);
     ev.prevent_default();
 }
+
+fn main() {}
 ```
 
 Constructors: `node(handle)`, `event(handle)`, `wrap_nodes(handles)`,

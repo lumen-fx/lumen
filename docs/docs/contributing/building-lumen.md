@@ -353,6 +353,22 @@ uv run zensical build --strict
 `--strict` turns broken links and unknown navigation entries into errors. The
 navigation lives in `docs/zensical.toml`.
 
+The test suite compiles the code blocks on those pages that are complete
+programs, because a reader copies them verbatim. Two rules decide which blocks
+those are:
+
+- A candela block is a whole script when it carries the prelude import line
+  `import "lumen.cdl";`. Every shipped script opens with it, so a block that
+  has it is offering itself as something to copy, and it is compiled with
+  `lumenc check`. That includes the `fn main() {}` candela requires; a block
+  without one fails the gate.
+- A markup block is a whole document when it opens `<root` and its last line
+  closes it. The check writes a placeholder for every file its `src` attributes
+  name, so what fails is the block rather than art a page cannot ship.
+
+Anything else is an excerpt and is left alone. To show a fragment of a script,
+leave the import line out and let the prose say where the lines go.
+
 The Rust API documentation is separate from that site and comes from the crates
 themselves:
 
