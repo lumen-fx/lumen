@@ -3765,6 +3765,7 @@ dependencies = [
  "lumen-scene",
  "lumen-script",
  "lumen-script-candela",
+ "lumen-web-http",
 ]
 
 [[package]]
@@ -4004,6 +4005,18 @@ dependencies = [
  "lumen-scene",
  "lumen-web",
  "wasm-bindgen",
+ "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
+name = "lumen-web-http"
+version = "0.0.3"
+dependencies = [
+ "js-sys",
+ "lumen-script",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
 ]

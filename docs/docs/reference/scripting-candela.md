@@ -640,7 +640,7 @@ signals each tick, so markup binds to them directly.
 lumen::fetch(url: string, tag: string)
 ```
 
-Issues an HTTP GET off the UI thread. A 2xx reply fires `on_fetch(tag, body)`;
+Issues an HTTP GET without holding up a tick. A 2xx reply fires `on_fetch(tag, body)`;
 a transport failure or non-2xx fires `on_fetch_error(tag, message)`. The reply
 is delivered on the tick thread, so a handler may touch signals and the element
 tree freely.

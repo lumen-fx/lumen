@@ -92,6 +92,10 @@ tools/             the release plumbing and the editor plugins
 - **lumen-http-ureq**: the HTTP client behind the scripts' `fetch()` and
   `http()` builtins. One blocking request per call over ureq, with a bounded
   body read.
+- **lumen-web-http**: the same builtins in a browser, run on the page's own
+  `fetch`. It replaces the dispatcher rather than the client, because a page
+  has no thread to block in a request: the reply comes back from a promise and
+  travels the same channel a desktop reply does.
 - **lumen-a11y-accesskit**: accessibility. Translates the entity tree into
   AccessKit tree updates each tick, and binds them to a live window for the
   platform's screen readers.

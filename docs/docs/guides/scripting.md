@@ -227,7 +227,7 @@ its own handler stops immediately.
 Notifications, clipboard, file dialogs, menus, the tray, global hotkeys, audio,
 and drag and drop are all script builtins. See
 [OS integration](os-integration.md). HTTP lives here too: `fetch(url, tag)`
-issues a GET off the UI thread and calls `on_fetch(tag, body)` or
+issues a GET without holding up a tick and calls `on_fetch(tag, body)` or
 `on_fetch_error(tag, message)` when it completes. For another method, headers,
 or a request body, `http(request)` takes the whole request and answers on
 `on_http(tag, response)`.

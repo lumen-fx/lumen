@@ -156,6 +156,28 @@ title = "do it"
 A `<for each="todos">` is then emitted with those two rows in it, and the app
 starts from the same list.
 
+## Reaching a server
+
+`fetch(url, tag)` and `http(...)` work in a page and mean what they mean on the
+desktop: the request goes out without holding up a frame, and `on_fetch`,
+`on_fetch_error` or `on_http` runs on the tick its reply arrives on. That is how
+a page shows data the build could not know. What a site is built with goes into
+the document, and what changes between visits is asked for once the app is
+running.
+
+The browser decides whether the request is allowed. Asking your own origin needs
+nothing; reading a response from another origin needs that server to send
+`Access-Control-Allow-Origin` for the origin your page is served from. That is
+the server's setting, not something a build can turn on. A refusal, a request an
+extension blocked and an unreachable host all arrive as the same failure, so the
+message a script gets says to open the console, where the browser writes which
+one it was.
+
+Two things differ from the same call on a desktop. A header the browser reserves
+for itself, such as `Host` or `Content-Length`, is dropped on the way out and
+nothing reports it. And credentials follow the browser's rule rather than the
+app's: cookies ride along to your own origin and not to another one.
+
 ## What the pages carry
 
 `[web] render` says whether the documents load the runtime. Both values write
