@@ -15,27 +15,19 @@
 //!
 //! `--iterations N` sets the sample count, 300 by default.
 
-use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::hint::black_box;
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use lumen_core::prelude::App;
-use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
-use lumen_core::signals::{ArrayItem, ArraySignals};
 use lumen_ir::artifact::{self, CompiledApp};
 use lumen_portable::{hosts, portable_app};
+use lumen_prerender::{Budget, Settled, settle, state};
 use lumen_scene::routing::install_routing;
 use lumen_scene::spawn::SpawnIntoWorld;
-
-/// How many ticks an app gets to stop moving. An app whose state is still
-/// changing after this many is reported rather than waited for: a spinner
-/// never converges, and a renderer cannot wait for one.
-const SETTLE_BUDGET: u32 = 64;
 
 /// Sample count when the command line names none.
 const DEFAULT_ITERATIONS: usize = 300;
@@ -142,70 +134,25 @@ fn boot(compiled: &CompiledApp, report: &mut Report) -> App {
     // again, so lumping it in with the ticks that follow would hide the one
     // number a cheaper boot would have to attack.
     let start = Instant::now();
-    let mut previous = state_of(&app.world);
     app.tick();
-    let mut ticks = 1;
     report.first_tick.push(start.elapsed());
 
     let start = Instant::now();
-    while ticks < SETTLE_BUDGET {
-        let current = state_of(&app.world);
-        if current == previous {
-            break;
-        }
-        previous = current;
-        app.tick();
-        ticks += 1;
-    }
+    let (settled_state, settled) = settle(&mut app, Budget::default());
     report.settle.push(start.elapsed());
-    report.ticks.push(ticks);
+    report.settled.push(settled);
+    black_box(settled_state);
 
     let start = Instant::now();
-    let state = state_of(&app.world);
+    let state = state(&app);
     report.read.push(start.elapsed());
-    report.globals.push(state.globals.len());
+    report.globals.push(state.seed.globals.len());
     report
         .rows
-        .push(state.arrays.values().map(Vec::len).sum::<usize>());
+        .push(state.seed.arrays.values().map(Vec::len).sum::<usize>());
     black_box(state);
 
     app
-}
-
-/// The state a rendered document is produced from: the global signals and the
-/// rows of every array.
-#[derive(PartialEq)]
-struct State {
-    globals: Vec<(Arc<str>, Value)>,
-    arrays: HashMap<String, Vec<ArrayItem>>,
-}
-
-/// A property value that can be compared for equality. [`PropertyValue`] has
-/// structural equality but no `PartialEq`, because its escape-hatch variant
-/// has none to have.
-struct Value(PropertyValue);
-
-impl PartialEq for Value {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.eq_value(&other.0)
-    }
-}
-
-/// Read the settled state out of a world.
-fn state_of(world: &bevy_ecs::world::World) -> State {
-    let mut globals: Vec<(Arc<str>, Value)> = world
-        .resource::<PropertyStore>()
-        .iter()
-        .filter_map(|(key, value)| match key {
-            PropertyKey::Global(name) => Some((Arc::clone(name), Value(value.clone()))),
-            PropertyKey::Entity(..) => None,
-        })
-        .collect();
-    globals.sort_by(|(a, _), (b, _)| a.cmp(b));
-    State {
-        globals,
-        arrays: world.resource::<ArraySignals>().0.clone(),
-    }
 }
 
 /// Every sample of every phase, in boot order.
@@ -218,7 +165,7 @@ struct Report {
     settle: Vec<Duration>,
     read: Vec<Duration>,
     drop_app: Vec<Duration>,
-    ticks: Vec<u32>,
+    settled: Vec<Settled>,
     globals: Vec<usize>,
     rows: Vec<usize>,
 }
@@ -234,7 +181,7 @@ impl Report {
             settle: Vec::with_capacity(n),
             read: Vec::with_capacity(n),
             drop_app: Vec::with_capacity(n),
-            ticks: Vec::with_capacity(n),
+            settled: Vec::with_capacity(n),
             globals: Vec::with_capacity(n),
             rows: Vec::with_capacity(n),
         }
@@ -277,13 +224,25 @@ impl Report {
             millis(percentile(&totals, 99))
         );
 
-        let mut ticks = self.ticks.clone();
+        // One tick more than the settle loop counted: the first one is timed
+        // as its own phase above and runs before that loop starts.
+        let mut ticks: Vec<u32> = self
+            .settled
+            .iter()
+            .map(|settled| match settled {
+                Settled::At(n) | Settled::Capped(n) => n + 1,
+            })
+            .collect();
         ticks.sort_unstable();
-        let most = ticks[ticks.len() - 1];
+        let capped = self
+            .settled
+            .iter()
+            .any(|settled| matches!(settled, Settled::Capped(_)));
         println!(
-            "settled after {} ticks at p50, {most} at most{}",
+            "settled after {} ticks at p50, {} at most{}",
             ticks[ticks.len() / 2],
-            if most >= SETTLE_BUDGET {
+            ticks[ticks.len() - 1],
+            if capped {
                 ", which is the budget: this app never stopped moving"
             } else {
                 ""

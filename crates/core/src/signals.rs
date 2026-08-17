@@ -786,6 +786,21 @@ pub fn push_external_clear(name: impl Into<String>) -> bool {
     tx.send(ExternalMutation::Clear { name: name_str }).is_ok()
 }
 
+/// Empties the external array channel, throwing away whatever it holds.
+///
+/// The array half of [`crate::property_store::discard_external_properties`]:
+/// one process-global channel, so an app built after another one inherits the
+/// mutations the first left queued unless they are dropped between the two.
+pub fn discard_external_signals() {
+    let Some(rx_lock) = EXTERNAL_RX.get() else {
+        return;
+    };
+    let Ok(rx) = rx_lock.lock() else {
+        return;
+    };
+    while rx.try_recv().is_ok() {}
+}
+
 /// Per-tick system that drains queued external Array / Clear mutations into [`ArraySignals`].
 /// Scalar signal writes were routed through [`push_external_property`] in wave-D and are committed
 /// to [`PropertyStore`] by [`crate::property_store::drain_external_properties`]; only the legacy

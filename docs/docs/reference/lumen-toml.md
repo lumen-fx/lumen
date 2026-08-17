@@ -189,7 +189,7 @@ with the toolchain, so there is nothing per-app to compile or trim.
 | `css` | `"sheet"`, `"computed"` | `sheet` | `sheet` emits the stylesheet the app was written with. `computed` writes the values Lumen's cascade resolved onto each element instead, which answers what Lumen resolved but loses states, media queries and anything created later. |
 | `widgets` | `"semantic"`, `"verbatim"` | `semantic` | Which shape a widget the parser built out of smaller elements is emitted as. Today both emit the parts. |
 | `render` | `"static"`, `"csr"` | `csr` | Whether the documents load the browser runtime. `csr` writes the runtime, the compiled app and the manifest beside the pages, and the pages load them. `static` writes the pages alone. Both write the whole markup tree, so a reader and a crawler get the same document either way. |
-| `prerender` | `"seeds"`, `"none"` | `seeds` | Where the state the pages are rendered with comes from. `seeds` uses `[web.seed]` and the defaults the markup declares; `none` renders the markup alone. |
+| `prerender` | `"seeds"`, `"run"`, `"none"` | `seeds` | Where the state the pages are rendered with comes from. `seeds` uses `[web.seed]` and the defaults the markup declares; `run` starts from those and then runs the app during the build, writing each page with the state it settles into; `none` renders the markup alone. |
 | `hash_assets` | bool | `false` | Add a content hash to asset file names. Not applied yet. |
 | `debug_attrs` | bool | `false` | Write the extra `data-lm-*` attributes naming what an element came from. Not written yet. |
 | `menubar` | `"omit"`, `"nav"` | `omit` | What an app menu bar becomes in a document. |

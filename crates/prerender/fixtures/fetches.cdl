@@ -1,0 +1,19 @@
+// Asks for data over the network on start, which a build refuses. The refusal
+// comes back as a failed reply, so the app carries on with the state it has
+// and the build says which address went unanswered.
+import "lumen.cdl";
+
+fn main() {}
+
+fn on_start() {
+    lumen::signal_set("status", "asking");
+    lumen::fetch("https://example.invalid/items.json", "items");
+}
+
+fn on_fetch(tag: string, body: string) {
+    lumen::signal_set("status", "answered");
+}
+
+fn on_fetch_error(tag: string, message: string) {
+    lumen::signal_set("status", "refused");
+}

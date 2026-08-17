@@ -664,6 +664,25 @@ pub fn external_properties_pending() -> bool {
         .unwrap_or(false)
 }
 
+/// Empties the cross-thread typed-property channel, throwing away whatever it
+/// holds.
+///
+/// The bus is one channel per process, so a second app built in the same
+/// process inherits every write the first one left queued. A caller that runs
+/// several apps in sequence (a build rendering one page after another, a
+/// server rendering one request after another) calls this between them so each
+/// app starts from its own state. Pair it with
+/// [`crate::signals::discard_external_signals`], which empties the array half.
+pub fn discard_external_properties() {
+    let Some(rx_lock) = EXTERNAL_PROPERTY_RX.get() else {
+        return;
+    };
+    let Ok(rx) = rx_lock.lock() else {
+        return;
+    };
+    while rx.try_recv().is_ok() {}
+}
+
 /// Per-tick system that drains every queued typed-property write into
 /// [`PropertyStore`]. Each entry calls [`PropertyStore::set`] so the cell
 /// gets the typed variant directly - no stringification, no `Signals`

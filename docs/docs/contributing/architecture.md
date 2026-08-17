@@ -177,6 +177,11 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
 - **lumen-web**: the web target's emitter. Turns an app into a static site:
   one HTML document per page with the markup already in it, plus the manifest
   the browser runtime boots from. It emits into memory and touches no files.
+- **lumen-prerender**: runs an app and reads the state it settles into, which
+  is how a page is written with state already in it. It builds the app from
+  `lumen-portable`, answers its HTTP calls itself so a page comes out the same
+  wherever it is built, and stops when the app's state stops changing rather
+  than when its frame loop goes quiet.
 - **lumen-web-runtime**: the browser runtime, built as a wasm module. One
   prebuilt module serves every app: a page loads it, hands it the app's
   compiled data, and it runs the same tick a desktop app runs. It installs no

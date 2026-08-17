@@ -507,18 +507,18 @@ fn the_command_says_what_it_cannot_do() {
     }
 
     // A mode the build does not have is named back rather than swapped for
-    // one it does, whichever mode is asked for.
+    // one it does.
     let output = Command::new(env!("CARGO_BIN_EXE_lumenc"))
         .args(["web"])
         .arg(repo().join("apps/pages-demo"))
         .arg("--out")
         .arg(out.join("site"))
-        .args(["--prerender", "run"])
+        .args(["--prerender", "sometimes"])
         .output()
         .expect("running lumenc web");
     assert_eq!(output.status.code(), Some(2));
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("unknown --prerender mode `run`"),
+        String::from_utf8_lossy(&output.stderr).contains("unknown --prerender mode `sometimes`"),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
@@ -560,5 +560,124 @@ fn a_list_named_in_the_config_is_in_the_document() {
     assert!(
         index.contains(r#""todos":[{"title":"write it down"}"#),
         "{index}"
+    );
+}
+
+/// An app whose list and whose branch come from its own script, so nothing in
+/// the page can be traced back to a declared value.
+fn app_that_publishes_on_start(scratch: &Path) -> PathBuf {
+    let app = scratch.join("app");
+    std::fs::create_dir_all(&app).expect("create the app directory");
+    std::fs::write(
+        app.join("main.lmn"),
+        "<root>\n  <if signal=\"loaded\">\n    <label class=\"banner\" text=\"ready\" />\n  \
+         </if>\n  <for each=\"todos\" key=\"id\">\n    <label class=\"todo\" \
+         text=\"{row.title}\" />\n  </for>\n  <script src=\"main.cdl\" />\n</root>\n",
+    )
+    .expect("write the markup");
+    std::fs::write(
+        app.join("main.cdl"),
+        "import \"lumen.cdl\";\n\nfn main() {}\n\nfn on_start() {\n    \
+         lumen::signal_set(\"loaded\", \"true\");\n    lumen::signal_array_set(\"todos\", \
+         [\n        {\"id\": \"1\", \"title\": \"written by the app\"},\n        {\"id\": \"2\", \
+         \"title\": \"and so was this\"}\n    ]);\n}\n",
+    )
+    .expect("write the script");
+    std::fs::write(
+        app.join("lumen.toml"),
+        "[app]\nid = \"com.lumen.tests.prehydrate\"\n\n[script]\nengine = \
+         \"candela\"\n\n[mcp]\nport = 0\n",
+    )
+    .expect("write the config");
+    app
+}
+
+#[test]
+fn the_state_the_app_settles_into_is_in_the_page() {
+    let scratch = scratch("prerender-run");
+    let app = app_that_publishes_on_start(&scratch);
+    let out = scratch.join("site");
+    let report = web(
+        app.to_str().expect("a scratch path is text"),
+        &out,
+        &["--prerender", "run", "--render", "static"],
+    );
+
+    let index = read(&out, "index.html");
+    check_documents(&out, "/");
+    assert!(
+        index.contains("written by the app") && index.contains("and so was this"),
+        "the list the script published is in the page: {index}"
+    );
+    assert!(
+        index.contains(">ready<"),
+        "the branch the script opened is taken: {index}"
+    );
+    // A static site carries no runtime and so no seed block, and the pages
+    // still hold everything the run produced.
+    assert!(!index.contains("lm-seed"), "{index}");
+    // An app that publishes on start reaches its answer, and reaches the same
+    // one twice.
+    assert!(
+        !report.contains("still changing") && !report.contains("settled differently"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_page_written_from_a_run_carries_the_state_the_runtime_adopts() {
+    let scratch = scratch("prerender-run-csr");
+    let app = app_that_publishes_on_start(&scratch);
+    let out = scratch.join("site");
+    web(
+        app.to_str().expect("a scratch path is text"),
+        &out,
+        &["--prerender", "run"],
+    );
+
+    let index = read(&out, "index.html");
+    assert!(
+        index.contains(r#""todos":[{"id":"1","title":"written by the app"}"#),
+        "the runtime starts from the list the document shows: {index}"
+    );
+    assert!(
+        index.contains(r#""loaded":{"t":"str","v":"true"}"#),
+        "{index}"
+    );
+}
+
+#[test]
+fn an_address_a_run_will_not_ask_for_is_reported() {
+    let scratch = scratch("prerender-run-fetch");
+    let app = scratch.join("app");
+    std::fs::create_dir_all(&app).expect("create the app directory");
+    std::fs::write(
+        app.join("main.lmn"),
+        "<root>\n  <label bind-text=\"status\" text=\"\" />\n  <script src=\"main.cdl\" \
+         />\n</root>\n",
+    )
+    .expect("write the markup");
+    std::fs::write(
+        app.join("main.cdl"),
+        "import \"lumen.cdl\";\n\nfn main() {}\n\nfn on_start() {\n    \
+         lumen::fetch(\"https://example.invalid/items.json\", \"items\");\n}\n",
+    )
+    .expect("write the script");
+    std::fs::write(
+        app.join("lumen.toml"),
+        "[app]\nid = \"com.lumen.tests.prehydrate-fetch\"\n\n[script]\nengine = \
+         \"candela\"\n\n[mcp]\nport = 0\n",
+    )
+    .expect("write the config");
+
+    let out = scratch.join("site");
+    let report = web(
+        app.to_str().expect("a scratch path is text"),
+        &out,
+        &["--prerender", "run"],
+    );
+    assert!(
+        report.contains("https://example.invalid/items.json"),
+        "the build says which address went unanswered: {report}"
     );
 }
