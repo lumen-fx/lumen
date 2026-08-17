@@ -351,9 +351,15 @@ fn the_zip_holds_the_folder() {
     let names: Vec<String> = (0..zip.len())
         .map(|i| zip.by_index(i).expect("member").name().to_string())
         .collect();
+    // Forward slashes whatever platform wrote the archive: a member named with
+    // a backslash unpacks elsewhere as one file with a slash in its name.
     assert!(
         names.iter().all(|n| n.starts_with("packaged/")),
         "every member sits under the folder: {names:?}"
+    );
+    assert!(
+        names.iter().all(|n| !n.contains('\\')),
+        "members are named with forward slashes: {names:?}"
     );
     assert!(
         names

@@ -1371,14 +1371,22 @@ fn zip_package(out: &Path) -> Result<PathBuf, String> {
             let Ok(rel) = path.strip_prefix(out) else {
                 continue;
             };
-            let inside = Path::new(&name).join(rel);
+            // A zip names its members with forward slashes whatever wrote it,
+            // so the separator is spelled out rather than taken from the
+            // platform: a Windows-built archive with backslashes in it unpacks
+            // as files with slashes in their names.
+            let mut inside = name.clone();
+            for part in rel.components() {
+                inside.push('/');
+                inside.push_str(&part.as_os_str().to_string_lossy());
+            }
             let options =
                 SimpleFileOptions::default().unix_permissions(if is_executable_file(&path) {
                     0o755
                 } else {
                     0o644
                 });
-            zip.start_file(inside.to_string_lossy(), options)
+            zip.start_file(inside, options)
                 .map_err(|e| format!("write {}: {e}", archive_path.display()))?;
             let bytes =
                 std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
