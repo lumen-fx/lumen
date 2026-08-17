@@ -1753,6 +1753,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// The whole of what a packaged Rust app carries: the engine its own build
+    /// produced, and the standard library that build compiled against. Both
+    /// come out of the same compiler, so the pair is assembled here rather than
+    /// gathered from an installed toolchain.
+    #[test]
+    fn a_rust_app_carries_its_own_engine_and_standard_library() {
+        let host = Target::host();
+        if host.os == Os::Windows {
+            return; // Covered by the test below; nothing is copied there.
+        }
+        let tmp = std::env::temp_dir().join(format!("lumen-rustpkg-{}", std::process::id()));
+        let profile = tmp.join("release");
+        let out = tmp.join("out");
+        std::fs::create_dir_all(&profile).expect("mkdir");
+        std::fs::create_dir_all(&out).expect("mkdir");
+        let engine = host.linked_engine_name();
+        std::fs::write(profile.join(engine), b"stand-in engine").expect("write engine");
+
+        let carried = copy_linked_engine(&profile.join("App"), &out, host).expect("copy");
+        assert!(out.join(engine).is_file(), "the engine travels");
+
+        // The standard library is only absent from a compiler built without a
+        // shared one, which is not what CI or a rustup toolchain has.
+        match local_shared_std(host).expect("ask rustc") {
+            Some(std_lib) => {
+                assert_eq!(carried, 2);
+                let name = std_lib.file_name().expect("a file name");
+                assert!(out.join(name).is_file(), "the standard library travels");
+            }
+            None => assert_eq!(carried, 1),
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// A Windows Rust app carries the runtime inside its executable, so there
     /// is no library to copy and nothing to look for.
     #[test]
