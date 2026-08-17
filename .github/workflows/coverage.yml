@@ -49,10 +49,6 @@ jobs:
     name: llvm-cov
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    env:
-      # Read here so the upload step can test for it. The secrets context is not
-      # available in an `if`, the env context is.
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
       # apps/music/*.ogg is the only LFS content in the repo, and the audio test
       # fixtures are raw bytes on purpose, so the suite runs without an LFS
@@ -81,21 +77,18 @@ jobs:
       - name: Collect coverage
         run: cargo llvm-cov --workspace --no-fail-fast --lcov --output-path lcov.info
 
+      # The upload is unconditional. codecov/patch is a required check, so a
+      # run that uploads nothing leaves the check pending and the pull request
+      # unmergeable with nothing the author can do about it. A pull request
+      # from a fork gets no repository secret, so `token` is empty there and
+      # the action uploads tokenless, which this repository is public enough
+      # to allow.
       - name: Upload to Codecov
-        if: env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@v7
         with:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: true
-
-      # Forks and a repo whose Codecov app is not set up yet still get the
-      # measurement in the log; only the upload needs the token.
-      - name: Report a missing token
-        if: env.CODECOV_TOKEN == ''
-        run: |
-          echo "::notice::CODECOV_TOKEN is not set; skipping the Codecov upload." \
-               "Coverage was measured and lcov.info is attached to this run."
 
       - name: Upload lcov.info as an artifact
         uses: actions/upload-artifact@v4
