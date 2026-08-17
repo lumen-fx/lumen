@@ -552,20 +552,13 @@ fn copy_linked_engine(built: &Path, out: &Path, target: Target) -> Result<usize,
         return Ok(0);
     }
     let engine = target.linked_engine_name();
-    // Beside the executable for an ordinary binary; one level up for an
-    // example, which cargo writes into a subdirectory of the same profile.
-    let from = [built.parent(), built.parent().and_then(Path::parent)]
-        .into_iter()
-        .flatten()
-        .map(|dir| dir.join(engine))
-        .find(|p| p.is_file())
-        .ok_or_else(|| {
-            format!(
-                "the build produced no {engine} beside {}. A Rust app links the engine, so \
-                 the library has to come out of the same build as the executable.",
-                built.display()
-            )
-        })?;
+    let from = linked_engine_beside(built, engine).ok_or_else(|| {
+        format!(
+            "the build produced no {engine} beside {}. A Rust app links the engine, so \
+             the library has to come out of the same build as the executable.",
+            built.display()
+        )
+    })?;
     std::fs::copy(&from, out.join(engine))
         .map_err(|e| format!("copy {} -> {}: {e}", from.display(), out.display()))?;
 
@@ -577,6 +570,17 @@ fn copy_linked_engine(built: &Path, out: &Path, target: Target) -> Result<usize,
         carried += 1;
     }
     Ok(carried)
+}
+
+/// Where cargo left the engine library relative to the executable it built:
+/// beside it for an ordinary binary, one level up for an example, which cargo
+/// writes into a subdirectory of the same profile.
+fn linked_engine_beside(built: &Path, engine: &str) -> Option<PathBuf> {
+    [built.parent(), built.parent().and_then(Path::parent)]
+        .into_iter()
+        .flatten()
+        .map(|dir| dir.join(engine))
+        .find(|p| p.is_file())
 }
 
 /// Copy the shared C library an app opens at run time, from the toolchain.
@@ -1678,5 +1682,133 @@ mod tests {
         assert!(image.starts_with(b"stub"));
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The library a Rust app links and the one a C caller opens are separate
+    /// crate targets, so they must never answer with the same file name: two
+    /// targets cannot write one file.
+    #[test]
+    fn the_linked_engine_and_the_c_library_are_different_files() {
+        for target in Target::ALL {
+            assert_ne!(
+                target.linked_engine_name(),
+                target.lib_name(),
+                "{} names both libraries the same",
+                target.name
+            );
+        }
+        let linux = Target::parse("linux-x86_64").expect("known target");
+        assert_eq!(linux.linked_engine_name(), "liblumen_engine.so");
+        assert_eq!(
+            Target::parse("macos-aarch64")
+                .expect("known target")
+                .linked_engine_name(),
+            "liblumen_engine.dylib"
+        );
+    }
+
+    /// Every target names a Rust triple its own toolchain understands, which
+    /// is what an SDK app is cross-compiled with.
+    #[test]
+    fn every_target_names_a_rust_triple() {
+        for target in Target::ALL {
+            let triple = target.rust_triple();
+            let arch = target.name.split('-').next_back().expect("arch");
+            assert!(
+                triple.starts_with(arch),
+                "{} maps to {triple}, which is not that architecture",
+                target.name
+            );
+        }
+    }
+
+    /// cargo writes a binary beside the engine it linked, and an example one
+    /// directory further down. Both have to resolve, or a packaged app would
+    /// ship without the library it needs.
+    #[test]
+    fn the_linked_engine_is_found_beside_a_binary_or_an_example() {
+        let tmp = std::env::temp_dir().join(format!("lumen-linked-{}", std::process::id()));
+        let profile = tmp.join("release");
+        let examples = profile.join("examples");
+        std::fs::create_dir_all(&examples).expect("mkdir");
+        let engine = profile.join("liblumen_engine.so");
+        std::fs::write(&engine, b"stand-in engine").expect("write engine");
+
+        assert_eq!(
+            linked_engine_beside(&profile.join("app"), "liblumen_engine.so"),
+            Some(engine.clone()),
+            "beside an ordinary binary"
+        );
+        assert_eq!(
+            linked_engine_beside(&examples.join("counter"), "liblumen_engine.so"),
+            Some(engine),
+            "one level up from an example"
+        );
+        assert_eq!(
+            linked_engine_beside(&profile.join("app"), "liblumen_missing.so"),
+            None,
+            "a library that was never built"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A Windows Rust app carries the runtime inside its executable, so there
+    /// is no library to copy and nothing to look for.
+    #[test]
+    fn a_windows_rust_app_carries_no_library() {
+        let tmp = std::env::temp_dir().join(format!("lumen-winpkg-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).expect("mkdir");
+        let windows = Target::parse("windows-x86_64").expect("known target");
+
+        let carried = copy_linked_engine(&tmp.join("App.exe"), &tmp, windows).expect("no-op");
+        assert_eq!(carried, 0);
+        assert!(
+            std::fs::read_dir(&tmp)
+                .expect("read back")
+                .flatten()
+                .next()
+                .is_none(),
+            "nothing was written"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The C library travels under the name the app looks for on the platform
+    /// it is packaged for, not under the name it had in the toolchain.
+    #[test]
+    fn the_c_library_travels_under_the_targets_name() {
+        let tmp = std::env::temp_dir().join(format!("lumen-clib-{}", std::process::id()));
+        let out = tmp.join("out");
+        std::fs::create_dir_all(&out).expect("mkdir");
+        let source = tmp.join("whatever-it-was-called");
+        std::fs::write(&source, b"stand-in library").expect("write library");
+
+        let windows = Target::parse("windows-x86_64").expect("known target");
+        copy_c_engine(
+            &out,
+            windows,
+            &Toolchain {
+                stub: tmp.join("unused"),
+                lib: source,
+            },
+        )
+        .expect("copy");
+        assert!(out.join("lumen.dll").is_file());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A Python app's sources are inside the frozen executable, so they stay
+    /// behind along with the interpreter's caches.
+    #[test]
+    fn a_python_package_leaves_the_sources_behind() {
+        let rules = CopyRules::sdk(AppKind::Python);
+        assert!(rules.skip_exts.contains(&"py"));
+        assert!(rules.skip_dirs.contains(&"__pycache__"));
+        // What the app reads at run time still travels.
+        assert!(!rules.skip_exts.contains(&"lmn"));
+        assert!(!rules.skip_exts.contains(&"css"));
     }
 }
