@@ -1,6 +1,12 @@
 # Coverage gates on the change, not the whole tree: the project status is
 # informational, while the patch status is a required check and fails when
-# the diff's new lines are meaningfully less covered than the baseline.
+# less than 80 percent of the diff's new lines are covered.
+#
+# The target is a fixed number rather than `auto`. An auto target is main's
+# own coverage at the time of the run, so it moves, and a pull request is
+# graded against one base while the merge queue grades the same diff against
+# another. A change could pass on the pull request, fail on the queue commit,
+# and get ejected every time it was requeued.
 
 coverage:
   status:
@@ -9,8 +15,7 @@ coverage:
         informational: true
     patch:
       default:
-        target: auto
-        threshold: "5%"
+        target: "80%"
 
 # Measured and tested, but not graded. Presenting to a window needs a real
 # adapter, a real swap chain, and a window to own them, none of which a CI
