@@ -1,0 +1,14 @@
+// Publishes a global and a list on start, which is what a build has to find
+// in the state it snapshots.
+import "lumen.cdl";
+
+fn main() {}
+
+fn on_start() {
+    lumen::signal_set("greeting", "hello from the build");
+    lumen::signal_set_int("count", 2);
+    lumen::signal_array_set("todos", [
+        {"id": "1", "title": "write it down"},
+        {"id": "2", "title": "do it"}
+    ]);
+}

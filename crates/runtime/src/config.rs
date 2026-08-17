@@ -689,6 +689,9 @@ pub enum WebPrerender {
     /// The values `[web.seed]` and the markup itself declare.
     #[default]
     Seeds,
+    /// Run the app at build time and write each page with the state it
+    /// settles into, on top of the declared values.
+    Run,
     /// None: a branch is not taken and a list has no rows until the browser
     /// runs the app.
     None,

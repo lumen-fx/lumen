@@ -125,7 +125,7 @@ Run the result with `lumenc run <dir> --artifact <out.lmna>`. See
 
 ```
 lumenc web <app_dir> [--out <dir>] [--base <path>] [--locale <tag>]...
-                     [--render static|csr] [--prerender seeds|none]
+                     [--render static|csr] [--prerender seeds|run|none]
                      [--no-hooks] [--lib-dir <dir>] [--strict]
                      [--serve [--port <n>]]
 ```
@@ -153,7 +153,7 @@ what a static host serves for a path that has no document of its own.
 | `--base <path>` | URL prefix the site is served under. Default: `[web] base_path`, else `/`. |
 | `--locale <tag>` | Emit a document tree for this locale; repeat for more. The first is served from the site root and the rest from `/<tag>/`. Default: `[web] locales`. |
 | `--render static\|csr` | Whether the pages carry the browser runtime: `csr` loads it and runs the app, `static` is files alone. Both write the whole markup tree. Default: `[web] render`. |
-| `--prerender seeds\|none` | Where the state the pages are rendered with comes from: `seeds` uses `[web.seed]` and the defaults the markup declares, `none` renders the markup alone. Default: `[web] prerender`. |
+| `--prerender seeds\|run\|none` | Where the state the pages are rendered with comes from: `seeds` uses `[web.seed]` and the defaults the markup declares, `run` starts from those and then runs the app here, writing each page with the state it settles into, `none` renders the markup alone. Default: `[web] prerender`. |
 | `--no-hooks` | Skip the app's `prebuild` hooks. |
 | `--lib-dir <dir>` | Directory holding `lumen-web.wasm` and `lumen-web.js`, instead of the copy shipped with lumenc. |
 | `--strict` | Exit non-zero if the build printed any warning. |
@@ -163,7 +163,10 @@ what a static host serves for a path that has no document of its own.
 A warning does not stop the build. The build warns when an asset lives outside
 the app directory, when a link names no page, when a script is in a language
 the browser cannot run, when the skin would otherwise be chosen by whichever
-machine built the site, and when the browser runtime cannot be found.
+machine built the site, and when the browser runtime cannot be found. Under
+`--prerender run` it also warns when an app is still changing when its budget
+runs out, when it asks for an address the build will not fetch, and when the
+same page settles differently on a second run.
 
 Everything the site says about itself - its address, description, social
 image, host, locales - is `lumen.toml`'s `[web]` section. See

@@ -52,7 +52,7 @@ _lumenc() {
             return
             ;;
         "web --prerender")
-            mapfile -t COMPREPLY < <(compgen -W "seeds none" -- "$cur")
+            mapfile -t COMPREPLY < <(compgen -W "seeds run none" -- "$cur")
             return
             ;;
         "package --target")

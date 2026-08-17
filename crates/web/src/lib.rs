@@ -22,6 +22,7 @@ pub mod html;
 pub mod markup;
 pub mod seo;
 pub mod site;
+pub mod snapshot;
 pub mod spec;
 pub mod urls;
 
@@ -29,6 +30,7 @@ pub use css::{RESET_CSS, rules_css, styles_css, token_warnings};
 pub use error::EmitError;
 pub use markup::{MarkupSheet, lift as lift_markup_styles};
 pub use site::{NOT_FOUND_FILE, SITEMAP_FILE, emit};
+pub use snapshot::{State, state_of};
 pub use spec::{
     AssetRef, CssMode, HostRewrite, LocaleSpec, OutputFile, PageSpec, SignalEnv, Site, SiteSpec,
     WebSpec, document_name,

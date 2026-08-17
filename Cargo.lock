@@ -3760,10 +3760,26 @@ dependencies = [
  "lumen-html",
  "lumen-input",
  "lumen-ir",
+ "lumen-prerender",
  "lumen-primitives",
  "lumen-scene",
  "lumen-script",
  "lumen-script-candela",
+]
+
+[[package]]
+name = "lumen-prerender"
+version = "0.0.3"
+dependencies = [
+ "bevy_ecs",
+ "lumen-core",
+ "lumen-html",
+ "lumen-ir",
+ "lumen-portable",
+ "lumen-scene",
+ "lumen-script",
+ "lumen-script-candela",
+ "lumen-web",
 ]
 
 [[package]]
@@ -4075,6 +4091,7 @@ dependencies = [
  "lumen-mcp",
  "lumen-os-dnd",
  "lumen-os-tray",
+ "lumen-prerender",
  "lumen-primitives",
  "lumen-render-wgpu",
  "lumen-runtime",

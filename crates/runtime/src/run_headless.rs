@@ -47,7 +47,8 @@ use std::time::{Duration, Instant};
 use bevy_ecs::message::Messages;
 use lumen_core::input::CloseRequest;
 use lumen_core::prelude::*;
-use lumen_core::render_world::{AnimationsActive, FrameDirty, SurfaceCapture, SurfaceFrame};
+use lumen_core::render_world::{FrameDirty, SurfaceCapture, SurfaceFrame};
+use lumen_core::tick::work_pending;
 use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin};
 use lumen_text::{ShapeOptions, ShaperService, TextShaper};
 use lumen_text_cosmic::CosmicShaper;
@@ -423,24 +424,15 @@ pub fn run_app_headless_rendered(
             break;
         }
 
-        // Pending-work sources - the same three the windowed
-        // `present_frame` re-arms the redraw on.
-        let work_pending = lumen_core::property_store::external_properties_pending()
-            || app
-                .world
-                .get_resource::<AnimationsActive>()
-                .is_some_and(|a| a.get())
-            || app
-                .world
-                .get_resource::<FrameDirty>()
-                .is_some_and(|f| f.dirty);
+        // The same check the windowed `present_frame` re-arms the redraw on.
+        let pending = work_pending(&app.world);
 
         // Bounded runs tick back-to-back; `--ticks N` bounds wall time.
         if headless.ticks.is_some() {
             continue;
         }
 
-        if work_pending {
+        if pending {
             // Pace follow-up frames at 60 Hz (vsync stand-in) against an
             // advancing deadline. An MCP wake cuts the park short (the
             // anchor is kept, so an early wake doesn't shift the phase of

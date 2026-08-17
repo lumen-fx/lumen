@@ -24,6 +24,7 @@ use lumen_core::input::{CloseRequest, PendingFileDrops, WindowFocused, WindowOcc
 use lumen_core::prelude::*;
 use lumen_core::text_events::{ImeSurroundingRequested, ImeSurroundingResponse, TextEditRequest};
 use lumen_core::text_model::TextBuffer;
+use lumen_core::tick::work_pending;
 use lumen_core::traits::{A11yBackend, FrameRequest, RenderTarget, SurfaceRenderer};
 use lumen_core::window::{MenuModel, WindowGeometry, WindowOptions};
 use raw_window_handle::{
@@ -1613,30 +1614,9 @@ fn present_frame(
     // without this the app parks with a stale frame until an unrelated
     // event arrives (the "click counter only updates on the next mouse
     // move", "press tint never finishes fading" class of bugs).
-    //
-    // Three sources of pending work, each of which reaches `false` on its
-    // own once the system settles - so this can never become a permanent
-    // vsync spin:
-    //   1. External typed-property bus still has undrained writes (a
-    //      cross-thread producer, or a main-thread script write that
-    //      landed after this tick's drain). Empties once drained.
-    //   2. An animation driver (hover/press tween, opacity transition,
-    //      scroll inertia) reported it still has motion this tick via
-    //      `AnimationsActive`. Cleared at the top of every tick and only
-    //      re-raised while a value is genuinely mid-flight, so it falls to
-    //      `false` the moment every animation settles.
-    //   3. `FrameDirty` is somehow still set (defensive - a system dirtied
-    //      state after the encode). Cleared by the next present.
-    let work_pending = lumen_core::property_store::external_properties_pending()
-        || app
-            .world
-            .get_resource::<AnimationsActive>()
-            .is_some_and(|a| a.get())
-        || app
-            .world
-            .get_resource::<FrameDirty>()
-            .is_some_and(|f| f.dirty);
-    if work_pending && let Some(mut sch) = app.world.get_resource_mut::<RedrawScheduler>() {
+    if work_pending(&app.world)
+        && let Some(mut sch) = app.world.get_resource_mut::<RedrawScheduler>()
+    {
         sch.pending = true;
     }
 }

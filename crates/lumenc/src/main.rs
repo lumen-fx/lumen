@@ -976,8 +976,9 @@ USAGE:
                           Runs `lumen.toml`'s `[[hooks]]` `prebuild` entries
                           first; --no-hooks skips them.
     lumenc web <app_dir> [--out DIR] [--base PATH] [--locale TAG]...
-                         [--prerender seeds|none] [--no-hooks]
-                         [--lib-dir DIR] [--strict] [--serve [--port N]]
+                         [--render static|csr] [--prerender seeds|run|none]
+                         [--no-hooks] [--lib-dir DIR] [--strict]
+                         [--serve [--port N]]
                           Emit the app as a static site: one HTML document
                           per page with the markup already in it, the
                           stylesheet, the compiled app, the browser runtime
@@ -986,8 +987,9 @@ USAGE:
                           lumen.toml [web] out_dir, else dist/web);
                           --base is the URL prefix it is served under;
                           --locale emits a document tree per locale, the
-                          first at the site root; --prerender says where
-                          the state the pages are rendered with comes from;
+                          first at the site root; --render says whether the
+                          pages carry the browser runtime; --prerender says
+                          where the state they are rendered with comes from;
                           --lib-dir points at a directory holding
                           lumen-web.wasm and lumen-web.js; --strict fails
                           the build on any warning; --serve serves the

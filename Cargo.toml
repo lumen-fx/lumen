@@ -114,6 +114,7 @@ members = [
     "crates/lumenc",
     "crates/mcp",
     "crates/portable",
+    "crates/prerender",
     "crates/primitives",
     "crates/runtime",
     "crates/scene",

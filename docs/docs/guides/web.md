@@ -135,8 +135,10 @@ Point `--lib-dir` at a directory holding `lumen-web.wasm` and `lumen-web.js`
 to use a copy you built yourself.
 
 Which page a document shows is decided at build time. State comes from
-`[web.seed]` and from the defaults the markup declares; set `[web] prerender
-= "none"` to render the markup alone, with no branch taken and no rows.
+`[web.seed]` and from the defaults the markup declares, and `[web] prerender`
+says so: set it to `"run"` to have the app itself supply the state (see
+[Running the app during the build](#running-the-app-during-the-build)), or to
+`"none"` to render the markup alone, with no branch taken and no rows.
 
 A list is state like any other, so `[web.seed]` can name its rows. Each row is
 a table of the fields the row template reads:
@@ -170,6 +172,50 @@ runtime, no compiled app, no manifest, and no boot script in the documents.
 Either way a link is an ordinary `<a href>`, so a browser that does not run the
 runtime, or a site that carries none, follows links by loading the next
 document. That needs no configuration.
+
+## Running the app during the build
+
+An app usually knows things the markup does not. A list arrives from a script,
+a total is derived from a handful of signals, a panel opens because a value
+came out true. Written from the seeds alone, the page holds the shape of all
+that and none of the answers.
+
+`[web] prerender = "run"`, or `--prerender run`, fills them in. The build starts
+the app, lets it settle, and writes each page with the state it settled into:
+
+```toml
+[web]
+prerender = "run"
+```
+
+Reach for it when a page's content comes from the app rather than from the
+markup: a list a script publishes, a branch a script decides, a value a
+`derive()` computes. It costs a run of the app per page at build time and
+nothing at all afterwards, and what it buys is a document that already holds
+the list, the branch and the row values the app decided, and a runtime that
+starts from them instead of working them out again.
+
+Each page is run on its own, starting from the values `[web.seed]` and the
+markup declare, so `on_start` sees the route it is being built for and can
+publish something different per page. What the app writes wins over what was
+declared, exactly as it does in a browser.
+
+The build stops when the app's state stops changing, not when it stops drawing,
+so an app with a spinner or a looping animation settles like any other. An app
+whose state never stops changing runs out of budget instead; the build says so
+and writes the state the app had reached by then, and `--strict` turns that
+into a failure.
+
+Two things keep a page the same wherever it is built. The build answers the
+app's HTTP calls itself, with a refusal, so nothing is fetched and no page
+depends on what a server said the day it was built; every address the app asked
+for is reported. The entry page is also built twice and compared, and `--strict`
+compares every page, so an app whose state depends on the clock or on the
+machine is caught rather than shipped.
+
+That leaves the network to the browser, which is where dynamic data belongs:
+the page arrives complete with everything the app knew on its own, and a
+`fetch()` fills in the part only a server can answer.
 
 ## Links and deep paths
 
@@ -261,19 +307,26 @@ means anything without an absolute address.
   where on the desktop the element wins. Normal declarations rank the way
   Lumen ranks them; this is the one case where the two differ.
 - A value bound with `bind-*`, or interpolated into text with `{name}` outside
-  a list row, is written as the markup wrote it. The seeded value replaces it
-  when the app runs; a branch taken with `<if>` is decided at build time. A
-  placeholder inside a `<for>` row is different: it is resolved against the
-  row while the page is written.
+  a list row, is written as the markup wrote it, whichever `prerender` mode
+  built the page. The runtime writes the current value over it on arrival,
+  from the state the page carries. A branch taken with `<if>` is decided at build
+  time, and a placeholder inside a `<for>` row is resolved against the row
+  while the page is written.
 - Elements a script creates appear when the runtime starts, not in the
   document, so a crawler does not see them.
 - A `<for virtualized="true">` emits no rows. Which rows a virtualized list
   shows comes from how far its scroll container has been scrolled, which a
   build cannot know, so the runtime mounts them when the page opens. The
   build warns when it emits one.
-- A list whose rows only exist once a script has run is emitted empty, the way
-  every other piece of script-made state is. `[web.seed]` is how a list
-  reaches the document without anything running.
+- A list whose rows only exist once a script has run is emitted empty under
+  `prerender = "seeds"`. `[web.seed]` puts rows in the document without
+  anything running, and `prerender = "run"` gets them from the app itself.
+- A run captures signals and lists, which is what the markup is written from.
+  It does not capture elements a script created, a property written on one
+  entity rather than on a signal, or a vector or a live Rust value, none of
+  which a document can carry; the build names any it found. Anything the app
+  would have learned from the network is missing too, and so is a value that
+  only appears after an animation longer than the run's budget.
 - A script written in Rhai or Lua does not run in the browser. candela does.
   An app written in one of them is still emitted and still reads: the pages
   show the state they were built with, and nothing runs.

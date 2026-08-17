@@ -21,13 +21,14 @@ use lumen_html::contract::{
 use lumen_i18n::{I18n, LanguageIdentifier, SharedI18n, translated_or_authored};
 use lumen_ir::artifact::CompiledApp;
 use lumen_ir::layout_ir::{Element, LayoutIR, relativize_asset_paths};
+use lumen_prerender::{self as prerender, Budget, Prerendered, Settled};
 use lumen_runtime::config::{
     LumenToml, WebCssMode, WebHost, WebNavigation, WebPrerender, WebRender, WebSeedValue,
 };
 use lumen_runtime::run::locale_dir;
 use lumen_web::urls::is_external;
 use lumen_web::{
-    AssetRef, CssMode, HostRewrite, LocaleSpec, PageSpec, SignalEnv, SiteSpec, WebSpec,
+    AssetRef, CssMode, HostRewrite, LocaleSpec, PageSpec, SignalEnv, SiteSpec, State, WebSpec,
 };
 
 use crate::web_serve::Server;
@@ -48,7 +49,7 @@ const WEB_USAGE: &str = "lumenc web - emit an app as a static site
 
 USAGE:
     lumenc web <app_dir> [--out DIR] [--base PATH] [--locale TAG]...
-                         [--render static|csr] [--prerender seeds|none]
+                         [--render static|csr] [--prerender seeds|run|none]
                          [--no-hooks] [--lib-dir DIR] [--strict]
                          [--serve [--port N]]
 
@@ -68,8 +69,9 @@ runtime are written beside them, and the pages load them.
                       loads it, static is files alone (default: [web]
                       render). Both write the whole markup tree.
     --prerender MODE  Where the state the pages are rendered with comes
-                      from: seeds (lumen.toml [web.seed] and the markup)
-                      or none (default: [web] prerender).
+                      from: seeds (lumen.toml [web.seed] and the markup),
+                      run (the app runs here and the state it settles into
+                      is written in) or none (default: [web] prerender).
     --no-hooks        Skip the app's prebuild [[hooks]].
     --lib-dir DIR     Directory holding lumen-web.wasm and lumen-web.js,
                       instead of the ones shipped with lumenc.
@@ -183,10 +185,11 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
                 let mode = value("--prerender")?;
                 options.prerender = Some(match mode.as_str() {
                     "seeds" => WebPrerender::Seeds,
+                    "run" => WebPrerender::Run,
                     "none" => WebPrerender::None,
                     other => {
                         return Err(format!(
-                            "unknown --prerender mode `{other}` (expected seeds or none)"
+                            "unknown --prerender mode `{other}` (expected seeds, run or none)"
                         ));
                     }
                 });
@@ -375,6 +378,20 @@ fn build(options: &Options) -> Result<Report, String> {
     }
 
     let seed = seed_values(&cfg, &compiled.ir.root, prerender);
+    // The app is run once per page, not once per page per locale: a
+    // translation is resolved in the tree the emitter walks, and a signal is
+    // the same value in every language.
+    let settled = match prerender {
+        WebPrerender::Run => run_pages(
+            &compiled,
+            &keys,
+            &entry,
+            &seed,
+            options.strict,
+            &mut warnings,
+        ),
+        WebPrerender::Seeds | WebPrerender::None => BTreeMap::new(),
+    };
     let mut pages_written = 0;
     for (index, locale) in locales.iter().enumerate() {
         let mut spec = SiteSpec {
@@ -394,7 +411,14 @@ fn build(options: &Options) -> Result<Report, String> {
         };
         let ir = translated_ir(&compiled.ir, dir, locale, &mut warnings)?;
         for key in &keys {
-            spec.pages.push(page_spec(key, &ir, &cfg, &seed, prerender));
+            spec.pages.push(page_spec(
+                key,
+                &ir,
+                &cfg,
+                &seed,
+                prerender,
+                settled.get(key),
+            ));
         }
         let site = lumen_web::emit(&spec).map_err(|e| e.to_string())?;
         for file in &site.files {
@@ -493,6 +517,82 @@ fn locales(options: &Options, cfg: &LumenToml) -> Vec<String> {
     locales
 }
 
+/// Run the app once for each page and keep the state each one settles into.
+///
+/// A page written from a run has to come out the same on every machine and on
+/// every build, so the entry page is always built twice and compared, and
+/// `--strict` compares every page.
+fn run_pages(
+    compiled: &CompiledApp,
+    keys: &[String],
+    entry: &str,
+    seed: &BTreeMap<String, WebSeedValue>,
+    strict: bool,
+    warnings: &mut Vec<String>,
+) -> BTreeMap<String, State> {
+    let declared = declared_seed(seed);
+    let mut settled = BTreeMap::new();
+    for key in keys {
+        let run = prerender::page(compiled, key, &declared, Budget::default());
+        report_run(key, &run, warnings);
+        if key == entry || strict {
+            let again = prerender::page(compiled, key, &declared, Budget::default());
+            if again.state != run.state {
+                warnings.push(format!(
+                    "page `{key}` settled differently the second time it was run, so what it \
+                     holds depends on something outside the app"
+                ));
+            }
+        }
+        settled.insert(key.clone(), run.state);
+    }
+    settled
+}
+
+/// What one run leaves a build to say.
+fn report_run(key: &str, run: &Prerendered, warnings: &mut Vec<String>) {
+    if let Settled::Capped(ticks) = run.settled {
+        warnings.push(format!(
+            "page `{key}` was still changing after {ticks} ticks, so it is written with the \
+             state it had reached by then"
+        ));
+    }
+    for url in &run.denied {
+        warnings.push(format!(
+            "page `{key}` asked for `{url}`, and a build answers the network itself so that \
+             every machine writes the same page; the browser fetches it on arrival"
+        ));
+    }
+    for skipped in &run.state.skipped {
+        warnings.push(format!("page `{key}` is written without {skipped}"));
+    }
+    for engine in &run.unsupported_engines {
+        warnings.push(format!(
+            "page `{key}` carries a `{engine}` program, which this lumenc has no host for; what \
+             it publishes is missing from the page"
+        ));
+    }
+}
+
+/// The declared state as a run reads it: what the app starts from before its
+/// own scripts write anything.
+fn declared_seed(seed: &BTreeMap<String, WebSeedValue>) -> Seed {
+    let mut declared = Seed::new();
+    for (name, value) in seed {
+        match value {
+            WebSeedValue::Rows(rows) => {
+                declared.arrays.insert(name.clone(), rows.clone());
+            }
+            value => {
+                declared
+                    .globals
+                    .insert(name.clone(), seed_value(value.clone()));
+            }
+        }
+    }
+    declared
+}
+
 /// One page, rendered with the state it arrives in.
 fn page_spec(
     key: &str,
@@ -500,8 +600,21 @@ fn page_spec(
     cfg: &LumenToml,
     seed: &BTreeMap<String, WebSeedValue>,
     prerender: WebPrerender,
+    settled: Option<&State>,
 ) -> PageSpec {
     let page_cfg = cfg.web.pages.get(key);
+    // A run started from the declared values and holds the page's route, so
+    // what it settled into is the whole state this page is written with.
+    if let Some(state) = settled {
+        return PageSpec {
+            key: key.to_string(),
+            ir: ir.clone(),
+            title: page_cfg.and_then(|page| page.title.clone()),
+            description: page_cfg.and_then(|page| page.description.clone()),
+            signals: state.signals.clone(),
+            seed: state.seed.clone(),
+        };
+    }
     let mut signals = SignalEnv::new();
     let mut page_seed = Seed::new();
     // Which page a document is showing is not app state: it is what the

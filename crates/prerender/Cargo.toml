@@ -1,0 +1,49 @@
+[package]
+name = "lumen-prerender"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Runs a Lumen app and reads the state it settles into, so a page can be written with that state already in it."
+keywords = ["ui", "gui", "lumen", "web", "ssr"]
+categories = ["web-programming", "gui"]
+publish = false
+
+[lib]
+name = "lumen_prerender"
+path = "src/lib.rs"
+
+[dependencies]
+lumen-core = { path = "../core", version = "0.0.3" }
+# The windowless assembly the app is built from: the reconcilers, the
+# bindings and the script command stream, and no window, renderer or font
+# stack.
+lumen-portable = { path = "../portable", version = "0.0.3", default-features = false }
+# The compiled app a run starts from.
+lumen-ir = { path = "../ir", version = "0.0.3" }
+# The seed a run starts from, which is also the shape its result comes back in.
+lumen-html = { path = "../html", version = "0.0.3" }
+# Routing and the IR-to-ECS spawner.
+lumen-scene = { path = "../scene", version = "0.0.3" }
+# Where a run's result is read, in the form a document is written from.
+lumen-web = { path = "../web", version = "0.0.3" }
+# The HTTP seam, so a run answers a request without one leaving the machine.
+lumen-script = { path = "../script/api", version = "0.0.3", default-features = false }
+
+[build-dependencies]
+# Compiles the test fixture to `.cdlb` on the host, so the program a run loads
+# is always the one this toolchain produces.
+lumen-script-candela = { path = "../script/candela", version = "0.0.3" }
+
+[dev-dependencies]
+# The tests build an app of their own to settle, which means writing a system.
+bevy_ecs.workspace = true
+
+[features]
+# The script hosts a run can carry, forwarded to the assembly that installs
+# them. An app whose scripts this build has no host for still runs: it renders
+# from what the markup and the seed declare.
+default = ["host-candela"]
+host-candela = ["lumen-portable/host-candela"]

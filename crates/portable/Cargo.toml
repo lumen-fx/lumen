@@ -39,6 +39,9 @@ lumen-script-candela = { path = "../script/candela", version = "0.0.3" }
 # The compiled app the boot benchmark reads. A running app never needs the
 # artifact container, only what came out of it.
 lumen-ir = { path = "../ir", version = "0.0.3" }
+# Settling an app and reading the state it settled into is one implementation,
+# and the benchmark measures that one rather than a copy of it.
+lumen-prerender = { path = "../prerender", version = "0.0.3" }
 
 [[bench]]
 name = "boot"
