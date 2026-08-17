@@ -19,7 +19,7 @@ pub mod escape;
 pub mod style;
 pub mod tags;
 
-pub use attrs::{class_list, html_attrs, is_disableable, markup_style};
+pub use attrs::{MarkupRules, class_list, html_attrs, is_disableable, markup_rules};
 pub use contract::{
     DATA_LM, DATA_LM_AUX, DATA_LM_BASE, DATA_LM_CHECKED, DATA_LM_CONTRACT, DATA_LM_DISABLED,
     DATA_LM_DRAG_OVER, DATA_LM_HIDDEN, DATA_LM_KEY, DATA_LM_LOCALE, DATA_LM_PAGE, DATA_LM_SELECTED,

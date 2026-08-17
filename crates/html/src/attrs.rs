@@ -6,10 +6,10 @@
 //! the browser as CSS instead, because a value that arrives as CSS keeps the
 //! precedence the author wrote.
 //!
-//! One thing crosses back over: a style the author wrote on the element
-//! itself. Lumen ranks that above every rule and a browser does not, so those
-//! declarations come back as an inline [`markup_style`], rewritten by
-//! [`style`](crate::style) and ranked the same way on both.
+//! A style the author wrote on the element itself is CSS too, and comes back
+//! from [`markup_rules`] as declarations for the emitter to write as a rule.
+//! Lumen ranks those above every rule and a browser does not, so where that
+//! rule goes in the file is what settles the order.
 //!
 //! A few Lumen states have no HTML attribute to land on. A `<toggle>` is a
 //! button, not a checkbox, so it has no `:checked`; a `<div>` cannot be
@@ -21,7 +21,7 @@ use lumen_core::components::LayoutDirection;
 use lumen_ir::layout_ir::Attributes;
 
 use crate::contract::{DATA_LM_CHECKED, DATA_LM_DISABLED};
-use crate::style::{Emission, rewrite_property};
+use crate::style::{Emission, WebDecl, rewrite_property};
 use crate::tags::{html_tag_for, lm_class};
 
 /// HTML elements that take a `disabled` attribute.
@@ -170,51 +170,58 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
     if let Some(lang) = &attrs.lang {
         out.push(("lang", lang.clone()));
     }
-    if let Some(style) = markup_style(attrs) {
-        out.push(("style", style));
-    }
     out
 }
 
-/// The `style` value that keeps a styling attribute outranking the
-/// stylesheet, or `None` for an element the author styled only through CSS.
-///
-/// The two surfaces disagree about which wins. In Lumen an attribute written
-/// on the element beats every rule that targets it, `!important` included; in
-/// a browser a rule beats everything but an inline declaration, and an
-/// `!important` inline declaration beats that too. Replaying the attributes as
-/// `!important` inline declarations is what makes the browser rank them the
-/// way Lumen does, so a page looks the same on both.
+/// What the styling attributes written on one element declare.
 ///
 /// The declarations are written the way a browser reads them, through the
 /// same rewrite the stylesheet goes through: `bg="#101014"` arrives as
 /// `background: #101014`, and `padding="8"` as `padding: 8px`.
-///
-/// A value that stands for a state has nowhere to land: an inline style
-/// cannot carry `:hover`. Those are left out, so a hover fill written as an
-/// attribute has to be written as a rule instead.
-pub fn markup_style(attrs: &Attributes) -> Option<String> {
-    if attrs.markup_styles.is_empty() {
-        return None;
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MarkupRules {
+    /// What the element declares about itself.
+    pub base: Vec<WebDecl>,
+    /// What it declares about a state, under the pseudo-class that state is
+    /// spelled with. `hover-bg` is the plainest case.
+    pub states: Vec<(&'static str, Vec<WebDecl>)>,
+}
+
+impl MarkupRules {
+    /// True when the element declares nothing the browser can be told.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.base.is_empty() && self.states.is_empty()
     }
-    let mut out = String::new();
+}
+
+/// What an element's own styling attributes become on the web.
+///
+/// The two surfaces disagree about which wins. In Lumen an attribute written
+/// on the element beats every rule that targets it; in a browser a rule beats
+/// an element's own styling unless that styling is inline. So these come back
+/// as rules of their own rather than as values, and the emitter puts them
+/// where an unlayered rule outranks the stylesheet.
+///
+/// Leaving the inline tier is what lets a state and an animation reach these
+/// declarations at all: an inline style cannot carry `:hover`, and a script
+/// writing one style replaces every inline declaration on the element.
+pub fn markup_rules(attrs: &Attributes) -> MarkupRules {
+    let mut rules = MarkupRules::default();
     for (property, value) in &attrs.markup_styles {
-        let decls = match rewrite_property(property, value) {
-            Emission::Plain(decls) => decls,
-            Emission::CustomProp(decl) => vec![decl],
-            Emission::StateRule { .. } | Emission::Drop(_) => continue,
-        };
-        for decl in decls {
-            if !out.is_empty() {
-                out.push(' ');
+        match rewrite_property(property, value) {
+            Emission::Plain(decls) => rules.base.extend(decls),
+            Emission::CustomProp(decl) => rules.base.push(decl),
+            Emission::StateRule { pseudo, decls } => {
+                match rules.states.iter_mut().find(|(name, _)| *name == pseudo) {
+                    Some((_, existing)) => existing.extend(decls),
+                    None => rules.states.push((pseudo, decls)),
+                }
             }
-            out.push_str(&decl.name);
-            out.push_str(": ");
-            out.push_str(&decl.value);
-            out.push_str(" !important;");
+            Emission::Drop(_) => {}
         }
     }
-    (!out.is_empty()).then_some(out)
+    rules
 }
 
 /// Write a number the way markup does: no trailing `.0` on whole values.
@@ -305,39 +312,58 @@ mod tests {
     }
 
     #[test]
-    fn markup_styles_come_back_as_an_important_inline_style() {
+    fn markup_styles_come_back_as_declarations_to_write_as_a_rule() {
         let mut a = attrs();
         a.markup_styles = vec![
             ("bg".into(), "#101014".into()),
             ("padding".into(), " 8 ".into()),
         ];
         assert_eq!(
-            markup_style(&a).as_deref(),
-            Some("background: #101014 !important; padding: 8px !important;")
+            markup_rules(&a).base,
+            vec![
+                WebDecl::new("background", "#101014"),
+                WebDecl::new("padding", "8px"),
+            ]
         );
         assert_eq!(
             find(&html_attrs("tile", &a), "style"),
-            Some("background: #101014 !important; padding: 8px !important;")
+            None,
+            "an element's own styling is a rule now, not an inline declaration"
         );
     }
 
     #[test]
-    fn a_state_style_written_on_the_element_has_nowhere_inline_to_land() {
+    fn a_state_style_written_on_the_element_gets_a_rule_of_its_own() {
         let mut a = attrs();
-        a.markup_styles = vec![("hover-bg".into(), "#222".into())];
-        assert_eq!(markup_style(&a), None);
-
-        a.markup_styles.push(("bg".into(), "#111".into()));
+        a.markup_styles = vec![
+            ("hover-bg".into(), "#222".into()),
+            ("bg".into(), "#111".into()),
+        ];
+        let rules = markup_rules(&a);
+        assert_eq!(rules.base, vec![WebDecl::new("background", "#111")]);
         assert_eq!(
-            markup_style(&a).as_deref(),
-            Some("background: #111 !important;"),
-            "the rest of the element's styles still land"
+            rules.states,
+            vec![(":hover", vec![WebDecl::new("background", "#222")])]
         );
     }
 
     #[test]
-    fn an_element_styled_only_by_css_gets_no_style_attribute() {
-        assert_eq!(markup_style(&attrs()), None);
+    fn two_states_spelled_the_same_way_share_one_rule() {
+        let mut a = attrs();
+        a.markup_styles = vec![
+            ("hover-bg".into(), "#222".into()),
+            ("hover-border".into(), "1 #444".into()),
+        ];
+        let rules = markup_rules(&a);
+        assert!(rules.base.is_empty());
+        assert_eq!(rules.states.len(), 1, "{:?}", rules.states);
+        assert_eq!(rules.states[0].0, ":hover");
+        assert_eq!(rules.states[0].1.len(), 2, "{:?}", rules.states);
+    }
+
+    #[test]
+    fn an_element_styled_only_by_css_declares_nothing_of_its_own() {
+        assert!(markup_rules(&attrs()).is_empty());
         assert_eq!(find(&html_attrs("tile", &attrs()), "style"), None);
     }
 

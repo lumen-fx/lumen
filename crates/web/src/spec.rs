@@ -12,6 +12,8 @@ use lumen_i18n::LanguageIdentifier;
 use lumen_ir::interpolate::Globals;
 use lumen_ir::layout_ir::LayoutIR;
 
+use crate::markup::MarkupSheet;
+
 /// The signal state a page is rendered with.
 ///
 /// A page is rendered from the state the app would be in on arrival, so the
@@ -339,6 +341,9 @@ pub struct SiteSpec {
     pub locale: LocaleSpec,
     /// Files the pages refer to.
     pub assets: Vec<AssetRef>,
+    /// The rules lifted off the elements that were styled on themselves,
+    /// which the pages reach by class.
+    pub markup: MarkupSheet,
 }
 
 impl SiteSpec {
