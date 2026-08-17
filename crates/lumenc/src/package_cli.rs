@@ -1835,6 +1835,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// Where cargo leaves a release binary when its own report cannot be read:
+    /// under the target directory, one level deeper when cross-compiling, and
+    /// named after the package with the suffix the platform being built for
+    /// wants rather than the one doing the building.
+    #[test]
+    fn the_conventional_cargo_binary_follows_the_target() {
+        let tmp = std::env::temp_dir().join(format!("lumen-cargoexe-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).expect("mkdir");
+        std::fs::write(
+            tmp.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("write manifest");
+
+        // Nothing built yet.
+        assert_eq!(conventional_cargo_executable(&tmp, None), None);
+
+        // Cross-compiled for Windows: under the triple, with the .exe suffix,
+        // whatever platform is doing the building.
+        let triple = "x86_64-pc-windows-msvc";
+        let cross_dir = tmp.join("target").join(triple).join("release");
+        std::fs::create_dir_all(&cross_dir).expect("mkdir");
+        std::fs::write(cross_dir.join("demo.exe"), b"stand-in binary").expect("write binary");
+        assert_eq!(
+            conventional_cargo_executable(&tmp, Some(triple)),
+            Some(cross_dir.join("demo.exe"))
+        );
+        // The same build says nothing about this machine's own layout.
+        assert_eq!(conventional_cargo_executable(&tmp, None), None);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// A Python app's sources are inside the frozen executable, so they stay
     /// behind along with the interpreter's caches.
     #[test]
