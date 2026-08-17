@@ -322,7 +322,10 @@ fn the_zip_holds_the_folder() {
     } else {
         "windows-x86_64"
     };
-    let out = root.join("Demo");
+    // Not a case-variant of the app directory: macOS and Windows both compare
+    // paths case-insensitively, and `demo` next to `Demo` would read there as
+    // an output directory that is the app itself.
+    let out = root.join("packaged");
     let result = run_package(&[
         app.to_str().expect("utf-8 path"),
         out.to_str().expect("utf-8 path"),
@@ -340,7 +343,8 @@ fn the_zip_holds_the_folder() {
         String::from_utf8_lossy(&result.stderr)
     );
 
-    let archive = root.join("Demo.zip");
+    // The archive is named after the folder it holds, not after the app.
+    let archive = root.join("packaged.zip");
     assert!(archive.is_file(), "the archive was not written");
     let bytes = std::fs::read(&archive).expect("read the archive");
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("read as a zip");
@@ -348,8 +352,14 @@ fn the_zip_holds_the_folder() {
         .map(|i| zip.by_index(i).expect("member").name().to_string())
         .collect();
     assert!(
-        names.iter().all(|n| n.starts_with("Demo/")),
+        names.iter().all(|n| n.starts_with("packaged/")),
         "every member sits under the folder: {names:?}"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|n| n.ends_with("Demo.exe") || n.ends_with("/Demo")),
+        "the app executable is in the archive: {names:?}"
     );
 
     let _ = std::fs::remove_dir_all(&root);
