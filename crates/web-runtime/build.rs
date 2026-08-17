@@ -21,8 +21,9 @@ use std::path::Path;
 const FIXTURE_DIR: &str = "../portable/fixtures";
 
 /// The fixtures, by source file stem. `unbound` compiles and fails to load,
-/// on purpose.
-const FIXTURES: &[&str] = &["smoke", "unbound"];
+/// on purpose. `fetch` reaches the network, so only a suite with a browser and
+/// a server around it can run it.
+const FIXTURES: &[&str] = &["fetch", "smoke", "unbound"];
 
 fn main() {
     // The fixtures are candela, and the suite that loads them runs only when

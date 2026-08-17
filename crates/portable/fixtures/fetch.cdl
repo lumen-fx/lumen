@@ -1,0 +1,20 @@
+// Reaches the network the way an app does: one request at startup, and
+// handlers that record what came back where a test can read it as a signal.
+import "lumen.cdl";
+
+fn main() {}
+
+fn on_start() {
+    // The browser test runner serves its own page at the site root, so this is
+    // a request the browser allows and the server answers.
+    lumen::fetch("/", "page");
+}
+
+fn on_fetch(tag: string, body: string) {
+    lumen::signal_set("fetched", tag);
+    lumen::signal_set("body", body);
+}
+
+fn on_fetch_error(tag: string, message: string) {
+    lumen::signal_set("failed", message);
+}

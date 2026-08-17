@@ -15,7 +15,9 @@
 //! desktop build uses, a worker thread per request blocked in
 //! [`HttpClient::send`]. A platform with no threads to block supplies its own
 //! and installs it with
-//! [`FetchRegistry::with_dispatch`](crate::runtime::FetchRegistry::with_dispatch).
+//! [`FetchRegistry::with_dispatch`](crate::runtime::FetchRegistry::with_dispatch);
+//! in a browser that is `lumen-web-http`, which runs the request on the page's
+//! own `fetch` and needs no client behind it.
 //!
 //! The types are transport-only on purpose: the delivery tag, the
 //! `fetch()`-versus-`http()` reply style, and the retry or logging policy all
@@ -105,7 +107,18 @@ pub trait HttpDispatch: Send + Sync + 'static {
 /// A thread per request suits the usual "a few API calls per UI action"
 /// workload; a pool can replace it behind the same trait if that stops being
 /// true.
-pub struct ThreadDispatch(Arc<dyn HttpClient>);
+///
+/// A platform with no threads cannot run this one, and up front is the only
+/// place to say so: [`std::thread::Builder::spawn`] consumes the completion
+/// callback, so a failed spawn leaves nothing to report the failure through.
+/// Such a platform gets an error naming what it should install instead, which
+/// is what a browser build sees until `lumen-web-http` goes in.
+pub struct ThreadDispatch(
+    // Unreachable where there are no threads, since `dispatch` answers before
+    // it would reach the client. It stays in place so both platforms build the
+    // same type rather than a second one appearing for the smaller case.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))] Arc<dyn HttpClient>,
+);
 
 impl ThreadDispatch {
     /// Run every dispatched request on `client`.
@@ -115,12 +128,23 @@ impl ThreadDispatch {
 }
 
 impl HttpDispatch for ThreadDispatch {
+    #[cfg(not(target_arch = "wasm32"))]
     fn dispatch(&self, label: &str, request: HttpRequest, body_limit: u64, done: HttpDone) {
         let client = Arc::clone(&self.0);
         std::thread::Builder::new()
             .name(format!("lumen-http:{label}"))
             .spawn(move || done(client.send(&request, body_limit)))
             .expect("spawn http thread");
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn dispatch(&self, _label: &str, request: HttpRequest, _body_limit: u64, done: HttpDone) {
+        done(Err(format!(
+            "cannot request {}: this platform has no thread to run a request \
+             on, so a build for it installs its own dispatcher with \
+             FetchRegistry::with_dispatch",
+            request.url
+        )));
     }
 }
 

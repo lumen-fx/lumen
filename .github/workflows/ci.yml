@@ -193,7 +193,8 @@ jobs:
             -p lumen-scene \
             -p lumen-script \
             -p lumen-script-candela \
-            -p lumen-web-dom
+            -p lumen-web-dom \
+            -p lumen-web-http
 
   # The browser runtime, end to end: build the module a page loads, measure it,
   # and run the suite in a real headless browser. A DOM shim is not an option
@@ -306,6 +307,7 @@ jobs:
           export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver"
           cargo test -p lumen-web-runtime --target wasm32-unknown-unknown
           cargo test -p lumen-web-dom --target wasm32-unknown-unknown
+          cargo test -p lumen-web-http --target wasm32-unknown-unknown
       # Both halves at once: emit an app with the runtime built above, serve
       # it, and open it in a browser. Neither crate's own tests can see a
       # disagreement between the emitter and the runtime, because neither has

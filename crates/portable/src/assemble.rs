@@ -16,6 +16,9 @@
 //! pushes that mark a key dirty, or the key's one-tick window closes
 //! unobserved and a bound label freezes at its spawn value.
 
+#[cfg(target_arch = "wasm32")]
+use std::sync::Arc;
+
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::{App, TickStage};
 use lumen_core::property_store::{PropertyKey, PropertyStore, commit_external_properties};
@@ -30,8 +33,12 @@ use lumen_primitives::{
     ValidationPlugin,
 };
 use lumen_scene::spawn;
+#[cfg(target_arch = "wasm32")]
+use lumen_script::FetchRegistry;
 use lumen_script::ScriptSet;
 use lumen_script::runtime::register_script_commands;
+#[cfg(target_arch = "wasm32")]
+use lumen_web_http::WebFetchDispatch;
 
 /// An app with everything installed that runs the same on every platform.
 ///
@@ -50,6 +57,8 @@ pub fn portable_app() -> App {
     // host installed later finds this already registered.
     register_script_commands(&mut app.world);
 
+    install_http(&mut app);
+
     // No clipboard: it is the one non-send resource the input layer installs,
     // and this app has to run wherever it is put.
     app.add_plugin(lumen_input::InputPlugin { clipboard: false });
@@ -64,6 +73,27 @@ pub fn portable_app() -> App {
     install_reconcilers(&mut app);
     install_bindings(&mut app);
     app
+}
+
+/// Put the transport the scripts' `fetch()` and `http()` builtins run on into
+/// the app, where the platform has one this assembly can name.
+///
+/// The registry goes in before any host does: the script plugin installs the
+/// disabled default only when it finds none, so an install after it is an
+/// install that does nothing.
+///
+/// In a browser the transport is the page's own `fetch`, which is the one
+/// platform whose answer this assembly knows without being told: a page has no
+/// thread to run a request on, so a build with no dispatcher installed has no
+/// working `fetch()` at all. Everywhere else the transport is the embedder's
+/// choice, made where the app is composed - the desktop runtime installs
+/// `lumen-http-ureq` - so nothing is assumed here.
+fn install_http(app: &mut App) {
+    #[cfg(target_arch = "wasm32")]
+    app.world
+        .insert_resource(FetchRegistry::with_dispatch(Arc::new(WebFetchDispatch)));
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = app;
 }
 
 /// The systems that keep the spawned tree in step with the app's state.
