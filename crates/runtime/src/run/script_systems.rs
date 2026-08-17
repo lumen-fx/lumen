@@ -343,6 +343,10 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
             apply_script_commands
                 .after(ScriptSet::Tick)
                 .after(ScriptSet::Dispatch)
+                // The use sites the build left for the script build their
+                // subtree through this applier, so the tree is whole on the
+                // tick it was mounted rather than the one after.
+                .after(ScriptSet::Fill)
                 .before(ScriptSet::Derivations)
                 .before(lumen_core::signals::apply_text_bindings)
                 .before(lumen_core::signals::apply_checked_bindings)
@@ -490,6 +494,19 @@ pub(crate) fn register_script_host_systems<
         TickStage::Systems,
         fire_on_ready::<H>
             .in_set(ScriptSet::Ready)
+            .after(build_dom_index)
+            .after(crate::run::dom_commands::publish_node_details)
+            .after(ScriptSet::SyncSignals),
+    );
+    // The use sites the build left for the script to fill, on the same terms
+    // as `on_ready`: after the tree is queryable, before the command collector,
+    // so what the call builds lands on the tick the call ran. Every tick, not
+    // once - a subtree spawned while the app runs can carry a marker too.
+    app.add_systems(
+        TickStage::Systems,
+        lumen_script::fill_components::<H>
+            .in_set(ScriptSet::Fill)
+            .after(ScriptSet::Ready)
             .after(build_dom_index)
             .after(crate::run::dom_commands::publish_node_details)
             .after(ScriptSet::SyncSignals),

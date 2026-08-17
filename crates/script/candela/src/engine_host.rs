@@ -135,6 +135,10 @@ fn build_engine(r: &Registries) -> candela::Engine {
 }
 
 impl ScriptHost for CandelaHost {
+    // `lmn!` is candela's macro, so a component marker in the tree names a
+    // function in this program and no other host should answer for it.
+    const FILLS_COMPONENTS: bool = true;
+
     /// candela has no first-class closure value (higher-order calls inline by
     /// symbol at compile time), so a derivation body is modeled by the script
     /// function's *name*. `derive(name, deps, f)` passes `f` as that name, and

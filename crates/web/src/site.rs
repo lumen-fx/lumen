@@ -61,11 +61,16 @@ pub fn emit(spec: &SiteSpec) -> Result<Site, EmitError> {
             css::styles_css(stylesheet(spec), spec.web.css_mode),
         ));
         warnings.extend(css::token_warnings(stylesheet(spec), spec.web.css_mode));
-        let manifest = serde_json::to_string_pretty(&manifest(spec))?;
-        files.push(OutputFile::new(
-            DEFAULT_MANIFEST_FILE,
-            format!("{manifest}\n"),
-        ));
+        // The manifest is what the runtime reads to find everything else, so
+        // a site that loads no runtime has nobody to read it, and writing one
+        // would name a wasm module the site does not carry.
+        if spec.web.runtime {
+            let manifest = serde_json::to_string_pretty(&manifest(spec))?;
+            files.push(OutputFile::new(
+                DEFAULT_MANIFEST_FILE,
+                format!("{manifest}\n"),
+            ));
+        }
         if let Some((name, contents)) = rewrite_file(spec) {
             files.push(OutputFile::new(name, contents));
         }

@@ -1922,6 +1922,27 @@ impl LumenClasses {
     }
 }
 
+/// A use site the build could not finish, waiting for the script to fill it.
+///
+/// A component element names a script function. When instantiating the block
+/// that function returns is the same as calling it, the build puts the block
+/// in the tree and nothing is left to do. When the function has to run,
+/// because it works a value out or picks between blocks, what the build leaves
+/// is one element carrying this: the function's name and the arguments the use
+/// site bound, in the order the call passes them.
+///
+/// The script runtime calls the function, replaces this element with the node
+/// it returns, and drops the marker. That runs on the tick the element was
+/// mounted, ahead of the command applier, so the tree is whole before it is
+/// drawn.
+#[derive(Component, Clone, Debug)]
+pub struct PendingFill {
+    /// Script function to call.
+    pub function: String,
+    /// Argument values, in the function's parameter order.
+    pub args: Vec<String>,
+}
+
 /// Markup tag name (`tile`, `label`, `button`, ...) retained on entities
 /// that carry a `class` / `id`, so the runtime can rebuild a minimal
 /// selector target and re-run the CSS cascade in place on a theme /

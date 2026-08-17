@@ -2,8 +2,9 @@
 //!
 //! The app is compiled exactly the way `lumenc build` compiles it, and the
 //! result is written out as HTML: one document per page, with the markup
-//! already in it. What the browser needs on top of that - the compiled app,
-//! the stylesheet, the runtime, the assets - is written beside the pages.
+//! already in it. The stylesheet and the assets are written beside the pages,
+//! and `[web] render` decides whether the compiled app and the browser runtime
+//! join them.
 //!
 //! What a site is made of is [`lumen_web`]'s to decide; this reads the app,
 //! hands the emitter a [`SiteSpec`], and puts the files it gets back on disk.
@@ -21,7 +22,7 @@ use lumen_i18n::{I18n, LanguageIdentifier, SharedI18n, translated_or_authored};
 use lumen_ir::artifact::CompiledApp;
 use lumen_ir::layout_ir::{Element, LayoutIR, relativize_asset_paths};
 use lumen_runtime::config::{
-    LumenToml, WebCssMode, WebHost, WebNavigation, WebPrerender, WebSeedValue,
+    LumenToml, WebCssMode, WebHost, WebNavigation, WebPrerender, WebRender, WebSeedValue,
 };
 use lumen_runtime::run::locale_dir;
 use lumen_web::urls::is_external;
@@ -47,13 +48,14 @@ const WEB_USAGE: &str = "lumenc web - emit an app as a static site
 
 USAGE:
     lumenc web <app_dir> [--out DIR] [--base PATH] [--locale TAG]...
-                         [--prerender seeds|none] [--no-hooks]
-                         [--lib-dir DIR] [--strict]
+                         [--render static|csr] [--prerender seeds|none]
+                         [--no-hooks] [--lib-dir DIR] [--strict]
                          [--serve [--port N]]
 
-Compiles the app and writes one HTML document per page, the stylesheet, the
-compiled app, the browser runtime and the app's assets. The documents carry
-the markup already rendered, so a page reads without scripting.
+Compiles the app and writes one HTML document per page, the stylesheet and
+the app's assets. The documents carry the markup already rendered, so a page
+reads without scripting. Under --render csr the compiled app and the browser
+runtime are written beside them, and the pages load them.
 
     --out DIR         Where the site is written (default: lumen.toml
                       [web] out_dir, else dist/web).
@@ -62,6 +64,9 @@ the markup already rendered, so a page reads without scripting.
     --locale TAG      Emit a document tree for this locale. Repeat for
                       more; the first is served from the site root
                       (default: [web] locales, else [app] locale).
+    --render MODE     Whether the pages carry the browser runtime: csr
+                      loads it, static is files alone (default: [web]
+                      render). Both write the whole markup tree.
     --prerender MODE  Where the state the pages are rendered with comes
                       from: seeds (lumen.toml [web.seed] and the markup)
                       or none (default: [web] prerender).
@@ -115,6 +120,7 @@ struct Options {
     out: Option<PathBuf>,
     base: Option<String>,
     locales: Vec<String>,
+    render: Option<WebRender>,
     prerender: Option<WebPrerender>,
     no_hooks: bool,
     lib_dir: Option<PathBuf>,
@@ -131,6 +137,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
         out: None,
         base: None,
         locales: Vec::new(),
+        render: None,
         prerender: None,
         no_hooks: false,
         lib_dir: None,
@@ -160,16 +167,23 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
             "--out" => options.out = Some(PathBuf::from(value("--out")?)),
             "--base" => options.base = Some(value("--base")?),
             "--locale" => options.locales.push(value("--locale")?),
+            "--render" => {
+                let mode = value("--render")?;
+                options.render = Some(match mode.as_str() {
+                    "static" => WebRender::Static,
+                    "csr" => WebRender::Csr,
+                    other => {
+                        return Err(format!(
+                            "unknown --render mode `{other}` (expected static or csr)"
+                        ));
+                    }
+                });
+            }
             "--prerender" => {
                 let mode = value("--prerender")?;
                 options.prerender = Some(match mode.as_str() {
                     "seeds" => WebPrerender::Seeds,
                     "none" => WebPrerender::None,
-                    "run" => {
-                        return Err(
-                            "--prerender run is not implemented yet; use seeds or none".to_string()
-                        );
-                    }
                     other => {
                         return Err(format!(
                             "unknown --prerender mode `{other}` (expected seeds or none)"
@@ -258,6 +272,7 @@ fn build(options: &Options) -> Result<Report, String> {
         .clone()
         .or_else(|| cfg.web.base_path.clone())
         .unwrap_or_else(|| "/".to_string());
+    let render = options.render.unwrap_or(cfg.web.render);
     let prerender = options.prerender.unwrap_or(cfg.web.prerender);
 
     // Assets travel with the site, so every `<image src>` is rewritten from
@@ -275,14 +290,32 @@ fn build(options: &Options) -> Result<Report, String> {
     let entry = plan.entry_key.clone();
     check_links(&compiled.ir.root, &keys, &entry, &mut warnings);
 
-    let runtime = match crate::package_cli::locate_web_runtime(options.lib_dir.as_deref()) {
-        Ok(files) => Some(files),
-        Err(message) => {
-            warnings.push(format!(
-                "{message} The site is emitted without it: the pages read and their links \
-                 work, and nothing runs in the browser."
-            ));
+    // A static site was asked for files alone, so nothing is looked for and
+    // there is nothing to warn about. Under `csr` a missing runtime is still
+    // only a missing file: the pages are emitted the way a static site's are,
+    // and the build says which one it could not find.
+    let runtime = match render {
+        WebRender::Static => {
+            if options.lib_dir.is_some() {
+                warnings.push(
+                    "--lib-dir names a runtime for pages to load, and a static site loads none; \
+                     pass --render csr to use it"
+                        .to_string(),
+                );
+            }
             None
+        }
+        WebRender::Csr => {
+            match crate::package_cli::locate_web_runtime(options.lib_dir.as_deref()) {
+                Ok(files) => Some(files),
+                Err(message) => {
+                    warnings.push(format!(
+                        "{message} The site is emitted without it: the pages read and their links \
+                     work, and nothing runs in the browser."
+                    ));
+                    None
+                }
+            }
         }
     };
 
@@ -323,10 +356,13 @@ fn build(options: &Options) -> Result<Report, String> {
     std::fs::create_dir_all(&out).map_err(|e| format!("create {}: {e}", out.display()))?;
     // The compiled app the browser loads is the one with the site's asset
     // paths in it, so a node the runtime creates points where the emitted
-    // markup points.
-    crate::artifact::write(&out.join(DEFAULT_ARTIFACT_FILE), &compiled)
-        .map_err(|e| format!("write {}: {e}", out.join(DEFAULT_ARTIFACT_FILE).display()))?;
-    write_bytecode(&compiled, &out)?;
+    // markup points. A static site loads neither, and they are the two
+    // largest files a site would otherwise carry for nobody.
+    if web.runtime {
+        crate::artifact::write(&out.join(DEFAULT_ARTIFACT_FILE), &compiled)
+            .map_err(|e| format!("write {}: {e}", out.join(DEFAULT_ARTIFACT_FILE).display()))?;
+        write_bytecode(&compiled, &out)?;
+    }
 
     let seed = seed_values(&cfg, &compiled.ir.root, prerender);
     let mut pages_written = 0;

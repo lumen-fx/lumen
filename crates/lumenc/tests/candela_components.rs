@@ -98,10 +98,19 @@ fn settle(app: &mut App) {
 }
 
 /// The tree the fixture builds, whichever way it was loaded.
+///
+/// Everything a use site names is here, including the three the build could
+/// not stand in for: `settle` runs enough ticks for the script to fill them.
 const EXPECTED: &str = "\
 root
   column#stage
     label.home = home for bob
+    column.outer
+      label.inner = in x
+    label.inner = in y
+    label.shout = hey ann!
+    label.arm = on
+    label.arm = off
   column#app
     label.home = home for bob
     column.rows
@@ -183,6 +192,46 @@ fn a_missing_key_on_the_artifact_path_instantiates_nothing() {
     );
 }
 
+/// A marker the loaded program cannot fill leaves an empty element, which is
+/// the failure a reader would not notice. It is reported and the marker
+/// dropped, rather than retried every tick against a program that will never
+/// have it.
+#[test]
+fn a_marker_no_script_can_fill_is_reported_and_dropped() {
+    let _serial = isolate();
+    let dir = fixture();
+    let mut compiled = lumenc::compile_app(&dir).expect("the fixture compiles");
+    // Ship the artifact with a program that lost the functions its tree names,
+    // which is what a tampered or half-built artifact looks like.
+    let stripped = "import \"lumen.cdl\";\nfn main() {}\n";
+    compiled.script_source = stripped.to_string();
+    for script in &mut compiled.scripts {
+        script.source = stripped.to_string();
+        script.bytecode = None;
+    }
+    let bytes = lumen_ir::artifact::serialize(&compiled).expect("artifact serializes");
+
+    let opts = RunOptions::new(&dir).with_artifact_bytes(bytes);
+    let (mut app, _window) = build_headless_app(opts).expect("headless app");
+    settle(&mut app);
+
+    let tree = dump(&mut app);
+    assert!(
+        !tree.contains("hey ann!"),
+        "nothing filled the marker: {tree}"
+    );
+    assert!(
+        tree.contains("label.home = home for bob"),
+        "what the build baked is still there: {tree}"
+    );
+    let left = app
+        .world
+        .query::<&lumen_core::components::PendingFill>()
+        .iter(&app.world)
+        .count();
+    assert_eq!(left, 0, "the marker was dropped rather than retried");
+}
+
 /// The block a component element stands in leaves a slot, and the node the
 /// component returns takes the slot's place among its siblings.
 #[test]
@@ -201,25 +250,141 @@ fn a_component_fills_the_slot_it_left_behind() {
     assert!(home < rows, "children keep their source order: {tree}");
 }
 
-/// A child's instantiation reaches the applier before its parent's: candela
-/// evaluates the call's arguments first, so the command the child pushed is
-/// already in the sink when the parent's goes in.
+/// A component element is a use site in the fragment, not a call in the
+/// expansion. The build resolves it, so a block naming a component the build
+/// can stand in for expands to nothing but its own instantiation.
 #[test]
-fn a_child_is_instantiated_before_its_parent() {
+fn a_block_naming_a_component_expands_to_no_call() {
     let _serial = isolate();
     let dir = fixture();
     let source = std::fs::read_to_string(dir.join("main.cdl")).expect("read main.cdl");
     let index = lumen_script_candela::lmn::FnIndex::scan(&source);
     let body = "<column id=\"app\"><Home name=\"bob\"/></column>";
     let expansion = lumen_script_candela::lmn::expand(body, &index).expect("expands");
-    let child = expansion.find("Home(").expect("the child call");
-    let parent = expansion
-        .find("lumen::fragment_spawn")
-        .expect("the parent call");
     assert!(
-        parent < child,
-        "the child sits in the parent's argument list, so it runs first: {expansion}"
+        !expansion.contains("Home("),
+        "the component is a use site, not a call: {expansion}"
     );
+    assert!(
+        expansion.contains("lumen::fragment_spawn"),
+        "the block still instantiates itself: {expansion}"
+    );
+}
+
+/// Two levels deep with the prop forwarded down, and nothing to work out at
+/// either level, so the whole subtree is in the compiled tree.
+#[test]
+fn a_forwarded_prop_reaches_two_levels_down_at_build_time() {
+    let _serial = isolate();
+    let compiled = lumenc::compile_app(&fixture()).expect("the fixture compiles");
+    let stage = stage_of(&compiled.ir.root);
+    let outer = stage
+        .iter()
+        .find(|e| e.attrs.classes.iter().any(|c| c == "outer"))
+        .expect("the outer column is baked");
+    assert_eq!(
+        outer.children[0].attrs.text.as_deref(),
+        Some("in x"),
+        "the inner label is baked with the forwarded prop"
+    );
+    assert!(
+        outer.children[0].frag_use.is_none(),
+        "nothing is left for the script to fill"
+    );
+}
+
+/// A body that is one component element is a fragment whose root is that use
+/// site, so naming the enclosing function from markup reaches through it.
+#[test]
+fn a_pass_through_component_is_usable_from_markup() {
+    let _serial = isolate();
+    let (mut app, _window) = build_headless_app(RunOptions::new(fixture())).expect("headless app");
+    settle(&mut app);
+
+    let tree = dump(&mut app);
+    assert!(tree.contains("label.inner = in y"), "{tree}");
+}
+
+/// A component that works a value out is not baked whole: the build leaves a
+/// marker naming it, and the runtime fills that by calling the function.
+#[test]
+fn a_computing_component_is_filled_by_calling_it() {
+    let _serial = isolate();
+    let compiled = lumenc::compile_app(&fixture()).expect("the fixture compiles");
+    let marker = stage_of(&compiled.ir.root)
+        .iter()
+        .find_map(|e| e.frag_use.as_ref().filter(|u| u.key == "Shout"))
+        .expect("Shout stays in the tree as a marker");
+    assert_eq!(
+        marker.args,
+        [("who".to_string(), "ann".to_string())],
+        "the marker carries the argument in parameter order"
+    );
+
+    let (mut app, _window) = build_headless_app(RunOptions::new(fixture())).expect("headless app");
+    settle(&mut app);
+    assert!(
+        dump(&mut app).contains("label.shout = hey ann!"),
+        "the call worked the value out and filled the marker"
+    );
+}
+
+/// The whole tree is there on the first tick, filled parts included: the fill
+/// runs before the command applier, so what it builds lands on the tick it was
+/// mounted. Timing a reader can see, so it is pinned rather than described.
+#[test]
+fn the_tree_is_whole_on_the_first_tick() {
+    let _serial = isolate();
+    let (mut app, _window) = build_headless_app(RunOptions::new(fixture())).expect("headless app");
+    app.tick();
+    let stage: String = dump(&mut app)
+        .lines()
+        .skip_while(|line| line.trim() != "column#stage")
+        .take_while(|line| line.starts_with("    ") || line.trim() == "column#stage")
+        .map(|line| format!("{}\n", line.trim()))
+        .collect();
+    assert_eq!(
+        stage,
+        "column#stage\n\
+         label.home = home for bob\n\
+         column.outer\n\
+         label.inner = in x\n\
+         label.inner = in y\n\
+         label.shout = hey ann!\n\
+         label.arm = on\n\
+         label.arm = off\n"
+    );
+}
+
+/// Both arms of a conditional component are compiled; the call picks which one
+/// is used, so the same component renders differently per use site.
+#[test]
+fn a_conditional_component_picks_each_arm_from_markup() {
+    let _serial = isolate();
+    let compiled = lumenc::compile_app(&fixture()).expect("the fixture compiles");
+    let arms = compiled
+        .fragments
+        .iter()
+        .filter(|(_, f)| f.components.iter().any(|c| c.name == "Pick"))
+        .count();
+    assert_eq!(arms, 2, "both arms travel in the artifact");
+
+    let (mut app, _window) = build_headless_app(RunOptions::new(fixture())).expect("headless app");
+    settle(&mut app);
+    let tree = dump(&mut app);
+    assert!(tree.contains("label.arm = on"), "{tree}");
+    assert!(tree.contains("label.arm = off"), "{tree}");
+}
+
+/// The children of the fixture's `#stage`, which is where its markup use
+/// sites are written.
+fn stage_of(root: &lumen_ir::layout_ir::Element) -> &[lumen_ir::layout_ir::Element] {
+    &root
+        .children
+        .iter()
+        .find(|e| e.attrs.id.as_deref() == Some("stage"))
+        .expect("the fixture has a stage")
+        .children
 }
 
 /// A `<for>` inside a block reads the record from the reconciler and the
@@ -305,26 +470,62 @@ fn check(name: &str, markup: &str, script: &str) -> Result<(), String> {
     result
 }
 
-/// Markup inlines the block a component returns, so a function that returns
-/// more than one has nothing to inline. The compiler says so instead of
-/// picking a branch.
+/// A component naming a prop the function does not declare reaches nothing,
+/// so the build says which parameters it has instead.
 #[test]
-fn a_component_with_two_blocks_cannot_be_used_from_markup() {
+fn a_prop_naming_no_parameter_is_refused_at_a_markup_use_site() {
     let _serial = isolate();
     let err = check(
-        "two_blocks",
-        "<root><column id=\"app\"><Toggle on=\"yes\"/></column>\
+        "bad_prop",
+        "<root><column id=\"app\"><Shout title=\"x\"/></column>\
          <script src=\"main.cdl\"/></root>",
         "import \"lumen.cdl\";\n\
-         fn Toggle(on) {\n\
-             if on == \"yes\" { return lmn!(<label text=\"on\"/>); }\n\
-             return lmn!(<label text=\"off\"/>);\n\
+         fn Shout(who) {\n\
+             let loud = who;\n\
+             return lmn!(<label text=\"$loud\"/>);\n\
          }\n\
          fn main() {}\n",
     )
-    .expect_err("Toggle has no single block to inline");
-    assert!(err.contains("Toggle"), "{err}");
-    assert!(err.contains("single `return lmn!(...)`"), "{err}");
+    .expect_err("Shout has no parameter `title`");
+    assert!(err.contains("Shout"), "{err}");
+    assert!(err.contains("title"), "{err}");
+    assert!(err.contains("who"), "{err}");
+}
+
+/// A component that reaches itself, directly or through another, would build
+/// forever. Rejected when the table is built, not discovered at run time, and
+/// named the way the author wrote it rather than by content key.
+#[test]
+fn a_component_cycle_is_rejected_at_build_time() {
+    let _serial = isolate();
+    let err = check(
+        "cycle",
+        "<root><column id=\"app\"><Outer/></column><script src=\"main.cdl\"/></root>",
+        "import \"lumen.cdl\";\n\
+         fn Inner() { return lmn!(<column><Outer/></column>); }\n\
+         fn Outer() { return lmn!(<column><Inner/></column>); }\n\
+         fn main() {}\n",
+    )
+    .expect_err("Outer reaches itself");
+    assert!(err.contains("instantiates itself"), "{err}");
+    assert!(err.contains("Outer -> Inner -> Outer"), "{err}");
+}
+
+/// The same cycle through a component that has to run would recurse while the
+/// app is running rather than while it is building. Rejected just the same.
+#[test]
+fn a_cycle_through_a_component_that_runs_is_rejected_too() {
+    let _serial = isolate();
+    let err = check(
+        "cycle_running",
+        "<root><column id=\"app\"><Outer/></column><script src=\"main.cdl\"/></root>",
+        "import \"lumen.cdl\";\n\
+         fn Inner() { let x = 1; return lmn!(<column><Outer/></column>); }\n\
+         fn Outer() { return lmn!(<column><Inner/></column>); }\n\
+         fn main() {}\n",
+    )
+    .expect_err("Outer reaches itself");
+    assert!(err.contains("instantiates itself"), "{err}");
 }
 
 /// A `<template>` and a candela component claiming one name leaves a use site

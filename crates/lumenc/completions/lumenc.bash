@@ -47,6 +47,10 @@ _lumenc() {
             mapfile -t COMPREPLY < <(compgen -W "primary secondary middle" -- "$cur")
             return
             ;;
+        "web --render")
+            mapfile -t COMPREPLY < <(compgen -W "static csr" -- "$cur")
+            return
+            ;;
         "web --prerender")
             mapfile -t COMPREPLY < <(compgen -W "seeds none" -- "$cur")
             return
@@ -89,7 +93,7 @@ _lumenc() {
         lint) flags="--css-cascade --signals --strict --json --port --app" ;;
         diff) flags="--json --port --app" ;;
         screenshot) flags="--highlight --lint --bounds --port --app" ;;
-        web) flags="--out --base --locale --prerender --no-hooks --lib-dir --strict --serve --port" ;;
+        web) flags="--out --base --locale --render --prerender --no-hooks --lib-dir --strict --serve --port" ;;
         bundle) flags="--static --no-hooks" ;;
         package) flags="--name --target --lib-dir --no-hooks" ;;
         i18n) flags="--lang" ;;

@@ -144,6 +144,9 @@ pub enum ScriptSet {
     /// [`fire_on_ready`]: the once-per-mount `on_ready` dispatch, per host.
     /// Registered by the embedder, not by [`ScriptPlugin`].
     Ready,
+    /// [`fill_components`]: the use sites the build left for the script.
+    /// Registered by the embedder, not by [`ScriptPlugin`].
+    Fill,
     /// The embedder's DOM-event propagation
     /// ([`crate::dom_events::dispatch_pointer_and_key_events`] and
     /// [`crate::dom_events::dispatch_state_events`]), per host.
@@ -438,6 +441,109 @@ pub fn tick_script<H: ScriptHost + Resource<Mutability = Mutable>>(
 ) {
     for c in host.drain_commands() {
         events.write(ScriptCommandEvent(c));
+    }
+}
+
+/// Fill every use site the build could not finish by calling the function it
+/// names and putting the node that call returns in the marker's place.
+///
+/// A component element names a script function. Where instantiating the block
+/// that function returns is the same as calling it, the build already put the
+/// block in the tree and no marker was left. Where the function has to run,
+/// because it works a value out or picks between blocks, the build left one
+/// element carrying [`PendingFill`] and this is what runs it.
+///
+/// The call's own commands go out first, so the subtree it built exists by the
+/// time the replacement names it; the reserved token the host minted resolves
+/// inside the same batch. The marker is dropped on the way, so a filled site
+/// fills once.
+///
+/// Every tick rather than once: a subtree spawned while the app runs can carry
+/// a marker of its own.
+///
+/// Only the host that compiles markup blocks runs this, because that is the
+/// only host a marker can name a function in. A function it does not declare
+/// is a program that failed to load or an artifact that lost it: reported once
+/// and the marker dropped, rather than retried against a program that will
+/// never have it. Loud, because what it leaves behind is an empty element,
+/// which is exactly what a reader would not notice.
+pub fn fill_components<H: ScriptHost + Resource<Mutability = Mutable>>(
+    mut host: ResMut<H>,
+    pending: Query<(Entity, &lumen_core::components::PendingFill)>,
+    // Function names already complained about, so a tree that keeps spawning
+    // the same unfillable use site says it once. One host fills, so this
+    // needs no sharing.
+    mut reported: Local<std::collections::HashSet<String>>,
+    mut commands: Commands,
+    mut events: MessageWriter<ScriptCommandEvent>,
+) {
+    if !H::FILLS_COMPONENTS {
+        return;
+    }
+    for (entity, fill) in &pending {
+        let args: Vec<ScriptValue> = fill
+            .args
+            .iter()
+            .map(|value| ScriptValue::Str(value.clone()))
+            .collect();
+        let outcome = match host.call(&fill.function, &args) {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                eprintln!(
+                    "{}: component {} failed: {e}",
+                    prefix(host.lang()),
+                    fill.function
+                );
+                commands
+                    .entity(entity)
+                    .remove::<lumen_core::components::PendingFill>();
+                continue;
+            }
+        };
+        if !outcome.found {
+            if reported.insert(fill.function.clone()) {
+                eprintln!(
+                    "{}: component {} is named in the tree but the loaded program does not \
+                     declare it; nothing was built there",
+                    prefix(host.lang()),
+                    fill.function
+                );
+            }
+            commands
+                .entity(entity)
+                .remove::<lumen_core::components::PendingFill>();
+            continue;
+        }
+        for c in outcome.commands {
+            events.write(ScriptCommandEvent(c));
+        }
+        if let Some(new) = outcome.ret.as_ref().and_then(node_of) {
+            events.write(ScriptCommandEvent(ScriptCommand::ReplaceWith {
+                old: lumen_core::node::NodeHandle::new(entity).pack(),
+                new,
+            }));
+        } else {
+            eprintln!(
+                "{}: component {} returned no node; a component returns one lmn! block",
+                prefix(host.lang()),
+                fill.function
+            );
+        }
+        commands
+            .entity(entity)
+            .remove::<lumen_core::components::PendingFill>();
+    }
+}
+
+/// The packed node a component's return value names, if it names one.
+///
+/// A host that cannot carry a 64-bit handle returns the interned id instead,
+/// which is what the node side-table resolves; the result may be a reserved
+/// spawn token, which the applier maps inside the batch it arrived in.
+fn node_of(value: &ScriptValue) -> Option<u64> {
+    match value {
+        ScriptValue::I64(id) => lumen_core::node::resolve_node_raw(i32::try_from(*id).ok()?),
+        _ => None,
     }
 }
 

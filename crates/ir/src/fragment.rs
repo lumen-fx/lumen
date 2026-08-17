@@ -45,21 +45,29 @@ pub enum FragmentKind {
 
 /// A candela function name that reaches a fragment.
 ///
-/// A candela function returns an `lmn!` block, and markup names that function
-/// as a tag. Markup is compiled with no script host in the loop, so the use
-/// site instantiates the block the function returns instead of calling it,
-/// which means the name has to reach the fragment the block declared.
+/// A candela function returns an `lmn!` block, and a use site names that
+/// function as a tag. Nothing parses markup while an app runs, so the tree a
+/// use site stands for is baked before the app starts; `inlinable` is whether
+/// baking it is the whole story.
 ///
-/// `inlinable` is whether it can. A function whose body is one
-/// `return lmn!(...)` has a single block to stand in for the call; a function
-/// with several blocks, or one that returns a block conditionally, has none,
-/// and the name is kept anyway so a use site naming it gets that message
-/// rather than "unknown tag".
+/// It is set when instantiating the fragment is the same as calling the
+/// function: the block is the function's whole body, and every value the block
+/// reads is one the caller passed. The build then puts the body at the use
+/// site and the subtree is there from the first frame.
+///
+/// It is clear when the function has to run, because it works a value out or
+/// picks between blocks. Every block it may return is compiled just the same;
+/// what stands at the use site is a marker the runtime fills on the first tick,
+/// by calling the function with [`params`](Self::params) and putting the node
+/// it returns in the marker's place.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FragmentComponent {
-    /// The candela function's name, as markup writes it.
+    /// The candela function's name, as a use site writes it.
     pub name: String,
-    /// Whether markup can instantiate the block through this name.
+    /// The function's parameters, in declaration order. A use site binds props
+    /// by name; a call passes them in this order.
+    pub params: Vec<String>,
+    /// Whether the baked body is what the call would have returned.
     pub inlinable: bool,
 }
 
@@ -204,12 +212,11 @@ impl FragmentTable {
         self.fragments.values_mut()
     }
 
-    /// The fragment a candela component name reaches, with whether markup can
-    /// inline it.
+    /// The fragment a candela component name reaches, with whether the baked
+    /// body is what calling the function would have returned.
     ///
     /// A name no component carries yields `None`, which the caller reports as
-    /// an unknown tag; a name carried by a function with no single block
-    /// yields `false`, which the caller reports against that function.
+    /// an unknown tag.
     pub fn by_component(&self, name: &str) -> Option<(&Fragment, bool)> {
         self.fragments.values().find_map(|fragment| {
             fragment
@@ -217,6 +224,19 @@ impl FragmentTable {
                 .iter()
                 .find(|component| component.name == name)
                 .map(|component| (fragment, component.inlinable))
+        })
+    }
+
+    /// The candela component a use site naming `name` reaches.
+    ///
+    /// A function that has to run is reached by name alone, so this answers
+    /// without reference to the block it happens to be attached to.
+    pub fn component(&self, name: &str) -> Option<&FragmentComponent> {
+        self.fragments.values().find_map(|fragment| {
+            fragment
+                .components
+                .iter()
+                .find(|component| component.name == name)
         })
     }
 
@@ -400,6 +420,7 @@ mod tests {
         fragment.kind = FragmentKind::Markup;
         fragment.components.push(FragmentComponent {
             name: "Home".to_string(),
+            params: Vec::new(),
             inlinable: true,
         });
         table.insert(fragment).expect("first declaration");
@@ -421,6 +442,7 @@ mod tests {
             let mut fragment = fragment("shared", "hi", vec![origin("main.cdl", 3)]);
             fragment.components.push(FragmentComponent {
                 name: name.to_string(),
+                params: Vec::new(),
                 inlinable: true,
             });
             table.insert(fragment).expect("the same body merges");
