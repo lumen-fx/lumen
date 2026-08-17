@@ -270,6 +270,19 @@ impl Target {
         }
     }
 
+    /// File name of the engine a Rust app links, as its own build produces it.
+    /// Distinct from [`Self::lib_name`], which is the C library an app opens:
+    /// the two are different crate targets and cannot share a file name.
+    fn linked_engine_name(self) -> &'static str {
+        match self.os {
+            Os::Macos => "liblumen_engine.dylib",
+            // Windows never reaches here - see `copy_linked_engine` - but the
+            // name is the one cargo would write.
+            Os::Windows => "lumen_engine.dll",
+            Os::Linux => "liblumen_engine.so",
+        }
+    }
+
     /// The Rust target triple for this platform, for an SDK app whose own
     /// toolchain does the cross-compiling.
     fn rust_triple(self) -> &'static str {
@@ -470,13 +483,16 @@ fn unknown_target(name: &str) -> ExitCode {
 /// Build an SDK app with its own toolchain, then assemble the same folder
 /// shape around what that build produced. Returns the summary to print.
 ///
-/// Every kind ships the shared Lumen library beside its executable, because
-/// every kind reaches the engine through it: C++ and Python call the C ABI,
-/// and a Rust app links the same library rather than compiling the engine into
-/// itself. A Rust app additionally carries the shared Rust standard library,
-/// which is the other half of linking the engine dynamically. All three read
-/// their markup, stylesheet, and scripts at run time, so unlike a markup app
-/// those files travel.
+/// How each kind reaches the engine decides what travels beside its
+/// executable. A C++ or Python app opens the shared C library, so that library
+/// comes from the toolchain and is copied in. A Rust app links the engine
+/// instead, and its own build already produced the library it linked, so that
+/// one travels along with the standard library both were compiled against.
+/// Windows is the exception: no linkable engine exists there, so a Rust app
+/// carries the runtime inside itself and needs nothing beside it.
+///
+/// All three read their markup, stylesheet, and scripts at run time, so unlike
+/// a markup app those files travel.
 fn package_sdk(
     src: &Path,
     out: &Path,
@@ -496,12 +512,13 @@ fn package_sdk(
     let exe_path = out.join(target.exe_name(app_name));
     copy_executable(&built, &exe_path)?;
 
-    let toolchain = locate_toolchain(target, lib_dir)?;
-    // A Rust app links the engine, so the copy of the standard library it
-    // compiled against has to be the engine's own; every other kind opens the
-    // engine through the C ABI and only needs whichever copy the engine wants.
-    let check_app_compiler = kind == AppKind::Rust;
-    copy_engine_libraries(out, target, &toolchain, check_app_compiler)?;
+    let carried = if kind == AppKind::Rust {
+        copy_linked_engine(&built, out, target)?
+    } else {
+        let toolchain = locate_toolchain(target, lib_dir)?;
+        copy_c_engine(out, target, &toolchain)?;
+        1
+    };
 
     // The freezer's own scratch directories sit under the output so they never
     // touch the app; the package itself has no use for them.
@@ -511,117 +528,80 @@ fn package_sdk(
 
     let copied = copy_app_files(src, out, CopyRules::sdk(kind))?;
     Ok(format!(
-        "wrote {} from the {} build ({} app file{} beside it, with the runtime library)",
+        "wrote {} from the {} build ({} app file{} beside it, {})",
         exe_path.display(),
         language_of(kind),
         copied,
         if copied == 1 { "" } else { "s" },
+        match carried {
+            0 => "runtime linked in".to_string(),
+            n => format!("with {n} shared librar{}", if n == 1 { "y" } else { "ies" }),
+        },
     ))
 }
 
-/// Copy the two shared libraries every packaged app runs on: the engine, and
-/// the Rust standard library the engine was built against.
+/// Copy the shared engine a Rust app just linked, and the standard library
+/// they share, out of the app's own build. Returns how many files travelled.
 ///
-/// The engine is a Rust library, and a Rust library links the standard library
-/// as a file of its own rather than absorbing it. That file is named after the
-/// compiler that produced it, so it cannot be assumed to exist on the machine
-/// the app lands on and travels with the app instead.
-///
-/// `match_app_compiler` is set when the app itself is Rust, which is the case
-/// where the two have to be the same copy rather than merely present.
-fn copy_engine_libraries(
-    out: &Path,
-    target: Target,
-    toolchain: &Toolchain,
-    match_app_compiler: bool,
-) -> Result<(), String> {
-    let lib_dest = out.join(target.lib_name());
-    std::fs::copy(&toolchain.lib, &lib_dest).map_err(|e| {
-        format!(
-            "copy {} -> {}: {e}",
-            toolchain.lib.display(),
-            lib_dest.display()
-        )
-    })?;
+/// Neither comes from an installed toolchain: cargo built the engine as part
+/// of building the app, so the copy that belongs in the package is that one,
+/// produced by the same compiler as the executable beside it. On Windows the
+/// engine is inside the executable and there is nothing to copy.
+fn copy_linked_engine(built: &Path, out: &Path, target: Target) -> Result<usize, String> {
+    if target.os == Os::Windows {
+        return Ok(0);
+    }
+    let engine = target.linked_engine_name();
+    // Beside the executable for an ordinary binary; one level up for an
+    // example, which cargo writes into a subdirectory of the same profile.
+    let from = [built.parent(), built.parent().and_then(Path::parent)]
+        .into_iter()
+        .flatten()
+        .map(|dir| dir.join(engine))
+        .find(|p| p.is_file())
+        .ok_or_else(|| {
+            format!(
+                "the build produced no {engine} beside {}. A Rust app links the engine, so \
+                 the library has to come out of the same build as the executable.",
+                built.display()
+            )
+        })?;
+    std::fs::copy(&from, out.join(engine))
+        .map_err(|e| format!("copy {} -> {}: {e}", from.display(), out.display()))?;
 
-    let Some(std_lib) = shared_std_library(target, &toolchain.lib, match_app_compiler)? else {
-        return Ok(());
-    };
-    let dest = out.join(std_lib.file_name().unwrap_or_default());
-    std::fs::copy(&std_lib, &dest)
-        .map_err(|e| format!("copy {} -> {}: {e}", std_lib.display(), dest.display()))
-        .map(|_| ())
+    let mut carried = 1;
+    if let Some(std_lib) = local_shared_std(target)? {
+        let dest = out.join(std_lib.file_name().unwrap_or_default());
+        std::fs::copy(&std_lib, &dest)
+            .map_err(|e| format!("copy {} -> {}: {e}", std_lib.display(), dest.display()))?;
+        carried += 1;
+    }
+    Ok(carried)
 }
 
-/// The shared Rust standard library a packaged app ships beside the engine,
-/// or `None` when it needs none.
-///
-/// The engine is a Rust library, so a copy of the standard library is a file
-/// it depends on rather than something absorbed into it, and that file carries
-/// the identity of the compiler that produced it in its name. The copy that
-/// belongs in the package is therefore the engine's own, found beside it.
-///
-/// `match_app_compiler` is set when the app is Rust and so links the engine
-/// rather than opening it. Then the two have to be the same copy, and the
-/// compiler about to build the app is asked which one it produces: a mismatch
-/// would assemble a folder that does not start, so it is reported instead.
-fn shared_std_library(
-    target: Target,
-    engine_lib: &Path,
-    match_app_compiler: bool,
-) -> Result<Option<PathBuf>, String> {
-    let (prefix, ext) = match target.os {
-        Os::Windows => ("std-", "dll"),
-        Os::Macos => ("libstd-", "dylib"),
-        Os::Linux => ("libstd-", "so"),
-    };
-    let beside_engine = engine_lib
-        .parent()
-        .and_then(|dir| find_shared_std(dir, prefix, ext));
-
-    if !match_app_compiler {
-        return match beside_engine {
-            Some(found) => Ok(Some(found)),
-            // No copy beside it means one of two things, and neither needs a
-            // file here: an engine that carries the standard library inside
-            // itself, or one built here, where the compiler that produced it
-            // is this machine's and its copy is already on the loader's path.
-            // Reaching for another platform's copy through this machine's
-            // compiler would be neither.
-            None if target != Target::host() => Ok(None),
-            None => Ok(local_shared_std(target, prefix, ext)?),
-        };
-    }
-
-    let from_compiler = local_shared_std(target, prefix, ext)?.ok_or_else(|| {
-        format!(
-            "the Rust compiler here has no shared standard library for {}. A Rust app \
-             links the engine, which needs one.",
-            target.name
-        )
-    })?;
-    match beside_engine {
-        Some(wanted) if wanted.file_name() != from_compiler.file_name() => Err(format!(
-            "{} was built against {}, and the compiler here produces {}. A Rust app and \
-             the engine it links share one standard library, so both have to come from \
-             the same compiler: build the app with the Rust version this Lumen release \
-             was built with (rust-toolchain.toml in the Lumen source names it).",
-            engine_lib.display(),
-            wanted.file_name().unwrap_or_default().to_string_lossy(),
-            from_compiler
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy(),
-        )),
-        Some(wanted) => Ok(Some(wanted)),
-        None => Ok(Some(from_compiler)),
-    }
+/// Copy the shared C library an app opens at run time, from the toolchain.
+fn copy_c_engine(out: &Path, target: Target, toolchain: &Toolchain) -> Result<(), String> {
+    let lib_dest = out.join(target.lib_name());
+    std::fs::copy(&toolchain.lib, &lib_dest)
+        .map(|_| ())
+        .map_err(|e| {
+            format!(
+                "copy {} -> {}: {e}",
+                toolchain.lib.display(),
+                lib_dest.display()
+            )
+        })
 }
 
 /// The shared standard library this machine's Rust compiler holds for
 /// `target`, asking `rustc` where its own target libraries live rather than
 /// guessing at a sysroot layout.
-fn local_shared_std(target: Target, prefix: &str, ext: &str) -> Result<Option<PathBuf>, String> {
+fn local_shared_std(target: Target) -> Result<Option<PathBuf>, String> {
+    let (prefix, ext) = match target.os {
+        Os::Windows => ("std-", "dll"),
+        Os::Macos => ("libstd-", "dylib"),
+        Os::Linux => ("libstd-", "so"),
+    };
     let mut command = std::process::Command::new("rustc");
     command.arg("--print").arg("target-libdir");
     if target != Target::host() {
@@ -949,7 +929,7 @@ fn package(
         }
     }
 
-    copy_engine_libraries(out, target, &toolchain, false)?;
+    copy_c_engine(out, target, &toolchain)?;
 
     let copied = copy_app_files(src, out, CopyRules::markup())?;
 

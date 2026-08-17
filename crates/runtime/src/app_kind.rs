@@ -265,17 +265,22 @@ fn rust_specs(dir: &Path, mode: Mode) -> Vec<CommandSpec> {
 }
 
 /// The environment a Rust app is compiled in so that it links the shared Lumen
-/// library instead of compiling a copy of the engine into itself.
+/// engine instead of compiling a copy of it into itself.
 ///
 /// Two flags do it. `-C prefer-dynamic` tells the compiler to take the shared
-/// form of a crate wherever one exists, which is what makes the app pick
-/// `liblumen` over the static library beside it; it also applies to the Rust
+/// form of a crate wherever one exists, which is what makes the app pick the
+/// engine library over the static one beside it; it also applies to the Rust
 /// standard library, so the app and the engine end up sharing one copy of that
-/// too rather than each carrying its own. The second flag adds the app's own
+/// too rather than each carrying its own. The second adds the app's own
 /// directory to the list the loader searches, so the shared libraries sitting
 /// beside a packaged executable are found without a `LD_LIBRARY_PATH` in front
-/// of it. Windows already searches the executable's directory and needs
-/// nothing.
+/// of it.
+///
+/// Windows gets neither, and the returned environment is empty there. No
+/// linkable engine is built for it - a shared library exporting a graph this
+/// large is past what its import-library format can describe - so a Rust app
+/// on Windows carries the runtime inside its own binary, which is what the
+/// absence of these flags produces.
 ///
 /// `target` is a Rust target triple to cross-compile for, or `None` for this
 /// machine. Anything already in `RUSTFLAGS` is kept and these are added after
@@ -286,12 +291,11 @@ pub fn rust_dynamic_env(target: Option<&str>) -> Vec<(String, String)> {
         Some(triple) => (triple.contains("apple"), triple.contains("windows")),
         None => (cfg!(target_os = "macos"), cfg!(target_os = "windows")),
     };
-    let mut flags = String::from("-C prefer-dynamic");
-    if is_macos {
-        flags.push_str(" -C link-arg=-Wl,-rpath,@loader_path");
-    } else if !is_windows {
-        flags.push_str(" -C link-arg=-Wl,-rpath,$ORIGIN");
+    if is_windows {
+        return Vec::new();
     }
+    let rpath = if is_macos { "@loader_path" } else { "$ORIGIN" };
+    let flags = format!("-C prefer-dynamic -C link-arg=-Wl,-rpath,{rpath}");
     let combined = match std::env::var("RUSTFLAGS") {
         Ok(existing) if !existing.trim().is_empty() => format!("{existing} {flags}"),
         _ => flags,

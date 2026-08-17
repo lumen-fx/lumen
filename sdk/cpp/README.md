@@ -96,8 +96,6 @@ accordingly.
 
 - A C++17 compiler (tested with g++ and clang++).
 - The Lumen C library, `liblumen`, built as a shared library or a static one.
-  The shared build is a Rust `dylib`, so a copy of the shared Rust standard
-  library sits beside it and has to stay there.
 
 Build the C library from the workspace root:
 

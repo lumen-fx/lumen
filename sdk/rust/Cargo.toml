@@ -14,12 +14,20 @@ categories = ["gui"]
 # The engine, and the SDK's only Lumen dependency. Everything the SDK is
 # written against - the runtime, the ECS app, the DOM surface, the widget
 # trait, the parser, `bevy_ecs` itself - is reached through `lumen::sdk`
-# rather than depended on again here, so an app built with `-C prefer-dynamic`
-# links one shared library and gets exactly one copy of each of them. A second
-# direct dependency would compile a second copy, and two copies of, say,
-# `lumen-core` are two different types to the compiler with two different
-# signal stores behind them.
+# rather than depended on again here, so an app gets exactly one copy of each
+# of them. A second direct dependency would compile a second copy, and two
+# copies of, say, `lumen-core` are two different types to the compiler with
+# two different signal stores behind them.
 lumen = { path = "../.." }
+
+# The same engine, in the form an app can link instead of compile in. Naming
+# it is what puts the shared library in the app's link graph; `-C
+# prefer-dynamic`, which `lumenc build` and `lumenc package` pass, is what
+# makes the app take that form rather than the static one. Windows is left out
+# because its linker cannot produce the library at all (see
+# crates/dylib/Cargo.toml), so a Rust app there links the engine in.
+[target.'cfg(not(windows))'.dependencies]
+lumen-dylib = { path = "../../crates/dylib" }
 
 [features]
 default = ["host-rhai"]

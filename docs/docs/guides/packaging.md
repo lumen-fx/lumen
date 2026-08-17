@@ -22,9 +22,8 @@ same relative paths your markup names them by. Copy that folder to another
 machine, run the executable, and the app starts. Nobody needs Lumen installed,
 and nobody needs a compiler.
 
-Two shared libraries sit in the folder next to the executable: the Lumen
-runtime, and the Rust standard library it was built against. Both belong to
-the app; keep them together when you move it.
+The Lumen runtime library sits in the folder next to the executable. It
+belongs to the app; keep the two together when you move it.
 
 Choose the name and the destination yourself:
 
@@ -257,9 +256,10 @@ Every kind produces an executable, and the runtime library goes beside it, the
 same as for a markup app. How the executable is produced is what differs:
 
 - **Rust.** `cargo build --release` runs, and the binary it reports is copied
-  in under your app's name. A Rust app links the runtime library rather than
-  compiling a copy of the engine into itself, so the executable is small and
-  the engine is the file beside it.
+  in under your app's name. On Linux and macOS a Rust app links the engine
+  rather than compiling a copy into itself, so the executable is small and the
+  engine travels beside it, out of the same build. On Windows the runtime is
+  inside the executable and nothing travels with it.
 - **C++.** CMake configures and builds, and the executable from the build tree
   is copied in. If the project builds more than one executable, the most recent
   one is packaged and the others are named on the way past; give the app its
@@ -288,12 +288,10 @@ building this machine's binary under another platform's name. A Python app is
 frozen against the interpreter doing the freezing and can only be packaged for
 the platform you are on.
 
-A cross-packaged Rust app has one extra requirement. The app links the engine
-as a Rust library, and two Rust binaries only link together when the same
-compiler built them, so the app has to be built with the Rust version that
-built the Lumen release you are packaging against. When it is not, packaging
-stops and names both versions rather than writing a folder that would not
-start.
+A Rust app needs nothing from the release channel: the engine it links comes
+out of its own cargo build, so `rustup target add` is the whole requirement.
+The other kinds open the C library, and that one is fetched for the platform
+you asked for.
 
 Every flag on every command here is in the [CLI
 reference](../reference/cli.md).

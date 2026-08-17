@@ -149,8 +149,7 @@ completion for `Model` fields, `Signal[T]`, and the `App` methods.
 ## Requirements
 
 - Python 3.9+ (stdlib `ctypes` only).
-- The Lumen C library, `liblumen`. It is a Rust `dylib`, so a copy of the
-  shared Rust standard library sits beside it and has to stay there.
+- The Lumen C library, `liblumen`, built as a shared library.
 - `App.run()` opens an OS window and a GPU surface. For CI or a no-display
   environment, `App.run_headless(ticks)` drives the full app (scripts,
   bindings, `<for>` and `<if>` reconciliation, and `watch` firing) for a

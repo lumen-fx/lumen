@@ -21,16 +21,13 @@ publish = false
 # stub, and the C++/Python SDKs all look for `liblumen.{so,dylib}` /
 # `lumen.dll`. Renaming this renames all of them.
 name = "lumen"
-# `dylib` rather than `cdylib`, so the one shared library serves both seams.
-# A Rust dylib still exports its `#[unsafe(no_mangle)] extern "C"` symbols, so
-# every C caller (the launcher, the C++ and Python SDKs) opens it exactly as
-# before; on top of that it carries Rust metadata, which is what lets the Rust
-# SDK link the engine instead of compiling its own copy. An app picks the
-# dynamic form by building with `-C prefer-dynamic`; without that flag cargo
-# takes the `lib` (rlib) and links statically, which is what `bundle --static`
-# and the workspace's own tests want. cargo rejects `dylib` and `cdylib` on
-# one target, so this is a choice, not an addition.
-crate-type = ["lib", "dylib", "staticlib"]
+# `cdylib` is the C seam: it exports the `extern "C"` surface and nothing else,
+# which is what the launcher and the C++ and Python SDKs open. The Rust SDK
+# needs a library carrying Rust metadata instead, and that is a second crate
+# type on one target, which cargo does not allow - so it lives in its own
+# crate, `crates/dylib`. See the note there for why it is not a member of this
+# workspace.
+crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 lumen-core = { path = "crates/core", version = "0.0.3" }
@@ -130,6 +127,10 @@ members = [
     "crates/script/*",
     "sdk/rust",
 ]
+# The linkable engine is built through the Rust SDK's own dependency on it, on
+# the platforms whose linker can produce one. Listing it here would build it on
+# Windows too, where it cannot link. See crates/dylib/Cargo.toml.
+exclude = ["crates/dylib"]
 
 [workspace.package]
 version = "0.0.3"
