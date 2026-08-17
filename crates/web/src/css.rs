@@ -24,6 +24,7 @@ use lumen_ir::css::{
     Origin, Rule, Specificity, Stylesheet, media_query_to_css, palette_root_css, selector_to_web,
 };
 
+use crate::markup::MarkupSheet;
 use crate::spec::CssMode;
 
 /// The stylesheet every emitted site starts with: the browser defaults
@@ -31,26 +32,79 @@ use crate::spec::CssMode;
 /// rather than into CSS.
 pub const RESET_CSS: &str = include_str!("reset.css");
 
+/// The layers the file declares, weakest first.
+///
+/// A normal declaration in no layer at all beats one in any layer, whatever
+/// the selectors weigh. That is what puts a style written on an element above
+/// the stylesheet without `!important`, and `!important` is what an author
+/// needs left free to animate: a declaration marked important cannot be
+/// overridden by `:hover`, a media query or a keyframe.
+const LAYER_ORDER: &str = "@layer lumen.reset, lumen.sheet;\n";
+
 /// The whole `styles.css` for a site.
 ///
 /// In [`CssMode::Computed`] the file is the reset alone: the elements
 /// carry what the cascade resolved as inline styles instead, and a second
 /// copy of the rules would only argue with them.
-pub fn styles_css(sheet: Option<&Stylesheet>, mode: CssMode) -> String {
-    let mut out = String::from(RESET_CSS);
+pub fn styles_css(sheet: Option<&Stylesheet>, markup: &MarkupSheet, mode: CssMode) -> String {
+    let mut out = String::from(LAYER_ORDER);
+    layer(&mut out, "lumen.reset", RESET_CSS);
     if mode == CssMode::Computed {
         return out;
     }
-    let Some(sheet) = sheet else {
-        return out;
-    };
-    if palette_missing(sheet) {
-        out.push('\n');
-        out.push_str(&palette_root_css());
+    if let Some(sheet) = sheet {
+        let mut authored = String::new();
+        if palette_missing(sheet) {
+            authored.push_str(&palette_root_css());
+            authored.push('\n');
+        }
+        authored.push_str(&rules_css(sheet));
+        layer(&mut out, "lumen.sheet", &authored);
     }
-    out.push('\n');
-    out.push_str(&rules_css(sheet));
+    out.push_str(&markup_css(markup));
     out
+}
+
+/// Wrap `body` in `@layer <name>`.
+fn layer(out: &mut String, name: &str, body: &str) {
+    out.push_str("@layer ");
+    out.push_str(name);
+    out.push_str(" {\n");
+    out.push_str(body);
+    if !body.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str("}\n");
+}
+
+/// The rules lifted off the elements, written in no layer so they outrank
+/// the stylesheet.
+fn markup_css(markup: &MarkupSheet) -> String {
+    let mut out = String::new();
+    for (class, rules) in markup.iter() {
+        write_decls(&mut out, &format!(".{class}"), &rules.base);
+        for (pseudo, decls) in &rules.states {
+            write_decls(&mut out, &format!(".{class}{pseudo}"), decls);
+        }
+    }
+    out
+}
+
+/// One rule, or nothing when it would declare nothing.
+fn write_decls(out: &mut String, selector: &str, decls: &[WebDecl]) {
+    if decls.is_empty() {
+        return;
+    }
+    out.push_str(selector);
+    out.push_str(" {\n");
+    for decl in decls {
+        out.push_str("  ");
+        out.push_str(&decl.name);
+        out.push_str(": ");
+        out.push_str(&decl.value);
+        out.push_str(";\n");
+    }
+    out.push_str("}\n");
 }
 
 /// What a sheet's own custom properties leave the emitter unable to write
@@ -383,11 +437,31 @@ mod tests {
 
     #[test]
     fn the_reset_is_the_whole_file_in_computed_mode() {
-        assert_eq!(styles_css(None, CssMode::Computed), RESET_CSS);
+        let emitted = styles_css(None, &MarkupSheet::default(), CssMode::Computed);
+        assert_eq!(
+            emitted,
+            format!("{LAYER_ORDER}@layer lumen.reset {{\n{RESET_CSS}}}\n")
+        );
     }
 
     #[test]
     fn a_site_with_no_stylesheet_still_gets_the_reset() {
-        assert_eq!(styles_css(None, CssMode::Sheet), RESET_CSS);
+        let emitted = styles_css(None, &MarkupSheet::default(), CssMode::Sheet);
+        assert!(emitted.contains("box-sizing: border-box"), "{emitted}");
+    }
+
+    #[test]
+    fn the_file_names_its_layers_before_it_fills_them() {
+        let emitted = styles_css(None, &MarkupSheet::default(), CssMode::Sheet);
+        let order = emitted
+            .find("@layer lumen.reset,")
+            .expect("the layer order");
+        let reset = emitted
+            .find("@layer lumen.reset {")
+            .expect("the reset layer");
+        assert!(
+            order < reset,
+            "a layer used before it is named takes the order it was used in:\n{emitted}"
+        );
     }
 }

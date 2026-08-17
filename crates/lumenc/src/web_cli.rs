@@ -353,6 +353,16 @@ fn build(options: &Options) -> Result<Report, String> {
         ..WebSpec::default()
     };
 
+    // A style written on an element becomes a class and a rule, and the class
+    // goes into the tree before the artifact is written: a row the browser
+    // builds later is spawned from this tree, so it arrives already wearing
+    // the class the stylesheet declares. In `computed` mode the cascade is
+    // already resolved onto each element, so there is nothing to lift.
+    let markup = match web.css_mode {
+        CssMode::Computed => lumen_web::MarkupSheet::default(),
+        CssMode::Sheet => lumen_web::lift_markup_styles(&mut compiled.ir.root),
+    };
+
     std::fs::create_dir_all(&out).map_err(|e| format!("create {}: {e}", out.display()))?;
     // The compiled app the browser loads is the one with the site's asset
     // paths in it, so a node the runtime creates points where the emitted
@@ -380,6 +390,7 @@ fn build(options: &Options) -> Result<Report, String> {
                 ..LocaleSpec::new(locale.clone())
             },
             assets: assets.clone(),
+            markup: markup.clone(),
         };
         let ir = translated_ir(&compiled.ir, dir, locale, &mut warnings)?;
         for key in &keys {

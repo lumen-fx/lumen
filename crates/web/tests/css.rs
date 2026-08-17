@@ -5,7 +5,9 @@ use lumen_ir::css::{
     Stylesheet, parse_selector_list,
 };
 use lumen_ir::layout_ir::{Attributes, Element, LayoutIR};
-use lumen_web::{CssMode, LocaleSpec, PageSpec, SiteSpec, WebSpec, emit, rules_css, styles_css};
+use lumen_web::{
+    CssMode, LocaleSpec, MarkupSheet, PageSpec, SiteSpec, WebSpec, emit, rules_css, styles_css,
+};
 
 fn rule(selectors: &str, decls: &[(&str, &str)]) -> Rule {
     Rule {
@@ -282,7 +284,7 @@ fn a_knob_measured_in_pixels_is_written_as_a_length() {
 
 #[test]
 fn the_reset_draws_the_parts_a_control_has_no_element_for() {
-    let emitted = styles_css(None, CssMode::Sheet);
+    let emitted = styles_css(None, &MarkupSheet::default(), CssMode::Sheet);
     // The knob a `<toggle>` and a `<switch>` are painted with, from the same
     // properties the desktop reads.
     assert!(emitted.contains("var(--lm-knob-color"), "{emitted}");
@@ -313,7 +315,7 @@ fn emitting_twice_writes_the_same_bytes() {
 #[test]
 fn the_palette_is_written_once_and_only_when_it_is_missing() {
     let bare = sheet(vec![rule("button", &[("bg", "#0a3358")])]);
-    let emitted = styles_css(Some(&bare), CssMode::Sheet);
+    let emitted = styles_css(Some(&bare), &MarkupSheet::default(), CssMode::Sheet);
     assert!(
         emitted.contains(&lumen_ir::css::palette_root_css()),
         "a stylesheet with no palette gets one:\n{emitted}"
@@ -332,7 +334,7 @@ fn the_palette_is_written_once_and_only_when_it_is_missing() {
                 .collect::<Vec<_>>(),
         )],
     };
-    let emitted = styles_css(Some(&carried), CssMode::Sheet);
+    let emitted = styles_css(Some(&carried), &MarkupSheet::default(), CssMode::Sheet);
     assert!(
         !emitted.contains(&lumen_ir::css::palette_root_css()),
         "a stylesheet that already carries the palette does not get a second:\n{emitted}"
@@ -344,9 +346,13 @@ fn the_palette_is_written_once_and_only_when_it_is_missing() {
 fn the_reset_comes_before_anything_the_app_says() {
     let emitted = styles_css(
         Some(&sheet(vec![rule("button", &[("bg", "#0a3358")])])),
+        &MarkupSheet::default(),
         CssMode::Sheet,
     );
-    assert!(emitted.starts_with("/*"), "{emitted}");
+    assert!(
+        emitted.starts_with("@layer lumen.reset, lumen.sheet;"),
+        "{emitted}"
+    );
     let reset = emitted.find("box-sizing: border-box").expect("the reset");
     let app = emitted.find("#0a3358").expect("the app's own rule");
     assert!(reset < app, "{emitted}");
@@ -382,6 +388,7 @@ fn site(mode: CssMode) -> SiteSpec {
         },
         locale: LocaleSpec::new("en-US"),
         assets: Vec::new(),
+        markup: MarkupSheet::default(),
     }
 }
 

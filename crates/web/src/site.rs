@@ -58,7 +58,7 @@ pub fn emit(spec: &SiteSpec) -> Result<Site, EmitError> {
     if spec.locale.is_root() {
         files.push(OutputFile::new(
             spec.web.css.clone(),
-            css::styles_css(stylesheet(spec), spec.web.css_mode),
+            css::styles_css(stylesheet(spec), &spec.markup, spec.web.css_mode),
         ));
         warnings.extend(css::token_warnings(stylesheet(spec), spec.web.css_mode));
         // The manifest is what the runtime reads to find everything else, so
@@ -230,6 +230,7 @@ pub fn manifest(spec: &SiteSpec) -> Manifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::markup::MarkupSheet;
     use crate::spec::{LocaleSpec, WebSpec};
     use lumen_html::contract::NavigationMode;
     use lumen_ir::layout_ir::LayoutIR;
@@ -248,6 +249,7 @@ mod tests {
             },
             locale: LocaleSpec::new("ar-EG"),
             assets: Vec::new(),
+            markup: MarkupSheet::default(),
         }
     }
 

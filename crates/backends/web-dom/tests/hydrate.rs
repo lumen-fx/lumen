@@ -587,3 +587,103 @@ fn a_two_element_row_body_adopts_both_elements_of_every_row() {
         Some("two")
     );
 }
+
+/// A style written on an element outranks a rule that targets it, which is
+/// what Lumen does and what a browser does not do on its own.
+///
+/// The whole point of writing these as rules rather than inline is that
+/// `!important` stays free for the author, so this asserts the ranking in a
+/// real browser rather than trusting the layer rules to read the way they
+/// look. A styled row is built by the runtime, not by the emitter, so the
+/// second assertion is that a class carried in the IR reaches a node the page
+/// never contained.
+#[wasm_bindgen_test]
+fn a_style_on_an_element_beats_a_rule_that_targets_it() {
+    let mut tile = element("tile", None, Vec::new());
+    tile.attrs.classes = vec!["card".to_string()];
+    tile.attrs.markup_styles = vec![("bg".to_string(), "#00ff00".to_string())];
+    let mut ir = LayoutIR {
+        root: element("root", None, vec![tile]),
+        ..LayoutIR::default()
+    };
+    ir.combined_stylesheet = Some(authored_sheet());
+
+    let markup = lumen_web::lift_markup_styles(&mut ir.root);
+    let lifted = ir.root.children[0].attrs.classes.clone();
+    assert_eq!(lifted.len(), 2, "the class the author wrote, then ours");
+
+    let mut page = PageSpec::new("index", ir.clone());
+    page.signals = SignalEnv::new();
+    let spec = SiteSpec {
+        pages: vec![page],
+        web: WebSpec {
+            runtime: false,
+            ..WebSpec::default()
+        },
+        markup,
+        ..SiteSpec::default()
+    };
+    let css = lumen_web::styles_css(
+        ir.combined_stylesheet.as_ref(),
+        &spec.markup,
+        lumen_web::CssMode::Sheet,
+    );
+
+    let document = web_sys::window().unwrap().document().unwrap();
+    let style = document.create_element("style").unwrap();
+    style.set_text_content(Some(&css));
+    document.body().unwrap().append_child(&style).unwrap();
+
+    let mut warnings = Vec::new();
+    let html =
+        lumen_web::html::emit_tree(&spec.pages[0], &spec, &mut warnings).expect("the tree emits");
+    let host = document.create_element("div").unwrap();
+    host.set_inner_html(&html);
+    document.body().unwrap().append_child(&host).unwrap();
+
+    let tile = host
+        .query_selector(".lm-tile")
+        .unwrap()
+        .expect("the emitter wrote the tile");
+    assert_eq!(
+        background_of(&tile),
+        "rgb(0, 255, 0)",
+        "the stylesheet's red should have lost to the green written on the element"
+    );
+    assert!(
+        !css.contains("!important"),
+        "the ranking comes from the layers, so important stays the author's to spend"
+    );
+
+    style.remove();
+    host.remove();
+}
+
+/// A stylesheet that paints every tile red, which the element overrides.
+fn authored_sheet() -> lumen_ir::css::Stylesheet {
+    lumen_ir::css::Stylesheet {
+        rules: vec![lumen_ir::css::Rule {
+            selectors: lumen_ir::css::parse_selector_list("tile").expect("selectors parse"),
+            declarations: vec![lumen_ir::css::Declaration {
+                name: "bg".to_string(),
+                value: "#ff0000".to_string(),
+                important: false,
+            }],
+            origin: lumen_ir::css::Origin::Author,
+            source_order: 0,
+            media: None,
+            selector: Default::default(),
+        }],
+    }
+}
+
+/// What the browser resolved an element's background to.
+fn background_of(element: &Element) -> String {
+    web_sys::window()
+        .unwrap()
+        .get_computed_style(element)
+        .unwrap()
+        .expect("the element is in the document")
+        .get_property_value("background-color")
+        .unwrap()
+}

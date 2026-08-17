@@ -58,4 +58,4 @@ wasm-bindgen-test.workspace = true
 # A test raises an event the way the browser raises it, which takes a
 # dictionary nothing in the crate itself constructs. Naming it here keeps it
 # out of the module a page loads.
-web-sys = { workspace = true, features = ["EventInit"] }
+web-sys = { workspace = true, features = ["CssStyleDeclaration", "EventInit"] }

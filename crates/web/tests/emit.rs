@@ -9,7 +9,8 @@ use lumen_ir::layout_ir::{
     Attributes, Element, FragmentUse, IfModeSpec, InterpolationSlot, LayoutIR,
 };
 use lumen_web::{
-    EmitError, HostRewrite, LocaleSpec, PageSpec, SignalEnv, Site, SiteSpec, WebSpec, emit,
+    EmitError, HostRewrite, LocaleSpec, MarkupSheet, PageSpec, SignalEnv, Site, SiteSpec, WebSpec,
+    emit,
 };
 
 fn element(tag: &str, attrs: Attributes, children: Vec<Element>) -> Element {
@@ -67,6 +68,7 @@ fn site(pages: Vec<PageSpec>) -> SiteSpec {
         },
         locale: LocaleSpec::new("en-US"),
         assets: Vec::new(),
+        markup: MarkupSheet::default(),
     }
 }
 
@@ -311,30 +313,76 @@ fn a_void_element_has_no_end_tag() {
 
 #[test]
 fn a_style_written_in_markup_outranks_the_stylesheet() {
-    let page = PageSpec::new(
-        "index",
-        ir(element(
-            "root",
-            Attributes::default(),
-            vec![element(
-                "tile",
-                Attributes {
-                    markup_styles: vec![
-                        ("bg".into(), "#101014".into()),
-                        ("gap".into(), "8".into()),
-                    ],
-                    ..Attributes::default()
-                },
-                Vec::new(),
-            )],
-        )),
+    let mut tree = element(
+        "root",
+        Attributes::default(),
+        vec![element(
+            "tile",
+            Attributes {
+                markup_styles: vec![("bg".into(), "#101014".into()), ("gap".into(), "8".into())],
+                ..Attributes::default()
+            },
+            Vec::new(),
+        )],
     );
-    let html = page_html(&site(vec![page]), "index.html");
+    let markup = lumen_web::lift_markup_styles(&mut tree);
+    let class = tree.children[0].attrs.classes[0].clone();
+
+    let mut spec = site(vec![PageSpec::new("index", ir(tree))]);
+    spec.markup = markup;
+    let emitted = emitted(&spec);
+
+    let html = emitted
+        .file("index.html")
+        .expect("the page is emitted")
+        .contents
+        .clone();
     assert!(
-        html.contains(r#"style="background: #101014 !important; gap: 8px !important;""#),
+        html.contains(&format!(r#"class="lm-tile {class}""#)),
         "{html}"
     );
+    assert!(
+        !html.contains("!important"),
+        "an important declaration cannot be animated or overridden by a state:\n{html}"
+    );
     assert_well_formed(&html);
+
+    let css = emitted
+        .file(&spec.web.css)
+        .expect("styles.css is emitted")
+        .contents
+        .clone();
+    let rule = css.find(&format!(".{class} {{")).expect("the lifted rule");
+    let sheet = css.find("@layer lumen.sheet").unwrap_or(0);
+    assert!(
+        rule > sheet,
+        "the rule is written after the layers, so it sits in none of them:\n{css}"
+    );
+    assert!(css[rule..].contains("background: #101014;"), "{css}");
+    assert!(css[rule..].contains("gap: 8px;"), "{css}");
+}
+
+#[test]
+fn a_state_written_in_markup_reaches_the_stylesheet() {
+    let mut tree = element(
+        "root",
+        Attributes {
+            markup_styles: vec![("hover-bg".into(), "#222".into())],
+            ..Attributes::default()
+        },
+        Vec::new(),
+    );
+    let markup = lumen_web::lift_markup_styles(&mut tree);
+    let class = tree.attrs.classes[0].clone();
+
+    let mut spec = site(vec![PageSpec::new("index", ir(tree))]);
+    spec.markup = markup;
+    let css = emitted(&spec)
+        .file(&spec.web.css)
+        .expect("styles.css is emitted")
+        .contents
+        .clone();
+    assert!(css.contains(&format!(".{class}:hover {{")), "{css}");
 }
 
 #[test]
