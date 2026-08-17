@@ -42,3 +42,9 @@ crate-type = ["lib", "dylib"]
 
 [dependencies]
 lumen = { path = "../.." }
+
+[features]
+# Passed straight through to the engine. The Rust SDK reaches the engine only
+# through this crate on the platforms where it is built, so a feature it
+# cannot forward is a feature an app cannot turn on.
+host-rhai = ["lumen/host-rhai"]

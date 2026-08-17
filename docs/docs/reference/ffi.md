@@ -424,11 +424,11 @@ through the C ABI: it links the runtime directly and exposes it in its native
 ECS shape, so a handler is an ordinary `bevy_ecs` system scheduled beside the
 framework's own.
 
-`lumenui` depends on the `lumen` library and nothing else of Lumen's, and
-re-exports everything an app writes against. That is what lets a packaged Rust
-app link the shared library beside it instead of compiling the engine into
-itself: one copy of each Lumen type exists, the one inside the library, so a
-signal set through the SDK and one set by a script are the same signal.
+`lumenui` has exactly one Lumen dependency - the engine - and re-exports
+everything an app writes against. That is what lets a packaged Rust app link
+the shared library beside it instead of compiling the engine into itself: one
+copy of each Lumen type exists, the one inside the library, so a signal set
+through the SDK and one set by a script are the same signal.
 
 ### Linking the engine
 

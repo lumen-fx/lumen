@@ -10,31 +10,36 @@ description = "Lumen UI framework Rust SDK: the single dependency for building a
 keywords = ["ui", "gui", "framework", "desktop", "sdk"]
 categories = ["gui"]
 
-[dependencies]
-# The engine, and the SDK's only Lumen dependency. Everything the SDK is
-# written against - the runtime, the ECS app, the DOM surface, the widget
-# trait, the parser, `bevy_ecs` itself - is reached through `lumen::sdk`
-# rather than depended on again here, so an app gets exactly one copy of each
-# of them. A second direct dependency would compile a second copy, and two
-# copies of, say, `lumen-core` are two different types to the compiler with
-# two different signal stores behind them.
-lumen = { path = "../.." }
-
-# The same engine, in the form an app can link instead of compile in. Naming
-# it is what puts the shared library in the app's link graph; `-C
-# prefer-dynamic`, which `lumenc build` and `lumenc package` pass, is what
-# makes the app take that form rather than the static one. Windows is left out
-# because its linker cannot produce the library at all (see
-# crates/dylib/Cargo.toml), so a Rust app there links the engine in.
+# One dependency, and it is the engine: everything the SDK is written against
+# - the runtime, the ECS app, the DOM surface, the widget trait, the parser,
+# `bevy_ecs` itself - is reached through it rather than depended on again, so
+# an app gets exactly one copy of each. A second path to any of them would
+# compile a second copy, and two copies of, say, `lumen-core` are two
+# different types to the compiler with two different signal stores behind
+# them.
+#
+# Which engine differs by platform, and only by which form of the library it
+# is. `lumen-dylib` is the form an app links instead of compiling in; naming
+# it is what puts the shared library in the app's link graph, and
+# `-C prefer-dynamic`, which `lumenc build` and `lumenc package` pass, is what
+# makes the app take that form rather than the static one. Windows has no such
+# crate - its linker cannot produce the library at all, see
+# crates/dylib/Cargo.toml - so there the engine crate is named directly and a
+# Rust app links the runtime in.
 [target.'cfg(not(windows))'.dependencies]
 lumen-dylib = { path = "../../crates/dylib" }
+
+[target.'cfg(windows)'.dependencies]
+lumen = { path = "../.." }
 
 [features]
 default = ["host-rhai"]
 # The `AppBuilder::rhai_extension` passthrough, which takes a `rhai::Engine`
 # and so binds to one host. `AppBuilder::native_fn` exposes a function to
-# every host the app runs and needs no feature.
-host-rhai = ["lumen/host-rhai"]
+# every host the app runs and needs no feature. Forwarded to whichever of the
+# two the platform carries; the one it does not is not in the graph, and a
+# feature naming an absent dependency is ignored rather than an error.
+host-rhai = ["lumen-dylib/host-rhai", "lumen/host-rhai"]
 
 [dev-dependencies]
 # Tests construct `ClickEvent { position: Vec2, .. }` directly.
