@@ -191,7 +191,7 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   the shared `liblumen` plus a static library. That shared form is a `cdylib`:
   it exports the `extern "C"` surface and nothing else, which is what the
   launcher and the C++ and Python SDKs open.
-- **lumen-dylib** (in `crates/dylib`): the same engine built as a Rust `dylib`,
+- **lumen-dylib** (in `sdk/rust/dylib`): the same engine built as a Rust `dylib`,
   which carries Rust metadata and so can be *linked* rather than opened. One
   crate target cannot be both a `cdylib` and a `dylib`, hence two crates. It is
   deliberately not a workspace member: a `dylib` exports the whole crate graph,
