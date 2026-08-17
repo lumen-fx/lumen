@@ -2,7 +2,9 @@
 #
 # Lives beside the Rust SDK because the SDK is its only consumer: nothing else
 # links the engine, and everything under crates/ is a piece of the engine
-# rather than a form of it.
+# rather than a form of it. Beside it rather than inside it: a workspace cannot
+# exclude a directory that sits within one of its members, because the member
+# owns its whole subtree, and being excluded is the point.
 #
 # Deliberately NOT a member of the workspace, and reached only through a
 # `cfg(not(windows))` dependency in the SDK. Both facts are load-bearing:
@@ -17,6 +19,15 @@
 #
 # `version`, `edition` and the rest are spelled out rather than inherited,
 # because a package outside the workspace cannot inherit from it.
+# Its own workspace root as well as being excluded from the one above. The
+# exclusion is what keeps it out of `cargo build --workspace`; this table is
+# what answers a tool that walks path dependencies and resolves this manifest
+# on its own (`cargo fmt --all`), which would otherwise keep searching upwards
+# for a workspace that claims it. Safe only because nothing above this
+# directory is a workspace member - inside a member's subtree the two roots
+# collide.
+[workspace]
+
 [package]
 name = "lumen-dylib"
 version = "0.0.3"
@@ -40,7 +51,7 @@ name = "lumen_engine"
 crate-type = ["lib", "dylib"]
 
 [dependencies]
-lumen = { path = "../../.." }
+lumen = { path = "../.." }
 
 [features]
 # Passed straight through to the engine. The Rust SDK reaches the engine only

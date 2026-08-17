@@ -433,7 +433,7 @@ through the SDK and one set by a script are the same signal.
 ### Linking the engine
 
 A Rust app does not open the C library. It links the engine as a Rust library,
-which is a separate build of the same code: `sdk/rust/dylib`, whose output is
+which is a separate build of the same code: `sdk/rust-dylib`, whose output is
 `liblumen_engine.{so,dylib}`. The C library exports the `extern "C"` surface
 and nothing else, and one crate cannot produce both forms, so they are two
 crates.
