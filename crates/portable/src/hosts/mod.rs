@@ -27,14 +27,14 @@ use lumen_core::prelude::App;
 use lumen_script::{ScriptError, ScriptHost, ScriptValue};
 
 /// Every engine name this build has a host for.
-pub(crate) const COMPILED_ENGINES: &[&str] = &[
+pub const COMPILED_ENGINES: &[&str] = &[
     #[cfg(feature = "host-candela")]
     candela::ENGINE,
 ];
 
 /// The app declared an engine no compiled-in host answers for.
 #[derive(Debug)]
-pub(crate) struct UnknownEngine(String);
+pub struct UnknownEngine(String);
 
 impl fmt::Display for UnknownEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -53,24 +53,24 @@ impl fmt::Display for UnknownEngine {
 
 impl Error for UnknownEngine {}
 
-/// Reaching the installed host, in the terms the page asks in.
+/// Reaching the installed host, in the terms a caller asks in.
 ///
 /// Every entry resolves the host resource itself, so the app owns no borrow of
 /// it between calls.
-pub(crate) struct ScriptHostAccess {
+pub struct ScriptHostAccess {
     /// The value the script last wrote to a signal, from the host's mirror.
     pub signal: fn(&World, &str) -> Option<ScriptValue>,
     /// Call an exported function with no arguments, returning what it returned
     /// when the host has such a function.
     pub call: fn(&mut World, &str) -> Result<Option<ScriptValue>, ScriptError>,
-    /// The names the page may call.
+    /// The names a caller may call.
     pub exports: fn(&World) -> Vec<String>,
 }
 
 impl ScriptHostAccess {
     /// The table an app with no script answers through: every entry reports
     /// nothing rather than the caller having to ask whether there is a host.
-    pub(crate) fn absent() -> Self {
+    pub fn absent() -> Self {
         Self {
             signal: |_, _| None,
             call: |_, _| Err(ScriptError::Runtime("no script is loaded".to_owned())),
@@ -99,7 +99,7 @@ impl ScriptHostAccess {
 ///
 /// For a caller that installed the host as part of assembling an app and
 /// now wants to read through it.
-pub(crate) fn access(engine: &str) -> Option<ScriptHostAccess> {
+pub fn access(engine: &str) -> Option<ScriptHostAccess> {
     match engine {
         #[cfg(feature = "host-candela")]
         candela::ENGINE => Some(candela::access()),
@@ -109,7 +109,7 @@ pub(crate) fn access(engine: &str) -> Option<ScriptHostAccess> {
 
 /// Install the host that runs `engine` over `program`, the script in whatever
 /// form that engine loads. `uri` names the program in a load error.
-pub(crate) fn install(
+pub fn install(
     app: &mut App,
     engine: &str,
     program: &[u8],
@@ -172,7 +172,7 @@ mod tests {
 
         assert_eq!((access.signal)(&world, "greeting"), None);
         let Err(ScriptError::Runtime(message)) = (access.call)(&mut world, "bump") else {
-            panic!("calling into a world with no host resource is a failure the page can show");
+            panic!("calling into a world with no host resource is a failure a caller can show");
         };
         assert!(message.contains("no script is loaded"), "{message}");
     }

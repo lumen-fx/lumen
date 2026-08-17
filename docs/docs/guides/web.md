@@ -48,11 +48,20 @@ about as long as `lumenc build`.
 
 ## How a page reaches the browser
 
-The document holds the page as it looks on arrival. The runtime then adopts
-what is already there: it binds itself to the existing elements instead of
-building them again, so nothing moves when it starts. From then on the app
-behaves as it does on the desktop, and a row or a branch that appears later
-is built from the same compiled app the desktop reads.
+The document holds the page as it looks on arrival, including the rows of a
+list: a `<for>` over a list the build knows is written out row by row, with
+each row's values already substituted in, so a crawler and a reader with no
+scripting both get the list itself rather than an empty box. The runtime then
+adopts what is already there: it binds itself to the existing elements instead
+of building them again, so nothing moves when it starts. From then on the app
+behaves as it does on the desktop, and a row or a branch that appears later is
+built from the same compiled app the desktop reads.
+
+An app that starts from a different list than the one the page was built with
+is put right on the first frame: rows the app does not have are taken out of
+the page, and rows it has and the page does not are built. Neither is
+something to configure; it is what keeps a stale document from showing a row
+that is gone.
 
 Input comes from the browser and behaviour stays Lumen's. A click on a tab, a
 toggle or a checkbox reaches the same widget code a desktop app runs, and what
@@ -109,9 +118,38 @@ Which page a document shows is decided at build time. State comes from
 `[web.seed]` and from the defaults the markup declares; set `[web] prerender
 = "none"` to render the markup alone, with no branch taken and no rows.
 
-A browser that cannot run the runtime is not left with a blank page: a link is
-an ordinary `<a href>`, and following it loads the next document. That
-degraded mode needs no configuration.
+A list is state like any other, so `[web.seed]` can name its rows. Each row is
+a table of the fields the row template reads:
+
+```toml
+[[web.seed.todos]]
+id    = "1"
+title = "write it down"
+
+[[web.seed.todos]]
+id    = "2"
+title = "do it"
+```
+
+A `<for each="todos">` is then emitted with those two rows in it, and the app
+starts from the same list.
+
+## What the pages carry
+
+`[web] render` says whether the documents load the runtime. Both values write
+the whole markup tree, so what a reader and a crawler get does not change; what
+changes is what happens once the page is open.
+
+`csr`, the default, writes the runtime, the compiled app and the manifest
+beside the pages, and the pages load them. The runtime adopts the markup the
+page arrived with and runs the app from there.
+
+`static` writes the pages, the stylesheet and the assets, and nothing else. No
+runtime, no compiled app, no manifest, and no boot script in the documents.
+
+Either way a link is an ordinary `<a href>`, so a browser that does not run the
+runtime, or a site that carries none, follows links by loading the next
+document. That needs no configuration.
 
 ## Links and deep paths
 
@@ -201,13 +239,20 @@ means anything without an absolute address.
   reach the site.
 - A style written as an attribute for a state, such as `hover-bg`, is not
   applied. Write it as a CSS rule and it is.
-- A value bound with `bind-*`, or interpolated into text with `{name}`, is
-  written as the markup wrote it. The seeded value replaces it when the app
-  runs; a branch taken with `<if>` is decided at build time.
+- A value bound with `bind-*`, or interpolated into text with `{name}` outside
+  a list row, is written as the markup wrote it. The seeded value replaces it
+  when the app runs; a branch taken with `<if>` is decided at build time. A
+  placeholder inside a `<for>` row is different: it is resolved against the
+  row while the page is written.
 - Elements a script creates appear when the runtime starts, not in the
   document, so a crawler does not see them.
-- A list built with `<for>` emits its anchor and no rows; the rows are built
-  when the app runs.
+- A `<for virtualized="true">` emits no rows. Which rows a virtualized list
+  shows comes from how far its scroll container has been scrolled, which a
+  build cannot know, so the runtime mounts them when the page opens. The
+  build warns when it emits one.
+- A list whose rows only exist once a script has run is emitted empty, the way
+  every other piece of script-made state is. `[web.seed]` is how a list
+  reaches the document without anything running.
 - A script written in Rhai or Lua does not run in the browser. candela does.
   An app written in one of them is still emitted and still reads: the pages
   show the state they were built with, and nothing runs.

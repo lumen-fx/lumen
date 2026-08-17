@@ -90,7 +90,11 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// `6`: [`crate::fragment::Fragment`] gains `components`, the candela function
 /// names that reach a fragment, so a `.lmn` file can write a component as a
 /// tag.
-pub const FORMAT_VERSION: u16 = 6;
+///
+/// `7`: [`crate::fragment::FragmentComponent`] gains `params`, and a use site
+/// the build cannot stand in for stays in the tree as the marker a runtime
+/// call fills, so a component that works a value out is usable from markup.
+pub const FORMAT_VERSION: u16 = 7;
 
 /// The navigable page set of a compiled multi-page app.
 ///
@@ -316,6 +320,7 @@ mod tests {
                 kind: FragmentKind::Markup,
                 components: vec![crate::fragment::FragmentComponent {
                     name: "Badge".to_string(),
+                    params: vec!["tone".to_string()],
                     inlinable: true,
                 }],
             })

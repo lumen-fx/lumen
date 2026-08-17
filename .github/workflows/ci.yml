@@ -189,6 +189,7 @@ jobs:
             -p lumen-core \
             -p lumen-ir \
             -p lumen-html \
+            -p lumen-portable \
             -p lumen-scene \
             -p lumen-script \
             -p lumen-script-candela \

@@ -22,11 +22,9 @@ use lumen_script_candela::lmn;
 /// `uri` is where the source came from, and lands on each fragment's origin so
 /// a later collision can name the file and line.
 ///
-/// A block that is a single component element declares no fragment: it stands
-/// for that component's own call.
-///
 /// A block written as the whole body of a capitalized function carries that
-/// function's name, which is what lets markup write the function as a tag.
+/// function's name, which is what lets a use site write the function as a tag,
+/// and whether instantiating the block is the same as calling the function.
 ///
 /// # Errors
 ///
@@ -39,9 +37,6 @@ pub fn script_fragments(source: &str, uri: &str) -> Result<FragmentTable, String
         let at = region.body_start;
         let block = lmn::analyze(region.body)
             .map_err(|e| located(source, at + e.offset, uri, &e.message))?;
-        if block.lone_component {
-            continue;
-        }
         let (line, col) = crate::parser_html::line_col_of(source, at);
         let origin = FragmentOrigin {
             file: uri.to_string(),
@@ -55,9 +50,10 @@ pub fn script_fragments(source: &str, uri: &str) -> Result<FragmentTable, String
             origin,
         )
         .map_err(|e| located(source, at, uri, &render(&e)))?;
-        if let Some(component) = lmn::component_at(source, &region.span, &index) {
+        if let Some(component) = lmn::component_at(source, &region.span, &index, &block.args) {
             fragment.components.push(FragmentComponent {
                 name: component.name,
+                params: component.params,
                 inlinable: component.inlinable,
             });
         }
@@ -129,27 +125,50 @@ mod tests {
         assert!(fragment.params.is_empty());
     }
 
+    /// A component element is a use site in the body, which is what the build
+    /// resolves against the component it names.
     #[test]
-    fn a_component_leaves_a_slot_in_the_body() {
+    fn a_component_leaves_a_use_site_in_the_body() {
         let src = "fn App() { return lmn!(<column><Home/></column>); }";
         let table = script_fragments(src, "main.cdl").expect("extracts");
         let key = lmn::key_of("<column><Home/></column>");
         let fragment = table.get(&key).expect("the block is in the table");
-        assert_eq!(fragment.body[0].children.len(), 1);
+        let child = &fragment.body[0].children[0];
         assert_eq!(
-            fragment.body[0].children[0].attrs.slot_name.as_deref(),
-            Some(lmn::slot_name(0).as_str())
+            child.frag_use.as_ref().map(|u| u.key.as_str()),
+            Some("Home")
         );
     }
 
+    /// A body that is one component element is a fragment whose single root
+    /// is that use site, so the enclosing function is nameable like any other.
     #[test]
-    fn a_block_that_is_one_component_declares_nothing() {
+    fn a_block_that_is_one_component_declares_a_use_site() {
         let src = "fn App() { return lmn!(<Home name=\"bob\"/>); }";
-        assert!(
-            script_fragments(src, "main.cdl")
-                .expect("extracts")
-                .is_empty()
-        );
+        let table = script_fragments(src, "main.cdl").expect("extracts");
+        let fragment = table
+            .get(&lmn::key_of("<Home name=\"bob\"/>"))
+            .expect("the block is in the table");
+        let use_site = fragment.body[0].frag_use.as_ref().expect("a use site");
+        assert_eq!(use_site.key, "Home");
+        assert_eq!(use_site.args, [("name".to_string(), "bob".to_string())]);
+        assert!(table.by_component("App").is_some());
+    }
+
+    /// The block is the whole body and reads only parameters, so the build
+    /// can stand in for the call; a value the function works out cannot.
+    #[test]
+    fn a_component_records_whether_the_build_can_stand_in() {
+        let forwarded = "fn Home(name) { return lmn!(<label text=\"$name\"/>); }";
+        let table = script_fragments(forwarded, "main.cdl").expect("extracts");
+        let (_, inlinable) = table.by_component("Home").expect("Home");
+        assert!(inlinable);
+
+        let computed = "fn Home(n) { let u = n; return lmn!(<label text=\"$u\"/>); }";
+        let table = script_fragments(computed, "main.cdl").expect("extracts");
+        let (_, inlinable) = table.by_component("Home").expect("Home");
+        assert!(!inlinable);
+        assert_eq!(table.component("Home").expect("Home").params, ["n"]);
     }
 
     #[test]

@@ -537,10 +537,13 @@ A declaration is visible to the whole file, wherever it sits in it, to any
 file that includes that file, and app-wide in a multi-page app.
 
 The name of a candela component instantiates the same way: `<Home name="bob"/>`
-takes the `lmn!` block the function `Home` returns. The function's body has to
-be a single `return lmn!(...)`, since markup takes the block rather than
-calling the function. Component names and `<template>` names share one
-namespace, and two declarations claiming one name are an error. See
+takes the `lmn!` block the function `Home` returns. Any component can be named
+this way. Where the block is the function's whole body and reads only its
+parameters, the build puts it in the tree outright; where the function works a
+value out or picks between blocks, the build leaves a marker there and the
+runtime fills it by calling the function on the first tick. Component names and
+`<template>` names share one namespace, and two
+declarations claiming one name are an error. See
 [composition](../guides/composition.md#naming-a-component-from-markup).
 
 ### `<include>`

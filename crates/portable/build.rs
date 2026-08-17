@@ -1,24 +1,17 @@
-//! Compiles the browser test fixtures to `.cdlb` bytecode.
+//! Compiles the host test fixtures to `.cdlb` bytecode.
 //!
-//! The runtime this crate builds carries no compiler, so a test needs an image
-//! from somewhere. Producing it here, with the same `compile_bytecode` a
-//! `lumenc build` calls, means the artifact a browser loads is always the one
+//! The candela host this crate installs carries no compiler, so a test needs
+//! an image from somewhere. Producing it here, with the same `compile_bytecode`
+//! a `lumenc build` calls, means the artifact a host loads is always the one
 //! this toolchain emits: a candela artifact format bump breaks the test loudly
 //! instead of leaving a checked-in blob to rot.
 //!
 //! Build scripts are compiled and run for the host, so the compiler this links
-//! is never part of the wasm module.
-//!
-//! The sources are the ones `lumen-portable` keeps beside its host modules.
-//! The browser suite and the host suite must load the same programs, and one
-//! copy is how they stay the same.
+//! is never part of a shipped runtime.
 
 use std::env;
 use std::fs;
 use std::path::Path;
-
-/// Where the fixture sources live, relative to this package.
-const FIXTURE_DIR: &str = "../portable/fixtures";
 
 /// The fixtures, by source file stem. `unbound` compiles and fails to load,
 /// on purpose.
@@ -32,7 +25,7 @@ fn main() {
     }
     let out_dir = env::var("OUT_DIR").expect("cargo sets OUT_DIR");
     for stem in FIXTURES {
-        let source_path = Path::new(FIXTURE_DIR).join(format!("{stem}.cdl"));
+        let source_path = Path::new("fixtures").join(format!("{stem}.cdl"));
         println!("cargo::rerun-if-changed={}", source_path.display());
         let source = fs::read_to_string(&source_path)
             .unwrap_or_else(|e| panic!("reading {}: {e}", source_path.display()));

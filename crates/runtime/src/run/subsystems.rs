@@ -194,7 +194,7 @@ pub(crate) fn register_text(app: &mut App) -> Box<dyn TextShaper> {
 /// tooltip / tabs / transitions / validation / assets). The always-on stack.
 pub(crate) fn register_core(app: &mut App) {
     app.add_plugin(TaffyLayoutPlugin);
-    app.add_plugin(InputPlugin);
+    app.add_plugin(InputPlugin::default());
     // Accessibility: the world-side half, which walks the tree once per
     // tick in `TickStage::A11ySync` and leaves an update for whatever
     // platform bridge is listening. It runs headless too, so an app under

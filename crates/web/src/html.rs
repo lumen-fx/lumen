@@ -5,16 +5,18 @@
 //! where the markup had none, and the browser runtime that adopts the
 //! document would find a node the app does not have.
 //!
-//! A `<for>` block emits its anchor and nothing inside it. Its children are
-//! the row template, not content, and the rows themselves come from the
-//! state the page is rendered with, which the prerenderer supplies.
+//! A `<for>` block's children are the row template, never content. What goes
+//! inside it is one instance of that template per row of the array signal the
+//! page is rendered with, with the row's own values substituted in.
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use lumen_html::contract::{DATA_LM, DATA_LM_HIDDEN, DATA_LM_SELECTED, DIALOG_OPEN, NodePath};
 use lumen_html::style::{Emission, rewrite_property};
 use lumen_html::{escape_attr, escape_text, html_attrs, html_tag_for};
 use lumen_ir::css::computed_style_map;
+use lumen_ir::interpolate::{Scope, substitute_element};
 use lumen_ir::layout_ir::{Attributes, Element, IfModeSpec};
 
 use crate::error::EmitError;
@@ -34,10 +36,16 @@ struct Walk<'a> {
     keys: Vec<String>,
     entry: &'a str,
     seen: BTreeSet<String>,
+    /// Where the page could not be written the way the app meant it.
+    warnings: &'a mut Vec<String>,
 }
 
 /// Write the page's element tree, starting at the page root.
-pub fn emit_tree(page: &PageSpec, spec: &SiteSpec) -> Result<String, EmitError> {
+pub fn emit_tree(
+    page: &PageSpec,
+    spec: &SiteSpec,
+    warnings: &mut Vec<String>,
+) -> Result<String, EmitError> {
     let mut out = String::new();
     let base = urls::normalize_base(&spec.web.base_path);
     let mut walk = Walk {
@@ -49,6 +57,7 @@ pub fn emit_tree(page: &PageSpec, spec: &SiteSpec) -> Result<String, EmitError> 
         keys: spec.keys(),
         entry: &spec.web.entry,
         seen: BTreeSet::new(),
+        warnings,
     };
     emit_element(&mut out, &page.ir.root, &NodePath::root(), &mut walk)?;
     Ok(out)
@@ -167,10 +176,79 @@ fn emit_element(
         for (index, child) in element.children.iter().enumerate() {
             emit_element(out, child, &path.child(index as u32), walk)?;
         }
+    } else if element.tag == "for" {
+        emit_rows(out, element, path, walk)?;
     }
     out.push_str("</");
     out.push_str(tag.name);
     out.push('>');
+    Ok(())
+}
+
+/// Write one instance of a `<for>` block's row template per row of the array
+/// it iterates.
+///
+/// A row element's identity is its FLAT position in the block's child list,
+/// not the row number: the reconciler spawns one entity per template element
+/// per row as flat siblings, and the runtime numbers those siblings by
+/// position when it looks for the element each one belongs to. A block whose
+/// template is two elements therefore starts its second row at slot 2.
+///
+/// The rows are not put through the cascade again. The browser has its own
+/// over the same stylesheet, which is why the reconciler leaves a row
+/// unresolved in a page too.
+fn emit_rows(
+    out: &mut String,
+    element: &Element,
+    path: &NodePath,
+    walk: &mut Walk<'_>,
+) -> Result<(), EmitError> {
+    let Some(name) = &element.attrs.each else {
+        return Ok(());
+    };
+    // The signal environment outlives the walk, so reading the rows out of it
+    // does not stand in the way of writing the document.
+    let signals = walk.signals;
+    let Some(rows) = signals.rows(name).filter(|rows| !rows.is_empty()) else {
+        return Ok(());
+    };
+    let body = &element.children;
+    if body.is_empty() {
+        return Ok(());
+    }
+    // Which rows a virtualized block mounts comes from the offset of the
+    // `<scroll>` it sits in, which a build machine cannot know. A guessed
+    // prefix would be markup the runtime takes straight back out.
+    if element.attrs.virtualized {
+        walk.warnings.push(format!(
+            "page `{}`: the virtualized `<for each=\"{name}\">` is emitted with no rows, \
+             because which rows are in view is not known until the page is scrolled",
+            walk.page
+        ));
+        return Ok(());
+    }
+
+    let missing: RefCell<BTreeSet<String>> = RefCell::new(BTreeSet::new());
+    let report = |field: &str| {
+        missing.borrow_mut().insert(field.to_string());
+    };
+    for (index, item) in rows.iter().enumerate() {
+        let scope = Scope::new(signals)
+            .with_row(item, index)
+            .reporting_to(&report);
+        for (offset, template) in body.iter().enumerate() {
+            let slot = index * body.len() + offset;
+            let instance = substitute_element(template, &scope);
+            emit_element(out, &instance, &path.row(slot as u32), walk)?;
+        }
+    }
+    for field in missing.into_inner() {
+        walk.warnings.push(format!(
+            "page `{}`: `<for each=\"{name}\">` reads row field `{field}`, which its records do \
+             not carry; it renders empty",
+            walk.page
+        ));
+    }
     Ok(())
 }
 

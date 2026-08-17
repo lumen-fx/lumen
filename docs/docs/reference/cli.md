@@ -83,8 +83,8 @@ The check covers the markup, the stylesheet, and every script, including the
 `lmn!` markup blocks a candela script writes: a block with no single root, a
 component element the script declares no function for, or a prop naming a
 parameter that function does not have all fail here. So does markup naming a
-component it cannot instantiate: a function whose body is not a single
-`return lmn!(...)`, or a name a `<template>` already claims.
+component it cannot instantiate: a name no candela function declares, a name a
+`<template>` already claims, or a component that reaches itself.
 
 Every command that compiles markup from source (`check`, `run`, `build`,
 `package`) prints the parse-time findings to stderr as
@@ -125,15 +125,21 @@ Run the result with `lumenc run <dir> --artifact <out.lmna>`. See
 
 ```
 lumenc web <app_dir> [--out <dir>] [--base <path>] [--locale <tag>]...
-                     [--prerender seeds|none] [--no-hooks]
-                     [--lib-dir <dir>] [--strict] [--serve [--port <n>]]
+                     [--render static|csr] [--prerender seeds|none]
+                     [--no-hooks] [--lib-dir <dir>] [--strict]
+                     [--serve [--port <n>]]
 ```
 
 Emits the app as a static site. Compiles it exactly as `build` does, then
 writes one HTML document per page with the markup already in it, the
-stylesheet, the compiled app, the compiled candela program where there is one,
-the manifest the browser runtime reads, the browser runtime itself, and every
-file the markup points at. Prints how many pages it wrote and where.
+stylesheet, and every file the markup points at. Prints how many pages it
+wrote and where.
+
+Under `--render csr`, which is the default, it also writes the compiled app,
+the compiled candela program where there is one, the manifest the browser
+runtime reads, and the browser runtime itself, and the documents load them.
+Under `--render static` it writes none of those, and the documents carry the
+same markup with nothing to run it.
 
 Runs the app's `prebuild` hooks first unless `--no-hooks` is given.
 
@@ -146,6 +152,7 @@ what a static host serves for a path that has no document of its own.
 | `--out <dir>` | Where the site is written. Default: `[web] out_dir`, else `<app_dir>/dist/web`. |
 | `--base <path>` | URL prefix the site is served under. Default: `[web] base_path`, else `/`. |
 | `--locale <tag>` | Emit a document tree for this locale; repeat for more. The first is served from the site root and the rest from `/<tag>/`. Default: `[web] locales`. |
+| `--render static\|csr` | Whether the pages carry the browser runtime: `csr` loads it and runs the app, `static` is files alone. Both write the whole markup tree. Default: `[web] render`. |
 | `--prerender seeds\|none` | Where the state the pages are rendered with comes from: `seeds` uses `[web.seed]` and the defaults the markup declares, `none` renders the markup alone. Default: `[web] prerender`. |
 | `--no-hooks` | Skip the app's `prebuild` hooks. |
 | `--lib-dir <dir>` | Directory holding `lumen-web.wasm` and `lumen-web.js`, instead of the copy shipped with lumenc. |
@@ -163,8 +170,8 @@ image, host, locales - is `lumen.toml`'s `[web]` section. See
 [the web guide](../guides/web.md) and
 [`[web]`](lumen-toml.md#web).
 
-A missing `<app_dir>`, an unknown flag, or `--prerender run`, which is not
-implemented yet, exits 2. Only a markup app can be emitted as a site.
+A missing `<app_dir>`, an unknown flag, or a mode neither `--render` nor
+`--prerender` has exits 2. Only a markup app can be emitted as a site.
 
 ## package
 

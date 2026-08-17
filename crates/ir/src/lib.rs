@@ -10,6 +10,9 @@
 //!   Cascade-5 application / re-application logic. The hand-rolled front-end
 //!   that *parses* CSS text into a [`Stylesheet`](css::Stylesheet) still lives
 //!   in `lumenc::parser_css`; this crate owns the data + the cascade.
+//! - [`interpolate`] - the `{...}` placeholder resolver a `<for>` row and a
+//!   fragment instance are built with, shared by the runtime and the web
+//!   emitter so both write the same text.
 //! - [`fragment`] - [`Fragment`](fragment::Fragment), the named reusable
 //!   markup subtree, and the [`FragmentTable`](fragment::FragmentTable) an
 //!   app declares.
@@ -27,6 +30,7 @@ pub mod artifact;
 pub mod css;
 pub mod css_vars;
 pub mod fragment;
+pub mod interpolate;
 pub mod layout_ir;
 pub mod values;
 

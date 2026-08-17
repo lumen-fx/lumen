@@ -908,12 +908,26 @@ pub fn ancestor_scroll(
 /// previous tick have been applied) and before LayoutSync (so Transform is
 /// stable for the test - Transform changes propagate to ExtractedRect next
 /// tick anyway).
-pub struct InputPlugin;
+pub struct InputPlugin {
+    /// Install the OS clipboard, which copy and paste read and write through.
+    ///
+    /// The clipboard handle is `!Send`: the platform ties it to the thread
+    /// that opened it. An app that may be built, ticked or dropped on more
+    /// than one thread leaves it out, and copy and paste then move no text,
+    /// which is what a machine with no desktop session gives anyway.
+    pub clipboard: bool,
+}
+
+impl Default for InputPlugin {
+    fn default() -> Self {
+        Self { clipboard: true }
+    }
+}
 
 impl Plugin for InputPlugin {
     fn build(self, app: &mut App) {
         #[allow(deprecated)]
-        if let Some(cb) = ClipboardResource::try_new() {
+        if let Some(cb) = self.clipboard.then(ClipboardResource::try_new).flatten() {
             app.world.insert_non_send(cb);
         }
         app.add_systems(TickStage::Systems, hit_test);

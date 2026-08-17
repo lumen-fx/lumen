@@ -3752,6 +3752,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-portable"
+version = "0.0.3"
+dependencies = [
+ "bevy_ecs",
+ "lumen-core",
+ "lumen-html",
+ "lumen-input",
+ "lumen-ir",
+ "lumen-primitives",
+ "lumen-scene",
+ "lumen-script",
+ "lumen-script-candela",
+]
+
+[[package]]
 name = "lumen-primitives"
 version = "0.0.3"
 dependencies = [
@@ -3985,9 +4000,8 @@ dependencies = [
  "js-sys",
  "lumen-core",
  "lumen-html",
- "lumen-input",
  "lumen-ir",
- "lumen-primitives",
+ "lumen-portable",
  "lumen-scene",
  "lumen-script",
  "lumen-script-candela",

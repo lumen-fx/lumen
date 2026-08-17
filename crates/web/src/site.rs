@@ -48,12 +48,12 @@ pub fn emit(spec: &SiteSpec) -> Result<Site, EmitError> {
     for page in &spec.pages {
         files.push(OutputFile::new(
             format!("{prefix}{}", page.document(&spec.web.entry)),
-            document(page, spec)?,
+            document(page, spec, &mut warnings)?,
         ));
     }
     files.push(OutputFile::new(
         format!("{prefix}{NOT_FOUND_FILE}"),
-        shell(spec)?,
+        shell(spec, &mut warnings)?,
     ));
     if spec.locale.is_root() {
         files.push(OutputFile::new(
@@ -61,11 +61,16 @@ pub fn emit(spec: &SiteSpec) -> Result<Site, EmitError> {
             css::styles_css(stylesheet(spec), spec.web.css_mode),
         ));
         warnings.extend(css::token_warnings(stylesheet(spec), spec.web.css_mode));
-        let manifest = serde_json::to_string_pretty(&manifest(spec))?;
-        files.push(OutputFile::new(
-            DEFAULT_MANIFEST_FILE,
-            format!("{manifest}\n"),
-        ));
+        // The manifest is what the runtime reads to find everything else, so
+        // a site that loads no runtime has nobody to read it, and writing one
+        // would name a wasm module the site does not carry.
+        if spec.web.runtime {
+            let manifest = serde_json::to_string_pretty(&manifest(spec))?;
+            files.push(OutputFile::new(
+                DEFAULT_MANIFEST_FILE,
+                format!("{manifest}\n"),
+            ));
+        }
         if let Some((name, contents)) = rewrite_file(spec) {
             files.push(OutputFile::new(name, contents));
         }
@@ -92,7 +97,7 @@ pub const SITEMAP_FILE: &str = "sitemap.xml";
 /// A deep path like `/user/42` is not a file, so a static host serves this.
 /// It carries the whole app but shows none of it, and the runtime picks the
 /// page from the address bar the way the desktop resolves a navigation.
-fn shell(spec: &SiteSpec) -> Result<String, EmitError> {
+fn shell(spec: &SiteSpec, warnings: &mut Vec<String>) -> Result<String, EmitError> {
     let entry = spec
         .pages
         .iter()
@@ -107,7 +112,7 @@ fn shell(spec: &SiteSpec) -> Result<String, EmitError> {
         signals: SignalEnv::new(),
         seed: Seed::new(),
     };
-    document(&shell, spec)
+    document(&shell, spec, warnings)
 }
 
 /// The deployment file that makes a deep path serve the shell, for a host
@@ -172,10 +177,14 @@ fn sitemap(spec: &SiteSpec) -> Option<String> {
 }
 
 /// The whole HTML document for one page.
-pub fn document(page: &PageSpec, spec: &SiteSpec) -> Result<String, EmitError> {
+pub fn document(
+    page: &PageSpec,
+    spec: &SiteSpec,
+    warnings: &mut Vec<String>,
+) -> Result<String, EmitError> {
     let mut out = String::new();
     seo::open_document(&mut out, page, spec)?;
-    out.push_str(&html::emit_tree(page, spec)?);
+    out.push_str(&html::emit_tree(page, spec, warnings)?);
     seo::close_document(&mut out, spec);
     Ok(out)
 }
