@@ -24,10 +24,10 @@ categories = ["gui"]
 # `-C prefer-dynamic`, which `lumenc build` and `lumenc package` pass, is what
 # makes the app take that form rather than the static one. Windows has no such
 # crate - its linker cannot produce the library at all, see
-# crates/dylib/Cargo.toml - so there the engine crate is named directly and a
+# dylib/Cargo.toml - so there the engine crate is named directly and a
 # Rust app links the runtime in.
 [target.'cfg(not(windows))'.dependencies]
-lumen-dylib = { path = "../../crates/dylib" }
+lumen-dylib = { path = "dylib" }
 
 [target.'cfg(windows)'.dependencies]
 lumen = { path = "../.." }

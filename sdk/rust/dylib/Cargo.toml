@@ -1,7 +1,11 @@
 # The engine as a library a Rust program can link, rather than open.
 #
+# Lives beside the Rust SDK because the SDK is its only consumer: nothing else
+# links the engine, and everything under crates/ is a piece of the engine
+# rather than a form of it.
+#
 # Deliberately NOT a member of the workspace, and reached only through a
-# `cfg(not(windows))` dependency in sdk/rust. Both facts are load-bearing:
+# `cfg(not(windows))` dependency in the SDK. Both facts are load-bearing:
 #
 #   - A `dylib` exports every symbol of the crate graph behind it. On Windows
 #     the import library that describes those exports caps at 65535 entries,
@@ -13,11 +17,6 @@
 #
 # `version`, `edition` and the rest are spelled out rather than inherited,
 # because a package outside the workspace cannot inherit from it.
-# Its own workspace root, which is what keeps tools that walk path
-# dependencies (`cargo fmt --all`, `cargo metadata`) from trying to place this
-# package in a workspace that does not list it.
-[workspace]
-
 [package]
 name = "lumen-dylib"
 version = "0.0.3"
@@ -41,7 +40,7 @@ name = "lumen_engine"
 crate-type = ["lib", "dylib"]
 
 [dependencies]
-lumen = { path = "../.." }
+lumen = { path = "../../.." }
 
 [features]
 # Passed straight through to the engine. The Rust SDK reaches the engine only
