@@ -50,11 +50,6 @@ package() {
   install -Dm755 "$srcdir/bin/lumenc" "$pkgdir/usr/lib/lumen/lumenc"
   install -Dm755 "$srcdir/bin/liblumen.so" "$pkgdir/usr/lib/lumen/liblumen.so"
   install -Dm755 "$srcdir/bin/lumen-launcher" "$pkgdir/usr/lib/lumen/lumen-launcher"
-  # The shared Rust standard library liblumen.so records a dependency on. It
-  # goes in the same directory because that is where liblumen.so's runpath
-  # looks, and its name carries the compiler that produced it, so the archive
-  # is what names it rather than this file.
-  install -Dm755 "$srcdir"/bin/libstd-*.so -t "$pkgdir/usr/lib/lumen/"
 
   install -d "$pkgdir/usr/bin"
   ln -s ../lib/lumen/lumenc "$pkgdir/usr/bin/lumenc"

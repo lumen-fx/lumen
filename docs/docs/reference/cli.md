@@ -181,9 +181,8 @@ lumenc package <app_dir> [<out_dir>] [--name <name>] [--target <target>]
 ```
 
 Assembles a folder that runs on a machine with no Lumen installation: the app
-executable, the Lumen runtime library, the Rust standard library that library
-was built against, `lumen.toml`, and every other file from `<app_dir>` at the
-same relative path. Dotfiles, the output directory, and the app's build inputs
+executable, the Lumen runtime library, `lumen.toml`, and every other file from
+`<app_dir>` at the same relative path. Dotfiles, the output directory, and the app's build inputs
 and build tree are skipped. Prints one line naming the executable it wrote and
 how many app files travelled with it.
 
@@ -224,10 +223,10 @@ toolchain file for that platform and exits 1 without one, and a Python app is
 frozen against the interpreter doing the freezing and exits 2 for any target
 but this machine's.
 
-A Rust app links the engine as a Rust library, which only works when one
-compiler built both. Packaging compares the standard library the app's compiler
-produces with the one the engine was built against and exits 1 naming both when
-they differ.
+A Rust app links the engine rather than opening it, so what travels beside it
+comes out of its own build: the engine library cargo produced and the shared
+Rust standard library both were compiled against. On Windows no linkable
+engine exists, so the runtime is inside the executable and nothing travels.
 
 The launcher stub and the runtime library are looked up in this order:
 `--lib-dir`, then, for this machine's own platform, the directory holding the

@@ -26,13 +26,9 @@ cargo build -p lumen             # target/debug/liblumen.{so,dylib,dll,a}
 cargo build -p lumen --release
 ```
 
-The shared library is a Rust `dylib`, which exports the C ABI exactly as a
-`cdylib` would and additionally lets the [Rust SDK](#rust-sdk) link it rather
-than compile a second engine. One consequence reaches C and Python callers
-too: the library depends on a shared copy of the Rust standard library, so
-that file sits beside it in a release archive and in every packaged app. A
-release build adds `-C prefer-dynamic`; see the release workflow for the exact
-flags.
+This builds the C library every C, C++, and Python caller opens. The Rust SDK
+links a second library instead of opening this one; see
+[the Rust SDK](#rust-sdk) for what that is and why they are separate.
 
 The build also renders a `lumen.pc` file into the crate's output directory.
 Install it where pkg-config looks and `pkg-config --cflags --libs lumen`
@@ -434,21 +430,28 @@ app link the shared library beside it instead of compiling the engine into
 itself: one copy of each Lumen type exists, the one inside the library, so a
 signal set through the SDK and one set by a script are the same signal.
 
-### Linking the shared library
+### Linking the engine
+
+A Rust app does not open the C library. It links the engine as a Rust library,
+which is a separate build of the same code: `crates/dylib`, whose output is
+`liblumen_engine.{so,dylib}`. The C library exports the `extern "C"` surface
+and nothing else, and one crate cannot produce both forms, so they are two
+crates.
 
 `lumenc build` and `lumenc package` compile a Rust app with `-C
-prefer-dynamic`, which is what makes cargo take the shared form of the engine
+prefer-dynamic`, which is what makes cargo take the shared form of that library
 rather than the static one beside it. Building the app yourself with plain
-`cargo build` is fine and links the engine statically instead; the app behaves
-the same and is simply bigger.
+`cargo build` is fine and links the engine in instead; the app behaves the same
+and is simply bigger. The flag also applies to the Rust standard library, so an
+app and the engine share one copy of that too, and a packaged app carries both
+files. Since both come out of the same build as the executable, there is
+nothing to keep in step by hand.
 
-The flag also applies to the Rust standard library, so an app and the engine
-share one copy of that too. A packaged app therefore carries two shared
-libraries, and the standard library is named after the compiler that produced
-it, which has one consequence worth knowing: a Rust app and the Lumen release
-it links have to be built by the same Rust version. `rust-toolchain.toml` in
-the Lumen source names the one a release was built with, and `lumenc package`
-compares them and stops rather than assembling a folder that would not start.
+**Windows links the engine in.** A shared library there has to describe its
+exports in an import library, and that format stops at 65535 entries, which a
+graph this size is well past. So no linkable engine is built for Windows, a
+Rust app carries the runtime inside its own executable, and a packaged one has
+no library beside it. Everything else about writing the app is the same.
 
 The surface is `App` for assembly, `LumenDefaultPlugins` for the standard stack
 (decomposable, so you can disable parts or compose your own group), `Signals`

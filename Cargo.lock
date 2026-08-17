@@ -3509,6 +3509,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-dylib"
+version = "0.0.3"
+dependencies = [
+ "lumen",
+]
+
+[[package]]
 name = "lumen-html"
 version = "0.0.3"
 dependencies = [
@@ -4098,6 +4105,7 @@ version = "0.0.3"
 dependencies = [
  "glam 0.33.3",
  "lumen",
+ "lumen-dylib",
 ]
 
 [[package]]

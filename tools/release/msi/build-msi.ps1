@@ -9,7 +9,6 @@
         <StageDir>\bin\lumenc.exe
         <StageDir>\bin\lumen.dll
         <StageDir>\bin\lumen-launcher.exe
-        <StageDir>\bin\std-<hash>.dll
         <StageDir>\share\lumen\lumen.receipt
 
     Both .github/workflows/release.yml and .github/workflows/msi-smoke.yml
@@ -68,15 +67,6 @@ foreach ($relative in 'bin\lumenc.exe', 'bin\lumen.dll', 'bin\lumen-launcher.exe
     }
 }
 
-# The shared Rust standard library lumen.dll was linked against. Its name
-# carries the identity of the compiler that produced it, so it is discovered
-# here and handed to wix rather than written into the .wxs, where it would go
-# stale the next time the toolchain moves.
-$sharedStd = Get-ChildItem -Path (Join-Path $stage 'bin\std-*.dll') | Select-Object -First 1
-if (-not $sharedStd) {
-    throw "build-msi.ps1: the stage has no bin\std-*.dll. lumen.dll cannot load without it."
-}
-
 # --- resolve the output -------------------------------------------------------
 
 $out = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine((Get-Location).ProviderPath, $OutFile))
@@ -103,7 +93,6 @@ Write-Host "building $out (version $Version) from $stage"
     -arch x64 `
     -d "Version=$Version" `
     -d "StageDir=$stage" `
-    -d "SharedStd=$($sharedStd.Name)" `
     -o $out `
     $wxs
 

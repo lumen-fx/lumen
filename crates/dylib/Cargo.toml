@@ -1,0 +1,44 @@
+# The engine as a library a Rust program can link, rather than open.
+#
+# Deliberately NOT a member of the workspace, and reached only through a
+# `cfg(not(windows))` dependency in sdk/rust. Both facts are load-bearing:
+#
+#   - A `dylib` exports every symbol of the crate graph behind it. On Windows
+#     the import library that describes those exports caps at 65535 entries,
+#     and this graph is far past it, so linking one there fails outright
+#     (LNK1189). Keeping it out of `members` is what stops a plain
+#     `cargo build --workspace` from trying.
+#   - Off Windows it is an ordinary dependency of the Rust SDK, so it is built
+#     with the rest of the workspace and nothing has to be asked for.
+#
+# `version`, `edition` and the rest are spelled out rather than inherited,
+# because a package outside the workspace cannot inherit from it.
+# Its own workspace root, which is what keeps tools that walk path
+# dependencies (`cargo fmt --all`, `cargo metadata`) from trying to place this
+# package in a workspace that does not list it.
+[workspace]
+
+[package]
+name = "lumen-dylib"
+version = "0.0.3"
+edition = "2024"
+license = "MPL-2.0"
+authors = ["Lumen contributors"]
+repository = "https://github.com/lumen-fx/lumen"
+rust-version = "1.85"
+description = "Lumen engine as a linkable shared library, for Rust apps that link the runtime rather than compile it in."
+publish = false
+
+[lib]
+# Not `lumen`: the engine crate's own cdylib already writes `liblumen.so` into
+# the same directory, and two targets cannot produce one file name. The name
+# here is the one a packaged Rust app carries and asks its loader for.
+name = "lumen_engine"
+# Both forms. With `lib` present, a plain `cargo build` takes the rlib and the
+# app links the engine statically, which is what a developer running `cargo
+# run` wants and what Windows gets. `-C prefer-dynamic` takes the `dylib`
+# instead, which is what `lumenc build` and `lumenc package` pass.
+crate-type = ["lib", "dylib"]
+
+[dependencies]
+lumen = { path = "../.." }

@@ -85,21 +85,13 @@ fn build_engine(bin_dir: &Path) -> Result<(), String> {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("cargo always sets OUT_DIR"));
     let source = fetch_source(&version, &out_dir)?;
 
-    // The engine is built to be linked, not just opened: a Rust app takes the
-    // shared library as a Rust dependency, which means both sides have to
-    // agree about the standard library. `-C prefer-dynamic` is what makes them
-    // share one copy of it, and the rpath is what lets the copy sit beside the
-    // library rather than in a system directory.
+    // The engine a packaged markup, C++, or Python app opens, and the stub
+    // `lumenc package` turns into an app executable. A Rust app needs neither:
+    // it links the engine through its own cargo build.
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     run(
         &cargo,
-        &["build", "--release", "-p", "lumen"],
-        &source,
-        &[("RUSTFLAGS", &dynamic_rustflags())],
-    )?;
-    run(
-        &cargo,
-        &["build", "--release", "-p", "lumen-launcher"],
+        &["build", "--release", "-p", "lumen", "-p", "lumen-launcher"],
         &source,
         &[],
     )?;
@@ -108,10 +100,6 @@ fn build_engine(bin_dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(bin_dir).map_err(|e| format!("create {}: {e}", bin_dir.display()))?;
     for name in [engine_library_name(), launcher_name()] {
         copy(&built.join(name), &bin_dir.join(name))?;
-    }
-    if let Some(std_lib) = shared_std_library() {
-        let name = std_lib.file_name().unwrap_or_default();
-        copy(&std_lib, &bin_dir.join(name))?;
     }
     Ok(())
 }
@@ -147,42 +135,6 @@ fn fetch_source(version: &str, out_dir: &Path) -> Result<PathBuf, String> {
         ));
     }
     Ok(unpacked)
-}
-
-/// The flags a shared engine is built with. Kept in step with
-/// `lumen_runtime::app_kind::rust_dynamic_env`, which applies the same two to
-/// an app; a library and an app that disagree here do not link.
-fn dynamic_rustflags() -> String {
-    let mut flags = String::from("-C prefer-dynamic");
-    if cfg!(target_os = "macos") {
-        flags.push_str(" -C link-arg=-Wl,-rpath,@loader_path");
-    } else if !cfg!(target_os = "windows") {
-        flags.push_str(" -C link-arg=-Wl,-rpath,$ORIGIN");
-    }
-    flags
-}
-
-/// The shared Rust standard library the engine was just linked against, which
-/// has to travel with it.
-fn shared_std_library() -> Option<PathBuf> {
-    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
-    let output = std::process::Command::new(rustc)
-        .arg("--print")
-        .arg("target-libdir")
-        .output()
-        .ok()?;
-    let dir = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim().to_string());
-    let (prefix, ext) = if cfg!(target_os = "windows") {
-        ("std-", "dll")
-    } else if cfg!(target_os = "macos") {
-        ("libstd-", "dylib")
-    } else {
-        ("libstd-", "so")
-    };
-    std::fs::read_dir(dir).ok()?.flatten().find_map(|entry| {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        (name.starts_with(prefix) && name.ends_with(ext)).then(|| entry.path())
-    })
 }
 
 fn engine_library_name() -> &'static str {

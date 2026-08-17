@@ -152,14 +152,29 @@ pub mod simple {
 
 // -- The crates behind the engine ---------------------------------------------
 
-// Every Lumen crate this SDK is written against, taken from the engine library
-// rather than depended on again. An app that links the engine dynamically gets
-// one copy of each of these, shared with the runtime already inside the
-// library; naming them here is what keeps it that way. Submodules reach them
-// as `crate::lumen_core`, `crate::bevy_ecs`, and so on.
-#[cfg(feature = "host-rhai")]
+// Every Lumen crate this SDK is written against, taken from the engine rather
+// than depended on again. An app gets one copy of each of these, shared with
+// the runtime already inside the engine; naming them here is what keeps it
+// that way. Submodules reach them as `crate::lumen_core`, `crate::bevy_ecs`,
+// and so on.
+//
+// Which crate they are taken *through* decides how an app links the engine.
+// `lumen_engine` is the shared library, so naming it puts that library in the
+// app's link graph and an app built with `-C prefer-dynamic` leaves the
+// runtime outside its own binary. Windows has no such library - its linker
+// cannot produce one for a graph this size - so there the same items come
+// straight from the engine crate and the runtime is linked in. Either way
+// these are the same crates and the same types.
+#[cfg(all(windows, feature = "host-rhai"))]
 pub use lumen::sdk::rhai;
+#[cfg(windows)]
 pub use lumen::sdk::{
+    bevy_ecs, lumen_core, lumen_runtime, lumen_script, lumen_widget, lumen_widget_macros, lumenc,
+};
+#[cfg(all(not(windows), feature = "host-rhai"))]
+pub use lumen_engine::sdk::rhai;
+#[cfg(not(windows))]
+pub use lumen_engine::sdk::{
     bevy_ecs, lumen_core, lumen_runtime, lumen_script, lumen_widget, lumen_widget_macros, lumenc,
 };
 
