@@ -13,8 +13,8 @@
 //!    Enforces plan invariant 1: dirty propagates to root.
 //! 4. [`sync_layout`] - pushes lumen [`Style`] into taffy (diffed
 //!    against the previous taffy style - W2.6), computes layout for
-//!    every dirty subtree root using `compute_layout_with_measure` so
-//!    text / image leaves report their intrinsic size via
+//!    every dirty subtree root through the memoising solver in `memo.rs`
+//!    so text / image leaves report their intrinsic size via
 //!    [`TextShaper::measure`] (W2.5), writes absolute coords into
 //!    [`Transform`] for every descendant, then clears [`DirtyLayout`].
 //!    The system also drops taffy nodes for entities whose [`Style`]
@@ -51,6 +51,10 @@ use lumen_text::{
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use taffy::prelude::*;
+
+mod memo;
+
+use memo::{Geometry, compute_layout_memoised};
 
 /// Marker for the taffy-backed [`LayoutEngine`].
 pub struct TaffyLayout;
@@ -303,11 +307,20 @@ pub struct LayoutResource {
     /// set on every dirty frame.
     last_context: HashMap<Entity, NodeContext>,
     viewport: taffy::Size<AvailableSpace>,
-    /// Number of `compute_layout_with_measure` solves performed by the
-    /// most recent non-idle [`sync_layout`] run. Spec section 17.3 invariant:
-    /// at most one taffy solve per dirty root per tick - tests assert
-    /// against this counter and a `debug_assert` enforces it in-place.
+    /// Computed boxes for every node, produced by the solver. taffy owns the
+    /// styles and the child lists; it has no public setter for a node's own
+    /// layout, so the geometry lives here.
+    geometry: Geometry,
+    /// Number of solves performed by the most recent non-idle [`sync_layout`]
+    /// run. Spec section 17.3 invariant: at most one taffy solve per dirty
+    /// root per tick - tests assert against this counter and a
+    /// `debug_assert` enforces it in-place.
     solves_last_sync: usize,
+    /// Number of nodes those solves computed, counting a node once
+    /// per distinct set of layout inputs it was asked about. Linear in the
+    /// size of the dirty subtrees; a deep-nesting regression shows up here as
+    /// a count that climbs with depth instead of with node count.
+    visits_last_sync: usize,
 }
 
 impl LayoutResource {
@@ -322,7 +335,9 @@ impl LayoutResource {
                 width: AvailableSpace::MaxContent,
                 height: AvailableSpace::MaxContent,
             },
+            geometry: Geometry::default(),
             solves_last_sync: 0,
+            visits_last_sync: 0,
         }
     }
 
@@ -337,7 +352,9 @@ impl LayoutResource {
     /// Read absolute Transform for an entity (post-sync), if known.
     pub fn computed_transform(&self, entity: Entity) -> Option<Transform> {
         let node = *self.map.get(&entity)?;
-        let layout = self.tree.layout(node).ok()?;
+        // A node the solver has not reached yet reads as a zero box, which is
+        // what taffy's own per-node layout defaulted to.
+        let layout = self.geometry.get(node).unwrap_or_default();
         Some(Transform {
             absolute: Vec2::new(layout.location.x, layout.location.y),
             size: Vec2::new(layout.size.width, layout.size.height),
@@ -363,6 +380,13 @@ impl LayoutResource {
     /// dirty root.
     pub fn solves_last_sync(&self) -> usize {
         self.solves_last_sync
+    }
+
+    /// Nodes computed by the most recent non-idle [`sync_layout`] run. Grows
+    /// with the number of elements in the dirty subtrees, not with their
+    /// nesting depth; `tests/deep_tree.rs` holds that line.
+    pub fn visits_last_sync(&self) -> usize {
+        self.visits_last_sync
     }
 }
 
@@ -530,7 +554,7 @@ pub fn propagate_dirty_layout(
 /// Push lumen Style -> taffy, recompute dirty subtrees, write
 /// Transforms, clear DirtyLayout markers.
 ///
-/// W2.5 wires `compute_layout_with_measure` so text / image leaves get
+/// W2.5 wires the solver's measure callback so text / image leaves get
 /// intrinsic sizes from [`TextShaper::measure`] /
 /// [`ImageComponent::natural_size`]. W2.6 adds:
 /// - a per-entity [`Style`] diff so taffy's internal cache is not
@@ -588,6 +612,7 @@ pub fn sync_layout(
         for entity in removed_style.read() {
             if let Some(node) = layout.map.remove(&entity) {
                 let _ = layout.tree.remove(node);
+                layout.geometry.remove(node);
             }
             layout.last_style.remove(&entity);
             layout.last_context.remove(&entity);
@@ -606,6 +631,7 @@ pub fn sync_layout(
         for e in stale {
             if let Some(node) = layout.map.remove(&e) {
                 let _ = layout.tree.remove(node);
+                layout.geometry.remove(node);
             }
             layout.last_style.remove(&e);
             layout.last_context.remove(&e);
@@ -740,18 +766,18 @@ pub fn sync_layout(
         );
     }
 
-    // Snapshot every entity's measure input *before* calling
-    // `compute_layout_with_measure`. The closure captures `&mut
-    // shaper` and a borrow of this map; doing the world reads up
-    // front keeps the closure's borrow set tiny (no queries inside).
+    // Snapshot every entity's measure input before the solve starts. The
+    // measure closure captures `&mut shaper` and a borrow of this map; doing
+    // the world reads up front keeps the closure's borrow set tiny (no
+    // queries inside).
     let measure_inputs: HashMap<Entity, MeasureInput> =
         build_measure_inputs(&style_q, &text_q, &image_q);
 
-    // W5.9 baseline writeback: collect text leaves' first-line
-    // baselines during measure. After `compute_layout_with_measure`
-    // returns, `write_transforms_recursive` looks each entity up here
-    // and stamps `Transform.baseline_y`. FlexAlign::Baseline +
-    // AccessKit text-position reporting consume the result.
+    // W5.9 baseline writeback: collect text leaves' first-line baselines
+    // during measure. Once the solve returns, `write_transforms_recursive`
+    // looks each entity up here and stamps `Transform.baseline_y`.
+    // FlexAlign::Baseline + AccessKit text-position reporting consume the
+    // result.
     let mut measured_baselines: HashMap<Entity, f32> = HashMap::new();
 
     // -- Lazy text measurement ----------------------------------------
@@ -839,23 +865,27 @@ pub fn sync_layout(
 
     let viewport = layout.viewport;
     layout.solves_last_sync = 0;
+    layout.visits_last_sync = 0;
     let shaper: &mut dyn TextShaper = &mut **shaper;
     let lazy_text = &lazy_text;
     let memo: &mut TextMeasureMemo = &mut memo;
     let tree: &mut TaffyTree<NodeContext> = &mut layout.tree;
+    let geometry: &mut Geometry = &mut layout.geometry;
     for root in &dirty_roots {
         // Boundary subtree recomputes solve against the boundary's
         // prior box; true roots solve against the viewport.
         let available = pins.get(root).map(|p| p.available).unwrap_or(viewport);
         if let Some(&node) = layout.map.get(root) {
             layout.solves_last_sync += 1;
-            let _ = tree.compute_layout_with_measure(
+            layout.visits_last_sync += compute_layout_memoised(
+                tree,
+                geometry,
                 node,
                 available,
                 |known: taffy::Size<Option<f32>>,
                  _available: taffy::Size<AvailableSpace>,
                  _node_id: NodeId,
-                 ctx: Option<&mut NodeContext>,
+                 ctx: Option<NodeContext>,
                  _style: &taffy::Style| {
                     // taffy hands us the parent-resolved dimensions
                     // first; honour them when present so a fixed-size
@@ -866,7 +896,7 @@ pub fn sync_layout(
                             height: h,
                         };
                     }
-                    match ctx {
+                    match ctx.as_ref() {
                         Some(NodeContext::Text(entity)) => match measure_inputs.get(entity) {
                             Some(MeasureInput::Text(t)) => {
                                 let max_width = known.width.or(t.max_width);
@@ -1257,9 +1287,7 @@ fn write_transforms_recursive(
     let Some(&node) = layout.map.get(&entity) else {
         return;
     };
-    let Ok(layout_result) = layout.tree.layout(node) else {
-        return;
-    };
+    let layout_result = layout.geometry.get(node).unwrap_or_default();
     let local = Vec2::new(layout_result.location.x, layout_result.location.y);
     let size = Vec2::new(layout_result.size.width, layout_result.size.height);
     // D1: boundary subtree recomputes keep the root's prior absolute

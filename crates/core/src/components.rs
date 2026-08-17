@@ -23,10 +23,9 @@ pub struct Transform {
     /// text that hasn't been measured yet.
     ///
     /// Consumed by [`FlexAlign::Baseline`] sibling alignment and by
-    /// AccessKit's text-position reporting. The taffy backend reads
-    /// this to wire `taffy::compute_layout_with_measure`'s baseline
-    /// callback; the renderer uses it to align mixed-size inline
-    /// runs.
+    /// AccessKit's text-position reporting. The taffy backend reads this to
+    /// wire its measure callback's baseline; the renderer uses it to align
+    /// mixed-size inline runs.
     pub baseline_y: Option<f32>,
 }
 
