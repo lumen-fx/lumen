@@ -118,6 +118,7 @@ members = [
     "crates/primitives",
     "crates/runtime",
     "crates/scene",
+    "crates/ssr",
     "crates/text",
     "crates/web",
     "crates/web-runtime",

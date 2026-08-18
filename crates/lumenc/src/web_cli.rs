@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use lumen_core::nav::{PATH_SIGNAL, SEGMENT_SIGNAL, resolve_path};
 use lumen_core::signals::ArrayItem;
@@ -409,7 +410,9 @@ fn build(options: &Options) -> Result<Report, String> {
             assets: assets.clone(),
             markup: markup.clone(),
         };
-        let ir = translated_ir(&compiled.ir, dir, locale, &mut warnings)?;
+        // One tree per locale, shared by every page of it: which page a
+        // document shows is a signal inside the tree, not a tree of its own.
+        let ir = Arc::new(translated_ir(&compiled.ir, dir, locale, &mut warnings)?);
         for key in &keys {
             spec.pages.push(page_spec(
                 key,
@@ -596,7 +599,7 @@ fn declared_seed(seed: &BTreeMap<String, WebSeedValue>) -> Seed {
 /// One page, rendered with the state it arrives in.
 fn page_spec(
     key: &str,
-    ir: &LayoutIR,
+    ir: &Arc<LayoutIR>,
     cfg: &LumenToml,
     seed: &BTreeMap<String, WebSeedValue>,
     prerender: WebPrerender,
@@ -608,7 +611,7 @@ fn page_spec(
     if let Some(state) = settled {
         return PageSpec {
             key: key.to_string(),
-            ir: ir.clone(),
+            ir: Arc::clone(ir),
             title: page_cfg.and_then(|page| page.title.clone()),
             description: page_cfg.and_then(|page| page.description.clone()),
             signals: state.signals.clone(),
@@ -642,7 +645,7 @@ fn page_spec(
     }
     PageSpec {
         key: key.to_string(),
-        ir: ir.clone(),
+        ir: Arc::clone(ir),
         title: page_cfg.and_then(|page| page.title.clone()),
         description: page_cfg.and_then(|page| page.description.clone()),
         signals,

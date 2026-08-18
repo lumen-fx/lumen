@@ -203,6 +203,16 @@ host "lumen" {
     fetch(string, string);
     http(...);
 
+    // the request the document is being rendered for, and the answer to it.
+    // The address parts are reserved `request.*` signals; the readers below
+    // give back an empty string outside a server render.
+    string request_header(string);
+    string request_cookie(string);
+    string request_body();
+    response_status(int);
+    response_header(string, string);
+    redirect(string);
+
     // text parsers. Both hand back a dynamically-shaped value, read with the
     // as_map / as_list / as_str / as_int downcasts.
     any parse_json(...);

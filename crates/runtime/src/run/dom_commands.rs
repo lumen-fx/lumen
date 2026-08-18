@@ -31,32 +31,6 @@ use crate::run::restyle::{LastMediaContext, RuntimeStylesheet, StyleVersion};
 #[derive(Resource, Default)]
 pub(crate) struct PendingDomCommands(pub(crate) Vec<ScriptCommand>);
 
-/// Whether a command is one this module applies.
-fn is_dom_command(cmd: &ScriptCommand) -> bool {
-    matches!(
-        cmd,
-        ScriptCommand::SetAttr { .. }
-            | ScriptCommand::RemoveAttr { .. }
-            | ScriptCommand::SetNodeText { .. }
-            | ScriptCommand::ClassAdd { .. }
-            | ScriptCommand::ClassRemove { .. }
-            | ScriptCommand::ClassToggle { .. }
-            | ScriptCommand::SetStyleProp { .. }
-            | ScriptCommand::RemoveStyleProp { .. }
-            | ScriptCommand::Spawn { .. }
-            | ScriptCommand::Insert { .. }
-            | ScriptCommand::ReplaceWith { .. }
-            | ScriptCommand::RemoveNode { .. }
-            | ScriptCommand::CloneNode { .. }
-            | ScriptCommand::SetInnerMarkup { .. }
-            | ScriptCommand::SpawnFragment { .. }
-            | ScriptCommand::BindEvent { .. }
-            | ScriptCommand::UnbindEvent { .. }
-            | ScriptCommand::WindowSetTitle { .. }
-            | ScriptCommand::WindowSetSize { .. }
-    )
-}
-
 /// Collect this tick's DOM / window commands from the script event stream
 /// and the external bus into [`PendingDomCommands`], preserving order.
 pub(crate) fn collect_dom_commands(
@@ -64,7 +38,7 @@ pub(crate) fn collect_dom_commands(
     mut pending: ResMut<PendingDomCommands>,
 ) {
     for ev in events.read() {
-        if is_dom_command(&ev.0) {
+        if ev.0.mutates_dom() {
             pending.0.push(ev.0.clone());
         }
     }

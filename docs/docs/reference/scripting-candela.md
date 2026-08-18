@@ -546,8 +546,8 @@ Each is its own host namespace, declared by the same prelude import.
 | `window::size()` | `float[]` | `[width, height]` in logical pixels. |
 | `window::set_size(width: float, height: float)` | | Resize the window, in logical pixels. |
 | `window::location_path()` | `string` | The current page path. |
-| `window::location_query()` | `string` | Always empty; query strings are not tracked. |
-| `window::location_hash()` | `string` | Always empty; fragments are not tracked. |
+| `window::location_query()` | `string` | The query string of the request the document is being rendered for, without the leading `?`. |
+| `window::location_hash()` | `string` | The fragment of the request the document is being rendered for, without the leading `#`. |
 | `history::back()` | | Step one entry back. |
 | `history::forward()` | | Step one entry forward. |
 | `history::go(delta: int)` | | Step `delta` entries; negative goes back. |
@@ -687,6 +687,21 @@ fn on_http(tag, response) {
     }
 }
 ```
+
+## Request and response
+
+The readers give back what arrived with the request the document is being
+rendered for, and an empty string when there is none to read; a desktop app has
+none. The three writers queue an answer that only a server render applies.
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `lumen::request_header(name: string)` | `string` | The named request header, matched without regard to case. |
+| `lumen::request_cookie(name: string)` | `string` | The named request cookie. |
+| `lumen::request_body()` | `string` | The request body. |
+| `lumen::response_status(status: int)` | | Answer with HTTP status `status`, clamped to 100..=599. |
+| `lumen::response_header(name: string, value: string)` | | Set a response header; setting the same name twice replaces the value. |
+| `lumen::redirect(location: string)` | | Answer with a redirect to `location`, a path or an absolute URL, instead of a document. |
 
 ## Parsing
 

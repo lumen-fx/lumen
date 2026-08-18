@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use lumen_core::signals::{ArrayItem, signal_is_truthy};
 use lumen_html::contract::{
@@ -78,12 +79,17 @@ impl Globals for SignalEnv {
 }
 
 /// One page of the site.
+///
+/// The markup is shared rather than owned. Every page of an app is emitted
+/// from one assembled tree, and which page a document shows is decided by a
+/// signal inside it, so a site with forty pages holds one tree and a server
+/// answering a request holds the same one the request before it did.
 #[derive(Debug, Clone, Default)]
 pub struct PageSpec {
     /// Page key, which is also its file name: `index` becomes `index.html`.
     pub key: String,
     /// The page's markup and stylesheet.
-    pub ir: LayoutIR,
+    pub ir: Arc<LayoutIR>,
     /// Title for this page. Falls back to the site title.
     pub title: Option<String>,
     /// Description for this page. Falls back to the site description.
@@ -97,10 +103,10 @@ pub struct PageSpec {
 
 impl PageSpec {
     /// A page with no title, description, state or seed of its own.
-    pub fn new(key: impl Into<String>, ir: LayoutIR) -> Self {
+    pub fn new(key: impl Into<String>, ir: impl Into<Arc<LayoutIR>>) -> Self {
         Self {
             key: key.into(),
-            ir,
+            ir: ir.into(),
             ..Self::default()
         }
     }

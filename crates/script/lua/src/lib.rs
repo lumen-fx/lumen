@@ -2083,14 +2083,22 @@ fn build_lua(
             "dpr",
             lua.create_function(|_, ()| Ok(lumen_core::window_state::dpr()))?,
         )?;
-        // window.location parts (path only; query / hash untracked).
+        // window.location parts. The path is the page Lumen resolved; the
+        // query and the fragment come from the request the document is being
+        // rendered for, and are empty when there is none.
         let location = lua.create_table()?;
         location.set(
             "path",
             lua.create_function(|_, ()| Ok(lumen_core::nav::current()))?,
         )?;
-        location.set("query", lua.create_function(|_, ()| Ok(String::new()))?)?;
-        location.set("hash", lua.create_function(|_, ()| Ok(String::new()))?)?;
+        location.set(
+            "query",
+            lua.create_function(|_, ()| Ok(lumen_core::request::query()))?,
+        )?;
+        location.set(
+            "hash",
+            lua.create_function(|_, ()| Ok(lumen_core::request::hash()))?,
+        )?;
         window.set("location", location)?;
         g.set("window", window)?;
     }
@@ -2383,6 +2391,32 @@ fn build_lua(
             })?,
         )?;
     }
+
+    // -- the request being rendered for --------------------------------
+    // The headers, the cookies and the body are too large to publish as
+    // signals, so they stay in the per-thread `lumen_core::request`
+    // context and a script asks for one part at a time; the address parts
+    // are reserved `request.*` signals instead. Outside a server render
+    // nothing is installed and each reader gives back an empty string.
+    g.set(
+        "request_header",
+        lua.create_function(|_, name: String| Ok(lumen_core::request::header(&name)))?,
+    )?;
+    g.set(
+        "request_cookie",
+        lua.create_function(|_, name: String| Ok(lumen_core::request::cookie(&name)))?,
+    )?;
+    g.set(
+        "request_body",
+        lua.create_function(|_, ()| Ok(lumen_core::request::body()))?,
+    )?;
+    // Only a server render applies these; elsewhere the command is drained
+    // and dropped.
+    enqueue!("response_status", (status: i64), ScriptCommand::SetResponseStatus {
+        status: status.clamp(100, 599) as u16,
+    });
+    enqueue!("response_header", (name: String, value: String), ScriptCommand::SetResponseHeader { name, value });
+    enqueue!("redirect", (location: String), ScriptCommand::Redirect { location });
 
     // parse_json(s)
     g.set(

@@ -1,0 +1,51 @@
+[package]
+name = "lumen-ssr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Renders a Lumen app to an HTML document per request, for embedding in a server."
+keywords = ["ui", "gui", "lumen", "web", "ssr"]
+categories = ["web-programming", "gui"]
+publish = false
+
+[lib]
+name = "lumen_ssr"
+path = "src/lib.rs"
+
+[dependencies]
+# The request cells every surface reads, and the route resolver a path is
+# turned into a page with.
+lumen-core = { path = "../core", version = "0.0.3" }
+# The compiled app a render starts from.
+lumen-ir = { path = "../ir", version = "0.0.3" }
+# The seed a render starts from and the document carries back out.
+lumen-html = { path = "../html", version = "0.0.3" }
+# Booting an app and settling it is one implementation, shared with the
+# build-time prerenderer.
+lumen-prerender = { path = "../prerender", version = "0.0.3", default-features = false }
+# The emitter the document comes out of.
+lumen-web = { path = "../web", version = "0.0.3" }
+# The command stream a script answers a request through, and the HTTP seam the
+# in-flight counter wraps.
+lumen-script = { path = "../script/api", version = "0.0.3", default-features = false }
+# The response state is a resource, and reading the command stream is a system.
+bevy_ecs.workspace = true
+# The queue a caller hands a request across and gets its answer back on.
+crossbeam-channel.workspace = true
+# The transport a render's own HTTP calls run on, behind `http-client`.
+lumen-http-ureq = { path = "../backends/http-ureq", version = "0.0.3", optional = true }
+
+[build-dependencies]
+# Compiles the test fixtures to `.cdlb` on the host, so the program a render
+# loads is always the one this toolchain produces.
+lumen-script-candela = { path = "../script/candela", version = "0.0.3" }
+
+[features]
+# A render reaches the network through the client Lumen ships. An embedder
+# with its own stack turns this off and passes their own dispatcher.
+default = ["host-candela", "http-client"]
+host-candela = ["lumen-prerender/host-candela"]
+http-client = ["dep:lumen-http-ureq"]

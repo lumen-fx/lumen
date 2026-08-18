@@ -1,6 +1,7 @@
 //! Putting the files of a site together.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use lumen_html::contract::{DEFAULT_MANIFEST_FILE, LM_CONTRACT_VERSION, Manifest, Seed};
 use lumen_html::escape_text;
@@ -106,7 +107,7 @@ fn shell(spec: &SiteSpec, warnings: &mut Vec<String>) -> Result<String, EmitErro
         .ok_or(EmitError::NoPages)?;
     let shell = PageSpec {
         key: entry.key.clone(),
-        ir: entry.ir.clone(),
+        ir: Arc::clone(&entry.ir),
         title: entry.title.clone(),
         description: entry.description.clone(),
         signals: SignalEnv::new(),

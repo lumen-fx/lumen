@@ -643,16 +643,17 @@ fn register_web_namespaces(engine: &mut Engine, sink: Arc<Mutex<Vec<ScriptComman
         );
     }
 
-    // window.location parts. Lumen models the resolved page path; query /
-    // hash are not tracked and return empty.
+    // window.location parts. The path is the page Lumen resolved; the query
+    // and the fragment come from the request the document is being rendered
+    // for, and are empty when there is none.
     engine.register_fn("path", |_l: &mut Location| -> rhai::ImmutableString {
         lumen_core::nav::current().into()
     });
     engine.register_fn("query", |_l: &mut Location| -> rhai::ImmutableString {
-        "".into()
+        lumen_core::request::query().into()
     });
     engine.register_fn("hash", |_l: &mut Location| -> rhai::ImmutableString {
-        "".into()
+        lumen_core::request::hash().into()
     });
 
     // history.
@@ -2174,6 +2175,54 @@ impl RhaiHost {
                 timeout_ms,
                 tag,
             });
+        });
+
+        // request_header(name) / request_cookie(name) / request_body() -
+        // read the request the document is being rendered for. The
+        // headers, the cookies and the body are too large to publish as
+        // signals, so they stay in the per-thread `lumen_core::request`
+        // context and a script asks for one part at a time; the address
+        // parts are reserved `request.*` signals instead. Outside a
+        // server render nothing is installed and each reader gives back
+        // an empty string.
+        engine.register_fn(
+            "request_header",
+            |name: rhai::ImmutableString| -> rhai::ImmutableString {
+                lumen_core::request::header(name.as_str()).into()
+            },
+        );
+        engine.register_fn(
+            "request_cookie",
+            |name: rhai::ImmutableString| -> rhai::ImmutableString {
+                lumen_core::request::cookie(name.as_str()).into()
+            },
+        );
+        engine.register_fn("request_body", || -> rhai::ImmutableString {
+            lumen_core::request::body().into()
+        });
+
+        // response_status(status) / response_header(name, value) /
+        // redirect(location) - answer the request with something other
+        // than a plain 200 document. Only a server render applies these;
+        // elsewhere the command is drained and dropped.
+        enqueue!("response_status", |status: i64| {
+            ScriptCommand::SetResponseStatus {
+                status: status.clamp(100, 599) as u16,
+            }
+        });
+        enqueue!(
+            "response_header",
+            |name: rhai::ImmutableString, value: rhai::ImmutableString| {
+                ScriptCommand::SetResponseHeader {
+                    name: name.to_string(),
+                    value: value.to_string(),
+                }
+            }
+        );
+        enqueue!("redirect", |location: rhai::ImmutableString| {
+            ScriptCommand::Redirect {
+                location: location.to_string(),
+            }
         });
 
         // parse_json(s) - convert a JSON string to a Rhai Map/Array/scalar

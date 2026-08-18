@@ -647,6 +647,39 @@ pub(crate) fn register_lumen_host_fns<S: HostFnSink>(engine: &mut S, r: &Registr
     });
     register_http(engine, r);
 
+    // -- the request being rendered for ------------------------------
+    // The headers, the cookies and the body are too large to publish as
+    // signals, so they stay in the per-thread `lumen_core::request`
+    // context and a script asks for one part at a time. The address
+    // parts are reserved `request.*` signals instead, read with
+    // `signal_get`. Outside a server render nothing is installed and
+    // every reader gives back an empty string.
+    engine.register_host_fn(HOST_NAMESPACE, "request_header", |name: String| -> String {
+        lumen_core::request::header(&name)
+    });
+    engine.register_host_fn(HOST_NAMESPACE, "request_cookie", |name: String| -> String {
+        lumen_core::request::cookie(&name)
+    });
+    engine.register_host_fn(HOST_NAMESPACE, "request_body", || -> String {
+        lumen_core::request::body()
+    });
+    // Only a server render applies these; elsewhere the command is
+    // drained and dropped.
+    enqueue!(engine, r.sink, "response_status", |status: i64| {
+        ScriptCommand::SetResponseStatus {
+            status: status.clamp(100, 599) as u16,
+        }
+    });
+    enqueue!(
+        engine,
+        r.sink,
+        "response_header",
+        |name: String, value: String| ScriptCommand::SetResponseHeader { name, value }
+    );
+    enqueue!(engine, r.sink, "redirect", |location: String| {
+        ScriptCommand::Redirect { location }
+    });
+
     // -- text parsers ------------------------------------------------
     // Both return a dynamically-shaped value, so both register
     // variadically and are declared `any name(...)`; see the crate docs.
@@ -1502,12 +1535,18 @@ fn register_web_namespaces<S: HostFnSink>(engine: &mut S, r: &Registries) {
         });
     }
     // window.location parts as flat `location_*` fns (candela has no nested
-    // namespace value). path only; query / hash are untracked.
+    // namespace value). The path comes from the page the app navigated to;
+    // the query and the fragment come from the request the document is
+    // being rendered for, and are empty when there is none.
     engine.register_host_fn("window", "location_path", || -> String {
         lumen_core::nav::current()
     });
-    engine.register_host_fn("window", "location_query", || -> String { String::new() });
-    engine.register_host_fn("window", "location_hash", || -> String { String::new() });
+    engine.register_host_fn("window", "location_query", || -> String {
+        lumen_core::request::query()
+    });
+    engine.register_host_fn("window", "location_hash", || -> String {
+        lumen_core::request::hash()
+    });
 
     // history.
     engine.register_host_fn("history", "back", || {
