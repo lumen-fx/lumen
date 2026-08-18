@@ -1567,6 +1567,11 @@ mod tests {
             Some("lumen-linux-aarch64.tar.gz".to_string())
         );
         assert!(Target::parse("plan9-x86_64").is_none());
+        // The browser runtime is published under the same naming with a
+        // component where a target goes, and install.sh tells the two apart
+        // by that name alone, so no target may be called "web".
+        assert_eq!(WEB_ARCHIVE, format!("lumen-{WEB_COMPONENT}.tar.gz"));
+        assert!(Target::parse(WEB_COMPONENT).is_none());
     }
 
     #[test]
@@ -1640,6 +1645,52 @@ mod tests {
         let found = locate_web_runtime(Some(&full)).expect("the flagged directory has both");
         assert_eq!(found.wasm, full.join(WEB_WASM));
         assert_eq!(found.js, full.join(WEB_JS));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The archive a release publishes and the code that unpacks it are
+    /// written in two different places, and a page that loads nothing is what
+    /// a disagreement between them looks like. Build the archive the way
+    /// `.github/scripts/build-web-runtime.sh` and `release.yml` do - the two
+    /// files at the root, under the names a site refers to them by - and take
+    /// it apart with the code a fetch runs.
+    #[test]
+    fn the_published_web_archive_unpacks_into_the_pair_a_build_wants() {
+        let mut archive = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::fast(),
+        ));
+        for (name, body) in [(WEB_WASM, b"wasm-bytes".as_slice()), (WEB_JS, b"js-bytes")] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, name, body)
+                .expect("append");
+        }
+        let bytes = archive
+            .into_inner()
+            .and_then(flate2::write::GzEncoder::finish)
+            .expect("close the archive");
+
+        let tmp = std::env::temp_dir().join(format!("lumen-web-archive-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).expect("mkdir");
+        let wanted = [WEB_WASM.to_string(), WEB_JS.to_string()];
+        let found = extract_tar_gz(&bytes, &wanted, &tmp).expect("unpack");
+
+        assert!(found.contains(&WEB_WASM.to_string()));
+        assert!(found.contains(&WEB_JS.to_string()));
+        assert_eq!(
+            first_dir_with(std::slice::from_ref(&tmp), &wanted),
+            Some(tmp.clone()),
+            "an unpacked cache directory is one a build can take the runtime from"
+        );
+        assert_eq!(
+            std::fs::read(tmp.join(WEB_WASM)).expect("read"),
+            b"wasm-bytes"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
