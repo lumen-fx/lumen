@@ -374,8 +374,8 @@ Pre-bound scope constants.
 | `window.size()` | `array` | `[width, height]` in logical pixels. |
 | `window.set_size(width, height)` | | Resize the window, in logical pixels. |
 | `window.location.path()` | `string` | The current page path. |
-| `window.location.query()` | `string` | Always empty; query strings are not tracked. |
-| `window.location.hash()` | `string` | Always empty; fragments are not tracked. |
+| `window.location.query()` | `string` | The query string of the request the document is being rendered for, without the leading `?`. |
+| `window.location.hash()` | `string` | The fragment of the request the document is being rendered for, without the leading `#`. |
 | `history.back()` | | Step one entry back. |
 | `history.forward()` | | Step one entry forward. |
 | `history.go(delta)` | | Step `delta` entries; negative goes back. |
@@ -479,6 +479,21 @@ success).
 
 Requests run off the UI thread; the reply is delivered on the tick thread, so a
 handler may touch signals and the element tree freely.
+
+## Request and response
+
+The readers give back what arrived with the request the document is being
+rendered for, and an empty string when there is none to read; a desktop app has
+none. The three writers queue an answer that only a server render applies.
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `request_header(name)` | `string` | The named request header, matched without regard to case. |
+| `request_cookie(name)` | `string` | The named request cookie. |
+| `request_body()` | `string` | The request body. |
+| `response_status(status)` | | Answer with HTTP status `status`, clamped to 100..=599. |
+| `response_header(name, value)` | | Set a response header; setting the same name twice replaces the value. |
+| `redirect(location)` | | Answer with a redirect to `location`, a path or an absolute URL, instead of a document. |
 
 ## Data helpers
 

@@ -3956,6 +3956,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-ssr"
+version = "0.0.3"
+dependencies = [
+ "bevy_ecs",
+ "crossbeam-channel",
+ "lumen-core",
+ "lumen-html",
+ "lumen-http-ureq",
+ "lumen-ir",
+ "lumen-prerender",
+ "lumen-script",
+ "lumen-script-candela",
+ "lumen-web",
+]
+
+[[package]]
 name = "lumen-text"
 version = "0.0.3"
 dependencies = [

@@ -1,0 +1,15 @@
+// Publishes what the app can read of the request it is being rendered for,
+// so a test can look for each of them in the document.
+import "lumen.cdl";
+
+fn main() {}
+
+fn on_start() {
+    lumen::signal_set("seen_language", lumen::request_header("accept-language"));
+    lumen::signal_set("seen_authorization", lumen::request_header("authorization"));
+    lumen::signal_set("seen_session", lumen::request_cookie("session"));
+    lumen::signal_set("seen_body", lumen::request_body());
+    lumen::signal_set("seen_query", window::location_query());
+    lumen::signal_set("seen_path", lumen::signal_get("request.path"));
+    lumen::signal_set("seen_method", lumen::signal_get("request.method"));
+}

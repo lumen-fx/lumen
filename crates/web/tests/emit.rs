@@ -1,6 +1,7 @@
 //! Emitting a site from hand-built IR.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use lumen_html::contract::{
     DEFAULT_CSS_FILE, DEFAULT_MANIFEST_FILE, LM_CONTRACT_VERSION, Manifest, Seed, SeedValue,
@@ -866,7 +867,7 @@ fn a_link_to_a_page_points_at_the_document_it_was_emitted_as() {
 fn every_site_carries_the_shell_a_deep_path_falls_back_to() {
     let mut page = simple_page();
     page.signals = SignalEnv::new().with_global("route.path", "index");
-    page.ir.root.children.push(element(
+    Arc::make_mut(&mut page.ir).root.children.push(element(
         "if",
         Attributes {
             if_signal: Some("route.path".into()),

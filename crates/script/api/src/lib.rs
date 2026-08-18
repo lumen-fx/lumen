@@ -645,6 +645,40 @@ pub enum ScriptCommand {
     },
 }
 
+impl ScriptCommand {
+    /// Whether the command changes the tree rather than the state behind it.
+    ///
+    /// A tree built by a script is built by running the script, so anything
+    /// producing a document without running one for the full life of the app
+    /// has to know that these went by: a page rendered on a server carries
+    /// the markup and the state, and the nodes a script went on to create
+    /// arrive when the browser runs it.
+    pub fn mutates_dom(&self) -> bool {
+        matches!(
+            self,
+            ScriptCommand::SetAttr { .. }
+                | ScriptCommand::RemoveAttr { .. }
+                | ScriptCommand::SetNodeText { .. }
+                | ScriptCommand::ClassAdd { .. }
+                | ScriptCommand::ClassRemove { .. }
+                | ScriptCommand::ClassToggle { .. }
+                | ScriptCommand::SetStyleProp { .. }
+                | ScriptCommand::RemoveStyleProp { .. }
+                | ScriptCommand::Spawn { .. }
+                | ScriptCommand::Insert { .. }
+                | ScriptCommand::ReplaceWith { .. }
+                | ScriptCommand::RemoveNode { .. }
+                | ScriptCommand::CloneNode { .. }
+                | ScriptCommand::SetInnerMarkup { .. }
+                | ScriptCommand::SpawnFragment { .. }
+                | ScriptCommand::BindEvent { .. }
+                | ScriptCommand::UnbindEvent { .. }
+                | ScriptCommand::WindowSetTitle { .. }
+                | ScriptCommand::WindowSetSize { .. }
+        )
+    }
+}
+
 /// File dialog flavour for [`ScriptCommand::OpenFileDialog`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileDialogKind {

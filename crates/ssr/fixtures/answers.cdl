@@ -1,0 +1,17 @@
+// Answers the request with a status and headers, or sends the visitor
+// somewhere else, so a test can see which of them the renderer will send.
+import "lumen.cdl";
+
+fn main() {}
+
+fn on_start() {
+    let go = lumen::request_header("x-go");
+    if go != "" {
+        lumen::redirect(go);
+    } else {
+        lumen::response_status(404);
+        lumen::response_header("X-Made-Up", "yes");
+        lumen::response_header("X-Sneaky", "one\r\nX-Extra: two");
+        lumen::response_header("Content-Length", "0");
+    }
+}

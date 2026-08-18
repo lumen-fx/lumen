@@ -31,6 +31,7 @@ use lumen_core::app::App;
 use lumen_core::property_store::{
     PropertyStore, discard_external_properties, external_properties_pending,
 };
+use lumen_core::request;
 use lumen_core::signals::{ArraySignals, discard_external_signals};
 use lumen_html::contract::Seed;
 use lumen_ir::artifact::CompiledApp;
@@ -105,9 +106,8 @@ pub struct Prerendered {
 /// An app built for one run, before its first tick.
 ///
 /// A caller that only wants the state a page settles into calls [`page`].
-/// This is for one that has something to say to the app first: a server
-/// writes the request it is answering into the store before the app starts,
-/// so an `on_start` reading the address gets the one it was asked for.
+/// This is for one with something to do between the two: a server reads the
+/// response its scripts asked for, and needs the app in hand to do it.
 pub struct Booted {
     /// The app, spawned and seeded, with no tick behind it yet.
     pub app: App,
@@ -137,6 +137,14 @@ pub fn boot(
     discard_external_signals();
 
     let mut app = portable_app();
+
+    // A thread that knows which request it is answering starts the app
+    // knowing it too, before the first script runs: `on_start` is called
+    // while the hosts go in, and an app deciding what to publish decides it
+    // from the address it was asked for.
+    if let Some(request) = request::current() {
+        request.publish(&mut app.world.resource_mut::<PropertyStore>());
+    }
 
     // Ahead of the hosts, which take whatever dispatch is already installed
     // and otherwise install one that would go to the network.
