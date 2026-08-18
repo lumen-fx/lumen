@@ -201,6 +201,36 @@ pub enum ScriptCommand {
         /// Identifier echoed back in `on_http(tag, response)`.
         tag: String,
     },
+    /// Set the status code of the response the document is being rendered
+    /// for.
+    ///
+    /// A page rendered per request answers with more than markup: a page for
+    /// a record nobody has says so with a 404, and a form that rejects what
+    /// it was sent says so with a 422. Nothing outside a server render reads
+    /// this.
+    SetResponseStatus {
+        /// HTTP status code.
+        status: u16,
+    },
+    /// Set a header on the response the document is being rendered for.
+    ///
+    /// Setting the same name twice replaces the value. The renderer decides
+    /// what a script may set: a name that would rewrite how the body is
+    /// framed, or one carrying a line break, is refused and reported.
+    SetResponseHeader {
+        /// Header name.
+        name: String,
+        /// Header value.
+        value: String,
+    },
+    /// Answer the request with a redirect instead of a document.
+    ///
+    /// The render stops where it is: whatever the app had rendered is
+    /// dropped, because a visitor being sent elsewhere never sees it.
+    Redirect {
+        /// Where the visitor is sent, as a path or an absolute URL.
+        location: String,
+    },
     /// Write `value` into the named slot of the reactive [`Signals`]
     /// map. Any entity carrying a `Bind*` component pointing at this name
     /// re-renders next tick. Strings only at this layer; numeric / bool

@@ -271,6 +271,11 @@ pub(crate) fn apply_script_commands(
             | ScriptCommand::BindEvent { .. }
             | ScriptCommand::UnbindEvent { .. }
             | ScriptCommand::WindowSetTitle { .. }
+            // The response belongs to a render that was asked for over HTTP,
+            // which a window is not; `lumen-ssr` applies these.
+            | ScriptCommand::SetResponseStatus { .. }
+            | ScriptCommand::SetResponseHeader { .. }
+            | ScriptCommand::Redirect { .. }
             | ScriptCommand::WindowSetSize { .. } => {}
         }
     }
@@ -423,6 +428,9 @@ pub(crate) fn apply_os_script_commands(
             | ScriptCommand::BindEvent { .. }
             | ScriptCommand::UnbindEvent { .. }
             | ScriptCommand::WindowSetTitle { .. }
+            | ScriptCommand::SetResponseStatus { .. }
+            | ScriptCommand::SetResponseHeader { .. }
+            | ScriptCommand::Redirect { .. }
             | ScriptCommand::WindowSetSize { .. } => {}
         }
     }

@@ -20,6 +20,7 @@ pub mod node_ir;
 pub mod palette;
 pub mod property_store;
 pub mod render_world;
+pub mod request;
 pub mod signals;
 pub mod task;
 pub mod text_events;
