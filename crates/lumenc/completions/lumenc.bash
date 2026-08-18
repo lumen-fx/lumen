@@ -68,7 +68,7 @@ _lumenc() {
             return
             ;;
         "run --size" | "run --dpr" | "run --ticks" | "i18n --lang" | "package --name" | \
-        "web --base" | "web --locale" | "web --port" | \
+        "web --base" | "web --locale" | "web --port" | "web --host" | "web --allow-host" | \
         "find --text" | "find --role" | "find --id" | "find --limit" | \
         "snapshot --max-lines" | "snapshot --cursor" | "screenshot --highlight" | \
         *" --port" | *" --wait-for")
@@ -93,7 +93,7 @@ _lumenc() {
         lint) flags="--css-cascade --signals --strict --json --port --app" ;;
         diff) flags="--json --port --app" ;;
         screenshot) flags="--highlight --lint --bounds --port --app" ;;
-        web) flags="--out --base --locale --render --prerender --no-hooks --lib-dir --strict --serve --port" ;;
+        web) flags="--out --base --locale --render --prerender --no-hooks --lib-dir --strict --serve --ssr --port --host --allow-host" ;;
         bundle) flags="--static --no-hooks" ;;
         package) flags="--name --target --lib-dir --no-hooks" ;;
         i18n) flags="--lang" ;;

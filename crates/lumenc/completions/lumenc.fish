@@ -124,7 +124,10 @@ complete -c lumenc -n '__fish_seen_subcommand_from web' -l no-hooks -d 'Skip the
 complete -c lumenc -n '__fish_seen_subcommand_from web' -l lib-dir -xa '(__fish_complete_directories)' -d 'Directory holding the browser runtime'
 complete -c lumenc -n '__fish_seen_subcommand_from web' -l strict -d 'Fail the build on any warning'
 complete -c lumenc -n '__fish_seen_subcommand_from web' -l serve -d 'Serve the site and print the URL'
+complete -c lumenc -n '__fish_seen_subcommand_from web' -l ssr -d 'Serve every page by rendering it for the request'
 complete -c lumenc -n '__fish_seen_subcommand_from web' -l port -x -d 'Port to serve on'
+complete -c lumenc -n '__fish_seen_subcommand_from web' -l host -x -d 'Address to listen on'
+complete -c lumenc -n '__fish_seen_subcommand_from web' -l allow-host -x -d 'Let a render ask this host for data'
 
 # --- bundle -------------------------------------------------------------------
 
