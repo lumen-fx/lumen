@@ -41,10 +41,10 @@ lumen-web.js        the module that loads it
 assets/             every file the markup points at
 ```
 
-Nothing here is per-app code. The runtime is one prebuilt pair of files that
-ships with the toolchain and loads the compiled app, the same way the desktop
-runtime loads it. A build never compiles Rust or WebAssembly, so it takes
-about as long as `lumenc build`.
+Nothing here is per-app code. The runtime is one prebuilt pair of files, the
+same for every app and every platform, and it loads the compiled app the way
+the desktop runtime loads it. A build never compiles Rust or WebAssembly, so
+it takes about as long as `lumenc build`.
 
 ## How a page reaches the browser
 
@@ -129,10 +129,14 @@ either, and `str(n)` is how a number joins a string in any case.
 program does not export, so a handler that would have done nothing is a
 warning at build time rather than a blank in the page.
 
-The browser runtime is not published yet. Until it is, a build says so and
-emits the site without it: the pages read, the links work, and nothing runs.
-Point `--lib-dir` at a directory holding `lumen-web.wasm` and `lumen-web.js`
-to use a copy you built yourself.
+The runtime is published with every Lumen release. A build uses the copy next
+to `lumenc` when there is one, and otherwise downloads the pair from the
+release matching your `lumenc` version, checks it against the checksums
+published with it, and keeps it in a cache so later builds do not fetch it
+again. `--lib-dir` points at a directory holding `lumen-web.wasm` and
+`lumen-web.js` to use a copy you built yourself instead. A build that finds
+neither says which files it wanted and emits the site without them: the pages
+read, the links work, and nothing runs.
 
 Which page a document shows is decided at build time. State comes from
 `[web.seed]` and from the defaults the markup declares, and `[web] prerender`

@@ -155,10 +155,19 @@ what a static host serves for a path that has no document of its own.
 | `--render static\|csr` | Whether the pages carry the browser runtime: `csr` loads it and runs the app, `static` is files alone. Both write the whole markup tree. Default: `[web] render`. |
 | `--prerender seeds\|run\|none` | Where the state the pages are rendered with comes from: `seeds` uses `[web.seed]` and the defaults the markup declares, `run` starts from those and then runs the app here, writing each page with the state it settles into, `none` renders the markup alone. Default: `[web] prerender`. |
 | `--no-hooks` | Skip the app's `prebuild` hooks. |
-| `--lib-dir <dir>` | Directory holding `lumen-web.wasm` and `lumen-web.js`, instead of the copy shipped with lumenc. |
+| `--lib-dir <dir>` | Directory holding `lumen-web.wasm` and `lumen-web.js`, instead of the published runtime. |
 | `--strict` | Exit non-zero if the build printed any warning. |
 | `--serve` | Serve the emitted site on 127.0.0.1 and print the address. Ctrl-C stops it. |
 | `--port <n>` | Port `--serve` listens on. Default 8787; `0` takes any free port and prints which. |
+
+The browser runtime is looked up in this order: `--lib-dir`, the directory
+holding the running `lumenc`, `$LUMEN_LIB_DIR`, then the download cache. When
+none of them has both files, `lumen-web.tar.gz` is downloaded from the release
+matching this `lumenc` version, checked against the `sha256sums.txt` published
+with it, and unpacked into the cache. It is one pair of files for every
+platform, so the cache holds it under the version alone. Set `LUMEN_GH_REPO`
+to fetch from a different repository. A `--lib-dir` missing either file is
+answered rather than fetched, since it already said which copy to use.
 
 A warning does not stop the build. The build warns when an asset lives outside
 the app directory, when a link names no page, when a script is in a language

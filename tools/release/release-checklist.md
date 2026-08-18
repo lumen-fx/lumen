@@ -81,6 +81,13 @@ checklist.
      did get built into `sha256sums.txt`, creates the release for the tag if
      it does not exist, and uploads the archives and the checksum file.
 
+   Beside the per-target archives it builds the browser runtime once, as
+   `lumen-web.tar.gz`. That pair is WebAssembly, so it is the same file on
+   every platform; `lumenc web` downloads it from the release matching its own
+   version the first time a site needs it. The recipe is
+   `.github/scripts/build-web-runtime.sh`, the same script `ci.yml` measures
+   and runs a browser against.
+
    A single failed target does not block the others: the publish step runs
    even if a build leg failed, and only what succeeded gets uploaded.
    Re-running the workflow after a fix is safe, because `gh release upload
@@ -132,6 +139,11 @@ about an asset is used to identify it.
 downloads; it prints the link and stops. The asset name carries no version:
 the release tag is the version, and GitHub scopes assets to the release they
 were uploaded to.
+
+`lumen-web.tar.gz` is named the same way and is not a target. The installer
+skips it, and `lumenc` fetches it by that exact name from the release matching
+its own version (`crates/lumenc/src/package_cli.rs`), verifying it against the
+same `sha256sums.txt`.
 
 `lumenc` follows the same split when it offers an update. On Unix it re-runs
 `install.sh`; on Windows it downloads

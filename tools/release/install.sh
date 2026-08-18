@@ -45,6 +45,10 @@
 #   lumen-windows-x86_64.msi  the Windows installer. This script never
 #                             fetches or runs it; the windows branch below
 #                             prints its URL and stops.
+#   lumen-web.tar.gz          the browser runtime, which belongs to no
+#                             platform. lumenc downloads it on its own the
+#                             first time a `lumenc web` build needs it, so
+#                             this script leaves it alone.
 #   sha256sums.txt            checksums covering every asset above.
 #
 # tools/release/release-checklist.md documents producing the asset under this
@@ -248,11 +252,14 @@ asset_sha() {
 
 published_targets() {
   # published_targets -> one target per line the release has a lumen-*.tar.gz
-  # asset for, read off the checksum lines rather than a separate list.
+  # asset for, read off the checksum lines rather than a separate list. The
+  # browser runtime is named the same way and is not a platform, so it is
+  # skipped rather than reported as one.
   awk '
     NF >= 2 {
       name = $2
       sub(/^\*/, "", name)
+      if (name == "lumen-web.tar.gz") { next }
       if (index(name, "lumen-") != 1) { next }
       if (name !~ /\.tar\.gz$/) { next }
       t = substr(name, length("lumen-") + 1)

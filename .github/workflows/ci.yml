@@ -214,8 +214,6 @@ jobs:
       # its own piece of work, and this follows the measurement back down when
       # that lands.
       WASM_SIZE_BUDGET_BYTES: 3000000
-      # `wasm-opt` is not published as a crate; the binaryen release carries it.
-      BINARYEN_VERSION: version_123
     steps:
       - if: needs.changes.outputs.rust == 'true'
         uses: actions/checkout@v4
@@ -237,45 +235,15 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: wasm-bindgen-cli@0.2.127
-      - name: Install wasm-opt
-        if: needs.changes.outputs.rust == 'true'
-        run: |
-          set -euo pipefail
-          url="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VERSION/binaryen-$BINARYEN_VERSION-x86_64-linux.tar.gz"
-          curl -fsSL "$url" | tar xz
-          echo "$PWD/binaryen-$BINARYEN_VERSION/bin" >> "$GITHUB_PATH"
       - if: needs.changes.outputs.rust == 'true'
         uses: Swatinem/rust-cache@v2
         with:
           key: web
+      # The same recipe a release runs, so the module measured here is the
+      # module a site downloads.
       - name: Build the browser runtime
         if: needs.changes.outputs.rust == 'true'
-        run: cargo build -p lumen-web-runtime --target wasm32-unknown-unknown --profile wasm-release
-      # `wasm-opt` validates against the features it is told about, and the
-      # ones rustc emits for this target are not all on by default.
-      #
-      # The pair comes out under the names a site refers to them by, because
-      # that is what a toolchain ships and what `lumenc web --lib-dir` looks
-      # for. The page tells the module where its wasm is, so renaming it past
-      # the loader's default costs nothing.
-      - name: Generate the JS bindings and optimise
-        if: needs.changes.outputs.rust == 'true'
-        run: |
-          set -euo pipefail
-          wasm-bindgen --target web --no-typescript --out-name lumen-web \
-            --out-dir web-dist \
-            target/wasm32-unknown-unknown/wasm-release/lumen_web_runtime.wasm
-          mv web-dist/lumen-web_bg.wasm web-dist/lumen-web.wasm
-          wasm-opt -Oz \
-            --enable-bulk-memory \
-            --enable-bulk-memory-opt \
-            --enable-nontrapping-float-to-int \
-            --enable-sign-ext \
-            --enable-mutable-globals \
-            --enable-reference-types \
-            --enable-multivalue \
-            web-dist/lumen-web.wasm \
-            -o web-dist/lumen-web.wasm
+        run: .github/scripts/build-web-runtime.sh web-dist
       - name: Record the module size
         if: needs.changes.outputs.rust == 'true'
         run: |
