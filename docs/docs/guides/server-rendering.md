@@ -28,6 +28,39 @@ and `assets/` as static files, and answer everything else with a render. The
 documents `lumenc web` wrote are the fallback for anything you do not render,
 and the runtime adopts a rendered document the same way it adopts a built one.
 
+## Trying it without writing a server
+
+```
+lumenc web myapp --ssr
+```
+
+That emits the site, then serves it with every page coming from a render of the
+app for the request that asked. It is the same renderer this page documents,
+with a socket in front of it, and it is for developing against and for hosting
+a site yourself: it listens on 127.0.0.1, `--host <addr>` is what widens that
+and says so, and anything the public reaches belongs behind a reverse proxy
+such as nginx. A production deployment embeds `lumen-ssr` in a server of your
+own, which is what the rest of this page is about.
+
+Files keep their own path through it: a stylesheet, an artifact and the wasm
+module are read from the directory the build wrote while a page is being
+rendered, so nothing a page needs waits behind the page. Renders queue, because
+a process renders one at a time.
+
+A renderer holds one site and a site is in one language, so a build emitted in
+several is rendered in the first one and the trees of the others are answered by
+the documents beside them.
+
+A render reaches no host unless you name it, the same policy an embedder sets
+in `FetchPolicy`:
+
+```
+lumenc web myapp --ssr --allow-host api.example.com
+```
+
+Warnings a render comes back with are printed once each, so a page reloaded
+twenty times does not bury a new one.
+
 ## Rendering
 
 ```rust,no_run

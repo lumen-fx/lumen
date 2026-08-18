@@ -7,12 +7,12 @@
 //! and never reaches the network.
 
 use std::collections::BTreeSet;
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use lumenc::web_serve::Server;
+use lumenc::web_serve::{LOOPBACK, Server};
 
 /// The repository this test is built from.
 fn repo() -> PathBuf {
@@ -452,7 +452,7 @@ fn the_served_site_is_what_a_browser_needs() {
     let out = scratch.join("site");
     web("apps/pages-demo", &out, &[]);
 
-    let server = Server::bind(&out, "/", 0).expect("bind a free port");
+    let server = Server::bind(&out, "/", LOOPBACK, 0).expect("bind a free port");
     let address = server.addr();
     std::thread::spawn(move || server.run());
 
@@ -680,4 +680,52 @@ fn an_address_a_run_will_not_ask_for_is_reported() {
         report.contains("https://example.invalid/items.json"),
         "the build says which address went unanswered: {report}"
     );
+}
+
+#[test]
+fn a_served_render_answers_the_paths_a_build_has_no_file_for() {
+    let scratch = scratch("serve-ssr");
+    let out = scratch.join("site");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lumenc"))
+        .arg("web")
+        .arg(repo().join("apps/pages-demo"))
+        .arg("--out")
+        .arg(&out)
+        .args(["--render", "static", "--ssr", "--port", "0"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("running lumenc web --ssr");
+    let address = match serving_at(&mut child) {
+        Some(address) => address,
+        None => {
+            let _ = child.kill();
+            panic!("the server never said where it was listening");
+        }
+    };
+
+    // A path the build wrote no file for: the shell answers it with a 404 on
+    // a file server, and a render answers it with the page it resolves to.
+    let deep = request(address, "/user/42");
+    // What the build wrote for the same path, which is the other answer.
+    let shell = std::fs::read_to_string(out.join("404.html")).expect("the build wrote a shell");
+    let _ = child.kill();
+
+    assert!(deep.starts_with("HTTP/1.1 200 "), "{deep}");
+    assert!(deep.contains(r#"data-lm-page="user""#), "{deep}");
+    assert!(
+        !shell.contains(r#"data-lm-page="user""#),
+        "the built shell is not the user page, so the render is what answered"
+    );
+}
+
+/// Read the server's output until it says where it is listening.
+fn serving_at(child: &mut std::process::Child) -> Option<std::net::SocketAddr> {
+    let stdout = child.stdout.take()?;
+    for line in std::io::BufReader::new(stdout).lines() {
+        let line = line.ok()?;
+        if let Some(url) = line.split(" at http://").nth(1) {
+            return url.trim_end_matches('/').parse().ok();
+        }
+    }
+    None
 }

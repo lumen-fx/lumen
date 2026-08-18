@@ -83,6 +83,9 @@ lumen-web = { path = "../web", version = "0.0.3", optional = true }
 # `--prerender run` - runs the app here and reads the state it settles into,
 # so a page carries the state the app arrives in.
 lumen-prerender = { path = "../prerender", version = "0.0.3", optional = true }
+# `--ssr` - the per-request renderer, which is also what an embedder puts
+# inside their own server. `lumenc` gives it a socket and nothing else.
+lumen-ssr = { path = "../ssr", version = "0.0.3", optional = true }
 # `lumenc web` resolves an app's translations at build time, so a page reads
 # in its language with nothing running.
 lumen-i18n = { path = "../i18n", version = "0.0.3", optional = true }
@@ -166,6 +169,7 @@ web = [
     "dep:lumen-html",
     "dep:lumen-web",
     "dep:lumen-prerender",
+    "dep:lumen-ssr",
     "dep:lumen-i18n",
     "package",
 ]

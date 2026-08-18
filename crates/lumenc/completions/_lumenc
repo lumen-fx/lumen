@@ -189,7 +189,10 @@ _lumenc() {
                         '--lib-dir[Directory holding the browser runtime]:directory:_directories' \
                         '--strict[Fail the build on any warning]' \
                         '--serve[Serve the site and print the URL]' \
+                        '--ssr[Serve every page by rendering it for the request]' \
                         '--port[Port to serve on]:port:' \
+                        '--host[Address to listen on]:address:' \
+                        '*--allow-host[Let a render ask this host for data]:host:' \
                         '--help[Show help]' \
                         '1:app directory:_directories'
                     ;;

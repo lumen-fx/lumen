@@ -127,7 +127,8 @@ Run the result with `lumenc run <dir> --artifact <out.lmna>`. See
 lumenc web <app_dir> [--out <dir>] [--base <path>] [--locale <tag>]...
                      [--render static|csr] [--prerender seeds|run|none]
                      [--no-hooks] [--lib-dir <dir>] [--strict]
-                     [--serve [--port <n>]]
+                     [--serve | --ssr] [--port <n>] [--host <addr>]
+                     [--allow-host <name>]...
 ```
 
 Emits the app as a static site. Compiles it exactly as `build` does, then
@@ -158,7 +159,31 @@ what a static host serves for a path that has no document of its own.
 | `--lib-dir <dir>` | Directory holding `lumen-web.wasm` and `lumen-web.js`, instead of the published runtime. |
 | `--strict` | Exit non-zero if the build printed any warning. |
 | `--serve` | Serve the emitted site on 127.0.0.1 and print the address. Ctrl-C stops it. |
-| `--port <n>` | Port `--serve` listens on. Default 8787; `0` takes any free port and prints which. |
+| `--ssr` | Serve every page by rendering the app for the request that asked, instead of sending the document the build wrote. Implies `--serve`. |
+| `--port <n>` | Port to serve on. Default 8787; `0` takes any free port and prints which. |
+| `--host <addr>` | Address to listen on. Default 127.0.0.1. Any other address makes the site reachable from other machines, and the command says so. |
+| `--allow-host <name>` | Let a render ask this host for data; repeat for more. A render reaches nothing that is not named. |
+
+### Serving
+
+`--serve` and `--ssr` are for development and for a site you host yourself: one
+directory, one machine, one process. Put a reverse proxy in front of either
+before anyone else uses it, and build your production server around
+[`lumen-ssr`](../guides/server-rendering.md), which is the renderer `--ssr`
+installs.
+
+Under `--ssr` the pages come from a render and everything else comes from the
+directory the build wrote, so the stylesheet, the compiled app, the assets and
+the browser runtime are served straight from disk while a page is being
+rendered. A path with no file behind it reaches the render too, so `/user/42`
+is answered by the `user` page with `/42` on `route.segment` rather than by
+`404.html`.
+
+A process renders one request at a time, and requests for pages queue.
+Serving more at once means more processes behind a proxy; the reason is in
+[Rendering on a server](../guides/server-rendering.md). A site emitted in
+several locales is rendered in the first one, and the other trees are served
+as the build wrote them.
 
 The browser runtime is looked up in this order: `--lib-dir`, the directory
 holding the running `lumenc`, `$LUMEN_LIB_DIR`, then the download cache. When

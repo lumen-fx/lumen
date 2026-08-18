@@ -26,6 +26,23 @@ Opening the files directly from disk does not work, because a browser refuses
 to load a module script or a streamed WebAssembly module without a real
 origin.
 
+The server listens on 127.0.0.1, so it answers this machine and nobody else.
+`--host <addr>` widens that, and says so when you use it: this is a server for
+developing against and for hosting a site yourself, and anything the public
+reaches belongs behind a reverse proxy.
+
+To watch the app answer per request rather than serve what the build wrote, ask
+for a render:
+
+```
+lumenc web myapp --ssr
+```
+
+Every page then comes from the app running for the request that asked for it,
+and everything else still comes from the directory. That is
+[rendering on a server](server-rendering.md) with a socket attached; a
+production deployment embeds `lumen-ssr` in a server of your own.
+
 ## What lands in the output directory
 
 ```
@@ -268,7 +285,9 @@ host = "netlify"   # or vercel, apache, nginx
 
 Then the host serves those paths with a 200 and the URL stays as the visitor
 typed it. `lumenc web --serve` answers deep paths the way a plain file server
-does, so what you see locally is what an unconfigured host does.
+does, so what you see locally is what an unconfigured host does. Under `--ssr`
+the render answers them instead, with the page the path resolves to and a 200,
+which is what a server does.
 
 A link with a scheme, a protocol-relative link and a fragment are written into
 the document unchanged.

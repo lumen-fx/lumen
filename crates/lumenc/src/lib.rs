@@ -87,6 +87,10 @@ pub mod web_cli;
 /// directory on one machine.
 #[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "web"))]
 pub mod web_serve;
+/// `lumenc web --ssr` - the server's pages come from a render of the app for
+/// the request that asked, through [`lumen_ssr`].
+#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "web"))]
+pub mod web_ssr;
 
 // The runtime core - the winit/ECS run loop, `RunOptions`/`RunError`,
 // `build_app`, hot reload, the default plugin stack, file-based pages,

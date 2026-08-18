@@ -10,6 +10,7 @@
 //! hands the emitter a [`SiteSpec`], and puts the files it gets back on disk.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -27,12 +28,14 @@ use lumen_runtime::config::{
     LumenToml, WebCssMode, WebHost, WebNavigation, WebPrerender, WebRender, WebSeedValue,
 };
 use lumen_runtime::run::locale_dir;
+use lumen_ssr::{FetchPolicy, RenderOptions, SsrSite};
 use lumen_web::urls::is_external;
 use lumen_web::{
     AssetRef, CssMode, HostRewrite, LocaleSpec, PageSpec, SignalEnv, SiteSpec, State, WebSpec,
 };
 
-use crate::web_serve::Server;
+use crate::web_serve::{LOOPBACK, Server};
+use crate::web_ssr::RenderHandler;
 
 /// Where a site is written when `lumen.toml` and `--out` both stay quiet.
 const DEFAULT_OUT_DIR: &str = "dist/web";
@@ -52,7 +55,8 @@ USAGE:
     lumenc web <app_dir> [--out DIR] [--base PATH] [--locale TAG]...
                          [--render static|csr] [--prerender seeds|run|none]
                          [--no-hooks] [--lib-dir DIR] [--strict]
-                         [--serve [--port N]]
+                         [--serve | --ssr] [--port N] [--host ADDR]
+                         [--allow-host NAME]...
 
 Compiles the app and writes one HTML document per page, the stylesheet and
 the app's assets. The documents carry the markup already rendered, so a page
@@ -78,7 +82,14 @@ runtime are written beside them, and the pages load them.
                       instead of the ones shipped with lumenc.
     --strict          Fail the build on any warning it prints.
     --serve           Serve the site after emitting it, and print the URL.
-    --port N          Port to serve on (default: 8787; 0 picks a free one).";
+    --ssr             Serve every page by rendering the app for the request
+                      that asked for it, instead of sending the document
+                      the build wrote. Implies --serve.
+    --port N          Port to serve on (default: 8787; 0 picks a free one).
+    --host ADDR       Address to listen on (default: 127.0.0.1). Any other
+                      address makes the site reachable from other machines.
+    --allow-host NAME Let a render ask this host for data. Repeat for more;
+                      a render reaches nothing that is not named.";
 
 /// Entry: `lumenc web <app_dir> [flags]`.
 pub fn cmd_web(args: impl Iterator<Item = String>) -> ExitCode {
@@ -106,7 +117,7 @@ pub fn cmd_web(args: impl Iterator<Item = String>) -> ExitCode {
                 return ExitCode::FAILURE;
             }
             if options.serve {
-                return serve(&report.out, &report.base, options.port);
+                return serve(report, &options);
             }
             ExitCode::SUCCESS
         }
@@ -129,7 +140,10 @@ struct Options {
     lib_dir: Option<PathBuf>,
     strict: bool,
     serve: bool,
+    ssr: bool,
     port: u16,
+    host: Option<String>,
+    allow_hosts: Vec<String>,
 }
 
 /// Parse the command line. `Ok(None)` means help was printed.
@@ -146,7 +160,10 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
         lib_dir: None,
         strict: false,
         serve: false,
+        ssr: false,
         port: DEFAULT_PORT,
+        host: None,
+        allow_hosts: Vec::new(),
     };
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
@@ -199,6 +216,14 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
             "--lib-dir" => options.lib_dir = Some(PathBuf::from(value("--lib-dir")?)),
             "--strict" => options.strict = true,
             "--serve" => options.serve = true,
+            // Rendering per request is a way of serving, so asking for it is
+            // asking for a server.
+            "--ssr" => {
+                options.ssr = true;
+                options.serve = true;
+            }
+            "--host" => options.host = Some(value("--host")?),
+            "--allow-host" => options.allow_hosts.push(value("--allow-host")?),
             "--port" => {
                 let raw = value("--port")?;
                 options.port = raw
@@ -228,6 +253,13 @@ struct Report {
     base: String,
     pages: usize,
     warnings: Vec<String>,
+    /// The app a server renders per request, when one was asked for. It holds
+    /// the tree the documents were emitted from, so a rendered page and a
+    /// built one are the same page.
+    site: Option<SsrSite>,
+    /// The locales other than the one a render answers in, which is what a
+    /// server hands to the documents on disk instead.
+    other_locales: Vec<String>,
 }
 
 fn build(options: &Options) -> Result<Report, String> {
@@ -394,6 +426,7 @@ fn build(options: &Options) -> Result<Report, String> {
         WebPrerender::Seeds | WebPrerender::None => BTreeMap::new(),
     };
     let mut pages_written = 0;
+    let mut served: Option<SiteSpec> = None;
     for (index, locale) in locales.iter().enumerate() {
         let mut spec = SiteSpec {
             pages: Vec::new(),
@@ -430,6 +463,13 @@ fn build(options: &Options) -> Result<Report, String> {
         if index == 0 {
             pages_written = spec.pages.len();
             warnings.extend(site.warnings);
+            // A render answers in the locale served from the site root, which
+            // is the tree the pages at the root were emitted from. Serving a
+            // request in one of the other locales is the reverse proxy's to
+            // decide, and it has the built documents for it.
+            if options.ssr {
+                served = Some(spec);
+            }
         }
     }
 
@@ -444,11 +484,27 @@ fn build(options: &Options) -> Result<Report, String> {
         note_deep_paths(&compiled, &keys, &entry);
     }
 
+    // A render starts from the compiled app rather than from the documents on
+    // disk: the state a page is written with is what the app settles into for
+    // the request asking, which is the whole difference between a rendered
+    // page and a built one. The files beside the documents are still the
+    // build's, and the server sends them from the directory.
+    let site = match served {
+        Some(spec) => {
+            let mut site = SsrSite::new(compiled, web).map_err(|e| e.to_string())?;
+            *site.spec_mut() = spec;
+            Some(site.with_seed(declared_seed(&seed)))
+        }
+        None => None,
+    };
+
     Ok(Report {
         out,
         base,
         pages: pages_written,
         warnings,
+        site,
+        other_locales: locales.into_iter().skip(1).collect(),
     })
 }
 
@@ -1062,16 +1118,87 @@ fn copy_file(source: &Path, target: &Path) -> Result<(), String> {
 }
 
 /// Serve the emitted site until the process is stopped.
-fn serve(out: &Path, base: &str, port: u16) -> ExitCode {
-    let server = match Server::bind(out, base, port) {
+///
+/// This is the development and self-hosting path: one directory, one machine,
+/// and one process. A site that answers the public belongs behind a reverse
+/// proxy, and an app that answers it from a render belongs in a server of your
+/// own built on [`lumen_ssr`], which is the same renderer this installs.
+fn serve(report: Report, options: &Options) -> ExitCode {
+    let host = match host_address(options.host.as_deref()) {
+        Ok(host) => host,
+        Err(message) => {
+            eprintln!("lumenc web: {message}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if !host.is_loopback() {
+        eprintln!(
+            "lumenc web: warning: --host {host} makes the site reachable from other machines. \
+             This server is for development and for a site you host yourself; put a reverse proxy \
+             in front of it before anyone else uses it."
+        );
+    }
+    let mut server = match Server::bind(&report.out, &report.base, host, options.port) {
         Ok(server) => server,
         Err(message) => {
             eprintln!("lumenc web: {message}");
             return ExitCode::FAILURE;
         }
     };
-    println!("lumenc web: serving {} at {}", out.display(), server.url());
+
+    if let Some(site) = report.site {
+        let mut fetch = FetchPolicy::default();
+        for allowed in &options.allow_hosts {
+            fetch = fetch.allow_host(allowed);
+        }
+        let render = RenderOptions {
+            fetch,
+            ..RenderOptions::default()
+        };
+        let handler = match RenderHandler::start(site, render, report.other_locales) {
+            Ok(handler) => handler,
+            Err(message) => {
+                eprintln!("lumenc web: {message}");
+                return ExitCode::FAILURE;
+            }
+        };
+        server = server.with_handler(Arc::new(handler));
+        // The number is the process's, not the machine's: a Lumen app reads
+        // its state through buses that belong to the process, so two apps
+        // ticking at once would read each other's writes.
+        println!(
+            "lumenc web: rendering every page for the request that asks, one render at a time"
+        );
+        if options.allow_hosts.is_empty() {
+            println!(
+                "lumenc web: a render reaches no host; pass --allow-host to let the app fetch its \
+                 data while the page is rendered"
+            );
+        }
+    }
+
+    println!(
+        "lumenc web: serving {} at {}",
+        report.out.display(),
+        server.url()
+    );
     println!("lumenc web: press Ctrl-C to stop");
     server.run();
     ExitCode::SUCCESS
+}
+
+/// The address to listen on. Nothing named means the loopback address, which
+/// is the machine this runs on and nobody else.
+fn host_address(host: Option<&str>) -> Result<IpAddr, String> {
+    let Some(host) = host.map(str::trim).filter(|host| !host.is_empty()) else {
+        return Ok(LOOPBACK);
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return Ok(LOOPBACK);
+    }
+    host.parse::<IpAddr>().map_err(|_| {
+        format!(
+            "--host takes an address this machine has, such as 127.0.0.1 or 0.0.0.0, got `{host}`"
+        )
+    })
 }
