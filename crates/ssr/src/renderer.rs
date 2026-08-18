@@ -152,6 +152,10 @@ impl Renderer {
     }
 
     /// Render the document for `request`, blocking until it is written.
+    ///
+    /// A render that panics takes the renderer with it: every later call
+    /// answers [`SsrError::Stopped`], and a server that has to carry on drops
+    /// this one and starts another.
     pub fn render(&self, request: SsrRequest) -> Result<SsrResponse, SsrError> {
         let (reply, answer) = unbounded();
         self.jobs
