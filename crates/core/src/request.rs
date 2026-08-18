@@ -149,8 +149,18 @@ impl Drop for Scope {
 
 /// Install `context` on this thread until the returned [`Scope`] is dropped.
 pub fn enter(context: RequestContext) -> Scope {
-    let previous = CURRENT.with(|current| current.borrow_mut().replace(context));
-    Scope(previous)
+    Scope(install(context))
+}
+
+/// Install `context` on this thread for good, and give back whatever was
+/// there.
+///
+/// This is for a surface whose thread answers one address for its whole life:
+/// a page in a browser is loaded from an address and keeps it until it is
+/// navigated away from. A renderer answering one request after another uses
+/// [`enter`] instead, so each render gets its own.
+pub fn install(context: RequestContext) -> Option<RequestContext> {
+    CURRENT.with(|current| current.borrow_mut().replace(context))
 }
 
 /// Read something out of the request installed on this thread.

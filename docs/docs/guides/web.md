@@ -243,6 +243,11 @@ That leaves the network to the browser, which is where dynamic data belongs:
 the page arrives complete with everything the app knew on its own, and a
 `fetch()` fills in the part only a server can answer.
 
+A page that depends on who is asking, or on data that changes faster than you
+rebuild, wants a render per request instead. That is
+[rendering on a server](server-rendering.md), and it runs the same app from the
+same files.
+
 ## Links and deep paths
 
 A link to a page becomes a link to that page's document: `<a href="settings">`

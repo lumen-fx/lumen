@@ -216,6 +216,19 @@ fn render_one(
              publishes is missing from the document"
         ));
     }
+    // A render runs compiled programs, so a language the build had no compiler
+    // for reaches it as source it cannot read. Said out loud, because the page
+    // is otherwise missing everything that program would have published and
+    // nothing says why.
+    for script in &site.compiled().scripts {
+        if script.bytecode.is_none() {
+            warnings.push(format!(
+                "the app's `{}` program was not compiled into the artifact, so this render runs \
+                 none of it",
+                script.engine
+            ));
+        }
+    }
 
     // The request cells went in with the app, ahead of its scripts. What is
     // left is the part of the address the page set answers for: the tail of a

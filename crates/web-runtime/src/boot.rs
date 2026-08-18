@@ -7,6 +7,7 @@
 
 use std::sync::Once;
 
+use lumen_core::request::RequestContext;
 use lumen_html::contract::DATA_LM;
 use lumen_scene::spawn::SpawnIntoWorld;
 use lumen_web_dom::WebDomPlugin;
@@ -69,6 +70,7 @@ fn report_panics() {
 /// Everything [`boot`] does, in terms that report their own failures.
 async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
     let page = PageContext::from_document()?;
+    install_location();
     let url = manifest_url.unwrap_or_else(|| page.manifest_url());
     let (manifest, loaded) = page.load(&url).await?;
 
@@ -98,6 +100,33 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
     }
     let _ = manifest;
     app.start_frame_loop().map_err(|_| BootError::NoWindow)
+}
+
+/// Tell the app the address the page was opened at.
+///
+/// `window::location_query()` and `window::location_hash()` read the request
+/// a document was produced for. On a server that is the request being
+/// answered; here it is the address in the bar, which is the same question a
+/// script is asking.
+fn install_location() {
+    let Some(location) = web_sys::window().map(|window| window.location()) else {
+        return;
+    };
+    let strip = |value: Result<String, JsValue>, lead: char| {
+        value
+            .unwrap_or_default()
+            .strip_prefix(lead)
+            .unwrap_or_default()
+            .to_string()
+    };
+    lumen_core::request::install(RequestContext {
+        method: "GET".to_string(),
+        path: location.pathname().unwrap_or_default(),
+        query: strip(location.search(), '?'),
+        hash: strip(location.hash(), '#'),
+        secure: location.protocol().unwrap_or_default() == "https:",
+        ..RequestContext::default()
+    });
 }
 
 /// The element the app's root node is.
