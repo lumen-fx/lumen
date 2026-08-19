@@ -11,15 +11,30 @@ use crate::network::NetworkCapture;
 /// per-tick body rebuild unbounded.
 const MAX_ELEMENT_LINES: usize = 400;
 
-/// One line of the Elements tree, ready to become a clickable row.
+/// One line of the Elements tree, ready to become a clickable row. The
+/// label is split into parts so the panel can color them Chrome-style
+/// (tag / id+class / dimensions / interaction state).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ElementRow {
     /// Entity bits of the element the row describes.
     pub id: u64,
     /// Hierarchy depth (0 = root), for indentation.
     pub depth: usize,
-    /// `<tag>#id.class [WxH]` label.
-    pub label: String,
+    /// `<tag>` part.
+    pub tag: String,
+    /// `#id.class` part (empty when the element has neither).
+    pub meta: String,
+    /// ` [WxH]` part (empty without a transform).
+    pub dims: String,
+    /// ` :hover:focus:press` part (empty when idle).
+    pub flags: String,
+}
+
+impl ElementRow {
+    /// The full one-line label (all parts joined).
+    pub fn label(&self) -> String {
+        format!("{}{}{}{}", self.tag, self.meta, self.dims, self.flags)
+    }
 }
 
 /// Flatten the live element tree into depth-annotated rows in document
@@ -65,7 +80,7 @@ pub fn format_elements(snap: &Snapshot, excluded: &HashSet<u64>) -> String {
     let mut out = String::from("Elements\n\n");
     for r in &rows {
         out.push_str(&"  ".repeat(r.depth));
-        out.push_str(&r.label);
+        out.push_str(&r.label());
         out.push('\n');
     }
     if rows.len() >= MAX_ELEMENT_LINES {
@@ -85,11 +100,7 @@ fn walk_element(
         return;
     }
     let inspect = snap.inspect.get(&id);
-    rows.push(ElementRow {
-        id,
-        depth,
-        label: element_line(id, inspect),
-    });
+    rows.push(element_row(id, depth, inspect));
 
     if let Some(i) = inspect {
         let mut kids: Vec<u64> = i
@@ -105,23 +116,30 @@ fn walk_element(
     }
 }
 
-fn element_line(id: u64, inspect: Option<&EntityInspect>) -> String {
+fn element_row(id: u64, depth: usize, inspect: Option<&EntityInspect>) -> ElementRow {
     let Some(i) = inspect else {
-        return format!("<?> e{id}");
+        return ElementRow {
+            id,
+            depth,
+            tag: format!("<?> e{id}"),
+            meta: String::new(),
+            dims: String::new(),
+            flags: String::new(),
+        };
     };
-    let tag = i.tag.as_deref().unwrap_or("node");
-    let mut s = format!("<{tag}>");
+    let mut meta = String::new();
     if let Some(lid) = &i.lumen_id {
-        s.push('#');
-        s.push_str(lid);
+        meta.push('#');
+        meta.push_str(lid);
     }
     for c in &i.classes {
-        s.push('.');
-        s.push_str(c);
+        meta.push('.');
+        meta.push_str(c);
     }
-    if let Some(t) = &i.transform {
-        s.push_str(&format!(" [{:.0}x{:.0}]", t.size.x, t.size.y));
-    }
+    let dims = match &i.transform {
+        Some(t) => format!(" [{:.0}x{:.0}]", t.size.x, t.size.y),
+        None => String::new(),
+    };
     let mut flags = Vec::new();
     if i.hovered {
         flags.push("hover");
@@ -132,11 +150,22 @@ fn element_line(id: u64, inspect: Option<&EntityInspect>) -> String {
     if i.pressed {
         flags.push("press");
     }
-    if !flags.is_empty() {
-        s.push_str(" :");
-        s.push_str(&flags.join(":"));
+    ElementRow {
+        id,
+        depth,
+        tag: format!("<{}>", i.tag.as_deref().unwrap_or("node")),
+        meta,
+        dims,
+        flags: if flags.is_empty() {
+            String::new()
+        } else {
+            format!(" :{}", flags.join(":"))
+        },
     }
-    s
+}
+
+fn element_line(id: u64, inspect: Option<&EntityInspect>) -> String {
+    element_row(id, 0, inspect).label()
 }
 
 /// Render the inspect pane for one selected element: identity line, box

@@ -1,57 +1,74 @@
 /*
-  Lumen devtools overlay styling - the static chrome. Everything spawned
-  after the mount (element rows, tab active/hover states, the highlight
-  box) is styled by the crate's systems, since this sheet is applied once
-  at parse time; the colors there mirror the palette here.
+  Lumen devtools panel styling - the static chrome, in the Chrome DevTools
+  dark palette (#202124 surfaces, #292a2d bars, #3c4043 borders, #e8eaed
+  text). Everything spawned after the mount (element rows, tab and row
+  interaction states, the highlight box) is styled by the crate's systems,
+  since this sheet is applied once at parse time; the colors there mirror
+  this palette.
 */
 
 .dt-panel {
-  background: #16181d;
-  padding: 8 10 10 10;
-  gap: 8;
-  border-left: 1 solid #2c2f36;
+  background: #202124;
+  border-left: 1 solid #3c4043;
 }
 
-.dt-header {
-  padding: 0 0 4 0;
+.dt-toolbar {
+  background: #292a2d;
+  padding: 4 8 4 8;
+  border-bottom: 1 solid #3c4043;
 }
 
-.dt-title {
-  color: #e6e8ec;
-  font-size: 13;
+.dt-pick,
+.dt-tab {
+  color: #9aa0a6;
+  padding: 5 10 5 10;
+  font-size: 12;
 }
 
 .dt-hint {
-  color: #6b7078;
+  color: #5f6368;
   font-size: 11;
-}
-
-.dt-tabbar {
-  padding: 0 0 4 0;
-}
-
-.dt-tab {
-  background: #21252c;
-  color: #c3c8d0;
-  padding: 4 10 4 10;
-  radius: 4;
-  font-size: 12;
+  padding: 5 4 0 0;
 }
 
 .dt-body-scroll {
-  background: #0f1115;
-  radius: 4;
-  padding: 6 8 6 8;
+  background: #202124;
+  padding: 4 0 4 0;
 }
 
 .dt-body {
-  color: #c9cdd4;
+  color: #e8eaed;
   font-size: 12;
+  padding: 2 8 2 8;
 }
 
 .dt-inspect {
-  background: #0f1115;
-  radius: 4;
-  padding: 8 10 8 10;
-  border-top: 1 solid #2c2f36;
+  background: #292a2d;
+  padding: 8 8 8 8;
+  border-top: 1 solid #3c4043;
+}
+
+.dt-edit {
+  background: #202124;
+  color: #e8eaed;
+  font-size: 12;
+  padding: 4 8 4 8;
+  radius: 3;
+  border: 1 solid #3c4043;
+}
+
+.dt-act {
+  background: #3c4043;
+  color: #e8eaed;
+  font-size: 12;
+  padding: 4 10 4 10;
+  radius: 3;
+}
+
+.dt-act:hover {
+  background: #4a4e52;
+}
+
+.dt-act-danger {
+  color: #f28b82;
 }

@@ -41,8 +41,8 @@ use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::*;
 use lumen_core::app::{App, Plugin};
 use lumen_core::components::{
-    Border, Color, DirtyLayout, Disabled, Edges, Fill, Length, LumenId, Style, TextContent,
-    TextStyle, TextWrap, Transform, Visible, Visuals,
+    Border, Color, DirtyLayout, Disabled, Edges, Fill, FlexDirection, Length, LumenId, Style,
+    TextContent, TextStyle, TextWrap, Transform, Visible, Visuals,
 };
 use lumen_core::input::{ClickEvent, Hovered, Key, KeyPressed, ScrollOffset};
 use lumen_core::render_world::{DockInsets, OverlayLayer};
@@ -74,6 +74,8 @@ pub const INSPECT_ID: &str = "dt-inspect";
 pub const INSPECT_BODY_ID: &str = "dt-inspect-body";
 /// `LumenId` of the pick-mode toggle button.
 pub const PICK_ID: &str = "dt-pick";
+/// `LumenId` of the inspect pane's text-content edit input.
+pub const EDIT_ID: &str = "dt-edit";
 
 /// Environment variable that opens the overlay at startup (instead of the
 /// default hidden-until-F12). Useful for headless / automated verification
@@ -81,22 +83,32 @@ pub const PICK_ID: &str = "dt-pick";
 /// enables it.
 pub const OPEN_ENV: &str = "LUMEN_DEVTOOLS_OPEN";
 
-// Dynamic-state palette. Mirrors assets/overlay.css - the stylesheet cannot
-// reach entities spawned after the mount, so the interactive states carry
-// their one Rust fallback here (same contract as the tooltip defaults).
-const TAB_FILL: Color = Color::from_rgba8([0x21, 0x25, 0x2c, 0xff]);
-const TAB_FILL_HOVER: Color = Color::from_rgba8([0x2b, 0x30, 0x3a, 0xff]);
-const TAB_FILL_ACTIVE: Color = Color::from_rgba8([0x3a, 0x68, 0xd8, 0xff]);
-const TAB_TEXT: Color = Color::from_rgba8([0xc3, 0xc8, 0xd0, 0xff]);
-const TAB_TEXT_ACTIVE: Color = Color::from_rgba8([0xff, 0xff, 0xff, 0xff]);
-const ROW_TEXT: Color = Color::from_rgba8([0xc9, 0xcd, 0xd4, 0xff]);
-const ROW_FILL_HOVER: Color = Color::from_rgba8([0x22, 0x26, 0x2e, 0xff]);
-const ROW_FILL_SELECTED: Color = Color::from_rgba8([0x2f, 0x4d, 0x80, 0xff]);
-const HIGHLIGHT_FILL: Color = Color::from_rgba8([0x4d, 0x8c, 0xf2, 0x48]);
-const HIGHLIGHT_BORDER: Color = Color::from_rgba8([0x4a, 0x90, 0xe2, 0xe6]);
+// Dynamic-state palette, the Chrome DevTools dark scheme. Mirrors
+// assets/overlay.css - the stylesheet cannot reach entities spawned after
+// the mount, so the interactive states carry their one Rust fallback here
+// (same contract as the tooltip defaults).
+const TAB_TEXT: Color = Color::from_rgba8([0x9a, 0xa0, 0xa6, 0xff]);
+const TAB_TEXT_ACTIVE: Color = Color::from_rgba8([0xe8, 0xea, 0xed, 0xff]);
+const TAB_UNDERLINE: Color = Color::from_rgba8([0x8a, 0xb4, 0xf8, 0xff]);
+const TAB_FILL_HOVER: Color = Color::from_rgba8([0x35, 0x36, 0x3a, 0xff]);
+const ROW_FILL_HOVER: Color = Color::from_rgba8([0x2f, 0x30, 0x33, 0xff]);
+const ROW_FILL_SELECTED: Color = Color::from_rgba8([0x21, 0x41, 0x66, 0xff]);
+// Markup syntax colors (Chrome Elements panel).
+const TAG_COLOR: Color = Color::from_rgba8([0x5d, 0xb0, 0xd7, 0xff]);
+const META_COLOR: Color = Color::from_rgba8([0xf2, 0x8b, 0x54, 0xff]);
+const DIM_COLOR: Color = Color::from_rgba8([0x9a, 0xa0, 0xa6, 0xff]);
+const FLAG_COLOR: Color = Color::from_rgba8([0xd7, 0xae, 0xfb, 0xff]);
+// Element highlight + its tag tooltip.
+const HIGHLIGHT_FILL: Color = Color::from_rgba8([0x6f, 0xa8, 0xdc, 0x66]);
+const HIGHLIGHT_BORDER: Color = Color::from_rgba8([0x6f, 0xa8, 0xdc, 0xcc]);
+const TIP_FILL: Color = Color::from_rgba8([0x20, 0x21, 0x24, 0xf2]);
+const TIP_BORDER: Color = Color::from_rgba8([0x3c, 0x40, 0x43, 0xff]);
+const TIP_TEXT: Color = Color::from_rgba8([0xe8, 0xea, 0xed, 0xff]);
 const ROW_FONT_PX: f32 = 12.0;
-const ROW_HEIGHT_PX: f32 = 17.0;
+const ROW_HEIGHT_PX: f32 = 18.0;
 const ROW_INDENT_PX: f32 = 12.0;
+const TIP_FONT_PX: f32 = 11.0;
+const TIP_HEIGHT_PX: f32 = 18.0;
 
 /// Whether [`OPEN_ENV`] requests the overlay open at startup.
 pub fn env_open() -> bool {
@@ -126,6 +138,11 @@ pub struct RowTarget(pub u64);
 /// drawn over the hovered / selected element, Chrome-style).
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct HighlightBox;
+
+/// Marker on the highlight's tag tooltip (the `<tag>#id WxH` chip Chrome
+/// shows next to the highlighted element).
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct HighlightTip;
 
 /// Which tab is currently shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -201,6 +218,28 @@ impl Plugin for DevtoolsPlugin {
                 ..Default::default()
             },
         ));
+        // Its tag tooltip chip, positioned beside the box each tick.
+        app.world.spawn((
+            HighlightTip,
+            DevtoolsMarker,
+            Disabled,
+            OverlayLayer,
+            Visible(false),
+            Transform::default(),
+            TextContent(String::new()),
+            TextStyle {
+                color: TIP_TEXT,
+                size_px: TIP_FONT_PX,
+                wrap: TextWrap::None,
+                ..Default::default()
+            },
+            Visuals {
+                fill: Some(Fill::Solid(TIP_FILL)),
+                radius: 3.0,
+                border: Some(Border::uniform(Edges::all(1.0), TIP_BORDER)),
+                ..Default::default()
+            },
+        ));
 
         // Install the process-wide HTTP capture sink so the scripting
         // fetch/http layer's (otherwise no-op) reports start flowing.
@@ -262,14 +301,21 @@ pub fn toggle_devtools_on_f12(
 /// System: route overlay clicks. Tab buttons switch the active tab (and
 /// mirror it into the `dt_tab` signal, parity with the reference
 /// `overlay.rhai`); the Pick button arms pick mode; an Elements row selects
-/// its element; and while picking, a click anywhere on the app selects the
-/// clicked element and disarms the mode (the click still reaches the app).
+/// its element; while picking, a click anywhere on the app selects the
+/// clicked element and disarms the mode (the click still reaches the app);
+/// and the inspect-pane actions edit the selected element in the running
+/// app - toggle its visibility, despawn its subtree, or replace its text
+/// content with what was typed into the edit input.
+#[allow(clippy::too_many_arguments)]
 pub fn handle_clicks(
+    mut commands: Commands,
     mut reader: MessageReader<ClickEvent>,
     mut state: ResMut<DevtoolsState>,
-    ids: Query<&LumenId>,
+    ids: Query<(Entity, &LumenId)>,
     rows: Query<&RowTarget>,
     own: Query<(), With<DevtoolsMarker>>,
+    vis: Query<&Visible>,
+    texts: Query<&TextContent>,
     store: Option<ResMut<lumen_core::property_store::PropertyStore>>,
 ) {
     let mut new_tab: Option<Tab> = None;
@@ -278,7 +324,8 @@ pub fn handle_clicks(
             state.selected = Some(row.0);
             continue;
         }
-        if let Ok(id) = ids.get(ev.entity) {
+        if let Ok((_, id)) = ids.get(ev.entity) {
+            let selected = state.selected.and_then(Entity::try_from_bits);
             match id.0.as_str() {
                 "dt-tab-elements" => new_tab = Some(Tab::Elements),
                 "dt-tab-signals" => new_tab = Some(Tab::Signals),
@@ -286,6 +333,41 @@ pub fn handle_clicks(
                 PICK_ID => {
                     state.picking = !state.picking;
                     state.tab = Tab::Elements;
+                    continue;
+                }
+                "dt-act-hide" => {
+                    if let Some(target) = selected
+                        && let Ok(mut e) = commands.get_entity(target)
+                    {
+                        let shown = vis.get(target).map(|v| v.0).unwrap_or(true);
+                        e.insert(Visible(!shown));
+                    }
+                    continue;
+                }
+                "dt-act-del" => {
+                    if let Some(target) = selected
+                        && let Ok(mut e) = commands.get_entity(target)
+                    {
+                        e.despawn();
+                        state.selected = None;
+                    }
+                    continue;
+                }
+                "dt-act-apply" => {
+                    let typed = ids
+                        .iter()
+                        .find(|(_, id)| id.0 == EDIT_ID)
+                        .and_then(|(e, _)| texts.get(e).ok())
+                        .map(|t| t.0.clone());
+                    // Only elements that already show text take an edit -
+                    // pasting a TextContent onto a container would not
+                    // render anything sensible.
+                    if let (Some(target), Some(new_text)) = (selected, typed)
+                        && texts.get(target).is_ok()
+                        && let Ok(mut e) = commands.get_entity(target)
+                    {
+                        e.insert((TextContent(new_text), DirtyLayout));
+                    }
                     continue;
                 }
                 _ => {}
@@ -352,29 +434,53 @@ pub fn rebuild_element_rows(
         return;
     };
     for r in &rows {
-        commands.spawn((
-            DevtoolsMarker,
-            RowTarget(r.id),
-            ChildOf(container),
-            Style {
-                width: Length::Percent(100.0),
-                height: Length::Px(ROW_HEIGHT_PX),
-                padding: Edges {
-                    left: 4.0 + r.depth as f32 * ROW_INDENT_PX,
+        // The row container carries the target + hit-test Visuals; each
+        // label part is a child with its own syntax color (only the
+        // container is a hit candidate, so hover/click land on the row).
+        let row = commands
+            .spawn((
+                DevtoolsMarker,
+                RowTarget(r.id),
+                ChildOf(container),
+                Style {
+                    width: Length::Percent(100.0),
+                    height: Length::Px(ROW_HEIGHT_PX),
+                    flex_direction: FlexDirection::Row,
+                    padding: Edges {
+                        left: 8.0 + r.depth as f32 * ROW_INDENT_PX,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
-                ..Default::default()
-            },
-            TextContent(r.label.clone()),
-            TextStyle {
-                color: ROW_TEXT,
-                size_px: ROW_FONT_PX,
-                wrap: TextWrap::None,
-                ..Default::default()
-            },
-            // A fill-less Visuals makes the row hit-testable (hover + click).
-            Visuals::default(),
-        ));
+                Visuals::default(),
+            ))
+            .id();
+        let parts: [(&str, Color); 4] = [
+            (&r.tag, TAG_COLOR),
+            (&r.meta, META_COLOR),
+            (&r.dims, DIM_COLOR),
+            (&r.flags, FLAG_COLOR),
+        ];
+        for (text, color) in parts {
+            if text.is_empty() {
+                continue;
+            }
+            commands.spawn((
+                DevtoolsMarker,
+                ChildOf(row),
+                Style {
+                    height: Length::Px(ROW_HEIGHT_PX),
+                    ..Default::default()
+                },
+                TextContent(text.to_string()),
+                TextStyle {
+                    color,
+                    size_px: ROW_FONT_PX,
+                    wrap: TextWrap::None,
+                    ..Default::default()
+                },
+            ));
+        }
     }
     commands.entity(container).insert(DirtyLayout);
     *last = rows;
@@ -383,11 +489,19 @@ pub fn rebuild_element_rows(
 /// System: tab-button visuals - active tab blue, hovered tab lifted, Pick
 /// button blue while pick mode is armed. Writes only on change so a static
 /// panel raises no frame dirt.
+#[allow(clippy::type_complexity)]
 pub fn style_tabs(
+    mut commands: Commands,
     state: Res<DevtoolsState>,
-    mut tabs: Query<(&LumenId, &mut Visuals, &mut TextStyle, Option<&Hovered>)>,
+    mut tabs: Query<(
+        Entity,
+        &LumenId,
+        Option<&mut Visuals>,
+        &mut TextStyle,
+        Option<&Hovered>,
+    )>,
 ) {
-    for (id, mut visuals, mut text, hovered) in &mut tabs {
+    for (entity, id, visuals, mut text, hovered) in &mut tabs {
         let active = match id.0.as_str() {
             "dt-tab-elements" => state.tab == Tab::Elements,
             "dt-tab-signals" => state.tab == Tab::Signals,
@@ -395,16 +509,41 @@ pub fn style_tabs(
             PICK_ID => state.picking,
             _ => continue,
         };
-        let fill = if active {
-            TAB_FILL_ACTIVE
-        } else if hovered.is_some() {
-            TAB_FILL_HOVER
+        // Chrome-style flat tabs: no fill at rest, subtle fill on hover, and
+        // the active tab gets bright text plus a blue bottom underline.
+        let fill = if hovered.is_some() {
+            Some(Fill::Solid(TAB_FILL_HOVER))
         } else {
-            TAB_FILL
+            None
         };
+        let border = active.then(|| Border {
+            widths: Edges {
+                bottom: 2.0,
+                ..Default::default()
+            },
+            color: TAB_UNDERLINE,
+            side_colors: None,
+        });
         let color = if active { TAB_TEXT_ACTIVE } else { TAB_TEXT };
-        if visuals.fill != Some(Fill::Solid(fill)) {
-            visuals.fill = Some(Fill::Solid(fill));
+        match visuals {
+            Some(mut visuals) => {
+                if visuals.fill != fill {
+                    visuals.fill = fill;
+                }
+                if visuals.border != border {
+                    visuals.border = border;
+                }
+            }
+            // A flat tab gets no Visuals from the stylesheet (no static
+            // background), which would also keep it out of hit-testing -
+            // seed the component so the button is clickable.
+            None => {
+                commands.entity(entity).insert(Visuals {
+                    fill,
+                    border,
+                    ..Default::default()
+                });
+            }
         }
         if text.color != color {
             text.color = color;
@@ -455,14 +594,20 @@ pub fn sync_dock_inset(
 /// System: position the highlight box over the current inspect target -
 /// the app element under the pointer while picking, else the hovered row's
 /// element, else the selection. Hidden when there is no target.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn update_highlight(
     state: Res<DevtoolsState>,
+    snapshot: Res<SnapshotHandle>,
     hovered_rows: Query<&RowTarget, With<Hovered>>,
     hovered_app: Query<Entity, (With<Hovered>, Without<DevtoolsMarker>)>,
-    transforms: Query<&Transform, Without<HighlightBox>>,
+    transforms: Query<&Transform, (Without<HighlightBox>, Without<HighlightTip>)>,
     parents: Query<&ChildOf>,
     scrolls: Query<&ScrollOffset>,
-    mut boxes: Query<(&mut Transform, &mut Visible), With<HighlightBox>>,
+    mut boxes: Query<(&mut Transform, &mut Visible), (With<HighlightBox>, Without<HighlightTip>)>,
+    mut tips: Query<
+        (&mut Transform, &mut Visible, &mut TextContent),
+        (With<HighlightTip>, Without<HighlightBox>),
+    >,
 ) {
     let target: Option<Entity> = if !state.visible {
         None
@@ -511,11 +656,62 @@ pub fn update_highlight(
             }
         }
     }
+
+    // The tag tooltip chip: `<tag>#id.class  WxH`, sitting just above the
+    // box (below it when the box touches the top edge).
+    let tip = rect.and_then(|(origin, size)| {
+        let target = target?;
+        let snap = snapshot.0.read().ok()?;
+        let i = snap.inspect.get(&target.to_bits())?;
+        let mut label = format!(" <{}>", i.tag.as_deref().unwrap_or("node"));
+        if let Some(id) = &i.lumen_id {
+            label.push('#');
+            label.push_str(id);
+        }
+        for c in &i.classes {
+            label.push('.');
+            label.push_str(c);
+        }
+        label.push_str(&format!("  {:.0}x{:.0} ", size.x, size.y));
+        let width = label.chars().count() as f32 * (TIP_FONT_PX * 0.62) + 8.0;
+        let y = if origin.y >= TIP_HEIGHT_PX + 4.0 {
+            origin.y - TIP_HEIGHT_PX - 2.0
+        } else {
+            origin.y + size.y + 2.0
+        };
+        Some((
+            glam::Vec2::new(origin.x.max(0.0), y.max(0.0)),
+            glam::Vec2::new(width, TIP_HEIGHT_PX),
+            label,
+        ))
+    });
+    for (mut transform, mut visible, mut text) in &mut tips {
+        match &tip {
+            Some((origin, size, label)) => {
+                if transform.absolute != *origin || transform.size != *size {
+                    transform.absolute = *origin;
+                    transform.size = *size;
+                }
+                if text.0 != *label {
+                    text.0 = label.clone();
+                }
+                if !visible.0 {
+                    visible.0 = true;
+                }
+            }
+            None => {
+                if visible.0 {
+                    visible.0 = false;
+                }
+            }
+        }
+    }
 }
 
 /// System: per-tab pane wiring - which of the rows column / text body /
 /// inspect pane is visible, and the text the visible ones carry. Runs only
 /// while the overlay is shown.
+#[allow(clippy::type_complexity)]
 pub fn refresh_panes(
     mut commands: Commands,
     state: Res<DevtoolsState>,
