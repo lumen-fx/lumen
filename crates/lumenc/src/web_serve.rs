@@ -225,8 +225,11 @@ fn answer(
         return write_response(&mut stream, method_not_allowed(), head_only);
     }
 
-    let (target, query) = head.target.split_once('?').unwrap_or((&head.target, ""));
-    let target = target.split('#').next().unwrap_or("/");
+    // The fragment comes off first, so a target carrying both does not leave
+    // `#top` on the end of the query. A browser keeps the fragment to itself,
+    // but a link followed by hand or by a tool sends it.
+    let (target, _fragment) = head.target.split_once('#').unwrap_or((&head.target, ""));
+    let (target, query) = target.split_once('?').unwrap_or((target, ""));
     // The traversal guard comes first and a handler never sees past it: a
     // path outside the site is refused whatever would have answered it.
     let Some(relative) = site_path(base, target) else {

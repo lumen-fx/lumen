@@ -142,6 +142,39 @@ fn a_deep_path_reaches_its_page_with_the_rest_left_for_it() {
 }
 
 #[test]
+fn a_link_inside_the_site_reaches_the_page_it_points_at() {
+    let _turn = in_turn();
+    let renderer =
+        Renderer::start(site(READS_REQUEST), options(Arc::new(Silent))).expect("nothing running");
+
+    // What a build writes a link to a page as, which is what a visitor
+    // clicking one asks for.
+    for target in ["/user.html", "/user.html?tab=posts"] {
+        let page = renderer
+            .render(SsrRequest::get(target))
+            .expect("the document is written");
+        assert!(
+            page.body.contains("the user page"),
+            "{target}: {}",
+            page.body
+        );
+    }
+
+    // The entry page's document, and a document the site has no page for,
+    // both answer with the entry page.
+    for target in ["/index.html", "/nowhere.html"] {
+        let page = renderer
+            .render(SsrRequest::get(target))
+            .expect("the document is written");
+        assert!(
+            !page.body.contains("the user page"),
+            "{target}: {}",
+            page.body
+        );
+    }
+}
+
+#[test]
 fn the_app_reads_the_request_it_is_rendered_for() {
     let _turn = in_turn();
     let request = SsrRequest::new("POST", "/user/42?tab=posts")

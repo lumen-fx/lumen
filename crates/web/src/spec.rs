@@ -129,6 +129,26 @@ pub fn document_name(key: &str, entry: &str) -> String {
     }
 }
 
+/// The page a URL path names, when what it names is a document.
+///
+/// The reverse of [`document_name`], and the reason it exists: a link inside
+/// an emitted site points at a page's document, so `/settings.html` is a
+/// request for the `settings` page. Anything a build did not write as a
+/// document is `None`, including a path that goes deeper than the site root,
+/// because a page key never has a slash in it.
+pub fn document_key(path: &str, entry: &str) -> Option<String> {
+    let name = path.trim_start_matches('/');
+    if name.contains('/') {
+        return None;
+    }
+    let key = name.strip_suffix(".html").filter(|key| !key.is_empty())?;
+    Some(if key == "index" {
+        entry.to_string()
+    } else {
+        key.to_string()
+    })
+}
+
 /// Where a site is deployed, and so what it takes for a deep path to reach
 /// the app instead of the host's own not-found page.
 ///
@@ -401,5 +421,32 @@ impl Site {
     /// The emitted file at `path`.
     pub fn file(&self, path: &str) -> Option<&OutputFile> {
         self.files.iter().find(|file| file.path == path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_document_name_reads_back_as_the_page_it_was_written_for() {
+        for (key, entry) in [("settings", "index"), ("index", "index"), ("home", "home")] {
+            let document = document_name(key, entry);
+            assert_eq!(
+                document_key(&format!("/{document}"), entry).as_deref(),
+                Some(key),
+                "{document} was written for `{key}`"
+            );
+        }
+    }
+
+    #[test]
+    fn a_path_that_is_not_a_document_names_no_page() {
+        // A path an author wrote, a path deeper than the site root, and the
+        // site root itself: all of them resolve as paths, not as documents.
+        assert_eq!(document_key("/settings", "index"), None);
+        assert_eq!(document_key("/de-DE/settings.html", "index"), None);
+        assert_eq!(document_key("/", "index"), None);
+        assert_eq!(document_key("/.html", "index"), None);
     }
 }

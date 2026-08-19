@@ -175,9 +175,10 @@ installs.
 Under `--ssr` the pages come from a render and everything else comes from the
 directory the build wrote, so the stylesheet, the compiled app, the assets and
 the browser runtime are served straight from disk while a page is being
-rendered. A path with no file behind it reaches the render too, so `/user/42`
-is answered by the `user` page with `/42` on `route.segment` rather than by
-`404.html`.
+rendered. Every address a link in the site produces reaches the page it names:
+`/settings.html` is the `settings` page, and a path with no file behind it
+reaches the render too, so `/user/42` is answered by the `user` page with `/42`
+on `route.segment` rather than by `404.html`.
 
 A process renders one request at a time, and requests for pages queue.
 Serving more at once means more processes behind a proxy; the reason is in
