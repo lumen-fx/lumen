@@ -3,8 +3,8 @@
 //! The app is compiled exactly the way `lumenc build` compiles it, and the
 //! result is written out as HTML: one document per page, with the markup
 //! already in it. The stylesheet and the assets are written beside the pages,
-//! and `[web] render` decides whether the compiled app and the browser runtime
-//! join them.
+//! and `[web] render` says where a document comes from: a build writes it, or
+//! a render produces it for the request that asks.
 //!
 //! What a site is made of is [`lumen_web`]'s to decide; this reads the app,
 //! hands the emitter a [`SiteSpec`], and puts the files it gets back on disk.
@@ -50,19 +50,20 @@ const BYTECODE_FILE: &str = "app.cdlb";
 /// Port `--serve` listens on when none is named.
 const DEFAULT_PORT: u16 = 8787;
 
-const WEB_USAGE: &str = "lumenc web - emit an app as a static site
+const WEB_USAGE: &str = "lumenc web - emit an app as a site
 
 USAGE:
     lumenc web <app_dir> [--out DIR] [--base PATH] [--locale TAG]...
-                         [--render static|csr] [--prerender seeds|run|none]
+                         [--render static|csr|ssr] [--prerender seeds|run|none]
                          [--no-hooks] [--lib-dir DIR] [--strict]
-                         [--serve | --ssr] [--port N] [--host ADDR]
+                         [--serve] [--port N] [--host ADDR]
                          [--allow-host NAME]...
 
-Compiles the app and writes one HTML document per page, the stylesheet and
-the app's assets. The documents carry the markup already rendered, so a page
-reads without scripting. Under --render csr the compiled app and the browser
-runtime are written beside them, and the pages load them.
+Compiles the app and writes the stylesheet, the app's assets and, unless the
+pages are rendered per request, one HTML document per page. A document carries
+the markup already rendered, so a page reads without scripting. Under
+--render csr and --render ssr the compiled app and the browser runtime are
+written too, and a page loads them.
 
     --out DIR         Where the site is written (default: lumen.toml
                       [web] out_dir, else dist/web).
@@ -71,9 +72,11 @@ runtime are written beside them, and the pages load them.
     --locale TAG      Emit a document tree for this locale. Repeat for
                       more; the first is served from the site root
                       (default: [web] locales, else [app] locale).
-    --render MODE     Whether the pages carry the browser runtime: csr
-                      loads it, static is files alone (default: [web]
-                      render). Both write the whole markup tree.
+    --render MODE     Where a page's document comes from: static writes it
+                      with nothing to run it, csr writes it and the runtime
+                      adopts it, ssr produces it for the request that asks
+                      (default: [web] render). Every mode writes the whole
+                      markup tree.
     --prerender MODE  Where the state the pages are rendered with comes
                       from: seeds (lumen.toml [web.seed] and the markup),
                       run (the app runs here and the state it settles into
@@ -83,9 +86,7 @@ runtime are written beside them, and the pages load them.
                       instead of the ones shipped with lumenc.
     --strict          Fail the build on any warning it prints.
     --serve           Serve the site after emitting it, and print the URL.
-    --ssr             Serve every page by rendering the app for the request
-                      that asked for it, instead of sending the document
-                      the build wrote. Implies --serve.
+                      Under --render ssr every page comes from a render.
     --port N          Port to serve on (default: 8787; 0 picks a free one).
     --host ADDR       Address to listen on (default: 127.0.0.1). Any other
                       address makes the site reachable from other machines.
@@ -107,18 +108,34 @@ pub fn cmd_web(args: impl Iterator<Item = String>) -> ExitCode {
             for warning in &report.warnings {
                 warn_line!("lumenc web: warning: {warning}");
             }
-            say_line!(
-                "lumenc web: {} page{} -> {}",
-                report.pages,
-                if report.pages == 1 { "" } else { "s" },
-                report.out.display()
-            );
+            let plural = if report.pages == 1 { "" } else { "s" };
+            if report.per_request {
+                say_line!(
+                    "lumenc web: {} page{plural}, each rendered for the request that asks -> {}",
+                    report.pages,
+                    report.out.display()
+                );
+            } else {
+                say_line!(
+                    "lumenc web: {} page{plural} -> {}",
+                    report.pages,
+                    report.out.display()
+                );
+            }
             if options.strict && !report.warnings.is_empty() {
                 warn_line!("lumenc web: --strict: {} warning(s)", report.warnings.len());
                 return ExitCode::FAILURE;
             }
             if options.serve {
                 return serve(report, &options);
+            }
+            // A rendered site is the files a render needs and no documents, so
+            // there is nothing here for a file server to hand out.
+            if report.per_request {
+                say_line!(
+                    "lumenc web: pass --serve to render the pages here, or point a server built \
+                     on lumen-ssr at this directory"
+                );
             }
             ExitCode::SUCCESS
         }
@@ -141,7 +158,6 @@ struct Options {
     lib_dir: Option<PathBuf>,
     strict: bool,
     serve: bool,
-    ssr: bool,
     port: u16,
     host: Option<String>,
     allow_hosts: Vec<String>,
@@ -161,7 +177,6 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
         lib_dir: None,
         strict: false,
         serve: false,
-        ssr: false,
         port: DEFAULT_PORT,
         host: None,
         allow_hosts: Vec::new(),
@@ -193,9 +208,10 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
                 options.render = Some(match mode.as_str() {
                     "static" => WebRender::Static,
                     "csr" => WebRender::Csr,
+                    "ssr" => WebRender::Ssr,
                     other => {
                         return Err(format!(
-                            "unknown --render mode `{other}` (expected static or csr)"
+                            "unknown --render mode `{other}` (expected static, csr or ssr)"
                         ));
                     }
                 });
@@ -217,12 +233,6 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
             "--lib-dir" => options.lib_dir = Some(PathBuf::from(value("--lib-dir")?)),
             "--strict" => options.strict = true,
             "--serve" => options.serve = true,
-            // Rendering per request is a way of serving, so asking for it is
-            // asking for a server.
-            "--ssr" => {
-                options.ssr = true;
-                options.serve = true;
-            }
             "--host" => options.host = Some(value("--host")?),
             "--allow-host" => options.allow_hosts.push(value("--allow-host")?),
             "--port" => {
@@ -253,6 +263,9 @@ struct Report {
     out: PathBuf,
     base: String,
     pages: usize,
+    /// Whether the pages are produced for the request that asks for them, so
+    /// the directory holds what a render needs rather than the documents.
+    per_request: bool,
     warnings: Vec<String>,
     /// The app a server renders per request, when one was asked for. It holds
     /// the tree the documents were emitted from, so a rendered page and a
@@ -311,6 +324,33 @@ fn build(options: &Options) -> Result<Report, String> {
         .unwrap_or_else(|| "/".to_string());
     let render = options.render.unwrap_or(cfg.web.render);
     let prerender = options.prerender.unwrap_or(cfg.web.prerender);
+    let per_request = render == WebRender::Ssr;
+    // Both of these say what state a page is written with, and they name
+    // different moments to read it at: a run here, and the app answering the
+    // request. Taking either one would leave the other asked for and unused.
+    if per_request && prerender == WebPrerender::Run {
+        return Err(
+            "render `ssr` produces each page for the request that asks, and prerender `run` \
+             writes the state a run of the app settled into here; a page comes from one or the \
+             other. Drop `run`, or render the pages at build time."
+                .to_string(),
+        );
+    }
+    if !options.allow_hosts.is_empty() && !(per_request && options.serve) {
+        warnings.push(
+            "--allow-host names a host a render may ask for data, and nothing here renders a \
+             page; pass --render ssr --serve to render them here, or set the policy in the \
+             server you build on lumen-ssr"
+                .to_string(),
+        );
+    }
+    if per_request && !matches!(cfg.web.host, WebHost::Static) {
+        warnings.push(
+            "[web] host writes the file that makes a file server send the shell for a deep path, \
+             and a rendered site answers that path itself; no rewrite file is written"
+                .to_string(),
+        );
+    }
 
     let plan = lumen_runtime::pages::discover(dir, &cfg);
 
@@ -336,9 +376,10 @@ fn build(options: &Options) -> Result<Report, String> {
     check_links(&compiled.ir.root, &keys, &entry, &mut warnings);
 
     // A static site was asked for files alone, so nothing is looked for and
-    // there is nothing to warn about. Under `csr` a missing runtime is still
-    // only a missing file: the pages are emitted the way a static site's are,
-    // and the build says which one it could not find.
+    // there is nothing to warn about. A page that carries the runtime is the
+    // same page whether a build wrote it or a render produced it, so both of
+    // the other modes need it; a missing one is still only a missing file,
+    // and the pages are emitted the way a static site's are.
     let runtime = match render {
         WebRender::Static => {
             if options.lib_dir.is_some() {
@@ -350,7 +391,7 @@ fn build(options: &Options) -> Result<Report, String> {
             }
             None
         }
-        WebRender::Csr => {
+        WebRender::Csr | WebRender::Ssr => {
             match crate::package_cli::locate_web_runtime(options.lib_dir.as_deref()) {
                 Ok(files) => Some(files),
                 Err(message) => {
@@ -439,7 +480,14 @@ fn build(options: &Options) -> Result<Report, String> {
     for (index, locale) in locales.iter().enumerate() {
         let mut spec = SiteSpec {
             pages: Vec::new(),
-            web: web.clone(),
+            web: WebSpec {
+                // A renderer holds one site and a site is in one language, so
+                // the tree at the site root is the one a render answers for.
+                // The others are answered by the documents beside it, which is
+                // why they are still written.
+                per_request: per_request && index == 0,
+                ..web.clone()
+            },
             locale: LocaleSpec {
                 alternates: locales
                     .iter()
@@ -476,7 +524,7 @@ fn build(options: &Options) -> Result<Report, String> {
             // is the tree the pages at the root were emitted from. Serving a
             // request in one of the other locales is the reverse proxy's to
             // decide, and it has the built documents for it.
-            if options.ssr {
+            if per_request && options.serve {
                 served = Some(spec);
             }
         }
@@ -489,7 +537,9 @@ fn build(options: &Options) -> Result<Report, String> {
         copy_file(&runtime.wasm, &out.join(web.wasm.as_str()))?;
         copy_file(&runtime.js, &out.join(web.js.as_str()))?;
     }
-    if matches!(cfg.web.host, WebHost::Static) {
+    // Which paths a file server has no file for is the build's to say; a
+    // render answers every path with the page it names.
+    if matches!(cfg.web.host, WebHost::Static) && !per_request {
         note_deep_paths(&compiled, &keys, &entry);
     }
 
@@ -511,6 +561,7 @@ fn build(options: &Options) -> Result<Report, String> {
         out,
         base,
         pages: pages_written,
+        per_request,
         warnings,
         site,
         other_locales: locales.into_iter().skip(1).collect(),

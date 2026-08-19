@@ -496,6 +496,9 @@ fn the_command_says_what_it_cannot_do() {
     for (args, expected) in [
         (vec!["web"], "missing <app_dir>"),
         (vec!["web", "--frobnicate"], "unknown flag"),
+        // Rendering per request is a value of --render, and the flag it was
+        // once asked for separately is gone rather than kept beside it.
+        (vec!["web", "--ssr"], "unknown flag"),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_lumenc"))
             .args(&args)
@@ -685,16 +688,24 @@ fn an_address_a_run_will_not_ask_for_is_reported() {
 #[test]
 fn a_served_render_answers_every_link_a_document_carries() {
     let scratch = scratch("serve-ssr-links");
+    // The same app written out as documents, which is where the addresses a
+    // link in the site produces come from. A rendered site writes none of
+    // them, and the two are the same pages either way.
+    let built = scratch.join("built");
+    web("apps/pages-demo", &built, &["--render", "static"]);
+
     let out = scratch.join("site");
     let mut child = Command::new(env!("CARGO_BIN_EXE_lumenc"))
         .arg("web")
         .arg(repo().join("apps/pages-demo"))
         .arg("--out")
         .arg(&out)
-        .args(["--render", "static", "--ssr", "--port", "0"])
+        .arg("--lib-dir")
+        .arg(runtime_dir(&scratch))
+        .args(["--render", "ssr", "--serve", "--port", "0"])
         .stdout(std::process::Stdio::piped())
         .spawn()
-        .expect("running lumenc web --ssr");
+        .expect("running lumenc web --render ssr");
     let address = match serving_at(&mut child) {
         Some(address) => address,
         None => {
@@ -703,16 +714,16 @@ fn a_served_render_answers_every_link_a_document_carries() {
         }
     };
 
-    // Every document the build wrote, which is every URL a link in the site
-    // points at. What each one is expected to answer with comes from the file
-    // itself, so a page added to the app is walked here without this test
-    // being told about it.
-    let mut asked: Vec<(String, String)> = documents(&out)
+    // Every document a build of the app writes, which is every URL a link in
+    // the site points at. What each one is expected to answer with comes from
+    // the file itself, so a page added to the app is walked here without this
+    // test being told about it.
+    let mut asked: Vec<(String, String)> = documents(&built)
         .into_iter()
         .filter(|name| name != "404.html")
         .map(|name| {
-            let built = read(&out, &name);
-            let page = page_of(&built)
+            let document = read(&built, &name);
+            let page = page_of(&document)
                 .unwrap_or_else(|| panic!("the built `{name}` says which page it is"));
             (format!("/{name}"), page)
         })
@@ -725,9 +736,10 @@ fn a_served_render_answers_every_link_a_document_carries() {
     // The addresses beside the documents: the site root, a page named the way
     // its author wrote it, a path deeper than a page, and a document carrying
     // a query string or a fragment. All of them name a page.
-    let entry_page = page_of(&read(&out, "index.html")).expect("the entry document names a page");
-    let settings = page_of(&read(&out, "settings.html")).expect("the settings document names one");
-    let user = page_of(&read(&out, "user.html")).expect("the user document names one");
+    let entry_page = page_of(&read(&built, "index.html")).expect("the entry document names a page");
+    let settings =
+        page_of(&read(&built, "settings.html")).expect("the settings document names one");
+    let user = page_of(&read(&built, "user.html")).expect("the user document names one");
     asked.push(("/".to_string(), entry_page));
     asked.push(("/settings".to_string(), settings.clone()));
     asked.push(("/settings.html?from=nav".to_string(), settings.clone()));
@@ -763,7 +775,7 @@ fn page_of(document: &str) -> Option<String> {
 }
 
 #[test]
-fn a_served_render_answers_the_paths_a_build_has_no_file_for() {
+fn a_served_render_answers_a_path_no_document_stands_for() {
     let scratch = scratch("serve-ssr");
     let out = scratch.join("site");
     let mut child = Command::new(env!("CARGO_BIN_EXE_lumenc"))
@@ -771,10 +783,12 @@ fn a_served_render_answers_the_paths_a_build_has_no_file_for() {
         .arg(repo().join("apps/pages-demo"))
         .arg("--out")
         .arg(&out)
-        .args(["--render", "static", "--ssr", "--port", "0"])
+        .arg("--lib-dir")
+        .arg(runtime_dir(&scratch))
+        .args(["--render", "ssr", "--serve", "--port", "0"])
         .stdout(std::process::Stdio::piped())
         .spawn()
-        .expect("running lumenc web --ssr");
+        .expect("running lumenc web --render ssr");
     let address = match serving_at(&mut child) {
         Some(address) => address,
         None => {
@@ -783,19 +797,63 @@ fn a_served_render_answers_the_paths_a_build_has_no_file_for() {
         }
     };
 
-    // A path the build wrote no file for: the shell answers it with a 404 on
-    // a file server, and a render answers it with the page it resolves to.
+    // A path deeper than a page, which a file server has nothing for and a
+    // render answers with the page it resolves to.
     let deep = request(address, "/user/42");
-    // What the build wrote for the same path, which is the other answer.
-    let shell = std::fs::read_to_string(out.join("404.html")).expect("the build wrote a shell");
     stop(child);
 
     assert!(deep.starts_with("HTTP/1.1 200 "), "{deep}");
     assert!(deep.contains(r#"data-lm-page="user""#), "{deep}");
+    // Nothing on disk could have answered it: the pages are the render's, and
+    // the directory holds what a render needs beside them.
     assert!(
-        !shell.contains(r#"data-lm-page="user""#),
-        "the built shell is not the user page, so the render is what answered"
+        documents(&out).is_empty(),
+        "a rendered site wrote documents: {:?}",
+        documents(&out)
     );
+}
+
+#[test]
+fn a_rendered_site_is_the_files_a_render_needs_and_no_documents() {
+    let scratch = scratch("ssr-files");
+    let out = scratch.join("site");
+    let printed = web("apps/pages-demo", &out, &["--render", "ssr"]);
+    // A build that renders nothing itself says how the pages are reached.
+    assert!(printed.contains("--serve"), "{printed}");
+    assert!(printed.contains("lumen-ssr"), "{printed}");
+
+    let files = files(&out);
+    for expected in [
+        "styles.css",
+        "app.lmna",
+        "lumen.web.json",
+        "lumen-web.wasm",
+        "lumen-web.js",
+    ] {
+        assert!(files.contains(expected), "no `{expected}` in {files:?}");
+    }
+    assert!(
+        documents(&out).is_empty(),
+        "a rendered site wrote documents: {:?}",
+        documents(&out)
+    );
+}
+
+#[test]
+fn a_page_comes_from_a_run_or_from_the_request_and_not_from_both() {
+    let out = scratch("ssr-prerender-run");
+    let output = Command::new(env!("CARGO_BIN_EXE_lumenc"))
+        .args(["web"])
+        .arg(repo().join("apps/pages-demo"))
+        .arg("--out")
+        .arg(out.join("site"))
+        .args(["--render", "ssr", "--prerender", "run"])
+        .output()
+        .expect("running lumenc web");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("render `ssr`"), "{stderr}");
+    assert!(stderr.contains("prerender `run`"), "{stderr}");
 }
 
 /// Stop a served process and collect it, so a case leaves nothing behind.

@@ -581,7 +581,7 @@ pub struct WebCfg {
     /// Which shape a widget the parser built out of smaller elements is
     /// emitted as.
     pub widgets: WebWidgets,
-    /// Whether the documents carry the browser runtime.
+    /// Where a page's document comes from.
     pub render: WebRender,
     /// Where the state the pages are rendered with comes from.
     pub prerender: WebPrerender,
@@ -662,14 +662,12 @@ pub enum WebWidgets {
     Verbatim,
 }
 
-/// `[web] render` - whether the documents carry the browser runtime.
+/// `[web] render` - where a page's document comes from.
 ///
-/// This says what a page does once it is open, not what is in it: every mode
-/// writes the whole markup tree, so a reader and a crawler get the same
-/// document either way. [`WebPrerender`] is the other half, and says which
-/// state that markup is written with.
-///
-/// A value for a site rendered per request joins these when the server lands.
+/// Every mode writes the whole markup tree, so a reader and a crawler get the
+/// same document whichever one is set. What changes is where that document is
+/// produced and what runs once it is open. [`WebPrerender`] is the other
+/// half, and says which state the markup is written with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WebRender {
@@ -680,6 +678,11 @@ pub enum WebRender {
     /// and runs the app from there.
     #[default]
     Csr,
+    /// Each document is produced for the request that asks for it, by running
+    /// the app for that request. The build writes what a server needs instead
+    /// of the pages: the compiled app, the runtime, the stylesheet and the
+    /// assets.
+    Ssr,
 }
 
 /// `[web] prerender` - where the state a page is rendered with comes from.

@@ -125,60 +125,70 @@ Run the result with `lumenc run <dir> --artifact <out.lmna>`. See
 
 ```
 lumenc web <app_dir> [--out <dir>] [--base <path>] [--locale <tag>]...
-                     [--render static|csr] [--prerender seeds|run|none]
+                     [--render static|csr|ssr] [--prerender seeds|run|none]
                      [--no-hooks] [--lib-dir <dir>] [--strict]
-                     [--serve | --ssr] [--port <n>] [--host <addr>]
+                     [--serve] [--port <n>] [--host <addr>]
                      [--allow-host <name>]...
 ```
 
-Emits the app as a static site. Compiles it exactly as `build` does, then
-writes one HTML document per page with the markup already in it, the
-stylesheet, and every file the markup points at. Prints how many pages it
-wrote and where.
+Emits the app as a site. Compiles it exactly as `build` does, then writes the
+stylesheet, every file the markup points at, and one HTML document per page
+with the markup already in it. Prints how many pages it wrote and where.
 
-Under `--render csr`, which is the default, it also writes the compiled app,
-the compiled candela program where there is one, the manifest the browser
-runtime reads, and the browser runtime itself, and the documents load them.
-Under `--render static` it writes none of those, and the documents carry the
-same markup with nothing to run it.
+`--render` says where a document comes from:
+
+- `static` writes the pages, the stylesheet and the assets. No compiled app,
+  no manifest, no runtime, and no boot script in the documents.
+- `csr`, the default, writes those and the compiled app, the compiled candela
+  program where there is one, the manifest the browser runtime reads, and the
+  runtime itself. The documents load them, and the runtime adopts the markup
+  each page arrived with.
+- `ssr` writes what a render needs and no documents: a page is produced when
+  it is asked for, by running the app for that request. `--serve` renders them
+  here; without it the directory is for a server you build on
+  [`lumen-ssr`](../guides/server-rendering.md).
+
+Every mode writes the whole markup tree, so a reader and a crawler get the
+same document whichever one is set.
 
 Runs the app's `prebuild` hooks first unless `--no-hooks` is given.
 
-The entry page is written as `index.html` whatever it is keyed as, and every
-site also gets a `404.html` holding the app with no page selected, which is
-what a static host serves for a path that has no document of its own.
+The entry page is written as `index.html` whatever it is keyed as, and a site
+whose documents a build writes also gets a `404.html` holding the app with no
+page selected, which is what a static host serves for a path that has no
+document of its own.
 
 | Flag | Effect |
 |------|--------|
 | `--out <dir>` | Where the site is written. Default: `[web] out_dir`, else `<app_dir>/dist/web`. |
 | `--base <path>` | URL prefix the site is served under. Default: `[web] base_path`, else `/`. |
 | `--locale <tag>` | Emit a document tree for this locale; repeat for more. The first is served from the site root and the rest from `/<tag>/`. Default: `[web] locales`. |
-| `--render static\|csr` | Whether the pages carry the browser runtime: `csr` loads it and runs the app, `static` is files alone. Both write the whole markup tree. Default: `[web] render`. |
-| `--prerender seeds\|run\|none` | Where the state the pages are rendered with comes from: `seeds` uses `[web.seed]` and the defaults the markup declares, `run` starts from those and then runs the app here, writing each page with the state it settles into, `none` renders the markup alone. Default: `[web] prerender`. |
+| `--render static\|csr\|ssr` | Where a page's document comes from: `static` and `csr` write it at build time, and `ssr` produces it for the request that asks. Default: `[web] render`. |
+| `--prerender seeds\|run\|none` | Where the state the pages are rendered with comes from: `seeds` uses `[web.seed]` and the defaults the markup declares, `run` starts from those and then runs the app here, writing each page with the state it settles into, `none` renders the markup alone. `run` with `--render ssr` is refused, because a rendered page settles its own state per request. Default: `[web] prerender`. |
 | `--no-hooks` | Skip the app's `prebuild` hooks. |
 | `--lib-dir <dir>` | Directory holding `lumen-web.wasm` and `lumen-web.js`, instead of the published runtime. |
 | `--strict` | Exit non-zero if the build printed any warning. |
-| `--serve` | Serve the emitted site on 127.0.0.1 and print the address. Ctrl-C stops it. |
-| `--ssr` | Serve every page by rendering the app for the request that asked, instead of sending the document the build wrote. Implies `--serve`. |
+| `--serve` | Serve the emitted site on 127.0.0.1 and print the address. Ctrl-C stops it. Under `--render ssr` every page comes from a render. |
 | `--port <n>` | Port to serve on. Default 8787; `0` takes any free port and prints which. |
 | `--host <addr>` | Address to listen on. Default 127.0.0.1. Any other address makes the site reachable from other machines, and the command says so. |
-| `--allow-host <name>` | Let a render ask this host for data; repeat for more. A render reaches nothing that is not named. |
+| `--allow-host <name>` | Let a render ask this host for data; repeat for more. A render reaches nothing that is not named. Applies to `--render ssr --serve`; a build that renders nothing says so and ignores it. |
 
 ### Serving
 
-`--serve` and `--ssr` are for development and for a site you host yourself: one
-directory, one machine, one process. Put a reverse proxy in front of either
-before anyone else uses it, and build your production server around
-[`lumen-ssr`](../guides/server-rendering.md), which is the renderer `--ssr`
-installs.
+`--serve` is for development and for a site you host yourself: one directory,
+one machine, one process. Put a reverse proxy in front of it before anyone
+else uses it, and build your production server around
+[`lumen-ssr`](../guides/server-rendering.md), which is the renderer
+`--render ssr` installs.
 
-Under `--ssr` the pages come from a render and everything else comes from the
-directory the build wrote, so the stylesheet, the compiled app, the assets and
-the browser runtime are served straight from disk while a page is being
-rendered. Every address a link in the site produces reaches the page it names:
-`/settings.html` is the `settings` page, and a path with no file behind it
-reaches the render too, so `/user/42` is answered by the `user` page with `/42`
-on `route.segment` rather than by `404.html`.
+Under `--render static` and `--render csr` it hands out the documents the
+build wrote, the way a plain file server does. Under `--render ssr` the pages
+come from a render and everything else comes from the directory, so the
+stylesheet, the compiled app, the assets and the browser runtime are served
+straight from disk while a page is being rendered. Every address a link in the
+site produces reaches the page it names: `/settings.html` is the `settings`
+page, and a path with no file behind it reaches the render too, so `/user/42`
+is answered by the `user` page with `/42` on `route.segment`.
 
 A process renders one request at a time, and requests for pages queue.
 Serving more at once means more processes behind a proxy; the reason is in
@@ -198,7 +208,9 @@ answered rather than fetched, since it already said which copy to use.
 A warning does not stop the build. The build warns when an asset lives outside
 the app directory, when a link names no page, when a script is in a language
 the browser cannot run, when the skin would otherwise be chosen by whichever
-machine built the site, and when the browser runtime cannot be found. Under
+machine built the site, and when the browser runtime cannot be found. It warns
+when `--allow-host` names a host and nothing here renders a page, and when
+`[web] host` names a rewrite file a rendered site has no use for. Under
 `--prerender run` it also warns when an app is still changing when its budget
 runs out, when it asks for an address the build will not fetch, and when the
 same page settles differently on a second run.
@@ -209,7 +221,10 @@ image, host, locales - is `lumen.toml`'s `[web]` section. See
 [`[web]`](lumen-toml.md#web).
 
 A missing `<app_dir>`, an unknown flag, or a mode neither `--render` nor
-`--prerender` has exits 2. Only a markup app can be emitted as a site.
+`--prerender` has exits 2. `--render ssr` together with `--prerender run`
+fails the build: a page is written with the state a run settled into here, or
+with the state the app settles into for the request, and not both. Only a
+markup app can be emitted as a site.
 
 ## package
 

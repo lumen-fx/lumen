@@ -231,6 +231,16 @@ pub struct WebSpec {
     /// say so by carrying no boot script at all, rather than pointing at a
     /// runtime that is not there.
     pub runtime: bool,
+    /// Whether a document of this tree is produced for the request that asks
+    /// for it.
+    ///
+    /// A rendered tree is emitted without documents: the pages, the shell a
+    /// deep path falls back to and a host's rewrite file all stand in for a
+    /// render, and writing them beside one would put a second copy of a page
+    /// where the server sends the rendered one. What the whole site shares is
+    /// written either way, because a render produces documents and nothing
+    /// else.
+    pub per_request: bool,
     /// Write `sitemap.xml`. Needs [`Self::url`].
     pub sitemap: bool,
 }
@@ -254,6 +264,7 @@ impl Default for WebSpec {
             scripts: Vec::new(),
             host: HostRewrite::default(),
             runtime: true,
+            per_request: false,
             sitemap: false,
         }
     }

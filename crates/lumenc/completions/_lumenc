@@ -183,13 +183,12 @@ _lumenc() {
                         '--out[Where the site is written]:directory:_directories' \
                         '--base[URL prefix the site is served under]:path:' \
                         '*--locale[Locale to emit a document tree for]:tag:' \
-                        '--render[Whether the pages carry the browser runtime]:mode:(static csr)' \
+                        '--render[Where the pages come from]:mode:(static csr ssr)' \
                         '--prerender[Where the rendered state comes from]:mode:(seeds run none)' \
                         '--no-hooks[Skip the prebuild hooks]' \
                         '--lib-dir[Directory holding the browser runtime]:directory:_directories' \
                         '--strict[Fail the build on any warning]' \
                         '--serve[Serve the site and print the URL]' \
-                        '--ssr[Serve every page by rendering it for the request]' \
                         '--port[Port to serve on]:port:' \
                         '--host[Address to listen on]:address:' \
                         '*--allow-host[Let a render ask this host for data]:host:' \
