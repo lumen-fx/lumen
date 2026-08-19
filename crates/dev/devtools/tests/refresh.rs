@@ -82,18 +82,24 @@ fn rebuild_spawns_rows_and_excludes_overlay() {
     sched.add_systems(rebuild_element_rows);
     sched.run(&mut world);
 
-    let mut rows = world.query::<(&RowTarget, &TextContent, &ChildOf)>();
-    let rows: Vec<(u64, String, Entity)> = rows
-        .iter(&world)
-        .map(|(t, text, p)| (t.0, text.0.clone(), p.parent()))
-        .collect();
+    let mut rows = world.query::<(&RowTarget, &ChildOf)>();
+    let rows: Vec<(u64, Entity)> = rows.iter(&world).map(|(t, p)| (t.0, p.parent())).collect();
     assert_eq!(rows.len(), 2, "one row per app element: {rows:?}");
-    assert!(rows.iter().all(|(.., p)| *p == container));
-    assert!(rows.iter().any(|(_, l, _)| l.contains("<column>#app-root")));
-    assert!(rows.iter().any(|(_, l, _)| l.contains("<text>")));
+    assert!(rows.iter().all(|(_, p)| *p == container));
+
+    // Label parts are children of the rows, colored per part.
+    let mut labels = world.query_filtered::<&TextContent, With<DevtoolsMarker>>();
+    let joined: String = labels
+        .iter(&world)
+        .map(|t| t.0.clone())
+        .collect::<Vec<_>>()
+        .join("|");
+    assert!(joined.contains("<column>"), "got: {joined}");
+    assert!(joined.contains("#app-root"), "got: {joined}");
+    assert!(joined.contains("<text>"), "got: {joined}");
     assert!(
-        !rows.iter().any(|(_, l, _)| l.contains("dt-secret")),
-        "overlay must not inspect itself: {rows:?}"
+        !joined.contains("dt-secret"),
+        "overlay must not inspect itself: {joined}"
     );
 }
 

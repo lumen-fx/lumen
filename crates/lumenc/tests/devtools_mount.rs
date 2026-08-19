@@ -74,14 +74,19 @@ fn devtools_overlay_mounts_and_refreshes() {
 
     app.tick();
 
-    // The Elements tab spawns one row entity per element, tagged so the
-    // next snapshot excludes it from the tree.
-    let mut q = app
+    // The Elements tab spawns one row entity per element (label parts are
+    // its children), all tagged so the next snapshot excludes them from
+    // the tree.
+    let mut rows = app.world.query::<&RowTarget>();
+    assert!(
+        rows.iter(&app.world).next().is_some(),
+        "rows spawned for the injected snapshot"
+    );
+    let mut labels = app
         .world
-        .query_filtered::<(&TextContent, Option<&DevtoolsMarker>), With<RowTarget>>();
-    let row = q
-        .iter(&app.world)
-        .find(|(t, _)| t.0.contains("app-hello"))
-        .expect("a row for the injected element");
-    assert!(row.1.is_some(), "rows carry DevtoolsMarker");
+        .query_filtered::<&TextContent, With<DevtoolsMarker>>();
+    assert!(
+        labels.iter(&app.world).any(|t| t.0.contains("app-hello")),
+        "a label part for the injected element"
+    );
 }

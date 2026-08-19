@@ -34,14 +34,27 @@ Switch panels by clicking a tab. There is no keyboard shortcut for switching.
 
 | Tab | Contents |
 |-----|----------|
-| Elements | Live element tree, one row per entity: `<tag>#id.class [WxH]` followed by `:hover`, `:focus`, and `:press` state. Hovering a row outlines that element in the app; clicking selects it and opens the inspect pane. The panel's own entities are excluded. Capped at 400 rows. |
-| Signals + Perf | Frame number, tick time, entity count, then one `name = value (kind)` row per global signal. |
+| Elements | Live element tree, one row per entity, syntax-colored the way a browser colors markup: tag, `#id.class`, `[WxH]`, and `:hover`/`:focus`/`:press` state each in their own color. Hovering a row overlays that element in the app with a tinted box and a `<tag>#id WxH` chip; clicking selects it and opens the inspect pane. The panel's own entities are excluded. Capped at 400 rows. |
+| Signals | Frame number, tick time, entity count, then one `name = value (kind)` row per global signal. |
 | Network | HTTP exchanges captured from script `fetch()` calls, oldest first: status, method, URL, and tag. Holds the last 128. |
 
 The Pick button arms hover-to-inspect on the app itself: the element under
-the pointer is outlined, and clicking it selects it in the tree. The click
-that picks still reaches the app. The inspect pane under the tree shows the
-selected element's box, layout style, fill, and text facts.
+the pointer is overlaid, and clicking it selects it in the tree. The click
+that picks still reaches the app.
+
+### Editing the running app
+
+The inspect pane under the tree shows the selected element's box, layout
+style, fill, and text facts, and edits the element in place:
+
+| Control | Effect |
+|---------|--------|
+| text field + Apply | Replaces the element's text content and re-lays it out. Only elements that already show text take the edit. |
+| Hide | Toggles the element's visibility. |
+| Delete | Despawns the element and its subtree. |
+
+Edits change the live world only - source files are untouched, and a
+hot-reload or a script that rewrites the same element overwrites them.
 
 The Elements panel needs the snapshot pipeline, which the introspection server
 provides. With that server off the panel says so instead of showing a tree.
