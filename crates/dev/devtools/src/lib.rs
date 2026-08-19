@@ -258,6 +258,13 @@ pub fn mount_marks(world: &mut World, root: Entity, descendants: &[Entity], visi
         }
     }
     if let Ok(mut em) = world.get_entity_mut(root) {
-        em.insert((DevtoolsRoot, Visible(visible)));
+        // OverlayLayer lifts the subtree into the top paint band: the overlay
+        // is a second root spawned before the app's, so without it the app's
+        // opaque background paints over the whole panel.
+        em.insert((
+            DevtoolsRoot,
+            Visible(visible),
+            lumen_core::render_world::OverlayLayer,
+        ));
     }
 }

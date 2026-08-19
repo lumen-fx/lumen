@@ -18,17 +18,26 @@ use bevy_ecs::prelude::*;
 use lumen_core::components::{LumenId, TextContent, Visible};
 use lumen_devtools::{BODY_ID, DevtoolsMarker, DevtoolsRoot, DevtoolsState, Tab};
 use lumen_mcp::{EntityInspect, EntityView, Snapshot, SnapshotHandle};
-use lumenc::run::{RunOptions, build_headless_app};
+use lumenc::{RunOptions, build_headless_app};
 
 #[test]
 fn devtools_overlay_mounts_and_refreshes() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/devtools_app");
     let (mut app, _window) = build_headless_app(RunOptions::new(dir)).expect("build headless app");
 
-    // The overlay root spawned, starts hidden, and is tagged.
-    let mut roots = app.world.query_filtered::<&Visible, With<DevtoolsRoot>>();
-    let vis = roots.iter(&app.world).next().expect("DevtoolsRoot spawned");
+    // The overlay root spawned, starts hidden, and is tagged. It must sit in
+    // the top-layer paint band: the overlay is a second root spawned before
+    // the app's, so without OverlayLayer the app's background paints over it.
+    let mut roots = app.world.query_filtered::<(
+        &Visible,
+        Option<&lumen_core::render_world::OverlayLayer>,
+    ), With<DevtoolsRoot>>();
+    let (vis, overlay) = roots.iter(&app.world).next().expect("DevtoolsRoot spawned");
     assert!(!vis.0, "overlay starts hidden until F12");
+    assert!(
+        overlay.is_some(),
+        "overlay root lifted into the top paint band"
+    );
 
     // The data-driven body entity exists and carries DevtoolsMarker (so the
     // Elements tab excludes the overlay's own entities).
