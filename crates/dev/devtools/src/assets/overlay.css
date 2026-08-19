@@ -1,58 +1,57 @@
 /*
-  Lumen devtools overlay styling. This is the devtools' own stylesheet:
-  all colours / metrics live here (CSS-reachable), not hardcoded in Rust.
-  Applied by the lumenc dev-mount before the overlay is spawned.
+  Lumen devtools overlay styling - the static chrome. Everything spawned
+  after the mount (element rows, tab active/hover states, the highlight
+  box) is styled by the crate's systems, since this sheet is applied once
+  at parse time; the colors there mirror the palette here.
 */
 
 .dt-panel {
   background: #16181d;
-  padding: 12 14 14 14;
-  gap: 10;
+  padding: 8 10 10 10;
+  gap: 8;
   border-left: 1 solid #2c2f36;
 }
 
 .dt-header {
-  padding: 0 0 8 0;
+  padding: 0 0 4 0;
 }
 
 .dt-title {
   color: #e6e8ec;
-  font-size: 15;
+  font-size: 13;
 }
 
 .dt-hint {
   color: #6b7078;
-  font-size: 12;
+  font-size: 11;
 }
 
 .dt-tabbar {
-  padding: 0 0 8 0;
+  padding: 0 0 4 0;
 }
 
 .dt-tab {
   background: #21252c;
   color: #c3c8d0;
-  padding: 6 12 6 12;
-  radius: 6;
-  font-size: 13;
-}
-
-.dt-tab:hover {
-  background: #2b303a;
-}
-
-.dt-tab.active {
-  background: #3a68d8;
-  color: #ffffff;
+  padding: 4 10 4 10;
+  radius: 4;
+  font-size: 12;
 }
 
 .dt-body-scroll {
   background: #0f1115;
-  radius: 6;
-  padding: 10 12 10 12;
+  radius: 4;
+  padding: 6 8 6 8;
 }
 
 .dt-body {
   color: #c9cdd4;
-  font-size: 13;
+  font-size: 12;
+}
+
+.dt-inspect {
+  background: #0f1115;
+  radius: 4;
+  padding: 8 10 8 10;
+  border-top: 1 solid #2c2f36;
 }

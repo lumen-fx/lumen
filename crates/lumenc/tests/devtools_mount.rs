@@ -16,7 +16,7 @@ use std::sync::{Arc, RwLock};
 
 use bevy_ecs::prelude::*;
 use lumen_core::components::{LumenId, TextContent, Visible};
-use lumen_devtools::{BODY_ID, DevtoolsMarker, DevtoolsRoot, DevtoolsState, Tab};
+use lumen_devtools::{BODY_ID, DevtoolsMarker, DevtoolsRoot, DevtoolsState, RowTarget, Tab};
 use lumen_mcp::{EntityInspect, EntityView, Snapshot, SnapshotHandle};
 use lumenc::{RunOptions, build_headless_app};
 
@@ -74,14 +74,14 @@ fn devtools_overlay_mounts_and_refreshes() {
 
     app.tick();
 
-    let mut q = app.world.query::<(&LumenId, &TextContent)>();
-    let body_text = q
+    // The Elements tab spawns one row entity per element, tagged so the
+    // next snapshot excludes it from the tree.
+    let mut q = app
+        .world
+        .query_filtered::<(&TextContent, Option<&DevtoolsMarker>), With<RowTarget>>();
+    let row = q
         .iter(&app.world)
-        .find(|(id, _)| id.0 == BODY_ID)
-        .map(|(_, t)| t.0.clone())
-        .expect("dt-body text");
-    assert!(
-        body_text.contains("app-hello"),
-        "body should show injected element data, got: {body_text}"
-    );
+        .find(|(t, _)| t.0.contains("app-hello"))
+        .expect("a row for the injected element");
+    assert!(row.1.is_some(), "rows carry DevtoolsMarker");
 }

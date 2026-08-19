@@ -28,15 +28,15 @@ pub struct NetEntry {
     pub error: Option<String>,
 }
 
-impl NetEntry {
-    /// A one-line human rendering for the Network tab.
-    pub fn render(&self) -> String {
-        let state = match (&self.error, self.status) {
-            (Some(e), _) => format!("ERR {e}"),
+/// A one-line human rendering for the Network tab.
+impl From<&NetEntry> for String {
+    fn from(e: &NetEntry) -> Self {
+        let state = match (&e.error, e.status) {
+            (Some(err), _) => format!("ERR {err}"),
             (None, Some(s)) => format!("{s}"),
             (None, None) => "...".to_string(),
         };
-        format!("[{state}] {} {}  ({})", self.method, self.url, self.tag)
+        format!("[{state}] {} {}  ({})", e.method, e.url, e.tag)
     }
 }
 
@@ -159,7 +159,7 @@ mod tests {
         let e = cap.iter().next().unwrap();
         assert_eq!(e.status, Some(200));
         assert!(e.error.is_none());
-        assert!(e.render().contains("200"));
+        assert!(String::from(e).contains("200"));
     }
 
     #[test]
@@ -178,7 +178,7 @@ mod tests {
         });
         let e = cap.iter().next().unwrap();
         assert_eq!(e.error.as_deref(), Some("dns failure"));
-        assert!(e.render().contains("ERR"));
+        assert!(String::from(e).contains("ERR"));
     }
 
     #[test]

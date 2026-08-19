@@ -321,6 +321,11 @@ pub struct LayoutResource {
     /// size of the dirty subtrees; a deep-nesting regression shows up here as
     /// a count that climbs with depth instead of with node count.
     visits_last_sync: usize,
+    /// `(right, bottom)` logical pixels a docked panel takes from the
+    /// viewport. Mirrored from [`lumen_core::render_world::DockInsets`] by
+    /// [`sync_viewport`]; normal roots solve against the reduced space,
+    /// top-layer ([`OverlayLayer`]) roots keep the full viewport.
+    dock_insets: (f32, f32),
 }
 
 impl LayoutResource {
@@ -338,6 +343,7 @@ impl LayoutResource {
             geometry: Geometry::default(),
             solves_last_sync: 0,
             visits_last_sync: 0,
+            dock_insets: (0.0, 0.0),
         }
     }
 
@@ -404,18 +410,23 @@ impl Default for LayoutResource {
 pub fn sync_viewport(
     mut commands: Commands,
     viewport: Res<Viewport>,
+    insets: Option<Res<lumen_core::render_world::DockInsets>>,
     mut layout: NonSendMut<LayoutResource>,
     roots_q: Query<Entity, (With<Style>, Without<ChildOf>)>,
 ) {
     let want = (viewport.size.x, viewport.size.y);
+    let want_insets = insets
+        .map(|i| (i.right.max(0.0), i.bottom.max(0.0)))
+        .unwrap_or((0.0, 0.0));
     let have = match (layout.viewport.width, layout.viewport.height) {
         (AvailableSpace::Definite(w), AvailableSpace::Definite(h)) => Some((w, h)),
         _ => None,
     };
-    if have == Some(want) {
+    if have == Some(want) && layout.dock_insets == want_insets {
         return;
     }
     layout.set_viewport(want.0, want.1);
+    layout.dock_insets = want_insets;
     for e in &roots_q {
         commands.entity(e).insert(DirtyLayout);
     }
@@ -587,6 +598,9 @@ pub fn sync_layout(
     // scroll-contained text that lies outside the visible band.
     scroll_q: Query<(Entity, &ScrollOffset), With<Scroll>>,
     mut memo: ResMut<TextMeasureMemo>,
+    // Dock-inset exemption: top-layer roots solve against the full
+    // viewport while a docked panel shrinks everyone else's.
+    overlay_q: Query<(), With<lumen_core::render_world::OverlayLayer>>,
 ) {
     // Idle-tick fast path: with no dirty entities there is no relayout to
     // do, so we also skip the map/tree bookkeeping below. Entity despawns
@@ -864,6 +878,19 @@ pub fn sync_layout(
     }
 
     let viewport = layout.viewport;
+    // Viewport minus the docked-panel insets: what a normal (non-top-layer)
+    // root solves against while a panel is docked.
+    let inset_viewport = {
+        let (right, bottom) = layout.dock_insets;
+        let shrink = |space: AvailableSpace, by: f32| match space {
+            AvailableSpace::Definite(v) => AvailableSpace::Definite((v - by).max(0.0)),
+            other => other,
+        };
+        taffy::Size {
+            width: shrink(viewport.width, right),
+            height: shrink(viewport.height, bottom),
+        }
+    };
     layout.solves_last_sync = 0;
     layout.visits_last_sync = 0;
     let shaper: &mut dyn TextShaper = &mut **shaper;
@@ -873,8 +900,15 @@ pub fn sync_layout(
     let geometry: &mut Geometry = &mut layout.geometry;
     for root in &dirty_roots {
         // Boundary subtree recomputes solve against the boundary's
-        // prior box; true roots solve against the viewport.
-        let available = pins.get(root).map(|p| p.available).unwrap_or(viewport);
+        // prior box; true roots solve against the viewport, minus the
+        // docked-panel insets unless the root sits in the top paint band.
+        let available = pins.get(root).map(|p| p.available).unwrap_or({
+            if overlay_q.contains(*root) {
+                viewport
+            } else {
+                inset_viewport
+            }
+        });
         if let Some(&node) = layout.map.get(root) {
             layout.solves_last_sync += 1;
             layout.visits_last_sync += compute_layout_memoised(

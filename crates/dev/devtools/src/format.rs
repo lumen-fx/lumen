@@ -11,13 +11,22 @@ use crate::network::NetworkCapture;
 /// per-tick body rebuild unbounded.
 const MAX_ELEMENT_LINES: usize = 400;
 
-/// Render the live element tree, indented by hierarchy depth. Entities in
-/// `excluded` (the devtools overlay's own subtree) are skipped so the panel
-/// never inspects itself.
-pub fn format_elements(snap: &Snapshot, excluded: &HashSet<u64>) -> String {
-    if snap.entities.is_empty() {
-        return "Elements\n\n(no snapshot yet - is the MCP/snapshot plugin enabled?)".to_string();
-    }
+/// One line of the Elements tree, ready to become a clickable row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ElementRow {
+    /// Entity bits of the element the row describes.
+    pub id: u64,
+    /// Hierarchy depth (0 = root), for indentation.
+    pub depth: usize,
+    /// `<tag>#id.class [WxH]` label.
+    pub label: String,
+}
+
+/// Flatten the live element tree into depth-annotated rows in document
+/// order. Entities in `excluded` (the devtools overlay's own subtree) are
+/// skipped so the panel never inspects itself. Capped at
+/// [`MAX_ELEMENT_LINES`] rows.
+pub fn element_rows(snap: &Snapshot, excluded: &HashSet<u64>) -> Vec<ElementRow> {
     // Roots: entities whose parent is absent or itself excluded / missing.
     let present: HashSet<u64> = snap.entities.iter().map(|e| e.id).collect();
     let mut roots: Vec<u64> = snap
@@ -35,14 +44,32 @@ pub fn format_elements(snap: &Snapshot, excluded: &HashSet<u64>) -> String {
         .collect();
     roots.sort_unstable();
 
-    let mut out = String::from("Elements\n\n");
-    let mut lines = 0usize;
+    let mut rows = Vec::new();
     for root in roots {
-        walk_element(snap, root, 0, excluded, &mut out, &mut lines);
-        if lines >= MAX_ELEMENT_LINES {
-            out.push_str("\n... (truncated)");
+        walk_element(snap, root, 0, excluded, &mut rows);
+        if rows.len() >= MAX_ELEMENT_LINES {
             break;
         }
+    }
+    rows
+}
+
+/// Render the live element tree as one indented text block. Kept for the
+/// unit tests and as the plain-text fallback; the panel itself spawns one
+/// row entity per [`ElementRow`].
+pub fn format_elements(snap: &Snapshot, excluded: &HashSet<u64>) -> String {
+    if snap.entities.is_empty() {
+        return "Elements\n\n(no snapshot yet - is the MCP/snapshot plugin enabled?)".to_string();
+    }
+    let rows = element_rows(snap, excluded);
+    let mut out = String::from("Elements\n\n");
+    for r in &rows {
+        out.push_str(&"  ".repeat(r.depth));
+        out.push_str(&r.label);
+        out.push('\n');
+    }
+    if rows.len() >= MAX_ELEMENT_LINES {
+        out.push_str("\n... (truncated)");
     }
     out
 }
@@ -52,18 +79,17 @@ fn walk_element(
     id: u64,
     depth: usize,
     excluded: &HashSet<u64>,
-    out: &mut String,
-    lines: &mut usize,
+    rows: &mut Vec<ElementRow>,
 ) {
-    if *lines >= MAX_ELEMENT_LINES || excluded.contains(&id) {
+    if rows.len() >= MAX_ELEMENT_LINES || excluded.contains(&id) {
         return;
     }
-    let indent = "  ".repeat(depth);
     let inspect = snap.inspect.get(&id);
-    out.push_str(&indent);
-    out.push_str(&element_line(id, inspect));
-    out.push('\n');
-    *lines += 1;
+    rows.push(ElementRow {
+        id,
+        depth,
+        label: element_line(id, inspect),
+    });
 
     if let Some(i) = inspect {
         let mut kids: Vec<u64> = i
@@ -74,7 +100,7 @@ fn walk_element(
             .collect();
         kids.sort_unstable();
         for k in kids {
-            walk_element(snap, k, depth + 1, excluded, out, lines);
+            walk_element(snap, k, depth + 1, excluded, rows);
         }
     }
 }
@@ -113,6 +139,56 @@ fn element_line(id: u64, inspect: Option<&EntityInspect>) -> String {
     s
 }
 
+/// Render the inspect pane for one selected element: identity line, box
+/// geometry, then the compact component facts Chrome would put in the
+/// Styles / Computed panes.
+pub fn format_inspect(inspect: &EntityInspect) -> String {
+    let mut out = element_line(inspect.id, Some(inspect));
+    out.push('\n');
+    if let Some(t) = &inspect.transform {
+        out.push_str(&format!(
+            "box  x {:.0}  y {:.0}  w {:.0}  h {:.0}\n",
+            t.absolute.x, t.absolute.y, t.size.x, t.size.y
+        ));
+    }
+    if let Some(s) = &inspect.style {
+        out.push_str(&format!(
+            "style  {}  w {}  h {}  pad {:?}  margin {:?}\n",
+            s.flex_direction, s.width, s.height, s.padding, s.margin
+        ));
+    }
+    if let Some(v) = &inspect.visuals {
+        let fill = match &v.fill {
+            Some(lumen_mcp::FillView::Solid { color }) => String::from(color),
+            Some(_) => "gradient".to_string(),
+            None => "none".to_string(),
+        };
+        out.push_str(&format!("fill {fill}  radius {:.0}\n", v.radius));
+    }
+    if let Some(ts) = &inspect.text_style {
+        out.push_str(&format!(
+            "text  {}  {:.0}px  {}\n",
+            String::from(&ts.color),
+            ts.size_px,
+            ts.align
+        ));
+    }
+    if let Some(text) = &inspect.text_content {
+        let mut t: String = text.chars().take(80).collect();
+        if text.chars().count() > 80 {
+            t.push_str("...");
+        }
+        out.push_str(&format!("content {t:?}\n"));
+    }
+    if let Some(o) = inspect.opacity {
+        out.push_str(&format!("opacity {o:.2}\n"));
+    }
+    if let Some(src) = &inspect.image_source {
+        out.push_str(&format!("image {src}\n"));
+    }
+    out
+}
+
 /// Render the Signals list plus a compact Performance summary.
 pub fn format_signals(snap: &Snapshot) -> String {
     let mut out = String::from("Signals + Performance\n\n");
@@ -140,7 +216,7 @@ pub fn format_network(cap: &NetworkCapture) -> String {
         return out;
     }
     for e in cap.iter() {
-        out.push_str(&e.render());
+        out.push_str(&String::from(e));
         out.push('\n');
     }
     out
