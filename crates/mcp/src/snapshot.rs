@@ -41,6 +41,24 @@ pub struct ColorView {
     pub a: f32,
 }
 
+/// CSS hex rendering: `#rrggbb`, or `#rrggbbaa` when translucent.
+impl From<&ColorView> for String {
+    fn from(c: &ColorView) -> Self {
+        let ch = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        if c.a >= 1.0 {
+            format!("#{:02x}{:02x}{:02x}", ch(c.r), ch(c.g), ch(c.b))
+        } else {
+            format!(
+                "#{:02x}{:02x}{:02x}{:02x}",
+                ch(c.r),
+                ch(c.g),
+                ch(c.b),
+                ch(c.a)
+            )
+        }
+    }
+}
+
 impl From<lumen_core::components::Color> for ColorView {
     fn from(c: lumen_core::components::Color) -> Self {
         Self {

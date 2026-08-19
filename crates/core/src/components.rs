@@ -2116,10 +2116,34 @@ impl Color {
         Self { r, g, b, a }
     }
 
+    /// Constructs a `Color` from `[R, G, B, A]` bytes - the inverse of
+    /// [`Self::to_rgba8`], and the readable spelling for hex palettes
+    /// (`Color::from_rgba8([0x21, 0x25, 0x2c, 0xff])`).
+    pub const fn from_rgba8(rgba: [u8; 4]) -> Self {
+        Self {
+            r: rgba[0] as f32 / 255.0,
+            g: rgba[1] as f32 / 255.0,
+            b: rgba[2] as f32 / 255.0,
+            a: rgba[3] as f32 / 255.0,
+        }
+    }
+
     /// Packs into `[R, G, B, A]` bytes, clamping each channel to `[0, 1]` and rounding to `u8`.
     pub fn to_rgba8(self) -> [u8; 4] {
         let q = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
         [q(self.r), q(self.g), q(self.b), q(self.a)]
+    }
+}
+
+impl From<[u8; 4]> for Color {
+    fn from(rgba: [u8; 4]) -> Self {
+        Self::from_rgba8(rgba)
+    }
+}
+
+impl From<Color> for [u8; 4] {
+    fn from(c: Color) -> Self {
+        c.to_rgba8()
     }
 }
 

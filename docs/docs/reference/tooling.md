@@ -6,8 +6,10 @@ running app.
 
 ## Devtools
 
-An overlay panel docked to the right edge of the window, showing the live
-element tree, signal values, and captured network requests.
+A panel docked to the right edge of the window, showing the live element
+tree, signal values, and captured network requests. While it is open the
+app reflows into the remaining width, like a browser's docked devtools; it
+never covers the app.
 
 ### Availability
 
@@ -32,9 +34,14 @@ Switch panels by clicking a tab. There is no keyboard shortcut for switching.
 
 | Tab | Contents |
 |-----|----------|
-| Elements | Indented live element tree, one line per entity: `<tag>#id.class [WxH]` followed by `:hover`, `:focus`, and `:press` state. The overlay's own entities are excluded. Capped at 400 lines. |
+| Elements | Live element tree, one row per entity: `<tag>#id.class [WxH]` followed by `:hover`, `:focus`, and `:press` state. Hovering a row outlines that element in the app; clicking selects it and opens the inspect pane. The panel's own entities are excluded. Capped at 400 rows. |
 | Signals + Perf | Frame number, tick time, entity count, then one `name = value (kind)` row per global signal. |
 | Network | HTTP exchanges captured from script `fetch()` calls, oldest first: status, method, URL, and tag. Holds the last 128. |
+
+The Pick button arms hover-to-inspect on the app itself: the element under
+the pointer is outlined, and clicking it selects it in the tree. The click
+that picks still reaches the app. The inspect pane under the tree shows the
+selected element's box, layout style, fill, and text facts.
 
 The Elements panel needs the snapshot pipeline, which the introspection server
 provides. With that server off the panel says so instead of showing a tree.
