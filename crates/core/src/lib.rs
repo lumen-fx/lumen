@@ -17,6 +17,7 @@ pub mod nav;
 pub mod net_capture;
 pub mod node;
 pub mod node_ir;
+pub mod output;
 pub mod palette;
 pub mod property_store;
 pub mod render_world;

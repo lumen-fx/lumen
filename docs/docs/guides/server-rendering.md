@@ -59,7 +59,13 @@ lumenc web myapp --ssr --allow-host api.example.com
 ```
 
 Warnings a render comes back with are printed once each, so a page reloaded
-twenty times does not bury a new one.
+twenty times does not bury a new one. Whether anything is reading them is not
+the server's business: a log line that cannot be written is dropped, rather
+than ending a process in the middle of answering somebody.
+
+A render that panics takes the renderer with it, and the requests after it are
+answered with what happened and a 500. Start the server again once you have
+fixed what panicked.
 
 ## Rendering
 

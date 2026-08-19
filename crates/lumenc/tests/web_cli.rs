@@ -698,7 +698,7 @@ fn a_served_render_answers_every_link_a_document_carries() {
     let address = match serving_at(&mut child) {
         Some(address) => address,
         None => {
-            let _ = child.kill();
+            stop(child);
             panic!("the server never said where it was listening");
         }
     };
@@ -741,7 +741,7 @@ fn a_served_render_answers_every_link_a_document_carries() {
             (path, page, answer)
         })
         .collect();
-    let _ = child.kill();
+    stop(child);
 
     for (path, page, answer) in answers {
         assert!(answer.starts_with("HTTP/1.1 200 "), "{path}: {answer}");
@@ -778,7 +778,7 @@ fn a_served_render_answers_the_paths_a_build_has_no_file_for() {
     let address = match serving_at(&mut child) {
         Some(address) => address,
         None => {
-            let _ = child.kill();
+            stop(child);
             panic!("the server never said where it was listening");
         }
     };
@@ -788,7 +788,7 @@ fn a_served_render_answers_the_paths_a_build_has_no_file_for() {
     let deep = request(address, "/user/42");
     // What the build wrote for the same path, which is the other answer.
     let shell = std::fs::read_to_string(out.join("404.html")).expect("the build wrote a shell");
-    let _ = child.kill();
+    stop(child);
 
     assert!(deep.starts_with("HTTP/1.1 200 "), "{deep}");
     assert!(deep.contains(r#"data-lm-page="user""#), "{deep}");
@@ -798,14 +798,35 @@ fn a_served_render_answers_the_paths_a_build_has_no_file_for() {
     );
 }
 
-/// Read the server's output until it says where it is listening.
+/// Stop a served process and collect it, so a case leaves nothing behind.
+fn stop(mut child: std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Read the server's output on a thread of its own, and hand back the address
+/// it says it is listening on.
+///
+/// The reader keeps reading for as long as the server runs, rather than
+/// stopping at the line this wants. A pipe nobody reads fills up, and a pipe
+/// whose reader has gone is broken for the writer; neither belongs between a
+/// test and the process it is asking for pages.
 fn serving_at(child: &mut std::process::Child) -> Option<std::net::SocketAddr> {
     let stdout = child.stdout.take()?;
-    for line in std::io::BufReader::new(stdout).lines() {
-        let line = line.ok()?;
-        if let Some(url) = line.split(" at http://").nth(1) {
-            return url.trim_end_matches('/').parse().ok();
+    let (found, address) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if let Some(url) = line.split(" at http://").nth(1) {
+                let _ = found.send(url.trim_end_matches('/').to_string());
+            }
         }
-    }
-    None
+    });
+    address
+        .recv_timeout(std::time::Duration::from_secs(120))
+        .ok()?
+        .parse()
+        .ok()
 }

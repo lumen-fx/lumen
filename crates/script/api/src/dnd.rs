@@ -23,6 +23,7 @@ use bevy_ecs::component::Mutable;
 use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use lumen_core::components::LumenId;
+use lumen_core::warn_line;
 use lumen_os_dnd::{DragStarted, DropAccepted};
 
 use crate::runtime::{ScriptCommandEvent, prefix, route_event_two_args};
@@ -42,7 +43,7 @@ pub fn dispatch_drops_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
         if let Err(e) =
             route_event_two_args(&mut *host, "drop", "on_drop", target_id, &payload, &mut out)
         {
-            eprintln!("{}: on_drop failed: {e}", prefix(host.lang()));
+            warn_line!("{}: on_drop failed: {e}", prefix(host.lang()));
         }
     }
 }
@@ -66,7 +67,7 @@ pub fn dispatch_drag_start_to_script<H: ScriptHost + Resource<Mutability = Mutab
             &payload,
             &mut out,
         ) {
-            eprintln!("{}: on_drag_start failed: {e}", prefix(host.lang()));
+            warn_line!("{}: on_drag_start failed: {e}", prefix(host.lang()));
         }
     }
 }

@@ -18,6 +18,7 @@
 
 use bevy_ecs::component::Component;
 use bevy_ecs::resource::Resource;
+use lumen_core::warn_line;
 use lumen_ir::fragment::{DEFAULT_SLOT, Fragment, FragmentTable, SLOT_TAG};
 use lumen_ir::layout_ir::Element;
 use std::collections::BTreeMap;
@@ -151,7 +152,7 @@ pub fn report_once(key: &str, fault: &FragmentFault) {
     let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
     let mut guard = seen.lock().unwrap_or_else(|e| e.into_inner());
     if guard.insert((key.to_string(), fault.to_string())) {
-        eprintln!("spawn_fragment `{key}`: {fault}");
+        warn_line!("spawn_fragment `{key}`: {fault}");
     }
 }
 

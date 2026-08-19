@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use lumen_core::nav::{PATH_SIGNAL, SEGMENT_SIGNAL, resolve_path};
 use lumen_core::signals::ArrayItem;
+use lumen_core::{say_line, warn_line};
 use lumen_html::contract::{
     DEFAULT_ARTIFACT_FILE, NavigationMode, ScriptFormat, ScriptRef, Seed, SeedValue,
 };
@@ -97,23 +98,23 @@ pub fn cmd_web(args: impl Iterator<Item = String>) -> ExitCode {
         Ok(Some(options)) => options,
         Ok(None) => return ExitCode::SUCCESS,
         Err(message) => {
-            eprintln!("lumenc web: {message}\n\n{WEB_USAGE}");
+            warn_line!("lumenc web: {message}\n\n{WEB_USAGE}");
             return ExitCode::from(2);
         }
     };
     match build(&options) {
         Ok(report) => {
             for warning in &report.warnings {
-                eprintln!("lumenc web: warning: {warning}");
+                warn_line!("lumenc web: warning: {warning}");
             }
-            println!(
+            say_line!(
                 "lumenc web: {} page{} -> {}",
                 report.pages,
                 if report.pages == 1 { "" } else { "s" },
                 report.out.display()
             );
             if options.strict && !report.warnings.is_empty() {
-                eprintln!("lumenc web: --strict: {} warning(s)", report.warnings.len());
+                warn_line!("lumenc web: --strict: {} warning(s)", report.warnings.len());
                 return ExitCode::FAILURE;
             }
             if options.serve {
@@ -122,7 +123,7 @@ pub fn cmd_web(args: impl Iterator<Item = String>) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(message) => {
-            eprintln!("lumenc web: {message}");
+            warn_line!("lumenc web: {message}");
             ExitCode::FAILURE
         }
     }
@@ -181,7 +182,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
         };
         match flag.as_str() {
             help if crate::is_help_flag(help) => {
-                println!("{WEB_USAGE}");
+                say_line!("{WEB_USAGE}");
                 return Ok(None);
             }
             "--out" => options.out = Some(PathBuf::from(value("--out")?)),
@@ -1060,7 +1061,7 @@ fn note_deep_paths(compiled: &CompiledApp, keys: &[String], entry: &str) {
         }
         what.push_str("the app's scripts");
     }
-    println!(
+    say_line!(
         "lumenc web: {what} read `{}`, so a path like /{example}/42 is answered by 404.html. Set \
          [web] host to have your host serve those paths with a 200 instead.",
         SEGMENT_SIGNAL,
@@ -1127,12 +1128,12 @@ fn serve(report: Report, options: &Options) -> ExitCode {
     let host = match host_address(options.host.as_deref()) {
         Ok(host) => host,
         Err(message) => {
-            eprintln!("lumenc web: {message}");
+            warn_line!("lumenc web: {message}");
             return ExitCode::FAILURE;
         }
     };
     if !host.is_loopback() {
-        eprintln!(
+        warn_line!(
             "lumenc web: warning: --host {host} makes the site reachable from other machines. \
              This server is for development and for a site you host yourself; put a reverse proxy \
              in front of it before anyone else uses it."
@@ -1141,7 +1142,7 @@ fn serve(report: Report, options: &Options) -> ExitCode {
     let mut server = match Server::bind(&report.out, &report.base, host, options.port) {
         Ok(server) => server,
         Err(message) => {
-            eprintln!("lumenc web: {message}");
+            warn_line!("lumenc web: {message}");
             return ExitCode::FAILURE;
         }
     };
@@ -1158,7 +1159,7 @@ fn serve(report: Report, options: &Options) -> ExitCode {
         let handler = match RenderHandler::start(site, render, report.other_locales) {
             Ok(handler) => handler,
             Err(message) => {
-                eprintln!("lumenc web: {message}");
+                warn_line!("lumenc web: {message}");
                 return ExitCode::FAILURE;
             }
         };
@@ -1166,23 +1167,23 @@ fn serve(report: Report, options: &Options) -> ExitCode {
         // The number is the process's, not the machine's: a Lumen app reads
         // its state through buses that belong to the process, so two apps
         // ticking at once would read each other's writes.
-        println!(
+        say_line!(
             "lumenc web: rendering every page for the request that asks, one render at a time"
         );
         if options.allow_hosts.is_empty() {
-            println!(
+            say_line!(
                 "lumenc web: a render reaches no host; pass --allow-host to let the app fetch its \
                  data while the page is rendered"
             );
         }
     }
 
-    println!(
+    say_line!(
         "lumenc web: serving {} at {}",
         report.out.display(),
         server.url()
     );
-    println!("lumenc web: press Ctrl-C to stop");
+    say_line!("lumenc web: press Ctrl-C to stop");
     server.run();
     ExitCode::SUCCESS
 }
@@ -1201,4 +1202,30 @@ fn host_address(host: Option<&str>) -> Result<IpAddr, String> {
             "--host takes an address this machine has, such as 127.0.0.1 or 0.0.0.0, got `{host}`"
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nothing_named_means_this_machine_and_nobody_else() {
+        assert_eq!(host_address(None), Ok(LOOPBACK));
+        assert_eq!(host_address(Some("")), Ok(LOOPBACK));
+        assert_eq!(host_address(Some(" localhost ")), Ok(LOOPBACK));
+        assert!(host_address(Some("127.0.0.1")).is_ok_and(|host| host.is_loopback()));
+    }
+
+    #[test]
+    fn an_address_that_reaches_further_is_taken_as_written() {
+        let any = host_address(Some("0.0.0.0")).expect("an address this machine can have");
+        assert!(!any.is_loopback(), "the warning is on this being reachable");
+        assert!(host_address(Some("::1")).is_ok_and(|host| host.is_loopback()));
+    }
+
+    #[test]
+    fn something_that_is_not_an_address_is_named_back() {
+        let error = host_address(Some("my-laptop")).expect_err("that is not an address");
+        assert!(error.contains("my-laptop"), "{error}");
+    }
 }

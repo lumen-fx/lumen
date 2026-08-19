@@ -24,6 +24,7 @@ use bevy_ecs::prelude::*;
 use lumen_core::components::{LumenId, TextContent, TextInput};
 use lumen_core::property_store::{PropertyStore, push_external_property};
 use lumen_core::signals::ArraySignals;
+use lumen_core::warn_line;
 use lumen_script::ScriptCommand;
 use lumen_script::runtime::ScriptCommandEvent;
 
@@ -41,7 +42,7 @@ pub fn apply_scene_script_commands(
 ) {
     for event in events.read() {
         match &event.0 {
-            ScriptCommand::Print(line) => eprintln!("[script] {line}"),
+            ScriptCommand::Print(line) => warn_line!("[script] {line}"),
             ScriptCommand::SetText { target_id, text } => {
                 for (entity, id) in &ids {
                     if id.0 != *target_id {
