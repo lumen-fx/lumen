@@ -241,6 +241,60 @@ fn every_completed_flag_exists_in_that_subcommand_s_help() {
     }
 }
 
+/// The modes `lumenc web --help` says `--render` takes, read off the usage
+/// block's `--render static|csr|ssr`.
+fn render_modes_from_help() -> BTreeSet<String> {
+    lumenc(&["web", "--help"])
+        .split_once("--render ")
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("`lumenc web --help` names no modes for --render"))
+        .trim_end_matches(']')
+        .split('|')
+        .map(str::to_string)
+        .collect()
+}
+
+/// The values one script offers for `lumenc web --render`, taken from the
+/// list each shell spells its own way.
+fn render_modes_from_script(shell: &str) -> BTreeSet<String> {
+    let list = match shell {
+        "bash" => BASH
+            .split_once("\"web --render\")")
+            .and_then(|(_, rest)| rest.split_once("-W \""))
+            .and_then(|(_, rest)| rest.split('"').next()),
+        "zsh" => ZSH
+            .split_once("'--render[")
+            .and_then(|(_, rest)| rest.split_once(":mode:("))
+            .and_then(|(_, rest)| rest.split(')').next()),
+        "fish" => FISH
+            .lines()
+            .find(|line| line.contains(" -l render "))
+            .and_then(|line| line.split_once(" -a '"))
+            .and_then(|(_, rest)| rest.split('\'').next()),
+        other => panic!("no reader for the {other} completion"),
+    };
+    list.unwrap_or_else(|| panic!("the {shell} completion offers no modes for --render"))
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn every_script_offers_the_render_modes_the_command_takes() {
+    let expected = render_modes_from_help();
+    assert!(
+        expected.len() > 1,
+        "the help parser found no plausible mode set: {expected:?}"
+    );
+    for shell in ["bash", "zsh", "fish"] {
+        assert_eq!(
+            render_modes_from_script(shell),
+            expected,
+            "the {shell} completion offers other `lumenc web --render` modes than the command takes"
+        );
+    }
+}
+
 #[test]
 fn the_subcommand_prints_the_shipped_scripts_verbatim() {
     for (shell, shipped) in [("bash", BASH), ("zsh", ZSH), ("fish", FISH)] {

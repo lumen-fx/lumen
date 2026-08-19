@@ -17,6 +17,10 @@ use crate::urls;
 /// Emit the site: one document per page, the shell a deep path falls back
 /// to, the stylesheet, and the manifest.
 ///
+/// A tree whose documents are produced per request is emitted without them,
+/// and keeps everything a render needs beside it. [`document`] is what
+/// produces one then.
+///
 /// Nothing is written to disk. The same spec always emits the same bytes,
 /// so a build can be compared against the one before it.
 pub fn emit(spec: &SiteSpec) -> Result<Site, EmitError> {
@@ -46,16 +50,18 @@ pub fn emit(spec: &SiteSpec) -> Result<Site, EmitError> {
     let prefix = spec.locale.prefix();
     let mut warnings = Vec::new();
     let mut files = Vec::with_capacity(spec.pages.len() + 4);
-    for page in &spec.pages {
+    if !spec.web.per_request {
+        for page in &spec.pages {
+            files.push(OutputFile::new(
+                format!("{prefix}{}", page.document(&spec.web.entry)),
+                document(page, spec, &mut warnings)?,
+            ));
+        }
         files.push(OutputFile::new(
-            format!("{prefix}{}", page.document(&spec.web.entry)),
-            document(page, spec, &mut warnings)?,
+            format!("{prefix}{NOT_FOUND_FILE}"),
+            shell(spec, &mut warnings)?,
         ));
     }
-    files.push(OutputFile::new(
-        format!("{prefix}{NOT_FOUND_FILE}"),
-        shell(spec, &mut warnings)?,
-    ));
     if spec.locale.is_root() {
         files.push(OutputFile::new(
             spec.web.css.clone(),
@@ -118,8 +124,12 @@ fn shell(spec: &SiteSpec, warnings: &mut Vec<String>) -> Result<String, EmitErro
 
 /// The deployment file that makes a deep path serve the shell, for a host
 /// that can rewrite. A plain file server needs none: it already serves
-/// [`NOT_FOUND_FILE`].
+/// [`NOT_FOUND_FILE`]. Neither does a rendered site, which answers a deep
+/// path with the page it names.
 fn rewrite_file(spec: &SiteSpec) -> Option<(&'static str, String)> {
+    if spec.web.per_request {
+        return None;
+    }
     let base = urls::normalize_base(&spec.web.base_path);
     let shell = urls::join(&base, NOT_FOUND_FILE);
     let contents = match spec.web.host {
@@ -269,6 +279,45 @@ mod tests {
         assert_eq!(manifest.entry, "index");
         assert_eq!(manifest.contract_version, LM_CONTRACT_VERSION);
         assert_eq!(manifest.navigation, NavigationMode::Hard);
+    }
+
+    #[test]
+    fn a_tree_rendered_per_request_keeps_everything_but_its_documents() {
+        let mut spec = spec();
+        spec.web.host = HostRewrite::Netlify;
+        // A tree a document can be written from, which the manifest cases
+        // above have no use for.
+        let ir = LayoutIR {
+            root: lumen_ir::layout_ir::Element {
+                tag: "root".to_string(),
+                ..Default::default()
+            },
+            ..LayoutIR::default()
+        };
+        for page in &mut spec.pages {
+            page.ir = Arc::new(ir.clone());
+        }
+        let built = emit(&spec).expect("a site of two pages");
+        let rewritten: Vec<&str> = built.files.iter().map(|file| file.path.as_str()).collect();
+        assert!(rewritten.iter().any(|path| path.ends_with(".html")));
+        assert!(rewritten.contains(&"_redirects"));
+
+        spec.web.per_request = true;
+        let rendered = emit(&spec).expect("a site of two pages");
+        let paths: Vec<&str> = rendered
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect();
+        assert!(
+            !paths.iter().any(|path| path.ends_with(".html")),
+            "a page and the shell are the render's to produce: {paths:?}"
+        );
+        // A rewrite file names the shell, and there is none to name.
+        assert!(!paths.contains(&"_redirects"), "{paths:?}");
+        // What every page loads is written whichever way the page arrives.
+        assert!(paths.contains(&spec.web.css.as_str()), "{paths:?}");
+        assert!(paths.contains(&DEFAULT_MANIFEST_FILE), "{paths:?}");
     }
 
     #[test]

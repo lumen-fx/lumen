@@ -35,13 +35,15 @@ To watch the app answer per request rather than serve what the build wrote, ask
 for a render:
 
 ```
-lumenc web myapp --ssr
+lumenc web myapp --render ssr --serve
 ```
 
 Every page then comes from the app running for the request that asked for it,
 and everything else still comes from the directory. That is
 [rendering on a server](server-rendering.md) with a socket attached; a
-production deployment embeds `lumen-ssr` in a server of your own.
+production deployment embeds `lumen-ssr` in a server of your own, and
+`lumenc web myapp --render ssr` on its own writes the directory that server
+reads.
 
 ## What lands in the output directory
 
@@ -62,6 +64,10 @@ Nothing here is per-app code. The runtime is one prebuilt pair of files, the
 same for every app and every platform, and it loads the compiled app the way
 the desktop runtime loads it. A build never compiles Rust or WebAssembly, so
 it takes about as long as `lumenc build`.
+
+Under `render = "ssr"` that list holds everything except the documents. A page
+is produced when it is asked for, so writing one here would leave a second
+copy of it beside the one a visitor is sent.
 
 ## How a page reaches the browser
 
@@ -199,11 +205,11 @@ for itself, such as `Host` or `Content-Length`, is dropped on the way out and
 nothing reports it. And credentials follow the browser's rule rather than the
 app's: cookies ride along to your own origin and not to another one.
 
-## What the pages carry
+## Where a page comes from
 
-`[web] render` says whether the documents load the runtime. Both values write
-the whole markup tree, so what a reader and a crawler get does not change; what
-changes is what happens once the page is open.
+`[web] render` says where a document comes from. Every value writes the whole
+markup tree, so what a reader and a crawler get does not change; what changes
+is what produces the page and what happens once it is open.
 
 `csr`, the default, writes the runtime, the compiled app and the manifest
 beside the pages, and the pages load them. The runtime adopts the markup the
@@ -212,9 +218,16 @@ page arrived with and runs the app from there.
 `static` writes the pages, the stylesheet and the assets, and nothing else. No
 runtime, no compiled app, no manifest, and no boot script in the documents.
 
-Either way a link is an ordinary `<a href>`, so a browser that does not run the
-runtime, or a site that carries none, follows links by loading the next
-document. That needs no configuration.
+`ssr` produces each document for the request that asks for it, by running the
+app for that request. The build writes what a render needs and leaves the
+pages to it, so the app answers with what it knows now rather than with what
+it knew when the site was built. A rendered page carries the runtime the way a
+`csr` page does, and it is adopted the same way. See
+[rendering on a server](server-rendering.md).
+
+Whichever it is, a link is an ordinary `<a href>`, so a browser that does not
+run the runtime, or a site that carries none, follows links by loading the
+next document. That needs no configuration.
 
 ## Running the app during the build
 
@@ -261,9 +274,11 @@ the page arrives complete with everything the app knew on its own, and a
 `fetch()` fills in the part only a server can answer.
 
 A page that depends on who is asking, or on data that changes faster than you
-rebuild, wants a render per request instead. That is
+rebuild, wants a render per request instead. That is `render = "ssr"` and
 [rendering on a server](server-rendering.md), and it runs the same app from the
-same files.
+same files. The two do not combine: a rendered page settles its own state for
+the request that asked, so `prerender = "run"` alongside it is refused rather
+than run and thrown away.
 
 ## Links and deep paths
 
@@ -285,9 +300,10 @@ host = "netlify"   # or vercel, apache, nginx
 
 Then the host serves those paths with a 200 and the URL stays as the visitor
 typed it. `lumenc web --serve` answers deep paths the way a plain file server
-does, so what you see locally is what an unconfigured host does. Under `--ssr`
-the render answers them instead, with the page the path resolves to and a 200,
-which is what a server does.
+does, so what you see locally is what an unconfigured host does. Under
+`--render ssr` the render answers them instead, with the page the path
+resolves to and a 200, which is what a server does; no `404.html` and no
+rewrite file is written, because neither has anything to stand in for.
 
 A link with a scheme, a protocol-relative link and a fragment are written into
 the document unchanged.
@@ -324,6 +340,10 @@ is built, so a page arrives already in its language; `<html lang>` and the
 writing direction follow the locale, and every document links to its
 counterparts with `hreflang`. What the whole site shares - the stylesheet, the
 compiled app, the runtime, the assets - is written once at the root.
+
+A renderer holds one site and a site is in one language, so under
+`render = "ssr"` the locale at the site root is the one a render answers in,
+and the trees of the other locales are written out as documents beside it.
 
 ## What a crawler sees
 

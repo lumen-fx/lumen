@@ -20,18 +20,22 @@ A render produces documents and nothing else. Everything else a page loads
 still comes from `lumenc web`:
 
 ```
-lumenc web myapp
+lumenc web myapp --render ssr
 ```
 
-Serve `styles.css`, `app.lmna`, `app.cdlb`, `lumen-web.wasm`, `lumen-web.js`
-and `assets/` as static files, and answer everything else with a render. The
-documents `lumenc web` wrote are the fallback for anything you do not render,
-and the runtime adopts a rendered document the same way it adopts a built one.
+That writes `styles.css`, `app.lmna`, `app.cdlb`, `lumen-web.wasm`,
+`lumen-web.js` and `assets/`, and no documents: serve those as static files
+and answer everything else with a render. The runtime adopts a rendered
+document the same way it adopts a built one.
+
+Build with `--render csr` instead when you want documents to fall back to.
+Which of the two answers a request is then yours to decide, and so is
+rebuilding them when the app changes.
 
 ## Trying it without writing a server
 
 ```
-lumenc web myapp --ssr
+lumenc web myapp --render ssr --serve
 ```
 
 That emits the site, then serves it with every page coming from a render of the
@@ -55,7 +59,7 @@ A render reaches no host unless you name it, the same policy an embedder sets
 in `FetchPolicy`:
 
 ```
-lumenc web myapp --ssr --allow-host api.example.com
+lumenc web myapp --render ssr --serve --allow-host api.example.com
 ```
 
 Warnings a render comes back with are printed once each, so a page reloaded
