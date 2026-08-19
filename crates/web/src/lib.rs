@@ -33,5 +33,5 @@ pub use site::{NOT_FOUND_FILE, SITEMAP_FILE, document, emit};
 pub use snapshot::{State, state_of};
 pub use spec::{
     AssetRef, CssMode, HostRewrite, LocaleSpec, OutputFile, PageSpec, SignalEnv, Site, SiteSpec,
-    WebSpec, document_name,
+    WebSpec, document_key, document_name,
 };

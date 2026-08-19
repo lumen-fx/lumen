@@ -683,6 +683,86 @@ fn an_address_a_run_will_not_ask_for_is_reported() {
 }
 
 #[test]
+fn a_served_render_answers_every_link_a_document_carries() {
+    let scratch = scratch("serve-ssr-links");
+    let out = scratch.join("site");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lumenc"))
+        .arg("web")
+        .arg(repo().join("apps/pages-demo"))
+        .arg("--out")
+        .arg(&out)
+        .args(["--render", "static", "--ssr", "--port", "0"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("running lumenc web --ssr");
+    let address = match serving_at(&mut child) {
+        Some(address) => address,
+        None => {
+            let _ = child.kill();
+            panic!("the server never said where it was listening");
+        }
+    };
+
+    // Every document the build wrote, which is every URL a link in the site
+    // points at. What each one is expected to answer with comes from the file
+    // itself, so a page added to the app is walked here without this test
+    // being told about it.
+    let mut asked: Vec<(String, String)> = documents(&out)
+        .into_iter()
+        .filter(|name| name != "404.html")
+        .map(|name| {
+            let built = read(&out, &name);
+            let page = page_of(&built)
+                .unwrap_or_else(|| panic!("the built `{name}` says which page it is"));
+            (format!("/{name}"), page)
+        })
+        .collect();
+    assert!(
+        asked.len() > 1,
+        "the app under test has more than one page: {asked:?}"
+    );
+
+    // The addresses beside the documents: the site root, a page named the way
+    // its author wrote it, a path deeper than a page, and a document carrying
+    // a query string or a fragment. All of them name a page.
+    let entry_page = page_of(&read(&out, "index.html")).expect("the entry document names a page");
+    let settings = page_of(&read(&out, "settings.html")).expect("the settings document names one");
+    let user = page_of(&read(&out, "user.html")).expect("the user document names one");
+    asked.push(("/".to_string(), entry_page));
+    asked.push(("/settings".to_string(), settings.clone()));
+    asked.push(("/settings.html?from=nav".to_string(), settings.clone()));
+    asked.push(("/settings.html#top".to_string(), settings));
+    asked.push(("/user/42".to_string(), user));
+
+    let answers: Vec<(String, String, String)> = asked
+        .into_iter()
+        .map(|(path, page)| {
+            let answer = request(address, &path);
+            (path, page, answer)
+        })
+        .collect();
+    let _ = child.kill();
+
+    for (path, page, answer) in answers {
+        assert!(answer.starts_with("HTTP/1.1 200 "), "{path}: {answer}");
+        assert_eq!(
+            page_of(&answer).as_deref(),
+            Some(page.as_str()),
+            "{path} was answered with another page: {answer}"
+        );
+    }
+}
+
+/// The page a document says it is, read off the `data-lm-page` attribute the
+/// emitter writes on `<html>`.
+fn page_of(document: &str) -> Option<String> {
+    document
+        .split_once("data-lm-page=\"")
+        .and_then(|(_, rest)| rest.split('"').next())
+        .map(str::to_string)
+}
+
+#[test]
 fn a_served_render_answers_the_paths_a_build_has_no_file_for() {
     let scratch = scratch("serve-ssr");
     let out = scratch.join("site");

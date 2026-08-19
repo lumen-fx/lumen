@@ -196,7 +196,7 @@ fn render_one(
     request: &SsrRequest,
 ) -> Result<SsrResponse, SsrError> {
     let mut warnings = Vec::new();
-    let (key, segment) = nav::resolve_path(&request.path, site.keys(), site.entry());
+    let (key, segment) = page_for(site, &request.path);
 
     // On this thread for as long as the render is, which is what the request
     // builtins read through.
@@ -311,6 +311,23 @@ fn render_one(
         body,
         warnings,
     })
+}
+
+/// The page a request is for, and the part of the path that page answers for.
+///
+/// Two shapes of address reach the same page. A link inside an emitted site
+/// points at the document a build wrote, so `/settings.html` is a request for
+/// the `settings` page; a link an author wrote, and any path deeper than a
+/// page, is resolved the way the desktop resolves it, leaving the rest of the
+/// path on `route.segment`. A document a build never wrote is not a page, so
+/// it goes through the resolver like anything else.
+fn page_for(site: &SsrSite, path: &str) -> (String, String) {
+    if let Some(key) = lumen_web::document_key(path, site.entry())
+        && site.keys().iter().any(|page| page == &key)
+    {
+        return (key, String::new());
+    }
+    nav::resolve_path(path, site.keys(), site.entry())
 }
 
 /// The answer to a request the app sent somewhere else.

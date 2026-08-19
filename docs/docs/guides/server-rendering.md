@@ -132,6 +132,11 @@ key, and the rest of it lands in `route.segment`. A request for `/user/42` in an
 app with `user.lmn` renders the `user` page with `/42` on `route.segment`, which
 is the page's to parse.
 
+A link inside a built site points at the document that build wrote, so
+`/settings.html` is a request for the `settings` page and `/index.html` for the
+entry page, whatever it is keyed as. `request.path` still holds the address as
+it arrived.
+
 The headers, the cookies and the body are read one at a time, because a page has
 no business holding all of them:
 
