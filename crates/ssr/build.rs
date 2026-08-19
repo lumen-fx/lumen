@@ -13,7 +13,7 @@ use std::fs;
 use std::path::Path;
 
 /// The fixtures, by source file stem.
-const FIXTURES: &[&str] = &["reads_request", "answers", "fetches"];
+const FIXTURES: &[&str] = &["reads_request", "answers", "fetches", "components"];
 
 fn main() {
     // The fixtures are candela, and the suite that loads them runs only when

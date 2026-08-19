@@ -9,14 +9,18 @@
 //! and it is why the same scene runs on a desktop window and in a browser
 //! document.
 //!
-//! Nothing here registers itself. A host adds the systems it wants, in the
-//! order its own pipeline needs; [`routing::install_routing`] is the one
-//! exception, and it installs navigation as a unit because the resolver has
-//! to run before the reconciler it drives.
+//! Most of this registers nothing. A host adds the systems it wants, in the
+//! order its own pipeline needs. The two exceptions install as a unit because
+//! their internal order is not the host's to choose:
+//! [`routing::install_routing`], whose resolver has to run before the
+//! reconciler it drives, and [`dom::install_dom`], whose applier has to run
+//! after the collector that fills it.
 
 #![warn(missing_docs)]
 
+pub mod dom;
 pub mod fragments;
 pub mod routing;
 pub mod script_commands;
+pub mod source_parser;
 pub mod spawn;

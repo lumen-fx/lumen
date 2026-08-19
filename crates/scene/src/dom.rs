@@ -1,39 +1,145 @@
-//! Applier for the dynamic DOM mutation commands (phases 2 + 3) and the
-//! `window` setters (section 4.8).
+//! The dynamic DOM: the tree a script reads, and the mutations it issues.
 //!
-//! Script-issued mutations arrive as [`ScriptCommandEvent`]s; C-ABI / SDK
-//! mutations arrive on the process-global external DOM bus
+//! A script reaches the scene through two channels, and both are here because
+//! neither knows anything about the platform underneath. The read side is
+//! [`build_dom_index`], which republishes the live tree each tick so a
+//! `query()` from a handler sees this tick's nodes. The write side is a pair:
+//! [`collect_dom_commands`] gathers this tick's mutations in issue order, and
+//! [`apply_dom_commands`] materializes them against the world.
+//!
+//! Script-issued mutations arrive as
+//! [`ScriptCommandEvent`](lumen_script::runtime::ScriptCommandEvent)s; C-ABI
+//! and SDK mutations arrive on the process-global external DOM bus
 //! ([`lumen_script::node_query::drain_external_dom_commands`]). Both funnel
-//! into one FIFO pass so a fluent chain's `spawn` + queued mutations apply
-//! together, keyed by the reserved token the host minted synchronously.
+//! into one FIFO pass so a fluent chain's `spawn` plus its queued mutations
+//! apply together, keyed by the reserved token the host minted synchronously.
 //!
 //! Structure edits reuse the same spawn / despawn / hierarchy path the
-//! `<for>` reconciler uses, so layout / style / paint stay consistent. A
-//! class / attribute / inline-style change bumps [`StyleVersion`] so the
-//! cascade re-resolver restyles the affected nodes in place. The
-//! re-resolver folds each node's [`InlineStyle`] on top of the stylesheet
-//! result, so a `set_style` write wins over author rules and repaints; a
-//! change to an animatable property tweens when the node declares a
-//! matching `transition`.
+//! `<for>` reconciler uses, so layout, style and paint stay consistent. A
+//! class, attribute or inline-style change bumps
+//! [`StyleVersion`](lumen_core::components::StyleVersion), which is what a
+//! host with a cascade of its own listens on; a host whose platform resolves
+//! CSS itself, such as a browser page, has nothing reading it and pays a
+//! counter increment.
 
-use super::*;
-use bevy_ecs::hierarchy::{ChildOf, Children};
-use lumen_core::components::{InlineStyle, LumenAttributes, LumenClasses, LumenId, TextContent};
-use lumen_core::node::is_reserved_token;
-use lumen_script::node_query::{
-    DomDetails, NodeDetail, drain_external_dom_commands, publish_dom_details,
-};
 use std::collections::HashMap;
 
-use crate::run::restyle::{LastMediaContext, RuntimeStylesheet, StyleVersion};
+use bevy_ecs::hierarchy::{ChildOf, Children};
+use bevy_ecs::prelude::*;
+use lumen_core::components::{
+    DirtyLayout, Disabled, InlineStyle, LumenAttributes, LumenClasses, LumenId, LumenTag,
+    StyleVersion, TextContent, TextInput,
+};
+use lumen_core::node::{DomIndex, DomRecord, NodeHandle, is_reserved_token, publish_dom_index};
+use lumen_core::prelude::{App, TickStage};
+use lumen_core::property_store::PropertyStore;
+use lumen_core::window_state::{set_size, set_title};
+use lumen_ir::fragment::FragmentTable;
+use lumen_ir::interpolate::Scope;
+use lumen_ir::layout_ir::Element;
+use lumen_script::event::{register_host_binding, unregister_binding};
+use lumen_script::node_query::drain_external_dom_commands;
+use lumen_script::runtime::{ScriptCommandEvent, register_script_commands};
+use lumen_script::{ScriptCommand, ScriptSet};
+
+use crate::fragments::{
+    FragmentFault, FragmentInstance, FragmentLibrary, SlotPlaceholder, bind_args, instance_body,
+    report_once,
+};
+use crate::source_parser::RuntimeParser;
+
+/// Install the dynamic DOM pipeline on `app`.
+///
+/// One call for every host, because the pieces only work as a set: the index
+/// has to be published before anything reads it, the collector has to run
+/// after every producer of commands, and the applier has to run after the
+/// collector. A host that installed two of the three would have a `query()`
+/// that answers about last tick, or a `mount()` that never lands.
+///
+/// The read publish runs before the handlers so a query issued from one sees
+/// this tick's tree, and before the key dispatch for the same reason.
+pub fn install_dom(app: &mut App) {
+    // The collector reads `ScriptCommandEvent`. The script plugin registers
+    // that message only when a host is installed, so an app with no script
+    // must self-register it here or the reader fails parameter validation.
+    register_script_commands(&mut app.world);
+    app.world.init_resource::<PendingDomCommands>();
+    app.add_systems(
+        TickStage::Systems,
+        build_dom_index
+            .before(ScriptSet::Dispatch)
+            .before(lumen_input::dispatch_focused_keys),
+    );
+    app.add_systems(
+        TickStage::Systems,
+        collect_dom_commands
+            .after(ScriptSet::Tick)
+            .after(ScriptSet::Dispatch)
+            .after(ScriptSet::Ready)
+            .after(ScriptSet::DomEvents),
+    );
+    app.add_systems(
+        TickStage::Systems,
+        apply_dom_commands.after(collect_dom_commands),
+    );
+}
+
+/// Rebuild the per-tick [`DomIndex`] snapshot from the live tree and publish
+/// it for cross-thread readers (script hosts, the C-ABI).
+///
+/// Every spawned element carries a [`LumenTag`], so the query walks all
+/// selector-reachable entities; a parent or child that is not itself tagged,
+/// such as the window root, is dropped from the element tree.
+#[allow(clippy::type_complexity)]
+pub fn build_dom_index(
+    query: Query<(
+        Entity,
+        &LumenTag,
+        Option<&LumenClasses>,
+        Option<&LumenId>,
+        Option<&ChildOf>,
+        Option<&Children>,
+    )>,
+) {
+    use std::collections::HashSet;
+    let indexed: HashSet<u64> = query.iter().map(|(e, ..)| e.to_bits()).collect();
+    let mut records: Vec<DomRecord> = Vec::with_capacity(indexed.len());
+    for (entity, tag, classes, id, child_of, children) in query.iter() {
+        let parent = child_of
+            .map(|c| c.parent())
+            .filter(|p| indexed.contains(&p.to_bits()));
+        let kids: Vec<Entity> = children
+            .map(|c| {
+                c.iter()
+                    .filter(|e| indexed.contains(&e.to_bits()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        records.push(DomRecord {
+            entity,
+            generation: entity.generation().to_bits(),
+            tag: tag.0.to_string(),
+            id: id.map(|i| i.0.clone()),
+            classes: classes
+                .map(|c| c.0.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default(),
+            parent,
+            children: kids,
+            child_index: 0,
+            sibling_count: 0,
+            doc_order: 0,
+        });
+    }
+    publish_dom_index(DomIndex::build(records));
+}
 
 /// Commands gathered this tick, in issue order, for [`apply_dom_commands`].
 #[derive(Resource, Default)]
-pub(crate) struct PendingDomCommands(pub(crate) Vec<ScriptCommand>);
+pub struct PendingDomCommands(Vec<ScriptCommand>);
 
 /// Collect this tick's DOM / window commands from the script event stream
 /// and the external bus into [`PendingDomCommands`], preserving order.
-pub(crate) fn collect_dom_commands(
+pub fn collect_dom_commands(
     mut events: MessageReader<ScriptCommandEvent>,
     mut pending: ResMut<PendingDomCommands>,
 ) {
@@ -46,7 +152,7 @@ pub(crate) fn collect_dom_commands(
 }
 
 /// Apply the collected DOM / window commands against the live world.
-pub(crate) fn apply_dom_commands(world: &mut World) {
+pub fn apply_dom_commands(world: &mut World) {
     let commands = {
         let Some(mut pending) = world.get_resource_mut::<PendingDomCommands>() else {
             return;
@@ -192,27 +298,27 @@ pub(crate) fn apply_dom_commands(world: &mut World) {
                 token,
             } => {
                 // Resolve a reserved spawn token to the real handle so the
-                // dispatcher (which sees live entities) matches the binding.
+                // dispatcher, which sees live entities, matches the binding.
                 let handle = resolve(world, &reserved, node)
-                    .map(|e| lumen_core::node::NodeHandle::new(e).pack())
+                    .map(|e| NodeHandle::new(e).pack())
                     .unwrap_or(node);
-                lumen_script::event::register_host_binding(token, handle, event_type, capture);
+                register_host_binding(token, handle, event_type, capture);
             }
             ScriptCommand::UnbindEvent { token } => {
-                lumen_script::event::unregister_binding(token);
+                unregister_binding(token);
             }
             ScriptCommand::WindowSetTitle { title } => {
-                lumen_core::window_state::set_title(&title);
+                set_title(&title);
             }
             ScriptCommand::WindowSetSize { width, height } => {
-                lumen_core::window_state::set_size(width, height);
+                set_size(width, height);
             }
             _ => {}
         }
     }
 
     if style_dirty {
-        bump_style_version(world);
+        StyleVersion::bump(world);
     }
 }
 
@@ -226,7 +332,7 @@ fn resolve(world: &World, reserved: &HashMap<u64, Entity>, handle: u64) -> Optio
     if is_reserved_token(handle) {
         return reserved.get(&handle).copied();
     }
-    let entity = lumen_core::node::NodeHandle::unpack(handle)?.entity;
+    let entity = NodeHandle::unpack(handle)?.entity;
     world.entities().contains(entity).then_some(entity)
 }
 
@@ -261,11 +367,6 @@ fn spawn_fragment(
     args: &[(String, String)],
     children: &[(String, Entity)],
 ) -> Option<Entity> {
-    use crate::fragments::{
-        FragmentFault, FragmentInstance, FragmentLibrary, SlotPlaceholder, bind_args,
-        instance_body, report_once,
-    };
-
     // An app built without a library declares nothing, which the key lookup
     // below reports the same way as a key nobody wrote.
     let library = world
@@ -286,11 +387,9 @@ fn spawn_fragment(
     let bound = bind_args(fragment, args);
 
     let instance = {
-        let empty = lumen_core::property_store::PropertyStore::default();
-        let store = world
-            .get_resource::<lumen_core::property_store::PropertyStore>()
-            .unwrap_or(&empty);
-        let scope = lumen_ir::interpolate::Scope::new(store).with_args(&bound);
+        let empty = PropertyStore::default();
+        let store = world.get_resource::<PropertyStore>().unwrap_or(&empty);
+        let scope = Scope::new(store).with_args(&bound);
         crate::spawn::substitute_in_element_with_css(body, &scope, None)
     };
     let root = crate::spawn::spawn_subtree(world, &instance, None);
@@ -353,7 +452,7 @@ fn child_index(world: &World, parent: Entity, child: Entity) -> Option<usize> {
 fn set_text(world: &mut World, entity: Entity, text: &str) {
     let mut e = world.entity_mut(entity);
     e.insert(TextContent(text.to_string()));
-    if let Some(mut input) = e.get_mut::<lumen_core::components::TextInput>() {
+    if let Some(mut input) = e.get_mut::<TextInput>() {
         input.cursor = text.len();
     }
 }
@@ -378,13 +477,9 @@ fn set_attr(world: &mut World, entity: Entity, name: &str, value: &str) -> bool 
         "disabled" => {
             let on = matches!(value, "true" | "" | "disabled");
             if on {
-                world
-                    .entity_mut(entity)
-                    .insert(lumen_core::components::Disabled);
+                world.entity_mut(entity).insert(Disabled);
             } else {
-                world
-                    .entity_mut(entity)
-                    .remove::<lumen_core::components::Disabled>();
+                world.entity_mut(entity).remove::<Disabled>();
             }
             true
         }
@@ -409,9 +504,7 @@ fn remove_attr(world: &mut World, entity: Entity, name: &str) -> bool {
             true
         }
         "disabled" => {
-            world
-                .entity_mut(entity)
-                .remove::<lumen_core::components::Disabled>();
+            world.entity_mut(entity).remove::<Disabled>();
             true
         }
         _ => {
@@ -453,13 +546,12 @@ fn class_edit(world: &mut World, entity: Entity, class: &str, op: ClassOp) {
 /// by `clone_deep`. Runtime-only components (interaction / layout state)
 /// are re-derived by the spawn path, not copied.
 fn element_from_entity(world: &World, entity: Entity) -> Option<Element> {
-    use lumen_core::components::{LumenClasses as Classes, LumenTag};
     let tag = world.get::<LumenTag>(entity)?.0.to_string();
     let mut el = Element {
         tag,
         ..Default::default()
     };
-    if let Some(c) = world.get::<Classes>(entity) {
+    if let Some(c) = world.get::<LumenClasses>(entity) {
         el.attrs.classes = c.0.iter().map(|s| s.to_string()).collect();
     }
     if let Some(i) = world.get::<LumenId>(entity) {
@@ -483,15 +575,13 @@ fn element_from_entity(world: &World, entity: Entity) -> Option<Element> {
 /// changed (needs a restyle).
 ///
 /// Guarded: parsing needs the injected markup front-end
-/// ([`RuntimeParser`](crate::source_parser)), which the from-source run path
-/// installs but the precompiled-artifact path does not. Absent, this is a
-/// no-op with a one-time warning, the documented limitation. The markup is
-/// live and unsanitized: callers must not feed it untrusted content.
+/// ([`RuntimeParser`](crate::source_parser::RuntimeParser)), which the
+/// from-source run path installs and the precompiled-artifact path does not.
+/// Absent, this is a no-op with a one-time warning, the documented
+/// limitation. The markup is live and unsanitized: callers must not feed it
+/// untrusted content.
 fn apply_inner_markup(world: &mut World, entity: Entity, markup: &str) -> bool {
-    let Some(parser) = world
-        .get_resource::<crate::source_parser::RuntimeParser>()
-        .map(|p| p.0.clone())
-    else {
+    let Some(parser) = world.get_resource::<RuntimeParser>().map(|p| p.0.clone()) else {
         warn_inner_markup_unavailable();
         return false;
     };
@@ -499,7 +589,7 @@ fn apply_inner_markup(world: &mut World, entity: Entity, markup: &str) -> bool {
     // bare text run) parse under one element the front-end accepts; only the
     // wrapper's children are spawned.
     let wrapped = format!("<div>{markup}</div>");
-    let ir = match parser.parse_html(&wrapped, &lumen_ir::fragment::FragmentTable::new()) {
+    let ir = match parser.parse_html(&wrapped, &FragmentTable::new()) {
         Ok(ir) => ir,
         Err(e) => {
             eprintln!("set_inner_markup: parse error: {e}");
@@ -515,7 +605,7 @@ fn apply_inner_markup(world: &mut World, entity: Entity, markup: &str) -> bool {
         world.entity_mut(child).despawn();
     }
     // Spawn the parsed children under `entity` through the same path the
-    // `<for>` reconciler + phase-3 Spawn use.
+    // `<for>` reconciler and `Spawn` use.
     let root = &ir.root;
     if root.children.is_empty() {
         if let Some(text) = &root.attrs.text {
@@ -530,9 +620,9 @@ fn apply_inner_markup(world: &mut World, entity: Entity, markup: &str) -> bool {
     true
 }
 
-/// One-time warning when `set_inner_markup` runs without an injected parser
-/// (the precompiled-artifact path). Keeps the log from flooding on a
-/// per-tick caller.
+/// One-time warning when `set_inner_markup` runs without an injected parser,
+/// which is every app running from a precompiled artifact. Keeps the log from
+/// flooding on a per-tick caller.
 fn warn_inner_markup_unavailable() {
     use std::sync::Once;
     static WARNED: Once = Once::new();
@@ -543,320 +633,4 @@ fn warn_inner_markup_unavailable() {
              dev / from-source run path."
         );
     });
-}
-
-fn bump_style_version(world: &mut World) {
-    if let Some(mut v) = world.get_resource_mut::<StyleVersion>() {
-        v.0 = v.0.wrapping_add(1);
-    } else {
-        world.insert_resource(StyleVersion(1));
-    }
-}
-
-/// Monotonic frame counter + previous-tick timestamp backing
-/// `frame_info()`. Advanced by [`publish_introspection`].
-#[derive(Resource)]
-pub(crate) struct FrameClock {
-    frame: u64,
-    last: std::time::Instant,
-}
-
-impl Default for FrameClock {
-    fn default() -> Self {
-        Self {
-            frame: 0,
-            last: std::time::Instant::now(),
-        }
-    }
-}
-
-/// Publish the phase-5 low-level introspection snapshot: post-layout
-/// geometry (rect / content_rect / scroll / visibility / z-index), typed
-/// component field maps, pointer / frame state, and the signal set. Runs
-/// each tick alongside the [`DomIndex`] publish so a read issued from a
-/// handler sees this tick's tree. Geometry reflects the last committed
-/// layout (this tick's `sync_layout` runs later in `LayoutSync`), matching
-/// `computed_style`'s one-tick lag. An inspection pass, not a render path.
-#[allow(clippy::type_complexity)]
-pub(crate) fn publish_introspection(world: &mut World) {
-    use lumen_core::components::{
-        DirtyLayout, Display, LumenTag, Style, Transform, Visible, Visuals, ZIndex,
-    };
-    use lumen_core::input::{ModifiersState, PointerState, ScrollOffset};
-    use lumen_core::introspect::ComponentIntrospection;
-    use lumen_script::introspect::{
-        FrameInfo, IntrospectSnapshot, NodeGeometry, NodeRect, NodeScroll, PointerSnapshot,
-        publish_introspection as publish,
-    };
-    use std::collections::HashMap;
-
-    let registry = ComponentIntrospection::with_defaults();
-    let known = registry.names().iter().map(|s| s.to_string()).collect();
-
-    // Absolute transform + parent lookups, computed once.
-    let transforms: HashMap<Entity, (glam::Vec2, glam::Vec2)> = {
-        let mut q = world.query::<(Entity, &Transform)>();
-        q.iter(world)
-            .map(|(e, t)| (e, (t.absolute, t.size)))
-            .collect()
-    };
-    let parents: HashMap<Entity, Entity> = {
-        let mut q = world.query::<(Entity, &ChildOf)>();
-        q.iter(world).map(|(e, c)| (e, c.parent())).collect()
-    };
-    let mut children_of: HashMap<Entity, Vec<Entity>> = HashMap::new();
-    for (child, parent) in &parents {
-        children_of.entry(*parent).or_default().push(*child);
-    }
-
-    // Raw per-element geometry inputs, for indexed (tagged) elements only.
-    struct Raw {
-        entity: Entity,
-        abs: glam::Vec2,
-        size: glam::Vec2,
-        pad: (f32, f32, f32, f32),
-        border: (f32, f32, f32, f32),
-        display_none: bool,
-        visible: bool,
-        z: i32,
-        scroll_off: Option<glam::Vec2>,
-    }
-    let raws: Vec<Raw> = {
-        let mut q = world.query_filtered::<(
-            Entity,
-            &Transform,
-            Option<&Style>,
-            Option<&Visuals>,
-            Option<&ZIndex>,
-            Option<&Visible>,
-            Option<&ScrollOffset>,
-        ), With<LumenTag>>();
-        q.iter(world)
-            .map(|(e, t, style, visuals, z, vis, scroll)| {
-                let pad = style
-                    .map(|s| {
-                        (
-                            s.padding.left,
-                            s.padding.right,
-                            s.padding.top,
-                            s.padding.bottom,
-                        )
-                    })
-                    .unwrap_or((0.0, 0.0, 0.0, 0.0));
-                let border = visuals
-                    .and_then(|v| v.border.as_ref())
-                    .map(|b| (b.widths.left, b.widths.right, b.widths.top, b.widths.bottom))
-                    .unwrap_or((0.0, 0.0, 0.0, 0.0));
-                Raw {
-                    entity: e,
-                    abs: t.absolute,
-                    size: t.size,
-                    pad,
-                    border,
-                    display_none: style.map(|s| s.display == Display::None).unwrap_or(false),
-                    visible: vis.map(|v| v.0).unwrap_or(true),
-                    z: z.map(|z| z.0).unwrap_or(0),
-                    scroll_off: scroll.map(|s| s.0),
-                }
-            })
-            .collect()
-    };
-
-    let mut geometry: HashMap<u64, NodeGeometry> = HashMap::with_capacity(raws.len());
-    for r in &raws {
-        let handle = lumen_core::node::NodeHandle::new(r.entity).pack();
-        let parent_abs = parents
-            .get(&r.entity)
-            .and_then(|p| transforms.get(p))
-            .map(|(a, _)| *a)
-            .unwrap_or(glam::Vec2::ZERO);
-        let local = r.abs - parent_abs;
-        let rect = NodeRect {
-            x: local.x,
-            y: local.y,
-            width: r.size.x,
-            height: r.size.y,
-            client_x: r.abs.x,
-            client_y: r.abs.y,
-        };
-        let (pl, pr, pt, pb) = r.pad;
-        let (bl, br, bt, bb) = r.border;
-        let inset_x = pl + bl;
-        let inset_y = pt + bt;
-        let content_rect = NodeRect {
-            x: local.x + inset_x,
-            y: local.y + inset_y,
-            width: (r.size.x - pl - pr - bl - br).max(0.0),
-            height: (r.size.y - pt - pb - bt - bb).max(0.0),
-            client_x: r.abs.x + inset_x,
-            client_y: r.abs.y + inset_y,
-        };
-        // Scroll extent from the bbox of direct children relative to self
-        // (the same rule `clamp_scroll_offsets` applies).
-        let scroll = match r.scroll_off {
-            Some(off) => {
-                let mut ext = glam::Vec2::ZERO;
-                if let Some(kids) = children_of.get(&r.entity) {
-                    for kid in kids {
-                        if let Some((kabs, ksize)) = transforms.get(kid) {
-                            let rel = (*kabs - r.abs) + *ksize;
-                            ext = ext.max(rel);
-                        }
-                    }
-                }
-                NodeScroll {
-                    x: off.x,
-                    y: off.y,
-                    max_x: (ext.x - r.size.x).max(0.0),
-                    max_y: (ext.y - r.size.y).max(0.0),
-                }
-            }
-            None => NodeScroll::default(),
-        };
-        geometry.insert(
-            handle,
-            NodeGeometry {
-                rect,
-                content_rect,
-                scroll,
-                visible: r.visible && !r.display_none,
-                z_index: r.z,
-            },
-        );
-    }
-
-    // Component field maps via the whitelist registry.
-    let mut components: HashMap<u64, Vec<(String, Vec<(String, String)>)>> =
-        HashMap::with_capacity(raws.len());
-    for r in &raws {
-        let handle = lumen_core::node::NodeHandle::new(r.entity).pack();
-        let maps = registry.read_all(world.entity(r.entity));
-        if !maps.is_empty() {
-            components.insert(handle, maps);
-        }
-    }
-
-    // Pointer state.
-    let pointer = {
-        let ps = world
-            .get_resource::<PointerState>()
-            .copied()
-            .unwrap_or_default();
-        let m = world
-            .get_resource::<ModifiersState>()
-            .map(|m| m.0)
-            .unwrap_or_default();
-        let pos = ps.position.unwrap_or(glam::Vec2::ZERO);
-        PointerSnapshot {
-            x: pos.x,
-            y: pos.y,
-            inside: ps.position.is_some(),
-            buttons: u32::from(ps.primary_down),
-            shift: m.shift,
-            ctrl: m.ctrl,
-            alt: m.alt,
-            super_: m.super_,
-        }
-    };
-
-    // Signal set (global scalar cells).
-    let signals: Vec<(String, String)> = world
-        .get_resource::<lumen_core::property_store::PropertyStore>()
-        .map(|store| {
-            let mut out: Vec<(String, String)> = store
-                .iter()
-                .filter_map(|(k, v)| match k {
-                    lumen_core::property_store::PropertyKey::Global(name) => {
-                        Some((name.to_string(), property_value_string(v)))
-                    }
-                    _ => None,
-                })
-                .collect();
-            out.sort();
-            out
-        })
-        .unwrap_or_default();
-
-    // Frame counters.
-    let dirty_count = {
-        let mut q = world.query_filtered::<Entity, With<DirtyLayout>>();
-        q.iter(world).count() as u64
-    };
-    let frame = {
-        let now = std::time::Instant::now();
-        let mut clock = world.get_resource_or_insert_with(FrameClock::default);
-        let dt_ms = now.duration_since(clock.last).as_secs_f64() * 1000.0;
-        clock.frame = clock.frame.wrapping_add(1);
-        clock.last = now;
-        FrameInfo {
-            frame: clock.frame,
-            dt_ms,
-            dirty_count,
-        }
-    };
-
-    publish(IntrospectSnapshot::new(
-        geometry, components, known, pointer, frame, signals,
-    ));
-}
-
-/// Render a scalar [`PropertyValue`](lumen_core::property_store::PropertyValue)
-/// as a display string for `signals_all()`. Colors render as hex, vectors
-/// as `x,y`; the enumerated scalars use their natural form.
-fn property_value_string(v: &lumen_core::property_store::PropertyValue) -> String {
-    use lumen_core::property_store::PropertyValue as V;
-    match v {
-        V::Bool(b) => b.to_string(),
-        V::I64(n) => n.to_string(),
-        V::F64(n) => n.to_string(),
-        V::Str(s) => s.to_string(),
-        V::Color(c) => {
-            let [r, g, b, a] = c.to_rgba8();
-            if a == 0xff {
-                format!("#{r:02x}{g:02x}{b:02x}")
-            } else {
-                format!("#{r:02x}{g:02x}{b:02x}{a:02x}")
-            }
-        }
-        V::Vec2(p) => format!("{},{}", p.x, p.y),
-        V::Custom(_) => String::new(),
-    }
-}
-
-/// Publish the per-node detail snapshot (text / generic attrs / inline
-/// style) plus the cascade inputs `computed_style` needs. Runs each tick
-/// alongside the [`DomIndex`] publish so a read issued from a handler sees
-/// this tick's state.
-#[allow(clippy::type_complexity)]
-pub(crate) fn publish_node_details(
-    nodes: Query<(
-        Entity,
-        Option<&TextContent>,
-        Option<&LumenAttributes>,
-        Option<&InlineStyle>,
-    )>,
-    focused: Query<Entity, With<lumen_core::input::Focused>>,
-    hovered: Query<Entity, With<lumen_core::input::Hovered>>,
-    sheet: Option<Res<RuntimeStylesheet>>,
-    media: Option<Res<LastMediaContext>>,
-) {
-    let pack = |e: Entity| lumen_core::node::NodeHandle::new(e).pack();
-    lumen_script::node_query::publish_focus(
-        focused.iter().next().map(pack),
-        hovered.iter().next().map(pack),
-    );
-    let mut map: HashMap<u64, NodeDetail> = HashMap::new();
-    for (entity, text, attrs, inline) in nodes.iter() {
-        let detail = NodeDetail {
-            text: text.map(|t| t.0.clone()),
-            attributes: attrs
-                .map(|a| a.0.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                .unwrap_or_default(),
-            inline_style: inline.map(|s| s.0.clone()).unwrap_or_default(),
-        };
-        map.insert(entity.to_bits(), detail);
-    }
-    let sheet = sheet.map(|s| std::sync::Arc::new(s.0.clone()));
-    let media = media.map(|m| m.0).unwrap_or_default();
-    publish_dom_details(DomDetails::new(map, sheet, media));
 }

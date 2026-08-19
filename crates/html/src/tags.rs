@@ -55,6 +55,7 @@ pub const MAPPED_TAGS: &[&str] = &[
     "title-bar",
     "for",
     "if",
+    "fragment",
     "label",
     "a",
     "image",
@@ -99,6 +100,10 @@ pub fn html_tag_for(ir_tag: &str) -> Option<HtmlTag> {
         // boxes here: the anchor stays in the document with its rows or its
         // branch inside it.
         "for" | "if" => HtmlTag::plain("div"),
+        // A component the runtime fills. It stands in the document as the
+        // empty box it is until the first tick replaces it, so the node the
+        // call builds has a place to take.
+        "fragment" => HtmlTag::plain("div"),
         // A label is a run of text inside its parent's flow, not a block.
         "label" => HtmlTag::plain("span"),
         "a" => HtmlTag::plain("a"),

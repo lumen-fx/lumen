@@ -40,7 +40,7 @@ pub mod run_headless;
 /// Embedded user-agent skin stylesheets.
 pub mod skins;
 /// The injected markup/CSS parser boundary. See [`SourceParser`].
-pub mod source_parser;
+pub use lumen_scene::source_parser;
 /// IR -> ECS spawner and the `<for>` / `<if>` reconcilers.
 pub use lumen_scene::spawn;
 /// Windowed geometry persistence (`[window] remember_state`).

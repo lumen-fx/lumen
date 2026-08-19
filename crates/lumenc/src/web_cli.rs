@@ -920,7 +920,12 @@ fn script_refs(compiled: &CompiledApp, warnings: &mut Vec<String>) -> Vec<Script
 /// compiler is in the process there and answers from the source, so the same
 /// app works on a desktop and shows a blank where the value should be in a
 /// browser.
+///
+/// A component the build could not stand in for is the same failure with a
+/// worse symptom: the page carries the box the call was to fill, and an empty
+/// box is what a reader would not notice.
 fn check_exports(compiled: &CompiledApp, warnings: &mut Vec<String>) {
+    let components = components_called(compiled);
     for script in &compiled.scripts {
         let Some(read_back) = lumen_runtime::run::script_exports(script) else {
             continue;
@@ -938,6 +943,7 @@ fn check_exports(compiled: &CompiledApp, warnings: &mut Vec<String>) {
                 continue;
             }
         };
+        let declared = defined_functions(&script.source);
         for name in called_by_name(&script.source) {
             if !exports.contains(&name) {
                 warnings.push(format!(
@@ -947,7 +953,41 @@ fn check_exports(compiled: &CompiledApp, warnings: &mut Vec<String>) {
                 ));
             }
         }
+        for name in components.iter().filter(|name| declared.contains(*name)) {
+            if !exports.contains(name) {
+                warnings.push(format!(
+                    "the markup writes `<{name}/>`, and the compiled program does not export \
+                     `{name}`, so the page carries an empty box where its body belongs; annotate \
+                     every parameter it takes, as in `fn {name}(id: any)`"
+                ));
+            }
+        }
     }
+}
+
+/// Every component the build could not stand in for, which the runtime fills
+/// by calling the function of that name.
+///
+/// The fragment bodies are walked as well as the page tree: a body is a
+/// subtree like any other and can name a component of its own, which reaches
+/// the page the moment something instantiates it.
+fn components_called(compiled: &CompiledApp) -> BTreeSet<String> {
+    fn walk(el: &Element, out: &mut BTreeSet<String>) {
+        if let Some(use_site) = &el.frag_use {
+            out.insert(use_site.key.clone());
+        }
+        for child in &el.children {
+            walk(child, out);
+        }
+    }
+    let mut out = BTreeSet::new();
+    walk(&compiled.ir.root, &mut out);
+    for (_, fragment) in compiled.fragments.iter() {
+        for el in &fragment.body {
+            walk(el, &mut out);
+        }
+    }
+    out
 }
 
 /// Every function `source` defines that something calls by name: a handler

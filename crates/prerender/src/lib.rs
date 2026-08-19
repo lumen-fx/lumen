@@ -171,7 +171,7 @@ pub fn boot(
         .unwrap_or_else(|| vec![key.to_string()]);
     install_routing(&mut app, key.to_string(), keys);
 
-    compiled.ir.spawn_into(&mut app.world);
+    compiled.spawn_into(&mut app.world);
     apply_seed(&mut app.world, seed);
 
     Booted {

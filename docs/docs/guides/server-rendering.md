@@ -251,7 +251,11 @@ apply.
 
 Nodes a script builds by hand with the DOM API arrive when the browser runs that
 script. The render says so in `response.warnings` rather than leaving you to
-find out, and the page is complete once the runtime has started.
+find out, and the page is complete once the runtime has started. A component
+that has to run is one of those nodes: the render calls it, so whatever the
+call publishes is state the document is written with, and the subtree itself
+comes with the runtime. A component the build stands in for is in the document
+from the start.
 
 The rest of the limits are the emitter's, and a rendered page has the same ones
 [a built page](web.md) has.

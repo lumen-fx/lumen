@@ -1,0 +1,23 @@
+// The two ways a fragment reaches a running app, in the form a shipped app
+// carries: compiled bytecode, no markup parser anywhere near it.
+//
+// `lmn!` blocks expand to `fragment_spawn` calls against the keys the build
+// put in the artifact's fragment table. Writing the calls out is what lets
+// this fixture name keys the test declares.
+import "lumen.cdl";
+
+fn main() {}
+
+// A component the build could not stand in for: it works a value out, so the
+// tree carries a marker and the runtime fills it by calling this. The
+// parameter is annotated because the call is by name, and a compiled program
+// is callable by name only where it says what its arguments are.
+fn Shout(who: string) {
+    let loud = who + "!";
+    return lumen::fragment_spawn("shout", ["who", loud], []);
+}
+
+// What an app mounts: a subtree built from a key, put at the app root.
+fn on_ready() {
+    lumen::mount(lumen::fragment_spawn("card", ["title", "mounted"], []));
+}

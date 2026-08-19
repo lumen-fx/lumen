@@ -198,11 +198,7 @@ pub(crate) fn reapply_styles_on_root_class_change(world: &mut World) {
     // class cache. No despawn, no disk re-read, no IR rebuild - the
     // existing entity tree retains every component the snapshot/restore
     // path used to lose.
-    if let Some(mut version) = world.get_resource_mut::<StyleVersion>() {
-        version.0 = version.0.wrapping_add(1);
-    } else {
-        world.insert_resource(StyleVersion(1));
-    }
+    StyleVersion::bump(world);
     if let Some(mut cache) = world.get_resource_mut::<RootClassesCache>() {
         cache.0 = current;
     } else {
@@ -216,18 +212,6 @@ pub(crate) fn reapply_styles_on_root_class_change(world: &mut World) {
 /// [`StyleVersion`] bumps on no-op writes).
 #[derive(Resource, Default, Debug, Clone)]
 pub(crate) struct RootClassesCache(pub(crate) Vec<String>);
-
-/// Monotonic counter bumped whenever a class / palette / media-feature
-/// change invalidates computed style for at least one entity. Downstream
-/// consumers (cascade re-resolver, `Visuals` recompute) observe
-/// `Changed<StyleVersion>` and re-walk only the entities flagged by
-/// [`StyleInvalidationCache`].
-///
-/// Per W4.7: this resource replaces the pre-Wave-4 respawn-on-theme-flip
-/// path. The bump is the single signal every reactive style consumer
-/// listens on; the actual re-resolution stays inside the cascade engine.
-#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StyleVersion(pub u64);
 
 /// Cross-thread payload pushed by the W4.6 `set_color_scheme(name)`
 /// Rhai builtin. Carries the parsed
@@ -456,11 +440,7 @@ pub(crate) fn detect_media_change(world: &mut World) {
     // the latest width even on ticks that don't bump.
     world.insert_resource(LastMediaContext(media));
     if changed {
-        if let Some(mut version) = world.get_resource_mut::<StyleVersion>() {
-            version.0 = version.0.wrapping_add(1);
-        } else {
-            world.insert_resource(StyleVersion(1));
-        }
+        StyleVersion::bump(world);
     }
 }
 

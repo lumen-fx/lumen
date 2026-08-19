@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use lumen_core::property_store::{PropertyKey, PropertyValue, push_external_property};
 use lumen_ir::artifact::{CompiledApp, CompiledPages, CompiledScript};
-use lumen_ir::layout_ir::{Attributes, Element, LayoutIR};
+use lumen_ir::fragment::{Fragment, FragmentKind, FragmentParam, FragmentTable};
+use lumen_ir::layout_ir::{Attributes, Element, FragmentUse, LayoutIR};
 use lumen_script::{HttpDispatch, HttpDone, HttpRequest, HttpResponse};
 use lumen_ssr::{
     Budget, FetchPolicy, HeaderPolicy, RenderOptions, Renderer, SsrError, SsrRequest, SsrResponse,
@@ -23,6 +24,9 @@ const ANSWERS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/answers.cdlb"))
 
 /// A program that asks an API for what the page shows.
 const FETCHES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fetches.cdlb"));
+
+/// A program holding the component the tree below leaves a marker for.
+const COMPONENTS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/components.cdlb"));
 
 /// The name the renderer's thread carries, which is where every app is built
 /// and dropped.
@@ -490,4 +494,91 @@ fn an_app_reaches_only_the_hosts_it_was_given() {
     // The app carries on with what it has, which is what it does in a browser
     // with no network.
     assert!(response.body.contains("refused"), "{}", response.body);
+}
+
+/// A component that has to run, as an app ships it: the tree carries a marker
+/// and the fragment it builds from travels beside it.
+fn app_with_a_component() -> CompiledApp {
+    let mut marker = element("Shout", Attributes::default(), Vec::new());
+    marker.frag_use = Some(Box::new(FragmentUse {
+        key: "Shout".to_string(),
+        args: vec![("who".to_string(), "ann".to_string())],
+        slot_children: false,
+    }));
+    let mut table = FragmentTable::new();
+    table
+        .insert(Fragment {
+            key: "shout".to_string(),
+            params: vec![FragmentParam {
+                name: "who".to_string(),
+                default: None,
+            }],
+            body: vec![element(
+                "label",
+                Attributes {
+                    text: Some("{who}".to_string()),
+                    ..Attributes::default()
+                },
+                Vec::new(),
+            )],
+            origins: Vec::new(),
+            kind: FragmentKind::Markup,
+            components: Vec::new(),
+        })
+        .expect("one key");
+    CompiledApp {
+        ir: LayoutIR {
+            root: element(
+                "root",
+                Attributes::default(),
+                vec![marker, gate("shouted", "ann!", "the call ran")],
+            ),
+            ..LayoutIR::default()
+        },
+        fragments: table,
+        scripts: vec![CompiledScript {
+            engine: "candela".to_string(),
+            source: String::new(),
+            bytecode: Some(COMPONENTS.to_vec()),
+        }],
+        ..CompiledApp::default()
+    }
+}
+
+/// A render runs the component the build could not stand in for, so what the
+/// call publishes is state the document is written with.
+///
+/// The subtree the call builds is not in the document: a render writes the
+/// app's tree as the build compiled it, with the state the run settled into,
+/// and a node a script built is one the browser builds when it runs the app.
+/// The marker stays as the box that node takes the place of, and the render
+/// says so rather than leaving the gap unexplained.
+#[test]
+fn a_component_runs_on_the_server_and_the_marker_holds_its_place() {
+    let _turn = in_turn();
+    let renderer = Renderer::start(
+        Arc::new(
+            SsrSite::new(app_with_a_component(), WebSpec::default()).expect("the entry is a page"),
+        ),
+        options(Arc::new(Silent)),
+    )
+    .expect("nothing else is running");
+    let response = renderer
+        .render(SsrRequest::get("/"))
+        .expect("the document is written");
+
+    assert!(response.body.contains("the call ran"), "{}", response.body);
+    assert!(
+        response.body.contains(r#"class="lm-fragment""#),
+        "{}",
+        response.body
+    );
+    assert!(
+        response
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("built nodes of their own")),
+        "{:?}",
+        response.warnings
+    );
 }

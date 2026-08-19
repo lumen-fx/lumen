@@ -18,11 +18,25 @@
 
 use bevy_ecs::component::Component;
 use bevy_ecs::resource::Resource;
+use bevy_ecs::world::World;
 use lumen_core::warn_line;
 use lumen_ir::fragment::{DEFAULT_SLOT, Fragment, FragmentTable, SLOT_TAG};
 use lumen_ir::layout_ir::Element;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+
+/// Put the app's declared fragments in `world`, replacing whatever set was
+/// there.
+///
+/// Every path that starts an app calls this with the table that app declares:
+/// the desktop with what it parsed or reloaded, and every path that boots from
+/// a compiled artifact with the table the artifact carries. One function
+/// rather than an insert per path, because a path that forgot the insert has
+/// an app whose fragments all report an unknown key, and nothing else about it
+/// looks wrong.
+pub fn install(world: &mut World, table: FragmentTable) {
+    world.insert_resource(FragmentLibrary::new(table));
+}
 
 /// The app's declared fragments, keyed by fragment key.
 ///

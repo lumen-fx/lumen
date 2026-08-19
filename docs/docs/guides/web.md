@@ -363,7 +363,14 @@ means anything without an absolute address.
   time, and a placeholder inside a `<for>` row is resolved against the row
   while the page is written.
 - Elements a script creates appear when the runtime starts, not in the
-  document, so a crawler does not see them.
+  document, so a crawler does not see them. A component that has to run is one
+  of them: the document carries the empty box its marker is, and the runtime
+  fills it on the first tick. A component the build stands in for is in the
+  document like any other markup. See
+  [Composition](composition.md#a-component-on-the-web).
+- A component the runtime fills has to annotate its parameters, or the compiled
+  program has no name to call it by and the box stays empty. The build warns,
+  naming the component.
 - A `<for virtualized="true">` emits no rows. Which rows a virtualized list
   shows comes from how far its scroll container has been scrolled, which a
   build cannot know, so the runtime mounts them when the page opens. The

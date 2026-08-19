@@ -118,7 +118,7 @@ pub(crate) fn apply_script_commands(
                     // re-resolver never re-walks the entity, the new class's
                     // rules never land, and a `transition` on the swapped
                     // property never runs - the `Node::set_class` path in
-                    // `dom_commands` bumps, and this global form must match it.
+                    // the DOM applier bumps, and this global form must match it.
                     let mut changed = false;
                     for (e, id, current) in &ids {
                         if id.0 == *target_id {
@@ -135,11 +135,7 @@ pub(crate) fn apply_script_commands(
                         // same reason as above, and it lands with the class
                         // write at the next sync point.
                         commands.queue(|world: &mut World| {
-                            if let Some(mut v) =
-                                world.get_resource_mut::<crate::run::restyle::StyleVersion>()
-                            {
-                                v.0 = v.0.wrapping_add(1);
-                            }
+                            lumen_core::components::StyleVersion::bump(world);
                         });
                     }
                 }
@@ -251,7 +247,7 @@ pub(crate) fn apply_script_commands(
             | ScriptCommand::AudioSeek { .. }
             | ScriptCommand::AudioVolume { .. }
             // Dynamic DOM mutation + window setters are applied by
-            // `dom_commands::apply_dom_commands` (an exclusive system that
+            // `lumen_scene::dom::apply_dom_commands` (an exclusive system that
             // needs `&mut World` for spawn / despawn / reparent); no-op here.
             | ScriptCommand::SetAttr { .. }
             | ScriptCommand::RemoveAttr { .. }
