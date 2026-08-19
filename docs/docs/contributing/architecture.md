@@ -57,10 +57,13 @@ tools/             the release plumbing and the editor plugins
   is the page the other expects.
 - **lumen-scene**: the scene layer, with no host in it. Spawns the element tree
   from the IR, reconciles the parts that depend on state (`<for>` rows, `<if>`
-  branches, dialogs), instantiates fragments, and resolves navigation between
-  pages. It registers nothing itself; a host adds the systems its own pipeline
-  needs. `lumen-runtime` re-exports it, and the browser runtime uses it
-  directly, which is what lets one scene run in a window and in a document.
+  branches, dialogs), instantiates fragments, applies the DOM mutations a
+  script or the C ABI issues, and resolves navigation between pages. Mostly it
+  registers nothing and a host adds the systems its own pipeline needs; the
+  exceptions are navigation and the DOM pipeline, which go in as a unit because
+  their internal order is not the host's to choose. `lumen-runtime` re-exports
+  it, and the browser runtime uses it directly, which is what lets one scene
+  run in a window and in a document.
 
 ### Backends
 

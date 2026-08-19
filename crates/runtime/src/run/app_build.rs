@@ -129,8 +129,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     } = loaded;
     // The app's declared fragments, reachable by key for the rest of the
     // run: a script instantiates one, and the applier builds it here.
-    app.world
-        .insert_resource(crate::fragments::FragmentLibrary::new(fragments));
+    crate::fragments::install(&mut app.world, fragments);
     // Hot-reload watch fields are only consumed by the (feature-gated)
     // watcher below; in a parser-free build they are always empty.
     #[cfg(not(feature = "runtime-parse"))]
@@ -394,7 +393,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         // into the document would attach to nothing.
         app.add_systems(
             TickStage::Systems,
-            hot_reload.before(crate::run::script_systems::build_dom_index),
+            hot_reload.before(lumen_scene::dom::build_dom_index),
         );
     }
 

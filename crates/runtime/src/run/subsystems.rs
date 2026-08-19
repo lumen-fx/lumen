@@ -450,7 +450,7 @@ pub(crate) fn register_styles(
         TickStage::Systems,
         reapply_computed_styles
             .after(reapply_styles_on_root_class_change)
-            .after(crate::run::dom_commands::apply_dom_commands),
+            .after(lumen_scene::dom::apply_dom_commands),
     );
 }
 

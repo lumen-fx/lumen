@@ -304,7 +304,7 @@ pub(crate) fn hot_reload(world: &mut World) {
     }
     // Same for the fragment set: an instantiation after the reload builds
     // from the edited declaration.
-    world.insert_resource(crate::fragments::FragmentLibrary::new(fragments));
+    crate::fragments::install(world, fragments);
     use crate::spawn::SpawnIntoWorld;
     let new_root = ir.spawn_into(world);
     restore_stateful_components(world, &preserved);

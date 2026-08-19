@@ -50,14 +50,18 @@ fn Passthru(t) {
 
 // Works a value out, so the block cannot stand in for the call. What the build
 // leaves is a marker, and the runtime fills it by calling this.
-fn Shout(who) {
+//
+// The parameter is annotated because this function is called by name. A
+// shipped app runs compiled bytecode, and a compiled program is callable by
+// name only where it declares what its arguments are.
+fn Shout(who: string) {
     let loud = who + "!";
     return lmn!(<label class="shout" text="hey $loud"/>);
 }
 
 // Picks between blocks. Both are compiled and travel in the artifact; the call
 // decides which one is used.
-fn Pick(on) {
+fn Pick(on: string) {
     if on == "yes" { return lmn!(<label class="arm" text="on"/>); }
     return lmn!(<label class="arm" text="off"/>);
 }

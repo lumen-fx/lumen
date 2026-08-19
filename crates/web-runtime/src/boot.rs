@@ -87,7 +87,7 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
         // document, so the app opens on it rather than on the entry.
         lumen_scene::routing::install_routing(&mut app, page.page.clone(), pages.keys.clone());
     }
-    let root_entity = loaded.artifact.ir.spawn_into(&mut app.world);
+    let root_entity = loaded.artifact.spawn_into(&mut app.world);
     apply_seed(&mut app.world, &loaded.seed);
 
     let root = page_root(&page)?;

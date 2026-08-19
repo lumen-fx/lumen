@@ -311,12 +311,12 @@ built before the app starts. What that takes depends on the component:
 - **The function has to run.** It works a value out, or picks between blocks:
 
   ```rust
-  fn Greet(who) {
+  fn Greet(who: string) {
       let loud = who + "!";
       return lmn!(<label text="hello $loud"/>);
   }
 
-  fn Pick(on) {
+  fn Pick(on: string) {
       if on == "yes" { return lmn!(<label text="on"/>); }
       return lmn!(<label text="off"/>);
   }
@@ -334,6 +334,35 @@ moment does delay that first frame; move it behind a signal if it is slow.
 
 A function the loaded program does not declare is reported once, naming the
 component, rather than leaving an empty element behind.
+
+### Annotate the parameters of a component that runs
+
+Note the `: string` on `Greet` and `Pick`. A component the runtime fills is
+called by name, and a shipped app runs compiled bytecode: candela makes a
+function callable by name only where it says what its arguments are. A
+component written with a bare parameter compiles and ships, and the call to it
+finds nothing, which leaves the empty box the fill was to replace.
+
+Props arrive as text, so `string` fits every one of them; `any` works too.
+
+A component the build stands in for is never called, so its parameters need no
+annotation. Annotating them all is the simpler rule, and it is what keeps a
+component usable after an edit turns it into one that has to run.
+
+`lumenc web` names the ones that would come out empty.
+
+### A component on the web
+
+The two kinds land differently in a page. A component the build stands in for
+is in the document the moment it is served, so a reader with no scripting and
+a crawler both see it. A component that has to run reaches the document as the
+empty box its marker is, and the browser runtime replaces it on the first tick
+with what the call returns. That is the same rule every script-built node
+follows, and a server render says so in its warnings.
+
+Where a component's body should be in the page itself, keep the function to
+what the build can stand in for: return one block, and read only its
+parameters.
 
 ### What a block may not do
 

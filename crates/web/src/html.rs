@@ -16,6 +16,7 @@ use lumen_html::contract::{DATA_LM, DATA_LM_HIDDEN, DATA_LM_SELECTED, DIALOG_OPE
 use lumen_html::style::{Emission, rewrite_property};
 use lumen_html::{escape_attr, escape_text, html_attrs, html_tag_for};
 use lumen_ir::css::computed_style_map;
+use lumen_ir::fragment::FRAGMENT_TAG;
 use lumen_ir::interpolate::{Scope, substitute_element};
 use lumen_ir::layout_ir::{Attributes, Element, IfModeSpec};
 
@@ -69,18 +70,20 @@ fn emit_element(
     path: &NodePath,
     walk: &mut Walk<'_>,
 ) -> Result<(), EmitError> {
-    // A fragment use site stands in for a body that lives in the app's
-    // fragment table. Expanding it is the compiler's step, not the
-    // emitter's; a tree that still carries one has not been through it, and
-    // writing the placeholder out would put an element in the page that the
-    // app does not have.
-    if let Some(frag) = &element.frag_use {
-        return Err(EmitError::UnexpandedFragment {
-            page: walk.page.to_string(),
-            key: frag.key.clone(),
-        });
-    }
-    let tag = html_tag_for(&element.tag).ok_or_else(|| EmitError::UnknownTag {
+    // A component whose body the build could stand in for is already the body
+    // by the time the tree gets here. What is left carrying a use site is a
+    // component that has to run, and the element is the marker the runtime
+    // replaces with what the call returns. It is written as the empty box it
+    // is: the node the call builds is not knowable here, and what the use site
+    // wrote inside the marker goes with the marker when the replacement lands,
+    // so writing that would put content in the page the app never has.
+    let marker = element.frag_use.is_some();
+    let ir_tag = if marker {
+        FRAGMENT_TAG
+    } else {
+        element.tag.as_str()
+    };
+    let tag = html_tag_for(ir_tag).ok_or_else(|| EmitError::UnknownTag {
         page: walk.page.to_string(),
         tag: element.tag.clone(),
     })?;
@@ -94,8 +97,8 @@ fn emit_element(
 
     let mut hidden = false;
     let mut open = false;
-    let mut children_are_content = true;
-    match element.tag.as_str() {
+    let mut children_are_content = !marker;
+    match ir_tag {
         "if" => match element.attrs.if_mode {
             // A hidden branch stays in the document, so the runtime has
             // something to show when the signal turns true.
@@ -125,7 +128,7 @@ fn emit_element(
     for (name, value) in tag.fixed {
         write_attr(out, name, value);
     }
-    for (name, value) in html_attrs(&element.tag, &element.attrs) {
+    for (name, value) in html_attrs(ir_tag, &element.attrs) {
         // A link and an asset reference are written as the IR holds them,
         // which is a page key and a path relative to the site root. Both
         // become URLs here, where the site's base path and page set are
@@ -169,6 +172,7 @@ fn emit_element(
     }
     if let Some(text) = &element.attrs.text
         && !text.is_empty()
+        && !marker
     {
         out.push_str(&escape_text(text));
     }
@@ -176,7 +180,7 @@ fn emit_element(
         for (index, child) in element.children.iter().enumerate() {
             emit_element(out, child, &path.child(index as u32), walk)?;
         }
-    } else if element.tag == "for" {
+    } else if ir_tag == "for" {
         emit_rows(out, element, path, walk)?;
     }
     out.push_str("</");

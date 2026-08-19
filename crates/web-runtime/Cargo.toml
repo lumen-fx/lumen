@@ -30,7 +30,6 @@ lumen-web-dom = { path = "../backends/web-dom", version = "0.0.3" }
 # The app a page runs, and the script hosts that run its scripts: everything
 # about a Lumen app that is not about the platform it runs on.
 lumen-portable = { path = "../portable", version = "0.0.3", default-features = false }
-lumen-text = { path = "../text", version = "0.0.3" }
 lumen-script = { path = "../script/api", version = "0.0.3", default-features = false }
 bevy_ecs.workspace = true
 wasm-bindgen.workspace = true
@@ -58,6 +57,9 @@ web-sys = { workspace = true, features = [
 lumen-script-candela = { path = "../script/candela", version = "0.0.3" }
 
 [dev-dependencies]
+# The emitter, so a browser test hydrates the document the real one writes
+# rather than a fixture string that can drift from it.
+lumen-web = { path = "../web", version = "0.0.3" }
 wasm-bindgen-test.workspace = true
 
 [features]

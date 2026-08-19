@@ -62,6 +62,11 @@ pub fn portable_app() -> App {
     // No clipboard: it is the one non-send resource the input layer installs,
     // and this app has to run wherever it is put.
     app.add_plugin(lumen_input::InputPlugin { clipboard: false });
+    // The tree a script reads and the mutations it issues, which is how a
+    // fragment reaches the world: `mount()` inserts a node the DOM applier
+    // built, and the applier is where a fragment key becomes a subtree. The
+    // desktop installs the same three systems.
+    lumen_scene::dom::install_dom(&mut app);
     app.add_plugin(PressPlugin::default());
     app.add_plugin(ControlsPlugin);
     app.add_plugin(CheckboxPlugin);

@@ -477,9 +477,9 @@ mod app_build;
 mod audio;
 mod caret_scroll;
 mod check;
-mod dom_commands;
 mod hot_reload;
 mod i18n;
+mod introspection;
 mod loading;
 mod restyle;
 mod script_commands;
@@ -523,6 +523,6 @@ pub use check::{check_app, compile_app, compile_app_with_skin, script_exports};
 pub(crate) use hot_reload::HotReloadDriver;
 pub use i18n::locale_dir;
 pub use restyle::{
-    ColorSchemeIntent, ErrorBanner, ErrorBannerMarker, StyleVersion,
-    dismiss_error_banner_on_escape, reconcile_error_banner,
+    ColorSchemeIntent, ErrorBanner, ErrorBannerMarker, dismiss_error_banner_on_escape,
+    reconcile_error_banner,
 };

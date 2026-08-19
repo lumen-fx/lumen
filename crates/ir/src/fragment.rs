@@ -29,6 +29,14 @@ pub const SLOT_TAG: &str = "slot";
 /// use site's unnamed children are passed under.
 pub const DEFAULT_SLOT: &str = "default";
 
+/// Tag standing for a use site the build could not finish, which the runtime
+/// fills by calling the function it names.
+///
+/// The element itself keeps the name a use site wrote, because that is what
+/// the call needs. This is what the element is *as a box*: an empty one, for
+/// as long as it takes the first tick to replace it.
+pub const FRAGMENT_TAG: &str = "fragment";
+
 /// Which authoring form declared a fragment.
 ///
 /// The distinction is kept because diagnostics point back at source: a

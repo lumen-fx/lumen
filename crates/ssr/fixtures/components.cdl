@@ -1,0 +1,12 @@
+// A component the build could not stand in for, and a signal the filled body
+// reads, so a document can show that the call ran on the server.
+import "lumen.cdl";
+
+fn main() {}
+
+// Called by name from the tree, so the parameter is annotated: a compiled
+// program is callable by name only where it says what its arguments are.
+fn Shout(who: string) {
+    lumen::signal_set("shouted", who + "!");
+    return lumen::fragment_spawn("shout", ["who", who], []);
+}

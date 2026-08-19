@@ -22,9 +22,9 @@ use std::error::Error;
 use std::fmt;
 
 use bevy_ecs::component::Mutable;
-use bevy_ecs::prelude::{Resource, World};
-use lumen_core::prelude::App;
-use lumen_script::{ScriptError, ScriptHost, ScriptValue};
+use bevy_ecs::prelude::{IntoScheduleConfigs, Resource, World};
+use lumen_core::prelude::{App, TickStage};
+use lumen_script::{ScriptError, ScriptHost, ScriptSet, ScriptValue};
 
 /// Every engine name this build has a host for.
 pub const COMPILED_ENGINES: &[&str] = &[
@@ -123,6 +123,39 @@ pub fn install(
             Err(UnknownEngine(engine.to_owned()))
         }
     }
+}
+
+/// Install the two per-host systems the script plugin leaves to whoever
+/// assembles the app.
+///
+/// `on_ready` is where an app mounts what its script builds: it runs on the
+/// first tick, once the tree is queryable, which is what `on_start` cannot do
+/// because no element exists yet. The component fill is the other half of the
+/// same story: a component the build could not stand in for is left in the
+/// tree as a marker, and this is what calls the function and puts the node it
+/// returns in the marker's place.
+///
+/// Both are ordered before the DOM collector, so whatever they build lands on
+/// the tick they ran rather than the one after.
+fn register_host_systems<H>(app: &mut App)
+where
+    H: ScriptHost + Resource<Mutability = Mutable>,
+{
+    app.add_systems(
+        TickStage::Systems,
+        lumen_script::fire_on_ready::<H>
+            .in_set(ScriptSet::Ready)
+            .after(lumen_scene::dom::build_dom_index)
+            .after(ScriptSet::SyncSignals),
+    );
+    app.add_systems(
+        TickStage::Systems,
+        lumen_script::fill_components::<H>
+            .in_set(ScriptSet::Fill)
+            .after(ScriptSet::Ready)
+            .after(lumen_scene::dom::build_dom_index)
+            .after(ScriptSet::SyncSignals),
+    );
 }
 
 /// Read `name` from the host's signal mirror.

@@ -1,15 +1,16 @@
 //! Injected source front-end - the markup + CSS parser boundary.
 //!
-//! `lumen-runtime` never links the `.lmn` / CSS parser. That front-end stays
-//! in the compiler (`lumenc`), and `lumenc` depends on this crate for its CLI
-//! `run` / `build` paths, so a direct parser dependency here would form a
-//! dependency cycle. The parser is injected instead:
+//! Nothing under the runtime links the `.lmn` / CSS parser. That front-end
+//! stays in the compiler (`lumenc`), and `lumenc` depends on the runtime for
+//! its CLI `run` / `build` paths, so a direct parser dependency here would
+//! form a dependency cycle. The parser is injected instead:
 //!
 //! - The CLI (`lumenc run`), the Rust SDK, and the C-ABI dev paths hand a
-//!   [`SourceParser`] to [`crate::RunOptions::parser`].
-//! - The dev source-load path ([`crate::run`]) and hot reload call it.
-//! - The precompiled-artifact path ([`RunOptions::artifact`](crate::RunOptions::artifact))
-//!   needs no parser at all and ignores this hook.
+//!   [`SourceParser`] to `RunOptions::parser`.
+//! - The dev source-load path and hot reload call it.
+//! - The precompiled-artifact path needs no parser at all and ignores this
+//!   hook, which is also every path that runs an app in a browser or on a
+//!   server.
 
 use bevy_ecs::prelude::Resource;
 use lumen_ir::css::Stylesheet;
@@ -86,9 +87,12 @@ pub trait SourceParser: Send + Sync {
     fn link_fragments(&self, table: FragmentTable) -> Result<FragmentTable, String>;
 }
 
-/// World-resource wrapper so the hot-reload system (a `&mut World` system that
-/// cannot take the parser as a param) can reach the injected [`SourceParser`].
-/// Inserted by `build_app` only when hot reload is active and a parser was
-/// supplied.
+/// World-resource wrapper so an exclusive system (one taking `&mut World`,
+/// which cannot take the parser as a param) can reach the injected
+/// [`SourceParser`]. Hot reload and `set_inner_markup` are the two.
+///
+/// Put in by the host that has a parser to give. An app with none, which is
+/// every app running from a compiled artifact, carries no such resource and
+/// the callers report the limitation rather than assuming one.
 #[derive(Resource, Clone)]
-pub(crate) struct RuntimeParser(pub(crate) Arc<dyn SourceParser>);
+pub struct RuntimeParser(pub Arc<dyn SourceParser>);

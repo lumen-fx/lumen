@@ -1,55 +1,6 @@
 use super::*;
 
-/// Rebuild the per-tick [`DomIndex`] snapshot from the live main-world
-/// tree and publish it for cross-thread readers (script hosts, the C-ABI).
-/// Every spawned element carries a [`LumenTag`], so the query walks all
-/// selector-reachable entities; a parent or child that is not itself
-/// tagged (e.g. the window root) is dropped from the element tree.
-///
-/// Runs in [`TickStage::Systems`] before the script / input dispatchers so
-/// a `query()` issued from an event handler observes this tick's tree.
-#[allow(clippy::type_complexity)]
-pub(crate) fn build_dom_index(
-    query: Query<(
-        Entity,
-        &LumenTag,
-        Option<&LumenClasses>,
-        Option<&LumenId>,
-        Option<&ChildOf>,
-        Option<&Children>,
-    )>,
-) {
-    use std::collections::HashSet;
-    let indexed: HashSet<u64> = query.iter().map(|(e, ..)| e.to_bits()).collect();
-    let mut records: Vec<DomRecord> = Vec::with_capacity(indexed.len());
-    for (entity, tag, classes, id, child_of, children) in query.iter() {
-        let parent = child_of
-            .map(|c| c.parent())
-            .filter(|p| indexed.contains(&p.to_bits()));
-        let kids: Vec<Entity> = children
-            .map(|c| {
-                c.iter()
-                    .filter(|e| indexed.contains(&e.to_bits()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        records.push(DomRecord {
-            entity,
-            generation: entity.generation().to_bits(),
-            tag: tag.0.to_string(),
-            id: id.map(|i| i.0.clone()),
-            classes: classes
-                .map(|c| c.0.iter().map(|s| s.to_string()).collect())
-                .unwrap_or_default(),
-            parent,
-            children: kids,
-            child_index: 0,
-            sibling_count: 0,
-            doc_order: 0,
-        });
-    }
-    lumen_core::node::publish_dom_index(DomIndex::build(records));
-}
+use lumen_scene::dom::build_dom_index;
 
 /// Install the host-neutral half of the script wiring: the DOM snapshot
 /// publishers, the mutation pipeline, the two-way binding readers and pushes,
@@ -83,23 +34,20 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
     // the derived signal freezes (RC1). Edge is inert when no script is
     // installed (the set has no members), same as the `ScriptSet::Dispatch`
     // references above.
-    // Dynamic DOM read side: rebuild + publish the query snapshot before
-    // any handler runs, so `query()` / traversal from an `on_click` body
-    // sees this tick's tree. Unconditional (runs with or without a script,
-    // so the C-ABI / SDK can query a script-less app).
-    app.add_systems(
-        TickStage::Systems,
-        build_dom_index
-            .before(ScriptSet::Dispatch)
-            .before(lumen_input::dispatch_focused_keys),
-    );
+    // The dynamic DOM: the tree a `query()` reads and the mutations a script
+    // or the C-ABI issues against it. Installed unconditionally, because an
+    // app with no script of its own is still queried and mutated over the
+    // C-ABI and the SDKs. The same call assembles it in a browser page and in
+    // a server render, which is what keeps one answer to `mount()` across the
+    // three.
+    lumen_scene::dom::install_dom(app);
     // Publish per-node detail (text / generic attrs / inline style) + the
     // cascade inputs `computed_style` consumes, alongside the DomIndex so a
     // read from a handler sees this tick's tree. Unconditional (works for a
     // script-less app queried over the C-ABI).
     app.add_systems(
         TickStage::Systems,
-        crate::run::dom_commands::publish_node_details
+        crate::run::introspection::publish_node_details
             .before(ScriptSet::Dispatch)
             .before(lumen_input::dispatch_focused_keys),
     );
@@ -108,25 +56,13 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
     // detail publish so an inspection read from a handler sees this tick.
     // Unconditional (works for a script-less app inspected over the C-ABI).
     app.world
-        .insert_resource(crate::run::dom_commands::FrameClock::default());
+        .insert_resource(crate::run::introspection::FrameClock::default());
     app.add_systems(
         TickStage::Systems,
-        crate::run::dom_commands::publish_introspection
+        crate::run::introspection::publish_introspection
             .before(ScriptSet::Dispatch)
             .before(lumen_input::dispatch_focused_keys),
     );
-    // Dynamic DOM mutation pipeline. `collect_dom_commands` gathers this
-    // tick's DOM / window commands from the script event stream and the
-    // external (C-ABI / SDK) bus in issue order; `apply_dom_commands` is an
-    // exclusive system that materializes spawns, reparents, and component
-    // edits against `&mut World`. Both run unconditionally so a script-less
-    // app still applies C-ABI / SDK mutations.
-    //
-    // `collect_dom_commands` reads `ScriptCommandEvent`; the script plugin
-    // registers that message only when a script is installed, so a
-    // script-less app must self-register it here or the reader fails
-    // parameter validation.
-    lumen_script::runtime::register_script_commands(&mut app.world);
     if !has_script {
         // No host means `register_script_host_systems` never runs, so install
         // the DOM-event dispatchers here against whichever host this build
@@ -144,21 +80,6 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
         ))]
         register_dom_event_dispatchers::<LuaHost>(app);
     }
-    app.world
-        .insert_resource(crate::run::dom_commands::PendingDomCommands::default());
-    app.add_systems(
-        TickStage::Systems,
-        crate::run::dom_commands::collect_dom_commands
-            .after(ScriptSet::Tick)
-            .after(ScriptSet::Dispatch)
-            .after(ScriptSet::Ready)
-            .after(ScriptSet::DomEvents),
-    );
-    app.add_systems(
-        TickStage::Systems,
-        crate::run::dom_commands::apply_dom_commands
-            .after(crate::run::dom_commands::collect_dom_commands),
-    );
     app.add_systems(
         TickStage::Systems,
         lumen_core::property_store::commit_external_properties
@@ -495,7 +416,7 @@ pub(crate) fn register_script_host_systems<
         fire_on_ready::<H>
             .in_set(ScriptSet::Ready)
             .after(build_dom_index)
-            .after(crate::run::dom_commands::publish_node_details)
+            .after(crate::run::introspection::publish_node_details)
             .after(ScriptSet::SyncSignals),
     );
     // The use sites the build left for the script to fill, on the same terms
@@ -508,7 +429,7 @@ pub(crate) fn register_script_host_systems<
             .in_set(ScriptSet::Fill)
             .after(ScriptSet::Ready)
             .after(build_dom_index)
-            .after(crate::run::dom_commands::publish_node_details)
+            .after(crate::run::introspection::publish_node_details)
             .after(ScriptSet::SyncSignals),
     );
     register_dom_event_dispatchers::<H>(app);

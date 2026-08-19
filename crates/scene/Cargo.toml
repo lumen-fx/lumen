@@ -32,6 +32,9 @@ lumen-os-dnd = { path = "../os/dnd", version = "0.0.3" }
 # One call: an anchor click honours a handler that prevented the click's
 # default action.
 lumen-script = { path = "../script/api", version = "0.0.3", default-features = false }
+# The DOM pipeline publishes the tree before the focused-key dispatch, so a
+# `query()` from a key handler sees this tick's nodes.
+lumen-input = { path = "../input", version = "0.0.3" }
 bevy_ecs.workspace = true
 glam.workspace = true
 tracing.workspace = true

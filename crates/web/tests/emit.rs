@@ -1005,23 +1005,33 @@ fn a_site_emitted_without_the_runtime_loads_nothing() {
     assert!(html.contains(r#"href="/styles.css""#));
 }
 
+/// A component that has to run reaches the page as the box the runtime
+/// replaces. What the use site wrote inside it belongs to the marker, and goes
+/// when the marker does, so the document carries the box and nothing else.
 #[test]
-fn a_fragment_that_was_never_expanded_is_an_error() {
-    let mut placeholder = element("column", Attributes::default(), Vec::new());
-    placeholder.frag_use = Some(Box::new(FragmentUse {
-        key: "card".into(),
+fn a_component_the_runtime_fills_is_an_empty_box_in_the_page() {
+    let inside = element(
+        "label",
+        Attributes {
+            text: Some("placeholder".into()),
+            ..Attributes::default()
+        },
+        Vec::new(),
+    );
+    let mut marker = element("Card", Attributes::default(), vec![inside]);
+    marker.frag_use = Some(Box::new(FragmentUse {
+        key: "Card".into(),
         args: Vec::new(),
         slot_children: false,
     }));
     let page = PageSpec::new(
         "index",
-        ir(element("root", Attributes::default(), vec![placeholder])),
+        ir(element("root", Attributes::default(), vec![marker])),
     );
-    assert_eq!(
-        emit(&site(vec![page])),
-        Err(EmitError::UnexpandedFragment {
-            page: "index".into(),
-            key: "card".into(),
-        })
+    let html = page_html(&site(vec![page]), "index.html");
+    assert!(
+        html.contains(r#"<div class="lm-fragment" data-lm="0.0"></div>"#),
+        "{html}"
     );
+    assert!(!html.contains("placeholder"), "{html}");
 }

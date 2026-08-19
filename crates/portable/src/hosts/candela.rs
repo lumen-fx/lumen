@@ -9,7 +9,7 @@ use bevy_ecs::prelude::World;
 use lumen_core::prelude::App;
 use lumen_script_candela::{CandelaVmHost, ScriptCandelaVmPlugin};
 
-use crate::hosts::ScriptHostAccess;
+use crate::hosts::{ScriptHostAccess, register_host_systems};
 
 /// The engine name a manifest names this host by.
 pub(crate) const ENGINE: &str = "candela";
@@ -17,6 +17,7 @@ pub(crate) const ENGINE: &str = "candela";
 /// Install the host over the `.cdlb` image `program`.
 pub(crate) fn install(app: &mut App, program: &[u8], uri: &str) -> ScriptHostAccess {
     app.add_plugin(ScriptCandelaVmPlugin::new(program.to_vec()).with_uri(uri));
+    register_host_systems::<CandelaVmHost>(app);
     access()
 }
 

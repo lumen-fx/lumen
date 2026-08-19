@@ -216,6 +216,20 @@ impl SpawnIntoWorld for LayoutIR {
     }
 }
 
+/// A compiled app spawns its tree and the fragments that tree names.
+///
+/// The tree alone is not the whole app: a `<template>` body and an `lmn!`
+/// block travel beside it in the artifact, and a script instantiates one by
+/// key while the app runs. Taking both from the artifact in one call is what
+/// keeps a page, a server render and a window building the same subtree,
+/// rather than each remembering to install the table on its own.
+impl SpawnIntoWorld for lumen_ir::artifact::CompiledApp {
+    fn spawn_into(&self, world: &mut World) -> Entity {
+        crate::fragments::install(world, self.fragments.clone());
+        self.ir.spawn_into(world)
+    }
+}
+
 /// Spawn an [`Element`] subtree under `parent` (or as a new root when
 /// `None`) WITHOUT touching the global [`LumenStylesheet`] resource.
 ///

@@ -48,6 +48,34 @@ impl From<(Vec2, Vec2)> for Transform {
     }
 }
 
+/// Monotonic counter bumped whenever a class / palette / media-feature
+/// change invalidates computed style for at least one entity. Downstream
+/// consumers (the cascade re-resolver, the `Visuals` recompute) observe
+/// `Changed<StyleVersion>` and re-walk only the entities the invalidation
+/// cache flagged.
+///
+/// Here rather than with the cascade because the writers and the readers are
+/// in different crates: a scripted class edit bumps it from the scene layer,
+/// and the host that owns the cascade reads it. A counter both can name has
+/// to sit under both.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StyleVersion(pub u64);
+
+impl StyleVersion {
+    /// Record that something a rule could match has changed.
+    ///
+    /// Takes the world rather than the resource: the writers are exclusive
+    /// systems, and an app assembled without a cascade (a browser page, where
+    /// the page's own CSS engine resolves rules) carries no counter until the
+    /// first edit puts one there.
+    pub fn bump(world: &mut bevy_ecs::world::World) {
+        match world.get_resource_mut::<Self>() {
+            Some(mut version) => version.0 = version.0.wrapping_add(1),
+            None => world.insert_resource(Self(1)),
+        }
+    }
+}
+
 /// Framework-internal style record. Smaller and renderer-agnostic compared with `taffy::Style`; the layout impl crate translates it into its backend type.
 /// New fields require a corresponding `dirty_mask` bit allocation in `lumen/src/style_mask.rs`.
 ///
