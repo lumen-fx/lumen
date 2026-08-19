@@ -194,14 +194,17 @@ fn install_bindings(app: &mut App) {
     );
 }
 
-/// Apply the state the page was rendered from, before the first tick.
+/// Apply the state the page was rendered from, before the scene is spawned.
 ///
-/// Only signals nothing has written yet: the same rule the spawner applies
-/// to a `signal_seed`, and for the same reason. A script that published a
-/// signal with a value of its own, or a widget default already in the store,
-/// is the state the page believes, and the seed says what the markup shows.
-/// They should agree; where they do not, the live one wins and the mismatch
-/// shows up as a repaint rather than as a lost write.
+/// Only signals nothing has written yet, so a script that published a signal
+/// of its own keeps it: that write is the live state, and the seed only says
+/// where the page starts.
+///
+/// Before the scene, because the spawner seeds a signal from the markup
+/// beside it: a `bind-text` label's own `text=` is what the app shows until
+/// the signal has a value. The page was rendered with the signal's value, so
+/// running the spawner first would let the fallback win and leave the
+/// document saying one thing and the app another.
 pub fn apply_seed(world: &mut World, seed: &Seed) {
     let mut store = world.resource_mut::<PropertyStore>();
     for (name, value) in &seed.globals {
