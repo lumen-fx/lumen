@@ -128,6 +128,10 @@ impl RequestHandler for RenderHandler {
 
 #[cfg(test)]
 mod tests {
+    use lumen_ir::artifact::CompiledApp;
+    use lumen_ir::layout_ir::{Attributes, Element, LayoutIR};
+    use lumen_web::WebSpec;
+
     use super::*;
 
     fn asking(path: &str) -> Request {
@@ -184,5 +188,55 @@ mod tests {
         let mut plain = asking("/");
         plain.headers = vec![("X-Forwarded-Proto".to_string(), "http".to_string())];
         assert!(!render_request(&plain).secure);
+    }
+
+    /// An app of one label, which is enough to tell a document apart from
+    /// nothing having been rendered.
+    fn one_page() -> CompiledApp {
+        let label = Element {
+            tag: "label".to_string(),
+            attrs: Attributes {
+                text: Some("rendered here".to_string()),
+                ..Attributes::default()
+            },
+            ..Element::default()
+        };
+        CompiledApp {
+            ir: LayoutIR {
+                root: Element {
+                    tag: "root".to_string(),
+                    children: vec![label],
+                    ..Element::default()
+                },
+                ..LayoutIR::default()
+            },
+            ..CompiledApp::default()
+        }
+    }
+
+    /// The process renders one request at a time, so this is the only case
+    /// here that starts a renderer, and it lets go of it before it ends.
+    #[test]
+    fn a_request_comes_back_as_the_document_it_was_rendered_into() {
+        let site = SsrSite::new(one_page(), WebSpec::default()).expect("the entry is the page");
+        let handler =
+            RenderHandler::start(site, RenderOptions::default(), vec!["de-DE".to_string()])
+                .expect("nothing else in this process is rendering");
+
+        let page = handler.handle(&asking("/")).expect("a page was rendered");
+        assert_eq!(page.status, 200);
+        assert!(
+            page.headers
+                .iter()
+                .any(|(name, value)| name == "Content-Type" && value.contains("text/html")),
+            "{:?}",
+            page.headers
+        );
+        let body = String::from_utf8(page.body).expect("a document is text");
+        assert!(body.contains("rendered here"), "{body}");
+
+        // A tree in another language is answered by the documents on disk,
+        // which is the directory's job and not this handler's.
+        assert!(handler.handle(&asking("/de-DE/index.html")).is_none());
     }
 }
