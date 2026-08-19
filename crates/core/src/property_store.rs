@@ -447,8 +447,9 @@ impl PropertyStore {
         )
     }
 
-    /// Reads a globally-keyed boolean. Recognises `Bool` directly, plus the
-    /// canonical `"true"` / `"false"` / `"1"` / `"0"` string aliases that
+    /// Reads a globally-keyed boolean. Recognises `Bool` directly, and reads a
+    /// string cell through [`crate::signals::signal_as_bool`], which is the one
+    /// rule for the canonical `"true"` / `"false"` / `"1"` / `"0"` aliases
     /// [`crate::signals::Signals::set_bool`] used to write. Other variants
     /// (numeric, colour, ...) yield `None` so callers can fall back to a default
     /// rather than treating an unrelated value as `false`.
@@ -456,11 +457,7 @@ impl PropertyStore {
         let key = PropertyKey::Global(Arc::<str>::from(name));
         match self.get(&key)? {
             PropertyValue::Bool(b) => Some(*b),
-            PropertyValue::Str(s) => match s.as_ref() {
-                "true" | "1" => Some(true),
-                "false" | "0" => Some(false),
-                _ => None,
-            },
+            PropertyValue::Str(s) => crate::signals::signal_as_bool(s.as_ref()),
             _ => None,
         }
     }

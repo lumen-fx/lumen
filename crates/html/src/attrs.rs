@@ -107,6 +107,17 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
         out.push((DATA_LM_DISABLED, String::new()));
     }
     if is_text_entry {
+        // A text field's text is its value, and an `input` has nowhere else to
+        // put it: it takes no children, so the text node every other element
+        // holds its text in has no place to go. A `textarea` does hold one,
+        // and the emitter writes it there. This is the same split the runtime
+        // makes when it projects an entity's text onto its element.
+        if name == "input"
+            && attrs.value.is_none()
+            && let Some(text) = attrs.text.as_ref().filter(|text| !text.is_empty())
+        {
+            out.push(("value", text.clone()));
+        }
         if let Some(placeholder) = &attrs.placeholder {
             out.push(("placeholder", placeholder.clone()));
         }
