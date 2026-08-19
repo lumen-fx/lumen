@@ -28,6 +28,10 @@ pub mod bundle_cli;
 /// Gated with the parser stack.
 #[cfg(feature = "runtime-parse")]
 pub mod compile;
+/// Filling a component that has to run while the site is built, so its body is
+/// in the page a crawler reads. Needs what `web_cli` needs.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "web"))]
+pub mod component_fill;
 /// Markup formatter - requires `roxmltree`, gated with the parser stack.
 #[cfg(feature = "runtime-parse")]
 pub mod formatter;

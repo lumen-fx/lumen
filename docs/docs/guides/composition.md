@@ -337,11 +337,12 @@ component, rather than leaving an empty element behind.
 
 ### Annotate the parameters of a component that runs
 
-Note the `: string` on `Greet` and `Pick`. A component the runtime fills is
-called by name, and a shipped app runs compiled bytecode: candela makes a
-function callable by name only where it says what its arguments are. A
-component written with a bare parameter compiles and ships, and the call to it
-finds nothing, which leaves the empty box the fill was to replace.
+Note the `: string` on `Greet` and `Pick`. A component that has to run is
+called by name, and both the build and a shipped app call it through compiled
+bytecode: candela makes a function callable by name only where it says what its
+arguments are. A component written with a bare parameter compiles and ships,
+and the call to it finds nothing, which leaves an empty element where its body
+belongs.
 
 Props arrive as text, so `string` fits every one of them; `any` works too.
 
@@ -353,16 +354,17 @@ component usable after an edit turns it into one that has to run.
 
 ### A component on the web
 
-The two kinds land differently in a page. A component the build stands in for
-is in the document the moment it is served, so a reader with no scripting and
-a crawler both see it. A component that has to run reaches the document as the
-empty box its marker is, and the browser runtime replaces it on the first tick
-with what the call returns. That is the same rule every script-built node
-follows, and a server render says so in its warnings.
+Both kinds are in the document. A component's shape is markup, not app state,
+so `lumenc web` resolves it while it builds the site: where the build cannot
+stand in for the call it runs the function itself and writes the body it
+returns into the HTML. A reader with no scripting and a crawler get the whole
+tree, in every `render` and `prerender` combination. The browser adopts those
+elements the way it adopts the rest of the page rather than building them
+again.
 
-Where a component's body should be in the page itself, keep the function to
-what the build can stand in for: return one block, and read only its
-parameters.
+The one thing that does not reach the document is a component written inside a
+`<for>`: what it renders depends on the row it is rendered for, so the browser
+fills it per row. The build says which components those are.
 
 ### What a block may not do
 

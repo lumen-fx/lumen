@@ -194,6 +194,90 @@ fn the_windowless_assembly_builds_the_same_tree() {
     assert_eq!(dump(&mut booted.app), EXPECTED);
 }
 
+/// The tree a site is emitted from, once the build has filled the components
+/// that have to run.
+#[cfg(feature = "web")]
+fn filled() -> lumen_ir::artifact::CompiledApp {
+    let mut compiled = lumenc::compile_app(&fixture()).expect("the fixture compiles");
+    let mut warnings = Vec::new();
+    lumenc::component_fill::fill(&mut compiled, "main", &mut warnings);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    compiled
+}
+
+/// Filling a component while the site is built leaves the tree the runtime
+/// would have built anyway.
+///
+/// This is the join between the two halves. The emitter writes this tree into
+/// the document, and the browser spawns this tree out of the artifact beside
+/// it; if filling produced anything other than what the call produces at run
+/// time, the page and the app it hydrates into would disagree from the first
+/// frame.
+#[cfg(feature = "web")]
+#[test]
+fn a_filled_tree_still_builds_what_the_runtime_builds() {
+    use std::sync::Arc;
+
+    let _serial = isolate();
+    let compiled = filled();
+    assert!(
+        !holds_marker(&compiled.ir.root),
+        "every component the build can run is its body by now"
+    );
+
+    let mut booted = lumen_prerender::boot(
+        &compiled,
+        "main",
+        &lumen_html::contract::Seed::new(),
+        Arc::new(lumen_prerender::DenyDispatch::default()),
+    );
+    lumen_prerender::settle(&mut booted.app, lumen_prerender::Budget::default());
+
+    assert_eq!(dump(&mut booted.app), EXPECTED);
+}
+
+/// Whether anything under `element` still stands in for a component.
+#[cfg(feature = "web")]
+fn holds_marker(element: &lumen_ir::layout_ir::Element) -> bool {
+    element.frag_use.is_some() || element.children.iter().any(holds_marker)
+}
+
+/// What a crawler is served: the body of every component, in the document
+/// itself, with no box left for a browser to fill.
+///
+/// Written from the same tree the test above spawns, so the paths the emitter
+/// numbers and the paths the runtime derives come from one source.
+#[cfg(feature = "web")]
+#[test]
+fn the_emitted_page_carries_every_component_body() {
+    let _serial = isolate();
+    let compiled = filled();
+    let spec = lumen_web::SiteSpec {
+        pages: vec![lumen_web::PageSpec::new("main", compiled.ir.clone())],
+        web: lumen_web::WebSpec {
+            runtime: false,
+            ..lumen_web::WebSpec::default()
+        },
+        ..lumen_web::SiteSpec::default()
+    };
+    let mut warnings = Vec::new();
+    let html = lumen_web::html::emit_tree(&spec.pages[0], &spec, &mut warnings)
+        .expect("the filled tree emits");
+
+    // The three the build had to run for, each with the value its call worked
+    // out rather than the box it used to leave.
+    assert!(html.contains("hey ann!"), "{html}");
+    assert!(html.contains(">on<"), "{html}");
+    assert!(html.contains(">off<"), "{html}");
+    // And the ones it could stand in for, which were never in doubt.
+    assert!(html.contains("home for bob"), "{html}");
+    assert!(html.contains("in x"), "{html}");
+    assert!(
+        !html.contains("lm-fragment"),
+        "no component is left as a box: {html}"
+    );
+}
+
 /// An artifact whose table lost the key the script names instantiates
 /// nothing, reports it, and keeps running.
 #[test]

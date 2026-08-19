@@ -312,12 +312,20 @@ fn build(options: &Options) -> Result<Report, String> {
     let render = options.render.unwrap_or(cfg.web.render);
     let prerender = options.prerender.unwrap_or(cfg.web.prerender);
 
+    let plan = lumen_runtime::pages::discover(dir, &cfg);
+
+    // A component that has to run is resolved here, before anything else reads
+    // the tree. Its body is markup like any other once it is in: the asset
+    // rewrite below reaches an `<image>` inside it, the link check sees its
+    // links, and the artifact the browser loads carries it, so the runtime
+    // adopts the body the page already shows instead of building it again.
+    crate::component_fill::fill(&mut compiled, &plan.entry_key, &mut warnings);
+
     // Assets travel with the site, so every `<image src>` is rewritten from
     // the path it has on this machine to the path it will have on the
     // server, and the files are copied there.
     let assets = collect_assets(&mut compiled.ir.root, dir, &mut warnings);
 
-    let plan = lumen_runtime::pages::discover(dir, &cfg);
     let keys: Vec<String> = plan.pages.iter().map(|page| page.key.clone()).collect();
     let keys = if keys.is_empty() {
         vec![plan.entry_key.clone()]
@@ -953,8 +961,16 @@ fn check_exports(compiled: &CompiledApp, warnings: &mut Vec<String>) {
                 ));
             }
         }
+        // Every name still here is one the build ran and could not fill, so
+        // each gets the reason it could not be. A component the build did fill
+        // is its body by now and names nothing.
         for name in components.iter().filter(|name| declared.contains(*name)) {
-            if !exports.contains(name) {
+            if exports.contains(name) {
+                warnings.push(format!(
+                    "`{name}` returned no markup when the build called it, so the page carries an \
+                     empty box where its body belongs; a component returns one `lmn!` block"
+                ));
+            } else {
                 warnings.push(format!(
                     "the markup writes `<{name}/>`, and the compiled program does not export \
                      `{name}`, so the page carries an empty box where its body belongs; annotate \

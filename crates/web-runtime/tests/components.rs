@@ -1,11 +1,15 @@
 //! Fragments in a real page: what the emitter wrote, what the runtime built,
 //! and whether the two agree.
 //!
-//! A fragment reaches a page two ways. A component the build could not stand
-//! in for is a marker in the document that the first tick replaces with what
-//! the call returns; a block the app mounts is a subtree no document ever
-//! carried. Both go through the browser backend, and only a browser says
-//! whether the element that came out is the one the page needed.
+//! A component that has to run is filled while the site is built, so the
+//! document already holds its body and the runtime's job is to adopt it. That
+//! is the path a visitor takes and the first test here.
+//!
+//! The rest is what happens when a body did not reach the document: a
+//! component the build could not call, and a block the app mounts, which is a
+//! subtree no document ever carried. Both go through the browser backend, and
+//! only a browser says whether the element that came out is the one the page
+//! needed.
 //!
 //! ```sh
 //! cargo test -p lumen-web-runtime --target wasm32-unknown-unknown
@@ -101,9 +105,25 @@ fn tree() -> LayoutIR {
     }
 }
 
-fn compiled() -> CompiledApp {
+/// The same tree, with the component filled the way the build fills it: the
+/// marker is gone and the body it names stands in its place.
+fn filled_tree() -> LayoutIR {
+    let mut ir = tree();
+    ir.root.children[1] = Element {
+        tag: "label".to_string(),
+        attrs: Attributes {
+            classes: vec!["shout".to_string()],
+            text: Some("ann!".to_string()),
+            ..Attributes::default()
+        },
+        ..Element::default()
+    };
+    ir
+}
+
+fn compiled_from(ir: LayoutIR) -> CompiledApp {
     CompiledApp {
-        ir: tree(),
+        ir,
         fragments: fragments(),
         scripts: vec![CompiledScript {
             engine: "candela".to_string(),
@@ -114,10 +134,10 @@ fn compiled() -> CompiledApp {
     }
 }
 
-/// Write the page the emitter writes for this app, and put it in the document.
-fn page() -> DomElement {
+/// Write the page the emitter writes for `ir`, and put it in the document.
+fn page_of(ir: LayoutIR) -> DomElement {
     let spec = SiteSpec {
-        pages: vec![PageSpec::new("index", tree())],
+        pages: vec![PageSpec::new("index", ir)],
         web: WebSpec {
             runtime: false,
             ..WebSpec::default()
@@ -135,16 +155,61 @@ fn page() -> DomElement {
     host.first_element_child().expect("the page root")
 }
 
-/// Boot the app into `root`, the way the page's own boot does, and tick it
-/// once.
-fn boot(root: DomElement) -> App {
+/// The page for the tree that still carries a marker, which is what an app
+/// whose component could not be called is emitted as.
+fn page() -> DomElement {
+    page_of(tree())
+}
+
+/// Boot `ir` into `root`, the way the page's own boot does, and tick it once.
+fn boot_ir(ir: LayoutIR, root: DomElement) -> App {
     let mut app = assemble::portable_app();
     hosts::install(&mut app, "candela", COMPONENTS, "components.cdlb")
         .expect("this build carries the candela host");
-    let root_entity = compiled().spawn_into(&mut app.world);
+    let root_entity = compiled_from(ir).spawn_into(&mut app.world);
     app.add_plugin(WebDomPlugin { root, root_entity });
     app.tick();
     app
+}
+
+/// Boot the tree that still carries a marker.
+fn boot(root: DomElement) -> App {
+    boot_ir(tree(), root)
+}
+
+/// The path a visitor takes: the build filled the component, so its body is in
+/// the document and the runtime adopts it like any other markup.
+///
+/// Nothing is built and nothing is replaced. A body the runtime rebuilt would
+/// churn the element a visitor is already looking at, and a body it built
+/// because the document had none would mean the page a crawler read was
+/// missing it.
+#[wasm_bindgen_test]
+fn a_filled_component_is_adopted_rather_than_built() {
+    let root = page_of(filled_tree());
+    let body = root
+        .query_selector(".shout")
+        .unwrap()
+        .expect("the build wrote the component's body into the page");
+    let before = body.outer_html();
+    assert!(
+        root.query_selector(".lm-fragment").unwrap().is_none(),
+        "a filled component leaves no box: {}",
+        root.outer_html()
+    );
+
+    let app = boot_ir(filled_tree(), root.clone());
+
+    assert_eq!(
+        body.outer_html(),
+        before,
+        "the element the emitter wrote is the one the app bound to, untouched"
+    );
+    let report = app.world.non_send::<NodeTable>().report();
+    assert_eq!(
+        report.created, 1,
+        "only the mounted block is built; the component's body was already there: {report:?}"
+    );
 }
 
 #[wasm_bindgen_test]
