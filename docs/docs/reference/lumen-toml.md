@@ -225,8 +225,10 @@ instead is an array signal: each entry is one row, its keys are the fields a
 `<for>` row template reads, and the values are strings. A `<for each="<name>">`
 is emitted with those rows in it, and an element bound to a seeded signal with
 `bind-text`, `bind-checked`, `bind-value` or `bind-disabled` is emitted showing
-that value. `[web.pages.<key>]` sets one page's `title` and `description`; both
-fall back to the site's.
+that value. A seeded signal beats the default the markup beside the binding
+would have set, and a script that publishes the signal itself beats both.
+`[web.pages.<key>]` sets one page's `title` and `description`; both fall back
+to the site's.
 
 See [the web guide](../guides/web.md).
 
