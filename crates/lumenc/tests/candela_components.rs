@@ -170,6 +170,30 @@ fn the_artifact_builds_the_same_tree_with_no_parser() {
     assert_eq!(dump(&mut app), EXPECTED);
 }
 
+/// The same artifact through the assembly that has no window.
+///
+/// A browser page, a prehydration run and a server render all build the app
+/// from `lumen-portable` rather than from the runtime a window uses. Nothing
+/// about a fragment is a windowing question, so the tree that comes out is the
+/// tree above or the two halves have drifted.
+#[cfg(feature = "web")]
+#[test]
+fn the_windowless_assembly_builds_the_same_tree() {
+    use std::sync::Arc;
+
+    let _serial = isolate();
+    let compiled = lumenc::compile_app(&fixture()).expect("the fixture compiles");
+    let mut booted = lumen_prerender::boot(
+        &compiled,
+        "main",
+        &lumen_html::contract::Seed::new(),
+        Arc::new(lumen_prerender::DenyDispatch::default()),
+    );
+    lumen_prerender::settle(&mut booted.app, lumen_prerender::Budget::default());
+
+    assert_eq!(dump(&mut booted.app), EXPECTED);
+}
+
 /// An artifact whose table lost the key the script names instantiates
 /// nothing, reports it, and keeps running.
 #[test]
