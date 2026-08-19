@@ -267,7 +267,7 @@ fn answer(
         // the path itself; sending 200 here would hide from a browser what
         // it will be told in production.
         Found::Nothing => {
-            let shell = root.join(lumen_web::NOT_FOUND_FILE);
+            let shell = shell_for(root, &relative);
             match std::fs::read(&shell) {
                 Ok(bytes) => Response::new(404, content_type(&shell), bytes),
                 Err(_) => Response::text(404, "not found"),
@@ -275,6 +275,20 @@ fn answer(
         }
     };
     write_response(&mut stream, response, head_only)
+}
+
+/// The shell that answers for `relative`, which has no file of its own.
+///
+/// A site emitted in several languages has one shell per language, under the
+/// tree it belongs to. A path inside such a tree is answered by that tree's
+/// shell, so a visitor asking in German is not handed the English app.
+fn shell_for(root: &Path, relative: &str) -> PathBuf {
+    let first = relative.split('/').next().unwrap_or_default();
+    let in_tree = root.join(first).join(lumen_web::NOT_FOUND_FILE);
+    if !first.is_empty() && in_tree.is_file() {
+        return in_tree;
+    }
+    root.join(lumen_web::NOT_FOUND_FILE)
 }
 
 /// The answer to a method nothing here has an answer for.
@@ -565,6 +579,23 @@ mod tests {
             site_path("/docs/", "/docs/user/42"),
             Some("user/42".to_string())
         );
+    }
+
+    #[test]
+    fn a_path_inside_a_language_tree_falls_back_to_that_trees_shell() {
+        let root = site("locale-shell");
+        std::fs::write(root.join("404.html"), "<!doctype html>root").expect("the root shell");
+        std::fs::create_dir_all(root.join("de-DE")).expect("the German tree");
+        std::fs::write(root.join("de-DE/404.html"), "<!doctype html>de").expect("its shell");
+
+        assert_eq!(
+            shell_for(&root, "de-DE/user/42"),
+            root.join("de-DE/404.html")
+        );
+        // A first segment that is a page rather than a tree, and a path at the
+        // site root, are both the root's to answer.
+        assert_eq!(shell_for(&root, "user/42"), root.join("404.html"));
+        assert_eq!(shell_for(&root, ""), root.join("404.html"));
     }
 
     #[test]
