@@ -181,10 +181,8 @@ jobs:
       # shipped app. None of them depends on another at compile time - lumenc
       # and the stub both dlopen liblumen at run time - so each is its own
       # build.
-      # The devtools feature puts the F12 overlay in the dev binary; shipped
-      # apps never carry it (liblumen and the launcher build without it).
       - name: Build lumenc
-        run: cargo build --release -p lumenc --features devtools
+        run: cargo build --release -p lumenc
         env:
           # The engine is fetched and built by lumenc's build script only when
           # it is installed from outside a checkout; say so explicitly here so

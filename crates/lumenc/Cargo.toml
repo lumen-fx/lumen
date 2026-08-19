@@ -161,7 +161,15 @@ bevy_ecs.workspace = true
 glam.workspace = true
 
 [features]
-default = ["http-fetch", "runtime-parse", "dev-run", "bundle", "package", "web"]
+default = [
+    "http-fetch",
+    "runtime-parse",
+    "dev-run",
+    "bundle",
+    "package",
+    "web",
+    "devtools",
+]
 # `lumenc web` - emit the app as a static site. ON by default. It finds the
 # prebuilt browser runtime through the same release-channel search `package`
 # uses, so it turns that on too.
@@ -212,9 +220,12 @@ dev-run = [
 # in-process compile. Build with:
 #   cargo build -p lumenc --no-default-features --features "runtime-parse,dlopen-run"
 dlopen-run = ["dep:libloading"]
-# Dev-only in-window devtools overlay (F12). Off by default - never compiled
-# into release / bundle builds. Build with `--features devtools` to get it, and
-# `lumenc run` then serves the overlay for the dev loop.
+# Dev-only in-window devtools overlay (F12), mounted by `lumenc run`. ON by
+# default: `lumenc` is the dev tool, so every dev build carries the overlay.
+# Shipped apps never do - liblumen and the launcher build without it, and an
+# artifact run mounts no overlay. A thin compiler build drops it with
+# `--no-default-features`. The weak forward keeps it out of runtime-free
+# builds.
 devtools = ["lumen-runtime?/devtools"]
 # The HTTP client behind the scripts' `fetch(url, tag)` builtin (ureq + rustls
 # + ring). On by default; a packager size knob. The runtime selects the client.

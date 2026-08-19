@@ -11,15 +11,11 @@ element tree, signal values, and captured network requests.
 
 ### Availability
 
-The released `lumenc` carries the overlay. A source build needs the
-`devtools` feature, which is off by default:
-
-```sh
-cargo build -p lumenc --features devtools
-```
-
-It mounts only for a run from source. An app started from a precompiled
-`.lmna` artifact has no overlay, and packaged apps never contain it.
+Every default `lumenc` build carries the overlay; a
+`--no-default-features` compiler build drops it with the rest of the
+runtime. It mounts only for a run from source. An app started from a
+precompiled `.lmna` artifact has no overlay, and packaged apps never
+contain it.
 
 ### Opening it
 
