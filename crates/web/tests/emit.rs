@@ -1005,11 +1005,16 @@ fn a_site_emitted_without_the_runtime_loads_nothing() {
     assert!(html.contains(r#"href="/styles.css""#));
 }
 
-/// A component that has to run reaches the page as the box the runtime
-/// replaces. What the use site wrote inside it belongs to the marker, and goes
-/// when the marker does, so the document carries the box and nothing else.
+/// A component the build could not run reaches the page as the box the
+/// runtime replaces.
+///
+/// The build fills these before the emitter sees them, so a tree that still
+/// carries one is an app whose component could not be called at all; `lumenc
+/// web` names it. Writing the box rather than refusing keeps the rest of the
+/// site emittable, and what the use site wrote inside the marker goes when the
+/// marker does, so the box is empty.
 #[test]
-fn a_component_the_runtime_fills_is_an_empty_box_in_the_page() {
+fn a_component_that_could_not_be_run_is_an_empty_box_in_the_page() {
     let inside = element(
         "label",
         Attributes {

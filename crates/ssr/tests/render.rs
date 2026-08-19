@@ -545,16 +545,17 @@ fn app_with_a_component() -> CompiledApp {
     }
 }
 
-/// A render runs the component the build could not stand in for, so what the
-/// call publishes is state the document is written with.
+/// An artifact whose components were never resolved still renders, and the
+/// render still runs them.
 ///
-/// The subtree the call builds is not in the document: a render writes the
-/// app's tree as the build compiled it, with the state the run settled into,
-/// and a node a script built is one the browser builds when it runs the app.
-/// The marker stays as the box that node takes the place of, and the render
-/// says so rather than leaving the gap unexplained.
+/// `lumenc web` resolves a component while it builds the site, so the app a
+/// server is meant to be handed carries markup here rather than a marker. This
+/// is the other artifact: one compiled some other way, with the markers still
+/// in it. The render calls the component, so what the call publishes is state
+/// the document is written with, and the marker holds the place its body would
+/// have taken for the browser to fill.
 #[test]
-fn a_component_runs_on_the_server_and_the_marker_holds_its_place() {
+fn an_unresolved_component_still_runs_and_its_marker_holds_its_place() {
     let _turn = in_turn();
     let renderer = Renderer::start(
         Arc::new(
