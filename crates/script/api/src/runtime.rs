@@ -49,6 +49,7 @@ use bevy_ecs::prelude::*;
 use lumen_core::net_capture::{self, NetEvent};
 use lumen_core::prelude::*;
 use lumen_core::time::Instant;
+use lumen_core::warn_line;
 use std::sync::Arc;
 
 use crate::dnd;
@@ -209,7 +210,7 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             // every handler / signal / derivation while the window keeps
             // rendering, which historically read as "the app ignores
             // clicks" rather than "the script is dead".
-            eprintln!(
+            warn_line!(
                 "\n\
                  ================================================================\n\
                  lumen-script-{lang}: SCRIPT LOAD FAILED\n\
@@ -230,7 +231,7 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
         // the sink).
         match self.host.call("on_start", &[]) {
             Ok(outcome) => self.host.push_commands(outcome.commands),
-            Err(e) => eprintln!("{}: on_start failed: {e}", prefix(lang)),
+            Err(e) => warn_line!("{}: on_start failed: {e}", prefix(lang)),
         }
         app.world.insert_resource(self.host);
         app.world.insert_resource(ScriptStartedAt(Instant::now()));
@@ -489,7 +490,7 @@ pub fn fill_components<H: ScriptHost + Resource<Mutability = Mutable>>(
         let outcome = match host.call(&fill.function, &args) {
             Ok(outcome) => outcome,
             Err(e) => {
-                eprintln!(
+                warn_line!(
                     "{}: component {} failed: {e}",
                     prefix(host.lang()),
                     fill.function
@@ -502,7 +503,7 @@ pub fn fill_components<H: ScriptHost + Resource<Mutability = Mutable>>(
         };
         if !outcome.found {
             if reported.insert(fill.function.clone()) {
-                eprintln!(
+                warn_line!(
                     "{}: component {} is named in the tree but the loaded program does not \
                      declare it; nothing was built there",
                     prefix(host.lang()),
@@ -523,7 +524,7 @@ pub fn fill_components<H: ScriptHost + Resource<Mutability = Mutable>>(
                 new,
             }));
         } else {
-            eprintln!(
+            warn_line!(
                 "{}: component {} returned no node; a component returns one lmn! block",
                 prefix(host.lang()),
                 fill.function
@@ -581,7 +582,7 @@ pub fn fire_on_ready<H: ScriptHost + Resource<Mutability = Mutable>>(
                 events.write(ScriptCommandEvent(c));
             }
         }
-        Err(e) => eprintln!("{}: on_ready failed: {e}", prefix(host.lang())),
+        Err(e) => warn_line!("{}: on_ready failed: {e}", prefix(host.lang())),
     }
 }
 
@@ -667,7 +668,7 @@ pub fn apply_derivations<H: ScriptHost + Resource<Mutability = Mutable>>(
             break;
         }
         if pass == MAX_DERIVATION_PASSES {
-            eprintln!(
+            warn_line!(
                 "{}: derivation cascade exceeded {MAX_DERIVATION_PASSES} \
                  passes (cyclic derive()?); giving up for this tick",
                 prefix(host.lang())
@@ -694,7 +695,7 @@ pub fn apply_derivations<H: ScriptHost + Resource<Mutability = Mutable>>(
                     }
                 }
                 Err(e) => {
-                    eprintln!("{}: derive '{name}' failed: {e}", prefix(host.lang()));
+                    warn_line!("{}: derive '{name}' failed: {e}", prefix(host.lang()));
                 }
             }
         }
@@ -815,7 +816,7 @@ pub fn fire_due_timers<H: ScriptHost + Resource<Mutability = Mutable>>(
 ) {
     for name in &due.0 {
         if let Err(e) = route_event(&mut *host, "timer", "on_timer", name, &mut out) {
-            eprintln!("{}: on_timer({name}) failed: {e}", prefix(host.lang()));
+            warn_line!("{}: on_timer({name}) failed: {e}", prefix(host.lang()));
         }
     }
 }
@@ -1078,7 +1079,7 @@ pub fn fire_fetched_responses<H: ScriptHost + Resource<Mutability = Mutable>>(
                     &payload,
                     &mut out,
                 ) {
-                    eprintln!(
+                    warn_line!(
                         "{}: {fallback_fn}({}) failed: {e}",
                         prefix(host.lang()),
                         outcome.tag
@@ -1095,7 +1096,7 @@ pub fn fire_fetched_responses<H: ScriptHost + Resource<Mutability = Mutable>>(
                     response,
                     &mut out,
                 ) {
-                    eprintln!(
+                    warn_line!(
                         "{}: on_http({}) failed: {e}",
                         prefix(host.lang()),
                         outcome.tag
@@ -1290,7 +1291,7 @@ pub fn dispatch_clicks_and_doubles<H: ScriptHost + Resource<Mutability = Mutable
     for click in first_click_to_fire {
         let id_str = ids.get(click.entity).map(|i| i.0.as_str()).unwrap_or("");
         if let Err(e) = route_event(&mut *host, "click", "on_click", id_str, &mut out) {
-            eprintln!("{}: on_click failed: {e}", prefix(host.lang()));
+            warn_line!("{}: on_click failed: {e}", prefix(host.lang()));
         }
     }
     for entity in double_order {
@@ -1302,7 +1303,7 @@ pub fn dispatch_clicks_and_doubles<H: ScriptHost + Resource<Mutability = Mutable
             id_str,
             &mut out,
         ) {
-            eprintln!("{}: on_double_click failed: {e}", prefix(host.lang()));
+            warn_line!("{}: on_double_click failed: {e}", prefix(host.lang()));
         }
     }
 }
@@ -1338,7 +1339,7 @@ pub fn dispatch_close_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
                 }
                 forward_outcome(outcome, &mut out);
             }
-            Err(e) => eprintln!("{}: on_close failed: {e}", prefix(host.lang())),
+            Err(e) => warn_line!("{}: on_close failed: {e}", prefix(host.lang())),
         }
     }
     if veto {
@@ -1365,7 +1366,7 @@ pub fn dispatch_toggle_to_script<H: ScriptHost + Resource<Mutability = Mutable>>
             ev.checked,
             &mut out,
         ) {
-            eprintln!("{}: on_toggle failed: {e}", prefix(host.lang()));
+            warn_line!("{}: on_toggle failed: {e}", prefix(host.lang()));
         }
     }
 }
@@ -1388,7 +1389,7 @@ pub fn dispatch_slider_to_script<H: ScriptHost + Resource<Mutability = Mutable>>
             ev.value as f64,
             &mut out,
         ) {
-            eprintln!("{}: on_slider failed: {e}", prefix(host.lang()));
+            warn_line!("{}: on_slider failed: {e}", prefix(host.lang()));
         }
     }
 }
@@ -1403,7 +1404,7 @@ pub fn dispatch_long_press_to_script<H: ScriptHost + Resource<Mutability = Mutab
     for ev in events.read() {
         let id_str = ids.get(ev.entity).map(|i| i.0.as_str()).unwrap_or("");
         if let Err(e) = route_event(&mut *host, "long_press", "on_long_press", id_str, &mut out) {
-            eprintln!("{}: on_long_press failed: {e}", prefix(host.lang()));
+            warn_line!("{}: on_long_press failed: {e}", prefix(host.lang()));
         }
     }
 }
@@ -1426,7 +1427,7 @@ pub fn dispatch_file_drops_to_script<H: ScriptHost + Resource<Mutability = Mutab
             &path_str,
             &mut out,
         ) {
-            eprintln!("{}: on_file_dropped failed: {e}", prefix(host.lang()));
+            warn_line!("{}: on_file_dropped failed: {e}", prefix(host.lang()));
         }
     }
 }
@@ -1441,7 +1442,7 @@ pub fn dispatch_hotkeys_to_script<H: ScriptHost + Resource<Mutability = Mutable>
 ) {
     for ev in events.read() {
         if let Err(e) = route_event(&mut *host, "hotkey", "on_hotkey", &ev.name, &mut out) {
-            eprintln!("{}: on_hotkey failed: {e}", prefix(host.lang()));
+            warn_line!("{}: on_hotkey failed: {e}", prefix(host.lang()));
         }
     }
 }
@@ -1463,7 +1464,7 @@ pub fn dispatch_hotkey_releases_to_script<H: ScriptHost + Resource<Mutability = 
             &ev.name,
             &mut out,
         ) {
-            eprintln!("{}: on_hotkey_release failed: {e}", prefix(host.lang()));
+            warn_line!("{}: on_hotkey_release failed: {e}", prefix(host.lang()));
         }
     }
 }
@@ -1485,7 +1486,7 @@ pub fn dispatch_notification_actions_to_script<H: ScriptHost + Resource<Mutabili
             &ev.action_id,
             &mut out,
         ) {
-            eprintln!(
+            warn_line!(
                 "{}: on_notification_action failed: {e}",
                 prefix(host.lang())
             );
@@ -1512,7 +1513,7 @@ pub fn dispatch_clipboard_reads_to_script<H: ScriptHost + Resource<Mutability = 
             &ev.text,
             &mut out,
         ) {
-            eprintln!("{}: on_clipboard failed: {e}", prefix(host.lang()));
+            warn_line!("{}: on_clipboard failed: {e}", prefix(host.lang()));
         }
     }
 }
@@ -1527,7 +1528,7 @@ pub fn dispatch_menu_clicks_to_script<H: ScriptHost + Resource<Mutability = Muta
 ) {
     for ev in events.read() {
         if let Err(e) = route_event(&mut *host, "menu", "on_menu", &ev.id, &mut out) {
-            eprintln!("{}: on_menu failed: {e}", prefix(host.lang()));
+            warn_line!("{}: on_menu failed: {e}", prefix(host.lang()));
         }
     }
 }
@@ -1549,7 +1550,7 @@ pub fn dispatch_dialog_closes_to_script<H: ScriptHost + Resource<Mutability = Mu
             ("dialog_rejected", "on_dialog_rejected")
         };
         if let Err(e) = route_event(&mut *host, event_name, fallback, &ev.id, &mut out) {
-            eprintln!("{}: {fallback} failed: {e}", prefix(host.lang()));
+            warn_line!("{}: {fallback} failed: {e}", prefix(host.lang()));
         }
     }
 }
@@ -1563,7 +1564,7 @@ pub fn dispatch_tray_clicks_to_script<H: ScriptHost + Resource<Mutability = Muta
 ) {
     for ev in events.read() {
         if let Err(e) = route_event(&mut *host, "tray", "on_tray", &ev.id, &mut out) {
-            eprintln!("{}: on_tray failed: {e}", prefix(host.lang()));
+            warn_line!("{}: on_tray failed: {e}", prefix(host.lang()));
         }
     }
 }
@@ -1584,7 +1585,7 @@ pub fn dispatch_file_picks_to_script<H: ScriptHost + Resource<Mutability = Mutab
             "open_multi" => ("files_picked", "on_files_picked"),
             "folder" => ("folder_picked", "on_folder_picked"),
             other => {
-                eprintln!("{}: unknown FilePicked kind '{other}'", prefix(host.lang()));
+                warn_line!("{}: unknown FilePicked kind '{other}'", prefix(host.lang()));
                 continue;
             }
         };
@@ -1597,7 +1598,7 @@ pub fn dispatch_file_picks_to_script<H: ScriptHost + Resource<Mutability = Mutab
         if let Err(e) =
             route_event_two_args(&mut *host, event_name, handler, &ev.tag, &joined, &mut out)
         {
-            eprintln!("{}: {handler} failed: {e}", prefix(host.lang()));
+            warn_line!("{}: {handler} failed: {e}", prefix(host.lang()));
         }
     }
 }
@@ -1626,7 +1627,7 @@ pub fn dispatch_text_input_to_script<H: ScriptHost + Resource<Mutability = Mutab
             if let Err(err) =
                 route_event_two_args(host, "text_input", "on_text_input", id_str, text, out)
             {
-                eprintln!("{}: on_text_input failed: {err}", prefix(host.lang()));
+                warn_line!("{}: on_text_input failed: {err}", prefix(host.lang()));
             }
         };
 

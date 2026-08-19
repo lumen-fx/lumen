@@ -13,7 +13,8 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
-use lumen_ssr::{RenderOptions, Renderer, SsrRequest, SsrSite};
+use lumen_core::warn_line;
+use lumen_ssr::{RenderOptions, Renderer, SsrError, SsrRequest, SsrSite};
 
 use crate::web_serve::{Request, RequestHandler, Response};
 
@@ -50,47 +51,51 @@ impl RenderHandler {
         })
     }
 
-    /// Whether a path belongs to a tree this handler leaves alone.
-    fn left_alone(&self, path: &str) -> bool {
-        let first = path.trim_start_matches('/').split('/').next().unwrap_or("");
-        self.leave.iter().any(|prefix| prefix == first)
-    }
-
     /// Print a warning the render came back with, unless it has been printed.
     fn say(&self, warning: &str) {
         if let Ok(mut said) = self.said.lock()
             && said.insert(warning.to_string())
         {
-            eprintln!("lumenc web: warning: {warning}");
+            warn_line!("lumenc web: warning: {warning}");
         }
     }
 }
 
+/// Whether a path belongs to a tree the documents on disk answer for.
+fn left_to_the_directory(prefixes: &[String], path: &str) -> bool {
+    let first = path.trim_start_matches('/').split('/').next().unwrap_or("");
+    prefixes.iter().any(|prefix| prefix == first)
+}
+
+/// The request a render is asked for, from the request the server read.
+fn render_request(request: &Request) -> SsrRequest {
+    let target = if request.query.is_empty() {
+        request.path.clone()
+    } else {
+        format!("{}?{}", request.path, request.query)
+    };
+    let mut render = SsrRequest::new(&request.method, &target).with_body(request.body.clone());
+    // A proxy in front of this one is where TLS ends, so what it says about
+    // the visitor's side of it is what the app reads.
+    if request
+        .headers
+        .iter()
+        .any(|(name, value)| name.eq_ignore_ascii_case(FORWARDED_PROTO) && value == "https")
+    {
+        render = render.secure();
+    }
+    for (name, value) in &request.headers {
+        render = render.with_header(name.clone(), value.clone());
+    }
+    render
+}
+
 impl RequestHandler for RenderHandler {
     fn handle(&self, request: &Request) -> Option<Response> {
-        if self.left_alone(&request.path) {
+        if left_to_the_directory(&self.leave, &request.path) {
             return None;
         }
-        let target = if request.query.is_empty() {
-            request.path.clone()
-        } else {
-            format!("{}?{}", request.path, request.query)
-        };
-        let mut render = SsrRequest::new(&request.method, &target).with_body(request.body.clone());
-        // A proxy in front of this one is where TLS ends, so what it says
-        // about the visitor's side of it is what the app reads.
-        if request
-            .headers
-            .iter()
-            .any(|(name, value)| name.eq_ignore_ascii_case(FORWARDED_PROTO) && value == "https")
-        {
-            render = render.secure();
-        }
-        for (name, value) in &request.headers {
-            render = render.with_header(name.clone(), value.clone());
-        }
-
-        match self.renderer.render(render) {
+        match self.renderer.render(render_request(request)) {
             Ok(response) => {
                 for warning in &response.warnings {
                     self.say(warning);
@@ -104,10 +109,80 @@ impl RequestHandler for RenderHandler {
             // A render that could not happen is the developer's to see, so it
             // is answered in the page rather than logged and hidden.
             Err(error) => {
-                let message = format!("cannot render {}: {error}", request.path);
-                eprintln!("lumenc web: {message}");
+                let mut message = format!("cannot render {}: {error}", request.path);
+                if matches!(error, SsrError::Stopped) {
+                    // A render that panicked takes the thread it ran on, and
+                    // every request after it lands here. What panicked was
+                    // said on the way past, which is where to look.
+                    message.push_str(
+                        ". A render ended in a panic and the ones after it cannot run; the panic \
+                         is above, and the server has to be started again.",
+                    );
+                }
+                warn_line!("lumenc web: {message}");
                 Some(Response::text(500, &message))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn asking(path: &str) -> Request {
+        Request {
+            method: "GET".to_string(),
+            path: path.to_string(),
+            ..Request::default()
+        }
+    }
+
+    #[test]
+    fn a_tree_in_another_language_is_the_directorys_to_answer() {
+        let leave = vec!["de-DE".to_string(), "fr-FR".to_string()];
+        assert!(left_to_the_directory(&leave, "/de-DE/settings.html"));
+        assert!(left_to_the_directory(&leave, "/fr-FR/"));
+        // The tree a render answers in, and a page whose key merely starts
+        // the same way.
+        assert!(!left_to_the_directory(&leave, "/settings.html"));
+        assert!(!left_to_the_directory(&leave, "/de-DE-notes.html"));
+        assert!(!left_to_the_directory(&leave, "/"));
+        assert!(!left_to_the_directory(&[], "/de-DE/settings.html"));
+    }
+
+    #[test]
+    fn the_address_a_render_is_asked_for_is_the_one_that_arrived() {
+        let mut asked = asking("/user/42");
+        asked.query = "tab=posts".to_string();
+        asked.method = "POST".to_string();
+        asked.body = "name=ada".to_string();
+        let render = render_request(&asked);
+        assert_eq!(render.method, "POST");
+        assert_eq!(render.path, "/user/42");
+        assert_eq!(render.query, "tab=posts");
+        assert_eq!(render.body, "name=ada");
+        assert!(!render.secure);
+
+        // A path with nothing after it keeps no empty query behind it.
+        assert_eq!(render_request(&asking("/")).query, "");
+    }
+
+    #[test]
+    fn what_a_proxy_says_about_tls_is_what_the_app_reads() {
+        let mut asked = asking("/");
+        asked.headers = vec![
+            ("X-Forwarded-Proto".to_string(), "https".to_string()),
+            ("Accept-Language".to_string(), "en-GB".to_string()),
+        ];
+        let render = render_request(&asked);
+        assert!(render.secure);
+        // Every header goes through; which of them the app may read is the
+        // renderer's policy, not this one's.
+        assert_eq!(render.headers.len(), 2);
+
+        let mut plain = asking("/");
+        plain.headers = vec![("X-Forwarded-Proto".to_string(), "http".to_string())];
+        assert!(!render_request(&plain).secure);
     }
 }
