@@ -8,6 +8,10 @@
 //! A `<for>` block's children are the row template, never content. What goes
 //! inside it is one instance of that template per row of the array signal the
 //! page is rendered with, with the row's own values substituted in.
+//!
+//! An element is written with the values its `bind-*` attributes hold in that
+//! same state, which [`crate::bindings`] resolves; what the state answers
+//! nothing for keeps the fallback the markup carries.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -22,7 +26,7 @@ use lumen_ir::layout_ir::{Attributes, Element, IfModeSpec};
 
 use crate::error::EmitError;
 use crate::spec::{CssMode, PageSpec, SignalEnv, SiteSpec};
-use crate::urls;
+use crate::{bindings, urls};
 
 /// What the walk needs to know that is not the element itself.
 struct Walk<'a> {
@@ -94,6 +98,12 @@ fn emit_element(
             path: path_text,
         });
     }
+    // What the element's bindings hold in the state this page is rendered
+    // with. An element whose bindings the state answers nothing for is emitted
+    // from its own attributes, which is what leaves the authored fallback in
+    // the page.
+    let bound = bindings::resolved(ir_tag, &element.attrs, walk.signals);
+    let attrs = bound.as_ref().unwrap_or(&element.attrs);
 
     let mut hidden = false;
     let mut open = false;
@@ -128,7 +138,7 @@ fn emit_element(
     for (name, value) in tag.fixed {
         write_attr(out, name, value);
     }
-    for (name, value) in html_attrs(ir_tag, &element.attrs) {
+    for (name, value) in html_attrs(ir_tag, attrs) {
         // A link and an asset reference are written as the IR holds them,
         // which is a page key and a path relative to the site root. Both
         // become URLs here, where the site's base path and page set are
@@ -145,7 +155,7 @@ fn emit_element(
     }
     write_attr(out, DATA_LM, &path_text);
     if walk.css_mode == CssMode::Computed {
-        let style = computed_style(&element.attrs);
+        let style = computed_style(attrs);
         if !style.is_empty() {
             write_attr(out, "style", &style);
         }
@@ -157,7 +167,7 @@ fn emit_element(
     // is the one Lumen calls `:selected`. The runtime maintains this mark; the
     // page needs it too, or the current tab is unmarked until the runtime
     // loads and unmarked forever without it.
-    if let Some((signal, value)) = &element.attrs.tab_strip
+    if let Some((signal, value)) = &attrs.tab_strip
         && walk.signals.global(signal) == Some(value.as_str())
     {
         write_attr(out, DATA_LM_SELECTED, "");
@@ -170,7 +180,7 @@ fn emit_element(
     if tag.void {
         return Ok(());
     }
-    if let Some(text) = &element.attrs.text
+    if let Some(text) = &attrs.text
         && !text.is_empty()
         && !marker
     {
