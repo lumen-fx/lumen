@@ -289,6 +289,29 @@ fn resolve_text(world: &World, el: &Element) -> Option<String> {
 /// overrides it; this is the single Rust-side fallback.
 const DISABLED_OPACITY_DEFAULT: f32 = 0.5;
 
+/// Read a `<toggle>` / `<switch>` track palette out of the cascaded
+/// attributes: the resting `bg` while unchecked, `:checked { bg }` while
+/// checked, `:disabled { bg }` while disabled.
+///
+/// `base` supplies each slot the cascade did not set: the built-in
+/// tokens at spawn, so a control is readable with no CSS at all, and the
+/// live palette on a restyle, so a theme flip that touches only one
+/// state leaves the others where markup put them.
+pub fn track_style_over(
+    base: lumen_primitives::TrackStyle,
+    attrs: &Attributes,
+) -> lumen_primitives::TrackStyle {
+    lumen_primitives::TrackStyle {
+        checked_bg: attrs.checked_bg.map(Into::into).unwrap_or(base.checked_bg),
+        unchecked_bg: attrs
+            .bg
+            .as_ref()
+            .and_then(|b| Fill::from(b).as_solid())
+            .unwrap_or(base.unchecked_bg),
+        disabled_bg: attrs.disabled_bg.map(Into::into).or(base.disabled_bg),
+    }
+}
+
 fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Entity {
     // Seed any synthetic signal defaults (currently only the
     // `<tabs>` parser pass authors this - picks the first `<tab>` as
@@ -402,28 +425,13 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         entity.insert(Toggleable {
             checked: el.attrs.checked.unwrap_or(false),
         });
-        // Track fills: author `bg` (or the built-in gray) while
-        // unchecked, `:checked { bg }` (or the built-in accent) while
-        // checked. `sync_toggle_visuals` swaps the fill at runtime.
-        let defaults = lumen_primitives::ToggleStyle::default();
-        entity.insert(lumen_primitives::ToggleStyle {
-            checked_bg: el
-                .attrs
-                .checked_bg
-                .map(Into::into)
-                .unwrap_or(defaults.checked_bg),
-            unchecked_bg: el
-                .attrs
-                .bg
-                .as_ref()
-                .and_then(|b| Fill::from(b).as_solid())
-                .unwrap_or(defaults.unchecked_bg),
-        });
-        // The checked/unchecked swap needs a fill to write into even
-        // when no skin or author CSS styled the track.
+        let track = track_style_over(lumen_primitives::TrackStyle::default(), &el.attrs);
+        entity.insert(track);
+        // `sync_track_fill` needs a fill to write into even when no skin
+        // or author CSS styled the track.
         if entity.get::<Visuals>().is_none() {
             entity.insert(Visuals {
-                fill: Some(Fill::Solid(defaults.unchecked_bg)),
+                fill: Some(Fill::Solid(track.unchecked_bg)),
                 radius: 12.0,
                 corner_radii: None,
                 shadows: Vec::new(),
@@ -435,32 +443,16 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         entity.insert(Toggleable {
             checked: el.attrs.checked.unwrap_or(false),
         });
-        // Track fills: author `bg` (or the built-in gray) while unchecked,
-        // `switch:checked { bg }` (or the built-in accent) while checked.
-        // `sync_switch_visuals` swaps the fill at runtime - same
-        // design-token surface as `<toggle>`.
-        let defaults = lumen_primitives::SwitchStyle::default();
-        entity.insert(lumen_primitives::SwitchStyle {
-            checked_bg: el
-                .attrs
-                .checked_bg
-                .map(Into::into)
-                .unwrap_or(defaults.checked_bg),
-            unchecked_bg: el
-                .attrs
-                .bg
-                .as_ref()
-                .and_then(|b| Fill::from(b).as_solid())
-                .unwrap_or(defaults.unchecked_bg),
-        });
+        let track = track_style_over(lumen_primitives::TrackStyle::default(), &el.attrs);
+        entity.insert(track);
         // Explicit a11y role: a switch is announced as `Role::Switch`, not
         // the `Role::CheckBox` that a bare `Toggleable` would derive.
         entity.insert(lumen_core::components::A11yRole::Switch);
-        // The checked/unchecked swap needs a fill to write into (and the
-        // track must be a hit-test candidate) even with no skin / CSS.
+        // `sync_track_fill` needs a fill to write into (and the track must
+        // be a hit-test candidate) even with no skin / CSS.
         if entity.get::<Visuals>().is_none() {
             entity.insert(Visuals {
-                fill: Some(Fill::Solid(defaults.unchecked_bg)),
+                fill: Some(Fill::Solid(track.unchecked_bg)),
                 radius: 14.0,
                 corner_radii: None,
                 shadows: Vec::new(),

@@ -1077,32 +1077,23 @@ fn apply_reapplied_attrs(world: &mut World, entity: Entity, attrs: &Attributes) 
         }
     }
 
-    // Stateful track fills: `<toggle>` / tab-strip buttons own their
-    // live fill via ToggleStyle / TabButtonStyle (the sync systems swap
-    // it as state flips). The generic Visuals write above painted the
-    // resting `bg` - correct the style pair from the re-resolved
-    // checked/selected fills and repaint the live fill per the CURRENT
-    // state so a theme flip doesn't stomp a checked track back to the
-    // unchecked color.
+    // Stateful track fills: `<toggle>` / `<switch>` / tab-strip buttons
+    // own their live fill via TrackStyle / TabButtonStyle (the sync
+    // systems swap it as state flips). The generic Visuals write above
+    // painted the resting `bg` - correct the palette from the re-resolved
+    // state fills and repaint per the CURRENT state so a theme flip
+    // doesn't stomp a checked track back to the unchecked color.
     {
         use lumen_core::components::Visuals as V;
         let checked = ent
             .get::<lumen_core::components::Toggleable>()
             .map(|t| t.checked);
+        let disabled = ent.contains::<lumen_core::components::Disabled>();
         if let Some(checked) = checked
-            && let Some(mut ts) = ent.get_mut::<lumen_primitives::ToggleStyle>()
+            && let Some(mut ts) = ent.get_mut::<lumen_primitives::TrackStyle>()
         {
-            if let Some(Fill::Solid(c)) = attrs.bg.as_ref().map(Fill::from) {
-                ts.unchecked_bg = c;
-            }
-            if let Some(c) = attrs.checked_bg {
-                ts.checked_bg = c.into();
-            }
-            let live = if checked {
-                ts.checked_bg
-            } else {
-                ts.unchecked_bg
-            };
+            *ts = lumen_scene::spawn::track_style_over(*ts, attrs);
+            let live = ts.fill_for(checked, disabled);
             if let Some(mut base) = ent.get_mut::<lumen_primitives::HoverBaseColor>() {
                 base.0 = live;
             }

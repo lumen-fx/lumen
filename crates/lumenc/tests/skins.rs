@@ -454,3 +454,109 @@ fn caret_and_selection_text_color_parse_as_inline_attrs() {
         0.0,
     );
 }
+
+// ---------------------------------------------------------------------------
+// State fills reach the live entity
+// ---------------------------------------------------------------------------
+
+/// Resolve one of the default skin's `:root` tokens to the color it names.
+fn default_skin_token(name: &str) -> String {
+    let sheet = parse_css(lumenc::skins::lookup("default").expect("default skin")).expect("css");
+    sheet
+        .resolve_root_var(name)
+        .unwrap_or_else(|| panic!("default skin defines --{name}"))
+}
+
+fn hex_of(c: lumen_core::components::Color) -> String {
+    let q = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+    format!("#{:02x}{:02x}{:02x}", q(c.r), q(c.g), q(c.b))
+}
+
+/// The track fill of the entity carrying `id`, after layout and styling.
+fn track_fill(app: &mut lumen_core::prelude::App, id: &str) -> String {
+    use lumen_core::components::{Fill, Visuals};
+    use lumen_core::prelude::LumenId;
+    let mut q = app.world.query::<(&LumenId, &Visuals)>();
+    for (lid, vis) in q.iter(&app.world) {
+        if lid.0 == id {
+            return vis
+                .fill
+                .as_ref()
+                .and_then(Fill::as_solid)
+                .map(hex_of)
+                .unwrap_or_else(|| panic!("{id} has no solid fill"));
+        }
+    }
+    panic!("no entity with id {id:?}");
+}
+
+fn settle(app: &mut lumen_core::prelude::App, ms: u64) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+    while std::time::Instant::now() < deadline {
+        app.tick();
+        std::thread::sleep(std::time::Duration::from_millis(8));
+    }
+    app.tick();
+    app.tick();
+}
+
+/// `<toggle>` and `<switch>` must show the token each state names, both
+/// on the first frame and after a theme flip re-runs the cascade.
+///
+/// The restyle pass re-applies the resting `bg` to every styled entity,
+/// so it is a second writer of a track's fill; a checked switch used to
+/// end up back on the unchecked gray, which left an on switch looking
+/// exactly like an off one. `:disabled { bg }` reached neither control.
+#[test]
+fn toggle_and_switch_tracks_show_their_state_token() {
+    use lumen_core::prelude::{ColorScheme, StyleManager};
+
+    let dir = std::env::temp_dir().join(format!("lumenc-track-state-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp app dir");
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").expect("lumen.toml");
+
+    let markup = r##"<root skin="default">
+  <column>
+    <switch id="sw-off" width="52px" height="28px" />
+    <switch id="sw-on" width="52px" height="28px" checked="true" />
+    <switch id="sw-disabled" width="52px" height="28px" disabled="true" />
+    <toggle id="tg-off" width="64px" height="36px" />
+    <toggle id="tg-on" width="64px" height="36px" checked="true" />
+    <toggle id="tg-disabled" width="64px" height="36px" disabled="true" />
+  </column>
+</root>"##;
+    let mut opts = lumenc::RunOptions::new(&dir)
+        .with_markup(markup)
+        .with_css("");
+    opts.hot_reload = false;
+    let (mut app, _window) = lumenc::build_headless_app(opts).expect("build headless app");
+
+    let track = default_skin_token("lumen-track");
+    let accent = default_skin_token("lumen-accent");
+    let disabled = default_skin_token("lumen-disabled-bg");
+    let expected = [
+        ("sw-off", &track),
+        ("sw-on", &accent),
+        ("sw-disabled", &disabled),
+        ("tg-off", &track),
+        ("tg-on", &accent),
+        ("tg-disabled", &disabled),
+    ];
+
+    settle(&mut app, 250);
+    for (id, want) in expected {
+        assert_eq!(&track_fill(&mut app, id), want, "{id} on the first frame");
+    }
+
+    // A scheme flip bumps the style version, which re-runs the cascade
+    // over every entity - the path that used to strand a checked track.
+    app.world
+        .resource_mut::<StyleManager>()
+        .set_scheme(ColorScheme::ForceDark);
+    settle(&mut app, 300);
+    for (id, want) in expected {
+        assert_eq!(&track_fill(&mut app, id), want, "{id} after a theme flip");
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
