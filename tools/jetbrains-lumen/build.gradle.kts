@@ -67,4 +67,11 @@ tasks.processResources {
         into("textmate/language-configuration")
         include("lumen.json", "lumen-css.json", "rhai.json")
     }
+    // Stamp the plugin version into the bundle, so the unpack directory
+    // changes with each release.
+    val pluginVersion = providers.gradleProperty("pluginVersion").get()
+    inputs.property("bundleVersion", pluginVersion)
+    filesMatching("textmate/bundle-version.txt") {
+        expand("version" to pluginVersion)
+    }
 }
