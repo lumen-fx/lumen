@@ -432,6 +432,10 @@ State-routable properties, and where each state's value lands:
 the three cannot differ. `outline` under `:focus-visible` gets its own
 slot and wins over `:focus` while focus came from the keyboard.
 
+On a `<toggle>` or `<switch>` track, `:disabled { bg }` wins over
+`:checked { bg }`, so a disabled control that happens to be on shows the
+disabled fill rather than the checked one.
+
 The same swaps are reachable as plain properties, which is often shorter:
 
 | Property | Equivalent |

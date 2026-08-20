@@ -3,7 +3,7 @@
 //! [`Toggleable`] machinery as `<checkbox>`.
 //!
 //! The markup parser spawns `<switch>` as a track element (tag `switch`,
-//! carrying [`Toggleable`] + [`SwitchStyle`]) with a single absolute-
+//! carrying [`Toggleable`] + [`crate::controls::TrackStyle`]) with a single absolute-
 //! positioned child - the `.switch-thumb` tile (carrying [`SwitchThumb`]).
 //! Every visual is design-token / CSS reachable through the skins:
 //!
@@ -55,12 +55,11 @@
 use std::time::Duration;
 
 use bevy_ecs::prelude::*;
-use lumen_core::components::{Color, Fill, Visible, Visuals};
+use lumen_core::components::{Visible, Visuals};
 use lumen_core::prelude::*;
 use lumen_core::render_world::AnimationsActive;
 
-use crate::controls::{KnobGeometry, TOGGLE_CHECKED_BG, TOGGLE_UNCHECKED_BG};
-use crate::hover::{HoverBaseColor, PressBaseColor};
+use crate::controls::KnobGeometry;
 use crate::transition::{Easing, Transition, TransitionProperty, TransitionSpecs};
 
 /// Fallback duration of the thumb slide when the switch flips, used when
@@ -87,27 +86,6 @@ fn slide_tween_params(specs: Option<&TransitionSpecs>) -> (Duration, Easing) {
     match specs.and_then(|s| s.for_property(TransitionProperty::BackgroundColor)) {
         Some(spec) => (spec.duration, spec.easing),
         None => (Duration::from_millis(SWITCH_SLIDE_MS), SWITCH_SLIDE_EASING),
-    }
-}
-
-/// Per-switch track fills, resolved at spawn from markup / CSS.
-/// [`sync_switch_visuals`] swaps [`Visuals::fill`] between the two on every
-/// `checked` flip - the track equivalent of [`crate::controls::ToggleStyle`].
-#[derive(Component, Clone, Copy, Debug)]
-pub struct SwitchStyle {
-    /// Track fill while checked (`switch:checked { bg }` or the default
-    /// accent).
-    pub checked_bg: Color,
-    /// Track fill while unchecked (author `bg` or the default gray).
-    pub unchecked_bg: Color,
-}
-
-impl Default for SwitchStyle {
-    fn default() -> Self {
-        Self {
-            checked_bg: TOGGLE_CHECKED_BG,
-            unchecked_bg: TOGGLE_UNCHECKED_BG,
-        }
     }
 }
 
@@ -162,30 +140,17 @@ pub fn register_switch_systems(app: &mut App) {
     );
 }
 
-/// Keep the `<switch>` visuals in step with [`Toggleable::checked`]:
+/// Place the [`SwitchThumb`] child: size + corner radius from the
+/// laid-out track height, and the horizontal inset toward the
+/// checked/unchecked end. The first placement snaps; a subsequent
+/// `checked` flip starts a [`SwitchThumbSlide`] from the thumb's current
+/// position so it glides.
 ///
-/// - track: swap [`Visuals::fill`] between [`SwitchStyle::checked_bg`] /
-///   [`SwitchStyle::unchecked_bg`] on every flip (gated on
-///   `Changed<Toggleable>`, rebasing any captured hover/press tint so a
-///   tint release doesn't restore the stale pre-flip color - same rule as
-///   [`crate::controls::sync_toggle_visuals`]);
-/// - thumb: size + corner radius from the laid-out track height, and the
-///   horizontal inset toward the checked/unchecked end. The first placement
-///   snaps; a subsequent `checked` flip starts a [`SwitchThumbSlide`] from
-///   the thumb's current position so it glides.
+/// The track fill belongs to [`crate::controls::sync_track_fill`], which
+/// serves `<toggle>` and `<switch>` alike.
 #[allow(clippy::type_complexity)]
 pub fn sync_switch_visuals(
     mut commands: Commands,
-    mut switches: Query<
-        (
-            &Toggleable,
-            &SwitchStyle,
-            &mut Visuals,
-            Option<&mut HoverBaseColor>,
-            Option<&mut PressBaseColor>,
-        ),
-        (Changed<Toggleable>, Without<SwitchThumb>),
-    >,
     parents: Query<(
         &Toggleable,
         &Transform,
@@ -204,25 +169,6 @@ pub fn sync_switch_visuals(
         (With<SwitchThumb>, Without<Toggleable>),
     >,
 ) {
-    // Track fill swap.
-    for (t, style, mut vis, hover_base, press_base) in &mut switches {
-        let target = if t.checked {
-            style.checked_bg
-        } else {
-            style.unchecked_bg
-        };
-        if vis.fill.as_ref().and_then(Fill::as_solid) != Some(target) {
-            vis.fill = Some(Fill::Solid(target));
-        }
-        if let Some(mut base) = hover_base {
-            base.0 = target;
-        }
-        if let Some(mut base) = press_base {
-            base.0 = target;
-        }
-    }
-
-    // Thumb geometry + animated slide.
     for (thumb_e, child_of, mut thumb, mut style, mut vis, slide) in &mut thumbs {
         let Ok((t, tr, geo, specs)) = parents.get(child_of.parent()) else {
             continue;
@@ -330,10 +276,11 @@ pub fn step_switch_thumb(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::controls::{KNOB_INSET, THUMB_SIZE};
+    use crate::controls::{KNOB_INSET, THUMB_SIZE, TrackStyle, sync_track_fill};
     use crate::transition::TransitionSpec;
     use bevy_ecs::system::RunSystemOnce;
     use glam::Vec2;
+    use lumen_core::components::{Color, Fill};
 
     /// Spawn a laid-out `<switch>` track + thumb child, with no
     /// [`KnobGeometry`] / [`TransitionSpecs`] on the track - the
@@ -356,9 +303,9 @@ mod tests {
     ) -> (Entity, Entity) {
         let mut track = world.spawn((
             Toggleable { checked },
-            SwitchStyle::default(),
+            TrackStyle::default(),
             Visuals {
-                fill: Some(Fill::Solid(SwitchStyle::default().unchecked_bg)),
+                fill: Some(Fill::Solid(TrackStyle::default().unchecked_bg)),
                 ..Default::default()
             },
             Transform {
@@ -400,10 +347,11 @@ mod tests {
         let mut world = World::new();
         let (track, thumb) = spawn_switch(&mut world, false);
         world.run_system_once(sync_switch_visuals).unwrap();
+        world.run_system_once(sync_track_fill).unwrap();
         assert_eq!(thumb_left(&world, thumb), KNOB_INSET);
         assert_eq!(
             track_fill(&world, track),
-            Some(SwitchStyle::default().unchecked_bg)
+            Some(TrackStyle::default().unchecked_bg)
         );
         // First placement snaps - no slide component.
         assert!(world.get::<SwitchThumbSlide>(thumb).is_none());
@@ -414,11 +362,12 @@ mod tests {
         let mut world = World::new();
         let (track, thumb) = spawn_switch(&mut world, true);
         world.run_system_once(sync_switch_visuals).unwrap();
+        world.run_system_once(sync_track_fill).unwrap();
         // on = 52 - 20 - 4 = 28.
         assert_eq!(thumb_left(&world, thumb), 28.0);
         assert_eq!(
             track_fill(&world, track),
-            Some(SwitchStyle::default().checked_bg)
+            Some(TrackStyle::default().checked_bg)
         );
         // A switch spawned already-on must not animate in from the off end.
         assert!(world.get::<SwitchThumbSlide>(thumb).is_none());

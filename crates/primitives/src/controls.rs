@@ -58,23 +58,53 @@ impl Default for KnobGeometry {
     }
 }
 
-/// Per-toggle track fills, resolved at spawn from markup / CSS.
-/// [`sync_toggle_visuals`] swaps [`Visuals::fill`] between the two on
-/// every checked flip.
+/// The full track palette of a `<toggle>` or `<switch>`, resolved at
+/// spawn from markup / CSS and refreshed by the restyle pass.
+/// [`sync_track_fill`] is the only thing that reads it, and
+/// [`TrackStyle::fill_for`] is the only place a state maps to a color.
+///
+/// Both controls share one component because they share one skin family:
+/// they differ in shape and in how the knob moves, not in what the track
+/// is painted with.
 #[derive(Component, Clone, Copy, Debug)]
-pub struct ToggleStyle {
+pub struct TrackStyle {
     /// Track fill while checked (`:checked { bg: ... }` or the default
     /// accent).
     pub checked_bg: Color,
     /// Track fill while unchecked (author `bg` or the default gray).
     pub unchecked_bg: Color,
+    /// Track fill while disabled (`:disabled { bg: ... }`), when a rule
+    /// supplied one. `None` leaves a disabled track on its
+    /// checked/unchecked fill, which the generic disabled-opacity dim
+    /// then covers.
+    pub disabled_bg: Option<Color>,
 }
 
-impl Default for ToggleStyle {
+impl Default for TrackStyle {
     fn default() -> Self {
         Self {
             checked_bg: TOGGLE_CHECKED_BG,
             unchecked_bg: TOGGLE_UNCHECKED_BG,
+            disabled_bg: None,
+        }
+    }
+}
+
+impl TrackStyle {
+    /// The fill this track paints in the given state.
+    ///
+    /// Disabled outranks checked: the skins order `:disabled` after
+    /// `:checked`, so in a browser the later rule would win, and a
+    /// control nobody can operate should not advertise its state as
+    /// live.
+    pub fn fill_for(&self, checked: bool, disabled: bool) -> Color {
+        if disabled && let Some(c) = self.disabled_bg {
+            return c;
+        }
+        if checked {
+            self.checked_bg
+        } else {
+            self.unchecked_bg
         }
     }
 }
@@ -190,6 +220,13 @@ impl Plugin for ControlsPlugin {
         app.add_systems(
             TickStage::Systems,
             sync_toggle_visuals.after(flip_toggle_on_click),
+        );
+        // Track fill for both `<toggle>` and `<switch>` - registered here
+        // rather than beside each widget's knob sync because it is driven
+        // by the shared `Toggleable` path this plugin owns.
+        app.add_systems(
+            TickStage::Systems,
+            sync_track_fill.after(flip_toggle_on_click),
         );
         app.add_systems(
             TickStage::Systems,
@@ -568,51 +605,70 @@ pub fn cancel_slider_drag_on_escape(
     }
 }
 
-/// Keep the `<toggle>` visuals in step with [`Toggleable::checked`]:
-/// swap the track fill between [`ToggleStyle::checked_bg`] /
-/// [`ToggleStyle::unchecked_bg`] on every flip, and slide the
-/// [`ToggleKnob`] child to the matching track end.
+/// Paint every `<toggle>` / `<switch>` track with the fill its current
+/// state calls for. This is the single owner of a track's
+/// [`Visuals::fill`]; the per-widget sync systems only move the knob.
 ///
-/// The fill swap is gated on `Changed<Toggleable>` so it doesn't fight
-/// the hover / press tint tweens each tick; any captured
-/// [`crate::hover::HoverBaseColor`] / [`crate::hover::PressBaseColor`]
-/// snapshot is rebased onto the new track color so a tint release
-/// doesn't restore the stale pre-flip fill.
+/// It runs every tick rather than on `Changed<Toggleable>`, because the
+/// state is not the only thing that repaints a track: the restyle pass
+/// re-applies the resting `bg` on a theme or media flip, and a gate on
+/// state change would leave that repaint standing and the control stuck
+/// looking off. Writes happen only when the fill differs, so an idle
+/// frame still triggers no change detection.
+///
+/// A track whose fill the hover / press tint FSM currently owns keeps
+/// its tint; the captured [`crate::hover::HoverBaseColor`] /
+/// [`crate::hover::PressBaseColor`] snapshot is rebased instead, so the
+/// tint releases onto the new state color rather than the stale one.
+/// A restyle tween aimed at the resting fill is retired for the same
+/// reason: state, not the cascade, decides what a track shows.
 #[allow(clippy::type_complexity)]
-pub fn sync_toggle_visuals(
+pub fn sync_track_fill(
     mut commands: Commands,
-    mut toggles: Query<
-        (
-            &Toggleable,
-            &ToggleStyle,
-            &mut Visuals,
-            Option<&mut crate::hover::HoverBaseColor>,
-            Option<&mut crate::hover::PressBaseColor>,
-        ),
-        (Changed<Toggleable>, Without<ToggleKnob>),
-    >,
-    parents: Query<(&Toggleable, &Transform, Option<&KnobGeometry>)>,
-    mut knobs: Query<
-        (Entity, &ChildOf, &mut Style, &mut Visuals),
-        (With<ToggleKnob>, Without<Toggleable>),
-    >,
+    mut tracks: Query<(
+        Entity,
+        &Toggleable,
+        &TrackStyle,
+        Has<lumen_core::components::Disabled>,
+        &mut Visuals,
+        Option<&mut crate::hover::HoverBaseColor>,
+        Option<&mut crate::hover::PressBaseColor>,
+    )>,
 ) {
-    for (t, style, mut vis, hover_base, press_base) in &mut toggles {
-        let target = if t.checked {
-            style.checked_bg
-        } else {
-            style.unchecked_bg
-        };
-        if vis.fill.as_ref().and_then(Fill::as_solid) != Some(target) {
-            vis.fill = Some(Fill::Solid(target));
-        }
+    for (entity, t, style, disabled, mut vis, hover_base, press_base) in &mut tracks {
+        let target = style.fill_for(t.checked, disabled);
+        let tinted = hover_base.is_some() || press_base.is_some();
         if let Some(mut base) = hover_base {
             base.0 = target;
         }
         if let Some(mut base) = press_base {
             base.0 = target;
         }
+        if tinted {
+            continue;
+        }
+        if vis.fill.as_ref().and_then(Fill::as_solid) != Some(target) {
+            vis.fill = Some(Fill::Solid(target));
+            commands
+                .entity(entity)
+                .remove::<crate::transition::BackgroundTransition>();
+        }
     }
+}
+
+/// Slide the [`ToggleKnob`] child of every `<toggle>` to the track end
+/// its [`Toggleable::checked`] state calls for, and size it from the
+/// laid-out track. The track fill itself belongs to
+/// [`sync_track_fill`].
+#[allow(clippy::type_complexity)]
+pub fn sync_toggle_visuals(
+    mut commands: Commands,
+    parents: Query<(&Toggleable, &Transform, Option<&KnobGeometry>)>,
+    mut knobs: Query<
+        (Entity, &ChildOf, &mut Style, &mut Visuals),
+        (With<ToggleKnob>, Without<Toggleable>),
+    >,
+) {
     for (knob_e, child_of, mut style, mut vis) in &mut knobs {
         let Ok((t, tr, geo)) = parents.get(child_of.parent()) else {
             continue;
@@ -890,7 +946,13 @@ mod slider_key_tests {
 }
 
 #[cfg(test)]
-mod knob_geometry_tests {
+mod track_tests {
+    //! What a track paints and where its knob sits.
+    //!
+    //! [`TrackStyle`] routing: each state paints the fill it names, and a
+    //! repaint from outside (a restyle re-applying the resting `bg`) does
+    //! not leave a track showing the wrong state.
+    //!
     //! [`KnobGeometry`] plumbing: an entity with no component reproduces
     //! today's hardcoded [`KNOB_INSET`] / [`THUMB_SIZE`] geometry exactly;
     //! a CSS-supplied component (as the spawn agent would insert from
@@ -950,6 +1012,106 @@ mod knob_geometry_tests {
 
     fn knob_inset_of(world: &World, knob: Entity) -> f32 {
         world.get::<Style>(knob).unwrap().inset.left
+    }
+
+    /// A track carrying the whole palette, plus the `Visuals` the fill
+    /// sync writes into. `disabled` inserts the marker the cascade's
+    /// `:disabled` rule keys off.
+    fn spawn_track(world: &mut World, checked: bool, disabled: bool) -> Entity {
+        let mut e = world.spawn((
+            Toggleable { checked },
+            TrackStyle {
+                checked_bg: Color::rgb(0.0, 1.0, 0.0),
+                unchecked_bg: Color::rgb(0.5, 0.5, 0.5),
+                disabled_bg: Some(Color::rgb(0.0, 0.0, 1.0)),
+            },
+            Visuals::default(),
+        ));
+        if disabled {
+            e.insert(lumen_core::components::Disabled);
+        }
+        e.id()
+    }
+
+    fn fill_of(world: &World, e: Entity) -> Option<Color> {
+        world
+            .get::<Visuals>(e)
+            .and_then(|v| v.fill.as_ref().and_then(Fill::as_solid))
+    }
+
+    #[test]
+    fn track_paints_the_fill_its_state_names() {
+        let mut world = World::new();
+        let off = spawn_track(&mut world, false, false);
+        let on = spawn_track(&mut world, true, false);
+        let disabled = spawn_track(&mut world, false, true);
+        // Disabled outranks checked, so a disabled-and-checked track still
+        // reads as unavailable rather than on.
+        let both = spawn_track(&mut world, true, true);
+        world.run_system_once(sync_track_fill).unwrap();
+        assert_eq!(fill_of(&world, off), Some(Color::rgb(0.5, 0.5, 0.5)));
+        assert_eq!(fill_of(&world, on), Some(Color::rgb(0.0, 1.0, 0.0)));
+        assert_eq!(fill_of(&world, disabled), Some(Color::rgb(0.0, 0.0, 1.0)));
+        assert_eq!(fill_of(&world, both), Some(Color::rgb(0.0, 0.0, 1.0)));
+    }
+
+    #[test]
+    fn track_with_no_disabled_rule_keeps_its_state_fill() {
+        let mut world = World::new();
+        let e = world
+            .spawn((
+                Toggleable { checked: true },
+                TrackStyle {
+                    checked_bg: Color::rgb(0.0, 1.0, 0.0),
+                    unchecked_bg: Color::rgb(0.5, 0.5, 0.5),
+                    disabled_bg: None,
+                },
+                Visuals::default(),
+                lumen_core::components::Disabled,
+            ))
+            .id();
+        world.run_system_once(sync_track_fill).unwrap();
+        assert_eq!(
+            fill_of(&world, e),
+            Some(Color::rgb(0.0, 1.0, 0.0)),
+            "with no `:disabled {{ bg }}` rule the generic opacity dim is \
+             the disabled affordance, so the state fill stands"
+        );
+    }
+
+    #[test]
+    fn track_repaints_after_a_restyle_overwrites_its_fill() {
+        // The restyle pass re-applies the resting `bg` on a theme or media
+        // flip. Gating the repaint on `Changed<Toggleable>` left a checked
+        // track stuck on the unchecked color from then on.
+        let mut world = World::new();
+        let on = spawn_track(&mut world, true, false);
+        world.run_system_once(sync_track_fill).unwrap();
+        world.get_mut::<Visuals>(on).unwrap().fill = Some(Fill::Solid(Color::rgb(0.5, 0.5, 0.5)));
+        world.run_system_once(sync_track_fill).unwrap();
+        assert_eq!(fill_of(&world, on), Some(Color::rgb(0.0, 1.0, 0.0)));
+    }
+
+    #[test]
+    fn tinted_track_rebases_instead_of_stomping_the_tint() {
+        let mut world = World::new();
+        let on = spawn_track(&mut world, true, false);
+        let tint = Color::rgb(1.0, 0.0, 0.0);
+        world
+            .entity_mut(on)
+            .insert(crate::hover::HoverBaseColor(Color::rgb(0.5, 0.5, 0.5)));
+        world.get_mut::<Visuals>(on).unwrap().fill = Some(Fill::Solid(tint));
+        world.run_system_once(sync_track_fill).unwrap();
+        assert_eq!(
+            fill_of(&world, on),
+            Some(tint),
+            "the hover tween owns the fill mid-tint"
+        );
+        assert_eq!(
+            world.get::<crate::hover::HoverBaseColor>(on).unwrap().0,
+            Color::rgb(0.0, 1.0, 0.0),
+            "the tint must release onto the current state color"
+        );
     }
 
     #[test]

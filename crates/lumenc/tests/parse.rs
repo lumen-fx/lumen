@@ -1469,7 +1469,7 @@ fn toggle_spawns_knob_child() {
     // Track carries per-state fills and a paintable Visuals.
     assert!(
         world
-            .get::<lumen_primitives::ToggleStyle>(toggle_e)
+            .get::<lumen_primitives::TrackStyle>(toggle_e)
             .is_some()
     );
     assert!(

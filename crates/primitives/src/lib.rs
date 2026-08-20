@@ -35,8 +35,8 @@ pub use checkbox::{
 };
 pub use controls::{
     ControlsPlugin, KnobGeometry, SliderChanged, SliderDragOrigin, SliderThumb, ToggleChanged,
-    ToggleKnob, ToggleStyle, WHEEL_NOTCH_PX, adjust_slider_on_wheel, cancel_slider_drag_on_escape,
-    sync_slider_thumb, sync_toggle_visuals,
+    ToggleKnob, TrackStyle, WHEEL_NOTCH_PX, adjust_slider_on_wheel, cancel_slider_drag_on_escape,
+    sync_slider_thumb, sync_toggle_visuals, sync_track_fill,
 };
 pub use cursor::{CursorPlugin, update_cursor_request};
 pub use drag::{DragConfig, DragPlugin, DragState, Draggable};
@@ -68,7 +68,7 @@ pub use state_style::{
     StatePatch, StateStylePlugin, StateVisuals, apply_state_visuals, eject_interaction_on_disable,
 };
 pub use switch::{
-    SWITCH_SLIDE_EASING, SWITCH_SLIDE_MS, SwitchPlugin, SwitchStyle, SwitchThumb, SwitchThumbSlide,
+    SWITCH_SLIDE_EASING, SWITCH_SLIDE_MS, SwitchPlugin, SwitchThumb, SwitchThumbSlide,
     register_switch_systems, step_switch_thumb, sync_switch_visuals,
 };
 pub use tabs::{
