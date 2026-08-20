@@ -1,9 +1,7 @@
 package dev.lumenfx.lumen
 
-import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.diagnostic.logger
-import com.intellij.openapi.extensions.PluginId
 import org.jetbrains.plugins.textmate.api.TextMateBundleProvider
 import java.nio.file.Files
 import java.nio.file.Path
@@ -22,8 +20,7 @@ class LumenTextMateBundle : TextMateBundleProvider {
     }
 
     private fun unpack(): Path? {
-        val version = PluginManagerCore.getPlugin(PluginId.getId(PLUGIN_ID))?.version ?: "dev"
-        val directory = Path.of(PathManager.getSystemPath(), "lumen-textmate", version)
+        val directory = Path.of(PathManager.getSystemPath(), "lumen-textmate", bundleVersion())
         return try {
             for (file in BUNDLE_FILES) {
                 val target = directory.resolve(file)
@@ -42,8 +39,14 @@ class LumenTextMateBundle : TextMateBundleProvider {
         }
     }
 
+    /** The build stamps the plugin version into this resource. */
+    private fun bundleVersion(): String {
+        val resource = LumenTextMateBundle::class.java.getResourceAsStream("$RESOURCES/bundle-version.txt")
+            ?: return "dev"
+        return resource.use { it.readBytes().decodeToString() }.trim().ifEmpty { "dev" }
+    }
+
     private companion object {
-        const val PLUGIN_ID = "dev.lumenfx.lumen"
         const val RESOURCES = "/textmate"
 
         /** Every file the bundle needs, including the paths named in package.json. */
