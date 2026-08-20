@@ -346,6 +346,53 @@ mod tests {
     }
 
     #[test]
+    fn inspect_renders_identity_box_and_hex_colors() {
+        use lumen_mcp::{ColorView, FillView, TextStyleView, TransformView, V2, VisualsView};
+        let mut i = inspect("label", Some("status"), None, vec![]);
+        i.transform = Some(TransformView {
+            absolute: V2 { x: 24.0, y: 404.0 },
+            size: V2 { x: 297.0, y: 15.0 },
+        });
+        i.visuals = Some(VisualsView {
+            fill: Some(FillView::Solid {
+                color: ColorView {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+            }),
+            radius: 6.0,
+            shadows: vec![],
+        });
+        i.text_style = Some(TextStyleView {
+            color: ColorView {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.5,
+            },
+            size_px: 12.0,
+            align: "start",
+            wrap: "word",
+            max_lines: None,
+        });
+        i.text_content = Some("hello".to_string());
+        i.opacity = Some(0.5);
+
+        let out = format_inspect(&i);
+        assert!(out.contains("<label>#status"), "identity line: {out}");
+        assert!(out.contains("box  x 24  y 404  w 297  h 15"), "{out}");
+        assert!(
+            out.contains("fill #ff0000"),
+            "opaque fill as #rrggbb: {out}"
+        );
+        assert!(out.contains("#00000080"), "translucent as #rrggbbaa: {out}");
+        assert!(out.contains("content \"hello\""), "{out}");
+        assert!(out.contains("opacity 0.50"), "{out}");
+    }
+
+    #[test]
     fn network_empty_and_populated() {
         let mut cap = NetworkCapture::default();
         assert!(format_network(&cap).contains("no requests"));

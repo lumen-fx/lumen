@@ -1909,6 +1909,62 @@ mod tests {
         assert_eq!(t.align_items, Some(taffy::style::AlignItems::BASELINE));
     }
 
+    /// A docked panel's [`DockInsets`] shrink a normal root's available
+    /// space, while a top-layer ([`OverlayLayer`]) root - the panel
+    /// itself - keeps the full viewport. Also covers the inset-change
+    /// re-dirty in [`sync_viewport`]: the world lays out once with no
+    /// insets, then again after the resource changes.
+    #[test]
+    fn dock_insets_shrink_normal_roots_but_not_overlay_roots() {
+        use lumen_core::components::*;
+        use lumen_core::render_world::{DockInsets, OverlayLayer};
+
+        let mut world = bevy_ecs::world::World::new();
+        world.insert_non_send(LayoutResource::new());
+        world.insert_non_send(ShaperService::default());
+        world.insert_resource(TextMeasureMemo::default());
+        world.insert_resource(Viewport {
+            size: glam::Vec2::new(1000.0, 600.0),
+            ..Viewport::default()
+        });
+        world.insert_resource(DockInsets::default());
+
+        let full = Style {
+            width: Length::Percent(100.0),
+            height: Length::Percent(100.0),
+            ..Style::default()
+        };
+        let app_root = world.spawn((full.clone(), DirtyLayout)).id();
+        let overlay_root = world.spawn((full, OverlayLayer, DirtyLayout)).id();
+
+        let mut schedule = bevy_ecs::schedule::Schedule::default();
+        schedule.add_systems(sync_viewport);
+        schedule.add_systems(resolve_layout_direction.before(sync_layout));
+        schedule.add_systems(sync_layout.after(sync_viewport));
+        schedule.run(&mut world);
+
+        let size =
+            |world: &bevy_ecs::world::World, e| world.get::<Transform>(e).map(|t| t.size).unwrap();
+        assert_eq!(size(&world, app_root).x, 1000.0, "no insets, full width");
+
+        // Dock a 300px panel on the right and a 100px bar at the bottom.
+        world.resource_mut::<DockInsets>().right = 300.0;
+        world.resource_mut::<DockInsets>().bottom = 100.0;
+        schedule.run(&mut world);
+
+        let app = size(&world, app_root);
+        let overlay = size(&world, overlay_root);
+        assert_eq!(app.x, 700.0, "normal root loses the docked width");
+        assert_eq!(app.y, 500.0, "normal root loses the docked height");
+        assert_eq!(overlay.x, 1000.0, "top-layer root keeps the viewport");
+        assert_eq!(overlay.y, 600.0);
+
+        // Undock: the next run restores the full viewport.
+        *world.resource_mut::<DockInsets>() = DockInsets::default();
+        schedule.run(&mut world);
+        assert_eq!(size(&world, app_root).x, 1000.0, "undock restores width");
+    }
+
     /// W5.9: end-to-end check. A 300-px-wide grid with two `1fr 2fr`
     /// columns should split into 100 + 200 (1/3 + 2/3). Builds a
     /// minimal world, runs `sync_layout`, asserts the resulting
