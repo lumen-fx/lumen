@@ -108,9 +108,12 @@ mod pipeline_integration_tests {
         );
 
         let (input_e, t) = {
-            let mut q = app
-                .world
-                .query_filtered::<(Entity, &Transform), With<TextInput>>();
+            // DomHidden excludes the devtools panel's own edit input, which
+            // a default (devtools-enabled) build mounts into every app.
+            let mut q = app.world.query_filtered::<(Entity, &Transform), (
+                With<TextInput>,
+                Without<lumen_core::components::DomHidden>,
+            )>();
             let (e, t) = q.single(&app.world).expect("one input");
             (e, *t)
         };
