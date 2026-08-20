@@ -48,9 +48,12 @@ const MARKUP: &str = r##"<root>
 </root>"##;
 
 fn field(app: &mut App) -> (Entity, Transform) {
-    let mut q = app
-        .world
-        .query_filtered::<(Entity, &Transform), With<TextInput>>();
+    let mut q = app.world.query_filtered::<(Entity, &Transform), (
+        With<TextInput>,
+        // Excludes the devtools panel's own edit input, which a default
+        // (devtools-enabled) build mounts into every app.
+        bevy_ecs::prelude::Without<lumen_core::components::DomHidden>,
+    )>();
     let (e, t) = q.single(&app.world).expect("one textarea");
     (e, *t)
 }
