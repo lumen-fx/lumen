@@ -346,6 +346,91 @@ mod tests {
     }
 
     #[test]
+    fn unknown_entities_classes_flags_and_the_cap_all_render() {
+        // An entity with no inspect record renders as a placeholder row.
+        let mut snap = Snapshot::default();
+        snap.entities = vec![EntityView {
+            id: 5,
+            components: vec![],
+        }];
+        let rows = element_rows(&snap, &HashSet::new());
+        assert!(rows[0].label().starts_with("<?> e5"), "{:?}", rows[0]);
+
+        // Classes and state flags land in their own parts.
+        let mut snap = Snapshot::default();
+        snap.entities = vec![EntityView {
+            id: 1,
+            components: vec![],
+        }];
+        let mut i = inspect("row", None, None, vec![]);
+        i.classes = vec!["card".into(), "wide".into()];
+        i.hovered = true;
+        i.focused = true;
+        i.pressed = true;
+        snap.inspect.insert(1, i);
+        let row = &element_rows(&snap, &HashSet::new())[0];
+        assert_eq!(row.meta, ".card.wide");
+        assert_eq!(row.flags, " :hover:focus:press");
+
+        // More entities than the cap: the text fallback says so.
+        let mut snap = Snapshot::default();
+        for id in 0..(MAX_ELEMENT_LINES as u64 + 10) {
+            snap.entities.push(EntityView {
+                id,
+                components: vec![],
+            });
+            snap.inspect.insert(id, inspect("node", None, None, vec![]));
+        }
+        let out = format_elements(&snap, &HashSet::new());
+        assert!(out.contains("(truncated)"));
+    }
+
+    #[test]
+    fn inspect_renders_style_gradient_image_and_truncated_content() {
+        use lumen_mcp::{ColorView, FillView, StyleView, VisualsView};
+        let mut i = inspect("tile", None, None, vec![]);
+        i.style = Some(StyleView {
+            flex_direction: "row",
+            ..Default::default()
+        });
+        i.visuals = Some(VisualsView {
+            fill: Some(FillView::Linear {
+                angle_deg: 90.0,
+                stops: vec![(
+                    0.0,
+                    ColorView {
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.0,
+                        a: 1.0,
+                    },
+                )],
+            }),
+            radius: 0.0,
+            shadows: vec![],
+        });
+        i.text_content = Some("x".repeat(120));
+        i.image_source = Some("icons/sun.png".into());
+        let out = format_inspect(&i);
+        assert!(out.contains("style  row"), "{out}");
+        i.visuals = Some(VisualsView {
+            fill: None,
+            radius: 0.0,
+            shadows: vec![],
+        });
+        assert!(format_inspect(&i).contains("fill none"));
+        assert!(out.contains("fill gradient"), "{out}");
+        assert!(out.contains("..."), "long content truncates: {out}");
+        assert!(out.contains("image icons/sun.png"), "{out}");
+    }
+
+    #[test]
+    fn signals_without_any_say_so() {
+        let out = format_signals(&Snapshot::default());
+        assert!(out.contains("(no global signals)"));
+    }
+
+    #[test]
     fn inspect_renders_identity_box_and_hex_colors() {
         use lumen_mcp::{ColorView, FillView, TextStyleView, TransformView, V2, VisualsView};
         let mut i = inspect("label", Some("status"), None, vec![]);
