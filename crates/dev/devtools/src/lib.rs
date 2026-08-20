@@ -399,6 +399,7 @@ pub fn handle_clicks(
 /// System: keep one spawned row entity per Elements line. Rows rebuild only
 /// when the flattened tree actually changes; leaving the Elements tab (or
 /// closing the overlay) despawns them.
+#[allow(clippy::too_many_arguments)]
 pub fn rebuild_element_rows(
     mut commands: Commands,
     state: Res<DevtoolsState>,
@@ -406,14 +407,28 @@ pub fn rebuild_element_rows(
     own: Query<Entity, With<DevtoolsMarker>>,
     ids: Query<(Entity, &LumenId)>,
     existing: Query<Entity, With<RowTarget>>,
+    parents: Query<&ChildOf>,
     mut last: Local<Vec<format::ElementRow>>,
 ) {
+    // Relayout must reach the container's SIBLINGS too: a row despawn that
+    // only dirties `dt-rows` leaves `dt-body` parked below the old rows,
+    // outside the scroll viewport. Dirtying the parent as well re-solves
+    // the whole scroll content.
+    let dirty_from = |commands: &mut Commands, container: Entity| {
+        commands.entity(container).insert(DirtyLayout);
+        if let Ok(p) = parents.get(container) {
+            commands.entity(p.parent()).insert(DirtyLayout);
+        }
+    };
     if !state.visible || state.tab != Tab::Elements {
         if !last.is_empty() {
             for e in &existing {
                 commands.entity(e).despawn();
             }
             last.clear();
+            if let Some(container) = ids.iter().find(|(_, id)| id.0 == ROWS_ID).map(|(e, _)| e) {
+                dirty_from(&mut commands, container);
+            }
         }
         return;
     }
@@ -482,7 +497,7 @@ pub fn rebuild_element_rows(
             ));
         }
     }
-    commands.entity(container).insert(DirtyLayout);
+    dirty_from(&mut commands, container);
     *last = rows;
 }
 
@@ -791,7 +806,11 @@ pub fn refresh_panes(
 pub fn mount_marks(world: &mut World, root: Entity, descendants: &[Entity], visible: bool) {
     for &e in descendants {
         if let Ok(mut em) = world.get_entity_mut(e) {
-            em.insert(DevtoolsMarker);
+            // DomHidden keeps the overlay out of the scripting DOM index:
+            // the overlay root spawns before the app's, and an indexed
+            // tooling root would otherwise become the document root that
+            // scripts build into.
+            em.insert((DevtoolsMarker, lumen_core::components::DomHidden));
         }
     }
     if let Ok(mut em) = world.get_entity_mut(root) {

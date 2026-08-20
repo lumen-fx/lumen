@@ -1980,6 +1980,15 @@ pub struct PendingFill {
 #[derive(Component, Clone, Debug)]
 pub struct LumenTag(pub std::sync::Arc<str>);
 
+/// Marker excluding an entity from the scripting DOM index: selectors never
+/// match it, and it can never become the document root scripts resolve.
+/// Attach to tooling subtrees that live in the app's world but are not part
+/// of the app's document - the devtools panel stamps it across its overlay.
+/// Without it, a tooling root spawned before the app's sorts first among the
+/// index roots and script-built content lands under the wrong tree.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct DomHidden;
+
 impl From<Vec<String>> for LumenClasses {
     fn from(v: Vec<String>) -> Self {
         Self(v.into_iter().map(Into::into).collect())
