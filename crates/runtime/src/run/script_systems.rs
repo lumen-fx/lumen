@@ -259,11 +259,25 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
         //    LAST. Without this edge the commands `on_close` emits (final
         //    signal writes, prints) would sit in the message buffer for a next
         //    tick that never runs and be silently dropped at exit.
+        //
+        //  * `.after(ScriptSet::DomInput)` - the DOM listener path
+        //    (`node.on("click", ...)`) emits its commands from
+        //    `dispatch_pointer_and_key_events`, which is the fourth producer
+        //    this applier drains. Left unordered, the two sat wherever the
+        //    scheduler put them: on a graph where the applier happened to run
+        //    first, a handler's signal write waited in the message
+        //    double-buffer for the next tick, and nothing scheduled one -
+        //    the write had not reached the store, so the end-of-tick dirty
+        //    queue was empty and the reactive wake stayed down. The click
+        //    then did nothing at all until an unrelated event arrived.
+        //    Adding any system to this stage was enough to flip the order,
+        //    so the scaffolded counter's `+1` button worked by luck.
         app.add_systems(
             TickStage::Systems,
             apply_script_commands
                 .after(ScriptSet::Tick)
                 .after(ScriptSet::Dispatch)
+                .after(ScriptSet::DomInput)
                 // The use sites the build left for the script build their
                 // subtree through this applier, so the tree is whole on the
                 // tick it was mounted rather than the one after.
@@ -283,7 +297,8 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
             TickStage::Systems,
             apply_os_script_commands
                 .after(ScriptSet::Tick)
-                .after(ScriptSet::Dispatch),
+                .after(ScriptSet::Dispatch)
+                .after(ScriptSet::DomInput),
         );
         // Audio transport wiring. COMPILE-TIME GATE (Part B tree-shaking):
         // only registered when the `audio` feature is compiled in. The
@@ -344,7 +359,7 @@ fn register_dom_event_dispatchers<H: lumen_script::ScriptHost + Resource<Mutabil
     app.add_systems(
         TickStage::Systems,
         lumen_script::dispatch_pointer_and_key_events::<H>
-            .in_set(ScriptSet::DomEvents)
+            .in_set(ScriptSet::DomInput)
             .after(build_dom_index)
             .after(lumen_input::dispatch_clicks)
             .after(lumen_input::dispatch_focused_keys)
@@ -353,7 +368,7 @@ fn register_dom_event_dispatchers<H: lumen_script::ScriptHost + Resource<Mutabil
     app.add_systems(
         TickStage::Systems,
         lumen_script::dispatch_state_events::<H>
-            .in_set(ScriptSet::DomEvents)
+            .in_set(ScriptSet::DomState)
             .after(build_dom_index)
             // `input` is derived from the edit stream, so this reads the
             // messages the text mutator writes. Anchor the edge on the

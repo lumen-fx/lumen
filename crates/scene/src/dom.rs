@@ -76,7 +76,8 @@ pub fn install_dom(app: &mut App) {
             .after(ScriptSet::Tick)
             .after(ScriptSet::Dispatch)
             .after(ScriptSet::Ready)
-            .after(ScriptSet::DomEvents),
+            .after(ScriptSet::DomInput)
+            .after(ScriptSet::DomState),
     );
     app.add_systems(
         TickStage::Systems,

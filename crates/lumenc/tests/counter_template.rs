@@ -116,3 +116,49 @@ fn run_case() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The same click, on an app carrying extra systems, must still land in one
+/// tick.
+///
+/// A `node.on("click", ...)` handler's signal write travels to the store as a
+/// `ScriptCommandEvent`, and a message a reader misses waits a whole tick.
+/// The applier's ordering against the DOM dispatcher used to be left to the
+/// scheduler, so which side won depended on the shape of the system graph:
+/// one more system anywhere in `TickStage::Systems` was enough to lose the
+/// click, and nothing rescheduled a tick to recover it, because the write had
+/// not reached the store for the end-of-tick wake to notice. Padding the
+/// graph here keeps that edge honest.
+#[test]
+fn click_lands_in_one_tick_with_extra_systems_installed() {
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(run_padded_case)
+        .expect("spawn test thread")
+        .join()
+        .expect("padded counter case");
+}
+
+fn run_padded_case() {
+    use lumen_core::prelude::TickStage;
+
+    let dir = scaffolded_counter();
+    let (mut app, _window) = build_headless_app(RunOptions::new(dir.clone())).expect("build app");
+    for _ in 0..8 {
+        app.add_systems(TickStage::Systems, || {});
+        app.add_systems(TickStage::Systems, |_: bevy_ecs::prelude::Commands| {});
+    }
+    for _ in 0..5 {
+        app.tick();
+    }
+
+    click_on(&mut app, "bump");
+    app.tick();
+    let texts = all_texts(&mut app);
+    assert!(
+        texts.iter().any(|t| t == "1"),
+        "the click needed more than one tick once the schedule grew; \
+         TextContents = {texts:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

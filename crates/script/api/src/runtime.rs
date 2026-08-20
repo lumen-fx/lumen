@@ -148,10 +148,18 @@ pub enum ScriptSet {
     /// [`fill_components`]: the use sites the build left for the script.
     /// Registered by the embedder, not by [`ScriptPlugin`].
     Fill,
-    /// The embedder's DOM-event propagation
-    /// ([`crate::dom_events::dispatch_pointer_and_key_events`] and
-    /// [`crate::dom_events::dispatch_state_events`]), per host.
-    DomEvents,
+    /// The embedder's DOM propagation of raw input
+    /// ([`crate::dom_events::dispatch_pointer_and_key_events`]), per host.
+    /// A `node.on("click", ...)` listener runs here, so this set produces
+    /// script commands and every applier of them orders after it.
+    DomInput,
+    /// The embedder's DOM propagation of derived state
+    /// ([`crate::dom_events::dispatch_state_events`]), per host. Kept
+    /// apart from [`ScriptSet::DomInput`] because it runs at the far end
+    /// of the tick, after the text edits that script commands produce;
+    /// one set covering both could not be ordered against the appliers
+    /// without a cycle.
+    DomState,
     /// The embedder's `on_audio_end` dispatch, per host. Declared here so the
     /// runtime's audio wiring has a set to order against.
     AudioEnded,
