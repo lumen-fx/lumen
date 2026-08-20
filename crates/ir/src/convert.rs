@@ -307,6 +307,46 @@ impl From<&Attributes> for Option<lumen_primitives::Interaction> {
     }
 }
 
+/// The slider an element's `min`, `max`, `value` and `step` describe.
+///
+/// The defaults are the range a `<slider>` has when the markup names none:
+/// zero to one, starting at the bottom. They live here rather than at each
+/// reader, because a page emitted from one set of defaults and adopted by an
+/// app holding another shows the thumb in two places.
+impl From<&Attributes> for lumen_core::components::SliderValue {
+    fn from(attrs: &Attributes) -> Self {
+        let min = attrs.min.unwrap_or(0.0);
+        let max = attrs.max.unwrap_or(1.0);
+        let slider = Self {
+            value: 0.0,
+            min,
+            max,
+            step: attrs.step,
+        };
+        Self {
+            value: slider.clamp(attrs.value.unwrap_or(min)),
+            ..slider
+        }
+    }
+}
+
+/// The progress bar an element's `value`, `max` and `duration` describe.
+///
+/// No `value` is an indeterminate bar, which is a bar with nothing to say
+/// about where it is rather than one sitting at zero. A `bind-value` write
+/// turns it determinate.
+impl From<&Attributes> for lumen_primitives::ProgressBar {
+    fn from(attrs: &Attributes) -> Self {
+        Self {
+            value: attrs.value,
+            max: attrs.max.unwrap_or(1.0),
+            period_ms: attrs
+                .progress_duration
+                .unwrap_or(lumen_primitives::PROGRESS_PERIOD_MS),
+        }
+    }
+}
+
 impl From<crate::layout_ir::OutlineSpec> for lumen_primitives::FocusOutlineSpec {
     fn from(spec: crate::layout_ir::OutlineSpec) -> Self {
         lumen_primitives::FocusOutlineSpec {
@@ -322,6 +362,46 @@ mod tests {
     use super::*;
     use crate::layout_ir::LineHeightSpec as IrLineHeightSpec;
     use lumen_core::components::LineHeightSpec as CoreLineHeightSpec;
+
+    /// The range a `<slider>` gets when the markup names none. Every reader
+    /// of a slider's bounds comes through this conversion, so the defaults
+    /// are pinned here rather than at each of them: the spawner builds the
+    /// widget with it and the web emitter writes the page with it, and a page
+    /// written from a different range than the app holds shows the thumb in
+    /// the wrong place.
+    #[test]
+    fn a_slider_with_no_bounds_runs_from_zero_to_one() {
+        let slider = lumen_core::components::SliderValue::from(&Attributes::default());
+        assert_eq!((slider.min, slider.max), (0.0, 1.0));
+        assert_eq!(slider.value, 0.0, "and starts at the bottom of its range");
+        assert_eq!(slider.step, None);
+    }
+
+    #[test]
+    fn a_slider_starts_inside_its_own_bounds() {
+        let attrs = Attributes {
+            min: Some(0.0),
+            max: Some(100.0),
+            value: Some(250.0),
+            ..Attributes::default()
+        };
+        assert_eq!(
+            lumen_core::components::SliderValue::from(&attrs).value,
+            100.0,
+            "an authored value past the top is held to it, not carried"
+        );
+    }
+
+    /// A bar with nothing to say about where it is, which is what an
+    /// indeterminate `<progress>` is. Zero would be a bar saying it has not
+    /// started, which is a different claim.
+    #[test]
+    fn a_progress_bar_with_no_value_is_indeterminate() {
+        let bar = lumen_primitives::ProgressBar::from(&Attributes::default());
+        assert_eq!(bar.value, None);
+        assert_eq!(bar.max, 1.0);
+        assert_eq!(bar.period_ms, lumen_primitives::PROGRESS_PERIOD_MS);
+    }
 
     /// A `line-height` alone - no color, size, align, wrap, max-lines,
     /// family, weight, or selection-color - must still produce a

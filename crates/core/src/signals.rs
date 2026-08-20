@@ -521,7 +521,7 @@ pub fn apply_value_bindings(
         let Some(parsed) = parsed else {
             continue;
         };
-        let clamped = parsed.clamp(sv.min.min(sv.max), sv.min.max(sv.max));
+        let clamped = sv.clamp(parsed);
         if (sv.value - clamped).abs() > f32::EPSILON {
             sv.value = clamped;
         }

@@ -20,6 +20,10 @@ lumen-html = { path = "../html", version = "0.0.3" }
 # The IR a page is emitted from.
 lumen-ir = { path = "../ir", version = "0.0.3" }
 lumen-core = { path = "../core", version = "0.0.3" }
+# A bound value is held to the bounds its widget holds it to, and the widget
+# owns that rule. Already in the graph under lumen-ir, which converts the IR
+# into these components.
+lumen-primitives = { path = "../primitives", version = "0.0.3" }
 # Locale parsing, so a document's writing direction is decided the same way
 # the desktop runtime decides it.
 lumen-i18n = { path = "../i18n", version = "0.0.3" }
