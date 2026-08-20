@@ -1628,6 +1628,20 @@ impl SliderValue {
     pub fn step_size(&self) -> f32 {
         self.step.unwrap_or((self.max - self.min) / 100.0)
     }
+
+    /// `value` held to this slider's bounds.
+    ///
+    /// The bounds are taken either way round, so a slider authored with its
+    /// `max` below its `min` still has a range rather than an empty one.
+    ///
+    /// Every path that puts a value on a slider comes through here: the
+    /// spawner with what the markup authored, the signal binding with what a
+    /// script wrote, and the web emitter writing the page ahead of both. A
+    /// second copy of the rule would let a page disagree with the app that
+    /// adopts it.
+    pub fn clamp(&self, value: f32) -> f32 {
+        value.clamp(self.min.min(self.max), self.min.max(self.max))
+    }
 }
 
 impl Default for SliderValue {

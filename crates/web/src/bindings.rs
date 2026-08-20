@@ -26,8 +26,10 @@
 //!   `$parent.` forms - nothing. Those read a property of one entity, and a
 //!   page's state is signals and rows; there is no entity to read yet.
 
+use lumen_core::components::SliderValue;
 use lumen_core::signals::signal_as_bool;
 use lumen_ir::layout_ir::{Attributes, BindKind};
+use lumen_primitives::ProgressBar;
 
 use crate::spec::SignalEnv;
 
@@ -79,17 +81,18 @@ fn bound<'a>(attrs: &Attributes, kind: BindKind, signals: &'a SignalEnv) -> Opti
 /// A bound value held to the bounds the widget holds it to, so the page shows
 /// what the app would and the runtime finds nothing to correct.
 ///
-/// A slider is bounded both ways by its own `min` and `max`; a progress bar
-/// starts at zero and runs to its `max`. A tag with neither has no value to
-/// carry, and the value is left as the markup wrote it.
+/// The widget owns its own rule and its own defaults, and both arrive here
+/// through the same conversion the spawner builds the widget with. Reading
+/// `min` and `max` off the attributes and clamping here would be a second
+/// copy: it would agree today and drift the day a widget's bounds change,
+/// and the drift would surface as the runtime correcting nodes on load.
+///
+/// A tag that carries neither widget has no value to hold, so the value is
+/// left as the markup wrote it.
 fn clamp(ir_tag: &str, attrs: &Attributes, value: f32) -> f32 {
     match ir_tag {
-        "slider" => {
-            let min = attrs.min.unwrap_or(0.0);
-            let max = attrs.max.unwrap_or(1.0);
-            value.clamp(min.min(max), min.max(max))
-        }
-        "progress" => value.clamp(0.0, attrs.max.unwrap_or(1.0).max(0.0)),
+        "slider" => SliderValue::from(attrs).clamp(value),
+        "progress" => ProgressBar::from(attrs).clamp(value),
         _ => value,
     }
 }

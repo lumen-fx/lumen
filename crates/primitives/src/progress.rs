@@ -63,6 +63,22 @@ pub struct ProgressBar {
     pub period_ms: u32,
 }
 
+impl ProgressBar {
+    /// `value` held to this bar's bounds.
+    ///
+    /// A progress bar starts at zero and runs to its [`Self::max`]; it has no
+    /// lower bound of its own, which is what separates it from a
+    /// [`lumen_core::components::SliderValue`]. A negative `max` would leave
+    /// no range at all, so the upper bound is held at zero too.
+    ///
+    /// Both the signal binding and the web emitter writing the page ahead of
+    /// it read the rule here, so a bar in a document and a bar in the app
+    /// that adopts it sit in the same place.
+    pub fn clamp(&self, value: f32) -> f32 {
+        value.clamp(0.0, self.max.max(0.0))
+    }
+}
+
 impl Default for ProgressBar {
     fn default() -> Self {
         Self {
@@ -128,7 +144,7 @@ pub fn apply_progress_bindings(
         let Some(parsed) = parsed else {
             continue;
         };
-        let clamped = parsed.clamp(0.0, bar.max.max(0.0));
+        let clamped = bar.clamp(parsed);
         if bar.value != Some(clamped) {
             bar.value = Some(clamped);
         }
