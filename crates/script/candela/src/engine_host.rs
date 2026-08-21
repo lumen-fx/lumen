@@ -155,7 +155,14 @@ impl ScriptHost for CandelaHost {
         // engine would leak that run's commands into the real sink. A scratch
         // engine keeps the check side-effect free, matching the trait contract.
         let scratch = Registries::default();
-        let engine = build_engine(&scratch);
+        let mut engine = build_engine(&scratch);
+        // Replay the embedder's registrations. candela binds every `host` block
+        // while it compiles, so a source that declares `host "native" { .. }`
+        // does not check against an engine carrying only Lumen's own builtins:
+        // the check would fail on an app that runs.
+        for f in self.script_fns.iter() {
+            register_script_fn(&mut engine, &scratch, f);
+        }
         // Splice the `host "lumen" { ... }` prelude in for a sentinel import; the
         // splice is single-line, so `span_line_col` still resolves user lines.
         let resolved = prelude::resolve_prelude(source);
