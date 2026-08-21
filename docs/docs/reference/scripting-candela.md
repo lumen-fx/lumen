@@ -797,10 +797,33 @@ from the signatures it was given. A script that spells the block itself keeps
 it: the host leaves a namespace the source already declares alone, so an app
 written against an earlier release compiles unchanged.
 
-An untyped function hands its arguments straight through and returns `any`; read
-the result with the `as_int` / `as_str` / `as_map` downcasts, the same way a
-`parse_json` result is read. One described with parameter and return types is
-bound and declared with them, so a call with the wrong shape fails the compile.
+A function described with parameter and return types is declared with them,
+whatever those types are, and the result is typed as declared, so it composes
+with operators the way a value of that type does. A call passing the wrong
+types or the wrong number of arguments is refused when it runs, naming the
+parameter.
+
+A function with an untyped parameter, a variadic argument list, or an optional
+trailing argument has no such spelling: it is declared `any name(...)`, takes
+any arguments, and returns `any`. Read that result with the `as_int` /
+`as_str` / `as_map` downcasts, the same way a `parse_json` result is read.
+
+The name is the plugin's to choose, including one candela's own library uses: a
+namespaced call takes its type from the block that declares it.
+
+A native function may fail. It raises where it was called, under the kind
+`host_fn_error` and naming the function, so a script handles one the way it
+handles any other runtime error:
+
+```rust
+fn level(pin) {
+    try {
+        return gpio::read(pin);
+    } catch "host_fn_error" {
+        return -1;
+    }
+}
+```
 
 A plugin can also ship candela source of its own, compiled ahead of the app, to
 offer method syntax over its functions. What that looks like is the plugin's

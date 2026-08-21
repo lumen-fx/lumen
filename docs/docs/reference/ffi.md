@@ -501,22 +501,31 @@ fn main() -> lumenui::Result<()> {
 
 `script_fn` on the same builder takes a described function rather than a bare
 closure: parameter types, a return type, a one-line doc, a namespace of your
-choosing, and the languages that may see it.
+choosing, and the languages that may see it. `ScriptFn::from_fn` reads the
+types off a plain Rust closure, and `ScriptFn::new` spells them out.
 
 ```rust
 use lumenui::{ScriptFn, ScriptTy, ScriptValue};
 
 App::builder()
     .dir("app")
+    .script_fn(ScriptFn::from_fn("set_pin", |pin: i64| pin > 0).param_names(["pin"]))
     .script_fn(
-        ScriptFn::new("set_pin")
+        ScriptFn::new("read_pin")
             .param("pin", ScriptTy::Int)
-            .ret(ScriptTy::Bool)
-            .doc("Drive a GPIO pin high.")
-            .build(|cx| ScriptValue::Bool(cx.int_arg(0) > 0)),
+            .ret(ScriptTy::Int)
+            .doc("Read a GPIO pin.")
+            .build(|cx| match cx.int_arg(0) {
+                pin @ 0..=27 => Ok(ScriptValue::I64(pin)),
+                pin => Err(format!("pin {pin} is out of range")),
+            }),
     )
     .run()
 ```
+
+A `script_fn` body may fail: `Err(message)` raises `message` in the script that
+called it, as a Rhai runtime error, a Lua error, or a candela `host_fn_error`.
+A `native_fn` closure always succeeds, as an exposed `LumenFn` does.
 
 Both land in the same registry as `lumen_app_expose` and as anything a plugin
 registers. A plugin is the third way in, and it goes through `add_plugin`: that
