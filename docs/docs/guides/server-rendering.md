@@ -28,6 +28,18 @@ That writes `styles.css`, `app.lmna`, `app.cdlb`, `lumen-web.wasm`,
 and answer everything else with a render. The runtime adopts a rendered
 document the same way it adopts a built one.
 
+Add `--no-runtime` to render pages that carry none:
+
+```
+lumenc web myapp --render ssr --no-runtime
+```
+
+Each page is still produced for the request that asks, and now it is only a
+document: no wasm, no boot script, and nothing that takes it over once it is
+open. Links load the next page, which is another render. `app.lmna` is still
+written, because that is what you render from; the runtime files and the
+manifest are not, because nothing loads them.
+
 Build with `--render csr` instead when you want documents to fall back to.
 Which of the two answers a request is then yours to decide, and so is
 rebuilding them when the app changes.

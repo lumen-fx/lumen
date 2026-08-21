@@ -977,6 +977,7 @@ USAGE:
                           first; --no-hooks skips them.
     lumenc web <app_dir> [--out DIR] [--base PATH] [--locale TAG]...
                          [--render static|csr|ssr] [--prerender seeds|run|none]
+                         [--runtime|--no-runtime]
                          [--no-hooks] [--lib-dir DIR] [--strict]
                          [--serve [--port N]]
                           Emit the app as a site: one HTML document per page
@@ -989,8 +990,10 @@ USAGE:
                           --locale emits a document tree per locale, the
                           first at the site root; --render says where a
                           page's document comes from, a build or a render
-                          per request; --prerender says where the state
-                          they are rendered with comes from;
+                          per request; --runtime / --no-runtime say whether
+                          the documents carry the browser runtime, which
+                          only --render ssr leaves open; --prerender says
+                          where the state they are rendered with comes from;
                           --lib-dir points at a directory holding
                           lumen-web.wasm and lumen-web.js; --strict fails
                           the build on any warning; --serve serves the

@@ -126,6 +126,7 @@ Run the result with `lumenc run <dir> --artifact <out.lmna>`. See
 ```
 lumenc web <app_dir> [--out <dir>] [--base <path>] [--locale <tag>]...
                      [--render static|csr|ssr] [--prerender seeds|run|none]
+                     [--runtime|--no-runtime]
                      [--no-hooks] [--lib-dir <dir>] [--strict]
                      [--serve] [--port <n>] [--host <addr>]
                      [--allow-host <name>]...
@@ -151,6 +152,15 @@ with the markup already in it. Prints how many pages it wrote and where.
 Every mode writes the whole markup tree, so a reader and a crawler get the
 same document whichever one is set.
 
+`--runtime` and `--no-runtime` say whether the documents carry the browser
+runtime, which is a separate question from where they come from. `static`
+already means `--no-runtime` and `csr` already means `--runtime`, so
+contradicting either is refused and the message names the mode that means it.
+`ssr` is the one that leaves it open: `--render ssr --no-runtime` produces a
+page for the request that asks and puts no wasm and no boot script in it, so
+the visitor reads it and nothing takes it over. The compiled app is still
+written, because that is what the server renders from.
+
 Runs the app's `prebuild` hooks first unless `--no-hooks` is given.
 
 The entry page is written as `index.html` whatever it is keyed as, and a site
@@ -164,6 +174,7 @@ document of its own.
 | `--base <path>` | URL prefix the site is served under. Default: `[web] base_path`, else `/`. |
 | `--locale <tag>` | Emit a document tree for this locale; repeat for more. The first is served from the site root and the rest from `/<tag>/`. Default: `[web] locales`. |
 | `--render static\|csr\|ssr` | Where a page's document comes from: `static` and `csr` write it at build time, and `ssr` produces it for the request that asks. Default: `[web] render`. |
+| `--runtime` / `--no-runtime` | Whether the documents carry the browser runtime. Refused against a `--render` mode that already says the opposite. Default: `[web] runtime`, else what `--render` implies. |
 | `--prerender seeds\|run\|none` | Where the state the pages are rendered with comes from: `seeds` uses `[web.seed]` and the defaults the markup declares, `run` starts from those and then runs the app here, writing each page with the state it settles into, `none` renders the markup alone. `run` with `--render ssr` is refused, because a rendered page settles its own state per request. Default: `[web] prerender`. |
 | `--no-hooks` | Skip the app's `prebuild` hooks. |
 | `--lib-dir <dir>` | Directory holding `lumen-web.wasm` and `lumen-web.js`, instead of the published runtime. |
@@ -223,8 +234,9 @@ image, host, locales - is `lumen.toml`'s `[web]` section. See
 A missing `<app_dir>`, an unknown flag, or a mode neither `--render` nor
 `--prerender` has exits 2. `--render ssr` together with `--prerender run`
 fails the build: a page is written with the state a run settled into here, or
-with the state the app settles into for the request, and not both. Only a
-markup app can be emitted as a site.
+with the state the app settles into for the request, and not both. So does a
+runtime setting that contradicts the `--render` mode. Only a markup app can be
+emitted as a site.
 
 ## package
 
