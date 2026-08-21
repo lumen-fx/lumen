@@ -1,17 +1,26 @@
 name: site-rebuild
 
-# Tells the site repo to rebuild and redeploy when main changes, so the
-# published docs track this repo. Needs the SITE_BUILD_TOKEN secret: a
-# fine-grained PAT that can write contents on lumen-fx/site. Without the
-# secret the step skips with a notice and the site's daily cron picks the
-# change up; with it, a failed dispatch fails this run.
+# Tells the site repo to rebuild and redeploy when a release is published, so
+# the docs a visitor reads describe the version they can install. Following
+# main instead would document a feature before there is anything to download
+# it in.
+#
+# The trigger is the published release rather than the tag push, because the
+# tag is what starts `release.yml`: dispatching then would rebuild the site
+# while the assets it links to are still being built.
+#
+# `workflow_dispatch` is here for a docs correction that should not wait for
+# the next release.
+#
+# Needs the SITE_BUILD_TOKEN secret: a fine-grained PAT that can write
+# contents on lumen-fx/site. Without the secret the step skips with a notice
+# and the site's daily cron picks the change up; with it, a failed dispatch
+# fails this run.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "docs/**"
-      - "tools/release/install.sh"
+  release:
+    types: [published]
+  workflow_dispatch:
 
 jobs:
   dispatch:
