@@ -164,18 +164,50 @@ fn a_link_inside_the_site_reaches_the_page_it_points_at() {
         );
     }
 
-    // The entry page's document, and a document the site has no page for,
-    // both answer with the entry page.
-    for target in ["/index.html", "/nowhere.html"] {
-        let page = renderer
+    // The entry page's own document answers with the entry page.
+    let page = renderer
+        .render(SsrRequest::get("/index.html"))
+        .expect("the document is written");
+    assert!(!page.body.contains("the user page"), "{}", page.body);
+}
+
+#[test]
+fn an_address_no_page_answers_for_is_not_found() {
+    let _turn = in_turn();
+    let renderer =
+        Renderer::start(site(READS_REQUEST), options(Arc::new(Silent))).expect("nothing running");
+
+    // A document the build never wrote, and a path that starts at no page.
+    // Both get the status a static host sends and the shell it sends with it,
+    // so a site answers such an address the same way whichever half answers.
+    for target in ["/nowhere.html", "/nowhere", "/nowhere/deeper"] {
+        let missing = renderer
             .render(SsrRequest::get(target))
-            .expect("the document is written");
+            .expect("the shell is written");
+        assert_eq!(missing.status, 404, "{target}");
+        assert_eq!(
+            missing.header("Content-Type"),
+            Some("text/html; charset=utf-8"),
+            "{target}"
+        );
         assert!(
-            !page.body.contains("the user page"),
-            "{target}: {}",
-            page.body
+            !missing.body.is_empty(),
+            "{target}: the shell is a document"
+        );
+        assert!(
+            !missing.body.contains("the user page"),
+            "{target}: the shell shows no page: {}",
+            missing.body
         );
     }
+
+    // A deep path a page does answer for is a page, not a miss. That is what
+    // `route.segment` is for, and the not-found rule leaves it alone.
+    let deep = renderer
+        .render(SsrRequest::get("/user/42"))
+        .expect("the document is written");
+    assert_eq!(deep.status, 200);
+    assert!(deep.body.contains("the user page"), "{}", deep.body);
 }
 
 #[test]

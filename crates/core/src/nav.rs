@@ -143,21 +143,24 @@ pub fn current() -> String {
 
 // -- page-path resolution (longest existing-file prefix) ---------------------
 
-/// Resolve a requested `path` against the set of known page `keys` (each a
-/// `.lmn` filename stem), returning `(page_key, segment)`.
+/// The page `path` names and the part of the path that page answers for, or
+/// `None` when no page answers for it.
 ///
 /// Algorithm - the framework does not pattern-match segments:
-/// 1. Strip a leading `/`. An empty path resolves to `entry` (the home page).
+/// 1. Strip a leading `/`. An empty path names `entry` (the home page).
 /// 2. Try the full path as a page key; if absent, walk up one segment at a
 ///    time to the longest existing prefix (`/user/7` -> `user` when only
 ///    `user.lmn` exists).
 /// 3. The leftover tail after the matched prefix becomes the `segment`
-///    (`/7`), for the page's own code to parse. A whole-path miss falls back
-///    to `entry` with the normalised path as the segment.
-pub fn resolve_path(path: &str, keys: &[String], entry: &str) -> (String, String) {
-    let norm = path.trim_start_matches('/').trim_end_matches('/');
+///    (`/7`), for the page's own code to parse.
+///
+/// Use this where an address that names nothing has an answer of its own,
+/// such as a server sending a 404. Somewhere that has to show a page either
+/// way, such as a window following a link, wants [`resolve_path`].
+pub fn match_path(path: &str, keys: &[String], entry: &str) -> Option<(String, String)> {
+    let norm = normalize_path(path);
     if norm.is_empty() {
-        return (entry.to_string(), String::new());
+        return Some((entry.to_string(), String::new()));
     }
     let segs: Vec<&str> = norm.split('/').filter(|s| !s.is_empty()).collect();
     for i in (1..=segs.len()).rev() {
@@ -169,12 +172,28 @@ pub fn resolve_path(path: &str, keys: &[String], entry: &str) -> (String, String
             } else {
                 format!("/{leftover}")
             };
-            return (candidate, segment);
+            return Some((candidate, segment));
         }
     }
-    // Nothing matched - fall back to the entry page, exposing the whole
-    // requested path as the segment so the app can render its own 404.
-    (entry.to_string(), format!("/{norm}"))
+    None
+}
+
+/// Resolve a requested `path` against the set of known page `keys` (each a
+/// `.lmn` filename stem), returning `(page_key, segment)`.
+///
+/// [`match_path`] does the matching. What this adds is the fallback: a path
+/// no page answers for lands on `entry` with the whole requested path as the
+/// segment, so an app that wants to say "no such thing" can render that
+/// itself.
+pub fn resolve_path(path: &str, keys: &[String], entry: &str) -> (String, String) {
+    match_path(path, keys, entry)
+        .unwrap_or_else(|| (entry.to_string(), format!("/{}", normalize_path(path))))
+}
+
+/// A request path with the leading and trailing slashes off, which is the
+/// shape a page key is compared against.
+fn normalize_path(path: &str) -> &str {
+    path.trim_start_matches('/').trim_end_matches('/')
 }
 
 #[cfg(test)]
@@ -229,5 +248,22 @@ mod tests {
             resolve_path("/nope", &keys, "index"),
             ("index".into(), "/nope".into())
         );
+    }
+
+    #[test]
+    fn an_address_no_page_answers_for_matches_nothing() {
+        let keys = vec!["index".to_string(), "user".to_string()];
+        // The root and a deep path a page does answer for both match, which
+        // is what keeps `/user/7` a page rather than a miss.
+        assert_eq!(
+            match_path("/", &keys, "index"),
+            Some(("index".into(), "".into()))
+        );
+        assert_eq!(
+            match_path("/user/7", &keys, "index"),
+            Some(("user".into(), "/7".into()))
+        );
+        assert_eq!(match_path("/nope", &keys, "index"), None);
+        assert_eq!(match_path("/nope/deeper", &keys, "index"), None);
     }
 }

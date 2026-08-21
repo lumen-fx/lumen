@@ -21,6 +21,10 @@ use lumen_script::runtime::ScriptCommandEvent;
 /// The status a document is answered with when nothing said otherwise.
 pub const DEFAULT_STATUS: u16 = 200;
 
+/// The status an address no page answers for is sent, which is the one a
+/// static host sends for a path it has no file for.
+pub const NOT_FOUND_STATUS: u16 = 404;
+
 /// The status a redirect is answered with when nothing said otherwise.
 ///
 /// A page that sends a visitor elsewhere is saying so about this request, not

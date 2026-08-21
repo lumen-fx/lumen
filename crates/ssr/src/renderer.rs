@@ -7,7 +7,7 @@ use std::thread::JoinHandle;
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::{IntoScheduleConfigs, ResMut, Resource};
 use crossbeam_channel::{Sender, unbounded};
-use lumen_core::nav::{self, SEGMENT_SIGNAL};
+use lumen_core::nav::SEGMENT_SIGNAL;
 use lumen_core::prelude::TickStage;
 use lumen_core::property_store::PropertyStore;
 use lumen_core::request;
@@ -20,7 +20,8 @@ use crate::error::SsrError;
 use crate::fetch::{CountingDispatch, FetchPolicy, Flight};
 use crate::request::{HeaderPolicy, SsrRequest};
 use crate::response::{
-    DEFAULT_STATUS, REDIRECT_STATUS, ResponseState, SsrResponse, apply_response_commands,
+    DEFAULT_STATUS, NOT_FOUND_STATUS, REDIRECT_STATUS, ResponseState, SsrResponse,
+    apply_response_commands,
 };
 use crate::site::SsrSite;
 
@@ -131,10 +132,17 @@ impl Renderer {
             .name("lumen-ssr".to_string())
             .spawn(move || {
                 let flight = Arc::new(Flight::default());
+                // The answer to an address no page answers for is the shell,
+                // which holds no state and so is the same document every
+                // time. Written once, on the first request that needs it.
+                let mut missing: Option<Result<SsrResponse, SsrError>> = None;
                 // Every app this thread builds is also dropped here, before
                 // the next request is taken.
                 for job in requests {
-                    let answer = render_one(&site, &options, &flight, &job.request);
+                    let answer = match site.page_for(&job.request.path) {
+                        Some(page) => render_one(&site, &options, &flight, &job.request, page),
+                        None => missing.get_or_insert_with(|| not_found(&site)).clone(),
+                    };
                     let _ = job.reply.send(answer);
                 }
             });
@@ -194,9 +202,10 @@ fn render_one(
     options: &RenderOptions,
     flight: &Arc<Flight>,
     request: &SsrRequest,
+    page: (String, String),
 ) -> Result<SsrResponse, SsrError> {
     let mut warnings = Vec::new();
-    let (key, segment) = page_for(site, &request.path);
+    let (key, segment) = page;
 
     // On this thread for as long as the render is, which is what the request
     // builtins read through.
@@ -313,21 +322,20 @@ fn render_one(
     })
 }
 
-/// The page a request is for, and the part of the path that page answers for.
+/// The answer to an address no page answers for: the app shell, with the
+/// status a static host sends for a path it has no file for.
 ///
-/// Two shapes of address reach the same page. A link inside an emitted site
-/// points at the document a build wrote, so `/settings.html` is a request for
-/// the `settings` page; a link an author wrote, and any path deeper than a
-/// page, is resolved the way the desktop resolves it, leaving the rest of the
-/// path on `route.segment`. A document a build never wrote is not a page, so
-/// it goes through the resolver like anything else.
-fn page_for(site: &SsrSite, path: &str) -> (String, String) {
-    if let Some(key) = lumen_web::document_key(path, site.entry())
-        && site.keys().iter().any(|page| page == &key)
-    {
-        return (key, String::new());
-    }
-    nav::resolve_path(path, site.keys(), site.entry())
+/// The app is not built for it. The shell is the app with no page selected
+/// and no state, so running the app would spend a whole boot to arrive at a
+/// document that is the same every time, for an address anyone can guess.
+fn not_found(site: &SsrSite) -> Result<SsrResponse, SsrError> {
+    let (body, warnings) = site.not_found_body()?;
+    Ok(SsrResponse {
+        status: NOT_FOUND_STATUS,
+        headers: vec![("Content-Type".to_string(), HTML.to_string())],
+        body,
+        warnings,
+    })
 }
 
 /// The answer to a request the app sent somewhere else.

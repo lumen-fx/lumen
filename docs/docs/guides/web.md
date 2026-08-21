@@ -315,9 +315,15 @@ host = "netlify"   # or vercel, apache, nginx
 Then the host serves those paths with a 200 and the URL stays as the visitor
 typed it. `lumenc web --serve` answers deep paths the way a plain file server
 does, so what you see locally is what an unconfigured host does. Under
-`--render ssr` the render answers them instead, with the page the path
-resolves to and a 200, which is what a server does; no `404.html` and no
-rewrite file is written, because neither has anything to stand in for.
+`--render ssr` the render answers them instead, with the page the path names
+and a 200, which is what a server does; no `404.html` and no rewrite file is
+written, because neither has anything to stand in for.
+
+An address that names no page at all, like `/nowhere`, is a 404 either way. A
+static host sends `404.html`, and a render sends the same shell with the same
+status, so a site answers such an address the same way whichever half answers
+it. Having the app render its own not-found page is
+[the embedder's to arrange](server-rendering.md#an-address-no-page-answers-for).
 
 A link with a scheme, a protocol-relative link and a fragment are written into
 the document unchanged.
