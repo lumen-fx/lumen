@@ -10,8 +10,9 @@
 //! * Every spawned entity carries [`DirtyLayout`] so taffy runs on first tick.
 //! * Children link to parents via [`ChildOf`].
 
+use lumen_core::property_store::PropertyStore;
 use lumen_core::signals::signal_is_truthy;
-use lumen_ir::interpolate::{Scope, substitute_element};
+use lumen_ir::interpolate::{Scope, carries_placeholder, substitute_element};
 use lumen_ir::layout_ir::{Attributes, BindKind, Element, LayoutIR};
 
 /// `<if mode="...">` policy. `Render` despawn/respawns the subtree on
@@ -212,7 +213,7 @@ impl SpawnIntoWorld for LayoutIR {
         if let Some(sheet) = self.combined_stylesheet.clone() {
             world.insert_resource(LumenStylesheet(sheet));
         }
-        spawn_element(world, &self.root, None)
+        spawn_subtree(world, &self.root, None, Placeholders::Unresolved)
     }
 }
 
@@ -230,14 +231,62 @@ impl SpawnIntoWorld for lumen_ir::artifact::CompiledApp {
     }
 }
 
+/// Whether a subtree still carries `{...}` placeholders for the spawner to
+/// resolve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placeholders {
+    /// The tree is as the markup wrote it, so a `{name}` in it names a global
+    /// signal and is resolved against the app's current state on the way in.
+    Unresolved,
+    /// Something already walked this tree with the scope that owns it: a
+    /// `<for>` row, a fragment instantiation, or the tree an `<if>` body
+    /// arrived inside. What braces are left in it are text, and a second pass
+    /// would read a value that arrived as data as markup.
+    Resolved,
+}
+
 /// Spawn an [`Element`] subtree under `parent` (or as a new root when
 /// `None`) WITHOUT touching the global [`LumenStylesheet`] resource.
 ///
 /// Used by the dev-only devtools overlay mount: it applies its own isolated
 /// stylesheet to the overlay IR before spawning, so it must not clobber the
 /// app's `<for>`-reconciler stylesheet the way [`LayoutIR::spawn_into`] does.
-pub fn spawn_subtree(world: &mut World, el: &Element, parent: Option<Entity>) -> Entity {
-    spawn_element(world, el, parent)
+pub fn spawn_subtree(
+    world: &mut World,
+    el: &Element,
+    parent: Option<Entity>,
+    placeholders: Placeholders,
+) -> Entity {
+    match with_globals_resolved(world, el, placeholders) {
+        Some(resolved) => spawn_element(world, &resolved, parent),
+        None => spawn_element(world, el, parent),
+    }
+}
+
+/// The subtree with every `{name}` its globals answer resolved, or `None`
+/// when there was nothing to resolve.
+///
+/// A global placeholder is read once, when the element is built. That is the
+/// same moment the web emitter reads it while writing the page, which is what
+/// makes a browser's first pass over a rendered document find the text it was
+/// going to write already there. A value that changes afterwards wants
+/// `bind-text`, which is a binding rather than a string built once.
+fn with_globals_resolved(
+    world: &World,
+    el: &Element,
+    placeholders: Placeholders,
+) -> Option<Element> {
+    if placeholders == Placeholders::Resolved || !tree_carries_placeholder(el) {
+        return None;
+    }
+    let store = world.get_resource::<PropertyStore>()?;
+    Some(substitute_element(el, &Scope::new(store)))
+}
+
+/// Whether anything in the subtree carries a placeholder, so a tree with none
+/// is spawned from the IR itself rather than from a copy of it.
+fn tree_carries_placeholder(el: &Element) -> bool {
+    carries_placeholder(&el.attrs) || el.children.iter().any(tree_carries_placeholder)
 }
 
 /// World-resource wrapper for the combined skin + user CSS so the
@@ -317,8 +366,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     // `<tabs>` parser pass authors this - picks the first `<tab>` as
     // the default active when no script has written the signal yet).
     if let Some((name, default_value)) = &el.attrs.signal_seed
-        && let Some(mut store) =
-            world.get_resource_mut::<lumen_core::property_store::PropertyStore>()
+        && let Some(mut store) = world.get_resource_mut::<PropertyStore>()
         && store.get_global_str(name).is_none()
     {
         store.set_global_str(name, default_value.as_str());
@@ -341,8 +389,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             BindKind::Text => el.attrs.text.clone(),
         };
         if let Some(v) = authored
-            && let Some(mut store) =
-                world.get_resource_mut::<lumen_core::property_store::PropertyStore>()
+            && let Some(mut store) = world.get_resource_mut::<PropertyStore>()
             && store.get_global_str(&spec.name).is_none()
         {
             store.set_global_str(&spec.name, v.as_str());
@@ -1340,7 +1387,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
 ///   actual transition (D5) - steady ticks touch nothing, so
 ///   `FrameDirty` stays clear.
 pub fn reconcile_if_blocks(
-    store: bevy_ecs::system::Res<lumen_core::property_store::PropertyStore>,
+    store: bevy_ecs::system::Res<PropertyStore>,
     mut markers: bevy_ecs::system::Query<(
         Entity,
         &mut IfMarker,
@@ -1367,7 +1414,12 @@ pub fn reconcile_if_blocks(
                 }
                 if now_truthy {
                     for tmpl in &marker.body {
-                        spawn_body_child(&mut commands, tmpl, parent_id);
+                        // A gated body was walked with the tree it came in
+                        // with, so its placeholders hold what the app was
+                        // built from. That is the state the web emitter wrote
+                        // the same branch with, which is what lets a browser
+                        // adopt it instead of rebuilding it.
+                        spawn_body_child(&mut commands, tmpl, parent_id, Placeholders::Resolved);
                     }
                     // Entering transition on the block itself (children
                     // handle their own via `spawn_body_child`).
@@ -1392,7 +1444,7 @@ pub fn reconcile_if_blocks(
                 // visibility state.
                 if now_truthy && !marker.currently_mounted {
                     for tmpl in &marker.body {
-                        spawn_body_child(&mut commands, tmpl, parent_id);
+                        spawn_body_child(&mut commands, tmpl, parent_id, Placeholders::Resolved);
                     }
                     marker.currently_mounted = true;
                 }
@@ -1473,7 +1525,7 @@ pub fn reconcile_if_blocks(
 pub fn close_dialogs_on_escape(
     mut keys: bevy_ecs::message::MessageReader<lumen_core::input::KeyPressed>,
     press_cancel: Option<bevy_ecs::system::Res<lumen_core::input::EscapePressCancel>>,
-    mut store: bevy_ecs::system::ResMut<lumen_core::property_store::PropertyStore>,
+    mut store: bevy_ecs::system::ResMut<PropertyStore>,
     blocks: bevy_ecs::system::Query<(
         &IfMarker,
         Option<&lumen_core::components::Visible>,
@@ -1861,7 +1913,7 @@ pub fn reconcile_for_blocks(
     // every internal write now lands on PropertyStore so reading either
     // layer would yield the same result, but PropertyStore is the
     // canonical source post wave-D.
-    store: bevy_ecs::system::Res<lumen_core::property_store::PropertyStore>,
+    store: bevy_ecs::system::Res<PropertyStore>,
     mut markers: bevy_ecs::system::Query<(
         Entity,
         &mut ForMarker,
@@ -2121,7 +2173,7 @@ pub fn reconcile_for_blocks(
                     });
                     inst.attrs.height = Some(lumen_ir::layout_ir::LengthSpec::Px(row_h));
                     inst.attrs.width = Some(lumen_ir::layout_ir::LengthSpec::Percent(100.0));
-                    spawn_body_child(&mut commands, &inst, parent_id);
+                    spawn_body_child(&mut commands, &inst, parent_id, Placeholders::Resolved);
                 }
                 new_win.push((*i, key.clone()));
             }
@@ -2158,7 +2210,7 @@ pub fn reconcile_for_blocks(
                     .reporting_to(&report_missing);
                 for tmpl in &marker.body {
                     let inst = substitute_in_element_with_css(tmpl, &scope, row_css);
-                    spawn_body_child(&mut commands, &inst, parent_id);
+                    spawn_body_child(&mut commands, &inst, parent_id, Placeholders::Resolved);
                 }
             }
             marker.cached_keys = new_keys;
@@ -2194,7 +2246,7 @@ pub fn reconcile_for_blocks(
                 .reporting_to(&report_missing);
             for tmpl in &marker.body {
                 let inst = substitute_in_element_with_css(tmpl, &scope, row_css);
-                spawn_body_child(&mut commands, &inst, parent_id);
+                spawn_body_child(&mut commands, &inst, parent_id, Placeholders::Resolved);
             }
         }
         marker.cached_keys = new_keys;
@@ -2287,10 +2339,15 @@ fn warn_missing_row_field_once(parent_id: Entity, field: &str) {
 /// so despawns queued before this in the same reconcile pass still land
 /// first, and `parent` (spawned earlier in the queue, or pre-existing)
 /// is alive by the time the closure runs.
-fn spawn_body_child(commands: &mut bevy_ecs::system::Commands, el: &Element, parent: Entity) {
+fn spawn_body_child(
+    commands: &mut bevy_ecs::system::Commands,
+    el: &Element,
+    parent: Entity,
+    placeholders: Placeholders,
+) {
     let el = el.clone();
     commands.queue(move |world: &mut World| {
-        let id = spawn_element(world, &el, Some(parent));
+        let id = spawn_subtree(world, &el, Some(parent), placeholders);
         // Mount-direction transition (the CSS `@starting-style`
         // analogue): an element entering the tree with a
         // `transition: opacity ...` declaration starts fully transparent
@@ -2432,7 +2489,6 @@ mod body_spawn_tests {
     //! / `<tab>` body spawned inert (audit RC5 / RC8 / RC9).
     use super::*;
     use bevy_ecs::system::RunSystemOnce;
-    use lumen_core::property_store::PropertyStore;
 
     fn el(tag: &str) -> Element {
         Element {
@@ -2569,7 +2625,6 @@ mod escape_tests {
     use bevy_ecs::message::Messages;
     use bevy_ecs::system::RunSystemOnce;
     use lumen_core::input::{Key, KeyPressed, Modifiers, NamedKey};
-    use lumen_core::property_store::PropertyStore;
 
     fn if_marker(signal: &str) -> IfMarker {
         IfMarker {
@@ -3032,7 +3087,7 @@ mod css_spawn_wiring_tests {
         let mut input = el("input");
         input.attrs.caret_width = Some(3.5);
         input.attrs.password_character = Some('#');
-        let e = spawn_subtree(&mut world, &input, None);
+        let e = spawn_subtree(&mut world, &input, None, Placeholders::Unresolved);
 
         assert_eq!(
             world.get::<lumen_core::components::CaretWidth>(e),
@@ -3050,7 +3105,7 @@ mod css_spawn_wiring_tests {
     #[test]
     fn input_gets_default_caret_width_and_password_character_when_unauthored() {
         let mut world = World::new();
-        let e = spawn_subtree(&mut world, &el("input"), None);
+        let e = spawn_subtree(&mut world, &el("input"), None, Placeholders::Unresolved);
 
         assert_eq!(
             world.get::<lumen_core::components::CaretWidth>(e),
@@ -3067,7 +3122,7 @@ mod css_spawn_wiring_tests {
     #[test]
     fn non_input_does_not_get_caret_width_or_password_character() {
         let mut world = World::new();
-        let e = spawn_subtree(&mut world, &el("column"), None);
+        let e = spawn_subtree(&mut world, &el("column"), None, Placeholders::Unresolved);
 
         assert!(world.get::<lumen_core::components::CaretWidth>(e).is_none());
         assert!(
@@ -3084,7 +3139,7 @@ mod css_spawn_wiring_tests {
         let mut world = World::new();
         let mut textarea = el("textarea");
         textarea.attrs.caret_width = Some(4.0);
-        let e = spawn_subtree(&mut world, &textarea, None);
+        let e = spawn_subtree(&mut world, &textarea, None, Placeholders::Unresolved);
 
         assert_eq!(
             world.get::<lumen_core::components::CaretWidth>(e),
@@ -3100,7 +3155,7 @@ mod css_spawn_wiring_tests {
         let mut world = World::new();
         let mut label = el("label");
         label.attrs.line_height = Some(lumen_ir::layout_ir::LineHeightSpec::Multiplier(1.6));
-        let e = spawn_subtree(&mut world, &label, None);
+        let e = spawn_subtree(&mut world, &label, None, Placeholders::Unresolved);
 
         let ts = world
             .get::<TextStyle>(e)
@@ -3126,7 +3181,7 @@ mod css_spawn_wiring_tests {
         column.attrs.scrollbar_hover_boost = Some(2.5);
         column.attrs.scrollbar_fade_delay_ms = Some(2000);
         column.attrs.scrollbar_fade_duration_ms = Some(500);
-        let e = spawn_subtree(&mut world, &column, None);
+        let e = spawn_subtree(&mut world, &column, None, Placeholders::Unresolved);
 
         let sb = world
             .get::<lumen_core::input::ScrollbarStyle>(e)
@@ -3150,7 +3205,7 @@ mod css_spawn_wiring_tests {
         let mut world = World::new();
         let mut column = el("column");
         column.attrs.scrollbar_thickness = Some(12.0);
-        let e = spawn_subtree(&mut world, &column, None);
+        let e = spawn_subtree(&mut world, &column, None, Placeholders::Unresolved);
 
         assert!(
             world.get::<lumen_core::input::ScrollbarStyle>(e).is_some(),
@@ -3164,8 +3219,71 @@ mod css_spawn_wiring_tests {
     #[test]
     fn no_scrollbar_properties_spawns_no_scrollbar_style() {
         let mut world = World::new();
-        let e = spawn_subtree(&mut world, &el("column"), None);
+        let e = spawn_subtree(&mut world, &el("column"), None, Placeholders::Unresolved);
 
         assert!(world.get::<lumen_core::input::ScrollbarStyle>(e).is_none());
+    }
+
+    /// A world whose globals hold `name`, which is the state a page arrives
+    /// with in a browser: the seed is applied before the tree is built.
+    fn world_holding(pairs: &[(&str, &str)]) -> World {
+        let mut world = World::new();
+        let mut store = PropertyStore::default();
+        for (name, value) in pairs {
+            store.set_global_str(name, *value);
+        }
+        world.insert_resource(store);
+        world
+    }
+
+    #[test]
+    fn a_placeholder_naming_a_global_is_resolved_when_the_element_is_built() {
+        let mut world = world_holding(&[("name", "Ada")]);
+        let mut label = el("label");
+        label.attrs.text = Some("hello {name}".to_string());
+        label.attrs.classes = vec!["tier-{name}".to_string()];
+        let e = spawn_subtree(&mut world, &label, None, Placeholders::Unresolved);
+
+        assert_eq!(
+            world.get::<TextContent>(e).map(|text| text.0.as_str()),
+            Some("hello Ada"),
+            "the web emitter writes the same string into the page"
+        );
+        let classes = world
+            .get::<lumen_core::components::LumenClasses>(e)
+            .expect("a class list");
+        assert!(
+            classes.0.iter().any(|class| &**class == "tier-Ada"),
+            "{:?}",
+            classes.0
+        );
+    }
+
+    #[test]
+    fn a_placeholder_no_global_answers_stays_in_the_text() {
+        let mut world = world_holding(&[]);
+        let mut label = el("label");
+        label.attrs.text = Some("hello {name}".to_string());
+        let e = spawn_subtree(&mut world, &label, None, Placeholders::Unresolved);
+
+        assert_eq!(
+            world.get::<TextContent>(e).map(|text| text.0.as_str()),
+            Some("hello {name}")
+        );
+    }
+
+    #[test]
+    fn a_tree_a_row_already_walked_is_not_walked_again() {
+        let mut world = world_holding(&[("name", "Ada")]);
+        let mut label = el("label");
+        // What a row field held, written in by the row walk. It is text, and
+        // reading it as a placeholder would put the global in its place.
+        label.attrs.text = Some("{name}".to_string());
+        let e = spawn_subtree(&mut world, &label, None, Placeholders::Resolved);
+
+        assert_eq!(
+            world.get::<TextContent>(e).map(|text| text.0.as_str()),
+            Some("{name}")
+        );
     }
 }

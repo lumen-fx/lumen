@@ -43,9 +43,26 @@ Braces splice a signal into text and into string attribute values:
 <tile class="badge tier-{$plan}" />
 ```
 
-Interpolation rebuilds the string, so it suits a value embedded in a sentence.
-`bind-text` replaces the whole content and is the better choice when the
-element shows nothing else.
+The value is read once, when the tree the element belongs to is built, and the
+string keeps it from then on. On the web that is the state the page was
+rendered with, so the document a visitor is sent already reads `Signed in as
+Ada` and carries `class="badge tier-gold"`, and the runtime that adopts the
+page computes the same strings and leaves them alone.
+
+A signal set after the tree was built does not reach a placeholder in it: the
+text keeps the braces the author wrote, which is also what a misspelled name
+looks like. `bind-text` is the form that follows a signal for as long as the
+element is there, so a value a script keeps writing wants that:
+
+```html
+<label bind-text="$user" />
+```
+
+A `<for>` row is built per record, so it reads later and reads more: each row
+resolves `{row.field}` against the record it is built for and its `{$signal}`
+placeholders against the signals at that moment. An `<if>` body belongs to the
+tree it arrived in, so its placeholders hold what that tree was built with,
+whenever the branch is taken.
 
 ## Lists
 

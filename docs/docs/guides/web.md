@@ -421,11 +421,11 @@ means anything without an absolute address.
 - An author's `!important` rule wins over a style written on the element,
   where on the desktop the element wins. Normal declarations rank the way
   Lumen ranks them; this is the one case where the two differ.
-- A value interpolated into text with `{name}` outside a list row is written as
-  the markup wrote it, whichever `prerender` mode built the page. The runtime
-  writes the current value over it on arrival, from the state the page carries.
-  A placeholder inside a `<for>` row is resolved against the row while the page
-  is written.
+- A value interpolated with `{name}` is read once, when the element is built.
+  The document carries the value the page's state held then, and the runtime
+  arrives at the same string from the same state; a name the state has nothing
+  for keeps its braces. A value that changes while the page is open wants
+  `bind-text`, which follows the signal instead of being built once.
 - `bind-scroll` reaches the document in no form. How far a container has been
   scrolled is a position the browser keeps, not an attribute a document sets.
 - Elements a script creates appear when the runtime starts, not in the
