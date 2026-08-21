@@ -434,10 +434,6 @@ impl ScriptHost for CandelaHost {
     }
 
     fn register_script_fn(&mut self, f: &ScriptFn) -> Result<(), ScriptError> {
-        // The host puts a declaration for this function in front of the app's
-        // source, so a name candela cannot spell there takes the whole program
-        // down with it. Refusing the registration costs the app that one
-        // function instead of its whole script.
         check_declarable(f)?;
         // candela host fns are registered before `compile`; the variadic
         // registration hands the closure a `&[Value]` slice of any length, so

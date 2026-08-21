@@ -3,9 +3,9 @@
 //!
 //! The candela host writes a `host "<ns>" { .. }` declaration for every
 //! namespace an embedder registered under and puts it in front of the app's own
-//! source. That makes a plugin's choice of name part of the app's program, so a
-//! name the grammar rejects used to fail the app's compile with the diagnostic
-//! pointing at a line the author never wrote. These pin the graceful outcome:
+//! source. That makes a plugin's choice of name part of the app's program: a
+//! name the grammar rejects would fail the app's compile, with the diagnostic
+//! pointing at a line the author never wrote. These pin the outcome instead;
 //! the registration is refused, and the app compiles and runs without it.
 
 use lumen_script::{ScriptError, ScriptFn, ScriptHost, ScriptNs, ScriptTy, ScriptValue};
@@ -103,7 +103,7 @@ fn a_plugin_namespace_does_not_displace_the_runtime_s_own() {
     );
     assert!(
         host.call("dpr", &[]).is_ok(),
-        "every function in the namespace, not just the first"
+        "every function in the namespace, not only the first"
     );
 }
 
