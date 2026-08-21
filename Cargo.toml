@@ -30,28 +30,28 @@ name = "lumen"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-lumen-core = { path = "crates/core", version = "0.0.4" }
-# Runtime core: `RunOptions` / `run_app` / the default plugin stack.
-# `default-features = false` so the FULL shared library turns every subsystem on
-# via this crate's own default feature set below, while a trimmed static
-# `--bundle` build (`--no-default-features --features "<caps>"`) selects exactly
-# the app's subsystems (Part B).
-lumen-runtime = { path = "crates/runtime", version = "0.0.4", default-features = false }
+lumen-core = { workspace = true }
+# Runtime core: `RunOptions` / `run_app` / the default plugin stack. The
+# workspace entry takes it without defaults, so the full shared library turns
+# every subsystem on through this crate's own default feature set below, while a
+# trimmed static `--bundle` build (`--no-default-features --features "<caps>"`)
+# selects exactly the app's subsystems (Part B).
+lumen-runtime = { workspace = true }
 # Host-neutral DOM read side (query / traversal over the snapshot) for the
 # LumenNode C-ABI. No host features needed here; the query engine is
 # host-independent.
-lumen-script = { path = "crates/script/api", version = "0.0.4", default-features = false }
+lumen-script = { workspace = true }
 # Compiler front-end, kept only to inject its parser (`default_parser()`).
 # OPTIONAL behind the default-on `embed-parser` feature: a static `--bundle`
 # runs a prebuilt LMNA artifact with NO parser, so dropping lumenc also drops
 # the feature-unification that would otherwise pull lumen-runtime back to full.
-lumenc = { path = "crates/lumenc", version = "0.0.4", optional = true }
+lumenc = { workspace = true, default-features = true, optional = true }
 # Widget trait, `Attributes`, and the `#[derive(Widget)]` macro. Not used by
 # the C ABI itself; carried so the Rust SDK reaches them through this one
 # library rather than compiling a second copy beside it (see the `sdk`
 # re-export module in src/lib.rs).
-lumen-widget = { path = "crates/widget", version = "0.0.4" }
-lumen-widget-macros = { path = "crates/widget-macros", version = "0.0.4" }
+lumen-widget = { workspace = true }
+lumen-widget-macros = { workspace = true }
 # Same reason: the Rust SDK's `AppBuilder::rhai_extension` takes a
 # `rhai::Engine`, so the type has to come from here to be the same type.
 # Follows the `host-rhai` feature, which is what compiles that host at all.
@@ -152,11 +152,89 @@ documentation = "https://docs.lumenfx.dev"
 keywords = ["ui", "gui", "framework", "desktop", "lumen"]
 categories = ["gui"]
 
-# Centralized dependency versions. Crates opt in by adding e.g.
+# Every dependency the workspace uses, declared once. Crates opt in by adding
+# e.g.
 #     bevy_ecs.workspace = true
 # in their own Cargo.toml. Adding a line here pulls nothing on its own;
 # stub crates stay dep-free until they need it.
 [workspace.dependencies]
+# The workspace's own crates. Each one is spelled out here and nowhere else; a
+# member reaches it with `lumen-core = { workspace = true }`, adding `optional`
+# or `features` beside that when it needs them.
+#
+# None of these carries a `version`. `lumenc` and `lumenui` are the only two
+# packages that reach crates.io, everything else is `publish = false`, and a
+# path dependency of a crate nobody publishes needs no version requirement. The
+# one version literal in the workspace is `[workspace.package] version`.
+#
+# `default-features = false` on an entry below means some member needs that
+# crate stripped, and the flag has to live here to take effect: cargo silently
+# ignores a member that turns defaults off against an entry leaving them on. The
+# reverse works, so a member that does want the defaults says
+# `default-features = true` and gets them.
+lumen = { path = "." }
+lumen-a11y-accesskit = { path = "crates/backends/a11y-accesskit" }
+lumen-assets = { path = "crates/assets" }
+lumen-async-tokio = { path = "crates/backends/async-tokio" }
+lumen-audio = { path = "crates/audio" }
+lumen-audio-rodio = { path = "crates/backends/audio-rodio" }
+lumen-core = { path = "crates/core" }
+lumen-devtools = { path = "crates/dev/devtools" }
+# The engine in the form a Rust app links instead of compiling in. Excluded from
+# the workspace, so it is the one internal crate that cannot inherit this table;
+# see sdk/rust-dylib/Cargo.toml for why it sits outside.
+lumen-dylib = { path = "sdk/rust-dylib" }
+lumen-html = { path = "crates/html" }
+lumen-http-ureq = { path = "crates/backends/http-ureq" }
+lumen-i18n = { path = "crates/i18n" }
+lumen-input = { path = "crates/input" }
+lumen-ir = { path = "crates/ir" }
+lumen-layout-taffy = { path = "crates/backends/layout-taffy" }
+lumen-mcp = { path = "crates/mcp" }
+lumen-os-clipboard = { path = "crates/os/clipboard" }
+lumen-os-dnd = { path = "crates/os/dnd" }
+lumen-os-filedialog = { path = "crates/os/filedialog" }
+lumen-os-hotkey = { path = "crates/os/hotkey" }
+lumen-os-launcher = { path = "crates/os/launcher" }
+lumen-os-menu = { path = "crates/os/menu" }
+lumen-os-mime = { path = "crates/os/mime" }
+lumen-os-notify = { path = "crates/os/notify" }
+lumen-os-power = { path = "crates/os/power" }
+lumen-os-tray = { path = "crates/os/tray" }
+# `host-candela` is the default on both, and the browser build takes them
+# without it: a page runs precompiled bytecode and has no use for the compiler.
+lumen-portable = { path = "crates/portable", default-features = false }
+lumen-prerender = { path = "crates/prerender", default-features = false }
+lumen-primitives = { path = "crates/primitives" }
+lumen-render-headless = { path = "crates/backends/render-headless" }
+lumen-render-wgpu = { path = "crates/backends/render-wgpu" }
+# Every subsystem is a default feature, and every consumer picks its own set:
+# the shared library takes them all, a `--bundle` takes the app's capabilities.
+lumen-runtime = { path = "crates/runtime", default-features = false }
+lumen-scene = { path = "crates/scene" }
+# These three carry no features of their own, so the flag only records that a
+# host is taken bare: giving one a default later will not switch it on
+# everywhere by surprise. `lumen-script-candela` below is the exception.
+lumen-script = { path = "crates/script/api", default-features = false }
+# Default `compiler` builds candela source at run time. A build script wants it;
+# a shipped runtime executes precompiled `.cdlb` and does not.
+lumen-script-candela = { path = "crates/script/candela", default-features = false }
+lumen-script-lua = { path = "crates/script/lua", default-features = false }
+lumen-script-rhai = { path = "crates/script/rhai", default-features = false }
+lumen-ssr = { path = "crates/ssr" }
+lumen-text = { path = "crates/text" }
+lumen-text-cosmic = { path = "crates/backends/text-cosmic" }
+lumen-web = { path = "crates/web" }
+lumen-web-dom = { path = "crates/backends/web-dom" }
+lumen-web-http = { path = "crates/backends/web-http" }
+lumen-widget = { path = "crates/widget" }
+lumen-widget-macros = { path = "crates/widget-macros" }
+lumen-window-winit = { path = "crates/backends/window-winit" }
+# A default lumenc links the whole runtime. The launcher stub and the LSP each
+# take one feature of it instead, so defaults are off here and the engine, which
+# wants the parser, asks for them back.
+lumenc = { path = "crates/lumenc", default-features = false }
+
 # Core
 # Bevy 0.18 merged bevy_hierarchy into bevy_ecs::hierarchy, and 0.19 keeps it
 # there. Parent -> ChildOf.

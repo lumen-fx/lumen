@@ -7,9 +7,11 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "rodio/cpal AudioBackend impl for Lumen. Decodes wav and ogg and mixes off the UI thread; degrades to a silent transport when no output device is available (headless/CI)."
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-audio = { path = "../../audio" }
+lumen-audio = { workspace = true }
 
 # rodio provides the cpal device sink + Player control handle and the
 # symphonia-backed decoders. Lean feature set: `playback` (cpal output),

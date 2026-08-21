@@ -9,9 +9,11 @@ rust-version.workspace = true
 description = "Async asset decode + GPU upload."
 keywords = ["ui", "gui", "assets", "images", "lumen"]
 categories = ["gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-core = { path = "../core", version = "0.0.4" }
+lumen-core = { workspace = true }
 bevy_ecs.workspace = true
 crossbeam-channel.workspace = true
 glam.workspace = true

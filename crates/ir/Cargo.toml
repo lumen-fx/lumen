@@ -9,6 +9,8 @@ rust-version.workspace = true
 description = "Lumen runtime-shared IR: LayoutIR, CSS AST + Cascade-5 application, and the AOT compiled-app artifact."
 keywords = ["ui", "gui", "markup", "css", "lumen"]
 categories = ["parser-implementations", "gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [lib]
 name = "lumen_ir"
@@ -17,10 +19,10 @@ path = "src/lib.rs"
 [dependencies]
 # From-impl targets for the IR spec types (LayoutIR conversions into core
 # components + primitives specs). These are dep-light workspace crates.
-lumen-core = { path = "../core", version = "0.0.4" }
-lumen-primitives = { path = "../primitives", version = "0.0.4" }
+lumen-core = { workspace = true }
+lumen-primitives = { workspace = true }
 # Doc-link targets for `<drag>` / drop-target attribute docs on `Attributes`.
-lumen-os-dnd = { path = "../os/dnd", version = "0.0.4" }
+lumen-os-dnd = { workspace = true }
 thiserror.workspace = true
 serde.workspace = true
 # Cascade diagnostics (`tracing::warn!` on unrecognised declarations).
