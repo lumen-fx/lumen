@@ -63,9 +63,10 @@ fn an_optional_parameter_binds_the_shorter_call_too() {
 /// A declared parameter type is the Rhai parameter type, so a call passing
 /// something else does not resolve and the body never runs.
 ///
-/// The host reports an unresolved call as a miss rather than an error (it is
-/// how a probe for an optional handler comes back), so what the mismatch
-/// produces here is the absent return value.
+/// The mismatch reaches the app as a runtime error naming the call. Only a miss
+/// on the handler being asked for is silent, because that is how the runtime
+/// probes for an optional handler; a miss inside a handler is a script calling
+/// something that is not there.
 #[test]
 fn a_declared_parameter_type_rejects_the_wrong_argument() {
     let mut host = RhaiHost::new();
@@ -84,10 +85,13 @@ fn a_declared_parameter_type_rejects_the_wrong_argument() {
         Some(ScriptValue::Bool(true)),
         "the declared shape resolves and the body runs"
     );
-    assert_eq!(
-        host.call("bad", &[]).expect("bad runs").ret,
-        None,
-        "a string where an int is declared resolves to nothing"
+    let err = host
+        .call("bad", &[])
+        .expect_err("a string where an int is declared does not resolve")
+        .to_string();
+    assert!(
+        err.contains("set_pin"),
+        "the error names the call the script got wrong: {err}"
     );
 }
 
@@ -108,9 +112,13 @@ fn a_shared_builtin_keeps_its_call_site_types() {
             .any(|c| matches!(c, lumen_script::ScriptCommand::SetText { .. })),
         "the declared shape queues the command"
     );
+    let err = host
+        .call("bad", &[])
+        .expect_err("a call with the wrong argument types does not resolve")
+        .to_string();
     assert!(
-        host.call("bad", &[]).expect("bad runs").commands.is_empty(),
-        "a call with the wrong argument types queues nothing"
+        err.contains("set_text"),
+        "the error names the call the script got wrong: {err}"
     );
 }
 
@@ -166,4 +174,34 @@ fn an_emitting_body_reaches_the_command_sink() {
         })
         .collect();
     assert_eq!(prints, vec!["HI".to_owned()]);
+}
+
+/// A handler that calls something unbound is an error, not an absent handler.
+///
+/// The runtime probes for optional handlers by calling them, so a miss on the
+/// name it asked for comes back as `found: false`. That answer used to be given
+/// for a miss on any name, which turned a script calling a function nobody
+/// registered into a silent no-op: the handler was reported absent, nothing
+/// reached stderr, and the app looked like it was ignoring input.
+#[test]
+fn a_miss_inside_a_handler_is_reported_rather_than_read_as_an_absent_handler() {
+    let mut host = RhaiHost::new();
+    host.load("fn on_start() { never_registered(1); }")
+        .expect("load");
+
+    let err = host
+        .call("on_start", &[])
+        .expect_err("the call inside the handler resolves to nothing")
+        .to_string();
+    assert!(
+        err.contains("never_registered"),
+        "the error names the function the script could not call: {err}"
+    );
+
+    // A handler that is genuinely absent is still the silent probe it has to
+    // be; every optional hook the runtime offers is found this way.
+    let outcome = host
+        .call("on_close", &[])
+        .expect("an absent handler is a miss");
+    assert!(!outcome.found);
 }

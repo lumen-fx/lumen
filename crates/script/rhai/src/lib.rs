@@ -2219,7 +2219,7 @@ impl RhaiHost {
                 .call_fn_with_options(opts, &mut self.scope, ast, fn_name, args);
         let ret = match result {
             Ok(v) => Some(v),
-            Err(e) if is_function_not_found(&e) => None,
+            Err(e) if is_function_not_found(&e, fn_name) => None,
             Err(e) => {
                 // A handler that queued commands (audio_play, set_text,
                 // set_signal, fetch, ...) and *then* errored must contribute
@@ -2899,11 +2899,21 @@ fn parse_compile_error(e: rhai::ParseError, uri: &str) -> ScriptError {
     }
 }
 
-/// Robust "function not found" detection - replaces the previous
-/// `e.to_string().contains("Function not found")` substring check
-/// (brittle across Rhai versions and locales).
-fn is_function_not_found(e: &EvalAltResult) -> bool {
-    matches!(e, EvalAltResult::ErrorFunctionNotFound(_, _))
+/// Whether `e` says that `fn_name` itself is the function that does not exist.
+///
+/// The runtime probes for optional handlers by calling them, so a miss on the
+/// name asked for is an answer rather than a failure. A miss on some other name
+/// is a script that called something unbound, and reporting it as an absent
+/// handler would leave a dead script with nothing on stderr: the error has to
+/// travel. Rhai spells the missing function as a signature, so the comparison
+/// takes the name off the front of it.
+fn is_function_not_found(e: &EvalAltResult, fn_name: &str) -> bool {
+    match e {
+        EvalAltResult::ErrorFunctionNotFound(signature, _) => {
+            signature.split('(').next().unwrap_or(signature).trim() == fn_name
+        }
+        _ => false,
+    }
 }
 
 /// Translate a [`ScriptValue`] into a Rhai `Dynamic`. Used by the
