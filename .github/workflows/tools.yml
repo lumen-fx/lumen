@@ -94,8 +94,10 @@ jobs:
             "^tools/zed-lumen/|$self"
           area release tools/release \
             "^tools/release/|^tools/setup-lumen/|^\.github/scripts/|$self"
+          # the SDK version has to equal the workspace version, and the test
+          # that checks it reads the root manifest
           area python sdk/python \
-            "^sdk/python/|$self"
+            "^sdk/python/|^Cargo\.toml$|$self"
           # include/ is the C ABI header the C++ SDK wraps
           area cpp sdk/cpp \
             "^sdk/cpp/|^include/|$self"
