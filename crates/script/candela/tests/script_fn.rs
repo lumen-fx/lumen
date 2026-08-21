@@ -111,3 +111,33 @@ fn main() {}
         vec!["after".to_owned()]
     );
 }
+
+/// `compile_check` checks against what the app will run.
+///
+/// candela binds every `host` block while it compiles, so a check on an engine
+/// carrying only Lumen's own builtins fails on a source declaring
+/// `host "native" { .. }` while the app it rejects runs fine. The host replays
+/// its registrations into the scratch engine to keep the two verdicts the same.
+#[test]
+fn compile_check_sees_the_registered_native_functions() {
+    let src = r#"
+host "native" {
+    any answer(...);
+}
+fn on_start() { let n = native::answer(); }
+fn main() {}
+"#;
+
+    let bare = CandelaHost::new();
+    assert!(
+        bare.compile_check(src, "native.cdl").is_err(),
+        "with nothing registered the declaration has nothing behind it"
+    );
+
+    let mut host = CandelaHost::new();
+    // The default namespace is `native`, the one the source declares.
+    host.register_script_fn(&ScriptFn::value("answer", 0, |_| ScriptValue::I64(42)))
+        .expect("register");
+    host.compile_check(src, "native.cdl")
+        .expect("the declaration binds to the registered fn");
+}
