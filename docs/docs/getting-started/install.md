@@ -99,6 +99,37 @@ building the other two yourself. `lumenc run`, `build`, and `check` work
 without them; `lumenc package` is the command that needs them, and it says so
 and names the directory to put them in.
 
+## Nightly builds
+
+A build of `main` goes up every night as a prerelease, on one tag:
+
+```
+https://github.com/lumen-fx/lumen/releases/tag/nightly
+```
+
+Take one to try a fix or a feature before it is released. It carries the same
+archives a release does, and the notes on it name the commit it was built from.
+
+Download the archive for your platform and unpack it yourself; on Windows take
+`lumen-windows-x86_64.zip`. Nothing installs a nightly for you. `install.sh`,
+the setup-lumen action, and `lumenc`'s own update check all resolve the current
+release, and a prerelease is not one, so a nightly never arrives on a machine
+that did not ask for it and never offers to replace itself.
+
+Three things to expect from a nightly:
+
+- There is no Windows installer, only the portable zip. An installer would
+  share product identity with a released install and take it over.
+- `lumenc --version` reports the version `main` carries, which no release is
+  behind. It does not say which night you have; the commit in the notes does.
+- `lumenc web` and `lumenc package --target` download their extra files from
+  the current release rather than from the nightly, because that is the only
+  version they can resolve. A nightly compiler pairs them with a released
+  browser runtime.
+
+Every night's assets replace the last, so a link keeps working and the build
+before it is gone. Keep a copy if you need one to stay around.
+
 ## Staying up to date
 
 An installed `lumenc` looks for a newer release at most once a day and prints a

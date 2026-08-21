@@ -22,7 +22,7 @@
 # toolchain install that reads it fails on a busy morning for reasons the
 # person who wrote the workflow cannot see or fix.
 #
-# Assets come out of .github/workflows/release.yml:
+# Assets come out of .github/workflows/build-toolchain.yml:
 #
 #   lumen-<target>.tar.gz     linux and macos, x86_64 and aarch64
 #   lumen-windows-x86_64.zip  the portable Windows archive

@@ -1,0 +1,188 @@
+name: nightly
+
+# Publishes a build of main every night, so anyone who wants to try work that
+# has not been released yet can download it instead of building the toolchain
+# themselves, and so the release path is exercised on a day nobody is cutting a
+# release. build-toolchain.yml does the building, exactly as it does for
+# release.yml, which is what makes a green nightly evidence that the next
+# release will build.
+#
+# It runs whether or not main moved. A rebuild on a quiet day is the point: it
+# catches a runner image, a system dependency, or an upstream crate that broke
+# under a workspace nobody touched.
+#
+# One rolling tag, one prerelease, replaced in place. `nightly` is force-moved
+# to the commit that was built and the assets are clobbered onto the release
+# already sitting on it, so the download URL never changes and only the newest
+# build is reachable. Yesterday's build is gone; keeping every night would mean
+# a retention job, and a stable URL is worth more here than history.
+#
+# Two things keep this channel out of the way of the real one:
+#
+#   - The tag is `nightly`, not vX.Y.Z. release.yml fires on `push: tags: v*`
+#     and its last job walks main's version forward, so a v-prefixed nightly
+#     tag would cut a release and bump the version every night.
+#   - The release is a prerelease. Every version-keyed lookup in the product
+#     resolves through the `releases/latest` redirect, which skips prereleases:
+#     `lumenc` picks the release its toolchain files come from that way
+#     (crates/lumenc/src/release.rs), the update check compares against it, and
+#     crates/lumenc/build.rs confirms a tag is published before fetching source
+#     for it. A nightly published as an ordinary release would become the
+#     version every installed copy is offered.
+#
+# There is no Windows installer here, only the portable zip. The MSI carries
+# fixed product GUIDs and a version, and installing one replaces whatever copy
+# of Lumen the same GUIDs already own; a nightly stamped with a released
+# version would silently take over a real install, and one stamped with an
+# unreleased version would block the release that later carries that number.
+# Giving the nightly its own product identity is a packaging decision, not a
+# workflow one. The zip carries no receipt, so a nightly unpacked from it never
+# checks for updates and never claims to be installed.
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A dispatch during a scheduled run would otherwise race it to the tag. The
+# second run waits instead of being cancelled, so it publishes the newer build.
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  # No MSI version, so build-toolchain.yml builds the portable Windows zip and
+  # stops there.
+  build:
+    name: build
+    if: github.repository == 'lumen-fx/lumen'
+    uses: ./.github/workflows/build-toolchain.yml
+
+  publish:
+    name: publish the nightly
+    needs: build
+    # Runs even if a build leg failed, the same way release.yml does, so one
+    # broken target still lets every other archive reach the prerelease. The
+    # collect step below fails the run when nothing at all was built.
+    if: always() && github.repository == 'lumen-fx/lumen'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: nightly
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # The same rules release.yml publishes by: refuse a run where every leg
+      # failed, and write the sha256sums.txt install.sh verifies downloads
+      # against. The asset names come back on stdout, and the step after next
+      # uses them to strip anything left from an earlier night.
+      - name: Collect what was built
+        id: collect
+        run: |
+          set -euo pipefail
+          {
+            echo 'assets<<ASSETS'
+            .github/scripts/collect-release-assets.sh artifacts
+            echo 'ASSETS'
+          } >>"$GITHUB_OUTPUT"
+
+      # Force-moving the tag is what makes the channel rolling. GitHub raises
+      # no workflow events for a ref written with GITHUB_TOKEN, and `nightly`
+      # does not match release.yml's `v*` pattern either way.
+      - name: Move the nightly tag onto this build
+        run: |
+          set -euo pipefail
+          if gh api "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$REPO/git/refs/tags/$TAG" \
+              -f "sha=$GITHUB_SHA" -F force=true >/dev/null
+            echo "moved $TAG to $GITHUB_SHA"
+          else
+            gh api -X POST "repos/$REPO/git/refs" \
+              -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA" >/dev/null
+            echo "created $TAG at $GITHUB_SHA"
+          fi
+
+      - name: Write the release notes
+        id: notes
+        run: |
+          set -euo pipefail
+          version="$(awk -F'"' '
+            /^\[workspace\.package\]/ { in_section = 1; next }
+            /^\[/                     { in_section = 0 }
+            in_section && /^version[[:space:]]*=/ { print $2; exit }
+          ' Cargo.toml)"
+          {
+            echo 'body<<NOTES'
+            cat <<NOTE
+          Built from \`$GITHUB_SHA\` on $(date -u '+%Y-%m-%d').
+
+          These binaries report version $version, which is the number the workspace
+          on main carries and says nothing about which night this is. The commit
+          above is what identifies the build.
+
+          The assets on this tag are replaced every night. A link to one always
+          gives you the newest build, and the build before it is gone.
+
+          There is no Windows installer here. Unpack
+          \`lumen-windows-x86_64.zip\` anywhere instead; a copy from the zip
+          never checks for updates and never touches an installed Lumen.
+
+          Nothing installs a nightly for you. \`install.sh\`, the setup-lumen
+          action, and \`lumenc\`'s own update check all resolve through the
+          releases page, which skips prereleases. Download an asset by hand.
+          NOTE
+            echo 'NOTES'
+          } >>"$GITHUB_OUTPUT"
+
+      # --prerelease on both paths: an existing release that somehow lost the
+      # flag is put back, rather than being left as the version every installed
+      # copy resolves to.
+      - name: Publish the prerelease
+        env:
+          NOTES: ${{ steps.notes.outputs.body }}
+          ASSETS: ${{ steps.collect.outputs.assets }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          mapfile -t files <<<"$ASSETS"
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$REPO" \
+              --title "Nightly" --notes "$NOTES" \
+              --prerelease --latest=false
+            gh release upload "$TAG" "${files[@]}" --repo "$REPO" --clobber
+          else
+            gh release create "$TAG" "${files[@]}" --repo "$REPO" \
+              --title "Nightly" --notes "$NOTES" \
+              --prerelease --latest=false
+          fi
+
+      # sha256sums.txt covers this run alone, so an archive left over from a
+      # night when the same target built and this one did not has nothing to be
+      # verified against. Drop it rather than leave a file on the release that
+      # install.sh would refuse and nobody can explain.
+      - name: Drop assets this build did not produce
+        env:
+          ASSETS: ${{ steps.collect.outputs.assets }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' |
+            while read -r name; do
+              if ! printf '%s\n' "$ASSETS" | grep -qxF "$name"; then
+                echo "dropping $name, which this build did not produce"
+                gh release delete-asset "$TAG" "$name" --repo "$REPO" --yes
+              fi
+            done
