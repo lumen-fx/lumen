@@ -11,7 +11,8 @@ use lumen_core::prelude::App;
 use lumen_core::property_store::PropertyStore;
 use lumen_script::event;
 use lumen_script::{
-    ScriptCommand, ScriptError, ScriptFn, ScriptHost, ScriptLoadFailure, ScriptNs, ScriptValue,
+    ScriptCommand, ScriptError, ScriptFn, ScriptHost, ScriptLoadFailure, ScriptNs, ScriptTy,
+    ScriptValue,
 };
 use lumen_script_candela::{CandelaHost, CandelaVmHost, ScriptCandelaVmPlugin, compile_bytecode};
 
@@ -459,6 +460,57 @@ fn a_native_fn_registered_before_the_load_binds_to_the_image() {
         prints(&outcome.commands),
         vec!["tag,42".to_owned()],
         "the script's mixed-typed arguments crossed into the native fn"
+    );
+}
+
+/// A plugin's own namespace reaches an artifact through the declarations the
+/// source carried when it was built.
+///
+/// Nothing synthesizes them here: the build had no plugin loaded, so the app
+/// spells the block and the registration binds against it at load.
+#[test]
+fn an_artifact_binds_a_plugin_namespace_the_source_declares() {
+    const GPIO: &str = r#"
+host "gpio" {
+    int read(int);
+}
+
+fn go() { return gpio::read(21); }
+
+fn main() {}
+"#;
+    let mut host = host_for(GPIO, "gpio.cdl");
+    host.register_script_fn(
+        &ScriptFn::new("read")
+            .ns(ScriptNs::Named("gpio".to_owned()))
+            .param("pin", ScriptTy::Int)
+            .ret(ScriptTy::Int)
+            .build(|cx| ScriptValue::I64(cx.int_arg(0) * 2)),
+    )
+    .expect("registering before the load is allowed");
+
+    host.load("", "gpio.cdlb")
+        .expect("the declaration binds to the registered fn");
+    assert_eq!(
+        host.call("go", &[]).expect("go runs").ret,
+        Some(ScriptValue::I64(42))
+    );
+}
+
+/// An artifact has nothing left to compile, so a plugin's `.cdl` wrapper is
+/// reported rather than silently dropped, and the load still succeeds.
+#[test]
+fn an_artifact_says_it_cannot_compile_a_wrapper() {
+    let mut host = host_for(NATIVE, "native.cdl");
+    host.register_script_fn(&joining_script_fn("log_it"))
+        .expect("registering before the load is allowed");
+    host.add_prelude("gpio", "fn pin(number) { return number; }\n");
+
+    host.load("", "native.cdlb")
+        .expect("the image still loads without the wrapper");
+    assert_eq!(
+        prints(&host.call("shout", &[]).expect("shout runs").commands),
+        vec!["tag,42".to_owned()]
     );
 }
 

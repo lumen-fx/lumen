@@ -74,8 +74,8 @@ pub use http::{
 };
 pub use runtime::*;
 pub use script_fn::{
-    CandelaWrapper, HostSet, MAX_VARIADIC_ARITY, ScriptFn, ScriptFnAppExt, ScriptFnBody,
-    ScriptFnBuilder, ScriptFnCx, ScriptFnRegistry, ScriptFnStore, ScriptNs, ScriptParam, ScriptSig,
+    HostSet, MAX_VARIADIC_ARITY, ScriptFn, ScriptFnAppExt, ScriptFnBody, ScriptFnBuilder,
+    ScriptFnCx, ScriptFnRegistry, ScriptFnStore, ScriptNs, ScriptParam, ScriptPrelude, ScriptSig,
     ScriptTy,
 };
 
@@ -1059,6 +1059,17 @@ pub trait ScriptHost: Send + Sync + 'static {
     /// (candela binds host declarations when the artifact loads) or the engine
     /// rejected the registration.
     fn register_script_fn(&mut self, f: &ScriptFn) -> Result<(), ScriptError>;
+
+    /// Take source a plugin ships alongside the functions it registered under
+    /// `ns`, to be compiled ahead of the app's own program.
+    ///
+    /// This is how a plugin offers sugar over its functions: a struct and an
+    /// `impl` block in the host's own language, so a script calls
+    /// `Gpio::read(pin)` instead of the free function. A host whose language
+    /// needs no such staging ignores it, which is the default.
+    fn add_prelude(&mut self, ns: &str, source: &str) {
+        let _ = (ns, source);
+    }
 
     // -- metadata ------------------------------------------------------
 

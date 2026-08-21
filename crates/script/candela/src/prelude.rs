@@ -20,10 +20,190 @@ use std::borrow::Cow;
 /// surface: `import "lumen.cdl";`.
 pub const PRELUDE_MODULE: &str = "lumen.cdl";
 
-/// The embedded prelude source: a `host "lumen" { ... }` block declaring every
-/// builtin the crate registers. Kept in lock-step with
-/// [`BUILTINS`](crate::BUILTINS) by the `prelude_declares_every_builtin` test.
-pub const PRELUDE_SOURCE: &str = include_str!("../prelude/lumen.cdl");
+/// The embedded prelude source: the generated declarations that bind the whole
+/// Lumen host surface, followed by the hand-written method sugar over them.
+///
+/// The generated half is kept current by the `prelude_generated` test; the
+/// sugar half is edited by hand.
+pub const PRELUDE_SOURCE: &str = concat!(
+    include_str!("../prelude/declarations.cdl"),
+    include_str!("../prelude/wrappers.cdl")
+);
+
+/// Write the generated half of the prelude from the shared builtin table and
+/// the declarations beside the host's own registrations.
+///
+/// The `prelude_generated` test compares this against the checked-in file and
+/// refreshes it on request.
+#[must_use]
+pub fn generate_declarations() -> String {
+    crate::declare::generated_prelude()
+}
+
+/// A source with everything candela needs in front of it, and what that cost
+/// the line numbers.
+///
+/// Two things go ahead of the author's own text: a `host "<ns>" { .. }` block
+/// for each namespace an embedder registered functions under, and any `.cdl`
+/// wrapper a plugin ships with them. Both shift the source down, so the offset
+/// travels with the text and every diagnostic subtracts it again.
+#[derive(Debug, Clone, Default)]
+pub struct PreparedSource {
+    /// What the compiler is handed.
+    pub text: String,
+    /// How many lines were put ahead of the author's first line.
+    pub line_offset: u32,
+    /// Where each plugin wrapper landed, so an error inside one names the
+    /// plugin instead of a line the author never wrote.
+    pub wrappers: Vec<WrapperSpan>,
+}
+
+/// The lines one plugin's wrapper source occupies in a [`PreparedSource`].
+#[derive(Debug, Clone)]
+pub struct WrapperSpan {
+    /// The namespace the wrapper belongs to.
+    pub ns: String,
+    /// First line of the wrapper, 1-based.
+    pub first_line: u32,
+    /// Last line of the wrapper, 1-based.
+    pub last_line: u32,
+}
+
+/// Where a byte offset in a [`PreparedSource`] falls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Location {
+    /// Line in the author's source, or in the wrapper when `wrapper` is set.
+    pub line: u32,
+    /// Column, 1-based.
+    pub col: u32,
+    /// The plugin namespace whose wrapper this position is inside.
+    pub wrapper: Option<String>,
+}
+
+impl PreparedSource {
+    /// A source with nothing put in front of it.
+    #[must_use]
+    pub fn plain(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            line_offset: 0,
+            wrappers: Vec::new(),
+        }
+    }
+
+    /// Resolve a byte offset in [`Self::text`] to the position an author can
+    /// act on.
+    #[must_use]
+    pub fn locate(&self, byte: usize) -> Location {
+        let (line, col) = line_col(&self.text, byte);
+        if line == 0 || line > self.line_offset {
+            return Location {
+                line: line.saturating_sub(self.line_offset),
+                col,
+                wrapper: None,
+            };
+        }
+        match self
+            .wrappers
+            .iter()
+            .find(|w| line >= w.first_line && line <= w.last_line)
+        {
+            Some(w) => Location {
+                line: line - w.first_line + 1,
+                col,
+                wrapper: Some(w.ns.clone()),
+            },
+            None => Location {
+                line,
+                col,
+                wrapper: None,
+            },
+        }
+    }
+}
+
+/// Byte offset to `(line, col)`, both 1-based. `(0, 0)` for the
+/// unknown-position sentinel candela uses when it has no span.
+#[must_use]
+pub fn line_col(source: &str, byte: usize) -> (u32, u32) {
+    if byte == 0 {
+        return (0, 0);
+    }
+    let mut line = 1u32;
+    let mut col = 1u32;
+    for (i, ch) in source.char_indices() {
+        if i >= byte {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
+/// Put the declarations and wrappers an embedder registered in front of
+/// `source`, after splicing the prelude into it.
+///
+/// `blocks` are `(namespace, declaration block)` pairs, each already folded
+/// onto one line; `wrappers` are `(namespace, source)` pairs written by the
+/// plugin that registered the namespace.
+///
+/// A namespace the author already declares is skipped: the check is a text
+/// search for `host "<ns>"`, which is what a hand-written block looks like, so
+/// a source carrying its own declarations compiles exactly as it did before
+/// and an app built for the artifact path keeps working.
+#[must_use]
+pub fn prepare(
+    source: &str,
+    blocks: &[(String, String)],
+    wrappers: &[(String, String)],
+) -> PreparedSource {
+    let resolved = resolve_prelude(source);
+    if blocks.is_empty() && wrappers.is_empty() {
+        return PreparedSource::plain(resolved.into_owned());
+    }
+
+    let mut prefix = String::new();
+    let mut line = 0u32;
+    let mut spans = Vec::new();
+    for (ns, block) in blocks {
+        if declares_namespace(source, ns) {
+            continue;
+        }
+        prefix.push_str(block);
+        prefix.push('\n');
+        line += 1;
+    }
+    for (ns, wrapper) in wrappers {
+        let first_line = line + 1;
+        prefix.push_str(wrapper);
+        if !wrapper.ends_with('\n') {
+            prefix.push('\n');
+        }
+        line = prefix.matches('\n').count() as u32;
+        spans.push(WrapperSpan {
+            ns: ns.clone(),
+            first_line,
+            last_line: line,
+        });
+    }
+
+    PreparedSource {
+        text: format!("{prefix}{resolved}"),
+        line_offset: line,
+        wrappers: spans,
+    }
+}
+
+/// Whether `source` already opens a `host "<ns>"` block of its own.
+fn declares_namespace(source: &str, ns: &str) -> bool {
+    let needle = format!("host \"{ns}\"");
+    source.contains(&needle)
+}
 
 /// Collapse the human-readable prelude into a single physical line: strip `//`
 /// line comments and fold every run of whitespace to one space. Splicing the

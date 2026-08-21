@@ -1,9 +1,12 @@
 //! `ScriptHost::register_script_fn` on the candela host: a native function
-//! registered through the fork's variadic host-fn API, callable from a `.cdl`
-//! script as `lumen::<name>(...)` with any argument count. Mirrors the
-//! Rhai/Lua hosts' extension point.
+//! registered through the fork's host-fn API, callable from a `.cdl` script as
+//! `<namespace>::<name>(...)`. Mirrors the Rhai/Lua hosts' extension point.
+//!
+//! candela resolves such a call through a `host` declaration, so the host
+//! writes one for every namespace it bound; the tests below cover both that and
+//! the app that brings its own block.
 
-use lumen_script::{ScriptCommand, ScriptFn, ScriptHost, ScriptNs, ScriptValue};
+use lumen_script::{ScriptCommand, ScriptError, ScriptFn, ScriptHost, ScriptNs, ScriptValue};
 use lumen_script_candela::CandelaHost;
 
 /// Join the marshalled args into a `Print` command so the test can observe
@@ -23,6 +26,14 @@ fn joining_script_fn() -> ScriptFn {
             cx.emit(ScriptCommand::Print(joined));
             ScriptValue::Unit
         })
+}
+
+/// The pin number a `gpio::read` call passed.
+fn pin_number(args: &[ScriptValue]) -> i64 {
+    match args.first() {
+        Some(ScriptValue::I64(n)) => *n,
+        _ => 0,
+    }
 }
 
 fn prints(cmds: &[ScriptCommand]) -> Vec<String> {
@@ -156,6 +167,159 @@ fn main() {}
     );
 }
 
+/// A registered function needs no declaration in the app.
+///
+/// The host knows every signature it bound, so it writes the `host` block the
+/// call resolves through. This is what lets a plugin add a function an app
+/// calls without the author repeating its shape.
+#[test]
+fn a_registered_fn_is_declared_by_the_host() {
+    let mut host = CandelaHost::new();
+    host.register_script_fn(&ScriptFn::value("answer", 0, |_| ScriptValue::I64(42)))
+        .expect("register");
+
+    let src = "fn ask() { return native::answer(); }\nfn main() {}\n";
+    host.load(src, "auto.cdl")
+        .expect("the registered fn is declared for the app");
+    assert_eq!(
+        host.call("ask", &[]).expect("ask runs").ret,
+        Some(ScriptValue::I64(42))
+    );
+}
+
+/// A namespace of the plugin's choosing is declared the same way.
+#[test]
+fn a_named_namespace_is_declared_by_the_host() {
+    let mut host = CandelaHost::new();
+    host.register_script_fn(
+        &ScriptFn::value("read", 1, |args| ScriptValue::I64(pin_number(args) * 2))
+            .with_ns(ScriptNs::Named("gpio".to_owned())),
+    )
+    .expect("register");
+
+    host.load(
+        "fn go() { return gpio::read(21); }\nfn main() {}\n",
+        "ns.cdl",
+    )
+    .expect("the named namespace is declared for the app");
+    assert_eq!(
+        host.call("go", &[]).expect("go runs").ret,
+        Some(ScriptValue::I64(42))
+    );
+}
+
+/// An app that declares the namespace itself keeps its own block.
+///
+/// A `.cdl` written before the host declared anything, and a `.cdlb` built from
+/// one, both carry a hand-written block; a second block for the same namespace
+/// would stop them compiling.
+#[test]
+fn a_hand_written_block_is_left_alone() {
+    let mut host = CandelaHost::new();
+    host.register_script_fn(&joining_script_fn().with_ns(ScriptNs::Extension))
+        .expect("register");
+
+    let src = r#"
+host "native" {
+    any log_it(...);
+}
+fn shout() { native::log_it("hand-written"); }
+fn main() {}
+"#;
+    host.load(src, "hand.cdl")
+        .expect("the app's own block still compiles");
+    assert_eq!(
+        prints(&host.call("shout", &[]).expect("shout runs").commands),
+        vec!["hand-written".to_owned()]
+    );
+}
+
+/// What the host puts in front of the source costs the author nothing: an
+/// error still reports the line it is on.
+#[test]
+fn the_synthesized_blocks_do_not_shift_line_numbers() {
+    let mut host = CandelaHost::new();
+    host.register_script_fn(&ScriptFn::value("answer", 0, |_| ScriptValue::I64(42)))
+        .expect("register");
+
+    // A wrapper runs to several lines, so the offset it costs is what the
+    // author would otherwise see added to every diagnostic.
+    host.add_prelude(
+        "native",
+        "fn helper_one() { return 1; }\nfn helper_two() { return 2; }\n",
+    );
+
+    let src = "import \"lumen.cdl\";\nfn main() {}\nfn broken( {}\n";
+    match host
+        .load(src, "lines.cdl")
+        .expect_err("line 3 is malformed")
+    {
+        ScriptError::Compile { line, col, uri, .. } => {
+            assert_eq!((line, col), (3, 12));
+            assert_eq!(uri, "lines.cdl");
+        }
+        other => panic!("expected a compile error, got {other:?}"),
+    }
+}
+
+/// A plugin's own `.cdl` compiles ahead of the app, so a script calls the
+/// method form of what the plugin registered.
+#[test]
+fn a_plugin_wrapper_is_compiled_ahead_of_the_app() {
+    let mut host = CandelaHost::new();
+    host.register_script_fn(
+        &ScriptFn::value("read", 1, |args| ScriptValue::I64(pin_number(args) * 2))
+            .with_ns(ScriptNs::Named("gpio".to_owned())),
+    )
+    .expect("register");
+    host.add_prelude(
+        "gpio",
+        r#"
+struct Pin { number: int }
+fn pin(number) { return Pin { number: number }; }
+impl Pin {
+    fn read(self) { return gpio::read(self.number); }
+}
+"#,
+    );
+
+    host.load(
+        "fn go() { return pin(21).read(); }\nfn main() {}\n",
+        "sugar.cdl",
+    )
+    .expect("the wrapper compiles ahead of the app");
+    assert_eq!(
+        host.call("go", &[]).expect("go runs").ret,
+        Some(ScriptValue::I64(42))
+    );
+}
+
+/// An error inside a wrapper is the plugin's, and the message says so rather
+/// than pointing at a line the author never wrote.
+#[test]
+fn an_error_in_a_wrapper_names_the_plugin() {
+    let mut host = CandelaHost::new();
+    host.register_script_fn(
+        &ScriptFn::value("read", 1, |_| ScriptValue::I64(0))
+            .with_ns(ScriptNs::Named("gpio".to_owned())),
+    )
+    .expect("register");
+    host.add_prelude("gpio", "fn broken( {}\n");
+
+    match host
+        .load("fn main() {}\n", "app.cdl")
+        .expect_err("the wrapper is malformed")
+    {
+        ScriptError::Compile { uri, .. } => {
+            assert!(
+                uri.contains("gpio"),
+                "the message must name the plugin: {uri}"
+            );
+        }
+        other => panic!("expected a compile error, got {other:?}"),
+    }
+}
+
 /// `compile_check` checks against what the app will run.
 ///
 /// candela binds every `host` block while it compiles, so a check on an engine
@@ -184,4 +348,16 @@ fn main() {}
         .expect("register");
     host.compile_check(src, "native.cdl")
         .expect("the declaration binds to the registered fn");
+
+    // And a check sees what a load would put in front of the source, so an app
+    // that declares nothing gets the same verdict either way.
+    host.add_prelude(
+        "native",
+        "fn answer_twice() { return native::answer() * 2; }\n",
+    );
+    host.compile_check(
+        "fn ask() { return answer_twice(); }\nfn main() {}\n",
+        "auto.cdl",
+    )
+    .expect("the check sees the synthesized block and the wrapper");
 }

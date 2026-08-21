@@ -112,6 +112,7 @@
 #![warn(missing_docs)]
 
 pub mod builtins;
+mod declare;
 #[cfg(feature = "compiler")]
 mod engine_host;
 mod host_fns;

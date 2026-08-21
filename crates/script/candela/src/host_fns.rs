@@ -30,6 +30,82 @@ pub const HOST_NAMESPACE: &str = "lumen";
 /// `host "native" { any my_fn(...); }` and calls `native::my_fn(...)`.
 pub const NATIVE_NAMESPACE: &str = "native";
 
+/// The declarations for the builtins this file registers itself.
+///
+/// Everything in the shared table declares itself: the generator reads its
+/// signature. What is left is registered here because it touches state a
+/// table entry cannot reach, and its declaration is written out beside it so
+/// there is still one authority per function. The prelude generator reads this
+/// list; `every_registered_lumen_fn_is_tabled` reads the registrations. Adding
+/// a registration here means adding its line here too.
+pub(crate) const RESIDUAL_DECLARATIONS: &[(&str, &str)] = &[
+    // Signals: the mirror is the host's, so every reader and writer is too.
+    ("lumen", "string signal_get(string);"),
+    ("lumen", "signal_set(string, string);"),
+    ("lumen", "int signal_get_int(string);"),
+    ("lumen", "signal_set_int(string, int);"),
+    ("lumen", "float signal_get_float(string);"),
+    ("lumen", "signal_set_float(string, float);"),
+    ("lumen", "bool signal_get_bool(string);"),
+    ("lumen", "signal_set_bool(string, bool);"),
+    ("lumen", "signal_set_color(string, string);"),
+    ("lumen", "{string: int} signal_get_color(string);"),
+    ("lumen", "bool is_valid(string);"),
+    // Array signals: a record's value type is not fixed, so the entries that
+    // carry one are variadic and the readers hand back `any`.
+    ("lumen", "signal_array_set(...);"),
+    ("lumen", "signal_array_push(...);"),
+    ("lumen", "any signal_array_get(...);"),
+    ("lumen", "any signal_array_all(...);"),
+    ("lumen", "int signal_array_len(string);"),
+    ("lumen", "signal_array_remove(string, int);"),
+    ("lumen", "signal_array_clear(string);"),
+    // Fragments: `lmn!` blocks expand to `fragment_spawn`.
+    ("lumen", "int fragment_spawn(string, string[], int[]);"),
+    ("lumen", "mount(int);"),
+    // Event binding: the token-to-handler registry is the host's.
+    ("lumen", "int event_on(int, string, string);"),
+    ("lumen", "int event_on_capture(int, string, string);"),
+    ("lumen", "event_off(int);"),
+    // Runtime state whose map shape is candela's own.
+    ("lumen", "{string: string} pointer_state();"),
+    ("lumen", "{string: float} frame_info();"),
+    ("lumen", "{string: string} signals_all();"),
+    ("lumen", "any matched_rules(...);"),
+    // One request map whose fields mix types, so it is variadic.
+    ("lumen", "http(...);"),
+    // Text parsers: both hand back a dynamically-shaped value, read with the
+    // as_map / as_list / as_str / as_int downcasts.
+    ("lumen", "any parse_json(...);"),
+    ("lumen", "any parse_markdown(...);"),
+    // Diagnostics, handler routing, and derived signals.
+    ("lumen", "print(...);"),
+    ("lumen", "on(string, string, string);"),
+    ("lumen", "derive(string, string[], string);"),
+    // The web namespaces (section 4.8) are their own host blocks; an app
+    // reaches them as `window::set_title(..)`, `document::get_by_id(..)`.
+    ("window", "set_href(string);"),
+    ("window", "string href();"),
+    ("window", "reload();"),
+    ("window", "string title();"),
+    ("window", "float dpr();"),
+    ("window", "float[] size();"),
+    ("window", "set_title(string);"),
+    ("window", "set_size(float, float);"),
+    ("window", "string location_path();"),
+    ("window", "string location_query();"),
+    ("window", "string location_hash();"),
+    ("history", "back();"),
+    ("history", "forward();"),
+    ("history", "go(int);"),
+    ("document", "int root();"),
+    ("document", "int[] query(string);"),
+    ("document", "int get_by_id(string);"),
+    ("document", "int focused();"),
+    ("document", "int hovered();"),
+    ("document", "int create(string);"),
+];
+
 /// A surface that binds candela `host` declarations to Rust closures.
 ///
 /// Implemented by `candela_vm::HostRegistry` (the artifact path) and, with the
@@ -564,6 +640,33 @@ fn register_typed<S: HostFnSink>(sink: &mut S, r: &Registries, f: &ScriptFn) -> 
         [a: Int, b: Int, c: Int] -> Unit,
     }
 }
+/// A sink that binds nothing, for asking the shape adapter a question.
+struct NullSink;
+
+impl HostFnSink for NullSink {
+    fn register_host_fn<Marker, F>(&mut self, _namespace: &str, _name: &str, _f: F)
+    where
+        F: IntoHostFn<Marker>,
+    {
+    }
+
+    fn register_host_fn_variadic<F>(&mut self, _namespace: &str, _name: &str, _f: F)
+    where
+        F: Fn(&[Value]) -> Value + 'static,
+    {
+    }
+}
+
+/// Whether the shape adapter binds `f` under a typed signature rather than
+/// variadically.
+///
+/// candela checks a declaration against the registration, so the two have to
+/// agree; running the adapter itself against a sink that binds nothing is what
+/// keeps the answer from drifting out of the shape list.
+pub(crate) fn binds_typed(f: &ScriptFn) -> bool {
+    register_typed(&mut NullSink, &Registries::default(), f)
+}
+
 /// Register the fragment surface: instantiate a compiled fragment by key, and
 /// put a node at the app root.
 ///
