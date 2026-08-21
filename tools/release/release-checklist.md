@@ -51,9 +51,11 @@ checklist.
 ## Cutting a release
 
 1. Make sure `main` is green in the `ci` workflow.
-2. Bump `version` in the workspace `Cargo.toml`, commit, push, wait for green.
-   The tag has to match this value: the release workflow compares them first
-   and publishes nothing if they differ, because the MSI's version, the
+2. Check that `version` in the workspace `Cargo.toml` is the version you are
+   about to tag. It usually is already, because step 6 bumps it as soon as the
+   previous release is tagged. If it is not, set it, commit, push, and wait for
+   green. The tag has to match this value: the release workflow compares them
+   first and publishes nothing if they differ, because the MSI's version, the
    install receipt, and `lumenc --version` all read from these two places.
 3. Tag and push:
 
@@ -83,8 +85,8 @@ checklist.
 
    Beside the per-target archives it builds the browser runtime once, as
    `lumen-web.tar.gz`. That pair is WebAssembly, so it is the same file on
-   every platform; `lumenc web` downloads it from the release matching its own
-   version the first time a site needs it. The recipe is
+   every platform; `lumenc web` downloads it the first time a site needs it,
+   from the release it resolves through the releases page. The recipe is
    `.github/scripts/build-web-runtime.sh`, the same script `ci.yml` measures
    and runs a browser against.
 
@@ -92,6 +94,21 @@ checklist.
    even if a build leg failed, and only what succeeded gets uploaded.
    Re-running the workflow after a fix is safe, because `gh release upload
    --clobber` replaces same-named assets rather than erroring on them.
+
+5. Work through [Verify](#verify) against the published release.
+
+6. Bump `version` in the workspace `Cargo.toml` to the next number and push
+   that. From here `main` carries a version with no release behind it, which
+   is the point: `main` builds identify themselves as the version they will
+   become, and step 2 of the next release has nothing left to do.
+
+   This is safe because nothing turns a version number into a download
+   address. Every version-keyed lookup asks the releases page what exists:
+   `lumenc` resolves the release its toolchain files come from through
+   `releases/latest` (or through its install receipt), the update check
+   compares against `releases/latest`, and `crates/lumenc/build.rs` confirms
+   the tag it needs is published before fetching source from it. A number with
+   no tag behind it resolves to nothing and says so.
 
 ## Why liblumen goes in bin/, not lib/
 
@@ -141,9 +158,10 @@ the release tag is the version, and GitHub scopes assets to the release they
 were uploaded to.
 
 `lumen-web.tar.gz` is named the same way and is not a target. The installer
-skips it, and `lumenc` fetches it by that exact name from the release matching
-its own version (`crates/lumenc/src/package_cli.rs`), verifying it against the
-same `sha256sums.txt`.
+skips it, and `lumenc` fetches it by that exact name
+(`crates/lumenc/src/package_cli.rs`) from the release
+`crates/lumenc/src/release.rs` resolves, verifying it against the same
+`sha256sums.txt`.
 
 `lumenc` follows the same split when it offers an update. On Unix it re-runs
 `install.sh`; on Windows it downloads
