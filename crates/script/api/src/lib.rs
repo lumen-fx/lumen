@@ -50,6 +50,10 @@ pub mod http;
 /// re-exported at the crate root for source compatibility.
 pub mod runtime;
 
+/// The host-neutral native-function description ([`ScriptFn`]) and the
+/// app-wide channel plugins register them through.
+pub mod script_fn;
+
 use std::collections::HashSet;
 use thiserror::Error;
 
@@ -61,6 +65,11 @@ pub use http::{
     ThreadDispatch,
 };
 pub use runtime::*;
+pub use script_fn::{
+    CandelaWrapper, HostSet, MAX_VARIADIC_ARITY, ScriptFn, ScriptFnAppExt, ScriptFnBody,
+    ScriptFnBuilder, ScriptFnCx, ScriptFnRegistry, ScriptFnStore, ScriptNs, ScriptParam, ScriptSig,
+    ScriptTy,
+};
 
 /// Errors a [`ScriptHost`] can surface from `load` or `tick`.
 ///
@@ -775,61 +784,6 @@ impl ScriptValue {
     }
 }
 
-/// The callable half of a [`NativeExternFn`]: shared so one description can
-/// be registered into several hosts, `Send + Sync` so it can run on any of
-/// their threads.
-pub type NativeFnBody = std::sync::Arc<dyn Fn(&[ScriptValue]) -> ScriptValue + Send + Sync>;
-
-/// One native function an embedder exposes to the app's script, in terms
-/// every host understands.
-///
-/// [`ScriptValue`] is the common currency across the host boundary, so a
-/// function described this way binds into whichever hosts the app runs:
-/// each host crate has a `with_native_fn` builder that marshals its own
-/// value type to and from [`ScriptValue`] and registers the call under
-/// `name`. The C-ABI's `lumen_app_expose` and the Rust SDK build these.
-///
-/// `arity` is the declared argument count. Hosts that dispatch on arity
-/// (Rhai) register exactly that many parameters; hosts that take variadic
-/// arguments (Lua, candela) pass through whatever the script supplies, so a
-/// call with the wrong count reaches the function rather than failing to
-/// resolve.
-///
-/// `call` runs on the script host's thread and must be callable from any of
-/// them, hence `Send + Sync`.
-#[derive(Clone)]
-pub struct NativeExternFn {
-    /// Name the script calls the function by.
-    pub name: String,
-    /// Declared argument count.
-    pub arity: usize,
-    /// The function body.
-    pub call: NativeFnBody,
-}
-
-impl NativeExternFn {
-    /// Build one from a name, an arity, and a closure.
-    pub fn new<F>(name: impl Into<String>, arity: usize, call: F) -> Self
-    where
-        F: Fn(&[ScriptValue]) -> ScriptValue + Send + Sync + 'static,
-    {
-        Self {
-            name: name.into(),
-            arity,
-            call: std::sync::Arc::new(call),
-        }
-    }
-}
-
-impl std::fmt::Debug for NativeExternFn {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NativeExternFn")
-            .field("name", &self.name)
-            .field("arity", &self.arity)
-            .finish_non_exhaustive()
-    }
-}
-
 /// Backend-agnostic facade exposing the reactive property store to
 /// script hosts. Mirrors QML's `QQmlContext::setContextProperty` /
 /// `contextProperty()` shape: scripts read + write through a thin layer
@@ -886,12 +840,6 @@ pub struct CallOutcome {
     /// optional handlers and treats a miss as silent success.
     pub found: bool,
 }
-
-/// Portable native-command extension: a Rust closure the embedder
-/// registers under a script-callable name via
-/// [`ScriptHost::register_command_fn`]. Receives the call args converted
-/// to [`ScriptValue`]s; returns commands to push into the host sink.
-pub type CommandFn = std::sync::Arc<dyn Fn(&[ScriptValue]) -> Vec<ScriptCommand> + Send + Sync>;
 
 /// Merge a pre-reload registry snapshot back under the entries the reloaded
 /// script just registered, so a reload never silently loses a registration.
@@ -1088,16 +1036,21 @@ pub trait ScriptHost: Send + Sync + 'static {
 
     // -- extension -----------------------------------------------------
 
-    /// Register a portable native command function callable from script
-    /// as `name(...)` with `arity` positional args. Host-specific escape
-    /// hatches (e.g. `RhaiHost::engine_mut`) remain available for
-    /// anything this shape cannot express.
-    fn register_command_fn(
-        &mut self,
-        name: &str,
-        arity: usize,
-        f: CommandFn,
-    ) -> Result<(), ScriptError>;
+    /// Bind one [`ScriptFn`] so the script can call it.
+    ///
+    /// The host maps [`ScriptNs`] onto its own name space, binds the
+    /// signature's arity range, and retains `f` in a [`ScriptFnStore`] so
+    /// [`Self::reset`] can put it back. Host-specific escape hatches
+    /// (`RhaiHost::engine_mut`, `LuaHost::lua_mut`,
+    /// `CandelaHost::engine_mut`) remain available for anything this shape
+    /// cannot express.
+    ///
+    /// # Errors
+    ///
+    /// The host could not bind the function: its binding window has closed
+    /// (candela binds host declarations when the artifact loads) or the engine
+    /// rejected the registration.
+    fn register_script_fn(&mut self, f: &ScriptFn) -> Result<(), ScriptError>;
 
     // -- metadata ------------------------------------------------------
 

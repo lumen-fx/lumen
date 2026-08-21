@@ -26,11 +26,13 @@ pub mod builtins;
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::*;
 use lumen_script::{
-    CallOutcome, CommandFn, NativeExternFn, ScriptCommand, ScriptContext, ScriptError, ScriptHost,
-    ScriptValue,
+    CallOutcome, MAX_VARIADIC_ARITY, ScriptCommand, ScriptContext, ScriptError, ScriptFn,
+    ScriptFnStore, ScriptHost, ScriptNs, ScriptTy, ScriptValue,
 };
 use parking_lot::Mutex;
-use rhai::{AST, CallFnOptions, Engine, EvalAltResult, Scope};
+use rhai::{AST, CallFnOptions, Dynamic, Engine, EvalAltResult, Module, Scope};
+use std::any::TypeId;
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 // Host-generic runtime re-exports: these lived in this crate before the
@@ -1336,6 +1338,14 @@ pub struct RhaiHost {
     /// dispatcher looks a handler up here by token; the host-neutral
     /// registry keys the same token to `(node, type, capture)`.
     event_closures: EventClosureMap,
+    /// The [`ScriptFn`]s an embedder registered, kept so [`RhaiHost::reset`]
+    /// can put them back.
+    script_fns: ScriptFnStore,
+    /// One `Module` per [`ScriptNs::Named`] namespace. Rhai takes a static
+    /// module by value, so a namespace that gains a function is rebuilt and
+    /// re-registered whole; the map is what makes the second registration keep
+    /// the first one's functions.
+    modules: HashMap<String, Module>,
 }
 
 /// `signal_name -> (dep names, closure)`. Threaded through
@@ -2537,6 +2547,8 @@ impl RhaiHost {
             derivations,
             pending_initial,
             event_closures,
+            script_fns: ScriptFnStore::default(),
+            modules: HashMap::new(),
         }
     }
 
@@ -2754,6 +2766,93 @@ impl RhaiHost {
             c.clear();
         }
         lumen_script::event::clear_host_bindings();
+        // Engine registrations survive a reset, so a replay only has to cover
+        // what a rebuilt engine would lose. It runs anyway: re-registering the
+        // same name and parameter types overwrites the entry rather than
+        // adding a second one, and a host whose reset grows to rebuild the
+        // engine stays correct without a second fix.
+        let stored = std::mem::take(&mut self.script_fns);
+        for f in stored.iter() {
+            let _ = self.register_script_fn(f);
+        }
+    }
+
+    /// Bind `f` into the engine's global namespace, one registration per
+    /// accepted argument count.
+    ///
+    /// Rhai resolves a call by name and argument types, so a declared
+    /// parameter binds as its own Rust type and a call that passes the wrong
+    /// one fails at the call site rather than inside the body. An
+    /// optional trailing parameter is a separate registration at the shorter
+    /// arity, which is how one `page(path)` also answers `page()`.
+    fn bind_globally(&mut self, f: &ScriptFn) {
+        for arity in f.sig.arity_range() {
+            let arg_types: Vec<TypeId> = (0..arity)
+                .map(|i| rhai_arg_type(f.sig.params.get(i).map_or(&ScriptTy::Any, |p| &p.ty)))
+                .collect();
+            let sink = self.sink.clone();
+            let f = f.clone();
+            self.engine
+                .register_raw_fn::<Dynamic>(f.name.clone(), arg_types, move |_ctx, args| {
+                    let vals: Vec<ScriptValue> =
+                        args.iter().map(|d| dynamic_to_script_value(d)).collect();
+                    invoke_into_sink(&f, &sink, &vals)
+                });
+        }
+    }
+
+    /// Bind `f` into the static module named by [`ScriptNs::Named`], so a
+    /// script calls it as `ns::name(...)`.
+    ///
+    /// A module takes typed closures only, so every slot here is `Dynamic` and
+    /// the declared types are checked against the arguments inside the
+    /// adapter; the script sees a runtime error naming the parameter instead
+    /// of an unresolved call.
+    fn bind_in_module(&mut self, ns: String, f: &ScriptFn) {
+        let host_sink = self.sink.clone();
+        let module = self.modules.entry(ns.clone()).or_default();
+        macro_rules! bind_arity {
+            ($($arg:ident),*) => {{
+                let sink = host_sink.clone();
+                let f = f.clone();
+                module.set_native_fn(
+                    f.name.clone(),
+                    move |$($arg: Dynamic),*| {
+                        let vals: Vec<ScriptValue> = vec![$(dynamic_to_script_value(&$arg)),*];
+                        if f.sig.is_typed()
+                            && let Err(message) = f.sig.check_args(&vals)
+                        {
+                            return Err(Box::new(EvalAltResult::ErrorRuntime(
+                                format!("{}: {message}", f.name).into(),
+                                rhai::Position::NONE,
+                            )));
+                        }
+                        invoke_into_sink(&f, &sink, &vals)
+                    },
+                );
+            }};
+        }
+        for arity in f.sig.arity_range() {
+            match arity {
+                0 => bind_arity!(),
+                1 => bind_arity!(a),
+                2 => bind_arity!(a, b),
+                3 => bind_arity!(a, b, c),
+                4 => bind_arity!(a, b, c, d),
+                5 => bind_arity!(a, b, c, d, e),
+                6 => bind_arity!(a, b, c, d, e, g),
+                7 => bind_arity!(a, b, c, d, e, g, h),
+                8 => bind_arity!(a, b, c, d, e, g, h, i),
+                n => tracing::warn!(
+                    "rhai: `{ns}::{}` takes {n} arguments; a namespaced function binds up to \
+                     {MAX_VARIADIC_ARITY}",
+                    f.name
+                ),
+            }
+        }
+        let module = self.modules[&ns].clone();
+        self.engine
+            .register_static_module(&ns, rhai::Shared::new(module));
     }
 
     /// Compiles `source` to a fresh AST and runs its top-level body
@@ -3129,37 +3228,15 @@ impl ScriptHost for RhaiHost {
         }
     }
 
-    fn register_command_fn(
-        &mut self,
-        name: &str,
-        arity: usize,
-        f: CommandFn,
-    ) -> Result<(), ScriptError> {
-        let sink = self.sink.clone();
-        // One arm per arity: each differs only in the closure parameter
-        // count and the `dynamic_to_script_value` array length. rhai's
-        // `register_fn` needs a statically-typed closure (no native
-        // variadics, unlike the Lua / candela hosts), so the arities are
-        // enumerated rather than collapsed into a slice.
-        macro_rules! register_arity {
-            ($($arg:ident),*) => {
-                self.engine.register_fn(name, move |$($arg: rhai::Dynamic),*| {
-                    sink.lock().extend(f(&[$(dynamic_to_script_value(&$arg)),*]));
-                })
-            };
+    fn register_script_fn(&mut self, f: &ScriptFn) -> Result<(), ScriptError> {
+        match &f.ns {
+            ScriptNs::Named(ns) => self.bind_in_module(ns.clone(), f),
+            // Rhai has no global namespace beyond the engine itself, so the
+            // runtime's own surface and an embedder's share it. Registration
+            // order decides a collision: the later one shadows the earlier.
+            ScriptNs::Builtin | ScriptNs::Extension => self.bind_globally(f),
         }
-        match arity {
-            0 => register_arity!(),
-            1 => register_arity!(a),
-            2 => register_arity!(a, b),
-            3 => register_arity!(a, b, c),
-            4 => register_arity!(a, b, c, d),
-            n => {
-                return Err(ScriptError::Runtime(format!(
-                    "register_command_fn: arity {n} unsupported (max 4)"
-                )));
-            }
-        };
+        self.script_fns.record(f);
         Ok(())
     }
 
@@ -3170,6 +3247,41 @@ impl ScriptHost for RhaiHost {
     fn builtins(&self) -> &'static [lumen_script::BuiltinFn] {
         builtins::BUILTINS
     }
+}
+
+/// The Rhai type a declared [`ScriptTy`] resolves a call by.
+///
+/// [`ScriptTy::Any`] takes a `Dynamic` slot, which matches whatever the script
+/// passes; every other type narrows the slot, so a call passing something else
+/// does not resolve.
+fn rhai_arg_type(ty: &ScriptTy) -> TypeId {
+    match ty {
+        ScriptTy::Any => TypeId::of::<Dynamic>(),
+        ScriptTy::Unit => TypeId::of::<()>(),
+        ScriptTy::Bool => TypeId::of::<bool>(),
+        ScriptTy::Int => TypeId::of::<rhai::INT>(),
+        ScriptTy::Float => TypeId::of::<rhai::FLOAT>(),
+        ScriptTy::Str => TypeId::of::<rhai::ImmutableString>(),
+        ScriptTy::Array(_) => TypeId::of::<rhai::Array>(),
+        ScriptTy::Map(_) => TypeId::of::<rhai::Map>(),
+    }
+}
+
+/// Run a [`ScriptFn`] body and hand its result back to Rhai.
+///
+/// The body emits into a scratch buffer and the sink lock is taken once, after
+/// it returns: a body that calls back into a builtin would otherwise meet a
+/// lock its own call is holding.
+fn invoke_into_sink(
+    f: &ScriptFn,
+    sink: &Arc<Mutex<Vec<ScriptCommand>>>,
+    args: &[ScriptValue],
+) -> Result<Dynamic, Box<EvalAltResult>> {
+    let (ret, commands) = f.invoke(args);
+    if !commands.is_empty() {
+        sink.lock().extend(commands);
+    }
+    Ok(script_value_to_dynamic(&ret))
 }
 
 /// Translate a Rhai `ParseError` into the structured
@@ -3370,29 +3482,6 @@ impl ScriptRhaiPlugin {
     {
         self.extensions.push(Box::new(f));
         self
-    }
-
-    /// Register a host-neutral [`NativeExternFn`] as a global Rhai function.
-    ///
-    /// The same [`NativeExternFn`] registers into the Lua and candela hosts
-    /// through their own `with_native_fn`, so an embedder describes a native
-    /// function once and every host the app runs can call it. Arguments and
-    /// the return value marshal through [`ScriptValue`]; Rhai dispatches on
-    /// the declared arity.
-    #[must_use]
-    pub fn with_native_fn(self, f: NativeExternFn) -> Self {
-        self.with_extension(move |engine: &mut Engine| {
-            let NativeExternFn { name, arity, call } = f;
-            let arg_types: Vec<std::any::TypeId> =
-                std::iter::repeat_with(std::any::TypeId::of::<rhai::Dynamic>)
-                    .take(arity)
-                    .collect();
-            engine.register_raw_fn::<rhai::Dynamic>(name, arg_types, move |_ctx, args| {
-                let vals: Vec<ScriptValue> =
-                    args.iter().map(|d| dynamic_to_script_value(d)).collect();
-                Ok(script_value_to_dynamic(&call(&vals)))
-            });
-        })
     }
 }
 

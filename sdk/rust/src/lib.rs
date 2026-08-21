@@ -196,8 +196,9 @@ pub use lumen_core::property_store::{Property, PropertyStore};
 
 /// The host-neutral description of a native function exposed to script, and
 /// the value type its arguments and result cross as. Build one with
-/// [`simple::AppBuilder::native_fn`].
-pub use lumen_script::{NativeExternFn, ScriptValue};
+/// [`ScriptFn::new`] for a typed signature, or with
+/// [`simple::AppBuilder::native_fn`] for the untyped shape.
+pub use lumen_script::{ScriptFn, ScriptFnCx, ScriptNs, ScriptSig, ScriptTy, ScriptValue};
 
 /// One-stop import: `use lumenui::prelude::*;`.
 ///

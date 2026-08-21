@@ -15,7 +15,7 @@ use bevy_ecs::system::ScheduleSystem;
 use lumen_core::app::{App as EcsApp, Plugin};
 use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_core::tick::TickStage;
-use lumen_runtime::RunOptions;
+use lumen_runtime::{PluginInstaller, RunOptions};
 
 type Deferred = Box<dyn FnOnce(&mut EcsApp) + 'static>;
 
@@ -52,6 +52,7 @@ type RunSetup = (RunOptions, Vec<(PropertyKey, PropertyValue)>, Vec<Deferred>);
 pub struct App {
     boot: BootConfig,
     seeds: Vec<(PropertyKey, PropertyValue)>,
+    plugins: Vec<PluginInstaller>,
     deferred: Vec<Deferred>,
     handlers: Vec<HandlerEntry>,
 }
@@ -73,13 +74,23 @@ impl App {
         self
     }
 
-    /// Add a single [`Plugin`], installed on the built ECS app before the first
-    /// tick.
+    /// Add a single [`Plugin`], installed on the built ECS app before the
+    /// script hosts load.
+    ///
+    /// That phase is what lets a plugin register script functions
+    /// ([`ScriptFnAppExt::add_script_fn`](lumen_script::ScriptFnAppExt::add_script_fn)):
+    /// candela binds its host declarations when the program compiles, so a
+    /// registration after the load has nothing to bind to. The consequence to
+    /// know: a plugin builds before this builder's own
+    /// [`insert_resource`](Self::insert_resource) /
+    /// [`add_systems`](Self::add_systems) run, so a plugin that reads a
+    /// resource the builder inserts must do it from a system rather than from
+    /// `build`.
     #[must_use]
     pub fn add_plugin<P: Plugin + Send + 'static>(mut self, plugin: P) -> Self {
-        self.push_deferred(move |ecs| {
+        self.plugins.push(Box::new(move |ecs: &mut EcsApp| {
             ecs.add_plugin(plugin);
-        });
+        }));
         self
     }
 
@@ -294,6 +305,10 @@ impl App {
         self.deferred.push(Box::new(f));
     }
 
+    pub(crate) fn push_plugin(&mut self, f: impl FnOnce(&mut EcsApp) + Send + 'static) {
+        self.plugins.push(Box::new(f));
+    }
+
     // -- Running -------------------------------------------------------------
 
     /// Boot the app and enter the winit event loop. Blocks until the window
@@ -338,6 +353,12 @@ impl App {
                 store.set(key, value);
             }
         }
+        // Plugins first, matching the windowed path: on a real boot they run
+        // before the script hosts load, which is ahead of everything added
+        // through `deferred`.
+        for f in self.plugins {
+            f(&mut ecs);
+        }
         for f in self.deferred {
             f(&mut ecs);
         }
@@ -374,6 +395,7 @@ impl App {
         };
 
         let mut opts = RunOptions::new(dir);
+        opts.plugins = self.plugins;
         opts.title = self.boot.title;
         if let Some(size) = self.boot.size {
             opts.size = size;

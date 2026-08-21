@@ -13,11 +13,11 @@ use bevy_ecs::prelude::*;
 use candela_vm::Value;
 use lumen_core::prelude::{App, Plugin};
 use lumen_script::{
-    CallOutcome, CommandFn, NativeExternFn, ScriptCommand, ScriptContext, ScriptError, ScriptHost,
+    CallOutcome, ScriptCommand, ScriptContext, ScriptError, ScriptFn, ScriptFnStore, ScriptHost,
     ScriptPlugin, ScriptValue,
 };
 
-use crate::host_fns::{NATIVE_NAMESPACE, Registries, register_lumen_host_fns};
+use crate::host_fns::{Registries, register_lumen_host_fns, register_script_fn};
 use crate::lmn;
 use crate::prelude;
 use crate::value::{candela_value_to_script, script_value_to_candela};
@@ -60,6 +60,9 @@ pub struct CandelaHost {
     /// Source of the currently-loaded program, kept so `Diagnostic` byte
     /// spans can be resolved to `(line, col)` for compile errors.
     source: String,
+    /// The [`ScriptFn`]s an embedder registered, kept so `compile_check` can
+    /// replay them into the scratch engine it builds.
+    script_fns: ScriptFnStore,
 }
 
 impl Default for CandelaHost {
@@ -82,6 +85,7 @@ impl CandelaHost {
             },
             registries,
             source: String::new(),
+            script_fns: ScriptFnStore::default(),
         }
     }
 
@@ -343,19 +347,14 @@ impl ScriptHost for CandelaHost {
         self.registries.clear_pending(evaluated);
     }
 
-    fn register_command_fn(
-        &mut self,
-        name: &str,
-        _arity: usize,
-        f: CommandFn,
-    ) -> Result<(), ScriptError> {
+    fn register_script_fn(&mut self, f: &ScriptFn) -> Result<(), ScriptError> {
         // candela host fns are registered before `compile`; the variadic
         // registration hands the closure a `&[Value]` slice of any length, so
         // one registration serves any arity (like the Lua host). The script
-        // declares it in its `host "lumen" { ... }` block with a `...` arg list
-        // and calls it as `lumen::<name>(...)`.
-        self.registries
-            .register_command_fn(&mut self.vm.engine, name, f);
+        // declares it in a `host "<ns>" { ... }` block with a `...` arg list
+        // and calls it as `<ns>::<name>(...)`.
+        register_script_fn(&mut self.vm.engine, &self.registries, f);
+        self.script_fns.record(f);
         Ok(())
     }
 
@@ -513,44 +512,6 @@ impl ScriptCandelaPlugin {
     {
         self.extensions.push(Box::new(f));
         self
-    }
-
-    /// Register a host-neutral [`NativeExternFn`] under the
-    /// [`NATIVE_NAMESPACE`] host namespace.
-    ///
-    /// The same [`NativeExternFn`] registers into the Rhai and Lua hosts
-    /// through their own `with_native_fn`, so an embedder describes a native
-    /// function once and every host the app runs can call it. Arguments and
-    /// the return value marshal through [`ScriptValue`].
-    ///
-    /// candela resolves every host call through a declared block, so a script
-    /// that calls one of these declares it first:
-    ///
-    /// ```text
-    /// host "native" {
-    ///     any my_fn(...);
-    /// }
-    ///
-    /// fn on_start() {
-    ///     native::my_fn(1, 2);
-    /// }
-    /// ```
-    ///
-    /// The registration is variadic, which is why the declaration is
-    /// `any my_fn(...)`; the declared arity is not enforced.
-    #[must_use]
-    pub fn with_native_fn(self, f: NativeExternFn) -> Self {
-        self.with_extension(move |engine: &mut candela::Engine| {
-            let NativeExternFn {
-                name,
-                arity: _,
-                call,
-            } = f;
-            engine.register_host_fn_variadic(NATIVE_NAMESPACE, &name, move |args: &[Value]| {
-                let vals: Vec<ScriptValue> = args.iter().map(candela_value_to_script).collect();
-                script_value_to_candela(&call(&vals))
-            });
-        })
     }
 }
 

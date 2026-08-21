@@ -400,12 +400,7 @@ mod text_event_tests {
             std::collections::HashSet::new()
         }
         fn clear_pending(&mut self, _evaluated: &[String]) {}
-        fn register_command_fn(
-            &mut self,
-            _name: &str,
-            _arity: usize,
-            _f: crate::CommandFn,
-        ) -> Result<(), crate::ScriptError> {
+        fn register_script_fn(&mut self, _f: &crate::ScriptFn) -> Result<(), crate::ScriptError> {
             unimplemented!("no host in these tests")
         }
         fn lang(&self) -> &'static str {

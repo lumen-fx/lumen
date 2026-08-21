@@ -57,6 +57,7 @@ use crate::http::{
     DisabledHttpClient, HttpClient, HttpDispatch, HttpDone, HttpRequest, HttpResponse,
     ThreadDispatch,
 };
+use crate::script_fn::ScriptFnRegistry;
 use crate::{CallOutcome, ScriptCommand, ScriptError, ScriptHost, ScriptValue};
 
 /// One [`ScriptCommand`] flowing through the ECS message bus so app
@@ -213,6 +214,25 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> ScriptPlugin<H> {
 impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> {
     fn build(mut self, app: &mut App) {
         let lang = self.host.lang();
+        // Bind the app's registered functions before the program compiles.
+        // candela resolves every `host "..." { .. }` declaration while it
+        // compiles the source, so a function registered after the load has
+        // nothing left to bind to; Rhai and Lua would bind a name the compiled
+        // program already failed to resolve. Sealing after the drain turns a
+        // late registration into a warning instead of a silent miss.
+        if app.world.contains_resource::<ScriptFnRegistry>() {
+            let fns = app.world.resource::<ScriptFnRegistry>().for_lang(lang);
+            for f in &fns {
+                if let Err(e) = self.host.register_script_fn(f) {
+                    warn_line!(
+                        "{}: registering `{}` failed: {e}",
+                        prefix(lang),
+                        f.name.as_str()
+                    );
+                }
+            }
+            app.world.resource_mut::<ScriptFnRegistry>().seal();
+        }
         if let Err(e) = self.host.load(&self.source, &self.uri) {
             // Unmissable, multi-line stderr banner - a load failure kills
             // every handler / signal / derivation while the window keeps

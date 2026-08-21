@@ -5,8 +5,7 @@ use lumen_ir::layout_ir::MenuEntrySpec;
 use lumen_core::command::{Command, CommandQueue};
 use lumen_core::components::ColorScheme;
 use lumen_core::nav;
-use lumen_script::{NativeFnBody, ScriptValue};
-use std::sync::Arc;
+use lumen_script::{HostSet, ScriptFn, ScriptFnAppExt, ScriptNs, ScriptTy, ScriptValue};
 
 /// Construct the fully-configured [`App`] and the [`WindowSetup`] the
 /// windowed path would run it with - everything [`run_app`] does short
@@ -17,7 +16,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     #[cfg(feature = "host-rhai")]
     let mut rhai_extensions = std::mem::take(&mut opts.rhai_extensions);
     // Host-neutral native functions (the C-ABI's `lumen_app_expose`, the Rust
-    // SDK). Every host arm below registers the same set, so an exposed
+    // SDK). They go into the registry every host drains, so an exposed
     // function is callable from whichever languages the app ships.
     let native_fns = std::mem::take(&mut opts.native_fns);
     let app_hooks = std::mem::take(&mut opts.app_hooks);
@@ -156,10 +155,10 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // `register_script_common` installs the host-neutral half once, ordering
     // it against `lumen_script::ScriptSet` so its RC-critical edges cover
     // every active host; `register_script_host_systems::<H>` then installs
-    // the per-host half once per language. `set_color_scheme` and the page
-    // navigation family are described once, host-neutrally
-    // ([`builtin_script_fns`]), and each arm registers them through the same
-    // `with_native_fn` channel an embedder's `RunOptions::native_fns` use.
+    // the per-host half once per language. Every native function an app can
+    // call - the runtime's own ([`builtin_script_fns`]), a plugin's, and the
+    // embedder's `RunOptions::native_fns` - goes into one `ScriptFnRegistry`
+    // below, which each host drains as it loads.
     //
     // A precompiled artifact carries the split the AOT compiler recorded, and
     // it is the only source of it: the app's `.lua` / `.rhai` files are not
@@ -178,27 +177,25 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // the first one to build installs a `FetchRegistry` if none exists yet.
     register_http_client(&mut app);
     register_script_common(&mut app, has_script);
-    let builtin_fns = builtin_script_fns(&app);
+    // The registration order is the shadowing order: the runtime's own
+    // functions first, then a plugin's, then the embedder's. Every host drains
+    // this one registry as it loads and seals it afterwards, so a registration
+    // that arrives too late to bind says so instead of going quiet.
+    app.add_script_fns(builtin_script_fns(&app));
+    for install in std::mem::take(&mut opts.plugins) {
+        install(&mut app);
+    }
+    app.add_script_fns(native_fns);
     for (engine, combined) in grouped {
         match engine {
             #[cfg(feature = "host-rhai")]
             crate::config::ScriptEngine::Rhai => {
                 let mut plugin = ScriptRhaiPlugin::new(combined);
-                // Runtime built-ins first, so a later registration under the
-                // same name (an app's own extension, an exposed native fn)
-                // shadows them.
-                for f in builtin_fns.iter().cloned() {
-                    plugin = plugin.with_native_fn(f);
-                }
                 // Native extensions (RunOptions / Rust SDK hooks) are
                 // `rhai::Engine`-typed, so they only bind to the Rhai host and
                 // are inapplicable to an app with no Rhai in it.
                 for ext in std::mem::take(&mut rhai_extensions) {
                     plugin = plugin.with_extension(ext);
-                }
-                // Host-neutral exposed functions: registered into every host.
-                for f in native_fns.iter().cloned() {
-                    plugin = plugin.with_native_fn(f);
                 }
                 app.add_plugin(plugin);
                 register_script_host_systems::<RhaiHost>(&mut app, multi_host);
@@ -206,17 +203,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
             }
             #[cfg(feature = "host-lua")]
             crate::config::ScriptEngine::Lua => {
-                let mut plugin = ScriptLuaPlugin::new(combined);
-                // Runtime built-ins first, so a later registration under the
-                // same name shadows them.
-                for f in builtin_fns.iter().cloned() {
-                    plugin = plugin.with_native_fn(f);
-                }
-                // Host-neutral exposed functions: registered into every host.
-                for f in native_fns.iter().cloned() {
-                    plugin = plugin.with_native_fn(f);
-                }
-                app.add_plugin(plugin);
+                app.add_plugin(ScriptLuaPlugin::new(combined));
                 register_script_host_systems::<LuaHost>(&mut app, multi_host);
                 reloaders.push(engine, reload_script::<LuaHost>);
             }
@@ -226,20 +213,16 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
                 // resolves its library next to the app under `lumenc run`,
                 // matching how `lumenc check` resolves it.
                 //
-                // This arm skips `builtin_script_fns`: candela already
-                // registers `set_color_scheme` and the page family in its own
-                // prelude, under the `lumen` namespace its scripts call them
-                // through. Registering them here too would add a second
-                // spelling (`native::page`) backed by a different bus.
-                let mut plugin =
-                    ScriptCandelaPlugin::new(combined).with_uri(html_path.display().to_string());
-                // Host-neutral exposed functions: registered into every host.
-                // candela reaches them as `native::<name>(...)` after the
-                // script declares `host "native" { ... }`.
-                for f in native_fns.iter().cloned() {
-                    plugin = plugin.with_native_fn(f);
-                }
-                app.add_plugin(plugin);
+                // The runtime's own functions carry `RHAI | LUA` and so pass
+                // this host by: candela already declares `set_color_scheme`
+                // and the page family in its prelude, under the `lumen`
+                // namespace its scripts call them through, and a second
+                // spelling (`native::page`) would be backed by a different
+                // bus. Everything else reaches candela as `native::<name>(...)`
+                // once the script declares `host "native" { ... }`.
+                app.add_plugin(
+                    ScriptCandelaPlugin::new(combined).with_uri(html_path.display().to_string()),
+                );
                 register_script_host_systems::<CandelaHost>(&mut app, multi_host);
                 reloaders.push(engine, reload_script::<CandelaHost>);
             }
@@ -256,7 +239,6 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     }
     #[cfg(feature = "host-rhai")]
     let _ = &rhai_extensions;
-    let _ = (&native_fns, &builtin_fns);
     app.world.insert_resource(reloaders);
     use crate::spawn::SpawnIntoWorld;
     let root = ir.spawn_into(&mut app.world);
@@ -507,22 +489,26 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
 /// The script functions the runtime itself provides: `set_color_scheme` and
 /// the file-based-pages navigation family.
 ///
-/// They are described in the host-neutral [`NativeExternFn`] terms every host
-/// understands, so each host registers them through the same `with_native_fn`
-/// channel an embedder's [`RunOptions::native_fns`] use, and a host added
-/// later gets them without a per-engine port. `app` supplies the
-/// [`CommandQueue`] sender the scheme change rides.
+/// They are described in the host-neutral [`ScriptFn`] terms every host
+/// understands, so a host added later gets them without a per-engine port.
+/// `app` supplies the [`CommandQueue`] sender the scheme change rides.
 ///
-/// `page` appears twice, at arity 1 and arity 0, sharing one body: Rhai
-/// resolves a call by argument count and needs both, while Lua and candela
-/// bind variadically and the body decides from what it was passed. Hosts that
-/// key a function by name alone cannot overload it, which is why the reader
-/// also has the unambiguous `page_current` spelling.
-pub fn builtin_script_fns(app: &App) -> Vec<NativeExternFn> {
+/// They carry `RHAI | LUA`: candela declares the same names in its own
+/// prelude, under the `lumen` namespace its scripts call them through, and a
+/// second spelling would be backed by a different bus.
+///
+/// `page` takes an optional argument: with one it navigates, without one it
+/// reads the current page. Hosts that key a function by name alone cannot
+/// overload it, which is why the reader also has the unambiguous
+/// `page_current` spelling.
+pub fn builtin_script_fns(app: &App) -> Vec<ScriptFn> {
     let sender = app.world.resource::<CommandQueue>().sender().clone();
-    let set_color_scheme =
-        NativeExternFn::new("set_color_scheme", 1, move |args: &[ScriptValue]| {
-            let name = args.first().map(ScriptValue::stringify).unwrap_or_default();
+    let set_color_scheme = ScriptFn::new("set_color_scheme")
+        .param("name", ScriptTy::Str)
+        .ret(ScriptTy::Unit)
+        .doc("Apply a color scheme by name.")
+        .build(move |cx| {
+            let name = cx.str_arg(0);
             let Some(scheme) = ColorScheme::from_name(&name) else {
                 tracing::warn!(
                     "set_color_scheme: unknown name {name:?}; expected one of \
@@ -543,31 +529,41 @@ pub fn builtin_script_fns(app: &App) -> Vec<NativeExternFn> {
     // `page("x")` navigates, `page()` reads the current page. Both ride the
     // shared `lumen_core::nav` bus, the same one an `<a href>` click, the
     // C-ABI, and the Rust SDK write.
-    let page: NativeFnBody = Arc::new(|args: &[ScriptValue]| match args.first() {
-        Some(ScriptValue::Unit) | None => ScriptValue::Str(nav::current()),
-        Some(path) => {
-            nav::navigate(path.stringify());
-            ScriptValue::Unit
-        }
-    });
-    vec![
+    let page = ScriptFn::new("page")
+        .param("path", ScriptTy::Str)
+        .min_arity(0)
+        .doc("Navigate to a page, or read the current one when called with no argument.")
+        .build(|cx| match cx.arg(0) {
+            ScriptValue::Unit => ScriptValue::Str(nav::current()),
+            path => {
+                nav::navigate(path.stringify());
+                ScriptValue::Unit
+            }
+        });
+    let fns = vec![
         set_color_scheme,
-        NativeExternFn {
-            name: "page".to_string(),
-            arity: 1,
-            call: Arc::clone(&page),
-        },
-        NativeExternFn {
-            name: "page".to_string(),
-            arity: 0,
-            call: page,
-        },
-        NativeExternFn::new("page_current", 0, |_| ScriptValue::Str(nav::current())),
+        page,
+        ScriptFn::new("page_current")
+            .ret(ScriptTy::Str)
+            .doc("The page the app is on.")
+            .build(|_| ScriptValue::Str(nav::current())),
         // History back / forward (in-memory stack on desktop). Both report
         // whether the step was queued, so a script can branch on it.
-        NativeExternFn::new("page_back", 0, |_| ScriptValue::Bool(nav::back())),
-        NativeExternFn::new("page_forward", 0, |_| ScriptValue::Bool(nav::forward())),
-    ]
+        ScriptFn::new("page_back")
+            .ret(ScriptTy::Bool)
+            .doc("Step back through the page history.")
+            .build(|_| ScriptValue::Bool(nav::back())),
+        ScriptFn::new("page_forward")
+            .ret(ScriptTy::Bool)
+            .doc("Step forward through the page history.")
+            .build(|_| ScriptValue::Bool(nav::forward())),
+    ];
+    fns.into_iter()
+        .map(|f| {
+            f.with_ns(ScriptNs::Builtin)
+                .with_hosts(HostSet::RHAI | HostSet::LUA)
+        })
+        .collect()
 }
 
 /// True when this build compiled the host for `engine`.

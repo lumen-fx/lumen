@@ -11,7 +11,7 @@ use crate::events::{EventCtx, EventKind, HandlerEntry, install_rust_handlers};
 use lumen_core::app::App as EcsApp;
 use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_runtime::RunOptions;
-use lumen_script::{NativeExternFn, ScriptValue};
+use lumen_script::{ScriptFn, ScriptValue};
 use std::path::PathBuf;
 
 /// Callback applied to the fully-built ECS app before the event loop.
@@ -68,7 +68,7 @@ pub struct AppBuilder {
     hot_reload: Option<bool>,
     seeds: Vec<(String, PropertyValue)>,
     handlers: Vec<HandlerEntry>,
-    native_fns: Vec<NativeExternFn>,
+    native_fns: Vec<ScriptFn>,
     #[cfg(feature = "host-rhai")]
     rhai_extensions: Vec<RhaiExtension>,
     configure: Vec<ConfigureHook>,
@@ -209,7 +209,9 @@ impl AppBuilder {
     /// The function is registered into every host the app runs, so it is
     /// callable whatever language the script is written in. Arguments and the
     /// return value cross as [`ScriptValue`]; `arity` is the declared argument
-    /// count, which Rhai dispatches on and Lua and candela do not enforce.
+    /// count, and the parameters are untyped. Reach for
+    /// [`Self::script_fn`] when you want declared parameter types, a
+    /// namespace, or a doc string.
     ///
     /// ```no_run
     /// use lumenui::simple::App;
@@ -222,11 +224,35 @@ impl AppBuilder {
     ///     .run()
     /// # }
     /// ```
-    pub fn native_fn<F>(mut self, name: impl Into<String>, arity: usize, f: F) -> Self
+    pub fn native_fn<F>(self, name: impl Into<String>, arity: usize, f: F) -> Self
     where
         F: Fn(&[ScriptValue]) -> ScriptValue + Send + Sync + 'static,
     {
-        self.native_fns.push(NativeExternFn::new(name, arity, f));
+        self.script_fn(ScriptFn::value(name, arity, f))
+    }
+
+    /// Expose a fully described [`ScriptFn`]: declared parameter types, a
+    /// return type, a namespace, and the languages that may see it.
+    ///
+    /// ```no_run
+    /// use lumenui::simple::App;
+    /// use lumenui::{ScriptFn, ScriptTy, ScriptValue};
+    ///
+    /// # fn demo() -> lumenui::Result<()> {
+    /// App::builder()
+    ///     .dir("app")
+    ///     .script_fn(
+    ///         ScriptFn::new("set_pin")
+    ///             .param("pin", ScriptTy::Int)
+    ///             .ret(ScriptTy::Bool)
+    ///             .doc("Drive a GPIO pin high.")
+    ///             .build(|cx| ScriptValue::Bool(cx.int_arg(0) > 0)),
+    ///     )
+    ///     .run()
+    /// # }
+    /// ```
+    pub fn script_fn(mut self, f: ScriptFn) -> Self {
+        self.native_fns.push(f);
         self
     }
 
@@ -390,13 +416,13 @@ mod tests {
         let names: Vec<(&str, usize)> = opts
             .native_fns
             .iter()
-            .map(|f| (f.name.as_str(), f.arity))
+            .map(|f| (f.name.as_str(), f.sig.params.len()))
             .collect();
         assert_eq!(names, vec![("answer", 0), ("shout", 1)]);
 
         let shout = &opts.native_fns[1];
         assert_eq!(
-            (shout.call)(&[ScriptValue::Str("hi".into())]),
+            shout.invoke(&[ScriptValue::Str("hi".into())]).0,
             ScriptValue::Str("HI".into()),
             "the closure the caller passed is the one that runs"
         );

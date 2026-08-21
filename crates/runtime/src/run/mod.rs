@@ -55,7 +55,7 @@ use lumen_script_rhai::{RhaiHost, ScriptRhaiPlugin};
 // hosts installed, an edge naming one host's system leaves the others outside
 // the one-tick dirty window.
 use lumen_render_wgpu::WgpuSurfaceRenderer;
-use lumen_script::{NativeExternFn, ScriptCommandEvent, ScriptSet, fire_on_ready, reload_script};
+use lumen_script::{ScriptCommandEvent, ScriptFn, ScriptSet, fire_on_ready, reload_script};
 use lumen_text::{ShaperService, TextShaper};
 use lumen_text_cosmic::CosmicShaper;
 use lumen_window_winit::{A11yBridgeFactory, run};
@@ -90,6 +90,12 @@ type RhaiExtension = Box<dyn FnOnce(&mut rhai::Engine) + Send + 'static>;
 /// values - `system.chain()` / `system.run_if(..)` box into `!Send`
 /// `ScheduleConfigs`, which a `Send` hook could not capture.
 pub type AppHook = Box<dyn FnOnce(&mut App) + 'static>;
+
+/// One deferred [`Plugin`](lumen_core::app::Plugin) installation, held until
+/// [`build_app`] reaches the phase that runs it. `Send` so an embedder can
+/// build the options on one thread and run them on another; the plugin itself
+/// is moved into the closure.
+pub type PluginInstaller = Box<dyn FnOnce(&mut App) + Send>;
 
 /// The window-facing half of a built app: the resolved
 /// [`WindowOptions`] plus the render-side text shaper the build picked
@@ -132,6 +138,9 @@ pub struct RunOptions {
     /// [`Self::native_fns`] for a function every host can call.
     #[cfg(feature = "host-rhai")]
     pub rhai_extensions: Vec<RhaiExtension>,
+    /// Plugins installed on the [`App`] before the script hosts load. See
+    /// [`Self::with_plugin`].
+    pub plugins: Vec<PluginInstaller>,
     /// Native functions exposed to the app's script in host-neutral terms.
     /// Each one is registered into every host the app runs, marshalling
     /// arguments and results through `lumen_script::ScriptValue`. This is what
@@ -140,7 +149,7 @@ pub struct RunOptions {
     /// candela resolves host calls through a declared block, so a candela
     /// script reaches these as `native::<name>(...)` after declaring
     /// `host "native" { any <name>(...); }`; Rhai and Lua see plain globals.
-    pub native_fns: Vec<NativeExternFn>,
+    pub native_fns: Vec<ScriptFn>,
     /// In-memory markup source. When `Some`, the runtime parses this
     /// string instead of reading `<dir>/main.lmn` from disk, and hot
     /// reload is disabled (there is no file to watch). Set by the Rust
@@ -211,6 +220,7 @@ impl RunOptions {
             hot_reload: true,
             #[cfg(feature = "host-rhai")]
             rhai_extensions: Vec::new(),
+            plugins: Vec::new(),
             native_fns: Vec::new(),
             markup: None,
             css: None,
@@ -255,9 +265,30 @@ impl RunOptions {
         self
     }
 
+    /// Builder: install a [`Plugin`](lumen_core::app::Plugin) on the app
+    /// before the script hosts load.
+    ///
+    /// This is the phase a plugin that registers script functions
+    /// ([`ScriptFnAppExt::add_script_fn`](lumen_script::ScriptFnAppExt::add_script_fn))
+    /// belongs in: candela binds its host declarations when the program
+    /// compiles or the artifact loads, so a function registered later has
+    /// nothing to bind to. Contrast [`Self::with_app_hook`], which runs on the
+    /// fully-built app and is where systems ordered against the default stack
+    /// belong.
+    ///
+    /// Plugins install in the order they are added, after the runtime's own
+    /// built-in script functions and before [`Self::native_fns`]; a name
+    /// registered later shadows an earlier one.
+    pub fn with_plugin<P: lumen_core::app::Plugin + Send + 'static>(mut self, plugin: P) -> Self {
+        self.plugins.push(Box::new(move |app: &mut App| {
+            app.add_plugin(plugin);
+        }));
+        self
+    }
+
     /// Builder: expose a native function to the app's script in host-neutral
     /// terms. See [`Self::native_fns`].
-    pub fn with_native_fn(mut self, f: NativeExternFn) -> Self {
+    pub fn with_native_fn(mut self, f: ScriptFn) -> Self {
         self.native_fns.push(f);
         self
     }

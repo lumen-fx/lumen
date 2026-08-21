@@ -40,8 +40,8 @@ use std::sync::{Arc, RwLock};
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::*;
 use lumen_script::{
-    CallOutcome, CommandFn, NativeExternFn, ScriptCommand, ScriptContext, ScriptError, ScriptHost,
-    ScriptValue,
+    CallOutcome, ScriptCommand, ScriptContext, ScriptError, ScriptFn, ScriptFnStore, ScriptHost,
+    ScriptNs, ScriptValue,
 };
 use mlua::{
     Function, Lua, MetaMethod, Table, UserData, UserDataMethods, Value as LuaValue, Variadic,
@@ -1292,6 +1292,10 @@ pub struct LuaHost {
     handlers: HandlerMap,
     derivations: DerivationMap,
     pending_initial: PendingSet,
+    /// The [`ScriptFn`]s an embedder registered. `reset` rebuilds the `Lua`
+    /// from scratch, which drops every global the old VM held, so the store is
+    /// what puts them back.
+    script_fns: ScriptFnStore,
 }
 
 impl Default for LuaHost {
@@ -1326,6 +1330,7 @@ impl LuaHost {
             handlers,
             derivations,
             pending_initial,
+            script_fns: ScriptFnStore::default(),
         }
     }
 
@@ -1509,6 +1514,16 @@ impl LuaHost {
             Ok(lua) => self.lua = lua,
             Err(e) => {
                 tracing::error!(target: "lumen.script.lua", error = %e, "reset: rebuild failed")
+            }
+        }
+        // The rebuilt VM has Lumen's builtins and nothing else, so every
+        // embedder registration goes back in. Without the replay a reset app
+        // loses its exposed functions with no diagnostic: the call reaches a
+        // nil global.
+        let stored = std::mem::take(&mut self.script_fns);
+        for f in stored.iter() {
+            if let Err(e) = self.register_script_fn(f) {
+                tracing::error!(target: "lumen.script.lua", error = %e, name = %f.name, "reset: re-registering a native fn failed");
             }
         }
         self.loaded = false;
@@ -1748,27 +1763,68 @@ impl ScriptHost for LuaHost {
         }
     }
 
-    fn register_command_fn(
-        &mut self,
-        name: &str,
-        _arity: usize,
-        f: CommandFn,
-    ) -> Result<(), ScriptError> {
-        // Lua functions are variadic natively - one closure handles any
-        // arity (no per-arity dispatch like the Rhai host needs).
+    fn register_script_fn(&mut self, f: &ScriptFn) -> Result<(), ScriptError> {
+        // Lua functions are variadic natively, so one closure serves every
+        // arity the signature accepts. What Rhai gets from binding a declared
+        // type to a parameter slot, Lua gets from checking the arguments here
+        // and raising: a call with the wrong shape fails at the call, not
+        // halfway through the body.
         let sink = self.sink.clone();
+        let bound = f.clone();
         let func = self
             .lua
-            .create_function(move |_, args: Variadic<LuaValue>| {
-                let svs: Vec<ScriptValue> = args.iter().map(lua_value_to_script_value).collect();
-                sink.lock().extend(f(&svs));
-                Ok(())
+            .create_function(move |lua, args: Variadic<LuaValue>| {
+                let vals: Vec<ScriptValue> = args.iter().map(lua_value_to_script_value).collect();
+                if bound.sig.is_typed()
+                    && let Err(message) = bound.sig.check_args(&vals)
+                {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "{}: {message}",
+                        bound.name
+                    )));
+                }
+                // The sink lock is taken once, after the body returns: a body
+                // that calls back into a builtin would otherwise meet a lock
+                // its own call is holding.
+                let (ret, commands) = bound.invoke(&vals);
+                if !commands.is_empty() {
+                    sink.lock().extend(commands);
+                }
+                script_value_to_lua(lua, &ret)
             })
             .map_err(|e| ScriptError::Runtime(e.to_string()))?;
-        self.lua
-            .globals()
-            .set(name, func)
-            .map_err(|e| ScriptError::Runtime(e.to_string()))
+        match &f.ns {
+            // Lua has one global table, so the runtime's own surface and an
+            // embedder's share it; a later registration shadows an earlier one.
+            ScriptNs::Builtin | ScriptNs::Extension => self
+                .lua
+                .globals()
+                .set(f.name.as_str(), func)
+                .map_err(|e| ScriptError::Runtime(e.to_string()))?,
+            // A named namespace is a global table the script indexes as
+            // `ns.name(...)`, created on the first function that names it.
+            ScriptNs::Named(ns) => {
+                let globals = self.lua.globals();
+                let table = match globals.get::<LuaValue>(ns.as_str()) {
+                    Ok(LuaValue::Table(t)) => t,
+                    _ => {
+                        let t = self
+                            .lua
+                            .create_table()
+                            .map_err(|e| ScriptError::Runtime(e.to_string()))?;
+                        globals
+                            .set(ns.as_str(), t.clone())
+                            .map_err(|e| ScriptError::Runtime(e.to_string()))?;
+                        t
+                    }
+                };
+                table
+                    .set(f.name.as_str(), func)
+                    .map_err(|e| ScriptError::Runtime(e.to_string()))?;
+            }
+        }
+        self.script_fns.record(f);
+        Ok(())
     }
 
     fn lang(&self) -> &'static str {
@@ -2776,35 +2832,6 @@ impl ScriptLuaPlugin {
     {
         self.extensions.push(Box::new(f));
         self
-    }
-
-    /// Register a host-neutral [`NativeExternFn`] as a global Lua function.
-    ///
-    /// The same [`NativeExternFn`] registers into the Rhai and candela hosts
-    /// through their own `with_native_fn`, so an embedder describes a native
-    /// function once and every host the app runs can call it. Arguments and
-    /// the return value marshal through [`ScriptValue`]. The Lua binding is
-    /// variadic: the declared arity is not enforced, and a call passing too
-    /// few arguments reaches the function with a shorter slice.
-    #[must_use]
-    pub fn with_native_fn(self, f: NativeExternFn) -> Self {
-        self.with_extension(move |lua: &mut Lua| {
-            let NativeExternFn {
-                name,
-                arity: _,
-                call,
-            } = f;
-            let registered = lua
-                .create_function(move |lua, args: Variadic<LuaValue>| {
-                    let vals: Vec<ScriptValue> =
-                        args.iter().map(lua_value_to_script_value).collect();
-                    script_value_to_lua(lua, &call(&vals))
-                })
-                .and_then(|func| lua.globals().set(name.as_str(), func));
-            if let Err(e) = registered {
-                tracing::warn!("lua: registering native fn `{name}` failed: {e}");
-            }
-        })
     }
 }
 
