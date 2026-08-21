@@ -533,6 +533,14 @@ Two more write directly to the element tree by id, without a node handle:
 | `set_text(target_id, text)` | Replace the text content of the element with that `id`. |
 | `set_src(target_id, path)` | Swap the asset path of an `<image>` at run time. Paths are app-relative. |
 
+## Native functions
+
+Functions an embedder or a plugin registers appear as bare globals here, and one
+registered under a namespace of its own appears as a global table:
+`gpio.read(21)`. A function registered with declared parameter types raises on a
+call whose arguments do not match; an untyped one takes whatever it is passed.
+See [FFI and SDKs](ffi.md).
+
 ## Reserved global
 
 `__lumen_event_handlers` is the table the host keeps bound event handlers in,

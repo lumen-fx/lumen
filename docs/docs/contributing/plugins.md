@@ -235,6 +235,112 @@ the app's markup is parsed. Suppressing the generated plugin also suppresses
 the registration, in which case call the generated `register` function
 yourself.
 
+## Exposing functions to scripts
+
+A plugin can give the app's script functions of its own. One description covers
+every language: describe the function once and a Rhai, Lua, or candela script
+calls it.
+
+```rust
+use lumen_core::prelude::*;
+use lumen_script::{ScriptFn, ScriptFnAppExt, ScriptNs, ScriptTy, ScriptValue};
+
+pub struct GpioPlugin;
+
+impl Plugin for GpioPlugin {
+    fn build(self, app: &mut App) {
+        app.add_script_fn(
+            ScriptFn::new("read")
+                .ns(ScriptNs::Named("gpio".to_string()))
+                .param("pin", ScriptTy::Int)
+                .ret(ScriptTy::Int)
+                .doc("Read a GPIO pin.")
+                .build(|cx| ScriptValue::I64(read_pin(cx.int_arg(0)))),
+        );
+    }
+}
+```
+
+A `ScriptFn` carries the name, the namespace, a typed signature, the languages
+that may see it, and the body. The body takes a call context: the arguments, and
+a sink it emits [script commands](architecture.md) into when its effect belongs
+to the runtime rather than to the return value. `ScriptFn::value` and
+`ScriptFn::commands` are shorthands for the untyped shapes.
+
+### Where the registration has to happen
+
+Install a plugin that registers script functions through the plugin phase:
+`RunOptions::with_plugin`, or `App::add_plugin` on the Rust SDK. That phase runs
+before the script hosts load the app's program, which is the window in which a
+registration can still be bound. candela resolves its `host` declarations while
+the program compiles, and the artifact host binds them while the image loads, so
+a function registered afterwards has nothing left to bind to. A late
+registration warns and is ignored rather than half-working.
+
+Registrations arrive in an app-wide `ScriptFnRegistry` resource. Each host
+drains the entries its language may see just before it loads, then the registry
+is sealed. Order is meaningful: a later function of the same namespace and name
+shadows an earlier one, which is how a plugin replaces one of the runtime's own
+builtins.
+
+A plugin installed this way builds before the SDK builder's own
+`insert_resource` and `add_systems` calls run, so a plugin that needs something
+the builder inserts should read it from a system rather than from `build`.
+
+### Namespaces
+
+| `ScriptNs` | Rhai | Lua | candela |
+| --- | --- | --- | --- |
+| `Builtin` | `read(21)` | `read(21)` | `lumen::read(21)` |
+| `Extension` | `read(21)` | `read(21)` | `native::read(21)` |
+| `Named("gpio")` | `gpio::read(21)` | `gpio.read(21)` | `gpio::read(21)` |
+
+`Builtin` is the runtime's own surface; a plugin normally takes `Extension` or a
+name of its own. Rhai gets a static module per named namespace, Lua a global
+table, candela a host namespace.
+
+candela needs a declaration behind every call, and the host writes it from the
+signature the plugin registered, so an app calls a plugin function without
+declaring anything. An app that spells the block itself keeps it: the host skips
+a namespace the source already declares, which is what a script written against
+an older release, and an artifact built from one, rely on.
+
+### Shipping candela sugar
+
+A plugin can ship candela source of its own, compiled ahead of the app's
+program, to offer method syntax over the functions it registered:
+
+```rust
+app.add_script_prelude(
+    "candela",
+    "gpio",
+    r#"
+struct Pin { number: int }
+fn pin(number) { return Pin { number: number }; }
+impl Pin {
+    fn read(self) { return gpio::read(self.number); }
+}
+"#,
+);
+```
+
+The script then calls `pin(21).read()`. An error inside that source is reported
+against the plugin's namespace, not against a line of the app.
+
+### Limits
+
+Values cross as scalars, strings, arrays, and string-keyed maps. A handle to
+something in the world does not; pass an id and look it up.
+
+Editor tooling reads the builtin metadata tables, which describe the runtime's
+own surface, so a plugin's functions do not appear in completion or hover.
+
+A precompiled `.cdlb` carries the declarations its source spelled: the build
+compiles the script on its own, with no plugin present to declare anything. A
+script that will be compiled ahead of time therefore writes the
+`host "<ns>" { .. }` block itself. For the same reason a `.cdl` wrapper cannot
+reach an artifact, and the artifact host says so when it is handed one.
+
 ## Extending the asset server
 
 The asset pipeline decides what a path becomes through a registry of loaders.

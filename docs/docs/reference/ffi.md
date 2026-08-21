@@ -139,22 +139,18 @@ Rhai and Lua scripts call an exposed `now_ms` as a plain global, `now_ms()`.
 Rhai dispatches on the declared `arg_count`; Lua binds the call variadically, so
 the count is not enforced there.
 
-candela resolves every host call through a declared block, so a candela script
-declares what it calls, once, and reaches it under the `native` namespace:
+A candela script reaches the same function under the `native` namespace:
 
 ```rust
-host "native" {
-    any now_ms(...);
-}
-
 fn on_start() {
     let t = native::now_ms();
 }
 ```
 
-Declare each one variadic with the `any` return type, and declare only what the
-embedder exposes: candela checks each declaration against a registered
-implementation at compile time. See
+candela resolves a host call through a `host "native" { .. }` block, and the host
+writes that block from what was exposed, so the script declares nothing. A script
+that carries its own block keeps it, and one compiled ahead of time to a `.cdlb`
+needs it: that build sees the script alone. See
 [candela scripting](scripting-candela.md#native-functions-from-the-embedder).
 
 Array and map arguments reach the callback as `LUMEN_NIL`; scalars and strings
@@ -502,6 +498,31 @@ fn main() -> lumenui::Result<()> {
         .run()
 }
 ```
+
+`script_fn` on the same builder takes a described function rather than a bare
+closure: parameter types, a return type, a one-line doc, a namespace of your
+choosing, and the languages that may see it.
+
+```rust
+use lumenui::{ScriptFn, ScriptTy, ScriptValue};
+
+App::builder()
+    .dir("app")
+    .script_fn(
+        ScriptFn::new("set_pin")
+            .param("pin", ScriptTy::Int)
+            .ret(ScriptTy::Bool)
+            .doc("Drive a GPIO pin high.")
+            .build(|cx| ScriptValue::Bool(cx.int_arg(0) > 0)),
+    )
+    .run()
+```
+
+Both land in the same registry as `lumen_app_expose` and as anything a plugin
+registers. A plugin is the third way in, and it goes through `add_plugin`: that
+installs it before the script hosts load, which is the window a registration has
+to arrive in. See [Writing plugins](../contributing/plugins.md) for what a plugin
+can expose and how each language spells a namespace.
 
 `rhai_extension` on the same builder takes a `rhai::Engine` and so reaches the
 Rhai host alone. It is behind the crate's `host-rhai` feature, on by default;
