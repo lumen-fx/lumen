@@ -57,6 +57,10 @@ pub mod script_fn;
 /// The builtin surface every host shares, described once as [`ScriptFn`]s.
 pub mod builtin_fns;
 
+/// The DOM and event surface a language without receiver methods reaches
+/// through free functions over an interned node id.
+mod node_fns;
+
 use std::collections::HashSet;
 use thiserror::Error;
 

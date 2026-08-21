@@ -148,10 +148,18 @@ fn on_start() {
 }
 
 // The tree exists from `on_ready` on, so that is where a node lookup belongs.
+// This walks the free-function DOM surface: a lookup, a read, a traversal, a
+// list, and a write, each one a typed declaration in the prelude.
 fn on_ready() {
     let n = lumen::node_get_by_id("out");
     if n != 0 {
         lumen::signal_set("found", "yes");
+        lumen::signal_set("tag", lumen::node_get_attr(n, "id"));
+        lumen::node_set_attr(n, "data-seen", "1");
+        let parent = lumen::node_parent(n);
+        let kids = lumen::node_children(parent);
+        lumen::signal_set_int("kids", kids.len());
+        lumen::signal_set("markup", lumen::node_outer_markup(n));
     }
 }
 
@@ -162,4 +170,18 @@ fn main() {}
     assert_eq!(label_text(&mut app).as_deref(), Some("candela says hello"));
     assert!(signal(&app, "page").is_some());
     assert_eq!(signal(&app, "found").as_deref(), Some("yes"));
+    assert_eq!(
+        signal(&app, "tag").as_deref(),
+        Some("out"),
+        "a string-returning node read crossed back"
+    );
+    assert_eq!(
+        signal(&app, "kids").as_deref(),
+        Some("1"),
+        "a node list crossed back as a candela array"
+    );
+    assert!(
+        signal(&app, "markup").is_some_and(|m| m.contains("label")),
+        "a markup read crossed back as a string"
+    );
 }

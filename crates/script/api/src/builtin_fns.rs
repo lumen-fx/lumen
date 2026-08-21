@@ -66,6 +66,7 @@ pub fn builtin_script_fns() -> Vec<ScriptFn> {
     fns.extend(request_fns());
     fns.extend(audio_fns());
     fns.extend(misc_fns());
+    fns.extend(crate::node_fns::node_script_fns());
     fns
 }
 

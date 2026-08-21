@@ -229,20 +229,41 @@ fn the_request_surface_reads_empty_off_a_server() {
     assert_eq!(builtin("lua", "request_body").invoke(&[]).0, text(""));
 }
 
-/// Every host is offered the same table apart from the navigation family,
-/// which is the one place a language's own shape wins.
+/// Every host is offered the shared surface, apart from two deliberate
+/// exceptions: the navigation family, where a language's own shape wins, and
+/// the free-function DOM surface, which exists for the language that has no
+/// receiver methods to reach it through.
 #[test]
 fn the_table_reaches_every_host() {
-    let split: Vec<&str> = ["page", "page_back", "page_forward"].to_vec();
+    let split = ["page", "page_back", "page_forward"];
     for f in builtin_script_fns() {
         if split.contains(&f.name.as_str()) {
             continue;
         }
-        assert_eq!(
-            f.hosts,
-            HostSet::ALL,
-            "`{}` is offered to some hosts only",
-            f.name
-        );
+        let expected = if f.name.starts_with("node_") || f.name.starts_with("event_") {
+            HostSet::CANDELA
+        } else {
+            HostSet::ALL
+        };
+        assert_eq!(f.hosts, expected, "`{}` reaches the wrong hosts", f.name);
+    }
+}
+
+/// The free-function DOM surface is candela's, and no other host offers it:
+/// Rhai and Lua reach the same reads and writes through node receivers.
+#[test]
+fn the_free_function_dom_surface_is_candela_only() {
+    let node_fns: Vec<ScriptFn> = builtin_script_fns()
+        .into_iter()
+        .filter(|f| f.name.starts_with("node_") || f.name.starts_with("event_"))
+        .collect();
+    assert!(
+        node_fns.len() > 50,
+        "the DOM surface is much larger than {}",
+        node_fns.len()
+    );
+    for f in &node_fns {
+        assert!(!f.visible_to("rhai"), "`{}` reached Rhai", f.name);
+        assert!(!f.visible_to("lua"), "`{}` reached Lua", f.name);
     }
 }
