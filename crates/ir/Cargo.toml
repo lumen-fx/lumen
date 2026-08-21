@@ -17,10 +17,10 @@ path = "src/lib.rs"
 [dependencies]
 # From-impl targets for the IR spec types (LayoutIR conversions into core
 # components + primitives specs). These are dep-light workspace crates.
-lumen-core = { path = "../core", version = "0.0.3" }
-lumen-primitives = { path = "../primitives", version = "0.0.3" }
+lumen-core = { path = "../core", version = "0.0.4" }
+lumen-primitives = { path = "../primitives", version = "0.0.4" }
 # Doc-link targets for `<drag>` / drop-target attribute docs on `Attributes`.
-lumen-os-dnd = { path = "../os/dnd", version = "0.0.3" }
+lumen-os-dnd = { path = "../os/dnd", version = "0.0.4" }
 thiserror.workspace = true
 serde.workspace = true
 # Cascade diagnostics (`tracing::warn!` on unrecognised declarations).

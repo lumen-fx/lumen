@@ -16,8 +16,8 @@ path = "src/lib.rs"
 
 [dependencies]
 # The attribute bag the projection reads.
-lumen-ir = { path = "../ir", version = "0.0.3" }
+lumen-ir = { path = "../ir", version = "0.0.4" }
 # `PropertyValue` and `Color`, the types a typed seed value converts to.
-lumen-core = { path = "../core", version = "0.0.3" }
+lumen-core = { path = "../core", version = "0.0.4" }
 serde.workspace = true
 serde_json.workspace = true

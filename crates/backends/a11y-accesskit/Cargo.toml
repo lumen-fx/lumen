@@ -11,7 +11,7 @@ keywords = ["ui", "gui", "accessibility", "a11y", "accesskit"]
 categories = ["accessibility", "gui"]
 
 [dependencies]
-lumen-core = { path = "../../core", version = "0.0.3" }
+lumen-core = { path = "../../core", version = "0.0.4" }
 bevy_ecs.workspace = true
 glam.workspace = true
 accesskit.workspace = true

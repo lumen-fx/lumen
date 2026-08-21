@@ -11,7 +11,7 @@ keywords = ["ui", "gui", "lifecycle", "autostart", "lumen"]
 categories = ["os", "gui"]
 
 [dependencies]
-lumen-core = { path = "../../core", version = "0.0.3" }
+lumen-core = { path = "../../core", version = "0.0.4" }
 bevy_ecs.workspace = true
 serde.workspace = true
 serde_json.workspace = true

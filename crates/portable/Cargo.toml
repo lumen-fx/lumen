@@ -12,20 +12,20 @@ categories = ["gui"]
 publish = false
 
 [dependencies]
-lumen-core = { path = "../core", version = "0.0.3" }
+lumen-core = { path = "../core", version = "0.0.4" }
 # The emitter/runtime contract, for the seed a rendered document carries.
-lumen-html = { path = "../html", version = "0.0.3" }
+lumen-html = { path = "../html", version = "0.0.4" }
 # The IR-to-ECS spawner and the reconcilers, shared with the desktop runtime.
-lumen-scene = { path = "../scene", version = "0.0.3" }
+lumen-scene = { path = "../scene", version = "0.0.4" }
 # The widget behaviour and the focus layer, unchanged from the desktop: what a
 # tab strip does when it is clicked is not a per-platform question.
-lumen-input = { path = "../input", version = "0.0.3" }
-lumen-primitives = { path = "../primitives", version = "0.0.3" }
-lumen-script = { path = "../script/api", version = "0.0.3", default-features = false }
+lumen-input = { path = "../input", version = "0.0.4" }
+lumen-primitives = { path = "../primitives", version = "0.0.4" }
+lumen-script = { path = "../script/api", version = "0.0.4", default-features = false }
 # The candela host, behind `host-candela`. The artifact half only: this
 # assembly runs precompiled `.cdlb` bytecode, so the candela compiler never
 # reaches whatever loads it.
-lumen-script-candela = { path = "../script/candela", version = "0.0.3", default-features = false, optional = true }
+lumen-script-candela = { path = "../script/candela", version = "0.0.4", default-features = false, optional = true }
 bevy_ecs.workspace = true
 
 # The browser's own `fetch`, behind the scripts' HTTP builtins. Target-gated
@@ -33,22 +33,22 @@ bevy_ecs.workspace = true
 # same app and wants the native client, which its own composition point
 # installs.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-lumen-web-http = { path = "../backends/web-http", version = "0.0.3" }
+lumen-web-http = { path = "../backends/web-http", version = "0.0.4" }
 
 [build-dependencies]
 # Compiles the test fixtures to `.cdlb` at build time, on the host, so the
 # artifact a host loads is always the one this toolchain produces. Build
 # dependencies are resolved for the host and never linked into the library, so
 # the compiler feature here does not reach a shipped runtime.
-lumen-script-candela = { path = "../script/candela", version = "0.0.3" }
+lumen-script-candela = { path = "../script/candela", version = "0.0.4" }
 
 [dev-dependencies]
 # The compiled app the boot benchmark reads. A running app never needs the
 # artifact container, only what came out of it.
-lumen-ir = { path = "../ir", version = "0.0.3" }
+lumen-ir = { path = "../ir", version = "0.0.4" }
 # Settling an app and reading the state it settled into is one implementation,
 # and the benchmark measures that one rather than a copy of it.
-lumen-prerender = { path = "../prerender", version = "0.0.3" }
+lumen-prerender = { path = "../prerender", version = "0.0.4" }
 
 [[bench]]
 name = "boot"

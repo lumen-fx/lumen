@@ -15,10 +15,10 @@ rust-version.workspace = true
 # `lumenc run` enables in the dev loop.
 
 [dependencies]
-lumen-core = { path = "../../core", version = "0.0.3" }
+lumen-core = { path = "../../core", version = "0.0.4" }
 # Snapshot data model + the snap_* builder pipeline that populates it. The
 # overlay reads the shared `SnapshotHandle` resource in-process; it never
 # stands up the TCP/MCP server.
-lumen-mcp = { path = "../../mcp", version = "0.0.3" }
+lumen-mcp = { path = "../../mcp", version = "0.0.4" }
 bevy_ecs.workspace = true
 glam.workspace = true
