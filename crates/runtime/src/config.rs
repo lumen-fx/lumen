@@ -539,6 +539,8 @@ pub fn infer_script_hosts(dir: &Path, cfg: &LumenToml) -> Vec<ScriptEngine> {
 /// description = "A Lumen app"  # used by any page without its own
 /// locales = ["en-US", "de-DE"] # one tree per locale
 /// host = "netlify"             # also write that host's deep-path rewrite file
+/// render = "ssr"               # a document per request
+/// runtime = false              # and no browser runtime in it
 ///
 /// [web.seed]
 /// count = 3                    # signal values the pages are rendered with
@@ -583,6 +585,10 @@ pub struct WebCfg {
     pub widgets: WebWidgets,
     /// Where a page's document comes from.
     pub render: WebRender,
+    /// Whether the documents carry the browser runtime. Unset takes what
+    /// [`Self::render`] implies, which is the only thing `static` and `csr`
+    /// differ about; `render = "ssr"` is the one that leaves it open.
+    pub runtime: Option<bool>,
     /// Where the state the pages are rendered with comes from.
     pub prerender: WebPrerender,
     /// Add a content hash to asset file names, so a cache can hold them
@@ -668,6 +674,11 @@ pub enum WebWidgets {
 /// same document whichever one is set. What changes is where that document is
 /// produced and what runs once it is open. [`WebPrerender`] is the other
 /// half, and says which state the markup is written with.
+///
+/// `static` and `csr` differ only in whether the document carries the runtime,
+/// which is why [`WebCfg::runtime`] is refused alongside either of them when
+/// it says the opposite. `ssr` leaves that question open, so it is the one
+/// that key answers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WebRender {
@@ -680,8 +691,8 @@ pub enum WebRender {
     Csr,
     /// Each document is produced for the request that asks for it, by running
     /// the app for that request. The build writes what a server needs instead
-    /// of the pages: the compiled app, the runtime, the stylesheet and the
-    /// assets.
+    /// of the pages: the compiled app, the stylesheet, the assets, and the
+    /// runtime when the pages carry one.
     Ssr,
 }
 

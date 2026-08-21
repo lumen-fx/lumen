@@ -55,15 +55,16 @@ const WEB_USAGE: &str = "lumenc web - emit an app as a site
 USAGE:
     lumenc web <app_dir> [--out DIR] [--base PATH] [--locale TAG]...
                          [--render static|csr|ssr] [--prerender seeds|run|none]
+                         [--runtime|--no-runtime]
                          [--no-hooks] [--lib-dir DIR] [--strict]
                          [--serve] [--port N] [--host ADDR]
                          [--allow-host NAME]...
 
 Compiles the app and writes the stylesheet, the app's assets and, unless the
 pages are rendered per request, one HTML document per page. A document carries
-the markup already rendered, so a page reads without scripting. Under
---render csr and --render ssr the compiled app and the browser runtime are
-written too, and a page loads them.
+the markup already rendered, so a page reads without scripting. When the pages
+carry the browser runtime, the compiled app and the runtime are written too and
+a page loads them.
 
     --out DIR         Where the site is written (default: lumen.toml
                       [web] out_dir, else dist/web).
@@ -77,6 +78,12 @@ written too, and a page loads them.
                       adopts it, ssr produces it for the request that asks
                       (default: [web] render). Every mode writes the whole
                       markup tree.
+    --runtime         Put the browser runtime in the documents.
+    --no-runtime      Leave it out, so a page reads and its links work and
+                      nothing runs. Only --render ssr leaves this open;
+                      --render static already means --no-runtime and
+                      --render csr already means --runtime, so contradicting
+                      either is refused (default: [web] runtime).
     --prerender MODE  Where the state the pages are rendered with comes
                       from: seeds (lumen.toml [web.seed] and the markup),
                       run (the app runs here and the state it settles into
@@ -153,6 +160,9 @@ struct Options {
     base: Option<String>,
     locales: Vec<String>,
     render: Option<WebRender>,
+    /// Whether the documents carry the browser runtime. `None` takes what
+    /// `render` implies.
+    runtime: Option<bool>,
     prerender: Option<WebPrerender>,
     no_hooks: bool,
     lib_dir: Option<PathBuf>,
@@ -172,6 +182,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
         base: None,
         locales: Vec::new(),
         render: None,
+        runtime: None,
         prerender: None,
         no_hooks: false,
         lib_dir: None,
@@ -229,6 +240,8 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
                     }
                 });
             }
+            "--runtime" => options.runtime = Some(true),
+            "--no-runtime" => options.runtime = Some(false),
             "--no-hooks" => options.no_hooks = true,
             "--lib-dir" => options.lib_dir = Some(PathBuf::from(value("--lib-dir")?)),
             "--strict" => options.strict = true,
@@ -325,6 +338,7 @@ fn build(options: &Options) -> Result<Report, String> {
     let render = options.render.unwrap_or(cfg.web.render);
     let prerender = options.prerender.unwrap_or(cfg.web.prerender);
     let per_request = render == WebRender::Ssr;
+    let carries_runtime = carries_runtime(render, options.runtime.or(cfg.web.runtime))?;
     // Both of these say what state a page is written with, and they name
     // different moments to read it at: a run here, and the app answering the
     // request. Taking either one would leave the other asked for and unused.
@@ -375,34 +389,31 @@ fn build(options: &Options) -> Result<Report, String> {
     let entry = plan.entry_key.clone();
     check_links(&compiled.ir.root, &keys, &entry, &mut warnings);
 
-    // A static site was asked for files alone, so nothing is looked for and
-    // there is nothing to warn about. A page that carries the runtime is the
-    // same page whether a build wrote it or a render produced it, so both of
-    // the other modes need it; a missing one is still only a missing file,
-    // and the pages are emitted the way a static site's are.
-    let runtime = match render {
-        WebRender::Static => {
-            if options.lib_dir.is_some() {
-                warnings.push(
-                    "--lib-dir names a runtime for pages to load, and a static site loads none; \
-                     pass --render csr to use it"
-                        .to_string(),
-                );
-            }
-            None
-        }
-        WebRender::Csr | WebRender::Ssr => {
-            match crate::package_cli::locate_web_runtime(options.lib_dir.as_deref()) {
-                Ok(files) => Some(files),
-                Err(message) => {
-                    warnings.push(format!(
-                        "{message} The site is emitted without it: the pages read and their links \
+    // Pages that carry no runtime were asked for files alone, so nothing is
+    // looked for and there is nothing to warn about. A page that carries one
+    // is the same page whether a build wrote it or a render produced it, so
+    // both reach for the same files; a missing one is still only a missing
+    // file, and the pages are emitted the way a runtime-less site's are.
+    let runtime = if carries_runtime {
+        match crate::package_cli::locate_web_runtime(options.lib_dir.as_deref()) {
+            Ok(files) => Some(files),
+            Err(message) => {
+                warnings.push(format!(
+                    "{message} The site is emitted without it: the pages read and their links \
                      work, and nothing runs in the browser."
-                    ));
-                    None
-                }
+                ));
+                None
             }
         }
+    } else {
+        if options.lib_dir.is_some() {
+            warnings.push(
+                "--lib-dir names a runtime for pages to load, and these pages carry none; drop \
+                 --no-runtime, or pass --render csr, to use it"
+                    .to_string(),
+            );
+        }
+        None
     };
 
     let scripts = script_refs(&compiled, &mut warnings);
@@ -450,13 +461,18 @@ fn build(options: &Options) -> Result<Report, String> {
     };
 
     std::fs::create_dir_all(&out).map_err(|e| format!("create {}: {e}", out.display()))?;
-    // The compiled app the browser loads is the one with the site's asset
-    // paths in it, so a node the runtime creates points where the emitted
-    // markup points. A static site loads neither, and they are the two
-    // largest files a site would otherwise carry for nobody.
-    if web.runtime {
+    // The compiled app carries the site's asset paths, so a node built from it
+    // points where the emitted markup points. The browser runtime loads it,
+    // and so does the server that renders the pages, so a rendered site keeps
+    // it whether or not its documents run anything.
+    if web.runtime || per_request {
         crate::artifact::write(&out.join(DEFAULT_ARTIFACT_FILE), &compiled)
             .map_err(|e| format!("write {}: {e}", out.join(DEFAULT_ARTIFACT_FILE).display()))?;
+    }
+    // The compiled program beside it is the browser's copy: a render runs the
+    // one inside the artifact. It is one of the two largest files a site would
+    // otherwise carry for nobody.
+    if web.runtime {
         write_bytecode(&compiled, &out)?;
     }
 
@@ -566,6 +582,35 @@ fn build(options: &Options) -> Result<Report, String> {
         site,
         other_locales: locales.into_iter().skip(1).collect(),
     })
+}
+
+/// Whether the documents carry the browser runtime.
+///
+/// `render` and `runtime` are separate questions, and only one combination of
+/// them is new: a document produced per request that carries no runtime, which
+/// is a page rendered for the visitor asking with nothing to run afterwards.
+/// The other two modes answer the runtime question themselves, so `wanted`
+/// there is either what the mode already says or a contradiction, and a
+/// contradiction is refused rather than quietly picked apart.
+fn carries_runtime(render: WebRender, wanted: Option<bool>) -> Result<bool, String> {
+    let implied = render != WebRender::Static;
+    let Some(wanted) = wanted else {
+        return Ok(implied);
+    };
+    match (render, wanted) {
+        (WebRender::Static, true) => Err(
+            "render `static` writes documents with nothing to run them, and runtime `true` asks \
+             for the runtime in them. A page a build writes and the runtime takes over is render \
+             `csr`."
+                .to_string(),
+        ),
+        (WebRender::Csr, false) => Err(
+            "render `csr` is a page the runtime adopts, and runtime `false` takes the runtime \
+             away. A page a build writes with nothing to run it is render `static`."
+                .to_string(),
+        ),
+        _ => Ok(wanted),
+    }
 }
 
 /// The skin the site is styled with.

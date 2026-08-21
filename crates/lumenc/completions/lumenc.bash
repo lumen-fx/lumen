@@ -93,7 +93,7 @@ _lumenc() {
         lint) flags="--css-cascade --signals --strict --json --port --app" ;;
         diff) flags="--json --port --app" ;;
         screenshot) flags="--highlight --lint --bounds --port --app" ;;
-        web) flags="--out --base --locale --render --prerender --no-hooks --lib-dir --strict --serve --port --host --allow-host" ;;
+        web) flags="--out --base --locale --render --runtime --no-runtime --prerender --no-hooks --lib-dir --strict --serve --port --host --allow-host" ;;
         bundle) flags="--static --no-hooks" ;;
         package) flags="--name --target --lib-dir --no-hooks" ;;
         i18n) flags="--lang" ;;

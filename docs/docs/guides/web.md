@@ -67,7 +67,9 @@ it takes about as long as `lumenc build`.
 
 Under `render = "ssr"` that list holds everything except the documents. A page
 is produced when it is asked for, so writing one here would leave a second
-copy of it beside the one a visitor is sent.
+copy of it beside the one a visitor is sent. With `runtime = false` beside it,
+`app.cdlb`, `lumen.web.json`, `lumen-web.wasm` and `lumen-web.js` go too:
+nothing loads them. `app.lmna` stays, because the server renders from it.
 
 ## How a page reaches the browser
 
@@ -236,12 +238,35 @@ runtime, no compiled app, no manifest, and no boot script in the documents.
 app for that request. The build writes what a render needs and leaves the
 pages to it, so the app answers with what it knows now rather than with what
 it knew when the site was built. A rendered page carries the runtime the way a
-`csr` page does, and it is adopted the same way. See
+`csr` page does, and is adopted the same way. See
 [rendering on a server](server-rendering.md).
 
 Whichever it is, a link is an ordinary `<a href>`, so a browser that does not
 run the runtime, or a site that carries none, follows links by loading the
 next document. That needs no configuration.
+
+### Whether the page carries the runtime
+
+`[web] runtime`, or `--runtime` / `--no-runtime`, is the separate question of
+whether a document loads the browser runtime at all. `static` and `csr` differ
+about nothing else, so each already answers it and saying the opposite
+alongside either is refused, naming the value that means it.
+
+`ssr` is the one that leaves it open:
+
+```toml
+[web]
+render  = "ssr"
+runtime = false
+```
+
+Every page is then produced for the request that asks and carries no wasm and
+no boot script. The visitor reads the document the app rendered for them and
+nothing takes it over: links load the next page, and the next page is another
+render. Reach for it when the page is a document rather than an application,
+and you want it to depend on who is asking without shipping a runtime to say
+so. The compiled app is still written beside the stylesheet, because that is
+what the server renders from.
 
 ## Running the app during the build
 
