@@ -11,15 +11,15 @@ keywords = ["ui", "gui", "web", "wasm", "lumen"]
 categories = ["gui", "wasm"]
 
 [dependencies]
-lumen-core = { path = "../../core", version = "0.0.3" }
-lumen-ir = { path = "../../ir", version = "0.0.3" }
+lumen-core = { path = "../../core", version = "0.0.4" }
+lumen-ir = { path = "../../ir", version = "0.0.4" }
 # The contract the emitter wrote the document against: node paths, the
 # `data-lm-*` attributes, the tag map. Hand-rolling any of it here would put
 # the two halves on different rules.
-lumen-html = { path = "../../html", version = "0.0.3" }
+lumen-html = { path = "../../html", version = "0.0.4" }
 # The scene this backend projects: the spawner that built it and the markers
 # the reconcilers maintain.
-lumen-scene = { path = "../../scene", version = "0.0.3" }
+lumen-scene = { path = "../../scene", version = "0.0.4" }
 bevy_ecs.workspace = true
 glam.workspace = true
 # Not target-gated. The crate is a browser backend and only a browser runs it,
@@ -53,7 +53,7 @@ web-sys = { workspace = true, features = [
 # The other half of the contract. The tests emit their fixtures with the real
 # emitter rather than checking against a copy of what it writes, because a
 # copy would agree with itself while the two halves drifted apart.
-lumen-web = { path = "../../web", version = "0.0.3" }
+lumen-web = { path = "../../web", version = "0.0.4" }
 wasm-bindgen-test.workspace = true
 # A test raises an event the way the browser raises it, which takes a
 # dictionary nothing in the crate itself constructs. Naming it here keeps it

@@ -11,7 +11,7 @@ keywords = ["ui", "gui", "http", "web", "lumen"]
 categories = ["gui", "wasm", "web-programming::http-client"]
 
 [dependencies]
-lumen-script = { path = "../../script/api", version = "0.0.3" }
+lumen-script = { path = "../../script/api", version = "0.0.4" }
 
 # Not target-gated. The crate is a browser backend and only a browser runs it,
 # but building it for the host is what puts it under the workspace's own clippy

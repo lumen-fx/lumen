@@ -10,9 +10,9 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-lumen-core = { path = "../core", version = "0.0.3" }
-lumen-primitives = { path = "../primitives", version = "0.0.3" }
-lumen-assets = { path = "../assets", version = "0.0.3" }
+lumen-core = { path = "../core", version = "0.0.4" }
+lumen-primitives = { path = "../primitives", version = "0.0.4" }
+lumen-assets = { path = "../assets", version = "0.0.4" }
 bevy_ecs.workspace = true
 glam.workspace = true
 tokio = { version = "1.52", features = ["rt-multi-thread", "net", "io-util", "io-std", "sync", "macros", "time"] }

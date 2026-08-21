@@ -11,9 +11,9 @@ keywords = ["ui", "gui", "input", "events", "focus"]
 categories = ["gui"]
 
 [dependencies]
-lumen-core = { path = "../core", version = "0.0.3" }
-lumen-os-clipboard = { path = "../os/clipboard", version = "0.0.3" }
-lumen-text = { path = "../text", version = "0.0.3" }
+lumen-core = { path = "../core", version = "0.0.4" }
+lumen-os-clipboard = { path = "../os/clipboard", version = "0.0.4" }
+lumen-text = { path = "../text", version = "0.0.4" }
 bevy_ecs.workspace = true
 glam.workspace = true
 

@@ -30,28 +30,28 @@ name = "lumen"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-lumen-core = { path = "crates/core", version = "0.0.3" }
+lumen-core = { path = "crates/core", version = "0.0.4" }
 # Runtime core: `RunOptions` / `run_app` / the default plugin stack.
 # `default-features = false` so the FULL shared library turns every subsystem on
 # via this crate's own default feature set below, while a trimmed static
 # `--bundle` build (`--no-default-features --features "<caps>"`) selects exactly
 # the app's subsystems (Part B).
-lumen-runtime = { path = "crates/runtime", version = "0.0.3", default-features = false }
+lumen-runtime = { path = "crates/runtime", version = "0.0.4", default-features = false }
 # Host-neutral DOM read side (query / traversal over the snapshot) for the
 # LumenNode C-ABI. No host features needed here; the query engine is
 # host-independent.
-lumen-script = { path = "crates/script/api", version = "0.0.3", default-features = false }
+lumen-script = { path = "crates/script/api", version = "0.0.4", default-features = false }
 # Compiler front-end, kept only to inject its parser (`default_parser()`).
 # OPTIONAL behind the default-on `embed-parser` feature: a static `--bundle`
 # runs a prebuilt LMNA artifact with NO parser, so dropping lumenc also drops
 # the feature-unification that would otherwise pull lumen-runtime back to full.
-lumenc = { path = "crates/lumenc", version = "0.0.3", optional = true }
+lumenc = { path = "crates/lumenc", version = "0.0.4", optional = true }
 # Widget trait, `Attributes`, and the `#[derive(Widget)]` macro. Not used by
 # the C ABI itself; carried so the Rust SDK reaches them through this one
 # library rather than compiling a second copy beside it (see the `sdk`
 # re-export module in src/lib.rs).
-lumen-widget = { path = "crates/widget", version = "0.0.3" }
-lumen-widget-macros = { path = "crates/widget-macros", version = "0.0.3" }
+lumen-widget = { path = "crates/widget", version = "0.0.4" }
+lumen-widget-macros = { path = "crates/widget-macros", version = "0.0.4" }
 # Same reason: the Rust SDK's `AppBuilder::rhai_extension` takes a
 # `rhai::Engine`, so the type has to come from here to be the same type.
 # Follows the `host-rhai` feature, which is what compiles that host at all.
@@ -136,7 +136,7 @@ members = [
 exclude = ["sdk/rust-dylib"]
 
 [workspace.package]
-version = "0.0.3"
+version = "0.0.4"
 edition = "2024"
 license = "MPL-2.0"
 authors = ["Lumen contributors"]

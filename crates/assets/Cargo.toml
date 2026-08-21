@@ -11,7 +11,7 @@ keywords = ["ui", "gui", "assets", "images", "lumen"]
 categories = ["gui"]
 
 [dependencies]
-lumen-core = { path = "../core", version = "0.0.3" }
+lumen-core = { path = "../core", version = "0.0.4" }
 bevy_ecs.workspace = true
 crossbeam-channel.workspace = true
 glam.workspace = true

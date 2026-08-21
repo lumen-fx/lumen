@@ -19,6 +19,6 @@ path = "src/main.rs"
 # links the whole runtime (wgpu / winit / cosmic-text / the script hosts), and
 # the stub must carry none of it - it finds liblumen beside itself at run time.
 # Check with `cargo tree -p lumen-launcher` after any dependency change.
-lumenc = { path = "../lumenc", version = "0.0.3", default-features = false, features = [
+lumenc = { path = "../lumenc", version = "0.0.4", default-features = false, features = [
     "dlopen-run",
 ] }

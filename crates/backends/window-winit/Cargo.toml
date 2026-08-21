@@ -11,11 +11,11 @@ keywords = ["ui", "gui", "window", "winit", "lumen"]
 categories = ["gui", "os"]
 
 [dependencies]
-lumen-core = { path = "../../core", version = "0.0.3" }
+lumen-core = { path = "../../core", version = "0.0.4" }
 # Native menu bar: the menu tree itself is `lumen_core::window::MenuModel`
 # (it arrives inside `WindowOptions`); this crate is here for the muda
 # attach and the click drain.
-lumen-os-menu = { path = "../../os/menu", version = "0.0.3" }
+lumen-os-menu = { path = "../../os/menu", version = "0.0.4" }
 bevy_ecs.workspace = true
 glam.workspace = true
 winit.workspace = true

@@ -11,7 +11,7 @@ keywords = ["ui", "gui", "widgets", "components", "lumen"]
 categories = ["gui"]
 
 [dependencies]
-lumen-core = { path = "../core", version = "0.0.3" }
+lumen-core = { path = "../core", version = "0.0.4" }
 bevy_ecs.workspace = true
 
 [dev-dependencies]

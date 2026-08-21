@@ -30,11 +30,11 @@ path = "src/main.rs"
 required-features = ["runtime-parse"]
 
 [dependencies]
-lumen-core = { path = "../core", version = "0.0.3" }
+lumen-core = { path = "../core", version = "0.0.4" }
 # Runtime-shared IR (LayoutIR, CSS AST + Cascade-5 application, value parsers,
 # `var()` resolver, AOT artifact). Extracted from lumenc; the modules are
 # re-exported from `lumenc::lib` so historical `lumenc::...` paths stay valid.
-lumen-ir = { path = "../ir", version = "0.0.3" }
+lumen-ir = { path = "../ir", version = "0.0.4" }
 # The runtime core (run loop, plugin stack, hot reload, config, pages, spawn,
 # app-kind, skins, profiler) plus every heavy backend it drags in
 # (wgpu / vello / winit / cosmic-text / taffy / rodio / mlua / the script
@@ -43,13 +43,13 @@ lumen-ir = { path = "../ir", version = "0.0.3" }
 # `lumen-lsp` links) stays thin. The `lumenc` BINARY keeps it for the CLI
 # `run` / `build` / `check` / `mcp` dev paths and injects its own parser
 # front-end via `LumencParser` (SourceParser).
-lumen-runtime = { path = "../runtime", version = "0.0.3", optional = true, default-features = false }
+lumen-runtime = { path = "../runtime", version = "0.0.4", optional = true, default-features = false }
 # `.lpak` archive packer for `lumenc bundle` (bundle_cli). OPTIONAL behind the
 # default-on `bundle` feature: lumen-assets carries a hard `vello` dependency
 # for its runtime GPU-upload path, so a thin compiler library
 # (`--no-default-features`, as `lumen-lsp` links) drops it - and vello/wgpu with
 # it - while the `lumenc` binary keeps the `bundle` subcommand.
-lumen-assets = { path = "../assets", version = "0.0.3", optional = true }
+lumen-assets = { path = "../assets", version = "0.0.4", optional = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 # Markup (`.lmn`) XML parser. Optional + gated behind the default-on
@@ -65,30 +65,30 @@ bincode.workspace = true
 # Widget tag registry - parser_html consults
 # `lumen_widget::is_widget_tag_registered` to accept `#[derive(Widget)]`
 # custom tags after the built-in KNOWN_TAGS miss.
-lumen-widget = { path = "../widget", version = "0.0.3" }
+lumen-widget = { path = "../widget", version = "0.0.4" }
 # The candela host, for the one module that decides what an `lmn!` block
 # means: the fragment key, the argument sites, the component elements, and the
 # candela the macro expands to. `lumenc` reads the same module the expander
 # does, so the ahead-of-time extraction and the compiled call cannot disagree.
 # OPTIONAL and pulled in by `runtime-parse`, which is the feature that carries
 # the markup front-end each block body compiles through.
-lumen-script-candela = { path = "../script/candela", version = "0.0.3", optional = true }
+lumen-script-candela = { path = "../script/candela", version = "0.0.4", optional = true }
 
 # `lumenc web` - the static-site emitter and the HTML contract it writes
 # against. OPTIONAL behind the default-on `web` feature; both are small and
 # pull nothing heavier than serde, but a thin compiler library that emits no
 # site drops them.
-lumen-html = { path = "../html", version = "0.0.3", optional = true }
-lumen-web = { path = "../web", version = "0.0.3", optional = true }
+lumen-html = { path = "../html", version = "0.0.4", optional = true }
+lumen-web = { path = "../web", version = "0.0.4", optional = true }
 # `--prerender run` - runs the app here and reads the state it settles into,
 # so a page carries the state the app arrives in.
-lumen-prerender = { path = "../prerender", version = "0.0.3", optional = true }
+lumen-prerender = { path = "../prerender", version = "0.0.4", optional = true }
 # `--render ssr` - the per-request renderer, which is also what an embedder
 # puts inside their own server. `lumenc` gives it a socket and nothing else.
-lumen-ssr = { path = "../ssr", version = "0.0.3", optional = true }
+lumen-ssr = { path = "../ssr", version = "0.0.4", optional = true }
 # `lumenc web` resolves an app's translations at build time, so a page reads
 # in its language with nothing running.
-lumen-i18n = { path = "../i18n", version = "0.0.3", optional = true }
+lumen-i18n = { path = "../i18n", version = "0.0.4", optional = true }
 
 # `lumenc package --target <another platform>`: fetch that platform's
 # toolchain files from the release channel, check them against the release's

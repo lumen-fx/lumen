@@ -11,8 +11,8 @@ keywords = ["ui", "gui", "menu", "muda", "lumen"]
 categories = ["os", "gui"]
 
 [dependencies]
-lumen-core = { path = "../../core", version = "0.0.3" }
-lumen-os-mime = { path = "../mime", version = "0.0.3" }
+lumen-core = { path = "../../core", version = "0.0.4" }
+lumen-os-mime = { path = "../mime", version = "0.0.4" }
 bevy_ecs.workspace = true
 
 # Native menu bar (extracted from lumen-window-winit; same target gating).

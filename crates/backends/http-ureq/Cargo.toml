@@ -11,7 +11,7 @@ keywords = ["ui", "gui", "http", "ureq", "lumen"]
 categories = ["gui", "web-programming::http-client"]
 
 [dependencies]
-lumen-script = { path = "../../script/api", version = "0.0.3" }
+lumen-script = { path = "../../script/api", version = "0.0.4" }
 
 # The transport itself. ureq's rustls+ring stack costs roughly a megabyte of
 # release .text, which is why the runtime hangs this whole crate off a feature:

@@ -11,8 +11,8 @@ keywords = ["ui", "gui", "scripting", "rhai", "lumen"]
 categories = ["gui"]
 
 [dependencies]
-lumen-script = { path = "../api", version = "0.0.3", default-features = false }
-lumen-core = { path = "../../core", version = "0.0.3" }
+lumen-script = { path = "../api", version = "0.0.4", default-features = false }
+lumen-core = { path = "../../core", version = "0.0.4" }
 bevy_ecs.workspace = true
 rhai.workspace = true
 serde_json.workspace = true

@@ -11,7 +11,7 @@ keywords = ["ui", "gui", "text", "fonts", "cosmic-text"]
 categories = ["gui", "text-processing"]
 
 [dependencies]
-lumen-text = { path = "../../text", version = "0.0.3" }
+lumen-text = { path = "../../text", version = "0.0.4" }
 cosmic-text.workspace = true
 # Bounded LRU cache for shape results. Replaces a HashMap with a
 # catastrophic-clear-on-cap policy. Pure-Rust, ~200 LoC.

@@ -11,12 +11,12 @@ keywords = ["ui", "gui", "rendering", "wgpu", "vello"]
 categories = ["rendering", "gui"]
 
 [dependencies]
-lumen-core = { path = "../../core", version = "0.0.3" }
-lumen-text = { path = "../../text", version = "0.0.3" }
+lumen-core = { path = "../../core", version = "0.0.4" }
+lumen-text = { path = "../../text", version = "0.0.4" }
 # `lumen-assets` owns ExtractedSvg + LoadedSvg because their cached
 # vello::Scene keeps the vello dep out of `lumen-core`. The renderer
 # reads them like any other Extracted* component.
-lumen-assets = { path = "../../assets", version = "0.0.3" }
+lumen-assets = { path = "../../assets", version = "0.0.4" }
 bevy_ecs.workspace = true
 glam.workspace = true
 # vello re-exports wgpu (`vello::wgpu`) so code never drifts the version.
