@@ -91,6 +91,29 @@ fn a_declared_parameter_type_rejects_the_wrong_argument() {
     );
 }
 
+/// A migrated builtin keeps the call-site typing it had when the host
+/// registered it by hand: `set_text` takes two strings, and a call passing
+/// numbers does not resolve.
+#[test]
+fn a_shared_builtin_keeps_its_call_site_types() {
+    let mut host = RhaiHost::new();
+    host.load(r#"fn ok() { set_text("out", "hi") } fn bad() { set_text(1, 2) }"#)
+        .expect("load");
+
+    let outcome = host.call("ok", &[]).expect("ok runs");
+    assert!(
+        outcome
+            .commands
+            .iter()
+            .any(|c| matches!(c, lumen_script::ScriptCommand::SetText { .. })),
+        "the declared shape queues the command"
+    );
+    assert!(
+        host.call("bad", &[]).expect("bad runs").commands.is_empty(),
+        "a call with the wrong argument types queues nothing"
+    );
+}
+
 /// A named namespace is a static module: the script calls `ns::name(...)`, and
 /// a second function in the same namespace joins the first rather than
 /// replacing the module.

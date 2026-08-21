@@ -88,6 +88,50 @@ fn main() {}
     );
 }
 
+/// A shared builtin binds as a typed host function, so a declaration that
+/// disagrees with it fails the compile.
+///
+/// This is what the shape adapter buys: were the entry bound variadically, the
+/// wrong declaration below would compile and the mismatch would surface as a
+/// runtime surprise. candela checks the argument list at the boundary, not at
+/// the call site, so this is where the check lands.
+#[test]
+fn a_shared_builtin_is_bound_under_its_declared_shape() {
+    let good = r#"
+host "lumen" {
+    set_text(string, string);
+}
+fn on_start() { lumen::set_text("out", "hi"); }
+fn main() {}
+"#;
+    let wrong_arity = r#"
+host "lumen" {
+    set_text(string);
+}
+fn on_start() { lumen::set_text("out"); }
+fn main() {}
+"#;
+    let variadic = r#"
+host "lumen" {
+    any set_text(...);
+}
+fn on_start() { lumen::set_text("out", "hi"); }
+fn main() {}
+"#;
+
+    let mut host = CandelaHost::new();
+    host.load(good, "good.cdl")
+        .expect("the declared shape compiles");
+
+    for (src, name) in [(wrong_arity, "wrong arity"), (variadic, "variadic")] {
+        let mut host = CandelaHost::new();
+        assert!(
+            host.load(src, "bad.cdl").is_err(),
+            "a {name} declaration must not bind to a typed registration"
+        );
+    }
+}
+
 /// A reset drops the program, not the embedder's registrations.
 #[test]
 fn a_registered_function_survives_a_reset() {
