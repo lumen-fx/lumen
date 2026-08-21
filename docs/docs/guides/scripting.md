@@ -256,6 +256,12 @@ candela, `gpio.level(21)` in Lua. candela needs no `host` block for either; the
 declarations are written for you from what was registered. A script you compile
 ahead of time to an artifact is the exception, and declares the namespace itself.
 
+Such a function can fail. It raises where the script called it, carrying the
+message the Rust side gave and naming the function, so you catch it the way the
+language catches anything else: `try`/`catch` in Rhai, `pcall` in Lua, and
+`catch "host_fn_error"` in candela. An uncaught failure ends that one call and is
+reported like any other script error; the app keeps running.
+
 What is available is up to the app's Rust, so look in its source, not here.
 [FFI and SDKs](../reference/ffi.md) covers exposing one, and
 [Writing plugins](../contributing/plugins.md) covers doing it from a plugin.

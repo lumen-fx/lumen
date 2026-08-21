@@ -241,31 +241,71 @@ A plugin can give the app's script functions of its own. One description covers
 every language: describe the function once and a Rhai, Lua, or candela script
 calls it.
 
+The short form takes a plain Rust closure and reads the signature off its
+types:
+
 ```rust
 use lumen_core::prelude::*;
-use lumen_script::{ScriptFn, ScriptFnAppExt, ScriptNs, ScriptTy, ScriptValue};
+use lumen_script::{ScriptFn, ScriptFnAppExt, ScriptNs};
 
 pub struct GpioPlugin;
 
 impl Plugin for GpioPlugin {
     fn build(self, app: &mut App) {
         app.add_script_fn(
-            ScriptFn::new("level")
-                .ns(ScriptNs::Named("gpio".to_string()))
-                .param("pin", ScriptTy::Int)
-                .ret(ScriptTy::Int)
-                .doc("Read a GPIO pin.")
-                .build(|cx| ScriptValue::I64(read_pin(cx.int_arg(0)))),
+            ScriptFn::from_fn("level", |pin: i64| -> Result<i64, String> {
+                match pin {
+                    0..=27 => Ok(read_pin(pin)),
+                    _ => Err(format!("pin {pin} is out of range")),
+                }
+            })
+            .param_names(["pin"])
+            .with_ns(ScriptNs::Named("gpio".to_string())),
         );
     }
 }
 ```
 
+`i64`, `f64`, `bool`, `String`, `Vec<T>`, `HashMap<String, T>` and `()` are the
+types that cross, up to eight arguments. The declared return type is the value
+type either way, so the same declaration binds a closure that can fail and one
+that cannot.
+
+The builder form spells the signature out, and is what you want for a doc line,
+optional trailing arguments, a restricted set of languages, or a body that
+queues [script commands](architecture.md):
+
+```rust
+use lumen_script::{ScriptFn, ScriptNs, ScriptTy, ScriptValue};
+
+ScriptFn::new("level")
+    .ns(ScriptNs::Named("gpio".to_string()))
+    .param("pin", ScriptTy::Int)
+    .ret(ScriptTy::Int)
+    .doc("Read a GPIO pin.")
+    .build(|cx| Ok(ScriptValue::I64(read_pin(cx.int_arg(0)))));
+```
+
 A `ScriptFn` carries the name, the namespace, a typed signature, the languages
 that may see it, and the body. The body takes a call context: the arguments, and
-a sink it emits [script commands](architecture.md) into when its effect belongs
-to the runtime rather than to the return value. `ScriptFn::value` and
-`ScriptFn::commands` are shorthands for the untyped shapes.
+a sink it emits script commands into when its effect belongs to the runtime
+rather than to the return value. `ScriptFn::value` and `ScriptFn::commands` are
+shorthands for the untyped shapes.
+
+### Reporting a failure
+
+A body returns `Err(message)` to raise in the script that called it. Each host
+raises the way its language does, and the message names the function:
+
+| Language | What the script sees |
+| --- | --- |
+| Rhai | a runtime error, caught with `try { .. } catch (e) { .. }` |
+| Lua | an error, caught with `pcall` |
+| candela | a `host_fn_error`, caught with `try { .. } catch "host_fn_error" { .. }` |
+
+An uncaught failure ends that one call and is reported like any other script
+error. The app keeps running, and commands the body queued before it failed are
+still applied.
 
 ### Where the registration has to happen
 
@@ -316,6 +356,13 @@ message naming the plugin's namespace and function. That covers a keyword, a
 hyphen, a quote and the empty string. The app compiles and runs without the
 function rather than failing to compile at all.
 
+A signature candela can name is declared with its types, whatever they are, and
+the call's result is typed as declared. A call passing the wrong types or the
+wrong number of arguments is refused when it runs, naming the parameter. A
+variadic signature, an untyped parameter, or an optional trailing argument has
+no such spelling, and is declared `any name(...)`, which candela accepts at any
+shape and leaves to the body.
+
 ### Shipping candela sugar
 
 A plugin can ship candela source of its own, compiled ahead of the app's
@@ -338,6 +385,11 @@ impl Pin {
 The script then calls `pin(21).level()`. An error inside that source is reported
 against the plugin's namespace, not against a line of the app.
 
+The sugar is compiled with the app, so it can call the runtime's own surface
+(`lumen::print(..)`) as well as the plugin's. Two plugins may ship source for
+the same namespace and both are kept, in registration order; a name written in
+both is a compile error pointing into the wrapper.
+
 ### Limits
 
 Values cross as scalars, strings, arrays, and string-keyed maps. A handle to
@@ -345,17 +397,6 @@ something in the world does not; pass an id and look it up.
 
 Editor tooling reads the builtin metadata tables, which describe the runtime's
 own surface, so a plugin's functions do not appear in completion or hover.
-
-candela types a call by the function's name alone when its own library has that
-name, whatever namespace the call sits in, and the declared return type is not
-consulted. A function named `int`, `float`, `bool`, `exists`, `write`, `range`
-or `append` that returns something else is therefore refused at registration,
-and the message says so. A name whose forced type is the one the function
-returns anyway, `read` giving back a string, is accepted and works.
-
-The refusal happens where the compiler runs. An app compiled ahead of time
-declares the block itself, so a `.cdlb` built against such a name carries the
-wrong type and the failure appears when the value is used.
 
 A precompiled `.cdlb` carries the declarations its source spelled: the build
 compiles the script on its own, with no plugin present to declare anything. A
