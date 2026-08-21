@@ -777,33 +777,42 @@ Two more write directly to the element tree by id, without a node handle:
 ## Native functions from the embedder
 
 An embedder exposes its own functions to the app's script: over the C ABI with
-`lumen_app_expose` (see [C ABI](ffi.md)), or from Rust with the SDK. They arrive
-in the `native` namespace, and, like every host call in candela, they must be
-declared before the script calls them. There is no prelude for them, because the
-set is per-embedder, so write the block by hand:
+`lumen_app_expose` (see [C ABI](ffi.md)), from Rust with the SDK, or from a Rust
+plugin. Call them by namespace:
 
 ```rust
-host "native" {
-    any now_ms(...);
-}
-
 fn on_start() {
     let t = native::now_ms();
     print(as_int(t));
 }
 ```
 
-Declare each one variadic (`...`) with the `any` return type: the binding passes
-arguments straight through and the return value carries whatever the embedder
-produced. Read it with candela's `as_int` / `as_str` / `as_map` downcasts, the
-same way a `parse_json` result is read.
+Functions the C ABI and the SDK expose land in the `native` namespace. A plugin
+can choose a name of its own instead, and the script calls it there
+(`gpio::read(21)`).
 
-Declare only what the embedder exposes. candela checks every declared
-host function against a registered implementation at compile time, so a
-declaration with nothing behind it fails the compile. It also means an app
-written for an embedder compiles under that embedder only: `lumenc check` and
-`lumenc run` register no native functions and report the declaration as
-unresolved.
+You do not declare them. candela resolves a host call through a
+`host "<ns>" { .. }` block, and the host writes one for every namespace it bound
+from the signatures it was given. A script that spells the block itself keeps
+it: the host leaves a namespace the source already declares alone, so an app
+written against an earlier release compiles unchanged.
 
-Rhai and Lua receive the same functions as plain globals (`now_ms()`), because
-neither needs a declaration to resolve a call.
+An untyped function hands its arguments straight through and returns `any`; read
+the result with the `as_int` / `as_str` / `as_map` downcasts, the same way a
+`parse_json` result is read. One described with parameter and return types is
+bound and declared with them, so a call with the wrong shape fails the compile.
+
+A plugin can also ship candela source of its own, compiled ahead of the app, to
+offer method syntax over its functions. What that looks like is the plugin's
+choice; `pin(21).read()` in place of `gpio::read(21)` is the shape to expect.
+
+Two things follow from where the declarations come from. An app calling a
+function nothing registered fails the compile, naming it, so `lumenc check` and
+`lumenc run` reject a call meant for an embedder they do not carry. And a script
+compiled ahead of time to a `.cdlb` gets no synthesized declarations, because the
+build compiles the script alone: write the `host` block by hand in a script you
+will build to an artifact.
+
+Rhai and Lua receive the same functions as plain globals (`now_ms()`), or as a
+module or table for a named namespace, because neither needs a declaration to
+resolve a call.

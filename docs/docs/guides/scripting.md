@@ -232,6 +232,34 @@ issues a GET without holding up a tick and calls `on_fetch(tag, body)` or
 or a request body, `http(request)` takes the whole request and answers on
 `on_http(tag, response)`.
 
+## Functions the app's Rust adds
+
+An app with Rust behind it can hand the script functions of its own, through the
+SDK, the C ABI, or a plugin. They are described once and reach every language,
+so a mixed-language app calls the same function from any of its scripts.
+
+A function with no namespace of its own is a global in Rhai and Lua and lives
+under `native` in candela:
+
+```rust
+// Rhai, Lua
+now_ms()
+```
+
+```rust
+// candela
+native::now_ms()
+```
+
+One that chose a namespace is reached through it: `gpio::read(21)` in Rhai and
+candela, `gpio.read(21)` in Lua. candela needs no `host` block for either; the
+declarations are written for you from what was registered. A script you compile
+ahead of time to an artifact is the exception, and declares the namespace itself.
+
+What is available is up to the app's Rust, so look in its source, not here.
+[FFI and SDKs](../reference/ffi.md) covers exposing one, and
+[Writing plugins](../contributing/plugins.md) covers doing it from a plugin.
+
 ## Hot reload
 
 `lumenc run` watches the app directory. Editing markup, CSS, an included
