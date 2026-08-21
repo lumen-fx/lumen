@@ -5,7 +5,7 @@
 //! The per-host suites check that each language resolves these names; this one
 //! checks what they do once resolved.
 
-use lumen_script::{HostSet, ScriptCommand, ScriptFn, ScriptValue, builtin_script_fns};
+use lumen_script::{HostSet, ScriptCommand, ScriptFn, ScriptValue, builtin_script_fns, builtins};
 
 /// Navigation rides a process-global bus, so the tests that read it run one at
 /// a time.
@@ -247,6 +247,68 @@ fn the_table_reaches_every_host() {
         };
         assert_eq!(f.hosts, expected, "`{}` reaches the wrong hosts", f.name);
     }
+}
+
+/// Editor tooling reads the per-host metadata tables, so a function a host
+/// binds from the shared table has a row there for that host.
+///
+/// The two sides are built from different files: the bodies from this crate's
+/// source, the rows from `builtins.ron`. A function moved into the shared table
+/// without its row would work in every language and be invisible in every
+/// editor.
+#[test]
+fn every_shared_entry_has_a_metadata_row_for_each_host_that_sees_it() {
+    let tables = [
+        ("rhai", builtins::RHAI_BUILTINS),
+        ("lua", builtins::LUA_BUILTINS),
+        ("candela", builtins::CANDELA_BUILTINS),
+    ];
+
+    let mut missing: Vec<String> = Vec::new();
+    for (lang, table) in tables {
+        let rows: std::collections::HashSet<&str> = table.iter().map(|b| b.name).collect();
+        for f in builtin_script_fns() {
+            if f.visible_to(lang) && !rows.contains(f.name.as_str()) {
+                missing.push(format!("{lang}::{}", f.name));
+            }
+        }
+    }
+    missing.sort_unstable();
+    assert!(
+        missing.is_empty(),
+        "these shared builtins have no row in builtins.ron for the host that sees them, so the \
+         LSP cannot offer them: {missing:?}"
+    );
+}
+
+/// A metadata row's parameter count matches the signature behind it, so hover
+/// text describes the call the body accepts.
+///
+/// A variadic or optional entry is exempt: one registration serves a range of
+/// arities and the row spells the shape an author writes.
+#[test]
+fn a_metadata_row_matches_the_signature_behind_it() {
+    let mut wrong: Vec<String> = Vec::new();
+    for b in builtins::CANDELA_BUILTINS {
+        let Some(f) = builtin_script_fns()
+            .into_iter()
+            .find(|f| f.name == b.name && f.visible_to("candela"))
+        else {
+            continue;
+        };
+        if f.sig.variadic || f.sig.min_arity != f.sig.params.len() {
+            continue;
+        }
+        if f.sig.params.len() != b.params.len() {
+            wrong.push(format!(
+                "{}: the table takes {} argument(s), the row spells {}",
+                b.name,
+                f.sig.params.len(),
+                b.params.len()
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:?}");
 }
 
 /// The free-function DOM surface is candela's, and no other host offers it:
