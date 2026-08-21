@@ -2347,6 +2347,11 @@ impl RhaiHost {
     /// one fails at the call site rather than inside the body. An
     /// optional trailing parameter is a separate registration at the shorter
     /// arity, which is how one `page(path)` also answers `page()`.
+    ///
+    /// The arguments are checked here as well as by the slot types. A `Dynamic`
+    /// slot accepts anything, and a declared float is bound at `INT` too, so a
+    /// resolved call can still carry the wrong shape; running the same check
+    /// the module path runs makes the two spell a mismatch the same way.
     fn bind_globally(&mut self, f: &ScriptFn) {
         for arity in f.sig.arity_range() {
             let slots: Vec<&ScriptTy> = (0..arity)
@@ -2359,9 +2364,9 @@ impl RhaiHost {
                     f.name.clone(),
                     arg_types,
                     move |_ctx, args| {
-                        let vals: Vec<ScriptValue> =
-                            args.iter().map(|d| dynamic_to_script_value(d)).collect();
-                        invoke_into_sink(&f, &sink, &vals)
+                        invoke_into_sink(&f, &sink, |vals| {
+                            vals.extend(args.iter().map(|d| dynamic_to_script_value(d)));
+                        })
                     },
                 );
             }
@@ -2385,16 +2390,8 @@ impl RhaiHost {
                 module.set_native_fn(
                     f.name.clone(),
                     move |$($arg: Dynamic),*| {
-                        let vals: Vec<ScriptValue> = vec![$(dynamic_to_script_value(&$arg)),*];
-                        if f.sig.is_typed()
-                            && let Err(message) = f.sig.check_args(&vals)
-                        {
-                            return Err(Box::new(EvalAltResult::ErrorRuntime(
-                                format!("{}: {message}", f.name).into(),
-                                rhai::Position::NONE,
-                            )));
-                        }
-                        invoke_into_sink(&f, &sink, &vals)
+                        let args = [$(dynamic_to_script_value(&$arg)),*];
+                        invoke_into_sink(&f, &sink, |vals| vals.extend(args))
                     },
                 );
             }};
@@ -2867,21 +2864,45 @@ fn rhai_arg_shapes(slots: &[&ScriptTy]) -> Vec<Vec<TypeId>> {
         .collect()
 }
 
-/// Run a [`ScriptFn`] body and hand its result back to Rhai.
+/// Run a [`ScriptFn`] body over `build`'s arguments and hand its result back to
+/// Rhai.
 ///
-/// The body emits into a scratch buffer and the sink lock is taken once, after
-/// it returns: a body that calls back into a builtin would otherwise meet a
-/// lock its own call is holding.
+/// The arguments and the commands both come from the pooled call scratch, so a
+/// warm app allocates neither. The sink lock is taken once, after the body
+/// returns: a body that calls back into a builtin would otherwise meet a lock
+/// its own call is holding.
+///
+/// A body that failed raises a Rhai runtime error naming the function, which a
+/// script catches with `try`/`catch` like any other.
 fn invoke_into_sink(
     f: &ScriptFn,
     sink: &Arc<Mutex<Vec<ScriptCommand>>>,
-    args: &[ScriptValue],
+    build: impl FnOnce(&mut Vec<ScriptValue>),
 ) -> Result<Dynamic, Box<EvalAltResult>> {
-    let (ret, commands) = f.invoke(args);
-    if !commands.is_empty() {
-        sink.lock().extend(commands);
-    }
-    Ok(script_value_to_dynamic(&ret))
+    lumen_script::with_call_scratch(|scratch| {
+        build(&mut scratch.args);
+        if f.sig.is_typed()
+            && let Err(message) = f.sig.check_args(&scratch.args)
+        {
+            return Err(runtime_error(&f.name, &message));
+        }
+        let ret = f.invoke_into(&scratch.args, &mut scratch.commands);
+        if !scratch.commands.is_empty() {
+            sink.lock().extend(scratch.commands.drain(..));
+        }
+        match ret {
+            Ok(value) => Ok(script_value_to_dynamic(&value)),
+            Err(message) => Err(runtime_error(&f.name, &message)),
+        }
+    })
+}
+
+/// The Rhai runtime error a failed or wrongly-called script function raises.
+fn runtime_error(name: &str, message: &str) -> Box<EvalAltResult> {
+    Box::new(EvalAltResult::ErrorRuntime(
+        format!("{name}: {message}").into(),
+        rhai::Position::NONE,
+    ))
 }
 
 /// Translate a Rhai `ParseError` into the structured

@@ -78,9 +78,10 @@ pub use http::{
 };
 pub use runtime::*;
 pub use script_fn::{
-    HostSet, MAX_VARIADIC_ARITY, ScriptFn, ScriptFnAppExt, ScriptFnBody, ScriptFnBuilder,
-    ScriptFnCx, ScriptFnRegistry, ScriptFnStore, ScriptNs, ScriptParam, ScriptPrelude, ScriptSig,
-    ScriptTy,
+    Arity0, CallScratch, HostSet, IntoScriptFn, MAX_VARIADIC_ARITY, ScriptFn, ScriptFnAppExt,
+    ScriptFnBody, ScriptFnBuilder, ScriptFnCx, ScriptFnRegistry, ScriptFnStore, ScriptNs,
+    ScriptParam, ScriptPrelude, ScriptResult, ScriptRet, ScriptSig, ScriptTy, ScriptType,
+    with_call_scratch,
 };
 
 /// Errors a [`ScriptHost`] can surface from `load` or `tick`.

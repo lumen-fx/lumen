@@ -12,9 +12,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
-use candela_vm::{IntoHostFn, Value};
-use lumen_core::warn_line;
-use lumen_script::{ScriptCommand, ScriptFn, ScriptNs, ScriptTy, ScriptValue, builtin_script_fns};
+use candela_vm::{HostError, HostType, IntoHostFn, Value};
+use lumen_script::{
+    ScriptCommand, ScriptFn, ScriptNs, ScriptTy, ScriptValue, builtin_script_fns, with_call_scratch,
+};
 
 use crate::parse;
 use crate::value::{array_to_rows, candela_value_to_script, script_value_to_candela};
@@ -120,47 +121,68 @@ pub trait HostFnSink {
     where
         F: IntoHostFn<Marker>;
 
+    /// Registers a host function whose signature is given as data rather than
+    /// derived from a Rust closure. The binding is checked against the
+    /// declaration exactly as a derived one is, so a function described at run
+    /// time (a plugin's, a generated one) stays typed at the call site.
+    fn register_host_fn_typed<F>(
+        &mut self,
+        namespace: &str,
+        name: &str,
+        arg_types: Vec<HostType>,
+        ret_type: HostType,
+        f: F,
+    ) where
+        F: Fn(&[Value]) -> Result<Value, HostError> + 'static;
+
     /// Registers a variadic host function under `namespace::name`. The closure
     /// receives every argument as a slice, so a dynamically-shaped value
     /// crosses the boundary without a fixed signature; the declaration spells
     /// the argument list `...`.
     fn register_host_fn_variadic<F>(&mut self, namespace: &str, name: &str, f: F)
     where
-        F: Fn(&[Value]) -> Value + 'static;
+        F: Fn(&[Value]) -> Result<Value, HostError> + 'static;
 }
 
-impl HostFnSink for candela_vm::HostRegistry {
-    fn register_host_fn<Marker, F>(&mut self, namespace: &str, name: &str, f: F)
-    where
-        F: IntoHostFn<Marker>,
-    {
-        Self::register_host_fn(self, namespace, name, f);
-    }
+/// Forward every [`HostFnSink`] method to the inherent method of the same name.
+/// Both candela surfaces spell them identically, so the impls differ only in
+/// the type they are written for.
+macro_rules! impl_host_fn_sink {
+    ($ty:ty) => {
+        impl HostFnSink for $ty {
+            fn register_host_fn<Marker, F>(&mut self, namespace: &str, name: &str, f: F)
+            where
+                F: IntoHostFn<Marker>,
+            {
+                Self::register_host_fn(self, namespace, name, f);
+            }
 
-    fn register_host_fn_variadic<F>(&mut self, namespace: &str, name: &str, f: F)
-    where
-        F: Fn(&[Value]) -> Value + 'static,
-    {
-        Self::register_host_fn_variadic(self, namespace, name, f);
-    }
+            fn register_host_fn_typed<F>(
+                &mut self,
+                namespace: &str,
+                name: &str,
+                arg_types: Vec<HostType>,
+                ret_type: HostType,
+                f: F,
+            ) where
+                F: Fn(&[Value]) -> Result<Value, HostError> + 'static,
+            {
+                Self::register_host_fn_typed(self, namespace, name, arg_types, ret_type, f);
+            }
+
+            fn register_host_fn_variadic<F>(&mut self, namespace: &str, name: &str, f: F)
+            where
+                F: Fn(&[Value]) -> Result<Value, HostError> + 'static,
+            {
+                Self::register_host_fn_variadic(self, namespace, name, f);
+            }
+        }
+    };
 }
 
+impl_host_fn_sink!(candela_vm::HostRegistry);
 #[cfg(feature = "compiler")]
-impl HostFnSink for candela::Engine {
-    fn register_host_fn<Marker, F>(&mut self, namespace: &str, name: &str, f: F)
-    where
-        F: IntoHostFn<Marker>,
-    {
-        Self::register_host_fn(self, namespace, name, f);
-    }
-
-    fn register_host_fn_variadic<F>(&mut self, namespace: &str, name: &str, f: F)
-    where
-        F: Fn(&[Value]) -> Value + 'static,
-    {
-        Self::register_host_fn_variadic(self, namespace, name, f);
-    }
-}
+impl_host_fn_sink!(candela::Engine);
 
 /// Derivation registry: `name -> (dep signal names, recompute fn name)`.
 /// Aliased to keep clippy's `type_complexity` lint quiet (mirrors the Lua
@@ -375,155 +397,115 @@ pub(crate) fn namespace_of(ns: &ScriptNs) -> &str {
     }
 }
 
-/// Bind one [`ScriptFn`] into `sink` as a variadic host function.
+/// Bind one [`ScriptFn`] into `sink`.
 ///
-/// One registration serves every arity, so the script declares the function
-/// with a `...` argument list and candela checks nothing at the call site. A
-/// declaration whose types the signature could carry is bound the same way for
-/// now; the typed shape adapters land with the prelude work.
+/// A signature candela can name goes in typed: the argument and return types
+/// travel as data, candela checks them against the declaration when it binds,
+/// and a call of the wrong shape fails to compile. Everything else (a variadic
+/// signature, an `any` in it, optional trailing arguments candela has no
+/// spelling for) binds variadically, which accepts any argument slice and is
+/// declared `any name(...)`.
 pub(crate) fn register_script_fn<S: HostFnSink>(
     sink: &mut S,
     registries: &Registries,
     f: &ScriptFn,
 ) {
-    if register_typed(sink, registries, f) {
-        return;
-    }
-    if matches!(f.ns, ScriptNs::Builtin) {
-        warn_line!(
-            "lumen-script-candela: `{}` has no typed shape; it binds variadically and must be \
-             declared `any {}(...)`",
-            f.name,
-            f.name
-        );
-    }
     let queue = registries.sink.clone();
     let bound = f.clone();
-    sink.register_host_fn_variadic(namespace_of(&f.ns), &f.name, move |args: &[Value]| {
-        let vals: Vec<ScriptValue> = args.iter().map(candela_value_to_script).collect();
-        // The sink lock is taken once, after the body returns: a body that
-        // calls back into a builtin would otherwise meet a lock its own call
-        // is holding.
-        let (ret, commands) = bound.invoke(&vals);
-        if !commands.is_empty() {
-            queue.lock().unwrap().extend(commands);
-        }
-        script_value_to_candela(&ret)
-    });
+    let ns = namespace_of(&f.ns).to_owned();
+
+    // The sink lock is taken once, after the body returns: a body that calls
+    // back into a builtin would otherwise meet a lock its own call is holding.
+    // A body that failed reports through candela's own funnel, which raises at
+    // the call site naming the function and is catchable as `host_fn_error`.
+    let ret_ty = f.sig.ret.clone();
+    let call = move |args: &[Value]| -> Result<Value, HostError> {
+        with_call_scratch(|scratch| {
+            scratch
+                .args
+                .extend(args.iter().map(candela_value_to_script));
+            let ret = bound.invoke_into(&scratch.args, &mut scratch.commands);
+            if !scratch.commands.is_empty() {
+                queue.lock().unwrap().extend(scratch.commands.drain(..));
+            }
+            ret.map(|value| as_declared(&ret_ty, &value))
+                .map_err(HostError::new)
+        })
+    };
+
+    match typed_signature(f) {
+        Some((args, ret)) => sink.register_host_fn_typed(&ns, &f.name, args, ret, call),
+        None => sink.register_host_fn_variadic(&ns, &f.name, call),
+    }
 }
 
-/// The Rust type a declared [`ScriptTy`] crosses the candela boundary as.
-macro_rules! host_ty {
-    (Int) => {
-        i64
-    };
-    (Float) => {
-        f64
-    };
-    (Bool) => {
-        bool
-    };
-    (Str) => {
-        String
-    };
-    (Unit) => {
-        ()
-    };
-    (Ints) => {
-        Vec<i64>
-    };
-    (Strs) => {
-        Vec<String>
-    };
-    (MapI) => {
-        HashMap<String, i64>
-    };
-    (MapF) => {
-        HashMap<String, f64>
-    };
-    (MapS) => {
-        HashMap<String, String>
-    };
+/// The candela signature `f` binds under, or `None` when it has to bind
+/// variadically.
+///
+/// candela names one concrete type per position and every position is
+/// required, so a variadic signature, an [`ScriptTy::Any`] anywhere in it, or
+/// an optional trailing argument leaves nothing to declare.
+fn typed_signature(f: &ScriptFn) -> Option<(Vec<HostType>, HostType)> {
+    if f.sig.variadic || f.sig.min_arity != f.sig.params.len() {
+        return None;
+    }
+    let args = f
+        .sig
+        .params
+        .iter()
+        .map(|p| host_type(&p.ty))
+        .collect::<Option<Vec<HostType>>>()?;
+    Some((args, host_type(&f.sig.ret)?))
 }
 
-/// The [`ScriptTy`] a shape letter names.
-macro_rules! script_ty {
-    (Int) => {
-        ScriptTy::Int
-    };
-    (Float) => {
-        ScriptTy::Float
-    };
-    (Bool) => {
-        ScriptTy::Bool
-    };
-    (Str) => {
-        ScriptTy::Str
-    };
-    (Unit) => {
-        ScriptTy::Unit
-    };
-    (Ints) => {
-        ScriptTy::Array(Box::new(ScriptTy::Int))
-    };
-    (Strs) => {
-        ScriptTy::Array(Box::new(ScriptTy::Str))
-    };
-    (MapI) => {
-        ScriptTy::Map(Box::new(ScriptTy::Int))
-    };
-    (MapF) => {
-        ScriptTy::Map(Box::new(ScriptTy::Float))
-    };
-    (MapS) => {
-        ScriptTy::Map(Box::new(ScriptTy::Str))
-    };
+/// The candela host type a declared [`ScriptTy`] crosses the boundary as, or
+/// `None` for [`ScriptTy::Any`], which candela has no fixed spelling for.
+fn host_type(ty: &ScriptTy) -> Option<HostType> {
+    Some(match ty {
+        ScriptTy::Int => HostType::Int,
+        ScriptTy::Float => HostType::Float,
+        ScriptTy::Bool => HostType::Bool,
+        ScriptTy::Str => HostType::String,
+        ScriptTy::Unit => HostType::Unit,
+        ScriptTy::Array(inner) => HostType::Array(Box::new(host_type(inner)?)),
+        ScriptTy::Map(value) => HostType::Map(Box::new(host_type(value)?)),
+        ScriptTy::Any => return None,
+    })
 }
 
-/// Convert what the body returned into the Rust type the declaration names.
-macro_rules! ret_value {
-    (Unit, $v:expr) => {{
-        let _ = $v;
-    }};
-    (Int, $v:expr) => {
-        as_int(&$v)
-    };
-    (Float, $v:expr) => {
-        as_float(&$v)
-    };
-    (Bool, $v:expr) => {
-        matches!($v, ScriptValue::Bool(true))
-    };
-    (Str, $v:expr) => {
-        $v.stringify()
-    };
-    (Ints, $v:expr) => {
-        items(&$v).iter().map(as_int).collect()
-    };
-    (Strs, $v:expr) => {
-        items(&$v)
-            .iter()
-            .map(ScriptValue::stringify)
-            .collect::<Vec<String>>()
-    };
-    (MapI, $v:expr) => {
-        entries(&$v)
-            .into_iter()
-            .map(|(k, v)| (k, as_int(&v)))
-            .collect()
-    };
-    (MapF, $v:expr) => {
-        entries(&$v)
-            .into_iter()
-            .map(|(k, v)| (k, as_float(&v)))
-            .collect()
-    };
-    (MapS, $v:expr) => {
-        entries(&$v)
-            .into_iter()
-            .map(|(k, v)| (k, v.stringify()))
-            .collect()
-    };
+/// Convert what the body returned into the type the declaration names.
+///
+/// candela reads the returned value against the declared type, so a body that
+/// hands back a string where an int was declared has to be narrowed here
+/// rather than left for the VM to misread.
+fn as_declared(ty: &ScriptTy, value: &ScriptValue) -> Value {
+    match ty {
+        ScriptTy::Unit => Value::Null,
+        ScriptTy::Int => Value::Int(as_int(value)),
+        ScriptTy::Float => Value::Float(as_float(value)),
+        ScriptTy::Bool => Value::Bool(matches!(value, ScriptValue::Bool(true))),
+        ScriptTy::Str => Value::String(value.stringify()),
+        ScriptTy::Array(inner) => Value::Array(
+            items(value)
+                .iter()
+                .map(|item| as_declared(inner, item))
+                .collect(),
+        ),
+        ScriptTy::Map(inner) => Value::Map(
+            entries(value)
+                .into_iter()
+                .map(|(k, v)| (k, as_declared(inner, &v)))
+                .collect(),
+        ),
+        ScriptTy::Any => script_value_to_candela(value),
+    }
+}
+
+/// Whether `f` binds under a typed signature rather than variadically. The
+/// declaration follows the binding, so the prelude generator asks the same
+/// question.
+pub(crate) fn binds_typed(f: &ScriptFn) -> bool {
+    typed_signature(f).is_some()
 }
 
 /// A returned value as an integer.
@@ -559,112 +541,6 @@ fn entries(v: &ScriptValue) -> Vec<(String, ScriptValue)> {
         ScriptValue::Map(m) => m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         _ => Vec::new(),
     }
-}
-
-/// Bind `f` under the first listed shape its signature matches.
-///
-/// candela derives a host function's signature from the Rust closure it is
-/// handed, so one closure per shape is what makes a declaration stay typed and
-/// checked at compile time. The shapes are generated from the list below rather
-/// than written per builtin.
-macro_rules! typed_shapes {
-    ($sink:expr, $r:expr, $f:expr; $( [$($b:ident : $p:ident),*] -> $ret:ident ),+ $(,)?) => {{
-        $(
-            if shape_matches($f, &[$(script_ty!($p)),*], &script_ty!($ret)) {
-                let queue = $r.sink.clone();
-                let bound = $f.clone();
-                $sink.register_host_fn(
-                    namespace_of(&$f.ns),
-                    &$f.name,
-                    move |$($b: host_ty!($p)),*| -> host_ty!($ret) {
-                        let vals = vec![$(ScriptValue::from($b)),*];
-                        let (ret, commands) = bound.invoke(&vals);
-                        if !commands.is_empty() {
-                            queue.lock().unwrap().extend(commands);
-                        }
-                        ret_value!($ret, ret)
-                    },
-                );
-                return true;
-            }
-        )+
-        false
-    }};
-}
-
-/// Whether `f` declares exactly these parameter types and this return type.
-fn shape_matches(f: &ScriptFn, params: &[ScriptTy], ret: &ScriptTy) -> bool {
-    !f.sig.variadic
-        && f.sig.min_arity == params.len()
-        && f.sig.ret == *ret
-        && f.sig.params.len() == params.len()
-        && f.sig.params.iter().zip(params).all(|(p, ty)| p.ty == *ty)
-}
-
-/// Bind `f` as a typed, non-variadic host function when its signature is one
-/// of the shapes candela can name in a declaration.
-fn register_typed<S: HostFnSink>(sink: &mut S, r: &Registries, f: &ScriptFn) -> bool {
-    typed_shapes! { sink, r, f;
-        [] -> Unit,
-        [a: Str] -> Unit,
-        [a: Int] -> Unit,
-        [a: Float] -> Unit,
-        [a: Str, b: Str] -> Unit,
-        [a: Str, b: Int] -> Unit,
-        [a: Str, b: Str, c: Str] -> Unit,
-        [a: Str, b: Str, c: Str, d: Str, e: Str] -> Unit,
-        [a: Str, b: Str, c: Str, d: Str, e: Bool] -> Unit,
-        [] -> Str,
-        [a: Str] -> Str,
-        [a: Str, b: Str] -> Str,
-        [a: Str, b: Str] -> Bool,
-        [] -> Int,
-        [a: Str] -> Int,
-        [a: Str] -> Ints,
-        [a: Int] -> Int,
-        [a: Int] -> Ints,
-        [a: Int] -> Str,
-        [a: Int] -> Strs,
-        [a: Int] -> Bool,
-        [a: Int] -> Float,
-        [a: Int] -> MapI,
-        [a: Int] -> MapF,
-        [a: Int] -> MapS,
-        [a: Int, b: Str] -> Unit,
-        [a: Int, b: Str] -> Int,
-        [a: Int, b: Str] -> Str,
-        [a: Int, b: Str] -> Bool,
-        [a: Int, b: Str] -> MapS,
-        [a: Int, b: Str, c: Str] -> Unit,
-        [a: Int, b: Int] -> Unit,
-        [a: Int, b: Int, c: Int] -> Unit,
-    }
-}
-/// A sink that binds nothing, for asking the shape adapter a question.
-struct NullSink;
-
-impl HostFnSink for NullSink {
-    fn register_host_fn<Marker, F>(&mut self, _namespace: &str, _name: &str, _f: F)
-    where
-        F: IntoHostFn<Marker>,
-    {
-    }
-
-    fn register_host_fn_variadic<F>(&mut self, _namespace: &str, _name: &str, _f: F)
-    where
-        F: Fn(&[Value]) -> Value + 'static,
-    {
-    }
-}
-
-/// Whether the shape adapter binds `f` under a typed signature rather than
-/// variadically.
-///
-/// candela checks a declaration against the registration, so the two have to
-/// agree; running the adapter itself against a sink that binds nothing is what
-/// keeps the answer from drifting out of the shape list.
-pub(crate) fn binds_typed(f: &ScriptFn) -> bool {
-    register_typed(&mut NullSink, &Registries::default(), f)
 }
 
 /// Register the fragment surface: instantiate a compiled fragment by key, and
@@ -788,10 +664,10 @@ pub(crate) fn register_lumen_host_fns<S: HostFnSink>(engine: &mut S, r: &Registr
     // Both return a dynamically-shaped value, so both register
     // variadically and are declared `any name(...)`; see the crate docs.
     engine.register_host_fn_variadic(HOST_NAMESPACE, "parse_json", |args: &[Value]| {
-        parse::json(&arg_text(args, 0))
+        Ok(parse::json(&arg_text(args, 0)))
     });
     engine.register_host_fn_variadic(HOST_NAMESPACE, "parse_markdown", |args: &[Value]| {
-        parse::markdown(&arg_text(args, 0))
+        Ok(parse::markdown(&arg_text(args, 0)))
     });
 
     // -- diagnostics -------------------------------------------------
@@ -808,7 +684,7 @@ pub(crate) fn register_lumen_host_fns<S: HostFnSink>(engine: &mut S, r: &Registr
                 .collect::<Vec<_>>()
                 .join(" ");
             sink.lock().unwrap().push(ScriptCommand::Print(line));
-            Value::Null
+            Ok(Value::Null)
         });
     }
 
@@ -893,9 +769,9 @@ fn register_runtime_state<S: HostFnSink>(engine: &mut S) {
     // is declared `any matched_rules(...)`.
     engine.register_host_fn_variadic(HOST_NAMESPACE, "matched_rules", |args: &[Value]| {
         let Some(handle) = args.first().and_then(Value::as_i64).and_then(cd_id_to_raw) else {
-            return Value::Array(Vec::new());
+            return Ok(Value::Array(Vec::new()));
         };
-        Value::Array(
+        Ok(Value::Array(
             ins::node_matched_rules(handle)
                 .into_iter()
                 .map(|rule| {
@@ -926,7 +802,7 @@ fn register_runtime_state<S: HostFnSink>(engine: &mut S) {
                     ]))
                 })
                 .collect(),
-        )
+        ))
     });
 }
 
@@ -1235,7 +1111,7 @@ fn register_array_signals<S: HostFnSink>(engine: &mut S, r: &Registries) {
                 other => vec![other],
             };
             reg.set_array(&arg_text(args, 0), next);
-            Value::Null
+            Ok(Value::Null)
         },
     );
 
@@ -1249,7 +1125,7 @@ fn register_array_signals<S: HostFnSink>(engine: &mut S, r: &Registries) {
             let mut next = reg.array_items(&name);
             next.push(arg_value(args, 1));
             reg.set_array(&name, next);
-            Value::Null
+            Ok(Value::Null)
         },
     );
 
@@ -1261,11 +1137,12 @@ fn register_array_signals<S: HostFnSink>(engine: &mut S, r: &Registries) {
         move |args: &[Value]| {
             let index = args.get(1).and_then(Value::as_i64).unwrap_or(-1);
             let Ok(index) = usize::try_from(index) else {
-                return Value::Null;
+                return Ok(Value::Null);
             };
-            reg.array_items(&arg_text(args, 0))
+            Ok(reg
+                .array_items(&arg_text(args, 0))
                 .get(index)
-                .map_or(Value::Null, script_value_to_candela)
+                .map_or(Value::Null, script_value_to_candela))
         },
     );
 
@@ -1275,7 +1152,9 @@ fn register_array_signals<S: HostFnSink>(engine: &mut S, r: &Registries) {
         HOST_NAMESPACE,
         "signal_array_all",
         move |args: &[Value]| {
-            script_value_to_candela(&ScriptValue::Array(reg.array_items(&arg_text(args, 0))))
+            Ok(script_value_to_candela(&ScriptValue::Array(
+                reg.array_items(&arg_text(args, 0)),
+            )))
         },
     );
 
@@ -1409,7 +1288,7 @@ fn register_http<S: HostFnSink>(engine: &mut S, r: &Registries) {
     let sink = r.sink.clone();
     engine.register_host_fn_variadic(HOST_NAMESPACE, "http", move |args: &[Value]| {
         let Some(Value::Map(req)) = args.first() else {
-            return Value::Null;
+            return Ok(Value::Null);
         };
         let text = |v: &Value| candela_value_to_script(v).stringify();
         let field = |key: &str| req.get(key).map(&text);
@@ -1448,7 +1327,7 @@ fn register_http<S: HostFnSink>(engine: &mut S, r: &Registries) {
                 .filter(|n| *n > 0),
             tag: field("tag").unwrap_or_default(),
         });
-        Value::Null
+        Ok(Value::Null)
     });
 }
 
@@ -1471,32 +1350,94 @@ fn parse_hex_color(s: &str) -> Option<(u8, u8, u8, u8)> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use candela_vm::HostRegistry;
+    use lumen_script::ScriptTy as T;
 
-    /// Every shared builtin candela is offered binds under a typed shape.
+    use super::*;
+
+    /// Every shared builtin candela is offered binds typed.
     ///
-    /// The fallback is variadic, which would turn a checked
+    /// The alternative is variadic, which would turn a checked
     /// `set_text(string, string)` declaration into `any set_text(...)` and hand
-    /// a whole class of mistakes to run time. A table entry whose shape is
-    /// missing from the adapter fails here rather than quietly widening the
-    /// prelude.
+    /// a whole class of mistakes to run time. A table entry that stops being
+    /// nameable fails here rather than quietly widening the prelude.
     #[test]
-    fn no_shared_builtin_falls_back_to_a_variadic_binding() {
-        let registries = Registries::default();
-        let mut untyped: Vec<String> = Vec::new();
-        for f in builtin_script_fns() {
-            if !f.visible_to("candela") {
-                continue;
-            }
-            let mut registry = HostRegistry::new();
-            if !register_typed(&mut registry, &registries, &f) {
-                untyped.push(f.name.clone());
-            }
-        }
+    fn every_shared_builtin_binds_typed() {
+        let untyped: Vec<String> = builtin_script_fns()
+            .into_iter()
+            .filter(|f| f.visible_to("candela") && !binds_typed(f))
+            .map(|f| f.name)
+            .collect();
         assert!(
             untyped.is_empty(),
-            "these builtins have no typed shape in the adapter: {untyped:?}"
+            "these builtins would bind variadically: {untyped:?}"
+        );
+    }
+
+    /// A shape no builtin happens to use binds typed all the same: the
+    /// signature travels as data, so there is no list for it to be missing
+    /// from.
+    #[test]
+    fn a_shape_no_builtin_uses_still_binds_typed() {
+        let f = ScriptFn::new("label_for")
+            .ns(ScriptNs::Named("gauge".into()))
+            .param("unit", T::Str)
+            .param("scale", T::Int)
+            .ret(T::Str)
+            .build(|cx| {
+                Ok(ScriptValue::Str(format!(
+                    "{}/{}",
+                    cx.str_arg(0),
+                    cx.int_arg(1)
+                )))
+            });
+        assert_eq!(
+            typed_signature(&f),
+            Some((vec![HostType::String, HostType::Int], HostType::String))
+        );
+    }
+
+    /// `any` and the variadic form have no fixed declaration, and neither does
+    /// an optional trailing argument: candela requires every declared
+    /// parameter at the call site.
+    #[test]
+    fn an_unnameable_signature_falls_back_to_the_variadic_form() {
+        let anything = ScriptFn::value("passthrough", 1, |_| ScriptValue::Unit);
+        assert!(!binds_typed(&anything));
+
+        let variadic = ScriptFn::new("log")
+            .min_arity(0)
+            .variadic()
+            .build(|_| Ok(ScriptValue::Unit));
+        assert!(!binds_typed(&variadic));
+
+        let optional = ScriptFn::new("page")
+            .param("path", T::Str)
+            .ret(T::Unit)
+            .min_arity(0)
+            .build(|_| Ok(ScriptValue::Unit));
+        assert!(!binds_typed(&optional));
+    }
+
+    /// The value a body hands back is narrowed to the declared type, so a
+    /// declaration and the bits that reach the VM cannot disagree.
+    #[test]
+    fn a_returned_value_is_narrowed_to_what_the_declaration_names() {
+        assert_eq!(
+            as_declared(&T::Int, &ScriptValue::F64(2.9)),
+            Value::Int(2),
+            "a float where an int is declared truncates rather than arriving as a float"
+        );
+        assert_eq!(
+            as_declared(&T::Str, &ScriptValue::I64(7)),
+            Value::String("7".to_owned())
+        );
+        assert_eq!(
+            as_declared(
+                &T::Array(Box::new(T::Int)),
+                &ScriptValue::Array(vec![ScriptValue::Str("3".into())])
+            ),
+            Value::Array(vec![Value::Int(0)]),
+            "an element that is not a number reads as zero, as every other coercion does"
         );
     }
 }

@@ -48,10 +48,13 @@
 //!   passed by the script function's *name* (a plain string), which
 //!   `ScriptHost::call_closure` re-invokes. This matches how candela already
 //!   references functions (by symbol).
-//! - `register_command_fn`: registered through `register_host_fn_variadic`,
-//!   which delivers any argument count as a `&[Value]` slice - so a portable
-//!   `Fn(&[ScriptValue]) -> Vec<ScriptCommand>` bridges cleanly. The script
-//!   declares the fn with a `...` arg list in its `host "lumen" { ... }` block.
+//! - `register_script_fn`: the host-neutral
+//!   [`ScriptFn`](lumen_script::ScriptFn) an app, a plugin, the C ABI or the
+//!   Rust SDK describes. A signature candela can name binds typed, so the call
+//!   site is checked when the program compiles; a variadic or `any` signature
+//!   binds as a `&[Value]` slice and is declared with a `...` arg list. A
+//!   function that fails raises `host_fn_error` at the call, which the script
+//!   can catch.
 //!
 //! # Dynamically-shaped builtins
 //!

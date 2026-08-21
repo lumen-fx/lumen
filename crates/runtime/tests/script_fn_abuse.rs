@@ -86,7 +86,7 @@ impl Plugin for ProbePlugin {
                     l.lock()
                         .unwrap()
                         .push(format!("mark({})", render(cx.args())));
-                    ScriptValue::Unit
+                    Ok(ScriptValue::Unit)
                 }),
         );
 
@@ -99,7 +99,7 @@ impl Plugin for ProbePlugin {
                 .ret(ScriptTy::Unit)
                 .build(move |cx| {
                     l.lock().unwrap().push(format!("report:{}", cx.str_arg(0)));
-                    ScriptValue::Unit
+                    Ok(ScriptValue::Unit)
                 }),
         );
 
@@ -116,7 +116,7 @@ impl Plugin for ProbePlugin {
                         cx.args().len(),
                         render(cx.args())
                     ));
-                    ScriptValue::I64(cx.args().len() as i64)
+                    Ok(ScriptValue::I64(cx.args().len() as i64))
                 }),
         );
 

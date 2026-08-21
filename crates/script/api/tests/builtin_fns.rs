@@ -29,6 +29,12 @@ fn commands(f: &ScriptFn, args: &[ScriptValue]) -> Vec<ScriptCommand> {
     f.invoke(args).1
 }
 
+/// The value a call returned. Nothing in the shared table fails, so a failure
+/// here is the test's own bug.
+fn returns(f: &ScriptFn, args: &[ScriptValue]) -> ScriptValue {
+    f.invoke(args).0.expect("a shared builtin does not fail")
+}
+
 fn text(s: &str) -> ScriptValue {
     ScriptValue::Str(s.to_string())
 }
@@ -44,7 +50,7 @@ fn set_color_scheme_queues_the_command_that_carries_it() {
         "unexpected commands: {queued:?}"
     );
     assert_eq!(
-        f.invoke(&[text("force-dark")]).0,
+        returns(&f, &[text("force-dark")]),
         ScriptValue::Unit,
         "the builtin returns nothing to the script"
     );
@@ -71,19 +77,19 @@ fn page_navigates_with_an_argument_and_reads_without_one() {
     assert_eq!(page.sig.arity_range(), 0..=1);
 
     assert_eq!(
-        page.invoke(&[text("settings")]).0,
+        returns(&page, &[text("settings")]),
         ScriptValue::Unit,
         "navigating returns nothing"
     );
     let current = lumen_core::nav::current();
-    assert_eq!(page.invoke(&[]).0, ScriptValue::Str(current.clone()));
+    assert_eq!(returns(&page, &[]), ScriptValue::Str(current.clone()));
     assert_eq!(
-        page.invoke(&[ScriptValue::Unit]).0,
+        returns(&page, &[ScriptValue::Unit]),
         ScriptValue::Str(current.clone()),
         "a unit placeholder reads too"
     );
     assert_eq!(
-        builtin("lua", "page_current").invoke(&[]).0,
+        returns(&builtin("lua", "page_current"), &[]),
         ScriptValue::Str(current),
         "page_current is the same reader under an unambiguous name"
     );
@@ -101,15 +107,15 @@ fn candela_takes_the_declarable_shape_of_the_navigation_family() {
 
     let back = builtin("candela", "page_back");
     assert_eq!(back.sig.ret, lumen_script::ScriptTy::Unit);
-    assert_eq!(back.invoke(&[]).0, ScriptValue::Unit);
+    assert_eq!(returns(&back, &[]), ScriptValue::Unit);
 
     assert_eq!(
-        builtin("rhai", "page_back").invoke(&[]).0,
+        returns(&builtin("rhai", "page_back"), &[]),
         ScriptValue::Bool(true),
         "the hosts that read the result get the boolean"
     );
     assert_eq!(
-        builtin("rhai", "page_forward").invoke(&[]).0,
+        returns(&builtin("rhai", "page_forward"), &[]),
         ScriptValue::Bool(true)
     );
 }
@@ -186,16 +192,16 @@ fn a_float_parameter_takes_an_integer_argument() {
 fn local_id_swaps_the_suffix_under_the_same_prefix() {
     let f = builtin("rhai", "local_id");
     assert_eq!(
-        f.invoke(&[text("user-card:btn"), text("label")]).0,
+        returns(&f, &[text("user-card:btn"), text("label")]),
         text("user-card:label")
     );
     assert_eq!(
-        f.invoke(&[text("a:b:btn"), text("label")]).0,
+        returns(&f, &[text("a:b:btn"), text("label")]),
         text("a:b:label"),
         "a multi-level prefix stacks"
     );
     assert_eq!(
-        f.invoke(&[text("btn"), text("label")]).0,
+        returns(&f, &[text("btn"), text("label")]),
         text("label"),
         "a source with no prefix gives the suffix back"
     );
@@ -207,13 +213,11 @@ fn local_id_swaps_the_suffix_under_the_same_prefix() {
 fn the_file_builtins_report_failure_through_their_return_value() {
     let missing = "/nonexistent-lumen-test-dir/nope.txt";
     assert_eq!(
-        builtin("rhai", "read_file").invoke(&[text(missing)]).0,
+        returns(&builtin("rhai", "read_file"), &[text(missing)]),
         text(""),
     );
     assert_eq!(
-        builtin("rhai", "write_file")
-            .invoke(&[text(missing), text("x")])
-            .0,
+        returns(&builtin("rhai", "write_file"), &[text(missing), text("x")]),
         ScriptValue::Bool(false),
     );
 }
@@ -223,10 +227,10 @@ fn the_file_builtins_report_failure_through_their_return_value() {
 #[test]
 fn the_request_surface_reads_empty_off_a_server() {
     assert_eq!(
-        builtin("lua", "request_header").invoke(&[text("accept")]).0,
+        returns(&builtin("lua", "request_header"), &[text("accept")]),
         text("")
     );
-    assert_eq!(builtin("lua", "request_body").invoke(&[]).0, text(""));
+    assert_eq!(returns(&builtin("lua", "request_body"), &[]), text(""));
 }
 
 /// Every host is offered the shared surface, apart from two deliberate
@@ -309,6 +313,64 @@ fn a_metadata_row_matches_the_signature_behind_it() {
         }
     }
     assert!(wrong.is_empty(), "{wrong:?}");
+}
+
+/// A candela row spells the types the candela host declares.
+///
+/// candela is the language that has to name a type in a `host` block, so its
+/// rows and the generated declarations are read side by side. An entry the
+/// generator declares `string node_text(int)` and the LSP describes as taking a
+/// `node` is the same function twice over, and the two spellings have to agree.
+#[test]
+fn a_candela_row_spells_the_types_the_declaration_names() {
+    /// How a candela row spells a declared type.
+    fn spelling(ty: &lumen_script::ScriptTy) -> String {
+        use lumen_script::ScriptTy as T;
+        match ty {
+            T::Int => "int".to_string(),
+            T::Float => "float".to_string(),
+            T::Bool => "bool".to_string(),
+            T::Str => "string".to_string(),
+            T::Unit => "()".to_string(),
+            T::Any => "any".to_string(),
+            T::Array(inner) => format!("{}[]", spelling(inner)),
+            T::Map(value) => format!("{{string: {}}}", spelling(value)),
+        }
+    }
+
+    let mut drifted: Vec<String> = Vec::new();
+    for b in builtins::CANDELA_BUILTINS {
+        let Some(f) = builtin_script_fns()
+            .into_iter()
+            .find(|f| f.name == b.name && f.visible_to("candela"))
+        else {
+            continue;
+        };
+        if spelling(&f.sig.ret) != b.ret {
+            drifted.push(format!(
+                "{}: returns {}, the row says {}",
+                b.name,
+                spelling(&f.sig.ret),
+                b.ret
+            ));
+        }
+        if f.sig.variadic || f.sig.min_arity != f.sig.params.len() {
+            continue;
+        }
+        for (param, row) in f.sig.params.iter().zip(b.params) {
+            if spelling(&param.ty) != row.ty {
+                drifted.push(format!(
+                    "{}: `{}` is {}, the row says {}",
+                    b.name,
+                    param.name,
+                    spelling(&param.ty),
+                    row.ty
+                ));
+            }
+        }
+    }
+    drifted.sort_unstable();
+    assert!(drifted.is_empty(), "{drifted:#?}");
 }
 
 /// The free-function DOM surface is candela's, and no other host offers it:

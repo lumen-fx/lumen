@@ -6,7 +6,9 @@
 //! writes one for every namespace it bound; the tests below cover both that and
 //! the app that brings its own block.
 
-use lumen_script::{ScriptCommand, ScriptError, ScriptFn, ScriptHost, ScriptNs, ScriptValue};
+use lumen_script::{
+    ScriptCommand, ScriptError, ScriptFn, ScriptHost, ScriptNs, ScriptTy, ScriptValue,
+};
 use lumen_script_candela::CandelaHost;
 
 /// Join the marshalled args into a `Print` command so the test can observe
@@ -24,7 +26,7 @@ fn joining_script_fn() -> ScriptFn {
                 .collect::<Vec<_>>()
                 .join(",");
             cx.emit(ScriptCommand::Print(joined));
-            ScriptValue::Unit
+            Ok(ScriptValue::Unit)
         })
 }
 
@@ -360,4 +362,197 @@ fn main() {}
         "auto.cdl",
     )
     .expect("the check sees the synthesized block and the wrapper");
+}
+
+/// A plugin function that fails raises where it was called.
+///
+/// The message reaches the script whole, under candela's own `host_fn_error`
+/// kind and naming the function, so an app can tell which plugin refused and
+/// the runtime reports it as an ordinary script error rather than dying.
+#[test]
+fn a_failing_plugin_fn_raises_at_the_call_site() {
+    let mut host = CandelaHost::new();
+    host.register_script_fn(
+        &ScriptFn::new("read")
+            .ns(ScriptNs::Named("gpio".to_owned()))
+            .param("pin", ScriptTy::Int)
+            .ret(ScriptTy::Int)
+            .build(|cx| match cx.int_arg(0) {
+                21 => Ok(ScriptValue::I64(1)),
+                pin => Err(format!("pin {pin} is not wired")),
+            }),
+    )
+    .expect("register");
+    host.load(
+        "fn level(pin) { return gpio::read(pin); }\nfn main() {}\n",
+        "app.cdl",
+    )
+    .expect("load");
+
+    let ScriptError::Runtime(message) = host
+        .call("level", &[ScriptValue::I64(7)])
+        .expect_err("the plugin refused")
+    else {
+        panic!("a failing plugin function is a runtime error");
+    };
+    assert!(
+        message.contains("gpio::read") && message.contains("pin 7 is not wired"),
+        "the message has to name the function and carry what it said: {message}"
+    );
+
+    // The app is still alive, and the call that does not fail still answers.
+    assert_eq!(
+        host.call("level", &[ScriptValue::I64(21)])
+            .expect("21 is wired")
+            .ret,
+        Some(ScriptValue::I64(1))
+    );
+}
+
+/// The failure is an ordinary candela runtime error, so a script catches it.
+#[test]
+fn a_script_catches_a_failing_plugin_fn() {
+    let mut host = CandelaHost::new();
+    host.register_script_fn(
+        &ScriptFn::new("read")
+            .ns(ScriptNs::Named("gpio".to_owned()))
+            .param("pin", ScriptTy::Int)
+            .ret(ScriptTy::Int)
+            .build(|_| Err("the bus is down".to_owned())),
+    )
+    .expect("register");
+    host.load(
+        "fn level(pin) {\n\
+         \x20   try { return gpio::read(pin); }\n\
+         \x20   catch \"host_fn_error\" { return -1; }\n\
+         }\n\
+         fn main() {}\n",
+        "app.cdl",
+    )
+    .expect("load");
+
+    assert_eq!(
+        host.call("level", &[ScriptValue::I64(7)])
+            .expect("caught")
+            .ret,
+        Some(ScriptValue::I64(-1))
+    );
+}
+
+/// A wrapper may call the prelude it is spliced in front of.
+///
+/// The wrappers go ahead of the app's source, and the prelude expands where the
+/// app's `import` line stood, so a wrapper's `lumen::` call is written above the
+/// block that declares it. candela resolves a host call through the whole
+/// program rather than what precedes it, which is what makes the sugar a plugin
+/// ships able to build on the runtime's own surface.
+#[test]
+fn a_wrapper_may_call_the_prelude_spliced_below_it() {
+    let mut host = CandelaHost::new();
+    host.add_prelude(
+        "gpio",
+        "fn announce(text: string) { lumen::print(text); return 7; }\n",
+    );
+    host.load(
+        "import \"lumen.cdl\";\nfn go() { return announce(\"ready\"); }\nfn main() {}\n",
+        "app.cdl",
+    )
+    .expect("the wrapper compiles above the prelude it calls");
+
+    let outcome = host.call("go", &[]).expect("go runs");
+    assert_eq!(outcome.ret, Some(ScriptValue::I64(7)));
+    assert_eq!(prints(&outcome.commands), vec!["ready".to_string()]);
+}
+
+/// Two plugins may ship sugar for the same namespace, and both compile.
+///
+/// One plugin registering the functions and another wrapping them is a
+/// composition worth allowing, so the host keeps both sources and splices them
+/// in registration order.
+#[test]
+fn two_wrappers_for_one_namespace_both_compile() {
+    let mut host = CandelaHost::new();
+    host.register_script_fn(
+        &ScriptFn::new("level")
+            .ns(ScriptNs::Named("gpio".to_owned()))
+            .ret(ScriptTy::Int)
+            .build(|_| Ok(ScriptValue::I64(3))),
+    )
+    .expect("register");
+    host.add_prelude("gpio", "fn doubled() { return gpio::level() * 2; }\n");
+    host.add_prelude("gpio", "fn tripled() { return gpio::level() * 3; }\n");
+    host.load(
+        "fn go() { return doubled() + tripled(); }\nfn main() {}\n",
+        "app.cdl",
+    )
+    .expect("both wrappers compile");
+
+    assert_eq!(
+        host.call("go", &[]).expect("go runs").ret,
+        Some(ScriptValue::I64(15))
+    );
+}
+
+/// A shape no builtin uses is declared with its types, and the call is checked
+/// against them.
+///
+/// The signature travels to candela as data, so what a plugin can declare is
+/// not drawn from a list of shapes the host happens to carry. The result is
+/// typed as the declaration says, and a call passing the wrong types or the
+/// wrong number of arguments is refused naming the parameter.
+#[test]
+fn an_unusual_typed_shape_is_declared_and_checked() {
+    let label = || {
+        ScriptFn::new("label")
+            .ns(ScriptNs::Named("gauge".to_owned()))
+            .param("unit", ScriptTy::Str)
+            .param("scale", ScriptTy::Int)
+            .ret(ScriptTy::Str)
+            .build(|cx| {
+                Ok(ScriptValue::Str(format!(
+                    "{}/{}",
+                    cx.str_arg(0),
+                    cx.int_arg(1)
+                )))
+            })
+    };
+
+    let mut host = CandelaHost::new();
+    host.register_script_fn(&label()).expect("register");
+    // Concatenating the result is what proves the declared `string` return
+    // reached the compiler: an `any` would not concatenate.
+    host.load(
+        "fn go() -> string { return gauge::label(\"mm\", 4) + \"!\"; }\nfn main() {}\n",
+        "app.cdl",
+    )
+    .expect("the declared shape is the call the app makes");
+    assert_eq!(
+        host.call("go", &[]).expect("go runs").ret,
+        Some(ScriptValue::Str("mm/4!".into()))
+    );
+
+    for (what, call) in [
+        (
+            "the arguments the wrong way round",
+            "gauge::label(4, \"mm\")",
+        ),
+        ("one argument short", "gauge::label(\"mm\")"),
+        ("one argument too many", "gauge::label(\"mm\", 4, 9)"),
+    ] {
+        let mut host = CandelaHost::new();
+        host.register_script_fn(&label()).expect("register");
+        host.load(
+            &format!("fn go() {{ return {call}; }}\nfn main() {{}}\n"),
+            "app.cdl",
+        )
+        .expect("load");
+        let err = host
+            .call("go", &[])
+            .expect_err("the declaration does not describe this call")
+            .to_string();
+        assert!(
+            err.contains("label"),
+            "{what}: the message has to name the function: {err}"
+        );
+    }
 }

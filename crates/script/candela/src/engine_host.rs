@@ -201,7 +201,6 @@ fn lmn_expander(
 /// The scratch engine carries no Lumen builtins; the block names one function
 /// and it is registered here, so nothing else has to resolve.
 fn check_declarable(f: &ScriptFn) -> Result<(), ScriptError> {
-    declare::check_inferred_return(f).map_err(ScriptError::compile)?;
     let ns = declare::namespace(f);
     let block = declare::one_line_block(ns, std::slice::from_ref(f));
     let scratch = Registries::default();

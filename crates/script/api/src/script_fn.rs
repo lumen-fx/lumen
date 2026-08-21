@@ -310,7 +310,12 @@ impl<'a> ScriptFnCx<'a> {
 
     /// Argument `i`, or [`ScriptValue::Unit`] when the call passed fewer.
     pub fn arg(&self, i: usize) -> ScriptValue {
-        self.args.get(i).cloned().unwrap_or(ScriptValue::Unit)
+        self.arg_ref(i).clone()
+    }
+
+    /// Argument `i` by reference, for a body that only reads it.
+    pub fn arg_ref(&self, i: usize) -> &ScriptValue {
+        self.args.get(i).unwrap_or(&ScriptValue::Unit)
     }
 
     /// Argument `i` as a string. Non-strings take their canonical rendering; a
@@ -367,7 +372,17 @@ impl<'a> ScriptFnCx<'a> {
 
 /// The callable half of a [`ScriptFn`]. Shared so one description binds into
 /// several hosts, `Send + Sync` so it runs on any of their threads.
-pub type ScriptFnBody = Arc<dyn Fn(&mut ScriptFnCx<'_>) -> ScriptValue + Send + Sync>;
+///
+/// A body that fails hands back the message the script sees. Each host raises
+/// it the way its language raises: a Rhai runtime error, a Lua
+/// `error(...)`, a candela `host_fn_error` the script can catch. The
+/// message names the function, so a failure is attributable without a
+/// stack trace.
+pub type ScriptFnBody = Arc<dyn Fn(&mut ScriptFnCx<'_>) -> ScriptResult + Send + Sync>;
+
+/// What a [`ScriptFn`] body hands back: a value, or the message to raise in
+/// the script that called it.
+pub type ScriptResult = Result<ScriptValue, String>;
 
 /// One native function, in terms every script host understands.
 #[derive(Clone)]
@@ -394,9 +409,13 @@ impl ScriptFn {
     ///     .param("pin", ScriptTy::Int)
     ///     .ret(ScriptTy::Bool)
     ///     .doc("Drive a GPIO pin high.")
-    ///     .build(|cx| ScriptValue::Bool(cx.int_arg(0) > 0));
+    ///     .build(|cx| Ok(ScriptValue::Bool(cx.int_arg(0) > 0)));
     /// assert_eq!(f.sig.params.len(), 1);
     /// ```
+    ///
+    /// [`ScriptFn::from_fn`] takes a plain Rust closure instead and reads the
+    /// signature off its types; the builder is for a function that also wants
+    /// a doc line, optional arguments, a host set, or the command sink.
     // A `ScriptFn` is not complete until it has a body, so the entry point
     // hands back the builder that collects one.
     #[allow(clippy::new_ret_no_self)]
@@ -421,8 +440,76 @@ impl ScriptFn {
             ns: ScriptNs::Extension,
             sig: any_sig(arity),
             hosts: HostSet::ALL,
-            body: Arc::new(move |cx: &mut ScriptFnCx<'_>| f(cx.args())),
+            body: Arc::new(move |cx: &mut ScriptFnCx<'_>| Ok(f(cx.args()))),
         }
+    }
+
+    /// Describe a function from a plain Rust closure, reading its signature off
+    /// the argument and return types.
+    ///
+    /// This is the short form: no builder, no [`ScriptTy`] spelled out. Each
+    /// parameter type maps onto the declared type a host binds it as, so
+    /// `|pin: i64, high: bool|` declares `(int, bool)` and a call passing
+    /// anything else fails at the call site. A closure returning
+    /// `Result<T, String>` may fail, and the message reaches the script.
+    ///
+    /// Parameters are named `arg0`, `arg1`, ... unless
+    /// [`param_names`](Self::param_names) renames them.
+    ///
+    /// ```
+    /// use lumen_script::{ScriptFn, ScriptTy};
+    ///
+    /// let f = ScriptFn::from_fn("gpio_read", |pin: i64| -> Result<bool, String> {
+    ///     if pin < 0 {
+    ///         return Err(format!("pin {pin} is out of range"));
+    ///     }
+    ///     Ok(pin % 2 == 0)
+    /// })
+    /// .param_names(["pin"]);
+    ///
+    /// assert_eq!(f.sig.params[0].ty, ScriptTy::Int);
+    /// assert_eq!(f.sig.ret, ScriptTy::Bool);
+    /// ```
+    pub fn from_fn<Marker, F>(name: impl Into<String>, f: F) -> Self
+    where
+        F: IntoScriptFn<Marker>,
+    {
+        let (params, ret, body) = f.into_script_fn_parts();
+        let arity = params.len();
+        Self {
+            name: name.into(),
+            ns: ScriptNs::Extension,
+            sig: ScriptSig {
+                params: params
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, ty)| ScriptParam {
+                        name: format!("arg{i}"),
+                        ty,
+                    })
+                    .collect(),
+                ret,
+                variadic: false,
+                min_arity: arity,
+                doc: String::new(),
+            },
+            hosts: HostSet::ALL,
+            body,
+        }
+    }
+
+    /// Rename the parameters, in order. Names past the declared arity are
+    /// ignored, and a parameter the list does not reach keeps `argN`.
+    ///
+    /// Only docs and diagnostics read these, so a function built with
+    /// [`ScriptFn::from_fn`] works without them; they are what makes an
+    /// editor's signature hint and a type-mismatch message readable.
+    #[must_use]
+    pub fn param_names<N: Into<String>>(mut self, names: impl IntoIterator<Item = N>) -> Self {
+        for (param, name) in self.sig.params.iter_mut().zip(names) {
+            param.name = name.into();
+        }
+        self
     }
 
     /// Describe an untyped function of `arity` arguments whose whole effect is
@@ -441,7 +528,7 @@ impl ScriptFn {
             hosts: HostSet::ALL,
             body: Arc::new(move |cx: &mut ScriptFnCx<'_>| {
                 f(cx);
-                ScriptValue::Unit
+                Ok(ScriptValue::Unit)
             }),
         }
     }
@@ -473,19 +560,82 @@ impl ScriptFn {
         self.hosts.contains(HostSet::from_lang(lang))
     }
 
-    /// Run the body over `args`, returning its value and whatever it emitted.
+    /// Run the body over `args`, appending whatever it emitted to `out`.
     ///
     /// Every host adapter goes through here, so a body observes the same
-    /// argument slice and the same one-shot command scratch whichever language
-    /// called it.
-    pub fn invoke(&self, args: &[ScriptValue]) -> (ScriptValue, Vec<ScriptCommand>) {
+    /// argument slice and the same command scratch whichever language called
+    /// it. `out` is the caller's buffer rather than a fresh one, so a host that
+    /// reuses [`CallScratch`] pays no allocation per call.
+    ///
+    /// A body that fails still leaves what it emitted before failing: a host
+    /// forwards those commands and then raises, which is what the runtime has
+    /// always done with a partially-completed call.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the body reported, verbatim.
+    pub fn invoke_into(&self, args: &[ScriptValue], out: &mut Vec<ScriptCommand>) -> ScriptResult {
+        let mut cx = ScriptFnCx::new(args, out);
+        (self.body)(&mut cx)
+    }
+
+    /// Run the body over `args`, returning its result and whatever it emitted.
+    ///
+    /// The allocating convenience over [`Self::invoke_into`], for a caller with
+    /// no scratch of its own.
+    pub fn invoke(&self, args: &[ScriptValue]) -> (ScriptResult, Vec<ScriptCommand>) {
         let mut out = Vec::new();
-        let ret = {
-            let mut cx = ScriptFnCx::new(args, &mut out);
-            (self.body)(&mut cx)
-        };
+        let ret = self.invoke_into(args, &mut out);
         (ret, out)
     }
+}
+
+/// The two buffers one call needs: the arguments going in, and the commands
+/// coming out.
+///
+/// A host builds the argument list on every call, and most bodies queue a
+/// command, so both were an allocation per script call. Borrowing them from
+/// [`with_call_scratch`] instead keeps the capacity between calls.
+#[derive(Default)]
+pub struct CallScratch {
+    /// The arguments, converted out of the engine's own value type.
+    pub args: Vec<ScriptValue>,
+    /// What the body emitted, to be moved into the host's sink.
+    pub commands: Vec<ScriptCommand>,
+}
+
+impl CallScratch {
+    /// Empty buffers, allocating nothing until something is pushed.
+    const fn new() -> Self {
+        Self {
+            args: Vec::new(),
+            commands: Vec::new(),
+        }
+    }
+}
+
+thread_local! {
+    /// This thread's scratch buffers, kept between calls so their capacity is
+    /// paid for once.
+    static SCRATCH: std::cell::RefCell<CallScratch> =
+        const { std::cell::RefCell::new(CallScratch::new()) };
+}
+
+/// Borrow this thread's cleared [`CallScratch`] for the length of one call.
+///
+/// The buffers keep their capacity between calls, so a host adapter that wraps
+/// its call in this stops allocating once the app is warm. A body that calls
+/// back into another function finds the shared buffers taken and gets fresh
+/// ones, so a nested call cannot disturb the one it is inside.
+pub fn with_call_scratch<R>(f: impl FnOnce(&mut CallScratch) -> R) -> R {
+    SCRATCH.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut scratch) => {
+            scratch.args.clear();
+            scratch.commands.clear();
+            f(&mut scratch)
+        }
+        Err(_) => f(&mut CallScratch::new()),
+    })
 }
 
 /// A signature of `arity` untyped parameters, all required.
@@ -578,9 +728,12 @@ impl ScriptFnBuilder {
     }
 
     /// Finish with the body.
+    ///
+    /// The body returns `Ok(value)`, or `Err(message)` to raise `message` in
+    /// the script that called it.
     pub fn build<F>(self, body: F) -> ScriptFn
     where
-        F: Fn(&mut ScriptFnCx<'_>) -> ScriptValue + Send + Sync + 'static,
+        F: Fn(&mut ScriptFnCx<'_>) -> ScriptResult + Send + Sync + 'static,
     {
         ScriptFn {
             name: self.name,
@@ -591,6 +744,246 @@ impl ScriptFnBuilder {
         }
     }
 }
+
+/// A Rust type [`ScriptFn::from_fn`] can carry across the script boundary.
+///
+/// Implemented for the scalars every host shares (`i64`, `f64`, `bool`,
+/// `String`), for `()`, and recursively for `Vec<T>` and
+/// `HashMap<String, T>`. The conversion into Rust is the same coercion the
+/// [`ScriptFnCx`] accessors apply, so an integer arrives where a float is
+/// declared and a missing argument reads as the type's empty value.
+pub trait ScriptType: Sized {
+    /// The declared type a host binds this parameter or return slot as.
+    fn script_ty() -> ScriptTy;
+
+    /// Read one argument.
+    fn from_script_value(value: &ScriptValue) -> Self;
+
+    /// Hand one value back to the script.
+    fn into_script_value(self) -> ScriptValue;
+}
+
+impl ScriptType for i64 {
+    fn script_ty() -> ScriptTy {
+        ScriptTy::Int
+    }
+
+    fn from_script_value(value: &ScriptValue) -> Self {
+        match value {
+            ScriptValue::I64(v) => *v,
+            ScriptValue::F64(v) => *v as Self,
+            ScriptValue::Bool(b) => Self::from(*b),
+            ScriptValue::Str(s) => s.trim().parse().unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    fn into_script_value(self) -> ScriptValue {
+        ScriptValue::I64(self)
+    }
+}
+
+impl ScriptType for f64 {
+    fn script_ty() -> ScriptTy {
+        ScriptTy::Float
+    }
+
+    fn from_script_value(value: &ScriptValue) -> Self {
+        match value {
+            ScriptValue::F64(v) => *v,
+            ScriptValue::I64(v) => *v as Self,
+            ScriptValue::Str(s) => s.trim().parse().unwrap_or(0.0),
+            _ => 0.0,
+        }
+    }
+
+    fn into_script_value(self) -> ScriptValue {
+        ScriptValue::F64(self)
+    }
+}
+
+impl ScriptType for bool {
+    fn script_ty() -> ScriptTy {
+        ScriptTy::Bool
+    }
+
+    fn from_script_value(value: &ScriptValue) -> Self {
+        match value {
+            ScriptValue::Bool(b) => *b,
+            ScriptValue::I64(v) => *v != 0,
+            ScriptValue::F64(v) => *v != 0.0,
+            ScriptValue::Str(s) => !s.is_empty() && s != "false" && s != "0",
+            _ => false,
+        }
+    }
+
+    fn into_script_value(self) -> ScriptValue {
+        ScriptValue::Bool(self)
+    }
+}
+
+impl ScriptType for String {
+    fn script_ty() -> ScriptTy {
+        ScriptTy::Str
+    }
+
+    fn from_script_value(value: &ScriptValue) -> Self {
+        value.stringify()
+    }
+
+    fn into_script_value(self) -> ScriptValue {
+        ScriptValue::Str(self)
+    }
+}
+
+impl ScriptType for () {
+    fn script_ty() -> ScriptTy {
+        ScriptTy::Unit
+    }
+
+    fn from_script_value(_value: &ScriptValue) -> Self {}
+
+    fn into_script_value(self) -> ScriptValue {
+        ScriptValue::Unit
+    }
+}
+
+impl<T: ScriptType> ScriptType for Vec<T> {
+    fn script_ty() -> ScriptTy {
+        ScriptTy::Array(Box::new(T::script_ty()))
+    }
+
+    fn from_script_value(value: &ScriptValue) -> Self {
+        match value {
+            ScriptValue::Array(items) => items.iter().map(T::from_script_value).collect(),
+            _ => Self::new(),
+        }
+    }
+
+    fn into_script_value(self) -> ScriptValue {
+        ScriptValue::Array(self.into_iter().map(T::into_script_value).collect())
+    }
+}
+
+impl<T: ScriptType> ScriptType for std::collections::HashMap<String, T> {
+    fn script_ty() -> ScriptTy {
+        ScriptTy::Map(Box::new(T::script_ty()))
+    }
+
+    fn from_script_value(value: &ScriptValue) -> Self {
+        match value {
+            ScriptValue::Map(entries) => entries
+                .iter()
+                .map(|(k, v)| (k.clone(), T::from_script_value(v)))
+                .collect(),
+            _ => Self::new(),
+        }
+    }
+
+    fn into_script_value(self) -> ScriptValue {
+        ScriptValue::Map(
+            self.into_iter()
+                .map(|(k, v)| (k, T::into_script_value(v)))
+                .collect(),
+        )
+    }
+}
+
+/// What a [`ScriptFn::from_fn`] closure may return: a value, or a
+/// `Result` whose error message reaches the script.
+///
+/// The declared return type is `T` either way, so the same declaration binds a
+/// closure that can fail and one that cannot.
+pub trait ScriptRet {
+    /// The declared return type.
+    fn script_ty() -> ScriptTy;
+
+    /// The result the body hands the host.
+    fn into_script_result(self) -> ScriptResult;
+}
+
+impl<T: ScriptType> ScriptRet for T {
+    fn script_ty() -> ScriptTy {
+        <T as ScriptType>::script_ty()
+    }
+
+    fn into_script_result(self) -> ScriptResult {
+        Ok(self.into_script_value())
+    }
+}
+
+impl<T: ScriptType> ScriptRet for Result<T, String> {
+    fn script_ty() -> ScriptTy {
+        <T as ScriptType>::script_ty()
+    }
+
+    fn into_script_result(self) -> ScriptResult {
+        self.map(ScriptType::into_script_value)
+    }
+}
+
+/// Adapts a plain Rust closure into the body and signature of a [`ScriptFn`].
+///
+/// The `Marker` parameter disambiguates the per-arity impls, the same trick
+/// Rhai and Bevy use so one entry point accepts closures of many shapes without
+/// a type annotation. Arity runs to [`MAX_VARIADIC_ARITY`]; past that, describe
+/// the function with [`ScriptFn::new`].
+pub trait IntoScriptFn<Marker> {
+    /// The declared parameter types, the declared return type, and the body.
+    ///
+    /// Driven by [`ScriptFn::from_fn`]; not meant to be called directly.
+    fn into_script_fn_parts(self) -> (Vec<ScriptTy>, ScriptTy, ScriptFnBody);
+}
+
+/// Marker for a closure that takes no arguments.
+pub struct Arity0;
+
+impl<F, R> IntoScriptFn<Arity0> for F
+where
+    F: Fn() -> R + Send + Sync + 'static,
+    R: ScriptRet,
+{
+    fn into_script_fn_parts(self) -> (Vec<ScriptTy>, ScriptTy, ScriptFnBody) {
+        (
+            Vec::new(),
+            <R as ScriptRet>::script_ty(),
+            Arc::new(move |_cx: &mut ScriptFnCx<'_>| self().into_script_result()),
+        )
+    }
+}
+
+/// One `IntoScriptFn` impl per arity. The marker is the tuple of parameter
+/// types, which keeps the impls disjoint from each other and from [`Arity0`].
+macro_rules! impl_into_script_fn {
+    ($($ty:ident $idx:tt),+) => {
+        impl<F, R, $($ty,)+> IntoScriptFn<($($ty,)+)> for F
+        where
+            F: Fn($($ty,)+) -> R + Send + Sync + 'static,
+            R: ScriptRet,
+            $( $ty: ScriptType + 'static, )+
+        {
+            fn into_script_fn_parts(self) -> (Vec<ScriptTy>, ScriptTy, ScriptFnBody) {
+                (
+                    vec![ $( <$ty as ScriptType>::script_ty(), )+ ],
+                    <R as ScriptRet>::script_ty(),
+                    Arc::new(move |cx: &mut ScriptFnCx<'_>| {
+                        self( $( <$ty as ScriptType>::from_script_value(cx.arg_ref($idx)), )+ )
+                            .into_script_result()
+                    }),
+                )
+            }
+        }
+    };
+}
+
+impl_into_script_fn!(A0 0);
+impl_into_script_fn!(A0 0, A1 1);
+impl_into_script_fn!(A0 0, A1 1, A2 2);
+impl_into_script_fn!(A0 0, A1 1, A2 2, A3 3);
+impl_into_script_fn!(A0 0, A1 1, A2 2, A3 3, A4 4);
+impl_into_script_fn!(A0 0, A1 1, A2 2, A3 3, A4 4, A5 5);
+impl_into_script_fn!(A0 0, A1 1, A2 2, A3 3, A4 4, A5 5, A6 6);
+impl_into_script_fn!(A0 0, A1 1, A2 2, A3 3, A4 4, A5 5, A6 6, A7 7);
 
 /// The functions a host registered, kept so it can put them back.
 ///
@@ -666,7 +1059,29 @@ impl ScriptFnRegistry {
     }
 
     /// Append a plugin's language source.
+    ///
+    /// Two plugins may ship source for the same namespace, and both are kept:
+    /// one plugin registers the functions and another wraps them, which is a
+    /// composition the registry has no business breaking. It is worth saying
+    /// out loud, because the two sources are compiled into the same program and
+    /// a name written in both is a compile error the app author did not write.
     pub fn push_prelude(&mut self, prelude: ScriptPrelude) {
+        if let Some(prior) = self
+            .preludes
+            .iter()
+            .find(|p| p.lang == prelude.lang && p.ns == prelude.ns)
+        {
+            warn_line!(
+                "add_script_prelude(`{lang}`, `{ns}`): `{ns}` already carries {prior_len} bytes of \
+                 {lang} source from an earlier plugin, and this adds {next_len} more; both \
+                 compile, in registration order, so a name written in both is a compile error \
+                 pointing into the wrapper",
+                lang = prelude.lang,
+                ns = prelude.ns,
+                prior_len = prior.source.len(),
+                next_len = prelude.source.len(),
+            );
+        }
         self.preludes.push(prelude);
     }
 
@@ -703,12 +1118,12 @@ impl ScriptFnRegistry {
 
 /// Register script functions on an [`App`].
 ///
-/// Install the plugin that calls these through
-/// `RunOptions::with_plugin`, which runs before the script hosts load. A
-/// registration made after that is refused: Rhai and Lua would bind a function
-/// no already-compiled program resolves, and candela binds its host
-/// declarations when the program compiles or the artifact loads, so there is
-/// nothing left to bind to.
+/// Install the plugin that calls these through `RunOptions::with_plugin`, or
+/// through the Rust SDK's `lumenui::App::add_plugin`; both run before the
+/// script hosts load. A registration made after that is refused: Rhai and Lua
+/// would bind a function no already-compiled program resolves, and candela
+/// binds its host declarations when the program compiles or the artifact loads,
+/// so there is nothing left to bind to.
 pub trait ScriptFnAppExt {
     /// Register one function.
     fn add_script_fn(&mut self, f: ScriptFn) -> &mut Self;
@@ -727,8 +1142,8 @@ impl ScriptFnAppExt for App {
         if registry.is_sealed() {
             warn_line!(
                 "add_script_fn(`{}`): the script hosts have already bound their functions; \
-                 register it from a plugin installed through `RunOptions::with_plugin`, which \
-                 runs before they load",
+                 register it from a plugin installed through `RunOptions::with_plugin` or \
+                 `lumenui::App::add_plugin`, which run before they load",
                 f.name
             );
             return self;
@@ -750,7 +1165,8 @@ impl ScriptFnAppExt for App {
             warn_line!(
                 "add_script_prelude(`{lang}`, `{ns}`): the script hosts have already bound their \
                  functions; register it from a plugin installed through \
-                 `RunOptions::with_plugin`, which runs before they load"
+                 `RunOptions::with_plugin` or `lumenui::App::add_plugin`, which run before they \
+                 load"
             );
             return self;
         }
@@ -781,7 +1197,7 @@ mod tests {
             .param("pin", ScriptTy::Int)
             .param("high", ScriptTy::Bool)
             .ret(ScriptTy::Bool)
-            .build(|cx| ScriptValue::Bool(cx.bool_arg(1)));
+            .build(|cx| Ok(ScriptValue::Bool(cx.bool_arg(1))));
 
         assert!(
             f.sig
@@ -804,7 +1220,7 @@ mod tests {
         let f = ScriptFn::new("page")
             .param("path", ScriptTy::Str)
             .min_arity(0)
-            .build(|cx| ScriptValue::Str(cx.str_arg(0)));
+            .build(|cx| Ok(ScriptValue::Str(cx.str_arg(0))));
 
         assert_eq!(f.sig.arity_range(), 0..=1);
         assert!(f.sig.check_args(&[]).is_ok());
@@ -819,7 +1235,7 @@ mod tests {
         let f = ScriptFn::new("log")
             .min_arity(0)
             .variadic()
-            .build(|_cx| ScriptValue::Unit);
+            .build(|_cx| Ok(ScriptValue::Unit));
         assert_eq!(f.sig.arity_range(), 0..=MAX_VARIADIC_ARITY);
         let args = vec![ScriptValue::I64(1); 5];
         assert!(f.sig.check_args(&args).is_ok());
@@ -832,7 +1248,7 @@ mod tests {
             cx.emit(ScriptCommand::Print(text));
         });
         let (ret, cmds) = f.invoke(&[ScriptValue::Str("hi".into())]);
-        assert_eq!(ret, ScriptValue::Unit);
+        assert_eq!(ret, Ok(ScriptValue::Unit));
         assert!(matches!(&cmds[..], [ScriptCommand::Print(s)] if s == "HI"));
     }
 
@@ -859,7 +1275,122 @@ mod tests {
         let names: Vec<&str> = store.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, vec!["f", "g"], "one entry per name, in first order");
         let (ret, _) = store.iter().next().unwrap().invoke(&[]);
-        assert_eq!(ret, ScriptValue::I64(3), "the last body wins");
+        assert_eq!(ret, Ok(ScriptValue::I64(3)), "the last body wins");
+    }
+
+    #[test]
+    fn a_body_that_fails_hands_back_its_message_and_what_it_emitted() {
+        let f = ScriptFn::new("gpio_write")
+            .param("pin", ScriptTy::Int)
+            .ret(ScriptTy::Unit)
+            .build(|cx| {
+                cx.emit(ScriptCommand::Print("about to write".into()));
+                Err(format!("pin {} is not exported", cx.int_arg(0)))
+            });
+        let (ret, cmds) = f.invoke(&[ScriptValue::I64(21)]);
+        assert_eq!(ret, Err("pin 21 is not exported".to_string()));
+        assert_eq!(cmds.len(), 1, "what ran before the failure still counts");
+    }
+
+    #[test]
+    fn a_plain_closure_declares_the_types_of_its_arguments() {
+        let f = ScriptFn::from_fn("local_id", |source: String, suffix: String| {
+            format!("{source}:{suffix}")
+        })
+        .param_names(["source", "suffix"]);
+
+        assert_eq!(f.sig.params.len(), 2);
+        assert_eq!(f.sig.params[0].name, "source");
+        assert_eq!(f.sig.params[1].ty, ScriptTy::Str);
+        assert_eq!(f.sig.ret, ScriptTy::Str);
+        assert_eq!(f.sig.min_arity, 2);
+        let (ret, _) = f.invoke(&[
+            ScriptValue::Str("card".into()),
+            ScriptValue::Str("label".into()),
+        ]);
+        assert_eq!(ret, Ok(ScriptValue::Str("card:label".into())));
+    }
+
+    #[test]
+    fn a_plain_closure_may_fail_and_still_declares_the_value_type() {
+        let f = ScriptFn::from_fn("half", |n: i64| -> Result<i64, String> {
+            if n % 2 == 0 {
+                Ok(n / 2)
+            } else {
+                Err(format!("{n} is odd"))
+            }
+        });
+        assert_eq!(
+            f.sig.ret,
+            ScriptTy::Int,
+            "the declared type is the `Ok` one"
+        );
+        assert_eq!(f.invoke(&[ScriptValue::I64(8)]).0, Ok(ScriptValue::I64(4)));
+        assert_eq!(
+            f.invoke(&[ScriptValue::I64(7)]).0,
+            Err("7 is odd".to_string())
+        );
+    }
+
+    #[test]
+    fn a_plain_closure_carries_lists_maps_and_no_arguments_at_all() {
+        let nullary = ScriptFn::from_fn("answer", || 42i64);
+        assert!(nullary.sig.params.is_empty());
+        assert_eq!(nullary.invoke(&[]).0, Ok(ScriptValue::I64(42)));
+
+        let listy = ScriptFn::from_fn("join", |parts: Vec<String>| parts.join("-"));
+        assert_eq!(
+            listy.sig.params[0].ty,
+            ScriptTy::Array(Box::new(ScriptTy::Str))
+        );
+        let (ret, _) = listy.invoke(&[ScriptValue::Array(vec![
+            ScriptValue::Str("a".into()),
+            ScriptValue::Str("b".into()),
+        ])]);
+        assert_eq!(ret, Ok(ScriptValue::Str("a-b".into())));
+
+        let mappy = ScriptFn::from_fn("sizes", || {
+            std::collections::HashMap::from([("w".to_string(), 3i64)])
+        });
+        assert_eq!(mappy.sig.ret, ScriptTy::Map(Box::new(ScriptTy::Int)));
+    }
+
+    #[test]
+    fn the_widest_closure_binds_and_the_names_stop_where_the_list_does() {
+        let f = ScriptFn::from_fn(
+            "wide",
+            |a: i64, b: i64, c: i64, d: i64, e: i64, g: i64, h: i64, i: i64| {
+                a + b + c + d + e + g + h + i
+            },
+        )
+        .param_names(["a", "b"]);
+        assert_eq!(f.sig.params.len(), MAX_VARIADIC_ARITY);
+        assert_eq!(f.sig.params[1].name, "b");
+        assert_eq!(f.sig.params[2].name, "arg2", "unnamed keeps its position");
+        let args: Vec<ScriptValue> = (1..=8).map(ScriptValue::I64).collect();
+        assert_eq!(f.invoke(&args).0, Ok(ScriptValue::I64(36)));
+    }
+
+    #[test]
+    fn the_call_scratch_comes_back_cleared_and_nests() {
+        let f = ScriptFn::commands("shout", 1, |cx| {
+            cx.emit(ScriptCommand::Print(cx.str_arg(0)));
+        });
+        for _ in 0..3 {
+            with_call_scratch(|scratch| {
+                scratch.args.push(ScriptValue::Str("hi".into()));
+                assert!(scratch.commands.is_empty(), "borrowed cleared");
+                let ret = f.invoke_into(&scratch.args, &mut scratch.commands);
+                assert_eq!(ret, Ok(ScriptValue::Unit));
+                assert_eq!(scratch.commands.len(), 1);
+                // A body that calls back into another function gets its own
+                // pair, so the outer one is untouched.
+                with_call_scratch(|inner| {
+                    assert!(inner.args.is_empty() && inner.commands.is_empty());
+                });
+                assert_eq!(scratch.commands.len(), 1);
+            });
+        }
     }
 
     #[test]

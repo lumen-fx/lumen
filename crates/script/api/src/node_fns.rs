@@ -67,7 +67,7 @@ where
     for (pname, ty) in params {
         b = b.param(*pname, ty.clone());
     }
-    b.build(move |cx| body(cx))
+    b.build(move |cx| Ok(body(cx)))
 }
 
 /// Describe a mutator: resolve the node id, queue one command, return nothing.
@@ -90,7 +90,7 @@ where
             let cmd = build(node, cx);
             cx.emit(cmd);
         }
-        ScriptValue::Unit
+        Ok(ScriptValue::Unit)
     })
 }
 
@@ -529,7 +529,7 @@ where
                 let cmd = build(a, b);
                 cx.emit(cmd);
             }
-            ScriptValue::Unit
+            Ok(ScriptValue::Unit)
         })
 }
 

@@ -149,62 +149,63 @@ fn the_last_registration_of_a_name_is_the_one_bound() {
     );
 }
 
-/// A name candela types from its own library is refused unless the type agrees.
+/// A plugin may name a function after one in candela's own library.
 ///
-/// candela reads the bare function name out of a namespaced call and answers
-/// the type from a table of its own, so `gpio::int(..)` is an `int` however the
-/// plugin declared it. Assigning the result then reports a type error, and
-/// using it arithmetically trips an assertion inside the VM and takes the
-/// process down. Refusing the registration is what keeps that unreachable.
+/// A namespaced call takes its type from the block that declares it, so
+/// `gpio::int(..)` is whatever `gpio` says it is and the built-in `int` is
+/// beside the point. The result is used, not only bound, because the type a
+/// call was compiled against only shows up once the value meets an operator.
 #[test]
-fn a_name_candela_types_from_its_own_library_is_refused() {
+fn a_name_candela_s_own_library_takes_is_still_the_plugin_s() {
     for name in ["int", "float", "bool", "exists", "write", "range", "append"] {
-        let mut host = CandelaHost::new();
-        let Err(err) = host.register_script_fn(
-            &ScriptFn::new(name)
-                .ns(ScriptNs::Named("gpio".to_owned()))
-                .param("a", ScriptTy::Str)
-                .ret(ScriptTy::Str)
-                .build(|_| ScriptValue::Str("from the plugin".into())),
-        ) else {
-            panic!("`gpio::{name}` returns a string where candela forces another type");
-        };
-        let err = err.to_string();
-        assert!(
-            err.contains(name) && err.contains("name candela's own library does not take"),
-            "the message has to say what to do about it: {err}"
-        );
-    }
-}
-
-/// The same name is fine when the type candela forces is the one it returns.
-///
-/// `read` is a string in candela's library and a string here, so nothing
-/// disagrees and there is no reason to refuse it.
-#[test]
-fn a_library_name_whose_type_already_agrees_is_left_alone() {
-    for name in ["read", "str", "input"] {
         let mut host = CandelaHost::new();
         host.register_script_fn(
             &ScriptFn::new(name)
                 .ns(ScriptNs::Named("gpio".to_owned()))
                 .param("a", ScriptTy::Str)
                 .ret(ScriptTy::Str)
-                .build(|_| ScriptValue::Str("from the plugin".into())),
+                .build(|_| Ok(ScriptValue::Str("from the plugin".into()))),
         )
-        .unwrap_or_else(|e| panic!("`{name}` returns what candela expects: {e}"));
+        .unwrap_or_else(|e| panic!("`gpio::{name}` was refused: {e}"));
 
         let src = format!(
-            "fn go() -> string {{ let v = gpio::{name}(\"x\"); return v; }}\nfn main() {{}}\n"
+            "fn go() -> string {{ return gpio::{name}(\"x\") + \"!\"; }}\nfn main() {{}}\n"
         );
         host.load(&src, "app.cdl")
             .unwrap_or_else(|e| panic!("`gpio::{name}` did not compile: {e}"));
         assert_eq!(
             host.call("go", &[]).expect("go runs").ret,
-            Some(ScriptValue::Str("from the plugin".into())),
-            "`gpio::{name}` reached the plugin's body"
+            Some(ScriptValue::Str("from the plugin!".into())),
+            "`gpio::{name}` was typed as the plugin declared it"
         );
     }
+}
+
+/// The same holds for a plugin function whose value is arithmetic.
+///
+/// `gpio::read` returning an int is the case that used to reach the VM as a
+/// string read of integer bits.
+#[test]
+fn a_library_name_returning_a_number_is_typed_as_a_number() {
+    let mut host = CandelaHost::new();
+    host.register_script_fn(
+        &ScriptFn::new("read")
+            .ns(ScriptNs::Named("gpio".to_owned()))
+            .param("pin", ScriptTy::Int)
+            .ret(ScriptTy::Int)
+            .build(|cx| Ok(ScriptValue::I64(cx.int_arg(0) * 2))),
+    )
+    .expect("register");
+
+    host.load(
+        "fn go() -> int { return gpio::read(21) + 1; }\nfn main() {}\n",
+        "app.cdl",
+    )
+    .expect("load");
+    assert_eq!(
+        host.call("go", &[]).expect("go runs").ret,
+        Some(ScriptValue::I64(43))
+    );
 }
 
 /// A name candela's library does not take is reached through its namespace.
@@ -217,7 +218,7 @@ fn a_name_candela_s_library_does_not_take_is_reached_through_its_namespace() {
                 .ns(ScriptNs::Named("gpio".to_owned()))
                 .param("a", ScriptTy::Str)
                 .ret(ScriptTy::Str)
-                .build(|_| ScriptValue::Str("from the plugin".into())),
+                .build(|_| Ok(ScriptValue::Str("from the plugin".into()))),
         )
         .expect("register");
 
