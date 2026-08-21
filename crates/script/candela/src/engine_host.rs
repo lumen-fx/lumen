@@ -17,6 +17,7 @@ use lumen_script::{
     ScriptPlugin, ScriptValue,
 };
 
+use crate::declare;
 use crate::host_fns::{Registries, register_lumen_host_fns, register_script_fn};
 use crate::lmn;
 use crate::prelude;
@@ -61,8 +62,12 @@ pub struct CandelaHost {
     /// spans can be resolved to `(line, col)` for compile errors.
     source: String,
     /// The [`ScriptFn`]s an embedder registered, kept so `compile_check` can
-    /// replay them into the scratch engine it builds.
+    /// replay them into the scratch engine it builds and the namespace
+    /// declarations can be synthesized from their signatures.
     script_fns: ScriptFnStore,
+    /// `.cdl` sources plugins ship with their namespaces, spliced ahead of the
+    /// app's own program.
+    wrappers: Vec<(String, String)>,
 }
 
 impl Default for CandelaHost {
@@ -86,6 +91,7 @@ impl CandelaHost {
             registries,
             source: String::new(),
             script_fns: ScriptFnStore::default(),
+            wrappers: Vec::new(),
         }
     }
 
@@ -105,15 +111,66 @@ impl CandelaHost {
         *self.registries.fn_index.lock().unwrap() = lmn::FnIndex::scan(source);
     }
 
+    /// Put the prelude, the synthesized namespace declarations, and any plugin
+    /// wrappers in front of `source`.
+    fn prepare(&self, source: &str) -> prelude::PreparedSource {
+        prelude::prepare(source, &self.namespace_blocks(), &self.wrappers)
+    }
+
+    /// One folded `host "<ns>" { .. }` block per namespace an embedder
+    /// registered functions under.
+    ///
+    /// This is what lets a script call a plugin function without declaring it:
+    /// candela resolves a host call through a declaration, and the host knows
+    /// every signature it bound.
+    fn namespace_blocks(&self) -> Vec<(String, String)> {
+        let mut blocks: Vec<(String, Vec<ScriptFn>)> = Vec::new();
+        for f in self.script_fns.iter() {
+            let ns = declare::namespace(f).to_string();
+            // The `lumen` namespace is the prelude's; an app that wants it
+            // imports it.
+            if ns == crate::host_fns::HOST_NAMESPACE {
+                continue;
+            }
+            match blocks.iter_mut().find(|(name, _)| *name == ns) {
+                Some((_, fns)) => fns.push(f.clone()),
+                None => blocks.push((ns, vec![f.clone()])),
+            }
+        }
+        blocks
+            .into_iter()
+            .map(|(ns, fns)| {
+                let block = declare::one_line_block(&ns, &fns);
+                (ns, block)
+            })
+            .collect()
+    }
+
     /// Map a candela compile-phase [`Diagnostic`](candela::Diagnostic) to the
-    /// structured [`ScriptError::Compile`], resolving `(line, col)`.
-    fn compile_error(&self, d: &candela::Diagnostic, uri: &str) -> ScriptError {
-        let (line, col) = span_line_col(&self.source, d.span.start);
-        ScriptError::Compile {
-            uri: uri.to_owned(),
-            line,
-            col,
-            message: d.message.clone(),
+    /// structured [`ScriptError::Compile`], resolving `(line, col)` against the
+    /// author's own source.
+    fn compile_error(
+        &self,
+        prepared: &prelude::PreparedSource,
+        d: &candela::Diagnostic,
+        uri: &str,
+    ) -> ScriptError {
+        let at = prepared.locate(d.span.start);
+        match at.wrapper {
+            // A wrapper is the plugin's source, not the app's, so the plugin
+            // is what the message has to name.
+            Some(ns) => ScriptError::Compile {
+                uri: format!("{uri} (plugin namespace `{ns}`)"),
+                line: at.line,
+                col: at.col,
+                message: d.message.clone(),
+            },
+            None => ScriptError::Compile {
+                uri: uri.to_owned(),
+                line: at.line,
+                col: at.col,
+                message: d.message.clone(),
+            },
         }
     }
 }
@@ -163,32 +220,24 @@ impl ScriptHost for CandelaHost {
         for f in self.script_fns.iter() {
             register_script_fn(&mut engine, &scratch, f);
         }
-        // Splice the `host "lumen" { ... }` prelude in for a sentinel import; the
-        // splice is single-line, so `span_line_col` still resolves user lines.
-        let resolved = prelude::resolve_prelude(source);
-        *scratch.fn_index.lock().unwrap() = lmn::FnIndex::scan(resolved.as_ref());
+        // Prepare the source exactly as `load` does, so what the check accepts
+        // is what the app runs.
+        let prepared = self.prepare(source);
+        *scratch.fn_index.lock().unwrap() = lmn::FnIndex::scan(&prepared.text);
         engine
-            .compile(resolved.as_ref(), uri)
+            .compile(&prepared.text, uri)
             .map(|_| ())
-            .map_err(|d| {
-                let (line, col) = span_line_col(resolved.as_ref(), d.span.start);
-                ScriptError::Compile {
-                    uri: uri.to_owned(),
-                    line,
-                    col,
-                    message: d.message,
-                }
-            })
+            .map_err(|d| self.compile_error(&prepared, &d, uri))
     }
 
     fn load(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
-        let resolved = prelude::resolve_prelude(source);
-        self.index_source(resolved.as_ref());
+        let prepared = self.prepare(source);
+        self.index_source(&prepared.text);
         let program = self
             .vm
             .engine
-            .compile(resolved.as_ref(), uri)
-            .map_err(|d| self.compile_error(&d, uri))?;
+            .compile(&prepared.text, uri)
+            .map_err(|d| self.compile_error(&prepared, &d, uri))?;
         self.source = source.to_owned();
         self.vm.program = Some(program);
         Ok(())
@@ -205,9 +254,9 @@ impl ScriptHost for CandelaHost {
         self.registries.handlers.write().unwrap().clear();
         self.registries.event_handlers.write().unwrap().clear();
 
-        let resolved = prelude::resolve_prelude(source);
-        self.index_source(resolved.as_ref());
-        match self.vm.engine.compile(resolved.as_ref(), uri) {
+        let prepared = self.prepare(source);
+        self.index_source(&prepared.text);
+        match self.vm.engine.compile(&prepared.text, uri) {
             Ok(program) => {
                 self.source = source.to_owned();
                 self.vm.program = Some(program);
@@ -233,7 +282,7 @@ impl ScriptHost for CandelaHost {
                 *self.registries.event_handlers.write().unwrap() = prior_event_handlers;
                 lumen_script::event::clear_host_bindings();
                 lumen_script::event::restore_host_bindings(prior_bindings);
-                Err(self.compile_error(&d, uri))
+                Err(self.compile_error(&prepared, &d, uri))
             }
         }
     }
@@ -365,6 +414,10 @@ impl ScriptHost for CandelaHost {
         Ok(())
     }
 
+    fn add_prelude(&mut self, ns: &str, source: &str) {
+        self.wrappers.push((ns.to_owned(), source.to_owned()));
+    }
+
     fn lang(&self) -> &'static str {
         "candela"
     }
@@ -447,7 +500,7 @@ pub fn compile_bytecode(source: &str, uri: &str) -> Result<Vec<u8>, ScriptError>
             candela::collect_diagnostic(|| candela::build_bytecode(resolved.to_string(), uri))
         })
         .map_err(|d| {
-            let (line, col) = span_line_col(resolved.as_ref(), d.span.start);
+            let (line, col) = prelude::line_col(resolved.as_ref(), d.span.start);
             ScriptError::Compile {
                 uri: uri.to_owned(),
                 line,
@@ -534,26 +587,4 @@ impl Plugin for ScriptCandelaPlugin {
         }
         plugin.build(app);
     }
-}
-
-/// Byte-span -> `(line, col)` over a source string. `(0, 0)` for the
-/// unknown-position sentinel candela uses when it has no span.
-fn span_line_col(source: &str, byte: usize) -> (u32, u32) {
-    if byte == 0 {
-        return (0, 0);
-    }
-    let mut line = 1u32;
-    let mut col = 1u32;
-    for (i, ch) in source.char_indices() {
-        if i >= byte {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-    (line, col)
 }

@@ -326,16 +326,17 @@ fn main() {}
     assert_eq!(out.ret, Some(ScriptValue::Str("/from-embedder".to_owned())));
 }
 
-/// Anti-drift: every registered builtin must be declared in the embedded
-/// prelude, so a new `BUILTINS` entry that forgets the prelude fails CI. The
-/// trailing `(` disambiguates prefix names (`signal_get` vs `signal_get_int`).
+/// Anti-drift: every tabled builtin must be declared in the embedded prelude,
+/// so a new `BUILTINS` entry that forgets it fails CI. The trailing `(`
+/// disambiguates prefix names (`signal_get` vs `signal_get_int`).
 #[test]
 fn prelude_declares_every_builtin() {
     for b in BUILTINS {
         let needle = format!("{}(", b.name);
         assert!(
             PRELUDE_SOURCE.contains(&needle),
-            "prelude/lumen.cdl is missing a declaration for builtin `{}`",
+            "the prelude is missing a declaration for builtin `{}`; refresh it with\n    \
+             UPDATE_PRELUDE=1 cargo test -p lumen-script-candela --test prelude_generated",
             b.name
         );
     }

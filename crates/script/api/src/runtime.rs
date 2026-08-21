@@ -231,6 +231,18 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
                     );
                 }
             }
+            // A plugin that ships sugar over its namespace hands it over here
+            // too, so the host can stage it ahead of the program.
+            let preludes: Vec<(String, String)> = app
+                .world
+                .resource::<ScriptFnRegistry>()
+                .preludes_for_lang(lang)
+                .iter()
+                .map(|p| (p.ns.clone(), p.source.clone()))
+                .collect();
+            for (ns, source) in &preludes {
+                self.host.add_prelude(ns, source);
+            }
             app.world.resource_mut::<ScriptFnRegistry>().seal();
         }
         if let Err(e) = self.host.load(&self.source, &self.uri) {

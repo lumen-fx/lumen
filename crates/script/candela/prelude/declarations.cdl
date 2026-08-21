@@ -1,0 +1,209 @@
+// Generated file. Do not edit.
+//
+// These are the declarations that bind the Lumen host surface to the closures
+// the candela host registers. An app pulls them in with one line:
+//
+//     import "lumen.cdl";
+//
+// The method sugar over them is hand-written and lives in `wrappers.cdl`; the
+// two are spliced together where the import stood.
+//
+// Refresh after changing a builtin:
+//
+//     UPDATE_PRELUDE=1 cargo test -p lumen-script-candela --test prelude_generated
+
+host "lumen" {
+    // Shared with the other hosts.
+    add_clicks(int);
+    set_string(string, string);
+    set_text(string, string);
+    set_src(string, string);
+    set_class(string, string);
+    set_root_class(string);
+    set_color_scheme(string);
+    open_menu(string);
+    close_menu(string);
+    set_timeout(string, int);
+    set_interval(string, int);
+    cancel_timer(string);
+    notify(string, string);
+    notify_ex(string, string, string, string, string);
+    clipboard_write(string);
+    clipboard_read(string);
+    copy_image(string);
+    save_clipboard_image(string);
+    tray_icon(string, string, string);
+    tray_icon_menu(string, string, string, string, bool);
+    unregister_tray(string);
+    open_url(string);
+    open_path(string);
+    reveal_path(string);
+    keep_awake(string, string);
+    allow_sleep(string);
+    register_hotkey(string, string);
+    unregister_hotkey(string);
+    pick_file(string);
+    pick_files(string);
+    pick_folder(string);
+    save_file(string, string);
+    pick_file_filtered(string, string);
+    page(string);
+    string page_current();
+    page_back();
+    page_forward();
+    string request_header(string);
+    string request_cookie(string);
+    string request_body();
+    response_status(int);
+    response_header(string, string);
+    redirect(string);
+    fetch(string, string);
+    audio_play(string);
+    audio_pause();
+    audio_resume();
+    audio_stop();
+    audio_seek(float);
+    audio_volume(float);
+    string t(string);
+    string tr(string);
+    string read_file(string);
+    bool write_file(string, string);
+    string local_id(string, string);
+    string dump_tree();
+    int[] node_query(string);
+    int node_get_by_id(string);
+    int node_document();
+    int node_parent(int);
+    int node_first_child(int);
+    int node_last_child(int);
+    int node_next(int);
+    int node_prev(int);
+    int[] node_children(int);
+    int node_closest(int, string);
+    bool node_valid(int);
+    node_set_attr(int, string, string);
+    node_remove_attr(int, string);
+    node_set_id(int, string);
+    node_set_text(int, string);
+    node_set_inner_markup(int, string);
+    node_class_add(int, string);
+    node_class_remove(int, string);
+    node_class_toggle(int, string);
+    node_set_class(int, string);
+    node_set_style(int, string, string);
+    node_style_remove(int, string);
+    node_remove(int);
+    node_append(int, int);
+    node_insert_before(int, int, int);
+    node_set_parent(int, int);
+    node_move_to(int, int);
+    node_replace_with(int, int);
+    int node_spawn(string);
+    int node_clone_deep(int);
+    string node_get_attr(int, string);
+    string node_text(int);
+    string node_id(int);
+    bool node_class_contains(int, string);
+    string node_style_get(int, string);
+    string node_computed_style(int, string);
+    {string: float} node_rect(int);
+    {string: float} node_content_rect(int);
+    {string: float} node_scroll(int);
+    bool node_is_visible(int);
+    int node_z_index(int);
+    {string: string} node_computed_style_all(int);
+    {string: string} node_inline_style(int);
+    {string: string} node_attrs(int);
+    string[] node_classes(int);
+    {string: int} node_entity_id(int);
+    string[] node_components(int);
+    {string: string} node_component(int, string);
+    string node_outer_markup(int);
+    string node_inner_markup(int);
+    int event_target(int);
+    int event_current_target(int);
+    string event_type(int);
+    string event_key(int);
+    string event_value(int);
+    int event_button(int);
+    float event_x(int);
+    float event_y(int);
+    float event_client_x(int);
+    float event_client_y(int);
+    float event_delta_x(int);
+    float event_delta_y(int);
+    bool event_shift(int);
+    bool event_ctrl(int);
+    bool event_alt(int);
+    bool event_super(int);
+    event_prevent_default(int);
+    event_stop_propagation(int);
+    event_stop_immediate_propagation(int);
+
+    // Registered by the candela host itself.
+    string signal_get(string);
+    signal_set(string, string);
+    int signal_get_int(string);
+    signal_set_int(string, int);
+    float signal_get_float(string);
+    signal_set_float(string, float);
+    bool signal_get_bool(string);
+    signal_set_bool(string, bool);
+    signal_set_color(string, string);
+    {string: int} signal_get_color(string);
+    bool is_valid(string);
+    signal_array_set(...);
+    signal_array_push(...);
+    any signal_array_get(...);
+    any signal_array_all(...);
+    int signal_array_len(string);
+    signal_array_remove(string, int);
+    signal_array_clear(string);
+    int fragment_spawn(string, string[], int[]);
+    mount(int);
+    int event_on(int, string, string);
+    int event_on_capture(int, string, string);
+    event_off(int);
+    {string: string} pointer_state();
+    {string: float} frame_info();
+    {string: string} signals_all();
+    any matched_rules(...);
+    http(...);
+    any parse_json(...);
+    any parse_markdown(...);
+    print(...);
+    on(string, string, string);
+    derive(string, string[], string);
+}
+
+host "window" {
+    // Registered by the candela host itself.
+    set_href(string);
+    string href();
+    reload();
+    string title();
+    float dpr();
+    float[] size();
+    set_title(string);
+    set_size(float, float);
+    string location_path();
+    string location_query();
+    string location_hash();
+}
+
+host "history" {
+    // Registered by the candela host itself.
+    back();
+    forward();
+    go(int);
+}
+
+host "document" {
+    // Registered by the candela host itself.
+    int root();
+    int[] query(string);
+    int get_by_id(string);
+    int focused();
+    int hovered();
+    int create(string);
+}

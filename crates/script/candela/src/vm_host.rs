@@ -21,6 +21,7 @@ use std::collections::HashSet;
 use bevy_ecs::prelude::*;
 use candela_vm::{CallError, HostRegistry, RuntimeProgram, Value, load_program};
 use lumen_core::prelude::{App, Plugin};
+use lumen_core::warn_line;
 use lumen_script::{
     CallOutcome, ScriptCommand, ScriptError, ScriptFn, ScriptFnStore, ScriptHost, ScriptPlugin,
     ScriptValue,
@@ -310,6 +311,18 @@ impl ScriptHost for CandelaVmHost {
         register_script_fn(registry, &self.registries, f);
         self.script_fns.record(f);
         Ok(())
+    }
+
+    /// An artifact carries compiled bytecode, so there is nothing left to
+    /// compile a plugin's wrapper into. Say so once, naming the namespace: the
+    /// free functions still bind, and the app has to call them directly or be
+    /// rebuilt with the plugin present.
+    fn add_prelude(&mut self, ns: &str, _source: &str) {
+        warn_line!(
+            "lumen-script-candela: the `{ns}` plugin ships a .cdl wrapper, which a prebuilt \
+             artifact cannot compile; call `{ns}::` functions directly, or rebuild the app with \
+             the plugin installed"
+        );
     }
 
     fn lang(&self) -> &'static str {

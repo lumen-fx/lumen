@@ -629,17 +629,21 @@ impl fmt::Debug for ScriptFnStore {
     }
 }
 
-/// candela source spliced ahead of an app's own program so a namespace's
-/// functions can be called without the app declaring them.
+/// Source a plugin ships in a script language, compiled ahead of the app's own
+/// program.
 ///
-/// candela resolves a host call through a declared `host "<ns>" { .. }` block,
-/// so a plugin that registers into a namespace also describes the block that
-/// declares it. Stored here now; the splice lands with the prelude work.
+/// This is how a plugin offers sugar over the functions it registered: a struct
+/// and an `impl` block in that language, so a script calls `Gpio::read(pin)`
+/// rather than the free function. Only the host whose language it names sees
+/// it.
 #[derive(Clone, Debug)]
-pub struct CandelaWrapper {
-    /// The host namespace the source declares.
+pub struct ScriptPrelude {
+    /// The language tag the source is written in (`"candela"`, `"rhai"`,
+    /// `"lua"`).
+    pub lang: String,
+    /// The namespace the functions it wraps are registered under.
     pub ns: String,
-    /// The candela source to splice.
+    /// The source itself.
     pub source: String,
 }
 
@@ -651,7 +655,7 @@ pub struct CandelaWrapper {
 #[derive(Resource, Default, Debug)]
 pub struct ScriptFnRegistry {
     fns: Vec<ScriptFn>,
-    candela_wrappers: Vec<CandelaWrapper>,
+    preludes: Vec<ScriptPrelude>,
     sealed: bool,
 }
 
@@ -661,9 +665,9 @@ impl ScriptFnRegistry {
         self.fns.push(f);
     }
 
-    /// Append a candela declaration block.
-    pub fn push_candela_wrapper(&mut self, wrapper: CandelaWrapper) {
-        self.candela_wrappers.push(wrapper);
+    /// Append a plugin's language source.
+    pub fn push_prelude(&mut self, prelude: ScriptPrelude) {
+        self.preludes.push(prelude);
     }
 
     /// Every registered function, in registration order.
@@ -671,9 +675,10 @@ impl ScriptFnRegistry {
         &self.fns
     }
 
-    /// Every registered candela declaration block.
-    pub fn candela_wrappers(&self) -> &[CandelaWrapper] {
-        &self.candela_wrappers
+    /// The sources `lang` is to compile ahead of the app's program, in
+    /// registration order.
+    pub fn preludes_for_lang(&self, lang: &str) -> Vec<&ScriptPrelude> {
+        self.preludes.iter().filter(|p| p.lang == lang).collect()
     }
 
     /// The functions `lang` may see, cloned for handing to a host.
@@ -711,9 +716,9 @@ pub trait ScriptFnAppExt {
     /// Register several functions, in order.
     fn add_script_fns(&mut self, fns: impl IntoIterator<Item = ScriptFn>) -> &mut Self;
 
-    /// Register the candela `host "<ns>" { .. }` block that declares a
-    /// namespace's functions.
-    fn add_candela_wrapper(&mut self, ns: &str, source: &str) -> &mut Self;
+    /// Register source in `lang` that the host of that language compiles ahead
+    /// of the app's own program, wrapping the functions registered under `ns`.
+    fn add_script_prelude(&mut self, lang: &str, ns: &str, source: &str) -> &mut Self;
 }
 
 impl ScriptFnAppExt for App {
@@ -739,17 +744,18 @@ impl ScriptFnAppExt for App {
         self
     }
 
-    fn add_candela_wrapper(&mut self, ns: &str, source: &str) -> &mut Self {
+    fn add_script_prelude(&mut self, lang: &str, ns: &str, source: &str) -> &mut Self {
         let mut registry = registry_mut(self);
         if registry.is_sealed() {
             warn_line!(
-                "add_candela_wrapper(`{ns}`): the script hosts have already bound their \
+                "add_script_prelude(`{lang}`, `{ns}`): the script hosts have already bound their \
                  functions; register it from a plugin installed through \
                  `RunOptions::with_plugin`, which runs before they load"
             );
             return self;
         }
-        registry.push_candela_wrapper(CandelaWrapper {
+        registry.push_prelude(ScriptPrelude {
+            lang: lang.to_string(),
             ns: ns.to_string(),
             source: source.to_string(),
         });

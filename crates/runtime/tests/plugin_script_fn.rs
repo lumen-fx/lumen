@@ -13,7 +13,7 @@ use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_ir::artifact::{self, CompiledApp, CompiledScript};
 use lumen_ir::layout_ir::{Element, LayoutIR};
 use lumen_runtime::{RunOptions, build_headless_app};
-use lumen_script::{ScriptCommand, ScriptFn, ScriptFnAppExt, ScriptTy, ScriptValue};
+use lumen_script::{ScriptCommand, ScriptFn, ScriptFnAppExt, ScriptNs, ScriptTy, ScriptValue};
 
 /// Nav, the DOM snapshot, and the property store are process-global, so the
 /// headless apps here run one at a time.
@@ -48,6 +48,34 @@ impl Plugin for GreeterPlugin {
                     ScriptValue::Str(greeting)
                 }),
         );
+    }
+}
+
+/// A plugin that puts its function in a namespace of its own, the way a device
+/// or service integration would.
+struct GpioPlugin {
+    /// candela source the plugin ships with the namespace, or nothing.
+    wrapper: Option<&'static str>,
+}
+
+impl Plugin for GpioPlugin {
+    fn build(self, app: &mut EcsApp) {
+        app.add_script_fn(
+            ScriptFn::new("read")
+                .ns(ScriptNs::Named("gpio".to_string()))
+                .param("pin", ScriptTy::Int)
+                .build(|cx| {
+                    let doubled = cx.int_arg(0) * 2;
+                    cx.emit(ScriptCommand::SetSignal {
+                        name: "reading".to_string(),
+                        value: doubled.to_string(),
+                    });
+                    ScriptValue::I64(doubled)
+                }),
+        );
+        if let Some(wrapper) = self.wrapper {
+            app.add_script_prelude("candela", "gpio", wrapper);
+        }
     }
 }
 
@@ -149,8 +177,8 @@ fn a_plugin_function_is_callable_from_lua() {
     assert_eq!(signal(&app, "greeting").as_deref(), Some("hello lua"));
 }
 
-/// candela resolves a host call through a declared block, so the script says
-/// what it calls. Auto-declaring the registered set comes later.
+/// candela resolves a host call through a declared block, and the host writes
+/// that block from what the plugin registered, so the app declares nothing.
 #[test]
 fn a_plugin_function_is_callable_from_candela() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -158,10 +186,6 @@ fn a_plugin_function_is_callable_from_candela() {
     let app = app_with(
         "candela",
         r#"
-host "native" {
-    any greet(...);
-}
-
 fn on_start() {
     let msg = native::greet("candela");
 }
@@ -175,6 +199,81 @@ fn main() {}
 
     assert_eq!(calls.lock().unwrap().as_slice(), ["candela".to_owned()]);
     assert_eq!(signal(&app, "greeting").as_deref(), Some("hello candela"));
+}
+
+/// An app that declares the namespace itself keeps working: the host leaves a
+/// namespace the source already spells alone, which is what a `.cdl` written
+/// before auto-declaration, or an artifact built from one, relies on.
+#[test]
+fn a_candela_app_may_declare_the_namespace_itself() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let calls: Calls = Arc::default();
+    let app = app_with(
+        "candela",
+        r#"
+host "native" {
+    any greet(...);
+}
+
+fn on_start() {
+    let msg = native::greet("by hand");
+}
+
+fn main() {}
+"#,
+        GreeterPlugin {
+            calls: calls.clone(),
+        },
+    );
+
+    assert_eq!(calls.lock().unwrap().as_slice(), ["by hand".to_owned()]);
+    assert_eq!(signal(&app, "greeting").as_deref(), Some("hello by hand"));
+}
+
+/// A plugin's own namespace is reachable from every language, each spelling it
+/// the way that language spells a namespace.
+#[test]
+fn a_plugin_namespace_is_callable_from_every_language() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for (engine, source) in [
+        ("rhai", "fn on_start() { gpio::read(21); }"),
+        ("lua", "function on_start() gpio.read(21) end"),
+        (
+            "candela",
+            "fn on_start() { let v = gpio::read(21); }\nfn main() {}\n",
+        ),
+    ] {
+        let app = app_with(engine, source, GpioPlugin { wrapper: None });
+        assert_eq!(
+            signal(&app, "reading").as_deref(),
+            Some("42"),
+            "{engine}: the plugin's namespaced function ran"
+        );
+    }
+}
+
+/// A plugin can ship candela sugar over its namespace, so the script calls the
+/// method form of what it registered.
+#[test]
+fn a_candela_plugin_wrapper_offers_the_method_form() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let app = app_with(
+        "candela",
+        "fn on_start() { let v = pin(21).read(); }\nfn main() {}\n",
+        GpioPlugin {
+            wrapper: Some(
+                r#"
+struct Pin { number: int }
+fn pin(number) { return Pin { number: number }; }
+impl Pin {
+    fn read(self) { return gpio::read(self.number); }
+}
+"#,
+            ),
+        },
+    );
+
+    assert_eq!(signal(&app, "reading").as_deref(), Some("42"));
 }
 
 /// The runtime's own functions go into the registry first, so a plugin that
