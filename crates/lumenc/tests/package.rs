@@ -513,17 +513,24 @@ fn other_target() -> &'static str {
     }
 }
 
+/// A repository address that can never answer. GitHub does not issue an owner
+/// name with two hyphens in a row, so this one cannot start existing later and
+/// turn the test below into a download.
+const UNREACHABLE_REPO: &str = "lumen--fx/lumen";
+
 /// Another platform's files come from a published release, and which release
-/// that is comes from the releases page. A machine that cannot reach the page
-/// has no answer, and the point of this test is that it says so: it must not
-/// fall back to the version `lumenc` was built as and ask for a release that
-/// may never have been tagged.
+/// that is comes from the releases page. A page with nothing to say leaves no
+/// answer, and the point of this test is that `lumenc` says so: it must not
+/// fall back to the version it was built as and ask for a release that may
+/// never have been tagged.
 ///
-/// Nothing here reaches the network. The child gets an empty `PATH`, so the
-/// `curl` and `wget` the lookup runs cannot be found, and a cache directory of
-/// its own, so no answer from an earlier run is waiting for it.
+/// This reaches for the network and expects to come back empty handed. The
+/// lookup is pointed at a repository that cannot exist, so the request either
+/// answers 404 or does not connect at all, and both leave the same nothing a
+/// machine with no network gets. The child also gets a cache directory of its
+/// own, so no answer an earlier run wrote down is waiting for it.
 #[test]
-fn a_cross_target_package_that_cannot_reach_the_releases_page_says_so() {
+fn a_cross_target_package_that_cannot_read_the_releases_page_says_so() {
     let root = scratch("no-releases-page");
     let app = root.join("demo");
     write_app(&app);
@@ -537,7 +544,7 @@ fn a_cross_target_package_that_cannot_reach_the_releases_page_says_so() {
             "--target",
             other_target(),
         ])
-        .env("PATH", "")
+        .env("LUMEN_GH_REPO", UNREACHABLE_REPO)
         .env("HOME", &cache)
         .env("XDG_CACHE_HOME", &cache)
         .env("LOCALAPPDATA", &cache)
@@ -545,17 +552,27 @@ fn a_cross_target_package_that_cannot_reach_the_releases_page_says_so() {
         .output()
         .expect("run lumenc package");
 
-    assert!(!result.status.success(), "there is nothing to package with");
-    let message = String::from_utf8_lossy(&result.stderr);
-    assert!(
-        message.contains("could not be reached"),
-        "the message should name the page it could not read: {message}"
+    let printed = format!(
+        "{}{}",
+        String::from_utf8_lossy(&result.stderr),
+        String::from_utf8_lossy(&result.stdout)
     );
     assert!(
-        message.contains("LUMEN_LIB_DIR") || message.contains("--lib-dir"),
-        "the message should say how to supply the files instead: {message}"
+        !result.status.success(),
+        "no release can be resolved, so there is nothing to package with: {printed}"
     );
-    let printed = format!("{message}{}", String::from_utf8_lossy(&result.stdout));
+    // Either reason is a correct answer to a page with nothing to say, and
+    // which one comes back depends on how GitHub answers for an owner that
+    // does not exist. The exact wording of each is pinned in the resolver's
+    // own tests; what matters here is that one of them reaches the user.
+    assert!(
+        printed.contains("could not be reached") || printed.contains("published no releases"),
+        "the message should say why no release could be resolved: {printed}"
+    );
+    assert!(
+        printed.contains("LUMEN_LIB_DIR") || printed.contains("--lib-dir"),
+        "the message should say how to supply the files instead: {printed}"
+    );
     assert!(
         !printed.contains("releases/download"),
         "no download address is invented when no release is known: {printed}"
