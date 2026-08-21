@@ -31,7 +31,6 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-mod audio;
 pub mod builtins;
 
 use std::collections::{HashMap, HashSet};
@@ -1251,29 +1250,6 @@ fn parse_markdown_blocks(src: &str) -> Vec<HashMap<String, ScriptValue>> {
     out
 }
 
-/// Parse a `pick_file_filtered` spec (`"Images:png,jpg|All:*"`) into
-/// `(label, [exts])` pairs. A literal `*` extension is dropped.
-fn parse_dialog_filter_spec(spec: &str) -> Vec<(String, Vec<String>)> {
-    let mut out = Vec::new();
-    for group in spec.split('|') {
-        let group = group.trim();
-        if group.is_empty() {
-            continue;
-        }
-        let (label, exts) = match group.split_once(':') {
-            Some((l, e)) => (l.trim().to_string(), e),
-            None => (group.to_string(), ""),
-        };
-        let exts: Vec<String> = exts
-            .split(',')
-            .map(|e| e.trim().to_string())
-            .filter(|e| !e.is_empty() && e != "*")
-            .collect();
-        out.push((label, exts));
-    }
-    out
-}
-
 // ---------------------------------------------------------------------
 // The host
 // ---------------------------------------------------------------------
@@ -1322,7 +1298,7 @@ impl LuaHost {
         )
         .expect("register lumen Lua builtins");
 
-        Self {
+        let mut host = Self {
             lua,
             loaded: false,
             sink,
@@ -1331,6 +1307,22 @@ impl LuaHost {
             derivations,
             pending_initial,
             script_fns: ScriptFnStore::default(),
+        };
+        // The shared builtin table binds through the same entry point an
+        // embedder's function takes, which is also what puts it back after a
+        // `reset` rebuilds the VM.
+        host.install_builtin_table();
+        host
+    }
+
+    /// Bind every shared builtin this host is offered.
+    fn install_builtin_table(&mut self) {
+        for f in lumen_script::builtin_script_fns() {
+            if f.visible_to("lua")
+                && let Err(e) = self.register_script_fn(&f)
+            {
+                tracing::error!(target: "lumen.script.lua", error = %e, name = %f.name, "registering a builtin failed");
+            }
         }
     }
 
@@ -1928,32 +1920,6 @@ fn build_lua(
         )?;
     }
 
-    // -- simple command-enqueue builtins -------------------------------
-    //
-    // One arity-generic macro: each builtin's argument list and its
-    // `ScriptCommand` construction stay inline at the call site (passed
-    // as macro args, not hidden behind a helper), so a reviewer can diff
-    // the three script hosts builtin-by-builtin. Args marshal through
-    // mlua's tuple `FromLuaMulti`; a single-arg builtin is a 1-tuple
-    // `(n,): (i64,)`.
-    macro_rules! enqueue {
-        ($name:literal, ($($arg:ident : $ty:ty),+ $(,)?), $build:expr $(,)?) => {{
-            let sink = sink.clone();
-            g.set(
-                $name,
-                lua.create_function(move |_, ($($arg,)+): ($($ty,)+)| {
-                    sink.lock().push($build);
-                    Ok(())
-                })?,
-            )?;
-        }};
-    }
-
-    enqueue!("add_clicks", (n: i64), ScriptCommand::AddClicks(n as i32));
-    enqueue!("set_string", (key: String, value: String), ScriptCommand::SetString { key, value });
-    enqueue!("set_text", (target_id: String, text: String), ScriptCommand::SetText { target_id, text });
-    enqueue!("set_src", (target_id: String, path: String), ScriptCommand::SetSrc { target_id, path });
-
     // -- Dynamic DOM read side: query / get_by_id / document ------------
     // Stateless globals reading the per-tick snapshot; return Node /
     // NodeQuery userdata (nil for "no node").
@@ -2006,10 +1972,6 @@ fn build_lua(
         g.set(
             "signals_all",
             lua.create_function(|lua, ()| kv_table(lua, ins::signals_all()))?,
-        )?;
-        g.set(
-            "dump_tree",
-            lua.create_function(|_, ()| Ok(ins::dump_tree()))?,
         )?;
     }
 
@@ -2277,118 +2239,6 @@ fn build_lua(
         )?;
     }
 
-    // -- timers --------------------------------------------------------
-    enqueue!("set_timeout", (name: String, ms: i64), ScriptCommand::SetTimer {
-        name,
-        millis: ms.max(0) as u64,
-        repeat: false,
-    });
-    enqueue!("set_interval", (name: String, ms: i64), ScriptCommand::SetTimer {
-        name,
-        millis: ms.max(0) as u64,
-        repeat: true,
-    });
-    enqueue!("cancel_timer", (name: String), ScriptCommand::CancelTimer { name });
-
-    // -- OS surface (all thin enqueues) --------------------------------
-    enqueue!("notify", (title: String, body: String), ScriptCommand::Notify { title, body });
-    enqueue!("notify_ex", (id: String, title: String, body: String, options: String, actions: String), ScriptCommand::NotifyEx {
-        id,
-        title,
-        body,
-        options,
-        actions,
-    });
-    enqueue!("clipboard_write", (text: String), ScriptCommand::ClipboardWrite { text });
-    enqueue!("clipboard_read", (tag: String), ScriptCommand::ClipboardRead { tag });
-    enqueue!("open_url", (url: String), ScriptCommand::OpenUrl { url });
-    enqueue!("open_path", (path: String), ScriptCommand::OpenPath { path });
-    enqueue!("reveal_path", (path: String), ScriptCommand::RevealPath { path });
-    enqueue!("keep_awake", (name: String, reason: String), ScriptCommand::KeepAwake { name, reason });
-    enqueue!("allow_sleep", (name: String), ScriptCommand::AllowSleep { name });
-    enqueue!("copy_image", (path: String), ScriptCommand::CopyImageToClipboard { path });
-    enqueue!("save_clipboard_image", (path: String), ScriptCommand::SaveClipboardImage { path });
-    enqueue!("tray_icon", (id: String, icon_path: String, tooltip: String), ScriptCommand::RegisterTrayIcon {
-        id,
-        icon_path,
-        tooltip: if tooltip.is_empty() {
-            None
-        } else {
-            Some(tooltip)
-        },
-        menu: String::new(),
-        template: false,
-    });
-    enqueue!("tray_icon_menu", (id: String, icon_path: String, tooltip: String, menu: String, template: bool), ScriptCommand::RegisterTrayIcon {
-        id,
-        icon_path,
-        tooltip: if tooltip.is_empty() {
-            None
-        } else {
-            Some(tooltip)
-        },
-        menu,
-        template,
-    });
-    enqueue!("unregister_tray", (id: String), ScriptCommand::UnregisterTrayIcon { id });
-    enqueue!("open_menu", (id: String), ScriptCommand::SetSignal {
-        name: format!("__menu_open:{id}"),
-        value: "true".to_string(),
-    });
-    enqueue!("close_menu", (id: String), ScriptCommand::SetSignal {
-        name: format!("__menu_open:{id}"),
-        value: "false".to_string(),
-    });
-
-    // file dialogs
-    for (fname, kind) in [
-        ("pick_file", lumen_script::FileDialogKind::Open),
-        ("pick_files", lumen_script::FileDialogKind::OpenMulti),
-        ("pick_folder", lumen_script::FileDialogKind::PickFolder),
-    ] {
-        let sink = sink.clone();
-        g.set(
-            fname,
-            lua.create_function(move |_, tag: String| {
-                sink.lock().push(ScriptCommand::OpenFileDialog {
-                    kind,
-                    tag,
-                    filters: Vec::new(),
-                    default_name: None,
-                });
-                Ok(())
-            })?,
-        )?;
-    }
-    enqueue!("save_file", (tag: String, default_name: String), ScriptCommand::OpenFileDialog {
-        kind: lumen_script::FileDialogKind::Save,
-        tag,
-        filters: Vec::new(),
-        default_name: Some(default_name),
-    });
-    enqueue!("pick_file_filtered", (tag: String, spec: String), ScriptCommand::OpenFileDialog {
-        kind: lumen_script::FileDialogKind::Open,
-        tag,
-        filters: parse_dialog_filter_spec(&spec),
-        default_name: None,
-    });
-
-    // hotkeys
-    enqueue!("register_hotkey", (name: String, accelerator: String), ScriptCommand::RegisterHotkey { name, accelerator });
-    enqueue!("unregister_hotkey", (name: String), ScriptCommand::UnregisterHotkey { name });
-
-    // classes
-    enqueue!("set_class", (id: String, classes: String), ScriptCommand::SetClasses {
-        target_id: id,
-        classes,
-    });
-    enqueue!("set_root_class", (classes: String), ScriptCommand::SetClasses {
-        target_id: "<root>".to_string(),
-        classes,
-    });
-
-    // -- HTTP ----------------------------------------------------------
-    enqueue!("fetch", (url: String, tag: String), ScriptCommand::Fetch { url, tag });
     {
         let sink = sink.clone();
         g.set(
@@ -2447,32 +2297,6 @@ fn build_lua(
             })?,
         )?;
     }
-
-    // -- the request being rendered for --------------------------------
-    // The headers, the cookies and the body are too large to publish as
-    // signals, so they stay in the per-thread `lumen_core::request`
-    // context and a script asks for one part at a time; the address parts
-    // are reserved `request.*` signals instead. Outside a server render
-    // nothing is installed and each reader gives back an empty string.
-    g.set(
-        "request_header",
-        lua.create_function(|_, name: String| Ok(lumen_core::request::header(&name)))?,
-    )?;
-    g.set(
-        "request_cookie",
-        lua.create_function(|_, name: String| Ok(lumen_core::request::cookie(&name)))?,
-    )?;
-    g.set(
-        "request_body",
-        lua.create_function(|_, ()| Ok(lumen_core::request::body()))?,
-    )?;
-    // Only a server render applies these; elsewhere the command is drained
-    // and dropped.
-    enqueue!("response_status", (status: i64), ScriptCommand::SetResponseStatus {
-        status: status.clamp(100, 599) as u16,
-    });
-    enqueue!("response_header", (name: String, value: String), ScriptCommand::SetResponseHeader { name, value });
-    enqueue!("redirect", (location: String), ScriptCommand::Redirect { location });
 
     // parse_json(s)
     g.set(
@@ -2537,17 +2361,6 @@ fn build_lua(
         )?;
     }
 
-    // local_id(source, suffix)
-    g.set(
-        "local_id",
-        lua.create_function(|_, (source, suffix): (String, String)| {
-            Ok(match source.rfind(':') {
-                Some(colon) => format!("{}:{}", &source[..colon], suffix),
-                None => suffix,
-            })
-        })?,
-    )?;
-
     // parse_markdown(src)
     g.set(
         "parse_markdown",
@@ -2557,45 +2370,6 @@ fn build_lua(
             script_value_to_lua(lua, &arr)
         })?,
     )?;
-
-    // Translation. `t("key")` returns the string the app's active locale
-    // carries for `key`, or `key` itself when no catalogue does - an
-    // untranslated app still renders something readable. The catalogue
-    // lives behind the process-wide `lumen_core::i18n` hook the runtime
-    // installs, so this host links no Fluent/ICU code and needs no world
-    // access. `tr` is Qt's spelling of the same call.
-    for name in ["t", "tr"] {
-        g.set(
-            name,
-            lua.create_function(|_, key: String| Ok(lumen_core::i18n::translate(&key)))?,
-        )?;
-    }
-
-    // read_file / write_file
-    g.set(
-        "read_file",
-        lua.create_function(|_, path: String| {
-            Ok(std::fs::read_to_string(&path).unwrap_or_else(|e| {
-                tracing::warn!(target: "lumen.script.lua", path = %path, error = %e, "read_file failed");
-                String::new()
-            }))
-        })?,
-    )?;
-    g.set(
-        "write_file",
-        lua.create_function(|_, (path, contents): (String, String)| {
-            Ok(match std::fs::write(&path, contents) {
-                Ok(()) => true,
-                Err(e) => {
-                    tracing::warn!(target: "lumen.script.lua", path = %path, error = %e, "write_file failed");
-                    false
-                }
-            })
-        })?,
-    )?;
-
-    // audio_* transport
-    audio::register(&lua, sink)?;
 
     drop(g);
     Ok(lua)

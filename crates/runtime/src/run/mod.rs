@@ -542,9 +542,6 @@ use subsystems::*;
 // app window-free without the extra `WinitPlugin` that `build_headless_app`
 // layers on.
 pub use app_build::build_app;
-// `builtin_script_fns` is public so an embedder wiring a script host of its
-// own can register the same built-ins the shipped hosts get.
-pub use app_build::builtin_script_fns;
 pub use check::CheckReport;
 // The app's catalogue directory, so a build that resolves translations
 // ahead of time reads them from where the runtime would.

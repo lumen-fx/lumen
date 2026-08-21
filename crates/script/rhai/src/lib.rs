@@ -20,7 +20,6 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-mod audio;
 pub mod builtins;
 
 use bevy_ecs::prelude::*;
@@ -560,7 +559,6 @@ fn register_introspection(engine: &mut Engine) {
     });
 
     // Global runtime state.
-    engine.register_fn("dump_tree", || -> String { ins::dump_tree() });
     engine.register_fn("pointer_state", || -> rhai::Map {
         let p = ins::pointer_state();
         let mut m = rhai::Map::new();
@@ -1402,56 +1400,6 @@ impl RhaiHost {
                 .push(ScriptCommand::Print(s.to_string()));
         });
 
-        // Register a builtin whose whole body is a single
-        // `sink.push(<command>)`. Each builtin's argument list AND its
-        // `ScriptCommand` construction stay inline at the call site
-        // (passed as macro args, not hidden behind another layer), so a
-        // reviewer can diff the three script hosts builtin-by-builtin.
-        macro_rules! enqueue {
-            ($name:literal, |$($arg:ident : $ty:ty),* $(,)?| $build:expr $(,)?) => {{
-                let sink = sink.clone();
-                engine.register_fn($name, move |$($arg: $ty),*| {
-                    sink.lock().push($build);
-                });
-            }};
-        }
-
-        // add_clicks(n)
-        enqueue!("add_clicks", |n: i64| ScriptCommand::AddClicks(n as i32));
-
-        // set_string(key, value)
-        enqueue!(
-            "set_string",
-            |key: rhai::ImmutableString, value: rhai::ImmutableString| ScriptCommand::SetString {
-                key: key.to_string(),
-                value: value.to_string(),
-            }
-        );
-
-        // set_text(target_id, text)
-        enqueue!(
-            "set_text",
-            |target_id: rhai::ImmutableString, text: rhai::ImmutableString| {
-                ScriptCommand::SetText {
-                    target_id: target_id.to_string(),
-                    text: text.to_string(),
-                }
-            }
-        );
-
-        // set_src(target_id, path) - swap an <image>'s asset path at
-        // runtime. The runtime side strips the old loaded asset and
-        // queues a fresh decode. Path is taken verbatim and resolved
-        // against the app dir by `apply_script_commands` so authors
-        // pass app-relative paths like "icons/sun.png".
-        enqueue!(
-            "set_src",
-            |target_id: rhai::ImmutableString, path: rhai::ImmutableString| ScriptCommand::SetSrc {
-                target_id: target_id.to_string(),
-                path: path.to_string(),
-            }
-        );
-
         // Signal / ArraySignal Rhai custom types: handle objects that
         // wrap the host-local signal mirror + the script command sink so
         // `let s = signal("name", default); s.set(v); s.get()` reads
@@ -1837,290 +1785,6 @@ impl RhaiHost {
             }
         });
 
-        // set_timeout(name, ms) - one-shot timer; fires `on_timer(name)`.
-        enqueue!("set_timeout", |name: rhai::ImmutableString, ms: i64| {
-            ScriptCommand::SetTimer {
-                name: name.to_string(),
-                millis: ms.max(0) as u64,
-                repeat: false,
-            }
-        });
-
-        // set_interval(name, ms) - repeating timer; fires `on_timer(name)`
-        // every `ms` until cancelled.
-        enqueue!("set_interval", |name: rhai::ImmutableString, ms: i64| {
-            ScriptCommand::SetTimer {
-                name: name.to_string(),
-                millis: ms.max(0) as u64,
-                repeat: true,
-            }
-        });
-
-        // cancel_timer(name)
-        enqueue!("cancel_timer", |name: rhai::ImmutableString| {
-            ScriptCommand::CancelTimer {
-                name: name.to_string(),
-            }
-        });
-
-        // notify(title, body) - fire an OS notification via
-        // notify-rust. Runs synchronously inside apply_script_commands;
-        // backends typically return quickly because the daemon owns
-        // the actual display.
-        enqueue!(
-            "notify",
-            |title: rhai::ImmutableString, body: rhai::ImmutableString| ScriptCommand::Notify {
-                title: title.to_string(),
-                body: body.to_string(),
-            }
-        );
-
-        // notify_ex(id, title, body, options, actions) - the same
-        // notification with an icon, an urgency, and buttons. `options`
-        // is `"icon:name-or-path|urgency:critical"` and `actions` is
-        // `"id:Label|id2:Label2"`; pressing one fires
-        // `on_notification_action(id, action_id)`. Empty strings mean
-        // "defaults" and "no buttons".
-        enqueue!(
-            "notify_ex",
-            |id: rhai::ImmutableString,
-             title: rhai::ImmutableString,
-             body: rhai::ImmutableString,
-             options: rhai::ImmutableString,
-             actions: rhai::ImmutableString| ScriptCommand::NotifyEx {
-                id: id.to_string(),
-                title: title.to_string(),
-                body: body.to_string(),
-                options: options.to_string(),
-                actions: actions.to_string(),
-            }
-        );
-
-        // clipboard_write(text) / clipboard_read(tag) - system clipboard
-        // text. The read is answered next tick by `on_clipboard(tag, text)`
-        // because the clipboard lives on the main thread's OS handle, not
-        // in the script engine.
-        enqueue!("clipboard_write", |text: rhai::ImmutableString| {
-            ScriptCommand::ClipboardWrite {
-                text: text.to_string(),
-            }
-        });
-        enqueue!("clipboard_read", |tag: rhai::ImmutableString| {
-            ScriptCommand::ClipboardRead {
-                tag: tag.to_string(),
-            }
-        });
-
-        // open_url(url) / open_path(path) / reveal_path(path) - hand a
-        // URL or file to the platform's default handler, or show a file
-        // in the file manager. Paths resolve relative to the app dir.
-        enqueue!("open_url", |url: rhai::ImmutableString| {
-            ScriptCommand::OpenUrl {
-                url: url.to_string(),
-            }
-        });
-        enqueue!("open_path", |path: rhai::ImmutableString| {
-            ScriptCommand::OpenPath {
-                path: path.to_string(),
-            }
-        });
-        enqueue!("reveal_path", |path: rhai::ImmutableString| {
-            ScriptCommand::RevealPath {
-                path: path.to_string(),
-            }
-        });
-
-        // keep_awake(name, reason) / allow_sleep(name) - hold off the
-        // screensaver and system sleep. Paired by name, like
-        // register_hotkey / unregister_hotkey.
-        enqueue!(
-            "keep_awake",
-            |name: rhai::ImmutableString, reason: rhai::ImmutableString| ScriptCommand::KeepAwake {
-                name: name.to_string(),
-                reason: reason.to_string(),
-            }
-        );
-        enqueue!("allow_sleep", |name: rhai::ImmutableString| {
-            ScriptCommand::AllowSleep {
-                name: name.to_string(),
-            }
-        });
-
-        // `copy_image(path)` enqueues a `CopyImageToClipboard` command. Paths resolve relative to the app directory at runtime.
-        enqueue!("copy_image", |path: rhai::ImmutableString| {
-            ScriptCommand::CopyImageToClipboard {
-                path: path.to_string(),
-            }
-        });
-
-        // `save_clipboard_image(path)` enqueues a `SaveClipboardImage` command writing the current clipboard image to `path` as PNG. Failures log to stderr.
-        enqueue!("save_clipboard_image", |path: rhai::ImmutableString| {
-            ScriptCommand::SaveClipboardImage {
-                path: path.to_string(),
-            }
-        });
-
-        // `tray_icon(id, icon_path, tooltip)` registers or replaces a system tray icon. Clicks invoke `on_tray(id)`. An empty `tooltip` string disables the tooltip.
-        enqueue!(
-            "tray_icon",
-            |id: rhai::ImmutableString,
-             icon_path: rhai::ImmutableString,
-             tooltip: rhai::ImmutableString| ScriptCommand::RegisterTrayIcon {
-                id: id.to_string(),
-                icon_path: icon_path.to_string(),
-                tooltip: if tooltip.is_empty() {
-                    None
-                } else {
-                    Some(tooltip.to_string())
-                },
-                menu: String::new(),
-                template: false,
-            }
-        );
-
-        // `tray_icon_menu(id, icon_path, tooltip, menu, template)` adds a
-        // context menu and the macOS template-image flag. `menu` is
-        // `"id:Label|-|id2:Label2"` where `-` is a separator; picking an
-        // item fires `on_menu(id)`.
-        enqueue!(
-            "tray_icon_menu",
-            |id: rhai::ImmutableString,
-             icon_path: rhai::ImmutableString,
-             tooltip: rhai::ImmutableString,
-             menu: rhai::ImmutableString,
-             template: bool| ScriptCommand::RegisterTrayIcon {
-                id: id.to_string(),
-                icon_path: icon_path.to_string(),
-                tooltip: if tooltip.is_empty() {
-                    None
-                } else {
-                    Some(tooltip.to_string())
-                },
-                menu: menu.to_string(),
-                template,
-            }
-        );
-
-        // unregister_tray(id) - drop a previously-registered tray icon.
-        enqueue!("unregister_tray", |id: rhai::ImmutableString| {
-            ScriptCommand::UnregisterTrayIcon { id: id.to_string() }
-        });
-
-        // `open_menu(id)` / `close_menu(id)` set `__menu_open:<id>` to `"true"` / `"false"`.
-        enqueue!("open_menu", |id: rhai::ImmutableString| {
-            ScriptCommand::SetSignal {
-                name: format!("__menu_open:{id}"),
-                value: "true".to_string(),
-            }
-        });
-        enqueue!("close_menu", |id: rhai::ImmutableString| {
-            ScriptCommand::SetSignal {
-                name: format!("__menu_open:{id}"),
-                value: "false".to_string(),
-            }
-        });
-
-        // pick_file(tag) / pick_files(tag) / pick_folder(tag) /
-        // save_file(tag, default_name) - show a native file dialog.
-        // The runtime opens the dialog on the main thread via `rfd`,
-        // then fires `on_file_picked(tag, path)`,
-        // `on_files_picked(tag, paths_joined_by_pipe)`, or
-        // `on_folder_picked(tag, path)` once the user closes it. A
-        // cancelled dialog still fires once with an empty path so
-        // scripts can clean up modal state.
-        for (name, kind) in [
-            ("pick_file", lumen_script::FileDialogKind::Open),
-            ("pick_files", lumen_script::FileDialogKind::OpenMulti),
-            ("pick_folder", lumen_script::FileDialogKind::PickFolder),
-        ] {
-            let sink_for = sink.clone();
-            engine.register_fn(name, move |tag: rhai::ImmutableString| {
-                sink_for.lock().push(ScriptCommand::OpenFileDialog {
-                    kind,
-                    tag: tag.to_string(),
-                    filters: Vec::new(),
-                    default_name: None,
-                });
-            });
-        }
-        enqueue!(
-            "save_file",
-            |tag: rhai::ImmutableString, default_name: rhai::ImmutableString| {
-                ScriptCommand::OpenFileDialog {
-                    kind: lumen_script::FileDialogKind::Save,
-                    tag: tag.to_string(),
-                    filters: Vec::new(),
-                    default_name: Some(default_name.to_string()),
-                }
-            }
-        );
-
-        // register_hotkey(name, accel) / unregister_hotkey(name) -
-        // hook an OS-level global accelerator. `on_hotkey(name)`
-        // fires every time the OS dispatches the chord (window
-        // focus optional). Accelerator syntax follows global-hotkey
-        // / Electron conventions: `"CommandOrControl+S"`,
-        // `"Alt+Space"`, `"F11"`.
-        enqueue!(
-            "register_hotkey",
-            |name: rhai::ImmutableString, accelerator: rhai::ImmutableString| {
-                ScriptCommand::RegisterHotkey {
-                    name: name.to_string(),
-                    accelerator: accelerator.to_string(),
-                }
-            }
-        );
-        enqueue!("unregister_hotkey", |name: rhai::ImmutableString| {
-            ScriptCommand::UnregisterHotkey {
-                name: name.to_string(),
-            }
-        });
-
-        // set_class(id, classes) / set_root_class(classes) - mutate
-        // `LumenClasses` on a `LumenId`-tagged entity (or the root).
-        // The runtime side detects `Changed<LumenClasses>` on the root
-        // and re-applies CSS so theme-token selectors light up live.
-        enqueue!(
-            "set_class",
-            |id: rhai::ImmutableString, classes: rhai::ImmutableString| ScriptCommand::SetClasses {
-                target_id: id.to_string(),
-                classes: classes.to_string(),
-            }
-        );
-        enqueue!("set_root_class", |classes: rhai::ImmutableString| {
-            ScriptCommand::SetClasses {
-                target_id: "<root>".to_string(),
-                classes: classes.to_string(),
-            }
-        });
-
-        // pick_file_filtered(tag, "Images:png,jpg|All:*") - same as
-        // pick_file but with an `rfd`-style filter list. The spec is
-        // pipe-separated `<label>:<ext1>,<ext2>,...` groups; the bare
-        // `*` extension means "no filter, all files".
-        enqueue!(
-            "pick_file_filtered",
-            |tag: rhai::ImmutableString, spec: rhai::ImmutableString| {
-                ScriptCommand::OpenFileDialog {
-                    kind: lumen_script::FileDialogKind::Open,
-                    tag: tag.to_string(),
-                    filters: parse_dialog_filter_spec(spec.as_str()),
-                    default_name: None,
-                }
-            }
-        );
-
-        // fetch(url, tag) - issue HTTP GET; on_fetch(tag, body) fires
-        // once the response lands. Simple sugar over `http` (below);
-        // both share the runtime's single off-thread transport.
-        enqueue!(
-            "fetch",
-            |url: rhai::ImmutableString, tag: rhai::ImmutableString| ScriptCommand::Fetch {
-                url: url.to_string(),
-                tag: tag.to_string(),
-            }
-        );
-
         // http(#{ method, url, headers, body, timeout_ms, tag }) - issue
         // a general HTTP request. `on_http(tag, response)` fires once the
         // reply lands, where `response` is
@@ -2185,54 +1849,6 @@ impl RhaiHost {
                 timeout_ms,
                 tag,
             });
-        });
-
-        // request_header(name) / request_cookie(name) / request_body() -
-        // read the request the document is being rendered for. The
-        // headers, the cookies and the body are too large to publish as
-        // signals, so they stay in the per-thread `lumen_core::request`
-        // context and a script asks for one part at a time; the address
-        // parts are reserved `request.*` signals instead. Outside a
-        // server render nothing is installed and each reader gives back
-        // an empty string.
-        engine.register_fn(
-            "request_header",
-            |name: rhai::ImmutableString| -> rhai::ImmutableString {
-                lumen_core::request::header(name.as_str()).into()
-            },
-        );
-        engine.register_fn(
-            "request_cookie",
-            |name: rhai::ImmutableString| -> rhai::ImmutableString {
-                lumen_core::request::cookie(name.as_str()).into()
-            },
-        );
-        engine.register_fn("request_body", || -> rhai::ImmutableString {
-            lumen_core::request::body().into()
-        });
-
-        // response_status(status) / response_header(name, value) /
-        // redirect(location) - answer the request with something other
-        // than a plain 200 document. Only a server render applies these;
-        // elsewhere the command is drained and dropped.
-        enqueue!("response_status", |status: i64| {
-            ScriptCommand::SetResponseStatus {
-                status: status.clamp(100, 599) as u16,
-            }
-        });
-        enqueue!(
-            "response_header",
-            |name: rhai::ImmutableString, value: rhai::ImmutableString| {
-                ScriptCommand::SetResponseHeader {
-                    name: name.to_string(),
-                    value: value.to_string(),
-                }
-            }
-        );
-        enqueue!("redirect", |location: rhai::ImmutableString| {
-            ScriptCommand::Redirect {
-                location: location.to_string(),
-            }
         });
 
         // parse_json(s) - convert a JSON string to a Rhai Map/Array/scalar
@@ -2312,22 +1928,6 @@ impl RhaiHost {
                   fn_name: rhai::ImmutableString| {
                 if let Ok(mut h) = handlers_for_on.write() {
                     h.insert((event.to_string(), id.to_string()), fn_name.to_string());
-                }
-            },
-        );
-
-        // local_id(source, suffix) - return a sibling id in the same
-        // template instance as `source`. If `source` is `user-card:btn`,
-        // `local_id(source, "label")` is `user-card:label`. Source
-        // without a `:` returns `suffix` unchanged. Multi-level prefixes
-        // (`a:b:btn`) stack: result is `a:b:label`.
-        engine.register_fn(
-            "local_id",
-            |source: rhai::ImmutableString, suffix: rhai::ImmutableString| -> String {
-                if let Some(colon) = source.rfind(':') {
-                    format!("{}:{}", &source[..colon], suffix.as_str())
-                } else {
-                    suffix.to_string()
                 }
             },
         );
@@ -2474,53 +2074,6 @@ impl RhaiHost {
             },
         );
 
-        // Translation. `t("key")` returns the string the app's active
-        // locale carries for `key`, or `key` itself when no catalogue
-        // does - an untranslated app still renders something readable.
-        // The catalogue lives behind the process-wide
-        // `lumen_core::i18n` hook the runtime installs, so this host
-        // links no Fluent/ICU code and needs no world access.
-        engine.register_fn("t", |key: rhai::ImmutableString| -> rhai::ImmutableString {
-            lumen_core::i18n::translate(key.as_str()).into()
-        });
-        // Qt's spelling of the same call.
-        engine.register_fn(
-            "tr",
-            |key: rhai::ImmutableString| -> rhai::ImmutableString {
-                lumen_core::i18n::translate(key.as_str()).into()
-            },
-        );
-
-        // D1.2: tiny file I/O for apps that load/save user files
-        // (markdown editor, future image viewer, etc.). Empty string
-        // on read error so scripts can branch on `len() > 0`.
-        engine.register_fn("read_file", move |path: rhai::ImmutableString| -> rhai::ImmutableString {
-            match std::fs::read_to_string(path.as_str()) {
-                Ok(s) => s.into(),
-                Err(e) => {
-                    tracing::warn!(target: "lumen.script.rhai", path = %path.as_str(), error = %e, "read_file failed");
-                    rhai::ImmutableString::from("")
-                }
-            }
-        });
-
-        engine.register_fn(
-            "write_file",
-            move |path: rhai::ImmutableString, contents: rhai::ImmutableString| -> bool {
-                match std::fs::write(path.as_str(), contents.as_str()) {
-                    Ok(_) => true,
-                    Err(e) => {
-                        tracing::warn!(target: "lumen.script.rhai", path = %path.as_str(), error = %e, "write_file failed");
-                        false
-                    }
-                }
-            },
-        );
-
-        // audio_play / _pause / _resume / _stop / _seek / _volume. Kept in
-        // `crate::audio` so the audio surface barely touches this file.
-        crate::audio::register(&mut engine, &sink);
-
         let mut scope = Scope::new();
         // Push the `signals` chained-access root into the persistent
         // scope as a constant - every script can reach the typed
@@ -2537,7 +2090,7 @@ impl RhaiHost {
         scope.push_constant("document", Document);
         scope.push_constant("history", History);
 
-        Self {
+        let mut host = Self {
             engine,
             ast: None,
             scope,
@@ -2549,7 +2102,16 @@ impl RhaiHost {
             event_closures,
             script_fns: ScriptFnStore::default(),
             modules: HashMap::new(),
+        };
+        // The shared builtin table binds through the same entry point an
+        // embedder's function takes, so a host built here carries the same
+        // surface whether it runs an app, a check, or a test.
+        for f in lumen_script::builtin_script_fns() {
+            if f.visible_to("rhai") {
+                let _ = host.register_script_fn(&f);
+            }
         }
+        host
     }
 
     /// Mutable access to the inner Rhai `Engine` so embedders can
@@ -2787,17 +2349,22 @@ impl RhaiHost {
     /// arity, which is how one `page(path)` also answers `page()`.
     fn bind_globally(&mut self, f: &ScriptFn) {
         for arity in f.sig.arity_range() {
-            let arg_types: Vec<TypeId> = (0..arity)
-                .map(|i| rhai_arg_type(f.sig.params.get(i).map_or(&ScriptTy::Any, |p| &p.ty)))
+            let slots: Vec<&ScriptTy> = (0..arity)
+                .map(|i| f.sig.params.get(i).map_or(&ScriptTy::Any, |p| &p.ty))
                 .collect();
-            let sink = self.sink.clone();
-            let f = f.clone();
-            self.engine
-                .register_raw_fn::<Dynamic>(f.name.clone(), arg_types, move |_ctx, args| {
-                    let vals: Vec<ScriptValue> =
-                        args.iter().map(|d| dynamic_to_script_value(d)).collect();
-                    invoke_into_sink(&f, &sink, &vals)
-                });
+            for arg_types in rhai_arg_shapes(&slots) {
+                let sink = self.sink.clone();
+                let f = f.clone();
+                self.engine.register_raw_fn::<Dynamic>(
+                    f.name.clone(),
+                    arg_types,
+                    move |_ctx, args| {
+                        let vals: Vec<ScriptValue> =
+                            args.iter().map(|d| dynamic_to_script_value(d)).collect();
+                        invoke_into_sink(&f, &sink, &vals)
+                    },
+                );
+            }
         }
     }
 
@@ -3267,6 +2834,39 @@ fn rhai_arg_type(ty: &ScriptTy) -> TypeId {
     }
 }
 
+/// Every Rhai parameter-type list one declared shape has to be bound under.
+///
+/// Rhai resolves a call by argument type, and an integer literal is an `INT`
+/// even where the author means a number, so a declared float is bound at both
+/// `FLOAT` and `INT` and `audio_seek(30)` resolves alongside
+/// `audio_seek(30.5)`. Beyond three float parameters the shapes are left at the
+/// declared form: the combinations double each time, and no builtin is written
+/// that way.
+fn rhai_arg_shapes(slots: &[&ScriptTy]) -> Vec<Vec<TypeId>> {
+    let floats = slots.iter().filter(|ty| **ty == &ScriptTy::Float).count();
+    if floats == 0 || floats > 3 {
+        return vec![slots.iter().map(|ty| rhai_arg_type(ty)).collect()];
+    }
+    (0..1u32 << floats)
+        .map(|mask| {
+            let mut seen = 0;
+            slots
+                .iter()
+                .map(|ty| {
+                    if **ty == ScriptTy::Float {
+                        let as_int = mask >> seen & 1 == 1;
+                        seen += 1;
+                        if as_int {
+                            return TypeId::of::<rhai::INT>();
+                        }
+                    }
+                    rhai_arg_type(ty)
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// Run a [`ScriptFn`] body and hand its result back to Rhai.
 ///
 /// The body emits into a scratch buffer and the sink lock is taken once, after
@@ -3530,30 +3130,6 @@ pub fn json_to_dynamic(v: serde_json::Value) -> rhai::Dynamic {
             map.into()
         }
     }
-}
-
-/// Parse a `pick_file_filtered` spec like `"Images:png,jpg|All:*"`
-/// into rfd's `(label, [exts])` list. A literal `*` extension is
-/// stripped (rfd treats no-extension filter as "all files").
-pub fn parse_dialog_filter_spec(spec: &str) -> Vec<(String, Vec<String>)> {
-    let mut out = Vec::new();
-    for group in spec.split('|') {
-        let group = group.trim();
-        if group.is_empty() {
-            continue;
-        }
-        let (label, exts) = match group.split_once(':') {
-            Some((l, e)) => (l.trim().to_string(), e),
-            None => (group.to_string(), ""),
-        };
-        let exts: Vec<String> = exts
-            .split(',')
-            .map(|e| e.trim().to_string())
-            .filter(|e| !e.is_empty() && e != "*")
-            .collect();
-        out.push((label, exts));
-    }
-    out
 }
 
 #[cfg(test)]

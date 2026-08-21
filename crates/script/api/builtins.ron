@@ -1289,38 +1289,74 @@
         ),
         (
             name: "set_color_scheme",
-            hosts: [Candela],
+            hosts: [Rhai, Lua, Candela],
             params: [("name", "string")],
             ret: "()",
             doc: "Switch the color scheme: \"default\" (follow the OS), \"force-light\", \"force-dark\", \"prefer-light\", \"prefer-dark\".",
         ),
         (
             name: "page",
-            hosts: [Candela],
+            hosts: [Rhai, Lua, Candela],
             params: [("path", "string")],
             ret: "()",
             doc: "Navigate to a page path (`\"settings\"`, `\"/user/7\"`, `\"/\"`).",
+            overrides: [
+                (
+                    host: Rhai,
+                    ret: Some("string"),
+                    doc: Some("Navigate to a page path; called with no argument, the active page key."),
+                ),
+                (
+                    host: Lua,
+                    ret: Some("string"),
+                    doc: Some("Navigate to a page path; called with no argument, the active page key."),
+                ),
+            ],
         ),
         (
             name: "page_current",
-            hosts: [Candela],
+            hosts: [Rhai, Lua, Candela],
             params: [],
             ret: "string",
             doc: "The active page key. Spelled apart from `page(path)` because a host fn takes one arity per name.",
         ),
         (
             name: "page_back",
-            hosts: [Candela],
+            hosts: [Rhai, Lua, Candela],
             params: [],
             ret: "()",
             doc: "Step one entry back in the in-memory page history.",
+            overrides: [
+                (
+                    host: Rhai,
+                    ret: Some("bool"),
+                    doc: Some("Step one entry back in the page history; false when there was nowhere to go."),
+                ),
+                (
+                    host: Lua,
+                    ret: Some("bool"),
+                    doc: Some("Step one entry back in the page history; false when there was nowhere to go."),
+                ),
+            ],
         ),
         (
             name: "page_forward",
-            hosts: [Candela],
+            hosts: [Rhai, Lua, Candela],
             params: [],
             ret: "()",
             doc: "Step one entry forward in the in-memory page history.",
+            overrides: [
+                (
+                    host: Rhai,
+                    ret: Some("bool"),
+                    doc: Some("Step one entry forward in the page history; false when there was nowhere to go."),
+                ),
+                (
+                    host: Lua,
+                    ret: Some("bool"),
+                    doc: Some("Step one entry forward in the page history; false when there was nowhere to go."),
+                ),
+            ],
         ),
         (
             name: "matched_rules",

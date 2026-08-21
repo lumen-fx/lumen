@@ -2,10 +2,7 @@ use super::*;
 use lumen_core::window::{Menu, MenuEntry, MenuModel, WindowGeometry};
 use lumen_ir::layout_ir::MenuEntrySpec;
 
-use lumen_core::command::{Command, CommandQueue};
-use lumen_core::components::ColorScheme;
-use lumen_core::nav;
-use lumen_script::{HostSet, ScriptFn, ScriptFnAppExt, ScriptNs, ScriptTy, ScriptValue};
+use lumen_script::ScriptFnAppExt;
 
 /// Construct the fully-configured [`App`] and the [`WindowSetup`] the
 /// windowed path would run it with - everything [`run_app`] does short
@@ -155,10 +152,11 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // `register_script_common` installs the host-neutral half once, ordering
     // it against `lumen_script::ScriptSet` so its RC-critical edges cover
     // every active host; `register_script_host_systems::<H>` then installs
-    // the per-host half once per language. Every native function an app can
-    // call - the runtime's own ([`builtin_script_fns`]), a plugin's, and the
-    // embedder's `RunOptions::native_fns` - goes into one `ScriptFnRegistry`
-    // below, which each host drains as it loads.
+    // the per-host half once per language. The native functions an app adds -
+    // a plugin's and the embedder's `RunOptions::native_fns` - go into one
+    // `ScriptFnRegistry` below, which each host drains as it loads; the shared
+    // builtin surface (`lumen_script::builtin_script_fns`) is bound by each
+    // host itself.
     //
     // A precompiled artifact carries the split the AOT compiler recorded, and
     // it is the only source of it: the app's `.lua` / `.rhai` files are not
@@ -177,11 +175,12 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // the first one to build installs a `FetchRegistry` if none exists yet.
     register_http_client(&mut app);
     register_script_common(&mut app, has_script);
-    // The registration order is the shadowing order: the runtime's own
-    // functions first, then a plugin's, then the embedder's. Every host drains
-    // this one registry as it loads and seals it afterwards, so a registration
-    // that arrives too late to bind says so instead of going quiet.
-    app.add_script_fns(builtin_script_fns(&app));
+    // The registration order is the shadowing order: a plugin's functions
+    // first, then the embedder's. Every host drains this one registry as it
+    // loads and seals it afterwards, so a registration that arrives too late
+    // to bind says so instead of going quiet. The builtin table is not in it;
+    // each host binds that itself when it is constructed, so a name registered
+    // here shadows a builtin of the same name.
     for install in std::mem::take(&mut opts.plugins) {
         install(&mut app);
     }
@@ -484,86 +483,6 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         hook(&mut app);
     }
     Ok((app, window))
-}
-
-/// The script functions the runtime itself provides: `set_color_scheme` and
-/// the file-based-pages navigation family.
-///
-/// They are described in the host-neutral [`ScriptFn`] terms every host
-/// understands, so a host added later gets them without a per-engine port.
-/// `app` supplies the [`CommandQueue`] sender the scheme change rides.
-///
-/// They carry `RHAI | LUA`: candela declares the same names in its own
-/// prelude, under the `lumen` namespace its scripts call them through, and a
-/// second spelling would be backed by a different bus.
-///
-/// `page` takes an optional argument: with one it navigates, without one it
-/// reads the current page. Hosts that key a function by name alone cannot
-/// overload it, which is why the reader also has the unambiguous
-/// `page_current` spelling.
-pub fn builtin_script_fns(app: &App) -> Vec<ScriptFn> {
-    let sender = app.world.resource::<CommandQueue>().sender().clone();
-    let set_color_scheme = ScriptFn::new("set_color_scheme")
-        .param("name", ScriptTy::Str)
-        .ret(ScriptTy::Unit)
-        .doc("Apply a color scheme by name.")
-        .build(move |cx| {
-            let name = cx.str_arg(0);
-            let Some(scheme) = ColorScheme::from_name(&name) else {
-                tracing::warn!(
-                    "set_color_scheme: unknown name {name:?}; expected one of \
-                 \"default\"/\"force-light\"/\"force-dark\"/\
-                 \"prefer-light\"/\"prefer-dark\""
-                );
-                return ScriptValue::Unit;
-            };
-            let cmd = Command::Typed {
-                type_id: std::any::TypeId::of::<ColorSchemeIntent>(),
-                payload: Box::new(ColorSchemeIntent(scheme)),
-            };
-            if sender.try_send(cmd).is_err() {
-                tracing::warn!("set_color_scheme: CommandQueue full; dropping scheme update");
-            }
-            ScriptValue::Unit
-        });
-    // `page("x")` navigates, `page()` reads the current page. Both ride the
-    // shared `lumen_core::nav` bus, the same one an `<a href>` click, the
-    // C-ABI, and the Rust SDK write.
-    let page = ScriptFn::new("page")
-        .param("path", ScriptTy::Str)
-        .min_arity(0)
-        .doc("Navigate to a page, or read the current one when called with no argument.")
-        .build(|cx| match cx.arg(0) {
-            ScriptValue::Unit => ScriptValue::Str(nav::current()),
-            path => {
-                nav::navigate(path.stringify());
-                ScriptValue::Unit
-            }
-        });
-    let fns = vec![
-        set_color_scheme,
-        page,
-        ScriptFn::new("page_current")
-            .ret(ScriptTy::Str)
-            .doc("The page the app is on.")
-            .build(|_| ScriptValue::Str(nav::current())),
-        // History back / forward (in-memory stack on desktop). Both report
-        // whether the step was queued, so a script can branch on it.
-        ScriptFn::new("page_back")
-            .ret(ScriptTy::Bool)
-            .doc("Step back through the page history.")
-            .build(|_| ScriptValue::Bool(nav::back())),
-        ScriptFn::new("page_forward")
-            .ret(ScriptTy::Bool)
-            .doc("Step forward through the page history.")
-            .build(|_| ScriptValue::Bool(nav::forward())),
-    ];
-    fns.into_iter()
-        .map(|f| {
-            f.with_ns(ScriptNs::Builtin)
-                .with_hosts(HostSet::RHAI | HostSet::LUA)
-        })
-        .collect()
 }
 
 /// True when this build compiled the host for `engine`.
