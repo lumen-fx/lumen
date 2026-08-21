@@ -667,6 +667,75 @@ fn a_bound_value_reaches_the_page_as_the_browser_reads_it() {
 }
 
 #[test]
+fn a_placeholder_outside_a_row_is_written_as_the_value_it_names() {
+    let mut greeting = element("label", labelled("hello {name}"), Vec::new());
+    greeting.interpolations = vec![InterpolationSlot::Global("name".to_string())];
+    let mut badge = element("tile", labelled("tier"), Vec::new());
+    badge.attrs.classes = vec!["tier-{plan}".to_string()];
+    badge.interpolations = vec![InterpolationSlot::Global("plan".to_string())];
+    // A name the page's state answers nothing for, which keeps its braces so
+    // an authoring typo reads as one rather than as an empty string.
+    let mut typo = element("label", labelled("nothing {missing} here"), Vec::new());
+    typo.interpolations = vec![InterpolationSlot::Global("missing".to_string())];
+
+    let page = PageSpec::new(
+        "index",
+        ir(element(
+            "root",
+            Attributes::default(),
+            vec![greeting, badge, typo],
+        )),
+    );
+    let mut spec = site(vec![page]);
+    spec.pages[0].signals = SignalEnv::new()
+        .with_global("name", "Ada")
+        .with_global("plan", "gold");
+
+    let html = page_html(&spec, "index.html");
+    assert!(html.contains(">hello Ada<"), "{html}");
+    assert!(html.contains("tier-gold"), "{html}");
+    assert!(html.contains(">nothing {missing} here<"), "{html}");
+}
+
+#[test]
+fn a_page_with_no_state_keeps_every_placeholder_the_markup_wrote() {
+    let mut greeting = element("label", labelled("hello {name}"), Vec::new());
+    greeting.interpolations = vec![InterpolationSlot::Global("name".to_string())];
+    let page = PageSpec::new(
+        "index",
+        ir(element("root", Attributes::default(), vec![greeting])),
+    );
+
+    let html = page_html(&site(vec![page]), "index.html");
+    assert!(html.contains(">hello {name}<"), "{html}");
+}
+
+#[test]
+fn a_row_resolves_its_placeholders_once() {
+    // A row whose record holds text that looks like a placeholder. The row
+    // walk wrote it, and the walk around it must read it as the text it is
+    // rather than as a name to look up.
+    let mut label = element("label", labelled("{row.name}"), Vec::new());
+    label.interpolations = vec![InterpolationSlot::Row("name".to_string())];
+    let mut block = element("for", Attributes::default(), vec![label]);
+    block.attrs.each = Some("items".into());
+    let page = PageSpec::new(
+        "index",
+        ir(element("root", Attributes::default(), vec![block])),
+    );
+    let mut spec = site(vec![page]);
+    spec.pages[0].signals = SignalEnv::new()
+        .with_global("name", "Ada")
+        .with_array("items", items(&["{name}"]));
+
+    let html = page_html(&spec, "index.html");
+    assert!(
+        html.contains(">{name}<"),
+        "the row's own text is text, not a second placeholder: {html}"
+    );
+}
+
+#[test]
 fn a_bound_row_reads_the_state_the_rest_of_the_page_does() {
     let mut label = bound_label("unit", "");
     label.attrs.classes = vec!["{row.name}".to_string()];

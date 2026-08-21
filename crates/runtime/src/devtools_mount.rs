@@ -43,7 +43,12 @@ pub fn install(app: &mut App, parser: &dyn crate::source_parser::SourceParser) {
     }
 
     // Spawn as an isolated root (does not clobber the app's LumenStylesheet).
-    let root = crate::spawn::spawn_subtree(&mut app.world, &ir.root, None);
+    let root = crate::spawn::spawn_subtree(
+        &mut app.world,
+        &ir.root,
+        None,
+        crate::spawn::Placeholders::Unresolved,
+    );
 
     // Collect the whole spawned subtree so lumen-devtools can tag it.
     let descendants = collect_subtree(&mut app.world, root);

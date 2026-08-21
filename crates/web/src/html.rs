@@ -12,6 +12,11 @@
 //! An element is written with the values its `bind-*` attributes hold in that
 //! same state, which [`crate::bindings`] resolves; what the state answers
 //! nothing for keeps the fallback the markup carries.
+//!
+//! A `{name}` placeholder is resolved the same way, through the resolver both
+//! halves of the web target share, so the page carries the value rather than
+//! the braces and the runtime that builds the same element arrives at the same
+//! string.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -21,7 +26,7 @@ use lumen_html::style::{Emission, rewrite_property};
 use lumen_html::{escape_attr, escape_text, html_attrs, html_tag_for};
 use lumen_ir::css::computed_style_map;
 use lumen_ir::fragment::FRAGMENT_TAG;
-use lumen_ir::interpolate::{Scope, substitute_element};
+use lumen_ir::interpolate::{Scope, substitute_attrs, substitute_element};
 use lumen_ir::layout_ir::{Attributes, Element, IfModeSpec};
 
 use crate::error::EmitError;
@@ -32,6 +37,13 @@ use crate::{bindings, urls};
 struct Walk<'a> {
     page: &'a str,
     signals: &'a SignalEnv,
+    /// Whether the walk is inside a `<for>` row.
+    ///
+    /// A row is written from an instance the row walk already resolved
+    /// against the row record and the globals together, so there is nothing
+    /// left for this walk to resolve there. Resolving again would read a
+    /// value that arrived from a row field as a placeholder of its own.
+    in_row: bool,
     css_mode: CssMode,
     /// Site base path, which is what the shared files hang off.
     base: String,
@@ -56,6 +68,7 @@ pub fn emit_tree(
     let mut walk = Walk {
         page: &page.key,
         signals: &page.signals,
+        in_row: false,
         css_mode: spec.web.css_mode,
         tree: urls::join(&base, &spec.locale.prefix()),
         base,
@@ -98,12 +111,26 @@ fn emit_element(
             path: path_text,
         });
     }
+    // A `{name}` in the markup names a global signal, and the page is written
+    // with the value the state holds for it, the same way the browser reads it
+    // when it builds the same element. A name the state has nothing for keeps
+    // its braces, so an authoring typo reads as one.
+    let filled = if walk.in_row {
+        None
+    } else {
+        substitute_attrs(
+            &element.attrs,
+            &element.interpolations,
+            &Scope::new(walk.signals),
+        )
+    };
+    let own = filled.as_ref().unwrap_or(&element.attrs);
     // What the element's bindings hold in the state this page is rendered
     // with. An element whose bindings the state answers nothing for is emitted
     // from its own attributes, which is what leaves the authored fallback in
     // the page.
-    let bound = bindings::resolved(ir_tag, &element.attrs, walk.signals);
-    let attrs = bound.as_ref().unwrap_or(&element.attrs);
+    let bound = bindings::resolved(ir_tag, own, walk.signals);
+    let attrs = bound.as_ref().unwrap_or(own);
 
     let mut hidden = false;
     let mut open = false;
@@ -246,6 +273,7 @@ fn emit_rows(
     let report = |field: &str| {
         missing.borrow_mut().insert(field.to_string());
     };
+    let outside = std::mem::replace(&mut walk.in_row, true);
     for (index, item) in rows.iter().enumerate() {
         let scope = Scope::new(signals)
             .with_row(item, index)
@@ -256,6 +284,7 @@ fn emit_rows(
             emit_element(out, &instance, &path.row(slot as u32), walk)?;
         }
     }
+    walk.in_row = outside;
     for field in missing.into_inner() {
         walk.warnings.push(format!(
             "page `{}`: `<for each=\"{name}\">` reads row field `{field}`, which its records do \
