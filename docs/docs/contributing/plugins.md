@@ -305,6 +305,17 @@ declaring anything. An app that spells the block itself keeps it: the host skips
 a namespace the source already declares, which is what a script written against
 an older release, and an artifact built from one, rely on.
 
+`lumen`, `window`, `document` and `history` are the runtime's own namespaces and
+the prelude declares them. A plugin that registers into one of them gets a
+warning and no declaration, because a second block for a namespace displaces the
+first and would cost the app every runtime function in it. Pick a name of your
+own.
+
+A name candela cannot spell in a declaration is refused at registration, with a
+message naming the plugin's namespace and function. That covers a keyword, a
+hyphen, a quote and the empty string. The app compiles and runs without the
+function rather than failing to compile at all.
+
 ### Shipping candela sugar
 
 A plugin can ship candela source of its own, compiled ahead of the app's
@@ -335,16 +346,26 @@ something in the world does not; pass an id and look it up.
 Editor tooling reads the builtin metadata tables, which describe the runtime's
 own surface, so a plugin's functions do not appear in completion or hover.
 
-candela types a call by the function's name when that name is one its own
-standard library uses, whatever namespace the call sits in, so a function named
-`read`, `write`, `str`, `input`, `int`, or `exists` is inferred as that
-library's type and a mismatch surfaces at run time. Name yours something else.
+candela types a call by the function's name alone when its own library has that
+name, whatever namespace the call sits in, and the declared return type is not
+consulted. A function named `int`, `float`, `bool`, `exists`, `write`, `range`
+or `append` that returns something else is therefore refused at registration,
+and the message says so. A name whose forced type is the one the function
+returns anyway, `read` giving back a string, is accepted and works.
+
+The refusal happens where the compiler runs. An app compiled ahead of time
+declares the block itself, so a `.cdlb` built against such a name carries the
+wrong type and the failure appears when the value is used.
 
 A precompiled `.cdlb` carries the declarations its source spelled: the build
 compiles the script on its own, with no plugin present to declare anything. A
 script that will be compiled ahead of time therefore writes the
-`host "<ns>" { .. }` block itself. For the same reason a `.cdl` wrapper cannot
-reach an artifact, and the artifact host says so when it is handed one.
+`host "<ns>" { .. }` block itself. The build does not object when it is missing;
+the call compiles, the function holding it is left out of the image, and the
+app starts without it. For the same reason a `.cdl` wrapper cannot reach an
+artifact, and the artifact host says so when it is handed one. An artifact whose
+block names a function no plugin registered fails its load, naming the
+function.
 
 ## Extending the asset server
 

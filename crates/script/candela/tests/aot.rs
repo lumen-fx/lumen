@@ -145,3 +145,68 @@ fn a_program_that_does_not_compile_reports_where() {
     assert_eq!(uri, "broken.cdl");
     assert!(line > 0, "the line is the user's own, not the prelude's");
 }
+
+/// A build has no plugin in it, so a namespace only a plugin would declare has
+/// to be spelled by the source.
+///
+/// The build does not object: a call into an undeclared namespace compiles, and
+/// the function it sits in is simply not in the image. What the author gets is
+/// an app that starts and a call that is not there, so the block is the thing
+/// to check when a plugin function goes missing from an artifact.
+#[test]
+fn a_call_into_an_undeclared_namespace_does_not_reach_the_image() {
+    const UNDECLARED: &str = r#"
+fn go() { return gpio::level(21); }
+
+fn main() {}
+"#;
+    let bytes = compile_bytecode(UNDECLARED, "undeclared.cdl").expect("the build does not object");
+    let mut hosts = HostRegistry::new();
+    hosts.register_host_fn("gpio", "level", |pin: i64| -> i64 { pin * 2 });
+
+    let program = load_program(&bytes, &hosts).expect("the image loads");
+    assert!(
+        !program.exports().any(|name| name == "go"),
+        "the function holding the undeclared call is not in the image"
+    );
+}
+
+/// A declaration the runtime has no closure behind fails the load by name.
+///
+/// This is what an artifact does when the app was built against a plugin that
+/// is not installed. The image is well formed, so the failure is a binding
+/// error naming the function, not a decode error and not a panic.
+#[test]
+fn a_declared_plugin_function_nobody_registered_fails_the_load_by_name() {
+    const DECLARED: &str = r#"
+host "gpio" {
+    int level(int);
+}
+
+fn go() { return gpio::level(21); }
+
+fn main() {}
+"#;
+    let bytes = compile_bytecode(DECLARED, "gpio.cdl").expect("the program compiles");
+
+    let Err(error) = load_program(&bytes, &HostRegistry::new()) else {
+        panic!("nothing is registered under `gpio`, so the load fails");
+    };
+    let LoadError::HostBinding(binding) = error else {
+        panic!("the image decodes and only its host bindings are missing: {error}");
+    };
+    assert!(
+        binding.to_string().contains("level"),
+        "the error names the function that has nothing behind it: {binding}"
+    );
+
+    // The same image with the plugin present is the app that works.
+    let mut hosts = HostRegistry::new();
+    hosts.register_host_fn("gpio", "level", |pin: i64| -> i64 { pin * 2 });
+    let mut program = load_program(&bytes, &hosts).expect("the declaration binds");
+    program.run();
+    assert_eq!(
+        program.call("go", &[]).expect("go is callable"),
+        Value::Int(42)
+    );
+}

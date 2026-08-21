@@ -16,6 +16,8 @@
 
 use std::borrow::Cow;
 
+use lumen_core::warn_line;
+
 /// The sentinel module id an app imports to pull in the entire Lumen host
 /// surface: `import "lumen.cdl";`.
 pub const PRELUDE_MODULE: &str = "lumen.cdl";
@@ -152,10 +154,16 @@ pub fn line_col(source: &str, byte: usize) -> (u32, u32) {
 /// onto one line; `wrappers` are `(namespace, source)` pairs written by the
 /// plugin that registered the namespace.
 ///
-/// A namespace the author already declares is skipped: the check is a text
-/// search for `host "<ns>"`, which is what a hand-written block looks like, so
-/// a source carrying its own declarations compiles exactly as it did before
-/// and an app built for the artifact path keeps working.
+/// A namespace already declared is skipped: the check is a text search for
+/// `host "<ns>"`, which is what a hand-written block looks like, so a source
+/// carrying its own declarations compiles exactly as it did before and an app
+/// built for the artifact path keeps working.
+///
+/// The search runs over the source with the prelude already spliced in, so the
+/// namespaces the runtime owns (`window`, `document`, `history`) count as
+/// declared for an app that imports it. A second block for one of those would
+/// displace the prelude's, and every runtime function in it would fail to
+/// resolve at run time while the program still compiled.
 #[must_use]
 pub fn prepare(
     source: &str,
@@ -171,7 +179,17 @@ pub fn prepare(
     let mut line = 0u32;
     let mut spans = Vec::new();
     for (ns, block) in blocks {
-        if declares_namespace(source, ns) {
+        if declares_namespace(&resolved, ns) {
+            // Declared by the author is the supported case and says nothing.
+            // Declared only once the prelude is in means an embedder took a
+            // namespace the runtime owns, and its functions are unreachable.
+            if !declares_namespace(source, ns) {
+                warn_line!(
+                    "lumen-script-candela: `{ns}` is the runtime's own namespace, so the \
+                     functions registered under it are not declared for the app; register them \
+                     under a namespace of your own"
+                );
+            }
             continue;
         }
         prefix.push_str(block);

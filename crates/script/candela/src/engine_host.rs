@@ -188,6 +188,36 @@ fn lmn_expander(
     }
 }
 
+/// Whether candela can compile the declaration this function would be given.
+///
+/// [`CandelaHost::namespace_blocks`] writes a `host "<ns>" { .. }` block for
+/// every namespace an embedder registered under and
+/// [`prelude::prepare`] puts it in front of the app's own source. A namespace
+/// or a name the grammar rejects (a hyphen, a quote, a keyword, the empty
+/// string) fails that compile, and the app author reads the error against a
+/// line they never wrote. Compiling the one block on its own answers the
+/// question before anything is bound.
+///
+/// The scratch engine carries no Lumen builtins; the block names one function
+/// and it is registered here, so nothing else has to resolve.
+fn check_declarable(f: &ScriptFn) -> Result<(), ScriptError> {
+    declare::check_inferred_return(f).map_err(ScriptError::compile)?;
+    let ns = declare::namespace(f);
+    let block = declare::one_line_block(ns, std::slice::from_ref(f));
+    let scratch = Registries::default();
+    let mut engine = candela::Engine::new();
+    register_script_fn(&mut engine, &scratch, f);
+    engine
+        .compile(&format!("{block}\nfn main() {{}}\n"), "<declaration>")
+        .map(|_| ())
+        .map_err(|d| {
+            ScriptError::compile(format!(
+                "candela cannot declare `{}::{}`: {}",
+                ns, f.name, d.message
+            ))
+        })
+}
+
 fn build_engine(r: &Registries) -> candela::Engine {
     let mut engine = candela::Engine::new();
     register_lumen_host_fns(&mut engine, r);
@@ -404,6 +434,11 @@ impl ScriptHost for CandelaHost {
     }
 
     fn register_script_fn(&mut self, f: &ScriptFn) -> Result<(), ScriptError> {
+        // The host puts a declaration for this function in front of the app's
+        // source, so a name candela cannot spell there takes the whole program
+        // down with it. Refusing the registration costs the app that one
+        // function instead of its whole script.
+        check_declarable(f)?;
         // candela host fns are registered before `compile`; the variadic
         // registration hands the closure a `&[Value]` slice of any length, so
         // one registration serves any arity (like the Lua host). The script

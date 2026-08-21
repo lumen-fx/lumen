@@ -46,6 +46,59 @@ pub(crate) fn declaration(f: &ScriptFn) -> String {
     }
 }
 
+/// The return type candela infers for any call whose function name is this,
+/// whatever namespace the call sits in.
+///
+/// candela's typer answers from its own table before it reads the declaration:
+/// `Expr::FunctionCall` in the compiler's `type_system.rs` matches on
+/// `namespace.last()`, which is the bare function name. A host function of one
+/// of these names is therefore compiled against the type below rather than the
+/// one it declared, and the value it returns meets an opcode expecting the
+/// other. Assigning it reports a type error; using it arithmetically trips an
+/// assertion inside the VM and takes the process with it.
+///
+/// The list is upstream's, mirrored because there is no way to ask for it and
+/// no way to detect the mistyping by compiling: candela accepts the
+/// declaration and only disagrees once the value is live.
+fn inferred_return(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "print" | "write" | "append" | "delete" | "delete_dir" => "null",
+        "type" | "str" | "input" | "read" | "json_stringify" | "as_str" => "string",
+        "float" | "as_float" => "float",
+        "int" | "the_answer" | "as_int" => "int",
+        "bool" | "exists" | "as_bool" | "is_int" | "is_float" | "is_str" | "is_bool"
+        | "is_list" | "is_map" | "is_null" => "bool",
+        "range" => "int[]",
+        "argv" => "string[]",
+        "as_list" => "any[]",
+        "as_map" => "{string: any}",
+        "json_parse" => "any",
+        _ => return None,
+    })
+}
+
+/// Whether candela will type a call to `f` as `f` declares it.
+///
+/// A name from [`inferred_return`]'s list is only usable when the type it
+/// forces is the one the function returns anyway; `read` giving back a string
+/// agrees, `read` giving back an int does not.
+pub(crate) fn check_inferred_return(f: &ScriptFn) -> Result<(), String> {
+    let Some(inferred) = inferred_return(&f.name) else {
+        return Ok(());
+    };
+    let declared = ty_name(&f.sig.ret);
+    if declared == inferred {
+        return Ok(());
+    }
+    Err(format!(
+        "candela types every call named `{name}` as {inferred}, whatever namespace it sits in, so \
+         `{ns}::{name}` returning {declared} would be compiled against the wrong type and fail \
+         once it is used; give it a name candela's own library does not take",
+        name = f.name,
+        ns = namespace(f),
+    ))
+}
+
 /// The namespace `f` is declared under, or `None` when it is not a host
 /// function candela reaches by namespace.
 pub(crate) fn namespace(f: &ScriptFn) -> &str {
