@@ -656,15 +656,9 @@ unsafe extern "C" fn make_kind(
     unsafe { *out = value };
 }
 
-/// Record a description of the first argument, and deliberately leave
-/// `out` alone: the caller must see unit.
-unsafe extern "C" fn take_value(
-    _out: *mut LumenValue,
-    argc: c_int,
-    argv: *const LumenValue,
-    _ud: *mut c_void,
-) {
-    let described = match args_of(argc, argv).first() {
+/// Describe the first argument of a call, for a test to compare against.
+fn describe_first(argc: c_int, argv: *const LumenValue) -> String {
+    match args_of(argc, argv).first() {
         None => "missing".to_owned(),
         Some(v) => unsafe {
             match v.kind {
@@ -679,8 +673,18 @@ unsafe extern "C" fn take_value(
                 LumenKind::Map => "map".to_owned(),
             }
         },
-    };
-    OBSERVED.lock().unwrap().push(described);
+    }
+}
+
+/// Record a description of the first argument, and deliberately leave
+/// `out` alone: the caller must see unit.
+unsafe extern "C" fn take_value(
+    _out: *mut LumenValue,
+    argc: c_int,
+    argv: *const LumenValue,
+    _ud: *mut c_void,
+) {
+    OBSERVED.lock().unwrap().push(describe_first(argc, argv));
 }
 
 #[test]
@@ -741,4 +745,121 @@ fn app_free_on_unrun_handle_is_safe() {
     assert!(!handle.is_null());
     unsafe { lumen_app_free(handle) };
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// -- Wider callbacks, and a map coming back into each language --------------
+
+/// The arguments a wide callback was handed, rendered in order.
+static WIDE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// What the map test's callback read. Its own slot, because the tests here run
+/// in parallel and only the app run itself is serialized.
+static MAP_SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// The `take_value` of the map test, writing to that test's own slot.
+unsafe extern "C" fn take_into_map_seen(
+    _out: *mut LumenValue,
+    argc: c_int,
+    argv: *const LumenValue,
+    _ud: *mut c_void,
+) {
+    MAP_SEEN.lock().unwrap().push(describe_first(argc, argv));
+}
+
+/// Record every argument, so a call that drops or reorders one is visible.
+unsafe extern "C" fn record_all(
+    out: *mut LumenValue,
+    argc: c_int,
+    argv: *const LumenValue,
+    _ud: *mut c_void,
+) {
+    let rendered: Vec<String> = args_of(argc, argv)
+        .iter()
+        .map(|v| unsafe {
+            match v.kind {
+                LumenKind::Int => format!("{}", v.as_.integer),
+                LumenKind::String => CStr::from_ptr(v.as_.string).to_string_lossy().into_owned(),
+                LumenKind::Bool => format!("{}", v.as_.boolean != 0),
+                other => format!("{other:?}"),
+            }
+        })
+        .collect();
+    WIDE.lock().unwrap().push(rendered.join(","));
+    unsafe { *out = int_value(rendered.len() as i64) };
+}
+
+/// An exposed callback takes more arguments than the old command channel did.
+///
+/// That channel capped at four. Eight is the arity Rhai binds a variadic
+/// signature up to, so it is the widest call the C ABI has to carry.
+#[test]
+fn an_exposed_callback_takes_eight_arguments() {
+    WIDE.lock().unwrap().clear();
+    let dir = write_script_fixture(
+        "wide",
+        "main.rhai",
+        "fn on_start() {\n    native_wide(1, 2, 3, 4, 5, 6, 7, 8);\n}\n",
+    );
+    run_exposed_many(&dir, &[("native_wide", 8, record_all)]);
+
+    assert_eq!(
+        WIDE.lock().unwrap().as_slice(),
+        ["1,2,3,4,5,6,7,8".to_owned()],
+        "every argument arrives, in order"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A map written through `out` is read back as a map by each language.
+///
+/// `native_make(6)` returns a one-entry map. Each script reads the entry and
+/// feeds it to `native_take`, so what is asserted is the value the script got
+/// out of the map rather than the fact that a map arrived.
+#[test]
+fn an_exposed_callback_returns_a_map_every_language_reads() {
+    for (name, script_name, script) in [
+        (
+            "map_rhai",
+            "main.rhai",
+            "fn on_start() {\n    let m = native_make(6);\n    native_take(m.n);\n}\n".to_owned(),
+        ),
+        (
+            "map_lua",
+            "main.lua",
+            "function on_start()\n    local m = native_make(6)\n    native_take(m.n)\nend\n"
+                .to_owned(),
+        ),
+        (
+            "map_candela",
+            "main.cdl",
+            // candela reaches an exposed function through the `native`
+            // namespace, and a map arrives as a dynamic value it downcasts.
+            "host \"native\" {\n    any make(...);\n    any take(...);\n}\n\
+             fn on_start() {\n    let m = as_map(native::make(6));\n    native::take(m.get(\"n\"));\n}\n\
+             fn main() {}\n"
+                .to_owned(),
+        ),
+    ] {
+        MAP_SEEN.lock().unwrap().clear();
+        let dir = write_script_fixture(name, script_name, &script);
+        let exported = if script_name == "main.cdl" {
+            [
+                ("make", 1, make_kind as LumenFn),
+                ("take", 1, take_into_map_seen),
+            ]
+        } else {
+            [
+                ("native_make", 1, make_kind as LumenFn),
+                ("native_take", 1, take_into_map_seen),
+            ]
+        };
+        run_exposed_many(&dir, &exported);
+
+        assert_eq!(
+            MAP_SEEN.lock().unwrap().as_slice(),
+            ["int:9".to_owned()],
+            "{name}: the script read the map entry the callback wrote"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
