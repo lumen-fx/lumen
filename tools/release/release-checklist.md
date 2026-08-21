@@ -52,11 +52,12 @@ checklist.
 
 1. Make sure `main` is green in the `ci` workflow.
 2. Check that `version` in the workspace `Cargo.toml` is the version you are
-   about to tag. It usually is already, because step 6 bumps it as soon as the
-   previous release is tagged. If it is not, set it, commit, push, and wait for
-   green. The tag has to match this value: the release workflow compares them
-   first and publishes nothing if they differ, because the MSI's version, the
-   install receipt, and `lumenc --version` all read from these two places.
+   about to tag. It usually is already, because the previous release opened a
+   pull request that set it (step 6). If it is not, run
+   `tools/release/bump-version.py <version>`, commit, push, and wait for green.
+   The tag has to match this value: the release workflow compares them first
+   and publishes nothing if they differ, because the MSI's version, the install
+   receipt, and `lumenc --version` all read from these two places.
 3. Tag and push:
 
    ```sh
@@ -97,10 +98,17 @@ checklist.
 
 5. Work through [Verify](#verify) against the published release.
 
-6. Bump `version` in the workspace `Cargo.toml` to the next number and push
-   that. From here `main` carries a version with no release behind it, which
+6. Merge the pull request the release opened. It is titled `chore: set the
+   workspace version to X.Y.Z+1`, comes from a branch named
+   `bump-version-X.Y.Z+1`, and moves every place the tree writes its version
+   down. From there `main` carries a version with no release behind it, which
    is the point: `main` builds identify themselves as the version they will
    become, and step 2 of the next release has nothing left to do.
+
+   It needs one click before its checks start. GitHub holds the workflow runs
+   for a pull request that Actions opened until someone with write access picks
+   "Approve workflows to run" in the merge box, which is what stops a workflow
+   from setting itself off again.
 
    This is safe because nothing turns a version number into a download
    address. Every version-keyed lookup asks the releases page what exists:
@@ -109,6 +117,33 @@ checklist.
    compares against `releases/latest`, and `crates/lumenc/build.rs` confirms
    the tag it needs is published before fetching source from it. A number with
    no tag behind it resolves to nothing and says so.
+
+   The bump is always the next patch, whatever kind of release the tag was.
+   To go somewhere else, run `tools/release/bump-version.py 0.2.0` on that
+   branch and push. The script takes the version to set and moves every place
+   the version is written out: the workspace package, each internal dependency
+   pin, `sdk/rust-dylib` (outside the workspace, so it cannot inherit one),
+   `Cargo.lock`, and the Python SDK. It writes nothing at all if one of those
+   comes out unchanged, so a file that grew a version literal nobody told it
+   about stops the bump instead of shipping a skew.
+
+   If no pull request appears, look at the `open the version bump` job in the
+   release run. It reports what it decided and does nothing when the decision
+   is not its to make:
+
+   - The job never ran, because the release job did not finish. Fix what
+     failed and re-run the workflow; the bump follows the release, and a
+     release that published only some of its archives still reaches it.
+   - `is not a plain vX.Y.Z tag`. Prereleases and other tag shapes are left
+     alone. Run `tools/release/bump-version.py` yourself.
+   - `main is at N, at or past ...`. The bump already landed, or this is a
+     re-run of an older release. Nothing to do.
+   - `a file that always moves did not`. A version literal changed shape, or
+     one appeared somewhere new. The job names the file; teach
+     `bump-version.py` about it and bump by hand this once.
+
+   Re-running a release is safe here too: the job commits to the same branch
+   and adds nothing to a pull request that is already open.
 
 ## Why liblumen goes in bin/, not lib/
 
@@ -216,8 +251,9 @@ release:
 
 Every workspace crate shares the `[workspace.package]` version, and each
 internal dependency asks for that exact version, so a version bump means
-updating those dependency lines too. The script checks that they agree and
-refuses to publish when they do not.
+updating those dependency lines too. `tools/release/bump-version.py` moves them
+with it, and `publish-crates.py` checks that they agree and refuses to publish
+when they do not.
 
 The setup the workflow needs (a `CRATES_IO_TOKEN` secret, a PyPI trusted
 publisher, a `PYPI_PUBLISH_ENABLED` variable) is listed at the top of
