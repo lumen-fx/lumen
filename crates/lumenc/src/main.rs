@@ -3,10 +3,10 @@
 //! Subcommands dispatch into either `lumenc` lib functions or `lumenc::mcp_cli` handlers.
 //! `--help` prints [`USAGE`]; `--version` prints the `CARGO_PKG_VERSION`.
 
-mod update_check;
-
 use std::path::PathBuf;
 use std::process::ExitCode;
+
+use lumenc::update_check;
 
 fn main() -> ExitCode {
     // Earliest reachable instant, used only when `LUMEN_BOOT_TRACE` is set:
