@@ -251,8 +251,8 @@ now_ms()
 native::now_ms()
 ```
 
-One that chose a namespace is reached through it: `gpio::read(21)` in Rhai and
-candela, `gpio.read(21)` in Lua. candela needs no `host` block for either; the
+One that chose a namespace is reached through it: `gpio::level(21)` in Rhai and
+candela, `gpio.level(21)` in Lua. candela needs no `host` block for either; the
 declarations are written for you from what was registered. A script you compile
 ahead of time to an artifact is the exception, and declares the namespace itself.
 

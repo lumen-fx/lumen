@@ -61,7 +61,7 @@ struct GpioPlugin {
 impl Plugin for GpioPlugin {
     fn build(self, app: &mut EcsApp) {
         app.add_script_fn(
-            ScriptFn::new("read")
+            ScriptFn::new("level")
                 .ns(ScriptNs::Named("gpio".to_string()))
                 .param("pin", ScriptTy::Int)
                 .build(|cx| {
@@ -236,11 +236,11 @@ fn main() {}
 fn a_plugin_namespace_is_callable_from_every_language() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     for (engine, source) in [
-        ("rhai", "fn on_start() { gpio::read(21); }"),
-        ("lua", "function on_start() gpio.read(21) end"),
+        ("rhai", "fn on_start() { gpio::level(21); }"),
+        ("lua", "function on_start() gpio.level(21) end"),
         (
             "candela",
-            "fn on_start() { let v = gpio::read(21); }\nfn main() {}\n",
+            "fn on_start() { let v = gpio::level(21); }\nfn main() {}\n",
         ),
     ] {
         let app = app_with(engine, source, GpioPlugin { wrapper: None });
@@ -259,14 +259,14 @@ fn a_candela_plugin_wrapper_offers_the_method_form() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let app = app_with(
         "candela",
-        "fn on_start() { let v = pin(21).read(); }\nfn main() {}\n",
+        "fn on_start() { let v = pin(21).level(); }\nfn main() {}\n",
         GpioPlugin {
             wrapper: Some(
                 r#"
 struct Pin { number: int }
 fn pin(number) { return Pin { number: number }; }
 impl Pin {
-    fn read(self) { return gpio::read(self.number); }
+    fn level(self) { return gpio::level(self.number); }
 }
 "#,
             ),

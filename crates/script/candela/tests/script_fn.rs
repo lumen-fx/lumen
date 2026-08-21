@@ -28,7 +28,7 @@ fn joining_script_fn() -> ScriptFn {
         })
 }
 
-/// The pin number a `gpio::read` call passed.
+/// The pin number a `gpio::level` call passed.
 fn pin_number(args: &[ScriptValue]) -> i64 {
     match args.first() {
         Some(ScriptValue::I64(n)) => *n,
@@ -192,13 +192,13 @@ fn a_registered_fn_is_declared_by_the_host() {
 fn a_named_namespace_is_declared_by_the_host() {
     let mut host = CandelaHost::new();
     host.register_script_fn(
-        &ScriptFn::value("read", 1, |args| ScriptValue::I64(pin_number(args) * 2))
+        &ScriptFn::value("level", 1, |args| ScriptValue::I64(pin_number(args) * 2))
             .with_ns(ScriptNs::Named("gpio".to_owned())),
     )
     .expect("register");
 
     host.load(
-        "fn go() { return gpio::read(21); }\nfn main() {}\n",
+        "fn go() { return gpio::level(21); }\nfn main() {}\n",
         "ns.cdl",
     )
     .expect("the named namespace is declared for the app");
@@ -268,7 +268,7 @@ fn the_synthesized_blocks_do_not_shift_line_numbers() {
 fn a_plugin_wrapper_is_compiled_ahead_of_the_app() {
     let mut host = CandelaHost::new();
     host.register_script_fn(
-        &ScriptFn::value("read", 1, |args| ScriptValue::I64(pin_number(args) * 2))
+        &ScriptFn::value("level", 1, |args| ScriptValue::I64(pin_number(args) * 2))
             .with_ns(ScriptNs::Named("gpio".to_owned())),
     )
     .expect("register");
@@ -278,13 +278,13 @@ fn a_plugin_wrapper_is_compiled_ahead_of_the_app() {
 struct Pin { number: int }
 fn pin(number) { return Pin { number: number }; }
 impl Pin {
-    fn read(self) { return gpio::read(self.number); }
+    fn level(self) { return gpio::level(self.number); }
 }
 "#,
     );
 
     host.load(
-        "fn go() { return pin(21).read(); }\nfn main() {}\n",
+        "fn go() { return pin(21).level(); }\nfn main() {}\n",
         "sugar.cdl",
     )
     .expect("the wrapper compiles ahead of the app");
@@ -300,7 +300,7 @@ impl Pin {
 fn an_error_in_a_wrapper_names_the_plugin() {
     let mut host = CandelaHost::new();
     host.register_script_fn(
-        &ScriptFn::value("read", 1, |_| ScriptValue::I64(0))
+        &ScriptFn::value("level", 1, |_| ScriptValue::I64(0))
             .with_ns(ScriptNs::Named("gpio".to_owned())),
     )
     .expect("register");

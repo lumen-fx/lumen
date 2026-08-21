@@ -537,7 +537,7 @@ Two more write directly to the element tree by id, without a node handle:
 
 Functions an embedder or a plugin registers appear as bare globals here, and one
 registered under a namespace of its own appears as a global table:
-`gpio.read(21)`. A function registered with declared parameter types raises on a
+`gpio.level(21)`. A function registered with declared parameter types raises on a
 call whose arguments do not match; an untyped one takes whatever it is passed.
 See [FFI and SDKs](ffi.md).
 
