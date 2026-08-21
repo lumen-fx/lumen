@@ -1749,9 +1749,9 @@ mod tests {
     /// The archive a release publishes and the code that unpacks it are
     /// written in two different places, and a page that loads nothing is what
     /// a disagreement between them looks like. Build the archive the way
-    /// `.github/scripts/build-web-runtime.sh` and `release.yml` do - the two
-    /// files at the root, under the names a site refers to them by - and take
-    /// it apart with the code a fetch runs.
+    /// `.github/scripts/build-web-runtime.sh` and `build-toolchain.yml` do -
+    /// the two files at the root, under the names a site refers to them by -
+    /// and take it apart with the code a fetch runs.
     /// A `.tar.gz` shaped like the one a release publishes: the members at the
     /// root, under the names they are asked for by.
     fn tar_gz(members: &[(&str, &[u8])]) -> Vec<u8> {

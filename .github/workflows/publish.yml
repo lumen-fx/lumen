@@ -69,6 +69,11 @@ jobs:
   # the jobs below gate on them.
   preflight:
     name: preconditions
+    # The registries take released versions only. nightly.yml republishes main
+    # every night as a prerelease on one rolling tag, and every job below needs
+    # this one, so skipping here skips the workflow. publish-packages.yml makes
+    # the same call for the package managers.
+    if: github.event.release.prerelease != true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

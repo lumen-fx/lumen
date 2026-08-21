@@ -24,6 +24,10 @@ on:
 
 jobs:
   dispatch:
+    # A prerelease documents nothing a visitor can install. nightly.yml
+    # publishes one every night, and rebuilding the site for each of them would
+    # say the docs had changed when they had not.
+    if: github.event.release.prerelease != true
     runs-on: ubuntu-latest
     steps:
       - name: Send product-updated to the site

@@ -3,9 +3,9 @@
 # module script that instantiates it.
 #
 # Two workflows want this pair. ci.yml measures it and runs the browser suite
-# against it; release.yml packs it into lumen-web.tar.gz for `lumenc web` to
-# find. They want the same two files built the same way, so the recipe lives
-# here and both call it.
+# against it; build-toolchain.yml packs it into lumen-web.tar.gz for `lumenc
+# web` to find. They want the same two files built the same way, so the recipe
+# lives here and both call it.
 #
 # The pair comes out under the names a site refers to them by, because that is
 # what a toolchain ships and what `lumenc web` looks for. The page tells the

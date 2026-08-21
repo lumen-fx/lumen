@@ -1,10 +1,10 @@
 # Release checklist
 
-How to cut a Lumen release. `.github/workflows/release.yml` builds and
-publishes it; a tag push is the only trigger, and no target has a manual
-upload step. Asset names are load-bearing, because `tools/release/install.sh`
-looks them up verbatim, so the workflow generates them rather than anyone
-typing them.
+How to cut a Lumen release. `.github/workflows/build-toolchain.yml` builds the
+assets and `.github/workflows/release.yml` publishes them; a tag push is the
+only trigger, and no target has a manual upload step. Asset names are
+load-bearing, because `tools/release/install.sh` looks them up verbatim, so the
+workflow generates them rather than anyone typing them.
 
 | Asset                          | Built by                              |
 | ------------------------------- | -------------------------------------- |
@@ -352,8 +352,8 @@ update itself out from under a package manager that owns the version.
   upgrades to a second version and confirms Windows records one product
   rather than two, then uninstalls and confirms nothing is left behind. It
   runs on every pull request that touches `tools/release/msi/`,
-  `msi-smoke.yml`, or `release.yml`, and it can be started by hand from the
-  Actions tab.
+  `msi-smoke.yml`, or `build-toolchain.yml`, and it can be started by hand
+  from the Actions tab.
 
 ## Windows checks that need a person
 
@@ -371,6 +371,52 @@ real desktop.
   the process exits and is the one most likely to break silently.
 
 The same two checks cover the winget package, which installs this `.msi`.
+
+## Nightly builds
+
+`.github/workflows/nightly.yml` runs every night and publishes a build of
+`main`. It calls the same `build-toolchain.yml` a release does, so a green
+nightly is evidence the next release will build, and a nightly that breaks on a
+day nobody pushed anything points at a runner image, a system dependency, or an
+upstream crate rather than at the workspace.
+
+It publishes onto one rolling tag, `nightly`, force-moved to the commit it
+built, with the assets clobbered onto the prerelease already sitting there.
+Download links never change and only the newest build is reachable. A run where
+one build leg failed publishes the rest and drops the leftover asset for the
+target that failed, because `sha256sums.txt` covers that run alone and
+`install.sh` refuses anything it cannot verify. A run where every leg failed
+publishes nothing and leaves the tag where it was.
+
+Two properties keep the nightly out of the release channel, and both are worth
+checking if you edit either workflow:
+
+- The tag is `nightly`, with no `v`. `release.yml` fires on `push: tags: v*`,
+  and its last job walks the version on `main` forward, so a `v`-prefixed
+  nightly tag would cut a release and bump the version every night.
+- The release is a prerelease, and the flag is set on every run rather than
+  only when the release is created. Every version-keyed lookup in the product
+  resolves through the `releases/latest` redirect, which skips prereleases, so a
+  nightly that ever lands as an ordinary release becomes the version
+  `install.sh` installs and the update check offers.
+
+The nightly publishes no Windows installer. The MSI's product GUIDs and version
+are what Windows identifies an installation by, and a nightly stamped with a
+version a release also carries would upgrade, replace, or block a real install
+through those same GUIDs. Giving the nightly its own product identity means new
+fixed GUIDs, a second entry in Installed apps, and two products appending to
+`PATH`; that is a packaging decision, not something the nightly needs. The
+portable zip carries no receipt, so a nightly unpacked from it never claims to
+be installed and never checks for updates.
+
+Start a nightly by hand from the Actions tab when you want one outside the
+schedule.
+
+Every workflow that runs off a published release skips a prerelease, so a
+nightly reaches none of the channels a release does: `publish.yml` holds back
+crates.io and PyPI, `publish-packages.yml` the package managers,
+`publish-extensions.yml` the editor marketplaces, and `site-rebuild.yml` the
+docs site. Add the same guard to anything new that triggers on a release.
 
 ## Current limitations
 

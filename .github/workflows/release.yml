@@ -2,76 +2,30 @@ name: release
 
 # Publishes the Lumen toolchain (lumenc + liblumen + the app launcher stub) to
 # a GitHub release, in the exact shape tools/release/install.sh expects: one
-# lumen-<target>.tar.gz per Unix target and, for Windows,
-# lumen-windows-x86_64.msi as the install channel plus
-# lumen-windows-x86_64.zip as the portable archive. Every one of them holds
-# bin/lumenc, the liblumen shared library, and bin/lumen-launcher; the Unix
-# archives also carry the shell completions under share/. That layout comes
-# from three places, not from guessing:
-#
-#   - install.sh requires a top-level bin/ directory in the archive (its
-#     unpack step fails otherwise) and looks up the asset by the exact name
-#     lumen-<target>.tar.gz / lumen-windows-x86_64.msi.
-#   - crates/lumenc/src/loader.rs dlopens liblumen from next to its own executable
-#     (or an LUMEN_LIB_DIR override, or the platform loader's default
-#     search path) - never from a sibling lib/ directory. So the shared
-#     library goes in bin/, next to lumenc, or a normal `~/.lumen` install
-#     would put a lumenc on PATH that cannot find its own runtime.
-#   - crates/lumenc/src/package_cli.rs looks for the launcher stub in the same place
-#     it looks for liblumen, so `lumenc package` on an installed toolchain
-#     finds it without being told where it is. An archive without the stub
-#     leaves that command with nothing to build an app executable from.
-#
-# The release carries one asset that belongs to no platform: lumen-web.tar.gz,
-# holding the browser runtime `lumenc web` copies beside the pages it emits.
-# WebAssembly is the same everywhere, so it is built once and downloaded by
-# every `lumenc` that emits a site, into a cache keyed on the version rather
-# than on a target. crates/lumenc/src/package_cli.rs looks for it under that
-# exact name, so a release without it leaves `lumenc web` with nothing to give
-# a page to load.
+# lumen-<target>.tar.gz per Unix target, lumen-windows-x86_64.msi as the
+# Windows install channel plus lumen-windows-x86_64.zip as the portable
+# archive, and lumen-web.tar.gz for the browser runtime. build-toolchain.yml
+# builds every one of them and explains why each archive holds what it holds;
+# this workflow decides when that happens and where the result lands.
 #
 # The release carries one more asset than the archives: sha256sums.txt, in
 # sha256sum's own format, covering every asset published above. install.sh
 # downloads it first, and refuses to install anything whose download does not
 # match the line for it, so a release without this file is a release nobody
-# can install from. Generating it in the publish job, from the artifacts as
-# they are about to be uploaded, is what keeps it in step with a partial
-# release where a build leg failed.
+# can install from. .github/scripts/collect-release-assets.sh writes it in the
+# publish job, from the artifacts as they are about to be uploaded, which is
+# what keeps it in step with a partial release where a build leg failed.
 #
 # The MSI installs one extra file the zip does not carry: the receipt at
 # share/lumen/lumen.receipt. That file is what marks a copy as installed, and
 # an installed copy is the only kind that checks for updates. See
 # tools/release/msi/lumen.wxs.
 #
-# lumenc does not link lumen at compile time (that is the whole point of
-# the dlopen seam), so it and liblumen are two separate `cargo build`
-# invocations, both under the workspace's [profile.release] (opt-level "s",
-# fat LTO, strip = "symbols" - already stripped, no separate strip step
-# needed here).
-#
-# Target coverage - every leg here builds NATIVELY for its own target, no
-# cross-compilation:
-#
-#   linux-x86_64    ubuntu-latest, same image as ci.yml
-#   linux-aarch64   ubuntu-24.04-arm, GitHub's hosted Arm64 Linux runner.
-#                   ci.yml's matrix has no aarch64 leg, so this is the only
-#                   place this target gets built at all; unlike x86_64 it is
-#                   not proven by a green CI run first.
-#   macos-aarch64   macos-latest (Apple Silicon), same image as ci.yml
-#   macos-x86_64    macos-26-intel. ci.yml has no Intel Mac leg either;
-#                   this label is what lumen-fx/candela's own release
-#                   workflow uses today, which is the freshest evidence
-#                   available that it is a real, current runner image.
-#   windows-x86_64  windows-latest, same image as ci.yml
-#
-# install.sh also accepts a windows-aarch64 target in principle (it derives
-# the target from `uname`/platform detection generically), but there is no
-# GitHub-hosted Windows-on-Arm runner to build it on, so it is not produced.
-# install.sh already handles a missing Windows asset gracefully (it prints
-# the release page link instead of failing).
-#
 # Triggers on any vX.Y.Z tag push. The repository starts with no releases
 # and no tags, so the first run of this workflow is also the first release.
+# nightly.yml builds the same artifacts every night and publishes them under a
+# rolling `nightly` tag; that tag does not match the pattern below, so a
+# nightly never cuts a release or moves the version on main.
 #
 # The last job opens a pull request setting the workspace version to the next
 # patch, so tagging is the only thing cutting a release asks anyone to type and
@@ -82,9 +36,9 @@ on:
     tags:
       - "v*"
 
-# contents: write is only needed by the release job, which is where it is
-# granted; the build matrix only checks out and compiles, so it keeps the
-# default read-only token.
+# contents: write is granted per job, to the two jobs that write: the one that
+# publishes the release and the one that opens the bump. build-toolchain.yml
+# declares its own read-only token for the builds.
 permissions:
   contents: read
 
@@ -94,10 +48,6 @@ permissions:
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
-
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: 0
 
 jobs:
   # The tag is the version, and three separate things read it: the MSI's
@@ -110,12 +60,15 @@ jobs:
     name: tag matches the workspace version
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      version: ${{ steps.compare.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: false
 
       - name: Compare the tag with Cargo.toml
+        id: compare
         run: |
           tag="${GITHUB_REF_NAME#v}"
           crate="$(awk -F'"' '
@@ -134,199 +87,23 @@ jobs:
             echo "v$crate) and push again." >&2
             exit 1
           fi
+          echo "version=$crate" >> "$GITHUB_OUTPUT"
           echo "tag ${GITHUB_REF_NAME} matches the workspace version $crate"
 
+  # Every archive on the release, plus the Windows installer stamped with the
+  # version the job above agreed on.
   build:
-    name: build (${{ matrix.target }})
+    name: build
     needs: version
-    runs-on: ${{ matrix.os }}
-    # The release profile (fat LTO, one codegen unit) is slower to build
-    # than the dev-ish builds in ci.yml's test job, hence the longer budget.
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: linux-x86_64
-            os: ubuntu-latest
-            libname: liblumen.so
-          - target: linux-aarch64
-            os: ubuntu-24.04-arm
-            libname: liblumen.so
-          - target: macos-aarch64
-            os: macos-latest
-            libname: liblumen.dylib
-          - target: macos-x86_64
-            os: macos-26-intel
-            libname: liblumen.dylib
-          - target: windows-x86_64
-            os: windows-latest
-            libname: lumen.dll
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: false
-
-      - name: Install pinned toolchain
-        run: |
-          rustup show active-toolchain
-          rustc --version
-
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: .github/scripts/linux-deps.sh
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: release-${{ matrix.target }}
-
-      # Three crates, three artifacts: the lumenc binary, the liblumen shared library
-      # (crate lumen), and the launcher stub `lumenc package` turns into a
-      # shipped app. None of them depends on another at compile time - lumenc
-      # and the stub both dlopen liblumen at run time - so each is its own
-      # build.
-      - name: Build lumenc
-        run: cargo build --release -p lumenc
-        env:
-          # The engine is fetched and built by lumenc's build script only when
-          # it is installed from outside a checkout; say so explicitly here so
-          # a workspace change can never turn a release build into a download.
-          LUMEN_SKIP_ENGINE_BUILD: "1"
-
-      - name: Build liblumen (the shared engine)
-        run: cargo build --release -p lumen
-
-      - name: Build the app launcher stub
-        run: cargo build --release -p lumen-launcher
-
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          mkdir -p dist/bin
-          cp target/release/lumenc dist/bin/
-          cp target/release/${{ matrix.libname }} dist/bin/
-          cp target/release/lumen-launcher dist/bin/
-          # Shell completions, each under the directory its shell searches, so
-          # a prefix on the usual search paths picks them up as installed. The
-          # same scripts are embedded in lumenc (`lumenc completions <shell>`)
-          # for anyone who installed some other way.
-          mkdir -p dist/share/bash-completion/completions \
-                   dist/share/zsh/site-functions \
-                   dist/share/fish/vendor_completions.d
-          cp crates/lumenc/completions/lumenc.bash dist/share/bash-completion/completions/lumenc
-          cp crates/lumenc/completions/_lumenc dist/share/zsh/site-functions/_lumenc
-          cp crates/lumenc/completions/lumenc.fish dist/share/fish/vendor_completions.d/lumenc.fish
-          tar -czf lumen-${{ matrix.target }}.tar.gz -C dist .
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist\bin | Out-Null
-          Copy-Item target\release\lumenc.exe dist\bin\
-          Copy-Item target\release\${{ matrix.libname }} dist\bin\
-          Copy-Item target\release\lumen-launcher.exe dist\bin\
-          Compress-Archive -Path dist\* -DestinationPath lumen-${{ matrix.target }}.zip
-
-      # The MSI payload is staged separately from dist\, and only after the
-      # zip is closed, because the two differ by one file. The MSI installs a
-      # receipt, which is what marks a copy as installed and turns the daily
-      # update check on; the portable zip must not carry one, or a
-      # hand-extracted copy would start offering to MSI-install a second Lumen
-      # beside itself.
-      - name: Stage the MSI payload (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $version = "${{ github.ref_name }}" -replace '^v', ''
-          New-Item -ItemType Directory -Force -Path msi-stage\bin, msi-stage\share\lumen | Out-Null
-          Copy-Item dist\bin\* msi-stage\bin\
-          # LF line endings and no BOM: lumenc reads this with a plain line
-          # split, and a BOM would land inside the first key.
-          $receipt = "version $version`ntarget windows-x86_64`ninstaller msi`n"
-          [IO.File]::WriteAllText("$PWD\msi-stage\share\lumen\lumen.receipt", $receipt, [Text.Encoding]::ASCII)
-          Get-Content msi-stage\share\lumen\lumen.receipt
-
-      - name: Install WiX (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          dotnet tool install --global wix --version 6.0.1
-          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Build the MSI (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $version = "${{ github.ref_name }}" -replace '^v', ''
-          tools\release\msi\build-msi.ps1 `
-            -Version $version `
-            -StageDir "$PWD\msi-stage" `
-            -OutFile "$PWD\lumen-${{ matrix.target }}.msi"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: lumen-${{ matrix.target }}
-          path: |
-            lumen-${{ matrix.target }}.tar.gz
-            lumen-${{ matrix.target }}.zip
-            lumen-${{ matrix.target }}.msi
-          if-no-files-found: error
-          retention-days: 1
-
-  # One build for every platform, which is why the browser runtime is a job of
-  # its own rather than a leg of the matrix above.
-  #
-  # The two files sit at the root of the archive. Nothing unpacks this one into
-  # an install prefix: `lumenc` picks the members it wants out by name and
-  # ignores their directories (crates/lumenc/src/package_cli.rs), so a flat
-  # archive is also what someone unpacking it by hand for `--lib-dir` ends up
-  # wanting.
-  web:
-    name: build (web)
-    needs: version
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: false
-
-      - name: Install pinned toolchain
-        run: |
-          rustup show active-toolchain
-          rustc --version
-
-      # The command-line tool refuses an artifact built against a different
-      # `wasm-bindgen` version, so this pin tracks the workspace dependency.
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: wasm-bindgen-cli@0.2.127
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: release-web
-
-      # The same recipe ci.yml measures and runs a browser against, so what
-      # ships is what was tested.
-      - name: Build the browser runtime
-        run: .github/scripts/build-web-runtime.sh web-dist
-
-      - name: Package
-        run: tar -czf lumen-web.tar.gz -C web-dist lumen-web.wasm lumen-web.js
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: lumen-web
-          path: lumen-web.tar.gz
-          if-no-files-found: error
-          retention-days: 1
+    uses: ./.github/workflows/build-toolchain.yml
+    with:
+      msi_version: ${{ needs.version.outputs.version }}
 
   release:
     name: publish release
-    needs: [version, build, web]
+    needs: [version, build]
     # Runs even if one build leg failed, so a single broken target (most
-    # likely linux-aarch64 or macos-x86_64 - see the header comment) or a
+    # likely linux-aarch64 or macos-x86_64 - see build-toolchain.yml) or a
     # broken browser runtime still lets every other archive reach the release
     # instead of blocking all of them. gh release upload --clobber makes
     # re-running this job safe after a fix: it replaces same-named assets
@@ -339,34 +116,19 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
 
-      - name: Check something built
-        run: |
-          shopt -s nullglob
-          files=(artifacts/*.tar.gz artifacts/*.zip artifacts/*.msi)
-          if [ "${#files[@]}" -eq 0 ]; then
-            echo "release.yml: every build leg failed, nothing to publish" >&2
-            exit 1
-          fi
-          printf 'publishing:\n'
-          printf '  %s\n' "${files[@]}"
-
-      # install.sh verifies every download against this file and installs
-      # nothing it cannot verify, so a release without it is a release nobody
-      # can install from. The names are bare (no artifacts/ prefix) because
-      # that is what an asset is called once it is on the release, and
-      # `sha256sum -c` in the same directory as the downloads then works.
-      - name: Generate sha256sums.txt
-        working-directory: artifacts
-        run: |
-          shopt -s nullglob
-          files=(*.tar.gz *.zip *.msi)
-          sha256sum "${files[@]}" > sha256sums.txt
-          cat sha256sums.txt
+      # Refuses a run where every leg failed, and writes the sha256sums.txt
+      # install.sh verifies every download against.
+      - name: Collect what was built
+        run: .github/scripts/collect-release-assets.sh artifacts
 
       - name: Create the release and upload assets
         env:

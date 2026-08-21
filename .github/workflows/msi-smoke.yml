@@ -6,9 +6,10 @@ name: msi-smoke
 # installing beside it, and whether an uninstall leaves anything behind.
 #
 # It builds the same .wxs and runs the same tools/release/msi/build-msi.ps1 that
-# release.yml does, so the package under test differs from a released one only
-# in the compiler profile. That is deliberate: the structure of the package is
-# what is under test, not the optimizer, and a dev build keeps the job short.
+# build-toolchain.yml does, so the package under test differs from a released
+# one only in the compiler profile. That is deliberate: the structure of the
+# package is what is under test, not the optimizer, and a dev build keeps the
+# job short.
 #
 # The versions are 9.9.9 and 9.9.10, which no release will ever carry, and
 # they exercise the numeric-not-lexical comparison a version-string bug would
@@ -20,7 +21,7 @@ on:
     paths:
       - "tools/release/msi/**"
       - ".github/workflows/msi-smoke.yml"
-      - ".github/workflows/release.yml"
+      - ".github/workflows/build-toolchain.yml"
 
 permissions:
   contents: read
@@ -61,9 +62,9 @@ jobs:
         env:
           LUMEN_SKIP_ENGINE_BUILD: "1"
 
-      # Mirrors release.yml: the zip closes first, and only then does the MSI
-      # stage gain the receipt. Step "the portable zip carries no receipt"
-      # below is what holds that order in place.
+      # Mirrors build-toolchain.yml: the zip closes first, and only then does
+      # the MSI stage gain the receipt. Step "the portable zip carries no
+      # receipt" below is what holds that order in place.
       - name: Stage the payload
         shell: pwsh
         run: |

@@ -5,6 +5,9 @@ name: publish-extensions
 # publish step checks its token and skips with a notice when it is absent,
 # so the workflow is safe before the accounts exist. The first JetBrains
 # upload is manual by marketplace rule; this takes over from the second.
+#
+# A prerelease publishes nothing. nightly.yml puts a build of main out every
+# night on a rolling tag, and the marketplaces take versions, not snapshots.
 
 on:
   release:
@@ -16,6 +19,7 @@ permissions:
 
 jobs:
   vscode:
+    if: github.event.release.prerelease != true
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -48,6 +52,7 @@ jobs:
           npx ovsx publish ./*.vsix -p "$OVSX_PAT"
 
   jetbrains:
+    if: github.event.release.prerelease != true
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
