@@ -15,21 +15,23 @@ fn class_list_differs(
     }
 }
 
+/// Apply the script commands that need something a window has: an asset
+/// path resolved against the app dir, an OS hotkey, a tray icon, a file
+/// dialog, the cascade's color scheme.
+///
+/// The commands whose whole effect is on the scene belong to
+/// [`lumen_scene::script_commands::apply_scene_script_commands`], which the
+/// browser and the server register too; every applier reads the same stream
+/// through a cursor of its own and ignores what the others own.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_script_commands(
     mut events: MessageReader<ScriptCommandEvent>,
     mut commands: Commands,
-    // `LumenClasses` rides on this query rather than a second one: the
-    // applier is already at bevy's system-parameter ceiling.
     ids: Query<(
         Entity,
         &LumenId,
         Option<&lumen_core::components::LumenClasses>,
     )>,
-    mut texts: Query<&mut TextContent>,
-    mut inputs: Query<&mut lumen_core::components::TextInput>,
-    mut store: ResMut<lumen_core::property_store::PropertyStore>,
-    mut array_signals: ResMut<lumen_core::signals::ArraySignals>,
     mut style_manager: ResMut<lumen_core::components::StyleManager>,
     mut hotkeys: Option<NonSendMut<OsHotkeyRegistry>>,
     file_dialog: Res<FileDialogService>,
@@ -50,22 +52,6 @@ pub(crate) fn apply_script_commands(
         .unwrap_or_else(|| PathBuf::from("."));
     for ev in events.read() {
         match &ev.0 {
-            ScriptCommand::Print(s) => eprintln!("[script] {s}"),
-            ScriptCommand::SetText { target_id, text } => {
-                for (e, id, _) in &ids {
-                    if id.0 == *target_id {
-                        if let Ok(mut tc) = texts.get_mut(e) {
-                            tc.0 = text.clone();
-                        }
-                        // Replacing text from script must clamp the
-                        // caret, or it points past the new buffer end
-                        // and next keypress crashes the insert_str.
-                        if let Ok(mut input) = inputs.get_mut(e) {
-                            input.cursor = text.len();
-                        }
-                    }
-                }
-            }
             ScriptCommand::SetSrc { target_id, path } => {
                 let p = Path::new(path);
                 let resolved = if p.is_relative() {
@@ -87,9 +73,6 @@ pub(crate) fn apply_script_commands(
                         ent.insert(lumen_assets::ImageSource(resolved.clone()));
                     }
                 }
-            }
-            ScriptCommand::SetSignal { name, value } => {
-                store.set_global_str(name, value.as_str());
             }
             ScriptCommand::RegisterHotkey { name, accelerator } => {
                 if let Some(reg) = hotkeys.as_mut() {
@@ -150,9 +133,6 @@ pub(crate) fn apply_script_commands(
                     ),
                 }
             }
-            ScriptCommand::SetArray { name, items } => {
-                array_signals.set(name, items.clone());
-            }
             ScriptCommand::OpenFileDialog {
                 kind,
                 tag,
@@ -210,15 +190,16 @@ pub(crate) fn apply_script_commands(
             ScriptCommand::UnregisterTrayIcon { id } => {
                 tray.unregister(id);
             }
-            ScriptCommand::SetProperty { key, value } => {
-                // Typed PropertyStore write deferred to the next tick.
-                // Hosts that want the immediate cross-thread path use
-                // `lumen_core::property_store::push_external_property`
-                // directly (the Rhai typed-builtin path). This branch
-                // exists for hosts that prefer a tick-coalesced apply.
-                lumen_core::property_store::push_external_property(key.clone(), value.clone());
-            }
-            ScriptCommand::AddClicks(_)
+            // A signal, an array, a property and an element's text are the
+            // same write wherever the app runs, so
+            // `apply_scene_script_commands` owns them for every platform;
+            // no-op here.
+            ScriptCommand::Print(_)
+            | ScriptCommand::SetText { .. }
+            | ScriptCommand::SetSignal { .. }
+            | ScriptCommand::SetArray { .. }
+            | ScriptCommand::SetProperty { .. }
+            | ScriptCommand::AddClicks(_)
             // Notifications, clipboard, launcher, and sleep inhibit are
             // applied by `apply_os_script_commands` below, which holds
             // those hosts; no-op here.
@@ -280,11 +261,11 @@ pub(crate) fn apply_script_commands(
 /// Apply the OS-host script commands: notifications, clipboard text,
 /// the URL / file launcher, and sleep inhibits.
 ///
-/// A second applier beside [`apply_script_commands`] rather than more
-/// arms in it: that system already sits at the system-parameter limit.
-/// Both read the same `ScriptCommandEvent` stream through their own
-/// cursor, so each sees every command and each ignores what the other
-/// owns.
+/// A second applier beside [`apply_script_commands`] rather than more arms
+/// in it: the appliers are grouped by what they have to reach, and these
+/// need OS services the rest of the runtime never touches. Both read the
+/// same `ScriptCommandEvent` stream through their own cursor, so each sees
+/// every command and each ignores what the other owns.
 ///
 /// The clipboard host is absent on a machine whose backend refused, and
 /// the two clipboard commands warn rather than fail the tick.

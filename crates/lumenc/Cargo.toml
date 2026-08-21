@@ -143,6 +143,10 @@ lumen-primitives = { path = "../primitives" }
 # `lumen_script_rhai::RhaiHost` etc. if the crate is a direct dependency - so
 # they live here (test-only) rather than in the thin library's `[dependencies]`.
 lumen-script = { path = "../script/api", default-features = false }
+# counter_template.rs names the scene applier so it can assert the edge that
+# pins it after the DOM dispatch, which is a claim about the schedule rather
+# than about anything the compiler links.
+lumen-scene = { path = "../scene" }
 lumen-script-rhai = { path = "../script/rhai", default-features = false }
 lumen-script-lua = { path = "../script/lua", default-features = false }
 lumen-script-candela = { path = "../script/candela", default-features = false, features = ["compiler"] }

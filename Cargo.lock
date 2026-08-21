@@ -4126,6 +4126,7 @@ dependencies = [
  "lumen-primitives",
  "lumen-render-wgpu",
  "lumen-runtime",
+ "lumen-scene",
  "lumen-script",
  "lumen-script-candela",
  "lumen-script-lua",

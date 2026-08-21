@@ -95,3 +95,51 @@ fn removing_a_record_despawns_its_element() {
     );
     assert_eq!(label_text(&mut app, "count-label").as_deref(), Some("2"));
 }
+
+/// The rows follow the array on the tick the script rewrote it, on an app
+/// carrying extra systems.
+///
+/// `signal_array_set` reaches `ArraySignals` through a `ScriptCommandEvent`,
+/// and the `<for>` reconciler reads that resource, so the applier has to run
+/// first. An ordering the executor picked rather than an edge holds only for
+/// the graph it was picked on: padding the stage here means a schedule that
+/// grows by one system cannot quietly push the reconciler in front of the
+/// write and leave the list a tick behind.
+#[test]
+fn a_rewritten_array_reaches_the_rows_in_one_tick_with_extra_systems_installed() {
+    use lumen_core::prelude::TickStage;
+
+    let opts = RunOptions::new(app_dir());
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
+    for _ in 0..8 {
+        app.add_systems(TickStage::Systems, || {});
+        app.add_systems(TickStage::Systems, |_: bevy_ecs::prelude::Commands| {});
+    }
+    for _ in 0..5 {
+        app.tick();
+    }
+
+    {
+        use lumen_script::ScriptHost;
+        let mut host = app
+            .world
+            .resource_mut::<lumen_script_candela::CandelaHost>();
+        let outcome = host.call("drop_first", &[]).expect("drop_first ok");
+        assert!(outcome.found, "the fixture defines drop_first");
+        host.push_commands(outcome.commands);
+    }
+    app.tick();
+
+    let mut texts = row_texts(&mut app);
+    texts.sort();
+    assert_eq!(
+        texts,
+        ["Beta", "Gamma"],
+        "the rows needed more than one tick once the schedule grew"
+    );
+    assert_eq!(
+        label_text(&mut app, "count-label").as_deref(),
+        Some("2"),
+        "the count label needed more than one tick once the schedule grew"
+    );
+}

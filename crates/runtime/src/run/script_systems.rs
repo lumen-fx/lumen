@@ -1,6 +1,7 @@
 use super::*;
 
 use lumen_scene::dom::build_dom_index;
+use lumen_scene::script_commands::apply_scene_script_commands;
 
 /// Install the host-neutral half of the script wiring: the DOM snapshot
 /// publishers, the mutation pipeline, the two-way binding readers and pushes,
@@ -217,9 +218,11 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
             .before(ScriptSet::Dispatch),
     );
     if has_script {
-        // `apply_script_commands` is the sole applier of script-produced
-        // `SetSignal` / `SetArray` writes into `PropertyStore` /
-        // `ArraySignals`. Its ordering is load-bearing post perf dirty-gating:
+        // `apply_scene_script_commands` is the sole applier of
+        // script-produced `SetSignal` / `SetArray` writes into
+        // `PropertyStore` / `ArraySignals`, on the desktop and everywhere
+        // else the scene runs. Its ordering is load-bearing post perf
+        // dirty-gating:
         //
         //  * `.after(ScriptSet::Tick)` / `.after(ScriptSet::Dispatch)` -
         //    those systems emit the `ScriptCommandEvent`s this drains (the
@@ -263,7 +266,7 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
         //  * `.after(ScriptSet::DomInput)` - the DOM listener path
         //    (`node.on("click", ...)`) emits its commands from
         //    `dispatch_pointer_and_key_events`, which is the fourth producer
-        //    this applier drains. Left unordered, the two sat wherever the
+        //    the appliers drain. Left unordered, the two sat wherever the
         //    scheduler put them: on a graph where the applier happened to run
         //    first, a handler's signal write waited in the message
         //    double-buffer for the next tick, and nothing scheduled one -
@@ -271,15 +274,18 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
         //    queue was empty and the reactive wake stayed down. The click
         //    then did nothing at all until an unrelated event arrived.
         //    Adding any system to this stage was enough to flip the order,
-        //    so the scaffolded counter's `+1` button worked by luck.
+        //    so the scaffolded counter's `+1` button worked by luck. Naming
+        //    the input half rather than the whole DOM set is what keeps this
+        //    acyclic: the state half runs at the far end of the tick, after
+        //    the text edits an applier's own writes produce.
         app.add_systems(
             TickStage::Systems,
-            apply_script_commands
+            apply_scene_script_commands
                 .after(ScriptSet::Tick)
                 .after(ScriptSet::Dispatch)
                 .after(ScriptSet::DomInput)
                 // The use sites the build left for the script build their
-                // subtree through this applier, so the tree is whole on the
+                // subtree through the appliers, so the tree is whole on the
                 // tick it was mounted rather than the one after.
                 .after(ScriptSet::Fill)
                 .before(ScriptSet::Derivations)
@@ -290,7 +296,20 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
                 // on_audio_end (auto-advance) may emit SetSignal commands.
                 .after(ScriptSet::AudioEnded),
         );
-        // Second applier, for the OS-host commands (notifications, clipboard,
+        // The commands that need what a window has: an asset path resolved
+        // against the app dir, a hotkey, a tray icon, a file dialog, the
+        // cascade's color scheme. It writes no signal, so it carries the
+        // producer edges above and none of the dirty-window ones.
+        app.add_systems(
+            TickStage::Systems,
+            apply_script_commands
+                .after(ScriptSet::Tick)
+                .after(ScriptSet::Dispatch)
+                .after(ScriptSet::DomInput)
+                .after(ScriptSet::Fill)
+                .after(ScriptSet::AudioEnded),
+        );
+        // Third applier, for the OS-host commands (notifications, clipboard,
         // launcher, sleep inhibit); its doc has why they are not arms of
         // `apply_script_commands`.
         app.add_systems(
@@ -403,15 +422,15 @@ pub(crate) fn register_script_host_systems<
     // builtins run, so with one host the early `ScriptSet::SyncSignals` pass
     // is all that is needed and this stays unregistered. With two, a signal
     // written in one language reaches `PropertyStore` only when
-    // `apply_script_commands` runs, and its dirty flag is cleared at end of
-    // tick - so the other host's mirror must be refreshed here, inside that
-    // one-tick window, or the write is invisible to it forever.
+    // `apply_scene_script_commands` runs, and its dirty flag is cleared at
+    // end of tick - so the other host's mirror must be refreshed here, inside
+    // that one-tick window, or the write is invisible to it forever.
     if multi_host {
         app.add_systems(
             TickStage::Systems,
             lumen_script::sync_signals_into_host::<H>
                 .in_set(ScriptSet::SyncSignalsLate)
-                .after(apply_script_commands)
+                .after(apply_scene_script_commands)
                 .before(ScriptSet::Derivations),
         );
     }
