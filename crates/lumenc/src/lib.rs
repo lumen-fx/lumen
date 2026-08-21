@@ -72,6 +72,9 @@ pub mod parser_css;
 /// parser-free runtime builds via the `runtime-parse` feature.
 #[cfg(feature = "runtime-parse")]
 pub mod parser_html;
+/// Which published release this toolchain draws its files from. Every download
+/// location and cache directory is keyed by the answer.
+pub mod release;
 /// `<include>` / `@import` resolution - parser-side only.
 #[cfg(feature = "runtime-parse")]
 pub mod resolve;
@@ -81,6 +84,8 @@ pub mod scaffold;
 /// trait (`dev-run`).
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub mod source_parser;
+/// The daily "a newer release exists" notice an installed toolchain prints.
+pub mod update_check;
 /// `lumenc web` - emit an app as a static site. Compiles the app the way
 /// `build` does, so it needs the same parser (`runtime-parse`) and runtime
 /// (`dev-run`), plus the emitter behind the default-on `web` feature.
