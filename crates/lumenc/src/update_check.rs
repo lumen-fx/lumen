@@ -31,15 +31,14 @@
 //! arrived shortly after the command finishes is dropped.
 
 use std::io::IsTerminal;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
-#[cfg(windows)]
-use std::path::PathBuf;
 #[cfg(any(unix, windows))]
 use std::process::Command;
 
-use crate::release::{self, INTERVAL_SECS, current, is_newer};
+use crate::release::{self, INTERVAL_SECS, State, current, is_newer};
 
 /// What the notice tells you to run, and what the prompt runs for you.
 #[cfg(unix)]
@@ -87,36 +86,103 @@ enum Source {
     Pending(Receiver<Option<String>>),
 }
 
+/// Why an invocation does not check. Each one is a rule from the list at the
+/// top of this file.
+#[derive(Debug, PartialEq, Eq)]
+enum Skip {
+    /// A subcommand a tool drives rather than a person types.
+    NotHuman,
+    /// A `--headless` run, which is automation with a terminal attached.
+    Headless,
+    /// `LUMEN_NO_UPDATE_CHECK`.
+    Disabled,
+    /// `CI`.
+    Ci,
+    /// Nothing would read the notice.
+    NotATerminal,
+    /// No install receipt, so there is no release behind this copy.
+    NotInstalled,
+    /// The install asked to stay where it is.
+    Pinned,
+}
+
+/// What the check reads about the run it rides along with.
+struct Facts<'a> {
+    cmd: &'a str,
+    headless: bool,
+    disabled: bool,
+    ci: bool,
+    terminal: bool,
+    /// The install receipt, when this copy was installed from a release.
+    receipt: Option<&'a str>,
+}
+
+/// Why this invocation does not check, or `None` when it does.
+fn skip(facts: &Facts) -> Option<Skip> {
+    if !HUMAN_COMMANDS.contains(&facts.cmd) {
+        return Some(Skip::NotHuman);
+    }
+    if facts.headless {
+        return Some(Skip::Headless);
+    }
+    if facts.disabled {
+        return Some(Skip::Disabled);
+    }
+    if facts.ci {
+        return Some(Skip::Ci);
+    }
+    if !facts.terminal {
+        return Some(Skip::NotATerminal);
+    }
+    // A receipt records the release this copy came from, and that is what a
+    // newer one is compared against. No receipt, or one too damaged to name a
+    // release, leaves nothing to compare.
+    let Some(receipt) = facts
+        .receipt
+        .filter(|r| release::installed_release(r).is_some())
+    else {
+        return Some(Skip::NotInstalled);
+    };
+    release::is_pinned_receipt(receipt).then_some(Skip::Pinned)
+}
+
 /// Decide whether to check for a newer release, and start the request if so.
 ///
 /// `cmd` is the subcommand and `args` the arguments after it. Returns `None`
 /// whenever the check does not apply, which is the common case.
 pub fn start(cmd: &str, args: &[String]) -> Option<Check> {
-    if !HUMAN_COMMANDS.contains(&cmd) {
+    let receipt = release::receipt_text();
+    let facts = Facts {
+        cmd,
+        headless: args.iter().any(|a| a == "--headless"),
+        disabled: std::env::var_os("LUMEN_NO_UPDATE_CHECK").is_some_and(|v| !v.is_empty()),
+        ci: std::env::var_os("CI").is_some(),
+        terminal: std::io::stderr().is_terminal(),
+        receipt: receipt.as_deref(),
+    };
+    if skip(&facts).is_some() {
         return None;
     }
-    if args.iter().any(|a| a == "--headless") {
-        return None;
-    }
-    if std::env::var_os("LUMEN_NO_UPDATE_CHECK").is_some_and(|v| !v.is_empty()) {
-        return None;
-    }
-    if std::env::var_os("CI").is_some() {
-        return None;
-    }
-    if !std::io::stderr().is_terminal() {
-        return None;
-    }
-    // Only an installed copy has a release behind it to compare against, and a
-    // pinned one asked to stay where it is.
-    release::installed_version()?;
-    if release::is_pinned() {
-        return None;
-    }
+    let state_file = release::state_path();
+    begin(
+        state_file,
+        release::read_state(),
+        release::unix_now()?,
+        || release::fetch_latest().ok(),
+    )
+}
 
-    let state = release::read_state();
-    let now = release::unix_now()?;
-
+/// Start the check with the day's state in hand, asking `ask` on its own
+/// thread when the day's request has not gone out yet.
+///
+/// The state file, the clock and the request are all arguments, so the rule
+/// about one request a day is checkable without any of the three.
+fn begin(
+    state_file: Option<PathBuf>,
+    state: State,
+    now: u64,
+    ask: impl FnOnce() -> Option<String> + Send + 'static,
+) -> Option<Check> {
     // Inside the daily window: no request, but a newer release the last check
     // already found is still worth repeating.
     if now.saturating_sub(state.checked_at) < INTERVAL_SECS {
@@ -128,41 +194,54 @@ pub fn start(cmd: &str, args: &[String]) -> Option<Check> {
     // back. A short command exits while the request is still in flight and
     // takes the thread with it, so a write that waited for the answer would
     // never land and every invocation would open a connection.
-    let previous = state.latest;
-    release::write_state(now, previous.as_deref());
+    if let Some(path) = state_file.as_deref() {
+        release::write_state_at(path, now, state.latest.as_deref());
+    }
 
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let fetched = release::fetch_latest().ok();
+        let fetched = ask();
         // Only a successful request has anything to add; a failed one already
         // left the day's timestamp behind.
-        if let Some(latest) = fetched.as_deref() {
-            release::write_state(release::unix_now().unwrap_or(now), Some(latest));
+        if let (Some(path), Some(latest)) = (state_file.as_deref(), fetched.as_deref()) {
+            release::write_state_at(path, release::unix_now().unwrap_or(now), Some(latest));
         }
         let _ = tx.send(fetched);
     });
     Some(Check(Source::Pending(rx)))
 }
 
+/// The notice for a release that is worth telling someone about, or `None`
+/// when it is not newer than what is running.
+fn notice(latest: &str, current: &str) -> Option<String> {
+    is_newer(latest, current).then(|| {
+        format!(
+            "lumenc {latest} is available (you have {current}). Update: {}",
+            update_hint()
+        )
+    })
+}
+
 impl Check {
     /// Print the notice, if a newer release turned up in time.
     pub fn finish(self) {
-        let latest = match self.0 {
+        let Some(latest) = self.found() else {
+            return;
+        };
+        let Some(notice) = notice(&latest, current()) else {
+            return;
+        };
+        eprintln!("{notice}");
+        offer_update();
+    }
+
+    /// The release this check found, waiting a moment for a request still in
+    /// flight and giving up on it rather than holding the command open.
+    fn found(self) -> Option<String> {
+        match self.0 {
             Source::Known(v) => Some(v),
             Source::Pending(rx) => rx.recv_timeout(GRACE).ok().flatten(),
-        };
-        let Some(latest) = latest else {
-            return;
-        };
-        if !is_newer(&latest, current()) {
-            return;
         }
-        eprintln!(
-            "lumenc {latest} is available (you have {}). Update: {}",
-            current(),
-            update_hint()
-        );
-        offer_update();
     }
 }
 
@@ -283,6 +362,209 @@ fn offer_update() {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A run that checks: a person's command, on a terminal, from an
+    /// installed copy that is not pinned.
+    fn checking() -> Facts<'static> {
+        Facts {
+            cmd: "run",
+            headless: false,
+            disabled: false,
+            ci: false,
+            terminal: true,
+            receipt: Some("version 0.1.0\ntarget linux-x86_64\n"),
+        }
+    }
+
+    #[test]
+    fn an_installed_copy_on_a_terminal_checks() {
+        assert_eq!(skip(&checking()), None);
+    }
+
+    /// Each rule on its own, so a change to one of them cannot hide behind
+    /// another.
+    #[test]
+    fn every_rule_turns_the_check_off_by_itself() {
+        let cases: [(&str, Facts, Skip); 6] = [
+            (
+                "an automation subcommand",
+                Facts {
+                    cmd: "snapshot",
+                    ..checking()
+                },
+                Skip::NotHuman,
+            ),
+            (
+                "a headless run",
+                Facts {
+                    headless: true,
+                    ..checking()
+                },
+                Skip::Headless,
+            ),
+            (
+                "LUMEN_NO_UPDATE_CHECK",
+                Facts {
+                    disabled: true,
+                    ..checking()
+                },
+                Skip::Disabled,
+            ),
+            (
+                "CI",
+                Facts {
+                    ci: true,
+                    ..checking()
+                },
+                Skip::Ci,
+            ),
+            (
+                "output that nobody reads",
+                Facts {
+                    terminal: false,
+                    ..checking()
+                },
+                Skip::NotATerminal,
+            ),
+            (
+                "a pinned install",
+                Facts {
+                    receipt: Some("version 0.1.0\npinned 0.1.0\n"),
+                    ..checking()
+                },
+                Skip::Pinned,
+            ),
+        ];
+        for (what, facts, want) in cases {
+            assert_eq!(skip(&facts), Some(want), "{what}");
+        }
+    }
+
+    /// A cargo build and the portable zip carry no receipt, and a copy with no
+    /// release behind it has nothing to compare against.
+    #[test]
+    fn a_copy_that_was_not_installed_never_checks() {
+        assert_eq!(
+            skip(&Facts {
+                receipt: None,
+                ..checking()
+            }),
+            Some(Skip::NotInstalled)
+        );
+    }
+
+    fn state_file(name: &str) -> PathBuf {
+        std::env::temp_dir()
+            .join(format!("lumen-check-{}-{name}", std::process::id()))
+            .join("update-check")
+    }
+
+    /// Inside the day the request does not go out, and a newer release the
+    /// last one found is repeated from the state file instead.
+    #[test]
+    fn a_second_run_the_same_day_makes_no_request() {
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = asked.clone();
+        let check = begin(
+            None,
+            State {
+                checked_at: 1_000_000,
+                latest: Some("99.0.0".to_string()),
+            },
+            1_000_000 + INTERVAL_SECS - 1,
+            move || {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Some("99.0.0".to_string())
+            },
+        );
+        assert_eq!(check.and_then(Check::found).as_deref(), Some("99.0.0"));
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// A release that is not newer than what is running is not a notice, so
+    /// there is nothing to hand back.
+    #[test]
+    fn a_release_that_is_not_newer_says_nothing() {
+        let check = begin(
+            None,
+            State {
+                checked_at: 1_000_000,
+                latest: Some("0.0.1".to_string()),
+            },
+            1_000_000,
+            || None,
+        );
+        assert!(check.is_none());
+        assert_eq!(notice("0.0.1", current()), None);
+        assert_eq!(notice(current(), current()), None);
+    }
+
+    /// Once the day is up the request goes out, its answer comes back through
+    /// the check, and the state file carries it into the next run.
+    #[test]
+    fn the_day_after_asks_and_writes_the_answer_down() {
+        let path = state_file("asks");
+        let _ = std::fs::remove_dir_all(path.parent().expect("has a parent"));
+
+        let check = begin(
+            Some(path.clone()),
+            State::default(),
+            INTERVAL_SECS * 30,
+            || Some("99.0.0".to_string()),
+        );
+        assert_eq!(check.and_then(Check::found).as_deref(), Some("99.0.0"));
+
+        let written = release::read_state_at(&path);
+        assert_eq!(written.latest.as_deref(), Some("99.0.0"));
+
+        let _ = std::fs::remove_dir_all(path.parent().expect("has a parent"));
+    }
+
+    /// A request that fails is a silent no-op, and the day's budget is still
+    /// spent so the next command does not open another connection.
+    #[test]
+    fn a_failed_request_stays_quiet_and_still_spends_the_day() {
+        let path = state_file("fails");
+        let _ = std::fs::remove_dir_all(path.parent().expect("has a parent"));
+
+        let now = INTERVAL_SECS * 30;
+        let check = begin(Some(path.clone()), State::default(), now, || None);
+        assert_eq!(check.and_then(Check::found), None);
+
+        let written = release::read_state_at(&path);
+        assert_eq!(written.checked_at, now);
+        assert_eq!(written.latest, None);
+
+        let _ = std::fs::remove_dir_all(path.parent().expect("has a parent"));
+    }
+
+    /// A copy built from source has no receipt, so no command it runs reaches
+    /// the network, whatever the terminal and the environment say.
+    #[test]
+    fn a_build_from_source_starts_no_check() {
+        for cmd in ["run", "build", "snapshot"] {
+            assert!(start(cmd, &[]).is_none(), "{cmd}");
+        }
+    }
+
+    /// A release older than the running copy is not news. This is what keeps a
+    /// build carrying a version that has not been tagged yet quiet, rather
+    /// than telling someone to downgrade.
+    #[test]
+    fn a_release_older_than_this_build_prints_nothing() {
+        assert_eq!(notice("0.0.1", "0.0.4"), None);
+        // Reaching the end without printing or prompting is the whole point.
+        Check(Source::Known("0.0.1".to_string())).finish();
+    }
+
+    /// The notice names both versions and how to install the new one.
+    #[test]
+    fn the_notice_names_the_new_release_and_how_to_get_it() {
+        let notice = notice("99.0.0", "0.0.1").expect("99.0.0 is newer");
+        assert!(notice.contains("99.0.0"), "{notice}");
+        assert!(notice.contains("0.0.1"), "{notice}");
+        assert!(notice.contains(&update_hint()), "{notice}");
+    }
 
     #[test]
     fn only_human_commands_are_listed() {
