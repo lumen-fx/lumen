@@ -85,7 +85,7 @@ fixed what panicked.
 
 ## Rendering
 
-```rust,no_run
+```rust
 use std::sync::Arc;
 use lumen_ssr::{FetchPolicy, RenderOptions, Renderer, SsrRequest, SsrSite};
 use lumen_web::WebSpec;
@@ -176,7 +176,7 @@ A deep path is not this case. `/user/42` in an app with `user.lmn` names the
 To have the app answer such an address itself, ask which page it names and
 render one the app does have:
 
-```rust,no_run
+```rust
 let response = match site.page_for(path) {
     Some(_) => renderer.render(SsrRequest::get(path))?,
     // `notfound.lmn` renders it, reading the address off `route.segment`.
@@ -217,7 +217,7 @@ the headers that say what a browser is and none that say who is using it:
 including `Authorization`, `Cookie` and `Proxy-Authorization`, is named
 explicitly or not read at all:
 
-```rust,no_run
+```rust
 use lumen_ssr::{HeaderPolicy, RenderOptions};
 
 let options = RenderOptions {
@@ -271,7 +271,7 @@ An app asking for an address is a visitor's request making your server make a
 request, so a render reaches only the hosts you name and makes a bounded number
 of requests:
 
-```rust,no_run
+```rust
 use lumen_ssr::{FetchPolicy, RenderOptions};
 
 let options = RenderOptions {
