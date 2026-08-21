@@ -52,13 +52,18 @@ impl ScriptTy {
     /// Whether `value` satisfies this type. [`ScriptTy::Any`] accepts anything;
     /// an [`Array`](ScriptTy::Array) or [`Map`](ScriptTy::Map) also checks its
     /// elements.
+    ///
+    /// An integer satisfies a declared float: every scripting language Lumen
+    /// hosts spells `1` and `1.0` as the same literal kind, so `audio_seek(30)`
+    /// is the call an author writes. The reverse does not hold; a float where
+    /// an integer is declared would silently drop its fraction.
     pub fn accepts(&self, value: &ScriptValue) -> bool {
         match (self, value) {
             (Self::Any, _) => true,
             (Self::Unit, ScriptValue::Unit) => true,
             (Self::Bool, ScriptValue::Bool(_)) => true,
             (Self::Int, ScriptValue::I64(_)) => true,
-            (Self::Float, ScriptValue::F64(_)) => true,
+            (Self::Float, ScriptValue::F64(_) | ScriptValue::I64(_)) => true,
             (Self::Str, ScriptValue::Str(_)) => true,
             (Self::Array(inner), ScriptValue::Array(items)) => {
                 items.iter().all(|v| inner.accepts(v))

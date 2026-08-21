@@ -13,7 +13,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 use candela_vm::{IntoHostFn, Value};
-use lumen_script::{FileDialogKind, ScriptCommand, ScriptFn, ScriptNs, ScriptValue};
+use lumen_core::warn_line;
+use lumen_script::{ScriptCommand, ScriptFn, ScriptNs, ScriptTy, ScriptValue, builtin_script_fns};
 
 use crate::parse;
 use crate::value::{array_to_rows, candela_value_to_script, script_value_to_candela};
@@ -83,27 +84,6 @@ impl HostFnSink for candela::Engine {
     {
         Self::register_host_fn_variadic(self, namespace, name, f);
     }
-}
-
-/// Register a `lumen`-namespace builtin whose whole body is a single
-/// `sink.push(<command>)`. Keeps each builtin's argument list AND its
-/// `ScriptCommand` construction inline at the call site (passed as macro
-/// args, not hidden behind another layer) so a reviewer can still diff
-/// the three script hosts builtin-by-builtin. Zero-arg builtins use the
-/// `|| <command>` form (dedicated arm below).
-macro_rules! enqueue {
-    ($engine:expr, $sink:expr, $name:literal, || $build:expr $(,)?) => {{
-        let sink = $sink.clone();
-        $engine.register_host_fn(HOST_NAMESPACE, $name, move || {
-            sink.lock().unwrap().push($build);
-        });
-    }};
-    ($engine:expr, $sink:expr, $name:literal, |$($arg:ident : $ty:ty),+ $(,)?| $build:expr $(,)?) => {{
-        let sink = $sink.clone();
-        $engine.register_host_fn(HOST_NAMESPACE, $name, move |$($arg: $ty),+| {
-            sink.lock().unwrap().push($build);
-        });
-    }};
 }
 
 /// Derivation registry: `name -> (dep signal names, recompute fn name)`.
@@ -330,6 +310,17 @@ pub(crate) fn register_script_fn<S: HostFnSink>(
     registries: &Registries,
     f: &ScriptFn,
 ) {
+    if register_typed(sink, registries, f) {
+        return;
+    }
+    if matches!(f.ns, ScriptNs::Builtin) {
+        warn_line!(
+            "lumen-script-candela: `{}` has no typed shape; it binds variadically and must be \
+             declared `any {}(...)`",
+            f.name,
+            f.name
+        );
+    }
     let queue = registries.sink.clone();
     let bound = f.clone();
     sink.register_host_fn_variadic(namespace_of(&f.ns), &f.name, move |args: &[Value]| {
@@ -343,6 +334,132 @@ pub(crate) fn register_script_fn<S: HostFnSink>(
         }
         script_value_to_candela(&ret)
     });
+}
+
+/// The Rust type a declared [`ScriptTy`] crosses the candela boundary as.
+macro_rules! host_ty {
+    (Int) => {
+        i64
+    };
+    (Float) => {
+        f64
+    };
+    (Bool) => {
+        bool
+    };
+    (Str) => {
+        String
+    };
+    (Unit) => {
+        ()
+    };
+}
+
+/// The [`ScriptTy`] a shape letter names.
+macro_rules! script_ty {
+    (Int) => {
+        ScriptTy::Int
+    };
+    (Float) => {
+        ScriptTy::Float
+    };
+    (Bool) => {
+        ScriptTy::Bool
+    };
+    (Str) => {
+        ScriptTy::Str
+    };
+    (Unit) => {
+        ScriptTy::Unit
+    };
+}
+
+/// Convert what the body returned into the Rust type the declaration names.
+macro_rules! ret_value {
+    (Unit, $v:expr) => {{
+        let _ = $v;
+    }};
+    (Int, $v:expr) => {
+        match $v {
+            ScriptValue::I64(n) => n,
+            ScriptValue::F64(n) => n as i64,
+            ScriptValue::Bool(b) => i64::from(b),
+            _ => 0,
+        }
+    };
+    (Float, $v:expr) => {
+        match $v {
+            ScriptValue::F64(n) => n,
+            ScriptValue::I64(n) => n as f64,
+            _ => 0.0,
+        }
+    };
+    (Bool, $v:expr) => {
+        matches!($v, ScriptValue::Bool(true))
+    };
+    (Str, $v:expr) => {
+        $v.stringify()
+    };
+}
+
+/// Bind `f` under the first listed shape its signature matches.
+///
+/// candela derives a host function's signature from the Rust closure it is
+/// handed, so one closure per shape is what makes a declaration stay typed and
+/// checked at compile time. The shapes are generated from the list below rather
+/// than written per builtin.
+macro_rules! typed_shapes {
+    ($sink:expr, $r:expr, $f:expr; $( [$($b:ident : $p:ident),*] -> $ret:ident ),+ $(,)?) => {{
+        $(
+            if shape_matches($f, &[$(script_ty!($p)),*], &script_ty!($ret)) {
+                let queue = $r.sink.clone();
+                let bound = $f.clone();
+                $sink.register_host_fn(
+                    namespace_of(&$f.ns),
+                    &$f.name,
+                    move |$($b: host_ty!($p)),*| -> host_ty!($ret) {
+                        let vals = vec![$(ScriptValue::from($b)),*];
+                        let (ret, commands) = bound.invoke(&vals);
+                        if !commands.is_empty() {
+                            queue.lock().unwrap().extend(commands);
+                        }
+                        ret_value!($ret, ret)
+                    },
+                );
+                return true;
+            }
+        )+
+        false
+    }};
+}
+
+/// Whether `f` declares exactly these parameter types and this return type.
+fn shape_matches(f: &ScriptFn, params: &[ScriptTy], ret: &ScriptTy) -> bool {
+    !f.sig.variadic
+        && f.sig.min_arity == params.len()
+        && f.sig.ret == *ret
+        && f.sig.params.len() == params.len()
+        && f.sig.params.iter().zip(params).all(|(p, ty)| p.ty == *ty)
+}
+
+/// Bind `f` as a typed, non-variadic host function when its signature is one
+/// of the shapes candela can name in a declaration.
+fn register_typed<S: HostFnSink>(sink: &mut S, r: &Registries, f: &ScriptFn) -> bool {
+    typed_shapes! { sink, r, f;
+        [] -> Unit,
+        [a: Str] -> Unit,
+        [a: Int] -> Unit,
+        [a: Float] -> Unit,
+        [a: Str, b: Str] -> Unit,
+        [a: Str, b: Int] -> Unit,
+        [a: Str, b: Str, c: Str] -> Unit,
+        [a: Str, b: Str, c: Str, d: Str, e: Str] -> Unit,
+        [a: Str, b: Str, c: Str, d: Str, e: Bool] -> Unit,
+        [] -> Str,
+        [a: Str] -> Str,
+        [a: Str, b: Str] -> Str,
+        [a: Str, b: Str] -> Bool,
+    }
 }
 /// Register the fragment surface: instantiate a compiled fragment by key, and
 /// put a node at the app root.
@@ -400,29 +517,15 @@ fn register_fragments<S: HostFnSink>(engine: &mut S, r: &Registries) {
 /// which binds the declarations a `.cdlb` image recorded. A builtin added here
 /// reaches both.
 pub(crate) fn register_lumen_host_fns<S: HostFnSink>(engine: &mut S, r: &Registries) {
+    // The shared table first: every builtin whose whole body is one command or
+    // one process-global read is described once in `lumen-script` and bound
+    // here through the same shape adapter an embedder's function takes.
+    for f in builtin_script_fns() {
+        if f.visible_to("candela") {
+            register_script_fn(engine, r, &f);
+        }
+    }
     register_fragments(engine, r);
-    // -- app-command emitters ----------------------------------------
-    enqueue!(engine, r.sink, "add_clicks", |n: i64| {
-        ScriptCommand::AddClicks(n as i32)
-    });
-    enqueue!(
-        engine,
-        r.sink,
-        "set_string",
-        |key: String, value: String| ScriptCommand::SetString { key, value }
-    );
-    enqueue!(
-        engine,
-        r.sink,
-        "set_text",
-        |target_id: String, text: String| ScriptCommand::SetText { target_id, text }
-    );
-    enqueue!(
-        engine,
-        r.sink,
-        "set_src",
-        |target_id: String, path: String| ScriptCommand::SetSrc { target_id, path }
-    );
 
     // -- signals (string + typed scalars) ----------------------------
     let m = r.mirror.clone();
@@ -466,203 +569,6 @@ pub(crate) fn register_lumen_host_fns<S: HostFnSink>(engine: &mut S, r: &Registr
         }
     });
 
-    // -- timers ------------------------------------------------------
-    enqueue!(engine, r.sink, "set_timeout", |name: String, ms: i64| {
-        ScriptCommand::SetTimer {
-            name,
-            millis: ms.max(0) as u64,
-            repeat: false,
-        }
-    });
-    enqueue!(engine, r.sink, "set_interval", |name: String, ms: i64| {
-        ScriptCommand::SetTimer {
-            name,
-            millis: ms.max(0) as u64,
-            repeat: true,
-        }
-    });
-    enqueue!(engine, r.sink, "cancel_timer", |name: String| {
-        ScriptCommand::CancelTimer { name }
-    });
-
-    // -- notifications / clipboard / tray ----------------------------
-    enqueue!(engine, r.sink, "notify", |title: String, body: String| {
-        ScriptCommand::Notify { title, body }
-    });
-    enqueue!(
-        engine,
-        r.sink,
-        "notify_ex",
-        |id: String, title: String, body: String, options: String, actions: String| {
-            ScriptCommand::NotifyEx {
-                id,
-                title,
-                body,
-                options,
-                actions,
-            }
-        }
-    );
-    enqueue!(engine, r.sink, "clipboard_write", |text: String| {
-        ScriptCommand::ClipboardWrite { text }
-    });
-    enqueue!(engine, r.sink, "clipboard_read", |tag: String| {
-        ScriptCommand::ClipboardRead { tag }
-    });
-    enqueue!(engine, r.sink, "open_url", |url: String| {
-        ScriptCommand::OpenUrl { url }
-    });
-    enqueue!(engine, r.sink, "open_path", |path: String| {
-        ScriptCommand::OpenPath { path }
-    });
-    enqueue!(engine, r.sink, "reveal_path", |path: String| {
-        ScriptCommand::RevealPath { path }
-    });
-    enqueue!(
-        engine,
-        r.sink,
-        "keep_awake",
-        |name: String, reason: String| ScriptCommand::KeepAwake { name, reason }
-    );
-    enqueue!(engine, r.sink, "allow_sleep", |name: String| {
-        ScriptCommand::AllowSleep { name }
-    });
-    enqueue!(engine, r.sink, "copy_image", |path: String| {
-        ScriptCommand::CopyImageToClipboard { path }
-    });
-    enqueue!(engine, r.sink, "save_clipboard_image", |path: String| {
-        ScriptCommand::SaveClipboardImage { path }
-    });
-    enqueue!(
-        engine,
-        r.sink,
-        "tray_icon",
-        |id: String, icon_path: String, tooltip: String| ScriptCommand::RegisterTrayIcon {
-            id,
-            icon_path,
-            tooltip: (!tooltip.is_empty()).then_some(tooltip),
-            menu: String::new(),
-            template: false,
-        }
-    );
-    enqueue!(
-        engine,
-        r.sink,
-        "tray_icon_menu",
-        |id: String, icon_path: String, tooltip: String, menu: String, template: bool| {
-            ScriptCommand::RegisterTrayIcon {
-                id,
-                icon_path,
-                tooltip: (!tooltip.is_empty()).then_some(tooltip),
-                menu,
-                template,
-            }
-        }
-    );
-    enqueue!(engine, r.sink, "unregister_tray", |id: String| {
-        ScriptCommand::UnregisterTrayIcon { id }
-    });
-
-    // -- menus (modeled as `__menu_open:<id>` signals) ---------------
-    let reg = r.clone();
-    engine.register_host_fn(HOST_NAMESPACE, "open_menu", move |id: String| {
-        reg.set_signal(&menu_signal(&id), ScriptValue::Bool(true));
-    });
-    let reg = r.clone();
-    engine.register_host_fn(HOST_NAMESPACE, "close_menu", move |id: String| {
-        reg.set_signal(&menu_signal(&id), ScriptValue::Bool(false));
-    });
-
-    // -- file dialogs ------------------------------------------------
-    // pick_file / pick_files / pick_folder share one closure shape;
-    // the loop keeps them from drifting apart (parity with the Rhai
-    // host's identical trio loop).
-    for (fname, kind) in [
-        ("pick_file", FileDialogKind::Open),
-        ("pick_files", FileDialogKind::OpenMulti),
-        ("pick_folder", FileDialogKind::PickFolder),
-    ] {
-        let s = r.sink.clone();
-        engine.register_host_fn(HOST_NAMESPACE, fname, move |tag: String| {
-            s.lock().unwrap().push(file_dialog(kind, tag, None));
-        });
-    }
-    enqueue!(
-        engine,
-        r.sink,
-        "save_file",
-        |tag: String, default_name: String| file_dialog(
-            FileDialogKind::Save,
-            tag,
-            Some(default_name)
-        )
-    );
-    enqueue!(
-        engine,
-        r.sink,
-        "pick_file_filtered",
-        |tag: String, spec: String| ScriptCommand::OpenFileDialog {
-            kind: FileDialogKind::Open,
-            tag,
-            filters: parse_filter_spec(&spec),
-            default_name: None,
-        }
-    );
-
-    // -- hotkeys -----------------------------------------------------
-    enqueue!(
-        engine,
-        r.sink,
-        "register_hotkey",
-        |name: String, accelerator: String| ScriptCommand::RegisterHotkey { name, accelerator }
-    );
-    enqueue!(engine, r.sink, "unregister_hotkey", |name: String| {
-        ScriptCommand::UnregisterHotkey { name }
-    });
-
-    // -- classes -----------------------------------------------------
-    enqueue!(
-        engine,
-        r.sink,
-        "set_class",
-        |id: String, classes: String| ScriptCommand::SetClasses {
-            target_id: id,
-            classes,
-        }
-    );
-    enqueue!(engine, r.sink, "set_root_class", |classes: String| {
-        ScriptCommand::SetClasses {
-            target_id: "<root>".to_owned(),
-            classes,
-        }
-    });
-    enqueue!(engine, r.sink, "set_color_scheme", |name: String| {
-        ScriptCommand::SetColorScheme { name }
-    });
-
-    // -- file-based pages --------------------------------------------
-    // Navigation rides the host-neutral `lumen_core::nav` bus, the same
-    // one an `<a href>` click and the Rust SDK write, so these need no
-    // world access and register here rather than as an embedder hook.
-    // A candela host fn cannot be arity-overloaded on one name, so the
-    // no-arg reader Rhai and Lua spell `page()` is `page_current()` here.
-    engine.register_host_fn(HOST_NAMESPACE, "page", |path: String| {
-        lumen_core::nav::navigate(path);
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "page_current", || -> String {
-        lumen_core::nav::current()
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "page_back", || {
-        lumen_core::nav::back();
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "page_forward", || {
-        lumen_core::nav::forward();
-    });
-
-    // -- networking --------------------------------------------------
-    enqueue!(engine, r.sink, "fetch", |url: String, tag: String| {
-        ScriptCommand::Fetch { url, tag }
-    });
     register_http(engine, r);
 
     // -- the request being rendered for ------------------------------
@@ -672,32 +578,6 @@ pub(crate) fn register_lumen_host_fns<S: HostFnSink>(engine: &mut S, r: &Registr
     // parts are reserved `request.*` signals instead, read with
     // `signal_get`. Outside a server render nothing is installed and
     // every reader gives back an empty string.
-    engine.register_host_fn(HOST_NAMESPACE, "request_header", |name: String| -> String {
-        lumen_core::request::header(&name)
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "request_cookie", |name: String| -> String {
-        lumen_core::request::cookie(&name)
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "request_body", || -> String {
-        lumen_core::request::body()
-    });
-    // Only a server render applies these; elsewhere the command is
-    // drained and dropped.
-    enqueue!(engine, r.sink, "response_status", |status: i64| {
-        ScriptCommand::SetResponseStatus {
-            status: status.clamp(100, 599) as u16,
-        }
-    });
-    enqueue!(
-        engine,
-        r.sink,
-        "response_header",
-        |name: String, value: String| ScriptCommand::SetResponseHeader { name, value }
-    );
-    enqueue!(engine, r.sink, "redirect", |location: String| {
-        ScriptCommand::Redirect { location }
-    });
-
     // -- text parsers ------------------------------------------------
     // Both return a dynamically-shaped value, so both register
     // variadically and are declared `any name(...)`; see the crate docs.
@@ -707,21 +587,6 @@ pub(crate) fn register_lumen_host_fns<S: HostFnSink>(engine: &mut S, r: &Registr
     engine.register_host_fn_variadic(HOST_NAMESPACE, "parse_markdown", |args: &[Value]| {
         parse::markdown(&arg_text(args, 0))
     });
-
-    // -- template-local ids ------------------------------------------
-    // `local_id("user-card:btn", "label")` is `"user-card:label"`: the
-    // sibling id `suffix` inside the same template instance as `source`.
-    // A source with no `:` prefix returns `suffix` unchanged.
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "local_id",
-        |source: String, suffix: String| -> String {
-            match source.rfind(':') {
-                Some(colon) => format!("{}:{suffix}", &source[..colon]),
-                None => suffix,
-            }
-        },
-    );
 
     // -- diagnostics -------------------------------------------------
     // candela's own `print` writes to process stdout. `lumen::print`
@@ -740,30 +605,6 @@ pub(crate) fn register_lumen_host_fns<S: HostFnSink>(engine: &mut S, r: &Registr
             Value::Null
         });
     }
-
-    // -- translation -------------------------------------------------
-    // `lumen::t("key")` returns the string the app's active locale
-    // carries for `key`, or `key` itself when no catalogue does - an
-    // untranslated app still renders something readable. The catalogue
-    // lives behind the process-wide `lumen_core::i18n` hook the runtime
-    // installs, so this host links no Fluent/ICU code and needs no
-    // world access. `tr` is Qt's spelling of the same call.
-    engine.register_host_fn(HOST_NAMESPACE, "t", |key: String| -> String {
-        lumen_core::i18n::translate(&key)
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "tr", |key: String| -> String {
-        lumen_core::i18n::translate(&key)
-    });
-
-    // -- filesystem --------------------------------------------------
-    engine.register_host_fn(HOST_NAMESPACE, "read_file", |path: String| -> String {
-        std::fs::read_to_string(path).unwrap_or_default()
-    });
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "write_file",
-        |path: String, contents: String| -> bool { std::fs::write(path, contents).is_ok() },
-    );
 
     // -- per-id handler routing --------------------------------------
     let h = r.handlers.clone();
@@ -798,8 +639,6 @@ pub(crate) fn register_lumen_host_fns<S: HostFnSink>(engine: &mut S, r: &Registr
     register_node_mutators(engine, r);
     register_node_events(engine, r);
     register_web_namespaces(engine, r);
-
-    register_audio(engine, r);
 }
 
 // -- free helpers ------------------------------------------------------------
@@ -1457,9 +1296,6 @@ fn register_node_introspection<S: HostFnSink>(engine: &mut S) {
         "signals_all",
         || -> HashMap<String, String> { ins::signals_all().into_iter().collect() },
     );
-    engine.register_host_fn(HOST_NAMESPACE, "dump_tree", || -> String {
-        ins::dump_tree()
-    });
 
     // `matched_rules(node)`: the stylesheet rules that matched, in ascending
     // cascade order (last wins). Each entry is
@@ -1947,55 +1783,34 @@ fn parse_hex_color(s: &str) -> Option<(u8, u8, u8, u8)> {
     }
 }
 
-/// Register the `audio_*` transport builtins, each a thin enqueue onto the
-/// shared command sink.
-fn register_audio<S: HostFnSink>(engine: &mut S, r: &Registries) {
-    enqueue!(engine, r.sink, "audio_play", |path: String| {
-        ScriptCommand::AudioPlay { path }
-    });
-    enqueue!(engine, r.sink, "audio_pause", || ScriptCommand::AudioPause);
-    enqueue!(engine, r.sink, "audio_resume", || {
-        ScriptCommand::AudioResume
-    });
-    enqueue!(engine, r.sink, "audio_stop", || ScriptCommand::AudioStop);
-    enqueue!(engine, r.sink, "audio_seek", |secs: f64| {
-        ScriptCommand::AudioSeek { secs }
-    });
-    enqueue!(engine, r.sink, "audio_volume", |level: f64| {
-        ScriptCommand::AudioVolume {
-            level: level as f32,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candela_vm::HostRegistry;
+
+    /// Every shared builtin candela is offered binds under a typed shape.
+    ///
+    /// The fallback is variadic, which would turn a checked
+    /// `set_text(string, string)` declaration into `any set_text(...)` and hand
+    /// a whole class of mistakes to run time. A table entry whose shape is
+    /// missing from the adapter fails here rather than quietly widening the
+    /// prelude.
+    #[test]
+    fn no_shared_builtin_falls_back_to_a_variadic_binding() {
+        let registries = Registries::default();
+        let mut untyped: Vec<String> = Vec::new();
+        for f in builtin_script_fns() {
+            if !f.visible_to("candela") {
+                continue;
+            }
+            let mut registry = HostRegistry::new();
+            if !register_typed(&mut registry, &registries, &f) {
+                untyped.push(f.name.clone());
+            }
         }
-    });
-}
-
-/// The signal a menu's open state lives on.
-fn menu_signal(id: &str) -> String {
-    format!("__menu_open:{id}")
-}
-
-/// Build an unfiltered [`ScriptCommand::OpenFileDialog`].
-fn file_dialog(kind: FileDialogKind, tag: String, default_name: Option<String>) -> ScriptCommand {
-    ScriptCommand::OpenFileDialog {
-        kind,
-        tag,
-        filters: Vec::new(),
-        default_name,
+        assert!(
+            untyped.is_empty(),
+            "these builtins have no typed shape in the adapter: {untyped:?}"
+        );
     }
-}
-
-/// Parse a `Label:ext1,ext2|All:*` filter spec into `(label, extensions)`
-/// pairs. `*` extensions are dropped (they mean "no filter").
-fn parse_filter_spec(spec: &str) -> Vec<(String, Vec<String>)> {
-    spec.split('|')
-        .filter_map(|group| {
-            let (label, exts) = group.split_once(':')?;
-            let exts: Vec<String> = exts
-                .split(',')
-                .map(str::trim)
-                .filter(|e| !e.is_empty() && *e != "*")
-                .map(str::to_owned)
-                .collect();
-            Some((label.trim().to_owned(), exts))
-        })
-        .collect()
 }

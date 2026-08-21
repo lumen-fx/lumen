@@ -296,12 +296,14 @@ fn builtins_parity() {
 /// see the whole surface. `builtins_parity` above proves the table is a subset
 /// of the registrations; this proves it is not a strict one.
 ///
-/// The registrations are found by scanning the host's own source for the three
-/// forms it uses: a `register_host_fn` / `register_host_fn_variadic` call whose
-/// namespace argument is `HOST_NAMESPACE`, a `mutate!` invocation, and an
-/// `enqueue!` invocation. All three name the builtin with a string literal.
-/// Because the scan reads source text, a fourth registration form added later
-/// is invisible to it: extend `registered_names` when one appears.
+/// The registrations come from two places and so does this list. The shared
+/// table is read structurally, by name, which is exact. What is left in the
+/// host's own source is found by scanning it for the forms it registers
+/// through: a `register_host_fn` / `register_host_fn_variadic` call whose
+/// namespace argument is `HOST_NAMESPACE`, and a `mutate!` invocation. Both
+/// name the builtin with a string literal. Because that half reads source
+/// text, a registration form added later is invisible to it: extend
+/// `registered_names` when one appears.
 #[test]
 fn every_registered_lumen_fn_is_tabled() {
     /// The builtin list, scanned for registration sites. One file: both hosts
@@ -310,13 +312,7 @@ fn every_registered_lumen_fn_is_tabled() {
 
     /// Builtins registered from a loop over a `fname` variable rather than a
     /// string literal, so the scan cannot see them.
-    const LOOP_REGISTERED: &[&str] = &[
-        "pick_file",
-        "pick_files",
-        "pick_folder",
-        "event_on",
-        "event_on_capture",
-    ];
+    const LOOP_REGISTERED: &[&str] = &["event_on", "event_on_capture"];
 
     /// The contents of the first string literal at or after `at`, or `None`
     /// when the argument in that position is not a literal.
@@ -339,7 +335,16 @@ fn every_registered_lumen_fn_is_tabled() {
         (rest[off..].starts_with(c)).then_some(from + off + c.len_utf8())
     }
 
-    let mut names: Vec<&str> = LOOP_REGISTERED.to_vec();
+    let mut names: Vec<String> = LOOP_REGISTERED.iter().map(|n| (*n).to_string()).collect();
+
+    // The shared table, read by name rather than scanned: these bind through
+    // the shape adapter, which takes the name from the entry.
+    names.extend(
+        lumen_script::builtin_script_fns()
+            .iter()
+            .filter(|f| f.visible_to("candela"))
+            .map(|f| f.name.clone()),
+    );
 
     // `register_host_fn(HOST_NAMESPACE, "name", ..)` and its variadic sibling.
     // Every other occurrence of the constant (its own declaration, the macro
@@ -350,17 +355,14 @@ fn every_registered_lumen_fn_is_tabled() {
             continue;
         };
         if let Some(name) = literal_at(SRC, comma) {
-            names.push(name);
+            names.push(name.to_string());
         }
     }
 
-    // `mutate!("name", ..)` and `enqueue!(engine, sink, "name", ..)`: the first
-    // literal in the invocation is the builtin name in both.
-    for marker in ["mutate!(", "enqueue!("] {
-        for (idx, _) in SRC.match_indices(marker) {
-            if let Some(name) = literal_at(SRC, idx + marker.len()) {
-                names.push(name);
-            }
+    // `mutate!("name", ..)`: the first literal in the invocation is the name.
+    for (idx, _) in SRC.match_indices("mutate!(") {
+        if let Some(name) = literal_at(SRC, idx + "mutate!(".len()) {
+            names.push(name.to_string());
         }
     }
 
@@ -372,9 +374,9 @@ fn every_registered_lumen_fn_is_tabled() {
     );
 
     let tabled: std::collections::HashSet<&str> = BUILTINS.iter().map(|b| b.name).collect();
-    let mut missing: Vec<&str> = names
+    let mut missing: Vec<String> = names
         .into_iter()
-        .filter(|n| !tabled.contains(n))
+        .filter(|n| !tabled.contains(n.as_str()))
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();

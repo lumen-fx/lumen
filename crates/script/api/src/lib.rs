@@ -54,9 +54,13 @@ pub mod runtime;
 /// app-wide channel plugins register them through.
 pub mod script_fn;
 
+/// The builtin surface every host shares, described once as [`ScriptFn`]s.
+pub mod builtin_fns;
+
 use std::collections::HashSet;
 use thiserror::Error;
 
+pub use builtin_fns::{builtin_script_fns, parse_dialog_filter_spec};
 pub use builtins::{BuiltinFn, BuiltinParam};
 pub use dnd::{dispatch_drag_start_to_script, dispatch_drops_to_script};
 pub use dom_events::{dispatch_pointer_and_key_events, dispatch_state_events};
