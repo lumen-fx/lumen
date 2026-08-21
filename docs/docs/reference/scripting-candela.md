@@ -789,7 +789,7 @@ fn on_start() {
 
 Functions the C ABI and the SDK expose land in the `native` namespace. A plugin
 can choose a name of its own instead, and the script calls it there
-(`gpio::read(21)`).
+(`gpio::level(21)`).
 
 You do not declare them. candela resolves a host call through a
 `host "<ns>" { .. }` block, and the host writes one for every namespace it bound
@@ -804,7 +804,7 @@ bound and declared with them, so a call with the wrong shape fails the compile.
 
 A plugin can also ship candela source of its own, compiled ahead of the app, to
 offer method syntax over its functions. What that looks like is the plugin's
-choice; `pin(21).read()` in place of `gpio::read(21)` is the shape to expect.
+choice; `pin(21).level()` in place of `gpio::level(21)` is the shape to expect.
 
 Two things follow from where the declarations come from. An app calling a
 function nothing registered fails the compile, naming it, so `lumenc check` and

@@ -538,4 +538,4 @@ Two more write directly to the element tree by id, without a node handle:
 
 Native functions an embedder or a plugin registers appear as bare globals here,
 and one registered under a namespace of its own appears as a module:
-`gpio::read(21)`. See [FFI and SDKs](ffi.md).
+`gpio::level(21)`. See [FFI and SDKs](ffi.md).

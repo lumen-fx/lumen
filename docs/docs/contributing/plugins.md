@@ -250,7 +250,7 @@ pub struct GpioPlugin;
 impl Plugin for GpioPlugin {
     fn build(self, app: &mut App) {
         app.add_script_fn(
-            ScriptFn::new("read")
+            ScriptFn::new("level")
                 .ns(ScriptNs::Named("gpio".to_string()))
                 .param("pin", ScriptTy::Int)
                 .ret(ScriptTy::Int)
@@ -293,7 +293,7 @@ the builder inserts should read it from a system rather than from `build`.
 | --- | --- | --- | --- |
 | `Builtin` | `read(21)` | `read(21)` | `lumen::read(21)` |
 | `Extension` | `read(21)` | `read(21)` | `native::read(21)` |
-| `Named("gpio")` | `gpio::read(21)` | `gpio.read(21)` | `gpio::read(21)` |
+| `Named("gpio")` | `gpio::level(21)` | `gpio.level(21)` | `gpio::level(21)` |
 
 `Builtin` is the runtime's own surface; a plugin normally takes `Extension` or a
 name of its own. Rhai gets a static module per named namespace, Lua a global
@@ -318,13 +318,13 @@ app.add_script_prelude(
 struct Pin { number: int }
 fn pin(number) { return Pin { number: number }; }
 impl Pin {
-    fn read(self) { return gpio::read(self.number); }
+    fn level(self) { return gpio::level(self.number); }
 }
 "#,
 );
 ```
 
-The script then calls `pin(21).read()`. An error inside that source is reported
+The script then calls `pin(21).level()`. An error inside that source is reported
 against the plugin's namespace, not against a line of the app.
 
 ### Limits
@@ -334,6 +334,11 @@ something in the world does not; pass an id and look it up.
 
 Editor tooling reads the builtin metadata tables, which describe the runtime's
 own surface, so a plugin's functions do not appear in completion or hover.
+
+candela types a call by the function's name when that name is one its own
+standard library uses, whatever namespace the call sits in, so a function named
+`read`, `write`, `str`, `input`, `int`, or `exists` is inferred as that
+library's type and a mismatch surfaces at run time. Name yours something else.
 
 A precompiled `.cdlb` carries the declarations its source spelled: the build
 compiles the script on its own, with no plugin present to declare anything. A
