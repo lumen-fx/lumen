@@ -150,7 +150,7 @@ fn a_program_that_does_not_compile_reports_where() {
 /// to be spelled by the source.
 ///
 /// The build does not object: a call into an undeclared namespace compiles, and
-/// the function it sits in is simply not in the image. What the author gets is
+/// the function it sits in is left out of the image. What the author gets is
 /// an app that starts and a call that is not there, so the block is the thing
 /// to check when a plugin function goes missing from an artifact.
 #[test]

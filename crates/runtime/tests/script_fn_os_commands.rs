@@ -328,7 +328,7 @@ fn candela_queues_the_os_commands_field_for_field() {
 }
 
 /// All three builtins reach all three languages, so every case above is a case
-/// the language really has rather than one the table hid.
+/// the language has rather than one the table hid.
 #[test]
 fn every_host_sees_the_three_os_builtins() {
     for name in ["notify_ex", "tray_icon_menu", "pick_file_filtered"] {

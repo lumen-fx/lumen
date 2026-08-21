@@ -179,10 +179,10 @@ fn an_emitting_body_reaches_the_command_sink() {
 /// A handler that calls something unbound is an error, not an absent handler.
 ///
 /// The runtime probes for optional handlers by calling them, so a miss on the
-/// name it asked for comes back as `found: false`. That answer used to be given
-/// for a miss on any name, which turned a script calling a function nobody
-/// registered into a silent no-op: the handler was reported absent, nothing
-/// reached stderr, and the app looked like it was ignoring input.
+/// name it asked for comes back as `found: false`. A miss on any other name is
+/// a script calling something nobody registered, and answering `found: false`
+/// for it reports the handler absent: nothing reaches stderr, and the app looks
+/// like it is ignoring input.
 #[test]
 fn a_miss_inside_a_handler_is_reported_rather_than_read_as_an_absent_handler() {
     let mut host = RhaiHost::new();
@@ -198,7 +198,7 @@ fn a_miss_inside_a_handler_is_reported_rather_than_read_as_an_absent_handler() {
         "the error names the function the script could not call: {err}"
     );
 
-    // A handler that is genuinely absent is still the silent probe it has to
+    // A handler that is absent is still the silent probe it has to
     // be; every optional hook the runtime offers is found this way.
     let outcome = host
         .call("on_close", &[])

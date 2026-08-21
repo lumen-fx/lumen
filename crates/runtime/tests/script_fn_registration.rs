@@ -216,8 +216,8 @@ fn a_registration_after_the_hosts_have_bound_changes_nothing() {
 /// A function a plugin registers under a namespace no host can bind still
 /// leaves the app's own script running.
 ///
-/// candela declares what it binds, so a name its grammar rejects used to fail
-/// the app's compile. The registration is refused instead, and the rest of the
+/// candela declares what it binds, so a name its grammar rejects would fail the
+/// app's compile. The registration is refused instead, and the rest of the
 /// program is untouched.
 #[test]
 fn a_registration_no_host_can_bind_leaves_the_script_running() {
