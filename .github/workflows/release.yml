@@ -72,6 +72,10 @@ name: release
 #
 # Triggers on any vX.Y.Z tag push. The repository starts with no releases
 # and no tags, so the first run of this workflow is also the first release.
+#
+# The last job opens a pull request setting the workspace version to the next
+# patch, so tagging is the only thing cutting a release asks anyone to type and
+# merging that pull request is the only thing it asks afterwards.
 
 on:
   push:
@@ -379,3 +383,106 @@ jobs:
               --title "${{ github.ref_name }}" \
               --generate-notes
           fi
+
+  # Cutting a release is a tag push and nothing else, so the version main
+  # carries has to move afterwards on its own. This opens the pull request that
+  # moves it, which leaves merging as the last thing a release asks of anyone.
+  #
+  # The next version is always the next patch. Nothing here can know whether
+  # the work after this release is a fix or a feature, and being predictable is
+  # worth more than being right: a number that is always one patch ahead is
+  # corrected by editing the branch, while a number that follows a rule
+  # somebody has to remember is not. Tags in any other shape, a prerelease
+  # among them, are left alone, because incrementing one is a decision rather
+  # than an increment.
+  #
+  # A release that published only some of its archives still published the tag,
+  # so main stops claiming that version either way; `release` runs on a partial
+  # release and this follows it. Re-running the workflow after fixing a build
+  # leg reaches this job again, and it lands on the branch and the number it
+  # did the first time, so there is one pull request however many times it
+  # runs. Once that pull request is merged, main is already at the next version
+  # and a later re-run stops before it commits anything.
+  #
+  # Only main moves here. publish.yml and publish-packages.yml run off the
+  # release and check out the tag, so neither is disturbed by main moving under
+  # them.
+  bump:
+    name: open the version bump
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          lfs: false
+
+      - name: Open the pull request that moves main to the next version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          released="${TAG#v}"
+          if ! printf '%s' "$released" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::notice::${TAG} is not a plain vX.Y.Z tag, so what comes after it is a choice; bump by hand"
+            exit 0
+          fi
+          next="${released%.*}.$(( 10#${released##*.} + 1 ))"
+
+          current="$(awk -F'"' '
+            /^\[workspace\.package\]/ { in_section = 1; next }
+            /^\[/                     { in_section = 0 }
+            in_section && /^version[[:space:]]*=/ { print $2; exit }
+          ' Cargo.toml)"
+          if [ -z "$current" ]; then
+            echo "release.yml: no [workspace.package] version in Cargo.toml" >&2
+            exit 1
+          fi
+
+          # A merged bump, or a re-run of an older release after later ones
+          # went out. Either way main is where it should be or further on, and
+          # bumping would walk it backwards.
+          oldest="$(printf '%s\n%s\n' "$current" "$next" | sort -V | head -1)"
+          if [ "$current" = "$next" ] || [ "$oldest" = "$next" ]; then
+            echo "::notice::main is at ${current}, at or past ${next}; nothing to bump"
+            exit 0
+          fi
+
+          python3 tools/release/bump-version.py "$next"
+          if git diff --quiet; then
+            echo "release.yml: bump-version.py changed nothing on the way to ${next}" >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore: set the workspace version to ${next}"
+
+          branch="bump-version-${next}"
+          git push -f origin "HEAD:refs/heads/${branch}"
+          if gh pr list --head "${branch}" --json number --jq '.[].number' | grep -q .; then
+            echo "::notice::the pull request for ${next} is already open, and now carries this run's commit"
+            exit 0
+          fi
+          gh pr create --head "${branch}" \
+            --title "chore: set the workspace version to ${next}" \
+            --body "$(cat <<BODY
+          ${TAG} is out, so main is free to move on. \`tools/release/bump-version.py\`
+          set the version to ${next} in every file that writes it out, from the
+          workspace package down to \`Cargo.lock\`.
+
+          Merging this means a build from main calls itself ${next}, which is the
+          version the next release gets tagged as. The number stays inert until that
+          tag exists, because every version-keyed lookup resolves through the releases
+          page rather than through what a binary says it is.
+
+          To go somewhere other than the next patch, run that script with the version
+          you want and push to this branch.
+          BODY
+          )"
