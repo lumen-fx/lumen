@@ -34,6 +34,17 @@
 //! visitor's page. Serve more requests at once by running more processes
 //! behind whatever balances them.
 //!
+//! # An address no page answers for
+//!
+//! A path that matches no page key, and is no document a build wrote, is
+//! answered with the app shell and a 404: the same document and the same
+//! status a static build of the app gives that address. The shell holds no
+//! state, so it is written once and the app is not built for it. Ask
+//! [`SsrSite::page_for`] first to give such an address an answer of your own.
+//!
+//! A deep path is not this case. `/user/42` in an app with a `user` page is
+//! that page, with the rest of the path on `route.segment`.
+//!
 //! # A request is a whole life
 //!
 //! Every request builds an app, ticks it, reads it and drops it. Nothing

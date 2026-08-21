@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use lumen_core::nav;
 use lumen_html::contract::Seed;
 use lumen_ir::artifact::CompiledApp;
 use lumen_ir::layout_ir::LayoutIR;
@@ -35,7 +36,7 @@ impl SsrSite {
     ///
     /// The page set comes from the app, so a request resolves to a page the
     /// same way it does on the desktop and in the browser. `web.entry` has to
-    /// name one of them, because it is where a path matching no page lands.
+    /// name one of them, because it is the page the site root opens on.
     pub fn new(compiled: CompiledApp, web: WebSpec) -> Result<Self, SsrError> {
         let (entry, keys) = match &compiled.pages {
             Some(pages) => (pages.entry.clone(), pages.keys.clone()),
@@ -122,7 +123,7 @@ impl SsrSite {
         &self.compiled
     }
 
-    /// The page a path matching nothing lands on.
+    /// The page the site root opens on.
     pub fn entry(&self) -> &str {
         &self.entry
     }
@@ -135,6 +136,38 @@ impl SsrSite {
     /// The state every render starts from.
     pub fn seed(&self) -> &Seed {
         &self.seed
+    }
+
+    /// The page `path` names, and the part of the path that page answers for.
+    ///
+    /// Two shapes of address reach the same page. A link inside an emitted
+    /// site points at the document a build wrote, so `/settings.html` is a
+    /// request for the `settings` page; a link an author wrote, and any path
+    /// deeper than a page, resolves the way the desktop resolves it, leaving
+    /// the rest of the path as the segment. A document a build never wrote is
+    /// not a page, so it goes through the resolver like anything else.
+    ///
+    /// `None` when no page answers for the address, which is what a render
+    /// answers with a 404. Ask this before rendering to give such an address
+    /// an answer of your own.
+    pub fn page_for(&self, path: &str) -> Option<(String, String)> {
+        if let Some(key) = lumen_web::document_key(path, &self.entry)
+            && self.keys.contains(&key)
+        {
+            return Some((key, String::new()));
+        }
+        nav::match_path(path, &self.keys, &self.entry)
+    }
+
+    /// The document an address no page answers for is sent.
+    ///
+    /// This is [`lumen_web::shell`] over the site's own spec: the same
+    /// `404.html` a build writes. It holds no state, so it does not depend on
+    /// the request and is worked out once.
+    pub(crate) fn not_found_body(&self) -> Result<(String, Vec<String>), SsrError> {
+        let mut warnings = Vec::new();
+        let body = lumen_web::shell(&self.spec, &mut warnings)?;
+        Ok((body, warnings))
     }
 
     /// The page `key`, ready to be rendered with a request's state.
