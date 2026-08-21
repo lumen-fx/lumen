@@ -223,8 +223,12 @@ values are handed to the runtime so it starts where the page left off. A value
 is a string, a number or a boolean. A name written as `[[web.seed.<name>]]`
 instead is an array signal: each entry is one row, its keys are the fields a
 `<for>` row template reads, and the values are strings. A `<for each="<name>">`
-is emitted with those rows in it. `[web.pages.<key>]` sets one page's `title`
-and `description`; both fall back to the site's.
+is emitted with those rows in it, and an element bound to a seeded signal with
+`bind-text`, `bind-checked`, `bind-value` or `bind-disabled` is emitted showing
+that value. A seeded signal beats the default the markup beside the binding
+would have set, and a script that publishes the signal itself beats both.
+`[web.pages.<key>]` sets one page's `title` and `description`; both fall back
+to the site's.
 
 See [the web guide](../guides/web.md).
 

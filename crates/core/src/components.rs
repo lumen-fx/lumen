@@ -1628,6 +1628,20 @@ impl SliderValue {
     pub fn step_size(&self) -> f32 {
         self.step.unwrap_or((self.max - self.min) / 100.0)
     }
+
+    /// `value` held to this slider's bounds.
+    ///
+    /// The bounds are taken either way round, so a slider authored with its
+    /// `max` below its `min` still has a range rather than an empty one.
+    ///
+    /// Every path that puts a value on a slider comes through here: the
+    /// spawner with what the markup authored, the signal binding with what a
+    /// script wrote, and the web emitter writing the page ahead of both. A
+    /// second copy of the rule would let a page disagree with the app that
+    /// adopts it.
+    pub fn clamp(&self, value: f32) -> f32 {
+        value.clamp(self.min.min(self.max), self.min.max(self.max))
+    }
 }
 
 impl Default for SliderValue {
@@ -1980,6 +1994,15 @@ pub struct PendingFill {
 #[derive(Component, Clone, Debug)]
 pub struct LumenTag(pub std::sync::Arc<str>);
 
+/// Marker excluding an entity from the scripting DOM index: selectors never
+/// match it, and it can never become the document root scripts resolve.
+/// Attach to tooling subtrees that live in the app's world but are not part
+/// of the app's document - the devtools panel stamps it across its overlay.
+/// Without it, a tooling root spawned before the app's sorts first among the
+/// index roots and script-built content lands under the wrong tree.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct DomHidden;
+
 impl From<Vec<String>> for LumenClasses {
     fn from(v: Vec<String>) -> Self {
         Self(v.into_iter().map(Into::into).collect())
@@ -2116,10 +2139,34 @@ impl Color {
         Self { r, g, b, a }
     }
 
+    /// Constructs a `Color` from `[R, G, B, A]` bytes - the inverse of
+    /// [`Self::to_rgba8`], and the readable spelling for hex palettes
+    /// (`Color::from_rgba8([0x21, 0x25, 0x2c, 0xff])`).
+    pub const fn from_rgba8(rgba: [u8; 4]) -> Self {
+        Self {
+            r: rgba[0] as f32 / 255.0,
+            g: rgba[1] as f32 / 255.0,
+            b: rgba[2] as f32 / 255.0,
+            a: rgba[3] as f32 / 255.0,
+        }
+    }
+
     /// Packs into `[R, G, B, A]` bytes, clamping each channel to `[0, 1]` and rounding to `u8`.
     pub fn to_rgba8(self) -> [u8; 4] {
         let q = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
         [q(self.r), q(self.g), q(self.b), q(self.a)]
+    }
+}
+
+impl From<[u8; 4]> for Color {
+    fn from(rgba: [u8; 4]) -> Self {
+        Self::from_rgba8(rgba)
+    }
+}
+
+impl From<Color> for [u8; 4] {
+    fn from(c: Color) -> Self {
+        c.to_rgba8()
     }
 }
 

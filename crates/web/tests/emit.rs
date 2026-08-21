@@ -7,7 +7,7 @@ use lumen_html::contract::{
     DEFAULT_CSS_FILE, DEFAULT_MANIFEST_FILE, LM_CONTRACT_VERSION, Manifest, Seed, SeedValue,
 };
 use lumen_ir::layout_ir::{
-    Attributes, Element, FragmentUse, IfModeSpec, InterpolationSlot, LayoutIR,
+    Attributes, BindKind, BindSpec, Element, FragmentUse, IfModeSpec, InterpolationSlot, LayoutIR,
 };
 use lumen_web::{
     EmitError, HostRewrite, LocaleSpec, MarkupSheet, PageSpec, SignalEnv, Site, SiteSpec, WebSpec,
@@ -549,6 +549,146 @@ fn a_rendered_branch_is_there_only_when_its_signal_holds() {
     let taken = page_html(&spec, "index.html");
     assert!(taken.contains(">home<"));
     assert_eq!(node_paths(&taken), vec!["0", "0.0", "0.0.0"]);
+}
+
+/// An element bound to `signal`, showing `fallback` until the signal has a
+/// value.
+fn bound_label(signal: &str, fallback: &str) -> Element {
+    element(
+        "label",
+        Attributes {
+            bind: Some(BindSpec {
+                kind: BindKind::Text,
+                name: signal.to_string(),
+            }),
+            ..labelled(fallback)
+        },
+        Vec::new(),
+    )
+}
+
+#[test]
+fn a_bound_element_shows_what_the_page_is_rendered_with() {
+    let page = PageSpec::new(
+        "index",
+        ir(element(
+            "root",
+            Attributes::default(),
+            vec![bound_label("name", "(unknown)")],
+        )),
+    );
+    let mut spec = site(vec![page]);
+
+    let unset = page_html(&spec, "index.html");
+    assert!(
+        unset.contains(">(unknown)<"),
+        "a signal the page has no value for leaves the fallback the author wrote: {unset}"
+    );
+
+    spec.pages[0].signals = SignalEnv::new().with_global("name", "Ada Lovelace");
+    let bound = page_html(&spec, "index.html");
+    assert!(
+        bound.contains(">Ada Lovelace<"),
+        "and a value it does have is what a visitor reads: {bound}"
+    );
+    assert!(!bound.contains("(unknown)"), "{bound}");
+}
+
+#[test]
+fn a_bound_value_reaches_the_page_as_the_browser_reads_it() {
+    let mut slider = element(
+        "slider",
+        Attributes {
+            bind: Some(BindSpec {
+                kind: BindKind::Value,
+                name: "level".into(),
+            }),
+            min: Some(0.0),
+            max: Some(100.0),
+            value: Some(0.0),
+            ..Attributes::default()
+        },
+        Vec::new(),
+    );
+    slider.attrs.id = Some("level".into());
+    let toggle = element(
+        "checkbox",
+        Attributes {
+            bind: Some(BindSpec {
+                kind: BindKind::Checked,
+                name: "agreed".into(),
+            }),
+            ..Attributes::default()
+        },
+        Vec::new(),
+    );
+    let button = element(
+        "button",
+        Attributes {
+            bind_disabled: Some("busy".into()),
+            ..labelled("Save")
+        },
+        Vec::new(),
+    );
+    let field = element(
+        "input",
+        Attributes {
+            bind: Some(BindSpec {
+                kind: BindKind::Text,
+                name: "query".into(),
+            }),
+            ..Attributes::default()
+        },
+        Vec::new(),
+    );
+    let page = PageSpec::new(
+        "index",
+        ir(element(
+            "root",
+            Attributes::default(),
+            vec![slider, toggle, button, field],
+        )),
+    );
+    let mut spec = site(vec![page]);
+    spec.pages[0].signals = SignalEnv::new()
+        .with_global("level", "42")
+        .with_global("agreed", "true")
+        .with_global("busy", "true")
+        .with_global("query", "lumen");
+
+    let html = page_html(&spec, "index.html");
+    assert!(html.contains(r#"value="42""#), "{html}");
+    assert!(html.contains(r#"checked="""#), "{html}");
+    assert!(html.contains(r#"disabled="""#), "{html}");
+    assert!(
+        html.contains(r#"value="lumen""#),
+        "a text field's text is its value, which is the only place an `input` can hold it: {html}"
+    );
+}
+
+#[test]
+fn a_bound_row_reads_the_state_the_rest_of_the_page_does() {
+    let mut label = bound_label("unit", "");
+    label.attrs.classes = vec!["{row.name}".to_string()];
+    label.interpolations = vec![InterpolationSlot::Row("name".to_string())];
+    let mut block = element("for", Attributes::default(), vec![label]);
+    block.attrs.each = Some("items".into());
+    let page = PageSpec::new(
+        "index",
+        ir(element("root", Attributes::default(), vec![block])),
+    );
+    let mut spec = site(vec![page]);
+    spec.pages[0].signals = SignalEnv::new()
+        .with_global("unit", "kg")
+        .with_array("items", items(&["mass", "weight"]));
+
+    let html = page_html(&spec, "index.html");
+    assert_eq!(
+        html.matches(">kg<").count(),
+        2,
+        "every row resolved the binding, and the row walk left it to do so: {html}"
+    );
+    assert!(html.contains(r#"class="lm-label mass""#), "{html}");
 }
 
 /// A row template that reads the row's `name` and the iteration index.

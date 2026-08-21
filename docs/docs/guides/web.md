@@ -167,6 +167,20 @@ says so: set it to `"run"` to have the app itself supply the state (see
 [Running the app during the build](#running-the-app-during-the-build)), or to
 `"none"` to render the markup alone, with no branch taken and no rows.
 
+That state is what the pages are written with. An `<if>` shows the branch it
+resolves to, a `<for>` holds its rows, and an element bound with `bind-text`,
+`bind-checked`, `bind-value` or `bind-disabled` is written showing the value
+its signal holds. Where the state has no value for a signal, the element keeps
+what the markup gave it, which is what an author writes a fallback for:
+
+```
+<label bind-text="name" text="(signing in)"/>
+```
+
+With `name` seeded, that label reads the name in the document itself, so a
+crawler and a reader with no scripting get it. Without, it reads
+`(signing in)` until the app writes the signal.
+
 A list is state like any other, so `[web.seed]` can name its rows. Each row is
 a table of the fields the row template reads:
 
@@ -376,12 +390,13 @@ means anything without an absolute address.
 - An author's `!important` rule wins over a style written on the element,
   where on the desktop the element wins. Normal declarations rank the way
   Lumen ranks them; this is the one case where the two differ.
-- A value bound with `bind-*`, or interpolated into text with `{name}` outside
-  a list row, is written as the markup wrote it, whichever `prerender` mode
-  built the page. The runtime writes the current value over it on arrival,
-  from the state the page carries. A branch taken with `<if>` is decided at build
-  time, and a placeholder inside a `<for>` row is resolved against the row
-  while the page is written.
+- A value interpolated into text with `{name}` outside a list row is written as
+  the markup wrote it, whichever `prerender` mode built the page. The runtime
+  writes the current value over it on arrival, from the state the page carries.
+  A placeholder inside a `<for>` row is resolved against the row while the page
+  is written.
+- `bind-scroll` reaches the document in no form. How far a container has been
+  scrolled is a position the browser keeps, not an attribute a document sets.
 - Elements a script creates appear when the runtime starts, not in the
   document, so a crawler does not see them. Components are not among them: the
   build runs a component that has to run and writes its body into the HTML, so

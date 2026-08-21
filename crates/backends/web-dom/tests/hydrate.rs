@@ -22,7 +22,7 @@ use lumen_core::property_store::PropertyStore;
 use lumen_core::signals::{ArrayItem, ArraySignals};
 use lumen_html::contract::{DATA_LM, DATA_LM_HIDDEN};
 use lumen_ir::layout_ir::{
-    Attributes, Element as IrElement, IfModeSpec, InterpolationSlot, LayoutIR,
+    Attributes, BindKind, BindSpec, Element as IrElement, IfModeSpec, InterpolationSlot, LayoutIR,
 };
 use lumen_scene::spawn;
 use lumen_scene::spawn::SpawnIntoWorld;
@@ -299,6 +299,58 @@ fn a_slider_the_visitor_moves_moves_in_the_world_too() {
     assert_eq!(
         moved, 75.0,
         "where the visitor left the control is where the world has it"
+    );
+}
+
+/// A page whose label reads the `name` signal, with the text the app shows
+/// until something writes it.
+fn bound_tree() -> LayoutIR {
+    let mut label = element("label", Some("(unknown)"), Vec::new());
+    label.attrs.bind = Some(BindSpec {
+        kind: BindKind::Text,
+        name: "name".to_string(),
+    });
+    LayoutIR {
+        root: element("root", None, vec![label]),
+        ..LayoutIR::default()
+    }
+}
+
+/// The emitter and the runtime read a binding out of the same state, so the
+/// value one writes is the value the other computes and the page is adopted
+/// with nothing to correct. Writing the fallback instead would make every
+/// bound element a mutation on load, and a visitor would read the wrong text
+/// until the first tick.
+#[wasm_bindgen_test]
+fn a_bound_element_is_adopted_without_being_corrected() {
+    let signals = SignalEnv::new().with_global("name", "Ada Lovelace");
+    let root = prerender_with(bound_tree(), signals);
+    assert_eq!(
+        root.text_content().as_deref(),
+        Some("Ada Lovelace"),
+        "the emitter wrote what the binding holds, not what stands in for it"
+    );
+    let before = root.outer_html();
+
+    let mut app = App::new();
+    app.extract_fns.clear();
+    app.world.init_resource::<PropertyStore>();
+    app.world
+        .resource_mut::<PropertyStore>()
+        .set_global_str("name", "Ada Lovelace");
+    let root_entity = bound_tree().spawn_into(&mut app.world);
+    app.add_plugin(WebDomPlugin {
+        root: root.clone(),
+        root_entity,
+    });
+    app.add_systems(TickStage::Systems, lumen_core::signals::apply_text_bindings);
+    app.tick();
+
+    assert_eq!(report(&app), (2, 0), "the root and the label were adopted");
+    assert_eq!(
+        root.outer_html(),
+        before,
+        "and the runtime found the page already saying what the signal holds"
     );
 }
 

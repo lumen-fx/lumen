@@ -521,7 +521,7 @@ pub fn apply_value_bindings(
         let Some(parsed) = parsed else {
             continue;
         };
-        let clamped = parsed.clamp(sv.min.min(sv.max), sv.min.max(sv.max));
+        let clamped = sv.clamp(parsed);
         if (sv.value - clamped).abs() > f32::EPSILON {
             sv.value = clamped;
         }
@@ -661,6 +661,26 @@ pub fn push_scroll_to_signal(
 /// case visible at the call site.
 pub fn signal_is_truthy(value: &str) -> bool {
     !matches!(value, "" | "false" | "0")
+}
+
+/// The boolean a signal's stringified value states, when it states one.
+///
+/// Stricter than [`signal_is_truthy`] on purpose: a binding that drives a
+/// state a widget already has, such as `bind-checked` or `bind-disabled`,
+/// leaves that state alone unless the signal says which way it goes.
+/// `"anything"` is a value nobody meant as a boolean, so the widget keeps
+/// what its markup gave it rather than silently turning on.
+///
+/// [`crate::property_store::PropertyStore::get_global_bool`] reads a typed
+/// `Bool` cell directly and passes a string one through here, so a value that
+/// arrives as text decides the same way wherever it is read: in a running
+/// app, and in a build writing the page ahead of one.
+pub fn signal_as_bool(value: &str) -> Option<bool> {
+    match value {
+        "true" | "1" => Some(true),
+        "false" | "0" => Some(false),
+        _ => None,
+    }
 }
 
 /// One row of a reactive array; field name -> stringified value.

@@ -461,19 +461,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         }
     }
     if el.tag == "slider" {
-        let min = el.attrs.min.unwrap_or(0.0);
-        let max = el.attrs.max.unwrap_or(1.0);
-        let value = el
-            .attrs
-            .value
-            .unwrap_or(min)
-            .clamp(min.min(max), min.max(max));
-        entity.insert(SliderValue {
-            value,
-            min,
-            max,
-            step: el.attrs.step,
-        });
+        entity.insert(SliderValue::from(&el.attrs));
         // UA fallback track fill - same rationale as the `<toggle>`
         // block above: with no skin or author CSS the slider must
         // still paint a groove AND be a hit-test candidate (hit-test
@@ -536,25 +524,19 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         }
     }
     if el.tag == "progress" {
-        entity.insert(lumen_primitives::ProgressBar {
-            // No `value` and no binding = indeterminate; a later
-            // `bind-value` pull flips it determinate.
-            value: el.attrs.value,
-            max: el.attrs.max.unwrap_or(1.0),
-            period_ms: el
-                .attrs
-                .progress_duration
-                .unwrap_or(lumen_primitives::PROGRESS_PERIOD_MS),
-        });
+        // No `value` and no binding = indeterminate; a later `bind-value`
+        // pull flips it determinate.
+        let bar = lumen_primitives::ProgressBar::from(&el.attrs);
         // The accessibility walk reads `A11yValue`, not `ProgressBar`;
         // `apply_progress_bindings` keeps the two in step.
         entity.insert(lumen_core::components::A11yValue {
-            now: f64::from(el.attrs.value.unwrap_or(0.0)),
+            now: f64::from(bar.value.unwrap_or(0.0)),
             min: 0.0,
-            max: f64::from(el.attrs.max.unwrap_or(1.0)),
+            max: f64::from(bar.max),
             step: 0.0,
             text: None,
         });
+        entity.insert(bar);
         // `progress-chunk` (markup attr or the CSS property) wins;
         // `ProgressChunk::default()` carries the runtime's own
         // indeterminate-fill-fraction constant when unauthored.

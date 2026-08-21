@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod bindings;
 pub mod css;
 pub mod error;
 pub mod html;

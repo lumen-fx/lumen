@@ -85,6 +85,22 @@ impl Default for Viewport {
     }
 }
 
+/// Main-world resource shrinking the layout viewport of every normal root
+/// while a panel is docked to a window edge (browser-devtools semantics: the
+/// page reflows into the remaining space instead of being covered). Roots in
+/// the top paint band ([`OverlayLayer`]) keep the full viewport - the docked
+/// panel itself is one, so it can lay out along the edge it occupies.
+///
+/// Written by whoever docks the panel (the devtools overlay); read by the
+/// layout backend. Absent or all-zero means no dock.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub struct DockInsets {
+    /// Logical pixels taken from the right window edge.
+    pub right: f32,
+    /// Logical pixels taken from the bottom window edge.
+    pub bottom: f32,
+}
+
 /// Per-frame flag indicating that the upcoming frame requires a fresh GPU encode.
 ///
 /// - Set by [`roll_up_frame_dirty`] from `Changed<T>` filters on render-relevant components: [`Transform`], [`Visuals`], [`TextStyle`], [`TextContent`], [`TextInput`], [`TextInputScroll`], [`Opacity`], [`Visible`], [`Viewport`], [`crate::components::LumenClasses`], plus the [`crate::property_store::PropertyStore`] notify queue (any property write since the previous tick), plus child-set mutations (newly added [`Visible`] / removed `ChildOf`).

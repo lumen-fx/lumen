@@ -1,24 +1,38 @@
 <!--
-  Lumen devtools overlay (v1). Authored in Lumen's own markup + CSS
-  pipeline and shipped as an embedded asset (include_str!). The lumenc
-  dev-mount parses this with the normal parser, spawns it as a second
-  root, and lifts the root into the top paint band (OverlayLayer) so it
-  floats over the app. Content is data-driven: the `dt-body` text is
-  rewritten every tick from the in-process snapshot / network-capture ring.
+  Lumen devtools panel. Authored in Lumen's own markup + CSS pipeline and
+  shipped as an embedded asset (include_str!). The lumenc dev-mount parses
+  this with the normal parser, spawns it as a second root, and lifts the
+  root into the top paint band (OverlayLayer) so it docks over the window's
+  right edge while the app reflows into the remaining width (DockInsets).
+
+  Static chrome only: the element rows, the tab/row interaction states, the
+  highlight box, and its tooltip are driven per tick by the crate's systems,
+  because entities spawned after the mount are outside this stylesheet's
+  reach.
 -->
 <row class="dt-overlay" width="100%" height="100%" justify="end">
-  <column class="dt-panel" width="470" height="100%">
-    <row class="dt-header" width="100%" justify="between">
-      <label class="dt-title" text="Lumen devtools" />
-      <label class="dt-hint" text="F12 to toggle" />
-    </row>
-    <row class="dt-tabbar" width="100%" gap="6">
+  <column class="dt-panel" id="dt-panel" width="470" height="100%">
+    <row class="dt-toolbar" width="100%" gap="2">
+      <button class="dt-pick" id="dt-pick" text="Pick" />
       <button class="dt-tab" id="dt-tab-elements" text="Elements" />
-      <button class="dt-tab" id="dt-tab-signals" text="Signals + Perf" />
+      <button class="dt-tab" id="dt-tab-signals" text="Signals" />
       <button class="dt-tab" id="dt-tab-network" text="Network" />
+      <spacer />
+      <label class="dt-hint" text="F12" />
     </row>
-    <scroll class="dt-body-scroll" width="100%" height="100%">
+    <scroll class="dt-body-scroll" width="100%" height="0" grow="1">
+      <column id="dt-rows" width="100%" />
       <label class="dt-body" id="dt-body" wrap="word" text="Lumen devtools loading..." />
     </scroll>
+    <column class="dt-inspect" id="dt-inspect" width="100%" height="190" gap="6">
+      <label class="dt-body" id="dt-inspect-body" wrap="word" text="" />
+      <spacer />
+      <row class="dt-actions" width="100%" gap="6">
+        <input class="dt-edit" id="dt-edit" width="0" grow="1" placeholder="text content..." />
+        <button class="dt-act" id="dt-act-apply" text="Apply" />
+        <button class="dt-act" id="dt-act-hide" text="Hide" />
+        <button class="dt-act dt-act-danger" id="dt-act-del" text="Delete" />
+      </row>
+    </column>
   </column>
 </row>

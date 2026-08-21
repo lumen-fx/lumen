@@ -9,6 +9,7 @@ use lumen_core::render_world::AnimationsActive;
 use lumen_core::tick::{TickStage, work_pending};
 use lumen_html::contract::{Seed, SeedValue};
 use lumen_ir::artifact::{CompiledApp, CompiledScript};
+use lumen_ir::layout_ir::{BindKind, BindSpec, Element, LayoutIR};
 use lumen_portable::portable_app;
 use lumen_prerender::{Budget, Settled, page, settle};
 
@@ -102,6 +103,45 @@ fn a_declared_value_starts_the_run_and_the_app_writes_over_it() {
         run.state.signals.global("greeting"),
         Some("hello from the build")
     );
+}
+
+/// A `bind-text` label's own text is what the app shows until the signal has
+/// a value, so a run that starts from a declared value has to start from the
+/// value and not from the fallback. The page is written with what the run
+/// settled into, and a run that took the fallback would publish a document
+/// contradicting its own seed.
+#[test]
+fn a_declared_value_beats_the_fallback_the_markup_shows_beside_a_binding() {
+    let _turn = in_turn();
+    let mut label = Element {
+        tag: "label".to_string(),
+        ..Element::default()
+    };
+    label.attrs.text = Some("(unknown)".to_string());
+    label.attrs.bind = Some(BindSpec {
+        kind: BindKind::Text,
+        name: "name".to_string(),
+    });
+    let app = CompiledApp {
+        ir: LayoutIR {
+            root: Element {
+                tag: "root".to_string(),
+                children: vec![label],
+                ..Element::default()
+            },
+            ..LayoutIR::default()
+        },
+        ..CompiledApp::default()
+    };
+    let mut seed = Seed::new();
+    seed.globals.insert(
+        "name".to_string(),
+        SeedValue::Str("Ada Lovelace".to_string()),
+    );
+
+    let run = page(&app, "index", &seed, Budget::default());
+
+    assert_eq!(run.state.signals.global("name"), Some("Ada Lovelace"));
 }
 
 #[test]

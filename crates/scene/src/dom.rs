@@ -93,14 +93,17 @@ pub fn install_dom(app: &mut App) {
 /// such as the window root, is dropped from the element tree.
 #[allow(clippy::type_complexity)]
 pub fn build_dom_index(
-    query: Query<(
-        Entity,
-        &LumenTag,
-        Option<&LumenClasses>,
-        Option<&LumenId>,
-        Option<&ChildOf>,
-        Option<&Children>,
-    )>,
+    query: Query<
+        (
+            Entity,
+            &LumenTag,
+            Option<&LumenClasses>,
+            Option<&LumenId>,
+            Option<&ChildOf>,
+            Option<&Children>,
+        ),
+        Without<lumen_core::components::DomHidden>,
+    >,
 ) {
     use std::collections::HashSet;
     let indexed: HashSet<u64> = query.iter().map(|(e, ..)| e.to_bits()).collect();

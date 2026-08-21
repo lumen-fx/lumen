@@ -6,21 +6,18 @@ running app.
 
 ## Devtools
 
-An overlay panel docked to the right edge of the window, showing the live
-element tree, signal values, and captured network requests.
+A panel docked to the right edge of the window, showing the live element
+tree, signal values, and captured network requests. While it is open the
+app reflows into the remaining width, like a browser's docked devtools; it
+never covers the app.
 
 ### Availability
 
-The overlay is compiled in behind a build feature that is off by default,
-including in released builds. To use it, build `lumenc` from source with the
-feature on:
-
-```sh
-cargo build -p lumenc --features devtools
-```
-
-It mounts only for a run from source. An app started from a precompiled
-`.lmna` artifact has no overlay.
+Every default `lumenc` build carries the overlay; a
+`--no-default-features` compiler build drops it with the rest of the
+runtime. It mounts only for a run from source. An app started from a
+precompiled `.lmna` artifact has no overlay, and packaged apps never
+contain it.
 
 ### Opening it
 
@@ -37,9 +34,27 @@ Switch panels by clicking a tab. There is no keyboard shortcut for switching.
 
 | Tab | Contents |
 |-----|----------|
-| Elements | Indented live element tree, one line per entity: `<tag>#id.class [WxH]` followed by `:hover`, `:focus`, and `:press` state. The overlay's own entities are excluded. Capped at 400 lines. |
-| Signals + Perf | Frame number, tick time, entity count, then one `name = value (kind)` row per global signal. |
+| Elements | Live element tree, one row per entity, syntax-colored the way a browser colors markup: tag, `#id.class`, `[WxH]`, and `:hover`/`:focus`/`:press` state each in their own color. Hovering a row overlays that element in the app with a tinted box and a `<tag>#id WxH` chip; clicking selects it and opens the inspect pane. The panel's own entities are excluded. Capped at 400 rows. |
+| Signals | Frame number, tick time, entity count, then one `name = value (kind)` row per global signal. |
 | Network | HTTP exchanges captured from script `fetch()` calls, oldest first: status, method, URL, and tag. Holds the last 128. |
+
+The Pick button arms hover-to-inspect on the app itself: the element under
+the pointer is overlaid, and clicking it selects it in the tree. The click
+that picks still reaches the app.
+
+### Editing the running app
+
+The inspect pane under the tree shows the selected element's box, layout
+style, fill, and text facts, and edits the element in place:
+
+| Control | Effect |
+|---------|--------|
+| text field + Apply | Replaces the element's text content and re-lays it out. Only elements that already show text take the edit. |
+| Hide | Toggles the element's visibility. |
+| Delete | Despawns the element and its subtree. |
+
+Edits change the live world only - source files are untouched, and a
+hot-reload or a script that rewrites the same element overwrites them.
 
 The Elements panel needs the snapshot pipeline, which the introspection server
 provides. With that server off the panel says so instead of showing a tree.
