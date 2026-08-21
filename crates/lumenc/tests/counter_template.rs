@@ -22,10 +22,17 @@ use lumen_core::components::{LumenId, TextContent};
 use lumen_core::input::{ClickEvent, PointerButton};
 use lumenc::{RunOptions, build_headless_app};
 
-/// Write the `counter` template into an isolated temp dir, with the MCP
-/// server disabled (`port = 0`) so the test never binds a TCP port.
-fn scaffolded_counter() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("lumenc-counter-template-{}", std::process::id()));
+/// Write the `counter` template into a temp dir of this case's own, with the
+/// MCP server disabled (`port = 0`) so the test never binds a TCP port.
+///
+/// `case` keeps two tests apart: they run on threads of one process, and each
+/// removes its directory when it is done, so a shared name lets one delete the
+/// app the other is still reading.
+fn scaffolded_counter(case: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "lumenc-counter-template-{}-{case}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("mkdir temp app");
     for (path, body) in lumenc::scaffold::COUNTER {
@@ -77,7 +84,7 @@ fn scaffolded_counter_counts_clicks() {
 }
 
 fn run_case() {
-    let dir = scaffolded_counter();
+    let dir = scaffolded_counter("clicks");
     let (mut app, _window) = build_headless_app(RunOptions::new(dir.clone())).expect("build app");
 
     // A few ticks so the tree mounts, the candela `on_ready` fires, its
@@ -141,7 +148,7 @@ fn click_lands_in_one_tick_with_extra_systems_installed() {
 fn run_padded_case() {
     use lumen_core::prelude::TickStage;
 
-    let dir = scaffolded_counter();
+    let dir = scaffolded_counter("padded");
     let (mut app, _window) = build_headless_app(RunOptions::new(dir.clone())).expect("build app");
     for _ in 0..8 {
         app.add_systems(TickStage::Systems, || {});
