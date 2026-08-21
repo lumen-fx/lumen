@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 use candela_vm::{IntoHostFn, Value};
-use lumen_script::{CommandFn, FileDialogKind, ScriptCommand, ScriptValue};
+use lumen_script::{FileDialogKind, ScriptCommand, ScriptFn, ScriptNs, ScriptValue};
 
 use crate::parse;
 use crate::value::{array_to_rows, candela_value_to_script, script_value_to_candela};
@@ -308,23 +308,41 @@ impl Registries {
         self.event_handlers.write().unwrap().clear();
         lumen_script::event::clear_host_bindings();
     }
+}
 
-    /// Bridge an embedder-registered [`CommandFn`] onto `sink` as a variadic
-    /// `lumen`-namespace builtin. One registration serves any arity; the script
-    /// declares it with a `...` argument list.
-    pub(crate) fn register_command_fn<S: HostFnSink>(
-        &self,
-        sink: &mut S,
-        name: &str,
-        f: CommandFn,
-    ) {
-        let queue = self.sink.clone();
-        sink.register_host_fn_variadic(HOST_NAMESPACE, name, move |args: &[Value]| {
-            let svs: Vec<ScriptValue> = args.iter().map(candela_value_to_script).collect();
-            queue.lock().unwrap().extend(f(&svs));
-            Value::Null
-        });
+/// The candela host namespace a [`ScriptNs`] lands in.
+pub(crate) fn namespace_of(ns: &ScriptNs) -> &str {
+    match ns {
+        ScriptNs::Builtin => HOST_NAMESPACE,
+        ScriptNs::Extension => NATIVE_NAMESPACE,
+        ScriptNs::Named(ns) => ns.as_str(),
     }
+}
+
+/// Bind one [`ScriptFn`] into `sink` as a variadic host function.
+///
+/// One registration serves every arity, so the script declares the function
+/// with a `...` argument list and candela checks nothing at the call site. A
+/// declaration whose types the signature could carry is bound the same way for
+/// now; the typed shape adapters land with the prelude work.
+pub(crate) fn register_script_fn<S: HostFnSink>(
+    sink: &mut S,
+    registries: &Registries,
+    f: &ScriptFn,
+) {
+    let queue = registries.sink.clone();
+    let bound = f.clone();
+    sink.register_host_fn_variadic(namespace_of(&f.ns), &f.name, move |args: &[Value]| {
+        let vals: Vec<ScriptValue> = args.iter().map(candela_value_to_script).collect();
+        // The sink lock is taken once, after the body returns: a body that
+        // calls back into a builtin would otherwise meet a lock its own call
+        // is holding.
+        let (ret, commands) = bound.invoke(&vals);
+        if !commands.is_empty() {
+            queue.lock().unwrap().extend(commands);
+        }
+        script_value_to_candela(&ret)
+    });
 }
 /// Register the fragment surface: instantiate a compiled fragment by key, and
 /// put a node at the app root.

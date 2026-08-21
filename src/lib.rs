@@ -39,7 +39,7 @@ use lumen_core::property_store::{
 };
 use lumen_core::signals::{push_external_array, push_external_clear};
 use lumen_runtime::RunOptions;
-use lumen_script::{NativeExternFn, ScriptValue};
+use lumen_script::{ScriptFn, ScriptValue};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -1082,7 +1082,7 @@ fn build_run_options(app: LumenApp) -> RunOptions {
             user_data,
             arg_count,
         } = ef;
-        opts = opts.with_native_fn(NativeExternFn::new(
+        opts = opts.with_native_fn(ScriptFn::value(
             name,
             arg_count,
             move |args: &[ScriptValue]| {

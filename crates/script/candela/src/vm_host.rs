@@ -22,10 +22,11 @@ use bevy_ecs::prelude::*;
 use candela_vm::{CallError, HostRegistry, RuntimeProgram, Value, load_program};
 use lumen_core::prelude::{App, Plugin};
 use lumen_script::{
-    CallOutcome, CommandFn, ScriptCommand, ScriptError, ScriptHost, ScriptPlugin, ScriptValue,
+    CallOutcome, ScriptCommand, ScriptError, ScriptFn, ScriptFnStore, ScriptHost, ScriptPlugin,
+    ScriptValue,
 };
 
-use crate::host_fns::{Registries, register_lumen_host_fns};
+use crate::host_fns::{Registries, register_lumen_host_fns, register_script_fn};
 use crate::value::{candela_value_to_script, script_value_to_candela};
 
 /// The registry awaiting a load, and the program once loaded, behind a
@@ -83,6 +84,10 @@ pub struct CandelaVmHost {
     /// generic plugin already turns a failure into a `ScriptLoadFailure` the
     /// embedder can show.
     image: Vec<u8>,
+    /// The [`ScriptFn`]s an embedder registered. `candela-vm` binds them when
+    /// the image loads, so the store only has something to put back when a
+    /// reset happens before that.
+    script_fns: ScriptFnStore,
 }
 
 impl CandelaVmHost {
@@ -100,6 +105,7 @@ impl CandelaVmHost {
             },
             registries,
             image,
+            script_fns: ScriptFnStore::default(),
         }
     }
 
@@ -177,6 +183,16 @@ impl ScriptHost for CandelaVmHost {
     fn reset(&mut self) {
         self.vm.program = None;
         self.registries.reset();
+        // Only reachable before the load: `candela-vm` takes the registry when
+        // it binds the image, and a closure registered after that has nothing
+        // left to bind to.
+        let stored = std::mem::take(&mut self.script_fns);
+        if let Some(registry) = self.vm.registry.as_mut() {
+            for f in stored.iter() {
+                register_script_fn(registry, &self.registries, f);
+            }
+            self.script_fns = stored;
+        }
     }
 
     fn call(&mut self, fn_name: &str, args: &[ScriptValue]) -> Result<CallOutcome, ScriptError> {
@@ -283,19 +299,16 @@ impl ScriptHost for CandelaVmHost {
         self.registries.clear_pending(evaluated);
     }
 
-    fn register_command_fn(
-        &mut self,
-        name: &str,
-        _arity: usize,
-        f: CommandFn,
-    ) -> Result<(), ScriptError> {
+    fn register_script_fn(&mut self, f: &ScriptFn) -> Result<(), ScriptError> {
         let registry = self.vm.registry.as_mut().ok_or_else(|| {
             ScriptError::Runtime(format!(
-                "{name}: candela-vm binds host functions when the artifact loads; register this \
-                 before the load"
+                "{}: candela-vm binds host functions when the artifact loads; register this \
+                 before the load",
+                f.name
             ))
         })?;
-        self.registries.register_command_fn(registry, name, f);
+        register_script_fn(registry, &self.registries, f);
+        self.script_fns.record(f);
         Ok(())
     }
 

@@ -692,7 +692,7 @@ impl LumenPluginsBuilder {
     pub(crate) fn write_into(self, app: &mut App) {
         app.merge_boot(self.boot);
         for plugin in self.extra {
-            app.push_deferred(move |ecs| plugin.install(ecs));
+            app.push_plugin(move |ecs| plugin.install(ecs));
         }
     }
 }

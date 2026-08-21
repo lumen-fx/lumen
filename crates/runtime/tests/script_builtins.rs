@@ -2,17 +2,16 @@
 //! them.
 //!
 //! `builtin_script_fns` describes `set_color_scheme` and the page navigation
-//! family once, host-neutrally, and every host registers the same values
-//! through its own `with_native_fn`. So the bodies can be driven directly
-//! here, with `ScriptValue` arguments standing in for whatever the host
-//! marshalled, and the per-host suites in lumenc check that each language
-//! actually resolves the names.
+//! family once, host-neutrally, and every host binds the same values from the
+//! app's registry. So the bodies can be driven directly here, with
+//! `ScriptValue` arguments standing in for whatever the host marshalled, and
+//! the per-host suites in lumenc check that each language resolves the names.
 
 use lumen_core::app::App;
 use lumen_core::command::{Command, CommandQueue, CommandReceiver};
 use lumen_core::components::ColorScheme;
 use lumen_runtime::run::ColorSchemeIntent;
-use lumen_script::{NativeExternFn, ScriptValue};
+use lumen_script::{HostSet, ScriptFn, ScriptValue};
 
 /// Navigation rides a process-global bus, so the tests that read it run one
 /// at a time.
@@ -23,16 +22,16 @@ fn nav_guard() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-/// Look up one built-in by name and declared arity.
-fn builtin(fns: &[NativeExternFn], name: &str, arity: usize) -> NativeExternFn {
+/// Look up one built-in by name.
+fn builtin(fns: &[ScriptFn], name: &str) -> ScriptFn {
     fns.iter()
-        .find(|f| f.name == name && f.arity == arity)
-        .unwrap_or_else(|| panic!("no built-in `{name}` of arity {arity}"))
+        .find(|f| f.name == name)
+        .unwrap_or_else(|| panic!("no built-in `{name}`"))
         .clone()
 }
 
-fn call(f: &NativeExternFn, args: &[ScriptValue]) -> ScriptValue {
-    (f.call)(args)
+fn call(f: &ScriptFn, args: &[ScriptValue]) -> ScriptValue {
+    f.invoke(args).0
 }
 
 /// An app whose command queue this test holds the receiving end of, so what
@@ -50,7 +49,7 @@ fn app_with_queue(capacity: usize) -> (App, CommandReceiver) {
 fn set_color_scheme_queues_the_typed_intent() {
     let (app, mut rx) = app_with_queue(4);
     let fns = lumen_runtime::run::builtin_script_fns(&app);
-    let set_scheme = builtin(&fns, "set_color_scheme", 1);
+    let set_scheme = builtin(&fns, "set_color_scheme");
 
     assert_eq!(
         call(&set_scheme, &[ScriptValue::Str("force-dark".into())]),
@@ -80,7 +79,7 @@ fn set_color_scheme_queues_the_typed_intent() {
 fn set_color_scheme_ignores_an_unknown_name() {
     let (app, mut rx) = app_with_queue(4);
     let fns = lumen_runtime::run::builtin_script_fns(&app);
-    let set_scheme = builtin(&fns, "set_color_scheme", 1);
+    let set_scheme = builtin(&fns, "set_color_scheme");
 
     assert_eq!(
         call(&set_scheme, &[ScriptValue::Str("chartreuse".into())]),
@@ -105,7 +104,7 @@ fn set_color_scheme_ignores_an_unknown_name() {
 fn set_color_scheme_drops_the_update_when_the_queue_is_full() {
     let (app, _rx) = app_with_queue(1);
     let fns = lumen_runtime::run::builtin_script_fns(&app);
-    let set_scheme = builtin(&fns, "set_color_scheme", 1);
+    let set_scheme = builtin(&fns, "set_color_scheme");
 
     let sender = app.world.resource::<CommandQueue>().sender().clone();
     sender
@@ -120,42 +119,42 @@ fn set_color_scheme_drops_the_update_when_the_queue_is_full() {
     );
 }
 
-/// `page` is registered at both arities over one body: with an argument it
-/// navigates, without one it reads. Hosts that pass a unit placeholder for a
-/// missing argument read as well, which is what keeps the no-argument spelling
-/// working across languages.
+/// `page` takes its argument optionally: with one it navigates, without one it
+/// reads. Hosts that pass a unit placeholder for a missing argument read as
+/// well, which is what keeps the no-argument spelling working across
+/// languages.
 #[test]
 fn page_navigates_with_an_argument_and_reads_without_one() {
     let _guard = nav_guard();
     let app = App::new();
     let fns = lumen_runtime::run::builtin_script_fns(&app);
 
-    let read = builtin(&fns, "page", 0);
-    let navigate = builtin(&fns, "page", 1);
-    assert!(
-        std::sync::Arc::ptr_eq(&read.call, &navigate.call),
-        "both arities share one body"
+    let page = builtin(&fns, "page");
+    assert_eq!(
+        page.sig.arity_range(),
+        0..=1,
+        "one description answers both call shapes"
     );
 
     assert_eq!(
-        call(&navigate, &[ScriptValue::Str("settings".into())]),
+        call(&page, &[ScriptValue::Str("settings".into())]),
         ScriptValue::Unit,
         "navigating returns nothing"
     );
 
     let current = lumen_core::nav::current();
     assert_eq!(
-        call(&read, &[]),
+        call(&page, &[]),
         ScriptValue::Str(current.clone()),
         "no argument reads the active page"
     );
     assert_eq!(
-        call(&read, &[ScriptValue::Unit]),
+        call(&page, &[ScriptValue::Unit]),
         ScriptValue::Str(current.clone()),
         "a unit placeholder reads too"
     );
     assert_eq!(
-        call(&builtin(&fns, "page_current", 0), &[]),
+        call(&builtin(&fns, "page_current"), &[]),
         ScriptValue::Str(current),
         "page_current is the same reader under an unambiguous name"
     );
@@ -170,13 +169,28 @@ fn history_steps_report_that_they_were_queued() {
     let fns = lumen_runtime::run::builtin_script_fns(&app);
 
     assert_eq!(
-        call(&builtin(&fns, "page_back", 0), &[]),
+        call(&builtin(&fns, "page_back"), &[]),
         ScriptValue::Bool(true),
         "page_back hands the script a boolean"
     );
     assert_eq!(
-        call(&builtin(&fns, "page_forward", 0), &[]),
+        call(&builtin(&fns, "page_forward"), &[]),
         ScriptValue::Bool(true),
         "page_forward does the same"
     );
+}
+
+/// candela declares these names in its own prelude, so the runtime's copies
+/// stay out of its way; Rhai and Lua have no such declaration and take them.
+#[test]
+fn the_runtime_builtins_are_offered_to_rhai_and_lua_only() {
+    let app = App::new();
+    for f in lumen_runtime::run::builtin_script_fns(&app) {
+        assert_eq!(
+            f.hosts,
+            HostSet::RHAI | HostSet::LUA,
+            "`{}` must not reach candela",
+            f.name
+        );
+    }
 }

@@ -50,8 +50,8 @@ pub use config::{ConfigError, LumenToml};
 #[cfg(feature = "host-rhai")]
 pub use run::run_with;
 pub use run::{
-    AppHook, CheckReport, RunError, RunOptions, WindowSetup, build_headless_app, run_app,
-    run_app_headless,
+    AppHook, CheckReport, PluginInstaller, RunError, RunOptions, WindowSetup, build_headless_app,
+    run_app, run_app_headless,
 };
 #[cfg(feature = "runtime-parse")]
 pub use run::{check_app, compile_app, compile_app_with_skin};

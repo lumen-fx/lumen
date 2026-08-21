@@ -6,14 +6,12 @@
 //! so the builtin list, the load, the export call and the signal mirror are
 //! held to one contract from one place.
 
-use std::sync::Arc;
-
 use lumen_core::node::{DomIndex, DomRecord, NodeHandle, publish_dom_index};
 use lumen_core::prelude::App;
 use lumen_core::property_store::PropertyStore;
 use lumen_script::event;
 use lumen_script::{
-    CommandFn, ScriptCommand, ScriptError, ScriptHost, ScriptLoadFailure, ScriptValue,
+    ScriptCommand, ScriptError, ScriptFn, ScriptHost, ScriptLoadFailure, ScriptNs, ScriptValue,
 };
 use lumen_script_candela::{CandelaHost, CandelaVmHost, ScriptCandelaVmPlugin, compile_bytecode};
 
@@ -84,7 +82,7 @@ fn main() {}
 "#;
 
 /// Declares a builtin Lumen does not register itself, so only an embedder's
-/// `register_command_fn` can put a closure behind it.
+/// `register_script_fn` can put a closure behind it.
 const NATIVE: &str = r#"
 host "lumen" {
     log_it(...);
@@ -129,16 +127,22 @@ fn loaded(source: &str, uri: &str) -> CandelaVmHost {
 }
 
 /// Joins the marshalled args into a `Print` so a test can observe exactly what
-/// crossed the boundary.
-fn joining_command_fn() -> CommandFn {
-    Arc::new(|args: &[ScriptValue]| {
-        let joined = args
-            .iter()
-            .map(ScriptValue::stringify)
-            .collect::<Vec<_>>()
-            .join(",");
-        vec![ScriptCommand::Print(joined)]
-    })
+/// crossed the boundary. Lands in the `lumen` namespace, the one the fixtures
+/// declare.
+fn joining_script_fn(name: &str) -> ScriptFn {
+    ScriptFn::new(name)
+        .ns(ScriptNs::Builtin)
+        .variadic()
+        .build(|cx| {
+            let joined = cx
+                .args()
+                .iter()
+                .map(ScriptValue::stringify)
+                .collect::<Vec<_>>()
+                .join(",");
+            cx.emit(ScriptCommand::Print(joined));
+            ScriptValue::Unit
+        })
 }
 
 fn prints(cmds: &[ScriptCommand]) -> Vec<String> {
@@ -438,13 +442,13 @@ fn a_derivation_is_registered_pending_and_recomputes_from_its_deps() {
 }
 
 #[test]
-fn a_native_command_fn_registered_before_the_load_binds_to_the_image() {
+fn a_native_fn_registered_before_the_load_binds_to_the_image() {
     let mut host = host_for(NATIVE, "native.cdl");
     assert!(
         host.registry_mut().is_some(),
         "the binding window is open until the load"
     );
-    host.register_command_fn("log_it", 0, joining_command_fn())
+    host.register_script_fn(&joining_script_fn("log_it"))
         .expect("registering before the load is allowed");
 
     host.load("", "native.cdlb")
@@ -459,9 +463,9 @@ fn a_native_command_fn_registered_before_the_load_binds_to_the_image() {
 }
 
 #[test]
-fn a_native_command_fn_registered_after_the_load_is_refused_by_name() {
+fn a_native_fn_registered_after_the_load_is_refused_by_name() {
     let mut host = host_for(NATIVE, "native.cdl");
-    host.register_command_fn("log_it", 0, joining_command_fn())
+    host.register_script_fn(&joining_script_fn("log_it"))
         .expect("registering before the load is allowed");
     host.load("", "native.cdlb").expect("the image loads");
 
@@ -469,8 +473,7 @@ fn a_native_command_fn_registered_after_the_load_is_refused_by_name() {
         host.registry_mut().is_none(),
         "the binding window closes at the load"
     );
-    let Err(ScriptError::Runtime(message)) =
-        host.register_command_fn("later", 0, joining_command_fn())
+    let Err(ScriptError::Runtime(message)) = host.register_script_fn(&joining_script_fn("later"))
     else {
         panic!("a host fn registered after the load has nothing left to bind to");
     };
