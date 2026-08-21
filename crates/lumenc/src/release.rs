@@ -74,12 +74,75 @@ pub fn current() -> &'static str {
 /// The release this toolchain downloads published files from.
 ///
 /// An installed copy answers from its receipt without a request. Anything else
-/// asks the releases page.
+/// asks the releases page, and the answer is kept for a day.
 pub fn resolve() -> Result<String, Unresolved> {
-    if let Some(installed) = installed_version() {
-        return Ok(installed);
+    let receipt = receipt_text();
+    let now = unix_now().unwrap_or(0);
+    let answer = decide(receipt.as_deref(), &read_state(), now, fetch_latest)?;
+    if let Answer::Asked(version) = &answer {
+        write_state(now, Some(version));
     }
-    latest()
+    Ok(answer.into_version())
+}
+
+/// Which of the things that can name a release did, so a caller knows whether
+/// the answer is worth writing down and a reader can tell the paths apart.
+#[derive(Debug, PartialEq, Eq)]
+enum Answer {
+    /// The receipt named the release this copy was installed from.
+    Installed(String),
+    /// The answer from an earlier run was still inside its day.
+    Remembered(String),
+    /// The releases page answered just now.
+    Asked(String),
+    /// The page could not be reached, so the last answer it gave stands.
+    Stale(String),
+}
+
+impl Answer {
+    fn into_version(self) -> String {
+        match self {
+            Answer::Installed(v) | Answer::Remembered(v) | Answer::Asked(v) | Answer::Stale(v) => v,
+        }
+    }
+}
+
+/// The whole decision, with everything it reads handed to it: the install
+/// receipt, what an earlier run wrote down, the time, and a way to ask the
+/// releases page.
+///
+/// Separating this from the reading is what lets the rules be checked without
+/// a network, a receipt on disk, or a clock.
+fn decide(
+    receipt: Option<&str>,
+    state: &State,
+    now: u64,
+    ask: impl FnOnce() -> Result<String, Unresolved>,
+) -> Result<Answer, Unresolved> {
+    // An installed copy came from a release, and its own release is the one
+    // whose files match the compiler sitting beside them. A pinned install
+    // holds here, because the pinned version is what the installer recorded.
+    if let Some(installed) = receipt.and_then(installed_release) {
+        return Ok(Answer::Installed(installed));
+    }
+    if now.saturating_sub(state.checked_at) < INTERVAL_SECS
+        && let Some(remembered) = state.latest.clone()
+    {
+        return Ok(Answer::Remembered(remembered));
+    }
+    match ask() {
+        Ok(latest) => Ok(Answer::Asked(latest)),
+        // Yesterday's answer came from the page too, so an unreachable page
+        // falls back to it rather than to a number this binary made up. A
+        // repository that has dropped its releases is a different answer and
+        // replaces the remembered one.
+        Err(Unresolved::Unreachable) => state
+            .latest
+            .clone()
+            .map(Answer::Stale)
+            .ok_or(Unresolved::Unreachable),
+        Err(other) => Err(other),
+    }
 }
 
 /// Why the releases page could not name a release.
@@ -101,30 +164,6 @@ impl fmt::Display for Unresolved {
 }
 
 impl std::error::Error for Unresolved {}
-
-/// The newest published release: the day's remembered answer when there is
-/// one, and the releases page otherwise.
-pub(crate) fn latest() -> Result<String, Unresolved> {
-    let now = unix_now().unwrap_or(0);
-    let state = read_state();
-    if now.saturating_sub(state.checked_at) < INTERVAL_SECS
-        && let Some(remembered) = state.latest.clone()
-    {
-        return Ok(remembered);
-    }
-    match fetch_latest() {
-        Ok(latest) => {
-            write_state(now, Some(&latest));
-            Ok(latest)
-        }
-        // Yesterday's answer came from the page too, so an unreachable page
-        // falls back to it rather than to a number this binary made up. A
-        // repository that has dropped its releases is a different answer and
-        // replaces the remembered one.
-        Err(Unresolved::Unreachable) => state.latest.ok_or(Unresolved::Unreachable),
-        Err(other) => Err(other),
-    }
-}
 
 /// The newest published release, asked for now.
 pub(crate) fn fetch_latest() -> Result<String, Unresolved> {
@@ -202,7 +241,7 @@ fn parse_location_tag(headers: &str) -> Option<String> {
 // --- the install receipt ------------------------------------------------------
 
 /// The receipt for the running executable, if this copy was installed.
-fn receipt_text() -> Option<String> {
+pub(crate) fn receipt_text() -> Option<String> {
     std::fs::read_to_string(receipt_path()?).ok()
 }
 
@@ -221,19 +260,19 @@ fn receipt_path_from(exe: &Path) -> Option<PathBuf> {
     Some(prefix.join("share").join("lumen").join("lumen.receipt"))
 }
 
-/// The release an installed toolchain came from. A receipt whose `version`
-/// line is damaged reads as no receipt at all, so the releases page answers
-/// instead of a malformed URL being built.
-pub fn installed_version() -> Option<String> {
-    let value = receipt_field(&receipt_text()?, "version")?;
+/// The release a receipt records. A receipt whose `version` line is damaged
+/// reads as no receipt at all, so the releases page answers instead of a
+/// malformed URL being built.
+pub(crate) fn installed_release(receipt: &str) -> Option<String> {
+    let value = receipt_field(receipt, "version")?;
     let value = value.strip_prefix('v').unwrap_or(&value).to_string();
     parse_version(&value).map(|_| value)
 }
 
-/// Whether this copy was installed with a pinned version. Pinning is a
-/// decision, so a pinned install is never told about newer releases.
-pub fn is_pinned() -> bool {
-    receipt_text().is_some_and(|text| receipt_field(&text, "pinned").is_some())
+/// Whether a receipt records a pinned install. Pinning is a decision, so a
+/// pinned install is never told about newer releases.
+pub(crate) fn is_pinned_receipt(receipt: &str) -> bool {
+    receipt_field(receipt, "pinned").is_some()
 }
 
 /// The value on the receipt line starting with `key`. A receipt line is a key,
@@ -278,14 +317,19 @@ fn state_dir() -> Option<PathBuf> {
         .map(|local| PathBuf::from(local).join("lumen"))
 }
 
-fn state_path() -> Option<PathBuf> {
+pub(crate) fn state_path() -> Option<PathBuf> {
     Some(state_dir()?.join("update-check"))
 }
 
 /// What the state file holds, or an empty state when there is none.
 pub(crate) fn read_state() -> State {
-    state_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
+    state_path().map(|p| read_state_at(&p)).unwrap_or_default()
+}
+
+/// What the state file at `path` holds. A file that is not there, or cannot be
+/// read, is an empty state: the answer is asked for again rather than guessed.
+pub(crate) fn read_state_at(path: &Path) -> State {
+    std::fs::read_to_string(path)
         .map(|text| parse_state(&text))
         .unwrap_or_default()
 }
@@ -316,9 +360,13 @@ fn format_state(checked_at: u64, latest: Option<&str>) -> String {
 /// Records the answer. A failure to write costs one extra request later, so it
 /// is not worth reporting.
 pub(crate) fn write_state(checked_at: u64, latest: Option<&str>) {
-    let Some(path) = state_path() else {
-        return;
-    };
+    if let Some(path) = state_path() {
+        write_state_at(&path, checked_at, latest);
+    }
+}
+
+/// Records the answer in the file at `path`, creating the directory it sits in.
+pub(crate) fn write_state_at(path: &Path, checked_at: u64, latest: Option<&str>) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -367,6 +415,234 @@ pub(crate) fn is_newer(latest: &str, current: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// An installed copy, as the installer writes it.
+    const RECEIPT: &str = "version 0.1.0\ntarget linux-x86_64\nfile bin/lumenc\n";
+
+    /// The same, pinned by `install.sh --version`.
+    const PINNED: &str = "version 0.1.0\ntarget linux-x86_64\npinned 0.1.0\nfile bin/lumenc\n";
+
+    /// A page that answers with `latest`, and a count of how often it was
+    /// asked, so a test can prove a path made no request at all.
+    fn page(
+        latest: Result<String, Unresolved>,
+        asked: &std::cell::Cell<u32>,
+    ) -> impl FnOnce() -> Result<String, Unresolved> {
+        move || {
+            asked.set(asked.get() + 1);
+            latest
+        }
+    }
+
+    fn remembered(checked_at: u64, latest: &str) -> State {
+        State {
+            checked_at,
+            latest: Some(latest.to_string()),
+        }
+    }
+
+    /// An installed toolchain uses the release it was installed from, and
+    /// makes no request to find that out.
+    #[test]
+    fn an_installed_copy_answers_from_its_receipt() {
+        let asked = std::cell::Cell::new(0);
+        let answer = decide(
+            Some(RECEIPT),
+            &State::default(),
+            1_000_000,
+            page(Ok("9.9.9".to_string()), &asked),
+        );
+        assert_eq!(answer, Ok(Answer::Installed("0.1.0".to_string())));
+        assert_eq!(asked.get(), 0, "the receipt already answered");
+    }
+
+    /// A pin holds because the installer wrote the pinned version as the
+    /// installed one: the newest release does not enter into it.
+    #[test]
+    fn a_pinned_copy_stays_on_the_version_it_was_pinned_to() {
+        let asked = std::cell::Cell::new(0);
+        let answer = decide(
+            Some(PINNED),
+            &remembered(1_000_000, "9.9.9"),
+            1_000_000,
+            page(Ok("9.9.9".to_string()), &asked),
+        );
+        assert_eq!(answer.map(Answer::into_version), Ok("0.1.0".to_string()));
+        assert_eq!(asked.get(), 0);
+        assert!(is_pinned_receipt(PINNED));
+        assert!(!is_pinned_receipt(RECEIPT));
+    }
+
+    /// A receipt that does not say which release it came from cannot answer,
+    /// so the page does. A damaged line must not become part of a URL.
+    #[test]
+    fn a_damaged_receipt_falls_through_to_the_page() {
+        let asked = std::cell::Cell::new(0);
+        for receipt in [
+            "target linux-x86_64\n",
+            "version not-a-number\n",
+            "version\n",
+        ] {
+            assert_eq!(installed_release(receipt), None, "{receipt:?}");
+        }
+        let answer = decide(
+            Some("version wobble\n"),
+            &State::default(),
+            1_000_000,
+            page(Ok("0.3.0".to_string()), &asked),
+        );
+        assert_eq!(answer, Ok(Answer::Asked("0.3.0".to_string())));
+        assert_eq!(asked.get(), 1);
+    }
+
+    /// A receipt records the bare version, but a `v` prefix is tolerated
+    /// rather than turned into `vv0.1.0` further down.
+    #[test]
+    fn a_receipt_version_reads_with_or_without_the_v() {
+        assert_eq!(
+            installed_release("version v0.1.0\n").as_deref(),
+            Some("0.1.0")
+        );
+        assert_eq!(installed_release(RECEIPT).as_deref(), Some("0.1.0"));
+    }
+
+    /// A copy that was not installed asks the page, and the answer is one the
+    /// caller should write down.
+    #[test]
+    fn a_source_build_asks_the_page() {
+        let asked = std::cell::Cell::new(0);
+        let answer = decide(
+            None,
+            &State::default(),
+            1_000_000,
+            page(Ok("0.0.3".to_string()), &asked),
+        );
+        assert_eq!(answer, Ok(Answer::Asked("0.0.3".to_string())));
+        assert_eq!(asked.get(), 1);
+    }
+
+    /// Inside the day, the answer from the last request is reused, so a run of
+    /// builds makes one request between them.
+    #[test]
+    fn an_answer_inside_its_day_is_reused() {
+        let asked = std::cell::Cell::new(0);
+        let answer = decide(
+            None,
+            &remembered(1_000_000, "0.0.3"),
+            1_000_000 + INTERVAL_SECS - 1,
+            page(Ok("0.0.4".to_string()), &asked),
+        );
+        assert_eq!(answer, Ok(Answer::Remembered("0.0.3".to_string())));
+        assert_eq!(asked.get(), 0);
+    }
+
+    /// Once the day is up the page is asked again, and its answer wins over
+    /// the remembered one.
+    #[test]
+    fn an_answer_older_than_a_day_is_asked_again() {
+        let asked = std::cell::Cell::new(0);
+        let answer = decide(
+            None,
+            &remembered(1_000_000, "0.0.3"),
+            1_000_000 + INTERVAL_SECS,
+            page(Ok("0.0.4".to_string()), &asked),
+        );
+        assert_eq!(answer, Ok(Answer::Asked("0.0.4".to_string())));
+        assert_eq!(asked.get(), 1);
+    }
+
+    /// Offline with an answer already on disk: the last answer the page gave
+    /// stands, because it is the page's and not this binary's own version.
+    #[test]
+    fn an_unreachable_page_falls_back_to_the_last_answer() {
+        let asked = std::cell::Cell::new(0);
+        let answer = decide(
+            None,
+            &remembered(0, "0.0.3"),
+            INTERVAL_SECS * 30,
+            page(Err(Unresolved::Unreachable), &asked),
+        );
+        assert_eq!(answer, Ok(Answer::Stale("0.0.3".to_string())));
+        assert_eq!(asked.get(), 1);
+    }
+
+    /// Offline with nothing on disk: no answer, and the message says the page
+    /// could not be reached rather than naming a release.
+    #[test]
+    fn an_unreachable_page_with_nothing_remembered_fails() {
+        let asked = std::cell::Cell::new(0);
+        let answer = decide(
+            None,
+            &State::default(),
+            1_000_000,
+            page(Err(Unresolved::Unreachable), &asked),
+        );
+        assert_eq!(answer, Err(Unresolved::Unreachable));
+    }
+
+    /// A repository that has published nothing replaces a remembered answer
+    /// rather than falling back to it: the page was reached, and this is what
+    /// it said.
+    #[test]
+    fn a_repository_with_no_releases_answers_nothing() {
+        let asked = std::cell::Cell::new(0);
+        let answer = decide(
+            None,
+            &remembered(0, "0.0.3"),
+            INTERVAL_SECS * 30,
+            page(Err(Unresolved::NoReleases), &asked),
+        );
+        assert_eq!(answer, Err(Unresolved::NoReleases));
+    }
+
+    /// A copy built by cargo is not an installed one: the search walks up from
+    /// the running executable, and a target directory holds no receipt. This
+    /// is what keeps a development build from resolving to the release whose
+    /// number it happens to carry.
+    #[test]
+    fn a_build_from_source_has_no_receipt() {
+        assert_eq!(receipt_text(), None);
+    }
+
+    /// The remembered answer belongs to the user, not to a project, so it sits
+    /// under the user cache directory rather than beside a build.
+    #[test]
+    fn the_remembered_answer_lives_under_the_user_cache() {
+        let Some(path) = state_path() else {
+            return;
+        };
+        assert!(path.ends_with("update-check"), "{}", path.display());
+        assert!(
+            path.parent().is_some_and(|p| p.ends_with("lumen")),
+            "{}",
+            path.display()
+        );
+        // And that path is the file the answer is read back from.
+        assert_eq!(read_state(), read_state_at(&path));
+    }
+
+    /// The state file is the seam between one run and the next, so it has to
+    /// survive the round trip on disk and read as empty when it is not there.
+    #[test]
+    fn the_remembered_answer_survives_a_round_trip() {
+        let dir = std::env::temp_dir().join(format!("lumen-state-{}", std::process::id()));
+        let path = dir.join("update-check");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(read_state_at(&path), State::default());
+        write_state_at(&path, 1_754_697_600, Some("0.2.0"));
+        assert_eq!(read_state_at(&path), remembered(1_754_697_600, "0.2.0"));
+        write_state_at(&path, 42, None);
+        assert_eq!(
+            read_state_at(&path),
+            State {
+                checked_at: 42,
+                latest: None
+            }
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn location_header_yields_the_tag() {
         let headers = "HTTP/2 302 \r\n\
@@ -407,6 +683,8 @@ mod tests {
             parse_location_tag("relocation: https://example.invalid/x"),
             None
         );
+        // A header with nothing after the colon names no tag either.
+        assert_eq!(parse_location_tag("location:   \r\n"), None);
     }
 
     /// Trimmed from a `curl -fsSI` against a GitHub `releases/latest` URL, tag
@@ -479,19 +757,16 @@ mod tests {
         assert!(!is_newer("0.2.0", "not-a-version"));
     }
 
-    #[test]
-    fn a_receipt_yields_the_release_it_recorded() {
-        let plain = "version 0.1.0\ntarget linux-x86_64\nfile bin/lumenc\n";
-        assert_eq!(receipt_field(plain, "version").as_deref(), Some("0.1.0"));
-        assert_eq!(receipt_field(plain, "pinned"), None);
-        // A path that merely contains the word is not a pin.
-        assert_eq!(receipt_field("file bin/pinned\n", "pinned"), None);
-    }
-
+    /// A receipt line is a key and a value, so a path that merely contains the
+    /// word `pinned` is not a pin.
     #[test]
     fn only_a_pinned_line_pins() {
-        let pinned = "version 0.1.0\ntarget linux-x86_64\npinned 0.1.0\nfile bin/lumenc\n";
-        assert_eq!(receipt_field(pinned, "pinned").as_deref(), Some("0.1.0"));
+        assert!(!is_pinned_receipt("file bin/pinned\n"));
+        assert_eq!(
+            receipt_field(RECEIPT, "target").as_deref(),
+            Some("linux-x86_64")
+        );
+        assert_eq!(receipt_field(RECEIPT, "installer"), None);
     }
 
     /// The MSI installs into `%LOCALAPPDATA%\Programs\Lumen`, two levels
@@ -519,26 +794,6 @@ mod tests {
     #[test]
     fn an_executable_with_nothing_above_it_has_no_receipt() {
         assert_eq!(receipt_path_from(Path::new("lumenc")), None);
-    }
-
-    #[test]
-    fn state_round_trips() {
-        let text = format_state(1_754_697_600, Some("0.2.0"));
-        assert_eq!(
-            parse_state(&text),
-            State {
-                checked_at: 1_754_697_600,
-                latest: Some("0.2.0".to_string()),
-            }
-        );
-        let no_version = format_state(42, None);
-        assert_eq!(
-            parse_state(&no_version),
-            State {
-                checked_at: 42,
-                latest: None,
-            }
-        );
     }
 
     #[test]

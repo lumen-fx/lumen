@@ -504,6 +504,66 @@ fn a_python_app_packages_for_this_machine_only() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A platform other than this machine's, whichever machine that is.
+fn other_target() -> &'static str {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "linux-x86_64"
+    } else {
+        "macos-aarch64"
+    }
+}
+
+/// Another platform's files come from a published release, and which release
+/// that is comes from the releases page. A machine that cannot reach the page
+/// has no answer, and the point of this test is that it says so: it must not
+/// fall back to the version `lumenc` was built as and ask for a release that
+/// may never have been tagged.
+///
+/// Nothing here reaches the network. The child gets an empty `PATH`, so the
+/// `curl` and `wget` the lookup runs cannot be found, and a cache directory of
+/// its own, so no answer from an earlier run is waiting for it.
+#[test]
+fn a_cross_target_package_that_cannot_reach_the_releases_page_says_so() {
+    let root = scratch("no-releases-page");
+    let app = root.join("demo");
+    write_app(&app);
+    let cache = root.join("cache");
+    std::fs::create_dir_all(&cache).expect("create cache dir");
+
+    let result = Command::new(env!("CARGO_BIN_EXE_lumenc"))
+        .arg("package")
+        .args([
+            app.to_str().expect("utf-8 path"),
+            "--target",
+            other_target(),
+        ])
+        .env("PATH", "")
+        .env("HOME", &cache)
+        .env("XDG_CACHE_HOME", &cache)
+        .env("LOCALAPPDATA", &cache)
+        .env_remove("LUMEN_LIB_DIR")
+        .output()
+        .expect("run lumenc package");
+
+    assert!(!result.status.success(), "there is nothing to package with");
+    let message = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        message.contains("could not be reached"),
+        "the message should name the page it could not read: {message}"
+    );
+    assert!(
+        message.contains("LUMEN_LIB_DIR") || message.contains("--lib-dir"),
+        "the message should say how to supply the files instead: {message}"
+    );
+    let printed = format!("{message}{}", String::from_utf8_lossy(&result.stdout));
+    assert!(
+        !printed.contains("releases/download"),
+        "no download address is invented when no release is known: {printed}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Cross-compiling a C++ app is CMake's job and needs a toolchain file for the
 /// other platform, which nothing here can stand in for. Without one, say so
 /// instead of building this machine's binary.
