@@ -9,15 +9,9 @@
 //! A host registers this alongside its own applier, with the same ordering
 //! edges: everything that reads a signal is dirty-gated on the tick the write
 //! lands, so a write applied after its reader is a write its reader never
-//! sees.
-//!
-//! The desktop runtime does not use this yet; its own applier still carries
-//! these arms. Moving it over is one system away and is held up by the
-//! desktop applier's position in the schedule, which rests on how the
-//! executor breaks a tie rather than on an edge: adding a second reader of
-//! the command stream moves it ahead of the handler dispatch that fills the
-//! stream, and the edge that would pin it closes a cycle through the text
-//! editor.
+//! sees. The desktop, the browser, a prehydration pass and a server render
+//! all register this one system, so a script's `set_signal` means the same
+//! thing wherever the app is running.
 
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::*;
