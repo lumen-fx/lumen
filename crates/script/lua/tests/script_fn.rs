@@ -67,7 +67,7 @@ fn a_declared_parameter_type_raises_on_the_wrong_argument() {
         &ScriptFn::new("set_pin")
             .param("pin", ScriptTy::Int)
             .ret(ScriptTy::Bool)
-            .build(|cx| ScriptValue::Bool(cx.int_arg(0) > 0)),
+            .build(|cx| Ok(ScriptValue::Bool(cx.int_arg(0) > 0))),
     )
     .expect("register");
 
@@ -147,4 +147,64 @@ fn an_emitting_body_reaches_the_command_sink() {
         })
         .collect();
     assert_eq!(prints, vec!["HI".to_owned()]);
+}
+
+/// A function that fails raises in the script, naming itself.
+///
+/// Lua sees an ordinary error, so `pcall` catches it and an uncaught one is
+/// reported the way every other Lua failure is; either way the host survives.
+#[test]
+fn a_failing_function_raises_and_names_itself() {
+    let mut host = LuaHost::new();
+    host.register_script_fn(
+        &ScriptFn::new("gpio_read")
+            .param("pin", ScriptTy::Int)
+            .ret(ScriptTy::Int)
+            .build(|cx| match cx.int_arg(0) {
+                21 => Ok(ScriptValue::I64(1)),
+                pin => Err(format!("pin {pin} is not wired")),
+            }),
+    )
+    .expect("register");
+    host.load("function probe() return gpio_read(7) end\nfunction safe() return gpio_read(21) end")
+        .expect("load");
+
+    let message = host
+        .call("probe", &[])
+        .expect_err("the function refused")
+        .to_string();
+    assert!(
+        message.contains("gpio_read") && message.contains("pin 7 is not wired"),
+        "the message has to name the function and carry what it said: {message}"
+    );
+    assert_eq!(
+        host.call("safe", &[]).expect("21 is wired").ret,
+        Some(ScriptValue::I64(1)),
+        "the host is still usable"
+    );
+}
+
+/// The script can catch it: `pcall` is what Lua reaches for.
+#[test]
+fn a_script_catches_a_failing_function() {
+    let mut host = LuaHost::new();
+    host.register_script_fn(
+        &ScriptFn::new("gpio_read")
+            .param("pin", ScriptTy::Int)
+            .ret(ScriptTy::Int)
+            .build(|_| Err("the bus is down".to_owned())),
+    )
+    .expect("register");
+
+    assert_eq!(
+        returns_int(
+            &mut host,
+            "function probe()\n\
+             \x20 local ok, err = pcall(gpio_read, 7)\n\
+             \x20 if ok then return 0 end\n\
+             \x20 return -1\n\
+             end",
+        ),
+        -1
+    );
 }

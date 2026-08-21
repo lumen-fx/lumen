@@ -52,7 +52,7 @@ fn an_optional_parameter_binds_the_shorter_call_too() {
         &ScriptFn::new("width")
             .param("scale", ScriptTy::Int)
             .min_arity(0)
-            .build(|cx| ScriptValue::I64(cx.int_arg(0) + 10)),
+            .build(|cx| Ok(ScriptValue::I64(cx.int_arg(0) + 10))),
     )
     .expect("register");
 
@@ -74,7 +74,7 @@ fn a_declared_parameter_type_rejects_the_wrong_argument() {
         &ScriptFn::new("set_pin")
             .param("pin", ScriptTy::Int)
             .ret(ScriptTy::Bool)
-            .build(|cx| ScriptValue::Bool(cx.int_arg(0) > 0)),
+            .build(|cx| Ok(ScriptValue::Bool(cx.int_arg(0) > 0))),
     )
     .expect("register");
 
@@ -204,4 +204,83 @@ fn a_miss_inside_a_handler_is_reported_rather_than_read_as_an_absent_handler() {
         .call("on_close", &[])
         .expect("an absent handler is a miss");
     assert!(!outcome.found);
+}
+
+/// A function that fails raises in the script, naming itself.
+///
+/// The app keeps running: the call reports a runtime error the way every other
+/// Rhai failure does, so the banner names the plugin's function rather than
+/// leaving a silent wrong answer behind.
+#[test]
+fn a_failing_function_raises_and_names_itself() {
+    let mut host = RhaiHost::new();
+    host.register_script_fn(
+        &ScriptFn::new("gpio_read")
+            .param("pin", ScriptTy::Int)
+            .ret(ScriptTy::Int)
+            .build(|cx| match cx.int_arg(0) {
+                21 => Ok(ScriptValue::I64(1)),
+                pin => Err(format!("pin {pin} is not wired")),
+            }),
+    )
+    .expect("register");
+    host.load("fn probe() { gpio_read(7) }\nfn safe() { gpio_read(21) }")
+        .expect("load");
+
+    let err = host.call("probe", &[]).expect_err("the function refused");
+    let message = err.to_string();
+    assert!(
+        message.contains("gpio_read") && message.contains("pin 7 is not wired"),
+        "the message has to name the function and carry what it said: {message}"
+    );
+    assert_eq!(
+        host.call("safe", &[]).expect("21 is wired").ret,
+        Some(ScriptValue::I64(1)),
+        "the host is still usable"
+    );
+}
+
+/// The script can catch it, because it is an ordinary Rhai runtime error.
+#[test]
+fn a_script_catches_a_failing_function() {
+    let mut host = RhaiHost::new();
+    host.register_script_fn(
+        &ScriptFn::new("gpio_read")
+            .param("pin", ScriptTy::Int)
+            .ret(ScriptTy::Int)
+            .build(|_| Err("the bus is down".to_owned())),
+    )
+    .expect("register");
+
+    assert_eq!(
+        returns_int(
+            &mut host,
+            "fn probe() { let n = 0; try { n = gpio_read(7); } catch (e) { n = -1; } n }",
+        ),
+        -1
+    );
+}
+
+/// A function in a namespace fails the same way.
+#[test]
+fn a_failing_namespaced_function_raises_too() {
+    let mut host = RhaiHost::new();
+    host.register_script_fn(
+        &ScriptFn::new("read")
+            .ns(ScriptNs::Named("gpio".into()))
+            .param("pin", ScriptTy::Int)
+            .ret(ScriptTy::Int)
+            .build(|_| Err("the bus is down".to_owned())),
+    )
+    .expect("register");
+    host.load("fn probe() { gpio::read(7) }").expect("load");
+
+    let message = host
+        .call("probe", &[])
+        .expect_err("the function refused")
+        .to_string();
+    assert!(
+        message.contains("read") && message.contains("the bus is down"),
+        "{message}"
+    );
 }

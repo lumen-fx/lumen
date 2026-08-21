@@ -234,6 +234,9 @@ impl AppBuilder {
     /// Expose a fully described [`ScriptFn`]: declared parameter types, a
     /// return type, a namespace, and the languages that may see it.
     ///
+    /// The body returns `Ok(value)`, or `Err(message)` to raise `message` in
+    /// the script that called it.
+    ///
     /// ```no_run
     /// use lumenui::simple::App;
     /// use lumenui::{ScriptFn, ScriptTy, ScriptValue};
@@ -246,7 +249,10 @@ impl AppBuilder {
     ///             .param("pin", ScriptTy::Int)
     ///             .ret(ScriptTy::Bool)
     ///             .doc("Drive a GPIO pin high.")
-    ///             .build(|cx| ScriptValue::Bool(cx.int_arg(0) > 0)),
+    ///             .build(|cx| match cx.int_arg(0) {
+    ///                 pin @ 0..=27 => Ok(ScriptValue::Bool(pin > 0)),
+    ///                 pin => Err(format!("pin {pin} is out of range")),
+    ///             }),
     ///     )
     ///     .run()
     /// # }
@@ -423,7 +429,7 @@ mod tests {
         let shout = &opts.native_fns[1];
         assert_eq!(
             shout.invoke(&[ScriptValue::Str("hi".into())]).0,
-            ScriptValue::Str("HI".into()),
+            Ok(ScriptValue::Str("HI".into())),
             "the closure the caller passed is the one that runs"
         );
     }

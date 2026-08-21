@@ -31,9 +31,9 @@ fn ty_name(ty: &ScriptTy) -> String {
 /// any parse_json(...);
 /// ```
 ///
-/// A signature the shape adapter cannot bind typed is bound variadically, and
-/// candela rejects a declaration that disagrees with the binding, so the
-/// argument list follows the adapter rather than the signature.
+/// A signature candela cannot name is bound variadically, and candela rejects
+/// a declaration that disagrees with the binding, so the argument list follows
+/// the binding rather than the signature.
 pub(crate) fn declaration(f: &ScriptFn) -> String {
     if !crate::host_fns::binds_typed(f) {
         return format!("any {}(...);", f.name);
@@ -44,59 +44,6 @@ pub(crate) fn declaration(f: &ScriptFn) -> String {
         ScriptTy::Unit => format!("{}({args});", f.name),
         ref ret => format!("{} {}({args});", ty_name(ret), f.name),
     }
-}
-
-/// The return type candela infers for any call whose function name is this,
-/// whatever namespace the call sits in.
-///
-/// candela's typer answers from its own table before it reads the declaration:
-/// `Expr::FunctionCall` in the compiler's `type_system.rs` matches on
-/// `namespace.last()`, which is the bare function name. A host function of one
-/// of these names is therefore compiled against the type below rather than the
-/// one it declared, and the value it returns meets an opcode expecting the
-/// other. Assigning it reports a type error; using it arithmetically trips an
-/// assertion inside the VM and takes the process with it.
-///
-/// The list is upstream's, mirrored because there is no way to ask for it and
-/// no way to detect the mistyping by compiling: candela accepts the
-/// declaration and only disagrees once the value is live.
-fn inferred_return(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "print" | "write" | "append" | "delete" | "delete_dir" => "null",
-        "type" | "str" | "input" | "read" | "json_stringify" | "as_str" => "string",
-        "float" | "as_float" => "float",
-        "int" | "the_answer" | "as_int" => "int",
-        "bool" | "exists" | "as_bool" | "is_int" | "is_float" | "is_str" | "is_bool"
-        | "is_list" | "is_map" | "is_null" => "bool",
-        "range" => "int[]",
-        "argv" => "string[]",
-        "as_list" => "any[]",
-        "as_map" => "{string: any}",
-        "json_parse" => "any",
-        _ => return None,
-    })
-}
-
-/// Whether candela will type a call to `f` as `f` declares it.
-///
-/// A name from [`inferred_return`]'s list is only usable when the type it
-/// forces is the one the function returns anyway; `read` giving back a string
-/// agrees, `read` giving back an int does not.
-pub(crate) fn check_inferred_return(f: &ScriptFn) -> Result<(), String> {
-    let Some(inferred) = inferred_return(&f.name) else {
-        return Ok(());
-    };
-    let declared = ty_name(&f.sig.ret);
-    if declared == inferred {
-        return Ok(());
-    }
-    Err(format!(
-        "candela types every call named `{name}` as {inferred}, whatever namespace it sits in, so \
-         `{ns}::{name}` returning {declared} would be compiled against the wrong type and fail \
-         once it is used; give it a name candela's own library does not take",
-        name = f.name,
-        ns = namespace(f),
-    ))
 }
 
 /// The namespace `f` is declared under, or `None` when it is not a host
@@ -206,7 +153,7 @@ const GENERATED_HEADER: &str = "\
 mod tests {
     use std::collections::HashSet;
 
-    use candela_vm::{IntoHostFn, Value};
+    use candela_vm::{HostError, HostType, IntoHostFn, Value};
     use lumen_script::{ScriptTy as T, ScriptValue};
 
     use super::*;
@@ -222,7 +169,7 @@ mod tests {
             .param("id", T::Str)
             .param("text", T::Str)
             .ret(T::Unit)
-            .build(|_| ScriptValue::Unit);
+            .build(|_| Ok(ScriptValue::Unit));
         assert_eq!(declaration(&f), "set_text(string, string);");
     }
 
@@ -231,13 +178,13 @@ mod tests {
         let f = probe("node_rect")
             .param("node", T::Int)
             .ret(T::Map(Box::new(T::Float)))
-            .build(|_| ScriptValue::Unit);
+            .build(|_| Ok(ScriptValue::Unit));
         assert_eq!(declaration(&f), "{string: float} node_rect(int);");
 
         let f = probe("node_query")
             .param("selector", T::Str)
             .ret(T::Array(Box::new(T::Int)))
-            .build(|_| ScriptValue::Unit);
+            .build(|_| Ok(ScriptValue::Unit));
         assert_eq!(declaration(&f), "int[] node_query(string);");
     }
 
@@ -246,24 +193,24 @@ mod tests {
         let f = probe("parse_json")
             .param("text", T::Str)
             .ret(T::Any)
-            .build(|_| ScriptValue::Unit);
+            .build(|_| Ok(ScriptValue::Unit));
         assert_eq!(declaration(&f), "any parse_json(...);");
 
-        let f = probe("log").variadic().build(|_| ScriptValue::Unit);
+        let f = probe("log").variadic().build(|_| Ok(ScriptValue::Unit));
         assert_eq!(declaration(&f), "any log(...);");
     }
 
-    /// A signature candela could name, but the shape adapter has no closure
-    /// for, still declares variadically: the declaration follows the binding.
+    /// A shape no builtin uses declares typed all the same: the signature
+    /// travels as data, so there is no list of shapes to fall off.
     #[test]
-    fn a_shape_the_adapter_cannot_bind_declares_variadic() {
+    fn a_shape_no_builtin_uses_declares_typed() {
         let f = probe("mix")
             .param("a", T::Float)
             .param("b", T::Float)
             .ret(T::Float)
-            .build(|_| ScriptValue::Unit);
-        assert!(!crate::host_fns::binds_typed(&f));
-        assert_eq!(declaration(&f), "any mix(...);");
+            .build(|_| Ok(ScriptValue::Unit));
+        assert!(crate::host_fns::binds_typed(&f));
+        assert_eq!(declaration(&f), "float mix(float, float);");
     }
 
     /// A sink that binds nothing and remembers every name offered to it.
@@ -278,9 +225,22 @@ mod tests {
             self.0.push((namespace.to_owned(), name.to_owned()));
         }
 
+        fn register_host_fn_typed<F>(
+            &mut self,
+            namespace: &str,
+            name: &str,
+            _arg_types: Vec<HostType>,
+            _ret_type: HostType,
+            _f: F,
+        ) where
+            F: Fn(&[Value]) -> Result<Value, HostError> + 'static,
+        {
+            self.0.push((namespace.to_owned(), name.to_owned()));
+        }
+
         fn register_host_fn_variadic<F>(&mut self, namespace: &str, name: &str, _f: F)
         where
-            F: Fn(&[Value]) -> Value + 'static,
+            F: Fn(&[Value]) -> Result<Value, HostError> + 'static,
         {
             self.0.push((namespace.to_owned(), name.to_owned()));
         }

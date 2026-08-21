@@ -142,7 +142,7 @@ fn joining_script_fn(name: &str) -> ScriptFn {
                 .collect::<Vec<_>>()
                 .join(",");
             cx.emit(ScriptCommand::Print(joined));
-            ScriptValue::Unit
+            Ok(ScriptValue::Unit)
         })
 }
 
@@ -485,7 +485,7 @@ fn main() {}
             .ns(ScriptNs::Named("gpio".to_owned()))
             .param("pin", ScriptTy::Int)
             .ret(ScriptTy::Int)
-            .build(|cx| ScriptValue::I64(cx.int_arg(0) * 2)),
+            .build(|cx| Ok(ScriptValue::I64(cx.int_arg(0) * 2))),
     )
     .expect("registering before the load is allowed");
 

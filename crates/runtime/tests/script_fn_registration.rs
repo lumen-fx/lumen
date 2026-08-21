@@ -44,7 +44,7 @@ impl Plugin for MarkPlugin {
                         name: "mark".to_string(),
                         value: tag.to_string(),
                     });
-                    ScriptValue::Str(tag.to_string())
+                    Ok(ScriptValue::Str(tag.to_string()))
                 }),
         );
     }

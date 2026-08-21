@@ -51,7 +51,7 @@ impl Plugin for GreeterPlugin {
                         name: "greeting".to_string(),
                         value: greeting.clone(),
                     });
-                    ScriptValue::Str(greeting)
+                    Ok(ScriptValue::Str(greeting))
                 }),
         );
     }
@@ -75,7 +75,7 @@ impl Plugin for GpioPlugin {
                 .build(move |cx| {
                     let pin = cx.int_arg(0);
                     pins.lock().unwrap().push(pin.to_string());
-                    ScriptValue::I64(pin * 2)
+                    Ok(ScriptValue::I64(pin * 2))
                 }),
         );
         app.add_script_prelude("candela", "gpio", self.wrapper);

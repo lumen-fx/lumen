@@ -45,7 +45,7 @@ impl Plugin for GreeterPlugin {
                         name: "greeting".to_string(),
                         value: greeting.clone(),
                     });
-                    ScriptValue::Str(greeting)
+                    Ok(ScriptValue::Str(greeting))
                 }),
         );
     }
@@ -70,7 +70,7 @@ impl Plugin for GpioPlugin {
                         name: "reading".to_string(),
                         value: doubled.to_string(),
                     });
-                    ScriptValue::I64(doubled)
+                    Ok(ScriptValue::I64(doubled))
                 }),
         );
         if let Some(wrapper) = self.wrapper {
@@ -96,6 +96,12 @@ impl Plugin for ShadowPlugin {
 
 /// Build a headless app from a script in `engine`, with `plugin` installed.
 fn app_with(engine: &str, source: &str, plugin: impl Plugin + Send + 'static) -> EcsApp {
+    app_with_scripts(&[(engine, source)], plugin)
+}
+
+/// Build a headless app running one script per language, with `plugin`
+/// installed. Every host drains the same registry as it loads.
+fn app_with_scripts(scripts: &[(&str, &str)], plugin: impl Plugin + Send + 'static) -> EcsApp {
     let dir = std::env::temp_dir().join(format!(
         "lumen_plugin_script_fn_{}_{}",
         std::process::id(),
@@ -113,12 +119,18 @@ fn app_with(engine: &str, source: &str, plugin: impl Plugin + Send + 'static) ->
             },
             ..Default::default()
         },
-        script_source: source.to_string(),
-        scripts: vec![CompiledScript {
-            engine: engine.to_string(),
-            source: source.to_string(),
-            bytecode: None,
-        }],
+        script_source: scripts
+            .first()
+            .map(|(_, s)| (*s).to_string())
+            .unwrap_or_default(),
+        scripts: scripts
+            .iter()
+            .map(|(engine, source)| CompiledScript {
+                engine: (*engine).to_string(),
+                source: (*source).to_string(),
+                bytecode: None,
+            })
+            .collect(),
         ..Default::default()
     })
     .expect("serialize artifact");
@@ -320,4 +332,121 @@ fn a_plugin_function_survives_a_reload() {
         calls.lock().unwrap().as_slice(),
         ["first".to_owned(), "second".to_owned()]
     );
+}
+
+/// One app, two languages, one plugin function.
+///
+/// Each host drains the registry as it loads and seals it afterwards, so the
+/// second host to load would see a closed channel if sealing meant emptying it.
+/// It does not: sealing refuses later writes and leaves the reads alone.
+#[test]
+fn two_languages_in_one_app_both_reach_the_plugin_function() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let calls: Calls = Arc::default();
+    let app = app_with_scripts(
+        &[
+            ("lua", "function on_start() greet(\"lua\") end"),
+            (
+                "candela",
+                "fn on_start() { let msg = native::greet(\"candela\"); }\nfn main() {}\n",
+            ),
+        ],
+        GreeterPlugin {
+            calls: calls.clone(),
+        },
+    );
+
+    let mut seen = calls.lock().unwrap().clone();
+    seen.sort();
+    assert_eq!(
+        seen,
+        ["candela".to_owned(), "lua".to_owned()],
+        "both hosts bound the function and both scripts called it"
+    );
+    // Whichever ran last owns the signal; the point is that neither host was
+    // left without the function.
+    assert!(signal(&app, "greeting").is_some_and(|g| g == "hello lua" || g == "hello candela"));
+}
+
+/// A plugin function that fails is a script error, not a dead app.
+///
+/// Every language raises it the way it raises its own failures, and the tick
+/// loop keeps going, so the window an author is looking at stays up. Rhai and
+/// Lua hand the message to the catch clause; candela catches by kind, so its
+/// script reports having caught rather than what it caught.
+#[test]
+fn a_failing_plugin_function_leaves_the_app_running() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    for (engine, source, expected) in [
+        (
+            "rhai",
+            "fn on_start() { try { refuse(\"x\"); } catch (e) { noted(\"\" + e); } }",
+            Some("`x` is not available"),
+        ),
+        (
+            "lua",
+            "function on_start()\n\
+             \x20 local ok, err = pcall(refuse, \"x\")\n\
+             \x20 if not ok then noted(tostring(err)) end\n\
+             end",
+            Some("`x` is not available"),
+        ),
+        (
+            "candela",
+            "fn on_start() {\n\
+             \x20   try { native::refuse(\"x\"); }\n\
+             \x20   catch \"host_fn_error\" { native::noted(\"raised\"); }\n\
+             }\n\
+             fn main() {}\n",
+            None,
+        ),
+    ] {
+        let caught: Calls = Arc::default();
+        let mut app = app_with(
+            engine,
+            source,
+            RefusingPlugin {
+                caught: caught.clone(),
+            },
+        );
+        // A few more ticks: a dead host would stop answering here.
+        app.tick();
+        app.tick();
+        let caught = caught.lock().unwrap();
+        assert_eq!(caught.len(), 1, "{engine}: the script caught the failure");
+        if let Some(text) = expected {
+            assert!(
+                caught[0].contains("refuse") && caught[0].contains(text),
+                "{engine}: the message names the function and carries its text: {}",
+                caught[0]
+            );
+        }
+    }
+}
+
+/// A plugin whose one function always refuses, plus a second that records what
+/// the script caught.
+struct RefusingPlugin {
+    caught: Calls,
+}
+
+impl Plugin for RefusingPlugin {
+    fn build(self, app: &mut EcsApp) {
+        let caught = self.caught;
+        app.add_script_fn(
+            ScriptFn::new("refuse")
+                .param("what", ScriptTy::Str)
+                .ret(ScriptTy::Str)
+                .build(|cx| Err(format!("`{}` is not available", cx.str_arg(0)))),
+        );
+        app.add_script_fn(
+            ScriptFn::new("noted")
+                .param("message", ScriptTy::Str)
+                .ret(ScriptTy::Unit)
+                .build(move |cx| {
+                    caught.lock().unwrap().push(cx.str_arg(0));
+                    Ok(ScriptValue::Unit)
+                }),
+        );
+    }
 }

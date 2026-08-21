@@ -35,7 +35,7 @@ where
     f.build(move |cx| {
         let cmd = build(cx);
         cx.emit(cmd);
-        ScriptValue::Unit
+        Ok(ScriptValue::Unit)
     })
 }
 
@@ -48,7 +48,7 @@ where
     for (pname, ty) in params {
         f = f.param(*pname, ty.clone());
     }
-    f.build(move |cx| body(cx))
+    f.build(move |cx| Ok(body(cx)))
 }
 
 /// The whole shared builtin table, in registration order.
@@ -463,14 +463,14 @@ fn navigation_fns() -> Vec<ScriptFn> {
             .min_arity(0)
             .doc("Navigate to a page, or read the current one when called with no argument.")
             .hosts(HostSet::RHAI | HostSet::LUA)
-            .build(move |cx| read_or_navigate(cx)),
+            .build(move |cx| Ok(read_or_navigate(cx))),
         ScriptFn::new("page")
             .ns(ScriptNs::Builtin)
             .param("path", T::Str)
             .ret(T::Unit)
             .doc("Navigate to a page.")
             .hosts(HostSet::CANDELA)
-            .build(move |cx| read_or_navigate(cx)),
+            .build(move |cx| Ok(read_or_navigate(cx))),
         value(
             "page_current",
             "The page the app is on.",
@@ -509,7 +509,7 @@ fn navigation_fns() -> Vec<ScriptFn> {
                     } else {
                         lumen_core::nav::back();
                     }
-                    ScriptValue::Unit
+                    Ok(ScriptValue::Unit)
                 })
         }),
     )
@@ -527,7 +527,7 @@ where
         .ret(T::Bool)
         .doc(doc)
         .hosts(HostSet::RHAI | HostSet::LUA)
-        .build(move |_| ScriptValue::Bool(go()))
+        .build(move |_| Ok(ScriptValue::Bool(go())))
 }
 
 /// The request being rendered for, and the response being built.

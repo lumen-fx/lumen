@@ -1766,23 +1766,35 @@ impl ScriptHost for LuaHost {
         let func = self
             .lua
             .create_function(move |lua, args: Variadic<LuaValue>| {
-                let vals: Vec<ScriptValue> = args.iter().map(lua_value_to_script_value).collect();
-                if bound.sig.is_typed()
-                    && let Err(message) = bound.sig.check_args(&vals)
-                {
-                    return Err(mlua::Error::RuntimeError(format!(
-                        "{}: {message}",
-                        bound.name
-                    )));
-                }
-                // The sink lock is taken once, after the body returns: a body
-                // that calls back into a builtin would otherwise meet a lock
-                // its own call is holding.
-                let (ret, commands) = bound.invoke(&vals);
-                if !commands.is_empty() {
-                    sink.lock().extend(commands);
-                }
-                script_value_to_lua(lua, &ret)
+                lumen_script::with_call_scratch(|scratch| {
+                    scratch
+                        .args
+                        .extend(args.iter().map(lua_value_to_script_value));
+                    if bound.sig.is_typed()
+                        && let Err(message) = bound.sig.check_args(&scratch.args)
+                    {
+                        return Err(mlua::Error::RuntimeError(format!(
+                            "{}: {message}",
+                            bound.name
+                        )));
+                    }
+                    // The sink lock is taken once, after the body returns: a
+                    // body that calls back into a builtin would otherwise meet
+                    // a lock its own call is holding.
+                    let ret = bound.invoke_into(&scratch.args, &mut scratch.commands);
+                    if !scratch.commands.is_empty() {
+                        sink.lock().extend(scratch.commands.drain(..));
+                    }
+                    // A body that failed raises in the calling script, where
+                    // `pcall` catches it like any other Lua error.
+                    match ret {
+                        Ok(value) => script_value_to_lua(lua, &value),
+                        Err(message) => Err(mlua::Error::RuntimeError(format!(
+                            "{}: {message}",
+                            bound.name
+                        ))),
+                    }
+                })
             })
             .map_err(|e| ScriptError::Runtime(e.to_string()))?;
         match &f.ns {
