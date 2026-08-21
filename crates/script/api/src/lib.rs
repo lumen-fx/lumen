@@ -62,7 +62,11 @@ pub mod builtin_fns;
 mod node_fns;
 
 use std::collections::HashSet;
+
+use lumen_core::warn_line;
 use thiserror::Error;
+
+use crate::runtime::prefix;
 
 pub use builtin_fns::{builtin_script_fns, parse_dialog_filter_spec};
 pub use builtins::{BuiltinFn, BuiltinParam};
@@ -1064,11 +1068,19 @@ pub trait ScriptHost: Send + Sync + 'static {
     /// `ns`, to be compiled ahead of the app's own program.
     ///
     /// This is how a plugin offers sugar over its functions: a struct and an
-    /// `impl` block in the host's own language, so a script calls
-    /// `Gpio::read(pin)` instead of the free function. A host whose language
-    /// needs no such staging ignores it, which is the default.
+    /// `impl` block in this host's own language, so a script calls
+    /// `pin(21).level()` instead of the free function. The registry hands a
+    /// host only the sources written in its language.
+    ///
+    /// A host that cannot stage source says so rather than dropping it, which
+    /// is what the default does.
     fn add_prelude(&mut self, ns: &str, source: &str) {
-        let _ = (ns, source);
+        let _ = source;
+        warn_line!(
+            "{}: the `{ns}` plugin ships source this host cannot compile ahead of the program; \
+             call its functions directly",
+            prefix(self.lang())
+        );
     }
 
     // -- metadata ------------------------------------------------------
