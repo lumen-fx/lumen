@@ -130,8 +130,10 @@ Install with `--version` to hold a project on a known release:
 curl -fsSL https://lumenfx.dev/install.sh | sh -s -- --version 0.1.0
 ```
 
-A pinned install is never offered a newer release. Run the installer again
-without `--version` to lift the pin.
+A pinned install is never offered a newer release, and the files it downloads
+later stay on the pinned version: `lumenc package --target` and `lumenc web`
+fetch from the release the pin names. Run the installer again without
+`--version` to lift the pin.
 
 Releases from before `sha256sums.txt` was published cannot be installed this
 way; the installer has nothing to verify them against and stops.

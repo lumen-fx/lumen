@@ -15,6 +15,11 @@
 //! directory it was installed into. Afterwards `lumenc package` behaves the
 //! same as it does on a machine that installed from a release.
 //!
+//! The tag has to match this crate's version, because the engine and the
+//! compiler are one tree. Whether that tag exists is the releases page's
+//! answer, not an assumption: a version bumped ahead of its release has
+//! nothing to fetch, and this says so instead of asking for it.
+//!
 //! It does nothing at all in a Lumen checkout, where the engine is already
 //! being built beside the compiler, and nothing when `LUMEN_SKIP_ENGINE_BUILD`
 //! is set, which is how a distribution packager who builds and places the
@@ -25,6 +30,7 @@ use std::path::{Path, PathBuf};
 fn main() {
     println!("cargo:rerun-if-env-changed=LUMEN_SKIP_ENGINE_BUILD");
     println!("cargo:rerun-if-env-changed=CARGO_INSTALL_ROOT");
+    println!("cargo:rerun-if-env-changed=LUMEN_GH_REPO");
 
     if std::env::var_os("LUMEN_SKIP_ENGINE_BUILD").is_some() {
         return;
@@ -82,6 +88,12 @@ fn install_bin_dir() -> Option<PathBuf> {
 /// Fetch the tagged source, build the two files, and copy them into `bin_dir`.
 fn build_engine(bin_dir: &Path) -> Result<(), String> {
     let version = std::env::var("CARGO_PKG_VERSION").expect("cargo always sets CARGO_PKG_VERSION");
+    // The engine and the compiler are one tree, so the tag has to be this
+    // crate's own version rather than whichever is newest. The releases page
+    // still decides whether that tag exists: a version that has been bumped
+    // ahead of its release has nothing to download, and saying so beats a
+    // request for a tag nobody pushed.
+    published(&version)?;
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("cargo always sets OUT_DIR"));
     let source = fetch_source(&version, &out_dir)?;
 
@@ -104,12 +116,70 @@ fn build_engine(bin_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Confirm the releases page carries a release for `version`.
+///
+/// `releases/latest` redirects to the newest published tag, so a version
+/// higher than that one has not been released. A page that cannot be reached
+/// is a different failure and reads as one; the download that follows is what
+/// reports it.
+fn published(version: &str) -> Result<(), String> {
+    let Some(latest) = latest_release() else {
+        return Ok(());
+    };
+    if semver(version) > semver(&latest) {
+        return Err(format!(
+            "v{version} has not been released yet, so there is no source archive to build \
+             the engine from. The newest release is v{latest}"
+        ));
+    }
+    Ok(())
+}
+
+/// The newest published version, or `None` when the releases page did not
+/// answer with one.
+fn latest_release() -> Option<String> {
+    let url = format!("https://github.com/{}/releases/latest", repo());
+    let response = ureq::head(&url)
+        .config()
+        .max_redirects(0)
+        .build()
+        .call()
+        .ok()?;
+    let location = response.headers().get("location")?.to_str().ok()?;
+    let tag = location.trim_end_matches('/').rsplit('/').next()?;
+    let version = tag.strip_prefix('v').unwrap_or(tag);
+    // A repository with no releases redirects to the releases index, whose
+    // last segment is a word rather than a version.
+    version.split(['.', '-', '+']).next()?.parse::<u64>().ok()?;
+    Some(version.to_string())
+}
+
+/// `X.Y.Z` as a comparable triple. Anything unparseable sorts lowest, which
+/// keeps an odd tag from declaring a real version unreleased.
+fn semver(version: &str) -> (u64, u64, u64) {
+    let core = version.split(['-', '+']).next().unwrap_or_default();
+    let mut parts = core.split('.').map(|p| p.parse().unwrap_or(0));
+    (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    )
+}
+
+/// The repository releases come from.
+fn repo() -> String {
+    std::env::var("LUMEN_GH_REPO")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "lumen-fx/lumen".to_string())
+}
+
 /// Download and unpack the source for this exact version, returning the
 /// directory it unpacked into. A published `lumenc` and the tag it was
 /// published from are the same tree, so the engine beside it is the engine it
 /// was compiled against.
 fn fetch_source(version: &str, out_dir: &Path) -> Result<PathBuf, String> {
-    let repo = std::env::var("LUMEN_GH_REPO").unwrap_or_else(|_| "lumen-fx/lumen".to_string());
+    let repo = repo();
     let unpacked = out_dir.join(format!("lumen-{version}"));
     if unpacked.join("Cargo.toml").is_file() {
         return Ok(unpacked);
@@ -119,7 +189,7 @@ fn fetch_source(version: &str, out_dir: &Path) -> Result<PathBuf, String> {
     println!("cargo:warning=lumenc: fetching the engine source from {url}");
     let mut response = ureq::get(&url)
         .call()
-        .map_err(|e| format!("cannot download {url}: {e}"))?;
+        .map_err(|e| format!("cannot download the v{version} source from {url}: {e}"))?;
     let mut bytes = Vec::new();
     std::io::Read::read_to_end(&mut response.body_mut().as_reader(), &mut bytes)
         .map_err(|e| format!("cannot read {url}: {e}"))?;

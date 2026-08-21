@@ -153,10 +153,12 @@ program does not export, so a handler that would have done nothing is a
 warning at build time rather than a blank in the page.
 
 The runtime is published with every Lumen release. A build uses the copy next
-to `lumenc` when there is one, and otherwise downloads the pair from the
-release matching your `lumenc` version, checks it against the checksums
-published with it, and keeps it in a cache so later builds do not fetch it
-again. `--lib-dir` points at a directory holding `lumen-web.wasm` and
+to `lumenc` when there is one, and otherwise downloads the pair from a
+published release, checks it against the checksums published with it, and
+keeps it in a cache so later builds do not fetch it again. Which release that
+is comes from the releases page:
+[the CLI reference](../reference/cli.md#which-release-toolchain-files-come-from)
+has the detail. `--lib-dir` points at a directory holding `lumen-web.wasm` and
 `lumen-web.js` to use a copy you built yourself instead. A build that finds
 neither says which files it wanted and emits the site without them: the pages
 read, the links work, and nothing runs.

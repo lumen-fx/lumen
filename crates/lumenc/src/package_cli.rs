@@ -31,9 +31,9 @@
 //!
 //! `--target` packages for a platform other than the one you are on. The
 //! toolchain files for another platform come from the release channel and are
-//! cached per version. Finding a prebuilt file that ships with the toolchain
-//! lives here too, so a web build and a package look in the same places for
-//! the same reasons.
+//! cached under the release they came from, which [`crate::release`] resolves.
+//! Finding a prebuilt file that ships with the toolchain lives here too, so a
+//! web build and a package look in the same places for the same reasons.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -41,6 +41,7 @@ use std::process::ExitCode;
 use lumen_ir::layout_ir::relativize_asset_paths;
 
 use crate::app_kind::AppKind;
+use crate::release;
 
 /// Conventional extension for a compiled-app artifact, matching
 /// [`crate::build_cli::ARTIFACT_EXT`].
@@ -982,12 +983,12 @@ struct Toolchain {
 /// `--lib-dir` wins outright. Otherwise a package for this machine's own
 /// platform uses the files shipped with the running `lumenc`, which is what an
 /// installed toolchain has beside it and what `LUMEN_LIB_DIR` points at in a
-/// source tree. A package for another platform comes from the per-version
-/// cache, and is fetched from the release channel when the cache is empty.
+/// source tree. A package for another platform comes from the cache for the
+/// release [`release::resolve`] names, and is fetched from that release when
+/// the cache is empty.
 fn locate_toolchain(target: Target, lib_dir: Option<&Path>) -> Result<Toolchain, String> {
     let wanted = [target.stub_name(), target.lib_name().to_string()];
-    let cache = cache_dir(target);
-    let dirs = search_dirs(lib_dir, target == Target::host(), cache.clone());
+    let dirs = search_dirs(lib_dir, target == Target::host());
 
     if let Some(dir) = first_dir_with(&dirs, &wanted) {
         return Ok(Toolchain {
@@ -998,19 +999,31 @@ fn locate_toolchain(target: Target, lib_dir: Option<&Path>) -> Result<Toolchain,
     // Another platform's files are not on this machine until they are
     // fetched; this machine's own come with the installation, so an empty
     // search there is a real failure rather than a cache miss.
-    if target != Target::host()
-        && let Some(dir) = cache
-    {
-        fetch_release_files(
-            &target.archive_name(),
-            &wanted,
-            &dir,
-            &format!(
-                "A release older than app packaging ships no launcher; build the {} files \
-                 yourself and pass --lib-dir instead.",
-                target.name
-            ),
-        )?;
+    if target != Target::host() {
+        let (version, dir) = component_cache(target.name).map_err(|why| {
+            format!(
+                "cannot find {} and {} for {}. Looked in: {}. They could not be fetched \
+                 either: {why}. Set LUMEN_LIB_DIR (or pass --lib-dir) to the directory \
+                 holding them.",
+                wanted[0],
+                wanted[1],
+                target.name,
+                searched(&dirs)
+            )
+        })?;
+        if first_dir_with(std::slice::from_ref(&dir), &wanted).is_none() {
+            fetch_release_files(
+                &version,
+                &target.archive_name(),
+                &wanted,
+                &dir,
+                &format!(
+                    "A release older than app packaging ships no launcher; build the {} files \
+                     yourself and pass --lib-dir instead.",
+                    target.name
+                ),
+            )?;
+        }
         return Ok(Toolchain {
             stub: dir.join(&wanted[0]),
             lib: dir.join(&wanted[1]),
@@ -1039,8 +1052,8 @@ pub struct WebRuntimeFiles {
 /// Find the prebuilt web runtime through the same search [`locate_toolchain`]
 /// runs for the launcher stub and the shared library: `--lib-dir` first, then
 /// the files shipped with the running `lumenc`, then `LUMEN_LIB_DIR`, then the
-/// per-version cache, which is filled from the release channel when it is
-/// empty.
+/// cache for the release [`release::resolve`] names, which is filled from that
+/// release when it is empty.
 ///
 /// The runtime is one prebuilt pair for every app and every platform, so
 /// unlike a package there is no target to pick: a web build on any machine
@@ -1051,8 +1064,7 @@ pub struct WebRuntimeFiles {
 /// decided which copy it wants.
 pub fn locate_web_runtime(lib_dir_flag: Option<&Path>) -> Result<WebRuntimeFiles, String> {
     let wanted = [WEB_WASM.to_string(), WEB_JS.to_string()];
-    let cache = cache_dir_for(WEB_COMPONENT);
-    let dirs = search_dirs(lib_dir_flag, true, cache.clone());
+    let dirs = search_dirs(lib_dir_flag, true);
 
     if let Some(dir) = first_dir_with(&dirs, &wanted) {
         return Ok(WebRuntimeFiles {
@@ -1066,33 +1078,41 @@ pub fn locate_web_runtime(lib_dir_flag: Option<&Path>) -> Result<WebRuntimeFiles
             dir.display()
         ));
     }
-    if let Some(dir) = cache {
+
+    let (version, dir) = component_cache(WEB_COMPONENT).map_err(|why| {
+        format!(
+            "cannot find {WEB_WASM} and {WEB_JS}. Looked in: {}. They could not be \
+             fetched either: {why}. Set LUMEN_LIB_DIR (or pass --lib-dir) to the \
+             directory holding them.",
+            searched(&dirs)
+        )
+    })?;
+    if first_dir_with(std::slice::from_ref(&dir), &wanted).is_none() {
         fetch_release_files(
+            &version,
             WEB_ARCHIVE,
             &wanted,
             &dir,
             "A release older than the web target ships no web runtime; build it yourself \
              and pass --lib-dir instead.",
         )?;
-        return Ok(WebRuntimeFiles {
-            wasm: dir.join(&wanted[0]),
-            js: dir.join(&wanted[1]),
-        });
     }
-
-    Err(format!(
-        "cannot find {WEB_WASM} and {WEB_JS}. Looked in: {}. Set LUMEN_LIB_DIR (or pass \
-         --lib-dir) to the directory holding them.",
-        searched(&dirs)
-    ))
+    Ok(WebRuntimeFiles {
+        wasm: dir.join(&wanted[0]),
+        js: dir.join(&wanted[1]),
+    })
 }
 
-/// The directories a toolchain artifact is looked for in, in order: the
-/// `--lib-dir` flag, the directory holding the running `lumenc`,
-/// `LUMEN_LIB_DIR`, then the per-version cache. The middle two are skipped
-/// when `installed` is false, which is another platform's files: an
-/// installation carries its own platform's, never a second one's.
-fn search_dirs(lib_dir: Option<&Path>, installed: bool, cache: Option<PathBuf>) -> Vec<PathBuf> {
+/// The directories a toolchain artifact is looked for in before the download
+/// cache, in order: the `--lib-dir` flag, the directory holding the running
+/// `lumenc`, then `LUMEN_LIB_DIR`. The last two are skipped when `installed`
+/// is false, which is another platform's files: an installation carries its
+/// own platform's, never a second one's.
+///
+/// The cache comes after all of these and is not in the list, because naming
+/// it means resolving which release this toolchain uses, and a build that
+/// finds its files here should not need the network to say so.
+fn search_dirs(lib_dir: Option<&Path>, installed: bool) -> Vec<PathBuf> {
     let exe_dir = installed
         .then(|| std::env::current_exe().ok())
         .flatten()
@@ -1101,7 +1121,7 @@ fn search_dirs(lib_dir: Option<&Path>, installed: bool, cache: Option<PathBuf>) 
         .then(|| std::env::var_os("LUMEN_LIB_DIR"))
         .flatten()
         .map(PathBuf::from);
-    ordered_dirs(lib_dir, exe_dir, env_dir, cache)
+    ordered_dirs(lib_dir, exe_dir, env_dir)
 }
 
 /// The search order itself, with the two directories [`search_dirs`] reads
@@ -1110,9 +1130,8 @@ fn ordered_dirs(
     lib_dir: Option<&Path>,
     exe_dir: Option<PathBuf>,
     env_dir: Option<PathBuf>,
-    cache: Option<PathBuf>,
 ) -> Vec<PathBuf> {
-    [lib_dir.map(Path::to_path_buf), exe_dir, env_dir, cache]
+    [lib_dir.map(Path::to_path_buf), exe_dir, env_dir]
         .into_iter()
         .flatten()
         .collect()
@@ -1138,11 +1157,31 @@ fn searched(dirs: &[PathBuf]) -> String {
         .join(", ")
 }
 
+/// The release this toolchain fetches published files from, and the directory
+/// they are cached in. Resolving the release is what makes the request, so
+/// this is called only once the local directories have come up empty.
+fn component_cache(component: &str) -> Result<(String, PathBuf), String> {
+    let version = release::resolve().map_err(|why| why.to_string())?;
+    let dir = cache_dir_for(&version, component).ok_or_else(|| {
+        "there is no cache directory to download into on this machine".to_string()
+    })?;
+    if version != release::current() {
+        // The files come from a release this build is not, which is the normal
+        // case for a build made from source. Saying which release keeps that
+        // visible rather than surprising.
+        println!(
+            "lumenc: this build is {}, and the toolchain files come from the v{version} release",
+            release::current()
+        );
+    }
+    Ok((version, dir))
+}
+
 /// Where files that did not come with this installation are kept between
-/// runs: under the platform cache directory, keyed by Lumen version and by
-/// `component` (a target name, or the web runtime) so an upgrade never
-/// reuses the old ones.
-fn cache_dir_for(component: &str) -> Option<PathBuf> {
+/// runs: under the platform cache directory, keyed by the release `version`
+/// they came from and by `component` (a target name, or the web runtime) so an
+/// upgrade never reuses the old ones.
+fn cache_dir_for(version: &str, component: &str) -> Option<PathBuf> {
     let base = if cfg!(target_os = "windows") {
         std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
     } else if cfg!(target_os = "macos") {
@@ -1155,14 +1194,9 @@ fn cache_dir_for(component: &str) -> Option<PathBuf> {
     Some(
         base.join("lumen")
             .join("toolchain")
-            .join(env!("CARGO_PKG_VERSION"))
+            .join(version)
             .join(component),
     )
-}
-
-/// Where another platform's toolchain files are kept between runs.
-fn cache_dir(target: Target) -> Option<PathBuf> {
-    cache_dir_for(target.name)
 }
 
 /// Copy a file and make it executable on Unix, since a copy keeps the source
@@ -1416,23 +1450,37 @@ fn holds(dir: &Path, inner: &Path) -> bool {
 // Fetching another platform's toolchain files
 // ============================================================
 
-/// Download this Lumen version's release `archive`, check it against the
-/// checksums published with the release, and put the `wanted` members of it
-/// in `dest`. `hint` closes the message when the release does not carry them,
-/// and says how to supply them by hand instead.
+/// Download the `archive` published with release `version`, check it against
+/// the checksums published beside it, and put the `wanted` members of it in
+/// `dest`. `hint` closes the message when the release does not carry them, and
+/// says how to supply them by hand instead.
+///
+/// `version` is a release that exists, resolved by [`release::resolve`]. It is
+/// never this binary's own version, which says nothing about what is published.
 fn fetch_release_files(
+    version: &str,
     archive: &str,
     wanted: &[String],
     dest: &Path,
     hint: &str,
 ) -> Result<(), String> {
-    let repo = std::env::var("LUMEN_GH_REPO").unwrap_or_else(|_| "lumen-fx/lumen".to_string());
-    let version = env!("CARGO_PKG_VERSION");
-    let base = format!("https://github.com/{repo}/releases/download/v{version}");
+    let base = release::asset_base(version);
 
     println!("lumenc: fetching {archive} from {base}");
 
-    let sums = http_get(&format!("{base}/sha256sums.txt"))?;
+    let sums_url = format!("{base}/sha256sums.txt");
+    let sums = http_get(&sums_url).map_err(|e| match e {
+        // Every release publishes checksums, so a status here says the release
+        // itself is not what it was taken to be rather than that one file is
+        // missing.
+        HttpError::Status(status) => format!(
+            "the v{version} release publishes no sha256sums.txt (the request answered \
+             {status}), so nothing from it can be verified. Either there is no such \
+             release, or it is older than checksum publishing. Pass --lib-dir to use \
+             files you already have."
+        ),
+        HttpError::Transport(message) => format!("cannot download {sums_url}: {message}"),
+    })?;
     let sums = String::from_utf8(sums).map_err(|_| {
         "the release checksums are not text; refusing to install from it".to_string()
     })?;
@@ -1449,7 +1497,9 @@ fn fetch_release_files(
             )
         })?;
 
-    let bytes = http_get(&format!("{base}/{archive}"))?;
+    let archive_url = format!("{base}/{archive}");
+    let bytes =
+        http_get(&archive_url).map_err(|e| format!("cannot download {archive_url}: {e}"))?;
     let got = {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
@@ -1477,18 +1527,36 @@ fn fetch_release_files(
     Ok(())
 }
 
+/// Why a download did not arrive. The two cases read differently: a status
+/// says the release does not carry the file, and everything else says the
+/// request never got an answer.
+enum HttpError {
+    Status(u16),
+    Transport(String),
+}
+
+impl std::fmt::Display for HttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HttpError::Status(status) => write!(f, "the server answered {status}"),
+            HttpError::Transport(message) => write!(f, "{message}"),
+        }
+    }
+}
+
 /// Fetch a URL whole, following redirects.
-fn http_get(url: &str) -> Result<Vec<u8>, String> {
+fn http_get(url: &str) -> Result<Vec<u8>, HttpError> {
     use std::io::Read;
-    let mut response = ureq::get(url)
-        .call()
-        .map_err(|e| format!("cannot download {url}: {e}"))?;
+    let mut response = ureq::get(url).call().map_err(|e| match e {
+        ureq::Error::StatusCode(status) => HttpError::Status(status),
+        other => HttpError::Transport(other.to_string()),
+    })?;
     let mut bytes = Vec::new();
     response
         .body_mut()
         .as_reader()
         .read_to_end(&mut bytes)
-        .map_err(|e| format!("cannot read {url}: {e}"))?;
+        .map_err(|e| HttpError::Transport(e.to_string()))?;
     Ok(bytes)
 }
 
@@ -1584,15 +1652,15 @@ mod tests {
     }
 
     /// The order every toolchain artifact is looked for in. A flag beats an
-    /// installation, an installation beats an environment override, and the
-    /// cache is the last resort because reaching it can mean a download.
+    /// installation, and an installation beats an environment override. The
+    /// cache follows all three and is not in this list, because reaching it
+    /// means resolving a release and can mean a download.
     #[test]
-    fn the_search_order_runs_flag_installation_environment_cache() {
+    fn the_search_order_runs_flag_installation_environment() {
         let dirs = ordered_dirs(
             Some(Path::new("/flag")),
             Some(PathBuf::from("/beside-lumenc")),
             Some(PathBuf::from("/env")),
-            Some(PathBuf::from("/cache")),
         );
         assert_eq!(
             dirs,
@@ -1600,24 +1668,19 @@ mod tests {
                 PathBuf::from("/flag"),
                 PathBuf::from("/beside-lumenc"),
                 PathBuf::from("/env"),
-                PathBuf::from("/cache"),
             ]
         );
-        assert!(ordered_dirs(None, None, None, None).is_empty());
+        assert!(ordered_dirs(None, None, None).is_empty());
     }
 
     /// Another platform's files never come from this installation, so the
     /// flag and the cache are the only places they can be.
     #[test]
     fn a_cross_target_search_skips_this_machines_own_files() {
-        let cache = PathBuf::from("/cache");
+        assert!(search_dirs(None, false).is_empty());
         assert_eq!(
-            search_dirs(None, false, Some(cache.clone())),
-            vec![cache.clone()]
-        );
-        assert_eq!(
-            search_dirs(Some(Path::new("/flag")), false, Some(cache.clone())),
-            vec![PathBuf::from("/flag"), cache]
+            search_dirs(Some(Path::new("/flag")), false),
+            vec![PathBuf::from("/flag")]
         );
     }
 
@@ -1699,21 +1762,24 @@ mod tests {
     /// own component name rather than under a platform's.
     #[test]
     fn the_web_runtime_caches_beside_the_per_target_toolchains() {
-        let Some(dir) = cache_dir_for(WEB_COMPONENT) else {
+        let Some(dir) = cache_dir_for("9.9.9", WEB_COMPONENT) else {
             return;
         };
         let text = dir.to_string_lossy();
-        assert!(text.contains(env!("CARGO_PKG_VERSION")));
+        assert!(text.contains("9.9.9"));
         assert!(text.ends_with("web"));
     }
 
+    /// The key is the release the files came from, not the version this
+    /// binary was built as: a build made from source pairs with a release it
+    /// is not, and the two must not share a directory.
     #[test]
-    fn the_cache_is_keyed_by_version_and_target() {
-        let Some(dir) = cache_dir(Target::parse("macos-aarch64").expect("known target")) else {
+    fn the_cache_is_keyed_by_release_and_target() {
+        let Some(dir) = cache_dir_for("9.9.9", "macos-aarch64") else {
             return;
         };
         let text = dir.to_string_lossy();
-        assert!(text.contains(env!("CARGO_PKG_VERSION")));
+        assert!(text.contains("9.9.9"));
         assert!(text.ends_with("macos-aarch64"));
     }
 
