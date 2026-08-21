@@ -17,7 +17,8 @@ use lumen::{
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-/// Four of these tests build a whole app and tick it. An app is not a
+/// Every test here that builds a whole app and ticks it takes this lock,
+/// including the ones that reach an app through a helper. An app is not a
 /// process-local object: it publishes the DOM index, the node-handle
 /// registry, the event-binding registry, the global property store and
 /// the last-error slot, and its plugin stack constructs OS host
@@ -301,6 +302,7 @@ extern "C" fn record_str_watch(_name: *const c_char, value: *const LumenValue, _
 
 #[test]
 fn string_signal_reaches_the_store_during_a_headless_run() {
+    let _isolated = isolate();
     let dir = write_fixture("str");
     let cdir = CString::new(dir.to_str().unwrap()).unwrap();
     let handle = unsafe { lumen_app_new(cdir.as_ptr()) };
@@ -471,6 +473,7 @@ fn write_script_fixture(name: &str, script_name: &str, script: &str) -> PathBuf 
 /// Register every `(name, arity, func)` on `dir`'s app and drive it
 /// headlessly.
 fn run_exposed_many(dir: &std::path::Path, funcs: &[(&str, u32, LumenFn)]) {
+    let _isolated = isolate();
     let cdir = CString::new(dir.to_str().unwrap()).unwrap();
     let handle = unsafe { lumen_app_new(cdir.as_ptr()) };
     assert!(!handle.is_null(), "app must construct: {}", last_error());
