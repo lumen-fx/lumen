@@ -9,6 +9,8 @@ rust-version.workspace = true
 description = "The HTML contract Lumen's web target is built on: tag map, node paths, data-lm attributes, manifest and seed types."
 keywords = ["ui", "gui", "html", "web", "lumen"]
 categories = ["web-programming", "gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [lib]
 name = "lumen_html"
@@ -16,8 +18,8 @@ path = "src/lib.rs"
 
 [dependencies]
 # The attribute bag the projection reads.
-lumen-ir = { path = "../ir", version = "0.0.4" }
+lumen-ir = { workspace = true }
 # `PropertyValue` and `Color`, the types a typed seed value converts to.
-lumen-core = { path = "../core", version = "0.0.4" }
+lumen-core = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true

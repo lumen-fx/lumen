@@ -9,9 +9,11 @@ rust-version.workspace = true
 description = "ureq HttpClient impl for Lumen. Blocking request/reply transport with a bounded body read, behind the scripts' fetch() and http() builtins."
 keywords = ["ui", "gui", "http", "ureq", "lumen"]
 categories = ["gui", "web-programming::http-client"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-script = { path = "../../script/api", version = "0.0.4" }
+lumen-script = { workspace = true, default-features = true }
 
 # The transport itself. ureq's rustls+ring stack costs roughly a megabyte of
 # release .text, which is why the runtime hangs this whole crate off a feature:

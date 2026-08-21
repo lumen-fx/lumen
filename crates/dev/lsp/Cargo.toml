@@ -23,15 +23,15 @@ name = "lumen-lsp"
 path = "src/main.rs"
 
 [dependencies]
-# Link the THIN compiler library only: `runtime-parse` gives us the markup /
+# Link the thin compiler library only: `runtime-parse` gives us the markup /
 # CSS front-end (`parse_html`, `formatter`, `FsLoader`) the LSP needs; dropping
 # the default `dev-run` feature keeps the runtime and every heavy backend
 # (wgpu / winit / vello / cosmic-text / taffy / rodio / mlua) out of the LSP.
-lumenc = { path = "../../lumenc", version = "0.0.4", default-features = false, features = ["runtime-parse"] }
+lumenc = { workspace = true, features = ["runtime-parse"] }
 # Source of truth for the Rhai builtins table + a fully-registered
 # engine to compile `.rhai` buffers against. Optional: only a `lang-rhai`
 # build analyses `.rhai` buffers (see [features]).
-lumen-script-rhai = { path = "../../script/rhai", version = "0.0.4", optional = true }
+lumen-script-rhai = { workspace = true, default-features = true, optional = true }
 rhai = { workspace = true, optional = true }
 tower-lsp.workspace = true
 tokio = { version = "1.52", features = ["rt-multi-thread", "io-util", "io-std", "macros", "sync"] }

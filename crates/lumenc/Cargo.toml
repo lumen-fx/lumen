@@ -30,11 +30,11 @@ path = "src/main.rs"
 required-features = ["runtime-parse"]
 
 [dependencies]
-lumen-core = { path = "../core", version = "0.0.4" }
+lumen-core = { workspace = true }
 # Runtime-shared IR (LayoutIR, CSS AST + Cascade-5 application, value parsers,
 # `var()` resolver, AOT artifact). Extracted from lumenc; the modules are
 # re-exported from `lumenc::lib` so historical `lumenc::...` paths stay valid.
-lumen-ir = { path = "../ir", version = "0.0.4" }
+lumen-ir = { workspace = true }
 # The runtime core (run loop, plugin stack, hot reload, config, pages, spawn,
 # app-kind, skins, profiler) plus every heavy backend it drags in
 # (wgpu / vello / winit / cosmic-text / taffy / rodio / mlua / the script
@@ -43,13 +43,13 @@ lumen-ir = { path = "../ir", version = "0.0.4" }
 # `lumen-lsp` links) stays thin. The `lumenc` BINARY keeps it for the CLI
 # `run` / `build` / `check` / `mcp` dev paths and injects its own parser
 # front-end via `LumencParser` (SourceParser).
-lumen-runtime = { path = "../runtime", version = "0.0.4", optional = true, default-features = false }
+lumen-runtime = { workspace = true, optional = true }
 # `.lpak` archive packer for `lumenc bundle` (bundle_cli). OPTIONAL behind the
 # default-on `bundle` feature: lumen-assets carries a hard `vello` dependency
 # for its runtime GPU-upload path, so a thin compiler library
 # (`--no-default-features`, as `lumen-lsp` links) drops it - and vello/wgpu with
 # it - while the `lumenc` binary keeps the `bundle` subcommand.
-lumen-assets = { path = "../assets", version = "0.0.4", optional = true }
+lumen-assets = { workspace = true, optional = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 # Markup (`.lmn`) XML parser. Optional + gated behind the default-on
@@ -65,30 +65,30 @@ bincode.workspace = true
 # Widget tag registry - parser_html consults
 # `lumen_widget::is_widget_tag_registered` to accept `#[derive(Widget)]`
 # custom tags after the built-in KNOWN_TAGS miss.
-lumen-widget = { path = "../widget", version = "0.0.4" }
+lumen-widget = { workspace = true }
 # The candela host, for the one module that decides what an `lmn!` block
 # means: the fragment key, the argument sites, the component elements, and the
 # candela the macro expands to. `lumenc` reads the same module the expander
 # does, so the ahead-of-time extraction and the compiled call cannot disagree.
 # OPTIONAL and pulled in by `runtime-parse`, which is the feature that carries
 # the markup front-end each block body compiles through.
-lumen-script-candela = { path = "../script/candela", version = "0.0.4", optional = true }
+lumen-script-candela = { workspace = true, default-features = true, optional = true }
 
 # `lumenc web` - the static-site emitter and the HTML contract it writes
 # against. OPTIONAL behind the default-on `web` feature; both are small and
 # pull nothing heavier than serde, but a thin compiler library that emits no
 # site drops them.
-lumen-html = { path = "../html", version = "0.0.4", optional = true }
-lumen-web = { path = "../web", version = "0.0.4", optional = true }
+lumen-html = { workspace = true, optional = true }
+lumen-web = { workspace = true, optional = true }
 # `--prerender run` - runs the app here and reads the state it settles into,
 # so a page carries the state the app arrives in.
-lumen-prerender = { path = "../prerender", version = "0.0.4", optional = true }
+lumen-prerender = { workspace = true, default-features = true, optional = true }
 # `--render ssr` - the per-request renderer, which is also what an embedder
 # puts inside their own server. `lumenc` gives it a socket and nothing else.
-lumen-ssr = { path = "../ssr", version = "0.0.4", optional = true }
+lumen-ssr = { workspace = true, optional = true }
 # `lumenc web` resolves an app's translations at build time, so a page reads
 # in its language with nothing running.
-lumen-i18n = { path = "../i18n", version = "0.0.4", optional = true }
+lumen-i18n = { workspace = true, optional = true }
 
 # `lumenc package --target <another platform>`: fetch that platform's
 # toolchain files from the release channel, check them against the release's
@@ -130,37 +130,37 @@ image.workspace = true
 # driven fully in-process - never a real window. Test-only, so these never
 # reach `lumen-lsp` or the release binary.
 [dev-dependencies]
-lumen-render-wgpu = { path = "../backends/render-wgpu" }
-lumen-core = { path = "../core" }
-lumen-os-dnd = { path = "../os/dnd" }
+lumen-render-wgpu = { workspace = true }
+lumen-core = { workspace = true }
+lumen-os-dnd = { workspace = true }
 # Widget-component assertions (parse.rs / run_pipeline.rs): StateVisuals,
 # ToggleStyle, TabStripButton, DropdownButton, transition/wake systems. Test
 # -only, so it stays out of the thin compiler library's link graph.
-lumen-primitives = { path = "../primitives" }
+lumen-primitives = { workspace = true }
 # Script-host and renderer crates named DIRECTLY by the integration tests
 # (run_pipeline / *_host_selection / golden / devtools_mount). They reach the
 # binary transitively through lumen-runtime, but a test can only *name*
 # `lumen_script_rhai::RhaiHost` etc. if the crate is a direct dependency - so
 # they live here (test-only) rather than in the thin library's `[dependencies]`.
-lumen-script = { path = "../script/api", default-features = false }
+lumen-script = { workspace = true }
 # counter_template.rs names the scene applier so it can assert the edge that
 # pins it after the DOM dispatch, which is a claim about the schedule rather
 # than about anything the compiler links.
-lumen-scene = { path = "../scene" }
-lumen-script-rhai = { path = "../script/rhai", default-features = false }
-lumen-script-lua = { path = "../script/lua", default-features = false }
-lumen-script-candela = { path = "../script/candela", default-features = false, features = ["compiler"] }
+lumen-scene = { workspace = true }
+lumen-script-rhai = { workspace = true }
+lumen-script-lua = { workspace = true }
+lumen-script-candela = { workspace = true, features = ["compiler"] }
 # os_integration.rs names the tray config / menu types directly, to assert a
 # script-supplied menu spec reaches them.
-lumen-os-tray = { path = "../os/tray" }
-lumen-text-cosmic = { path = "../backends/text-cosmic" }
+lumen-os-tray = { workspace = true }
+lumen-text-cosmic = { workspace = true }
 # text_geometry_pipeline.rs asserts against the shaped run the layout
 # producer publishes (`ShapedText` / `TextGeometry`), so it has to be able
 # to name the crate that defines them.
-lumen-text = { path = "../text" }
+lumen-text = { workspace = true }
 # devtools_mount.rs (compiled only under `--features devtools`) names these.
-lumen-mcp = { path = "../mcp" }
-lumen-devtools = { path = "../dev/devtools" }
+lumen-mcp = { workspace = true }
+lumen-devtools = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 

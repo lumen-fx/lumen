@@ -9,10 +9,12 @@ rust-version.workspace = true
 description = "Lua (mlua / Lua 5.4) ScriptHost impl - selectable alternative to the Rhai host, same engine-function surface."
 keywords = ["ui", "gui", "scripting", "lua", "mlua"]
 categories = ["gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-script = { path = "../api", version = "0.0.4", default-features = false }
-lumen-core = { path = "../../core", version = "0.0.4" }
+lumen-script = { workspace = true }
+lumen-core = { workspace = true }
 bevy_ecs.workspace = true
 # Lua 5.4, statically vendored, Send+Sync (see workspace dep comment).
 mlua.workspace = true

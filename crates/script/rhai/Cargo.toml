@@ -9,10 +9,12 @@ rust-version.workspace = true
 description = "Rhai ScriptHost impl."
 keywords = ["ui", "gui", "scripting", "rhai", "lumen"]
 categories = ["gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-script = { path = "../api", version = "0.0.4", default-features = false }
-lumen-core = { path = "../../core", version = "0.0.4" }
+lumen-script = { workspace = true }
+lumen-core = { workspace = true }
 bevy_ecs.workspace = true
 rhai.workspace = true
 serde_json.workspace = true

@@ -9,12 +9,14 @@ rust-version.workspace = true
 description = "taffy-backed LayoutEngine impl."
 keywords = ["ui", "gui", "layout", "flexbox", "taffy"]
 categories = ["gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-core = { path = "../../core", version = "0.0.4" }
+lumen-core = { workspace = true }
 # Intrinsic text sizing during taffy's MeasureFunc callback goes through
 # the `TextShaper` trait, so the layout engine names no shaping backend.
-lumen-text = { path = "../../text", version = "0.0.4" }
+lumen-text = { workspace = true }
 bevy_ecs.workspace = true   # needed for #[derive(Resource)] macro expansion path
 glam.workspace = true
 taffy.workspace = true

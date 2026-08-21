@@ -9,6 +9,8 @@ rust-version.workspace = true
 description = "Shared MimePayload + Action abstractions for lumen-os-* crates (QMimeData / GdkContentProvider / QAction / GAction analog)."
 keywords = ["ui", "gui", "mime", "clipboard", "lumen"]
 categories = ["os", "gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
 smallvec = "1"

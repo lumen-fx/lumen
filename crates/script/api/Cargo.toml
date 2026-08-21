@@ -9,13 +9,15 @@ rust-version.workspace = true
 description = "Scripting backend trait (ScriptHost, StateProxy)."
 keywords = ["ui", "gui", "scripting", "host", "lumen"]
 categories = ["gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-core = { path = "../../core", version = "0.0.4" }
-lumen-ir = { path = "../../ir", version = "0.0.4" }
-lumen-input = { path = "../../input", version = "0.0.4" }
-lumen-primitives = { path = "../../primitives", version = "0.0.4" }
-lumen-os-dnd = { path = "../../os/dnd", version = "0.0.4" }
+lumen-core = { workspace = true }
+lumen-ir = { workspace = true }
+lumen-input = { workspace = true }
+lumen-primitives = { workspace = true }
+lumen-os-dnd = { workspace = true }
 bevy_ecs.workspace = true
 crossbeam-channel.workspace = true
 thiserror.workspace = true

@@ -212,21 +212,32 @@ registries are the other. `.github/workflows/publish.yml` covers them, runs
 when a release is published, and can also be started by hand from the Actions
 tab with a dry-run switch.
 
-| Package                       | Registry  | What it is                    |
-| ----------------------------- | --------- | ----------------------------- |
-| `lumenui`                     | PyPI      | the Python SDK                |
-| `lumenui`                     | crates.io | the Rust SDK                  |
-| `lumenc`                      | crates.io | the CLI, for `cargo install`  |
-| `lumen-*`                     | crates.io | what those two are built from |
+| Package   | Registry  | What it is                   |
+| --------- | --------- | ---------------------------- |
+| `lumenui` | PyPI      | the Python SDK               |
+| `lumenui` | crates.io | the Rust SDK                 |
+| `lumenc`  | crates.io | the CLI, for `cargo install` |
 
 The Python distribution is pure Python and ships no binary, so one wheel
 covers every platform; it finds `liblumen` from an installed toolchain or a
 checkout at run time (`sdk/python/README.md` documents the search order).
 
-The crates go out in dependency order, because crates.io resolves each upload
-against what is already published. `tools/release/publish-crates.py` computes
-that order from `cargo metadata`, reports what state each crate is in, and
-publishes them one at a time:
+That table is the whole list. Every other crate in the workspace is
+`publish = false`, because the engine does not travel through crates.io:
+`crates/lumenc/build.rs` fetches the tagged source and builds `liblumen` and
+the launcher beside the installed binary, so a `cargo install lumenc` gets the
+engine without any of its pieces being registry packages.
+
+Neither crates.io package can go out yet. `lumenc` names eleven `lumen-*`
+crates as dependencies and `lumenui` names the engine, and cargo will not
+publish a crate whose dependency is not on the registry. Closing that means a
+published `lumenc` that carries no engine dependencies; until then
+`tools/release/publish-crates.py --plan` refuses to start and lists exactly
+which crates are in the way, and `cargo publish -p lumenc --dry-run` names the
+first of them.
+
+The script computes publish order from `cargo metadata`, reports what state
+each crate is in, and publishes them one at a time:
 
 ```sh
 tools/release/publish-crates.py --plan      # order and per-crate state
@@ -248,12 +259,6 @@ release:
 - A dependency taken from git with no version. crates.io accepts no such
   dependency, so the crate carrying it, and everything above it, cannot be
   published. `lumen-script-candela` is in that state until candela publishes.
-
-Every workspace crate shares the `[workspace.package]` version, and each
-internal dependency asks for that exact version, so a version bump means
-updating those dependency lines too. `tools/release/bump-version.py` moves them
-with it, and `publish-crates.py` checks that they agree and refuses to publish
-when they do not.
 
 The setup the workflow needs (a `CRATES_IO_TOKEN` secret, a PyPI trusted
 publisher, a `PYPI_PUBLISH_ENABLED` variable) is listed at the top of

@@ -9,6 +9,8 @@ rust-version.workspace = true
 description = "Lumen UI framework core: tick loop, ECS, command queue, backend traits."
 keywords.workspace = true
 categories.workspace = true
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
 # Core runtime/storage primitives only. No backend (render/window/text/script) deps.

@@ -9,16 +9,18 @@ rust-version.workspace = true
 description = "In-memory RGBA renderer for CI and tests."
 keywords = ["ui", "gui", "rendering", "headless", "testing"]
 categories = ["rendering", "gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-core = { path = "../../core", version = "0.0.4" }
-lumen-text = { path = "../../text", version = "0.0.4" }
+lumen-core = { workspace = true }
+lumen-text = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
-lumen-layout-taffy = { path = "../layout-taffy" }
+lumen-layout-taffy = { workspace = true }
 glam.workspace = true
 # Stand-in window for the `SurfaceRenderer` tests: it reports a size and no
 # handles, which is all a software renderer ever asks a window for.

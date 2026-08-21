@@ -9,6 +9,8 @@ rust-version.workspace = true
 description = "#[derive(Widget)] proc-macro - generates Plugin + spawn glue for lumen-widget."
 keywords = ["ui", "gui", "widgets", "macros", "derive"]
 categories = ["gui", "development-tools"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [lib]
 proc-macro = true
@@ -19,6 +21,6 @@ quote = "1"
 proc-macro2 = "1"
 
 [dev-dependencies]
-lumen-widget = { path = "../widget" }
-lumen-core = { path = "../core" }
+lumen-widget = { workspace = true }
+lumen-core = { workspace = true }
 bevy_ecs.workspace = true

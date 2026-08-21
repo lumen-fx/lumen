@@ -9,9 +9,11 @@ rust-version.workspace = true
 description = "Text shaping backend trait (TextShaper, FontDB)."
 keywords = ["ui", "gui", "text", "shaping", "fonts"]
 categories = ["gui", "text-processing"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-core = { path = "../core", version = "0.0.4" }
+lumen-core = { workspace = true }
 bevy_ecs.workspace = true
 ropey.workspace = true
 unicode-segmentation.workspace = true

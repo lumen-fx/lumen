@@ -9,32 +9,34 @@ rust-version.workspace = true
 description = "Lumen's scene layer: spawning the element tree from IR, reconciling for/if blocks and dialogs, fragments, and page routing."
 keywords.workspace = true
 categories.workspace = true
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [lib]
 name = "lumen_scene"
 path = "src/lib.rs"
 
 [dependencies]
-lumen-core = { path = "../core", version = "0.0.4" }
-lumen-ir = { path = "../ir", version = "0.0.4" }
+lumen-core = { workspace = true }
+lumen-ir = { workspace = true }
 # Widget behaviour components the spawner attaches: toggles, sliders,
 # dropdowns, tab strips, popups.
-lumen-primitives = { path = "../primitives", version = "0.0.4" }
+lumen-primitives = { workspace = true }
 # `translatable="..."` resolves against the app's catalogue as an element
 # spawns.
-lumen-i18n = { path = "../i18n", version = "0.0.4" }
+lumen-i18n = { workspace = true }
 # `<image src>` attaches an asset request; the loader behind it is the
 # host's.
-lumen-assets = { path = "../assets", version = "0.0.4" }
+lumen-assets = { workspace = true }
 # `draggable` / `drop-accept` attach the transport components; the platform
 # that fills them is the host's.
-lumen-os-dnd = { path = "../os/dnd", version = "0.0.4" }
+lumen-os-dnd = { workspace = true }
 # One call: an anchor click honours a handler that prevented the click's
 # default action.
-lumen-script = { path = "../script/api", version = "0.0.4", default-features = false }
+lumen-script = { workspace = true }
 # The DOM pipeline publishes the tree before the focused-key dispatch, so a
 # `query()` from a key handler sees this tick's nodes.
-lumen-input = { path = "../input", version = "0.0.4" }
+lumen-input = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 tracing.workspace = true
