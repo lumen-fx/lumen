@@ -353,6 +353,21 @@ macro_rules! host_ty {
     (Unit) => {
         ()
     };
+    (Ints) => {
+        Vec<i64>
+    };
+    (Strs) => {
+        Vec<String>
+    };
+    (MapI) => {
+        HashMap<String, i64>
+    };
+    (MapF) => {
+        HashMap<String, f64>
+    };
+    (MapS) => {
+        HashMap<String, String>
+    };
 }
 
 /// The [`ScriptTy`] a shape letter names.
@@ -372,6 +387,21 @@ macro_rules! script_ty {
     (Unit) => {
         ScriptTy::Unit
     };
+    (Ints) => {
+        ScriptTy::Array(Box::new(ScriptTy::Int))
+    };
+    (Strs) => {
+        ScriptTy::Array(Box::new(ScriptTy::Str))
+    };
+    (MapI) => {
+        ScriptTy::Map(Box::new(ScriptTy::Int))
+    };
+    (MapF) => {
+        ScriptTy::Map(Box::new(ScriptTy::Float))
+    };
+    (MapS) => {
+        ScriptTy::Map(Box::new(ScriptTy::Str))
+    };
 }
 
 /// Convert what the body returned into the Rust type the declaration names.
@@ -380,19 +410,10 @@ macro_rules! ret_value {
         let _ = $v;
     }};
     (Int, $v:expr) => {
-        match $v {
-            ScriptValue::I64(n) => n,
-            ScriptValue::F64(n) => n as i64,
-            ScriptValue::Bool(b) => i64::from(b),
-            _ => 0,
-        }
+        as_int(&$v)
     };
     (Float, $v:expr) => {
-        match $v {
-            ScriptValue::F64(n) => n,
-            ScriptValue::I64(n) => n as f64,
-            _ => 0.0,
-        }
+        as_float(&$v)
     };
     (Bool, $v:expr) => {
         matches!($v, ScriptValue::Bool(true))
@@ -400,6 +421,68 @@ macro_rules! ret_value {
     (Str, $v:expr) => {
         $v.stringify()
     };
+    (Ints, $v:expr) => {
+        items(&$v).iter().map(as_int).collect()
+    };
+    (Strs, $v:expr) => {
+        items(&$v)
+            .iter()
+            .map(ScriptValue::stringify)
+            .collect::<Vec<String>>()
+    };
+    (MapI, $v:expr) => {
+        entries(&$v)
+            .into_iter()
+            .map(|(k, v)| (k, as_int(&v)))
+            .collect()
+    };
+    (MapF, $v:expr) => {
+        entries(&$v)
+            .into_iter()
+            .map(|(k, v)| (k, as_float(&v)))
+            .collect()
+    };
+    (MapS, $v:expr) => {
+        entries(&$v)
+            .into_iter()
+            .map(|(k, v)| (k, v.stringify()))
+            .collect()
+    };
+}
+
+/// A returned value as an integer.
+fn as_int(v: &ScriptValue) -> i64 {
+    match v {
+        ScriptValue::I64(n) => *n,
+        ScriptValue::F64(n) => *n as i64,
+        ScriptValue::Bool(b) => i64::from(*b),
+        _ => 0,
+    }
+}
+
+/// A returned value as a float.
+fn as_float(v: &ScriptValue) -> f64 {
+    match v {
+        ScriptValue::F64(n) => *n,
+        ScriptValue::I64(n) => *n as f64,
+        _ => 0.0,
+    }
+}
+
+/// The elements of a returned list; empty for anything else.
+fn items(v: &ScriptValue) -> Vec<ScriptValue> {
+    match v {
+        ScriptValue::Array(list) => list.clone(),
+        _ => Vec::new(),
+    }
+}
+
+/// The entries of a returned map; empty for anything else.
+fn entries(v: &ScriptValue) -> Vec<(String, ScriptValue)> {
+    match v {
+        ScriptValue::Map(m) => m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Bind `f` under the first listed shape its signature matches.
@@ -459,6 +542,26 @@ fn register_typed<S: HostFnSink>(sink: &mut S, r: &Registries, f: &ScriptFn) -> 
         [a: Str] -> Str,
         [a: Str, b: Str] -> Str,
         [a: Str, b: Str] -> Bool,
+        [] -> Int,
+        [a: Str] -> Int,
+        [a: Str] -> Ints,
+        [a: Int] -> Int,
+        [a: Int] -> Ints,
+        [a: Int] -> Str,
+        [a: Int] -> Strs,
+        [a: Int] -> Bool,
+        [a: Int] -> Float,
+        [a: Int] -> MapI,
+        [a: Int] -> MapF,
+        [a: Int] -> MapS,
+        [a: Int, b: Str] -> Unit,
+        [a: Int, b: Str] -> Int,
+        [a: Int, b: Str] -> Str,
+        [a: Int, b: Str] -> Bool,
+        [a: Int, b: Str] -> MapS,
+        [a: Int, b: Str, c: Str] -> Unit,
+        [a: Int, b: Int] -> Unit,
+        [a: Int, b: Int, c: Int] -> Unit,
     }
 }
 /// Register the fragment surface: instantiate a compiled fragment by key, and
@@ -635,637 +738,20 @@ pub(crate) fn register_lumen_host_fns<S: HostFnSink>(engine: &mut S, r: &Registr
         },
     );
 
-    register_node_query(engine);
-    register_node_mutators(engine, r);
-    register_node_events(engine, r);
+    register_event_bindings(engine, r);
+    register_runtime_state(engine);
     register_web_namespaces(engine, r);
 }
 
-// -- free helpers ------------------------------------------------------------
-
-/// Read positional argument `idx` of a variadic host call as text. A string
-/// argument comes through verbatim; anything else takes its canonical
-/// stringified form, and a missing argument is the empty string.
-fn arg_text(args: &[Value], idx: usize) -> String {
-    args.get(idx)
-        .map(|v| candela_value_to_script(v).stringify())
-        .unwrap_or_default()
-}
-
-/// Read positional argument `idx` of a variadic host call as a
-/// [`ScriptValue`], or [`ScriptValue::Unit`] when it is absent.
-fn arg_value(args: &[Value], idx: usize) -> ScriptValue {
-    args.get(idx)
-        .map_or(ScriptValue::Unit, candela_value_to_script)
-}
-
-/// Resolve a candela `int` node id (from the process-global side-table)
-/// into the packed handle the host-neutral query surface consumes.
-fn cd_id_to_packed(id: i64) -> Option<u64> {
-    i32::try_from(id)
-        .ok()
-        .and_then(lumen_core::node::resolve_node)
-        .map(|h| h.pack())
-}
-
-/// Intern a packed handle back into a candela `int` id (`0` for none).
-fn cd_packed_to_id(packed: u64) -> i64 {
-    match lumen_core::node::NodeHandle::unpack(packed) {
-        Some(h) => lumen_core::node::intern_node(h.entity, h.generation) as i64,
-        None => 0,
-    }
-}
-
-/// Resolve a candela `int` id to its raw packed bits (a live handle OR a
-/// reserved spawn token), for the mutation surface.
-fn cd_id_to_raw(id: i64) -> Option<u64> {
-    i32::try_from(id)
-        .ok()
-        .and_then(lumen_core::node::resolve_node_raw)
-}
-
-/// Intern any packed handle (real or reserved token) into a candela id.
-fn cd_intern_raw(packed: u64) -> i64 {
-    lumen_core::node::intern_node_raw(packed) as i64
-}
-
-/// Register the dynamic DOM read side. candela's value type is a small
-/// integer, so a 64-bit handle cannot ride inside it; every node is an
-/// `int` id interned in the process-global side-table
-/// (`lumen_core::node`). Scripts call these procedurally
-/// (`lumen::node_parent(h)`); the `impl Node`/`node.parent()` sugar waits
-/// on user-struct methods landing in candela.
-/// Register the phase-4 event surface (procedural). candela has no closure
-/// value, so a handler is referenced by function name and the event object is
-/// reached through free `event_*` accessors keyed by the event id passed to
-/// the handler. The method-sugar form (`ev.target()`) waits on user-struct
-/// impl methods landing in the pinned candela dep.
+/// The runtime state reads whose result shape is candela's own.
 ///
-/// ```candela
-/// let off = lumen::event_on(btn, "click", "on_save");   // returns a token
-/// fn on_save(ev) {
-///     let t = lumen::event_target(ev);
-///     lumen::event_prevent_default(ev);
-/// }
-/// // later: lumen::event_off(off);
-/// ```
-fn register_node_events<S: HostFnSink>(engine: &mut S, r: &Registries) {
-    use lumen_script::event as ev;
-
-    // Bind: resolve the node id, stash the handler name by token, emit
-    // BindEvent, and return the off token.
-    for (fname, capture) in [("event_on", false), ("event_on_capture", true)] {
-        let sink = r.sink.clone();
-        let eh = r.event_handlers.clone();
-        engine.register_host_fn(
-            HOST_NAMESPACE,
-            fname,
-            move |node: i64, event_type: String, handler: String| -> i64 {
-                let Some(packed) = cd_id_to_raw(node) else {
-                    return 0;
-                };
-                let token = ev::mint_event_token();
-                eh.write().unwrap().insert(token, handler);
-                sink.lock().unwrap().push(ScriptCommand::BindEvent {
-                    node: packed,
-                    event_type,
-                    capture,
-                    token,
-                });
-                token as i64
-            },
-        );
-    }
-    // Unbind by token.
-    {
-        let sink = r.sink.clone();
-        let eh = r.event_handlers.clone();
-        engine.register_host_fn(HOST_NAMESPACE, "event_off", move |token: i64| {
-            let t = token as u64;
-            eh.write().unwrap().remove(&t);
-            sink.lock()
-                .unwrap()
-                .push(ScriptCommand::UnbindEvent { token: t });
-        });
-    }
-
-    // Accessors. Each takes the event id (currently the token) and reads the
-    // process-global current-event cell; the id is accepted for the
-    // web-idiomatic `event_target(ev)` shape and to leave room for nested
-    // dispatch later.
-    engine.register_host_fn(HOST_NAMESPACE, "event_target", |_ev: i64| -> i64 {
-        cd_packed_to_id(ev::event_target())
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_current_target", |_ev: i64| -> i64 {
-        cd_packed_to_id(ev::event_current_target())
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_type", |_ev: i64| -> String {
-        ev::event_type()
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_key", |_ev: i64| -> String {
-        ev::event_key()
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_value", |_ev: i64| -> String {
-        ev::event_value()
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_button", |_ev: i64| -> i64 {
-        ev::event_button()
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_x", |_ev: i64| -> f64 {
-        ev::event_position_local().0
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_y", |_ev: i64| -> f64 {
-        ev::event_position_local().1
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_client_x", |_ev: i64| -> f64 {
-        ev::event_position_client().0
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_client_y", |_ev: i64| -> f64 {
-        ev::event_position_client().1
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_delta_x", |_ev: i64| -> f64 {
-        ev::event_delta().0
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_delta_y", |_ev: i64| -> f64 {
-        ev::event_delta().1
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_shift", |_ev: i64| -> bool {
-        ev::event_modifiers().0
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_ctrl", |_ev: i64| -> bool {
-        ev::event_modifiers().1
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_alt", |_ev: i64| -> bool {
-        ev::event_modifiers().2
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_super", |_ev: i64| -> bool {
-        ev::event_modifiers().3
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_prevent_default", |_ev: i64| {
-        ev::event_prevent_default();
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "event_stop_propagation", |_ev: i64| {
-        ev::event_stop_propagation();
-    });
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "event_stop_immediate_propagation",
-        |_ev: i64| {
-            ev::event_stop_immediate_propagation();
-        },
-    );
-}
-
-fn register_node_query<S: HostFnSink>(engine: &mut S) {
-    use lumen_script::node_query;
-
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "node_query",
-        |selector: String| -> Vec<i64> {
-            node_query::run_query(&selector)
-                .map(|q| q.nodes.iter().map(|&p| cd_packed_to_id(p)).collect())
-                .unwrap_or_default()
-        },
-    );
-    engine.register_host_fn(HOST_NAMESPACE, "node_get_by_id", |id: String| -> i64 {
-        node_query::run_get_by_id(&id)
-            .map(cd_packed_to_id)
-            .unwrap_or(0)
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "node_document", || -> i64 {
-        node_query::run_document().map(cd_packed_to_id).unwrap_or(0)
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "node_parent", |h: i64| -> i64 {
-        cd_id_to_packed(h)
-            .and_then(node_query::node_parent)
-            .map(cd_packed_to_id)
-            .unwrap_or(0)
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "node_first_child", |h: i64| -> i64 {
-        cd_id_to_packed(h)
-            .and_then(node_query::node_first_child)
-            .map(cd_packed_to_id)
-            .unwrap_or(0)
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "node_last_child", |h: i64| -> i64 {
-        cd_id_to_packed(h)
-            .and_then(node_query::node_last_child)
-            .map(cd_packed_to_id)
-            .unwrap_or(0)
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "node_next", |h: i64| -> i64 {
-        cd_id_to_packed(h)
-            .and_then(node_query::node_next)
-            .map(cd_packed_to_id)
-            .unwrap_or(0)
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "node_prev", |h: i64| -> i64 {
-        cd_id_to_packed(h)
-            .and_then(node_query::node_prev)
-            .map(cd_packed_to_id)
-            .unwrap_or(0)
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "node_children", |h: i64| -> Vec<i64> {
-        cd_id_to_packed(h)
-            .map(|p| {
-                node_query::node_children(p)
-                    .iter()
-                    .map(|&x| cd_packed_to_id(x))
-                    .collect()
-            })
-            .unwrap_or_default()
-    });
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "node_closest",
-        |h: i64, selector: String| -> i64 {
-            cd_id_to_packed(h)
-                .and_then(|p| node_query::node_closest(p, &selector).ok().flatten())
-                .map(cd_packed_to_id)
-                .unwrap_or(0)
-        },
-    );
-    engine.register_host_fn(HOST_NAMESPACE, "node_valid", |h: i64| -> bool {
-        cd_id_to_packed(h)
-            .map(node_query::node_valid)
-            .unwrap_or(false)
-    });
-}
-
-/// Register the dynamic DOM write side (phases 2 + 3) for candela.
-///
-/// The pinned candela dep predates user-struct impl-block methods, so the
-/// mutators are procedural under the `lumen` namespace
-/// (`lumen::node_set_attr(h, name, value)`), not `node.set_attr(..)`
-/// method sugar, and there is no fluent chaining; each call is a separate
-/// statement. A future candela-dep bump enables the method + chaining form
-/// the rhai / lua hosts already expose. Handles are the same `int` ids the
-/// read side uses; `node_spawn` / `node_clone_deep` mint a reserved-token
-/// id valid for the whole tick.
-fn register_node_mutators<S: HostFnSink>(engine: &mut S, r: &Registries) {
-    use lumen_script::node_query;
-
-    /// Register a mutator whose body resolves the node id and pushes one
-    /// command into the sink.
-    macro_rules! mutate {
-        ($name:literal, |$node:ident $(, $arg:ident : $ty:ty)*| $build:expr) => {{
-            let sink = r.sink.clone();
-            engine.register_host_fn(
-                HOST_NAMESPACE,
-                $name,
-                move |$node: i64 $(, $arg: $ty)*| {
-                    if let Some($node) = cd_id_to_raw($node) {
-                        sink.lock().unwrap().push($build);
-                    }
-                },
-            );
-        }};
-    }
-
-    mutate!("node_set_attr", |node, name: String, value: String| {
-        ScriptCommand::SetAttr { node, name, value }
-    });
-    mutate!("node_remove_attr", |node, name: String| {
-        ScriptCommand::RemoveAttr { node, name }
-    });
-    mutate!("node_set_id", |node, id: String| {
-        ScriptCommand::SetAttr {
-            node,
-            name: "id".to_string(),
-            value: id,
-        }
-    });
-    mutate!("node_set_text", |node, text: String| {
-        ScriptCommand::SetNodeText { node, text }
-    });
-    // Guarded markup injection (design 4.4). Do not feed untrusted content.
-    mutate!("node_set_inner_markup", |node, markup: String| {
-        ScriptCommand::SetInnerMarkup { node, markup }
-    });
-    mutate!("node_class_add", |node, class: String| {
-        ScriptCommand::ClassAdd { node, class }
-    });
-    mutate!("node_class_remove", |node, class: String| {
-        ScriptCommand::ClassRemove { node, class }
-    });
-    mutate!("node_class_toggle", |node, class: String| {
-        ScriptCommand::ClassToggle { node, class }
-    });
-    mutate!("node_set_class", |node, classes: String| {
-        ScriptCommand::SetAttr {
-            node,
-            name: "class".to_string(),
-            value: classes,
-        }
-    });
-    mutate!("node_set_style", |node, name: String, value: String| {
-        ScriptCommand::SetStyleProp { node, name, value }
-    });
-    mutate!("node_style_remove", |node, name: String| {
-        ScriptCommand::RemoveStyleProp { node, name }
-    });
-    mutate!("node_remove", |node| ScriptCommand::RemoveNode { node });
-
-    // Two-handle structural ops.
-    {
-        let sink = r.sink.clone();
-        engine.register_host_fn(
-            HOST_NAMESPACE,
-            "node_append",
-            move |parent: i64, child: i64| {
-                if let (Some(parent), Some(child)) = (cd_id_to_raw(parent), cd_id_to_raw(child)) {
-                    sink.lock().unwrap().push(ScriptCommand::Insert {
-                        parent,
-                        node: child,
-                        before: 0,
-                    });
-                }
-            },
-        );
-    }
-    {
-        let sink = r.sink.clone();
-        engine.register_host_fn(
-            HOST_NAMESPACE,
-            "node_insert_before",
-            move |parent: i64, child: i64, reference: i64| {
-                if let (Some(parent), Some(child)) = (cd_id_to_raw(parent), cd_id_to_raw(child)) {
-                    let before = cd_id_to_raw(reference).unwrap_or(0);
-                    sink.lock().unwrap().push(ScriptCommand::Insert {
-                        parent,
-                        node: child,
-                        before,
-                    });
-                }
-            },
-        );
-    }
-    {
-        let sink = r.sink.clone();
-        engine.register_host_fn(
-            HOST_NAMESPACE,
-            "node_set_parent",
-            move |node: i64, parent: i64| {
-                if let (Some(node), Some(parent)) = (cd_id_to_raw(node), cd_id_to_raw(parent)) {
-                    sink.lock().unwrap().push(ScriptCommand::Insert {
-                        parent,
-                        node,
-                        before: 0,
-                    });
-                }
-            },
-        );
-    }
-    {
-        let sink = r.sink.clone();
-        engine.register_host_fn(
-            HOST_NAMESPACE,
-            "node_move_to",
-            move |node: i64, parent: i64| {
-                if let (Some(node), Some(parent)) = (cd_id_to_raw(node), cd_id_to_raw(parent)) {
-                    sink.lock().unwrap().push(ScriptCommand::Insert {
-                        parent,
-                        node,
-                        before: 0,
-                    });
-                }
-            },
-        );
-    }
-    {
-        let sink = r.sink.clone();
-        engine.register_host_fn(
-            HOST_NAMESPACE,
-            "node_replace_with",
-            move |old: i64, new: i64| {
-                if let (Some(old), Some(new)) = (cd_id_to_raw(old), cd_id_to_raw(new)) {
-                    sink.lock()
-                        .unwrap()
-                        .push(ScriptCommand::ReplaceWith { old, new });
-                }
-            },
-        );
-    }
-
-    // Create verbs -> return the new node's id.
-    {
-        let sink = r.sink.clone();
-        engine.register_host_fn(HOST_NAMESPACE, "node_spawn", move |tag: String| -> i64 {
-            let (handle, cmd) = node_query::build_spawn(&tag);
-            sink.lock().unwrap().push(cmd);
-            cd_intern_raw(handle)
-        });
-    }
-    {
-        let sink = r.sink.clone();
-        engine.register_host_fn(
-            HOST_NAMESPACE,
-            "node_clone_deep",
-            move |source: i64| -> i64 {
-                let Some(source) = cd_id_to_raw(source) else {
-                    return 0;
-                };
-                let (handle, cmd) = node_query::build_clone(source);
-                sink.lock().unwrap().push(cmd);
-                cd_intern_raw(handle)
-            },
-        );
-    }
-
-    // Read-backs.
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "node_get_attr",
-        |node: i64, name: String| -> String {
-            cd_id_to_raw(node)
-                .and_then(|h| node_query::node_get_attr(h, &name))
-                .unwrap_or_default()
-        },
-    );
-    engine.register_host_fn(HOST_NAMESPACE, "node_text", |node: i64| -> String {
-        cd_id_to_raw(node)
-            .and_then(node_query::node_text)
-            .unwrap_or_default()
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "node_id", |node: i64| -> String {
-        cd_id_to_raw(node)
-            .and_then(node_query::node_id)
-            .unwrap_or_default()
-    });
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "node_class_contains",
-        |node: i64, class: String| -> bool {
-            cd_id_to_raw(node)
-                .map(|h| node_query::node_class_contains(h, &class))
-                .unwrap_or(false)
-        },
-    );
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "node_style_get",
-        |node: i64, prop: String| -> String {
-            cd_id_to_raw(node)
-                .and_then(|h| node_query::node_style_get(h, &prop))
-                .unwrap_or_default()
-        },
-    );
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "node_computed_style",
-        |node: i64, prop: String| -> String {
-            cd_id_to_raw(node)
-                .and_then(|h| node_query::node_computed_style(h, &prop))
-                .unwrap_or_default()
-        },
-    );
-    register_node_introspection(engine);
-}
-
-/// Register the phase-5 low-level introspection procedural surface for
-/// candela: geometry, full computed style / provenance, typed component
-/// reads, and global runtime state. Value maps marshal as candela
-/// `{string: T}` maps; a node argument is the interned `int` id. Absent /
-/// unknown reads yield an empty map (candela host fns surface no error).
-fn register_node_introspection<S: HostFnSink>(engine: &mut S) {
+/// Each of these gives back a map, and each host spells that map differently:
+/// candela names concrete value types in its declaration, while Rhai and Lua
+/// build a nested dynamic map. They stay per host until the shapes are made to
+/// agree.
+fn register_runtime_state<S: HostFnSink>(engine: &mut S) {
     use lumen_script::introspect as ins;
-    use std::collections::HashMap;
 
-    fn rect_map(r: ins::NodeRect) -> HashMap<String, f64> {
-        HashMap::from([
-            ("x".to_string(), r.x as f64),
-            ("y".to_string(), r.y as f64),
-            ("width".to_string(), r.width as f64),
-            ("height".to_string(), r.height as f64),
-            ("client_x".to_string(), r.client_x as f64),
-            ("client_y".to_string(), r.client_y as f64),
-        ])
-    }
-
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "node_rect",
-        |node: i64| -> HashMap<String, f64> {
-            cd_id_to_raw(node)
-                .and_then(ins::node_rect)
-                .map(rect_map)
-                .unwrap_or_default()
-        },
-    );
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "node_content_rect",
-        |node: i64| -> HashMap<String, f64> {
-            cd_id_to_raw(node)
-                .and_then(ins::node_content_rect)
-                .map(rect_map)
-                .unwrap_or_default()
-        },
-    );
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "node_scroll",
-        |node: i64| -> HashMap<String, f64> {
-            cd_id_to_raw(node)
-                .and_then(ins::node_scroll)
-                .map(|s| {
-                    HashMap::from([
-                        ("x".to_string(), s.x as f64),
-                        ("y".to_string(), s.y as f64),
-                        ("max_x".to_string(), s.max_x as f64),
-                        ("max_y".to_string(), s.max_y as f64),
-                    ])
-                })
-                .unwrap_or_default()
-        },
-    );
-    engine.register_host_fn(HOST_NAMESPACE, "node_is_visible", |node: i64| -> bool {
-        cd_id_to_raw(node)
-            .map(ins::node_is_visible)
-            .unwrap_or(false)
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "node_z_index", |node: i64| -> i64 {
-        cd_id_to_raw(node)
-            .map(|h| ins::node_z_index(h) as i64)
-            .unwrap_or(0)
-    });
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "node_computed_style_all",
-        |node: i64| -> HashMap<String, String> {
-            cd_id_to_raw(node)
-                .map(|h| ins::node_computed_style_map(h).into_iter().collect())
-                .unwrap_or_default()
-        },
-    );
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "node_inline_style",
-        |node: i64| -> HashMap<String, String> {
-            cd_id_to_raw(node)
-                .map(|h| ins::node_inline_style(h).into_iter().collect())
-                .unwrap_or_default()
-        },
-    );
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "node_attrs",
-        |node: i64| -> HashMap<String, String> {
-            cd_id_to_raw(node)
-                .map(|h| ins::node_attrs(h).into_iter().collect())
-                .unwrap_or_default()
-        },
-    );
-    engine.register_host_fn(HOST_NAMESPACE, "node_classes", |node: i64| -> Vec<String> {
-        cd_id_to_raw(node)
-            .map(ins::node_classes)
-            .unwrap_or_default()
-    });
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "node_entity_id",
-        |node: i64| -> HashMap<String, i64> {
-            match cd_id_to_raw(node).and_then(ins::node_entity_id) {
-                Some((index, generation)) => HashMap::from([
-                    ("index".to_string(), index as i64),
-                    ("generation".to_string(), generation as i64),
-                ]),
-                None => HashMap::new(),
-            }
-        },
-    );
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "node_components",
-        |node: i64| -> Vec<String> {
-            cd_id_to_raw(node)
-                .map(ins::node_components)
-                .unwrap_or_default()
-        },
-    );
-    engine.register_host_fn(
-        HOST_NAMESPACE,
-        "node_component",
-        |node: i64, name: String| -> HashMap<String, String> {
-            cd_id_to_raw(node)
-                .and_then(|h| ins::node_component(h, &name).ok().flatten())
-                .map(|m| m.into_iter().collect())
-                .unwrap_or_default()
-        },
-    );
-    engine.register_host_fn(HOST_NAMESPACE, "node_outer_markup", |node: i64| -> String {
-        cd_id_to_raw(node)
-            .map(ins::outer_markup)
-            .unwrap_or_default()
-    });
-    engine.register_host_fn(HOST_NAMESPACE, "node_inner_markup", |node: i64| -> String {
-        cd_id_to_raw(node)
-            .map(ins::inner_markup)
-            .unwrap_or_default()
-    });
-
-    // Global runtime state (no node argument).
     engine.register_host_fn(
         HOST_NAMESPACE,
         "pointer_state",
@@ -1339,6 +825,103 @@ fn register_node_introspection<S: HostFnSink>(engine: &mut S) {
                 .collect(),
         )
     });
+}
+
+// -- free helpers ------------------------------------------------------------
+
+/// Read positional argument `idx` of a variadic host call as text. A string
+/// argument comes through verbatim; anything else takes its canonical
+/// stringified form, and a missing argument is the empty string.
+fn arg_text(args: &[Value], idx: usize) -> String {
+    args.get(idx)
+        .map(|v| candela_value_to_script(v).stringify())
+        .unwrap_or_default()
+}
+
+/// Read positional argument `idx` of a variadic host call as a
+/// [`ScriptValue`], or [`ScriptValue::Unit`] when it is absent.
+fn arg_value(args: &[Value], idx: usize) -> ScriptValue {
+    args.get(idx)
+        .map_or(ScriptValue::Unit, candela_value_to_script)
+}
+
+/// Intern a packed handle back into a candela `int` id (`0` for none).
+fn cd_packed_to_id(packed: u64) -> i64 {
+    match lumen_core::node::NodeHandle::unpack(packed) {
+        Some(h) => lumen_core::node::intern_node(h.entity, h.generation) as i64,
+        None => 0,
+    }
+}
+
+/// Resolve a candela `int` id to its raw packed bits (a live handle OR a
+/// reserved spawn token), for the mutation surface.
+fn cd_id_to_raw(id: i64) -> Option<u64> {
+    i32::try_from(id)
+        .ok()
+        .and_then(lumen_core::node::resolve_node_raw)
+}
+
+/// Intern any packed handle (real or reserved token) into a candela id.
+fn cd_intern_raw(packed: u64) -> i64 {
+    lumen_core::node::intern_node_raw(packed) as i64
+}
+
+/// Register the dynamic DOM read side. candela's value type is a small
+/// integer, so a 64-bit handle cannot ride inside it; every node is an
+/// Bind and unbind a DOM event handler.
+///
+/// candela has no closure value, so a handler is referenced by function name
+/// and the binding is what the host keeps: the token-to-name registry lives in
+/// [`Registries`], which is why this half stays here while the `event_*`
+/// accessors are described in the shared table.
+///
+/// ```candela
+/// let off = lumen::event_on(btn, "click", "on_save");   // returns a token
+/// fn on_save(ev) {
+///     let t = lumen::event_target(ev);
+///     lumen::event_prevent_default(ev);
+/// }
+/// // later: lumen::event_off(off);
+/// ```
+fn register_event_bindings<S: HostFnSink>(engine: &mut S, r: &Registries) {
+    use lumen_script::event as ev;
+
+    // Bind: resolve the node id, stash the handler name by token, emit
+    // BindEvent, and return the off token.
+    for (fname, capture) in [("event_on", false), ("event_on_capture", true)] {
+        let sink = r.sink.clone();
+        let eh = r.event_handlers.clone();
+        engine.register_host_fn(
+            HOST_NAMESPACE,
+            fname,
+            move |node: i64, event_type: String, handler: String| -> i64 {
+                let Some(packed) = cd_id_to_raw(node) else {
+                    return 0;
+                };
+                let token = ev::mint_event_token();
+                eh.write().unwrap().insert(token, handler);
+                sink.lock().unwrap().push(ScriptCommand::BindEvent {
+                    node: packed,
+                    event_type,
+                    capture,
+                    token,
+                });
+                token as i64
+            },
+        );
+    }
+    // Unbind by token.
+    {
+        let sink = r.sink.clone();
+        let eh = r.event_handlers.clone();
+        engine.register_host_fn(HOST_NAMESPACE, "event_off", move |token: i64| {
+            let t = token as u64;
+            eh.write().unwrap().remove(&t);
+            sink.lock()
+                .unwrap()
+                .push(ScriptCommand::UnbindEvent { token: t });
+        });
+    }
 }
 
 /// Register the `window` / `document` / `history` namespaces (section 4.8)
