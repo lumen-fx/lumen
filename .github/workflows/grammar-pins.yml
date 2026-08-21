@@ -48,7 +48,12 @@ jobs:
           repin tools/tree-sitter-lumen/editors/helix/languages.toml
           repin tools/tree-sitter-lumen/editors/nvim/lumen.lua
 
-          if git diff --quiet; then
+          # Ask about the pinned files alone. A checkout that leaves anything
+          # else modified would otherwise send this down the commit path with
+          # nothing staged, where the commit fails and takes the job with it.
+          if git diff --quiet -- tools/zed-lumen/extension.toml \
+                                 tools/tree-sitter-lumen/editors/helix/languages.toml \
+                                 tools/tree-sitter-lumen/editors/nvim/lumen.lua; then
             echo "pins already at ${rev}"
             exit 0
           fi
