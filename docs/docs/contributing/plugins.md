@@ -291,8 +291,8 @@ the builder inserts should read it from a system rather than from `build`.
 
 | `ScriptNs` | Rhai | Lua | candela |
 | --- | --- | --- | --- |
-| `Builtin` | `read(21)` | `read(21)` | `lumen::read(21)` |
-| `Extension` | `read(21)` | `read(21)` | `native::read(21)` |
+| `Builtin` | `level(21)` | `level(21)` | `lumen::level(21)` |
+| `Extension` | `level(21)` | `level(21)` | `native::level(21)` |
 | `Named("gpio")` | `gpio::level(21)` | `gpio.level(21)` | `gpio::level(21)` |
 
 `Builtin` is the runtime's own surface; a plugin normally takes `Extension` or a
