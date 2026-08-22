@@ -17,7 +17,8 @@ use crate::{
     emit_outline, emit_outline_cached, emit_outline_into_fragment, emit_rect, emit_rect_cached,
     emit_rect_into_fragment, emit_shadow, emit_shadow_cached, emit_shadow_into_fragment, emit_svg,
 };
-use lumen_core::node_ir::{ClipShape, Node, RetainedScene};
+use lumen_core::native::{NativePaintCtx, NativePainters};
+use lumen_core::node_ir::{Affine2, ClipShape, Node, RetainedScene};
 use lumen_core::render_world::{
     ExtractedImage, ExtractedOutline, ExtractedRect, ExtractedShadow, FrameDamage,
     Rect as LumenRect,
@@ -80,6 +81,9 @@ pub struct WalkContext<'a> {
     pub opacity: f32,
     /// Active clip stack - see [`ClipStack`].
     pub clips: ClipStack,
+    /// Painters for [`Node::Native`] leaves. When `None`, or when no painter is registered for a
+    /// leaf's `extension_id`, that leaf paints nothing.
+    pub natives: Option<&'a NativePainters>,
 }
 
 impl<'a> WalkContext<'a> {
@@ -103,6 +107,7 @@ impl<'a> WalkContext<'a> {
             opacity: 1.0,
             clips: ClipStack::default(),
             dpr: 1.0,
+            natives: None,
         }
     }
 
@@ -127,7 +132,24 @@ impl<'a> WalkContext<'a> {
             opacity: 1.0,
             clips: ClipStack::default(),
             dpr: dpr.max(0.01),
+            natives: None,
         }
+    }
+
+    /// Attaches the painter registry that [`Node::Native`] leaves dispatch through. Without it
+    /// every native leaf is skipped, which is how a backend with no registered painters stays
+    /// portable rather than failing.
+    pub fn with_native_painters(mut self, painters: &'a NativePainters) -> Self {
+        self.natives = Some(painters);
+        self
+    }
+}
+
+/// Converts the walker's running vello transform back into the IR's affine, which is what a
+/// painter is handed - painters see logical coordinates and the device scale, not vello types.
+fn affine_to_affine2(a: Affine) -> Affine2 {
+    Affine2 {
+        coeffs: a.as_coeffs(),
     }
 }
 
@@ -396,10 +418,43 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
                 emit_svg(ctx.scene, &svg);
             }
         }
-        Node::Native { .. } => {
-            // Native escape hatch - back-ends consult `extension_id` to dispatch. The default walker is a
-            // no-op so unknown extensions don't crash the encode pass; embedders override by wrapping the
-            // walker with their own dispatch table.
+        Node::Native {
+            extension_id,
+            payload,
+            bounds,
+            clip_to_bounds,
+            ..
+        } => {
+            // An id with no painter registered paints nothing. That is the portability story: a
+            // scene carrying an extension this backend does not implement still renders the rest.
+            let painter = ctx
+                .natives
+                .and_then(|registry| registry.get(extension_id))
+                .cloned();
+            let Some(painter) = painter else {
+                return;
+            };
+            let pops = if *clip_to_bounds {
+                let shape = scale_clip_shape(ClipShape::Rect(*bounds), ctx.dpr);
+                push_clip_layer(ctx.scene, shape, ctx.opacity)
+            } else {
+                0
+            };
+            let transform = affine_to_affine2(ctx.transform);
+            let (dpr, opacity) = (ctx.dpr, ctx.opacity);
+            let mut paint_ctx = NativePaintCtx::new(
+                payload.as_ref(),
+                &mut *ctx.scene,
+                crate::BACKEND_ID,
+                *bounds,
+                transform,
+                dpr,
+                opacity,
+            );
+            painter.paint(&mut paint_ctx);
+            for _ in 0..pops {
+                ctx.scene.pop_layer();
+            }
         }
     }
 }

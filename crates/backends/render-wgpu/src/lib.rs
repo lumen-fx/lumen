@@ -12,9 +12,18 @@ pub mod surface;
 pub mod walker;
 pub use scene_cache::{CacheStats, FragmentKey, SceneFragmentCache, append_translated};
 pub use surface::{GPU_INIT_DEADLINE_DEFAULT_MS, GPU_INIT_DEADLINE_ENV, WgpuSurfaceRenderer};
+/// The vello version this backend draws with. A crate that implements a
+/// [`lumen_core::native::NativePainter`] for this backend downcasts the draw target to
+/// `vello::Scene`, and a downcast only matches when both sides mean the same vello, so painters
+/// reach it through this re-export rather than declaring their own vello dependency.
+pub use vello;
 pub use walker::{
     ClipStack, WalkContext, damage_union, diff_retained_scenes, walk_node, walk_retained_scene,
 };
+
+/// Names this backend in [`lumen_core::native::NativePaintCtx::backend_id`]. A painter that sees it
+/// knows the draw target is a [`vello::Scene`].
+pub const BACKEND_ID: &str = "lumen.render-wgpu";
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::NonSendMut;
@@ -1266,6 +1275,7 @@ fn wgpu_render_system(
     retained: Res<lumen_core::node_ir::RetainedScene>,
     mut previous: ResMut<lumen_core::node_ir::PreviousScene>,
     mut damage: ResMut<FrameDamage>,
+    natives: Option<Res<lumen_core::native::NativePainters>>,
 ) {
     // Device pixel ratio: the walker scales every leaf (and clip) from logical to physical pixels
     // at emit time, so the target texture and the damage scissor must be sized in the same physical
@@ -1316,6 +1326,9 @@ fn wgpu_render_system(
                 shaper_ref,
                 dpr,
             );
+            if let Some(painters) = natives.as_deref() {
+                ctx = ctx.with_native_painters(painters);
+            }
             crate::walker::walk_retained_scene(&mut ctx, &retained);
         }
 
