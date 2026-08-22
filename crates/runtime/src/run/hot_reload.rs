@@ -203,6 +203,15 @@ pub(crate) fn hot_reload(world: &mut World) {
     else {
         return;
     };
+    // Same story for the compiler plugins: injected once in `build_app`,
+    // reused here so a reload reruns the same hooks without reloading the
+    // plugin libraries. Absent only when `build_app` never ran (not a
+    // reachable state on this system's path); fall back to the empty chain
+    // rather than skip the reload.
+    let compiler_plugins = world
+        .get_resource::<crate::compiler_plugins::RuntimeCompilerPlugins>()
+        .map(|p| p.0.clone())
+        .unwrap_or_else(|| std::sync::Arc::new(crate::compiler_plugins::NoCompilerPlugins) as _);
     let Some(state) = world.get_resource::<HotReloadState>() else {
         return;
     };
@@ -255,6 +264,7 @@ pub(crate) fn hot_reload(world: &mut World) {
         fragments,
     } = match load_ir(
         &*parser,
+        &*compiler_plugins,
         &html_path,
         &css_path,
         &dir,

@@ -1,9 +1,14 @@
 # Writing plugins
 
-A plugin is how Rust code joins a Lumen app. It registers systems into the tick
-and render schedules, installs resources, and can replace parts of the frame
-pipeline. Every backend in the workspace is a plugin, so the extension surface
-you get is the one the framework uses on itself.
+Lumen has two plugin kinds: runtime plugins join a running app (systems,
+resources, script functions), and [compiler plugins](#compiler-plugins) change
+what `lumenc` produces from an app's sources. The first part of this page
+covers runtime plugins; compiler plugins have their own section at the end.
+
+A runtime plugin is how Rust code joins a Lumen app. It registers systems into
+the tick and render schedules, installs resources, and can replace parts of
+the frame pipeline. Every backend in the workspace is a plugin, so the
+extension surface you get is the one the framework uses on itself.
 
 Read [Architecture](architecture.md) first for the two-world model and the
 stage ordering; this page assumes both.
@@ -474,3 +479,98 @@ why a packaged app resolves `icons/sun.png` out of its archive; register
 another with `AssetServer::register_source` to serve assets from somewhere
 else, such as bytes embedded in the binary. Sources run on the main thread
 while the load is being queued, so keep them to an index lookup.
+
+## Compiler plugins
+
+A compiler plugin is a Rust cdylib that `lumenc` loads while compiling an app.
+It can rewrite the entry markup and CSS before parsing, transform the parsed
+tree before the cascade, lint the cascaded tree, and emit extra build outputs.
+An app declares its plugins in `lumen.toml` (see the
+[`[[plugins]]` reference](../reference/lumen-toml.md#plugins)); they run on
+every compile path, `lumenc check` included.
+
+Author one by depending on the SDK crate from the Lumen repo at a release tag
+and building a cdylib:
+
+```toml
+[package]
+name = "markdown"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+lumenc-plugin = { git = "https://github.com/FizzWizZleDazzle/Lumen", tag = "v0.0.6" }
+```
+
+Implement the `CompilerPlugin` trait and export it. Every hook has a default
+no-op body; implement the ones the plugin needs:
+
+```rust
+use lumenc_plugin::{lumenc_plugin, CompilerPlugin, Ctx, Error, LayoutIR};
+
+#[derive(Default)]
+struct Markdown;
+
+impl CompilerPlugin for Markdown {
+    fn transform_markup(&self, src: &str, ctx: &Ctx) -> Result<Option<String>, Error> {
+        let flavor: String = ctx.config()?;
+        Ok(Some(expand_markdown(src, &flavor)))
+    }
+}
+
+lumenc_plugin!(Markdown::default);
+```
+
+The macro generates the whole C-ABI surface; a plugin crate contains no unsafe
+code. One instance serves the process and hooks take `&self`, so a plugin
+holding mutable state brings its own lock.
+
+The hooks, in pipeline order:
+
+- `transform_markup` and `transform_css` rewrite the entry file text before
+  `<include>` and `@import` splicing, so emitted directives resolve like
+  hand-written ones. Only the entry markup and entry CSS pass through;
+  included files and sibling page files do not.
+- `transform_ir` receives the parsed tree after multi-page assembly and
+  before asset resolution and the cascade, so an injected element gets its
+  asset paths resolved and its styles applied like a hand-written one.
+- `lint` reads the cascaded tree and returns findings, printed beside the
+  built-in lint findings. They are advisory, never fail the build, and are
+  not baked into the compiled artifact.
+- `emit` returns extra build products, written under
+  `.lumen/generated/<plugin>/` in the app directory. Outputs are side
+  products (manifests, reports, generated sources for a later compile), not
+  inputs to the compile that produced them. Under `lumenc check` the hook
+  still runs and its outputs are discarded.
+
+The plugin and the compiler exchange serialized bytes over a versioned C ABI,
+so a prebuilt `lumenc` loads plugins built by any Rust toolchain. At load,
+`lumenc` verifies the plugin's ABI version and the IR format version it was
+built against, and that the library reports the `name` the app declared; a
+mismatch fails the compile with an error naming the plugin and the fix
+(rebuild against the matching Lumen tag). Build plugins with the default
+`panic = "unwind"`: the generated thunks catch a hook panic and turn it into
+a compile error, and `panic = "abort"` would kill the compiler instead.
+
+The development loop pairs a `prebuild` hook with a `path` source, so the
+plugin rebuilds before every compile that needs it:
+
+```toml
+[[hooks]]
+when    = "prebuild"
+run     = "cargo build --release --manifest-path plugins/markdown/Cargo.toml"
+inputs  = ["plugins/markdown/src/lib.rs"]
+outputs = ["plugins/markdown/target/release/libmarkdown.so"]
+
+[[plugins]]
+name = "markdown"
+path = "plugins/markdown/target/release/markdown"
+```
+
+`lumenc check` runs no hooks, so checking a clean tree before the first build
+fails with "no file at" the declared path; run `lumenc build` once first.
+
+Known limits: plugin functions and transformed sources are invisible to
+editor tooling (the LSP reads the untransformed files), and a plugin's lint
+findings do not appear in `lumenc lint --signals` output.

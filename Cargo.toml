@@ -112,6 +112,8 @@ members = [
     "crates/ir",
     "crates/launcher",
     "crates/lumenc",
+    "crates/lumenc-plugin",
+    "crates/lumenc-plugin/fixture",
     "crates/mcp",
     "crates/portable",
     "crates/prerender",
@@ -235,6 +237,10 @@ lumen-window-winit = { path = "crates/backends/window-winit" }
 # wants the parser, asks for them back.
 lumenc = { path = "crates/lumenc", default-features = false }
 
+# Compiler-plugin SDK and loader. Defaults off: plugin authors take the trait
+# and macro only; lumenc/lumen-runtime ask for the `host` loader feature.
+lumenc-plugin = { path = "crates/lumenc-plugin", default-features = false }
+
 # Core
 # Bevy 0.18 merged bevy_hierarchy into bevy_ecs::hierarchy, and 0.19 keeps it
 # there. Parent -> ChildOf.
@@ -326,6 +332,13 @@ tracing-chrome = "0.7"
 
 # Errors
 thiserror = "2"
+
+# Shared-library loading: the dlopen run path and the compiler-plugin loader.
+libloading = "0.9"
+
+# Version-requirement matching for `[[plugins]] version` resolution
+# (cargo-compatible semantics: "1.2" means ^1.2).
+semver = "1"
 
 # Unix signal -> flag bridge (lumenc --headless graceful SIGINT/SIGTERM).
 signal-hook = "0.4"

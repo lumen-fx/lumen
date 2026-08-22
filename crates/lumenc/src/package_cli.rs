@@ -937,6 +937,10 @@ fn package(
     copy_c_engine(out, target, &toolchain)?;
 
     let copied = copy_app_files(src, out, CopyRules::markup())?;
+    // Compiler-plugin outputs live under the dot-prefixed `.lumen/generated`
+    // root, which the walk above deliberately skips; copy them explicitly so
+    // a packaged app ships what its plugins produced.
+    copy_generated_outputs(src, out)?;
 
     if sidecar {
         println!(
@@ -1335,6 +1339,38 @@ impl CopyRules {
 /// markup names is deliberate: an app reaches many of its files at run time,
 /// through a script that plays a sound or a translation the locale picks, and
 /// a static reading of the markup cannot see those.
+/// Mirror `<src>/.lumen/generated` (compiler-plugin emit outputs) into the
+/// package. Absent when the app declares no plugins, and nothing to do then.
+fn copy_generated_outputs(src: &Path, out: &Path) -> Result<(), String> {
+    let root = src.join(".lumen").join("generated");
+    if !root.is_dir() {
+        return Ok(());
+    }
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let entries =
+            std::fs::read_dir(&dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let Ok(rel) = path.strip_prefix(src) else {
+                continue;
+            };
+            let dest = out.join(rel);
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("create {}: {e}", parent.display()))?;
+            }
+            std::fs::copy(&path, &dest)
+                .map_err(|e| format!("copy {} -> {}: {e}", path.display(), dest.display()))?;
+        }
+    }
+    Ok(())
+}
+
 fn copy_app_files(src: &Path, out: &Path, rules: CopyRules) -> Result<usize, String> {
     let mut count = 0usize;
     let mut stack = vec![src.to_path_buf()];

@@ -31,6 +31,11 @@
 //! run     = "cc -shared -fPIC -O2 -o libmd.so md.c"
 //! inputs  = ["md.c"]
 //! outputs = ["libmd.so"]
+//!
+//! [[plugins]]                      # compiler plugins, run in declaration order
+//! name    = "markdown"             # must match what the cdylib reports
+//! path    = "plugins/markdown"     # built cdylib; extensionless probes lib*.so/.dylib/.dll
+//! config  = { flavor = "gfm" }     # optional, handed to the plugin verbatim
 //! ```
 //!
 //! Parse failures surface as [`ConfigError`]; the caller decides whether to abort or fall back to defaults.
@@ -74,6 +79,13 @@ pub struct LumenToml {
     /// `bundle`. See [`crate::hooks`] for the execution semantics (ordering,
     /// OS filtering, staleness skip) and [`HookCfg`] for the field reference.
     pub hooks: Vec<HookCfg>,
+    /// `[[plugins]]` array - compiler plugins, run in declaration order by
+    /// every compile path, `check` included. Carried raw: the schema, the
+    /// loader, and the validation live in `lumenc-plugin` (see its
+    /// `PluginCfg`), and the chain reaches the pipeline through the injected
+    /// [`crate::compiler_plugins::CompilerPlugins`] boundary, the same
+    /// inversion the parser uses.
+    pub plugins: Vec<toml::Value>,
     /// `[signals]` table - optional typed schema. Each key declares
     /// the expected `SignalType`. Used by `lumenc lint --signals`
     /// to flag untyped writes / schema mismatches. Schema entries

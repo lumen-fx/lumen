@@ -198,6 +198,11 @@ pub struct RunOptions {
     /// that only ever loads AOT artifacts; a from-source run with no parser
     /// fails with [`RunError::ParserDisabled`].
     pub parser: Option<Box<dyn SourceParser>>,
+    /// Injected compiler-plugin chain, mirroring [`Self::parser`]: the
+    /// runtime links no plugin loader; `lumenc` builds the chain from the
+    /// app's `[[plugins]]` declarations and hands it in here. `None` runs
+    /// the empty chain.
+    pub compiler_plugins: Option<std::sync::Arc<dyn crate::compiler_plugins::CompilerPlugins>>,
 }
 
 impl RunOptions {
@@ -230,6 +235,7 @@ impl RunOptions {
             bounded: false,
             assets: None,
             parser: None,
+            compiler_plugins: None,
         }
     }
 
@@ -237,6 +243,16 @@ impl RunOptions {
     /// hot-reload re-parse. See [`Self::parser`].
     pub fn with_parser(mut self, parser: Box<dyn SourceParser>) -> Self {
         self.parser = Some(parser);
+        self
+    }
+
+    /// Builder: inject the compiler-plugin chain run by the dev source-load
+    /// and hot-reload paths. See [`Self::compiler_plugins`].
+    pub fn with_compiler_plugins(
+        mut self,
+        plugins: std::sync::Arc<dyn crate::compiler_plugins::CompilerPlugins>,
+    ) -> Self {
+        self.compiler_plugins = Some(plugins);
         self
     }
 
@@ -389,6 +405,10 @@ pub enum RunError {
     /// CSS application failed.
     #[error("apply CSS: {0}")]
     ApplyCss(String),
+    /// A compiler plugin failed to load or one of its hooks failed. The
+    /// message names the plugin.
+    #[error("{0}")]
+    Plugin(String),
     /// winit returned an error.
     #[error("window: {0}")]
     Window(String),

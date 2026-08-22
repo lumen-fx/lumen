@@ -40,6 +40,12 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     let css_path = dir.join("main.css");
     let asset_roots = cfg.resolved_asset_roots(&dir);
     let skin_override = cfg.skin.name.clone();
+    // The injected compiler-plugin chain (loaded by lumenc, like the parser),
+    // shared with hot reload as a resource; a reload pays only the hook calls.
+    let compiler_plugins: std::sync::Arc<dyn crate::compiler_plugins::CompilerPlugins> = opts
+        .compiler_plugins
+        .take()
+        .unwrap_or_else(|| std::sync::Arc::new(crate::compiler_plugins::NoCompilerPlugins));
 
     // Subsystem gating (measured startup quick-wins): resolve, from one bounded
     // source scan + `lumen.toml` + run-mode flags, which optional subsystems
@@ -102,6 +108,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     let loaded = load_inputs(
         &opts,
         parser.as_deref(),
+        &*compiler_plugins,
         &html_path,
         &css_path,
         &dir,
@@ -287,6 +294,10 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         app.world
             .insert_resource(crate::source_parser::RuntimeParser(parser));
     }
+    app.world
+        .insert_resource(crate::compiler_plugins::RuntimeCompilerPlugins(
+            compiler_plugins,
+        ));
 
     // file to watch - force hot reload off so the watcher never despawns the
     // tree in favour of stale disk state.
