@@ -626,8 +626,8 @@ fn diff_node(
 ///
 /// Conservative by construction: only the leaf variants whose every visual
 /// field is comparable return `true`. Variants carrying an opaque payload we
-/// cannot compare for equality ([`Node::Image`] blob, [`Node::Svg`],
-/// [`Node::Native`]) and any cross-variant pair fall through to `false`, i.e.
+/// cannot compare for equality ([`Node::Image`] blob, [`Node::Svg`]) and any
+/// cross-variant pair fall through to `false`, i.e.
 /// "assume changed" - a false *positive* damage only costs an unnecessary
 /// repaint, whereas a false *negative* would drop a real change on the floor.
 /// This is the same safety bias as GTK's / Qt's damage bookkeeping: never
@@ -721,15 +721,35 @@ fn leaf_visually_eq(a: &Node, b: &Node) -> bool {
         // `PartialEq` note): identical fields => identical shaping => identical
         // pixels.
         (Node::Text { run: ar }, Node::Text { run: br }) => ar == br,
-        // Image / Svg / Native carry `Arc<dyn Any>` payloads we cannot compare;
-        // any cross-variant pair is also a real change. Assume changed.
+        // Native leaves compare by the stamp their producer maintains. The
+        // payload `Arc` is rebuilt every dirty frame, so identity would report
+        // every leaf changed; the revision is the seam's contract instead -
+        // equal revision at equal geometry means equal pixels.
+        (
+            Node::Native {
+                extension_id: aid,
+                bounds: ab,
+                revision: arv,
+                clip_to_bounds: ac,
+                ..
+            },
+            Node::Native {
+                extension_id: bid,
+                bounds: bb,
+                revision: brv,
+                clip_to_bounds: bc,
+                ..
+            },
+        ) => aid == bid && ab == bb && arv == brv && ac == bc,
+        // Image / Svg carry `Arc<dyn Any>` payloads we cannot compare; any
+        // cross-variant pair is also a real change. Assume changed.
         _ => false,
     }
 }
 
 /// Returns the bounding rect of `node` in window coordinates, with `xform` applied. Containers recurse and
-/// union; leaves report their own bounds. Conservative fallback: viewport for variants without a natural
-/// bound (Native escape hatch).
+/// union; leaves report their own bounds. Conservative fallback: the viewport for a leaf whose
+/// geometry cannot be read (an SVG payload this backend does not recognise).
 fn node_bounds(node: &Node, viewport: LumenRect, xform: Affine) -> LumenRect {
     match node {
         Node::Container { children } => {
@@ -816,7 +836,9 @@ fn node_bounds(node: &Node, viewport: LumenRect, xform: Affine) -> LumenRect {
                 viewport
             }
         }
-        Node::Native { .. } => viewport,
+        // The seam requires bounds that enclose every pixel the painter touches, so damage from a
+        // native leaf is confined to them like any other leaf.
+        Node::Native { bounds, .. } => apply_affine_to_rect(*bounds, xform),
     }
 }
 
