@@ -386,6 +386,11 @@ A draggable value control. Focusable by default.
 Arrow keys move by one step, Page Up and Page Down by ten. Style the
 thumb with `knob-color` and `thumb-size`.
 
+A click or a drag lands on the same positions the arrow keys reach: the
+value is `min` plus a whole number of steps. A range that is not a whole
+number of steps stops on the last step that fits, so `min="0" max="100"
+step="30"` tops out at 90.
+
 ### `<checkbox>`
 
 A row containing an indicator box and a caption. Focusable by default.
