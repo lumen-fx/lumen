@@ -1642,6 +1642,38 @@ impl SliderValue {
     pub fn clamp(&self, value: f32) -> f32 {
         value.clamp(self.min.min(self.max), self.min.max(self.max))
     }
+
+    /// `value` moved to the nearest position on this slider's step grid,
+    /// then held to its bounds.
+    ///
+    /// The grid starts at the near bound and rises by [`Self::step_size`],
+    /// which is what `<input type=range>` does and what a `QSlider`'s
+    /// integer range gives for free. A pointer landing anywhere on the
+    /// track therefore writes a value the arrow keys could also have
+    /// reached, so `step="1024"` means multiples of 1024 whichever way the
+    /// user moved it.
+    ///
+    /// A range that is not a whole number of steps stops short of its far
+    /// bound: the last position on the grid is the highest one that fits,
+    /// so `min="0" max="100" step="30"` tops out at 90. That is what
+    /// `<input type=range>` does, and it is the only answer that keeps
+    /// every value the control can take on the grid.
+    pub fn snap(&self, value: f32) -> f32 {
+        let step = self.step_size();
+        if !step.is_finite() || step <= 0.0 {
+            return self.clamp(value);
+        }
+        let near = self.min.min(self.max);
+        let far = self.min.max(self.max);
+        let steps = ((value - near) / step).round();
+        let snapped = near + steps * step;
+        let snapped = if snapped > far {
+            near + (steps - 1.0) * step
+        } else {
+            snapped
+        };
+        snapped.clamp(near, far)
+    }
 }
 
 impl Default for SliderValue {

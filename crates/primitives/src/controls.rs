@@ -354,6 +354,11 @@ fn slider_frac(pointer_x: f32, absolute_x: f32, size_x: f32, thumb_size: f32) ->
 /// [`SliderThumb`] child resolve to the parent slider (see
 /// [`resolve_control`]). Coarse positioning; the drag handler refines
 /// from there.
+///
+/// The pointer fraction is continuous and the slider's positions are not,
+/// so the landing value goes through [`SliderValue::snap`] - a click on a
+/// `step="1024"` slider writes a multiple of 1024, the same as an arrow
+/// key.
 pub fn set_slider_on_click(
     mut clicks: MessageReader<ClickEvent>,
     mut q: Query<(&mut SliderValue, &Transform, Option<&KnobGeometry>)>,
@@ -367,7 +372,7 @@ pub fn set_slider_on_click(
         if let Ok((mut s, t, geo)) = q.get_mut(target) {
             let thumb_size = geo.copied().unwrap_or_default().thumb_size;
             let frac = slider_frac(click.position.x, t.absolute.x, t.size.x, thumb_size);
-            let new = s.min + frac * (s.max - s.min);
+            let new = s.snap(s.min + frac * (s.max - s.min));
             if new != s.value {
                 s.value = new;
                 out.write(SliderChanged {
@@ -441,6 +446,10 @@ pub fn move_slider_on_keys(
 /// inherits all of lumen-input's per-OS drag-threshold behavior for free.
 /// Drags that started on the [`SliderThumb`] child (the common grab)
 /// resolve to the parent slider (see [`resolve_control`]).
+///
+/// Snapped through [`SliderValue::snap`] for the same reason a click is:
+/// a drag ends on a position the keyboard could have reached, so the thumb
+/// steps between stops rather than sliding freely.
 pub fn set_slider_on_drag(
     mut drags: MessageReader<DragMoveEvent>,
     mut q: Query<(&mut SliderValue, &Transform, Option<&KnobGeometry>)>,
@@ -454,7 +463,7 @@ pub fn set_slider_on_drag(
         if let Ok((mut s, t, geo)) = q.get_mut(target) {
             let thumb_size = geo.copied().unwrap_or_default().thumb_size;
             let frac = slider_frac(d.position.x, t.absolute.x, t.size.x, thumb_size);
-            let new = s.min + frac * (s.max - s.min);
+            let new = s.snap(s.min + frac * (s.max - s.min));
             if new != s.value {
                 s.value = new;
                 out.write(SliderChanged {
