@@ -125,25 +125,36 @@ jobs:
             /^\[/                     { in_section = 0 }
             in_section && /^version[[:space:]]*=/ { print $2; exit }
           ' Cargo.toml)"
+          built_on="$(date -u '+%Y-%m-%d')"
+          echo "title=nightly (${built_on})" >>"$GITHUB_OUTPUT"
           {
             echo 'body<<NOTES'
             cat <<NOTE
-          Built from \`$GITHUB_SHA\` on $(date -u '+%Y-%m-%d').
+          A build of \`main\` from ${GITHUB_SHA}, made on ${built_on}.
 
-          These binaries report version $version, which is the number the workspace
-          on main carries and says nothing about which night this is. The commit
-          above is what identifies the build.
+          This is not a release. It reports version $version, whatever \`main\`
+          is at, which is usually a number no release has been cut for, and it
+          is a prerelease, so nothing that resolves the latest release finds it:
+          \`install.sh\` with no arguments, the setup-lumen action, and
+          \`lumenc\`'s own update check all stay on the newest real release.
+          The commit above is what identifies this build.
 
-          The assets on this tag are replaced every night. A link to one always
-          gives you the newest build, and the build before it is gone.
+          Install it by asking for this tag:
 
-          There is no Windows installer here. Unpack
-          \`lumen-windows-x86_64.zip\` anywhere instead; a copy from the zip
-          never checks for updates and never touches an installed Lumen.
+          \`\`\`sh
+          curl -fsSL https://lumenfx.dev/install.sh | sh -s -- --version nightly --force
+          \`\`\`
 
-          Nothing installs a nightly for you. \`install.sh\`, the setup-lumen
-          action, and \`lumenc\`'s own update check all resolve through the
-          releases page, which skips prereleases. Download an asset by hand.
+          The pin keeps \`lumenc\` from offering you a release as an update, and
+          \`--force\` is what reinstalls over yesterday's nightly, since the
+          version the receipt records does not change from one to the next.
+
+          On Windows, unpack \`lumen-windows-x86_64.zip\`. There is no installer
+          here; the one a release publishes cannot tell itself apart from a
+          nightly of the same number.
+
+          One tag carries the newest build and nothing else, so yesterday's is
+          gone.
           NOTE
             echo 'NOTES'
           } >>"$GITHUB_OUTPUT"
@@ -161,12 +172,12 @@ jobs:
           mapfile -t files <<<"$ASSETS"
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release edit "$TAG" --repo "$REPO" \
-              --title "Nightly" --notes "$NOTES" \
+              --title "${{ steps.notes.outputs.title }}" --notes "$NOTES" \
               --prerelease --latest=false
             gh release upload "$TAG" "${files[@]}" --repo "$REPO" --clobber
           else
             gh release create "$TAG" "${files[@]}" --repo "$REPO" \
-              --title "Nightly" --notes "$NOTES" \
+              --title "${{ steps.notes.outputs.title }}" --notes "$NOTES" \
               --prerelease --latest=false
           fi
 
