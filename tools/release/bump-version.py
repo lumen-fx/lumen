@@ -17,9 +17,10 @@ manifests in this directory and the toolchain pins in CI point at builds that
 exist, and `update-package-manifests.sh` moves those. The version here is what
 the tree will be next, which is a different thing.
 
-`.github/workflows/release.yml` runs this after a release publishes, to open
-the pull request that moves `main` to the next patch version. Run it by hand to
-go somewhere other than the next patch, or to repair a copy that drifted.
+`.github/workflows/release.yml` runs this after a release publishes and commits
+the result to `main`, which is how `main` reaches the next patch version. Run it
+by hand to go somewhere other than the next patch, or to repair a copy that
+drifted.
 """
 
 from __future__ import annotations
