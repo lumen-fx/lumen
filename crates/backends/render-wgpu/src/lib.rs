@@ -329,6 +329,17 @@ impl WgpuRenderer {
     }
 }
 
+/// Drain the device before the queue drops. wgpu-core's `Queue::drop` waits
+/// on the last submission with a fixed timeout and panics when it expires;
+/// a software rasterizer on a loaded machine can hold a frame past it, and
+/// a panic inside drop aborts the process. Waiting here, without a
+/// deadline, turns that abort into a quiet finish.
+impl Drop for WgpuRenderer {
+    fn drop(&mut self) {
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+}
+
 impl lumen_core::traits::Renderer for WgpuRenderer {}
 
 /// Emit a single rect onto an already-reset scene. Callers manage scene

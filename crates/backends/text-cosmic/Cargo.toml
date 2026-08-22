@@ -9,9 +9,11 @@ rust-version.workspace = true
 description = "cosmic-text TextShaper + FontDB impl."
 keywords = ["ui", "gui", "text", "fonts", "cosmic-text"]
 categories = ["gui", "text-processing"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-text = { path = "../../text", version = "0.0.3" }
+lumen-text = { workspace = true }
 cosmic-text.workspace = true
 # Bounded LRU cache for shape results. Replaces a HashMap with a
 # catastrophic-clear-on-cap policy. Pure-Rust, ~200 LoC.
@@ -22,9 +24,9 @@ rustc-hash.workspace = true
 
 [dev-dependencies]
 # Tests resolve the default `line-height` rather than restating its ratio.
-lumen-core = { path = "../../core" }
+lumen-core = { workspace = true }
 # The layout engine's shaped-text producer is exercised against a real
 # shaper here; nothing in the shipped crate depends on the layout engine.
-lumen-layout-taffy = { path = "../layout-taffy" }
+lumen-layout-taffy = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true

@@ -119,6 +119,8 @@ complete -c lumenc -n '__fish_seen_subcommand_from web' -l out -xa '(__fish_comp
 complete -c lumenc -n '__fish_seen_subcommand_from web' -l base -x -d 'URL prefix the site is served under'
 complete -c lumenc -n '__fish_seen_subcommand_from web' -l locale -x -d 'Locale to emit a document tree for'
 complete -c lumenc -n '__fish_seen_subcommand_from web' -l render -x -a 'static csr ssr' -d 'Where the pages come from'
+complete -c lumenc -n '__fish_seen_subcommand_from web' -l runtime -d 'Put the browser runtime in the documents'
+complete -c lumenc -n '__fish_seen_subcommand_from web' -l no-runtime -d 'Leave the browser runtime out'
 complete -c lumenc -n '__fish_seen_subcommand_from web' -l prerender -x -a 'seeds run none' -d 'Where the rendered state comes from'
 complete -c lumenc -n '__fish_seen_subcommand_from web' -l no-hooks -d 'Skip the prebuild hooks'
 complete -c lumenc -n '__fish_seen_subcommand_from web' -l lib-dir -xa '(__fish_complete_directories)' -d 'Directory holding the browser runtime'

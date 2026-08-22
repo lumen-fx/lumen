@@ -17,20 +17,20 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-lumen-core = { path = "../core", version = "0.0.3" }
+lumen-core = { workspace = true }
 # The compiled artifact a page fetches, and the emitter/runtime contract that
 # says what the files beside it are called.
-lumen-ir = { path = "../ir", version = "0.0.3" }
-lumen-html = { path = "../html", version = "0.0.3" }
+lumen-ir = { workspace = true }
+lumen-html = { workspace = true }
 # The IR-to-ECS spawner and the reconcilers, shared with the desktop runtime.
-lumen-scene = { path = "../scene", version = "0.0.3" }
+lumen-scene = { workspace = true }
 # The browser as a render backend: adopting the prerendered document, keeping
 # it in step with the world, and turning DOM events into Lumen events.
-lumen-web-dom = { path = "../backends/web-dom", version = "0.0.3" }
+lumen-web-dom = { workspace = true }
 # The app a page runs, and the script hosts that run its scripts: everything
 # about a Lumen app that is not about the platform it runs on.
-lumen-portable = { path = "../portable", version = "0.0.3", default-features = false }
-lumen-script = { path = "../script/api", version = "0.0.3", default-features = false }
+lumen-portable = { workspace = true }
+lumen-script = { workspace = true }
 bevy_ecs.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
@@ -54,12 +54,12 @@ web-sys = { workspace = true, features = [
 # artifact the browser loads is always the one this toolchain produces. Build
 # dependencies are resolved for the host and never linked into the wasm module,
 # so the compiler feature here does not reach the page.
-lumen-script-candela = { path = "../script/candela", version = "0.0.3" }
+lumen-script-candela = { workspace = true, default-features = true }
 
 [dev-dependencies]
 # The emitter, so a browser test hydrates the document the real one writes
 # rather than a fixture string that can drift from it.
-lumen-web = { path = "../web", version = "0.0.3" }
+lumen-web = { workspace = true }
 wasm-bindgen-test.workspace = true
 
 [features]

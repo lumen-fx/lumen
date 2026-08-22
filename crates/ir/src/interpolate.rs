@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use lumen_core::property_store::PropertyStore;
 use lumen_core::signals::ArrayItem;
 
-use crate::layout_ir::{Element, InterpolationSlot};
+use crate::layout_ir::{Attributes, Element, InterpolationSlot};
 
 /// Where a global placeholder reads its value.
 ///
@@ -119,31 +119,75 @@ pub fn substitute_element(template: &Element, scope: &Scope<'_>) -> Element {
 /// Resolve every placeholder in one element's own strings, leaving its
 /// children alone.
 fn substitute_in_place(element: &mut Element, scope: &Scope<'_>) {
-    let substitute = |text: &str| resolve(text, &element.interpolations, scope);
-    if let Some(text) = &element.attrs.text {
-        element.attrs.text = Some(substitute(text));
+    if let Some(attrs) = substitute_attrs(&element.attrs, &element.interpolations, scope) {
+        element.attrs = attrs;
     }
-    if let Some(id) = &element.attrs.id {
-        element.attrs.id = Some(substitute(id));
+}
+
+/// The attributes to build an element with, once the placeholders in its own
+/// strings are resolved against `scope`.
+///
+/// `None` when nothing changed: an element with no placeholder in it, or one
+/// whose placeholders the scope has no value for. The caller then builds the
+/// element from the attributes it already has, and nothing is copied.
+///
+/// Children belong to whoever is walking the tree. [`substitute_element`]
+/// walks one subtree with a scope that does not change under it; a caller
+/// that carries its own walk, such as the web emitter or the spawner, calls
+/// this at each element it reaches.
+pub fn substitute_attrs(
+    attrs: &Attributes,
+    slots: &[InterpolationSlot],
+    scope: &Scope<'_>,
+) -> Option<Attributes> {
+    if !carries_placeholder(attrs) {
+        return None;
     }
-    if let Some(src) = &element.attrs.src {
-        element.attrs.src = Some(substitute(src));
+    let mut out = attrs.clone();
+    let mut changed = false;
+    let mut substitute = |text: &mut String| {
+        if !text.contains('{') {
+            return;
+        }
+        let resolved = resolve(text, slots, scope);
+        changed |= resolved != *text;
+        *text = resolved;
+    };
+    for text in [
+        out.text.as_mut(),
+        out.id.as_mut(),
+        out.src.as_mut(),
+        out.style_role.as_mut(),
+        out.placeholder.as_mut(),
+        out.drag_payload.as_mut(),
+    ]
+    .into_iter()
+    .flatten()
+    .chain(out.classes.iter_mut())
+    {
+        substitute(text);
     }
-    if let Some(role) = &element.attrs.style_role {
-        element.attrs.style_role = Some(substitute(role));
-    }
-    if let Some(placeholder) = &element.attrs.placeholder {
-        element.attrs.placeholder = Some(substitute(placeholder));
-    }
-    if let Some(payload) = &element.attrs.drag_payload {
-        element.attrs.drag_payload = Some(substitute(payload));
-    }
-    element.attrs.classes = element
-        .attrs
-        .classes
-        .iter()
-        .map(|class| substitute(class))
-        .collect();
+    changed.then_some(out)
+}
+
+/// Whether any string [`substitute_attrs`] resolves carries a `{`.
+///
+/// The two walk the same strings, so a field added to one belongs in the
+/// other; this is what keeps an element with no placeholder from being
+/// copied at all.
+pub fn carries_placeholder(attrs: &Attributes) -> bool {
+    [
+        attrs.text.as_ref(),
+        attrs.id.as_ref(),
+        attrs.src.as_ref(),
+        attrs.style_role.as_ref(),
+        attrs.placeholder.as_ref(),
+        attrs.drag_payload.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .chain(attrs.classes.iter())
+    .any(|text| text.contains('{'))
 }
 
 /// Replace every `{...}` token in `text` with what its scope holds.

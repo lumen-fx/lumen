@@ -9,16 +9,17 @@ rust-version.workspace = true
 description = "Lumen app launcher: the executable stub `lumenc package` turns into a shippable app."
 keywords = ["ui", "gui", "launcher", "packaging", "lumen"]
 categories = ["gui", "command-line-utilities"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [[bin]]
 name = "lumen-launcher"
 path = "src/main.rs"
 
 [dependencies]
-# The dlopen seam only. `default-features = false` matters: a default lumenc
-# links the whole runtime (wgpu / winit / cosmic-text / the script hosts), and
-# the stub must carry none of it - it finds liblumen beside itself at run time.
+# The dlopen seam only. Taking it without defaults, which the workspace entry
+# does, is what keeps the stub small: a default lumenc links the whole runtime
+# (wgpu / winit / cosmic-text / the script hosts), and the stub must carry none
+# of it, because it finds liblumen beside itself at run time.
 # Check with `cargo tree -p lumen-launcher` after any dependency change.
-lumenc = { path = "../lumenc", version = "0.0.3", default-features = false, features = [
-    "dlopen-run",
-] }
+lumenc = { workspace = true, features = ["dlopen-run"] }

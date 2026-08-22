@@ -9,6 +9,8 @@ rust-version.workspace = true
 description = "Translation + locale-aware formatters (Fluent + ICU4X)."
 keywords = ["ui", "gui", "i18n", "fluent", "icu"]
 categories = ["internationalization", "gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
 bevy_ecs.workspace = true

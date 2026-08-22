@@ -9,11 +9,13 @@ rust-version.workspace = true
 description = "Headless primitives with per-OS native physics (Scroll, Drag, Press)."
 keywords = ["ui", "gui", "scroll", "gestures", "lumen"]
 categories = ["gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-core = { path = "../core", version = "0.0.3" }
-lumen-input = { path = "../input", version = "0.0.3" }
-lumen-widget = { path = "../widget", version = "0.0.3" }
-lumen-widget-macros = { path = "../widget-macros", version = "0.0.3" }
+lumen-core = { workspace = true }
+lumen-input = { workspace = true }
+lumen-widget = { workspace = true }
+lumen-widget-macros = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true

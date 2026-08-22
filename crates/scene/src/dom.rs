@@ -47,6 +47,7 @@ use crate::fragments::{
     report_once,
 };
 use crate::source_parser::RuntimeParser;
+use crate::spawn::Placeholders;
 
 /// Install the dynamic DOM pipeline on `app`.
 ///
@@ -179,7 +180,8 @@ pub fn apply_dom_commands(world: &mut World) {
                     tag,
                     ..Default::default()
                 };
-                let entity = crate::spawn::spawn_subtree(world, &el, None);
+                let entity =
+                    crate::spawn::spawn_subtree(world, &el, None, Placeholders::Unresolved);
                 reserved.insert(tok, entity);
                 style_dirty = true;
             }
@@ -189,7 +191,10 @@ pub fn apply_dom_commands(world: &mut World) {
             } => {
                 if let Some(src) = resolve(world, &reserved, source) {
                     if let Some(el) = element_from_entity(world, src) {
-                        let entity = crate::spawn::spawn_subtree(world, &el, None);
+                        // Read back out of a live entity, so its strings are
+                        // the resolved ones the original was built with.
+                        let entity =
+                            crate::spawn::spawn_subtree(world, &el, None, Placeholders::Resolved);
                         reserved.insert(tok, entity);
                         style_dirty = true;
                     }
@@ -396,7 +401,7 @@ fn spawn_fragment(
         let scope = Scope::new(store).with_args(&bound);
         crate::spawn::substitute_in_element_with_css(body, &scope, None)
     };
-    let root = crate::spawn::spawn_subtree(world, &instance, None);
+    let root = crate::spawn::spawn_subtree(world, &instance, None, Placeholders::Resolved);
 
     if !children.is_empty() {
         let slots: Vec<(String, Entity)> = descendants(world, root)
@@ -617,7 +622,7 @@ fn apply_inner_markup(world: &mut World, entity: Entity, markup: &str) -> bool {
         }
     } else {
         for child_el in &root.children {
-            crate::spawn::spawn_subtree(world, child_el, Some(entity));
+            crate::spawn::spawn_subtree(world, child_el, Some(entity), Placeholders::Unresolved);
         }
     }
     world.entity_mut(entity).insert(DirtyLayout);

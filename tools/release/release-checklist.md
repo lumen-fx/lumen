@@ -1,10 +1,10 @@
 # Release checklist
 
-How to cut a Lumen release. `.github/workflows/release.yml` builds and
-publishes it; a tag push is the only trigger, and no target has a manual
-upload step. Asset names are load-bearing, because `tools/release/install.sh`
-looks them up verbatim, so the workflow generates them rather than anyone
-typing them.
+How to cut a Lumen release. `.github/workflows/build-toolchain.yml` builds the
+assets and `.github/workflows/release.yml` publishes them; a tag push is the
+only trigger, and no target has a manual upload step. Asset names are
+load-bearing, because `tools/release/install.sh` looks them up verbatim, so the
+workflow generates them rather than anyone typing them.
 
 | Asset                          | Built by                              |
 | ------------------------------- | -------------------------------------- |
@@ -51,10 +51,13 @@ checklist.
 ## Cutting a release
 
 1. Make sure `main` is green in the `ci` workflow.
-2. Bump `version` in the workspace `Cargo.toml`, commit, push, wait for green.
+2. Check that `version` in the workspace `Cargo.toml` is the version you are
+   about to tag. It usually is already, because the previous release opened a
+   pull request that set it (step 6). If it is not, run
+   `tools/release/bump-version.py <version>`, commit, push, and wait for green.
    The tag has to match this value: the release workflow compares them first
-   and publishes nothing if they differ, because the MSI's version, the
-   install receipt, and `lumenc --version` all read from these two places.
+   and publishes nothing if they differ, because the MSI's version, the install
+   receipt, and `lumenc --version` all read from these two places.
 3. Tag and push:
 
    ```sh
@@ -83,8 +86,8 @@ checklist.
 
    Beside the per-target archives it builds the browser runtime once, as
    `lumen-web.tar.gz`. That pair is WebAssembly, so it is the same file on
-   every platform; `lumenc web` downloads it from the release matching its own
-   version the first time a site needs it. The recipe is
+   every platform; `lumenc web` downloads it the first time a site needs it,
+   from the release it resolves through the releases page. The recipe is
    `.github/scripts/build-web-runtime.sh`, the same script `ci.yml` measures
    and runs a browser against.
 
@@ -92,6 +95,55 @@ checklist.
    even if a build leg failed, and only what succeeded gets uploaded.
    Re-running the workflow after a fix is safe, because `gh release upload
    --clobber` replaces same-named assets rather than erroring on them.
+
+5. Work through [Verify](#verify) against the published release.
+
+6. Merge the pull request the release opened. It is titled `chore: set the
+   workspace version to X.Y.Z+1`, comes from a branch named
+   `bump-version-X.Y.Z+1`, and moves every place the tree writes its version
+   down. From there `main` carries a version with no release behind it, which
+   is the point: `main` builds identify themselves as the version they will
+   become, and step 2 of the next release has nothing left to do.
+
+   It needs one click before its checks start. GitHub holds the workflow runs
+   for a pull request that Actions opened until someone with write access picks
+   "Approve workflows to run" in the merge box, which is what stops a workflow
+   from setting itself off again.
+
+   This is safe because nothing turns a version number into a download
+   address. Every version-keyed lookup asks the releases page what exists:
+   `lumenc` resolves the release its toolchain files come from through
+   `releases/latest` (or through its install receipt), the update check
+   compares against `releases/latest`, and `crates/lumenc/build.rs` confirms
+   the tag it needs is published before fetching source from it. A number with
+   no tag behind it resolves to nothing and says so.
+
+   The bump is always the next patch, whatever kind of release the tag was.
+   To go somewhere else, run `tools/release/bump-version.py 0.2.0` on that
+   branch and push. The script takes the version to set and moves every place
+   the version is written out: the workspace package, each internal dependency
+   pin, `sdk/rust-dylib` (outside the workspace, so it cannot inherit one),
+   `Cargo.lock`, and the Python SDK. It writes nothing at all if one of those
+   comes out unchanged, so a file that grew a version literal nobody told it
+   about stops the bump instead of shipping a skew.
+
+   If no pull request appears, look at the `open the version bump` job in the
+   release run. It reports what it decided and does nothing when the decision
+   is not its to make:
+
+   - The job never ran, because the release job did not finish. Fix what
+     failed and re-run the workflow; the bump follows the release, and a
+     release that published only some of its archives still reaches it.
+   - `is not a plain vX.Y.Z tag`. Prereleases and other tag shapes are left
+     alone. Run `tools/release/bump-version.py` yourself.
+   - `main is at N, at or past ...`. The bump already landed, or this is a
+     re-run of an older release. Nothing to do.
+   - `a file that always moves did not`. A version literal changed shape, or
+     one appeared somewhere new. The job names the file; teach
+     `bump-version.py` about it and bump by hand this once.
+
+   Re-running a release is safe here too: the job commits to the same branch
+   and adds nothing to a pull request that is already open.
 
 ## Why liblumen goes in bin/, not lib/
 
@@ -141,9 +193,10 @@ the release tag is the version, and GitHub scopes assets to the release they
 were uploaded to.
 
 `lumen-web.tar.gz` is named the same way and is not a target. The installer
-skips it, and `lumenc` fetches it by that exact name from the release matching
-its own version (`crates/lumenc/src/package_cli.rs`), verifying it against the
-same `sha256sums.txt`.
+skips it, and `lumenc` fetches it by that exact name
+(`crates/lumenc/src/package_cli.rs`) from the release
+`crates/lumenc/src/release.rs` resolves, verifying it against the same
+`sha256sums.txt`.
 
 `lumenc` follows the same split when it offers an update. On Unix it re-runs
 `install.sh`; on Windows it downloads
@@ -159,21 +212,32 @@ registries are the other. `.github/workflows/publish.yml` covers them, runs
 when a release is published, and can also be started by hand from the Actions
 tab with a dry-run switch.
 
-| Package                       | Registry  | What it is                    |
-| ----------------------------- | --------- | ----------------------------- |
-| `lumenui`                     | PyPI      | the Python SDK                |
-| `lumenui`                     | crates.io | the Rust SDK                  |
-| `lumenc`                      | crates.io | the CLI, for `cargo install`  |
-| `lumen-*`                     | crates.io | what those two are built from |
+| Package   | Registry  | What it is                   |
+| --------- | --------- | ---------------------------- |
+| `lumenui` | PyPI      | the Python SDK               |
+| `lumenui` | crates.io | the Rust SDK                 |
+| `lumenc`  | crates.io | the CLI, for `cargo install` |
 
 The Python distribution is pure Python and ships no binary, so one wheel
 covers every platform; it finds `liblumen` from an installed toolchain or a
 checkout at run time (`sdk/python/README.md` documents the search order).
 
-The crates go out in dependency order, because crates.io resolves each upload
-against what is already published. `tools/release/publish-crates.py` computes
-that order from `cargo metadata`, reports what state each crate is in, and
-publishes them one at a time:
+That table is the whole list. Every other crate in the workspace is
+`publish = false`, because the engine does not travel through crates.io:
+`crates/lumenc/build.rs` fetches the tagged source and builds `liblumen` and
+the launcher beside the installed binary, so a `cargo install lumenc` gets the
+engine without any of its pieces being registry packages.
+
+Neither crates.io package can go out yet. `lumenc` names eleven `lumen-*`
+crates as dependencies and `lumenui` names the engine, and cargo will not
+publish a crate whose dependency is not on the registry. Closing that means a
+published `lumenc` that carries no engine dependencies; until then
+`tools/release/publish-crates.py --plan` refuses to start and lists exactly
+which crates are in the way, and `cargo publish -p lumenc --dry-run` names the
+first of them.
+
+The script computes publish order from `cargo metadata`, reports what state
+each crate is in, and publishes them one at a time:
 
 ```sh
 tools/release/publish-crates.py --plan      # order and per-crate state
@@ -195,11 +259,6 @@ release:
 - A dependency taken from git with no version. crates.io accepts no such
   dependency, so the crate carrying it, and everything above it, cannot be
   published. `lumen-script-candela` is in that state until candela publishes.
-
-Every workspace crate shares the `[workspace.package]` version, and each
-internal dependency asks for that exact version, so a version bump means
-updating those dependency lines too. The script checks that they agree and
-refuses to publish when they do not.
 
 The setup the workflow needs (a `CRATES_IO_TOKEN` secret, a PyPI trusted
 publisher, a `PYPI_PUBLISH_ENABLED` variable) is listed at the top of
@@ -293,8 +352,8 @@ update itself out from under a package manager that owns the version.
   upgrades to a second version and confirms Windows records one product
   rather than two, then uninstalls and confirms nothing is left behind. It
   runs on every pull request that touches `tools/release/msi/`,
-  `msi-smoke.yml`, or `release.yml`, and it can be started by hand from the
-  Actions tab.
+  `msi-smoke.yml`, or `build-toolchain.yml`, and it can be started by hand
+  from the Actions tab.
 
 ## Windows checks that need a person
 
@@ -312,6 +371,52 @@ real desktop.
   the process exits and is the one most likely to break silently.
 
 The same two checks cover the winget package, which installs this `.msi`.
+
+## Nightly builds
+
+`.github/workflows/nightly.yml` runs every night and publishes a build of
+`main`. It calls the same `build-toolchain.yml` a release does, so a green
+nightly is evidence the next release will build, and a nightly that breaks on a
+day nobody pushed anything points at a runner image, a system dependency, or an
+upstream crate rather than at the workspace.
+
+It publishes onto one rolling tag, `nightly`, force-moved to the commit it
+built, with the assets clobbered onto the prerelease already sitting there.
+Download links never change and only the newest build is reachable. A run where
+one build leg failed publishes the rest and drops the leftover asset for the
+target that failed, because `sha256sums.txt` covers that run alone and
+`install.sh` refuses anything it cannot verify. A run where every leg failed
+publishes nothing and leaves the tag where it was.
+
+Two properties keep the nightly out of the release channel, and both are worth
+checking if you edit either workflow:
+
+- The tag is `nightly`, with no `v`. `release.yml` fires on `push: tags: v*`,
+  and its last job walks the version on `main` forward, so a `v`-prefixed
+  nightly tag would cut a release and bump the version every night.
+- The release is a prerelease, and the flag is set on every run rather than
+  only when the release is created. Every version-keyed lookup in the product
+  resolves through the `releases/latest` redirect, which skips prereleases, so a
+  nightly that ever lands as an ordinary release becomes the version
+  `install.sh` installs and the update check offers.
+
+The nightly publishes no Windows installer. The MSI's product GUIDs and version
+are what Windows identifies an installation by, and a nightly stamped with a
+version a release also carries would upgrade, replace, or block a real install
+through those same GUIDs. Giving the nightly its own product identity means new
+fixed GUIDs, a second entry in Installed apps, and two products appending to
+`PATH`; that is a packaging decision, not something the nightly needs. The
+portable zip carries no receipt, so a nightly unpacked from it never claims to
+be installed and never checks for updates.
+
+Start a nightly by hand from the Actions tab when you want one outside the
+schedule.
+
+Every workflow that runs off a published release skips a prerelease, so a
+nightly reaches none of the channels a release does: `publish.yml` holds back
+crates.io and PyPI, `publish-packages.yml` the package managers,
+`publish-extensions.yml` the editor marketplaces, and `site-rebuild.yml` the
+docs site. Add the same guard to anything new that triggers on a release.
 
 ## Current limitations
 

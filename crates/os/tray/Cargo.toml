@@ -9,10 +9,12 @@ rust-version.workspace = true
 description = "System tray host for Lumen (tray-icon wrapper, MenuModel from lumen-os-menu, TrayClicked / TrayDoubleClicked / TrayMenuClicked messages). QSystemTrayIcon / AppIndicator analog."
 keywords = ["ui", "gui", "tray", "tray-icon", "lumen"]
 categories = ["os", "gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-core = { path = "../../core", version = "0.0.3" }
-lumen-os-mime = { path = "../mime", version = "0.0.3" }
+lumen-core = { workspace = true }
+lumen-os-mime = { workspace = true }
 bevy_ecs.workspace = true
 image.workspace = true
 tracing.workspace = true

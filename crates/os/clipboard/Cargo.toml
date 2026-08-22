@@ -9,6 +9,8 @@ rust-version.workspace = true
 description = "OS clipboard host (arboard wrapper) for Lumen - MIME-typed read/write, optional PRIMARY selection on Linux."
 keywords = ["ui", "gui", "clipboard", "arboard", "lumen"]
 categories = ["os", "gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [features]
 default = []
@@ -17,7 +19,7 @@ default = []
 linux_primary = []
 
 [dependencies]
-lumen-os-mime = { path = "../mime", version = "0.0.3" }
+lumen-os-mime = { workspace = true }
 
 # arboard speaks to X11, Wayland, NSPasteboard, and the Win32 clipboard, none
 # of which exist in a browser, and it is the one dependency that stops the

@@ -28,6 +28,18 @@ That writes `styles.css`, `app.lmna`, `app.cdlb`, `lumen-web.wasm`,
 and answer everything else with a render. The runtime adopts a rendered
 document the same way it adopts a built one.
 
+Add `--no-runtime` to render pages that carry none:
+
+```
+lumenc web myapp --render ssr --no-runtime
+```
+
+Each page is still produced for the request that asks, and now it is only a
+document: no wasm, no boot script, and nothing that takes it over once it is
+open. Links load the next page, which is another render. `app.lmna` is still
+written, because that is what you render from; the runtime files and the
+manifest are not, because nothing loads them.
+
 Build with `--render csr` instead when you want documents to fall back to.
 Which of the two answers a request is then yours to decide, and so is
 rebuilding them when the app changes.
@@ -73,7 +85,7 @@ fixed what panicked.
 
 ## Rendering
 
-```rust,no_run
+```rust
 use std::sync::Arc;
 use lumen_ssr::{FetchPolicy, RenderOptions, Renderer, SsrRequest, SsrSite};
 use lumen_web::WebSpec;
@@ -147,6 +159,35 @@ A link inside a built site points at the document that build wrote, so
 entry page, whatever it is keyed as. `request.path` still holds the address as
 it arrived.
 
+### An address no page answers for
+
+`/nowhere` matches no page key and is no document a build wrote, so nothing is
+rendered for it: the response is a 404 carrying the app shell, which is the
+same `404.html` a static build writes for a path its host has no file for. A
+site answers such an address the same way whether it is rendered or built.
+
+The shell holds no state, so it is written once and reused, and the app is not
+built for it. An address anyone can guess would otherwise cost a whole app boot
+to arrive at a document that is the same every time.
+
+A deep path is not this case. `/user/42` in an app with `user.lmn` names the
+`user` page, so it renders as that page with `/42` on `route.segment`.
+
+To have the app answer such an address itself, ask which page it names and
+render one the app does have:
+
+```rust
+let response = match site.page_for(path) {
+    Some(_) => renderer.render(SsrRequest::get(path))?,
+    // `notfound.lmn` renders it, reading the address off `route.segment`.
+    None => {
+        let mut own = renderer.render(SsrRequest::get(&format!("/notfound{path}")))?;
+        own.status = 404;
+        own
+    }
+};
+```
+
 The headers, the cookies and the body are read one at a time, because a page has
 no business holding all of them:
 
@@ -176,7 +217,7 @@ the headers that say what a browser is and none that say who is using it:
 including `Authorization`, `Cookie` and `Proxy-Authorization`, is named
 explicitly or not read at all:
 
-```rust,no_run
+```rust
 use lumen_ssr::{HeaderPolicy, RenderOptions};
 
 let options = RenderOptions {
@@ -230,7 +271,7 @@ An app asking for an address is a visitor's request making your server make a
 request, so a render reaches only the hosts you name and makes a bounded number
 of requests:
 
-```rust,no_run
+```rust
 use lumen_ssr::{FetchPolicy, RenderOptions};
 
 let options = RenderOptions {

@@ -9,9 +9,11 @@ rust-version.workspace = true
 description = "Browser HttpDispatch impl for Lumen. Runs the scripts' fetch() and http() builtins on the page's own fetch, with a bounded body read."
 keywords = ["ui", "gui", "http", "web", "lumen"]
 categories = ["gui", "wasm", "web-programming::http-client"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-script = { path = "../../script/api", version = "0.0.3" }
+lumen-script = { workspace = true, default-features = true }
 
 # Not target-gated. The crate is a browser backend and only a browser runs it,
 # but building it for the host is what puts it under the workspace's own clippy

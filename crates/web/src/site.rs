@@ -104,7 +104,12 @@ pub const SITEMAP_FILE: &str = "sitemap.xml";
 /// A deep path like `/user/42` is not a file, so a static host serves this.
 /// It carries the whole app but shows none of it, and the runtime picks the
 /// page from the address bar the way the desktop resolves a navigation.
-fn shell(spec: &SiteSpec, warnings: &mut Vec<String>) -> Result<String, EmitError> {
+///
+/// A server answering an address no page answers for sends the same document,
+/// which is what makes a rendered site and a built one agree about a request
+/// neither of them has a page for. It holds no state, so it is the same
+/// document every time it is asked for.
+pub fn shell(spec: &SiteSpec, warnings: &mut Vec<String>) -> Result<String, EmitError> {
     let entry = spec
         .pages
         .iter()

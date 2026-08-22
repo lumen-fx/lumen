@@ -840,6 +840,111 @@ fn a_rendered_site_is_the_files_a_render_needs_and_no_documents() {
 }
 
 #[test]
+fn a_rendered_site_can_be_asked_for_pages_with_nothing_to_run_them() {
+    let scratch = scratch("ssr-no-runtime");
+    let out = scratch.join("site");
+    let printed = web(
+        "apps/pages-demo",
+        &out,
+        &["--render", "ssr", "--no-runtime"],
+    );
+    // The runtime the helper handed it has nowhere to go, and the build says
+    // so rather than copying it in for nobody.
+    assert!(printed.contains("--lib-dir"), "{printed}");
+
+    let files = files(&out);
+    // What the server renders from stays; what only a browser would load goes.
+    assert!(files.contains("styles.css"), "{files:?}");
+    assert!(files.contains("app.lmna"), "{files:?}");
+    for absent in [
+        "lumen.web.json",
+        "lumen-web.wasm",
+        "lumen-web.js",
+        "app.cdlb",
+    ] {
+        assert!(!files.contains(absent), "`{absent}` in {files:?}");
+    }
+    assert!(
+        documents(&out).is_empty(),
+        "a rendered site wrote documents: {:?}",
+        documents(&out)
+    );
+}
+
+#[test]
+fn a_rendered_page_with_no_runtime_carries_nothing_to_run() {
+    let scratch = scratch("serve-ssr-no-runtime");
+    let out = scratch.join("site");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lumenc"))
+        .arg("web")
+        .arg(repo().join("apps/pages-demo"))
+        .arg("--out")
+        .arg(&out)
+        .args(["--render", "ssr", "--no-runtime", "--serve", "--port", "0"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("running lumenc web --render ssr --no-runtime");
+    let address = match serving_at(&mut child) {
+        Some(address) => address,
+        None => {
+            stop(child);
+            panic!("the server never said where it was listening");
+        }
+    };
+    let page = request(address, "/settings.html");
+    stop(child);
+
+    assert!(page.starts_with("HTTP/1.1 200 "), "{page}");
+    // The page is the app's, rendered for this request.
+    assert!(page.contains(r#"data-lm-page="settings""#), "{page}");
+    // And there is nothing in it to take it over.
+    assert!(!page.contains("<script"), "{page}");
+    assert!(!page.contains("lumen-web"), "{page}");
+}
+
+#[test]
+fn a_runtime_setting_that_contradicts_the_render_mode_is_refused() {
+    // Each mode that answers the runtime question itself, and the setting
+    // that says the opposite. The message names the mode that means it.
+    for (mode, flag, named) in [
+        ("static", "--runtime", "csr"),
+        ("csr", "--no-runtime", "static"),
+    ] {
+        let out = scratch(&format!("runtime-{mode}"));
+        let output = Command::new(env!("CARGO_BIN_EXE_lumenc"))
+            .args(["web"])
+            .arg(repo().join("apps/pages-demo"))
+            .arg("--out")
+            .arg(out.join("site"))
+            .args(["--render", mode, flag])
+            .output()
+            .expect("running lumenc web");
+        assert!(
+            !output.status.success(),
+            "`--render {mode} {flag}` was built"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(&format!("render `{mode}`")), "{stderr}");
+        assert!(stderr.contains(&format!("render `{named}`")), "{stderr}");
+    }
+}
+
+#[test]
+fn a_runtime_setting_the_render_mode_agrees_with_is_taken() {
+    let scratch = scratch("runtime-agrees");
+    let out = scratch.join("site");
+    // `static` already means no runtime, so saying it again changes nothing.
+    web(
+        "apps/pages-demo",
+        &out,
+        &["--render", "static", "--no-runtime"],
+    );
+    let files = files(&out);
+    assert!(files.contains("index.html"), "{files:?}");
+    assert!(!files.contains("lumen-web.wasm"), "{files:?}");
+}
+
+#[test]
 fn a_page_comes_from_a_run_or_from_the_request_and_not_from_both() {
     let out = scratch("ssr-prerender-run");
     let output = Command::new(env!("CARGO_BIN_EXE_lumenc"))

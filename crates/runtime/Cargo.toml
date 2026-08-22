@@ -9,87 +9,89 @@ rust-version.workspace = true
 description = "Lumen runtime core: winit/ECS run loop, default plugin stack, hot reload, file-based pages, and app loaders. Parser-free (injected via SourceParser)."
 keywords.workspace = true
 categories.workspace = true
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [lib]
 name = "lumen_runtime"
 path = "src/lib.rs"
 
 [dependencies]
-lumen-core = { path = "../core", version = "0.0.3" }
+lumen-core = { workspace = true }
 # Runtime-shared IR (LayoutIR, CSS AST + Cascade-5 application, value parsers,
 # `var()` resolver, AOT artifact). The runtime consumes it directly; the
 # markup/CSS front-end that PRODUCES it stays in `lumenc` and is injected via
 # `SourceParser`.
-lumen-ir = { path = "../ir", version = "0.0.3" }
-lumen-primitives = { path = "../primitives", version = "0.0.3" }
+lumen-ir = { workspace = true }
+lumen-primitives = { workspace = true }
 # The host-neutral scene layer: the IR spawner, the reconcilers, fragments,
 # and the page resolver. Re-exported from here, so `lumen_runtime::spawn` and
 # `lumen_runtime::pages` still name what they always did.
-lumen-scene = { path = "../scene", version = "0.0.3" }
-lumen-assets = { path = "../assets", version = "0.0.3" }
+lumen-scene = { workspace = true }
+lumen-assets = { workspace = true }
 # Translation catalogues + locale-aware formatters. The runtime resolves the
 # app's locale, loads `locale/*.ftl`, and publishes the translator that
 # `translatable="..."` markup and the scripts' `t()` builtin read.
-lumen-i18n = { path = "../i18n", version = "0.0.3" }
+lumen-i18n = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 thiserror.workspace = true
 
 # Default plugin stack + OS surface crates the run loop wires.
-lumen-input = { path = "../input", version = "0.0.3" }
-lumen-os-clipboard = { path = "../os/clipboard", version = "0.0.3" }
-lumen-os-dnd = { path = "../os/dnd", version = "0.0.3" }
-lumen-os-filedialog = { path = "../os/filedialog", version = "0.0.3" }
-lumen-os-tray = { path = "../os/tray", version = "0.0.3" }
-lumen-os-notify = { path = "../os/notify", version = "0.0.3" }
-lumen-os-hotkey = { path = "../os/hotkey", version = "0.0.3" }
-lumen-os-launcher = { path = "../os/launcher", version = "0.0.3" }
-lumen-os-power = { path = "../os/power", version = "0.0.3" }
+lumen-input = { workspace = true }
+lumen-os-clipboard = { workspace = true }
+lumen-os-dnd = { workspace = true }
+lumen-os-filedialog = { workspace = true }
+lumen-os-tray = { workspace = true }
+lumen-os-notify = { workspace = true }
+lumen-os-hotkey = { workspace = true }
+lumen-os-launcher = { workspace = true }
+lumen-os-power = { workspace = true }
 # Async spawn/timer bridge (tokio rt-multi-thread). Part B tree-shaking:
 # OPTIONAL behind the `async` feature. File dialogs resolve on this runtime,
 # so the run loop installs `AsyncTokioPlugin` for an app that opens them; a
 # trimmed bundle drops the crate and falls back to the blocking path.
 
-lumen-async-tokio = { path = "../backends/async-tokio", optional = true }
+lumen-async-tokio = { workspace = true, optional = true }
 # Audio capability: the transport model + the `AudioBackend` trait, with no
 # device and no decoder behind it. Part B: OPTIONAL behind `audio`.
-lumen-audio = { path = "../audio", optional = true }
+lumen-audio = { workspace = true, optional = true }
 # The audio backend Lumen ships (rodio + cpal + symphonia). OPTIONAL behind
 # `audio-rodio`; without it the audio systems run against the silent backend.
-lumen-audio-rodio = { path = "../backends/audio-rodio", optional = true }
+lumen-audio-rodio = { workspace = true, optional = true }
 # The HTTP client the scripts' `fetch()` / `http()` builtins run on. OPTIONAL
 # behind `http-fetch`; without it the builtins report that no client is
 # installed, and an embedder can install its own `lumen_script::HttpClient`.
-lumen-http-ureq = { path = "../backends/http-ureq", version = "0.0.3", optional = true }
-lumen-layout-taffy = { path = "../backends/layout-taffy" }
+lumen-http-ureq = { workspace = true, optional = true }
+lumen-layout-taffy = { workspace = true }
 
 
 # Script hosts. Every host is a Part B tree-shaking knob, OPTIONAL behind
 # `host-rhai` / `host-lua` / `host-candela`, so a bundle links exactly the
 # languages its app ships.
-lumen-script = { path = "../script/api", version = "0.0.3", default-features = false }
-lumen-script-rhai = { path = "../script/rhai", version = "0.0.3", default-features = false, optional = true }
+lumen-script = { workspace = true }
+lumen-script-rhai = { workspace = true, optional = true }
 rhai = { workspace = true, optional = true }
-lumen-script-lua = { path = "../script/lua", version = "0.0.3", default-features = false, optional = true }
-lumen-script-candela = { path = "../script/candela", version = "0.0.3", default-features = false, features = ["compiler"], optional = true }
+lumen-script-lua = { workspace = true, optional = true }
+lumen-script-candela = { workspace = true, optional = true, features = ["compiler"] }
 mlua = { workspace = true, optional = true }
 
-lumen-text-cosmic = { path = "../backends/text-cosmic", version = "0.0.3" }
-lumen-text = { path = "../text", version = "0.0.3" }
-lumen-window-winit = { path = "../backends/window-winit", version = "0.0.3" }
+lumen-text-cosmic = { workspace = true }
+lumen-text = { workspace = true }
+lumen-window-winit = { workspace = true }
 # The renderer, on screen and off: the windowed path attaches the surface
 # renderer to the winit window, and `run --headless` drives the offscreen one
 # through the same Node-IR walker.
-lumen-render-wgpu = { path = "../backends/render-wgpu", version = "0.0.3" }
+lumen-render-wgpu = { workspace = true }
 # Accessibility. The window backend drives whatever bridge it is handed;
 # picking AccessKit is this crate's call, as the composition point.
-lumen-a11y-accesskit = { path = "../backends/a11y-accesskit", version = "0.0.3" }
+lumen-a11y-accesskit = { workspace = true }
 # MCP introspection server (tokio + serde_json + http). Part B: OPTIONAL
 # behind `mcp`. Dev-only; lumenc never infers it into a release bundle.
-lumen-mcp = { path = "../mcp", version = "0.0.3", optional = true }
+lumen-mcp = { workspace = true, optional = true }
 # Dev-only in-window devtools overlay. Optional + gated behind the off-by-
 # default `devtools` feature.
-lumen-devtools = { path = "../dev/devtools", version = "0.0.3", optional = true }
+lumen-devtools = { workspace = true, optional = true }
 
 # Hot-reload file watching (inotify / FSEvents / ReadDirectoryChangesW).
 notify.workspace = true

@@ -9,6 +9,8 @@ rust-version.workspace = true
 description = "candela ScriptHost impl."
 keywords = ["ui", "gui", "scripting", "candela", "lumen"]
 categories = ["gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [features]
 default = ["compiler"]
@@ -21,8 +23,8 @@ default = ["compiler"]
 compiler = ["dep:candela"]
 
 [dependencies]
-lumen-script = { path = "../api", version = "0.0.3", default-features = false }
-lumen-core = { path = "../../core", version = "0.0.3" }
+lumen-script = { workspace = true }
+lumen-core = { workspace = true }
 bevy_ecs.workspace = true
 # candela embedding API (Engine/Program) lives on the crate's `main` branch.
 # Structured host-fn marshalling (string/int/float/bool/null plus Array/Map),

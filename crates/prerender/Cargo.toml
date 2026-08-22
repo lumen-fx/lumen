@@ -16,26 +16,26 @@ name = "lumen_prerender"
 path = "src/lib.rs"
 
 [dependencies]
-lumen-core = { path = "../core", version = "0.0.3" }
+lumen-core = { workspace = true }
 # The windowless assembly the app is built from: the reconcilers, the
 # bindings and the script command stream, and no window, renderer or font
 # stack.
-lumen-portable = { path = "../portable", version = "0.0.3", default-features = false }
+lumen-portable = { workspace = true }
 # The compiled app a run starts from.
-lumen-ir = { path = "../ir", version = "0.0.3" }
+lumen-ir = { workspace = true }
 # The seed a run starts from, which is also the shape its result comes back in.
-lumen-html = { path = "../html", version = "0.0.3" }
+lumen-html = { workspace = true }
 # Routing and the IR-to-ECS spawner.
-lumen-scene = { path = "../scene", version = "0.0.3" }
+lumen-scene = { workspace = true }
 # Where a run's result is read, in the form a document is written from.
-lumen-web = { path = "../web", version = "0.0.3" }
+lumen-web = { workspace = true }
 # The HTTP seam, so a run answers a request without one leaving the machine.
-lumen-script = { path = "../script/api", version = "0.0.3", default-features = false }
+lumen-script = { workspace = true }
 
 [build-dependencies]
 # Compiles the test fixture to `.cdlb` on the host, so the program a run loads
 # is always the one this toolchain produces.
-lumen-script-candela = { path = "../script/candela", version = "0.0.3" }
+lumen-script-candela = { workspace = true, default-features = true }
 
 [dev-dependencies]
 # The tests build an app of their own to settle, which means writing a system.

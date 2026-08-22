@@ -184,6 +184,8 @@ _lumenc() {
                         '--base[URL prefix the site is served under]:path:' \
                         '*--locale[Locale to emit a document tree for]:tag:' \
                         '--render[Where the pages come from]:mode:(static csr ssr)' \
+                        '--runtime[Put the browser runtime in the documents]' \
+                        '--no-runtime[Leave the browser runtime out]' \
                         '--prerender[Where the rendered state comes from]:mode:(seeds run none)' \
                         '--no-hooks[Skip the prebuild hooks]' \
                         '--lib-dir[Directory holding the browser runtime]:directory:_directories' \

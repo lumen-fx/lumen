@@ -112,7 +112,9 @@ interpolate a signal into text and into string attribute values:
 <label text="Signed in as {$user}" />
 ```
 
-Binding an element's whole text to a signal is a separate, cheaper form:
+The value is read when the tree is built, so what the signal holds by then is
+what the text says. Binding an element's whole text to a signal is the separate
+form, and it follows the signal from then on:
 
 ```html
 <label bind-text="$status" />

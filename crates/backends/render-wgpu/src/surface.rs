@@ -149,6 +149,15 @@ struct GpuState {
     blitter: TextureBlitter,
 }
 
+/// Drain the device before the queue drops, for the same reason as
+/// `WgpuRenderer`: wgpu-core's `Queue::drop` panics if its fixed-timeout
+/// wait on the last submission expires, and a panic inside drop aborts.
+impl Drop for GpuState {
+    fn drop(&mut self) {
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+}
+
 /// WGPU + vello renderer that presents into an OS window.
 ///
 /// Construction is free and does no GPU work: a window backend builds one

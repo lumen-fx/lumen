@@ -169,3 +169,59 @@ fn run_padded_case() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The applier runs after the DOM dispatch because an edge says so, not
+/// because the executor sorted it that way.
+///
+/// Padding the stage catches an order a bigger graph would flip, but only the
+/// flips that padding happens to produce; an order that survives every
+/// padding a test thought to try is still an order nobody asked for. So this
+/// asks the schedule rather than the app. It offers a system that has to run
+/// after the applier and before the dispatch, which the builder can only
+/// refuse if it already knows a path the other way, and the refusal is that
+/// path.
+#[test]
+fn the_dom_dispatch_reaches_the_applier_through_the_graph() {
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(run_edge_case)
+        .expect("spawn test thread")
+        .join()
+        .expect("applier edge case");
+}
+
+fn run_edge_case() {
+    use bevy_ecs::prelude::{IntoScheduleConfigs, Schedules};
+    use lumen_core::app::Tick;
+    use lumen_core::prelude::TickStage;
+    use lumen_scene::script_commands::apply_scene_script_commands;
+    use lumen_script::ScriptSet;
+
+    let dir = scaffolded_counter("edge");
+    let (mut app, _window) = build_headless_app(RunOptions::new(dir.clone())).expect("build app");
+    // One tick so every plugin has registered and the graph is whole.
+    app.tick();
+
+    let mut schedules = app
+        .world
+        .remove_resource::<Schedules>()
+        .expect("the Tick schedule is installed by App::new");
+    let schedule = schedules.get_mut(Tick).expect("the Tick schedule");
+    schedule.add_systems(
+        (|| {})
+            .after(apply_scene_script_commands)
+            .before(ScriptSet::DomInput)
+            .in_set(TickStage::Systems),
+    );
+    let outcome = schedule.initialize(&mut app.world);
+    app.world.insert_resource(schedules);
+
+    assert!(
+        outcome.is_err(),
+        "the scene applier is not ordered after ScriptSet::DomInput, so a \
+         handler's signal write reaches the store whenever the executor \
+         feels like it"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

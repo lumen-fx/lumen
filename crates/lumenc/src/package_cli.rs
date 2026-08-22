@@ -31,9 +31,9 @@
 //!
 //! `--target` packages for a platform other than the one you are on. The
 //! toolchain files for another platform come from the release channel and are
-//! cached per version. Finding a prebuilt file that ships with the toolchain
-//! lives here too, so a web build and a package look in the same places for
-//! the same reasons.
+//! cached under the release they came from, which [`crate::release`] resolves.
+//! Finding a prebuilt file that ships with the toolchain lives here too, so a
+//! web build and a package look in the same places for the same reasons.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -41,6 +41,7 @@ use std::process::ExitCode;
 use lumen_ir::layout_ir::relativize_asset_paths;
 
 use crate::app_kind::AppKind;
+use crate::release;
 
 /// Conventional extension for a compiled-app artifact, matching
 /// [`crate::build_cli::ARTIFACT_EXT`].
@@ -972,6 +973,7 @@ fn build_artifact(
 }
 
 /// The two toolchain files a package is assembled from.
+#[derive(Debug)]
 struct Toolchain {
     stub: PathBuf,
     lib: PathBuf,
@@ -982,12 +984,12 @@ struct Toolchain {
 /// `--lib-dir` wins outright. Otherwise a package for this machine's own
 /// platform uses the files shipped with the running `lumenc`, which is what an
 /// installed toolchain has beside it and what `LUMEN_LIB_DIR` points at in a
-/// source tree. A package for another platform comes from the per-version
-/// cache, and is fetched from the release channel when the cache is empty.
+/// source tree. A package for another platform comes from the cache for the
+/// release [`release::resolve`] names, and is fetched from that release when
+/// the cache is empty.
 fn locate_toolchain(target: Target, lib_dir: Option<&Path>) -> Result<Toolchain, String> {
     let wanted = [target.stub_name(), target.lib_name().to_string()];
-    let cache = cache_dir(target);
-    let dirs = search_dirs(lib_dir, target == Target::host(), cache.clone());
+    let dirs = search_dirs(lib_dir, target == Target::host());
 
     if let Some(dir) = first_dir_with(&dirs, &wanted) {
         return Ok(Toolchain {
@@ -998,19 +1000,22 @@ fn locate_toolchain(target: Target, lib_dir: Option<&Path>) -> Result<Toolchain,
     // Another platform's files are not on this machine until they are
     // fetched; this machine's own come with the installation, so an empty
     // search there is a real failure rather than a cache miss.
-    if target != Target::host()
-        && let Some(dir) = cache
-    {
-        fetch_release_files(
-            &target.archive_name(),
-            &wanted,
-            &dir,
-            &format!(
-                "A release older than app packaging ships no launcher; build the {} files \
-                 yourself and pass --lib-dir instead.",
-                target.name
-            ),
-        )?;
+    if target != Target::host() {
+        let (version, dir) = component_cache(target.name)
+            .map_err(|why| cannot_fetch(&wanted, Some(target.name), &dirs, &why))?;
+        if first_dir_with(std::slice::from_ref(&dir), &wanted).is_none() {
+            fetch_release_files(
+                &version,
+                &target.archive_name(),
+                &wanted,
+                &dir,
+                &format!(
+                    "A release older than app packaging ships no launcher; build the {} files \
+                     yourself and pass --lib-dir instead.",
+                    target.name
+                ),
+            )?;
+        }
         return Ok(Toolchain {
             stub: dir.join(&wanted[0]),
             lib: dir.join(&wanted[1]),
@@ -1029,6 +1034,7 @@ fn locate_toolchain(target: Target, lib_dir: Option<&Path>) -> Result<Toolchain,
 }
 
 /// The prebuilt runtime a web build copies beside the pages it emits.
+#[derive(Debug)]
 pub struct WebRuntimeFiles {
     /// The wasm runtime that loads the app's compiled artifact in a browser.
     pub wasm: PathBuf,
@@ -1039,8 +1045,8 @@ pub struct WebRuntimeFiles {
 /// Find the prebuilt web runtime through the same search [`locate_toolchain`]
 /// runs for the launcher stub and the shared library: `--lib-dir` first, then
 /// the files shipped with the running `lumenc`, then `LUMEN_LIB_DIR`, then the
-/// per-version cache, which is filled from the release channel when it is
-/// empty.
+/// cache for the release [`release::resolve`] names, which is filled from that
+/// release when it is empty.
 ///
 /// The runtime is one prebuilt pair for every app and every platform, so
 /// unlike a package there is no target to pick: a web build on any machine
@@ -1051,8 +1057,7 @@ pub struct WebRuntimeFiles {
 /// decided which copy it wants.
 pub fn locate_web_runtime(lib_dir_flag: Option<&Path>) -> Result<WebRuntimeFiles, String> {
     let wanted = [WEB_WASM.to_string(), WEB_JS.to_string()];
-    let cache = cache_dir_for(WEB_COMPONENT);
-    let dirs = search_dirs(lib_dir_flag, true, cache.clone());
+    let dirs = search_dirs(lib_dir_flag, true);
 
     if let Some(dir) = first_dir_with(&dirs, &wanted) {
         return Ok(WebRuntimeFiles {
@@ -1066,33 +1071,35 @@ pub fn locate_web_runtime(lib_dir_flag: Option<&Path>) -> Result<WebRuntimeFiles
             dir.display()
         ));
     }
-    if let Some(dir) = cache {
+
+    let (version, dir) =
+        component_cache(WEB_COMPONENT).map_err(|why| cannot_fetch(&wanted, None, &dirs, &why))?;
+    if first_dir_with(std::slice::from_ref(&dir), &wanted).is_none() {
         fetch_release_files(
+            &version,
             WEB_ARCHIVE,
             &wanted,
             &dir,
             "A release older than the web target ships no web runtime; build it yourself \
              and pass --lib-dir instead.",
         )?;
-        return Ok(WebRuntimeFiles {
-            wasm: dir.join(&wanted[0]),
-            js: dir.join(&wanted[1]),
-        });
     }
-
-    Err(format!(
-        "cannot find {WEB_WASM} and {WEB_JS}. Looked in: {}. Set LUMEN_LIB_DIR (or pass \
-         --lib-dir) to the directory holding them.",
-        searched(&dirs)
-    ))
+    Ok(WebRuntimeFiles {
+        wasm: dir.join(&wanted[0]),
+        js: dir.join(&wanted[1]),
+    })
 }
 
-/// The directories a toolchain artifact is looked for in, in order: the
-/// `--lib-dir` flag, the directory holding the running `lumenc`,
-/// `LUMEN_LIB_DIR`, then the per-version cache. The middle two are skipped
-/// when `installed` is false, which is another platform's files: an
-/// installation carries its own platform's, never a second one's.
-fn search_dirs(lib_dir: Option<&Path>, installed: bool, cache: Option<PathBuf>) -> Vec<PathBuf> {
+/// The directories a toolchain artifact is looked for in before the download
+/// cache, in order: the `--lib-dir` flag, the directory holding the running
+/// `lumenc`, then `LUMEN_LIB_DIR`. The last two are skipped when `installed`
+/// is false, which is another platform's files: an installation carries its
+/// own platform's, never a second one's.
+///
+/// The cache comes after all of these and is not in the list, because naming
+/// it means resolving which release this toolchain uses, and a build that
+/// finds its files here should not need the network to say so.
+fn search_dirs(lib_dir: Option<&Path>, installed: bool) -> Vec<PathBuf> {
     let exe_dir = installed
         .then(|| std::env::current_exe().ok())
         .flatten()
@@ -1101,7 +1108,7 @@ fn search_dirs(lib_dir: Option<&Path>, installed: bool, cache: Option<PathBuf>) 
         .then(|| std::env::var_os("LUMEN_LIB_DIR"))
         .flatten()
         .map(PathBuf::from);
-    ordered_dirs(lib_dir, exe_dir, env_dir, cache)
+    ordered_dirs(lib_dir, exe_dir, env_dir)
 }
 
 /// The search order itself, with the two directories [`search_dirs`] reads
@@ -1110,9 +1117,8 @@ fn ordered_dirs(
     lib_dir: Option<&Path>,
     exe_dir: Option<PathBuf>,
     env_dir: Option<PathBuf>,
-    cache: Option<PathBuf>,
 ) -> Vec<PathBuf> {
-    [lib_dir.map(Path::to_path_buf), exe_dir, env_dir, cache]
+    [lib_dir.map(Path::to_path_buf), exe_dir, env_dir]
         .into_iter()
         .flatten()
         .collect()
@@ -1138,11 +1144,52 @@ fn searched(dirs: &[PathBuf]) -> String {
         .join(", ")
 }
 
+/// Files that are neither on this machine nor fetchable, and why. `why` is the
+/// reason no release could be resolved, which is what separates a repository
+/// with nothing published from a page that could not be reached.
+fn cannot_fetch(names: &[String], target: Option<&str>, dirs: &[PathBuf], why: &str) -> String {
+    let for_target = target.map(|t| format!(" for {t}")).unwrap_or_default();
+    format!(
+        "cannot find {} and {}{for_target}. Looked in: {}. They could not be fetched \
+         either: {why}. Set LUMEN_LIB_DIR (or pass --lib-dir) to the directory holding \
+         them.",
+        names[0],
+        names[1],
+        searched(dirs)
+    )
+}
+
+/// The release this toolchain fetches published files from, and the directory
+/// they are cached in. Resolving the release is what makes the request, so
+/// this is called only once the local directories have come up empty.
+fn component_cache(component: &str) -> Result<(String, PathBuf), String> {
+    let version = release::resolve().map_err(|why| why.to_string())?;
+    let dir = cache_dir_for(&version, component).ok_or_else(|| {
+        "there is no cache directory to download into on this machine".to_string()
+    })?;
+    if let Some(note) = release_note(&version, release::current()) {
+        println!("{note}");
+    }
+    Ok((version, dir))
+}
+
+/// What to say when the files come from a release this build is not, which is
+/// the normal case for a build made from source. Saying which release keeps
+/// that visible rather than surprising.
+fn release_note(version: &str, current: &str) -> Option<String> {
+    (version != current).then(|| {
+        format!(
+            "lumenc: this build is {current}, and the toolchain files come from the \
+             v{version} release"
+        )
+    })
+}
+
 /// Where files that did not come with this installation are kept between
-/// runs: under the platform cache directory, keyed by Lumen version and by
-/// `component` (a target name, or the web runtime) so an upgrade never
-/// reuses the old ones.
-fn cache_dir_for(component: &str) -> Option<PathBuf> {
+/// runs: under the platform cache directory, keyed by the release `version`
+/// they came from and by `component` (a target name, or the web runtime) so an
+/// upgrade never reuses the old ones.
+fn cache_dir_for(version: &str, component: &str) -> Option<PathBuf> {
     let base = if cfg!(target_os = "windows") {
         std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
     } else if cfg!(target_os = "macos") {
@@ -1155,14 +1202,9 @@ fn cache_dir_for(component: &str) -> Option<PathBuf> {
     Some(
         base.join("lumen")
             .join("toolchain")
-            .join(env!("CARGO_PKG_VERSION"))
+            .join(version)
             .join(component),
     )
-}
-
-/// Where another platform's toolchain files are kept between runs.
-fn cache_dir(target: Target) -> Option<PathBuf> {
-    cache_dir_for(target.name)
 }
 
 /// Copy a file and make it executable on Unix, since a copy keeps the source
@@ -1416,47 +1458,73 @@ fn holds(dir: &Path, inner: &Path) -> bool {
 // Fetching another platform's toolchain files
 // ============================================================
 
-/// Download this Lumen version's release `archive`, check it against the
-/// checksums published with the release, and put the `wanted` members of it
-/// in `dest`. `hint` closes the message when the release does not carry them,
-/// and says how to supply them by hand instead.
+/// Download the `archive` published with release `version`, check it against
+/// the checksums published beside it, and put the `wanted` members of it in
+/// `dest`. `hint` closes the message when the release does not carry them, and
+/// says how to supply them by hand instead.
+///
+/// `version` is a release that exists, resolved by [`release::resolve`]. It is
+/// never this binary's own version, which says nothing about what is published.
 fn fetch_release_files(
+    version: &str,
     archive: &str,
     wanted: &[String],
     dest: &Path,
     hint: &str,
 ) -> Result<(), String> {
-    let repo = std::env::var("LUMEN_GH_REPO").unwrap_or_else(|_| "lumen-fx/lumen".to_string());
-    let version = env!("CARGO_PKG_VERSION");
-    let base = format!("https://github.com/{repo}/releases/download/v{version}");
+    let base = release::asset_base(version);
 
     println!("lumenc: fetching {archive} from {base}");
 
-    let sums = http_get(&format!("{base}/sha256sums.txt"))?;
+    let sums_url = format!("{base}/sha256sums.txt");
+    let sums = http_get(&sums_url).map_err(|e| match e {
+        // Every release publishes checksums, so a status here says the release
+        // itself is not what it was taken to be rather than that one file is
+        // missing.
+        HttpError::Status(status) => no_checksums(version, status),
+        HttpError::Transport(message) => format!("cannot download {sums_url}: {message}"),
+    })?;
     let sums = String::from_utf8(sums).map_err(|_| {
         "the release checksums are not text; refusing to install from it".to_string()
     })?;
-    let want = sums
-        .lines()
-        .find_map(|line| {
-            let (hash, name) = line.split_once("  ")?;
-            (name.trim() == archive).then(|| hash.trim().to_lowercase())
-        })
-        .ok_or_else(|| {
-            format!(
-                "the v{version} release publishes no checksum for {archive}, so it cannot be \
-                 verified. {hint}"
-            )
-        })?;
 
-    let bytes = http_get(&format!("{base}/{archive}"))?;
-    let got = {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes);
-        format!("{:x}", hasher.finalize())
-    };
-    if got != want {
+    let archive_url = format!("{base}/{archive}");
+    let bytes =
+        http_get(&archive_url).map_err(|e| format!("cannot download {archive_url}: {e}"))?;
+
+    install_release_files(version, archive, &sums, &bytes, wanted, dest, hint)
+}
+
+/// What a release that answers for no `sha256sums.txt` means.
+fn no_checksums(version: &str, status: u16) -> String {
+    format!(
+        "the v{version} release publishes no sha256sums.txt (the request answered {status}), \
+         so nothing from it can be verified. Either there is no such release, or it is older \
+         than checksum publishing. Pass --lib-dir to use files you already have."
+    )
+}
+
+/// Everything after the download: check `bytes` against the checksum published
+/// for `archive`, then write the `wanted` members out into `dest`.
+///
+/// Split from the download so the verification and the unpacking are the same
+/// code whether the bytes arrived over the network or from a test.
+fn install_release_files(
+    version: &str,
+    archive: &str,
+    sums: &str,
+    bytes: &[u8],
+    wanted: &[String],
+    dest: &Path,
+    hint: &str,
+) -> Result<(), String> {
+    let want = checksum_for(sums, archive).ok_or_else(|| {
+        format!(
+            "the v{version} release publishes no checksum for {archive}, so it cannot be \
+             verified. {hint}"
+        )
+    })?;
+    if sha256(bytes) != want {
         return Err(format!(
             "{archive} does not match the checksum published with the release; \
              nothing was installed"
@@ -1465,9 +1533,9 @@ fn fetch_release_files(
 
     std::fs::create_dir_all(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
     let found = if archive.ends_with(".zip") {
-        extract_zip(&bytes, wanted, dest)?
+        extract_zip(bytes, wanted, dest)?
     } else {
-        extract_tar_gz(&bytes, wanted, dest)?
+        extract_tar_gz(bytes, wanted, dest)?
     };
     for name in wanted {
         if !found.contains(name) {
@@ -1477,18 +1545,52 @@ fn fetch_release_files(
     Ok(())
 }
 
+/// The checksum published for `archive`, from `sha256sums.txt`, whose lines
+/// are a hash, two spaces, and a file name.
+fn checksum_for(sums: &str, archive: &str) -> Option<String> {
+    sums.lines().find_map(|line| {
+        let (hash, name) = line.split_once("  ")?;
+        (name.trim() == archive).then(|| hash.trim().to_lowercase())
+    })
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+/// Why a download did not arrive. The two cases read differently: a status
+/// says the release does not carry the file, and everything else says the
+/// request never got an answer.
+enum HttpError {
+    Status(u16),
+    Transport(String),
+}
+
+impl std::fmt::Display for HttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HttpError::Status(status) => write!(f, "the server answered {status}"),
+            HttpError::Transport(message) => write!(f, "{message}"),
+        }
+    }
+}
+
 /// Fetch a URL whole, following redirects.
-fn http_get(url: &str) -> Result<Vec<u8>, String> {
+fn http_get(url: &str) -> Result<Vec<u8>, HttpError> {
     use std::io::Read;
-    let mut response = ureq::get(url)
-        .call()
-        .map_err(|e| format!("cannot download {url}: {e}"))?;
+    let mut response = ureq::get(url).call().map_err(|e| match e {
+        ureq::Error::StatusCode(status) => HttpError::Status(status),
+        other => HttpError::Transport(other.to_string()),
+    })?;
     let mut bytes = Vec::new();
     response
         .body_mut()
         .as_reader()
         .read_to_end(&mut bytes)
-        .map_err(|e| format!("cannot read {url}: {e}"))?;
+        .map_err(|e| HttpError::Transport(e.to_string()))?;
     Ok(bytes)
 }
 
@@ -1584,15 +1686,15 @@ mod tests {
     }
 
     /// The order every toolchain artifact is looked for in. A flag beats an
-    /// installation, an installation beats an environment override, and the
-    /// cache is the last resort because reaching it can mean a download.
+    /// installation, and an installation beats an environment override. The
+    /// cache follows all three and is not in this list, because reaching it
+    /// means resolving a release and can mean a download.
     #[test]
-    fn the_search_order_runs_flag_installation_environment_cache() {
+    fn the_search_order_runs_flag_installation_environment() {
         let dirs = ordered_dirs(
             Some(Path::new("/flag")),
             Some(PathBuf::from("/beside-lumenc")),
             Some(PathBuf::from("/env")),
-            Some(PathBuf::from("/cache")),
         );
         assert_eq!(
             dirs,
@@ -1600,24 +1702,19 @@ mod tests {
                 PathBuf::from("/flag"),
                 PathBuf::from("/beside-lumenc"),
                 PathBuf::from("/env"),
-                PathBuf::from("/cache"),
             ]
         );
-        assert!(ordered_dirs(None, None, None, None).is_empty());
+        assert!(ordered_dirs(None, None, None).is_empty());
     }
 
     /// Another platform's files never come from this installation, so the
     /// flag and the cache are the only places they can be.
     #[test]
     fn a_cross_target_search_skips_this_machines_own_files() {
-        let cache = PathBuf::from("/cache");
+        assert!(search_dirs(None, false).is_empty());
         assert_eq!(
-            search_dirs(None, false, Some(cache.clone())),
-            vec![cache.clone()]
-        );
-        assert_eq!(
-            search_dirs(Some(Path::new("/flag")), false, Some(cache.clone())),
-            vec![PathBuf::from("/flag"), cache]
+            search_dirs(Some(Path::new("/flag")), false),
+            vec![PathBuf::from("/flag")]
         );
     }
 
@@ -1652,28 +1749,54 @@ mod tests {
     /// The archive a release publishes and the code that unpacks it are
     /// written in two different places, and a page that loads nothing is what
     /// a disagreement between them looks like. Build the archive the way
-    /// `.github/scripts/build-web-runtime.sh` and `release.yml` do - the two
-    /// files at the root, under the names a site refers to them by - and take
-    /// it apart with the code a fetch runs.
-    #[test]
-    fn the_published_web_archive_unpacks_into_the_pair_a_build_wants() {
+    /// `.github/scripts/build-web-runtime.sh` and `build-toolchain.yml` do -
+    /// the two files at the root, under the names a site refers to them by -
+    /// and take it apart with the code a fetch runs.
+    /// A `.tar.gz` shaped like the one a release publishes: the members at the
+    /// root, under the names they are asked for by.
+    fn tar_gz(members: &[(&str, &[u8])]) -> Vec<u8> {
         let mut archive = tar::Builder::new(flate2::write::GzEncoder::new(
             Vec::new(),
             flate2::Compression::fast(),
         ));
-        for (name, body) in [(WEB_WASM, b"wasm-bytes".as_slice()), (WEB_JS, b"js-bytes")] {
+        for (name, body) in members {
             let mut header = tar::Header::new_gnu();
             header.set_size(body.len() as u64);
             header.set_mode(0o644);
             header.set_cksum();
             archive
-                .append_data(&mut header, name, body)
+                .append_data(&mut header, name, *body)
                 .expect("append");
         }
-        let bytes = archive
+        archive
             .into_inner()
             .and_then(flate2::write::GzEncoder::finish)
-            .expect("close the archive");
+            .expect("close the archive")
+    }
+
+    /// The `sha256sums.txt` a release publishes beside its archives.
+    fn sums_line(archive: &str, bytes: &[u8]) -> String {
+        format!("{}  {archive}\n", sha256(bytes))
+    }
+
+    /// A `.zip` shaped like the one the Windows leg publishes, where the files
+    /// sit under the `bin/` directory the archive carries.
+    fn zip_of(members: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write;
+
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, body) in members {
+            writer
+                .start_file(*name, zip::write::SimpleFileOptions::default())
+                .expect("start member");
+            writer.write_all(body).expect("write member");
+        }
+        writer.finish().expect("close the archive").into_inner()
+    }
+
+    #[test]
+    fn the_published_web_archive_unpacks_into_the_pair_a_build_wants() {
+        let bytes = tar_gz(&[(WEB_WASM, b"wasm-bytes"), (WEB_JS, b"js-bytes")]);
 
         let tmp = std::env::temp_dir().join(format!("lumen-web-archive-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).expect("mkdir");
@@ -1695,25 +1818,269 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// A `--lib-dir` says which copy of the runtime to use, so a directory
+    /// that turns out not to hold it is answered rather than quietly replaced
+    /// with a download.
+    #[test]
+    fn a_flagged_directory_without_the_web_runtime_is_not_fetched_around() {
+        let tmp = std::env::temp_dir().join(format!("lumen-web-flag-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).expect("mkdir");
+
+        let error = locate_web_runtime(Some(&tmp)).expect_err("the directory is empty");
+        assert!(error.contains(WEB_WASM), "{error}");
+        assert!(error.contains(WEB_JS), "{error}");
+        assert!(error.contains(&tmp.display().to_string()), "{error}");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A `--lib-dir` holding both files is the answer, and nothing is
+    /// resolved or downloaded to find that out.
+    #[test]
+    fn a_flagged_directory_with_both_files_is_the_toolchain() {
+        let host = Target::host();
+        let tmp = std::env::temp_dir().join(format!("lumen-toolchain-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).expect("mkdir");
+        std::fs::write(tmp.join(host.stub_name()), b"stub").expect("write stub");
+        std::fs::write(tmp.join(host.lib_name()), b"lib").expect("write lib");
+
+        let found = locate_toolchain(host, Some(&tmp)).expect("both files are there");
+        assert_eq!(found.stub, tmp.join(host.stub_name()));
+        assert_eq!(found.lib, tmp.join(host.lib_name()));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// This machine's own files come with the installation, so an empty search
+    /// is a failure rather than a reason to download: the error names the
+    /// files, the directories it looked in, and how to point at them.
+    #[test]
+    fn this_machines_own_platform_is_never_fetched() {
+        let host = Target::host();
+        let empty = std::env::temp_dir().join(format!("lumen-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&empty).expect("mkdir");
+
+        let error = locate_toolchain(host, Some(&empty)).expect_err("the directory is empty");
+        assert!(error.contains(&host.stub_name()), "{error}");
+        assert!(error.contains(host.lib_name()), "{error}");
+        assert!(error.contains(host.name), "{error}");
+        assert!(error.contains(&empty.display().to_string()), "{error}");
+        assert!(error.contains("LUMEN_LIB_DIR"), "{error}");
+
+        let _ = std::fs::remove_dir_all(&empty);
+    }
+
+    /// The checksum decides whether anything is installed at all, so the
+    /// verified path and every way it can fail are checked with the bytes in
+    /// hand rather than over a network.
+    #[test]
+    fn a_verified_archive_installs_and_an_unverified_one_does_not() {
+        let tmp = std::env::temp_dir().join(format!("lumen-install-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let wanted = [WEB_WASM.to_string(), WEB_JS.to_string()];
+        let bytes = tar_gz(&[(WEB_WASM, b"wasm-bytes"), (WEB_JS, b"js-bytes")]);
+        let sums = sums_line(WEB_ARCHIVE, &bytes);
+
+        install_release_files("0.0.9", WEB_ARCHIVE, &sums, &bytes, &wanted, &tmp, "HINT")
+            .expect("the checksum matches, so both files install");
+        assert_eq!(
+            std::fs::read(tmp.join(WEB_WASM)).expect("read"),
+            b"wasm-bytes"
+        );
+
+        // Bytes that do not match what the release published.
+        let tampered = tar_gz(&[(WEB_WASM, b"not-what-was-published"), (WEB_JS, b"js")]);
+        let error = install_release_files(
+            "0.0.9",
+            WEB_ARCHIVE,
+            &sums,
+            &tampered,
+            &wanted,
+            &tmp,
+            "HINT",
+        )
+        .expect_err("the checksum does not match");
+        assert!(error.contains("does not match the checksum"), "{error}");
+        assert!(error.contains("nothing was installed"), "{error}");
+
+        // A release that publishes checksums, but none for this archive.
+        let error = install_release_files(
+            "0.0.9",
+            WEB_ARCHIVE,
+            "abc123  something-else.tar.gz\n",
+            &bytes,
+            &wanted,
+            &tmp,
+            "HINT",
+        )
+        .expect_err("no checksum line for this archive");
+        assert!(error.contains("v0.0.9"), "{error}");
+        assert!(error.contains("no checksum for"), "{error}");
+        assert!(error.ends_with("HINT"), "the hint says what to do: {error}");
+
+        // An archive from a release that predates one of the files.
+        let older = tar_gz(&[(WEB_WASM, b"wasm-bytes")]);
+        let error = install_release_files(
+            "0.0.9",
+            WEB_ARCHIVE,
+            &sums_line(WEB_ARCHIVE, &older),
+            &older,
+            &wanted,
+            &tmp,
+            "HINT",
+        )
+        .expect_err("the archive is missing a wanted file");
+        assert!(error.contains(WEB_JS), "{error}");
+        assert!(error.ends_with("HINT"), "{error}");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Windows publishes a `.zip` while every other platform publishes a
+    /// `.tar.gz`, and the archive's name is what decides how it is opened.
+    /// The members sit under `bin/`, and what is wanted is the file names.
+    #[test]
+    fn a_windows_zip_installs_the_same_way_a_tarball_does() {
+        let windows = Target::parse("windows-x86_64").expect("known target");
+        let archive = windows.archive_name();
+        assert!(archive.ends_with(".zip"), "{archive}");
+
+        let wanted = [windows.stub_name(), windows.lib_name().to_string()];
+        let bytes = zip_of(&[
+            (&format!("bin/{}", wanted[0]), b"stub".as_slice()),
+            (&format!("bin/{}", wanted[1]), b"library"),
+            ("bin/lumenc.exe", b"the compiler, which no package wants"),
+        ]);
+
+        let tmp = std::env::temp_dir().join(format!("lumen-zip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        install_release_files(
+            "0.0.9",
+            &archive,
+            &sums_line(&archive, &bytes),
+            &bytes,
+            &wanted,
+            &tmp,
+            "HINT",
+        )
+        .expect("the checksum matches, so the members install");
+
+        assert_eq!(std::fs::read(tmp.join(&wanted[0])).expect("read"), b"stub");
+        assert_eq!(
+            std::fs::read(tmp.join(&wanted[1])).expect("read"),
+            b"library"
+        );
+        assert!(
+            !tmp.join("lumenc.exe").exists(),
+            "only the wanted members are unpacked"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The checksum file is a hash, two spaces and a name, and only the line
+    /// for this archive counts.
+    #[test]
+    fn only_the_line_for_this_archive_is_its_checksum() {
+        let sums = "aaaa  lumen-linux-x86_64.tar.gz\nBBBB  lumen-web.tar.gz\n";
+        assert_eq!(checksum_for(sums, WEB_ARCHIVE).as_deref(), Some("bbbb"));
+        assert_eq!(
+            checksum_for(sums, "lumen-linux-x86_64.tar.gz").as_deref(),
+            Some("aaaa")
+        );
+        assert_eq!(checksum_for(sums, "lumen-macos-aarch64.tar.gz"), None);
+        assert_eq!(checksum_for("", WEB_ARCHIVE), None);
+        assert_eq!(
+            checksum_for("no-two-spaces here.tar.gz", "here.tar.gz"),
+            None
+        );
+    }
+
+    /// A release that answers for no checksum file at all is a release that
+    /// is not there, and the message says so rather than showing a status on
+    /// its own.
+    #[test]
+    fn a_release_that_publishes_nothing_reads_as_a_missing_release() {
+        let message = no_checksums("0.0.2", 404);
+        assert!(message.contains("v0.0.2"), "{message}");
+        assert!(message.contains("no such release"), "{message}");
+        assert!(message.contains("--lib-dir"), "{message}");
+        assert_eq!(
+            HttpError::Status(404).to_string(),
+            "the server answered 404"
+        );
+        assert_eq!(
+            HttpError::Transport("timed out".to_string()).to_string(),
+            "timed out"
+        );
+    }
+
+    /// When files are neither here nor fetchable, the message names every
+    /// directory it looked in and why the download could not happen. The
+    /// reason is the resolver's, so a repository with nothing published and a
+    /// page that could not be reached read differently.
+    #[test]
+    fn an_unfetchable_lookup_names_where_it_looked_and_why_it_stopped() {
+        let wanted = [WEB_WASM.to_string(), WEB_JS.to_string()];
+        let dirs = [PathBuf::from("/flag"), PathBuf::from("/env")];
+
+        let message = cannot_fetch(
+            &wanted,
+            None,
+            &dirs,
+            &release::Unresolved::NoReleases.to_string(),
+        );
+        assert!(message.contains("/flag, /env"), "{message}");
+        assert!(
+            message.contains("has published no releases yet"),
+            "{message}"
+        );
+        assert!(!message.contains(" for "), "no target to name: {message}");
+
+        let message = cannot_fetch(
+            &wanted,
+            Some("macos-aarch64"),
+            &[],
+            &release::Unresolved::Unreachable.to_string(),
+        );
+        assert!(message.contains("for macos-aarch64"), "{message}");
+        assert!(message.contains("Looked in: nowhere"), "{message}");
+        assert!(message.contains("releases/latest"), "{message}");
+        assert!(message.contains("could not be reached"), "{message}");
+    }
+
+    /// A build whose own version is not the release its files come from says
+    /// which release that is, and a build that matches says nothing.
+    #[test]
+    fn a_build_that_is_not_its_release_says_which_release_it_used() {
+        let note = release_note("0.0.3", "0.0.4").expect("the two differ");
+        assert!(note.contains("this build is 0.0.4"), "{note}");
+        assert!(note.contains("v0.0.3 release"), "{note}");
+        assert_eq!(release_note("0.0.3", "0.0.3"), None);
+    }
+
     /// The web runtime is the same pair everywhere, so it caches under its
     /// own component name rather than under a platform's.
     #[test]
     fn the_web_runtime_caches_beside_the_per_target_toolchains() {
-        let Some(dir) = cache_dir_for(WEB_COMPONENT) else {
+        let Some(dir) = cache_dir_for("9.9.9", WEB_COMPONENT) else {
             return;
         };
         let text = dir.to_string_lossy();
-        assert!(text.contains(env!("CARGO_PKG_VERSION")));
+        assert!(text.contains("9.9.9"));
         assert!(text.ends_with("web"));
     }
 
+    /// The key is the release the files came from, not the version this
+    /// binary was built as: a build made from source pairs with a release it
+    /// is not, and the two must not share a directory.
     #[test]
-    fn the_cache_is_keyed_by_version_and_target() {
-        let Some(dir) = cache_dir(Target::parse("macos-aarch64").expect("known target")) else {
+    fn the_cache_is_keyed_by_release_and_target() {
+        let Some(dir) = cache_dir_for("9.9.9", "macos-aarch64") else {
             return;
         };
         let text = dir.to_string_lossy();
-        assert!(text.contains(env!("CARGO_PKG_VERSION")));
+        assert!(text.contains("9.9.9"));
         assert!(text.ends_with("macos-aarch64"));
     }
 

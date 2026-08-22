@@ -11,9 +11,9 @@
         <StageDir>\bin\lumen-launcher.exe
         <StageDir>\share\lumen\lumen.receipt
 
-    Both .github/workflows/release.yml and .github/workflows/msi-smoke.yml
-    call this script, so the package a pull request smoke-tests is built the
-    same way as the one a tag publishes.
+    Both .github/workflows/build-toolchain.yml and
+    .github/workflows/msi-smoke.yml call this script, so the package a pull
+    request smoke-tests is built the same way as the one a tag publishes.
 
     Requires the WiX command line, which CI installs with
     `dotnet tool install --global wix --version 6.0.1`.

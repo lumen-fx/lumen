@@ -126,6 +126,7 @@ Run the result with `lumenc run <dir> --artifact <out.lmna>`. See
 ```
 lumenc web <app_dir> [--out <dir>] [--base <path>] [--locale <tag>]...
                      [--render static|csr|ssr] [--prerender seeds|run|none]
+                     [--runtime|--no-runtime]
                      [--no-hooks] [--lib-dir <dir>] [--strict]
                      [--serve] [--port <n>] [--host <addr>]
                      [--allow-host <name>]...
@@ -151,6 +152,15 @@ with the markup already in it. Prints how many pages it wrote and where.
 Every mode writes the whole markup tree, so a reader and a crawler get the
 same document whichever one is set.
 
+`--runtime` and `--no-runtime` say whether the documents carry the browser
+runtime, which is a separate question from where they come from. `static`
+already means `--no-runtime` and `csr` already means `--runtime`, so
+contradicting either is refused and the message names the mode that means it.
+`ssr` is the one that leaves it open: `--render ssr --no-runtime` produces a
+page for the request that asks and puts no wasm and no boot script in it, so
+the visitor reads it and nothing takes it over. The compiled app is still
+written, because that is what the server renders from.
+
 Runs the app's `prebuild` hooks first unless `--no-hooks` is given.
 
 The entry page is written as `index.html` whatever it is keyed as, and a site
@@ -164,6 +174,7 @@ document of its own.
 | `--base <path>` | URL prefix the site is served under. Default: `[web] base_path`, else `/`. |
 | `--locale <tag>` | Emit a document tree for this locale; repeat for more. The first is served from the site root and the rest from `/<tag>/`. Default: `[web] locales`. |
 | `--render static\|csr\|ssr` | Where a page's document comes from: `static` and `csr` write it at build time, and `ssr` produces it for the request that asks. Default: `[web] render`. |
+| `--runtime` / `--no-runtime` | Whether the documents carry the browser runtime. Refused against a `--render` mode that already says the opposite. Default: `[web] runtime`, else what `--render` implies. |
 | `--prerender seeds\|run\|none` | Where the state the pages are rendered with comes from: `seeds` uses `[web.seed]` and the defaults the markup declares, `run` starts from those and then runs the app here, writing each page with the state it settles into, `none` renders the markup alone. `run` with `--render ssr` is refused, because a rendered page settles its own state per request. Default: `[web] prerender`. |
 | `--no-hooks` | Skip the app's `prebuild` hooks. |
 | `--lib-dir <dir>` | Directory holding `lumen-web.wasm` and `lumen-web.js`, instead of the published runtime. |
@@ -198,12 +209,12 @@ as the build wrote them.
 
 The browser runtime is looked up in this order: `--lib-dir`, the directory
 holding the running `lumenc`, `$LUMEN_LIB_DIR`, then the download cache. When
-none of them has both files, `lumen-web.tar.gz` is downloaded from the release
-matching this `lumenc` version, checked against the `sha256sums.txt` published
-with it, and unpacked into the cache. It is one pair of files for every
-platform, so the cache holds it under the version alone. Set `LUMEN_GH_REPO`
-to fetch from a different repository. A `--lib-dir` missing either file is
-answered rather than fetched, since it already said which copy to use.
+none of them has both files, `lumen-web.tar.gz` is downloaded from
+[the release this toolchain uses](#which-release-toolchain-files-come-from),
+checked against the `sha256sums.txt` published with it, and unpacked into the
+cache. It is one pair of files for every platform, so the cache holds it under
+the release alone. A `--lib-dir` missing either file is answered rather than
+fetched, since it already said which copy to use.
 
 A warning does not stop the build. The build warns when an asset lives outside
 the app directory, when a link names no page, when a script is in a language
@@ -223,8 +234,9 @@ image, host, locales - is `lumen.toml`'s `[web]` section. See
 A missing `<app_dir>`, an unknown flag, or a mode neither `--render` nor
 `--prerender` has exits 2. `--render ssr` together with `--prerender run`
 fails the build: a page is written with the state a run settled into here, or
-with the state the app settles into for the request, and not both. Only a
-markup app can be emitted as a site.
+with the state the app settles into for the request, and not both. So does a
+runtime setting that contradicts the `--render` mode. Only a markup app can be
+emitted as a site.
 
 ## package
 
@@ -284,13 +296,14 @@ engine exists, so the runtime is inside the executable and nothing travels.
 The launcher stub and the runtime library are looked up in this order:
 `--lib-dir`, then, for this machine's own platform, the directory holding the
 running `lumenc` and then `$LUMEN_LIB_DIR`, then the download cache. When none
-of them has both files and the target is another platform, the release matching
-this `lumenc` version is downloaded, checked against the `sha256sums.txt`
-published with it, and unpacked into the cache; a release that publishes no
-checksum for the archive, or no launcher in it, exits 1 rather than installing
-anything. Set `LUMEN_GH_REPO` to fetch from a different repository. When
-nothing can be found and nothing can be fetched, the error names every
-directory it looked in.
+of them has both files and the target is another platform, the archive for that
+platform is downloaded from
+[the release this toolchain uses](#which-release-toolchain-files-come-from),
+checked against the `sha256sums.txt` published with it, and unpacked into the
+cache; a release that publishes no checksum for the archive, or no launcher in
+it, exits 1 rather than installing anything. When nothing can be found and
+nothing can be fetched, the error names every directory it looked in and why
+the download could not happen.
 
 Windows and Linux packages carry the compiled app appended to the executable. A
 macOS package built on macOS links it in as a Mach-O section, which needs `cc`
@@ -588,6 +601,41 @@ The check runs only for `run`, `check`, `build`, `bundle`, `new`, `fmt`, and
 
 The check never changes the command's exit code.
 
+## Which release toolchain files come from
+
+`package --target` and `web` download files that were published with a
+release: another platform's launcher stub and runtime library, and the browser
+runtime. Which release they come from is read from the releases page, never
+from the version `lumenc --version` prints. A version number on its own says
+what a copy of `lumenc` is, and a copy can be newer than anything published.
+
+Two things answer, in this order:
+
+1. An installed toolchain uses the release it was installed from, which its
+   install receipt records. That is also what holds an `install.sh --version`
+   pin in place: a pinned toolchain keeps downloading the files published with
+   the version it was pinned to.
+2. Any other copy, such as a build from source or an unpacked portable zip,
+   uses the newest published release. `<repo>/releases/latest` redirects to it.
+   The answer is remembered for a day under the user cache directory, so
+   repeated builds make one request and a machine that goes offline keeps
+   building.
+
+When a copy resolves to a release it is not, the build says which release the
+files come from.
+
+Downloads are cached per release and per component under the platform cache
+directory (`~/.cache/lumen/toolchain/<release>/<component>` on Linux), so
+resolving a different release downloads into a different directory and never
+reuses files from another one. Old directories are left in place; they are a
+cache and can be deleted at any time.
+
+A repository that has published no releases and a releases page that cannot be
+reached both fail the lookup, and the error says which of the two happened.
+Neither one guesses a download address. Set `LUMEN_GH_REPO` to read releases
+from a different repository; it changes both the release these downloads come
+from and the one the update check compares against.
+
 ## Environment variables
 
 | Variable | Effect |
@@ -605,4 +653,4 @@ The check never changes the command's exit code.
 | `LUMEN_TRACE_FRAME_DIRTY` | Logs which source marked each frame dirty. |
 | `LUMEN_WORKSPACE_DIR` | Lumen source tree that `bundle --static` builds the trimmed runtime from. |
 | `LUMEN_LIB_DIR` | Directory searched for the shared Lumen library and the launcher stub, after the directory holding `lumenc`. |
-| `LUMEN_GH_REPO` | Repository, as `owner/name`, that `package --target` fetches another platform's toolchain files from. Defaults to `lumen-fx/lumen`. |
+| `LUMEN_GH_REPO` | Repository, as `owner/name`, whose releases toolchain downloads and the update check read. Defaults to `lumen-fx/lumen`. |

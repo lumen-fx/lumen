@@ -504,6 +504,83 @@ fn a_python_app_packages_for_this_machine_only() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A platform other than this machine's, whichever machine that is.
+fn other_target() -> &'static str {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "linux-x86_64"
+    } else {
+        "macos-aarch64"
+    }
+}
+
+/// A repository address that can never answer. GitHub does not issue an owner
+/// name with two hyphens in a row, so this one cannot start existing later and
+/// turn the test below into a download.
+const UNREACHABLE_REPO: &str = "lumen--fx/lumen";
+
+/// Another platform's files come from a published release, and which release
+/// that is comes from the releases page. A page with nothing to say leaves no
+/// answer, and the point of this test is that `lumenc` says so: it must not
+/// fall back to the version it was built as and ask for a release that may
+/// never have been tagged.
+///
+/// This reaches for the network and expects to come back empty handed. The
+/// lookup is pointed at a repository that cannot exist, so the request either
+/// answers 404 or does not connect at all, and both leave the same nothing a
+/// machine with no network gets. The child also gets a cache directory of its
+/// own, so no answer an earlier run wrote down is waiting for it.
+#[test]
+fn a_cross_target_package_that_cannot_read_the_releases_page_says_so() {
+    let root = scratch("no-releases-page");
+    let app = root.join("demo");
+    write_app(&app);
+    let cache = root.join("cache");
+    std::fs::create_dir_all(&cache).expect("create cache dir");
+
+    let result = Command::new(env!("CARGO_BIN_EXE_lumenc"))
+        .arg("package")
+        .args([
+            app.to_str().expect("utf-8 path"),
+            "--target",
+            other_target(),
+        ])
+        .env("LUMEN_GH_REPO", UNREACHABLE_REPO)
+        .env("HOME", &cache)
+        .env("XDG_CACHE_HOME", &cache)
+        .env("LOCALAPPDATA", &cache)
+        .env_remove("LUMEN_LIB_DIR")
+        .output()
+        .expect("run lumenc package");
+
+    let printed = format!(
+        "{}{}",
+        String::from_utf8_lossy(&result.stderr),
+        String::from_utf8_lossy(&result.stdout)
+    );
+    assert!(
+        !result.status.success(),
+        "no release can be resolved, so there is nothing to package with: {printed}"
+    );
+    // Either reason is a correct answer to a page with nothing to say, and
+    // which one comes back depends on how GitHub answers for an owner that
+    // does not exist. The exact wording of each is pinned in the resolver's
+    // own tests; what matters here is that one of them reaches the user.
+    assert!(
+        printed.contains("could not be reached") || printed.contains("published no releases"),
+        "the message should say why no release could be resolved: {printed}"
+    );
+    assert!(
+        printed.contains("LUMEN_LIB_DIR") || printed.contains("--lib-dir"),
+        "the message should say how to supply the files instead: {printed}"
+    );
+    assert!(
+        !printed.contains("releases/download"),
+        "no download address is invented when no release is known: {printed}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Cross-compiling a C++ app is CMake's job and needs a toolchain file for the
 /// other platform, which nothing here can stand in for. Without one, say so
 /// instead of building this machine's binary.

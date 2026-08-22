@@ -9,13 +9,15 @@ rust-version.workspace = true
 description = "winit WindowBackend impl + raw input source."
 keywords = ["ui", "gui", "window", "winit", "lumen"]
 categories = ["gui", "os"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-core = { path = "../../core", version = "0.0.3" }
+lumen-core = { workspace = true }
 # Native menu bar: the menu tree itself is `lumen_core::window::MenuModel`
 # (it arrives inside `WindowOptions`); this crate is here for the muda
 # attach and the click drain.
-lumen-os-menu = { path = "../../os/menu", version = "0.0.3" }
+lumen-os-menu = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 winit.workspace = true

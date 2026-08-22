@@ -9,10 +9,12 @@ rust-version.workspace = true
 description = "Native menu bar abstraction for Lumen (muda integration + Action / MenuBuilder)."
 keywords = ["ui", "gui", "menu", "muda", "lumen"]
 categories = ["os", "gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-core = { path = "../../core", version = "0.0.3" }
-lumen-os-mime = { path = "../mime", version = "0.0.3" }
+lumen-core = { workspace = true }
+lumen-os-mime = { workspace = true }
 bevy_ecs.workspace = true
 
 # Native menu bar (extracted from lumen-window-winit; same target gating).

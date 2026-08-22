@@ -63,11 +63,12 @@ The targets are `linux-x86_64`, `linux-aarch64`, `macos-x86_64`,
 assembly rather than compilation, so any host can produce any of them; an SDK
 app is compiled, and [what that needs](#cross-packaging-an-sdk-app) is below.
 
-The runtime library and the launcher for the other platform come from the
-Lumen release matching your `lumenc`, downloaded once and kept in a cache
-keyed by version, and checked against the checksums published with that
-release. If you already have those two files, point at them instead and
-nothing is downloaded:
+The runtime library and the launcher for the other platform come from a
+published Lumen release: the one you installed, or the newest one if this
+`lumenc` was not installed from a release. They are downloaded once, kept in a
+cache keyed by that release, and checked against the checksums published with
+it. If you already have those two files, point at them instead and nothing is
+downloaded:
 
 ```sh
 lumenc package myapp --target windows-x86_64 --lib-dir /path/to/files

@@ -1,10 +1,9 @@
 name: publish
 
 # Publishes the Lumen packages to the language registries: `lumenui` on PyPI
-# (the Python SDK) and the Rust crates on crates.io (`lumenui`, `lumenc`, and
-# everything they are built from). This is a different channel from
-# release.yml, which builds the toolchain archives people install with
-# install.sh; both run off the same release.
+# (the Python SDK) and `lumenui` and `lumenc` on crates.io. This is a different
+# channel from release.yml, which builds the toolchain archives people install
+# with install.sh; both run off the same release.
 #
 # Owner setup, all of it optional and each leg checked separately, so this
 # workflow is safe to run before any of it exists:
@@ -32,11 +31,16 @@ name: publish
 # is already published, so a leg that failed halfway is fixed by running the
 # workflow again.
 #
-# One crates.io job, not one per package: `lumenui` depends on `lumenc`, which
-# depends on the rest of the workspace, so there is a single dependency order
-# covering all of them, and tools/release/publish-crates.py computes it.
-# Publishing them in separate jobs would only mean computing the same order
+# One crates.io job, not one per package: `lumenui` depends on `lumenc`, so the
+# two have an order between them and tools/release/publish-crates.py computes
+# it. Publishing them in separate jobs would only mean computing the same order
 # twice and racing on it.
+#
+# Every other crate in the workspace is `publish = false`, because the engine
+# reaches a `cargo install lumenc` through crates/lumenc/build.rs rather than
+# through the registry. `lumenc` still names those crates as dependencies, so
+# the script refuses to start and this job fails until that is unwound; see the
+# registries section of tools/release/release-checklist.md.
 
 on:
   release:
@@ -65,6 +69,11 @@ jobs:
   # the jobs below gate on them.
   preflight:
     name: preconditions
+    # The registries take released versions only. nightly.yml republishes main
+    # every night as a prerelease on one rolling tag, and every job below needs
+    # this one, so skipping here skips the workflow. publish-packages.yml makes
+    # the same call for the package managers.
+    if: github.event.release.prerelease != true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -195,9 +204,9 @@ jobs:
   # crates.io rate limit requires; the step below only chooses its mode.
   #
   # The timeout is generous because the first publish is: crates.io lets an
-  # account create a few new crates and then meters the rest, and this
-  # workspace is several dozen crates. Later releases publish new versions of
-  # crates that exist, which is metered far more loosely.
+  # account create a few new crates and then meters the rest. Later releases
+  # publish new versions of crates that exist, which is metered far more
+  # loosely.
   crates-io:
     name: crates on crates.io
     needs: preflight

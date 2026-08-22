@@ -9,10 +9,12 @@ rust-version.workspace = true
 description = "Widget trait + Attributes type - the surface implemented by `#[derive(Widget)]` (see lumen-widget-macros)."
 keywords = ["ui", "gui", "widgets", "components", "lumen"]
 categories = ["gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-core = { path = "../core", version = "0.0.3" }
+lumen-core = { workspace = true }
 bevy_ecs.workspace = true
 
 [dev-dependencies]
-lumen-widget-macros = { path = "../widget-macros" }
+lumen-widget-macros = { workspace = true }

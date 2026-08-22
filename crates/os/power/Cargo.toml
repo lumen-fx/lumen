@@ -9,9 +9,11 @@ rust-version.workspace = true
 description = "Screen-saver / sleep inhibit host for Lumen. gtk_application_inhibit / IOPMAssertion / SetThreadExecutionState analog."
 keywords = ["ui", "gui", "power", "inhibit", "lumen"]
 categories = ["os", "gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-core = { path = "../../core", version = "0.0.3" }
+lumen-core = { workspace = true }
 bevy_ecs.workspace = true
 tracing.workspace = true
 

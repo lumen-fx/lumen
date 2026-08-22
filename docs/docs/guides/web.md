@@ -67,7 +67,9 @@ it takes about as long as `lumenc build`.
 
 Under `render = "ssr"` that list holds everything except the documents. A page
 is produced when it is asked for, so writing one here would leave a second
-copy of it beside the one a visitor is sent.
+copy of it beside the one a visitor is sent. With `runtime = false` beside it,
+`app.cdlb`, `lumen.web.json`, `lumen-web.wasm` and `lumen-web.js` go too:
+nothing loads them. `app.lmna` stays, because the server renders from it.
 
 ## How a page reaches the browser
 
@@ -153,10 +155,12 @@ program does not export, so a handler that would have done nothing is a
 warning at build time rather than a blank in the page.
 
 The runtime is published with every Lumen release. A build uses the copy next
-to `lumenc` when there is one, and otherwise downloads the pair from the
-release matching your `lumenc` version, checks it against the checksums
-published with it, and keeps it in a cache so later builds do not fetch it
-again. `--lib-dir` points at a directory holding `lumen-web.wasm` and
+to `lumenc` when there is one, and otherwise downloads the pair from a
+published release, checks it against the checksums published with it, and
+keeps it in a cache so later builds do not fetch it again. Which release that
+is comes from the releases page:
+[the CLI reference](../reference/cli.md#which-release-toolchain-files-come-from)
+has the detail. `--lib-dir` points at a directory holding `lumen-web.wasm` and
 `lumen-web.js` to use a copy you built yourself instead. A build that finds
 neither says which files it wanted and emits the site without them: the pages
 read, the links work, and nothing runs.
@@ -236,12 +240,35 @@ runtime, no compiled app, no manifest, and no boot script in the documents.
 app for that request. The build writes what a render needs and leaves the
 pages to it, so the app answers with what it knows now rather than with what
 it knew when the site was built. A rendered page carries the runtime the way a
-`csr` page does, and it is adopted the same way. See
+`csr` page does, and is adopted the same way. See
 [rendering on a server](server-rendering.md).
 
 Whichever it is, a link is an ordinary `<a href>`, so a browser that does not
 run the runtime, or a site that carries none, follows links by loading the
 next document. That needs no configuration.
+
+### Whether the page carries the runtime
+
+`[web] runtime`, or `--runtime` / `--no-runtime`, is the separate question of
+whether a document loads the browser runtime at all. `static` and `csr` differ
+about nothing else, so each already answers it and saying the opposite
+alongside either is refused, naming the value that means it.
+
+`ssr` is the one that leaves it open:
+
+```toml
+[web]
+render  = "ssr"
+runtime = false
+```
+
+Every page is then produced for the request that asks and carries no wasm and
+no boot script. The visitor reads the document the app rendered for them and
+nothing takes it over: links load the next page, and the next page is another
+render. Reach for it when the page is a document rather than an application,
+and you want it to depend on who is asking without shipping a runtime to say
+so. The compiled app is still written beside the stylesheet, because that is
+what the server renders from.
 
 ## Running the app during the build
 
@@ -315,9 +342,15 @@ host = "netlify"   # or vercel, apache, nginx
 Then the host serves those paths with a 200 and the URL stays as the visitor
 typed it. `lumenc web --serve` answers deep paths the way a plain file server
 does, so what you see locally is what an unconfigured host does. Under
-`--render ssr` the render answers them instead, with the page the path
-resolves to and a 200, which is what a server does; no `404.html` and no
-rewrite file is written, because neither has anything to stand in for.
+`--render ssr` the render answers them instead, with the page the path names
+and a 200, which is what a server does; no `404.html` and no rewrite file is
+written, because neither has anything to stand in for.
+
+An address that names no page at all, like `/nowhere`, is a 404 either way. A
+static host sends `404.html`, and a render sends the same shell with the same
+status, so a site answers such an address the same way whichever half answers
+it. Having the app render its own not-found page is
+[the embedder's to arrange](server-rendering.md#an-address-no-page-answers-for).
 
 A link with a scheme, a protocol-relative link and a fragment are written into
 the document unchanged.
@@ -390,11 +423,11 @@ means anything without an absolute address.
 - An author's `!important` rule wins over a style written on the element,
   where on the desktop the element wins. Normal declarations rank the way
   Lumen ranks them; this is the one case where the two differ.
-- A value interpolated into text with `{name}` outside a list row is written as
-  the markup wrote it, whichever `prerender` mode built the page. The runtime
-  writes the current value over it on arrival, from the state the page carries.
-  A placeholder inside a `<for>` row is resolved against the row while the page
-  is written.
+- A value interpolated with `{name}` is read once, when the element is built.
+  The document carries the value the page's state held then, and the runtime
+  arrives at the same string from the same state; a name the state has nothing
+  for keeps its braces. A value that changes while the page is open wants
+  `bind-text`, which follows the signal instead of being built once.
 - `bind-scroll` reaches the document in no form. How far a container has been
   scrolled is a position the browser keeps, not an attribute a document sets.
 - Elements a script creates appear when the runtime starts, not in the

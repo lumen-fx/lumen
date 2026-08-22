@@ -55,8 +55,14 @@ only the first non-empty text child is read.
 | `{$index}` | The current `<for>` row index. `{idx}` is the older spelling. |
 
 Bare `{name}` still works; the compiler emits an informational lint
-suggesting the explicit form. Placeholders that match nothing resolve to
-an empty string.
+suggesting the explicit form.
+
+A placeholder is resolved when the tree it belongs to is built, against the
+signals as they stand then; a `<for>` row is built per record and reads the
+signals then. One naming a signal nothing has set stays in the string as the
+braces the author wrote, so a typo reads as a typo. A `{row.field}` the record
+does not carry is the exception: it resolves to an empty string and is
+reported, because the record is what says which fields there are.
 
 A `{k}` placeholder inside a `<template>` body reads the parameter `k`, and
 falls back to the global signal `k` when no use site binds it. See

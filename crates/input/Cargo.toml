@@ -9,11 +9,13 @@ rust-version.workspace = true
 description = "Focus tracker, hit-test, event dispatch. Consumes WindowBackend events."
 keywords = ["ui", "gui", "input", "events", "focus"]
 categories = ["gui"]
+# Not published: `lumenc` and `lumenui` are the only crates.io packages.
+publish = false
 
 [dependencies]
-lumen-core = { path = "../core", version = "0.0.3" }
-lumen-os-clipboard = { path = "../os/clipboard", version = "0.0.3" }
-lumen-text = { path = "../text", version = "0.0.3" }
+lumen-core = { workspace = true }
+lumen-os-clipboard = { workspace = true }
+lumen-text = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 
@@ -23,4 +25,4 @@ glam.workspace = true
 # D4/D8 integration tests drive the real shaper to build `ShapedText`
 # geometry (proportional-font hit-test, IME caret rect). Dev-only: the
 # runtime deps stay shaper-free.
-lumen-text-cosmic = { path = "../backends/text-cosmic" }
+lumen-text-cosmic = { workspace = true }
