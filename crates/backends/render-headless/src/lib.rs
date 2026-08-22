@@ -4,6 +4,9 @@
 //! - Deterministic; no GPU or display dependencies.
 //! - Supports filled rounded rectangles. [`ExtractedText`] is ignored here.
 //! - Implements [`SurfaceRenderer`], so a window backend can drive it in place of a GPU renderer. There are no pixels to put on screen, but frames are still rasterised and screenshot requests are answered, which is what makes a windowed run reproducible in a test.
+//! - Paints no plugin extensions. This renderer rasterises the extracted rects directly and never
+//!   walks the node tree, so a [`lumen_core::native::ExtractedNative`] leaf leaves the framebuffer
+//!   untouched here regardless of which painters an app registered.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
