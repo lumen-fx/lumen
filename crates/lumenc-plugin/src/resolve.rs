@@ -358,6 +358,7 @@ mod tests {
         assert!(err.contains("registry client is not wired up yet"), "{err}");
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn the_cache_root_falls_back_to_home_and_errors_without_one() {
         let env = cache_env("root-fallback");
@@ -377,6 +378,32 @@ mod tests {
         assert!(err.contains("HOME"), "{err}");
         if let Some(v) = saved_home {
             unsafe { std::env::set_var("HOME", v) };
+        }
+        if let Some(v) = saved_cache {
+            unsafe { std::env::set_var("LUMEN_PLUGIN_CACHE", v) };
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_cache_root_falls_back_to_localappdata_and_errors_without_one() {
+        let env = cache_env("root-fallback-win");
+        drop(env);
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved_cache = std::env::var_os("LUMEN_PLUGIN_CACHE");
+        let saved_local = std::env::var_os("LOCALAPPDATA");
+        unsafe { std::env::remove_var("LUMEN_PLUGIN_CACHE") };
+        unsafe { std::env::set_var("LOCALAPPDATA", r"C:\Users\someone\AppData\Local") };
+        assert_eq!(
+            cache_root().unwrap(),
+            PathBuf::from(r"C:\Users\someone\AppData\Local\Programs\Lumen\plugins")
+        );
+        unsafe { std::env::remove_var("LOCALAPPDATA") };
+        let err = cache_root().unwrap_err();
+        assert!(err.contains("LOCALAPPDATA"), "{err}");
+        if let Some(v) = saved_local {
+            unsafe { std::env::set_var("LOCALAPPDATA", v) };
         }
         if let Some(v) = saved_cache {
             unsafe { std::env::set_var("LUMEN_PLUGIN_CACHE", v) };
