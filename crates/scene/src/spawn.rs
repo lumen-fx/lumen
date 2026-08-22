@@ -495,8 +495,8 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         // Explicit a11y role: a switch is announced as `Role::Switch`, not
         // the `Role::CheckBox` that a bare `Toggleable` would derive.
         entity.insert(lumen_core::components::A11yRole::Switch);
-        // `sync_track_fill` needs a fill to write into (and the track must
-        // be a hit-test candidate) even with no skin / CSS.
+        // `sync_track_fill` needs a fill to write into even with no
+        // skin / CSS.
         if entity.get::<Visuals>().is_none() {
             entity.insert(Visuals {
                 fill: Some(Fill::Solid(track.unchecked_bg)),
@@ -511,9 +511,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         entity.insert(SliderValue::from(&el.attrs));
         // UA fallback track fill - same rationale as the `<toggle>`
         // block above: with no skin or author CSS the slider must
-        // still paint a groove AND be a hit-test candidate (hit-test
-        // only considers entities with `Visuals` or `Scroll`), or
-        // track clicks / drags can never reach `set_slider_on_click`.
+        // still paint a groove.
         if entity.get::<Visuals>().is_none() {
             entity.insert(Visuals {
                 fill: Some(Fill::Solid(lumen_primitives::controls::TOGGLE_UNCHECKED_BG)),
@@ -541,13 +539,6 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         if el.attrs.indeterminate {
             entity.insert(lumen_primitives::Indeterminate);
         }
-        // The row itself must be a hit-test candidate so clicking the
-        // label / gap toggles too (hit-test only considers entities
-        // with `Visuals` or `Scroll`). A fill-less Visuals paints
-        // nothing.
-        if entity.get::<Visuals>().is_none() {
-            entity.insert(Visuals::default());
-        }
     }
     if el.tag == "radio"
         && let (Some(group), Some(value)) = (&el.attrs.radio_group, &el.attrs.radio_value)
@@ -565,10 +556,6 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
                 .map(Into::into)
                 .unwrap_or(defaults.selected_bg),
         });
-        // Same hit-test candidacy rationale as `<checkbox>` above.
-        if entity.get::<Visuals>().is_none() {
-            entity.insert(Visuals::default());
-        }
     }
     if el.tag == "progress" {
         // No `value` and no binding = indeterminate; a later `bind-value`
@@ -650,11 +637,10 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             }
         }
     }
-    // UA fallback field chrome for text inputs: click-to-focus routes
-    // through `ClickEvent`, which requires the entity to be a hit-test
-    // candidate (`Visuals` or `Scroll`) - an unstyled `<input>` was
-    // invisible AND unclickable. A subtle translucent fill works on
-    // both light and dark app themes; any skin or author rule wins.
+    // UA fallback field chrome for text inputs: an unstyled `<input>`
+    // is otherwise invisible, with no edge to aim the caret at. A
+    // subtle translucent fill works on both light and dark app themes;
+    // any skin or author rule wins.
     if matches!(el.tag.as_str(), "input" | "textarea") && entity.get::<Visuals>().is_none() {
         entity.insert(Visuals {
             fill: Some(Fill::Solid(Color::rgba(0.5, 0.5, 0.5, 0.18))),
@@ -905,6 +891,15 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         && let Some(href) = &el.attrs.href
     {
         entity.insert(crate::routing::Anchor(href.clone()));
+        // An anchor is interactive, so it is a pointer target whether or
+        // not it paints anything - `tab-index="-1"` is exactly HTML's
+        // "focusable by pointer, not in the Tab chain". Links stay out
+        // of the Tab chain by default; an author opts one in with
+        // `tab-index="0"`, which wins because it was already applied
+        // above.
+        if el.attrs.tab_index.is_none() {
+            entity.insert(TabIndex(-1));
+        }
     }
     if !el.attrs.classes.is_empty() {
         entity.insert(LumenClasses::from(el.attrs.classes.clone()));
@@ -2585,9 +2580,8 @@ mod body_spawn_tests {
             "dropdown header in an if-body must carry DropdownButton"
         );
         // Unstyled controls still get UA fallback visuals: without a
-        // `Visuals` component they are invisible AND excluded from the
-        // hit-test candidate set, so track clicks / click-to-focus
-        // could never work in skinless apps.
+        // `Visuals` component they paint nothing at all, so a skinless
+        // app shows no groove and no field chrome.
         for (label, e) in [("slider", slider_e), ("toggle", toggle_e)] {
             assert!(
                 world.get::<Visuals>(e).is_some(),
@@ -3115,6 +3109,41 @@ mod css_spawn_wiring_tests {
             world.get::<lumen_core::components::PasswordCharacter>(e),
             Some(&lumen_core::components::PasswordCharacter::default())
         );
+    }
+
+    /// An `<a href>` is interactive, so it takes the pointer whether or
+    /// not it paints: hit-testing keys on the layout rect plus
+    /// interactivity. `-1` keeps links out of the Tab chain, matching
+    /// HTML's "focusable by pointer, not tabbable".
+    #[test]
+    fn anchor_is_a_pointer_target_without_a_background() {
+        let mut world = World::new();
+        let mut a = el("a");
+        a.attrs.href = Some("about".to_string());
+        let e = spawn_subtree(&mut world, &a, None, Placeholders::Unresolved);
+
+        assert!(
+            world.get::<Visuals>(e).is_none(),
+            "an unstyled anchor paints nothing"
+        );
+        assert_eq!(
+            world.get::<TabIndex>(e).map(|t| t.0),
+            Some(-1),
+            "an anchor is a pointer target but not a Tab stop"
+        );
+    }
+
+    /// An authored `tab-index` on a link wins - that is how an author
+    /// puts one in the Tab chain.
+    #[test]
+    fn authored_tab_index_on_an_anchor_wins() {
+        let mut world = World::new();
+        let mut a = el("a");
+        a.attrs.href = Some("about".to_string());
+        a.attrs.tab_index = Some(0);
+        let e = spawn_subtree(&mut world, &a, None, Placeholders::Unresolved);
+
+        assert_eq!(world.get::<TabIndex>(e).map(|t| t.0), Some(0));
     }
 
     /// A non-text-input element must not gain either component at all -

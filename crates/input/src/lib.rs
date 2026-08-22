@@ -4,7 +4,9 @@
 //! - Computes the entity under the cursor each tick.
 //! - Inserts/removes [`Hovered`] on entities entering and leaving hover.
 //! - Inserts [`Pressed`] on `PointerPressed` against the hovered entity; removes it and emits [`ClickEvent`] on `PointerReleased` against the same entity.
-//! - Hit-tests via AABB against [`Transform`] for entities carrying [`Transform`] and an input-relevant component such as [`Visuals`] or [`TextContent`].
+//! - Hit-tests via AABB against [`Transform`] for entities carrying [`Transform`] and an
+//!   input-relevant component: [`Visuals`], [`Scroll`], or [`TabIndex`]. Whether the element
+//!   painted a background has no bearing on it.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -1037,8 +1039,17 @@ impl Plugin for InputPlugin {
 /// draws at.
 ///
 /// Candidate set: anything with a [`Transform`] **and** at least one of
-/// [`Visuals`] (visual button-like surfaces) or [`Scroll`] (transparent
-/// scroll containers - still need to receive wheel events).
+/// [`Visuals`] (visual button-like surfaces), [`Scroll`] (transparent
+/// scroll containers - still need to receive wheel events), or
+/// [`TabIndex`] (anything focusable).
+///
+/// Paint never decides participation. An element takes part in hit
+/// testing on its layout rect and its interactivity, the same rule Qt
+/// (a `QWidget` receives mouse events whether or not it fills its rect)
+/// and Slint follow. Keying candidacy on `Visuals` alone made a
+/// `<button>` with no `bg` anywhere - no markup attribute, no CSS rule,
+/// no skin - inert at its own rect, so deleting an app's stylesheet
+/// killed every button in it.
 ///
 /// Hidden entities never hit (spec section 17.4): an entity is skipped when it
 /// (or any ancestor) carries `Visible(false)` (render-gate hide, the
@@ -1077,7 +1088,11 @@ pub fn hit_test(
     pointer: Res<PointerState>,
     candidates: Query<
         (Entity, &Transform),
-        Or<(With<lumen_core::components::Visuals>, With<Scroll>)>,
+        Or<(
+            With<lumen_core::components::Visuals>,
+            With<Scroll>,
+            With<TabIndex>,
+        )>,
     >,
     parents: Query<&ChildOf>,
     scrolls: Query<&ScrollOffset>,

@@ -204,6 +204,13 @@ children stack left to right.
 | `drop`, `drop-target` | boolean | Makes the element a drop target for OS file drops and in-app drags. |
 | `accept` | MIME type | Restricts what an in-app drop target accepts. Absent accepts anything. |
 
+An element receives the pointer when it is focusable (it has a
+`tab-index`, which the controls and `<a href>` carry by default), when it
+scrolls, or when it paints a background. Painting is not required: a
+`<button>` with no `bg` in markup, in your CSS, or in a skin still
+hovers, presses, and clicks over its own rect. Where several targets
+overlap, the innermost one takes the event.
+
 ### Binding
 
 Values name a signal, with or without a leading `$`.
@@ -306,7 +313,9 @@ control its appearance.
 
 ### `<a>`
 
-An anchor. Clicking it navigates the app to another page.
+An anchor. Clicking it navigates the app to another page. An anchor takes
+the pointer with or without a background, and takes focus when clicked,
+but it is not in the Tab chain unless you give it `tab-index="0"`.
 
 | Attribute | Value | Effect |
 | --- | --- | --- |

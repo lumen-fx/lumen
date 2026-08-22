@@ -53,8 +53,9 @@ by `tab-index` first, then by the order elements appear in your markup:
 These are focusable without you writing anything: `input`, `textarea`,
 `button`, `toggle`, `switch`, `slider`, `checkbox`, the buttons of a `tabs`
 strip, and a `dropdown`. A radio group is one Tab stop; arrow keys move between
-its options. Anything else, including `tile` and container elements, becomes
-focusable when you give it a `tab-index`.
+its options. A link (`<a href>`) takes focus when clicked but is not in the Tab
+chain; give it `tab-index="0"` to put it there. Anything else, including `tile`
+and container elements, becomes focusable when you give it a `tab-index`.
 
 Disabled elements and hidden subtrees are skipped. While a `dialog` is open,
 Tab stays inside it.
