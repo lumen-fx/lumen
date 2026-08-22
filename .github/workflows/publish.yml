@@ -2,8 +2,19 @@ name: publish
 
 # Publishes the Lumen packages to the language registries: `lumenui` on PyPI
 # (the Python SDK) and `lumenui` and `lumenc` on crates.io. This is a different
-# channel from release.yml, which builds the toolchain archives people install
-# with install.sh; both run off the same release.
+# channel from the toolchain archives people install with install.sh; both go
+# out for the same release, and release.yml starts both.
+#
+# release.yml calls this once the release is published, off the tag it was cut
+# from. Waiting on `release: published` instead would never fire: release.yml
+# creates the release with the built-in token, and GitHub raises no workflow
+# events for anything that token writes. `workflow_dispatch` re-runs a leg that
+# failed, or verifies the whole path without uploading.
+#
+# The registries take released versions only, and a nightly is not one. Nothing
+# carries one here: nightly.yml calls no workflow, and the only automatic
+# caller is release.yml, which fires on `v*` tags while the nightly publishes
+# onto a tag named `nightly`.
 #
 # Owner setup, all of it optional and each leg checked separately, so this
 # workflow is safe to run before any of it exists:
@@ -16,10 +27,17 @@ name: publish
 #                           the PyPI job builds and checks the artifacts and
 #                           uploads nothing.
 #   PyPI trusted publisher  on pypi.org, for project `lumenui`, owner
-#                           `lumen-fx`, repository `lumen`, workflow
-#                           `publish.yml`, environment `pypi`. This replaces a
-#                           long-lived API token: the job mints a short-lived
-#                           one from its OIDC identity.
+#                           `lumen-fx`, repository `lumen`, environment `pypi`.
+#                           This replaces a long-lived API token: the job mints
+#                           a short-lived one from its OIDC identity. PyPI
+#                           matches the registered workflow filename against
+#                           the file that defines the publishing job, which is
+#                           this one, and its documentation lists a workflow
+#                           started by another workflow as unsupported. So
+#                           confirm an upload is accepted before leaving
+#                           PYPI_PUBLISH_ENABLED on; if PyPI rejects the
+#                           identity, the upload step moves into release.yml
+#                           and the registration names release.yml instead.
 #   candela-lang            published to crates.io from lumen-fx/candela, and
 #                           `crates/script/candela/Cargo.toml` pointing at it
 #                           with `package = "candela-lang"` and a `version`.
@@ -43,8 +61,15 @@ name: publish
 # registries section of tools/release/release-checklist.md.
 
 on:
-  release:
-    types: [published]
+  # A release publishes, so the call defaults to uploading. A person reaching
+  # for the Actions tab is usually checking rather than shipping, so the manual
+  # form defaults the other way and has to be switched off to publish.
+  workflow_call:
+    inputs:
+      dry_run:
+        description: "Build and verify everything, upload nothing"
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       dry_run:
@@ -55,6 +80,9 @@ on:
 permissions:
   contents: read
 
+# Governs a run started from the Actions tab. A call from release.yml is part
+# of that workflow's run and is covered by its group instead, so the two jobs
+# that reach a registry carry a lock of their own below.
 concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: false
@@ -69,11 +97,6 @@ jobs:
   # the jobs below gate on them.
   preflight:
     name: preconditions
-    # The registries take released versions only. nightly.yml republishes main
-    # every night as a prerelease on one rolling tag, and every job below needs
-    # this one, so skipping here skips the workflow. publish-packages.yml makes
-    # the same call for the package managers.
-    if: github.event.release.prerelease != true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -103,11 +126,13 @@ jobs:
 
       # A release publishes the tag it was cut from, so the tag and the
       # workspace version have to agree, the same check release.yml makes
-      # before it builds anything.
+      # before it builds anything. A call from release.yml runs on the tag, so
+      # the ref is where the tag comes from; a run started from the Actions tab
+      # is usually on a branch, and there is no tag to compare against.
       - name: Compare the tag with the workspace version
-        if: github.event_name == 'release'
+        if: startsWith(github.ref, 'refs/tags/')
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.ref_name }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           tag="${TAG#v}"
@@ -153,9 +178,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: pypi
+    concurrency:
+      group: publish-pypi
+      cancel-in-progress: false
     permissions:
+      contents: read
       # Trusted publishing: the job proves its identity to PyPI with a
-      # short-lived OIDC token instead of carrying an API token.
+      # short-lived OIDC token instead of carrying an API token. A called
+      # workflow can only narrow what its caller granted, so release.yml grants
+      # this on the job that calls here.
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -212,6 +243,9 @@ jobs:
     needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    concurrency:
+      group: publish-crates-io
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:

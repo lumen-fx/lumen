@@ -1,16 +1,21 @@
 name: site-rebuild
 
-# Tells the site repo to rebuild and redeploy when a release is published, so
-# the docs a visitor reads describe the version they can install. Following
-# main instead would document a feature before there is anything to download
-# it in.
+# Tells the site repo to rebuild and redeploy when a release goes out, so the
+# docs a visitor reads describe the version they can install. Following main
+# instead would document a feature before there is anything to download it in.
 #
-# The trigger is the published release rather than the tag push, because the
-# tag is what starts `release.yml`: dispatching then would rebuild the site
-# while the assets it links to are still being built.
+# release.yml calls this once the release is published, so the assets the docs
+# link to are there before the site is rebuilt. Waiting on `release: published`
+# instead would never fire:
+# release.yml creates the release with the built-in token, and GitHub raises no
+# workflow events for anything that token writes.
 #
 # `workflow_dispatch` is here for a docs correction that should not wait for
 # the next release.
+#
+# A nightly never reaches this. nightly.yml calls nothing, and the only
+# automatic caller is release.yml, which fires on `v*` tags while the nightly
+# publishes onto a tag named `nightly`.
 #
 # Needs the SITE_BUILD_TOKEN secret: a fine-grained PAT that can write
 # contents on lumen-fx/site. Without the secret the step skips with a notice
@@ -18,16 +23,11 @@ name: site-rebuild
 # fails this run.
 
 on:
-  release:
-    types: [published]
+  workflow_call:
   workflow_dispatch:
 
 jobs:
   dispatch:
-    # A prerelease documents nothing a visitor can install. nightly.yml
-    # publishes one every night, and rebuilding the site for each of them would
-    # say the docs had changed when they had not.
-    if: github.event.release.prerelease != true
     runs-on: ubuntu-latest
     steps:
       - name: Send product-updated to the site

@@ -25,7 +25,17 @@ name: release
 # and no tags, so the first run of this workflow is also the first release.
 # nightly.yml builds the same artifacts every night and publishes them under a
 # rolling `nightly` tag; that tag does not match the pattern below, so a
-# nightly never cuts a release or moves the version on main.
+# nightly never cuts a release, moves the version on main, or reaches any of
+# the channels named next.
+#
+# Once the release exists, this workflow starts everything that follows from
+# it: the language registries, the OS package managers, the editor
+# marketplaces, and the docs site. Each of those lives in its own file and is
+# called from here rather than triggered by the release, because the release is
+# created with the built-in token and GitHub raises no workflow events for
+# anything that token writes; a workflow waiting on `release: published` waits
+# forever. Each file keeps a `workflow_dispatch` trigger, so a leg that failed
+# is re-run on its own without another tag.
 #
 # The last job sets the workspace version on `main` to the next patch and
 # pushes it there, so a tag push is the whole release: nothing is left to merge
@@ -148,6 +158,48 @@ jobs:
               --generate-notes
           fi
 
+  # The four channels a release feeds, each in the file that owns it. They run
+  # alongside each other and alongside the bump, off the tag this run was
+  # started by: a called workflow sees the caller's ref, so `actions/checkout`
+  # in any of them lands on the commit that was tagged.
+  #
+  # `secrets: inherit` because every one of them reads credentials the
+  # repository holds, and none of them can be handed a secret this workflow
+  # does not already have.
+
+  registries:
+    name: registries
+    needs: release
+    uses: ./.github/workflows/publish.yml
+    # The PyPI leg proves its identity to PyPI with an OIDC token. A called
+    # workflow can only narrow the permissions its caller granted, so the grant
+    # is made here; `contents: read` is listed too, because naming any
+    # permission drops the rest to none and the jobs check the repository out.
+    permissions:
+      contents: read
+      id-token: write
+    secrets: inherit
+
+  packages:
+    name: package managers
+    needs: release
+    uses: ./.github/workflows/publish-packages.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets: inherit
+
+  extensions:
+    name: editor extensions
+    needs: release
+    uses: ./.github/workflows/publish-extensions.yml
+    secrets: inherit
+
+  site:
+    name: site rebuild
+    needs: release
+    uses: ./.github/workflows/site-rebuild.yml
+    secrets: inherit
+
   # Cutting a release is a tag push and nothing else, so the version main
   # carries has to move afterwards on its own. This moves it, by committing
   # straight to main, which leaves a release asking nothing of anyone after the
@@ -182,9 +234,8 @@ jobs:
   # quietly restores the flow this replaced would hide a missing key or a
   # changed ruleset until the next release fails its tag-versus-manifest check.
   #
-  # Only main moves here. publish.yml and publish-packages.yml run off the
-  # release and check out the tag, so neither is disturbed by main moving under
-  # them.
+  # Only main moves here. The publishing jobs above check out the tag this run
+  # was started by, so none of them is disturbed by main moving under them.
   bump:
     name: move main to the next version
     needs: release
