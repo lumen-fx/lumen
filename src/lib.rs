@@ -1229,8 +1229,26 @@ fn build_run_options(app: LumenApp) -> RunOptions {
     opts
 }
 
+/// Inject the app's `[[plugins]]` chain for a from-source run. The trimmed
+/// no-parser launcher runs prebuilt artifacts only, where the chain already
+/// ran at build time, so it passes the options through untouched.
+fn with_compiler_plugins(opts: RunOptions) -> Result<RunOptions, LumenStatus> {
+    #[cfg(feature = "embed-parser")]
+    {
+        lumenc::with_default_compiler_plugins(opts).map_err(|e| {
+            set_last_error(format!("{e}"));
+            classify_runtime_error(&format!("{e}"))
+        })
+    }
+    #[cfg(not(feature = "embed-parser"))]
+    Ok(opts)
+}
+
 fn run_inner(app: LumenApp) -> LumenStatus {
-    let opts = build_run_options(app);
+    let opts = match with_compiler_plugins(build_run_options(app)) {
+        Ok(o) => o,
+        Err(status) => return status,
+    };
     match lumen_runtime::run_app(opts) {
         Ok(()) => LumenStatus::Ok,
         Err(e) => {
@@ -1241,7 +1259,10 @@ fn run_inner(app: LumenApp) -> LumenStatus {
 }
 
 fn run_headless_inner(app: LumenApp, ticks: u32) -> LumenStatus {
-    let opts = build_run_options(app);
+    let opts = match with_compiler_plugins(build_run_options(app)) {
+        Ok(o) => o,
+        Err(status) => return status,
+    };
     match lumen_runtime::run_app_headless(opts, ticks) {
         Ok(()) => LumenStatus::Ok,
         Err(e) => {

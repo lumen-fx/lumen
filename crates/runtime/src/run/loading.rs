@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::compiler_plugins::CompilerPlugins;
 use crate::config::ScriptEngine;
 
 /// Everything [`load_ir`] produces: the parsed [`lumen_ir::layout_ir::LayoutIR`] plus
@@ -41,6 +42,7 @@ pub(crate) struct LoadResult {
 pub(crate) fn load_inputs(
     opts: &RunOptions,
     parser: Option<&dyn SourceParser>,
+    plugins: &dyn CompilerPlugins,
     html_path: &Path,
     css_path: &Path,
     dir: &Path,
@@ -59,6 +61,7 @@ pub(crate) fn load_inputs(
         let parser = parser.ok_or(RunError::ParserDisabled)?;
         load_ir(
             parser,
+            plugins,
             html_path,
             css_path,
             dir,
@@ -76,6 +79,7 @@ pub(crate) fn load_inputs(
     {
         let _ = (
             parser,
+            plugins,
             html_path,
             css_path,
             dir,
@@ -164,6 +168,7 @@ pub(crate) struct SourceOverrides<'a> {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn load_ir(
     parser: &dyn SourceParser,
+    plugins: &dyn CompilerPlugins,
     html_path: &Path,
     css_path: &Path,
     dir: &Path,
@@ -178,9 +183,26 @@ pub(crate) fn load_ir(
         None => std::fs::read_to_string(html_path)
             .map_err(|e| RunError::Read(html_path.to_path_buf(), e))?,
     };
+    // Compiler plugins rewrite the entry sources first, before any splicing,
+    // so a plugin can emit `<include>` / `@import` directives and have them
+    // resolved like hand-written ones. In-memory overrides (SDK, tests,
+    // `set_inner_markup`) pass through the same hooks as on-disk files.
+    // Included files and sibling page files are read further down without
+    // this pass; entry-only is the documented v1 scope.
+    let html = plugins
+        .transform_markup(html, html_path)
+        .map_err(RunError::Plugin)?;
     let css_raw = match sources.css {
         Some(src) => Some(src.to_string()),
         None => read_optional(css_path)?,
+    };
+    let css_raw = match css_raw {
+        Some(src) => Some(
+            plugins
+                .transform_css(src, html_path, css_path)
+                .map_err(RunError::Plugin)?,
+        ),
+        None => None,
     };
     // Resolve `@import "..."` directives: splice imported sheets ahead of
     // this file's own rules (imported-first, so the importing file wins at
@@ -338,6 +360,13 @@ pub(crate) fn load_ir(
             ir.included_files.push(p);
         }
     }
+    // Compiler plugins transform the assembled tree here, before asset
+    // resolution and the cascade, so an element a plugin injects gets its
+    // asset paths resolved and its styles applied exactly like a
+    // hand-written one.
+    plugins
+        .transform_ir(&mut ir, html_path)
+        .map_err(RunError::Plugin)?;
     // Resolve every `<image src="..." />` path against the app dir so
     // relative paths work regardless of cwd at run time. Authors write
     // `src="apps/weather/icons/sun.png"`-style paths relative to the
@@ -440,6 +469,13 @@ pub(crate) fn load_ir(
     // that can fail a build on them.
     for f in &ir.lint_findings {
         eprintln!("{}", f.render(html_path));
+    }
+    // Plugin lint + emit run over the cascaded tree, on the same advisory
+    // terms as the findings above. They stay out of `ir.lint_findings`,
+    // which serializes into the artifact; a shipped app carries no plugin
+    // diagnostics.
+    for line in plugins.finish(&ir, html_path).map_err(RunError::Plugin)? {
+        eprintln!("{line}");
     }
     let script_paths: Vec<PathBuf> = ir.external_scripts.iter().map(|p| dir.join(p)).collect();
     let script_mtimes: Vec<Option<SystemTime>> = script_paths.iter().map(|p| mtime(p)).collect();

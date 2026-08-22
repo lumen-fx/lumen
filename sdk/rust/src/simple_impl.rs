@@ -292,6 +292,7 @@ impl AppBuilder {
     /// window closes; returns any setup or runtime error.
     pub fn run(self) -> Result<()> {
         let opts = self.into_run_options()?;
+        let opts = lumenc::with_default_compiler_plugins(opts).map_err(Error::Run)?;
         lumen_runtime::run_app(opts).map_err(Error::Run)
     }
 
