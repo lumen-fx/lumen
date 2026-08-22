@@ -30,7 +30,7 @@
 
 [package]
 name = "lumen-dylib"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2024"
 license = "MPL-2.0"
 authors = ["Lumen contributors"]
