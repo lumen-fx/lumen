@@ -229,6 +229,7 @@ pub fn assemble(
     plan: &PagePlan,
     fragments: &FragmentTable,
     parser: &dyn crate::source_parser::SourceParser,
+    entry_markup: &str,
 ) -> Result<Vec<PathBuf>, String> {
     let mut gates: Vec<Element> = Vec::new();
     let mut script_source = String::new();
@@ -236,8 +237,15 @@ pub fn assemble(
     let mut watch: Vec<PathBuf> = Vec::new();
 
     for page in &plan.pages {
-        let raw = std::fs::read_to_string(&page.path)
-            .map_err(|e| format!("read page {}: {e}", page.path.display()))?;
+        // The entry page parses from the text the loader already carries -
+        // compiler plugins may have rewritten it, and a disk re-read here
+        // would silently discard their markup transform for multi-page apps.
+        let raw = if page.path == plan.entry_file {
+            entry_markup.to_string()
+        } else {
+            std::fs::read_to_string(&page.path)
+                .map_err(|e| format!("read page {}: {e}", page.path.display()))?
+        };
         let pir = parser
             .parse_html_with_loader(&raw, &page.path, fragments)
             .map_err(|e| format!("parse page {}: {e}", page.path.display()))?;
@@ -300,11 +308,18 @@ pub fn assemble(
 pub fn collect_fragments(
     plan: &PagePlan,
     parser: &dyn crate::source_parser::SourceParser,
+    entry_markup: Option<&str>,
 ) -> Result<FragmentTable, String> {
     let mut table = FragmentTable::new();
     for path in &plan.fragment_files {
-        let src =
-            std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        // Same substitution as `assemble`: the entry's declarations come
+        // from the (possibly plugin-transformed) text the loader holds, so
+        // a `<template>` a plugin emits into the entry is instantiable.
+        let src = match entry_markup {
+            Some(entry) if path == &plan.entry_file => entry.to_string(),
+            _ => std::fs::read_to_string(path)
+                .map_err(|e| format!("read {}: {e}", path.display()))?,
+        };
         let declared = parser
             .collect_fragments(&src, path)
             .map_err(|e| format!("parse {}: {e}", path.display()))?;

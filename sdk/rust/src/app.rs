@@ -407,6 +407,11 @@ impl App {
         opts.css = self.boot.css;
         opts.hot_reload = self.boot.hot_reload.unwrap_or(!in_memory);
 
+        // The compiler-plugin chain resolves here, with the other option
+        // preparation, so every run entry point below - windowed, headless
+        // mode, bounded ticks - carries it without touching the options
+        // again.
+        let opts = lumenc::with_default_compiler_plugins(opts).map_err(Error::Run)?;
         Ok((opts, self.seeds, self.deferred))
     }
 }

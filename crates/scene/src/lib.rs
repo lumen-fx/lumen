@@ -18,6 +18,7 @@
 
 #![warn(missing_docs)]
 
+pub mod compiler_plugins;
 pub mod dom;
 pub mod fragments;
 pub mod routing;

@@ -58,6 +58,10 @@ pub enum CompileError {
     /// The artifact failed to encode.
     #[error("artifact: {0}")]
     Artifact(String),
+    /// A compiler plugin failed to load or one of its hooks failed. The
+    /// message names the plugin.
+    #[error("{0}")]
+    Plugin(String),
 }
 
 /// Compile `<dir>/main.lmn` (+ optional `main.css`, `<include>`, `@import`,
@@ -69,18 +73,66 @@ pub enum CompileError {
 /// file; otherwise `main.lmn` is used. Asset (`<image src>`) paths are rewritten
 /// absolute against `dir` so they survive a cwd shift at run time.
 pub fn compile_dir_to_lmna(dir: &Path) -> Result<Vec<u8>, CompileError> {
-    let compiled = compile_dir(dir)?;
+    // The same `[[plugins]]` chain the fat compile paths run; this path
+    // reads the declarations itself because it links no `lumen-runtime`.
+    let cfgs = crate::plugin_host::read_plugin_cfgs(dir).map_err(CompileError::Plugin)?;
+    let plugins = lumenc_plugin::PluginSet::load(dir, &cfgs)
+        .map_err(|e| CompileError::Plugin(e.to_string()))?;
+    compile_dir_to_lmna_with(dir, &plugins)
+}
+
+/// [`compile_dir_to_lmna`] with the plugin chain supplied by the caller.
+pub fn compile_dir_to_lmna_with(
+    dir: &Path,
+    plugins: &lumenc_plugin::PluginSet,
+) -> Result<Vec<u8>, CompileError> {
+    let compiled = compile_dir(dir, plugins)?;
     lumen_ir::artifact::serialize(&compiled).map_err(|e| CompileError::Artifact(e.to_string()))
 }
 
-fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileError> {
+fn compile_dir(
+    dir: &Path,
+    plugins: &lumenc_plugin::PluginSet,
+) -> Result<lumen_ir::artifact::CompiledApp, CompileError> {
+    use lumenc_plugin::SourceKind;
+
     let entry = entry_name(dir);
     let html_path = dir.join(&entry);
     let css_path = dir.join("main.css");
 
     let html = std::fs::read_to_string(&html_path)
         .map_err(|e| CompileError::Read(html_path.clone(), e))?;
+    // Compiler plugins rewrite the entry sources first, before any
+    // splicing, the same points `load_ir` runs them at.
+    let original_html = html.clone();
+    let html = plugins
+        .transform_source(SourceKind::Markup, html, &html_path, &html_path)
+        .map_err(|e| CompileError::Plugin(e.to_string()))?;
+    let markup_transformed = html != original_html;
+    drop(original_html);
+    // Same attribution the fat path applies: positions in a markup error
+    // point into the rewritten text, not the file on disk.
+    let attribute = |e: String| {
+        if markup_transformed {
+            format!("(in the markup as rewritten by compiler plugins) {e}")
+        } else {
+            e
+        }
+    };
     let css_raw = read_optional(&css_path)?;
+    // An absent stylesheet runs through the chain as the empty string, so a
+    // plugin can synthesize one; an empty result stays "no stylesheet".
+    let css_raw = {
+        let out = plugins
+            .transform_source(
+                SourceKind::Css,
+                css_raw.unwrap_or_default(),
+                &html_path,
+                &css_path,
+            )
+            .map_err(|e| CompileError::Plugin(e.to_string()))?;
+        (!out.is_empty()).then_some(out)
+    };
 
     // Resolve `@import "..."` (imported-first) before parsing the sheet.
     let css = match &css_raw {
@@ -131,7 +183,7 @@ fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileErr
         Some(&crate::resolve::FsLoader),
         &mut include_paths,
     )
-    .map_err(|e| CompileError::ParseHtml(e.to_string()))?;
+    .map_err(|e| CompileError::ParseHtml(attribute(e.to_string())))?;
     // An unresolvable var() degrades to empty text plus a printed warning
     // instead of failing the compile - matching how the stylesheet cascade
     // below drops one bad declaration and keeps going (see `load_ir`'s
@@ -149,13 +201,24 @@ fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileErr
     // The `lmn!` blocks the app's candela scripts write, read before the tree:
     // markup names a candela component by writing the function as a tag, so
     // the blocks are in the table this parse instantiates against.
-    let scripted = script_fragments(&spliced, &html_path, dir)?;
+    // Reads the (possibly rewritten) entry text, so its errors carry the
+    // same attribution as the other markup errors.
+    let scripted = script_fragments(&spliced, &html_path, dir).map_err(|e| match e {
+        CompileError::ParseHtml(msg) => CompileError::ParseHtml(attribute(msg)),
+        other => other,
+    })?;
     // Includes are already spliced away, so the string-only parser suffices.
     let parsed = crate::parse_markup(&spliced, &html_path, None, &scripted)
-        .map_err(|e| CompileError::ParseHtml(e.to_string()))?;
+        .map_err(|e| CompileError::ParseHtml(attribute(e.to_string())))?;
     let mut fragments = parsed.fragments;
     let mut ir = parsed.ir;
     ir.included_files = include_paths;
+
+    // Compiler plugins transform the tree before asset resolution and the
+    // cascade, the same point `load_ir` runs the hook at.
+    plugins
+        .transform_ir(&mut ir, &html_path)
+        .map_err(|e| CompileError::Plugin(e.to_string()))?;
 
     // Rewrite `<image src>` relative paths absolute against the app dir.
     resolve_asset_paths(&mut ir.root, dir);
@@ -219,6 +282,13 @@ fn compile_dir(dir: &Path) -> Result<lumen_ir::artifact::CompiledApp, CompileErr
     // compiled through the launcher reports what `lumenc check` does.
     for f in &ir.lint_findings {
         eprintln!("{}", f.render(&html_path));
+    }
+    // Plugin lint + emit over the cascaded tree, same advisory terms.
+    let plugin_findings = plugins
+        .finish(&ir, &html_path)
+        .map_err(|e| CompileError::Plugin(e.to_string()))?;
+    for line in lumenc_plugin::PluginSet::render_findings(&plugin_findings, &html_path) {
+        eprintln!("{line}");
     }
 
     // Bake inline + external `<script>` into one string; strip both from the IR

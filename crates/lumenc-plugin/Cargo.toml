@@ -1,0 +1,41 @@
+[package]
+name = "lumenc-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "SDK for lumenc compiler plugins: the CompilerPlugin trait, the C-ABI export macro, and the loader lumenc itself uses."
+# Not published: plugin authors take this crate as a cargo git dependency on
+# the Lumen repo at a release tag, which resolves lumen-ir and its closure as
+# path dependencies inside the clone.
+publish = false
+
+[lib]
+name = "lumenc_plugin"
+path = "src/lib.rs"
+
+[features]
+default = []
+# The loader side: dlopen a plugin cdylib, verify its descriptor, drive its
+# hooks, resolve `version` sources against the plugin cache, and keep
+# lumen.lock. Only lumenc enables this; plugin authors never do.
+host = ["dep:libloading", "dep:semver", "dep:sha2"]
+# Test-only helper that builds the fixture plugin cdylib once per tree.
+testing = ["dep:serde_json"]
+
+[dependencies]
+lumen-ir = { workspace = true }
+serde = { workspace = true }
+bincode = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+libloading = { workspace = true, optional = true }
+semver = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[dev-dependencies]
+lumenc-plugin = { workspace = true, features = ["host", "testing"] }
+toml = { workspace = true }

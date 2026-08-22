@@ -39,6 +39,9 @@ pub mod run;
 pub mod run_headless;
 /// Embedded user-agent skin stylesheets.
 pub mod skins;
+/// The injected compiler-plugin boundary. See
+/// [`compiler_plugins::CompilerPlugins`].
+pub use lumen_scene::compiler_plugins;
 /// The injected markup/CSS parser boundary. See [`SourceParser`].
 pub use lumen_scene::source_parser;
 /// IR -> ECS spawner and the `<for>` / `<if>` reconcilers.
@@ -46,6 +49,7 @@ pub use lumen_scene::spawn;
 /// Windowed geometry persistence (`[window] remember_state`).
 pub mod window_state;
 
+pub use compiler_plugins::CompilerPlugins;
 pub use config::{ConfigError, LumenToml};
 #[cfg(feature = "host-rhai")]
 pub use run::run_with;

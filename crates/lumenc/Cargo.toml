@@ -108,7 +108,13 @@ rhai = { workspace = true, optional = true }
 # drive a prebuilt LMNA app over the C-ABI. OPTIONAL behind `dlopen-run`; this
 # is the whole point of the thin launcher: it pulls NO backend crate, only
 # the dynamic-loader shim.
-libloading = { version = "0.9", optional = true }
+libloading = { workspace = true, optional = true }
+
+# Compiler-plugin loader: `[[plugins]]` schema, the dlopen host that runs
+# plugin hooks, the plugin cache, and lumen.lock. Unconditional: every shape
+# of lumenc that compiles an app runs the declared plugins, and the thin
+# library costs only this crate plus libloading.
+lumenc-plugin = { workspace = true, features = ["host"] }
 
 # `tracing` stays unconditional: lumenc emits plain warn!/debug! diagnostics
 # through it. The subscriber / chrome / tracy backends live in `lumen-runtime`
@@ -130,6 +136,8 @@ image.workspace = true
 # driven fully in-process - never a real window. Test-only, so these never
 # reach `lumen-lsp` or the release binary.
 [dev-dependencies]
+# The compiler-plugin fixture builder for tests/compiler_plugins.rs.
+lumenc-plugin = { workspace = true, features = ["host", "testing"] }
 lumen-render-wgpu = { workspace = true }
 lumen-core = { workspace = true }
 lumen-os-dnd = { workspace = true }

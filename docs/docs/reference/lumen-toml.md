@@ -274,6 +274,48 @@ model as a Cargo build script. `lumenc run --no-hooks` skips them.
 An unknown `when` or `os` value, or an empty `run`, is a parse error naming
 the offending value.
 
+## [[plugins]]
+
+Compiler plugins the app declares. Each entry is one plugin; entries run in
+declaration order on every compile path (`run`, `build`, `check`, `package`,
+`web`). See [authoring compiler plugins](../contributing/plugins.md#compiler-plugins)
+for what a plugin can do.
+
+| Key | Type | Required | Effect |
+|-----|------|----------|--------|
+| `name` | string | yes | Plugin name; the loaded library must report the same one. |
+| `version` | string | one source | Version requirement (cargo semantics: `"1.2"` means `^1.2`), resolved against the plugin cache and pinned in `lumen.lock`. |
+| `path` | string | one source | A built cdylib, relative to the app directory (absolute paths work too). Without an extension the platform spellings are probed (`lib<p>.so`, `lib<p>.dylib`, `<p>.dll`, plus the underscored variants cargo produces for a hyphenated name). |
+| `config` | table | no | Handed to the plugin verbatim; a key the plugin does not read produces no diagnostic. |
+
+```toml
+[[plugins]]
+name    = "markdown"
+version = "1.2"
+config  = { flavor = "gfm" }
+
+[[plugins]]
+name = "local-dev"
+path = "plugins/local-dev"
+```
+
+Declare exactly one source per entry. `git` and `registry` sources are not
+supported yet and error saying so.
+
+A `version` source resolves to a prebuilt, per-platform cdylib in the plugin
+cache (`~/.lumen/plugins`, `%LOCALAPPDATA%\Programs\Lumen\plugins` on
+Windows, `LUMEN_PLUGIN_CACHE` overrides). The resolved version and its
+per-platform sha256 are pinned in `lumen.lock` beside `lumen.toml`; commit
+that file, and every later build reuses the pinned version and refuses a
+cached library whose bytes changed. `lumenc` does not fetch plugins yet; a
+version absent from the cache is an error that says so.
+
+Unlike `[[hooks]]`, plugins also run under `lumenc check`, so the tree being
+validated is the tree a build produces; emit outputs are discarded there,
+though a `version` source may still write `lumen.lock`. A plugin is native
+code loaded into the compiler's process, the same trust model as a Cargo
+build script.
+
 ## [signals]
 
 An optional typed schema for the app's signals, read by

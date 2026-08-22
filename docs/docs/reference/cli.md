@@ -76,7 +76,10 @@ lumenc check <dir>
 ```
 
 Parses and validates the app without opening a window and without running
-hooks. Prints `<dir>: ok (N elements, script: yes|none)` and exits 0, or
+hooks. Declared compiler plugins do run, in check-only mode: the tree being
+validated is the tree a build produces, and emit outputs are discarded (a
+`version` source may still update `lumen.lock`).
+Prints `<dir>: ok (N elements, script: yes|none)` and exits 0, or
 prints the parse error and exits 1. A missing `<dir>` exits 2.
 
 The check covers the markup, the stylesheet, and every script, including the
@@ -109,7 +112,9 @@ The artifact carries every fragment the app declares, both the `<template>`
 blocks in its markup and the `lmn!` blocks in its candela scripts, so the
 compiled app instantiates them with no parser present.
 
-Runs the app's `prebuild` hooks first unless `--no-hooks` is given.
+Runs the app's `prebuild` hooks first unless `--no-hooks` is given. Declared
+compiler plugins run as part of the compile; their emit outputs land under
+`.lumen/generated/<plugin>/` in the app directory.
 
 A multi-page app compiles whole: every page goes into the artifact behind the
 gate that mounts it, together with the page set navigation resolves against.
@@ -248,7 +253,8 @@ lumenc package <app_dir> [<out_dir>] [--name <name>] [--target <target>]
 Assembles a folder that runs on a machine with no Lumen installation: the app
 executable, the Lumen runtime library, `lumen.toml`, and every other file from
 `<app_dir>` at the same relative path. Dotfiles, the output directory, and the app's build inputs
-and build tree are skipped. Prints one line naming the executable it wrote and
+and build tree are skipped; compiler-plugin outputs under `.lumen/generated`
+are the one dot-prefixed tree that ships. Prints one line naming the executable it wrote and
 how many app files travelled with it.
 
 For a markup app the executable is the launcher with the compiled app inside

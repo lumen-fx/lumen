@@ -72,6 +72,9 @@ pub mod parser_css;
 /// parser-free runtime builds via the `runtime-parse` feature.
 #[cfg(feature = "runtime-parse")]
 pub mod parser_html;
+/// The compiler side of the injected compiler-plugin boundary: builds an
+/// app's `[[plugins]]` chain over the `lumenc-plugin` loader.
+pub mod plugin_host;
 /// Which published release this toolchain draws its files from. Every download
 /// location and cache directory is keyed by the answer.
 pub mod release;
@@ -168,18 +171,36 @@ fn with_default_parser(opts: RunOptions) -> RunOptions {
     opts
 }
 
+/// Inject the app's `[[plugins]]` chain into `opts` when the caller hasn't
+/// supplied one, beside the parser above. A malformed declaration or a
+/// failing plugin load aborts the run here, before any window exists. The
+/// precompiled-artifact paths skip the chain: the artifact already carries
+/// the transformed tree.
+#[cfg(feature = "dev-run")]
+pub fn with_default_compiler_plugins(mut opts: RunOptions) -> Result<RunOptions, RunError> {
+    if opts.compiler_plugins.is_none() && opts.artifact.is_none() && opts.artifact_bytes.is_none() {
+        let chain =
+            plugin_host::compiler_plugins_for(&opts.dir, false).map_err(RunError::Plugin)?;
+        opts = opts.with_compiler_plugins(chain);
+    }
+    Ok(opts)
+}
+
 /// Run a markup app, injecting the compiler's default parser. See
 /// [`lumen_runtime::run_app`].
 #[cfg(feature = "dev-run")]
 pub fn run_app(opts: RunOptions) -> Result<(), RunError> {
-    lumen_runtime::run_app(with_default_parser(opts))
+    lumen_runtime::run_app(with_default_compiler_plugins(with_default_parser(opts))?)
 }
 
 /// Headless (window-free) run, injecting the compiler's default parser. See
 /// [`lumen_runtime::run_app_headless`].
 #[cfg(feature = "dev-run")]
 pub fn run_app_headless(opts: RunOptions, ticks: u32) -> Result<(), RunError> {
-    lumen_runtime::run_app_headless(with_default_parser(opts), ticks)
+    lumen_runtime::run_app_headless(
+        with_default_compiler_plugins(with_default_parser(opts))?,
+        ticks,
+    )
 }
 
 /// Build the app window-free, injecting the compiler's default parser. See
@@ -188,7 +209,7 @@ pub fn run_app_headless(opts: RunOptions, ticks: u32) -> Result<(), RunError> {
 pub fn build_headless_app(
     opts: RunOptions,
 ) -> Result<(lumen_core::app::App, WindowSetup), RunError> {
-    lumen_runtime::build_headless_app(with_default_parser(opts))
+    lumen_runtime::build_headless_app(with_default_compiler_plugins(with_default_parser(opts))?)
 }
 
 /// Rendered offscreen headless run, injecting the compiler's default parser.
@@ -198,7 +219,10 @@ pub fn run_app_headless_rendered(
     opts: RunOptions,
     headless: HeadlessOptions,
 ) -> Result<(), RunError> {
-    lumen_runtime::run_app_headless_rendered(with_default_parser(opts), headless)
+    lumen_runtime::run_app_headless_rendered(
+        with_default_compiler_plugins(with_default_parser(opts))?,
+        headless,
+    )
 }
 
 /// Minimal-boilerplate entry point: run `dir` with one native Rhai extension,
@@ -226,14 +250,16 @@ pub fn is_help_flag(arg: &str) -> bool {
 /// default parser. See [`lumen_runtime::check_app`].
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub fn check_app(dir: &std::path::Path) -> Result<CheckReport, RunError> {
-    lumen_runtime::check_app(dir, &source_parser::LumencParser)
+    let plugins = plugin_host::compiler_plugins_for(dir, true).map_err(RunError::Plugin)?;
+    lumen_runtime::check_app(dir, &source_parser::LumencParser, &*plugins)
 }
 
 /// AOT-compile an app from source (`lumenc build`), using the compiler's
 /// default parser. See [`lumen_runtime::compile_app`].
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub fn compile_app(dir: &std::path::Path) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
-    lumen_runtime::compile_app(dir, &source_parser::LumencParser)
+    let plugins = plugin_host::compiler_plugins_for(dir, false).map_err(RunError::Plugin)?;
+    lumen_runtime::compile_app(dir, &source_parser::LumencParser, &*plugins)
 }
 
 /// AOT-compile an app from source with the skin named outright, which is what
@@ -243,5 +269,6 @@ pub fn compile_app_with_skin(
     dir: &std::path::Path,
     skin: Option<&str>,
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
-    lumen_runtime::compile_app_with_skin(dir, &source_parser::LumencParser, skin)
+    let plugins = plugin_host::compiler_plugins_for(dir, false).map_err(RunError::Plugin)?;
+    lumen_runtime::compile_app_with_skin(dir, &source_parser::LumencParser, &*plugins, skin)
 }

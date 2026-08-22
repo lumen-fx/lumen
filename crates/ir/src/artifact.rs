@@ -94,6 +94,11 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// `7`: [`crate::fragment::FragmentComponent`] gains `params`, and a use site
 /// the build cannot stand in for stays in the tree as the marker a runtime
 /// call fills, so a component that works a value out is usable from markup.
+///
+/// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
+/// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
+/// with the loader, so a bump obsoletes every built plugin until it is
+/// rebuilt against the new tag.
 pub const FORMAT_VERSION: u16 = 7;
 
 /// The navigable page set of a compiled multi-page app.

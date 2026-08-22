@@ -24,8 +24,9 @@ pub struct CheckReport {
 pub fn compile_app(
     dir: &Path,
     parser: &dyn SourceParser,
+    plugins: &dyn crate::compiler_plugins::CompilerPlugins,
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
-    compile_app_with_skin(dir, parser, None)
+    compile_app_with_skin(dir, parser, plugins, None)
 }
 
 /// [`compile_app`] with the skin named outright instead of read from
@@ -39,6 +40,7 @@ pub fn compile_app(
 pub fn compile_app_with_skin(
     dir: &Path,
     parser: &dyn SourceParser,
+    plugins: &dyn crate::compiler_plugins::CompilerPlugins,
     skin: Option<&str>,
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
@@ -51,6 +53,7 @@ pub fn compile_app_with_skin(
     let skin_override = skin.map(str::to_string).or_else(|| cfg.skin.name.clone());
     let loaded = load_ir(
         parser,
+        plugins,
         &html_path,
         &css_path,
         dir,
@@ -166,7 +169,11 @@ pub fn script_exports(
 ///
 /// Requires the source parser (`runtime-parse` feature).
 #[cfg(feature = "runtime-parse")]
-pub fn check_app(dir: &Path, parser: &dyn SourceParser) -> Result<CheckReport, RunError> {
+pub fn check_app(
+    dir: &Path,
+    parser: &dyn SourceParser,
+    plugins: &dyn crate::compiler_plugins::CompilerPlugins,
+) -> Result<CheckReport, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
     let roots = cfg.resolved_asset_roots(dir);
     // File-based pages: validate the whole assembled multi-page tree (entry +
@@ -177,6 +184,7 @@ pub fn check_app(dir: &Path, parser: &dyn SourceParser) -> Result<CheckReport, R
     let entry_path = plan.entry_file.clone();
     let LoadResult { ir, .. } = load_ir(
         parser,
+        plugins,
         &entry_path,
         &dir.join("main.css"),
         dir,

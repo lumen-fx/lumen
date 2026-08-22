@@ -937,6 +937,10 @@ fn package(
     copy_c_engine(out, target, &toolchain)?;
 
     let copied = copy_app_files(src, out, CopyRules::markup())?;
+    // Compiler-plugin outputs live under the dot-prefixed `.lumen/generated`
+    // root, which the walk above deliberately skips; copy them explicitly so
+    // a packaged app ships what its plugins produced.
+    copy_generated_outputs(src, out)?;
 
     if sidecar {
         println!(
@@ -1324,6 +1328,37 @@ impl CopyRules {
             },
         }
     }
+}
+
+/// Mirror `<src>/.lumen/generated` (compiler-plugin emit outputs) into the
+/// package. Absent when the app declares no plugins, and nothing to do then.
+fn copy_generated_outputs(src: &Path, out: &Path) -> Result<(), String> {
+    let root = src.join(".lumen").join("generated");
+    if !root.is_dir() {
+        return Ok(());
+    }
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let entries =
+            std::fs::read_dir(&dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            // The walk is rooted at `src` and every entry is a real child,
+            // so the prefix strips and the destination has a parent.
+            let rel = path.strip_prefix(src).expect("walk stays under src");
+            let dest = out.join(rel);
+            let parent = dest.parent().expect("dest sits under out");
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create {}: {e}", parent.display()))?;
+            std::fs::copy(&path, &dest)
+                .map_err(|e| format!("copy {} -> {}: {e}", path.display(), dest.display()))?;
+        }
+    }
+    Ok(())
 }
 
 /// Copy the app's own files into the package, at the same relative paths.
@@ -2296,5 +2331,29 @@ mod tests {
         // What the app reads at run time still travels.
         assert!(!rules.skip_exts.contains(&"lmn"));
         assert!(!rules.skip_exts.contains(&"css"));
+    }
+
+    #[test]
+    fn generated_outputs_mirror_into_the_package() {
+        let base =
+            std::env::temp_dir().join(format!("lumenc-package-generated-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("app");
+        let out = base.join("dist");
+        std::fs::create_dir_all(src.join(".lumen/generated/demo/sub")).unwrap();
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(src.join(".lumen/generated/demo/sub/report.txt"), b"x").unwrap();
+
+        copy_generated_outputs(&src, &out).unwrap();
+        assert_eq!(
+            std::fs::read(out.join(".lumen/generated/demo/sub/report.txt")).unwrap(),
+            b"x"
+        );
+
+        // An app with no generated tree copies nothing and is not an error.
+        let bare = base.join("bare");
+        std::fs::create_dir_all(&bare).unwrap();
+        copy_generated_outputs(&bare, &out).unwrap();
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
