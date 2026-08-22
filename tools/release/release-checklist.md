@@ -43,21 +43,26 @@ checklist.
 ## One-time setup
 
 - Actions enabled on the repository (already on).
-- The release itself needs no secrets: the release job uses the built-in
-  `GITHUB_TOKEN` (`contents: write`, scoped to the release job only).
-  Publishing to the package managers afterwards does need credentials, one per
+- Publishing the release needs no secrets: the release job uses the built-in
+  `GITHUB_TOKEN` (`contents: write`, scoped to that job only).
+- Moving `main` to the next version afterwards needs one, `REPIN_DEPLOY_KEY`,
+  holding the private half of the repository's write deploy key. The ruleset on
+  `main` requires a pull request and lets deploy keys past it, so this is what a
+  workflow pushes there with. `grammar-pins.yml` uses the same key for the same
+  reason.
+- Publishing to the package managers afterwards does need credentials, one per
   channel; see the section on them below.
 
 ## Cutting a release
 
 1. Make sure `main` is green in the `ci` workflow.
 2. Check that `version` in the workspace `Cargo.toml` is the version you are
-   about to tag. It usually is already, because the previous release opened a
-   pull request that set it (step 6). If it is not, run
-   `tools/release/bump-version.py <version>`, commit, push, and wait for green.
-   The tag has to match this value: the release workflow compares them first
-   and publishes nothing if they differ, because the MSI's version, the install
-   receipt, and `lumenc --version` all read from these two places.
+   about to tag. It usually is already, because the previous release set it
+   (step 6). If it is not, run `tools/release/bump-version.py <version>`,
+   commit, push, and wait for green. The tag has to match this value: the
+   release workflow compares them first and publishes nothing if they differ,
+   because the MSI's version, the install receipt, and `lumenc --version` all
+   read from these two places.
 3. Tag and push:
 
    ```sh
@@ -98,19 +103,15 @@ checklist.
 
 5. Work through [Verify](#verify) against the published release.
 
-6. Merge the pull request the release opened. It is titled `chore: set the
-   workspace version to X.Y.Z+1`, comes from a branch named
-   `bump-version-X.Y.Z+1`, and moves every place the tree writes its version
-   down. From there `main` carries a version with no release behind it, which
-   is the point: `main` builds identify themselves as the version they will
-   become, and step 2 of the next release has nothing left to do.
+6. Check that `main` moved on. The release's last job commits
+   `chore: set the workspace version to X.Y.Z+1` straight to `main`, so the tag
+   push is the whole release and there is nothing left to merge.
 
-   It needs one click before its checks start. GitHub holds the workflow runs
-   for a pull request that Actions opened until someone with write access picks
-   "Approve workflows to run" in the merge box, which is what stops a workflow
-   from setting itself off again.
+   From there `main` carries a version with no release behind it, which is the
+   point: `main` builds identify themselves as the version they will become,
+   and step 2 of the next release has nothing left to do.
 
-   This is safe because nothing turns a version number into a download
+   That is safe because nothing turns a version number into a download
    address. Every version-keyed lookup asks the releases page what exists:
    `lumenc` resolves the release its toolchain files come from through
    `releases/latest` (or through its install receipt), the update check
@@ -118,18 +119,24 @@ checklist.
    the tag it needs is published before fetching source from it. A number with
    no tag behind it resolves to nothing and says so.
 
+   The commit is pushed over SSH with the write deploy key in
+   `REPIN_DEPLOY_KEY`, and `ci` runs against it on `main` like any other
+   commit. Pushing it with the workflow's own `GITHUB_TOKEN` instead would land
+   it with no run behind it at all, and the ruleset on `main` takes no pusher
+   but a deploy key.
+
    The bump is always the next patch, whatever kind of release the tag was.
-   To go somewhere else, run `tools/release/bump-version.py 0.2.0` on that
-   branch and push. The script takes the version to set and moves every place
-   the version is written out: the workspace package, each internal dependency
-   pin, `sdk/rust-dylib` (outside the workspace, so it cannot inherit one),
+   To go somewhere else, run `tools/release/bump-version.py 0.2.0` and land
+   that. The script takes the version to set and moves every place the version
+   is written out: the workspace package, each internal dependency pin,
+   `sdk/rust-dylib` (outside the workspace, so it cannot inherit one),
    `Cargo.lock`, and the Python SDK. It writes nothing at all if one of those
    comes out unchanged, so a file that grew a version literal nobody told it
    about stops the bump instead of shipping a skew.
 
-   If no pull request appears, look at the `open the version bump` job in the
-   release run. It reports what it decided and does nothing when the decision
-   is not its to make:
+   If `main` is still on the version you tagged, look at the
+   `move main to the next version` job in the release run. It reports what it
+   decided and does nothing when the decision is not its to make:
 
    - The job never ran, because the release job did not finish. Fix what
      failed and re-run the workflow; the bump follows the release, and a
@@ -141,9 +148,19 @@ checklist.
    - `a file that always moves did not`. A version literal changed shape, or
      one appeared somewhere new. The job names the file; teach
      `bump-version.py` about it and bump by hand this once.
+   - `main is dirty the moment it is checked out`. Something rewrites a tracked
+     file as the runner checks it out, and the bump commit would carry it. Find
+     what, because the commit goes to `main` unreviewed.
+   - `no REPIN_DEPLOY_KEY` or `could not be pushed to main`. The key is gone
+     from the repository secrets, or it no longer bypasses the ruleset on
+     `main`. The job fails rather than opening a pull request instead, so that
+     a broken push is repaired now and not discovered by the next release
+     failing its tag-versus-version check. Restore the key, then run
+     `tools/release/bump-version.py` and land the bump by hand this once.
 
-   Re-running a release is safe here too: the job commits to the same branch
-   and adds nothing to a pull request that is already open.
+   Re-running a release is safe: the first run leaves `main` past the version
+   the tag was cut for, and every later run of that tag, or of an older one,
+   reads `main`, finds it already there, and stops without committing.
 
 ## Why liblumen goes in bin/, not lib/
 

@@ -27,18 +27,20 @@ name: release
 # rolling `nightly` tag; that tag does not match the pattern below, so a
 # nightly never cuts a release or moves the version on main.
 #
-# The last job opens a pull request setting the workspace version to the next
-# patch, so tagging is the only thing cutting a release asks anyone to type and
-# merging that pull request is the only thing it asks afterwards.
+# The last job sets the workspace version on `main` to the next patch and
+# pushes it there, so a tag push is the whole release: nothing is left to merge
+# and nothing is left to type.
 
 on:
   push:
     tags:
       - "v*"
 
-# contents: write is granted per job, to the two jobs that write: the one that
-# publishes the release and the one that opens the bump. build-toolchain.yml
-# declares its own read-only token for the builds.
+# contents: write is granted to the one job whose token writes, the one that
+# publishes the release. The bump job writes to `main` over SSH with a deploy
+# key instead, for the reasons its own comment gives, so its token stays
+# read-only, and build-toolchain.yml declares its own read-only token for the
+# builds.
 permissions:
   contents: read
 
@@ -147,46 +149,57 @@ jobs:
           fi
 
   # Cutting a release is a tag push and nothing else, so the version main
-  # carries has to move afterwards on its own. This opens the pull request that
-  # moves it, which leaves merging as the last thing a release asks of anyone.
+  # carries has to move afterwards on its own. This moves it, by committing
+  # straight to main, which leaves a release asking nothing of anyone after the
+  # tag.
+  #
+  # The push goes over SSH with the write deploy key, not with GITHUB_TOKEN,
+  # for two separate reasons. A push authenticated by GITHUB_TOKEN raises no
+  # workflow events, so the bump commit would sit on main with no `ci` run
+  # behind it. And the ruleset on main requires a pull request, which only a
+  # bypass actor may skip; the deploy key is the one actor in that list allowed
+  # to skip it on a direct push. `grammar-pins.yml` pushes to main the same way
+  # with the same key, which is why there is one secret for both.
   #
   # The next version is always the next patch. Nothing here can know whether
   # the work after this release is a fix or a feature, and being predictable is
   # worth more than being right: a number that is always one patch ahead is
-  # corrected by editing the branch, while a number that follows a rule
-  # somebody has to remember is not. Tags in any other shape, a prerelease
-  # among them, are left alone, because incrementing one is a decision rather
-  # than an increment.
+  # corrected by one commit, while a number that follows a rule somebody has to
+  # remember is not. Tags in any other shape, a prerelease among them, are left
+  # alone, because incrementing one is a decision rather than an increment.
   #
   # A release that published only some of its archives still published the tag,
   # so main stops claiming that version either way; `release` runs on a partial
-  # release and this follows it. Re-running the workflow after fixing a build
-  # leg reaches this job again, and it lands on the branch and the number it
-  # did the first time, so there is one pull request however many times it
-  # runs. Once that pull request is merged, main is already at the next version
-  # and a later re-run stops before it commits anything.
+  # release and this follows it. What makes a re-run safe is the version on
+  # main itself: the first run moves main past the tag it was cut for, and
+  # every later run of that tag, or of an older one, reads main, finds it at or
+  # past the number it was going to write, and stops before committing
+  # anything. Two releases running at once resolve the same way, because each
+  # attempt re-reads main immediately before it writes.
+  #
+  # A push that cannot be made fails the job rather than falling back to a
+  # pull request. There is one way for main to move here, and a fallback that
+  # quietly restores the flow this replaced would hide a missing key or a
+  # changed ruleset until the next release fails its tag-versus-manifest check.
   #
   # Only main moves here. publish.yml and publish-packages.yml run off the
   # release and check out the tag, so neither is disturbed by main moving under
   # them.
   bump:
-    name: open the version bump
+    name: move main to the next version
     needs: release
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
           lfs: false
 
-      - name: Open the pull request that moves main to the next version
+      - name: Set main to the next version
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          DEPLOY_KEY: ${{ secrets.REPIN_DEPLOY_KEY }}
         run: |
           set -euo pipefail
 
@@ -197,54 +210,66 @@ jobs:
           fi
           next="${released%.*}.$(( 10#${released##*.} + 1 ))"
 
-          current="$(awk -F'"' '
-            /^\[workspace\.package\]/ { in_section = 1; next }
-            /^\[/                     { in_section = 0 }
-            in_section && /^version[[:space:]]*=/ { print $2; exit }
-          ' Cargo.toml)"
-          if [ -z "$current" ]; then
-            echo "release.yml: no [workspace.package] version in Cargo.toml" >&2
+          if [ -z "${DEPLOY_KEY}" ]; then
+            echo "release.yml: no REPIN_DEPLOY_KEY, and main takes no other pusher." >&2
+            echo "Run tools/release/bump-version.py ${next} and land it as a pull request." >&2
             exit 1
           fi
-
-          # A merged bump, or a re-run of an older release after later ones
-          # went out. Either way main is where it should be or further on, and
-          # bumping would walk it backwards.
-          oldest="$(printf '%s\n%s\n' "$current" "$next" | sort -V | head -1)"
-          if [ "$current" = "$next" ] || [ "$oldest" = "$next" ]; then
-            echo "::notice::main is at ${current}, at or past ${next}; nothing to bump"
-            exit 0
-          fi
-
-          python3 tools/release/bump-version.py "$next"
-          if git diff --quiet; then
-            echo "release.yml: bump-version.py changed nothing on the way to ${next}" >&2
-            exit 1
-          fi
+          key_file="$(mktemp)"
+          trap 'rm -f "${key_file}"' EXIT
+          printf '%s\n' "${DEPLOY_KEY}" > "${key_file}"
+          export GIT_SSH_COMMAND="ssh -i ${key_file} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "chore: set the workspace version to ${next}"
 
-          branch="bump-version-${next}"
-          git push -f origin "HEAD:refs/heads/${branch}"
-          if gh pr list --head "${branch}" --json number --jq '.[].number' | grep -q .; then
-            echo "::notice::the pull request for ${next} is already open, and now carries this run's commit"
-            exit 0
-          fi
-          gh pr create --head "${branch}" \
-            --title "chore: set the workspace version to ${next}" \
-            --body "$(cat <<BODY
-          ${TAG} is out, so main is free to move on. \`tools/release/bump-version.py\`
-          set the version to ${next} in every file that writes it out, from the
-          workspace package down to \`Cargo.lock\`.
+          # Each attempt reads main, writes the bump against that exact commit,
+          # and pushes it as a fast-forward. A refused push means either that
+          # main moved while this was being prepared, which reading main again
+          # answers, or that the key cannot write, which nothing here answers.
+          for attempt in 1 2 3; do
+            git fetch --quiet origin main
+            git reset --quiet --hard FETCH_HEAD
+            if ! git diff --quiet; then
+              echo "release.yml: main is dirty the moment it is checked out, so a commit here would carry more than the bump" >&2
+              exit 1
+            fi
 
-          Merging this means a build from main calls itself ${next}, which is the
-          version the next release gets tagged as. The number stays inert until that
-          tag exists, because every version-keyed lookup resolves through the releases
-          page rather than through what a binary says it is.
+            current="$(awk -F'"' '
+              /^\[workspace\.package\]/ { in_section = 1; next }
+              /^\[/                     { in_section = 0 }
+              in_section && /^version[[:space:]]*=/ { print $2; exit }
+            ' Cargo.toml)"
+            if [ -z "$current" ]; then
+              echo "release.yml: no [workspace.package] version in Cargo.toml" >&2
+              exit 1
+            fi
 
-          To go somewhere other than the next patch, run that script with the version
-          you want and push to this branch.
-          BODY
-          )"
+            # The bump already landed, or this is a re-run of an older release
+            # after later ones went out. Either way main is where it should be
+            # or further on, and bumping would walk it backwards.
+            oldest="$(printf '%s\n%s\n' "$current" "$next" | sort -V | head -1)"
+            if [ "$current" = "$next" ] || [ "$oldest" = "$next" ]; then
+              echo "::notice::main is at ${current}, at or past ${next}; nothing to bump"
+              exit 0
+            fi
+
+            python3 tools/release/bump-version.py "$next"
+            if git diff --quiet; then
+              echo "release.yml: bump-version.py changed nothing on the way to ${next}" >&2
+              exit 1
+            fi
+            git commit -am "chore: set the workspace version to ${next}"
+
+            if git push "git@github.com:${GITHUB_REPOSITORY}.git" HEAD:main; then
+              echo "::notice::main is at ${next}"
+              exit 0
+            fi
+            echo "::notice::attempt ${attempt} to push ${next} to main was refused; reading main again"
+          done
+
+          echo "release.yml: ${next} could not be pushed to main. Either the deploy key" >&2
+          echo "no longer bypasses the ruleset, or main is moving faster than this can" >&2
+          echo "follow. Run tools/release/bump-version.py ${next} and land it as a" >&2
+          echo "pull request." >&2
+          exit 1
