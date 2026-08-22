@@ -111,7 +111,12 @@ impl NodeQueryResult {
 /// sibling position so `:first-child` / `:nth-child` resolve.
 fn subject_info(rec: &DomRecord) -> AncestorInfo {
     AncestorInfo::new(rec.tag.clone(), rec.classes.clone(), rec.id.clone())
-        .with_position(rec.child_index, rec.sibling_count)
+        .with_position(record_position(rec))
+}
+
+/// The sibling position the DOM index recorded for `rec`.
+pub(crate) fn record_position(rec: &DomRecord) -> lumen_ir::css::SiblingPosition {
+    lumen_ir::css::SiblingPosition::new(rec.child_index, rec.sibling_count)
 }
 
 /// Root-first ancestor identities for `entity` (excluding itself).
@@ -458,8 +463,13 @@ pub fn resolved_attributes(handle: u64) -> lumen_ir::layout_ir::Attributes {
             el.attrs.classes = rec.classes.clone();
             el.attrs.id = rec.id.clone();
             let ancestors = ancestor_infos(&index, entity);
-            let _ =
-                lumen_ir::css::reapply_with_ancestors(&mut el, sheet, &details.media, &ancestors);
+            let _ = lumen_ir::css::reapply_with_ancestors(
+                &mut el,
+                sheet,
+                &details.media,
+                &ancestors,
+                record_position(rec),
+            );
             attrs = el.attrs;
         }
     }
