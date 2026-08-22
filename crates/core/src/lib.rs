@@ -13,6 +13,7 @@ pub mod components;
 pub mod i18n;
 pub mod input;
 pub mod introspect;
+pub mod native;
 pub mod nav;
 pub mod net_capture;
 pub mod node;
@@ -70,6 +71,9 @@ pub mod prelude {
         ScrollbarDrag, ScrollbarGeometry, ScrollbarInteraction, ScrollbarMetrics, ScrollbarPart,
         ScrollbarState, ScrollbarStyle, ScrollbarWidthMode, ShowContextMenu, TextInputCommitted,
         horizontal_scrollbar, vertical_scrollbar,
+    };
+    pub use crate::native::{
+        ExtractedNative, NativePaintCtx, NativePainter, NativePainters, next_revision,
     };
     pub use crate::nav::{NavOp, navigate as nav_navigate, request as nav_request};
     pub use crate::node::{
