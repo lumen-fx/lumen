@@ -1395,6 +1395,9 @@ pub fn reconcile_if_blocks(
     )>,
     mut commands: bevy_ecs::system::Commands,
 ) {
+    // Set when a body is mounted below, so the end of the pass can raise
+    // `StyleVersion`.
+    let mut mounted = false;
     for (parent_id, mut marker, children) in markers.iter_mut() {
         let value: Option<std::sync::Arc<str>> = store.get_global_str(&marker.signal_name);
         let value_str: Option<&str> = value.as_deref();
@@ -1416,6 +1419,7 @@ pub fn reconcile_if_blocks(
                         // adopt it instead of rebuilding it.
                         spawn_body_child(&mut commands, tmpl, parent_id, Placeholders::Resolved);
                     }
+                    mounted = true;
                     // Entering transition on the block itself (children
                     // handle their own via `spawn_body_child`).
                     if let Ok((specs, cur)) = fade_targets.get(parent_id)
@@ -1441,6 +1445,7 @@ pub fn reconcile_if_blocks(
                     for tmpl in &marker.body {
                         spawn_body_child(&mut commands, tmpl, parent_id, Placeholders::Resolved);
                     }
+                    mounted = true;
                     marker.currently_mounted = true;
                 }
                 // D5: apply visibility only on a transition. The
@@ -1489,6 +1494,20 @@ pub fn reconcile_if_blocks(
                 }
             }
         }
+    }
+    if mounted {
+        // A body carries the attributes the load-time cascade resolved,
+        // against the color scheme and viewport the app started with.
+        // Nothing re-resolves them on their own, so a page reached by
+        // navigation after `set_color_scheme` - or a dialog opened after
+        // the OS flipped to dark - would mount in the scheme the app
+        // booted with. Raising the style version is what puts the newly
+        // mounted elements in front of the cascade re-resolver, which
+        // reads the live scheme. Queued rather than taken as a `ResMut`
+        // param so it lands with the spawns at the next sync point.
+        commands.queue(|world: &mut bevy_ecs::world::World| {
+            lumen_core::components::StyleVersion::bump(world);
+        });
     }
 }
 
