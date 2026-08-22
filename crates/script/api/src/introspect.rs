@@ -248,7 +248,7 @@ pub fn node_matched_rules(handle: u64) -> Vec<MatchedRuleView> {
     };
     let subject =
         lumen_ir::css::AncestorInfo::new(rec.tag.clone(), rec.classes.clone(), rec.id.clone())
-            .with_position(rec.child_index, rec.sibling_count);
+            .with_position(crate::node_query::record_position(rec));
     let ancestors = ancestor_infos(&index, entity);
     let has_children = !rec.children.is_empty();
     let text = crate::node_query::node_text(handle);

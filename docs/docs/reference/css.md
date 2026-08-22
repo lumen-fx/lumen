@@ -90,7 +90,7 @@ the value in when the element enters that state.
 | `:selected` | Tab strip button of the active tab. |
 | `:drag-over` | An acceptable in-app drag hovers this drop target. |
 
-Structural pseudo-classes filter at compile time:
+Structural pseudo-classes filter on where the element sits in the tree:
 
 | Pseudo-class | Matches |
 | --- | --- |
@@ -103,6 +103,12 @@ Structural pseudo-classes filter at compile time:
 | `:is(list)` | Any selector in the list. |
 | `:where(list)` | Any selector in the list, contributing zero specificity. |
 | `:not(list)` | No selector in the list. |
+
+Sibling position is read from the live tree, so a restyle that runs
+against one element on its own still selects the same elements a
+whole-document pass would: after a theme flip, a class change from a
+script, or a `<for>` rebuild, `.row:last-child` is still only the last
+row.
 
 `:is()`, `:where()`, and `:not()` take a comma-separated list of
 selectors, each of which may use combinators. The element being tested is
