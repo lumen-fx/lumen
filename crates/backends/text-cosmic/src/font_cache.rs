@@ -41,10 +41,11 @@ use cosmic_text::fontdb::{
     Database, FaceInfo, Family, ID, Language, Source, Stretch, Style, Weight,
 };
 
-/// Magic + format version. Bump [`VERSION`] on any layout change so old
-/// caches are rejected instead of misread.
+/// Magic + format version. Bump [`VERSION`] on any layout change, and on
+/// any change to what the fresh scan records, so old caches are rejected
+/// instead of replayed.
 const MAGIC: &[u8; 4] = b"LFDB";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 /// Build a [`FontSystem`] equivalent to [`FontSystem::new`], using the
 /// persistent metadata cache when it is present and still valid. On a
@@ -56,7 +57,7 @@ pub fn load_font_system() -> FontSystem {
     // scan every time and skips writing, for benchmarking the cold path or
     // sidestepping a suspect cache without deleting the file.
     if cache_disabled() {
-        return FontSystem::new();
+        return scan();
     }
     if let Some(path) = cache_path()
         && let Some(cf) = read_valid(&path)
@@ -64,11 +65,63 @@ pub fn load_font_system() -> FontSystem {
         return build_from_cache(cf);
     }
     // Miss: full scan, then persist for next launch.
-    let fs = FontSystem::new();
+    let fs = scan();
     if let Some(path) = cache_path() {
         let _ = write_cache(&path, &fs);
     }
     fs
+}
+
+/// Full system-font scan, keeping the generic-family aliases the platform
+/// itself resolved.
+///
+/// `FontSystem::new` loads the system fonts and then overwrites the
+/// `serif` / `sans-serif` / `monospace` aliases with three fixed family
+/// names, discarding the mapping fontdb had just read from fontconfig.
+/// On a machine that has none of those three families the alias names no
+/// installed face at all, so every lookup for a generic family misses and
+/// the text falls through to cosmic-text's last-resort face list. Scanning
+/// the database here keeps the platform's own answer and reaches for
+/// cosmic-text's names only when that answer is not installed.
+fn scan() -> FontSystem {
+    let mut db = Database::new();
+    db.load_system_fonts();
+    ground_generics(&mut db);
+    let locale = sys_locale::get_locale().unwrap_or_else(|| String::from("en-US"));
+    FontSystem::new_with_locale_and_db(locale, db)
+}
+
+/// Repoint any generic-family alias that names a family the database does
+/// not hold, using cosmic-text's built-in choice as the second try. An
+/// alias with no installed candidate is left alone.
+fn ground_generics(db: &mut Database) {
+    let serif = grounded(db, &Family::Serif, "DejaVu Serif");
+    let sans_serif = grounded(db, &Family::SansSerif, "Open Sans");
+    let monospace = grounded(db, &Family::Monospace, "Noto Sans Mono");
+    if let Some(name) = serif {
+        db.set_serif_family(name);
+    }
+    if let Some(name) = sans_serif {
+        db.set_sans_serif_family(name);
+    }
+    if let Some(name) = monospace {
+        db.set_monospace_family(name);
+    }
+}
+
+/// `Some(replacement)` when `generic` names no installed family and `alt`
+/// does; `None` to leave the alias as the platform set it.
+fn grounded(db: &Database, generic: &Family<'_>, alt: &str) -> Option<String> {
+    if family_present(db, db.family_name(generic)) {
+        return None;
+    }
+    family_present(db, alt).then(|| alt.to_string())
+}
+
+/// Whether any face in the database lists `name` among its families.
+fn family_present(db: &Database, name: &str) -> bool {
+    db.faces()
+        .any(|f| f.families.iter().any(|(fam, _)| fam.as_str() == name))
 }
 
 /// Whether `LUMEN_FONT_CACHE` is set to a falsey value (`0` / `off` /
@@ -209,7 +262,8 @@ fn build_from_cache(cf: CacheFile) -> FontSystem {
         });
     }
     // Re-apply the generic aliases exactly as the fresh scan resolved them
-    // (cosmic-text's own new() sets three; fontconfig may set all five).
+    // (see `scan`: the platform's mapping, grounded against the faces it
+    // actually holds).
     db.set_serif_family(cf.generics.serif);
     db.set_sans_serif_family(cf.generics.sans_serif);
     db.set_monospace_family(cf.generics.monospace);
