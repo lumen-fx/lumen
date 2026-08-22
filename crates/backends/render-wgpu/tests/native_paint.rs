@@ -1,4 +1,4 @@
-//! What a plugin's painter actually puts on the target, end to end.
+//! What a plugin's painter puts on the target, end to end.
 //!
 //! Drives the full main-world -> extract -> Node IR -> offscreen renderer path with a small
 //! painting extension installed, and reads the framebuffer back to see what it drew.
