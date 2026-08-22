@@ -34,7 +34,16 @@ coverage:
 # are tested. Everything they are built on stays graded: the scene layer, the
 # emitter, the contract types, and the host-neutral scripting layer are all
 # ordinary crates that run under `cargo test`.
+#
+# The compiler-plugin test scaffolding is the same case at a smaller scale:
+# the fixture is a cdylib the tests dlopen, built by a nested cargo without
+# instrumentation, so its hooks execute outside the measured process; the
+# `testing` module is the helper that builds it. Both exist only for the
+# tests that drive them, and the SDK surface they exercise is graded through
+# its own unit tests.
 ignore:
   - "crates/backends/render-wgpu/src/surface.rs"
   - "crates/backends/web-dom"
   - "crates/web-runtime"
+  - "crates/lumenc-plugin/fixture"
+  - "crates/lumenc-plugin/src/testing.rs"

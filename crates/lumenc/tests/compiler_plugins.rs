@@ -111,7 +111,7 @@ fn the_thin_path_matches_the_fat_path() {
         "thin",
         "<root><label text=\"FROM_PLUGIN_MARKUP\"/></root>",
         ".from-plugin { color: #ff0000; }",
-        &["inject_text = \"hello\""],
+        &["inject_text = \"hello\"\nlint_message = \"thin lint\""],
     );
     let thin = lumenc::compile::compile_dir_to_lmna(&dir).unwrap();
     let thin = lumen_ir::artifact::read_bytes(&thin).unwrap();
@@ -278,4 +278,112 @@ fn a_malformed_declaration_fails_the_compile_naming_the_plugin() {
     assert!(err.contains("not supported yet"), "{err}");
     let err = lumenc::check_app(&dir).unwrap_err().to_string();
     assert!(err.contains("not supported yet"), "{err}");
+}
+
+#[test]
+fn a_plugin_free_parse_error_carries_no_attribution() {
+    let dir = app("plain-invalid", "<root><label></root>", "", &[]);
+    std::fs::write(dir.join("lumen.toml"), "").unwrap();
+    let err = lumenc::compile_app(&dir).unwrap_err().to_string();
+    assert!(!err.contains("rewritten by compiler plugins"), "{err}");
+    let err = lumenc::compile::compile_dir_to_lmna(&dir)
+        .unwrap_err()
+        .to_string();
+    assert!(!err.contains("rewritten by compiler plugins"), "{err}");
+}
+
+#[test]
+fn a_rewritten_tree_the_parser_rejects_is_attributed_too() {
+    // `wrong_root` is well-formed XML, so the failure lands in the markup
+    // parser proper rather than the include resolver.
+    let dir = app("wrong-root", "<root/>", "", &["wrong_root = true"]);
+    let err = lumenc::compile_app(&dir).unwrap_err().to_string();
+    assert!(err.contains("rewritten by compiler plugins"), "{err}");
+    let err = lumenc::compile::compile_dir_to_lmna(&dir)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("rewritten by compiler plugins"), "{err}");
+}
+
+#[test]
+fn a_missing_script_reference_passes_through_untouched() {
+    // The transform changed the markup, and the failure afterwards is a
+    // file read, not a parse: it must not gain the rewrite attribution.
+    let dir = app(
+        "missing-script",
+        "<root><label text=\"/END\"/><script src=\"nope.cdl\"/></root>",
+        "",
+        &["order = \"x\""],
+    );
+    let err = lumenc::compile::compile_dir_to_lmna(&dir)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("nope.cdl"), "{err}");
+    assert!(!err.contains("rewritten by compiler plugins"), "{err}");
+}
+
+#[test]
+fn an_unparseable_config_declares_no_plugins() {
+    // Matches `LumenToml::load_or_default` leniency: a broken lumen.toml is
+    // "no config" here; the config loader is what reports it.
+    let dir = std::env::temp_dir().join(format!(
+        "lumenc-compiler-plugins-{}-bad-toml",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("lumen.toml"), "not toml ][").unwrap();
+    assert!(
+        lumenc::plugin_host::read_plugin_cfgs(&dir)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn an_app_without_a_config_declares_no_plugins() {
+    let dir = std::env::temp_dir().join(format!(
+        "lumenc-compiler-plugins-{}-no-toml",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(
+        lumenc::plugin_host::read_plugin_cfgs(&dir)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn the_run_wrappers_reject_a_bad_declaration_before_any_window() {
+    let dir = app("run-fastfail", "<root/>", "", &[]);
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[[plugins]]\nname = \"x\"\ngit = \"https://example.com\"\n",
+    )
+    .unwrap();
+    let opts = lumen_runtime::RunOptions::new(&dir);
+    let err = lumenc::run_app(opts).unwrap_err().to_string();
+    assert!(err.contains("not supported yet"), "{err}");
+}
+
+#[test]
+fn the_headless_wrapper_runs_the_declared_chain() {
+    let dir = app(
+        "run-headless",
+        "<root><label text=\"FROM_PLUGIN_MARKUP\"/></root>",
+        "",
+        &["emit_path = \"ran.txt\""],
+    );
+    // MCP off so the bounded run binds no socket.
+    let toml = std::fs::read_to_string(dir.join("lumen.toml")).unwrap();
+    std::fs::write(dir.join("lumen.toml"), format!("[mcp]\nport = 0\n{toml}")).unwrap();
+    let mut opts = lumen_runtime::RunOptions::new(&dir);
+    opts.hot_reload = false;
+    lumenc::run_app_headless(opts, 1).unwrap();
+    assert!(
+        dir.join(".lumen/generated/lumen-plugin-fixture/ran.txt")
+            .is_file()
+    );
 }

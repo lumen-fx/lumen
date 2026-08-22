@@ -292,7 +292,6 @@ impl AppBuilder {
     /// window closes; returns any setup or runtime error.
     pub fn run(self) -> Result<()> {
         let opts = self.into_run_options()?;
-        let opts = lumenc::with_default_compiler_plugins(opts).map_err(Error::Run)?;
         lumen_runtime::run_app(opts).map_err(Error::Run)
     }
 
@@ -354,7 +353,10 @@ impl AppBuilder {
 
         // Inject the compiler's front-end so the runtime can parse the app's
         // markup / CSS from source (it links no parser itself).
-        Ok(opts.with_parser(lumenc::default_parser()))
+        let opts = opts.with_parser(lumenc::default_parser());
+        // The compiler-plugin chain resolves with the rest of the options,
+        // so `run` boots with it already in place.
+        lumenc::with_default_compiler_plugins(opts).map_err(Error::Run)
     }
 }
 

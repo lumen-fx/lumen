@@ -325,13 +325,10 @@ impl App {
             // Windowing disabled: fall back to a bounded headless drive so
             // `run()` still terminates instead of blocking on a loop that
             // never opens a window.
-            let opts = lumenc::with_default_compiler_plugins(with_hooks(opts, seeds, deferred))
-                .map_err(Error::Run)?;
-            return lumen_runtime::run_app_headless(opts, 1).map_err(Error::Run);
+            return lumen_runtime::run_app_headless(with_hooks(opts, seeds, deferred), 1)
+                .map_err(Error::Run);
         }
-        let opts = lumenc::with_default_compiler_plugins(with_hooks(opts, seeds, deferred))
-            .map_err(Error::Run)?;
-        lumen_runtime::run_app(opts).map_err(Error::Run)
+        lumen_runtime::run_app(with_hooks(opts, seeds, deferred)).map_err(Error::Run)
     }
 
     /// Build the full stack without a window and tick it `ticks` times. The CI /
@@ -339,9 +336,8 @@ impl App {
     /// [`run`](Self::run), no GPU. Requires a UI source.
     pub fn run_headless(self, ticks: u32) -> Result<()> {
         let (opts, seeds, deferred) = self.into_run_options()?;
-        let opts = lumenc::with_default_compiler_plugins(with_hooks(opts, seeds, deferred))
-            .map_err(Error::Run)?;
-        lumen_runtime::run_app_headless(opts, ticks).map_err(Error::Run)
+        lumen_runtime::run_app_headless(with_hooks(opts, seeds, deferred), ticks)
+            .map_err(Error::Run)
     }
 
     /// Build a *bare* ECS [`App`](EcsApp) carrying only the seeds, user
@@ -411,6 +407,11 @@ impl App {
         opts.css = self.boot.css;
         opts.hot_reload = self.boot.hot_reload.unwrap_or(!in_memory);
 
+        // The compiler-plugin chain resolves here, with the other option
+        // preparation, so every run entry point below - windowed, headless
+        // mode, bounded ticks - carries it without touching the options
+        // again.
+        let opts = lumenc::with_default_compiler_plugins(opts).map_err(Error::Run)?;
         Ok((opts, self.seeds, self.deferred))
     }
 }

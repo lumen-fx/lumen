@@ -74,6 +74,7 @@ struct LockDoc {
 
 /// The parsed `lumen.lock`, with change tracking so an unchanged lock is
 /// never rewritten.
+#[derive(Debug)]
 pub struct LockFile {
     path: PathBuf,
     doc: LockDoc,
@@ -355,6 +356,81 @@ mod tests {
         let err = resolve_version_source("ghost", "1.2", &mut lock).unwrap_err();
         assert!(err.contains("no cached version matches"), "{err}");
         assert!(err.contains("registry client is not wired up yet"), "{err}");
+    }
+
+    #[test]
+    fn the_cache_root_falls_back_to_home_and_errors_without_one() {
+        let env = cache_env("root-fallback");
+        drop(env); // keep the mutex path exercised the same way
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved_cache = std::env::var_os("LUMEN_PLUGIN_CACHE");
+        let saved_home = std::env::var_os("HOME");
+        unsafe { std::env::remove_var("LUMEN_PLUGIN_CACHE") };
+        unsafe { std::env::set_var("HOME", "/home/someone") };
+        assert_eq!(
+            cache_root().unwrap(),
+            PathBuf::from("/home/someone/.lumen/plugins")
+        );
+        unsafe { std::env::remove_var("HOME") };
+        let err = cache_root().unwrap_err();
+        assert!(err.contains("HOME"), "{err}");
+        if let Some(v) = saved_home {
+            unsafe { std::env::set_var("HOME", v) };
+        }
+        if let Some(v) = saved_cache {
+            unsafe { std::env::set_var("LUMEN_PLUGIN_CACHE", v) };
+        }
+    }
+
+    #[test]
+    fn a_newer_lock_format_is_refused() {
+        let env = cache_env("lock-v2");
+        std::fs::write(env.app.join(LOCK_FILE), "version = 2\n").unwrap();
+        let err = LockFile::read(&env.app).unwrap_err();
+        assert!(err.contains("lock format version 2"), "{err}");
+        assert!(err.contains("update lumenc"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_lock_is_an_error_naming_the_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let env = cache_env("lock-unreadable");
+        let lock_path = env.app.join(LOCK_FILE);
+        std::fs::write(&lock_path, "version = 1\n").unwrap();
+        std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let err = LockFile::read(&env.app).unwrap_err();
+        std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(err.contains(LOCK_FILE), "{err}");
+    }
+
+    #[test]
+    fn a_cached_version_without_this_platforms_library_says_so() {
+        let env = cache_env("no-lib");
+        std::fs::create_dir_all(env.root.join("demo").join("1.0.0")).unwrap();
+        let mut lock = LockFile::read(&env.app).unwrap();
+        let err = resolve_version_source("demo", "1", &mut lock).unwrap_err();
+        assert!(err.contains("holds no library for this platform"), "{err}");
+    }
+
+    #[test]
+    fn a_lock_entry_missing_this_platforms_checksum_gains_it() {
+        let env = cache_env("gain-checksum");
+        install(&env.root, "demo", "1.0.0", b"bytes");
+        // A lock pinned on another platform: same version, no checksum for
+        // this one.
+        std::fs::write(
+            env.app.join(LOCK_FILE),
+            "version = 1\n\n[[plugin]]\nname = \"demo\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        let mut lock = LockFile::read(&env.app).unwrap();
+        resolve_version_source("demo", "1", &mut lock).unwrap();
+        assert!(lock.dirty);
+        lock.store().unwrap();
+        let text = std::fs::read_to_string(env.app.join(LOCK_FILE)).unwrap();
+        assert!(text.contains(&platform_key()), "{text}");
     }
 
     #[test]
