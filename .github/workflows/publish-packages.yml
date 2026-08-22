@@ -49,11 +49,25 @@ name: publish-packages
 #
 # A prerelease, a draft, and a release with no sha256sums.txt asset are all
 # skipped: the first two are not what a package manager should hand people, and
-# the third leaves nothing to write into the manifests.
+# the third leaves nothing to write into the manifests. That prerelease check
+# reads the release itself, so it holds however this workflow was started, and
+# it is the second thing keeping a nightly out of the package managers. The
+# first is that nothing brings one here: nightly.yml calls no workflow, and the
+# only automatic caller is release.yml, which fires on `v*` tags while the
+# nightly publishes onto a tag named `nightly`.
+#
+# release.yml calls this once the release is published, passing the tag it was
+# cut from. Waiting on `release: published` instead would never fire:
+# release.yml creates the release with the built-in token, and GitHub raises no
+# workflow events for anything that token writes.
 
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to publish. Defaults to the newest release.
+        required: false
+        type: string
   # Manual trigger, for re-publishing a release whose first run failed, or for
   # the first run after a secret is added.
   workflow_dispatch:
@@ -68,6 +82,10 @@ permissions:
 
 # Two releases published close together would otherwise race each other to the
 # same package repositories, and the loser would publish the older version.
+# Each publishing job takes the lock for the repository it pushes to, rather
+# than one lock covering the workflow: a called workflow's jobs join the
+# caller's run, so a workflow-level group has no run of its own to gate. The
+# group below still covers a run started from the Actions tab.
 concurrency:
   group: publish-packages
   cancel-in-progress: false
@@ -86,10 +104,9 @@ jobs:
         id: pick
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ inputs.tag }}
         run: |
-          tag="${EVENT_TAG:-$INPUT_TAG}"
+          tag="$INPUT_TAG"
           if [ -z "$tag" ]; then
             tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
           fi
@@ -165,6 +182,9 @@ jobs:
     if: needs.release.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: publish-packages-aur
+      cancel-in-progress: false
     steps:
       - name: Check the AUR key is set
         id: gate
@@ -219,6 +239,9 @@ jobs:
     if: needs.release.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: publish-packages-homebrew
+      cancel-in-progress: false
     steps:
       - name: Check the tap is reachable
         id: gate
@@ -269,6 +292,9 @@ jobs:
     if: needs.release.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: publish-packages-scoop
+      cancel-in-progress: false
     steps:
       - name: Check the bucket is reachable
         id: gate
@@ -319,6 +345,9 @@ jobs:
     if: needs.release.outputs.publish == 'true'
     runs-on: windows-latest
     timeout-minutes: 20
+    concurrency:
+      group: publish-packages-winget
+      cancel-in-progress: false
     steps:
       - name: Check the token and the existing package
         id: gate

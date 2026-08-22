@@ -1,10 +1,11 @@
 # Release checklist
 
 How to cut a Lumen release. `.github/workflows/build-toolchain.yml` builds the
-assets and `.github/workflows/release.yml` publishes them; a tag push is the
-only trigger, and no target has a manual upload step. Asset names are
-load-bearing, because `tools/release/install.sh` looks them up verbatim, so the
-workflow generates them rather than anyone typing them.
+assets and `.github/workflows/release.yml` publishes them and starts every
+channel that follows; a tag push is the only trigger for any of it, and no
+target has a manual upload step. Asset names are load-bearing, because
+`tools/release/install.sh` looks them up verbatim, so the workflow generates
+them rather than anyone typing them.
 
 | Asset                          | Built by                              |
 | ------------------------------- | -------------------------------------- |
@@ -58,7 +59,7 @@ checklist.
 1. Make sure `main` is green in the `ci` workflow.
 2. Check that `version` in the workspace `Cargo.toml` is the version you are
    about to tag. It usually is already, because the previous release set it
-   (step 6). If it is not, run `tools/release/bump-version.py <version>`,
+   (step 7). If it is not, run `tools/release/bump-version.py <version>`,
    commit, push, and wait for green. The tag has to match this value: the
    release workflow compares them first and publishes nothing if they differ,
    because the MSI's version, the install receipt, and `lumenc --version` all
@@ -101,9 +102,26 @@ checklist.
    Re-running the workflow after a fix is safe, because `gh release upload
    --clobber` replaces same-named assets rather than erroring on them.
 
-5. Work through [Verify](#verify) against the published release.
+5. The same run then goes on to the four channels a release feeds, each in the
+   workflow that owns it and each checked out at the tag: `publish.yml` for the
+   language registries, `publish-packages.yml` for the OS package managers,
+   `publish-extensions.yml` for the editor marketplaces, and `site-rebuild.yml`
+   for the docs site. They appear as jobs of the release run rather than as
+   runs of their own.
 
-6. Check that `main` moved on. The release's last job commits
+   `release.yml` calls them instead of each one waiting on the release,
+   because the release is created with the built-in `GITHUB_TOKEN` and GitHub
+   raises no workflow events for anything that token writes. A workflow
+   triggered by `release: published` never starts here.
+
+   Every one of them keeps a manual trigger in the Actions tab, so a leg that
+   failed is re-run on its own rather than by cutting another release, and
+   every one skips the parts it has no credential for. Each of those files
+   lists the credentials it wants at the top.
+
+6. Work through [Verify](#verify) against the published release.
+
+7. Check that `main` moved on. The release's last job commits
    `chore: set the workspace version to X.Y.Z+1` straight to `main`, so the tag
    push is the whole release and there is nothing left to merge.
 
@@ -225,9 +243,9 @@ link.
 ## Publishing to the package registries
 
 The toolchain install channel above is one way to get Lumen; the language
-registries are the other. `.github/workflows/publish.yml` covers them, runs
-when a release is published, and can also be started by hand from the Actions
-tab with a dry-run switch.
+registries are the other. `.github/workflows/publish.yml` covers them.
+`release.yml` calls it once the release is published, and it can also be
+started by hand from the Actions tab, where it defaults to a dry run.
 
 | Package   | Registry  | What it is                   |
 | --------- | --------- | ---------------------------- |
@@ -283,15 +301,25 @@ publisher, a `PYPI_PUBLISH_ENABLED` variable) is listed at the top of
 skips when one is missing, so running the workflow before the setup exists
 reports what is missing instead of failing.
 
+The PyPI leg needs one thing settled before `PYPI_PUBLISH_ENABLED` is turned
+on. A trusted publisher is registered against a workflow filename, and PyPI
+matches that name against the file the publishing job is defined in, which is
+`publish.yml`; its documentation also lists a workflow started by another
+workflow as unsupported. So register the publisher for `publish.yml`, turn the
+variable on, and cut a release to see whether the upload is accepted. If PyPI
+rejects the identity, move the upload step up into `release.yml` and change the
+registered filename to match. Nothing has gone to PyPI yet, so there is no
+working registration to lose either way.
+
 ## Publishing to the package managers
 
 Lumen is also published to Homebrew, the AUR, scoop, and winget. The manifests
 live in this directory, one per manager, and
-`.github/workflows/publish-packages.yml` takes them from a published release to
-the repository that serves each one: the AUR over SSH, the tap
-(`lumen-fx/homebrew-lumen`) and the bucket (`lumen-fx/scoop-lumen`) over a
-push, and winget as a pull request against `microsoft/winget-pkgs` raised by
-`wingetcreate`.
+`.github/workflows/publish-packages.yml`, which `release.yml` calls with the
+tag it just published, takes them to the repository that serves each one: the
+AUR over SSH, the tap (`lumen-fx/homebrew-lumen`) and the bucket
+(`lumen-fx/scoop-lumen`) over a push, and winget as a pull request against
+`microsoft/winget-pkgs` raised by `wingetcreate`.
 
 The version and checksums in the manifests come from the release's
 `sha256sums.txt`. `tools/release/update-package-manifests.sh <version>` does
@@ -429,11 +457,14 @@ be installed and never checks for updates.
 Start a nightly by hand from the Actions tab when you want one outside the
 schedule.
 
-Every workflow that runs off a published release skips a prerelease, so a
-nightly reaches none of the channels a release does: `publish.yml` holds back
-crates.io and PyPI, `publish-packages.yml` the package managers,
-`publish-extensions.yml` the editor marketplaces, and `site-rebuild.yml` the
-docs site. Add the same guard to anything new that triggers on a release.
+None of the publishing workflows starts on its own. `release.yml` calls all
+four, and the only thing that starts `release.yml` is a `v`-prefixed tag, so a
+nightly reaches none of them: not crates.io or PyPI, not the package managers,
+not the editor marketplaces, not the docs site. Running one by hand from the
+Actions tab is the only way to point it at a nightly, and
+`publish-packages.yml` refuses even that, because it reads the release it was
+given and stops on a prerelease. Anything new that publishes on a release
+belongs in that list of calls rather than on a trigger of its own.
 
 ## Current limitations
 

@@ -6,12 +6,25 @@ name: publish-extensions
 # so the workflow is safe before the accounts exist. The first JetBrains
 # upload is manual by marketplace rule; this takes over from the second.
 #
-# A prerelease publishes nothing. nightly.yml puts a build of main out every
-# night on a rolling tag, and the marketplaces take versions, not snapshots.
+# release.yml calls this once the release is published, off the tag it was cut
+# from. Waiting on `release: published` instead would never fire: release.yml
+# creates the release with the built-in token, and GitHub raises no workflow
+# events for anything that token writes. `workflow_dispatch` re-runs a leg that
+# failed, or makes the first run after a token is added.
+#
+# The marketplaces take versions, not snapshots, and a nightly is a snapshot.
+# Nothing carries one here: nightly.yml calls no workflow, and the only
+# automatic caller is release.yml, which fires on `v*` tags while the nightly
+# publishes onto a tag named `nightly`.
+#
+# Each job holds its own lock. A marketplace rejects a version it already has
+# rather than skipping it, so two overlapping runs fail the second one. The
+# lock is per job rather than per workflow because a called workflow's jobs
+# join the caller's run, leaving a workflow-level group no run of its own to
+# gate.
 
 on:
-  release:
-    types: [published]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -19,9 +32,11 @@ permissions:
 
 jobs:
   vscode:
-    if: github.event.release.prerelease != true
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: publish-extensions-vscode
+      cancel-in-progress: false
     defaults:
       run:
         working-directory: tools/vscode-lumen
@@ -52,9 +67,11 @@ jobs:
           npx ovsx publish ./*.vsix -p "$OVSX_PAT"
 
   jetbrains:
-    if: github.event.release.prerelease != true
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    concurrency:
+      group: publish-extensions-jetbrains
+      cancel-in-progress: false
     defaults:
       run:
         working-directory: tools/jetbrains-lumen
