@@ -25,6 +25,20 @@ fn container(children: Vec<Arc<Node>>) -> Arc<Node> {
     Arc::new(Node::Container { children })
 }
 
+fn native(origin: (f32, f32), size: (f32, f32), revision: u64) -> Arc<Node> {
+    Arc::new(Node::Native {
+        extension_id: "test.chart".into(),
+        // A fresh payload Arc every call, the way a real producer rebuilds it each dirty frame.
+        payload: Arc::new(revision),
+        bounds: Rect {
+            origin: glam::Vec2::new(origin.0, origin.1),
+            size: glam::Vec2::new(size.0, size.1),
+        },
+        revision,
+        clip_to_bounds: true,
+    })
+}
+
 #[test]
 fn single_rect_color_change_damages_only_that_rect() {
     let viewport = Rect {
@@ -215,6 +229,121 @@ fn fresh_trees_single_change_damages_proportionally() {
             "damage rect {r:?} outside changed widget #23 bounds (185,125,40,40)"
         );
     }
+}
+
+/// A plugin's leaf whose content did not change costs nothing, even though its
+/// payload is a different allocation this frame. Without the revision contract
+/// every native leaf would repaint the window on every frame.
+#[test]
+fn an_unchanged_native_leaf_emits_no_damage() {
+    let viewport = Rect {
+        origin: glam::Vec2::ZERO,
+        size: glam::Vec2::new(800.0, 600.0),
+    };
+    let prev = container(vec![
+        rect((10.0, 10.0), (50.0, 50.0), Color::rgb(1.0, 0.0, 0.0)),
+        native((200.0, 100.0), (120.0, 80.0), 42),
+    ]);
+    let curr = container(vec![
+        rect((10.0, 10.0), (50.0, 50.0), Color::rgb(1.0, 0.0, 0.0)),
+        native((200.0, 100.0), (120.0, 80.0), 42),
+    ]);
+
+    let mut damage = FrameDamage::default();
+    diff_retained_scenes(Some(&prev), Some(&curr), viewport, &mut damage);
+
+    assert!(
+        damage.is_empty(),
+        "a leaf at the same revision means the same pixels, got {:?}",
+        damage.0
+    );
+}
+
+/// The regression this seam fixes: a native leaf used to report the whole
+/// viewport as its bounds, so one changed chart repainted the entire window.
+/// Damage now covers the leaf and nothing else.
+#[test]
+fn a_new_revision_damages_only_the_leafs_own_bounds() {
+    let viewport = Rect {
+        origin: glam::Vec2::ZERO,
+        size: glam::Vec2::new(800.0, 600.0),
+    };
+    let prev = container(vec![native((200.0, 100.0), (120.0, 80.0), 1)]);
+    let curr = container(vec![native((200.0, 100.0), (120.0, 80.0), 2)]);
+
+    let mut damage = FrameDamage::default();
+    diff_retained_scenes(Some(&prev), Some(&curr), viewport, &mut damage);
+
+    assert!(!damage.is_empty(), "a new revision means new pixels");
+    let damage_area: f32 = damage.0.iter().map(|r| r.size.x * r.size.y).sum();
+    assert!(
+        damage_area <= 120.0 * 80.0 + 1.0,
+        "damage {damage_area} px^2 should cover the leaf, not the {} px^2 viewport",
+        viewport.size.x * viewport.size.y
+    );
+    for r in &damage.0 {
+        assert!(
+            r.origin.x >= 199.0
+                && r.origin.x + r.size.x <= 321.0
+                && r.origin.y >= 99.0
+                && r.origin.y + r.size.y <= 181.0,
+            "damage rect {r:?} outside the leaf's bounds (200,100,120,80)"
+        );
+    }
+}
+
+/// A leaf that moved damages where it was and where it is, so the vacated
+/// region is repainted too.
+#[test]
+fn a_moved_native_leaf_damages_both_places() {
+    let viewport = Rect {
+        origin: glam::Vec2::ZERO,
+        size: glam::Vec2::new(800.0, 600.0),
+    };
+    let prev = container(vec![native((100.0, 100.0), (40.0, 40.0), 7)]);
+    let curr = container(vec![native((300.0, 100.0), (40.0, 40.0), 7)]);
+
+    let mut damage = FrameDamage::default();
+    diff_retained_scenes(Some(&prev), Some(&curr), viewport, &mut damage);
+
+    let covers = |x: f32| {
+        damage
+            .0
+            .iter()
+            .any(|r| r.origin.x <= x && x <= r.origin.x + r.size.x)
+    };
+    assert!(
+        covers(120.0),
+        "the vacated region is damaged: {:?}",
+        damage.0
+    );
+    assert!(covers(320.0), "the new region is damaged: {:?}", damage.0);
+}
+
+/// Swapping a native leaf for an ordinary rect changes both, so both bounds are
+/// damaged rather than the pair being read as unchanged.
+#[test]
+fn replacing_a_native_leaf_with_a_rect_damages_both() {
+    let viewport = Rect {
+        origin: glam::Vec2::ZERO,
+        size: glam::Vec2::new(800.0, 600.0),
+    };
+    let prev = container(vec![native((100.0, 100.0), (40.0, 40.0), 7)]);
+    let curr = container(vec![rect(
+        (400.0, 400.0),
+        (40.0, 40.0),
+        Color::rgb(0.0, 1.0, 0.0),
+    )]);
+
+    let mut damage = FrameDamage::default();
+    diff_retained_scenes(Some(&prev), Some(&curr), viewport, &mut damage);
+
+    assert_eq!(
+        damage.0.len(),
+        2,
+        "old bounds and new bounds: {:?}",
+        damage.0
+    );
 }
 
 #[test]
