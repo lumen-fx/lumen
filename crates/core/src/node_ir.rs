@@ -75,6 +75,33 @@ impl Affine2 {
             coeffs: [1.0, 0.0, 0.0, 1.0, tx, ty],
         }
     }
+
+    /// Uniform scale by `s` about the origin.
+    pub const fn scale(s: f64) -> Self {
+        Self {
+            coeffs: [s, 0.0, 0.0, s, 0.0, 0.0],
+        }
+    }
+}
+
+/// Composition: `outer * inner` applies `inner` first, matching `vello::kurbo::Affine`.
+impl std::ops::Mul for Affine2 {
+    type Output = Affine2;
+
+    fn mul(self, rhs: Affine2) -> Affine2 {
+        let a = self.coeffs;
+        let b = rhs.coeffs;
+        Affine2 {
+            coeffs: [
+                a[0] * b[0] + a[2] * b[1],
+                a[1] * b[0] + a[3] * b[1],
+                a[0] * b[2] + a[2] * b[3],
+                a[1] * b[2] + a[3] * b[3],
+                a[0] * b[4] + a[2] * b[5] + a[4],
+                a[1] * b[4] + a[3] * b[5] + a[5],
+            ],
+        }
+    }
 }
 
 impl Default for Affine2 {

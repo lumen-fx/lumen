@@ -371,6 +371,9 @@ impl App {
         // Snapshot of hidden main entities, refreshed each extract phase by
         // `stash_hidden_entities` and consumed by the `cull_hidden` guard.
         render_world.insert_resource(HiddenExtracts::default());
+        // Painter registry for plugin-contributed `ExtractedNative` leaves; see
+        // [`Self::register_native_painter`].
+        render_world.insert_resource(crate::native::NativePainters::default());
 
         // Install the render schedule ordered `Prepare -> Render`.
         let mut render_schedule = Schedule::new(Render);
@@ -599,6 +602,22 @@ impl App {
     /// Appends an extract fn to [`Self::extract_fns`].
     pub fn add_extract_fn(&mut self, f: ExtractFn) -> &mut Self {
         self.extract_fns.push(f);
+        self
+    }
+
+    /// Registers the painter that draws every [`crate::native::ExtractedNative`] leaf carrying
+    /// `extension_id`. Registering the same id twice keeps the later painter.
+    ///
+    /// The backend calls it when the leaf's turn comes in paint order; a backend with no painter
+    /// for an id skips the leaf. See [`crate::native`] for the seam's contracts.
+    pub fn register_native_painter<P: crate::native::NativePainter>(
+        &mut self,
+        extension_id: impl Into<std::sync::Arc<str>>,
+        painter: P,
+    ) -> &mut Self {
+        self.render_world
+            .get_resource_or_insert_with(crate::native::NativePainters::default)
+            .register(extension_id, painter);
         self
     }
 
