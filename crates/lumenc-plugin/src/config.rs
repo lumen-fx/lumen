@@ -121,28 +121,37 @@ impl PluginCfg {
             .try_into::<Vec<PluginCfg>>()
             .map_err(|e| format!("lumen.toml [[plugins]]: {e}"))
     }
-
-    /// Read the `[[plugins]]` array from re-serialized raw entries (the shape
-    /// `lumen-runtime`'s config carries them in).
-    pub fn from_values(values: &[toml::Value]) -> Result<Vec<PluginCfg>, String> {
-        values
-            .iter()
-            .map(|v| {
-                v.clone()
-                    .try_into::<PluginCfg>()
-                    .map_err(|e| format!("lumen.toml [[plugins]]: {e}"))
-            })
-            .collect()
-    }
 }
 
-/// The platform spellings of a library called `name`, in probe order.
-pub(crate) fn library_spellings(name: &str) -> [String; 3] {
-    [
-        format!("lib{name}.so"),
-        format!("lib{name}.dylib"),
-        format!("{name}.dll"),
-    ]
+/// The candidate file names of a library called `name`, in probe order: the
+/// running platform's spelling first, the other platforms' after (so one
+/// lumen.toml reads the same everywhere), and for a hyphenated name the
+/// underscored variant of each (cargo writes `libfoo_bar.so` for a package
+/// named `foo-bar`).
+pub(crate) fn library_spellings(name: &str) -> Vec<String> {
+    let mut spellings = Vec::new();
+    let mut push = |name: &str| {
+        let host = format!(
+            "{}{name}{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_SUFFIX
+        );
+        for cand in [
+            host,
+            format!("lib{name}.so"),
+            format!("lib{name}.dylib"),
+            format!("{name}.dll"),
+        ] {
+            if !spellings.contains(&cand) {
+                spellings.push(cand);
+            }
+        }
+    };
+    push(name);
+    if name.contains('-') {
+        push(&name.replace('-', "_"));
+    }
+    spellings
 }
 
 /// Resolve a `[[plugins]] path` to the file to load. Relative paths anchor at
@@ -170,13 +179,16 @@ pub fn resolve_plugin_path(app_dir: &Path, path: &str) -> Result<PathBuf, Vec<Pa
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let dir = base.parent().unwrap_or(Path::new("."));
-    let candidates = library_spellings(&stem).map(|f| dir.join(f));
+    let candidates: Vec<PathBuf> = library_spellings(&stem)
+        .iter()
+        .map(|f| dir.join(f))
+        .collect();
     for c in &candidates {
         if c.is_file() {
             return Ok(c.clone());
         }
     }
-    Err(candidates.to_vec())
+    Err(candidates)
 }
 
 #[cfg(test)]
@@ -253,12 +265,32 @@ mod tests {
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, ["libdemo.so", "libdemo.dylib", "demo.dll"]);
+        // The host platform's spelling leads; every platform's is probed.
+        assert!(
+            names[0].starts_with(std::env::consts::DLL_PREFIX),
+            "{names:?}"
+        );
+        for want in ["libdemo.so", "libdemo.dylib", "demo.dll"] {
+            assert!(names.iter().any(|n| n == want), "{names:?}");
+        }
 
         std::fs::create_dir_all(dir.join("plugins")).unwrap();
         let hit = dir.join("plugins").join("libdemo.so");
         std::fs::write(&hit, b"").unwrap();
         assert_eq!(resolve_plugin_path(&dir, "plugins/demo").unwrap(), hit);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod spelling_tests {
+    use super::*;
+
+    #[test]
+    fn hyphenated_names_probe_the_underscore_variant() {
+        let names = library_spellings("foo-bar");
+        assert!(names.iter().any(|n| n == "libfoo-bar.so"), "{names:?}");
+        assert!(names.iter().any(|n| n == "libfoo_bar.so"), "{names:?}");
+        assert!(names.iter().any(|n| n == "foo_bar.dll"), "{names:?}");
     }
 }

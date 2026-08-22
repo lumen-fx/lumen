@@ -690,7 +690,9 @@ USAGE:
 
 Parses <dir>/main.lmn (+ optional main.css), applies the cascade, and
 compiles the app's scripts with the same engine settings `run` uses. Runs
-no [[hooks]] and opens no window. Exits non-zero on the first failure.";
+no [[hooks]] and opens no window; declared [[plugins]] do run, with their
+emit outputs discarded (a `version` source may still update lumen.lock).
+Exits non-zero on the first failure.";
     let Some(dir) = args.next() else {
         eprintln!("lumenc check: missing <dir>\n\n{USAGE}");
         return ExitCode::from(2);

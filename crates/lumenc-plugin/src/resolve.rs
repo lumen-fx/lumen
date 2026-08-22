@@ -8,8 +8,9 @@
 //!
 //! `lumen.lock`, beside `lumen.toml`, pins what a requirement resolved to:
 //! the exact version plus a sha256 per platform. Committing it makes the
-//! next build - any machine, any platform - reuse the same version and
-//! refuse a cdylib whose bytes changed. The file is regenerated
+//! next build reuse the pinned version and refuse a cached cdylib whose
+//! bytes changed. A platform records its checksum the first time it builds;
+//! from then on that platform verifies against it. The file is regenerated
 //! deterministically; edit `lumen.toml`, not the lock.
 
 use std::collections::BTreeMap;
@@ -85,7 +86,17 @@ impl LockFile {
         let path = app_dir.join(LOCK_FILE);
         let doc = match std::fs::read_to_string(&path) {
             Ok(text) => {
-                toml::from_str::<LockDoc>(&text).map_err(|e| format!("{}: {e}", path.display()))?
+                let doc = toml::from_str::<LockDoc>(&text)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                if doc.version != 1 {
+                    return Err(format!(
+                        "{}: lock format version {} is newer than this lumenc understands; \
+                         update lumenc or delete the lock to regenerate it",
+                        path.display(),
+                        doc.version
+                    ));
+                }
+                doc
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => LockDoc {
                 version: 1,
@@ -160,6 +171,17 @@ pub fn resolve_version_source(
     };
 
     let version_dir = plugin_dir.join(&version);
+    if !version_dir.is_dir() {
+        // The lock pin points at a version this machine has not cached (a
+        // fresh clone, or a cache root that does not exist). Saying "no
+        // library for this platform" here would send the user hunting for
+        // the wrong problem.
+        return Err(format!(
+            "plugin '{name}': the locked version {version} is not in the plugin cache ({}); \
+             install it there or use a `path` source (the registry client is not wired up yet)",
+            version_dir.display()
+        ));
+    }
     let lib = library_spellings(name)
         .iter()
         .map(|f| version_dir.join(f))
@@ -333,6 +355,25 @@ mod tests {
         let err = resolve_version_source("ghost", "1.2", &mut lock).unwrap_err();
         assert!(err.contains("no cached version matches"), "{err}");
         assert!(err.contains("registry client is not wired up yet"), "{err}");
+    }
+
+    #[test]
+    fn a_pinned_version_missing_from_the_cache_names_the_real_problem() {
+        let env = cache_env("pinned-absent");
+        install(&env.root, "demo", "1.4.2", b"bytes");
+        let mut lock = LockFile::read(&env.app).unwrap();
+        resolve_version_source("demo", "1", &mut lock).unwrap();
+        lock.store().unwrap();
+
+        // Fresh-clone shape: the lock survives, the cache does not.
+        std::fs::remove_dir_all(env.root.join("demo")).unwrap();
+        let mut lock = LockFile::read(&env.app).unwrap();
+        let err = resolve_version_source("demo", "1", &mut lock).unwrap_err();
+        assert!(
+            err.contains("locked version 1.4.2 is not in the plugin cache"),
+            "{err}"
+        );
+        assert!(!err.contains("is in the cache but"), "{err}");
     }
 
     #[test]

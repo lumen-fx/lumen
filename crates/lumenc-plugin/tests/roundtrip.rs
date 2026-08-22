@@ -20,7 +20,11 @@ fn load(app_dir: &Path, config: &str) -> PluginSet {
 }
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("lumenc-plugin-roundtrip-{tag}"));
+    // Keyed by pid so two concurrent runs of this binary cannot collide.
+    let dir = std::env::temp_dir().join(format!(
+        "lumenc-plugin-roundtrip-{}-{tag}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -181,4 +185,23 @@ fn declaration_order_composes() {
         )
         .unwrap();
     assert_eq!(out, "<root>abc/END</root>");
+}
+
+#[test]
+fn duplicate_names_keep_both_entries_emit_outputs() {
+    let dir = temp_dir("dup-emit");
+    let lib = testing::fixture_cdylib();
+    let set = PluginSet::load(
+        &dir,
+        &[
+            cfg("lumen-plugin-fixture", &lib, "emit_path = \"one.txt\""),
+            cfg("lumen-plugin-fixture", &lib, "emit_path = \"two.txt\""),
+        ],
+    )
+    .unwrap();
+    set.finish(&LayoutIR::default(), &dir.join("main.lmn"))
+        .unwrap();
+    let root = dir.join(".lumen/generated/lumen-plugin-fixture");
+    assert!(root.join("one.txt").is_file(), "first entry's output gone");
+    assert!(root.join("two.txt").is_file(), "second entry's output gone");
 }

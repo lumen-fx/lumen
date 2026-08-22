@@ -104,17 +104,34 @@ fn compile_dir(
         .map_err(|e| CompileError::Read(html_path.clone(), e))?;
     // Compiler plugins rewrite the entry sources first, before any
     // splicing, the same points `load_ir` runs them at.
+    let original_html = html.clone();
     let html = plugins
         .transform_source(SourceKind::Markup, html, &html_path, &html_path)
         .map_err(|e| CompileError::Plugin(e.to_string()))?;
+    let markup_transformed = html != original_html;
+    drop(original_html);
+    // Same attribution the fat path applies: positions in a markup error
+    // point into the rewritten text, not the file on disk.
+    let attribute = |e: String| {
+        if markup_transformed {
+            format!("(in the markup as rewritten by compiler plugins) {e}")
+        } else {
+            e
+        }
+    };
     let css_raw = read_optional(&css_path)?;
-    let css_raw = match css_raw {
-        Some(src) => Some(
-            plugins
-                .transform_source(SourceKind::Css, src, &html_path, &css_path)
-                .map_err(|e| CompileError::Plugin(e.to_string()))?,
-        ),
-        None => None,
+    // An absent stylesheet runs through the chain as the empty string, so a
+    // plugin can synthesize one; an empty result stays "no stylesheet".
+    let css_raw = {
+        let out = plugins
+            .transform_source(
+                SourceKind::Css,
+                css_raw.unwrap_or_default(),
+                &html_path,
+                &css_path,
+            )
+            .map_err(|e| CompileError::Plugin(e.to_string()))?;
+        (!out.is_empty()).then_some(out)
     };
 
     // Resolve `@import "..."` (imported-first) before parsing the sheet.
@@ -166,7 +183,7 @@ fn compile_dir(
         Some(&crate::resolve::FsLoader),
         &mut include_paths,
     )
-    .map_err(|e| CompileError::ParseHtml(e.to_string()))?;
+    .map_err(|e| CompileError::ParseHtml(attribute(e.to_string())))?;
     // An unresolvable var() degrades to empty text plus a printed warning
     // instead of failing the compile - matching how the stylesheet cascade
     // below drops one bad declaration and keeps going (see `load_ir`'s
@@ -184,10 +201,15 @@ fn compile_dir(
     // The `lmn!` blocks the app's candela scripts write, read before the tree:
     // markup names a candela component by writing the function as a tag, so
     // the blocks are in the table this parse instantiates against.
-    let scripted = script_fragments(&spliced, &html_path, dir)?;
+    // Reads the (possibly rewritten) entry text, so its errors carry the
+    // same attribution as the other markup errors.
+    let scripted = script_fragments(&spliced, &html_path, dir).map_err(|e| match e {
+        CompileError::ParseHtml(msg) => CompileError::ParseHtml(attribute(msg)),
+        other => other,
+    })?;
     // Includes are already spliced away, so the string-only parser suffices.
     let parsed = crate::parse_markup(&spliced, &html_path, None, &scripted)
-        .map_err(|e| CompileError::ParseHtml(e.to_string()))?;
+        .map_err(|e| CompileError::ParseHtml(attribute(e.to_string())))?;
     let mut fragments = parsed.fragments;
     let mut ir = parsed.ir;
     ir.included_files = include_paths;

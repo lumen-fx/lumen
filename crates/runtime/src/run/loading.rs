@@ -189,20 +189,37 @@ pub(crate) fn load_ir(
     // `set_inner_markup`) pass through the same hooks as on-disk files.
     // Included files and sibling page files are read further down without
     // this pass; entry-only is the documented v1 scope.
+    let original_html = html.clone();
     let html = plugins
         .transform_markup(html, html_path)
         .map_err(RunError::Plugin)?;
+    // Remembered so a parse error can say the text differs from the file on
+    // disk; positions in it would otherwise send the user to lines that do
+    // not exist.
+    let markup_transformed = html != original_html;
+    drop(original_html);
+    // Positions in any downstream markup error point into the text being
+    // parsed; when a plugin rewrote it that text is not the file on disk,
+    // and the error says so instead of sending the user to lines that do
+    // not exist.
+    let attribute = |e: String| {
+        if markup_transformed {
+            format!("(in the markup as rewritten by compiler plugins) {e}")
+        } else {
+            e
+        }
+    };
     let css_raw = match sources.css {
         Some(src) => Some(src.to_string()),
         None => read_optional(css_path)?,
     };
-    let css_raw = match css_raw {
-        Some(src) => Some(
-            plugins
-                .transform_css(src, html_path, css_path)
-                .map_err(RunError::Plugin)?,
-        ),
-        None => None,
+    // An absent stylesheet runs through the chain as the empty string, so a
+    // plugin can synthesize one; an empty result stays "no stylesheet".
+    let css_raw = {
+        let out = plugins
+            .transform_css(css_raw.unwrap_or_default(), html_path, css_path)
+            .map_err(RunError::Plugin)?;
+        (!out.is_empty()).then_some(out)
     };
     // Resolve `@import "..."` directives: splice imported sheets ahead of
     // this file's own rules (imported-first, so the importing file wins at
@@ -269,7 +286,7 @@ pub(crate) fn load_ir(
     let mut include_paths: Vec<PathBuf> = Vec::new();
     let html = parser
         .resolve_includes(&html, html_path, &mut include_paths)
-        .map_err(RunError::ParseHtml)?;
+        .map_err(|e| RunError::ParseHtml(attribute(e)))?;
     let mut include_mtimes: Vec<Option<SystemTime>> =
         include_paths.iter().map(|p| mtime(p)).collect();
     // Inline var() substitution runs on the fully-spliced markup. An
@@ -295,7 +312,8 @@ pub(crate) fn load_ir(
     // file and hot-reloading picks the new body up.
     let mut fragments = match plan {
         Some(plan) if sources.markup.is_none() && plan.multipage => {
-            crate::pages::collect_fragments(plan, parser).map_err(RunError::ParseHtml)?
+            crate::pages::collect_fragments(plan, parser, Some(&html))
+                .map_err(RunError::ParseHtml)?
         }
         _ => lumen_ir::fragment::FragmentTable::new(),
     };
@@ -305,7 +323,7 @@ pub(crate) fn load_ir(
     // here so a run from source instantiates the same fragments a built
     // artifact carries, and so a malformed block fails the load rather than
     // the window.
-    let scripted = script_fragments(&html, html_path, dir, plan, parser)?;
+    let scripted = script_fragments(&html, html_path, dir, plan, parser, markup_transformed)?;
     fragments
         .merge(scripted.clone())
         .map_err(|e| RunError::Script(e.to_string()))?;
@@ -314,11 +332,12 @@ pub(crate) fn load_ir(
     // `<template>` in the directory, not only the ones the entry page reached.
     let mut declared = match plan {
         Some(plan) if sources.markup.is_none() => {
-            crate::pages::collect_fragments(plan, parser).map_err(RunError::ParseHtml)?
+            crate::pages::collect_fragments(plan, parser, Some(&html))
+                .map_err(RunError::ParseHtml)?
         }
         _ => parser
             .collect_fragments(&html, html_path)
-            .map_err(RunError::ParseHtml)?,
+            .map_err(|e| RunError::ParseHtml(attribute(e)))?,
     };
     declared
         .merge(scripted)
@@ -335,7 +354,7 @@ pub(crate) fn load_ir(
     // Includes are already spliced away, so the string-only parser suffices.
     let mut ir = parser
         .parse_html(&html, &fragments)
-        .map_err(RunError::ParseHtml)?;
+        .map_err(|e| RunError::ParseHtml(attribute(e)))?;
     // Carry the resolved include list on the IR for parity with
     // `external_scripts` (used by hot reload + inspectable by consumers).
     ir.included_files = include_paths.clone();
@@ -350,7 +369,7 @@ pub(crate) fn load_ir(
         && let Some(plan) = plan
         && plan.multipage
     {
-        let extra = crate::pages::assemble(&mut ir, plan, &fragments, parser)
+        let extra = crate::pages::assemble(&mut ir, plan, &fragments, parser, &html)
             .map_err(RunError::ParseHtml)?;
         // Watch + mtime-track every page file so editing any page hot-reloads.
         for p in extra {
@@ -516,6 +535,7 @@ fn script_fragments(
     dir: &Path,
     plan: Option<&crate::pages::PagePlan>,
     parser: &dyn SourceParser,
+    entry_transformed: bool,
 ) -> Result<lumen_ir::fragment::FragmentTable, RunError> {
     let mut markup: Vec<(String, PathBuf)> = vec![(html.to_string(), html_path.to_path_buf())];
     if let Some(plan) = plan {
@@ -542,7 +562,16 @@ fn script_fragments(
             .map_err(|e| RunError::Script(e.to_string()))
     };
     for (src, path) in &markup {
-        let refs = parser.script_refs(src, path).map_err(RunError::ParseHtml)?;
+        // Only the entry text can differ from its file (compiler plugins
+        // rewrite it); errors in it get the same attribution the other
+        // markup errors carry.
+        let refs = parser.script_refs(src, path).map_err(|e| {
+            RunError::ParseHtml(if entry_transformed && path == html_path {
+                format!("(in the markup as rewritten by compiler plugins) {e}")
+            } else {
+                e
+            })
+        })?;
         if !refs.inline.trim().is_empty() {
             fold(&mut table, &refs.inline, &path.display().to_string())?;
         }

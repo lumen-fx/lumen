@@ -26,11 +26,11 @@ pub enum PluginError {
     NotFound { name: String, probed: Vec<PathBuf> },
     #[error("{0}")]
     Resolve(String),
-    #[error("plugin '{name}': failed to open {path}: {source}")]
+    #[error("plugin '{name}': failed to open {path}: {message}")]
     Open {
         name: String,
         path: PathBuf,
-        source: libloading::Error,
+        message: String,
     },
     #[error(
         "plugin '{name}': {path} exports no lumenc_plugin_v1 entry; is it a lumenc compiler plugin?"
@@ -162,10 +162,14 @@ impl PluginSet {
                 )
                 .map_err(PluginError::Resolve)?,
             };
-            let lib = unsafe { Library::new(&path) }.map_err(|source| PluginError::Open {
+            let lib = unsafe { Library::new(&path) }.map_err(|e| PluginError::Open {
                 name: cfg.name.clone(),
                 path: path.clone(),
-                source,
+                // libloading's Display is a bare "dlopen failed"; the OS
+                // reason (missing dependency, wrong architecture, not a
+                // library) sits in the source chain, and it is the only
+                // actionable part.
+                message: error_chain(&e),
             })?;
             let entry: libloading::Symbol<unsafe extern "C" fn() -> *const Desc> =
                 unsafe { lib.get(abi::ENTRY) }.map_err(|_| PluginError::MissingEntry {
@@ -178,8 +182,13 @@ impl PluginSet {
                     name: cfg.name.clone(),
                 });
             }
-            verify(&cfg.name, unsafe { &*desc })?;
-            let config_toml = toml::to_string(&cfg.config).unwrap_or_default();
+            verify(&cfg.name, desc)?;
+            let config_toml = toml::to_string(&cfg.config).map_err(|e| {
+                PluginError::Resolve(format!(
+                    "plugin '{}': its `config` table does not re-serialize: {e}",
+                    cfg.name
+                ))
+            })?;
             plugins.push(Loaded {
                 name: cfg.name.clone(),
                 config_toml,
@@ -192,7 +201,10 @@ impl PluginSet {
         }
         Ok(PluginSet {
             plugins,
-            app_dir: app_dir.to_path_buf(),
+            // Canonicalized so `Ctx::app_dir` (and the emit root) reads the
+            // same regardless of the cwd lumenc ran from; kept as given when
+            // canonicalization fails (the load above already used it).
+            app_dir: std::fs::canonicalize(app_dir).unwrap_or_else(|_| app_dir.to_path_buf()),
             check_only: false,
         })
     }
@@ -313,6 +325,7 @@ impl PluginSet {
         }
         let mut bytes: Option<Vec<u8>> = None;
         let mut findings = Vec::new();
+        let mut emitted: Vec<(String, Vec<Output>)> = Vec::new();
         for plugin in &self.plugins {
             let desc = plugin.desc();
             if desc.lint.is_none() && desc.emit.is_none() {
@@ -346,10 +359,20 @@ impl PluginSet {
                             hook: "emit",
                             message: e,
                         })?;
-                    if !self.check_only {
-                        self.write_outputs(&plugin.name, &outputs)?;
+                    // Accumulated per NAME and written once after the chain:
+                    // an app may declare one plugin several times (different
+                    // configs), and per-call writes would let a later entry's
+                    // directory reset destroy an earlier entry's files.
+                    match emitted.iter_mut().find(|(n, _)| *n == plugin.name) {
+                        Some((_, all)) => all.extend(outputs),
+                        None => emitted.push((plugin.name.clone(), outputs)),
                     }
                 }
+            }
+        }
+        if !self.check_only {
+            for (name, outputs) in &emitted {
+                self.write_outputs(name, outputs)?;
             }
         }
         Ok(findings)
@@ -416,7 +439,10 @@ impl PluginSet {
     }
 
     /// Render plugin findings in the same shape as the built-in lint lines:
-    /// severity, anchor, `[<plugin>/<rule>]`, message, optional hint.
+    /// severity, anchor, `[<plugin>/<rule>]`, message, optional hint. The
+    /// format string mirrors `lumen_ir::layout_ir::LintFinding::render`
+    /// (which cannot be reused: its kind slot is a closed enum, this one is
+    /// a plugin/rule pair); keep the two in sync.
     pub fn render_findings(findings: &[(String, Finding)], entry: &Path) -> Vec<String> {
         findings
             .iter()
@@ -442,26 +468,42 @@ impl PluginSet {
 }
 
 /// The handshake: refuse anything about the descriptor that would make the
-/// byte payloads or the pointers untrustworthy. Field order matters: the
-/// first two fields sit at frozen offsets and are read before the rest of
-/// the struct is believed.
-fn verify(declared: &str, desc: &Desc) -> Result<(), PluginError> {
+/// byte payloads or the pointers untrustworthy. The first two fields sit at
+/// frozen offsets and are read through the raw pointer before a `&Desc` for
+/// the whole struct exists, so a truncated or foreign descriptor is refused
+/// without ever forming a reference past its end.
+///
+/// # Safety (internal)
+/// `desc` is non-null and points at at least 8 readable bytes; the caller
+/// checked null, and any exporter of the entry symbol provides at least the
+/// frozen prefix.
+fn verify(declared: &str, desc: *const Desc) -> Result<(), PluginError> {
     let name = declared.to_string();
-    if desc.abi_version != abi::ABI_VERSION {
+    let abi_version = unsafe { (desc as *const u32).read() };
+    let struct_size = unsafe { (desc as *const u32).add(1).read() };
+    if abi_version != abi::ABI_VERSION {
         return Err(PluginError::AbiMismatch {
             name,
             want: abi::ABI_VERSION,
-            got: desc.abi_version,
+            got: abi_version,
         });
     }
-    if (desc.struct_size as usize) < std::mem::size_of::<Desc>() {
+    if (struct_size as usize) < std::mem::size_of::<Desc>() {
         return Err(PluginError::BadDescriptor {
             name,
             reason: format!(
-                "descriptor is {} bytes, expected at least {}",
-                desc.struct_size,
+                "descriptor is {struct_size} bytes, expected at least {}",
                 std::mem::size_of::<Desc>()
             ),
+        });
+    }
+    let desc: &Desc = unsafe { &*desc };
+    if desc.flags & abi::FLAG_PANIC_ABORT != 0 {
+        return Err(PluginError::BadDescriptor {
+            name,
+            reason: "built with panic = \"abort\"; the panic-to-error contract needs \
+                     unwinding, rebuild with the default panic = \"unwind\""
+                .to_string(),
         });
     }
     if desc.ir_format_version != lumen_ir::artifact::FORMAT_VERSION {
@@ -507,6 +549,18 @@ fn verify(declared: &str, desc: &Desc) -> Result<(), PluginError> {
         });
     }
     Ok(())
+}
+
+/// Join an error with its source chain, most specific last.
+fn error_chain(e: &dyn std::error::Error) -> String {
+    let mut out = e.to_string();
+    let mut cur = e.source();
+    while let Some(s) = cur {
+        out.push_str(": ");
+        out.push_str(&s.to_string());
+        cur = s.source();
+    }
+    out
 }
 
 /// One FFI hook call: borrowed input in, plugin-owned buffer out, freed here
@@ -566,7 +620,7 @@ mod tests {
             abi_version: ABI_VERSION,
             struct_size: std::mem::size_of::<Desc>() as u32,
             ir_format_version: lumen_ir::artifact::FORMAT_VERSION,
-            _reserved: 0,
+            flags: 0,
             name: c"demo".as_ptr(),
             version: c"0.1.0".as_ptr(),
             transform_markup: None,
@@ -580,14 +634,14 @@ mod tests {
 
     #[test]
     fn good_descriptor_verifies() {
-        verify("demo", &good_desc()).unwrap();
+        verify("demo", &good_desc() as *const Desc).unwrap();
     }
 
     #[test]
     fn wrong_abi_version_is_refused() {
         let mut d = good_desc();
         d.abi_version = ABI_VERSION + 1;
-        let err = verify("demo", &d).unwrap_err().to_string();
+        let err = verify("demo", &d as *const Desc).unwrap_err().to_string();
         assert!(err.contains("plugin 'demo'"), "{err}");
         assert!(err.contains("ABI"), "{err}");
     }
@@ -596,7 +650,7 @@ mod tests {
     fn short_struct_is_refused() {
         let mut d = good_desc();
         d.struct_size = 8;
-        let err = verify("demo", &d).unwrap_err().to_string();
+        let err = verify("demo", &d as *const Desc).unwrap_err().to_string();
         assert!(err.contains("descriptor is 8 bytes"), "{err}");
     }
 
@@ -604,7 +658,7 @@ mod tests {
     fn wrong_ir_version_is_refused() {
         let mut d = good_desc();
         d.ir_format_version = 1;
-        let err = verify("demo", &d).unwrap_err().to_string();
+        let err = verify("demo", &d as *const Desc).unwrap_err().to_string();
         assert!(err.contains("IR format"), "{err}");
         assert!(err.contains("matching Lumen tag"), "{err}");
     }
@@ -613,13 +667,15 @@ mod tests {
     fn null_name_is_refused() {
         let mut d = good_desc();
         d.name = std::ptr::null();
-        let err = verify("demo", &d).unwrap_err().to_string();
+        let err = verify("demo", &d as *const Desc).unwrap_err().to_string();
         assert!(err.contains("null name"), "{err}");
     }
 
     #[test]
     fn name_mismatch_names_both() {
-        let err = verify("other", &good_desc()).unwrap_err().to_string();
+        let err = verify("other", &good_desc() as *const Desc)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("'other'"), "{err}");
         assert!(err.contains("'demo'"), "{err}");
     }
@@ -628,7 +684,7 @@ mod tests {
     fn missing_free_is_refused() {
         let mut d = good_desc();
         d.free = None;
-        let err = verify("demo", &d).unwrap_err().to_string();
+        let err = verify("demo", &d as *const Desc).unwrap_err().to_string();
         assert!(err.contains("no free function"), "{err}");
     }
 

@@ -11,7 +11,11 @@ use lumenc_plugin::testing::fixture_cdylib;
 /// Write a temp app declaring the fixture plugin `entries` times, each with
 /// its own config table body.
 fn app(tag: &str, markup: &str, css: &str, configs: &[&str]) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("lumenc-compiler-plugins-{tag}"));
+    // Keyed by pid so two concurrent runs of this binary cannot collide.
+    let dir = std::env::temp_dir().join(format!(
+        "lumenc-compiler-plugins-{}-{tag}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("main.lmn"), markup).unwrap();
@@ -165,7 +169,10 @@ fn a_panicking_hook_fails_the_compile_not_the_process() {
 fn a_version_source_resolves_through_cache_and_lock() {
     // Install the fixture into a private cache as version 1.0.0, point
     // LUMEN_PLUGIN_CACHE at it, and declare a version source.
-    let base = std::env::temp_dir().join("lumenc-compiler-plugins-versioned");
+    let base = std::env::temp_dir().join(format!(
+        "lumenc-compiler-plugins-{}-versioned",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&base);
     let cache = base.join("cache");
     let ver_dir = cache.join("lumen-plugin-fixture").join("1.0.0");
@@ -194,7 +201,8 @@ fn a_version_source_resolves_through_cache_and_lock() {
     )
     .unwrap();
 
-    // Serialize against anything else touching the cache env var.
+    // `set_var` is process-global; this is the only test in the binary that
+    // touches it, which is what keeps the unsafe sound.
     unsafe { std::env::set_var("LUMEN_PLUGIN_CACHE", &cache) };
     let compiled = lumenc::compile_app(&dir).unwrap();
     unsafe { std::env::remove_var("LUMEN_PLUGIN_CACHE") };
@@ -204,4 +212,70 @@ fn a_version_source_resolves_through_cache_and_lock() {
     assert!(all.iter().any(|t| t == "markup-transformed"), "{all:?}");
     let lock = std::fs::read_to_string(dir.join("lumen.lock")).unwrap();
     assert!(lock.contains("version = \"1.0.0\""), "{lock}");
+}
+
+#[test]
+fn the_markup_transform_survives_a_multipage_app() {
+    let dir = app(
+        "multipage",
+        "<root><label text=\"FROM_PLUGIN_MARKUP\"/>/END</root>",
+        "",
+        &["order = \"m\""],
+    );
+    std::fs::write(
+        dir.join("about.lmn"),
+        "<root><label text=\"about\"/></root>",
+    )
+    .unwrap();
+    let compiled = lumenc::compile_app(&dir).unwrap();
+    let mut all = Vec::new();
+    texts(&compiled.ir.root, &mut all);
+    // Both markers prove the entry page parsed from the transformed text,
+    // not from a disk re-read during page assembly.
+    assert!(all.iter().any(|t| t == "markup-transformed"), "{all:?}");
+    assert!(all.iter().any(|t| t.contains("m/END")), "{all:?}");
+}
+
+#[test]
+fn a_plugin_synthesizes_the_stylesheet_when_the_app_ships_none() {
+    let dir = app(
+        "no-css",
+        "<root><label text=\"hi\"/></root>",
+        "",
+        &["inject_text = \"styled\"\nsynthesize_css = \".from-plugin { color: #00ff00; }\""],
+    );
+    assert!(!dir.join("main.css").exists());
+    let compiled = lumenc::compile_app(&dir).unwrap();
+    let injected = find_injected(&compiled.ir.root).expect("injected element");
+    assert!(
+        injected.attrs.text_color.is_some(),
+        "synthesized stylesheet was not cascaded"
+    );
+}
+
+#[test]
+fn a_parse_error_in_rewritten_markup_says_so() {
+    let dir = app("invalid", "<root/>", "", &["invalid_markup = true"]);
+    let err = lumenc::compile_app(&dir).unwrap_err().to_string();
+    assert!(err.contains("rewritten by compiler plugins"), "{err}");
+    // The thin path reports the same attribution.
+    let err = lumenc::compile::compile_dir_to_lmna(&dir)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("rewritten by compiler plugins"), "{err}");
+}
+
+#[test]
+fn a_malformed_declaration_fails_the_compile_naming_the_plugin() {
+    let dir = app("bad-decl", "<root/>", "", &[]);
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[[plugins]]\nname = \"x\"\ngit = \"https://example.com\"\n",
+    )
+    .unwrap();
+    let err = lumenc::compile_app(&dir).unwrap_err().to_string();
+    assert!(err.contains("plugin 'x'"), "{err}");
+    assert!(err.contains("not supported yet"), "{err}");
+    let err = lumenc::check_app(&dir).unwrap_err().to_string();
+    assert!(err.contains("not supported yet"), "{err}");
 }

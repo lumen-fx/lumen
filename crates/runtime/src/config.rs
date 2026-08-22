@@ -80,9 +80,11 @@ pub struct LumenToml {
     /// OS filtering, staleness skip) and [`HookCfg`] for the field reference.
     pub hooks: Vec<HookCfg>,
     /// `[[plugins]]` array - compiler plugins, run in declaration order by
-    /// every compile path, `check` included. Carried raw: the schema, the
-    /// loader, and the validation live in `lumenc-plugin` (see its
-    /// `PluginCfg`), and the chain reaches the pipeline through the injected
+    /// every compile path, `check` included. This field only accepts the
+    /// array (`deny_unknown_fields` would otherwise reject any app declaring
+    /// one); nothing reads it. The schema, the loader, and the validation
+    /// live in `lumenc-plugin` (see its `PluginCfg`), lumenc reads the file
+    /// itself, and the chain reaches the pipeline through the injected
     /// [`crate::compiler_plugins::CompilerPlugins`] boundary, the same
     /// inversion the parser uses.
     pub plugins: Vec<toml::Value>,

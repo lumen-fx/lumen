@@ -508,19 +508,40 @@ no-op body; implement the ones the plugin needs:
 
 ```rust
 use lumenc_plugin::{lumenc_plugin, CompilerPlugin, Ctx, Error, LayoutIR};
+use serde::Deserialize;
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct Cfg {
+    flavor: String,
+}
 
 #[derive(Default)]
 struct Markdown;
 
 impl CompilerPlugin for Markdown {
     fn transform_markup(&self, src: &str, ctx: &Ctx) -> Result<Option<String>, Error> {
-        let flavor: String = ctx.config()?;
-        Ok(Some(expand_markdown(src, &flavor)))
+        let cfg: Cfg = ctx.config()?;
+        Ok(Some(expand_markdown(src, &cfg.flavor)))
     }
 }
 
 lumenc_plugin!(Markdown::default);
 ```
+
+The full hook set, all defaulted to no-ops:
+
+```rust
+fn transform_markup(&self, src: &str, ctx: &Ctx) -> Result<Option<String>, Error>;
+fn transform_css(&self, src: &str, ctx: &Ctx) -> Result<Option<String>, Error>;
+fn transform_ir(&self, ir: &mut LayoutIR, ctx: &Ctx) -> Result<(), Error>;
+fn lint(&self, ir: &LayoutIR, ctx: &Ctx) -> Result<Vec<Finding>, Error>;
+fn emit(&self, ir: &LayoutIR, ctx: &Ctx) -> Result<Vec<Output>, Error>;
+```
+
+`Ctx::config` deserializes the entry's whole `config` table into any serde
+type; a key the type does not declare is ignored unless the type opts into
+`deny_unknown_fields`.
 
 The macro generates the whole C-ABI surface; a plugin crate contains no unsafe
 code. One instance serves the process and hooks take `&self`, so a plugin
@@ -531,7 +552,9 @@ The hooks, in pipeline order:
 - `transform_markup` and `transform_css` rewrite the entry file text before
   `<include>` and `@import` splicing, so emitted directives resolve like
   hand-written ones. Only the entry markup and entry CSS pass through;
-  included files and sibling page files do not.
+  included files and sibling page files do not. An app that ships no
+  `main.css` runs the CSS hook over the empty string, so a plugin can
+  synthesize the stylesheet.
 - `transform_ir` receives the parsed tree after multi-page assembly and
   before asset resolution and the cascade, so an injected element gets its
   asset paths resolved and its styles applied like a hand-written one.
@@ -549,9 +572,10 @@ so a prebuilt `lumenc` loads plugins built by any Rust toolchain. At load,
 `lumenc` verifies the plugin's ABI version and the IR format version it was
 built against, and that the library reports the `name` the app declared; a
 mismatch fails the compile with an error naming the plugin and the fix
-(rebuild against the matching Lumen tag). Build plugins with the default
-`panic = "unwind"`: the generated thunks catch a hook panic and turn it into
-a compile error, and `panic = "abort"` would kill the compiler instead.
+(rebuild against the matching Lumen tag). Plugins must build with the
+default `panic = "unwind"`: the generated thunks catch a hook panic and
+turn it into a compile error, which needs unwinding, so a plugin built with
+`panic = "abort"` is refused at load with an error saying so.
 
 The development loop pairs a `prebuild` hook with a `path` source, so the
 plugin rebuilds before every compile that needs it:
@@ -570,7 +594,18 @@ path = "plugins/markdown/target/release/markdown"
 
 `lumenc check` runs no hooks, so checking a clean tree before the first build
 fails with "no file at" the declared path; run `lumenc build` once first.
+Cargo names the built file with underscores (`libmy_plugin.so` for a package
+named `my-plugin`); the probe tries both spellings, so an extensionless
+`path` finds it either way.
+
+The chain is loaded once per process: editing `[[plugins]]` or rebuilding a
+`path` plugin during a `lumenc run` session takes effect on the next start,
+not on a hot reload (a reload reruns the hooks of the already-loaded
+libraries).
 
 Known limits: plugin functions and transformed sources are invisible to
-editor tooling (the LSP reads the untransformed files), and a plugin's lint
-findings do not appear in `lumenc lint --signals` output.
+editor tooling (the LSP, `lumenc lint --signals`, and `lumenc lint
+--css-cascade` all read the untransformed files), a plugin's lint findings
+do not appear in `lumenc lint --signals` output, and a parse error in
+rewritten markup carries positions into the rewritten text, flagged with
+"in the markup as rewritten by compiler plugins".
