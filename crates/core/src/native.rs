@@ -12,7 +12,7 @@
 //!
 //! ## Contracts
 //!
-//! - **Bounds are honest.** [`ExtractedNative::bounds`] must enclose every pixel the painter
+//! - **Bounds enclose the paint.** [`ExtractedNative::bounds`] must cover every pixel the painter
 //!   touches. The damage diff repaints exactly that rect, so paint outside it survives as stale
 //!   pixels until something else damages the region.
 //! - **`revision` is pixel identity.** Two leaves with the same `extension_id`, `bounds`,

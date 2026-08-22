@@ -174,6 +174,139 @@ extract function that produces it, and a render system that consumes it.
 Replacing an existing entry in the chain, rather than appending, is how a
 plugin changes what every primitive sees.
 
+### Painting your own pixels
+
+A plugin whose content the built-in primitives cannot describe, such as a
+chart, a map, or a drawing surface, paints it itself. The scene graph
+positions, orders, and clips an opaque leaf, and what goes inside that leaf is
+between the plugin and the render backend. Qt calls the same arrangement
+`QSGRenderNode` and GTK calls it `GskGLShaderNode`.
+
+It takes four moves.
+
+**A main-world component** holds the state you draw from, like any other
+plugin state.
+
+**An extract function** turns that state into an `ExtractedNative` in the
+render world. Take the paint order from `paint_order_of` and the leaf lands
+where the entity lands in the document: over its own background, under its
+descendants, inside the clip of an enclosing scroll container, and in the top
+layer when the entity is in one. Upsert it against `RenderEntityMap::native`
+the way the built-in extractors do, so the leaf keeps one render entity across
+frames.
+
+**A painter** registered for the same extension id draws the leaf when its
+turn comes:
+
+```rust
+app.register_native_painter("acme.sparkline", SparklinePainter);
+```
+
+**A system that raises `FrameDirty`** when your state changes. Nothing else
+will: the dirty roll-up watches the framework's own components, not yours, so
+a tick that only changed your state is a clean tick and extract never runs. If
+the content animates, raise `AnimationsActive` while it is still moving.
+
+Together:
+
+```rust
+use lumen_core::prelude::*;
+use lumen_core::render_world::{RenderEntityMap, build_parent_map, paint_order_of};
+use std::sync::Arc;
+
+#[derive(Component)]
+struct Sparkline {
+    samples: Vec<f32>,
+    revision: u64,
+}
+
+/// What the painter is handed. The extension id promises this type.
+struct SparklinePayload {
+    samples: Vec<f32>,
+}
+
+struct SparklinePainter;
+
+impl NativePainter for SparklinePainter {
+    fn paint(&self, ctx: &mut NativePaintCtx<'_>) {
+        let Some(payload) = ctx.payload_as::<SparklinePayload>() else {
+            return;
+        };
+        // Draw into the backend's target, in logical coordinates placed by
+        // `ctx.device_transform()`. On lumen-render-wgpu the target is a
+        // `vello::Scene`, reached through that crate's `vello` re-export.
+        let _ = (payload, ctx.bounds, ctx.opacity);
+    }
+}
+
+fn extract_sparklines(main: &mut World, render: &mut World) {
+    let (parents, mut depth_cache) = build_parent_map(main);
+    let mut q = main.query::<(Entity, &Transform, &Sparkline)>();
+    let leaves: Vec<(Entity, ExtractedNative)> = q
+        .iter(main)
+        .map(|(e, transform, sparkline)| {
+            (
+                e,
+                ExtractedNative {
+                    extension_id: "acme.sparkline".into(),
+                    payload: Arc::new(SparklinePayload {
+                        samples: sparkline.samples.clone(),
+                    }),
+                    bounds: Rect::new(transform.absolute, transform.size),
+                    order: paint_order_of(e, &parents, &mut depth_cache),
+                    revision: sparkline.revision,
+                    clip_to_bounds: true,
+                },
+            )
+        })
+        .collect();
+    // Upsert `leaves` against `render.resource_mut::<RenderEntityMap>().native`.
+}
+
+fn redraw_when_samples_change(
+    changed: Query<(), Changed<Sparkline>>,
+    mut frame_dirty: ResMut<FrameDirty>,
+) {
+    if !changed.is_empty() {
+        frame_dirty.dirty = true;
+    }
+}
+```
+
+Four contracts come with the seam:
+
+- **Bounds enclose the paint.** They must cover every pixel the painter touches.
+  Damage is computed from them, so paint outside them stays on screen as a
+  stale smear until something else repaints that region. `clip_to_bounds`
+  enforces the promise for you, at the cost of a clip layer.
+- **The revision is pixel identity.** Two leaves with the same extension id,
+  bounds, clip flag, and revision are taken to be the same pixels and cost no
+  repaint. Give the leaf a new revision, from `next_revision()`, whenever its
+  content changes, or the frame never repaints. The payload is not compared:
+  producers rebuild it every dirty frame, so comparing it would report a change
+  every time.
+- **A painter takes `&self`.** One painter serves every leaf carrying its
+  extension id, so per-frame state goes behind interior mutability.
+- **The extension id names a contract**, covering the payload type and what the
+  painter expects of the backend. A backend with no painter for an id skips
+  that leaf in silence, which is what lets one scene render on a backend that
+  does not implement the extension.
+
+Paint order always comes from `paint_order_of`. Leaves sharing an order key
+sort by extension id, so two extensions contributing at one entity keep the
+same order from frame to frame.
+
+Which backends paint these leaves:
+
+| Backend | Native leaves |
+|---|---|
+| `lumen-render-wgpu` | Painted. The draw target is a `vello::Scene`, reached through that crate's `vello` re-export so a painter cannot version-skew its downcast. `BACKEND_ID` names the backend in the paint context. |
+| `lumen-render-headless` | Not painted. It rasterises the extracted rects directly and never walks the node tree. |
+| `lumen-web-dom` | Not painted. The web target emits DOM nodes rather than walking the retained tree. |
+
+The paint context carries no text shaper. Draw text through a sibling text
+element, or shape it yourself before extract.
+
 Two rules apply to anything on this path:
 
 - **Iterate deterministically.** Paint order comes from document order, z-index,
