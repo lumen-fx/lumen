@@ -46,6 +46,7 @@
 //! - W2.4 lets the offscreen render path reuse the same walker (and hence the [`crate::render_world::SceneFragmentCache`]).
 
 use crate::components::{Color, ImageBlob, SvgPayload};
+use crate::native::ExtractedNative;
 use crate::render_world::{
     Brush, ExtractedBorder, ExtractedClipBox, ExtractedImage, ExtractedOutline, ExtractedRect,
     ExtractedScrollbar, ExtractedShadow, ExtractedText, PaintOrder, Rect,
@@ -297,14 +298,22 @@ pub enum Node {
         /// Type-erased SVG payload. The concrete type is typically `Arc<lumen_assets::ExtractedSvg>`.
         payload: Arc<dyn Any + Send + Sync>,
     },
-    /// Native back-end escape hatch - apps record custom RHI/wgpu commands.
+    /// Backend-painted leaf contributed by a plugin - see [`crate::native`] for the seam.
     ///
-    /// Maps to `QSGRenderNode` / `GskGLShaderNode`. The renderer downcasts `payload` based on `extension_id`.
+    /// Maps to `QSGRenderNode` / `GskGLShaderNode`. The backend looks up a
+    /// [`crate::native::NativePainter`] by `extension_id` and hands it the payload plus its own
+    /// draw target; an unregistered id paints nothing.
     Native {
         /// String identifier for the native extension (e.g. `"lumen.native.wgpu"`).
         extension_id: Arc<str>,
         /// Opaque payload the back-end downcasts.
         payload: Arc<dyn Any + Send + Sync>,
+        /// Bounding rect in window coordinates - encloses every pixel the painter touches.
+        bounds: Rect,
+        /// Content stamp; equal revisions mean identical pixels.
+        revision: u64,
+        /// Clip the painter to `bounds`.
+        clip_to_bounds: bool,
     },
 }
 
@@ -362,9 +371,17 @@ impl std::fmt::Debug for Node {
                 .field("size", &image.size)
                 .finish(),
             Node::Svg { .. } => f.debug_struct("Svg").finish(),
-            Node::Native { extension_id, .. } => {
-                f.debug_struct("Native").field("ext", extension_id).finish()
-            }
+            Node::Native {
+                extension_id,
+                bounds,
+                revision,
+                ..
+            } => f
+                .debug_struct("Native")
+                .field("ext", extension_id)
+                .field("bounds", bounds)
+                .field("revision", revision)
+                .finish(),
         }
     }
 }
@@ -453,6 +470,18 @@ impl From<&SvgPayload> for Node {
     }
 }
 
+impl From<&ExtractedNative> for Node {
+    fn from(n: &ExtractedNative) -> Self {
+        Node::Native {
+            extension_id: n.extension_id.clone(),
+            payload: n.payload.clone(),
+            bounds: n.bounds,
+            revision: n.revision,
+            clip_to_bounds: n.clip_to_bounds,
+        }
+    }
+}
+
 /// One drawable entry produced during extract, sorted by [`PaintOrder`] before tree assembly.
 #[derive(Clone)]
 pub enum DrawEntry {
@@ -517,7 +546,7 @@ type EntryOrder = PaintOrder;
 
 /// Builds a [`RetainedScene`] from the flat `Extracted*` components in the render world.
 ///
-/// Walks every `ExtractedRect`/`Shadow`/`Outline`/`Text`/`Image`/`Svg`/`ClipBox` once, sorts the leaves by
+/// Walks every `ExtractedRect`/`Shadow`/`Outline`/`Text`/`Image`/`Svg`/`Native`/`ClipBox` once, sorts the leaves by
 /// [`PaintOrder`], folds the clip pairs around the leaves they enclose, and produces an `Arc<Node::Container>`
 /// containing the painter-ordered children. The previous frame's root is moved into [`PreviousScene`] so the
 /// walker can diff against it.
@@ -534,6 +563,7 @@ pub fn transform_extracted_to_nodes(
     texts: bevy_ecs::system::Query<&ExtractedText>,
     images: bevy_ecs::system::Query<(&ExtractedImage, Option<&ImageBlob>)>,
     svgs: bevy_ecs::system::Query<&SvgPayload>,
+    natives: bevy_ecs::system::Query<&ExtractedNative>,
     clips: bevy_ecs::system::Query<&ExtractedClipBox>,
     scrollbars: bevy_ecs::system::Query<&ExtractedScrollbar>,
 ) {
@@ -548,7 +578,8 @@ pub fn transform_extracted_to_nodes(
             + outlines.iter().len()
             + texts.iter().len()
             + images.iter().len()
-            + svgs.iter().len(),
+            + svgs.iter().len()
+            + natives.iter().len(),
     );
     for r in &rects {
         entries.push((r.order, Arc::new(Node::from(r))));
@@ -581,6 +612,19 @@ pub fn transform_extracted_to_nodes(
     }
     for s in &svgs {
         entries.push((s.order, Arc::new(Node::from(s))));
+    }
+    // Plugin-painted leaves. Query iteration follows archetype order, which
+    // shifts as plugins add and drop components, so sort by
+    // (order, extension_id) first: at a shared paint-order key two extensions
+    // then always stack the same way from frame to frame.
+    let mut native_leaves: Vec<&ExtractedNative> = natives.iter().collect();
+    native_leaves.sort_by(|a, b| {
+        a.order
+            .cmp(&b.order)
+            .then_with(|| a.extension_id.cmp(&b.extension_id))
+    });
+    for n in native_leaves {
+        entries.push((n.order, Arc::new(Node::from(n))));
     }
     // Overlay scrollbars: pushed LAST so the stable sort keeps them
     // after any other leaf sharing their paint-order key, and `draws`
@@ -678,6 +722,7 @@ pub fn transform_extracted_to_nodes(
 mod tests {
     use super::*;
     use crate::components::Color;
+    use crate::render_world::{OVERLAY_ORDER_BASE, ScrollbarDrawRect};
 
     fn solid_rect(order: PaintOrder, origin: Vec2, size: Vec2) -> ExtractedRect {
         ExtractedRect {
@@ -739,6 +784,170 @@ mod tests {
         assert_eq!(children.len(), 3);
         assert!(matches!(children[0].as_ref(), Node::Rect { .. }));
         assert!(matches!(children[1].as_ref(), Node::Border { .. }));
+        assert!(matches!(children[2].as_ref(), Node::Rect { .. }));
+    }
+
+    fn native(
+        order: PaintOrder,
+        extension_id: &str,
+        origin: Vec2,
+        revision: u64,
+    ) -> ExtractedNative {
+        ExtractedNative {
+            extension_id: extension_id.into(),
+            payload: Arc::new(revision),
+            bounds: Rect::new(origin, Vec2::new(30.0, 30.0)),
+            order,
+            revision,
+            clip_to_bounds: false,
+        }
+    }
+
+    fn assemble(world: &mut bevy_ecs::world::World) -> Arc<Node> {
+        world.insert_resource(RetainedScene::default());
+        world.insert_resource(PreviousScene::default());
+        let mut schedule = bevy_ecs::schedule::Schedule::default();
+        schedule.add_systems(transform_extracted_to_nodes);
+        schedule.run(world);
+        world
+            .resource::<RetainedScene>()
+            .root
+            .as_ref()
+            .expect("root")
+            .clone()
+    }
+
+    fn children_of(node: &Arc<Node>) -> Vec<Arc<Node>> {
+        match node.as_ref() {
+            Node::Container { children } => children.clone(),
+            other => panic!("expected a container, got {other:?}"),
+        }
+    }
+
+    /// A plugin's leaf reaches the tree with the geometry and content stamp it
+    /// was extracted with: the renderer positions and repaints it from those,
+    /// not from anything inside the opaque payload.
+    #[test]
+    fn a_native_leaf_carries_its_bounds_and_revision_into_the_tree() {
+        let mut world = bevy_ecs::world::World::new();
+        let mut leaf = native(4, "demo.chart", Vec2::new(12.0, 8.0), 77);
+        leaf.clip_to_bounds = true;
+        world.spawn(leaf);
+
+        let children = children_of(&assemble(&mut world));
+        assert_eq!(children.len(), 1);
+        match children[0].as_ref() {
+            Node::Native {
+                extension_id,
+                bounds,
+                revision,
+                clip_to_bounds,
+                ..
+            } => {
+                assert_eq!(&**extension_id, "demo.chart");
+                assert_eq!(bounds.origin, Vec2::new(12.0, 8.0));
+                assert_eq!(*revision, 77);
+                assert!(clip_to_bounds);
+            }
+            other => panic!("expected Native, got {other:?}"),
+        }
+    }
+
+    /// At one entity's paint-order key the leaf paints over that entity's own
+    /// background and border, the way a canvas sits inside the box that styles
+    /// it.
+    #[test]
+    fn a_native_leaf_paints_over_the_box_it_sits_in() {
+        let mut world = bevy_ecs::world::World::new();
+        world.spawn(solid_rect(4, Vec2::ZERO, Vec2::new(40.0, 40.0)));
+        world.spawn(ExtractedBorder {
+            origin: Vec2::ZERO,
+            size: Vec2::new(40.0, 40.0),
+            widths: [1.0; 4],
+            color: Color::rgba(0.0, 0.0, 1.0, 1.0),
+            side_colors: None,
+            radius: 0.0,
+            corner_radii: None,
+            order: 4,
+        });
+        world.spawn(native(4, "demo.chart", Vec2::ZERO, 1));
+
+        let children = children_of(&assemble(&mut world));
+        assert_eq!(children.len(), 3);
+        assert!(matches!(children[0].as_ref(), Node::Rect { .. }));
+        assert!(matches!(children[1].as_ref(), Node::Border { .. }));
+        assert!(matches!(children[2].as_ref(), Node::Native { .. }));
+    }
+
+    /// Two extensions contributing at the same paint-order key stack by
+    /// `extension_id`, so the frame does not reorder itself as archetypes churn.
+    #[test]
+    fn native_leaves_at_one_order_stack_by_extension_id() {
+        let mut world = bevy_ecs::world::World::new();
+        world.spawn(native(4, "zeta.overlay", Vec2::ZERO, 1));
+        world.spawn(native(4, "alpha.grid", Vec2::ZERO, 1));
+
+        let children = children_of(&assemble(&mut world));
+        let ids: Vec<String> = children
+            .iter()
+            .map(|c| match c.as_ref() {
+                Node::Native { extension_id, .. } => extension_id.to_string(),
+                other => panic!("expected Native, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(ids, ["alpha.grid", "zeta.overlay"]);
+    }
+
+    /// An enclosing `overflow: hidden` container clips a plugin's leaf the same
+    /// way it clips a rect, so a scrolled-out chart does not paint over its
+    /// container's edge.
+    #[test]
+    fn an_enclosing_clip_brackets_a_native_leaf() {
+        let mut world = bevy_ecs::world::World::new();
+        world.spawn(ExtractedClipBox {
+            origin: Vec2::new(5.0, 5.0),
+            size: Vec2::new(50.0, 50.0),
+            radius: 0.0,
+            start_order: 4,
+            end_order: 8,
+        });
+        world.spawn(native(6, "demo.chart", Vec2::ZERO, 1));
+
+        let children = children_of(&assemble(&mut world));
+        assert_eq!(children.len(), 1);
+        let Node::Clip { child, .. } = children[0].as_ref() else {
+            panic!("expected the leaf wrapped in a clip, got {:?}", children[0]);
+        };
+        let inner = children_of(child);
+        assert!(matches!(inner[0].as_ref(), Node::Native { .. }));
+    }
+
+    /// The top-layer band lifts a plugin's leaf over all normal content, and
+    /// overlay scrollbars still paint last of all.
+    #[test]
+    fn the_overlay_band_and_scrollbars_keep_their_places_around_a_native_leaf() {
+        let mut world = bevy_ecs::world::World::new();
+        world.spawn(solid_rect(6, Vec2::ZERO, Vec2::new(40.0, 40.0)));
+        world.spawn(native(
+            OVERLAY_ORDER_BASE + 2,
+            "demo.tooltip",
+            Vec2::ZERO,
+            1,
+        ));
+        world.spawn(ExtractedScrollbar {
+            draws: vec![ScrollbarDrawRect {
+                origin: Vec2::new(90.0, 0.0),
+                size: Vec2::new(6.0, 40.0),
+                color: Color::rgba(0.0, 0.0, 0.0, 0.4),
+                radius: 3.0,
+            }],
+            order: OVERLAY_ORDER_BASE + 2,
+        });
+
+        let children = children_of(&assemble(&mut world));
+        assert_eq!(children.len(), 3);
+        assert!(matches!(children[0].as_ref(), Node::Rect { .. }));
+        assert!(matches!(children[1].as_ref(), Node::Native { .. }));
         assert!(matches!(children[2].as_ref(), Node::Rect { .. }));
     }
 

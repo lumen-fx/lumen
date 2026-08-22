@@ -1030,6 +1030,7 @@ pub fn cull_hidden(
         &mut map.svg,
         &mut map.clip,
         &mut map.scrollbar,
+        &mut map.native,
     ] {
         m.retain(|main_e, render_e| {
             if h.contains(main_e) {
@@ -1119,6 +1120,9 @@ pub struct RenderEntityMap {
     /// `main_entity -> render_entity` for [`ExtractedScrollbar`]; one
     /// entry per scroll container with visible overlay bars.
     pub scrollbar: std::collections::HashMap<Entity, Entity>,
+    /// `main_entity -> render_entity` for [`crate::native::ExtractedNative`]; one entry per
+    /// plugin-painted leaf.
+    pub native: std::collections::HashMap<Entity, Entity>,
 }
 
 /// Despawns transient render-world entities carrying `Extracted*` components, called once per frame before any [`ExtractFn`] runs.
@@ -1139,6 +1143,7 @@ pub fn clear_extracted(render: &mut World) {
         set.extend(map.image.values().copied());
         set.extend(map.svg.values().copied());
         set.extend(map.scrollbar.values().copied());
+        set.extend(map.native.values().copied());
         set
     };
     let to_despawn: Vec<Entity> = render
@@ -1150,6 +1155,7 @@ pub fn clear_extracted(render: &mut World) {
             With<ExtractedBorder>,
             With<ExtractedShadow>,
             With<ExtractedScrollbar>,
+            With<crate::native::ExtractedNative>,
         )>>()
         .iter(render)
         .filter(|e| !upserted.contains(e))
