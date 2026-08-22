@@ -424,6 +424,11 @@ pub struct LumenApp {
     /// App-level close hook registered via [`lumen_app_on_close`]. A
     /// second registration replaces the first.
     close_handler: Option<(LumenCloseFn, UserData)>,
+    /// The app's `[[plugins]]` compiler-plugin chain, resolved eagerly in
+    /// [`lumen_app_new`] beside the directory validation, so a bad
+    /// declaration fails at construction time. `None` on the artifact path
+    /// and in a no-parser build, where nothing compiles from source.
+    compiler_plugins: Option<std::sync::Arc<dyn lumen_runtime::CompilerPlugins>>,
 }
 
 /// Embedder-supplied opaque pointer carried across the FFI to native
@@ -583,6 +588,16 @@ pub unsafe extern "C" fn lumen_app_new(dir: *const c_char) -> *mut LumenApp {
                 "lumen_app_new: app directory {s:?} contains neither main.lmn nor lumen.toml"
             ));
         }
+        // The `[[plugins]]` chain resolves as eagerly as the directory
+        // above and fails the same way: a bad declaration is a bad app
+        // directory, and surfacing it here beats surfacing it after a
+        // window opened.
+        #[cfg(feature = "embed-parser")]
+        let compiler_plugins = Some(
+            lumenc::plugin_host::compiler_plugins_for(&path, false).map_err(|e| e.to_string())?,
+        );
+        #[cfg(not(feature = "embed-parser"))]
+        let compiler_plugins = None;
         Ok(Box::into_raw(Box::new(LumenApp {
             dir: path,
             artifact_bytes: None,
@@ -591,6 +606,7 @@ pub unsafe extern "C" fn lumen_app_new(dir: *const c_char) -> *mut LumenApp {
             exposed: Vec::new(),
             click_handlers: HashMap::new(),
             close_handler: None,
+            compiler_plugins,
         })))
     }))
     .unwrap_or_else(|_| Err("panic in lumen_app_new".to_string()));
@@ -650,6 +666,7 @@ pub unsafe extern "C" fn lumen_app_new_from_lmna(
             exposed: Vec::new(),
             click_handlers: HashMap::new(),
             close_handler: None,
+            compiler_plugins: None,
         })))
     }))
     .unwrap_or_else(|_| Err("panic in lumen_app_new_from_lmna".to_string()));
@@ -1049,6 +1066,7 @@ fn build_run_options(app: LumenApp) -> RunOptions {
         exposed,
         click_handlers,
         close_handler,
+        compiler_plugins,
     } = app;
 
     // Two source shapes:
@@ -1068,6 +1086,8 @@ fn build_run_options(app: LumenApp) -> RunOptions {
         #[cfg(not(feature = "embed-parser"))]
         None => RunOptions::new(&dir),
     };
+    // The chain `lumen_app_new` resolved rides in with the parser.
+    opts.compiler_plugins = compiler_plugins;
     if let Some(t) = title {
         opts.title = Some(t);
     }
@@ -1229,26 +1249,8 @@ fn build_run_options(app: LumenApp) -> RunOptions {
     opts
 }
 
-/// Inject the app's `[[plugins]]` chain for a from-source run. The trimmed
-/// no-parser launcher runs prebuilt artifacts only, where the chain already
-/// ran at build time, so it passes the options through untouched.
-fn with_compiler_plugins(opts: RunOptions) -> Result<RunOptions, LumenStatus> {
-    #[cfg(feature = "embed-parser")]
-    {
-        lumenc::with_default_compiler_plugins(opts).map_err(|e| {
-            set_last_error(format!("{e}"));
-            classify_runtime_error(&format!("{e}"))
-        })
-    }
-    #[cfg(not(feature = "embed-parser"))]
-    Ok(opts)
-}
-
 fn run_inner(app: LumenApp) -> LumenStatus {
-    let opts = match with_compiler_plugins(build_run_options(app)) {
-        Ok(o) => o,
-        Err(status) => return status,
-    };
+    let opts = build_run_options(app);
     match lumen_runtime::run_app(opts) {
         Ok(()) => LumenStatus::Ok,
         Err(e) => {
@@ -1259,10 +1261,7 @@ fn run_inner(app: LumenApp) -> LumenStatus {
 }
 
 fn run_headless_inner(app: LumenApp, ticks: u32) -> LumenStatus {
-    let opts = match with_compiler_plugins(build_run_options(app)) {
-        Ok(o) => o,
-        Err(status) => return status,
-    };
+    let opts = build_run_options(app);
     match lumen_runtime::run_app_headless(opts, ticks) {
         Ok(()) => LumenStatus::Ok,
         Err(e) => {

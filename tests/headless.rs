@@ -863,3 +863,40 @@ fn an_exposed_callback_returns_a_map_every_language_reads() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// The artifact constructor takes prebuilt bytes and no plugin chain: the
+/// chain ran at build time, so the handle carries none.
+#[test]
+fn app_new_from_lmna_accepts_prebuilt_bytes() {
+    let _guard = isolate();
+    let dir = write_fixture("from_lmna");
+    let compiled = lumenc::compile_app(&dir).unwrap();
+    let bytes = lumenc::artifact::serialize(&compiled).unwrap();
+    let base = CString::new(dir.to_str().unwrap()).unwrap();
+    let app = unsafe { lumen::lumen_app_new_from_lmna(bytes.as_ptr(), bytes.len(), base.as_ptr()) };
+    assert!(!app.is_null(), "{}", last_error());
+    let status = unsafe { lumen_app_run_headless(app, 1) };
+    assert_eq!(status, LumenStatus::Ok, "{}", last_error());
+}
+
+/// The `[[plugins]]` chain resolves inside `lumen_app_new`, beside the
+/// directory validation, so a bad declaration is refused at construction:
+/// no window, no frame loop, and both run entry points are already safe.
+#[test]
+fn app_new_rejects_a_bad_plugin_declaration() {
+    let _guard = isolate();
+    let dir = write_fixture("bad_plugin_decl");
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[mcp]\nport = 0\n\n[[plugins]]\nname = \"x\"\ngit = \"https://example.com\"\n",
+    )
+    .unwrap();
+    let c_dir = CString::new(dir.to_str().unwrap()).unwrap();
+    let app = unsafe { lumen_app_new(c_dir.as_ptr()) };
+    assert!(app.is_null());
+    assert!(
+        last_error().contains("not supported yet"),
+        "{}",
+        last_error()
+    );
+}

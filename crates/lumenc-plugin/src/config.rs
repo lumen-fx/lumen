@@ -251,6 +251,20 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_name_is_refused() {
+        let err = parse("[[plugins]]\nname = \"  \"\npath = \"x\"\n").unwrap_err();
+        assert!(err.contains("must not be empty"), "{err}");
+    }
+
+    #[test]
+    fn an_extensioned_path_that_does_not_exist_reports_itself() {
+        let dir = std::env::temp_dir();
+        let err = resolve_plugin_path(&dir, "nope/libmissing.so").unwrap_err();
+        assert_eq!(err.len(), 1);
+        assert!(err[0].ends_with("nope/libmissing.so"), "{err:?}");
+    }
+
+    #[test]
     fn no_plugins_array_is_empty() {
         assert!(parse("[app]\nname = \"x\"\n").unwrap().is_empty());
     }

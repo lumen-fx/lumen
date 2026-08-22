@@ -193,3 +193,68 @@ impl<E: std::fmt::Display> From<E> for Error {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A plugin overriding nothing: every default body answers "no change".
+    struct Noop;
+    impl CompilerPlugin for Noop {}
+
+    #[test]
+    fn the_default_hooks_change_nothing() {
+        let ctx = Ctx::new(
+            PathBuf::from("/app"),
+            PathBuf::from("/app/main.lmn"),
+            PathBuf::from("/app/main.lmn"),
+            false,
+            String::new(),
+        );
+        let mut ir = LayoutIR::default();
+        assert!(Noop.transform_markup("x", &ctx).unwrap().is_none());
+        assert!(Noop.transform_css("y", &ctx).unwrap().is_none());
+        Noop.transform_ir(&mut ir, &ctx).unwrap();
+        assert!(Noop.lint(&ir, &ctx).unwrap().is_empty());
+        assert!(Noop.emit(&ir, &ctx).unwrap().is_empty());
+    }
+
+    #[test]
+    fn ctx_config_deserializes_the_table_and_reports_type_errors() {
+        let ctx = Ctx::new(
+            PathBuf::from("/app"),
+            PathBuf::from("/app/main.lmn"),
+            PathBuf::from("/app/main.lmn"),
+            true,
+            "flavor = \"gfm\"".to_string(),
+        );
+        assert!(ctx.check_only);
+        let table: toml::Table = ctx.config().unwrap();
+        assert_eq!(table.get("flavor").and_then(|v| v.as_str()), Some("gfm"));
+
+        #[derive(serde::Deserialize, Debug)]
+        struct Wrong {
+            #[allow(dead_code)]
+            flavor: i64,
+        }
+        let err = ctx.config::<Wrong>().unwrap_err();
+        assert!(err.message.contains("invalid type"), "{}", err.message);
+    }
+
+    #[test]
+    fn severity_labels_match_the_diagnostic_prefixes() {
+        assert_eq!(Severity::Error.label(), "error");
+        assert_eq!(Severity::Warn.label(), "warn");
+        assert_eq!(Severity::Info.label(), "info");
+        assert_eq!(Severity::Hint.label(), "hint");
+    }
+
+    #[test]
+    fn any_display_type_converts_into_error() {
+        assert_eq!(Error::from("plain").message, "plain");
+        assert_eq!(
+            Error::from(std::fmt::Error).message,
+            std::fmt::Error.to_string()
+        );
+    }
+}

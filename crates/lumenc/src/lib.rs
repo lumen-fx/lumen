@@ -181,7 +181,7 @@ pub fn with_default_compiler_plugins(mut opts: RunOptions) -> Result<RunOptions,
     if opts.compiler_plugins.is_none() && opts.artifact.is_none() && opts.artifact_bytes.is_none() {
         let chain =
             plugin_host::compiler_plugins_for(&opts.dir, false).map_err(RunError::Plugin)?;
-        opts.compiler_plugins = Some(chain);
+        opts = opts.with_compiler_plugins(chain);
     }
     Ok(opts)
 }

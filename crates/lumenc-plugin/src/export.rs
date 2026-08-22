@@ -61,10 +61,6 @@ fn dispatch(
     let ir = |input: &[u8]| -> Result<crate::LayoutIR, (i32, Vec<u8>)> {
         codec::decode(input).map_err(|e| (ERR, format!("IR decode: {e}").into_bytes()))
     };
-    let encoded = |r: Result<Vec<u8>, String>| match r {
-        Ok(bytes) => (OK, bytes),
-        Err(e) => (ERR, format!("encode: {e}").into_bytes()),
-    };
     let result = match kind {
         HookKind::Markup | HookKind::Css => {
             let src = match text(input) {
@@ -106,7 +102,10 @@ fn dispatch(
         }
     };
     match result {
-        Ok(enc) => encoded(enc),
+        // The payload types are this crate's own serde structs plus
+        // `LayoutIR`; all of them always bincode-encode, same contract the
+        // host side relies on.
+        Ok(enc) => (OK, enc.expect("SDK payloads always encode")),
         Err(e) => (ERR, e.message.into_bytes()),
     }
 }
