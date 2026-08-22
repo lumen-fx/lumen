@@ -402,6 +402,14 @@ honouring the generic keywords, and falls back to the platform
 sans-serif. `lighter` and `bolder` are rejected: they need the parent's
 computed weight.
 
+Any `font-weight` from 1 to 1000 is accepted. A variable font renders the
+weight you author wherever its weight axis covers the value; a family
+built from separate faces renders the nearest weight it ships, chosen the
+way CSS chooses it (from 400-500 look up to 500 first, then down; below
+400 look down first; above 500 look up first). So `font-weight: 650`
+against a family with a regular and a bold face draws the bold face, and
+measures as that face.
+
 `text-overflow: ellipsis` elides overflowing single-line text unless you
 also author `wrap` and `max-lines`, in which case your multi-line clamp
 is ellipsized instead.
