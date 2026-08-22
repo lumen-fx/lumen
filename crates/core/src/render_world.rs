@@ -744,7 +744,8 @@ pub struct ExtractedText {
 /// - Emitted for `<scroll>` containers and entities with `overflow: hidden`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ExtractedClipBox {
-    /// Top-left in window coordinates.
+    /// Top-left in window coordinates, ancestor scroll offsets already applied - the same space the
+    /// leaves it clips are emitted in.
     pub origin: Vec2,
     /// Width x height in logical pixels.
     pub size: Vec2,
@@ -1412,6 +1413,9 @@ pub fn extract_borders(main: &mut World, render: &mut World) {
 ///
 /// - A clipping ancestor is one carrying a [`crate::input::Scroll`] component or a [`crate::components::Style`] with `overflow_x` or `overflow_y` set to [`crate::components::Overflow::Hidden`].
 /// - Entities without a clipping ancestor are absent from the returned map.
+/// - Rects are on-screen: a clipper nested inside a scrolled container is shifted by that container's
+///   [`crate::input::ScrollOffset`], the same shift every leaf under it gets (see [`parent_scroll_offsets`]).
+///   Its own offset is not applied - a scroll box moves its content, not its own frame.
 pub fn parent_scroll_clip_rects(
     main: &mut World,
     parents: &std::collections::HashMap<Entity, Entity>,
@@ -1424,6 +1428,7 @@ pub fn parent_scroll_clip_rects(
     {
         return v.clone();
     }
+    let offsets = parent_scroll_offsets(main, parents);
     // Per-clipper rect (origin, size) in window coords.
     let clippers: std::collections::HashMap<Entity, (Vec2, Vec2)> = {
         let mut q = main.query::<(Entity, &Transform, &Style, Option<&Scroll>)>();
@@ -1432,7 +1437,8 @@ pub fn parent_scroll_clip_rects(
                 let qualifies = scroll.is_some()
                     || matches!(style.overflow_y, Overflow::Hidden)
                     || matches!(style.overflow_x, Overflow::Hidden);
-                qualifies.then_some((e, (t.absolute, t.size)))
+                let off = offsets.get(&e).copied().unwrap_or(Vec2::ZERO);
+                qualifies.then_some((e, (t.absolute - off, t.size)))
             })
             .collect()
     };
@@ -1511,6 +1517,10 @@ fn aabb_outside(origin: Vec2, size: Vec2, clip: (Vec2, Vec2)) -> bool {
 /// Extracts one [`ExtractedClipBox`] per clipping entity (carrying [`crate::input::Scroll`] or `Style.overflow_x` / `overflow_y == Hidden`).
 /// Each emission carries the containing rect plus the `(start_order, end_order)` range bracketing descendant paints so the renderer can push/pop a vello layer.
 ///
+/// The rect is where the box lands on screen: a clipper inside a scrolled container carries that
+/// container's [`crate::input::ScrollOffset`], exactly like the leaves it clips (see
+/// [`parent_scroll_offsets`]). Its own scroll offset stays out - that one moves its content.
+///
 /// W2.3 wires this back into the default extract chain - the boxes feed [`crate::node_ir::Node::Clip`]
 /// wrappers inside [`crate::node_ir::transform_extracted_to_nodes`].
 pub fn extract_clips(main: &mut World, render: &mut World) {
@@ -1518,6 +1528,7 @@ pub fn extract_clips(main: &mut World, render: &mut World) {
     use crate::input::Scroll;
     let (parents, mut depth_cache) = build_parent_map(main);
     let hidden = hidden_entities(main, &parents);
+    let offsets = parent_scroll_offsets(main, &parents);
     // Invert the parent map into a child lookup so descendant orders can be computed.
     let mut children: std::collections::HashMap<Entity, Vec<Entity>> =
         std::collections::HashMap::new();
@@ -1597,10 +1608,11 @@ pub fn extract_clips(main: &mut World, render: &mut World) {
                 .get::<crate::components::Visuals>(e)
                 .map(|v| v.radius)
                 .unwrap_or(0.0);
+            let off = offsets.get(&e).copied().unwrap_or(Vec2::ZERO);
             Some((
                 e,
                 ExtractedClipBox {
-                    origin: t.absolute,
+                    origin: t.absolute - off,
                     size: t.size,
                     radius,
                     start_order: own,
@@ -3284,6 +3296,102 @@ mod tests {
         );
         assert!(clip.start_order < po_opt1 && po_opt1 <= clip.end_order);
         assert!(clip.start_order < po_opt2 && po_opt2 <= clip.end_order);
+    }
+
+    /// Issue 136 regression: an `overflow: hidden` box inside a scrolled container clips where it is
+    /// drawn, not where it was laid out. The clip box and the nearest-clip-ancestor rect used to keep
+    /// the raw layout origin while every leaf under them moved with the scroll offset, so scrolling
+    /// far enough carried a subtree clean out of its own clip and the box painted nothing.
+    #[test]
+    fn clip_rects_follow_the_scroll_offset_of_their_ancestors() {
+        use crate::components::{Overflow, Style, Transform, Visuals};
+        use crate::input::{Scroll, ScrollOffset};
+        let mut main = World::new();
+        let mut render = World::new();
+        render.insert_resource(RenderEntityMap::default());
+
+        // A 200x100 scroll viewport, scrolled 200px down, holding a 60px-tall
+        // overflow-hidden card that starts at y = 200 - i.e. exactly at the top
+        // of the viewport once scrolled.
+        let scroller = main
+            .spawn((
+                Scroll::default(),
+                ScrollOffset(Vec2::new(0.0, 200.0)),
+                Style::default(),
+                Transform {
+                    absolute: Vec2::ZERO,
+                    size: Vec2::new(200.0, 100.0),
+                    baseline_y: None,
+                },
+            ))
+            .id();
+        let card = main
+            .spawn((
+                Style {
+                    overflow_y: Overflow::Hidden,
+                    ..Default::default()
+                },
+                Transform {
+                    absolute: Vec2::new(0.0, 200.0),
+                    size: Vec2::new(200.0, 60.0),
+                    baseline_y: None,
+                },
+                ChildOf(scroller),
+            ))
+            .id();
+        let inner = main
+            .spawn((
+                Transform {
+                    absolute: Vec2::new(0.0, 200.0),
+                    size: Vec2::new(50.0, 50.0),
+                    baseline_y: None,
+                },
+                Visuals {
+                    fill: Some(crate::components::Fill::Solid(Color::rgb(1.0, 0.0, 0.0))),
+                    ..Default::default()
+                },
+                ChildOf(card),
+            ))
+            .id();
+
+        let (parents, _) = build_parent_map(&mut main);
+        let clips = parent_scroll_clip_rects(&mut main, &parents);
+        assert_eq!(
+            clips.get(&inner).copied(),
+            Some((Vec2::new(0.0, 0.0), Vec2::new(200.0, 60.0))),
+            "the card clips its child where the card is drawn"
+        );
+
+        extract_clips(&mut main, &mut render);
+        let boxes: Vec<ExtractedClipBox> = {
+            let mut q = render.query::<&ExtractedClipBox>();
+            q.iter(&render).copied().collect()
+        };
+        let card_box = boxes
+            .iter()
+            .find(|b| b.size == Vec2::new(200.0, 60.0))
+            .expect("clip box for the card");
+        assert_eq!(card_box.origin, Vec2::new(0.0, 0.0));
+        let scroller_box = boxes
+            .iter()
+            .find(|b| b.size == Vec2::new(200.0, 100.0))
+            .expect("clip box for the scroll container");
+        assert_eq!(
+            scroller_box.origin,
+            Vec2::ZERO,
+            "a scroll box moves its content, not its own frame"
+        );
+
+        extract_rects(&mut main, &mut render);
+        let origins: Vec<Vec2> = {
+            let mut q = render.query::<&ExtractedRect>();
+            q.iter(&render).map(|r| r.origin).collect()
+        };
+        assert_eq!(
+            origins,
+            vec![Vec2::ZERO],
+            "the scrolled-into-view child still paints"
+        );
     }
 
     /// Overlay content escapes ancestor scroll/overflow clip rects (top-layer semantics): the

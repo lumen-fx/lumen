@@ -307,7 +307,10 @@ for `grow`, `flex-shrink` for `shrink`, `justify-content` for `justify`,
 | `overflow`, `overflow-x`, `overflow-y` | `visible`, `hidden`, `scroll` | `visible` |
 | `layout-boundary` | `true`, `yes` | automatic |
 
-`overflow: scroll` makes an element a live scroll container.
+`overflow: scroll` makes an element a live scroll container. `overflow:
+hidden` cuts its descendants off at the element's box without making it
+scrollable; inside a scroll container that clip travels with the element as
+the content scrolls.
 
 ### Logical properties
 
