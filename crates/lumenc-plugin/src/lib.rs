@@ -181,6 +181,11 @@ pub struct Error {
     pub message: String,
 }
 
+// Blanket over Display so `?` works on any error in a hook body. This
+// compiles only while `Error` itself implements neither Display nor
+// std::error::Error; adding either collides with core's reflexive
+// `From<T> for T`. If that trade ever needs reversing, replace this with
+// explicit From impls for the common error types.
 impl<E: std::fmt::Display> From<E> for Error {
     fn from(e: E) -> Self {
         Error {

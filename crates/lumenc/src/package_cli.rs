@@ -1330,15 +1330,6 @@ impl CopyRules {
     }
 }
 
-/// Copy the app's own files into the package, at the same relative paths.
-///
-/// Everything the app directory holds travels except what the executable
-/// already carries and what is not part of the shipped app: dotfiles, the
-/// build inputs and outputs named by `rules`, and whichever directory the
-/// package is being written into. Copying whole rather than only the files the
-/// markup names is deliberate: an app reaches many of its files at run time,
-/// through a script that plays a sound or a translation the locale picks, and
-/// a static reading of the markup cannot see those.
 /// Mirror `<src>/.lumen/generated` (compiler-plugin emit outputs) into the
 /// package. Absent when the app declares no plugins, and nothing to do then.
 fn copy_generated_outputs(src: &Path, out: &Path) -> Result<(), String> {
@@ -1371,6 +1362,15 @@ fn copy_generated_outputs(src: &Path, out: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Copy the app's own files into the package, at the same relative paths.
+///
+/// Everything the app directory holds travels except what the executable
+/// already carries and what is not part of the shipped app: dotfiles, the
+/// build inputs and outputs named by `rules`, and whichever directory the
+/// package is being written into. Copying whole rather than only the files the
+/// markup names is deliberate: an app reaches many of its files at run time,
+/// through a script that plays a sound or a translation the locale picks, and
+/// a static reading of the markup cannot see those.
 fn copy_app_files(src: &Path, out: &Path, rules: CopyRules) -> Result<usize, String> {
     let mut count = 0usize;
     let mut stack = vec![src.to_path_buf()];

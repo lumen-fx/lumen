@@ -285,8 +285,8 @@ for what a plugin can do.
 |-----|------|----------|--------|
 | `name` | string | yes | Plugin name; the loaded library must report the same one. |
 | `version` | string | one source | Version requirement (cargo semantics: `"1.2"` means `^1.2`), resolved against the plugin cache and pinned in `lumen.lock`. |
-| `path` | string | one source | A built cdylib, relative to the app directory. Without an extension the platform spellings are probed (`lib<p>.so`, `lib<p>.dylib`, `<p>.dll`). |
-| `config` | table | no | Handed to the plugin verbatim. |
+| `path` | string | one source | A built cdylib, relative to the app directory (absolute paths work too). Without an extension the platform spellings are probed (`lib<p>.so`, `lib<p>.dylib`, `<p>.dll`, plus the underscored variants cargo produces for a hyphenated name). |
+| `config` | table | no | Handed to the plugin verbatim; a key the plugin does not read produces no diagnostic. |
 
 ```toml
 [[plugins]]
@@ -311,9 +311,10 @@ cached library whose bytes changed. `lumenc` does not fetch plugins yet; a
 version absent from the cache is an error that says so.
 
 Unlike `[[hooks]]`, plugins also run under `lumenc check`, so the tree being
-validated is the tree a build produces; emit outputs are discarded there. A
-plugin is native code loaded into the compiler's process, the same trust
-model as a Cargo build script.
+validated is the tree a build produces; emit outputs are discarded there,
+though a `version` source may still write `lumen.lock`. A plugin is native
+code loaded into the compiler's process, the same trust model as a Cargo
+build script.
 
 ## [signals]
 

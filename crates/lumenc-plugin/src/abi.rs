@@ -8,8 +8,10 @@
 
 use std::os::raw::c_char;
 
-/// Version of this descriptor layout and of the [`crate::Ctx`] wire shape.
-/// Bump on any change to [`Desc`], [`Buf`], the status codes, or `Ctx`.
+/// Version of this descriptor layout and of the SDK-owned wire shapes.
+/// Bump on any change to [`Desc`], [`Buf`], the status codes, or any serde
+/// type this crate sends across the boundary (`Ctx`, `Finding`, `Output`);
+/// `lumen_ir` types are covered by [`Desc::ir_format_version`] instead.
 pub const ABI_VERSION: u32 = 1;
 
 /// The one symbol a plugin cdylib exports:
@@ -50,6 +52,12 @@ pub type HookFn = unsafe extern "C" fn(
 /// Frees a buffer previously returned by any hook of the same plugin.
 pub type FreeFn = unsafe extern "C" fn(ptr: *mut u8, len: usize, cap: usize);
 
+/// Set in [`Desc::flags`] by a plugin built with `panic = "abort"`. The host
+/// refuses such a plugin at load: the panic-to-error contract depends on
+/// unwinding, and an aborting plugin would kill the compiler on any hook
+/// panic.
+pub const FLAG_PANIC_ABORT: u16 = 1;
+
 /// `out` holds the hook's payload.
 pub const OK: i32 = 0;
 /// `out` holds a UTF-8 error message; the compile fails with it.
@@ -75,7 +83,8 @@ pub struct Desc {
     /// `lumen_ir::artifact::FORMAT_VERSION` the plugin was built against.
     /// The IR payloads are only meaningful when it matches the host's.
     pub ir_format_version: u16,
-    pub _reserved: u16,
+    /// Bit set of [`FLAG_PANIC_ABORT`] and future flags; zero otherwise.
+    pub flags: u16,
     /// NUL-terminated UTF-8, `'static`. Must match the `[[plugins]] name`
     /// declared in `lumen.toml`.
     pub name: *const c_char,

@@ -124,7 +124,7 @@ fn dispatch(
 /// valid for writes.
 #[doc(hidden)]
 pub unsafe fn hook_entry(
-    plugin: &'static dyn CompilerPlugin,
+    plugin: fn() -> &'static dyn CompilerPlugin,
     kind: HookKind,
     input: *const u8,
     input_len: usize,
@@ -138,8 +138,11 @@ pub unsafe fn hook_entry(
             std::slice::from_raw_parts(ctx, ctx_len),
         )
     };
+    // The getter runs inside the catch too: first-call construction is a
+    // plugin-authored code path and a panicking constructor must fail the
+    // compile, not abort the process.
     let (status, bytes) =
-        match catch_unwind(AssertUnwindSafe(|| dispatch(plugin, kind, input, ctx))) {
+        match catch_unwind(AssertUnwindSafe(|| dispatch(plugin(), kind, input, ctx))) {
             Ok(r) => r,
             Err(payload) => {
                 let msg = payload
@@ -189,7 +192,7 @@ macro_rules! lumenc_plugin {
             ) -> i32 {
                 unsafe {
                     $crate::export::hook_entry(
-                        instance(),
+                        instance,
                         $crate::export::HookKind::Markup,
                         input,
                         input_len,
@@ -208,7 +211,7 @@ macro_rules! lumenc_plugin {
             ) -> i32 {
                 unsafe {
                     $crate::export::hook_entry(
-                        instance(),
+                        instance,
                         $crate::export::HookKind::Css,
                         input,
                         input_len,
@@ -227,7 +230,7 @@ macro_rules! lumenc_plugin {
             ) -> i32 {
                 unsafe {
                     $crate::export::hook_entry(
-                        instance(),
+                        instance,
                         $crate::export::HookKind::Ir,
                         input,
                         input_len,
@@ -246,7 +249,7 @@ macro_rules! lumenc_plugin {
             ) -> i32 {
                 unsafe {
                     $crate::export::hook_entry(
-                        instance(),
+                        instance,
                         $crate::export::HookKind::Lint,
                         input,
                         input_len,
@@ -265,7 +268,7 @@ macro_rules! lumenc_plugin {
             ) -> i32 {
                 unsafe {
                     $crate::export::hook_entry(
-                        instance(),
+                        instance,
                         $crate::export::HookKind::Emit,
                         input,
                         input_len,
@@ -280,7 +283,11 @@ macro_rules! lumenc_plugin {
                 abi_version: $crate::abi::ABI_VERSION,
                 struct_size: ::std::mem::size_of::<$crate::abi::Desc>() as u32,
                 ir_format_version: $crate::lumen_ir::artifact::FORMAT_VERSION,
-                _reserved: 0,
+                flags: if ::std::cfg!(panic = "abort") {
+                    $crate::abi::FLAG_PANIC_ABORT
+                } else {
+                    0
+                },
                 name: concat!(env!("CARGO_PKG_NAME"), "\0").as_ptr()
                     as *const ::std::os::raw::c_char,
                 version: concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr()

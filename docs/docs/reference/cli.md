@@ -77,7 +77,8 @@ lumenc check <dir>
 
 Parses and validates the app without opening a window and without running
 hooks. Declared compiler plugins do run, in check-only mode: the tree being
-validated is the tree a build produces, and emit outputs are discarded.
+validated is the tree a build produces, and emit outputs are discarded (a
+`version` source may still update `lumen.lock`).
 Prints `<dir>: ok (N elements, script: yes|none)` and exits 0, or
 prints the parse error and exits 1. A missing `<dir>` exits 2.
 
