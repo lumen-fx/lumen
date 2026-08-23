@@ -434,14 +434,27 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
             let Some(painter) = painter else {
                 return;
             };
-            let pops = if *clip_to_bounds {
-                let shape = scale_clip_shape(ClipShape::Rect(*bounds), ctx.dpr);
-                push_clip_layer(ctx.scene, shape, ctx.opacity)
-            } else {
-                0
-            };
             let transform = affine_to_affine2(ctx.transform);
             let (dpr, opacity) = (ctx.dpr, ctx.opacity);
+            // Layers the walker owns right now. Everything the painter opens sits above this mark,
+            // and nothing below it is the painter's to close.
+            let depth_before = ctx.scene.encoding().n_open_clips;
+            if *clip_to_bounds {
+                // Clip in the painter's own space: the same device transform the painter is handed,
+                // over the same logical bounds. Pre-scaling the rect instead would put the clip in a
+                // different space than the content as soon as an ancestor transform is non-identity.
+                // Alpha stays at 1: opacity has one owner, and it is the painter, through
+                // `ctx.opacity`. A clip that also composited would make the leaf's alpha depend on
+                // whether it asked to be clipped.
+                let device = Affine::scale(dpr as f64) * ctx.transform;
+                ctx.scene.push_layer(
+                    Fill::NonZero,
+                    peniko::BlendMode::default(),
+                    1.0,
+                    device,
+                    &lumen_rect_to_kurbo(*bounds),
+                );
+            }
             let mut paint_ctx = NativePaintCtx::new(
                 payload.as_ref(),
                 &mut *ctx.scene,
@@ -452,7 +465,11 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
                 opacity,
             );
             painter.paint(&mut paint_ctx);
-            for _ in 0..pops {
+            // Rebalance. A painter that left layers open would otherwise have the walker's later
+            // pops close its layers instead of the walker's own; one that over-popped would already
+            // have closed an ancestor's clip, and popping again here would close another. Closing
+            // down to the mark and no further is the only move that is right in both directions.
+            while ctx.scene.encoding().n_open_clips > depth_before {
                 ctx.scene.pop_layer();
             }
         }
@@ -837,8 +854,17 @@ fn node_bounds(node: &Node, viewport: LumenRect, xform: Affine) -> LumenRect {
             }
         }
         // The seam requires bounds that enclose every pixel the painter touches, so damage from a
-        // native leaf is confined to them like any other leaf.
-        Node::Native { bounds, .. } => apply_affine_to_rect(*bounds, xform),
+        // native leaf is confined to them like any other leaf. Bounds with no area are the one
+        // exception: an empty rect is dropped from the damage list, which would leave such a leaf
+        // frozen on screen no matter how often its revision moved, so it falls back to the
+        // viewport - a repaint that costs too much beats one that never happens.
+        Node::Native { bounds, .. } => {
+            if bounds.size.x <= 0.0 || bounds.size.y <= 0.0 {
+                viewport
+            } else {
+                apply_affine_to_rect(*bounds, xform)
+            }
+        }
     }
 }
 

@@ -306,18 +306,24 @@ fn a_moved_native_leaf_damages_both_places() {
     let mut damage = FrameDamage::default();
     diff_retained_scenes(Some(&prev), Some(&curr), viewport, &mut damage);
 
-    let covers = |x: f32| {
-        damage
-            .0
-            .iter()
-            .any(|r| r.origin.x <= x && x <= r.origin.x + r.size.x)
+    let covers = |x: f32, y: f32| {
+        damage.0.iter().any(|r| {
+            r.origin.x <= x
+                && x <= r.origin.x + r.size.x
+                && r.origin.y <= y
+                && y <= r.origin.y + r.size.y
+        })
     };
     assert!(
-        covers(120.0),
+        covers(120.0, 120.0),
         "the vacated region is damaged: {:?}",
         damage.0
     );
-    assert!(covers(320.0), "the new region is damaged: {:?}", damage.0);
+    assert!(
+        covers(320.0, 120.0),
+        "the new region is damaged: {:?}",
+        damage.0
+    );
 }
 
 /// Swapping a native leaf for an ordinary rect changes both, so both bounds are
@@ -342,6 +348,32 @@ fn replacing_a_native_leaf_with_a_rect_damages_both() {
         damage.0.len(),
         2,
         "old bounds and new bounds: {:?}",
+        damage.0
+    );
+}
+
+/// A leaf that declares no area cannot own a damage rect, because an empty rect is no damage at
+/// all. Rather than freeze on screen forever, it costs a full-viewport repaint when its content
+/// moves - loud enough to notice, which is the point.
+#[test]
+fn a_leaf_with_no_area_falls_back_to_the_whole_viewport() {
+    let viewport = Rect {
+        origin: glam::Vec2::ZERO,
+        size: glam::Vec2::new(800.0, 600.0),
+    };
+    let prev = container(vec![native((100.0, 100.0), (120.0, 0.0), 1)]);
+    let curr = container(vec![native((100.0, 100.0), (120.0, 0.0), 2)]);
+
+    let mut damage = FrameDamage::default();
+    diff_retained_scenes(Some(&prev), Some(&curr), viewport, &mut damage);
+
+    assert!(
+        !damage.is_empty(),
+        "a leaf with no declared area still has to repaint when its revision moves"
+    );
+    assert!(
+        damage.0.iter().any(|r| r.size == viewport.size),
+        "and the only rect that can cover it is the viewport, got {:?}",
         damage.0
     );
 }

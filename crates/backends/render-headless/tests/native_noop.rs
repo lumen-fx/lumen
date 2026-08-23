@@ -5,7 +5,6 @@
 //! behaviour rather than something a later change could alter unnoticed.
 
 use lumen_core::prelude::*;
-use lumen_core::render_world::RenderEntityMap;
 use lumen_render_headless::{HeadlessRenderer, HeadlessRendererPlugin};
 use std::sync::Arc;
 
@@ -24,28 +23,26 @@ impl NativePainter for Loud {
 }
 
 fn extract_painted(main: &mut World, render: &mut World) {
+    let mut place = NativeExtract::new(main);
     let mut q = main.query::<(Entity, &Transform, &Painted)>();
-    let pairs: Vec<(Entity, ExtractedNative)> = q
+    let leaves: Vec<(Entity, ExtractedNative)> = q
         .iter(main)
-        .map(|(e, transform, _)| {
-            (
+        .filter_map(|(e, transform, _)| {
+            let placed = place.place(e, transform, None)?;
+            Some((
                 e,
                 ExtractedNative {
                     extension_id: "test.loud".into(),
                     payload: Arc::new(()),
-                    bounds: Rect::new(transform.absolute, transform.size),
-                    order: 4,
+                    bounds: placed.bounds,
+                    order: placed.order,
                     revision: next_revision(),
                     clip_to_bounds: true,
                 },
-            )
+            ))
         })
         .collect();
-    let mut next: std::collections::HashMap<Entity, Entity> = std::collections::HashMap::new();
-    for (main_e, leaf) in pairs {
-        next.insert(main_e, render.spawn(leaf).id());
-    }
-    render.resource_mut::<RenderEntityMap>().native = next;
+    upsert_native_leaves(render, "test.loud", leaves);
 }
 
 fn framebuffer(app: &App) -> Vec<u8> {
