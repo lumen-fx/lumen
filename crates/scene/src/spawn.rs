@@ -775,6 +775,17 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
                 )
                 .collect(),
         });
+        // The header's text binding names the value signal, and the
+        // closed combobox shows the selected option's label rather than
+        // the value that signal holds. `apply_text_bindings` reads the
+        // mapping off this component as it writes, so the header never
+        // shows the raw value even for a tick.
+        entity.insert(lumen_core::components::BindTextLabels(
+            spec.options
+                .iter()
+                .map(|(value, label, _)| (value.clone(), label.clone()))
+                .collect(),
+        ));
         // `popup-gap` (markup attr or the CSS property) wins;
         // `PopupGap::default()` carries the runtime's own gap constant
         // when unauthored. Sits on the trigger (this header entity) -

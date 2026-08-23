@@ -41,7 +41,7 @@ use crate::spec::SignalEnv;
 /// The caller emits from the element's own attributes then, and nothing is
 /// copied.
 pub fn resolved(ir_tag: &str, attrs: &Attributes, signals: &SignalEnv) -> Option<Attributes> {
-    let text = bound(attrs, BindKind::Text, signals).map(str::to_string);
+    let text = bound(attrs, BindKind::Text, signals).map(|value| shown_as(attrs, value));
     let checked = bound(attrs, BindKind::Checked, signals).and_then(signal_as_bool);
     let value = bound(attrs, BindKind::Value, signals)
         .and_then(|value| value.parse::<f32>().ok())
@@ -69,6 +69,25 @@ pub fn resolved(ir_tag: &str, attrs: &Attributes, signals: &SignalEnv) -> Option
         out.disabled = disabled;
     }
     Some(out)
+}
+
+/// The text an element shows for a bound value.
+///
+/// It is the value itself for everything but a closed `<dropdown>` header,
+/// whose signal holds the selected `<option>`'s `value` while the header
+/// reads its `label`. The desktop makes the same substitution as it writes
+/// the text, so the page and the app that adopts it say one thing.
+fn shown_as(attrs: &Attributes, value: &str) -> String {
+    attrs
+        .dropdown_button
+        .as_ref()
+        .and_then(|spec| {
+            spec.options
+                .iter()
+                .find(|(option, _, _)| option == value)
+                .map(|(_, label, _)| label.clone())
+        })
+        .unwrap_or_else(|| value.to_string())
 }
 
 /// The value of the signal an element's `kind` binding names, when the page's

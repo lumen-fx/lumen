@@ -24,8 +24,8 @@
 #![allow(deprecated)]
 
 use crate::components::{
-    BindChecked, BindDisabled, BindScroll, BindText, BindValue, Disabled, ImeState, SliderValue,
-    TextContent, TextInput, Toggleable,
+    BindChecked, BindDisabled, BindScroll, BindText, BindTextLabels, BindValue, Disabled, ImeState,
+    SliderValue, TextContent, TextInput, Toggleable,
 };
 use crate::input::{Focused, Scroll, ScrollOffset};
 use crate::property_store::{PropertyKey, PropertyStore, PropertyValue, push_external_property};
@@ -322,6 +322,11 @@ pub fn clear_signal_dirty(signals: Option<ResMut<Signals>>) {
 /// Copies `PropertyStore[Global(name)]` into [`TextContent`] for every [`BindText`] entity.
 /// Entities whose property has no entry keep their existing text.
 ///
+/// A [`BindTextLabels`] on the same entity says what to show for a value
+/// instead of the value itself, which is how a closed `<dropdown>` reads
+/// its selected option's label while the signal holds that option's
+/// value. A value it does not name is written as it stands.
+///
 /// Editing-protection gate: entities currently carrying [`Focused`] or an active
 /// [`ImeState`] preedit are skipped - overwriting `TextContent` mid-edit would
 /// race the keystroke / IME path in [`crate::input::route_ime_events`] and
@@ -333,7 +338,12 @@ pub fn clear_signal_dirty(signals: Option<ResMut<Signals>>) {
 pub fn apply_text_bindings(
     store: Res<PropertyStore>,
     mut q: Query<
-        (&BindText, &mut TextContent, Option<&mut TextInput>),
+        (
+            &BindText,
+            &mut TextContent,
+            Option<&mut TextInput>,
+            Option<&BindTextLabels>,
+        ),
         (Without<Focused>, Without<ImeState>),
     >,
     new_binds: Query<(), Added<BindText>>,
@@ -355,7 +365,7 @@ pub fn apply_text_bindings(
     if store.dirty_peek().is_empty() && new_binds.is_empty() {
         return;
     }
-    for (bind, mut tc, input) in &mut q {
+    for (bind, mut tc, input, labels) in &mut q {
         let key = PropertyKey::Global(Arc::<str>::from(bind.0.as_ref()));
         // Stringify scalar variants via the existing `From<PropertyValue> for Arc<str>` impl
         // - `Bool` -> `"true"` / `"false"`, `I64` / `F64` -> decimal - so a typed write to the
@@ -364,7 +374,11 @@ pub fn apply_text_bindings(
             continue;
         };
         let value: Arc<str> = Arc::<str>::from(pv.clone());
-        let value_str = value.as_ref();
+        // What the element says for this value, when it says something
+        // other than the value.
+        let value_str = labels
+            .and_then(|labels| labels.label_for(value.as_ref()))
+            .unwrap_or(value.as_ref());
         if tc.0 != value_str {
             tc.0 = value_str.to_string();
             // Cursor / selection_anchor are raw byte offsets into TextContent;

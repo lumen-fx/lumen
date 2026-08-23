@@ -1499,6 +1499,32 @@ arc_str_binding! {
     BindText
 }
 
+/// The text to show for each value a [`BindText`] entity's signal can
+/// hold, in the order they were declared.
+///
+/// A binding names a signal, and what the signal holds is not always what
+/// the control says. A closed `<dropdown>` is the case: the signal holds
+/// the selected `<option>`'s `value`, which is what a script reads and
+/// what a click writes, while the header reads its `label`.
+/// `apply_text_bindings` looks the value up here before it writes, so the
+/// two never disagree and the display text is chosen once rather than
+/// corrected afterwards.
+///
+/// A value with no entry is shown as it stands, which is what leaves a
+/// placeholder in place until something selects an option.
+#[derive(Component, Clone, Debug, Default)]
+pub struct BindTextLabels(pub Vec<(String, String)>);
+
+impl BindTextLabels {
+    /// The text `value` is shown as, or `None` when nothing names it.
+    pub fn label_for(&self, value: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(known, _)| known == value)
+            .map(|(_, label)| label.as_str())
+    }
+}
+
 /// Two-way binding for `<toggle bind-checked="signal">`.
 /// - Signal -> [`Toggleable`] via [`crate::signals::apply_checked_bindings`].
 /// - [`Toggleable`] -> signal via [`crate::signals::push_toggle_to_signal`] on user flip.
