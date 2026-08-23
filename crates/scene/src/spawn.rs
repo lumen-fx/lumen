@@ -306,11 +306,77 @@ struct DocumentOrderCounter(u32);
 /// entity's `world.spawn(..)` call - `EntityWorldMut` holds `world`
 /// exclusively for its lifetime, so the resource bump can't be interleaved
 /// once that borrow starts.
+///
+/// This is the seed only. A subtree that mounts later - an `<if>` body,
+/// a `<for>` row, a node a script appends - continues the same counter,
+/// which places it after everything already in the world rather than
+/// where it sits in the tree. [`renumber_document_order`] restates the
+/// value from the live hierarchy once the shape settles.
 fn next_document_order(world: &mut World) -> u32 {
     let mut counter = world.get_resource_or_insert_with(DocumentOrderCounter::default);
     let n = counter.0;
     counter.0 = counter.0.wrapping_add(1);
     n
+}
+
+/// Restate [`lumen_core::components::DocumentOrder`] from the live
+/// hierarchy, so it means "where this element sits in the document"
+/// rather than "when it was spawned".
+///
+/// The spawn counter is only markup order for the tree the build walked.
+/// Anything that mounts afterwards is numbered at mount time, which puts
+/// it behind every element already in the world: a button inside an
+/// `<if>` was thrown past the whole list beside it, and the longer that
+/// list, the further Tab jumped over the button. Short lists hid the
+/// defect, because a couple of stops out of place still looks right.
+///
+/// The walk is depth-first, parent before children, siblings in
+/// `Children` order - which is the order they were attached, so it is
+/// markup order for the initial tree and mount order within a
+/// reconciler's own body. Roots are visited in their existing order, so
+/// a second root (the error banner, the devtools overlay) keeps its
+/// place. Only entities whose number actually moves are written, so a
+/// steady tree costs one query and nothing else.
+pub fn renumber_document_order(
+    mut commands: bevy_ecs::system::Commands,
+    reshaped: bevy_ecs::system::Query<(), Changed<bevy_ecs::hierarchy::Children>>,
+    roots: bevy_ecs::system::Query<
+        (Entity, &lumen_core::components::DocumentOrder),
+        Without<bevy_ecs::hierarchy::ChildOf>,
+    >,
+    children: bevy_ecs::system::Query<&bevy_ecs::hierarchy::Children>,
+    orders: bevy_ecs::system::Query<&lumen_core::components::DocumentOrder>,
+) {
+    // Nothing gained or lost a child this tick, so every relative
+    // position still holds.
+    if reshaped.is_empty() {
+        return;
+    }
+    let mut top: Vec<(u32, Entity)> = roots.iter().map(|(e, d)| (d.0, e)).collect();
+    top.sort_unstable();
+    // Depth-first with an explicit stack: an app can nest deeper than a
+    // recursive walk is comfortable with.
+    let mut stack: Vec<Entity> = top.into_iter().rev().map(|(_, e)| e).collect();
+    let mut n: u32 = 0;
+    while let Some(e) = stack.pop() {
+        if orders.get(e).ok().map(|d| d.0) != Some(n) {
+            // `try_insert`, because a later system in the same stage can
+            // despawn an entity this walk just numbered - a script
+            // handler rebuilding a list does exactly that - and the
+            // write lands after it. Losing the number is the right
+            // outcome there: the entity is gone, and the despawn
+            // reshapes the tree, so the next tick walks it again.
+            commands
+                .entity(e)
+                .try_insert(lumen_core::components::DocumentOrder(n));
+        }
+        n = n.wrapping_add(1);
+        if let Ok(kids) = children.get(e) {
+            for kid in kids.iter().rev() {
+                stack.push(kid);
+            }
+        }
+    }
 }
 
 /// The text an element spawns with.
@@ -2626,6 +2692,109 @@ mod body_spawn_tests {
             3,
             "if-body focusables must carry TabIndex + DocumentOrder"
         );
+    }
+}
+
+#[cfg(test)]
+mod document_order_tests {
+    //! `DocumentOrder` is a position, not a spawn timestamp. A subtree
+    //! that mounts after the initial walk - an `<if>` body, a `<for>`
+    //! row - takes the counter values that were left over, which puts it
+    //! behind every element already in the world. Tab then skipped a
+    //! gated button into the list beside it, and the longer the list,
+    //! the further the jump.
+    use super::*;
+    use bevy_ecs::system::RunSystemOnce;
+
+    fn el(tag: &str) -> Element {
+        Element {
+            tag: tag.to_string(),
+            ..Element::default()
+        }
+    }
+
+    fn order_of(world: &World, e: Entity) -> u32 {
+        world
+            .get::<lumen_core::components::DocumentOrder>(e)
+            .expect("every spawned element carries DocumentOrder")
+            .0
+    }
+
+    /// `<root>` = head button, `<if>` holding one button, a long list,
+    /// tail button. The gated button mounts last and must still sort
+    /// between the head and the list.
+    fn tree_with_a_gate(rows: usize) -> (World, Entity, Entity, Entity, Entity) {
+        let mut world = World::new();
+        world.insert_resource(PropertyStore::default());
+        world
+            .resource_mut::<PropertyStore>()
+            .set_global_str("open", "1");
+
+        let mut gate = el("if");
+        gate.attrs.if_signal = Some("open".to_string());
+        gate.children = vec![el("button")];
+        let mut list = el("column");
+        list.children = (0..rows).map(|_| el("button")).collect();
+        let mut root = el("root");
+        root.children = vec![el("button"), gate, list, el("button")];
+
+        let root_e = spawn_subtree(&mut world, &root, None, Placeholders::Unresolved);
+        let kids: Vec<Entity> = world
+            .get::<bevy_ecs::hierarchy::Children>(root_e)
+            .map(|c| c.iter().collect())
+            .expect("root has children");
+        let (head, gate_e, list_e, tail) = (kids[0], kids[1], kids[2], kids[3]);
+
+        world.run_system_once(reconcile_if_blocks).unwrap();
+        let gated = world
+            .get::<bevy_ecs::hierarchy::Children>(gate_e)
+            .and_then(|c| c.iter().next())
+            .expect("the if body mounted");
+        let first_row = world
+            .get::<bevy_ecs::hierarchy::Children>(list_e)
+            .and_then(|c| c.iter().next())
+            .expect("the list has rows");
+        world.run_system_once(renumber_document_order).unwrap();
+        (world, head, gated, first_row, tail)
+    }
+
+    #[test]
+    fn a_mounted_if_body_sorts_where_it_sits_not_where_it_landed() {
+        let (world, head, gated, first_row, tail) = tree_with_a_gate(500);
+        assert!(
+            order_of(&world, head) < order_of(&world, gated),
+            "the gated button follows the head button"
+        );
+        assert!(
+            order_of(&world, gated) < order_of(&world, first_row),
+            "the gated button precedes the list beside it"
+        );
+        assert!(
+            order_of(&world, first_row) < order_of(&world, tail),
+            "the list precedes the tail button"
+        );
+    }
+
+    /// The same tree with an almost-empty list. The defect used to hide
+    /// here, because being a couple of stops out of place still looks
+    /// right; the ordering must not depend on the list's size at all.
+    #[test]
+    fn list_size_does_not_change_the_order() {
+        let (world, head, gated, first_row, tail) = tree_with_a_gate(1);
+        assert!(order_of(&world, head) < order_of(&world, gated));
+        assert!(order_of(&world, gated) < order_of(&world, first_row));
+        assert!(order_of(&world, first_row) < order_of(&world, tail));
+    }
+
+    /// The walk is a fixed point: running it over a tree that did not
+    /// move leaves every number where it was.
+    #[test]
+    fn a_settled_tree_is_left_alone() {
+        let (mut world, _, gated, _, _) = tree_with_a_gate(4);
+        let before = order_of(&world, gated);
+        world.clear_trackers();
+        world.run_system_once(renumber_document_order).unwrap();
+        assert_eq!(order_of(&world, gated), before);
     }
 }
 

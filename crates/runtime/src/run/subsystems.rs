@@ -275,6 +275,18 @@ pub(crate) fn register_reactive(app: &mut App) {
     app.world.init_resource::<crate::spawn::ScenePolicy>();
     app.add_systems(TickStage::Systems, crate::spawn::reconcile_for_blocks);
     app.add_systems(TickStage::Systems, crate::spawn::reconcile_if_blocks);
+    // A mounted subtree takes its place in the document, not at the end
+    // of it: `DocumentOrder` is restated from the hierarchy once the
+    // reconcilers have flushed their spawns, so Tab reaches an `<if>`
+    // body where it sits in the markup no matter what follows it. The
+    // `after` edges are what put the sync point in front of this system,
+    // so the walk sees the entities the reconcilers just queued.
+    app.add_systems(
+        TickStage::Systems,
+        crate::spawn::renumber_document_order
+            .after(crate::spawn::reconcile_for_blocks)
+            .after(crate::spawn::reconcile_if_blocks),
+    );
     // W5 dialog contract (Qt QDialog):
     // - Enter-anywhere activates the default button. Ordered after the
     //   focused-key fanout (same-tick keystroke) and before the script

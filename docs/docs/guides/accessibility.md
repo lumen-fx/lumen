@@ -60,6 +60,11 @@ and container elements, becomes focusable when you give it a `tab-index`.
 Disabled elements and hidden subtrees are skipped. While a `dialog` is open,
 Tab stays inside it.
 
+Content that appears while the app runs takes its place from where it sits in
+the markup, not from when it appeared: the body of an `<if>` that just opened,
+rows a `<for>` just mounted, and elements a script appended all sit in the order
+a reader would expect, whatever else is on the page.
+
 Activation follows the usual desktop rules:
 
 - Enter activates the focused control immediately.

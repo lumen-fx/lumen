@@ -1047,13 +1047,19 @@ pub struct Disabled;
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Selected;
 
-/// Spawn-order tiebreak for focus cycling. `bevy_ecs` 0.19's `Entity: Ord`
-/// is a niche-optimized row-index comparison, not a spawn-order one - for
-/// entities recycled through a freed ECS row, a later-spawned entity can
-/// sort *before* an earlier one. `lumenc::spawn` assigns this from a
-/// monotonic per-document counter as it walks the parsed tree in markup
-/// order, so entities with equal [`TabIndex`] cycle in the order they
-/// appear in the source, not in whatever order their table rows landed.
+/// Position of this entity in the document, as a depth-first index over
+/// the tree. It is the tiebreak for focus cycling: `bevy_ecs` 0.19's
+/// `Entity: Ord` is a niche-optimized row-index comparison, not a
+/// spawn-order one - for entities recycled through a freed ECS row, a
+/// later-spawned entity can sort *before* an earlier one. Entities with
+/// equal [`TabIndex`] cycle in the order they appear in the source, not
+/// in whatever order their table rows landed.
+///
+/// `lumen_scene::spawn` seeds it from a counter as it walks the parsed
+/// tree, then restates it from the live hierarchy whenever the tree
+/// changes shape. The restatement is what keeps it a *position*: a
+/// subtree that mounts at runtime (an `<if>` body, a `<for>` row) would
+/// otherwise carry a number that says only how late it arrived.
 ///
 /// Absent on entities not spawned through `lumenc` (hand-built ECS test
 /// fixtures, primarily) - consumers should treat a missing value as "no
