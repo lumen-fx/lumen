@@ -37,6 +37,7 @@ pub(crate) fn apply_script_commands(
     file_dialog: Res<FileDialogService>,
     mut tray: NonSendMut<OsTrayService>,
     hot: Option<Res<HotReloadState>>,
+    document_root: Option<Res<crate::run::restyle::DocumentRoot>>,
     // The file dialog runs on the app's executor when one is installed; the
     // resource is absent in a build with no async backend, and the dialog
     // then blocks the tick instead.
@@ -88,9 +89,15 @@ pub(crate) fn apply_script_commands(
                 let new_classes: Vec<String> =
                     classes.split_whitespace().map(|s| s.to_string()).collect();
                 if target_id == "<root>" {
-                    if let Some(state) = &hot {
+                    // The root has no `id` to look up, so it is read from
+                    // `DocumentRoot`, which the spawn pass records for every
+                    // run. This used to come off the hot-reload state, which
+                    // only exists while a file watcher is running, so
+                    // `set_root_class` silently did nothing in a compiled app
+                    // and in every headless run.
+                    if let Some(root) = document_root.as_ref() {
                         commands
-                            .entity(state.root)
+                            .entity(root.0)
                             .insert(lumen_core::components::LumenClasses::from(new_classes));
                     }
                 } else {

@@ -317,6 +317,7 @@ pub(crate) fn hot_reload(world: &mut World) {
     crate::fragments::install(world, fragments);
     use crate::spawn::SpawnIntoWorld;
     let new_root = ir.spawn_into(world);
+    crate::run::restyle::install_document_root(world, new_root);
     restore_stateful_components(world, &preserved);
 
     {

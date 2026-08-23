@@ -123,9 +123,9 @@ pub fn dismiss_error_banner_on_escape(
 /// and cost O(tree) per flip. See `docs/audits/theming.md` section 6.
 ///
 /// Today the function:
-/// 1. Reads the latest root `LumenClasses` (already mutated in place
-///    by [`lumen_core::signals::apply_theme_signal_to_root_classes`]
-///    or by the `set_root_class` Rhai builtin).
+/// 1. Reads the latest [`DocumentRoot`] `LumenClasses` (already mutated
+///    in place by [`lumen_core::signals::apply_theme_signal_to_root_classes`]
+///    or by `set_root_class`).
 /// 2. Diffs against [`RootClassesCache`]; no-ops when unchanged.
 /// 3. Consults [`StyleInvalidationCache::diff_affects`] - when no
 ///    selector in the parsed stylesheet mentions any changed class,
@@ -135,21 +135,7 @@ pub fn dismiss_error_banner_on_escape(
 ///    style depended on the changed classes / media features. The
 ///    parsed `Stylesheet` is reused - no disk read, no respawn.
 pub(crate) fn reapply_styles_on_root_class_change(world: &mut World) {
-    // Locate the root entity. Prefer [`HotReloadState`] when it carries
-    // a cached id (hot-reload mode); otherwise search for the unique
-    // top-level [`LumenClasses`]-bearing entity (the spawn pass attaches
-    // it to the root and only the root).
-    let root = world
-        .get_resource::<HotReloadState>()
-        .map(|s| s.root)
-        .or_else(|| {
-            let mut q = world.query_filtered::<Entity, (
-                bevy_ecs::query::With<lumen_core::components::LumenClasses>,
-                bevy_ecs::query::Without<bevy_ecs::hierarchy::ChildOf>,
-            )>();
-            q.iter(world).next()
-        });
-    let Some(root) = root else {
+    let Some(root) = world.get_resource::<DocumentRoot>().map(|r| r.0) else {
         return;
     };
     // Alloc-free change gate: compare the live `Arc<str>` class list
@@ -204,6 +190,33 @@ pub(crate) fn reapply_styles_on_root_class_change(world: &mut World) {
     } else {
         world.insert_resource(RootClassesCache(current));
     }
+}
+
+/// The entity the app's markup tree was spawned onto. Whoever writes the
+/// root - `set_root_class`, the OS theme follow, the class-change
+/// watcher - asks here rather than guessing from the hierarchy, so there
+/// is one answer and it does not depend on the root happening to carry a
+/// class or on hot reload being on. A respawn (hot reload) overwrites it.
+#[derive(Resource, Debug, Clone, Copy)]
+pub(crate) struct DocumentRoot(pub(crate) Entity);
+
+/// Record `root` as the [`DocumentRoot`] and make sure it carries a
+/// [`LumenClasses`](lumen_core::components::LumenClasses) list.
+///
+/// The spawn pass attaches that component only to elements whose markup
+/// declared a class, and a root usually declares none. Without it the OS
+/// theme follow has nothing to write `theme-dark` / `theme-light` onto,
+/// and `set_root_class` would have to create the component before it
+/// could set anything. An empty list is the root's real class list, so
+/// giving it one costs nothing and every writer finds it there.
+pub(crate) fn install_document_root(world: &mut World, root: Entity) {
+    use lumen_core::components::LumenClasses;
+    if world.get::<LumenClasses>(root).is_none() {
+        world
+            .entity_mut(root)
+            .insert(LumenClasses::from(Vec::<String>::new()));
+    }
+    world.insert_resource(DocumentRoot(root));
 }
 
 /// Cached snapshot of the root entity's `LumenClasses` so
