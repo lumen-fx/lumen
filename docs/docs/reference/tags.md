@@ -112,7 +112,7 @@ These apply to any element unless the entry says otherwise.
 | `position` | `relative`, `absolute` | `relative` |
 | `z-index` | integer | paint in document order |
 | `overflow`, `overflow-x`, `overflow-y` | `visible`, `hidden`, `scroll` | `visible` |
-| `layout-boundary` | boolean | Auto: true for scroll containers and for elements with both a fixed width and a fixed height |
+| `layout-boundary` | boolean | Auto: true for scroll containers, and for elements that carry a fixed width, a fixed height and `shrink: 0` |
 
 Flex direction comes from the tag, not an attribute: `<row>` lays out
 horizontally, `<column>` vertically. Use CSS `flex-direction` to change
@@ -290,6 +290,10 @@ A scroll container. Defaults to a vertical column scroller; `scroll="x"`
 switches to a horizontal row scroller and `scroll="both"` enables both
 axes. Accepts `sensitivity`, `inertia`, `bind-scroll`, and the
 `scrollbar-*` attributes. A scroll container is a layout boundary.
+
+Its direct children default to `shrink: 0`, so content taller (or wider)
+than the container keeps its own size and scrolls instead of being
+squeezed to fit. Write `shrink: 1` on a child to opt back in.
 
 ### `<overlay>`
 

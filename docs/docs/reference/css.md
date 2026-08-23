@@ -283,7 +283,7 @@ for `grow`, `flex-shrink` for `shrink`, `justify-content` for `justify`,
 | --- | --- | --- |
 | `display` | `flex`, `grid`, `none` | `flex` |
 | `width`, `height` | length | content size |
-| `min-width`, `min-height`, `max-width`, `max-height` | length | unconstrained |
+| `min-width`, `min-height`, `max-width`, `max-height` | length | `auto` (see below) |
 | `aspect-ratio` | number | none |
 | `padding`, `margin` | edges | `0` |
 | `inset` | edges | auto |
@@ -293,7 +293,7 @@ for `grow`, `flex-shrink` for `shrink`, `justify-content` for `justify`,
 | `flex-wrap` | `nowrap`, `wrap`, `wrap-reverse` | `nowrap` |
 | `flex` | `none`, `auto`, `initial`, or `<grow> [<shrink>] [<basis>]` | |
 | `grow`, `flex-grow` | number | `0` |
-| `shrink`, `flex-shrink` | number | `1` |
+| `shrink`, `flex-shrink` | number | `1`, or `0` on a scroll container's direct child |
 | `flex-basis` | length | `auto` |
 | `gap` | `<both>` or `<row> <column>`; each may be a percentage | `0` |
 | `row-gap`, `column-gap` | number or percentage | `0` |
@@ -308,6 +308,26 @@ for `grow`, `flex-shrink` for `shrink`, `justify-content` for `justify`,
 | `layout-boundary` | `true`, `yes` | automatic |
 
 `overflow: scroll` makes an element a live scroll container.
+
+#### Minimum sizes and shrinking
+
+Items on a flex line that does not fit shrink, in proportion to their
+size, until they reach their minimum size. Left at the default `auto`,
+that minimum is the smaller of the element's own content and its
+authored `width` / `height`: a box with nothing in it shrinks to
+nothing, a box holding a 250px child stops at 250px, and a box whose
+child is wider than its authored width still stops at that width.
+
+Two properties change it:
+
+- `min-width: 0` / `min-height: 0` drops the floor entirely, so the
+  element shrinks past its content and the content overflows. This is
+  what a long unbreakable label or a nested scroll pane usually wants.
+- `shrink: 0` takes the element off the shrinking list, so it keeps its
+  authored size and the line overflows instead.
+
+`overflow: hidden` and `overflow: scroll` also drop the automatic
+floor to zero, since the element clips its own content.
 
 ### Logical properties
 
