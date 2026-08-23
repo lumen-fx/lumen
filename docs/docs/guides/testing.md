@@ -43,7 +43,10 @@ faster and opens nothing.
 ## Drive a running app
 
 A running app can answer questions about its own UI and accept input, over a
-local TCP port. `lumenc` ships one subcommand per operation.
+local TCP port. `lumenc` has a subcommand for reading the tree, sending input,
+taking a screenshot, and listing lint findings. The port carries more than
+that, signal reads and writes among them; those go through the MCP bridge
+rather than the shell. See [Tooling](../reference/tooling.md).
 
 Reading the UI needs nothing but a running app. Injecting input is opt in:
 

@@ -192,7 +192,10 @@ preferences are not read from the OS yet, so those two features only match
 `no-preference`; offer an in-app switch instead.
 
 When the OS theme changes or the window crosses a width you wrote a rule for,
-the affected elements re-resolve.
+the affected elements re-resolve. So does anything that appears afterwards: a
+page reached by navigation, or an `<if>` body mounted after a
+`set_color_scheme` call, comes up in the scheme that is in force rather than
+the one the app started in.
 
 ## What is deliberately not here
 

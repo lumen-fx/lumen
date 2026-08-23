@@ -90,7 +90,7 @@ the value in when the element enters that state.
 | `:selected` | Tab strip button of the active tab. |
 | `:drag-over` | An acceptable in-app drag hovers this drop target. |
 
-Structural pseudo-classes filter at compile time:
+Structural pseudo-classes filter on where the element sits in the tree:
 
 | Pseudo-class | Matches |
 | --- | --- |
@@ -103,6 +103,12 @@ Structural pseudo-classes filter at compile time:
 | `:is(list)` | Any selector in the list. |
 | `:where(list)` | Any selector in the list, contributing zero specificity. |
 | `:not(list)` | No selector in the list. |
+
+Sibling position is read from the live tree, so a restyle that runs
+against one element on its own still selects the same elements a
+whole-document pass would: after a theme flip, a class change from a
+script, or a `<for>` rebuild, `.row:last-child` is still only the last
+row.
 
 `:is()`, `:where()`, and `:not()` take a comma-separated list of
 selectors, each of which may use combinators. The element being tested is
@@ -307,7 +313,16 @@ for `grow`, `flex-shrink` for `shrink`, `justify-content` for `justify`,
 | `overflow`, `overflow-x`, `overflow-y` | `visible`, `hidden`, `scroll` | `visible` |
 | `layout-boundary` | `true`, `yes` | automatic |
 
-`overflow: scroll` makes an element a live scroll container.
+`overflow: scroll` makes an element a live scroll container. `overflow:
+hidden` cuts its descendants off at the element's box without making it
+scrollable; inside a scroll container that clip travels with the element as
+the content scrolls.
+
+An element's own text lays out as an item of its own, sized to the words,
+so `justify-content` places it along the main axis the same way it places
+a child: `justify-content: center` on a `button` centres its label. It
+applies on a horizontal main axis only, and an authored `text-align` wins
+where both are set.
 
 #### Minimum sizes and shrinking
 
@@ -412,6 +427,14 @@ The shaper resolves the first available family in a `font-family` list,
 honouring the generic keywords, and falls back to the platform
 sans-serif. `lighter` and `bolder` are rejected: they need the parent's
 computed weight.
+
+Any `font-weight` from 1 to 1000 is accepted. A variable font renders the
+weight you author wherever its weight axis covers the value; a family
+built from separate faces renders the nearest weight it ships, chosen the
+way CSS chooses it (from 400-500 look up to 500 first, then down; below
+400 look down first; above 500 look up first). So `font-weight: 650`
+against a family with a regular and a bold face draws the bold face, and
+measures as that face.
 
 `text-overflow: ellipsis` elides overflowing single-line text unless you
 also author `wrap` and `max-lines`, in which case your multi-line clamp

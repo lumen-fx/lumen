@@ -634,3 +634,80 @@ fn four_same_tick_clicks_deliver_four_times() {
         "four separate same-tick clicks must yield exactly four ClickEvents"
     );
 }
+
+/// A `<button>` with no `bg` anywhere (no markup attr, no CSS rule, no
+/// skin) spawns without [`Visuals`]. Hit-testing must still route the
+/// pointer to it: participation is decided by the layout rect plus
+/// interactivity, never by whether the element painted a background.
+/// Deleting an app's stylesheet used to make every button inert.
+#[test]
+fn button_without_visuals_is_a_click_target() {
+    let mut app = App::new();
+    app.add_plugin(InputPlugin::default());
+    let button = app
+        .world
+        .spawn((
+            Transform {
+                absolute: glam::Vec2::ZERO,
+                size: glam::Vec2::splat(50.0),
+                baseline_y: None,
+            },
+            TabIndex(0),
+        ))
+        .id();
+    assert!(
+        app.world.get::<Visuals>(button).is_none(),
+        "the fixture must stay bg-less for the test to mean anything"
+    );
+
+    write_pointer_moved(&mut app.world, glam::Vec2::new(25.0, 25.0));
+    app.tick();
+    assert!(
+        app.world.get::<Hovered>(button).is_some(),
+        "an unpainted button must hover at its own rect"
+    );
+
+    write_pointer_pressed(&mut app.world, glam::Vec2::new(25.0, 25.0));
+    app.tick();
+    write_pointer_released(&mut app.world, glam::Vec2::new(25.0, 25.0));
+    app.tick();
+    assert_eq!(
+        click_count(&app.world),
+        1,
+        "an unpainted button must deliver a ClickEvent at its own rect"
+    );
+}
+
+/// A bg-less focusable nested inside a painted container wins the hit
+/// over the container: deepest-candidate-wins is unchanged, the
+/// focusable simply joined the candidate set.
+#[test]
+fn nested_bg_less_focusable_wins_over_its_painted_parent() {
+    let mut app = App::new();
+    app.add_plugin(InputPlugin::default());
+    let panel = spawn_button(
+        &mut app.world,
+        glam::Vec2::ZERO,
+        glam::Vec2::new(200.0, 100.0),
+    );
+    let inner = app
+        .world
+        .spawn((
+            Transform {
+                absolute: glam::Vec2::new(20.0, 20.0),
+                size: glam::Vec2::splat(40.0),
+                baseline_y: None,
+            },
+            TabIndex(0),
+            ChildOf(panel),
+        ))
+        .id();
+
+    write_pointer_moved(&mut app.world, glam::Vec2::new(30.0, 30.0));
+    app.tick();
+    assert!(
+        app.world.get::<Hovered>(inner).is_some(),
+        "the deeper unpainted focusable takes the hit"
+    );
+    assert!(app.world.get::<Hovered>(panel).is_none());
+}

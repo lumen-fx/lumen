@@ -216,10 +216,61 @@ fn the_file_builtins_report_failure_through_their_return_value() {
         returns(&builtin("rhai", "read_file"), &[text(missing)]),
         text(""),
     );
+    // A directory is the other kind of failure, the one still worth a
+    // warning; the return value stays the same empty string.
+    assert_eq!(
+        returns(&builtin("rhai", "read_file"), &[text("/")]),
+        text("")
+    );
     assert_eq!(
         returns(&builtin("rhai", "write_file"), &[text(missing), text("x")]),
         ScriptValue::Bool(false),
     );
+}
+
+/// `write_file` goes through a temp-file-and-rename, not a truncating write
+/// in place, so a reader racing it never sees a partial file (#154). Check
+/// the two observable ends of that: the final file holds the new contents,
+/// and no temp file is left behind next to it.
+#[test]
+fn write_file_leaves_only_the_finished_file_behind() {
+    let dir = std::env::temp_dir().join(format!(
+        "lumen-write-file-atomic-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("out.txt");
+
+    assert_eq!(
+        returns(
+            &builtin("rhai", "write_file"),
+            &[text(target.to_str().unwrap()), text("first")]
+        ),
+        ScriptValue::Bool(true),
+    );
+    assert_eq!(
+        returns(
+            &builtin("rhai", "write_file"),
+            &[
+                text(target.to_str().unwrap()),
+                text("second, longer contents")
+            ]
+        ),
+        ScriptValue::Bool(true),
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "second, longer contents"
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+    assert_eq!(
+        leftovers.len(),
+        1,
+        "a temp file was left behind: {leftovers:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Outside a server render the request surface is empty rather than absent, so

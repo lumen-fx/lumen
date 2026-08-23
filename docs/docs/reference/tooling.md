@@ -258,8 +258,17 @@ The bridge connects lazily, so it registers cleanly with no app running; the
 first call then reports that nothing is listening. Start the app, and
 subsequent calls work without restarting the agent.
 
-For one-off queries from a shell, `lumenc` has a subcommand per operation and
-needs no bridge. See [Testing](../guides/testing.md).
+For one-off queries from a shell, `lumenc` covers part of the surface with no
+bridge: `snapshot`, `find`, `element-at`, `click`, `type`, `key`, `scroll`,
+`lint`, `diff`, and `screenshot`. Every other tool in the table below is
+reachable through the bridge only. See [Testing](../guides/testing.md).
+
+### Talking to the port yourself
+
+The port speaks newline-delimited JSON-RPC 2.0 on a raw TCP socket: send one
+request object on one line, read one reply on one line, and keep the
+connection open for as many requests as you like. It is not HTTP, so an
+HTTP request line comes back as a `-32700` parse error.
 
 ### Tools
 

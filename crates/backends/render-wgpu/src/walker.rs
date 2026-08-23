@@ -17,7 +17,8 @@ use crate::{
     emit_outline, emit_outline_cached, emit_outline_into_fragment, emit_rect, emit_rect_cached,
     emit_rect_into_fragment, emit_shadow, emit_shadow_cached, emit_shadow_into_fragment, emit_svg,
 };
-use lumen_core::node_ir::{ClipShape, Node, RetainedScene};
+use lumen_core::native::{NativePaintCtx, NativePainters};
+use lumen_core::node_ir::{Affine2, ClipShape, Node, RetainedScene};
 use lumen_core::render_world::{
     ExtractedImage, ExtractedOutline, ExtractedRect, ExtractedShadow, FrameDamage,
     Rect as LumenRect,
@@ -80,6 +81,9 @@ pub struct WalkContext<'a> {
     pub opacity: f32,
     /// Active clip stack - see [`ClipStack`].
     pub clips: ClipStack,
+    /// Painters for [`Node::Native`] leaves. When `None`, or when no painter is registered for a
+    /// leaf's `extension_id`, that leaf paints nothing.
+    pub natives: Option<&'a NativePainters>,
 }
 
 impl<'a> WalkContext<'a> {
@@ -103,6 +107,7 @@ impl<'a> WalkContext<'a> {
             opacity: 1.0,
             clips: ClipStack::default(),
             dpr: 1.0,
+            natives: None,
         }
     }
 
@@ -127,7 +132,24 @@ impl<'a> WalkContext<'a> {
             opacity: 1.0,
             clips: ClipStack::default(),
             dpr: dpr.max(0.01),
+            natives: None,
         }
+    }
+
+    /// Attaches the painter registry that [`Node::Native`] leaves dispatch through. Without it
+    /// every native leaf is skipped, which is how a backend with no registered painters stays
+    /// portable rather than failing.
+    pub fn with_native_painters(mut self, painters: &'a NativePainters) -> Self {
+        self.natives = Some(painters);
+        self
+    }
+}
+
+/// Converts the walker's running vello transform back into the IR's affine, which is what a
+/// painter is handed - painters see logical coordinates and the device scale, not vello types.
+fn affine_to_affine2(a: Affine) -> Affine2 {
+    Affine2 {
+        coeffs: a.as_coeffs(),
     }
 }
 
@@ -396,10 +418,60 @@ pub fn walk_node(ctx: &mut WalkContext<'_>, node: &Node) {
                 emit_svg(ctx.scene, &svg);
             }
         }
-        Node::Native { .. } => {
-            // Native escape hatch - back-ends consult `extension_id` to dispatch. The default walker is a
-            // no-op so unknown extensions don't crash the encode pass; embedders override by wrapping the
-            // walker with their own dispatch table.
+        Node::Native {
+            extension_id,
+            payload,
+            bounds,
+            clip_to_bounds,
+            ..
+        } => {
+            // An id with no painter registered paints nothing. That is the portability story: a
+            // scene carrying an extension this backend does not implement still renders the rest.
+            let painter = ctx
+                .natives
+                .and_then(|registry| registry.get(extension_id))
+                .cloned();
+            let Some(painter) = painter else {
+                return;
+            };
+            let transform = affine_to_affine2(ctx.transform);
+            let (dpr, opacity) = (ctx.dpr, ctx.opacity);
+            // Layers the walker owns right now. Everything the painter opens sits above this mark,
+            // and nothing below it is the painter's to close.
+            let depth_before = ctx.scene.encoding().n_open_clips;
+            if *clip_to_bounds {
+                // Clip in the painter's own space: the same device transform the painter is handed,
+                // over the same logical bounds. Pre-scaling the rect instead would put the clip in a
+                // different space than the content as soon as an ancestor transform is non-identity.
+                // Alpha stays at 1: opacity has one owner, and it is the painter, through
+                // `ctx.opacity`. A clip that also composited would make the leaf's alpha depend on
+                // whether it asked to be clipped.
+                let device = Affine::scale(dpr as f64) * ctx.transform;
+                ctx.scene.push_layer(
+                    Fill::NonZero,
+                    peniko::BlendMode::default(),
+                    1.0,
+                    device,
+                    &lumen_rect_to_kurbo(*bounds),
+                );
+            }
+            let mut paint_ctx = NativePaintCtx::new(
+                payload.as_ref(),
+                &mut *ctx.scene,
+                crate::BACKEND_ID,
+                *bounds,
+                transform,
+                dpr,
+                opacity,
+            );
+            painter.paint(&mut paint_ctx);
+            // Rebalance. A painter that left layers open would otherwise have the walker's later
+            // pops close its layers instead of the walker's own; one that over-popped would already
+            // have closed an ancestor's clip, and popping again here would close another. Closing
+            // down to the mark and no further is the only move that is right in both directions.
+            while ctx.scene.encoding().n_open_clips > depth_before {
+                ctx.scene.pop_layer();
+            }
         }
     }
 }
@@ -571,8 +643,8 @@ fn diff_node(
 ///
 /// Conservative by construction: only the leaf variants whose every visual
 /// field is comparable return `true`. Variants carrying an opaque payload we
-/// cannot compare for equality ([`Node::Image`] blob, [`Node::Svg`],
-/// [`Node::Native`]) and any cross-variant pair fall through to `false`, i.e.
+/// cannot compare for equality ([`Node::Image`] blob, [`Node::Svg`]) and any
+/// cross-variant pair fall through to `false`, i.e.
 /// "assume changed" - a false *positive* damage only costs an unnecessary
 /// repaint, whereas a false *negative* would drop a real change on the floor.
 /// This is the same safety bias as GTK's / Qt's damage bookkeeping: never
@@ -666,15 +738,35 @@ fn leaf_visually_eq(a: &Node, b: &Node) -> bool {
         // `PartialEq` note): identical fields => identical shaping => identical
         // pixels.
         (Node::Text { run: ar }, Node::Text { run: br }) => ar == br,
-        // Image / Svg / Native carry `Arc<dyn Any>` payloads we cannot compare;
-        // any cross-variant pair is also a real change. Assume changed.
+        // Native leaves compare by the stamp their producer maintains. The
+        // payload `Arc` is rebuilt every dirty frame, so identity would report
+        // every leaf changed; the revision is the seam's contract instead -
+        // equal revision at equal geometry means equal pixels.
+        (
+            Node::Native {
+                extension_id: aid,
+                bounds: ab,
+                revision: arv,
+                clip_to_bounds: ac,
+                ..
+            },
+            Node::Native {
+                extension_id: bid,
+                bounds: bb,
+                revision: brv,
+                clip_to_bounds: bc,
+                ..
+            },
+        ) => aid == bid && ab == bb && arv == brv && ac == bc,
+        // Image / Svg carry `Arc<dyn Any>` payloads we cannot compare; any
+        // cross-variant pair is also a real change. Assume changed.
         _ => false,
     }
 }
 
 /// Returns the bounding rect of `node` in window coordinates, with `xform` applied. Containers recurse and
-/// union; leaves report their own bounds. Conservative fallback: viewport for variants without a natural
-/// bound (Native escape hatch).
+/// union; leaves report their own bounds. Conservative fallback: the viewport for a leaf whose
+/// geometry cannot be read (an SVG payload this backend does not recognise).
 fn node_bounds(node: &Node, viewport: LumenRect, xform: Affine) -> LumenRect {
     match node {
         Node::Container { children } => {
@@ -761,7 +853,18 @@ fn node_bounds(node: &Node, viewport: LumenRect, xform: Affine) -> LumenRect {
                 viewport
             }
         }
-        Node::Native { .. } => viewport,
+        // The seam requires bounds that enclose every pixel the painter touches, so damage from a
+        // native leaf is confined to them like any other leaf. Bounds with no area are the one
+        // exception: an empty rect is dropped from the damage list, which would leave such a leaf
+        // frozen on screen no matter how often its revision moved, so it falls back to the
+        // viewport - a repaint that costs too much beats one that never happens.
+        Node::Native { bounds, .. } => {
+            if bounds.size.x <= 0.0 || bounds.size.y <= 0.0 {
+                viewport
+            } else {
+                apply_affine_to_rect(*bounds, xform)
+            }
+        }
     }
 }
 

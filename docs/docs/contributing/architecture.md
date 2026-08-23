@@ -303,7 +303,9 @@ image, and native variants. The variants map one to one onto Qt's scene graph
 and GTK's GSK render nodes, so a renderer backend only has to translate each
 variant to its native equivalent. Children are shared behind reference counts,
 so an unchanged subtree compares equal by pointer and the frame diff
-short-circuits.
+short-circuits. The native variant is the seam a plugin paints its own pixels
+through; see
+[Painting your own pixels](plugins.md#painting-your-own-pixels).
 
 ## From markup to entities
 

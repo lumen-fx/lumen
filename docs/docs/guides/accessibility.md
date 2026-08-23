@@ -53,11 +53,17 @@ by `tab-index` first, then by the order elements appear in your markup:
 These are focusable without you writing anything: `input`, `textarea`,
 `button`, `toggle`, `switch`, `slider`, `checkbox`, the buttons of a `tabs`
 strip, and a `dropdown`. A radio group is one Tab stop; arrow keys move between
-its options. Anything else, including `tile` and container elements, becomes
-focusable when you give it a `tab-index`.
+its options. A link (`<a href>`) takes focus when clicked but is not in the Tab
+chain; give it `tab-index="0"` to put it there. Anything else, including `tile`
+and container elements, becomes focusable when you give it a `tab-index`.
 
 Disabled elements and hidden subtrees are skipped. While a `dialog` is open,
 Tab stays inside it.
+
+Content that appears while the app runs takes its place from where it sits in
+the markup, not from when it appeared: the body of an `<if>` that just opened,
+rows a `<for>` just mounted, and elements a script appended all sit in the order
+a reader would expect, whatever else is on the page.
 
 Activation follows the usual desktop rules:
 

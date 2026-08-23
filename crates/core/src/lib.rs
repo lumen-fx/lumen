@@ -13,6 +13,7 @@ pub mod components;
 pub mod i18n;
 pub mod input;
 pub mod introspect;
+pub mod native;
 pub mod nav;
 pub mod net_capture;
 pub mod node;
@@ -46,11 +47,11 @@ pub mod prelude {
         A11yLabel, A11yLevel, A11yLive, A11yRelations, A11yRole, A11yRootLabel,
         A11yScrollIntoViewRequests, A11ySetSize, A11yState, A11yValue, AlignContent, BindChecked,
         BindDisabled, BindParentChecked, BindParentText, BindParentValue, BindSelfChecked,
-        BindSelfText, BindSelfValue, BindText, BindValue, Border, BoxSizing, CaretBlink, Color,
-        ColorScheme, DefaultLayoutDirection, DirtyA11y, DirtyLayout, Disabled, DocumentOrder,
-        DropHovered, DropTarget, Edges, Fill, FlexAlign, FlexDirection, FlexJustify, FlexWrap,
-        FocusBoundary, ImageBlob, ImageComponent, ImageFit, ImeState, Lang, LayoutDirection,
-        Length, LumenClasses, LumenId, LumenTag, MemoryBudget, Opacity, Overflow,
+        BindSelfText, BindSelfValue, BindText, BindTextLabels, BindValue, Border, BoxSizing,
+        CaretBlink, Color, ColorScheme, DefaultLayoutDirection, DirtyA11y, DirtyLayout, Disabled,
+        DocumentOrder, DropHovered, DropTarget, Edges, Fill, FlexAlign, FlexDirection, FlexJustify,
+        FlexWrap, FocusBoundary, ImageBlob, ImageComponent, ImageFit, ImeState, Lang,
+        LayoutDirection, Length, LumenClasses, LumenId, LumenTag, MemoryBudget, Opacity, Overflow,
         PendingA11yUpdate, Position, RelayoutBoundary, ResolvedDirection, RootWindowEntity,
         Selected, ShadowSpec, SliderValue, Style, StyleManager, StyleVersion, SvgPayload, TabIndex,
         TextAlign, TextContent, TextInput, TextInputPaint, TextInputScroll, TextStyle, TextWrap,
@@ -70,6 +71,10 @@ pub mod prelude {
         ScrollbarDrag, ScrollbarGeometry, ScrollbarInteraction, ScrollbarMetrics, ScrollbarPart,
         ScrollbarState, ScrollbarStyle, ScrollbarWidthMode, ShowContextMenu, TextInputCommitted,
         horizontal_scrollbar, vertical_scrollbar,
+    };
+    pub use crate::native::{
+        ExtractedNative, NativeExtract, NativePaintCtx, NativePainter, NativePainters,
+        NativePlacement, next_revision, upsert_native_leaves,
     };
     pub use crate::nav::{NavOp, navigate as nav_navigate, request as nav_request};
     pub use crate::node::{

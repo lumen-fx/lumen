@@ -1047,13 +1047,19 @@ pub struct Disabled;
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Selected;
 
-/// Spawn-order tiebreak for focus cycling. `bevy_ecs` 0.19's `Entity: Ord`
-/// is a niche-optimized row-index comparison, not a spawn-order one - for
-/// entities recycled through a freed ECS row, a later-spawned entity can
-/// sort *before* an earlier one. `lumenc::spawn` assigns this from a
-/// monotonic per-document counter as it walks the parsed tree in markup
-/// order, so entities with equal [`TabIndex`] cycle in the order they
-/// appear in the source, not in whatever order their table rows landed.
+/// Position of this entity in the document, as a depth-first index over
+/// the tree. It is the tiebreak for focus cycling: `bevy_ecs` 0.19's
+/// `Entity: Ord` is a niche-optimized row-index comparison, not a
+/// spawn-order one - for entities recycled through a freed ECS row, a
+/// later-spawned entity can sort *before* an earlier one. Entities with
+/// equal [`TabIndex`] cycle in the order they appear in the source, not
+/// in whatever order their table rows landed.
+///
+/// `lumen_scene::spawn` seeds it from a counter as it walks the parsed
+/// tree, then restates it from the live hierarchy whenever the tree
+/// changes shape. The restatement is what keeps it a *position*: a
+/// subtree that mounts at runtime (an `<if>` body, a `<for>` row) would
+/// otherwise carry a number that says only how late it arrived.
 ///
 /// Absent on entities not spawned through `lumenc` (hand-built ECS test
 /// fixtures, primarily) - consumers should treat a missing value as "no
@@ -1499,6 +1505,32 @@ arc_str_binding! {
     BindText
 }
 
+/// The text to show for each value a [`BindText`] entity's signal can
+/// hold, in the order they were declared.
+///
+/// A binding names a signal, and what the signal holds is not always what
+/// the control says. A closed `<dropdown>` is the case: the signal holds
+/// the selected `<option>`'s `value`, which is what a script reads and
+/// what a click writes, while the header reads its `label`.
+/// `apply_text_bindings` looks the value up here before it writes, so the
+/// two never disagree and the display text is chosen once rather than
+/// corrected afterwards.
+///
+/// A value with no entry is shown as it stands, which is what leaves a
+/// placeholder in place until something selects an option.
+#[derive(Component, Clone, Debug, Default)]
+pub struct BindTextLabels(pub Vec<(String, String)>);
+
+impl BindTextLabels {
+    /// The text `value` is shown as, or `None` when nothing names it.
+    pub fn label_for(&self, value: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(known, _)| known == value)
+            .map(|(_, label)| label.as_str())
+    }
+}
+
 /// Two-way binding for `<toggle bind-checked="signal">`.
 /// - Signal -> [`Toggleable`] via [`crate::signals::apply_checked_bindings`].
 /// - [`Toggleable`] -> signal via [`crate::signals::push_toggle_to_signal`] on user flip.
@@ -1641,6 +1673,38 @@ impl SliderValue {
     /// adopts it.
     pub fn clamp(&self, value: f32) -> f32 {
         value.clamp(self.min.min(self.max), self.min.max(self.max))
+    }
+
+    /// `value` moved to the nearest position on this slider's step grid,
+    /// then held to its bounds.
+    ///
+    /// The grid starts at the near bound and rises by [`Self::step_size`],
+    /// which is what `<input type=range>` does and what a `QSlider`'s
+    /// integer range gives for free. A pointer landing anywhere on the
+    /// track therefore writes a value the arrow keys could also have
+    /// reached, so `step="1024"` means multiples of 1024 whichever way the
+    /// user moved it.
+    ///
+    /// A range that is not a whole number of steps stops short of its far
+    /// bound: the last position on the grid is the highest one that fits,
+    /// so `min="0" max="100" step="30"` tops out at 90. That is what
+    /// `<input type=range>` does, and it is the only answer that keeps
+    /// every value the control can take on the grid.
+    pub fn snap(&self, value: f32) -> f32 {
+        let step = self.step_size();
+        if !step.is_finite() || step <= 0.0 {
+            return self.clamp(value);
+        }
+        let near = self.min.min(self.max);
+        let far = self.min.max(self.max);
+        let steps = ((value - near) / step).round();
+        let snapped = near + steps * step;
+        let snapped = if snapped > far {
+            near + (steps - 1.0) * step
+        } else {
+            snapped
+        };
+        snapped.clamp(near, far)
     }
 }
 

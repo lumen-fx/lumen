@@ -10,6 +10,7 @@
 //! * Every spawned entity carries [`DirtyLayout`] so taffy runs on first tick.
 //! * Children link to parents via [`ChildOf`].
 
+use lumen_core::nav::PATH_SIGNAL;
 use lumen_core::property_store::PropertyStore;
 use lumen_core::signals::signal_is_truthy;
 use lumen_ir::interpolate::{Scope, carries_placeholder, substitute_element};
@@ -306,11 +307,77 @@ struct DocumentOrderCounter(u32);
 /// entity's `world.spawn(..)` call - `EntityWorldMut` holds `world`
 /// exclusively for its lifetime, so the resource bump can't be interleaved
 /// once that borrow starts.
+///
+/// This is the seed only. A subtree that mounts later - an `<if>` body,
+/// a `<for>` row, a node a script appends - continues the same counter,
+/// which places it after everything already in the world rather than
+/// where it sits in the tree. [`renumber_document_order`] restates the
+/// value from the live hierarchy once the shape settles.
 fn next_document_order(world: &mut World) -> u32 {
     let mut counter = world.get_resource_or_insert_with(DocumentOrderCounter::default);
     let n = counter.0;
     counter.0 = counter.0.wrapping_add(1);
     n
+}
+
+/// Restate [`lumen_core::components::DocumentOrder`] from the live
+/// hierarchy, so it means "where this element sits in the document"
+/// rather than "when it was spawned".
+///
+/// The spawn counter is only markup order for the tree the build walked.
+/// Anything that mounts afterwards is numbered at mount time, which puts
+/// it behind every element already in the world: a button inside an
+/// `<if>` was thrown past the whole list beside it, and the longer that
+/// list, the further Tab jumped over the button. Short lists hid the
+/// defect, because a couple of stops out of place still looks right.
+///
+/// The walk is depth-first, parent before children, siblings in
+/// `Children` order - which is the order they were attached, so it is
+/// markup order for the initial tree and mount order within a
+/// reconciler's own body. Roots are visited in their existing order, so
+/// a second root (the error banner, the devtools overlay) keeps its
+/// place. Only entities whose number actually moves are written, so a
+/// steady tree costs one query and nothing else.
+pub fn renumber_document_order(
+    mut commands: bevy_ecs::system::Commands,
+    reshaped: bevy_ecs::system::Query<(), Changed<bevy_ecs::hierarchy::Children>>,
+    roots: bevy_ecs::system::Query<
+        (Entity, &lumen_core::components::DocumentOrder),
+        Without<bevy_ecs::hierarchy::ChildOf>,
+    >,
+    children: bevy_ecs::system::Query<&bevy_ecs::hierarchy::Children>,
+    orders: bevy_ecs::system::Query<&lumen_core::components::DocumentOrder>,
+) {
+    // Nothing gained or lost a child this tick, so every relative
+    // position still holds.
+    if reshaped.is_empty() {
+        return;
+    }
+    let mut top: Vec<(u32, Entity)> = roots.iter().map(|(e, d)| (d.0, e)).collect();
+    top.sort_unstable();
+    // Depth-first with an explicit stack: an app can nest deeper than a
+    // recursive walk is comfortable with.
+    let mut stack: Vec<Entity> = top.into_iter().rev().map(|(_, e)| e).collect();
+    let mut n: u32 = 0;
+    while let Some(e) = stack.pop() {
+        if orders.get(e).ok().map(|d| d.0) != Some(n) {
+            // `try_insert`, because a later system in the same stage can
+            // despawn an entity this walk just numbered - a script
+            // handler rebuilding a list does exactly that - and the
+            // write lands after it. Losing the number is the right
+            // outcome there: the entity is gone, and the despawn
+            // reshapes the tree, so the next tick walks it again.
+            commands
+                .entity(e)
+                .try_insert(lumen_core::components::DocumentOrder(n));
+        }
+        n = n.wrapping_add(1);
+        if let Ok(kids) = children.get(e) {
+            for kid in kids.iter().rev() {
+                stack.push(kid);
+            }
+        }
+    }
 }
 
 /// The text an element spawns with.
@@ -379,7 +446,15 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     // detection on the widget component is deliberately NOT pushed
     // (`push_*_to_signal` skips `is_added()` rows) - the widget's
     // component default is not an authored value.
-    if let Some(spec) = &el.attrs.bind {
+    // The `<dropdown>` header button is excluded here: its `text` is the
+    // authored `placeholder`, not an initial value for the bound signal,
+    // and the dropdown pass already seeds the signal itself (above, via
+    // `signal_seed`, only when there's no placeholder). Letting this
+    // generic path run too would seed the value signal with the
+    // placeholder string.
+    if let Some(spec) = &el.attrs.bind
+        && el.attrs.dropdown_button.is_none()
+    {
         let authored: Option<String> = match spec.kind {
             BindKind::Checked => el
                 .attrs
@@ -507,8 +582,8 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         // Explicit a11y role: a switch is announced as `Role::Switch`, not
         // the `Role::CheckBox` that a bare `Toggleable` would derive.
         entity.insert(lumen_core::components::A11yRole::Switch);
-        // `sync_track_fill` needs a fill to write into (and the track must
-        // be a hit-test candidate) even with no skin / CSS.
+        // `sync_track_fill` needs a fill to write into even with no
+        // skin / CSS.
         if entity.get::<Visuals>().is_none() {
             entity.insert(Visuals {
                 fill: Some(Fill::Solid(track.unchecked_bg)),
@@ -523,9 +598,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         entity.insert(SliderValue::from(&el.attrs));
         // UA fallback track fill - same rationale as the `<toggle>`
         // block above: with no skin or author CSS the slider must
-        // still paint a groove AND be a hit-test candidate (hit-test
-        // only considers entities with `Visuals` or `Scroll`), or
-        // track clicks / drags can never reach `set_slider_on_click`.
+        // still paint a groove.
         if entity.get::<Visuals>().is_none() {
             entity.insert(Visuals {
                 fill: Some(Fill::Solid(lumen_primitives::controls::TOGGLE_UNCHECKED_BG)),
@@ -553,13 +626,6 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         if el.attrs.indeterminate {
             entity.insert(lumen_primitives::Indeterminate);
         }
-        // The row itself must be a hit-test candidate so clicking the
-        // label / gap toggles too (hit-test only considers entities
-        // with `Visuals` or `Scroll`). A fill-less Visuals paints
-        // nothing.
-        if entity.get::<Visuals>().is_none() {
-            entity.insert(Visuals::default());
-        }
     }
     if el.tag == "radio"
         && let (Some(group), Some(value)) = (&el.attrs.radio_group, &el.attrs.radio_value)
@@ -577,10 +643,6 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
                 .map(Into::into)
                 .unwrap_or(defaults.selected_bg),
         });
-        // Same hit-test candidacy rationale as `<checkbox>` above.
-        if entity.get::<Visuals>().is_none() {
-            entity.insert(Visuals::default());
-        }
     }
     if el.tag == "progress" {
         // No `value` and no binding = indeterminate; a later `bind-value`
@@ -662,11 +724,10 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             }
         }
     }
-    // UA fallback field chrome for text inputs: click-to-focus routes
-    // through `ClickEvent`, which requires the entity to be a hit-test
-    // candidate (`Visuals` or `Scroll`) - an unstyled `<input>` was
-    // invisible AND unclickable. A subtle translucent fill works on
-    // both light and dark app themes; any skin or author rule wins.
+    // UA fallback field chrome for text inputs: an unstyled `<input>`
+    // is otherwise invisible, with no edge to aim the caret at. A
+    // subtle translucent fill works on both light and dark app themes;
+    // any skin or author rule wins.
     if matches!(el.tag.as_str(), "input" | "textarea") && entity.get::<Visuals>().is_none() {
         entity.insert(Visuals {
             fill: Some(Fill::Solid(Color::rgba(0.5, 0.5, 0.5, 0.18))),
@@ -787,6 +848,17 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
                 )
                 .collect(),
         });
+        // The header's text binding names the value signal, and the
+        // closed combobox shows the selected option's label rather than
+        // the value that signal holds. `apply_text_bindings` reads the
+        // mapping off this component as it writes, so the header never
+        // shows the raw value even for a tick.
+        entity.insert(lumen_core::components::BindTextLabels(
+            spec.options
+                .iter()
+                .map(|(value, label, _)| (value.clone(), label.clone()))
+                .collect(),
+        ));
         // `popup-gap` (markup attr or the CSS property) wins;
         // `PopupGap::default()` carries the runtime's own gap constant
         // when unauthored. Sits on the trigger (this header entity) -
@@ -917,6 +989,15 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         && let Some(href) = &el.attrs.href
     {
         entity.insert(crate::routing::Anchor(href.clone()));
+        // An anchor is interactive, so it is a pointer target whether or
+        // not it paints anything - `tab-index="-1"` is exactly HTML's
+        // "focusable by pointer, not in the Tab chain". Links stay out
+        // of the Tab chain by default; an author opts one in with
+        // `tab-index="0"`, which wins because it was already applied
+        // above.
+        if el.attrs.tab_index.is_none() {
+            entity.insert(TabIndex(-1));
+        }
     }
     if !el.attrs.classes.is_empty() {
         entity.insert(LumenClasses::from(el.attrs.classes.clone()));
@@ -1412,6 +1493,9 @@ pub fn reconcile_if_blocks(
     )>,
     mut commands: bevy_ecs::system::Commands,
 ) {
+    // Set when a body is mounted below, so the end of the pass can raise
+    // `StyleVersion`.
+    let mut mounted = false;
     for (parent_id, mut marker, children) in markers.iter_mut() {
         let value: Option<std::sync::Arc<str>> = store.get_global_str(&marker.signal_name);
         let value_str: Option<&str> = value.as_deref();
@@ -1433,6 +1517,7 @@ pub fn reconcile_if_blocks(
                         // adopt it instead of rebuilding it.
                         spawn_body_child(&mut commands, tmpl, parent_id, Placeholders::Resolved);
                     }
+                    mounted = true;
                     // Entering transition on the block itself (children
                     // handle their own via `spawn_body_child`).
                     if let Ok((specs, cur)) = fade_targets.get(parent_id)
@@ -1458,6 +1543,7 @@ pub fn reconcile_if_blocks(
                     for tmpl in &marker.body {
                         spawn_body_child(&mut commands, tmpl, parent_id, Placeholders::Resolved);
                     }
+                    mounted = true;
                     marker.currently_mounted = true;
                 }
                 // D5: apply visibility only on a transition. The
@@ -1506,6 +1592,20 @@ pub fn reconcile_if_blocks(
                 }
             }
         }
+    }
+    if mounted {
+        // A body carries the attributes the load-time cascade resolved,
+        // against the color scheme and viewport the app started with.
+        // Nothing re-resolves them on their own, so a page reached by
+        // navigation after `set_color_scheme` - or a dialog opened after
+        // the OS flipped to dark - would mount in the scheme the app
+        // booted with. Raising the style version is what puts the newly
+        // mounted elements in front of the cascade re-resolver, which
+        // reads the live scheme. Queued rather than taken as a `ResMut`
+        // param so it lands with the spawns at the next sync point.
+        commands.queue(|world: &mut bevy_ecs::world::World| {
+            lumen_core::components::StyleVersion::bump(world);
+        });
     }
 }
 
@@ -2409,7 +2509,7 @@ fn mount_fade_bundle(
 /// `run::loading::load_ir`), so a skinless app still gets a sizing
 /// floor without a Rust-side table to keep in sync.
 ///
-/// Two cases don't fit a plain CSS rule and stay here, running at spawn
+/// Three cases don't fit a plain CSS rule and stay here, running at spawn
 /// time after the cascade and inline attrs have been folded into
 /// `attrs`:
 ///
@@ -2418,6 +2518,19 @@ fn mount_fade_bundle(
 ///   CSS has no "set this property only if that other property is
 ///   unset" syntax, so this stays a Rust conditional instead of a
 ///   `ua.css` rule.
+/// - A page host box fills the window. A multi-page app mounts each page
+///   inside a synthetic gate keyed on the reserved active-page signal,
+///   and that gate is the page's containing block: left at its content
+///   size, a page whose shell asks for `height: 100%` resolves the
+///   percentage against the shell itself and the bottom of the shell
+///   lands past the bottom of the window. Pinning the gate to `<root>`'s
+///   padding box gives every page the same full-window rect, which is
+///   what Qt's `QStackedWidget` and Slint's page containers do; taking it
+///   out of flow at the same time is what keeps the gates of the pages
+///   that are NOT mounted - one empty sibling per page file - from
+///   dividing the window between them. The gate is spelled `<if>`, and an
+///   author's own `<if>` is an ordinary in-flow element, so the rule keys
+///   on the signal rather than the tag and cannot be a `ua.css` selector.
 /// - `<input>` / `<textarea>` default to `overflow: hidden` only when
 ///   neither the `overflow` shorthand nor `overflow-x` / `overflow-y`
 ///   was authored anywhere. `lumen_ir::css` never expands the `overflow`
@@ -2431,6 +2544,10 @@ fn mount_fade_bundle(
 pub fn apply_ua_style_defaults(tag: &str, attrs: &Attributes, style: &mut Style) {
     if tag == "switch" && attrs.width.is_none() && attrs.min_width.is_none() {
         style.min_width = Length::Px(52.0);
+    }
+    if tag == "if" && attrs.if_signal.as_deref() == Some(PATH_SIGNAL) && attrs.position.is_none() {
+        style.position = Position::Absolute;
+        style.inset = Edges::default();
     }
     if matches!(tag, "input" | "textarea") {
         // Long values scroll horizontally under the caret-keep-visible
@@ -2614,9 +2731,8 @@ mod body_spawn_tests {
             "dropdown header in an if-body must carry DropdownButton"
         );
         // Unstyled controls still get UA fallback visuals: without a
-        // `Visuals` component they are invisible AND excluded from the
-        // hit-test candidate set, so track clicks / click-to-focus
-        // could never work in skinless apps.
+        // `Visuals` component they paint nothing at all, so a skinless
+        // app shows no groove and no field chrome.
         for (label, e) in [("slider", slider_e), ("toggle", toggle_e)] {
             assert!(
                 world.get::<Visuals>(e).is_some(),
@@ -2642,6 +2758,109 @@ mod body_spawn_tests {
             3,
             "if-body focusables must carry TabIndex + DocumentOrder"
         );
+    }
+}
+
+#[cfg(test)]
+mod document_order_tests {
+    //! `DocumentOrder` is a position, not a spawn timestamp. A subtree
+    //! that mounts after the initial walk - an `<if>` body, a `<for>`
+    //! row - takes the counter values that were left over, which puts it
+    //! behind every element already in the world. Tab then skipped a
+    //! gated button into the list beside it, and the longer the list,
+    //! the further the jump.
+    use super::*;
+    use bevy_ecs::system::RunSystemOnce;
+
+    fn el(tag: &str) -> Element {
+        Element {
+            tag: tag.to_string(),
+            ..Element::default()
+        }
+    }
+
+    fn order_of(world: &World, e: Entity) -> u32 {
+        world
+            .get::<lumen_core::components::DocumentOrder>(e)
+            .expect("every spawned element carries DocumentOrder")
+            .0
+    }
+
+    /// `<root>` = head button, `<if>` holding one button, a long list,
+    /// tail button. The gated button mounts last and must still sort
+    /// between the head and the list.
+    fn tree_with_a_gate(rows: usize) -> (World, Entity, Entity, Entity, Entity) {
+        let mut world = World::new();
+        world.insert_resource(PropertyStore::default());
+        world
+            .resource_mut::<PropertyStore>()
+            .set_global_str("open", "1");
+
+        let mut gate = el("if");
+        gate.attrs.if_signal = Some("open".to_string());
+        gate.children = vec![el("button")];
+        let mut list = el("column");
+        list.children = (0..rows).map(|_| el("button")).collect();
+        let mut root = el("root");
+        root.children = vec![el("button"), gate, list, el("button")];
+
+        let root_e = spawn_subtree(&mut world, &root, None, Placeholders::Unresolved);
+        let kids: Vec<Entity> = world
+            .get::<bevy_ecs::hierarchy::Children>(root_e)
+            .map(|c| c.iter().collect())
+            .expect("root has children");
+        let (head, gate_e, list_e, tail) = (kids[0], kids[1], kids[2], kids[3]);
+
+        world.run_system_once(reconcile_if_blocks).unwrap();
+        let gated = world
+            .get::<bevy_ecs::hierarchy::Children>(gate_e)
+            .and_then(|c| c.iter().next())
+            .expect("the if body mounted");
+        let first_row = world
+            .get::<bevy_ecs::hierarchy::Children>(list_e)
+            .and_then(|c| c.iter().next())
+            .expect("the list has rows");
+        world.run_system_once(renumber_document_order).unwrap();
+        (world, head, gated, first_row, tail)
+    }
+
+    #[test]
+    fn a_mounted_if_body_sorts_where_it_sits_not_where_it_landed() {
+        let (world, head, gated, first_row, tail) = tree_with_a_gate(500);
+        assert!(
+            order_of(&world, head) < order_of(&world, gated),
+            "the gated button follows the head button"
+        );
+        assert!(
+            order_of(&world, gated) < order_of(&world, first_row),
+            "the gated button precedes the list beside it"
+        );
+        assert!(
+            order_of(&world, first_row) < order_of(&world, tail),
+            "the list precedes the tail button"
+        );
+    }
+
+    /// The same tree with an almost-empty list. The defect used to hide
+    /// here, because being a couple of stops out of place still looks
+    /// right; the ordering must not depend on the list's size at all.
+    #[test]
+    fn list_size_does_not_change_the_order() {
+        let (world, head, gated, first_row, tail) = tree_with_a_gate(1);
+        assert!(order_of(&world, head) < order_of(&world, gated));
+        assert!(order_of(&world, gated) < order_of(&world, first_row));
+        assert!(order_of(&world, first_row) < order_of(&world, tail));
+    }
+
+    /// The walk is a fixed point: running it over a tree that did not
+    /// move leaves every number where it was.
+    #[test]
+    fn a_settled_tree_is_left_alone() {
+        let (mut world, _, gated, _, _) = tree_with_a_gate(4);
+        let before = order_of(&world, gated);
+        world.clear_trackers();
+        world.run_system_once(renumber_document_order).unwrap();
+        assert_eq!(order_of(&world, gated), before);
     }
 }
 
@@ -3144,6 +3363,41 @@ mod css_spawn_wiring_tests {
             world.get::<lumen_core::components::PasswordCharacter>(e),
             Some(&lumen_core::components::PasswordCharacter::default())
         );
+    }
+
+    /// An `<a href>` is interactive, so it takes the pointer whether or
+    /// not it paints: hit-testing keys on the layout rect plus
+    /// interactivity. `-1` keeps links out of the Tab chain, matching
+    /// HTML's "focusable by pointer, not tabbable".
+    #[test]
+    fn anchor_is_a_pointer_target_without_a_background() {
+        let mut world = World::new();
+        let mut a = el("a");
+        a.attrs.href = Some("about".to_string());
+        let e = spawn_subtree(&mut world, &a, None, Placeholders::Unresolved);
+
+        assert!(
+            world.get::<Visuals>(e).is_none(),
+            "an unstyled anchor paints nothing"
+        );
+        assert_eq!(
+            world.get::<TabIndex>(e).map(|t| t.0),
+            Some(-1),
+            "an anchor is a pointer target but not a Tab stop"
+        );
+    }
+
+    /// An authored `tab-index` on a link wins - that is how an author
+    /// puts one in the Tab chain.
+    #[test]
+    fn authored_tab_index_on_an_anchor_wins() {
+        let mut world = World::new();
+        let mut a = el("a");
+        a.attrs.href = Some("about".to_string());
+        a.attrs.tab_index = Some(0);
+        let e = spawn_subtree(&mut world, &a, None, Placeholders::Unresolved);
+
+        assert_eq!(world.get::<TabIndex>(e).map(|t| t.0), Some(0));
     }
 
     /// A non-text-input element must not gain either component at all -

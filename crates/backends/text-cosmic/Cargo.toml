@@ -21,6 +21,10 @@ lru = "0.18"
 # FxHasher for the font-id -> face-data dedup map (trusted keys; no need
 # for SipHash's DoS resistance).
 rustc-hash.workspace = true
+# The system-font scan is assembled here rather than taken whole from
+# `FontSystem::new`, so the locale that goes with it is read directly.
+# Already a transitive dep via cosmic-text.
+sys-locale.workspace = true
 
 [dev-dependencies]
 # Tests resolve the default `line-height` rather than restating its ratio.

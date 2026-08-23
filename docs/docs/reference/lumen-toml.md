@@ -53,12 +53,15 @@ Multi-page navigation. See [Pages](../guides/pages.md).
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
 | `entry` | string | see below | Home page key: a filename stem with no `.lmn`. Ignored when no page has that key. |
-| `enabled` | bool | on when more than one `.lmn` file is present | Forces multi-page mode on or off. |
-| `include` | array of strings | directory discovery | Explicit ordered page-file list. When set, only these files are pages. |
+| `enabled` | bool | on when the app directory holds more than one `.lmn` file | Forces multi-page mode on or off. |
+| `include` | array of strings | directory discovery | Explicit ordered page-file list. When set, only these files are pages. Paths are relative to the app directory and may point into a subdirectory. |
 
 Without `include`, every `.lmn` file in the app directory is a page except
 `layout.lmn`, which contributes its `<template>` declarations to every page
-instead of becoming one.
+instead of becoming one. Discovery does not descend into subdirectories, so a
+page kept in one needs an `include` entry naming it, plus `enabled = true`
+when the app directory itself holds fewer than two `.lmn` files. A page's key
+is its filename stem either way: `pages/settings.lmn` is `settings`.
 
 The entry key resolves in this order: `[pages] entry` when it names an
 existing page, then `index`, then the `[app] entry` stem, then `main`, then
@@ -330,6 +333,10 @@ is a parse error.
 A value can also be a table. An inline table with no `type` key is an object
 whose entries are its field types. An explicit `type = "array"` or
 `type = "object"` with a `fields` table types the record at the leaf.
+
+There is no `signal_set_string`; `signal_set` is already the typed write for
+a `string`-declared signal, so the lint's `untyped-write` finding does not
+fire on it.
 
 ```toml
 [signals]

@@ -15,10 +15,10 @@
 //! Each render-world entity represents one drawable. Adding a primitive consists of: one `Extracted*` component, one extract fn, and one render system.
 
 use crate::components::{
-    CARET_WIDTH_PX, CaretBlink, CaretWidth, Color, EchoMode, Fill, ImeState, Opacity,
-    PASSWORD_MASK_CHAR, PasswordCharacter, TextAlign, TextBlockOrigin, TextContent, TextInput,
-    TextInputPaint, TextInputScroll, TextStyle, Transform, Visible, Visuals, resolve_line_height,
-    text_baseline_in_line, text_block_top,
+    CARET_WIDTH_PX, CaretBlink, CaretWidth, Color, EchoMode, Fill, FlexDirection, FlexJustify,
+    ImeState, Opacity, PASSWORD_MASK_CHAR, PasswordCharacter, Style, TextAlign, TextBlockOrigin,
+    TextContent, TextInput, TextInputPaint, TextInputScroll, TextStyle, Transform, Visible,
+    Visuals, resolve_line_height, text_baseline_in_line, text_block_top,
 };
 use crate::input::{Focused, ScrollOffset};
 use bevy_ecs::prelude::*;
@@ -744,7 +744,8 @@ pub struct ExtractedText {
 /// - Emitted for `<scroll>` containers and entities with `overflow: hidden`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ExtractedClipBox {
-    /// Top-left in window coordinates.
+    /// Top-left in window coordinates, ancestor scroll offsets already applied - the same space the
+    /// leaves it clips are emitted in.
     pub origin: Vec2,
     /// Width x height in logical pixels.
     pub size: Vec2,
@@ -1040,6 +1041,15 @@ pub fn cull_hidden(
             }
         });
     }
+    // Plugin leaves key on their extension id as well as the entity.
+    map.native.retain(|(_, main_e), render_e| {
+        if h.contains(main_e) {
+            victims.push(*render_e);
+            false
+        } else {
+            true
+        }
+    });
     // Shadows map one main entity to a stack of render entities.
     map.shadow.retain(|main_e, render_es| {
         if h.contains(main_e) {
@@ -1063,9 +1073,21 @@ pub fn cull_offscreen(
     viewport: Res<Viewport>,
     rects: Query<(Entity, &ExtractedRect)>,
     texts: Query<(Entity, &ExtractedText)>,
+    natives: Query<(Entity, &crate::native::ExtractedNative)>,
 ) {
     let vw = viewport.size.x;
     let vh = viewport.size.y;
+    // Plugin leaves declare their bounds, so they cull on the same AABB test as rects. Without it
+    // an off-screen leaf keeps calling its painter and keeps reporting damage outside the window.
+    for (e, n) in &natives {
+        if n.bounds.origin.x + n.bounds.size.x <= 0.0
+            || n.bounds.origin.y + n.bounds.size.y <= 0.0
+            || n.bounds.origin.x >= vw
+            || n.bounds.origin.y >= vh
+        {
+            commands.entity(e).despawn();
+        }
+    }
     for (e, r) in &rects {
         if r.origin.x + r.size.x <= 0.0
             || r.origin.y + r.size.y <= 0.0
@@ -1119,6 +1141,11 @@ pub struct RenderEntityMap {
     /// `main_entity -> render_entity` for [`ExtractedScrollbar`]; one
     /// entry per scroll container with visible overlay bars.
     pub scrollbar: std::collections::HashMap<Entity, Entity>,
+    /// `(extension_id, main_entity) -> render_entity` for
+    /// [`crate::native::ExtractedNative`]. Keyed by extension as well as entity so two plugins
+    /// painting in the same frame keep separate sets: each retires only the leaves it produced.
+    /// Maintained by [`crate::native::upsert_native_leaves`].
+    pub native: std::collections::HashMap<(std::sync::Arc<str>, Entity), Entity>,
 }
 
 /// Despawns transient render-world entities carrying `Extracted*` components, called once per frame before any [`ExtractFn`] runs.
@@ -1139,6 +1166,7 @@ pub fn clear_extracted(render: &mut World) {
         set.extend(map.image.values().copied());
         set.extend(map.svg.values().copied());
         set.extend(map.scrollbar.values().copied());
+        set.extend(map.native.values().copied());
         set
     };
     let to_despawn: Vec<Entity> = render
@@ -1150,6 +1178,7 @@ pub fn clear_extracted(render: &mut World) {
             With<ExtractedBorder>,
             With<ExtractedShadow>,
             With<ExtractedScrollbar>,
+            With<crate::native::ExtractedNative>,
         )>>()
         .iter(render)
         .filter(|e| !upserted.contains(e))
@@ -1412,6 +1441,9 @@ pub fn extract_borders(main: &mut World, render: &mut World) {
 ///
 /// - A clipping ancestor is one carrying a [`crate::input::Scroll`] component or a [`crate::components::Style`] with `overflow_x` or `overflow_y` set to [`crate::components::Overflow::Hidden`].
 /// - Entities without a clipping ancestor are absent from the returned map.
+/// - Rects are on-screen: a clipper nested inside a scrolled container is shifted by that container's
+///   [`crate::input::ScrollOffset`], the same shift every leaf under it gets (see [`parent_scroll_offsets`]).
+///   Its own offset is not applied - a scroll box moves its content, not its own frame.
 pub fn parent_scroll_clip_rects(
     main: &mut World,
     parents: &std::collections::HashMap<Entity, Entity>,
@@ -1424,6 +1456,7 @@ pub fn parent_scroll_clip_rects(
     {
         return v.clone();
     }
+    let offsets = parent_scroll_offsets(main, parents);
     // Per-clipper rect (origin, size) in window coords.
     let clippers: std::collections::HashMap<Entity, (Vec2, Vec2)> = {
         let mut q = main.query::<(Entity, &Transform, &Style, Option<&Scroll>)>();
@@ -1432,7 +1465,8 @@ pub fn parent_scroll_clip_rects(
                 let qualifies = scroll.is_some()
                     || matches!(style.overflow_y, Overflow::Hidden)
                     || matches!(style.overflow_x, Overflow::Hidden);
-                qualifies.then_some((e, (t.absolute, t.size)))
+                let off = offsets.get(&e).copied().unwrap_or(Vec2::ZERO);
+                qualifies.then_some((e, (t.absolute - off, t.size)))
             })
             .collect()
     };
@@ -1500,7 +1534,7 @@ pub fn parent_scroll_clip_rects(
 /// any-part-outside test made every child that overhangs its scroll container by even one
 /// pixel - e.g. `width: 100%` plus a horizontal margin, or a row straddling the container's
 /// bottom edge - vanish entirely (W6 T2, the invisible counter tiles).
-fn aabb_outside(origin: Vec2, size: Vec2, clip: (Vec2, Vec2)) -> bool {
+pub(crate) fn aabb_outside(origin: Vec2, size: Vec2, clip: (Vec2, Vec2)) -> bool {
     let (co, cs) = clip;
     origin.x + size.x <= co.x
         || origin.y + size.y <= co.y
@@ -1511,6 +1545,10 @@ fn aabb_outside(origin: Vec2, size: Vec2, clip: (Vec2, Vec2)) -> bool {
 /// Extracts one [`ExtractedClipBox`] per clipping entity (carrying [`crate::input::Scroll`] or `Style.overflow_x` / `overflow_y == Hidden`).
 /// Each emission carries the containing rect plus the `(start_order, end_order)` range bracketing descendant paints so the renderer can push/pop a vello layer.
 ///
+/// The rect is where the box lands on screen: a clipper inside a scrolled container carries that
+/// container's [`crate::input::ScrollOffset`], exactly like the leaves it clips (see
+/// [`parent_scroll_offsets`]). Its own scroll offset stays out - that one moves its content.
+///
 /// W2.3 wires this back into the default extract chain - the boxes feed [`crate::node_ir::Node::Clip`]
 /// wrappers inside [`crate::node_ir::transform_extracted_to_nodes`].
 pub fn extract_clips(main: &mut World, render: &mut World) {
@@ -1518,6 +1556,7 @@ pub fn extract_clips(main: &mut World, render: &mut World) {
     use crate::input::Scroll;
     let (parents, mut depth_cache) = build_parent_map(main);
     let hidden = hidden_entities(main, &parents);
+    let offsets = parent_scroll_offsets(main, &parents);
     // Invert the parent map into a child lookup so descendant orders can be computed.
     let mut children: std::collections::HashMap<Entity, Vec<Entity>> =
         std::collections::HashMap::new();
@@ -1597,10 +1636,11 @@ pub fn extract_clips(main: &mut World, render: &mut World) {
                 .get::<crate::components::Visuals>(e)
                 .map(|v| v.radius)
                 .unwrap_or(0.0);
+            let off = offsets.get(&e).copied().unwrap_or(Vec2::ZERO);
             Some((
                 e,
                 ExtractedClipBox {
-                    origin: t.absolute,
+                    origin: t.absolute - off,
                     size: t.size,
                     radius,
                     start_order: own,
@@ -2152,6 +2192,53 @@ fn mask_echo(
     }
 }
 
+/// Where a run of text sits along the main axis of the box holding it.
+///
+/// A flex box lays the text inside it out as an item of its own, sized to
+/// the words rather than to the box, so `justify-content: center` on a
+/// `<button>` centres its label the same way it centres a child. That is
+/// what Qt and Slint do with a button's contents, and what a browser does
+/// with the anonymous item it wraps a flex container's text in - which is
+/// why `text-align` is not the property an author reaches for first.
+///
+/// An authored [`TextAlign`] wins: it places the lines, and
+/// `justify-content` only speaks for the run when nothing else has. The
+/// two agree on a single line either way, and on several the run is placed
+/// as a block with its lines aligned inside it, which is the arrangement
+/// the anonymous item produces.
+///
+/// Read on a horizontal main axis only. Under `flex-direction: column`
+/// `justify-content` distributes vertically and has nothing to say about
+/// where a line starts.
+fn text_run_align(align: TextAlign, style: Option<&Style>) -> TextAlign {
+    if align != TextAlign::Start {
+        return align;
+    }
+    let Some(style) = style else {
+        return align;
+    };
+    let placed = match style.justify {
+        // One item is centred by every distribution that leaves space on
+        // both sides of it, and left where it started by the one that does
+        // not (CSS Flexbox 8.2).
+        FlexJustify::Center | FlexJustify::SpaceAround | FlexJustify::SpaceEvenly => {
+            TextAlign::Center
+        }
+        FlexJustify::End => TextAlign::End,
+        FlexJustify::Start | FlexJustify::SpaceBetween => TextAlign::Start,
+    };
+    match style.flex_direction {
+        FlexDirection::Row => placed,
+        // The main axis runs the other way, so the ends swap.
+        FlexDirection::RowReverse => match placed {
+            TextAlign::Start => TextAlign::End,
+            TextAlign::End => TextAlign::Start,
+            TextAlign::Center => TextAlign::Center,
+        },
+        FlexDirection::Column | FlexDirection::ColumnReverse => align,
+    }
+}
+
 /// Default extract fn that emits one [`ExtractedText`] per entity with [`Transform`] and [`TextContent`].
 ///
 /// - When an [`ImeState`] is present, its `preedit` is concatenated onto the committed text.
@@ -2159,7 +2246,6 @@ fn mask_echo(
 /// - Under a concealed [`EchoMode`] the display glyphs, caret, and selection are masked (see [`mask_echo`]); the buffer plaintext is untouched.
 /// - Hidden subtrees and entities clipped fully outside their scroll/overflow ancestor are skipped.
 pub fn extract_text(main: &mut World, render: &mut World) {
-    use crate::components::Style;
     let (parents, mut depth_cache) = build_parent_map(main);
     let hidden = hidden_entities(main, &parents);
     let scroll = parent_scroll_offsets(main, &parents);
@@ -2316,7 +2402,7 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                             .map(|c| alpha.apply(c)),
                         caret_color: paint.and_then(|p| p.caret_color).map(|c| alpha.apply(c)),
                         container_width,
-                        align: ts.align,
+                        align: text_run_align(ts.align, style),
                         wrap: ts.wrap,
                         max_lines: ts.max_lines,
                         family: ts.family.clone(),
@@ -3286,6 +3372,102 @@ mod tests {
         assert!(clip.start_order < po_opt2 && po_opt2 <= clip.end_order);
     }
 
+    /// Issue 136 regression: an `overflow: hidden` box inside a scrolled container clips where it is
+    /// drawn, not where it was laid out. The clip box and the nearest-clip-ancestor rect used to keep
+    /// the raw layout origin while every leaf under them moved with the scroll offset, so scrolling
+    /// far enough carried a subtree clean out of its own clip and the box painted nothing.
+    #[test]
+    fn clip_rects_follow_the_scroll_offset_of_their_ancestors() {
+        use crate::components::{Overflow, Style, Transform, Visuals};
+        use crate::input::{Scroll, ScrollOffset};
+        let mut main = World::new();
+        let mut render = World::new();
+        render.insert_resource(RenderEntityMap::default());
+
+        // A 200x100 scroll viewport, scrolled 200px down, holding a 60px-tall
+        // overflow-hidden card that starts at y = 200 - i.e. exactly at the top
+        // of the viewport once scrolled.
+        let scroller = main
+            .spawn((
+                Scroll::default(),
+                ScrollOffset(Vec2::new(0.0, 200.0)),
+                Style::default(),
+                Transform {
+                    absolute: Vec2::ZERO,
+                    size: Vec2::new(200.0, 100.0),
+                    baseline_y: None,
+                },
+            ))
+            .id();
+        let card = main
+            .spawn((
+                Style {
+                    overflow_y: Overflow::Hidden,
+                    ..Default::default()
+                },
+                Transform {
+                    absolute: Vec2::new(0.0, 200.0),
+                    size: Vec2::new(200.0, 60.0),
+                    baseline_y: None,
+                },
+                ChildOf(scroller),
+            ))
+            .id();
+        let inner = main
+            .spawn((
+                Transform {
+                    absolute: Vec2::new(0.0, 200.0),
+                    size: Vec2::new(50.0, 50.0),
+                    baseline_y: None,
+                },
+                Visuals {
+                    fill: Some(crate::components::Fill::Solid(Color::rgb(1.0, 0.0, 0.0))),
+                    ..Default::default()
+                },
+                ChildOf(card),
+            ))
+            .id();
+
+        let (parents, _) = build_parent_map(&mut main);
+        let clips = parent_scroll_clip_rects(&mut main, &parents);
+        assert_eq!(
+            clips.get(&inner).copied(),
+            Some((Vec2::new(0.0, 0.0), Vec2::new(200.0, 60.0))),
+            "the card clips its child where the card is drawn"
+        );
+
+        extract_clips(&mut main, &mut render);
+        let boxes: Vec<ExtractedClipBox> = {
+            let mut q = render.query::<&ExtractedClipBox>();
+            q.iter(&render).copied().collect()
+        };
+        let card_box = boxes
+            .iter()
+            .find(|b| b.size == Vec2::new(200.0, 60.0))
+            .expect("clip box for the card");
+        assert_eq!(card_box.origin, Vec2::new(0.0, 0.0));
+        let scroller_box = boxes
+            .iter()
+            .find(|b| b.size == Vec2::new(200.0, 100.0))
+            .expect("clip box for the scroll container");
+        assert_eq!(
+            scroller_box.origin,
+            Vec2::ZERO,
+            "a scroll box moves its content, not its own frame"
+        );
+
+        extract_rects(&mut main, &mut render);
+        let origins: Vec<Vec2> = {
+            let mut q = render.query::<&ExtractedRect>();
+            q.iter(&render).map(|r| r.origin).collect()
+        };
+        assert_eq!(
+            origins,
+            vec![Vec2::ZERO],
+            "the scrolled-into-view child still paints"
+        );
+    }
+
     /// Overlay content escapes ancestor scroll/overflow clip rects (top-layer semantics): the
     /// nearest-clip-ancestor map must stop at the overlay root, while normal siblings keep theirs.
     #[test]
@@ -3431,5 +3613,74 @@ mod tests {
         let overridden_et = render.get::<ExtractedText>(map[&overridden]).unwrap();
         assert_eq!(plain_et.caret_width_px, CARET_WIDTH_PX);
         assert_eq!(overridden_et.caret_width_px, 4.0);
+    }
+
+    /// Every distribution a box can take, mapped onto where it leaves the
+    /// one item a run of text becomes. Exercised directly because the
+    /// arms differ only in the value they return, and a pipeline test can
+    /// only reach one of them per app it builds.
+    #[test]
+    fn a_distribution_places_the_run_the_way_it_places_an_item() {
+        use crate::components::{FlexDirection, FlexJustify, Style};
+
+        let row = |justify| Style {
+            justify,
+            ..Style::default()
+        };
+        let cases = [
+            (FlexJustify::Start, TextAlign::Start),
+            (FlexJustify::SpaceBetween, TextAlign::Start),
+            (FlexJustify::Center, TextAlign::Center),
+            (FlexJustify::SpaceAround, TextAlign::Center),
+            (FlexJustify::SpaceEvenly, TextAlign::Center),
+            (FlexJustify::End, TextAlign::End),
+        ];
+        for (justify, want) in cases {
+            assert_eq!(
+                text_run_align(TextAlign::Start, Some(&row(justify))),
+                want,
+                "{justify:?} must leave the run at {want:?}"
+            );
+        }
+
+        // Reversed, the ends swap and the middle stays put.
+        let reversed = |justify| Style {
+            justify,
+            flex_direction: FlexDirection::RowReverse,
+            ..Style::default()
+        };
+        assert_eq!(
+            text_run_align(TextAlign::Start, Some(&reversed(FlexJustify::Start))),
+            TextAlign::End
+        );
+        assert_eq!(
+            text_run_align(TextAlign::Start, Some(&reversed(FlexJustify::End))),
+            TextAlign::Start
+        );
+        assert_eq!(
+            text_run_align(TextAlign::Start, Some(&reversed(FlexJustify::Center))),
+            TextAlign::Center
+        );
+
+        // A vertical main axis distributes down the box, and an element
+        // with no style at all has nothing to read.
+        for direction in [FlexDirection::Column, FlexDirection::ColumnReverse] {
+            let column = Style {
+                justify: FlexJustify::Center,
+                flex_direction: direction,
+                ..Style::default()
+            };
+            assert_eq!(
+                text_run_align(TextAlign::Start, Some(&column)),
+                TextAlign::Start
+            );
+        }
+        assert_eq!(text_run_align(TextAlign::Start, None), TextAlign::Start);
+
+        // An authored alignment is the answer whatever the box says.
+        assert_eq!(
+            text_run_align(TextAlign::End, Some(&row(FlexJustify::Center))),
+            TextAlign::End
+        );
     }
 }

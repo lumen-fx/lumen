@@ -140,6 +140,11 @@ value. Nothing calls it; a write to any dependency does. Derived values may
 depend on other derived values, and a whole chain settles within the tick that
 started it.
 
+In candela the function is named rather than written inline, and each parameter
+carries a declared type that has to match the kind its signal holds. Declare it
+`any` when you are not sure. See
+[derived signals](../reference/scripting-candela.md#derived-signals).
+
 ## How a change travels
 
 1. Something writes a signal: a script, a user editing a bound control, or host

@@ -121,6 +121,12 @@ it, including the reverse variants.
 `overflow: scroll` on any element makes it a live scroll container, the
 same as `<scroll>`.
 
+An element's own text lays out as an item of its own, sized to the words,
+so `justify` places it along the main axis the same way it places a child:
+`justify="center"` on a `<button>` centres its label. It applies on a
+horizontal main axis only, and an authored `text-align` wins where both
+are set.
+
 ### Colour and paint
 
 | Attribute | Value | Default |
@@ -203,6 +209,13 @@ children stack left to right.
 | `drag-payload` | text | Makes the element an in-app drag source publishing this payload. An empty value uses the element's `id`. Interpolated per row inside `<for>`. |
 | `drop`, `drop-target` | boolean | Makes the element a drop target for OS file drops and in-app drags. |
 | `accept` | MIME type | Restricts what an in-app drop target accepts. Absent accepts anything. |
+
+An element receives the pointer when it is focusable (it has a
+`tab-index`, which the controls and `<a href>` carry by default), when it
+scrolls, or when it paints a background. Painting is not required: a
+`<button>` with no `bg` in markup, in your CSS, or in a skin still
+hovers, presses, and clicks over its own rect. Where several targets
+overlap, the innermost one takes the event.
 
 ### Binding
 
@@ -310,7 +323,9 @@ control its appearance.
 
 ### `<a>`
 
-An anchor. Clicking it navigates the app to another page.
+An anchor. Clicking it navigates the app to another page. An anchor takes
+the pointer with or without a background, and takes focus when clicked,
+but it is not in the Tab chain unless you give it `tab-index="0"`.
 
 | Attribute | Value | Effect |
 | --- | --- | --- |
@@ -337,6 +352,9 @@ A focusable, clickable box. Focusable by default (`tab-index="0"`).
 | Attribute | Value | Effect |
 | --- | --- | --- |
 | `default` | boolean | Marks the default button of the containing `<dialog>`: Enter anywhere in the dialog activates it, and closing through it takes the accepted path. Also adds the `default` class. |
+
+A button holds its label itself rather than in a child element, so
+`justify="center"` is what centres the text.
 
 ### `<input>`
 
@@ -390,6 +408,11 @@ A draggable value control. Focusable by default.
 Arrow keys move by one step, Page Up and Page Down by ten. Style the
 thumb with `knob-color` and `thumb-size`.
 
+A click or a drag lands on the same positions the arrow keys reach: the
+value is `min` plus a whole number of steps. A range that is not a whole
+number of steps stops on the last step that fits, so `min="0" max="100"
+step="30"` tops out at 90.
+
 ### `<checkbox>`
 
 A row containing an indicator box and a caption. Focusable by default.
@@ -438,6 +461,15 @@ A combobox. The parser expands it into a header button plus a floating
 options panel; the panel is dismissed by clicking outside it and flips
 above the trigger near the bottom of the window.
 
+The tag stays on the box those parts sit in, so `width`, `min-width`,
+`padding`, `bg` and a `dropdown` rule in a stylesheet size and paint the
+control the way they do any other widget. The generated elements carry
+the classes `dropdown-button` for the closed face, `dropdown-panel` for
+the floating list, and `dropdown-option` for a row in it. The face fills
+the box, so sizing the `<dropdown>` sizes the whole control; the face's
+height and an option row's are theme metrics, so restyle those classes to
+change them.
+
 `<dropdown>` requires `bind-value`. Its children must all be `<option>`.
 
 | Tag | Attribute | Effect |
@@ -447,6 +479,11 @@ above the trigger near the bottom of the window.
 | `<option>` | `value` | Required. Value written to the signal on click. |
 | `<option>` | `label` | Display text. Defaults to `value`. |
 | `<option>` | `disabled` | Unclickable, skipped by arrow navigation. |
+
+The closed header reads the selected option's `label`. The signal holds
+that option's `value`, which is what your script reads and what a click
+writes, so the two differ whenever an option carries a label of its own.
+A value no option declares is shown as it stands.
 
 The first `<option>` seeds the signal, so the dropdown opens on a real
 selection. Add `placeholder` to start unselected instead. A value your

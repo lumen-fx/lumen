@@ -123,9 +123,9 @@ pub fn dismiss_error_banner_on_escape(
 /// and cost O(tree) per flip. See `docs/audits/theming.md` section 6.
 ///
 /// Today the function:
-/// 1. Reads the latest root `LumenClasses` (already mutated in place
-///    by [`lumen_core::signals::apply_theme_signal_to_root_classes`]
-///    or by the `set_root_class` Rhai builtin).
+/// 1. Reads the latest [`DocumentRoot`] `LumenClasses` (already mutated
+///    in place by [`lumen_core::signals::apply_theme_signal_to_root_classes`]
+///    or by `set_root_class`).
 /// 2. Diffs against [`RootClassesCache`]; no-ops when unchanged.
 /// 3. Consults [`StyleInvalidationCache::diff_affects`] - when no
 ///    selector in the parsed stylesheet mentions any changed class,
@@ -135,21 +135,7 @@ pub fn dismiss_error_banner_on_escape(
 ///    style depended on the changed classes / media features. The
 ///    parsed `Stylesheet` is reused - no disk read, no respawn.
 pub(crate) fn reapply_styles_on_root_class_change(world: &mut World) {
-    // Locate the root entity. Prefer [`HotReloadState`] when it carries
-    // a cached id (hot-reload mode); otherwise search for the unique
-    // top-level [`LumenClasses`]-bearing entity (the spawn pass attaches
-    // it to the root and only the root).
-    let root = world
-        .get_resource::<HotReloadState>()
-        .map(|s| s.root)
-        .or_else(|| {
-            let mut q = world.query_filtered::<Entity, (
-                bevy_ecs::query::With<lumen_core::components::LumenClasses>,
-                bevy_ecs::query::Without<bevy_ecs::hierarchy::ChildOf>,
-            )>();
-            q.iter(world).next()
-        });
-    let Some(root) = root else {
+    let Some(root) = world.get_resource::<DocumentRoot>().map(|r| r.0) else {
         return;
     };
     // Alloc-free change gate: compare the live `Arc<str>` class list
@@ -204,6 +190,33 @@ pub(crate) fn reapply_styles_on_root_class_change(world: &mut World) {
     } else {
         world.insert_resource(RootClassesCache(current));
     }
+}
+
+/// The entity the app's markup tree was spawned onto. Whoever writes the
+/// root - `set_root_class`, the OS theme follow, the class-change
+/// watcher - asks here rather than guessing from the hierarchy, so there
+/// is one answer and it does not depend on the root happening to carry a
+/// class or on hot reload being on. A respawn (hot reload) overwrites it.
+#[derive(Resource, Debug, Clone, Copy)]
+pub(crate) struct DocumentRoot(pub(crate) Entity);
+
+/// Record `root` as the [`DocumentRoot`] and make sure it carries a
+/// [`LumenClasses`](lumen_core::components::LumenClasses) list.
+///
+/// The spawn pass attaches that component only to elements whose markup
+/// declared a class, and a root usually declares none. Without it the OS
+/// theme follow has nothing to write `theme-dark` / `theme-light` onto,
+/// and `set_root_class` would have to create the component before it
+/// could set anything. An empty list is the root's real class list, so
+/// giving it one costs nothing and every writer finds it there.
+pub(crate) fn install_document_root(world: &mut World, root: Entity) {
+    use lumen_core::components::LumenClasses;
+    if world.get::<LumenClasses>(root).is_none() {
+        world
+            .entity_mut(root)
+            .insert(LumenClasses::from(Vec::<String>::new()));
+    }
+    world.insert_resource(DocumentRoot(root));
 }
 
 /// Cached snapshot of the root entity's `LumenClasses` so
@@ -490,6 +503,10 @@ pub(crate) fn reapply_computed_styles(world: &mut World) {
     #[allow(clippy::type_complexity)]
     let mut q = world.query::<(Entity, &LumenTag, Option<&LumenClasses>, Option<&LumenId>)>();
     let entities: Vec<Entity> = q.iter(world).map(|(e, ..)| e).collect();
+    // Sibling positions for the whole tree, once. The structural
+    // pseudo-classes read them, and computing them per element would
+    // re-walk each parent's child list once per child.
+    let positions = sibling_positions(world);
 
     for entity in entities {
         // Reconstruct the subject element from its identity components.
@@ -500,8 +517,11 @@ pub(crate) fn reapply_computed_styles(world: &mut World) {
         if let Some(sheet) = sheet.as_ref() {
             // Walk `ChildOf` up to the root, reading each ancestor's identity
             // components, then reverse to root-first order for the cascade.
-            let ancestors = build_ancestor_chain(world, entity);
-            if lumen_ir::css::reapply_with_ancestors(&mut el, sheet, &media, &ancestors).is_err() {
+            let ancestors = build_ancestor_chain(world, entity, &positions);
+            let position = positions.get(&entity).copied().unwrap_or_default();
+            if lumen_ir::css::reapply_with_ancestors(&mut el, sheet, &media, &ancestors, position)
+                .is_err()
+            {
                 continue;
             }
             resolved = true;
@@ -567,11 +587,14 @@ fn entity_to_element(world: &World, entity: Entity) -> Option<Element> {
 /// return the chain in root-first order (the order the cascade matcher
 /// expects). A plain layout container with no `LumenTag` contributes an
 /// empty-tag entry so child-combinator depth stays exact - the immediate
-/// parent is always the immediate parent, tagged or not. `child_index` /
-/// `sibling_count` are left at their `1 of 1` defaults: threading real
-/// sibling positions would cost a `Children` lookup per ancestor and no
-/// theme rule the runtime re-resolves depends on ancestor `:nth-child`.
-fn build_ancestor_chain(world: &World, entity: Entity) -> Vec<lumen_ir::css::AncestorInfo> {
+/// parent is always the immediate parent, tagged or not. Each ancestor
+/// carries its real sibling position too, so `.row:first-child .cell`
+/// selects on the row the cascade is actually standing under.
+fn build_ancestor_chain(
+    world: &World,
+    entity: Entity,
+    positions: &SiblingPositions,
+) -> Vec<lumen_ir::css::AncestorInfo> {
     use bevy_ecs::hierarchy::ChildOf;
     use lumen_core::components::{LumenClasses, LumenId, LumenTag};
     let mut chain = Vec::new();
@@ -591,12 +614,46 @@ fn build_ancestor_chain(world: &World, entity: Entity) -> Vec<lumen_ir::css::Anc
             .map(|c| c.0.iter().map(|s| s.to_string()).collect())
             .unwrap_or_default();
         let id = world.get::<LumenId>(parent).map(|i| i.0.clone());
-        chain.push(lumen_ir::css::AncestorInfo::new(tag, classes, id));
+        chain.push(
+            lumen_ir::css::AncestorInfo::new(tag, classes, id)
+                .with_position(positions.get(&parent).copied().unwrap_or_default()),
+        );
         cur = parent;
     }
     // Walked leaf->root; the matcher wants outer-first (root->parent).
     chain.reverse();
     chain
+}
+
+/// Sibling positions keyed by entity. An entity absent from the map has
+/// no position to report and falls back to `SiblingPosition::default()`
+/// (an only child), which is what a document root is.
+type SiblingPositions = std::collections::HashMap<Entity, lumen_ir::css::SiblingPosition>;
+
+/// Where every element sits among the element siblings sharing its
+/// parent, for the structural pseudo-classes. Only entities carrying a
+/// [`LumenTag`] count as siblings: that is the marker every spawned
+/// markup element gets and nothing else does, so a renderer-internal
+/// child added beside a row does not shift the row's `:nth-child`.
+fn sibling_positions(world: &mut World) -> SiblingPositions {
+    use bevy_ecs::hierarchy::Children;
+    use bevy_ecs::query::With;
+    use lumen_core::components::LumenTag;
+    use lumen_ir::css::SiblingPosition;
+
+    let mut tagged = world.query_filtered::<Entity, With<LumenTag>>();
+    let tagged: std::collections::HashSet<Entity> = tagged.iter(world).collect();
+
+    let mut parents = world.query::<&Children>();
+    let mut out = SiblingPositions::new();
+    for children in parents.iter(world) {
+        let siblings: Vec<Entity> = children.iter().filter(|e| tagged.contains(e)).collect();
+        let count = siblings.len() as i32;
+        for (i, entity) in siblings.into_iter().enumerate() {
+            out.insert(entity, SiblingPosition::new(i as i32 + 1, count));
+        }
+    }
+    out
 }
 
 /// Patch the whitelisted cascade result from [`reapply_computed_styles`]

@@ -278,9 +278,23 @@ whenever any signal in `deps` changes. `f` receives the dependency values in
 `deps` order and returns the new value. candela has no closure value, so the
 recompute body is referenced by function name.
 
+Declare each parameter as the type the cell holds, or as `any`. A cell written
+through `signal_set_int` arrives as an `int`, `signal_set_float` as a `float`,
+`signal_set_bool` as a `bool`, and `signal_set` as a `string`; the conversions
+a getter performs do not apply here, so `fn f(n: float)` on an `int` cell is a
+type error. `any` takes whatever the cell holds and is the safe choice when a
+signal's type is not fixed:
+
+```rust
+fn calc_label(n: any) {
+    return "clicks: " + str(n);
+}
+```
+
 A derivation runs once after registration, then on every change to a
 dependency. Derived-of-derived chains settle within the same tick. A derivation
-that errors is retried on the next tick.
+that errors is retried on the next tick, so a parameter type that never matches
+fails and logs on every tick for the life of the app.
 
 ## Timers
 
@@ -744,7 +758,7 @@ See [Translation](../guides/i18n.md) for the catalogue format.
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |
 | `lumen::read_file(path: string)` | `string` | File contents; empty string on error. |
-| `lumen::write_file(path: string, contents: string)` | `bool` | `true` on success. |
+| `lumen::write_file(path: string, contents: string)` | `bool` | `true` on success. Writes atomically (temp file + rename), so a reader never sees a truncated file. |
 
 ## Diagnostics
 

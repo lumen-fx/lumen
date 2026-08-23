@@ -275,6 +275,18 @@ pub(crate) fn register_reactive(app: &mut App) {
     app.world.init_resource::<crate::spawn::ScenePolicy>();
     app.add_systems(TickStage::Systems, crate::spawn::reconcile_for_blocks);
     app.add_systems(TickStage::Systems, crate::spawn::reconcile_if_blocks);
+    // A mounted subtree takes its place in the document, not at the end
+    // of it: `DocumentOrder` is restated from the hierarchy once the
+    // reconcilers have flushed their spawns, so Tab reaches an `<if>`
+    // body where it sits in the markup no matter what follows it. The
+    // `after` edges are what put the sync point in front of this system,
+    // so the walk sees the entities the reconcilers just queued.
+    app.add_systems(
+        TickStage::Systems,
+        crate::spawn::renumber_document_order
+            .after(crate::spawn::reconcile_for_blocks)
+            .after(crate::spawn::reconcile_if_blocks),
+    );
     // W5 dialog contract (Qt QDialog):
     // - Enter-anywhere activates the default button. Ordered after the
     //   focused-key fanout (same-tick keystroke) and before the script
@@ -429,7 +441,8 @@ pub(crate) fn register_styles(
     //   1. `detect_media_change`   - theme / viewport-breakpoint flip -> bump
     //   2. `reapply_styles_on_root_class_change` - root class flip -> bump
     //   3. `apply_dom_commands` - script spawns / class edits -> bump
-    //   4. `reapply_computed_styles` - consume the bump, re-resolve entities
+    //   4. `reconcile_if_blocks` - a newly mounted body -> bump
+    //   5. `reapply_computed_styles` - consume the bump, re-resolve entities
     //
     // The `apply_dom_commands` edge is what keeps a scripted DOM edit
     // single-frame. Every spawn, reparent, class edit and inline-style
@@ -441,6 +454,12 @@ pub(crate) fn register_styles(
     // script that rebuilds a subtree paints one frame of unstyled,
     // wrongly-measured nodes before the cascade lands on the next tick -
     // the whole pane visibly flashes on every edit that rebuilds it.
+    //
+    // The `reconcile_if_blocks` edge does the same job for the elements a
+    // `<if>` gate mounts. Those carry the attributes the load-time cascade
+    // resolved, so without a re-resolve a page reached by navigation comes
+    // up in whatever color scheme the app booted with rather than the one
+    // now in force.
     app.add_systems(TickStage::Systems, detect_media_change);
     app.add_systems(
         TickStage::Systems,
@@ -450,7 +469,8 @@ pub(crate) fn register_styles(
         TickStage::Systems,
         reapply_computed_styles
             .after(reapply_styles_on_root_class_change)
-            .after(lumen_scene::dom::apply_dom_commands),
+            .after(lumen_scene::dom::apply_dom_commands)
+            .after(crate::spawn::reconcile_if_blocks),
     );
 }
 
