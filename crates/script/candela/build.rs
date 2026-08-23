@@ -42,11 +42,14 @@ fn main() {
         return;
     }
 
-    let Some(source) = candela_libs() else {
-        warn(
-            "cannot find the candela source cargo resolved, so the candela standard library was not staged. `import \"std/...\"` and the array methods will not resolve.",
-        );
-        return;
+    let source = match candela_libs() {
+        Ok(source) => source,
+        Err(why) => {
+            warn(&format!(
+                "{why}, so the candela standard library was not staged. `import \"std/...\"` and the array methods will not resolve."
+            ));
+            return;
+        }
     };
     println!("cargo::rerun-if-changed={}", source.display());
 
@@ -63,30 +66,59 @@ fn main() {
 /// The `libs/` tree in the candela package this crate compiles against.
 ///
 /// It is a dependency's own source directory, which cargo does not name in the
-/// environment, so the resolved graph is what answers. Everything the query
-/// needs is already on disk (the build is compiling out of it), so it stays
-/// offline and locked.
-fn candela_libs() -> Option<PathBuf> {
-    let cargo = env::var_os("CARGO")?;
-    let manifest_dir = env::var_os("CARGO_MANIFEST_DIR")?;
+/// environment, so the resolved graph is what answers. The first ask is
+/// offline, because everything it reads is normally on disk already and an
+/// offline ask reaches for nothing; a build that has yet to unpack a source it
+/// only holds compressed answers the second.
+fn candela_libs() -> Result<PathBuf, String> {
+    let metadata = match resolved_graph(&["--offline"]) {
+        Ok(metadata) => metadata,
+        Err(offline) => resolved_graph(&[]).map_err(|e| format!("{offline}, and then {e}"))?,
+    };
+    let manifest = metadata
+        .get("packages")
+        .and_then(|p| p.as_array())
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|p| p.get("name").and_then(|n| n.as_str()) == Some("candela-lang"))
+        })
+        .and_then(|p| p.get("manifest_path"))
+        .and_then(|p| p.as_str())
+        .ok_or("the resolved graph carries no candela package")?;
+    let libs = Path::new(manifest)
+        .parent()
+        .ok_or("the candela manifest has no directory")?
+        .join("libs");
+    if !libs.is_dir() {
+        return Err(format!(
+            "the candela source at {} carries no standard library",
+            libs.display()
+        ));
+    }
+    Ok(libs)
+}
+
+/// The packages cargo resolved for this build, as `cargo metadata` reports
+/// them with `flags` added to the ask.
+fn resolved_graph(flags: &[&str]) -> Result<serde_json::Value, String> {
+    let cargo = env::var_os("CARGO").ok_or("cargo did not say where it is")?;
+    let manifest_dir = env::var_os("CARGO_MANIFEST_DIR").ok_or("cargo named no manifest")?;
     let output = Command::new(cargo)
-        .args(["metadata", "--format-version", "1", "--offline", "--locked"])
+        .args(["metadata", "--format-version", "1"])
+        .args(flags)
         .current_dir(manifest_dir)
         .output()
-        .ok()?;
+        .map_err(|e| format!("cargo did not run: {e}"))?;
     if !output.status.success() {
-        return None;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "cargo could not report the resolved graph: {}",
+            stderr.trim().replace('\n', "; ")
+        ));
     }
-    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
-    let manifest = metadata
-        .get("packages")?
-        .as_array()?
-        .iter()
-        .find(|p| p.get("name").and_then(|n| n.as_str()) == Some("candela-lang"))?
-        .get("manifest_path")?
-        .as_str()?;
-    let libs = Path::new(manifest).parent()?.join("libs");
-    libs.is_dir().then_some(libs)
+    serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("cargo's resolved graph does not parse: {e}"))
 }
 
 /// Where a copy of the library belongs: beside the binaries cargo links, and
