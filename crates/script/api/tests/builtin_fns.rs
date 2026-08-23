@@ -216,6 +216,12 @@ fn the_file_builtins_report_failure_through_their_return_value() {
         returns(&builtin("rhai", "read_file"), &[text(missing)]),
         text(""),
     );
+    // A directory is the other kind of failure, the one still worth a
+    // warning; the return value stays the same empty string.
+    assert_eq!(
+        returns(&builtin("rhai", "read_file"), &[text("/")]),
+        text("")
+    );
     assert_eq!(
         returns(&builtin("rhai", "write_file"), &[text(missing), text("x")]),
         ScriptValue::Bool(false),
