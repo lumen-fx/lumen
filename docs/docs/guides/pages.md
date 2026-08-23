@@ -123,6 +123,36 @@ A shared header, nav bar, or frame belongs in a `<template>`. Put it in
 `layout.lmn` and every page can use it; see
 [composition](composition.md).
 
+## Where a page sits
+
+A page is not spliced straight into `<root>`. Each one mounts inside its own
+box, and every page's box covers the same rect: the whole of `<root>`, which
+is the whole window. A shell that asks for the full window gets it:
+
+```html
+<root>
+  <column height="100%">
+    <row height="56"/>
+    <column grow="1"/>
+    <row height="40"/>
+  </column>
+</root>
+```
+
+`height: 100%` measures against the page box, which measures the window, so
+the bottom row sits on the bottom edge of the window rather than below it, and
+`grow` on the middle column takes whatever is left between them. Nothing here
+needs `position: absolute`.
+
+The box supplies size and nothing else: no padding, background, or spacing of
+its own. Everything visible on screen is the page's own markup. Because it
+covers `<root>` edge to edge, padding written on `<root>` does not inset a
+page - put the breathing room on the page's own shell instead.
+
+The home page's `<root>` is the app's root element, so its attributes apply
+under every page. On any other page `<root>` is only a wrapper: its children
+mount, and attributes written on it are ignored.
+
 ## Page state
 
 Navigating away despawns the old page's elements and spawns the new page's from

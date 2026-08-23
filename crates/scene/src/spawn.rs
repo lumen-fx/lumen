@@ -10,6 +10,7 @@
 //! * Every spawned entity carries [`DirtyLayout`] so taffy runs on first tick.
 //! * Children link to parents via [`ChildOf`].
 
+use lumen_core::nav::PATH_SIGNAL;
 use lumen_core::property_store::PropertyStore;
 use lumen_core::signals::signal_is_truthy;
 use lumen_ir::interpolate::{Scope, carries_placeholder, substitute_element};
@@ -2397,7 +2398,7 @@ fn mount_fade_bundle(
 /// `run::loading::load_ir`), so a skinless app still gets a sizing
 /// floor without a Rust-side table to keep in sync.
 ///
-/// Two cases don't fit a plain CSS rule and stay here, running at spawn
+/// Three cases don't fit a plain CSS rule and stay here, running at spawn
 /// time after the cascade and inline attrs have been folded into
 /// `attrs`:
 ///
@@ -2406,6 +2407,19 @@ fn mount_fade_bundle(
 ///   CSS has no "set this property only if that other property is
 ///   unset" syntax, so this stays a Rust conditional instead of a
 ///   `ua.css` rule.
+/// - A page host box fills the window. A multi-page app mounts each page
+///   inside a synthetic gate keyed on the reserved active-page signal,
+///   and that gate is the page's containing block: left at its content
+///   size, a page whose shell asks for `height: 100%` resolves the
+///   percentage against the shell itself and the bottom of the shell
+///   lands past the bottom of the window. Pinning the gate to `<root>`'s
+///   padding box gives every page the same full-window rect, which is
+///   what Qt's `QStackedWidget` and Slint's page containers do; taking it
+///   out of flow at the same time is what keeps the gates of the pages
+///   that are NOT mounted - one empty sibling per page file - from
+///   dividing the window between them. The gate is spelled `<if>`, and an
+///   author's own `<if>` is an ordinary in-flow element, so the rule keys
+///   on the signal rather than the tag and cannot be a `ua.css` selector.
 /// - `<input>` / `<textarea>` default to `overflow: hidden` only when
 ///   neither the `overflow` shorthand nor `overflow-x` / `overflow-y`
 ///   was authored anywhere. `lumen_ir::css` never expands the `overflow`
@@ -2419,6 +2433,10 @@ fn mount_fade_bundle(
 pub fn apply_ua_style_defaults(tag: &str, attrs: &Attributes, style: &mut Style) {
     if tag == "switch" && attrs.width.is_none() && attrs.min_width.is_none() {
         style.min_width = Length::Px(52.0);
+    }
+    if tag == "if" && attrs.if_signal.as_deref() == Some(PATH_SIGNAL) && attrs.position.is_none() {
+        style.position = Position::Absolute;
+        style.inset = Edges::default();
     }
     if matches!(tag, "input" | "textarea") {
         // Long values scroll horizontally under the caret-keep-visible
