@@ -261,7 +261,7 @@ fn capture_requested(render_world: &World) -> bool {
 /// == None` - reports damage so the initial paint always runs.
 ///
 /// Conservative: the diff assumes-changed for any leaf it cannot compare
-/// (images, SVGs, native), so it never under-reports the dirty region.
+/// (images, SVGs), so it never under-reports the dirty region.
 fn scene_has_damage(render_world: &World) -> bool {
     let previous = render_world.get_resource::<PreviousScene>();
     let retained = render_world.get_resource::<RetainedScene>();
@@ -453,6 +453,11 @@ impl GpuState {
             let viewport = render_world.resource::<Viewport>();
             (viewport.scale_factor.max(0.01), viewport.clear)
         };
+        // Snapshot the painter registry before the shaper borrow below takes the world mutably.
+        // Cloning shares the table, so this costs one refcount.
+        let natives = render_world
+            .get_resource::<lumen_core::native::NativePainters>()
+            .cloned();
 
         self.vello_scene.reset();
         {
@@ -475,6 +480,9 @@ impl GpuState {
                     shaper_ref,
                     dpr,
                 );
+                if let Some(painters) = natives.as_ref() {
+                    ctx = ctx.with_native_painters(painters);
+                }
                 walk_node(&mut ctx, root);
             }
         }

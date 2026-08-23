@@ -1283,14 +1283,22 @@ mod cascade_tests {
         // Root flipped to theme-dark -> descendant rule wins.
         let root = AncestorInfo::new("root", vec!["theme-dark".into()], None);
         let mut el = card_el();
-        reapply_with_ancestors(&mut el, &css, &media, &[root]).expect("reapply");
+        reapply_with_ancestors(&mut el, &css, &media, &[root], SiblingPosition::default())
+            .expect("reapply");
         let c = solid(el.attrs.bg.as_ref().expect("bg"));
         assert!(c.r < 0.01, "descendant .theme-dark .card selected");
 
         // Root not theme-dark -> base rule keeps winning.
         let root_light = AncestorInfo::new("root", vec!["theme-light".into()], None);
         let mut el2 = card_el();
-        reapply_with_ancestors(&mut el2, &css, &media, &[root_light]).expect("reapply");
+        reapply_with_ancestors(
+            &mut el2,
+            &css,
+            &media,
+            &[root_light],
+            SiblingPosition::default(),
+        )
+        .expect("reapply");
         let c2 = solid(el2.attrs.bg.as_ref().expect("bg"));
         assert!(c2.r > 0.99, "base .card kept without .theme-dark ancestor");
     }
@@ -1312,13 +1320,27 @@ mod cascade_tests {
 
         let dark_root = AncestorInfo::new("root", vec!["theme-dark".into()], None);
         let mut el = card_el();
-        reapply_with_ancestors(&mut el, &css, &media, &[dark_root]).expect("reapply");
+        reapply_with_ancestors(
+            &mut el,
+            &css,
+            &media,
+            &[dark_root],
+            SiblingPosition::default(),
+        )
+        .expect("reapply");
         let c = solid(el.attrs.bg.as_ref().expect("bg"));
         assert!(c.r < 0.01, "descendant var(--bg) resolved to dark scope");
 
         let plain_root = AncestorInfo::new("root", vec![], None);
         let mut el2 = card_el();
-        reapply_with_ancestors(&mut el2, &css, &media, &[plain_root]).expect("reapply");
+        reapply_with_ancestors(
+            &mut el2,
+            &css,
+            &media,
+            &[plain_root],
+            SiblingPosition::default(),
+        )
+        .expect("reapply");
         let c2 = solid(el2.attrs.bg.as_ref().expect("bg"));
         assert!(c2.r > 0.99, "var(--bg) resolved to :root default");
     }
@@ -1334,7 +1356,8 @@ mod cascade_tests {
         // Immediate parent is `.parent` -> matches.
         let parent = AncestorInfo::new("tile", vec!["parent".into()], None);
         let mut el = card_el();
-        reapply_with_ancestors(&mut el, &css, &media, &[parent]).expect("reapply");
+        reapply_with_ancestors(&mut el, &css, &media, &[parent], SiblingPosition::default())
+            .expect("reapply");
         assert!(
             el.attrs.bg.is_some(),
             "direct child of .parent matches parent > child"
@@ -1345,10 +1368,55 @@ mod cascade_tests {
         let grandparent = AncestorInfo::new("tile", vec!["parent".into()], None);
         let middle = AncestorInfo::new("tile", vec!["mid".into()], None);
         let mut el2 = card_el();
-        reapply_with_ancestors(&mut el2, &css, &media, &[grandparent, middle]).expect("reapply");
+        reapply_with_ancestors(
+            &mut el2,
+            &css,
+            &media,
+            &[grandparent, middle],
+            SiblingPosition::default(),
+        )
+        .expect("reapply");
         assert!(
             el2.attrs.bg.is_none(),
             "grandchild of .parent does not match parent > child"
+        );
+    }
+
+    #[test]
+    fn reapply_ancestors_honours_the_sibling_position() {
+        // A single-element re-apply decides `:first-child` / `:last-child`
+        // / `:nth-child()` from the position it is handed. Passing the
+        // real position is what stops one rule painting every sibling.
+        let css = parse_css(
+            r#"
+            .card { bg: #ffffff; }
+            .card:last-child { bg: #ff0000; }
+        "#,
+        )
+        .expect("css");
+        let media = MediaContext::default();
+        let row = AncestorInfo::new("row", vec![], None);
+
+        let mut middle = card_el();
+        reapply_with_ancestors(
+            &mut middle,
+            &css,
+            &media,
+            std::slice::from_ref(&row),
+            SiblingPosition::new(2, 3),
+        )
+        .expect("reapply");
+        assert!(
+            solid(middle.attrs.bg.as_ref().expect("bg")).g > 0.99,
+            "the second of three siblings is not the last child"
+        );
+
+        let mut last = card_el();
+        reapply_with_ancestors(&mut last, &css, &media, &[row], SiblingPosition::new(3, 3))
+            .expect("reapply");
+        assert!(
+            solid(last.attrs.bg.as_ref().expect("bg")).g < 0.01,
+            "the third of three siblings is the last child"
         );
     }
 

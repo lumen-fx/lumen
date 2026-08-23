@@ -4003,6 +4003,7 @@ dependencies = [
  "lumen-layout-taffy",
  "lumen-text",
  "rustc-hash 2.1.3",
+ "sys-locale",
 ]
 
 [[package]]

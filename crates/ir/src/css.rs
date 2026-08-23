@@ -2102,8 +2102,47 @@ pub fn reapply_single_with_media(
             }
         }
     }
-    reapply_probe(el, css, media, &[], &inherited, &InheritedText::default());
+    reapply_probe(
+        el,
+        css,
+        media,
+        &[],
+        &inherited,
+        &InheritedText::default(),
+        SiblingPosition::default(),
+    );
     Ok(())
+}
+
+/// Where an element sits among its element siblings. The structural
+/// pseudo-classes (`:first-child`, `:last-child`, `:only-child`,
+/// `:nth-child()`) are decided from this, so a caller that re-runs the
+/// cascade for a single element has to supply it: a wrong position is a
+/// rule matching the wrong sibling, not a rule that quietly fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SiblingPosition {
+    /// 1-based position among element siblings.
+    pub child_index: i32,
+    /// Total element siblings, self included.
+    pub sibling_count: i32,
+}
+
+impl SiblingPosition {
+    /// Position `child_index` of `sibling_count`, both 1-based.
+    pub fn new(child_index: i32, sibling_count: i32) -> Self {
+        Self {
+            child_index,
+            sibling_count,
+        }
+    }
+}
+
+impl Default for SiblingPosition {
+    /// An only child. This is the position of a document root, and the
+    /// honest answer for a caller with no sibling information at all.
+    fn default() -> Self {
+        Self::new(1, 1)
+    }
 }
 
 /// Public identity of one ancestor in the cascade chain handed to
@@ -2143,11 +2182,11 @@ impl AncestorInfo {
         }
     }
 
-    /// Builder: set the 1-based sibling position, for `:nth-child` /
+    /// Builder: set the sibling position, for `:nth-child` /
     /// `:first-child` ancestor matching.
-    pub fn with_position(mut self, child_index: i32, sibling_count: i32) -> Self {
-        self.child_index = child_index;
-        self.sibling_count = sibling_count;
+    pub fn with_position(mut self, position: SiblingPosition) -> Self {
+        self.child_index = position.child_index;
+        self.sibling_count = position.sibling_count;
         self
     }
 
@@ -2181,15 +2220,29 @@ impl AncestorInfo {
 /// own matched rules then fold their `--*` on top inside
 /// [`apply_to_element`]. Copy-back uses the same whitelist as
 /// [`reapply_single_with_media`].
+///
+/// `position` is where `el` sits among its element siblings, and decides
+/// the structural pseudo-classes. Pass the real position: the default
+/// (`1 of 1`) makes `:first-child` and `:last-child` match the element
+/// whether or not it is either one.
 pub fn reapply_with_ancestors(
     el: &mut Element,
     css: &Stylesheet,
     media: &MediaContext,
     ancestors: &[AncestorInfo],
+    position: SiblingPosition,
 ) -> Result<(), ParseError> {
     let parents: Vec<ElementRef> = ancestors.iter().map(AncestorInfo::to_ref).collect();
     let (inherited, inherited_text) = ancestor_var_scope(css, media, &parents);
-    reapply_probe(el, css, media, &parents, &inherited, &inherited_text);
+    reapply_probe(
+        el,
+        css,
+        media,
+        &parents,
+        &inherited,
+        &inherited_text,
+        position,
+    );
     Ok(())
 }
 
@@ -2672,6 +2725,7 @@ fn ancestor_var_scope(
 /// probe (an attr-stripped clone carrying only the element's own
 /// classes / id) against `parents` + a pre-seeded `inherited` var scope,
 /// then copy the whitelisted result back onto `el`.
+#[allow(clippy::too_many_arguments)]
 fn reapply_probe(
     el: &mut Element,
     css: &Stylesheet,
@@ -2679,6 +2733,7 @@ fn reapply_probe(
     parents: &[ElementRef],
     inherited: &std::collections::HashMap<String, String>,
     inherited_text: &InheritedText,
+    position: SiblingPosition,
 ) {
     let mut probe = el.clone();
     probe.attrs = Attributes {
@@ -2694,8 +2749,8 @@ fn reapply_probe(
         inherited,
         inherited_text,
         parents,
-        1,
-        1,
+        position.child_index,
+        position.sibling_count,
         None,
         &mut warnings,
     );

@@ -12,7 +12,8 @@
 pub mod font_cache;
 pub mod font_db;
 
-use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Wrap};
+use cosmic_text::skrifa::{FontRef, MetadataProvider, Tag};
+use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Wrap, fontdb};
 use lru::LruCache;
 use lumen_text::{GlyphPosition, ShapeOptions, ShapedRun, ShapedSegment, TextShaper, WrapMode};
 use std::borrow::Borrow;
@@ -26,6 +27,10 @@ const SHAPE_CACHE_CAP: usize = 512;
 
 /// Width bucket size in logical pixels; reflows within one bucket share a cache entry.
 const WIDTH_BUCKET_PX: f32 = 4.0;
+
+/// CSS `font-weight: normal`. The weight the family probe asks for,
+/// because a family that ships one face at all ships this one.
+const REGULAR_WEIGHT: u16 = 400;
 
 /// Non-text portion of a [`ShapeKey`]: everything that affects shaping
 /// except the source string. `f32` fields are stored as `u32::to_bits()`
@@ -46,12 +51,15 @@ struct ShapeParams {
     /// raw string keys the cache; resolution to a concrete face happens
     /// once per distinct list via [`CosmicShaper::resolve_family`].
     family: Option<Arc<str>>,
-    /// CSS `font-weight` (1-1000).
+    /// Weight handed to cosmic-text: the authored CSS `font-weight`
+    /// snapped to one the resolved family provides (see
+    /// [`CosmicShaper::snap_weight`]). Keying on the snapped value lets
+    /// authored weights that resolve to the same face share one entry.
     weight: u16,
 }
 
 impl ShapeParams {
-    fn new(size_px: f32, opts: &ShapeOptions) -> Self {
+    fn new(size_px: f32, opts: &ShapeOptions, weight: u16) -> Self {
         Self {
             size_bits: size_px.to_bits(),
             wrap: opts.wrap,
@@ -62,7 +70,7 @@ impl ShapeParams {
                 .unwrap_or(u32::MAX),
             line_height_bits: opts.line_height.map(f32::to_bits).unwrap_or(u32::MAX),
             family: opts.family.clone(),
-            weight: opts.weight,
+            weight,
         }
     }
 }
@@ -149,12 +157,22 @@ pub struct CosmicShaper {
     /// Resolution scans the font database once per distinct list; every
     /// later shape with the same list is a hash lookup.
     family_cache: std::collections::HashMap<Arc<str>, FamilyChoice>,
+    /// Memoised `(family, authored weight) -> weight to shape with`.
+    /// Filled by [`CosmicShaper::snap_weight`], whose miss path walks the
+    /// family's faces and may read a font file to inspect its `wght` axis.
+    weight_cache: std::collections::HashMap<(FamilyChoice, u16), u16>,
+    /// Memoised `family -> the family name whose faces it is actually
+    /// shaped from`. Usually the name the database gives, but a generic
+    /// alias can name a family the machine does not hold, and then it is
+    /// the family cosmic-text's own fallback chain settles on. `None`
+    /// records a family nothing resolved for.
+    family_name_cache: std::collections::HashMap<FamilyChoice, Option<Arc<str>>>,
 }
 
 /// Resolved CSS `font-family` list: either one of the CSS generic
-/// families (mapped to cosmic-text's built-in aliases) or a concrete
+/// families (mapped through the font database's aliases) or a concrete
 /// family name verified to exist in the font database.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 enum FamilyChoice {
     /// `sans-serif` / `system-ui` / unresolvable list fallback.
     SansSerif,
@@ -206,7 +224,13 @@ impl CosmicShaper {
     /// paid only on the first launch after the installed font set changes;
     /// subsequent launches rebuild an identical database from the cache.
     pub fn new() -> Self {
-        let mut font_system = font_cache::load_font_system();
+        Self::from_font_system(font_cache::load_font_system())
+    }
+
+    /// Wrap an already-built [`FontSystem`]. The shared body of the two
+    /// public constructors, and the seam the unit tests build a shaper
+    /// over a hand-made font database through.
+    fn from_font_system(mut font_system: FontSystem) -> Self {
         let metrics = Metrics::new(16.0, 20.0);
         let buffer = Buffer::new(&mut font_system, metrics);
         Self {
@@ -216,6 +240,8 @@ impl CosmicShaper {
             cache: LruCache::new(NonZeroUsize::new(SHAPE_CACHE_CAP).unwrap()),
             font_bytes: std::collections::HashMap::new(),
             family_cache: std::collections::HashMap::new(),
+            weight_cache: std::collections::HashMap::new(),
+            family_name_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -234,17 +260,7 @@ impl CosmicShaper {
     pub fn new_sharing_db(other: &Self) -> Self {
         let locale = other.font_system.locale().to_string();
         let db = other.font_system.db().clone();
-        let mut font_system = FontSystem::new_with_locale_and_db(locale, db);
-        let metrics = Metrics::new(16.0, 20.0);
-        let buffer = Buffer::new(&mut font_system, metrics);
-        Self {
-            font_system,
-            buffer,
-            last_metrics: metrics,
-            cache: LruCache::new(NonZeroUsize::new(SHAPE_CACHE_CAP).unwrap()),
-            font_bytes: std::collections::HashMap::new(),
-            family_cache: std::collections::HashMap::new(),
-        }
+        Self::from_font_system(FontSystem::new_with_locale_and_db(locale, db))
     }
 
     /// Resolve a raw CSS `font-family` list to a concrete
@@ -292,10 +308,171 @@ impl CosmicShaper {
         choice
     }
 
+    /// Snap an authored CSS `font-weight` to one `family` can actually be
+    /// shaped at, memoised per `(family, weight)`.
+    ///
+    /// cosmic-text matches a family only through a face whose weight
+    /// equals the request exactly, or a variable face whose `wght` axis
+    /// spans it. A request that hits neither - `font-weight: 650` against
+    /// a family shipping 400 and 700 - drops the family out of matching
+    /// altogether, and the text is shaped with whatever face the
+    /// last-resort list happens to start with: a different face per
+    /// glyph, at that face's advances. Snapping keeps the authored family
+    /// and picks the face CSS asks for. A family with a real `wght` axis
+    /// covering the request keeps the authored weight, so variable fonts
+    /// still render intermediate weights.
+    ///
+    /// One weight comes out, and it feeds the single `Attrs` that shaping
+    /// and measurement both read, so the two cannot disagree about which
+    /// face they described.
+    fn snap_weight(&mut self, family: &FamilyChoice, weight: u16) -> u16 {
+        let key = (family.clone(), weight);
+        if let Some(&hit) = self.weight_cache.get(&key) {
+            return hit;
+        }
+        let snapped = match self.effective_family_name(family) {
+            Some(name) => shapeable_weight(self.font_system.db(), &name, weight),
+            // No family resolved at all (an empty database): leave the
+            // authored weight alone rather than inventing one.
+            None => weight,
+        };
+        self.weight_cache.insert(key, snapped);
+        snapped
+    }
+
+    /// The family name whose faces `family` is really shaped from,
+    /// memoised.
+    ///
+    /// The database's own answer is right whenever it names a family the
+    /// machine holds. A generic alias need not: the alias is a plain
+    /// string, and `sans-serif` pointing at a family nothing provides is
+    /// the ordinary case on a machine with a small font set. cosmic-text
+    /// then shapes the text through its fallback chain instead, so that
+    /// is the family a weight has to be snapped against - asking the
+    /// alias would find no faces and snap nothing. Shaping one character
+    /// at a weight every family ships reports which face the chain
+    /// settles on.
+    fn effective_family_name(&mut self, family: &FamilyChoice) -> Option<Arc<str>> {
+        if let Some(hit) = self.family_name_cache.get(family) {
+            return hit.clone();
+        }
+        let named = provided_family_name(self.font_system.db(), family);
+        let resolved = named.or_else(|| self.probe_family_name(family));
+        self.family_name_cache
+            .insert(family.clone(), resolved.clone());
+        resolved
+    }
+
+    /// Shape one digit through `family` at the regular weight and report
+    /// the family of the face that came back. Runs on its own buffer so
+    /// the in-flight shape's buffer is untouched, and at most once per
+    /// distinct family.
+    fn probe_family_name(&mut self, family: &FamilyChoice) -> Option<Arc<str>> {
+        let attrs = Attrs::new()
+            .family(family.as_family())
+            .weight(cosmic_text::Weight(REGULAR_WEIGHT));
+        let mut probe = Buffer::new(&mut self.font_system, self.last_metrics);
+        {
+            let mut bb = probe.borrow_with(&mut self.font_system);
+            bb.set_wrap(Wrap::None);
+            bb.set_size(None, None);
+            bb.set_text("0", &attrs, Shaping::Advanced, None);
+            bb.shape_until_scroll(false);
+        }
+        let font_id = probe
+            .layout_runs()
+            .flat_map(|run| run.glyphs.iter())
+            .map(|g| g.font_id)
+            .next()?;
+        let db = self.font_system.db();
+        let face = db.face(font_id)?;
+        face.families
+            .first()
+            .map(|(name, _)| Arc::from(name.as_str()))
+    }
+
     /// Force-drop the result cache. Mostly useful for tests.
     pub fn clear_cache(&mut self) {
         self.cache.clear();
     }
+}
+
+/// The family name the database itself provides for `family`, when it
+/// names a family the database holds faces for. `None` when the name
+/// resolves to nothing - the ordinary case for a generic alias on a
+/// machine without the family the alias points at.
+fn provided_family_name(db: &fontdb::Database, family: &FamilyChoice) -> Option<Arc<str>> {
+    let query = family.as_family();
+    let name = db.family_name(&query);
+    family_faces(db, name).next().map(|_| Arc::from(name))
+}
+
+/// Miss path of [`CosmicShaper::snap_weight`], over a family name known
+/// to have faces.
+fn shapeable_weight(db: &fontdb::Database, name: &str, weight: u16) -> u16 {
+    let faces: Vec<(fontdb::ID, u16)> =
+        family_faces(db, name).map(|f| (f.id, f.weight.0)).collect();
+    // The family already ships the authored weight as its own face.
+    if faces.iter().any(|(_, w)| *w == weight) {
+        return weight;
+    }
+    // A variable face spanning the request needs no snapping: the
+    // instance at that weight is a real one.
+    if faces
+        .iter()
+        .any(|(id, _)| weight_axis_covers(db, *id, weight))
+    {
+        return weight;
+    }
+    let mut available: Vec<u16> = faces.into_iter().map(|(_, w)| w).collect();
+    available.sort_unstable();
+    available.dedup();
+    if available.is_empty() {
+        return weight;
+    }
+    nearest_css_weight(weight, &available)
+}
+
+/// Every face in the database listing `name` among its families.
+fn family_faces<'a>(
+    db: &'a fontdb::Database,
+    name: &'a str,
+) -> impl Iterator<Item = &'a fontdb::FaceInfo> {
+    db.faces()
+        .filter(move |f| f.families.iter().any(|(fam, _)| fam.as_str() == name))
+}
+
+/// Whether the face carries a `wght` variation axis spanning `weight`, in
+/// which case it can be instantiated at exactly that weight.
+fn weight_axis_covers(db: &fontdb::Database, id: fontdb::ID, weight: u16) -> bool {
+    db.with_face_data(id, |bytes, index| {
+        let font = FontRef::from_index(bytes, index).ok()?;
+        let axis = font.axes().get_by_tag(Tag::new(b"wght"))?;
+        let w = f32::from(weight);
+        Some(w >= axis.min_value() && w <= axis.max_value())
+    }) == Some(Some(true))
+}
+
+/// The weight to use when `available` does not hold `weight`, per the CSS
+/// Fonts font-weight matching order: from 400-500 look up to 500 first,
+/// then down, then above; below 400 look down first; above 500 look up
+/// first. `available` is sorted ascending and non-empty.
+fn nearest_css_weight(weight: u16, available: &[u16]) -> u16 {
+    let heavier = |over: u16| available.iter().copied().find(|w| *w > over);
+    let lighter = |under: u16| available.iter().rev().copied().find(|w| *w < under);
+    let picked = if (400..=500).contains(&weight) {
+        available
+            .iter()
+            .copied()
+            .find(|w| *w > weight && *w <= 500)
+            .or_else(|| lighter(weight))
+            .or_else(|| heavier(500))
+    } else if weight < 400 {
+        lighter(weight).or_else(|| heavier(weight))
+    } else {
+        heavier(weight).or_else(|| lighter(weight))
+    };
+    picked.unwrap_or(available[0])
 }
 
 impl Default for CosmicShaper {
@@ -322,11 +499,21 @@ impl TextShaper for CosmicShaper {
             return None;
         }
 
+        // Resolve the CSS family fallback chain and the weight the family
+        // can be shaped at (both memoised) before anything else: they are
+        // what the cache key describes, so two authored weights that land
+        // on the same face share one entry.
+        let family_choice = match &opts.family {
+            Some(raw) => self.resolve_family(raw),
+            None => FamilyChoice::SansSerif,
+        };
+        let weight = self.snap_weight(&family_choice, opts.weight.clamp(1, 1000));
+
         // Lookup before shaping. The probe borrows `text` (no copy on a
         // cache hit); the owned `ShapeKey` is only minted below, on a miss.
         // `LruCache::get` promotes the entry to most-recent on hit; a hit
         // clones the cached [`ShapedRun`] (Arc-cheap).
-        let params = ShapeParams::new(size_px, &opts);
+        let params = ShapeParams::new(size_px, &opts, weight);
         let probe = ShapeKeyRef {
             text,
             params: params.clone(),
@@ -347,15 +534,9 @@ impl TextShaper for CosmicShaper {
             WrapMode::Glyph => Wrap::Glyph,
         };
 
-        // Resolve the CSS family fallback chain (memoised per list) and
-        // weight before building the cosmic-text attrs.
-        let family_choice = match &opts.family {
-            Some(raw) => self.resolve_family(raw),
-            None => FamilyChoice::SansSerif,
-        };
         let attrs = Attrs::new()
             .family(family_choice.as_family())
-            .weight(cosmic_text::Weight(opts.weight.clamp(1, 1000)));
+            .weight(cosmic_text::Weight(weight));
         {
             let mut bb = self.buffer.borrow_with(&mut self.font_system);
             bb.set_wrap(wrap);
@@ -729,10 +910,10 @@ mod tests {
             width: Some(105.0),
             ..ShapeOptions::default()
         };
-        let k_100 = ShapeParams::new(14.0, &opts_100);
-        let k_101 = ShapeParams::new(14.0, &opts_101);
-        let k_104 = ShapeParams::new(14.0, &opts_104);
-        let k_105 = ShapeParams::new(14.0, &opts_105);
+        let k_100 = ShapeParams::new(14.0, &opts_100, 400);
+        let k_101 = ShapeParams::new(14.0, &opts_101, 400);
+        let k_104 = ShapeParams::new(14.0, &opts_104, 400);
+        let k_105 = ShapeParams::new(14.0, &opts_105, 400);
         assert_eq!(
             k_101, k_104,
             "101 and 104 share the same 4-px bucket (round up to 104)"
@@ -762,9 +943,9 @@ mod tests {
             line_height: Some(30.0),
             ..ShapeOptions::default()
         };
-        let k_default = ShapeParams::new(16.0, &default_opts);
-        let k_override = ShapeParams::new(16.0, &overridden_opts);
-        let k_same = ShapeParams::new(16.0, &same_override_opts);
+        let k_default = ShapeParams::new(16.0, &default_opts, 400);
+        let k_override = ShapeParams::new(16.0, &overridden_opts, 400);
+        let k_same = ShapeParams::new(16.0, &same_override_opts, 400);
         assert_ne!(
             k_default, k_override,
             "an absent line_height must not collide with an explicit override"
@@ -918,5 +1099,125 @@ mod tests {
         shaper.set_capacity(1);
         assert!(shaper.cache_len() <= 1, "shrink evicted to cap");
         shaper.set_capacity(SHAPE_CACHE_CAP);
+    }
+
+    /// The CSS search order, against a family shipping regular and bold.
+    #[test]
+    fn nearest_weight_follows_the_css_search_order() {
+        let regular_bold = [400, 700];
+        // Above 500: heavier first.
+        assert_eq!(nearest_css_weight(600, &regular_bold), 700);
+        assert_eq!(nearest_css_weight(650, &regular_bold), 700);
+        assert_eq!(nearest_css_weight(800, &regular_bold), 700);
+        // Below 400: lighter first.
+        assert_eq!(nearest_css_weight(200, &regular_bold), 400);
+        // 400-500 looks up to 500, then down, then past 500.
+        assert_eq!(nearest_css_weight(450, &regular_bold), 400);
+        assert_eq!(nearest_css_weight(450, &[300, 480, 700]), 480);
+        assert_eq!(nearest_css_weight(500, &[600, 900]), 600);
+        // A single face absorbs every request.
+        assert_eq!(nearest_css_weight(650, &[400]), 400);
+        assert_eq!(nearest_css_weight(100, &[900]), 900);
+    }
+
+    /// A font database holding one face per weight in `weights`, all in
+    /// `family`, with the sans-serif alias pointed at it. Weight matching
+    /// reads face metadata only, so the faces need no content and the
+    /// outcome is the same on every machine, with no system fonts in it.
+    fn db_with(family: &str, weights: &[u16]) -> fontdb::Database {
+        use cosmic_text::fontdb::{
+            Database, FaceInfo, ID, Language, Source, Stretch, Style, Weight,
+        };
+        let mut db = Database::new();
+        for &w in weights {
+            db.push_face_info(FaceInfo {
+                id: ID::dummy(),
+                source: Source::Binary(Arc::new(Vec::<u8>::new())),
+                index: 0,
+                families: vec![(family.to_string(), Language::English_UnitedStates)],
+                post_script_name: format!("{family}-{w}"),
+                style: Style::Normal,
+                weight: Weight(w),
+                stretch: Stretch::Normal,
+                monospaced: false,
+            });
+        }
+        db.set_sans_serif_family(family);
+        db
+    }
+
+    /// The sans-serif alias resolves to the family the database holds,
+    /// and a name nothing provides resolves to nothing rather than to a
+    /// family with no faces to snap against.
+    #[test]
+    fn a_family_resolves_only_when_the_database_holds_it() {
+        let db = db_with("Test Sans", &[400, 700]);
+        assert_eq!(
+            provided_family_name(&db, &FamilyChoice::SansSerif).as_deref(),
+            Some("Test Sans")
+        );
+        assert_eq!(
+            provided_family_name(&db, &FamilyChoice::Named(Arc::from("Absent"))).as_deref(),
+            None
+        );
+        // An alias pointing at a family the machine does not hold - the
+        // case a generic keyword lands in on a small font set.
+        let empty = db_with("Absent Sans", &[]);
+        assert_eq!(
+            provided_family_name(&empty, &FamilyChoice::SansSerif).as_deref(),
+            None
+        );
+    }
+
+    /// A weight the family ships is shaped exactly as authored.
+    #[test]
+    fn a_weight_the_family_ships_is_shaped_as_authored() {
+        let db = db_with("Test Sans", &[400, 700]);
+        assert_eq!(shapeable_weight(&db, "Test Sans", 400), 400);
+        assert_eq!(shapeable_weight(&db, "Test Sans", 700), 700);
+    }
+
+    /// The reported bug: an authored weight the family does not ship has
+    /// to land on one it does. Left unsnapped, cosmic-text drops the
+    /// family from matching and shapes each glyph through a different
+    /// last-resort face.
+    #[test]
+    fn a_weight_the_family_lacks_snaps_onto_a_face_it_ships() {
+        let db = db_with("Test Sans", &[400, 700]);
+        assert_eq!(
+            shapeable_weight(&db, "Test Sans", 650),
+            700,
+            "the reported weight"
+        );
+        assert_eq!(shapeable_weight(&db, "Test Sans", 600), 700);
+        assert_eq!(shapeable_weight(&db, "Test Sans", 800), 700);
+        assert_eq!(shapeable_weight(&db, "Test Sans", 300), 400);
+        assert_eq!(shapeable_weight(&db, "Test Sans", 100), 400);
+        // The whole CSS range, not just the weights around bold.
+        for authored in 1..=1000u16 {
+            let snapped = shapeable_weight(&db, "Test Sans", authored);
+            assert!(
+                snapped == 400 || snapped == 700,
+                "font-weight: {authored} shaped at {snapped}, which the family has no face for"
+            );
+        }
+    }
+
+    /// A family with a fuller ladder keeps the nearer face rather than
+    /// collapsing everything onto regular and bold.
+    #[test]
+    fn snapping_picks_the_nearest_face_the_family_ships() {
+        let db = db_with("Test Sans", &[100, 400, 500, 900]);
+        assert_eq!(shapeable_weight(&db, "Test Sans", 650), 900);
+        assert_eq!(shapeable_weight(&db, "Test Sans", 450), 500);
+        assert_eq!(shapeable_weight(&db, "Test Sans", 200), 100);
+    }
+
+    /// A name with no faces behind it leaves the authored weight alone
+    /// rather than snapping it to something invented.
+    #[test]
+    fn a_family_with_no_faces_leaves_the_weight_alone() {
+        let db = db_with("Test Sans", &[400, 700]);
+        assert_eq!(shapeable_weight(&db, "Absent", 650), 650);
     }
 }

@@ -48,6 +48,17 @@ fn settle(app: &mut App) {
 /// 16x16 thumb child positioned for `value` - the same shape
 /// `lumenc::spawn` produces for `<slider>`. Returns `(slider, thumb)`.
 fn spawn_slider(world: &mut World, value: f32) -> (Entity, Entity) {
+    spawn_slider_with(world, value, 0.0, 100.0, None)
+}
+
+/// [`spawn_slider`] over the range and step the caller names.
+fn spawn_slider_with(
+    world: &mut World,
+    value: f32,
+    min: f32,
+    max: f32,
+    step: Option<f32>,
+) -> (Entity, Entity) {
     let track_w = 200.0;
     let slider = world
         .spawn((
@@ -55,14 +66,14 @@ fn spawn_slider(world: &mut World, value: f32) -> (Entity, Entity) {
             Visuals::default(),
             SliderValue {
                 value,
-                min: 0.0,
-                max: 100.0,
-                step: None,
+                min,
+                max,
+                step,
             },
             TabIndex(0),
         ))
         .id();
-    let left = (value / 100.0) * (track_w - THUMB_SIZE);
+    let left = ((value - min) / (max - min)) * (track_w - THUMB_SIZE);
     let thumb = world
         .spawn((
             Transform::new(glam::Vec2::new(left, 4.0), glam::Vec2::splat(THUMB_SIZE)),
@@ -468,4 +479,82 @@ fn custom_knob_geometry_thumb_size_changes_click_mapping() {
          mapping (got {})",
         slider_value(&app.world, slider)
     );
+}
+
+/// A click lands on a position the arrow keys could also have reached.
+/// The pointer fraction is continuous and the slider's positions are not,
+/// so a `step="1024"` slider used to take whatever the pixel said - a
+/// click near the left of the track wrote 12375 while the keyboard walked
+/// whole multiples of 1024.
+#[test]
+fn click_on_the_track_lands_on_a_step() {
+    let mut app = test_app();
+    let (slider, _thumb) = spawn_slider_with(&mut app.world, 0.0, 0.0, 65536.0, Some(1024.0));
+
+    // frac = (43 - 8) / 184 ~ 0.1902 -> 12466, which is 12.2 steps in.
+    let at = glam::Vec2::new(43.0, 12.0);
+    move_pointer(&mut app.world, at);
+    app.tick();
+    press(&mut app.world, at);
+    app.tick();
+    release(&mut app.world, at);
+    settle(&mut app);
+
+    assert_eq!(
+        slider_value(&app.world, slider),
+        12288.0,
+        "a click must snap to the nearest step (12 x 1024)"
+    );
+}
+
+/// The same rule down the drag path: the thumb stops on steps rather than
+/// tracking the cursor continuously.
+#[test]
+fn dragging_the_thumb_lands_on_a_step() {
+    let mut app = test_app();
+    let (slider, thumb) = spawn_slider_with(&mut app.world, 0.0, 0.0, 65536.0, Some(1024.0));
+
+    let grab = thumb_center(&app.world, thumb);
+    move_pointer(&mut app.world, grab);
+    app.tick();
+    press(&mut app.world, grab);
+    app.tick();
+    move_pointer(&mut app.world, glam::Vec2::new(100.0, 12.0));
+    app.tick(); // threshold crossed -> DragStart
+    // frac = (140 - 8) / 184 ~ 0.7174 -> 47011, which is 45.9 steps in.
+    move_pointer(&mut app.world, glam::Vec2::new(140.0, 12.0));
+    settle(&mut app);
+
+    assert_eq!(
+        slider_value(&app.world, slider),
+        47104.0,
+        "a drag must snap to the nearest step (46 x 1024)"
+    );
+
+    release(&mut app.world, glam::Vec2::new(140.0, 12.0));
+    settle(&mut app);
+    assert_eq!(
+        slider_value(&app.world, slider),
+        47104.0,
+        "the release keeps the snapped value"
+    );
+}
+
+/// A range that is not a whole number of steps stops on the last step
+/// that fits rather than on `max`, which is what a browser's range input
+/// does. Clicking the far end of a 0..100 track stepped by 30 gives 90.
+#[test]
+fn a_click_at_the_far_end_stops_on_the_last_step() {
+    let mut app = test_app();
+    let (slider, _thumb) = spawn_slider_with(&mut app.world, 0.0, 0.0, 100.0, Some(30.0));
+
+    let at = glam::Vec2::new(199.0, 12.0);
+    move_pointer(&mut app.world, at);
+    app.tick();
+    press(&mut app.world, at);
+    app.tick();
+    release(&mut app.world, at);
+    settle(&mut app);
+
+    assert_eq!(slider_value(&app.world, slider), 90.0);
 }

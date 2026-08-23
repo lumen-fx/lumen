@@ -121,6 +121,12 @@ it, including the reverse variants.
 `overflow: scroll` on any element makes it a live scroll container, the
 same as `<scroll>`.
 
+An element's own text lays out as an item of its own, sized to the words,
+so `justify` places it along the main axis the same way it places a child:
+`justify="center"` on a `<button>` centres its label. It applies on a
+horizontal main axis only, and an authored `text-align` wins where both
+are set.
+
 ### Colour and paint
 
 | Attribute | Value | Default |
@@ -203,6 +209,13 @@ children stack left to right.
 | `drag-payload` | text | Makes the element an in-app drag source publishing this payload. An empty value uses the element's `id`. Interpolated per row inside `<for>`. |
 | `drop`, `drop-target` | boolean | Makes the element a drop target for OS file drops and in-app drags. |
 | `accept` | MIME type | Restricts what an in-app drop target accepts. Absent accepts anything. |
+
+An element receives the pointer when it is focusable (it has a
+`tab-index`, which the controls and `<a href>` carry by default), when it
+scrolls, or when it paints a background. Painting is not required: a
+`<button>` with no `bg` in markup, in your CSS, or in a skin still
+hovers, presses, and clicks over its own rect. Where several targets
+overlap, the innermost one takes the event.
 
 ### Binding
 
@@ -306,7 +319,9 @@ control its appearance.
 
 ### `<a>`
 
-An anchor. Clicking it navigates the app to another page.
+An anchor. Clicking it navigates the app to another page. An anchor takes
+the pointer with or without a background, and takes focus when clicked,
+but it is not in the Tab chain unless you give it `tab-index="0"`.
 
 | Attribute | Value | Effect |
 | --- | --- | --- |
@@ -333,6 +348,9 @@ A focusable, clickable box. Focusable by default (`tab-index="0"`).
 | Attribute | Value | Effect |
 | --- | --- | --- |
 | `default` | boolean | Marks the default button of the containing `<dialog>`: Enter anywhere in the dialog activates it, and closing through it takes the accepted path. Also adds the `default` class. |
+
+A button holds its label itself rather than in a child element, so
+`justify="center"` is what centres the text.
 
 ### `<input>`
 
@@ -385,6 +403,11 @@ A draggable value control. Focusable by default.
 
 Arrow keys move by one step, Page Up and Page Down by ten. Style the
 thumb with `knob-color` and `thumb-size`.
+
+A click or a drag lands on the same positions the arrow keys reach: the
+value is `min` plus a whole number of steps. A range that is not a whole
+number of steps stops on the last step that fits, so `min="0" max="100"
+step="30"` tops out at 90.
 
 ### `<checkbox>`
 
