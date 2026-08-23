@@ -787,3 +787,83 @@ fn editing_a_fragment_file_renders_the_new_body() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A page shell that asks for the full window height gets it.
+///
+/// Every page mounts inside its own host box under `<root>`. That box is the
+/// page's containing block, so a `height: 100%` shell resolves its percentage
+/// against it; a host box sized to its content would resolve the percentage
+/// against the shell's own content height and push the footer past the bottom
+/// of the window. No `position: absolute` anywhere in the fixture.
+fn shell_scratch_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("lumen_pages_shell_{}_{}", std::process::id(), {
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+    let page = |marker: &str| {
+        format!(
+            r#"<root>
+  <column id="shell" width="100%" height="100%">
+    <row id="head" height="48"/>
+    <column id="body" grow="1">
+      <label text="{marker}"/>
+    </column>
+    <row id="foot" height="40"/>
+  </column>
+</root>"#
+        )
+    };
+    std::fs::write(dir.join("index.lmn"), page("INDEX_PAGE")).unwrap();
+    std::fs::write(dir.join("settings.lmn"), page("SETTINGS_PAGE")).unwrap();
+    dir
+}
+
+fn transform_of(app: &mut App, id: &str) -> lumen_core::components::Transform {
+    let e = entity_by_id(app, id);
+    *app.world
+        .get::<lumen_core::components::Transform>(e)
+        .expect("laid-out element")
+}
+
+#[test]
+fn a_full_height_page_shell_fits_the_window() {
+    let _guard = nav_test_guard();
+    let dir = shell_scratch_dir();
+    let mut opts = RunOptions::new(&dir);
+    opts.hot_reload = false;
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
+    tick_n(&mut app, 4);
+
+    let window_h = app
+        .world
+        .resource::<lumen_core::render_world::Viewport>()
+        .size
+        .y;
+    assert!(window_h > 0.0, "the headless window has a height");
+
+    let check = |app: &mut App, page: &str| {
+        let shell = transform_of(app, "shell");
+        let foot = transform_of(app, "foot");
+        assert_eq!(
+            shell.size.y, window_h,
+            "{page}: the shell should fill the window height"
+        );
+        assert_eq!(
+            foot.absolute.y + foot.size.y,
+            window_h,
+            "{page}: the footer should end at the bottom of the window"
+        );
+        assert_eq!(foot.size.y, 40.0, "{page}: the footer keeps its height");
+    };
+    check(&mut app, "index");
+
+    // The same holds for a page reached by navigating, not just the entry.
+    lumen_core::nav::navigate("settings");
+    tick_n(&mut app, 5);
+    assert_eq!(route_signal(&mut app, "route.path"), "settings");
+    check(&mut app, "settings");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
