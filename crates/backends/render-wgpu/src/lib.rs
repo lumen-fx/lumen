@@ -1143,6 +1143,11 @@ fn draw_glyph_run(
         vello_scene
             .draw_glyphs(&font)
             .font_size(size_px)
+            // The instance the shaper measured this segment at. A variable
+            // face otherwise paints its default instance, pairing one
+            // weight's advances with another weight's strokes; a static
+            // face reports no coordinates and is unaffected.
+            .normalized_coords(&seg.normalized_coords)
             .brush(brush)
             .transform(Affine::translate((draw_x as f64, baseline_y as f64)))
             .draw(
