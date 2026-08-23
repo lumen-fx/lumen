@@ -8,7 +8,9 @@
 //!   string-typed sink and bypasses the typed PropertyStore variant.
 //!   Migration prompt: prefer `signal_set_int("count", 5)` or the
 //!   chained `signals.count.set(5)` form whenever the value fits a
-//!   PropertyValue scalar.
+//!   PropertyValue scalar. Skipped when the schema declares the
+//!   signal as `string`: there is no `signal_set_string` to migrate
+//!   to, so `signal_set` is already the typed sink.
 //! - **Bare interpolation ambiguity** - `<text>{count}</text>` reads
 //!   the loop / template scope; the global variant is `{$count}`
 //!   (or `{$self.field}` inside a component instance). Info-level
@@ -573,8 +575,13 @@ fn scan_script(
             } else {
                 None
             };
-            // Emit UntypedWrite for the bare `signal_set(...)` form.
-            if typed.is_none() {
+            // Emit UntypedWrite for the bare `signal_set(...)` form,
+            // unless the schema declares this signal as `string`:
+            // there is no `signal_set_string` to migrate to, so
+            // `signal_set` already is the typed sink for a
+            // string-declared signal.
+            let declared_str = matches!(schema.fields.get(&name), Some(SignalType::Str));
+            if typed.is_none() && !declared_str {
                 let suggestion = match inferred {
                     Some(InferredType::Int) => format!(
                         "use `signal_set_int(\"{name}\", ...)` or chained `signals.{name}.set(...)`"
@@ -1280,6 +1287,32 @@ mod tests {
         assert!(
             untyped.is_empty(),
             "typed setter should not be flagged untyped"
+        );
+    }
+
+    #[test]
+    fn schema_string_write_does_not_emit_untyped_warning() {
+        let schema = schema_with(&[("theme", SignalType::Str)]);
+        let lmn = r#"<root><label bind-text="theme" /></root>"#;
+        let rhai = r#"
+            fn on_start() {
+                signal_set("theme", "dark");
+            }
+        "#;
+        let findings = analyze(
+            &schema,
+            lmn,
+            &PathBuf::from("main.lmn"),
+            rhai,
+            &PathBuf::from("main.rhai"),
+        );
+        let untyped: Vec<_> = findings
+            .iter()
+            .filter(|f| f.kind == FindingKind::UntypedWrite)
+            .collect();
+        assert!(
+            untyped.is_empty(),
+            "signal_set on a string-declared signal should not be flagged untyped, got {findings:?}"
         );
     }
 
