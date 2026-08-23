@@ -64,7 +64,8 @@ candela, `.lua` under Lua, `.rhai` under Rhai.
 
 An app written this way runs both hosts at once. Files of the same language
 join into one program, so two `.cdl` files share their functions the way two
-halves of one file would; two different languages stay separate programs and
+halves of one file would, and each still opens with its own
+`import "lumen.cdl";`. Two different languages stay separate programs and
 cannot call each other. What they do share is signals: they read and write the
 same signal bus, and a value one host writes is visible to the other on the
 same tick. Lifecycle and event callbacks reach every host, so `on_start`,

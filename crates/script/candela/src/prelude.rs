@@ -264,6 +264,12 @@ fn is_prelude_import(line: &str) -> bool {
 /// the embedded `host "lumen" { ... }` block so the app opts into the full
 /// builtin surface. Sources without the sentinel are returned untouched
 /// (builtins stay opt-in), and no allocation happens in that common case.
+///
+/// The prelude lands once per program. An app's `.cdl` files are concatenated
+/// into one candela module and each states the import it depends on, so the
+/// first sentinel takes the block and every later one drops to an empty line.
+/// Splicing all of them would define `signal` and its siblings twice and fail
+/// the compile.
 #[must_use]
 pub fn resolve_prelude(source: &str) -> Cow<'_, str> {
     // Fast path: the sentinel string is absent, so nothing to splice.
@@ -281,7 +287,9 @@ pub fn resolve_prelude(source: &str) -> Cow<'_, str> {
             None => (line, ""),
         };
         if is_prelude_import(content) {
-            out.push_str(&block);
+            if !replaced {
+                out.push_str(&block);
+            }
             out.push_str(newline);
             replaced = true;
         } else {
@@ -319,6 +327,23 @@ mod tests {
             src.matches('\n').count(),
             out.matches('\n').count(),
             "prelude splice must preserve line count"
+        );
+    }
+
+    #[test]
+    fn repeated_imports_splice_once() {
+        let src = "import \"lumen.cdl\";\nfn a() {}\nimport \"lumen.cdl\";\nfn b() {}\n";
+        let out = resolve_prelude(src);
+        assert_eq!(
+            out.matches("host \"lumen\" {").count(),
+            1,
+            "each app's files import the prelude, but it may only be declared once"
+        );
+        assert!(!out.contains("import"), "every sentinel is consumed");
+        assert_eq!(
+            src.matches('\n').count(),
+            out.matches('\n').count(),
+            "a dropped import still costs its line"
         );
     }
 

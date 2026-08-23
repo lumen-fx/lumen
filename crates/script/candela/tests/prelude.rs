@@ -118,6 +118,49 @@ fn prelude_splice_preserves_user_line_numbers() {
     }
 }
 
+/// Every `.cdl` file in an app states the import it depends on, and the runtime
+/// concatenates them into one candela module before it reaches the host. The
+/// prelude lands once for the whole module, so the second file's import costs
+/// nothing and both halves call the builtins.
+#[test]
+fn every_file_in_an_app_may_import_the_prelude() {
+    let mut host = CandelaHost::new();
+    // What `grouped_script_sources` hands the host for a two-file app.
+    let helper =
+        "import \"lumen.cdl\";\n\nfn greet() { lumen::signal_set(\"greeting\", \"hi\"); }\n";
+    let main = r#"import "lumen.cdl";
+
+fn on_start() {
+    greet();
+    lumen::add_clicks(1);
+}
+
+fn main() {}
+"#;
+    let src = format!("{helper}\n{main}");
+
+    host.compile_check(&src, "two_files.lmn")
+        .expect("a second importing file must not redefine the prelude");
+    host.load(&src, "two_files.lmn")
+        .expect("a second importing file must not redefine the prelude");
+
+    let outcome = host.call("on_start", &[]).expect("on_start ok");
+    assert!(
+        outcome.commands.iter().any(|c| matches!(
+            c,
+            ScriptCommand::SetSignal { name, value } if name == "greeting" && value == "hi"
+        )),
+        "the first file's builtin call reached the sink"
+    );
+    assert!(
+        outcome
+            .commands
+            .iter()
+            .any(|c| matches!(c, ScriptCommand::AddClicks(1))),
+        "the second file's builtin call reached the sink"
+    );
+}
+
 /// The prelude alone grants the DOM write side: a list-building app with no
 /// hand-written `host` block spawns elements, sets text/class, and appends them,
 /// and every mutation reaches the command sink. This is the surface that used to
