@@ -1287,71 +1287,98 @@ mod tests {
         assert!(normalized_wght_coords(b"not a font", 0, 700).is_empty());
     }
 
-    /// The machine's first family with a `wght` axis, and the ends of that
-    /// axis. `None` on a machine whose installed fonts are all static -
-    /// the variable-instance tests then have nothing to look at and say so
-    /// rather than failing.
-    fn variable_family(shaper: &CosmicShaper) -> Option<(Arc<str>, u16, u16)> {
-        let db = shaper.font_system.db();
-        for face in db.faces() {
-            let Some(Some((min, max))) = db.with_face_data(face.id, |bytes, index| {
-                let font = FontRef::from_index(bytes, index).ok()?;
-                let axis = font.axes().get_by_tag(Tag::new(b"wght"))?;
-                Some((axis.min_value(), axis.max_value()))
-            }) else {
-                continue;
-            };
-            let (min, max) = (min.round() as u16, max.round() as u16);
-            if min >= max {
-                continue;
-            }
-            let Some((name, _)) = face.families.first() else {
-                continue;
-            };
-            return Some((Arc::from(name.as_str()), min, max));
+    /// A font file holding one table: an `fvar` declaring a single `wght`
+    /// axis over `min ..= max` with `default` at its origin. That is all
+    /// the instance math reads, so the coordinates it produces are the
+    /// same on a machine with no variable font installed as on one with a
+    /// shelf of them.
+    fn wght_axis_face(min: f32, default: f32, max: f32) -> Vec<u8> {
+        fn be16(out: &mut Vec<u8>, v: u16) {
+            out.extend_from_slice(&v.to_be_bytes());
         }
-        None
+        fn be32(out: &mut Vec<u8>, v: u32) {
+            out.extend_from_slice(&v.to_be_bytes());
+        }
+        /// A design-space coordinate, in the 16.16 fixed point `fvar` uses.
+        fn fixed(out: &mut Vec<u8>, v: f32) {
+            out.extend_from_slice(&((v * 65536.0) as i32).to_be_bytes());
+        }
+        let mut fvar = Vec::new();
+        be16(&mut fvar, 1); // major version
+        be16(&mut fvar, 0); // minor version
+        be16(&mut fvar, 16); // offset to the axis array
+        be16(&mut fvar, 2); // reserved
+        be16(&mut fvar, 1); // axis count
+        be16(&mut fvar, 20); // bytes per axis record
+        be16(&mut fvar, 0); // named instance count
+        be16(&mut fvar, 8); // bytes per instance record
+        fvar.extend_from_slice(b"wght");
+        fixed(&mut fvar, min);
+        fixed(&mut fvar, default);
+        fixed(&mut fvar, max);
+        be16(&mut fvar, 0); // flags
+        be16(&mut fvar, 256); // axis name id
+
+        // Table directory: one record, whose data follows it immediately.
+        const DIRECTORY_LEN: u32 = 12 + 16;
+        let mut face = Vec::new();
+        be32(&mut face, 0x0001_0000); // sfnt version
+        be16(&mut face, 1); // table count
+        be16(&mut face, 16); // search range
+        be16(&mut face, 0); // entry selector
+        be16(&mut face, 0); // range shift
+        face.extend_from_slice(b"fvar");
+        be32(&mut face, 0); // checksum, which nothing here verifies
+        be32(&mut face, DIRECTORY_LEN);
+        be32(&mut face, fvar.len() as u32);
+        face.extend_from_slice(&fvar);
+        face
     }
 
-    /// The reported bug: a variable face shapes its advances at the
-    /// instance the authored weight picks, so the segment has to name that
-    /// instance for the renderer to paint the matching outlines. Two ends
-    /// of the same `wght` axis must therefore produce different
-    /// coordinates on one face.
+    /// The instance a weight picks on a known axis: the default weight
+    /// sits at the axis origin, each end sits at the F2Dot14 unit, a
+    /// weight in between interpolates, and one past an end clamps to it.
+    /// These are the coordinates the renderer draws the outlines from.
     #[test]
-    fn a_variable_face_reports_the_instance_it_shaped_at() {
+    fn a_weight_normalizes_onto_the_faces_wght_axis() {
+        let face = wght_axis_face(100.0, 400.0, 900.0);
+        assert_eq!(normalized_wght_coords(&face, 0, 400), vec![0]);
+        assert_eq!(normalized_wght_coords(&face, 0, 900), vec![16384]);
+        assert_eq!(normalized_wght_coords(&face, 0, 100), vec![-16384]);
+        assert_eq!(normalized_wght_coords(&face, 0, 650), vec![8192]);
+        assert_eq!(normalized_wght_coords(&face, 0, 1000), vec![16384]);
+        assert_eq!(normalized_wght_coords(&face, 0, 1), vec![-16384]);
+    }
+
+    /// An axis that does not reach as far as the authored weight still
+    /// answers with its own end, and a face index nothing sits at reports
+    /// no instance rather than failing the shape.
+    #[test]
+    fn an_axis_shorter_than_the_css_range_clamps_to_its_ends() {
+        let face = wght_axis_face(300.0, 400.0, 700.0);
+        assert_eq!(normalized_wght_coords(&face, 0, 900), vec![16384]);
+        assert_eq!(normalized_wght_coords(&face, 0, 100), vec![-16384]);
+        assert!(normalized_wght_coords(&face, 1, 400).is_empty());
+    }
+
+    /// One parse per face and weight. The second ask for the same instance
+    /// answers from the cache, which face data that cannot be parsed
+    /// proves: a miss would read it and report no instance at all.
+    #[test]
+    fn an_instance_is_parsed_once_per_face_and_weight() {
         let mut shaper = CosmicShaper::new();
-        let Some((family, min, max)) = variable_family(&shaper) else {
-            eprintln!("no variable font installed: nothing to instance");
-            return;
-        };
-        let shape_at = |shaper: &mut CosmicShaper, weight: u16| {
-            let opts = ShapeOptions {
-                family: Some(family.clone()),
-                weight,
-                ..ShapeOptions::default()
-            };
-            shaper
-                .shape("0", 16.0, opts)
-                .expect("a family the database holds shapes a digit")
-                .segments
-                .remove(0)
-        };
-        let light = shape_at(&mut shaper, min);
-        let heavy = shape_at(&mut shaper, max);
-        if light.font_id != heavy.font_id {
-            // Both ends resolved through different faces, so the axis is
-            // not what separates them.
-            eprintln!("{family} shapes its axis ends through separate faces");
-            return;
-        }
-        assert!(
-            !light.normalized_coords.is_empty(),
-            "a variable face must name the instance it shaped at"
+        let face = wght_axis_face(100.0, 400.0, 900.0);
+        let id = fontdb::ID::dummy();
+        assert_eq!(shaper.instance_coords(id, 650, &face, 0), vec![8192]);
+        assert_eq!(
+            shaper.instance_coords(id, 650, b"not a font", 0),
+            vec![8192],
+            "the cached instance answers without re-reading the face"
         );
-        assert_ne!(
-            light.normalized_coords, heavy.normalized_coords,
-            "{family} at {min} and at {max} must be different instances"
+        assert_eq!(
+            shaper.instance_coords(id, 900, &face, 0),
+            vec![16384],
+            "a different weight is a different instance"
         );
     }
 }
