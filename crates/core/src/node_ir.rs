@@ -700,8 +700,14 @@ pub fn transform_extracted_to_nodes(
         // Open any new clips that start at/before this leaf.
         while next_clip < clip_ranges.len() && clip_ranges[next_clip].0 <= order {
             let (_, end, shape) = clip_ranges[next_clip];
-            open_clips.push((end, shape, Vec::new()));
             next_clip += 1;
+            // A range that already ended holds no leaf of its own: an empty
+            // container clips nothing. Opening it here would wrap this leaf,
+            // which sits past the range, in a clip it is not inside.
+            if end < order {
+                continue;
+            }
+            open_clips.push((end, shape, Vec::new()));
         }
         push_into(&mut open_clips, &mut roots, leaf);
     }
@@ -924,6 +930,65 @@ mod tests {
         };
         let inner = children_of(child);
         assert!(matches!(inner[0].as_ref(), Node::Native { .. }));
+    }
+
+    /// An empty container's clip range covers no leaf, so the next leaf after
+    /// it stays outside: a hidden or childless `overflow: hidden` box must not
+    /// clip the sibling that paints after it.
+    #[test]
+    fn an_empty_clip_range_leaves_the_following_leaf_alone() {
+        let mut world = bevy_ecs::world::World::new();
+        world.spawn(ExtractedClipBox {
+            origin: Vec2::new(5.0, 5.0),
+            size: Vec2::new(10.0, 10.0),
+            radius: 0.0,
+            start_order: 4,
+            end_order: 4,
+        });
+        world.spawn(solid_rect(6, Vec2::ZERO, Vec2::new(40.0, 40.0)));
+
+        let children = children_of(&assemble(&mut world));
+        assert_eq!(children.len(), 1);
+        assert!(
+            matches!(children[0].as_ref(), Node::Rect { .. }),
+            "expected an unclipped rect, got {:?}",
+            children[0]
+        );
+    }
+
+    /// The same holds for a range nested inside a live one: the leaf keeps the
+    /// enclosing clip and picks up nothing from the empty range beside it.
+    #[test]
+    fn an_empty_clip_range_nested_in_a_live_one_wraps_nothing() {
+        let mut world = bevy_ecs::world::World::new();
+        world.spawn(ExtractedClipBox {
+            origin: Vec2::ZERO,
+            size: Vec2::new(80.0, 80.0),
+            radius: 0.0,
+            start_order: 1,
+            end_order: 10,
+        });
+        world.spawn(ExtractedClipBox {
+            origin: Vec2::new(2.0, 2.0),
+            size: Vec2::new(4.0, 4.0),
+            radius: 0.0,
+            start_order: 3,
+            end_order: 4,
+        });
+        world.spawn(solid_rect(5, Vec2::ZERO, Vec2::new(40.0, 40.0)));
+
+        let children = children_of(&assemble(&mut world));
+        assert_eq!(children.len(), 1);
+        let Node::Clip { child, .. } = children[0].as_ref() else {
+            panic!("expected the outer clip, got {:?}", children[0]);
+        };
+        let inner = children_of(child);
+        assert_eq!(inner.len(), 1);
+        assert!(
+            matches!(inner[0].as_ref(), Node::Rect { .. }),
+            "expected the rect directly under the outer clip, got {:?}",
+            inner[0]
+        );
     }
 
     /// The top-layer band lifts a plugin's leaf over all normal content, and
