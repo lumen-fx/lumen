@@ -78,6 +78,17 @@ pub struct ShapedSegment {
     pub font_data: Arc<Vec<u8>>,
     /// Face index inside the font file.
     pub font_index: u32,
+    /// Normalized variation coordinates of the instance this segment was
+    /// shaped at, in the face's axis order, as F2Dot14 raw bits. Empty for
+    /// a static face, which has one instance and needs none.
+    ///
+    /// A variable face shapes at the instance the authored `font-weight`
+    /// selects, and the advances in `glyphs` come from that instance. The
+    /// renderer hands these coordinates to the glyph rasterizer so the
+    /// outlines it paints belong to the same one; without them the outlines
+    /// come from the face's default instance and the text pairs one weight's
+    /// spacing with another weight's strokes.
+    pub normalized_coords: Vec<i16>,
     /// BiDi embedding level (Unicode BiDi algorithm). Even = LTR, odd =
     /// RTL. From cosmic-text's `LayoutGlyph.level` (unicode-bidi crate).
     pub level: u8,

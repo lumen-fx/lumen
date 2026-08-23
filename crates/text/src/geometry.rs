@@ -468,6 +468,7 @@ mod tests {
             font_id: 1,
             font_data: Arc::new(Vec::new()),
             font_index: 0,
+            normalized_coords: Vec::new(),
             level,
             glyphs,
             width,

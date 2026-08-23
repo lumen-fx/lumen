@@ -153,6 +153,11 @@ pub struct CosmicShaper {
     /// wheel scrolling drop frames. Fonts are immutable for the life of
     /// the `FontSystem`, so one copy per face per process is enough.
     font_bytes: std::collections::HashMap<cosmic_text::fontdb::ID, (Arc<Vec<u8>>, u32, u64)>,
+    /// Memoised `(face, weight) -> normalized variation coordinates`.
+    /// The miss path parses the face to normalize the weight against its
+    /// `wght` axis; a face and weight repeat on every frame that paints the
+    /// same label, so the parse happens once per instance per process.
+    coords_cache: std::collections::HashMap<(cosmic_text::fontdb::ID, u16), Vec<i16>>,
     /// Memoised `raw font-family list -> concrete family choice`.
     /// Resolution scans the font database once per distinct list; every
     /// later shape with the same list is a hash lookup.
@@ -239,6 +244,7 @@ impl CosmicShaper {
             last_metrics: metrics,
             cache: LruCache::new(NonZeroUsize::new(SHAPE_CACHE_CAP).unwrap()),
             font_bytes: std::collections::HashMap::new(),
+            coords_cache: std::collections::HashMap::new(),
             family_cache: std::collections::HashMap::new(),
             weight_cache: std::collections::HashMap::new(),
             family_name_cache: std::collections::HashMap::new(),
@@ -391,6 +397,29 @@ impl CosmicShaper {
             .map(|(name, _)| Arc::from(name.as_str()))
     }
 
+    /// Normalized variation coordinates of the instance cosmic-text shaped
+    /// `font_id` at, memoised per `(face, weight)`.
+    ///
+    /// cosmic-text builds one font instance per `(face, weight)` and pins
+    /// the face's `wght` axis to that weight, so the advances it reports
+    /// belong to that instance. Carrying its coordinates alongside the
+    /// glyphs lets the renderer instantiate the outlines the same way
+    /// instead of falling back on the face's default instance.
+    fn instance_coords(
+        &mut self,
+        font_id: fontdb::ID,
+        weight: u16,
+        bytes: &[u8],
+        index: u32,
+    ) -> Vec<i16> {
+        if let Some(hit) = self.coords_cache.get(&(font_id, weight)) {
+            return hit.clone();
+        }
+        let coords = normalized_wght_coords(bytes, index, weight);
+        self.coords_cache.insert((font_id, weight), coords.clone());
+        coords
+    }
+
     /// Force-drop the result cache. Mostly useful for tests.
     pub fn clear_cache(&mut self) {
         self.cache.clear();
@@ -440,6 +469,21 @@ fn family_faces<'a>(
 ) -> impl Iterator<Item = &'a fontdb::FaceInfo> {
     db.faces()
         .filter(move |f| f.families.iter().any(|(fam, _)| fam.as_str() == name))
+}
+
+/// Normalize `weight` against the `wght` axis of the face in `bytes`,
+/// yielding one F2Dot14 coordinate per axis the face declares, in axis
+/// order. Empty for a face with no axes or one that fails to parse: a
+/// static face has a single instance, and an empty coordinate list is what
+/// asks a rasterizer for it.
+fn normalized_wght_coords(bytes: &[u8], index: u32, weight: u16) -> Vec<i16> {
+    let Ok(font) = FontRef::from_index(bytes, index) else {
+        return Vec::new();
+    };
+    let location = font
+        .axes()
+        .location([(Tag::new(b"wght"), f32::from(weight))]);
+    location.coords().iter().map(|c| c.to_bits()).collect()
 }
 
 /// Whether the face carries a `wght` variation axis spanning `weight`, in
@@ -560,6 +604,9 @@ impl TextShaper for CosmicShaper {
         // for the caret/selection math downstream.
         struct PendingSeg {
             font_id: cosmic_text::fontdb::ID,
+            /// Weight cosmic-text shaped these glyphs at, which is the
+            /// instance a variable face reported its advances from.
+            weight: u16,
             level: u8,
             glyphs: Vec<GlyphPosition>,
             width: f32,
@@ -613,14 +660,18 @@ impl TextShaper for CosmicShaper {
                     byte_start: g.start as u32 + base,
                     byte_end: g.end as u32 + base,
                 };
-                // Append to the last segment when font_id + level match;
-                // otherwise start a new segment. Visual ordering inside
-                // a segment is preserved; the segment list itself walks
-                // cosmic-text's per-line glyph order (visual L->R), which
-                // is the order downstream callers expect for paint.
+                // Append to the last segment when font_id + weight + level
+                // match; otherwise start a new segment. Weight joins the
+                // key because a variable face shapes a different instance
+                // per weight, and the segment carries the coordinates the
+                // renderer paints that instance from. Visual ordering
+                // inside a segment is preserved; the segment list itself
+                // walks cosmic-text's per-line glyph order (visual L->R),
+                // which is the order downstream callers expect for paint.
+                let weight = g.font_weight.0;
                 let extend = segs
                     .last()
-                    .map(|s| s.font_id == g.font_id && s.level == level)
+                    .map(|s| s.font_id == g.font_id && s.weight == weight && s.level == level)
                     .unwrap_or(false);
                 if extend {
                     let s = segs.last_mut().unwrap();
@@ -629,6 +680,7 @@ impl TextShaper for CosmicShaper {
                 } else {
                     segs.push(PendingSeg {
                         font_id: g.font_id,
+                        weight,
                         level,
                         glyphs: vec![gp],
                         width: g.w,
@@ -652,14 +704,15 @@ impl TextShaper for CosmicShaper {
                 bb.set_text("\u{2026}", &attrs, Shaping::Advanced, None);
                 bb.shape_until_scroll(false);
             }
-            // `(glyph_id, x-within-ellipsis, advance, font_id)` - the
-            // ellipsis may resolve to a different fallback face than
-            // the host text, so it becomes its own segment below.
-            let mut ell_glyphs: Vec<(u32, f32, f32, cosmic_text::fontdb::ID)> = Vec::new();
+            // `(glyph_id, x-within-ellipsis, advance, font_id, weight)` -
+            // the ellipsis may resolve to a different fallback face than
+            // the host text, so it becomes its own segment below, at the
+            // instance it was shaped at.
+            let mut ell_glyphs: Vec<(u32, f32, f32, cosmic_text::fontdb::ID, u16)> = Vec::new();
             let mut ell_w = 0.0_f32;
             for run in self.buffer.layout_runs() {
                 for g in run.glyphs.iter() {
-                    ell_glyphs.push((g.glyph_id as u32, g.x, g.w, g.font_id));
+                    ell_glyphs.push((g.glyph_id as u32, g.x, g.w, g.font_id, g.font_weight.0));
                     ell_w += g.w;
                 }
             }
@@ -699,10 +752,10 @@ impl TextShaper for CosmicShaper {
                         segs.pop();
                     }
                 }
-                let ell_font = ell_glyphs[0].3;
+                let (ell_font, ell_weight) = (ell_glyphs[0].3, ell_glyphs[0].4);
                 let mut glyphs: Vec<GlyphPosition> = Vec::with_capacity(ell_glyphs.len());
                 let mut w = 0.0_f32;
-                for (id, gx, adv, _font) in &ell_glyphs {
+                for (id, gx, adv, _font, _weight) in &ell_glyphs {
                     glyphs.push(GlyphPosition {
                         id: *id,
                         x: end_x + *gx,
@@ -716,6 +769,7 @@ impl TextShaper for CosmicShaper {
                 }
                 segs.push(PendingSeg {
                     font_id: ell_font,
+                    weight: ell_weight,
                     level: host_level,
                     glyphs,
                     width: w,
@@ -766,11 +820,14 @@ impl TextShaper for CosmicShaper {
                     self.font_bytes.insert(s.font_id, entry.clone());
                     entry
                 };
+            let normalized_coords =
+                self.instance_coords(s.font_id, s.weight, &font_data, font_index);
             glyphs.extend(s.glyphs.iter().copied());
             segments.push(ShapedSegment {
                 font_id: font_id_hash,
                 font_data,
                 font_index,
+                normalized_coords,
                 level: s.level,
                 glyphs: s.glyphs,
                 width: s.width,
@@ -1219,5 +1276,82 @@ mod tests {
     fn a_family_with_no_faces_leaves_the_weight_alone() {
         let db = db_with("Test Sans", &[400, 700]);
         assert_eq!(shapeable_weight(&db, "Absent", 650), 650);
+    }
+
+    /// Face data that parses to nothing carries no instance, so the
+    /// coordinate list stays empty and the renderer paints the face's own
+    /// outlines.
+    #[test]
+    fn face_data_that_does_not_parse_reports_no_coordinates() {
+        assert!(normalized_wght_coords(&[], 0, 400).is_empty());
+        assert!(normalized_wght_coords(b"not a font", 0, 700).is_empty());
+    }
+
+    /// The machine's first family with a `wght` axis, and the ends of that
+    /// axis. `None` on a machine whose installed fonts are all static -
+    /// the variable-instance tests then have nothing to look at and say so
+    /// rather than failing.
+    fn variable_family(shaper: &CosmicShaper) -> Option<(Arc<str>, u16, u16)> {
+        let db = shaper.font_system.db();
+        for face in db.faces() {
+            let Some(Some((min, max))) = db.with_face_data(face.id, |bytes, index| {
+                let font = FontRef::from_index(bytes, index).ok()?;
+                let axis = font.axes().get_by_tag(Tag::new(b"wght"))?;
+                Some((axis.min_value(), axis.max_value()))
+            }) else {
+                continue;
+            };
+            let (min, max) = (min.round() as u16, max.round() as u16);
+            if min >= max {
+                continue;
+            }
+            let Some((name, _)) = face.families.first() else {
+                continue;
+            };
+            return Some((Arc::from(name.as_str()), min, max));
+        }
+        None
+    }
+
+    /// The reported bug: a variable face shapes its advances at the
+    /// instance the authored weight picks, so the segment has to name that
+    /// instance for the renderer to paint the matching outlines. Two ends
+    /// of the same `wght` axis must therefore produce different
+    /// coordinates on one face.
+    #[test]
+    fn a_variable_face_reports_the_instance_it_shaped_at() {
+        let mut shaper = CosmicShaper::new();
+        let Some((family, min, max)) = variable_family(&shaper) else {
+            eprintln!("no variable font installed: nothing to instance");
+            return;
+        };
+        let shape_at = |shaper: &mut CosmicShaper, weight: u16| {
+            let opts = ShapeOptions {
+                family: Some(family.clone()),
+                weight,
+                ..ShapeOptions::default()
+            };
+            shaper
+                .shape("0", 16.0, opts)
+                .expect("a family the database holds shapes a digit")
+                .segments
+                .remove(0)
+        };
+        let light = shape_at(&mut shaper, min);
+        let heavy = shape_at(&mut shaper, max);
+        if light.font_id != heavy.font_id {
+            // Both ends resolved through different faces, so the axis is
+            // not what separates them.
+            eprintln!("{family} shapes its axis ends through separate faces");
+            return;
+        }
+        assert!(
+            !light.normalized_coords.is_empty(),
+            "a variable face must name the instance it shaped at"
+        );
+        assert_ne!(
+            light.normalized_coords, heavy.normalized_coords,
+            "{family} at {min} and at {max} must be different instances"
+        );
     }
 }

@@ -1126,6 +1126,7 @@ mod tests {
             font_id: 1,
             font_data: std::sync::Arc::new(Vec::new()),
             font_index: 0,
+            normalized_coords: Vec::new(),
             level: 0,
             glyphs: glyphs.clone(),
             width,
