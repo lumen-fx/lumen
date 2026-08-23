@@ -33,6 +33,10 @@ on one OS is a portability gap to fix rather than an OS to drop.
 Tests that need a GPU or a display probe for one and skip themselves with a
 printed reason, so the suite runs unmodified on a headless machine.
 
+CodeQL scans every pull request. A new security alert of high or higher
+severity blocks the merge; fix the finding or dismiss it with a reason on the
+Security tab.
+
 ## Invariants you must not break
 
 1. `lumen-core` may not import any impl crate.
