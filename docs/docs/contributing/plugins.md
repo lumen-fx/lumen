@@ -188,12 +188,15 @@ It takes four moves.
 plugin state.
 
 **An extract function** turns that state into an `ExtractedNative` in the
-render world. Take the paint order from `paint_order_of` and the leaf lands
-where the entity lands in the document: over its own background, under its
-descendants, inside the clip of an enclosing scroll container, and in the top
-layer when the entity is in one. Upsert it against `RenderEntityMap::native`
-the way the built-in extractors do, so the leaf keeps one render entity across
-frames.
+render world. Place each leaf with `NativeExtract`: it resolves the paint order
+for the entity's position in the document, subtracts the scroll offset of every
+ancestor, reports the opacity the entity inherits, and returns nothing at all
+for an entity that is hidden or scrolled out of its container. Placing a leaf
+from `Transform::absolute` by hand instead pins it in place while its scroll
+container scrolls. Hand the finished leaves to `upsert_native_leaves`, which
+keeps one render-world entity per leaf across frames and retires the ones that
+went away. Its bookkeeping is scoped to your extension id, so two plugins
+extracting in the same frame never evict each other's leaves.
 
 **A painter** registered for the same extension id draws the leaf when its
 turn comes:
@@ -211,7 +214,6 @@ Together:
 
 ```rust
 use lumen_core::prelude::*;
-use lumen_core::render_world::{RenderEntityMap, build_parent_map, paint_order_of};
 use std::sync::Arc;
 
 #[derive(Component)]
@@ -220,9 +222,19 @@ struct Sparkline {
     revision: u64,
 }
 
+impl Sparkline {
+    /// Every content change takes a new stamp. Without one the frame diff reads
+    /// the leaf as unchanged and the new samples never reach the screen.
+    fn push(&mut self, sample: f32) {
+        self.samples.push(sample);
+        self.revision = next_revision();
+    }
+}
+
 /// What the painter is handed. The extension id promises this type.
 struct SparklinePayload {
     samples: Vec<f32>,
+    opacity: f32,
 }
 
 struct SparklinePainter;
@@ -240,27 +252,29 @@ impl NativePainter for SparklinePainter {
 }
 
 fn extract_sparklines(main: &mut World, render: &mut World) {
-    let (parents, mut depth_cache) = build_parent_map(main);
-    let mut q = main.query::<(Entity, &Transform, &Sparkline)>();
+    let mut place = NativeExtract::new(main);
+    let mut q = main.query::<(Entity, &Transform, &Sparkline, Option<&Opacity>)>();
     let leaves: Vec<(Entity, ExtractedNative)> = q
         .iter(main)
-        .map(|(e, transform, sparkline)| {
-            (
+        .filter_map(|(e, transform, sparkline, opacity)| {
+            let placed = place.place(e, transform, opacity)?;
+            Some((
                 e,
                 ExtractedNative {
                     extension_id: "acme.sparkline".into(),
                     payload: Arc::new(SparklinePayload {
                         samples: sparkline.samples.clone(),
+                        opacity: placed.opacity,
                     }),
-                    bounds: Rect::new(transform.absolute, transform.size),
-                    order: paint_order_of(e, &parents, &mut depth_cache),
+                    bounds: placed.bounds,
+                    order: placed.order,
                     revision: sparkline.revision,
                     clip_to_bounds: true,
                 },
-            )
+            ))
         })
         .collect();
-    // Upsert `leaves` against `render.resource_mut::<RenderEntityMap>().native`.
+    upsert_native_leaves(render, "acme.sparkline", leaves);
 }
 
 fn redraw_when_samples_change(
@@ -273,12 +287,14 @@ fn redraw_when_samples_change(
 }
 ```
 
-Four contracts come with the seam:
+The contracts that come with the seam:
 
-- **Bounds enclose the paint.** They must cover every pixel the painter touches.
-  Damage is computed from them, so paint outside them stays on screen as a
-  stale smear until something else repaints that region. `clip_to_bounds`
-  enforces the promise for you, at the cost of a clip layer.
+- **Bounds enclose the paint.** They must cover every pixel the painter touches,
+  and they must have area. Damage is computed from them, so paint outside them
+  stays on screen as a stale smear until something else repaints that region,
+  and a leaf that declares zero width or height falls back to repainting the
+  whole viewport because an empty rect is no damage at all. `clip_to_bounds`
+  enforces the first half of the promise for you, at the cost of a clip layer.
 - **The revision is pixel identity.** Two leaves with the same extension id,
   bounds, clip flag, and revision are taken to be the same pixels and cost no
   repaint. Give the leaf a new revision, from `next_revision()`, whenever its
@@ -291,10 +307,19 @@ Four contracts come with the seam:
   painter expects of the backend. A backend with no painter for an id skips
   that leaf in silence, which is what lets one scene render on a backend that
   does not implement the extension.
+- **Opacity is the painter's to apply.** A bounds clip composites nothing, so
+  asking to be clipped never changes a leaf's alpha. `ctx.opacity` carries what
+  ancestor opacity groups accumulated; the entity's own CSS `opacity` reaches
+  you as `NativePlacement::opacity` at extract, to fold into the payload the way
+  the built-in extractors fold it into their colours.
+- **Leave the layer stack as you found it.** The walker closes any layer a
+  painter left open before it moves on, so a painter cannot cost the rest of the
+  frame its clips, but a painter that pops more than it pushed has already
+  closed someone else's.
 
-Paint order always comes from `paint_order_of`. Leaves sharing an order key
-sort by extension id, so two extensions contributing at one entity keep the
-same order from frame to frame.
+Paint order always comes from the placement. Leaves that share an order key
+sort by extension id and then by leaf, so what a frame paints on top does not
+change between frames.
 
 Which backends paint these leaves:
 
