@@ -69,6 +69,7 @@ pub const MAPPED_TAGS: &[&str] = &[
     "checkbox",
     "radio",
     "slider",
+    "dropdown",
 ];
 
 /// Prefix of the class an element carries for its tag.
@@ -148,6 +149,12 @@ pub fn html_tag_for(ir_tag: &str) -> Option<HtmlTag> {
             fixed: &[("type", "range")],
             void: true,
         },
+        // A dropdown is the box its parts sit in, not a `select`: the
+        // parser expands it into a header button over a floating panel,
+        // and both are elements of their own. The tag stays on the box so
+        // a rule written against it reaches the same element on both
+        // targets.
+        "dropdown" => HtmlTag::plain("div"),
         _ => return None,
     };
     Some(tag)
@@ -193,9 +200,17 @@ mod tests {
 
     #[test]
     fn a_tag_the_parser_resolves_away_has_no_mapping() {
-        for tag in ["tabs", "dropdown", "menu", "date-picker", "tooltip"] {
+        for tag in ["tabs", "menu", "date-picker", "tooltip"] {
             assert_eq!(html_tag_for(tag), None);
         }
+    }
+
+    /// A `<dropdown>` expands into parts but keeps its own tag on the box
+    /// holding them, so a `dropdown` rule reaches the same element here as
+    /// it does on the desktop.
+    #[test]
+    fn a_dropdown_is_the_box_its_parts_sit_in() {
+        assert_eq!(html_tag_for("dropdown").expect("mapped").name, "div");
     }
 
     #[test]
