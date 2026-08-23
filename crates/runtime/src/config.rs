@@ -957,7 +957,9 @@ pub enum SignalType {
     F64,
     /// `signal_set_bool` target - `PropertyValue::Bool`.
     Bool,
-    /// Free-form string (legacy untyped writes).
+    /// `signal_set` target - `PropertyValue::Str`. `signal_set` has no
+    /// dedicated `signal_set_string` variant; it is already the typed
+    /// sink for a `string`-declared signal.
     Str,
     /// `signal_set_color` target - `#rrggbb` / `#rrggbbaa`.
     Color,

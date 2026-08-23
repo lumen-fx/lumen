@@ -331,6 +331,10 @@ A value can also be a table. An inline table with no `type` key is an object
 whose entries are its field types. An explicit `type = "array"` or
 `type = "object"` with a `fields` table types the record at the leaf.
 
+There is no `signal_set_string`; `signal_set` is already the typed write for
+a `string`-declared signal, so the lint's `untyped-write` finding does not
+fire on it.
+
 ```toml
 [signals]
 count = "i64"
