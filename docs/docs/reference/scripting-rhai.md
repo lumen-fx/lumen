@@ -516,8 +516,22 @@ See [Translation](../guides/i18n.md) for the catalogue format.
 
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |
-| `read_file(path)` | `string` | File contents; empty string on error. |
-| `write_file(path, contents)` | `bool` | `true` on success. Writes atomically (temp file + rename), so a reader never sees a truncated file. |
+| `read_file(path)` | `string` | File contents; empty string on error. Relative paths resolve against the app directory. |
+| `write_file(path, contents)` | `bool` | `true` on success. Relative paths resolve against the app directory; the write is atomic (temp file + rename), so a reader never sees a truncated file. |
+| `data_dir()` | `string` | The directory this app saves data in, created when missing. |
+
+A relative path names a file the app ships, so it reads the same wherever the
+app was started from. Saved state goes under `data_dir()` instead, because the
+app directory is read-only once the app is installed:
+
+```rhai
+write_file(data_dir() + "/session.json", state);
+```
+
+`data_dir()` follows the platform convention for user data (`$XDG_DATA_HOME`,
+else `~/.local/share`, on Linux; `~/Library/Application Support` on macOS;
+`%APPDATA%` on Windows) and names one directory per app from
+[`[app] id`](lumen-toml.md), so two apps on a machine keep their saves apart.
 
 ## Embedder commands
 

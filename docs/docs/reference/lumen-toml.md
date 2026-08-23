@@ -30,7 +30,7 @@ engine = "candela"
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
 | `entry` | string | `"main.lmn"` | Markup entry filename, relative to the app directory. |
-| `id` | string | the app directory name | Stable identifier for per-app state directories, and the app id notifications are attributed to. |
+| `id` | string | the app directory name | Stable identifier for per-app state directories, including the one a script's `data_dir()` writes to, and the app id notifications are attributed to. |
 | `kind` | `"markup"`, `"rust"`, `"cpp"`, `"python"` | auto-detected | Pins the build and run route instead of letting the directory contents decide. |
 | `locale` | BCP-47 tag | the OS locale, else `en-US` | The locale the app starts in. Selects which `locale/<tag>.ftl` catalogue `translatable` markup and the scripts' `t()` builtin resolve against; every catalogue in the directory is loaded regardless. A tag that is not valid BCP-47 is a parse error. |
 
