@@ -3108,6 +3108,41 @@ fn dropdown_with_placeholder_starts_unselected() {
     );
 }
 
+/// A regression for the bug where the generic authored-bind-seed pass
+/// (meant for markup like `<span bind-text="msg" text="hello">`) also
+/// fired for the dropdown header, seeding the value signal with the
+/// placeholder string before any option was picked.
+#[test]
+fn dropdown_placeholder_does_not_seed_the_value_signal() {
+    use bevy_ecs::prelude::*;
+    use lumen_core::property_store::PropertyStore;
+
+    let ir = parse_html(
+        r##"<root>
+                <dropdown bind-value="pick" placeholder="Choose one">
+                    <option value="a" label="A"/>
+                    <option value="b" label="B"/>
+                </dropdown>
+            </root>"##,
+    )
+    .expect("html");
+    let mut world = World::new();
+    world.insert_resource(PropertyStore::default());
+    ir.spawn_into(&mut world);
+
+    assert_eq!(
+        world.resource::<PropertyStore>().get_global_str("pick"),
+        None,
+        "an authored placeholder must not seed the value signal"
+    );
+    let header = &ir.root.children[0].children[0];
+    assert_eq!(
+        header.attrs.text.as_deref(),
+        Some("Choose one"),
+        "the header still shows the placeholder text"
+    );
+}
+
 #[test]
 fn pickers_carry_a_shape_pattern() {
     // The generated pattern is the structural check, not the `-` / `:`

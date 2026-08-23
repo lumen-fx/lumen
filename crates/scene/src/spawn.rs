@@ -446,7 +446,15 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     // detection on the widget component is deliberately NOT pushed
     // (`push_*_to_signal` skips `is_added()` rows) - the widget's
     // component default is not an authored value.
-    if let Some(spec) = &el.attrs.bind {
+    // The `<dropdown>` header button is excluded here: its `text` is the
+    // authored `placeholder`, not an initial value for the bound signal,
+    // and the dropdown pass already seeds the signal itself (above, via
+    // `signal_seed`, only when there's no placeholder). Letting this
+    // generic path run too would seed the value signal with the
+    // placeholder string.
+    if let Some(spec) = &el.attrs.bind
+        && el.attrs.dropdown_button.is_none()
+    {
         let authored: Option<String> = match spec.kind {
             BindKind::Checked => el
                 .attrs
