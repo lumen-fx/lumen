@@ -180,16 +180,14 @@ subdirectory, which is the way to keep pages in a folder of their own:
 
 ```toml
 [pages]
-enabled = true
 include = ["index.lmn", "pages/settings.lmn", "pages/user.lmn"]
 ```
 
 A page's name is still its filename stem, so `pages/settings.lmn` is reachable
 as `settings`. Discovery itself never looks inside a subdirectory: a `.lmn`
 file down there is a page only when `include` names it, and `layout.lmn` is
-picked up from the app directory only. `enabled` is what switches multi-page
-mode on here, because the automatic switch counts the `.lmn` files in the app
-directory and a subdirectory adds none.
+picked up from the app directory only. An `include` naming more than one page
+switches multi-page mode on by itself; `enabled = false` still turns it off.
 
 ## During development
 

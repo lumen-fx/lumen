@@ -53,7 +53,7 @@ Multi-page navigation. See [Pages](../guides/pages.md).
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
 | `entry` | string | see below | Home page key: a filename stem with no `.lmn`. Ignored when no page has that key. |
-| `enabled` | bool | on when the app directory holds more than one `.lmn` file | Forces multi-page mode on or off. |
+| `enabled` | bool | on when more than one `.lmn` file is present, or `include` names more than one page | Forces multi-page mode on or off. |
 | `include` | array of strings | directory discovery | Explicit ordered page-file list. When set, only these files are pages. Paths are relative to the app directory and may point into a subdirectory. |
 
 Without `include`, every `.lmn` file in the app directory is a page except

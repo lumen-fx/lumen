@@ -186,11 +186,19 @@ pub fn discover(dir: &Path, cfg: &LumenToml) -> PagePlan {
     // Every `.lmn` in the dir contributes fragments (pages plus `layout.lmn`).
     let fragment_files: Vec<PathBuf> = all_lmn.iter().map(|f| f.path.clone()).collect();
 
-    // The multi-page pipeline runs whenever the app has more than one `.lmn`
-    // file. A lone `index.lmn` beside a `layout.lmn` counts, so the page still
-    // picks up the shared fragments; a single-file app does not and takes the
-    // untouched legacy path.
-    let multipage = cfg.pages.enabled.unwrap_or(all_lmn.len() > 1);
+    // The multi-page pipeline runs whenever more than one page participates.
+    // `files` already reflects an explicit `[pages] include`, so an include
+    // naming more than one page (even ones living in a subfolder the
+    // directory scan never sees) flips the default on its own; a single-entry
+    // include does not. A directory scan finding more than one `.lmn` file
+    // also flips it: a lone `index.lmn` beside a shared `layout.lmn` counts,
+    // so the page still picks up the shared fragments; a single-file app does
+    // not and takes the untouched legacy path. An explicit `[pages] enabled`
+    // always wins over either count.
+    let multipage = cfg
+        .pages
+        .enabled
+        .unwrap_or(files.len() > 1 || all_lmn.len() > 1);
 
     PagePlan {
         multipage,
@@ -347,6 +355,79 @@ pub fn install(app: &mut lumen_core::app::App, plan: &PagePlan) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::LumenToml;
+
+    /// Unique scratch dir per call, holding just `index.lmn`: the shared
+    /// fixture for the `discover` default-flip tests below.
+    fn temp_app_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "lumen_pages_{tag}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.lmn"), "<root></root>").unwrap();
+        dir
+    }
+
+    #[test]
+    fn include_naming_several_subfolder_pages_enables_multipage() {
+        // The app dir itself holds only `index.lmn` (the directory scan sees
+        // one file), but `include` names two more pages in a subfolder the
+        // scan never looks into. That still states multi-page intent, so the
+        // default must flip on.
+        let dir = temp_app_dir("include_many");
+        let mut cfg = LumenToml::default();
+        cfg.pages.include = Some(vec![
+            "index.lmn".into(),
+            "pages/settings.lmn".into(),
+            "pages/about.lmn".into(),
+        ]);
+
+        let plan = discover(&dir, &cfg);
+        assert!(plan.multipage, "a multi-page include must enable multipage");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn single_entry_include_stays_single_page() {
+        // An `include` naming exactly one page (even one living in a
+        // subfolder) states no more intent than the plain single-file case,
+        // so the default must stay off.
+        let dir = temp_app_dir("include_one");
+        let mut cfg = LumenToml::default();
+        cfg.pages.include = Some(vec!["pages/settings.lmn".into()]);
+
+        let plan = discover(&dir, &cfg);
+        assert!(
+            !plan.multipage,
+            "a single-entry include must not enable multipage"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn explicit_enabled_false_wins_over_a_multipage_include() {
+        // `[pages] enabled = false` is an explicit override and must win even
+        // when `include` alone would flip the default on.
+        let dir = temp_app_dir("include_disabled");
+        let mut cfg = LumenToml::default();
+        cfg.pages.enabled = Some(false);
+        cfg.pages.include = Some(vec!["index.lmn".into(), "pages/settings.lmn".into()]);
+
+        let plan = discover(&dir, &cfg);
+        assert!(
+            !plan.multipage,
+            "explicit enabled = false must override the include-derived default"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn keys_are_longest_first() {

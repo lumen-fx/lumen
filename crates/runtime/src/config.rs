@@ -149,7 +149,8 @@ where
 /// entry = "index"                   # home page key (default: "index", else the
 ///                                   #   [app] entry stem, else "main")
 /// enabled = true                    # force multi-page on/off (default: auto -
-///                                   #   on when >1 .lmn file is present)
+///                                   #   on when >1 .lmn file is present, or
+///                                   #   `include` names >1 page)
 /// include = ["index.lmn", "settings.lmn", "user.lmn"]  # explicit page set,
 ///                                   #   overriding directory auto-discovery
 /// ```
@@ -159,13 +160,17 @@ pub struct PagesCfg {
     /// Home/entry page key (filename stem, no `.lmn`). Defaults to `index`
     /// when an `index.lmn` exists, else the `[app] entry` stem, else `main`.
     pub entry: Option<String>,
-    /// Force multi-page mode on (`true`) or off (`false`). When absent,
-    /// multi-page activates automatically iff more than one page file is
-    /// present - so single-page apps (`main.lmn` / a lone `index.lmn`) keep
-    /// the exact legacy single-file load path.
+    /// Force multi-page mode on (`true`) or off (`false`) and win over the
+    /// auto default either way. When absent, multi-page activates
+    /// automatically when more than one `.lmn` file sits in the app
+    /// directory, or when `include` names more than one page, including
+    /// pages living in a subfolder the directory scan never sees. So
+    /// single-page apps (`main.lmn` / a lone `index.lmn`, or a single-entry
+    /// `include`) keep the exact legacy single-file load path.
     pub enabled: Option<bool>,
-    /// Explicit ordered page-file list (relative filenames). When set, this
-    /// overrides directory auto-discovery - only these files are pages.
+    /// Explicit ordered page-file list (relative filenames, may name a
+    /// subfolder). When set, this overrides directory auto-discovery: only
+    /// these files are pages.
     pub include: Option<Vec<String>>,
 }
 
