@@ -744,7 +744,7 @@ See [Translation](../guides/i18n.md) for the catalogue format.
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |
 | `lumen::read_file(path: string)` | `string` | File contents; empty string on error. |
-| `lumen::write_file(path: string, contents: string)` | `bool` | `true` on success. |
+| `lumen::write_file(path: string, contents: string)` | `bool` | `true` on success. Writes atomically (temp file + rename), so a reader never sees a truncated file. |
 
 ## Diagnostics
 

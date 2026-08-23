@@ -638,6 +638,55 @@ fn audio_fns() -> Vec<ScriptFn> {
     ]
 }
 
+/// Write `contents` to `path` without a truncated-read window.
+///
+/// `std::fs::write` truncates the file before writing, so a reader racing
+/// the write (a file watcher, another process, the app reloading its own
+/// save file) can see a zero-length or partial file. Writing to a sibling
+/// temp file and renaming it into place avoids that: rename is atomic on a
+/// given filesystem, so a concurrent reader always sees either the old
+/// contents or the new ones.
+fn write_file_atomic(path: &str, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let path = std::path::Path::new(path);
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => std::path::Path::new("."),
+    };
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "write_file: path has no file name",
+        )
+    })?;
+
+    // A per-process counter so two writes racing the same path in the same
+    // tick never pick the same temp name.
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let tmp_path = dir.join(format!(
+        ".{}.tmp-{}-{}",
+        file_name.to_string_lossy(),
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed),
+    ));
+
+    let write_result = (|| -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&tmp_path)?;
+        f.write_all(contents.as_bytes())?;
+        f.sync_all()
+    })();
+
+    match write_result {
+        Ok(()) => std::fs::rename(&tmp_path, path),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            Err(e)
+        }
+    }
+}
+
 /// Translation, the filesystem, template-local ids, and the tree dump.
 fn misc_fns() -> Vec<ScriptFn> {
     vec![
@@ -681,7 +730,7 @@ fn misc_fns() -> Vec<ScriptFn> {
             T::Bool,
             |cx| {
                 let path = cx.str_arg(0);
-                match std::fs::write(&path, cx.str_arg(1)) {
+                match write_file_atomic(&path, &cx.str_arg(1)) {
                     Ok(()) => ScriptValue::Bool(true),
                     Err(e) => {
                         warn_line!("write_file({path}): {e}");
