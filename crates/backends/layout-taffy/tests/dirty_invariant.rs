@@ -40,13 +40,19 @@ fn mutation_strat(n_entities: usize) -> impl Strategy<Value = Mutation> {
 }
 
 /// D1: entities are randomly promoted to [`RelayoutBoundary`]. Every
-/// spawned entity carries fixed `Px` width + height, which is exactly
-/// the constraint-imposed-size condition `lumenc`'s
+/// spawned entity carries fixed `Px` width + height and `shrink: 0`,
+/// which is exactly the constraint-imposed-size condition `lumenc`'s
 /// `is_relayout_boundary` requires - so any subset is a valid boundary
 /// set, and the incremental result must STILL match the from-scratch
 /// baseline: boundary subtree recomputes may not teleport or resize the
 /// boundary, and a boundary's own style mutation must pierce to its
 /// parent.
+///
+/// `shrink: 0` is load-bearing, not decoration. A shrinkable item on an
+/// overflowing line is squeezed to its automatic minimum size, which
+/// tracks its content, so an internal change reaches its own outer box
+/// and a boundary there would be unsound - which is why the real rule
+/// excludes it.
 fn hierarchy_strat() -> impl Strategy<Value = (usize, Vec<usize>, Vec<bool>)> {
     // n in [2, 8]; for each child i in [1, n), pick parent in [0, i).
     (2usize..=8).prop_flat_map(|n| {
@@ -75,6 +81,7 @@ fn build_app(
             width: Length::Px(w),
             height: Length::Px(100.0),
             flex_direction: FlexDirection::Row,
+            shrink: 0.0,
             ..Default::default()
         };
         let e = if i == 0 {

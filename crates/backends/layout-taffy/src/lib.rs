@@ -1380,32 +1380,20 @@ fn lumen_style_to_taffy(s: &Style, dir: LayoutDirection) -> taffy::Style {
     let width = lumen_length_to_taffy_dim(s.width);
     let height = lumen_length_to_taffy_dim(s.height);
 
-    // Spec section 0: an explicit fixed size wins over intrinsic content, full
-    // stop (Slint: "any element with a specified width and height has a
-    // fixed size in a layout"; Qt: an explicit size makes the hint
-    // irrelevant). Under raw CSS-flex semantics that's not what taffy
-    // does - `min-size: auto` floors the item at its content's
-    // min-content size and the default `flex-shrink: 1` lets siblings
-    // squeeze it - so a `width: 200px` element could still end up wider
-    // (long child) or narrower (crowded row) than 200. Pinning
-    // `min_size` to the explicit length kills both leaks: the content
-    // floor no longer applies and shrink can't go below the authored
-    // size. This is also what makes fixed-px [`RelayoutBoundary`]
-    // entities sound: their laid-out size genuinely cannot change when
-    // their content changes (D1). An author-supplied `min-width` /
-    // `min-height` still takes precedence.
-    let min_width =
-        if matches!(s.min_width, LumenLength::Auto) && matches!(s.width, LumenLength::Px(_)) {
-            width
-        } else {
-            lumen_length_to_taffy_dim(s.min_width)
-        };
-    let min_height =
-        if matches!(s.min_height, LumenLength::Auto) && matches!(s.height, LumenLength::Px(_)) {
-            height
-        } else {
-            lumen_length_to_taffy_dim(s.min_height)
-        };
+    // `min-width` / `min-height` go to taffy exactly as authored, `auto`
+    // included. `auto` is the CSS automatic minimum size, which taffy
+    // resolves per CSS flexbox section 4.5 as the smaller of the item's
+    // min-content size and its own specified size - so a long child can
+    // never push a `width: 200px` item past 200, while a crowded line can
+    // still squeeze it below 200, which is what flex-shrink means. An
+    // explicit `min-width: 0` removes the floor entirely.
+    //
+    // This used to substitute the specified length for an `auto` min-size
+    // whenever the matching size was a fixed px, which pinned every
+    // fixed-size element at its authored size and left `min-width: 0` as
+    // the only way to get flex shrinking at all.
+    let min_width = lumen_length_to_taffy_dim(s.min_width);
+    let min_height = lumen_length_to_taffy_dim(s.min_height);
 
     // W5.5: `Row` under Rtl resolves to RowReverse so the layout
     // backend mirrors the inline axis automatically.

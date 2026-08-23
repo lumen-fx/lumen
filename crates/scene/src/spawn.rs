@@ -475,6 +475,18 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     let text = resolve_text(world, el);
     let mut style = Style::from(&el.attrs);
     apply_ua_style_defaults(&el.tag, &el.attrs, &mut style);
+    // The content of a scroll container keeps its own size instead of
+    // being squeezed into the viewport - that is what there is to scroll.
+    // Every layout here is flex, so without this a `height: 900` block
+    // inside a 200px-tall scroller shrinks to 200 and the scrollbar has
+    // nothing to travel over. Qt's `QScrollArea` keeps its widget's size
+    // hint and Slint's `ScrollView` its content's preferred size; on the
+    // web the same shape needs `flex-shrink: 0` written by hand. An
+    // authored `shrink` still wins. The parent is spawned before its
+    // children, so its `Scroll` marker is already in place.
+    if el.attrs.shrink.is_none() && parent.is_some_and(|p| world.get::<Scroll>(p).is_some()) {
+        style.shrink = 0.0;
+    }
     let is_boundary = is_relayout_boundary(&style, el);
     let doc_order = next_document_order(world);
     let mut entity = world.spawn((
@@ -2611,12 +2623,22 @@ fn knob_style(size: f32, inset_px: f32) -> Style {
 /// when:
 ///
 /// 1. Explicit `layout-boundary="true"` markup attr - author override.
-/// 2. Either axis overflows as `Scroll` - the scroll container clips
-///    its content, so descendants reflowing don't affect the parent's
-///    own size beyond what already-known clip box allows.
-/// 3. Both `width` and `height` are fixed `Px` - the entity's size is
-///    constraint-imposed, so descendants can re-flow internally
-///    without changing the parent's measured dimensions.
+/// 2. The entity is a scroll container - `<scroll>`, or either axis
+///    overflowing as `Scroll`. It clips its content, so descendants
+///    reflowing don't affect the parent's own size beyond what the
+///    already-known clip box allows.
+/// 3. Both `width` and `height` are fixed `Px` and the entity cannot be
+///    flex-shrunk (`shrink: 0`) - its size is then constraint-imposed,
+///    so descendants can re-flow internally without changing the
+///    parent's measured dimensions.
+///
+/// The `shrink: 0` half of rule 3 is what keeps the boundary sound. On an
+/// overflowing line a shrinkable item is squeezed down to its automatic
+/// minimum size, which is the smaller of its content's min-content size
+/// and its authored width - so under the CSS default `flex-shrink: 1` a
+/// purely internal change can still move the item's own outer box, and
+/// stopping the dirty walk there would leave ancestors holding stale
+/// geometry.
 ///
 /// Pattern: Flutter's `_relayoutBoundary`, set on `RenderObjects` that
 /// pass the same constraint test.
@@ -2624,11 +2646,18 @@ fn is_relayout_boundary(style: &Style, el: &Element) -> bool {
     if el.attrs.layout_boundary {
         return true;
     }
-    if matches!(style.overflow_x, Overflow::Scroll) || matches!(style.overflow_y, Overflow::Scroll)
+    // `<scroll>` carries its axis on `attrs.scroll` and never sets the
+    // `overflow` properties, so the style check alone missed the one tag
+    // whose whole job is scrolling.
+    if el.attrs.scroll.is_some()
+        || matches!(style.overflow_x, Overflow::Scroll)
+        || matches!(style.overflow_y, Overflow::Scroll)
     {
         return true;
     }
-    matches!(style.width, Length::Px(_)) && matches!(style.height, Length::Px(_))
+    matches!(style.width, Length::Px(_))
+        && matches!(style.height, Length::Px(_))
+        && style.shrink == 0.0
 }
 
 #[cfg(test)]
