@@ -327,13 +327,17 @@ pub fn clear_signal_dirty(signals: Option<ResMut<Signals>>) {
 /// its selected option's label while the signal holds that option's
 /// value. A value it does not name is written as it stands.
 ///
-/// Editing-protection gate: entities currently carrying [`Focused`] or an active
-/// [`ImeState`] preedit are skipped - overwriting `TextContent` mid-edit would
-/// race the keystroke / IME path in [`crate::input::route_ime_events`] and
-/// `lumen_input::type_into_focused`, wiping the user's in-progress typing or
-/// leaving the caret dangling past the new (shorter) string. When `apply_text_bindings`
-/// does overwrite an unfocused entity, any co-resident [`TextInput.cursor`] is
-/// clamped to `<= new_text.len()` so the cursor cannot point past the buffer end.
+/// Editing-protection gate: an entity is skipped while an edit is in flight on
+/// it, meaning a focused [`TextInput`] or an active [`ImeState`] preedit.
+/// Overwriting `TextContent` mid-edit would race the keystroke / IME path in
+/// [`crate::input::route_ime_events`] and `lumen_input::type_into_focused`,
+/// wiping the user's in-progress typing or leaving the caret dangling past the
+/// new (shorter) string. Focus alone is not an edit: a focused element with no
+/// text buffer, such as the `<dropdown>` header the popup hands focus back to on
+/// close, has no keystroke to protect and keeps tracking its signal. When
+/// `apply_text_bindings` does overwrite an entity, any co-resident
+/// [`TextInput.cursor`] is clamped to `<= new_text.len()` so the cursor cannot
+/// point past the buffer end.
 #[allow(clippy::type_complexity)]
 pub fn apply_text_bindings(
     store: Res<PropertyStore>,
@@ -343,8 +347,9 @@ pub fn apply_text_bindings(
             &mut TextContent,
             Option<&mut TextInput>,
             Option<&BindTextLabels>,
+            Option<&Focused>,
         ),
-        (Without<Focused>, Without<ImeState>),
+        Without<ImeState>,
     >,
     new_binds: Query<(), Added<BindText>>,
 ) {
@@ -365,7 +370,12 @@ pub fn apply_text_bindings(
     if store.dirty_peek().is_empty() && new_binds.is_empty() {
         return;
     }
-    for (bind, mut tc, input, labels) in &mut q {
+    for (bind, mut tc, input, labels, focused) in &mut q {
+        // The edit in flight the gate protects: a focused text buffer, whose
+        // next keystroke would land on the text this write replaces.
+        if focused.is_some() && input.is_some() {
+            continue;
+        }
         let key = PropertyKey::Global(Arc::<str>::from(bind.0.as_ref()));
         // Stringify scalar variants via the existing `From<PropertyValue> for Arc<str>` impl
         // - `Bool` -> `"true"` / `"false"`, `I64` / `F64` -> decimal - so a typed write to the
@@ -871,7 +881,117 @@ pub fn drain_external_signals(mut arrays: ResMut<ArraySignals>) {
 
 #[cfg(test)]
 mod tests {
-    use super::signal_is_truthy;
+    use super::{apply_text_bindings, signal_is_truthy};
+    use crate::components::{BindText, BindTextLabels, ImeState, TextContent, TextInput};
+    use crate::input::Focused;
+    use crate::property_store::{PropertyKey, PropertyStore, PropertyValue};
+    use bevy_ecs::prelude::*;
+    use bevy_ecs::system::RunSystemOnce;
+    use std::sync::Arc;
+
+    /// A world holding one signal and the binding system's store.
+    fn world_with_signal(name: &str, value: &str) -> World {
+        let mut world = World::new();
+        let mut store = PropertyStore::default();
+        store.set(
+            PropertyKey::Global(Arc::<str>::from(name)),
+            PropertyValue::Str(Arc::<str>::from(value)),
+        );
+        world.insert_resource(store);
+        world
+    }
+
+    fn write_signal(world: &mut World, name: &str, value: &str) {
+        world.resource_mut::<PropertyStore>().set(
+            PropertyKey::Global(Arc::<str>::from(name)),
+            PropertyValue::Str(Arc::<str>::from(value)),
+        );
+    }
+
+    fn text_of(world: &World, entity: Entity) -> String {
+        world.get::<TextContent>(entity).unwrap().0.clone()
+    }
+
+    #[test]
+    fn a_focused_dropdown_header_still_follows_its_value_signal() {
+        let mut world = world_with_signal("pick", "a");
+        // The header the popup hands focus back to on close: bound text,
+        // per-value labels, no text buffer.
+        let header = world
+            .spawn((
+                BindText("pick".into()),
+                BindTextLabels(vec![
+                    ("a".into(), "Apple".into()),
+                    ("b".into(), "Banana".into()),
+                ]),
+                TextContent(String::new()),
+                Focused,
+            ))
+            .id();
+        world.run_system_once(apply_text_bindings).unwrap();
+        assert_eq!(text_of(&world, header), "Apple");
+
+        write_signal(&mut world, "pick", "b");
+        world.run_system_once(apply_text_bindings).unwrap();
+        assert_eq!(text_of(&world, header), "Banana");
+    }
+
+    #[test]
+    fn a_focused_text_input_keeps_what_the_user_typed() {
+        let mut world = world_with_signal("name", "from signal");
+        let input = world
+            .spawn((
+                BindText("name".into()),
+                TextContent("half typed".into()),
+                TextInput {
+                    cursor: "half typed".len(),
+                    ..Default::default()
+                },
+                Focused,
+            ))
+            .id();
+        world.run_system_once(apply_text_bindings).unwrap();
+        assert_eq!(text_of(&world, input), "half typed");
+        assert_eq!(world.get::<TextInput>(input).unwrap().cursor, 10);
+    }
+
+    #[test]
+    fn an_unfocused_text_input_takes_the_signal_and_clamps_its_cursor() {
+        let mut world = world_with_signal("name", "ab");
+        let input = world
+            .spawn((
+                BindText("name".into()),
+                TextContent("longer text".into()),
+                TextInput {
+                    cursor: 11,
+                    selection_anchor: Some(9),
+                    ..Default::default()
+                },
+            ))
+            .id();
+        world.run_system_once(apply_text_bindings).unwrap();
+        assert_eq!(text_of(&world, input), "ab");
+        let state = world.get::<TextInput>(input).unwrap();
+        assert_eq!(state.cursor, 2);
+        assert_eq!(state.selection_anchor, None);
+    }
+
+    #[test]
+    fn an_ime_preedit_holds_the_binding_back() {
+        let mut world = world_with_signal("name", "from signal");
+        let input = world
+            .spawn((
+                BindText("name".into()),
+                TextContent("composing".into()),
+                ImeState {
+                    preedit: "ka".into(),
+                    cursor: 2,
+                },
+            ))
+            .id();
+        world.run_system_once(apply_text_bindings).unwrap();
+        assert_eq!(text_of(&world, input), "composing");
+    }
 
     #[test]
     fn only_empty_false_and_zero_are_falsy() {

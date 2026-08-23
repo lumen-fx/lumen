@@ -153,7 +153,9 @@ produces one consistent frame rather than three. Elements bound to a signal
 nobody wrote are not touched, so an idle app does no work.
 
 One value edits at a time: while an `<input>` has focus, a signal write does not
-overwrite what the user is typing.
+overwrite what the user is typing. Only an edit in progress holds a write back;
+any other focused element, such as a `<dropdown>` header that the popup returns
+focus to, keeps showing whatever its signal says.
 
 ## Where to look things up
 

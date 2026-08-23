@@ -13,6 +13,8 @@
 
 use lumen_core::app::App;
 use lumen_core::components::{LumenClasses, TextContent};
+use lumen_core::input::Focused;
+use lumen_core::prelude::Entity;
 use lumen_core::property_store::PropertyStore;
 use lumenc::RunOptions;
 use lumenc::run::build_headless_app;
@@ -44,6 +46,18 @@ fn header_text(app: &mut App) -> String {
         .find(|(classes, _)| classes.0.iter().any(|c| c.as_ref() == "dropdown-button"))
         .map(|(_, text)| text.0.clone())
         .expect("a dropdown header")
+}
+
+/// Puts keyboard focus on the header, which is what closing the popup
+/// does once a selection commits.
+fn focus_header(app: &mut App) {
+    let mut q = app.world.query::<(Entity, &LumenClasses)>();
+    let header = q
+        .iter(&app.world)
+        .find(|(_, classes)| classes.0.iter().any(|c| c.as_ref() == "dropdown-button"))
+        .map(|(entity, _)| entity)
+        .expect("a dropdown header");
+    app.world.entity_mut(header).insert(Focused);
 }
 
 fn select(app: &mut App, signal: &str, value: &str) {
@@ -108,6 +122,18 @@ fn an_option_with_no_label_reads_as_its_value() {
 </root>"##,
     );
     assert_eq!(header_text(&mut app), "small");
+}
+
+/// Selecting hands focus back to the header, and the header still tracks
+/// the signal from there: the second selection moves the closed face too.
+#[test]
+fn a_focused_header_keeps_following_the_value_signal() {
+    let mut app = build(FRUIT);
+    focus_header(&mut app);
+    select(&mut app, "fruit", "b");
+    assert_eq!(header_text(&mut app), "Banana");
+    select(&mut app, "fruit", "a");
+    assert_eq!(header_text(&mut app), "Apple");
 }
 
 /// A value no option declares is shown as it stands, which is what leaves
