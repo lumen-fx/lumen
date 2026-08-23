@@ -3478,4 +3478,73 @@ mod tests {
         assert_eq!(plain_et.caret_width_px, CARET_WIDTH_PX);
         assert_eq!(overridden_et.caret_width_px, 4.0);
     }
+
+    /// Every distribution a box can take, mapped onto where it leaves the
+    /// one item a run of text becomes. Exercised directly because the
+    /// arms differ only in the value they return, and a pipeline test can
+    /// only reach one of them per app it builds.
+    #[test]
+    fn a_distribution_places_the_run_the_way_it_places_an_item() {
+        use crate::components::{FlexDirection, FlexJustify, Style};
+
+        let row = |justify| Style {
+            justify,
+            ..Style::default()
+        };
+        let cases = [
+            (FlexJustify::Start, TextAlign::Start),
+            (FlexJustify::SpaceBetween, TextAlign::Start),
+            (FlexJustify::Center, TextAlign::Center),
+            (FlexJustify::SpaceAround, TextAlign::Center),
+            (FlexJustify::SpaceEvenly, TextAlign::Center),
+            (FlexJustify::End, TextAlign::End),
+        ];
+        for (justify, want) in cases {
+            assert_eq!(
+                text_run_align(TextAlign::Start, Some(&row(justify))),
+                want,
+                "{justify:?} must leave the run at {want:?}"
+            );
+        }
+
+        // Reversed, the ends swap and the middle stays put.
+        let reversed = |justify| Style {
+            justify,
+            flex_direction: FlexDirection::RowReverse,
+            ..Style::default()
+        };
+        assert_eq!(
+            text_run_align(TextAlign::Start, Some(&reversed(FlexJustify::Start))),
+            TextAlign::End
+        );
+        assert_eq!(
+            text_run_align(TextAlign::Start, Some(&reversed(FlexJustify::End))),
+            TextAlign::Start
+        );
+        assert_eq!(
+            text_run_align(TextAlign::Start, Some(&reversed(FlexJustify::Center))),
+            TextAlign::Center
+        );
+
+        // A vertical main axis distributes down the box, and an element
+        // with no style at all has nothing to read.
+        for direction in [FlexDirection::Column, FlexDirection::ColumnReverse] {
+            let column = Style {
+                justify: FlexJustify::Center,
+                flex_direction: direction,
+                ..Style::default()
+            };
+            assert_eq!(
+                text_run_align(TextAlign::Start, Some(&column)),
+                TextAlign::Start
+            );
+        }
+        assert_eq!(text_run_align(TextAlign::Start, None), TextAlign::Start);
+
+        // An authored alignment is the answer whatever the box says.
+        assert_eq!(
+            text_run_align(TextAlign::End, Some(&row(FlexJustify::Center))),
+            TextAlign::End
+        );
+    }
 }
