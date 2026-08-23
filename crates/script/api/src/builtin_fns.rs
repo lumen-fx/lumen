@@ -668,7 +668,14 @@ fn misc_fns() -> Vec<ScriptFn> {
                 match std::fs::read_to_string(&path) {
                     Ok(text) => ScriptValue::Str(text),
                     Err(e) => {
-                        warn_line!("read_file({path}): {e}");
+                        // A missing file is the expected way for a script to
+                        // probe for optional state (a config that has not
+                        // been saved yet, say), not a fault to report; only
+                        // warn about the errors that mean something went
+                        // wrong reading a file that is there.
+                        if e.kind() != std::io::ErrorKind::NotFound {
+                            warn_line!("read_file({path}): {e}");
+                        }
                         ScriptValue::Str(String::new())
                     }
                 }
