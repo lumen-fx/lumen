@@ -89,7 +89,7 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
     );
     // Signal -> TextContent must land BEFORE the keystroke / IME path so a
     // user's mid-tick keystroke always wins over an external signal write,
-    // and so the gate (Without<Focused>, Without<ImeState>) inside
+    // and so the in-flight-edit gate (focused text buffer / active IME) inside
     // apply_text_bindings has the latest focus markers to consult. It also
     // runs AFTER `commit_external_properties` (hence after
     // `dispatch_clicks_and_doubles`) so a same-tick script write is already
