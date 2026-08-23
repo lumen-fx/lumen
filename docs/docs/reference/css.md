@@ -309,6 +309,12 @@ for `grow`, `flex-shrink` for `shrink`, `justify-content` for `justify`,
 
 `overflow: scroll` makes an element a live scroll container.
 
+An element's own text lays out as an item of its own, sized to the words,
+so `justify-content` places it along the main axis the same way it places
+a child: `justify-content: center` on a `button` centres its label. It
+applies on a horizontal main axis only, and an authored `text-align` wins
+where both are set.
+
 ### Logical properties
 
 Each takes a px number and resolves against the element's writing
