@@ -175,6 +175,22 @@ include = ["index.lmn", "settings.lmn", "user.lmn"]
 `include` replaces directory discovery with an explicit list. Full key
 descriptions are in the [lumen.toml reference](../reference/lumen-toml.md).
 
+`include` paths are relative to the app directory and may point into a
+subdirectory, which is the way to keep pages in a folder of their own:
+
+```toml
+[pages]
+enabled = true
+include = ["index.lmn", "pages/settings.lmn", "pages/user.lmn"]
+```
+
+A page's name is still its filename stem, so `pages/settings.lmn` is reachable
+as `settings`. Discovery itself never looks inside a subdirectory: a `.lmn`
+file down there is a page only when `include` names it, and `layout.lmn` is
+picked up from the app directory only. `enabled` is what switches multi-page
+mode on here, because the automatic switch counts the `.lmn` files in the app
+directory and a subdirectory adds none.
+
 ## During development
 
 `lumenc run` watches every page file. Editing any page, or the shared
