@@ -50,6 +50,10 @@ The import is replaced with the declarations before compilation, so no
 block), the source still compiles, and calling a builtin fails at run time with
 `lumen is not a valid namespace`.
 
+Write the import in every `.cdl` file that uses the surface. An app's candela
+files join into one program and the declarations land once for the whole
+program, so a repeated import costs nothing.
+
 The prelude also declares the `window`, `document`, and `history` namespaces and
 defines the `Node`, `Event`, `Signal`, and `ArraySignal` method wrappers
 described below.
