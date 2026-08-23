@@ -1820,17 +1820,24 @@ mod http_tests {
         schedule.add_systems(drain_fetch_commands);
         schedule.run(&mut world);
 
-        // The worker thread is the only asynchrony here; poll the collector
-        // until the reply lands rather than sleeping a fixed amount.
+        // The worker thread is the only asynchrony here, so block on the
+        // registry channel until its reply is queued rather than spinning a
+        // bounded number of times: on a loaded machine a spin runs out before
+        // the worker is scheduled, and the asserts below then read a world
+        // nothing has landed in yet. `Select::ready` waits for the message
+        // without taking it, leaving it for the collector. It also orders the
+        // client's own bookkeeping, since the worker sends only after
+        // `HttpClient::send` returns.
+        {
+            let registry = world.resource::<FetchRegistry>();
+            let mut ready = crossbeam_channel::Select::new();
+            ready.recv(&registry.receiver);
+            ready.ready();
+        }
+
         let mut collect = Schedule::default();
         collect.add_systems(collect_fetch_replies);
-        for _ in 0..200 {
-            collect.run(&mut world);
-            if !world.resource::<PendingFetchReplies>().0.is_empty() {
-                break;
-            }
-            std::thread::yield_now();
-        }
+        collect.run(&mut world);
 
         let seen = client.seen.lock().unwrap();
         assert_eq!(seen.len(), 1, "exactly one request reached the client");
