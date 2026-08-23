@@ -73,7 +73,8 @@ pub mod prelude {
         horizontal_scrollbar, vertical_scrollbar,
     };
     pub use crate::native::{
-        ExtractedNative, NativePaintCtx, NativePainter, NativePainters, next_revision,
+        ExtractedNative, NativeExtract, NativePaintCtx, NativePainter, NativePainters,
+        NativePlacement, next_revision, upsert_native_leaves,
     };
     pub use crate::nav::{NavOp, navigate as nav_navigate, request as nav_request};
     pub use crate::node::{

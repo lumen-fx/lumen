@@ -25,10 +25,28 @@
 //! - **`extension_id` names a contract**, covering both the concrete payload type and the API the
 //!   painter expects from the backend. A backend with no painter registered for an id skips the
 //!   leaf, which is what keeps a scene portable across backends.
+//! - **Bounds with no area never repaint on their own.** Damage is a rect, and an empty rect is no
+//!   damage, so a leaf that declares zero width or height falls back to whole-viewport damage when
+//!   its revision moves. Declare the area you paint.
+//!
+//! ## Producing leaves
+//!
+//! [`NativeExtract`] resolves the placement of one entity - paint order, scroll offset, inherited
+//! opacity, hidden subtrees - the same way the built-in extractors do, and
+//! [`upsert_native_leaves`] carries the leaves across frames under one extension id so two plugins
+//! extracting in the same frame cannot evict each other's entities.
 
+use crate::components::{Opacity, Transform};
 use crate::node_ir::Affine2;
-use crate::render_world::{PaintOrder, Rect};
+use crate::render_world::{
+    PaintOrder, Rect, RenderEntityMap, aabb_outside, build_parent_map, effective_opacity,
+    hidden_entities, paint_order_of, parent_opacities, parent_scroll_clip_rects,
+    parent_scroll_offsets,
+};
+use bevy_ecs::entity::Entity;
 use bevy_ecs::prelude::{Component, Resource};
+use bevy_ecs::world::World;
+use glam::Vec2;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
@@ -78,6 +96,121 @@ pub fn next_revision() -> u64 {
     REVISION.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Where one entity's leaf belongs this frame, as [`NativeExtract`] resolved it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NativePlacement {
+    /// Bounds in window coordinates, with ancestor scroll offsets already applied.
+    pub bounds: Rect,
+    /// Paint order for the entity's position in the document.
+    pub order: PaintOrder,
+    /// Opacity inherited from ancestors, multiplied by the entity's own.
+    pub opacity: f32,
+}
+
+/// The hierarchy-derived facts a plugin's extract fn needs, computed once per frame.
+///
+/// A leaf placed by hand from `Transform::absolute` alone ignores everything an ancestor says: it
+/// stays pinned while its scroll container scrolls, ignores `opacity`, and keeps painting inside a
+/// hidden subtree. Build one of these at the top of the extract fn and ask it to
+/// [`place`](Self::place) each entity instead. It reads the same memo the built-in extractors
+/// share, so the maps are built once per frame no matter how many extractors ask.
+pub struct NativeExtract {
+    parents: HashMap<Entity, Entity>,
+    depth_cache: HashMap<Entity, u32>,
+    hidden: std::collections::HashSet<Entity>,
+    scroll: HashMap<Entity, Vec2>,
+    opacities: HashMap<Entity, f32>,
+    clip: HashMap<Entity, (Vec2, Vec2)>,
+}
+
+impl NativeExtract {
+    /// Reads the frame's hierarchy, scroll, opacity, visibility, and clip maps from the main world.
+    pub fn new(main: &mut World) -> Self {
+        let (parents, depth_cache) = build_parent_map(main);
+        let hidden = hidden_entities(main, &parents);
+        let scroll = parent_scroll_offsets(main, &parents);
+        let opacities = parent_opacities(main, &parents);
+        let clip = parent_scroll_clip_rects(main, &parents);
+        Self {
+            parents,
+            depth_cache,
+            hidden,
+            scroll,
+            opacities,
+            clip,
+        }
+    }
+
+    /// Resolves where `entity`'s leaf belongs, or `None` when it should not be extracted at all:
+    /// hidden by a `Visible(false)` on itself or an ancestor, or scrolled fully out of the nearest
+    /// scroll or `overflow: hidden` container.
+    pub fn place(
+        &mut self,
+        entity: Entity,
+        transform: &Transform,
+        opacity: Option<&Opacity>,
+    ) -> Option<NativePlacement> {
+        if self.hidden.contains(&entity) {
+            return None;
+        }
+        let offset = self.scroll.get(&entity).copied().unwrap_or(Vec2::ZERO);
+        let origin = transform.absolute - offset;
+        if let Some(clip_rect) = self.clip.get(&entity)
+            && aabb_outside(origin, transform.size, *clip_rect)
+        {
+            return None;
+        }
+        Some(NativePlacement {
+            bounds: Rect::new(origin, transform.size),
+            order: paint_order_of(entity, &self.parents, &mut self.depth_cache),
+            opacity: effective_opacity(opacity, &self.opacities, entity).0,
+        })
+    }
+}
+
+/// Carries one extension's leaves into the render world, reusing each entity's render-world entity
+/// across frames and despawning the ones that went away.
+///
+/// The lifecycle is scoped to `extension_id`, so several plugins extracting in the same frame keep
+/// their own sets: a plugin only ever retires leaves it produced. Pass the id the leaves carry.
+pub fn upsert_native_leaves<I>(render: &mut World, extension_id: &str, leaves: I)
+where
+    I: IntoIterator<Item = (Entity, ExtractedNative)>,
+{
+    let mut map = std::mem::take(&mut render.resource_mut::<RenderEntityMap>().native);
+    let mut prior: HashMap<Entity, Entity> = HashMap::new();
+    map.retain(|(id, main_e), render_e| {
+        if &**id == extension_id {
+            prior.insert(*main_e, *render_e);
+            false
+        } else {
+            true
+        }
+    });
+
+    let id: Arc<str> = Arc::from(extension_id);
+    for (main_e, leaf) in leaves {
+        let reuse = prior
+            .remove(&main_e)
+            .filter(|&re| render.get_entity(re).is_ok());
+        let render_e = match reuse {
+            Some(re) => {
+                render.entity_mut(re).insert(leaf);
+                re
+            }
+            None => render.spawn(leaf).id(),
+        };
+        map.insert((id.clone(), main_e), render_e);
+    }
+    // Whatever is left in `prior` had a leaf last frame and none now.
+    for (_, render_e) in prior {
+        if let Ok(em) = render.get_entity_mut(render_e) {
+            em.despawn();
+        }
+    }
+    render.resource_mut::<RenderEntityMap>().native = map;
+}
+
 /// What a backend hands a [`NativePainter`] for one leaf.
 ///
 /// Both the payload and the draw target are type-erased, which is what keeps this crate free of
@@ -91,11 +224,19 @@ pub struct NativePaintCtx<'a> {
     pub backend_id: &'static str,
     /// The leaf's bounds in logical window coordinates.
     pub bounds: Rect,
-    /// Transform accumulated from ancestor transform nodes, in logical coordinates.
+    /// Transform accumulated from ancestor transform nodes, in logical coordinates. The tree
+    /// builder emits no transform nodes today, so this is the identity for now; compose through
+    /// [`Self::device_transform`] rather than assuming it.
     pub transform: Affine2,
     /// Device pixel ratio between logical coordinates and the target's pixels.
     pub dpr: f32,
     /// Alpha multiplier accumulated from ancestor opacity nodes.
+    ///
+    /// The painter is the only thing that applies it. A bounds clip composites nothing, so asking
+    /// to be clipped never changes a leaf's alpha. The tree builder emits no opacity nodes today,
+    /// so this is `1.0` for now; the way to honour CSS `opacity` is to fold
+    /// [`NativePlacement::opacity`] into the payload at extract, which is what the built-in
+    /// extractors do with their own colours.
     pub opacity: f32,
 }
 
