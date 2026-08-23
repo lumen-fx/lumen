@@ -1,0 +1,58 @@
+name: codeql
+
+# CodeQL security analysis over the languages here that scan without a build:
+# the Rust workspace, the workflow files themselves, the TypeScript editor
+# extensions, and the Python SDK. Alerts land on the repository Security tab,
+# and the main-branch ruleset requires a result from this analysis before a
+# pull request can merge.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Weekly sweep so updated queries reach main without waiting for a push.
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+# One run per ref. A new push cancels the run it supersedes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+          - language: rust
+            build-mode: none
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: init
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
