@@ -1258,20 +1258,13 @@ fn build_composed_widget(
             if default_value.is_none() {
                 default_value = Some(value.clone());
             }
+            // An option row carries no sizing of its own: how tall it is
+            // and how far its text sits from the edge are theme metrics,
+            // and they live on `.dropdown-option` in the user-agent sheet
+            // where a skin or an app can overrule them.
             let mut opt_btn = Element {
                 tag: "button".to_string(),
-                attrs: Attributes {
-                    height: Some(LengthSpec::Px(32.0)),
-                    width: Some(LengthSpec::Percent(100.0)),
-                    padding: Some(crate::layout_ir::Edges {
-                        left: 12.0,
-                        right: 12.0,
-                        top: 0.0,
-                        bottom: 0.0,
-                        ..crate::layout_ir::Edges::default()
-                    }),
-                    ..Attributes::default()
-                },
+                attrs: Attributes::default(),
                 children: Vec::new(),
                 ..Default::default()
             };
@@ -1288,19 +1281,14 @@ fn build_composed_widget(
         // closed combobox takes keyboard interaction like a
         // `QComboBox`: Up/Down value stepping, Alt+Down / Space /
         // Enter open, type-ahead.
+        // Its size is the control's: `.dropdown-button` fills the
+        // `<dropdown>` box in the user-agent sheet, so what the author
+        // sizes is what the closed combobox measures, and its height and
+        // padding stay theme metrics a skin can overrule.
         let mut header = Element {
             tag: "button".to_string(),
             attrs: Attributes {
-                width: Some(LengthSpec::Percent(100.0)),
-                height: Some(LengthSpec::Px(36.0)),
                 tab_index: Some(0),
-                padding: Some(crate::layout_ir::Edges {
-                    left: 12.0,
-                    right: 12.0,
-                    top: 0.0,
-                    bottom: 0.0,
-                    ..crate::layout_ir::Edges::default()
-                }),
                 ..Attributes::default()
             },
             children: Vec::new(),
@@ -1362,22 +1350,46 @@ fn build_composed_widget(
         panel_if.attrs.if_eq = Some("true".to_string());
         panel_if.attrs.if_mode = crate::layout_ir::IfModeSpec::Hide;
 
-        let mut column = Element {
-            tag: "column".to_string(),
-            attrs: Attributes {
-                flex: Some(FlexAxis::Column),
-                position: Some(PositionSpec::Relative),
-                ..Attributes::default()
-            },
-            children: vec![header, panel_if],
-            ..Default::default()
+        // The box the author sizes and styles. It keeps the authored tag
+        // and takes the attributes written on it, so `width="240"` and a
+        // `dropdown { ... }` rule reach the control the same way they
+        // reach a `<button>`; the parts it expands into are reachable by
+        // class beneath it.
+        let mut attrs = Attributes {
+            flex: Some(FlexAxis::Column),
+            // Anchors the floating panel.
+            position: Some(PositionSpec::Relative),
+            ..Attributes::default()
         };
-        column.attrs.classes = vec!["dropdown".to_string()];
+        let mut slots: Vec<InterpolationSlot> = Vec::new();
+        apply_authored_attributes(
+            node,
+            tag,
+            &mut attrs,
+            &mut slots,
+            src,
+            lint_findings,
+            frag,
+            in_for_body,
+        )?;
+        // `bind-value` and `placeholder` are the widget's own vocabulary,
+        // spent above on the header's text binding and its resting text.
+        // Leaving them here would bind the box to the same signal and
+        // give it a second copy of the hint.
+        attrs.bind = None;
+        attrs.placeholder = None;
+        attrs.classes.push("dropdown".to_string());
         // Seed the open-panel signal to "false" so the panel hides at
         // startup.
-        column.attrs.signal_seed = Some((open_signal, "false".to_string()));
-        column.attrs.widget = Some(WidgetRole::Dropdown);
-        return Ok(Some(column));
+        attrs.signal_seed = Some((open_signal, "false".to_string()));
+        attrs.widget = Some(WidgetRole::Dropdown);
+        return Ok(Some(Element {
+            tag: tag.to_string(),
+            attrs,
+            children: vec![header, panel_if],
+            interpolations: slots,
+            ..Default::default()
+        }));
     }
 
     // `<option>` outside of `<dropdown>` is meaningless - same
@@ -1716,6 +1728,144 @@ fn synthesize_widget_parts(
 /// left inline would hold that stack at all 32 levels.
 const MAX_ELEMENT_DEPTH: u32 = 32;
 
+/// Write every attribute authored on `node` into `attrs`, and normalise the
+/// `{...}` placeholders in the ones that carry them into `slots`.
+///
+/// Every element the parser produces comes through here, including the box a
+/// composed widget expands into: `width` on a `<dropdown>` has to mean what it
+/// means on any other tag, and a `dropdown` rule in a stylesheet has to reach
+/// the same element the attribute did.
+#[allow(clippy::too_many_arguments)]
+fn apply_authored_attributes(
+    node: roxmltree::Node,
+    tag: &str,
+    attrs: &mut Attributes,
+    slots: &mut Vec<InterpolationSlot>,
+    src: &str,
+    lint_findings: &mut Vec<LintFinding>,
+    frag: &FragCtx<'_>,
+    in_for_body: bool,
+) -> Result<(), ParseError> {
+    // Track byte offsets (in expanded source) of attributes that may
+    // carry `{interpolation}` placeholders so the wave-B
+    // bare-interpolation lint can report accurate line/col. We collect
+    // these BEFORE `apply_attribute` mutates `attrs` because the
+    // roxmltree `Attribute` handle owns the offset info.
+    let mut text_off: Option<usize> = None;
+    let mut placeholder_off: Option<usize> = None;
+    let mut src_off: Option<usize> = None;
+    let mut id_off: Option<usize> = None;
+    let mut class_off: Option<usize> = None;
+    for a in node.attributes() {
+        let off = a.range_value().start;
+        match a.name() {
+            "text" => text_off = Some(off),
+            "placeholder" => placeholder_off = Some(off),
+            "src" => src_off = Some(off),
+            "id" => id_off = Some(off),
+            "class" => class_off = Some(off),
+            _ => {}
+        }
+        // A fragment body writes markers into any attribute, and a value
+        // like `tab-index="{n}"` is not an integer until an argument
+        // replaces the marker. Hold the text and parse it per use site.
+        if frag.in_body && a.value().contains('{') && !interpolated_attribute(a.name()) {
+            let (line, col) = line_col_of(src, off);
+            attrs.deferred.push(DeferredAttr {
+                name: a.name().to_string(),
+                value: a.value().to_string(),
+                line,
+                col,
+            });
+            continue;
+        }
+        let mut ctx = AttrCtx {
+            src,
+            value_offset: off,
+            // Reborrow: the sink outlives every attribute in the loop.
+            lint_findings: &mut *lint_findings,
+        };
+        let applied = apply_attribute(tag, a.name(), a.value(), attrs, &mut ctx)?;
+        // Which surface set a value is not recoverable from the fields
+        // `apply_attribute` just wrote, and a target that ranks a rule above
+        // an attribute needs to know. Record the styling ones under the
+        // spelling the cascade files them under; anything else on the element
+        // (`id`, `text`, `bind-value`) is not a style and is skipped, as is an
+        // attribute the vocabulary has no meaning for and dropped.
+        if applied && let Some(property) = canonical_style_property(a.name()) {
+            attrs
+                .markup_styles
+                .push((property.to_string(), a.value().to_string()));
+        }
+    }
+
+    // Normalise `{$name}` -> `{name}` in string-valued attrs that may
+    // carry interpolation placeholders. Keeps the IR backwards-
+    // compatible with the legacy bare-name form while letting authors
+    // write the preferred `$`-prefixed shape. See `normalize_dollar_interpolation`.
+    //
+    // Wave-C: collect [`InterpolationSlot`]s into `slots` so the
+    // spawner / for-block reconciler can resolve each placeholder
+    // against the right scope (global signals, the current iteration
+    // record, the row index, ...) without re-classifying the brace body
+    // at runtime. Order preserves first-appearance across the
+    // text/placeholder/src/id/classes scan.
+    if let Some(t) = attrs.text.take() {
+        let off = text_off.unwrap_or(0);
+        attrs.text = Some(normalize_dollar_interpolation(
+            &t,
+            off,
+            src,
+            lint_findings,
+            slots,
+            in_for_body,
+        ));
+    }
+    if let Some(p) = attrs.placeholder.take() {
+        let off = placeholder_off.unwrap_or(0);
+        attrs.placeholder = Some(normalize_dollar_interpolation(
+            &p,
+            off,
+            src,
+            lint_findings,
+            slots,
+            in_for_body,
+        ));
+    }
+    if let Some(src_val) = attrs.src.take() {
+        let off = src_off.unwrap_or(0);
+        attrs.src = Some(normalize_dollar_interpolation(
+            &src_val,
+            off,
+            src,
+            lint_findings,
+            slots,
+            in_for_body,
+        ));
+    }
+    if let Some(id) = attrs.id.take() {
+        let off = id_off.unwrap_or(0);
+        attrs.id = Some(normalize_dollar_interpolation(
+            &id,
+            off,
+            src,
+            lint_findings,
+            slots,
+            in_for_body,
+        ));
+    }
+    if !attrs.classes.is_empty() {
+        let off = class_off.unwrap_or(0);
+        attrs.classes = std::mem::take(&mut attrs.classes)
+            .into_iter()
+            .map(|c| {
+                normalize_dollar_interpolation(&c, off, src, lint_findings, slots, in_for_body)
+            })
+            .collect();
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_element(
     node: roxmltree::Node,
@@ -1893,125 +2043,17 @@ fn build_element(
         ..Default::default()
     };
 
-    // Track byte offsets (in expanded source) of attributes that may
-    // carry `{interpolation}` placeholders so the wave-B
-    // bare-interpolation lint can report accurate line/col. We collect
-    // these BEFORE `apply_attribute` mutates `attrs` because the
-    // roxmltree `Attribute` handle owns the offset info.
-    let mut text_off: Option<usize> = None;
-    let mut placeholder_off: Option<usize> = None;
-    let mut src_off: Option<usize> = None;
-    let mut id_off: Option<usize> = None;
-    let mut class_off: Option<usize> = None;
-    for a in node.attributes() {
-        let off = a.range_value().start;
-        match a.name() {
-            "text" => text_off = Some(off),
-            "placeholder" => placeholder_off = Some(off),
-            "src" => src_off = Some(off),
-            "id" => id_off = Some(off),
-            "class" => class_off = Some(off),
-            _ => {}
-        }
-        // A fragment body writes markers into any attribute, and a value
-        // like `tab-index="{n}"` is not an integer until an argument
-        // replaces the marker. Hold the text and parse it per use site.
-        if frag.in_body && a.value().contains('{') && !interpolated_attribute(a.name()) {
-            let (line, col) = line_col_of(src, off);
-            attrs.deferred.push(DeferredAttr {
-                name: a.name().to_string(),
-                value: a.value().to_string(),
-                line,
-                col,
-            });
-            continue;
-        }
-        let mut ctx = AttrCtx {
-            src,
-            value_offset: off,
-            // Reborrow: the sink outlives every attribute in the loop.
-            lint_findings: &mut *lint_findings,
-        };
-        let applied = apply_attribute(&tag, a.name(), a.value(), &mut attrs, &mut ctx)?;
-        // Which surface set a value is not recoverable from the fields
-        // `apply_attribute` just wrote, and a target that ranks a rule above
-        // an attribute needs to know. Record the styling ones under the
-        // spelling the cascade files them under; anything else on the element
-        // (`id`, `text`, `bind-value`) is not a style and is skipped, as is an
-        // attribute the vocabulary has no meaning for and dropped.
-        if applied && let Some(property) = canonical_style_property(a.name()) {
-            attrs
-                .markup_styles
-                .push((property.to_string(), a.value().to_string()));
-        }
-    }
-
-    // Normalise `{$name}` -> `{name}` in string-valued attrs that may
-    // carry interpolation placeholders. Keeps the IR backwards-
-    // compatible with the legacy bare-name form while letting authors
-    // write the preferred `$`-prefixed shape. See `normalize_dollar_interpolation`.
-    //
-    // Wave-C: collect [`InterpolationSlot`]s into `slots` so the
-    // spawner / for-block reconciler can resolve each placeholder
-    // against the right scope (global signals, the current iteration
-    // record, the row index, ...) without re-classifying the brace body
-    // at runtime. Order preserves first-appearance across the
-    // text/placeholder/src/id/classes scan.
     let mut slots: Vec<InterpolationSlot> = Vec::new();
-    if let Some(t) = attrs.text.take() {
-        let off = text_off.unwrap_or(0);
-        attrs.text = Some(normalize_dollar_interpolation(
-            &t,
-            off,
-            src,
-            lint_findings,
-            &mut slots,
-            in_for_body,
-        ));
-    }
-    if let Some(p) = attrs.placeholder.take() {
-        let off = placeholder_off.unwrap_or(0);
-        attrs.placeholder = Some(normalize_dollar_interpolation(
-            &p,
-            off,
-            src,
-            lint_findings,
-            &mut slots,
-            in_for_body,
-        ));
-    }
-    if let Some(src_val) = attrs.src.take() {
-        let off = src_off.unwrap_or(0);
-        attrs.src = Some(normalize_dollar_interpolation(
-            &src_val,
-            off,
-            src,
-            lint_findings,
-            &mut slots,
-            in_for_body,
-        ));
-    }
-    if let Some(id) = attrs.id.take() {
-        let off = id_off.unwrap_or(0);
-        attrs.id = Some(normalize_dollar_interpolation(
-            &id,
-            off,
-            src,
-            lint_findings,
-            &mut slots,
-            in_for_body,
-        ));
-    }
-    if !attrs.classes.is_empty() {
-        let off = class_off.unwrap_or(0);
-        attrs.classes = attrs
-            .classes
-            .into_iter()
-            .map(|c| {
-                normalize_dollar_interpolation(&c, off, src, lint_findings, &mut slots, in_for_body)
-            })
-            .collect();
-    }
+    apply_authored_attributes(
+        node,
+        &tag,
+        &mut attrs,
+        &mut slots,
+        src,
+        lint_findings,
+        frag,
+        in_for_body,
+    )?;
 
     // Recurse into children. When the current element is a `<for>`,
     // flip `in_for_body` on so descendants get row-aware
