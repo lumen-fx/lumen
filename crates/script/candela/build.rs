@@ -51,9 +51,9 @@ fn main() {
     println!("cargo::rerun-if-changed={}", source.display());
 
     for dest in destinations() {
-        if let Err(message) = stage(&source, &dest) {
+        for message in stage(&source, &dest) {
             warn(&format!(
-                "{message}. The candela standard library is not at {}, so `import \"std/...\"` and the array methods will not resolve.",
+                "{message}. That part of the candela standard library is not at {}, so what a program imports from it will not resolve.",
                 dest.display()
             ));
         }
@@ -102,18 +102,28 @@ fn destinations() -> Vec<PathBuf> {
     vec![profile.join("libs"), profile.join("deps").join("libs")]
 }
 
-/// Copy the text modules and build the C-backed ones into `dest`.
-fn stage(source: &Path, dest: &Path) -> Result<(), String> {
-    copy_modules(&source.join("std"), &dest.join("std"))?;
+/// Copy the text modules and build the C-backed ones into `dest`, reporting
+/// every part that did not make it rather than stopping at the first: a module
+/// that fails to build costs a program the functions it declares, and no more.
+fn stage(source: &Path, dest: &Path) -> Vec<String> {
+    let mut problems = Vec::new();
+    if let Err(message) = copy_modules(&source.join("std"), &dest.join("std")) {
+        problems.push(message);
+    }
     for (module, sources) in NATIVE_MODULES {
-        build_native(source, dest, module, sources)?;
+        if let Err(message) = build_native(source, dest, module, sources) {
+            problems.push(message);
+        }
     }
     // The random module is built from a third-party generator that ships its
     // own licence; the notice travels with the binary made from it.
-    copy_file(
+    if let Err(message) = copy_file(
         &source.join("std_src/random/LICENSE.txt"),
         &dest.join("std_src/random/LICENSE.txt"),
-    )
+    ) {
+        problems.push(message);
+    }
+    problems
 }
 
 /// Copy every `.cdl` module in `from` into `to`.
@@ -153,7 +163,14 @@ fn build_native(source: &Path, dest: &Path, module: &str, sources: &[&str]) -> R
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
     let library = out_dir.join(format!("{module}.{}", library_extension()));
 
+    // Optimized whatever profile Lumen is being built in, which is how candela
+    // builds these for its own releases. The modules carry inline definitions
+    // with no out-of-line copy behind them, so an unoptimized build leaves a
+    // call to a function nothing defines and the library will not link; and
+    // what they hold is arithmetic an app calls at run time, which has no
+    // reason to be slow because the engine around it was built for debugging.
     let tool = cc::Build::new()
+        .opt_level(2)
         .try_get_compiler()
         .map_err(|e| format!("no C compiler to build the candela {module} module: {e}"))?;
     let mut command = tool.to_command();

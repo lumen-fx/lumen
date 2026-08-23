@@ -41,6 +41,37 @@ fn c_backed_module_binds_its_library() {
 }
 
 #[test]
+fn the_other_c_backed_modules_bind_too() {
+    let mut host = CandelaHost::new();
+    host.load(
+        "import \"std/math\";\nimport \"std/random\";\n\
+         fn angle() { return cos(0.0); }\n\
+         fn draw() { seed(7); return random_int_range(1, 6); }\n\
+         fn main() {}\n",
+        "app.cdl",
+    )
+    .expect("the math and random modules import");
+
+    let out = host.call("angle", &[]).expect("cos() runs");
+    let Some(ScriptValue::F64(cosine)) = out.ret else {
+        panic!("cos() returns a float, got {:?}", out.ret);
+    };
+    assert!(
+        (cosine - 1.0).abs() < f64::EPSILON,
+        "cos(0) is 1, got {cosine}"
+    );
+
+    let out = host.call("draw", &[]).expect("random_int_range() runs");
+    let Some(ScriptValue::I64(draw)) = out.ret else {
+        panic!("random_int_range() returns an int, got {:?}", out.ret);
+    };
+    assert!(
+        (1..=6).contains(&draw),
+        "a draw between 1 and 6 stays there, got {draw}"
+    );
+}
+
+#[test]
 fn array_methods_resolve_without_an_import() {
     let mut host = CandelaHost::new();
     host.load(
