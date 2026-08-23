@@ -47,8 +47,13 @@
   flex-direction: row;
 }
 
-:where(.lm-column, .lm-root, .lm-scroll, .lm-overlay, .lm-dialog, .lm-for) {
+:where(.lm-column, .lm-root, .lm-scroll, .lm-overlay, .lm-dialog, .lm-for, .lm-dropdown) {
   flex-direction: column;
+}
+
+/* A dropdown is what its options panel is positioned against. */
+:where(.lm-dropdown) {
+  position: relative;
 }
 
 :where(.lm-row, .lm-title-bar, .lm-checkbox, .lm-radio, .lm-progress) {

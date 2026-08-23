@@ -59,3 +59,13 @@ progress { width: 100%; height: 6; }
    runtime-driven (`sync_progress_fill`). */
 .checkbox-box, .radio-dot { width: 18; height: 18; }
 .progress-fill { height: 100%; }
+
+/* The closed face of a `<dropdown>` and the rows in its panel. Both fill
+   the box above them, so sizing the `<dropdown>` sizes the control and
+   the option rows follow the panel. The row height and the gap from the
+   edge to the text are theme metrics: a skin's own `.dropdown-button` /
+   `.dropdown-option` rule outranks these, which is why they are not
+   written as attributes in the parser. `.dropdown-button` takes its
+   height floor from the `button` rule above. */
+.dropdown-button, .dropdown-option { width: 100%; padding: 0 12; }
+.dropdown-option { min-height: 32; }

@@ -457,6 +457,15 @@ A combobox. The parser expands it into a header button plus a floating
 options panel; the panel is dismissed by clicking outside it and flips
 above the trigger near the bottom of the window.
 
+The tag stays on the box those parts sit in, so `width`, `min-width`,
+`padding`, `bg` and a `dropdown` rule in a stylesheet size and paint the
+control the way they do any other widget. The generated elements carry
+the classes `dropdown-button` for the closed face, `dropdown-panel` for
+the floating list, and `dropdown-option` for a row in it. The face fills
+the box, so sizing the `<dropdown>` sizes the whole control; the face's
+height and an option row's are theme metrics, so restyle those classes to
+change them.
+
 `<dropdown>` requires `bind-value`. Its children must all be `<option>`.
 
 | Tag | Attribute | Effect |
