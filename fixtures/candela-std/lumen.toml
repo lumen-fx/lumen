@@ -1,0 +1,10 @@
+# Proof fixture for the candela standard library under the Lumen host. The
+# script imports a C-backed module (`std/time`) and calls an array method the
+# compiler loads from `std/list` on its own; both read the library the toolchain
+# ships, so the labels in main.lmn keep their markup text when it is missing.
+[script]
+engine = "candela"
+
+# No introspection server, which keeps `--headless` CI runs from binding a port.
+[mcp]
+port = 0

@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   The Lumen Windows installer: lumenc, the liblumen runtime library, the app
-  launcher stub, and an install receipt, installed for the current user.
+  launcher stub, the candela standard library, and an install receipt,
+  installed for the current user.
 
   It installs into the user profile so it never asks for administrator
   rights, which is the same shape VS Code's user installer uses. The payload
@@ -84,6 +85,15 @@
       <Component Id="LumenLauncherExe" Directory="BINFOLDER">
         <File Id="LumenLauncherExe" Source="$(var.StageDir)\bin\lumen-launcher.exe" KeyPath="yes" />
       </Component>
+
+      <!--
+        The candela standard library, under bin\libs. candela reads `import
+        "std/..."` and the array methods out of a libs\ directory beside the
+        running executable, so this tree has to keep its shape and its place
+        next to lumenc.exe. It is harvested rather than authored file by file
+        because the module list belongs to candela, not to this package.
+      -->
+      <Files Include="$(var.StageDir)\bin\libs\**" Directory="BINFOLDER" Subdirectory="libs" />
 
       <!--
         The receipt marks this as an installed copy, which is what turns the

@@ -60,6 +60,13 @@ apps are narrower: `apps/scroll-tiles` and `apps/notes` for basic markup and
 scripting, `apps/kanban` for drag and drop, `apps/pages-demo` for multi-page
 navigation, `apps/music` for audio.
 
+The build also writes `target/<profile>/libs`, the candela standard library
+that `lumen-script-candela`'s build script stages out of the candela source
+cargo resolved, with the C-backed modules built by the C compiler cargo already
+uses for the other native dependencies. candela reads the tree from beside the
+running executable, so it goes there rather than into `OUT_DIR`, and the
+release archive ships the same tree next to `lumenc`.
+
 ## Developing without a window
 
 Add `--headless` to run the whole pipeline (layout, shaping, GPU render, MCP

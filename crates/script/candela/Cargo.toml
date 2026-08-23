@@ -47,3 +47,13 @@ candela-vm = { git = "https://github.com/lumen-fx/candela", branch = "main", ver
 serde_json.workspace = true
 # `parse_markdown`: markdown -> block list, matching the Rhai and Lua hosts.
 pulldown-cmark.workspace = true
+
+[build-dependencies]
+# Reads the resolved dependency graph, the only place a dependency's own source
+# directory is named, so the build script can stage the standard library out of
+# the candela source this crate compiles against.
+serde_json.workspace = true
+# Names the C compiler and the flags for the target. The build script drives
+# the command itself, because candela opens the C-backed standard library
+# modules as shared libraries and `cc` builds static archives.
+cc.workspace = true

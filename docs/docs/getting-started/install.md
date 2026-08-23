@@ -1,9 +1,9 @@
 # Install Lumen
 
 Installing Lumen gives you `lumenc`, the command you use to create, run, and
-package apps, the Lumen runtime library it loads, and the launcher a packaged
-app is built from. You do not need a Rust toolchain to build apps, or to
-package one for someone else.
+package apps, the Lumen runtime library it loads, the launcher a packaged app
+is built from, and the candela standard library scripts import. You do not need
+a Rust toolchain to build apps, or to package one for someone else.
 
 ## Linux and macOS
 
@@ -93,6 +93,11 @@ This needs a Rust toolchain. It builds `lumenc`, then fetches the matching
 Lumen source and builds the runtime library and the launcher from it, putting
 both beside the installed `lumenc` so packaging an app works the same as it
 does from a release. Expect it to take a while: it is compiling the engine.
+
+A source install carries no candela standard library, because cargo keeps only
+the binary it installed: a script that reaches for `import "std/..."` or an
+array method wants a release install, or a `libs/` directory copied beside
+`lumenc` by hand.
 
 Set `LUMEN_SKIP_ENGINE_BUILD=1` to install only the compiler, if you are
 building the other two yourself. `lumenc run`, `build`, and `check` work

@@ -1,0 +1,5 @@
+<root>
+  <label id="clock-label" bind-text="clock" text="waiting" />
+  <label id="total-label" bind-text="total" text="waiting" />
+  <script src="main.cdl" />
+</root>

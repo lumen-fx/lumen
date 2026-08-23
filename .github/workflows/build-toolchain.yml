@@ -151,6 +151,11 @@ jobs:
           cp target/release/lumenc dist/bin/
           cp target/release/${{ matrix.libname }} dist/bin/
           cp target/release/lumen-launcher dist/bin/
+          # The candela standard library, staged beside the binaries by
+          # lumen-script-candela's build script. candela reads `import
+          # "std/..."` (and the array methods) out of `libs/` next to the
+          # running executable, so it belongs beside lumenc, not in share/.
+          cp -R target/release/libs dist/bin/libs
           # Shell completions, each under the directory its shell searches, so
           # a prefix on the usual search paths picks them up as installed. The
           # same scripts are embedded in lumenc (`lumenc completions <shell>`)
@@ -171,6 +176,7 @@ jobs:
           Copy-Item target\release\lumenc.exe dist\bin\
           Copy-Item target\release\${{ matrix.libname }} dist\bin\
           Copy-Item target\release\lumen-launcher.exe dist\bin\
+          Copy-Item -Recurse target\release\libs dist\bin\libs
           Compress-Archive -Path dist\* -DestinationPath lumen-${{ matrix.target }}.zip
 
       # The MSI payload is staged separately from dist\, and only after the
@@ -186,7 +192,7 @@ jobs:
           MSI_VERSION: ${{ inputs.msi_version }}
         run: |
           New-Item -ItemType Directory -Force -Path msi-stage\bin, msi-stage\share\lumen | Out-Null
-          Copy-Item dist\bin\* msi-stage\bin\
+          Copy-Item -Recurse dist\bin\* msi-stage\bin\
           # LF line endings and no BOM: lumenc reads this with a plain line
           # split, and a BOM would land inside the first key.
           $receipt = "version $env:MSI_VERSION`ntarget windows-x86_64`ninstaller msi`n"

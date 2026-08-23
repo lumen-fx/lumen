@@ -31,6 +31,11 @@ Beyond `lumen::`, the prelude adds `window::`, `document::`, and `history::`,
 plus `Node` and `Event` wrappers so tree work reads as method chains. `main()`
 stays empty; a Lumen app does its work in the lifecycle handlers.
 
+candela's own standard library ships with the toolchain, so `import "std/time";`
+and the array methods work in an app script the way they do anywhere else; see
+[the candela reference](../reference/scripting-candela.md#the-candela-standard-library)
+for where it does not reach.
+
 **Rhai** and **Lua** expose the same capabilities as plain globals:
 
 ```rhai
