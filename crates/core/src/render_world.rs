@@ -15,10 +15,10 @@
 //! Each render-world entity represents one drawable. Adding a primitive consists of: one `Extracted*` component, one extract fn, and one render system.
 
 use crate::components::{
-    CARET_WIDTH_PX, CaretBlink, CaretWidth, Color, EchoMode, Fill, ImeState, Opacity,
-    PASSWORD_MASK_CHAR, PasswordCharacter, TextAlign, TextBlockOrigin, TextContent, TextInput,
-    TextInputPaint, TextInputScroll, TextStyle, Transform, Visible, Visuals, resolve_line_height,
-    text_baseline_in_line, text_block_top,
+    CARET_WIDTH_PX, CaretBlink, CaretWidth, Color, EchoMode, Fill, FlexDirection, FlexJustify,
+    ImeState, Opacity, PASSWORD_MASK_CHAR, PasswordCharacter, Style, TextAlign, TextBlockOrigin,
+    TextContent, TextInput, TextInputPaint, TextInputScroll, TextStyle, Transform, Visible,
+    Visuals, resolve_line_height, text_baseline_in_line, text_block_top,
 };
 use crate::input::{Focused, ScrollOffset};
 use bevy_ecs::prelude::*;
@@ -2192,6 +2192,53 @@ fn mask_echo(
     }
 }
 
+/// Where a run of text sits along the main axis of the box holding it.
+///
+/// A flex box lays the text inside it out as an item of its own, sized to
+/// the words rather than to the box, so `justify-content: center` on a
+/// `<button>` centres its label the same way it centres a child. That is
+/// what Qt and Slint do with a button's contents, and what a browser does
+/// with the anonymous item it wraps a flex container's text in - which is
+/// why `text-align` is not the property an author reaches for first.
+///
+/// An authored [`TextAlign`] wins: it places the lines, and
+/// `justify-content` only speaks for the run when nothing else has. The
+/// two agree on a single line either way, and on several the run is placed
+/// as a block with its lines aligned inside it, which is the arrangement
+/// the anonymous item produces.
+///
+/// Read on a horizontal main axis only. Under `flex-direction: column`
+/// `justify-content` distributes vertically and has nothing to say about
+/// where a line starts.
+fn text_run_align(align: TextAlign, style: Option<&Style>) -> TextAlign {
+    if align != TextAlign::Start {
+        return align;
+    }
+    let Some(style) = style else {
+        return align;
+    };
+    let placed = match style.justify {
+        // One item is centred by every distribution that leaves space on
+        // both sides of it, and left where it started by the one that does
+        // not (CSS Flexbox 8.2).
+        FlexJustify::Center | FlexJustify::SpaceAround | FlexJustify::SpaceEvenly => {
+            TextAlign::Center
+        }
+        FlexJustify::End => TextAlign::End,
+        FlexJustify::Start | FlexJustify::SpaceBetween => TextAlign::Start,
+    };
+    match style.flex_direction {
+        FlexDirection::Row => placed,
+        // The main axis runs the other way, so the ends swap.
+        FlexDirection::RowReverse => match placed {
+            TextAlign::Start => TextAlign::End,
+            TextAlign::End => TextAlign::Start,
+            TextAlign::Center => TextAlign::Center,
+        },
+        FlexDirection::Column | FlexDirection::ColumnReverse => align,
+    }
+}
+
 /// Default extract fn that emits one [`ExtractedText`] per entity with [`Transform`] and [`TextContent`].
 ///
 /// - When an [`ImeState`] is present, its `preedit` is concatenated onto the committed text.
@@ -2199,7 +2246,6 @@ fn mask_echo(
 /// - Under a concealed [`EchoMode`] the display glyphs, caret, and selection are masked (see [`mask_echo`]); the buffer plaintext is untouched.
 /// - Hidden subtrees and entities clipped fully outside their scroll/overflow ancestor are skipped.
 pub fn extract_text(main: &mut World, render: &mut World) {
-    use crate::components::Style;
     let (parents, mut depth_cache) = build_parent_map(main);
     let hidden = hidden_entities(main, &parents);
     let scroll = parent_scroll_offsets(main, &parents);
@@ -2356,7 +2402,7 @@ pub fn extract_text(main: &mut World, render: &mut World) {
                             .map(|c| alpha.apply(c)),
                         caret_color: paint.and_then(|p| p.caret_color).map(|c| alpha.apply(c)),
                         container_width,
-                        align: ts.align,
+                        align: text_run_align(ts.align, style),
                         wrap: ts.wrap,
                         max_lines: ts.max_lines,
                         family: ts.family.clone(),

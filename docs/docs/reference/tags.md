@@ -121,6 +121,12 @@ it, including the reverse variants.
 `overflow: scroll` on any element makes it a live scroll container, the
 same as `<scroll>`.
 
+An element's own text lays out as an item of its own, sized to the words,
+so `justify` places it along the main axis the same way it places a child:
+`justify="center"` on a `<button>` centres its label. It applies on a
+horizontal main axis only, and an authored `text-align` wins where both
+are set.
+
 ### Colour and paint
 
 | Attribute | Value | Default |
@@ -342,6 +348,9 @@ A focusable, clickable box. Focusable by default (`tab-index="0"`).
 | Attribute | Value | Effect |
 | --- | --- | --- |
 | `default` | boolean | Marks the default button of the containing `<dialog>`: Enter anywhere in the dialog activates it, and closing through it takes the accepted path. Also adds the `default` class. |
+
+A button holds its label itself rather than in a child element, so
+`justify="center"` is what centres the text.
 
 ### `<input>`
 

@@ -318,6 +318,12 @@ hidden` cuts its descendants off at the element's box without making it
 scrollable; inside a scroll container that clip travels with the element as
 the content scrolls.
 
+An element's own text lays out as an item of its own, sized to the words,
+so `justify-content` places it along the main axis the same way it places
+a child: `justify-content: center` on a `button` centres its label. It
+applies on a horizontal main axis only, and an authored `text-align` wins
+where both are set.
+
 ### Logical properties
 
 Each takes a px number and resolves against the element's writing
