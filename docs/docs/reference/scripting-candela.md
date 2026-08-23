@@ -761,8 +761,22 @@ See [Translation](../guides/i18n.md) for the catalogue format.
 
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |
-| `lumen::read_file(path: string)` | `string` | File contents; empty string on error. |
-| `lumen::write_file(path: string, contents: string)` | `bool` | `true` on success. Writes atomically (temp file + rename), so a reader never sees a truncated file. |
+| `lumen::read_file(path: string)` | `string` | File contents; empty string on error. Relative paths resolve against the app directory. |
+| `lumen::write_file(path: string, contents: string)` | `bool` | `true` on success. Relative paths resolve against the app directory; the write is atomic (temp file + rename), so a reader never sees a truncated file. |
+| `lumen::data_dir()` | `string` | The directory this app saves data in, created when missing. |
+
+A relative path names a file the app ships, so it reads the same wherever the
+app was started from. Saved state goes under `data_dir()` instead, because the
+app directory is read-only once the app is installed:
+
+```rust
+lumen::write_file(lumen::data_dir() + "/session.json", state);
+```
+
+`data_dir()` follows the platform convention for user data (`$XDG_DATA_HOME`,
+else `~/.local/share`, on Linux; `~/Library/Application Support` on macOS;
+`%APPDATA%` on Windows) and names one directory per app from
+[`[app] id`](lumen-toml.md), so two apps on a machine keep their saves apart.
 
 ## Diagnostics
 

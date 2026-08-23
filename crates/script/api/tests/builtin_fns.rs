@@ -228,6 +228,62 @@ fn the_file_builtins_report_failure_through_their_return_value() {
     );
 }
 
+/// A path an app author writes is app-relative, so a file the app ships is
+/// named the same way wherever the app was started from, and saved state has a
+/// per-app home the working directory cannot move.
+#[test]
+fn the_file_builtins_resolve_against_the_app_and_its_data_directory() {
+    let app = std::env::temp_dir().join(format!("lumen-builtin-files-{}", std::process::id()));
+    std::fs::create_dir_all(&app).expect("app dir");
+    lumen_core::app_paths::set_app(&app, "lumen-builtin-files-test");
+
+    let wrote = returns(
+        &builtin("rhai", "write_file"),
+        &[text("notes.txt"), text("hello")],
+    );
+    assert_eq!(wrote, ScriptValue::Bool(true));
+    assert_eq!(
+        std::fs::read_to_string(app.join("notes.txt")).ok(),
+        Some("hello".to_string()),
+        "a relative write lands in the app directory"
+    );
+    assert_eq!(
+        returns(&builtin("rhai", "read_file"), &[text("notes.txt")]),
+        text("hello"),
+        "and the matching read finds it"
+    );
+
+    let absolute = app.join("absolute.txt");
+    let absolute = absolute.to_string_lossy().into_owned();
+    assert_eq!(
+        returns(
+            &builtin("lua", "write_file"),
+            &[text(&absolute), text("kept")]
+        ),
+        ScriptValue::Bool(true),
+        "an absolute path is left alone"
+    );
+    assert_eq!(
+        returns(&builtin("lua", "read_file"), &[text(&absolute)]),
+        text("kept")
+    );
+
+    let ScriptValue::Str(data) = returns(&builtin("candela", "data_dir"), &[]) else {
+        panic!("data_dir returns a path");
+    };
+    let data = std::path::PathBuf::from(data);
+    assert!(data.is_dir(), "{} was not created", data.display());
+    assert!(
+        data.ends_with("lumen-builtin-files-test") || data == app,
+        "the data directory carries the app id: {}",
+        data.display()
+    );
+    if data != app {
+        let _ = std::fs::remove_dir(&data);
+    }
+    let _ = std::fs::remove_dir_all(&app);
+}
+
 /// `write_file` goes through a temp-file-and-rename, not a truncating write
 /// in place, so a reader racing it never sees a partial file (#154). Check
 /// the two observable ends of that: the final file holds the new contents,

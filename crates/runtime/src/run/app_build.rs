@@ -24,6 +24,12 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         opts.parser.take().map(std::sync::Arc::from);
     let dir = opts.dir.clone();
     let cfg = crate::config::LumenToml::load_or_default(&dir).map_err(RunError::Config)?;
+    // Where this app lives and what it is called, published before anything
+    // that resolves a path runs: the script builtins `read_file`,
+    // `write_file` and `data_dir` read them, and a script's `on_start` fires
+    // on the first tick.
+    let app_id = cfg.app.id.clone().unwrap_or_else(|| derive_app_id(&dir));
+    lumen_core::app_paths::set_app(dir.clone(), app_id.clone());
     // File-based pages: discover the page set up front. The entry file is
     // `index.lmn` (else the `[app] entry` stem, else `main.lmn`). Single-file
     // apps come back `multipage = false` and take the untouched legacy path.
@@ -404,11 +410,6 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     let mut start_position: Option<(i32, i32)> = None;
     let mut on_close_state: Option<Box<dyn FnOnce(WindowGeometry) + Send>> = None;
     if cfg.window.remember_state.unwrap_or(false) {
-        let app_id = cfg
-            .app
-            .id
-            .clone()
-            .unwrap_or_else(|| derive_app_id(&opts.dir));
         let prev = crate::window_state::load(&app_id);
         if let Some([w, h]) = prev.size {
             size = (w, h);

@@ -18,6 +18,7 @@ use crate::ScriptValue;
 use crate::{
     FileDialogKind, HostSet, ScriptCommand, ScriptFn, ScriptFnCx, ScriptNs, ScriptTy as T,
 };
+use lumen_core::app_paths;
 use lumen_core::warn_line;
 
 /// Describe a builtin whose whole effect is one queued [`ScriptCommand`].
@@ -646,11 +647,10 @@ fn audio_fns() -> Vec<ScriptFn> {
 /// temp file and renaming it into place avoids that: rename is atomic on a
 /// given filesystem, so a concurrent reader always sees either the old
 /// contents or the new ones.
-fn write_file_atomic(path: &str, contents: &str) -> std::io::Result<()> {
+fn write_file_atomic(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    let path = std::path::Path::new(path);
     let dir = match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => std::path::Path::new("."),
@@ -707,13 +707,18 @@ fn misc_fns() -> Vec<ScriptFn> {
             T::Str,
             |cx| ScriptValue::Str(lumen_core::i18n::translate(&cx.str_arg(0))),
         ),
+        // A relative path resolves against the app directory, the same rule
+        // `open_path` and `audio_play` apply, so a file an app ships is named
+        // the same way wherever the app was started from. Saved state belongs
+        // under `data_dir()` instead: the app directory is read-only once the
+        // app is installed.
         value(
             "read_file",
             "The contents of that file, or an empty string.",
             &[("path", T::Str)],
             T::Str,
             |cx| {
-                let path = cx.str_arg(0);
+                let path = app_paths::resolve(cx.str_arg(0));
                 match std::fs::read_to_string(&path) {
                     Ok(text) => ScriptValue::Str(text),
                     Err(e) => {
@@ -723,7 +728,7 @@ fn misc_fns() -> Vec<ScriptFn> {
                         // warn about the errors that mean something went
                         // wrong reading a file that is there.
                         if e.kind() != std::io::ErrorKind::NotFound {
-                            warn_line!("read_file({path}): {e}");
+                            warn_line!("read_file({}): {e}", path.display());
                         }
                         ScriptValue::Str(String::new())
                     }
@@ -736,15 +741,25 @@ fn misc_fns() -> Vec<ScriptFn> {
             &[("path", T::Str), ("contents", T::Str)],
             T::Bool,
             |cx| {
-                let path = cx.str_arg(0);
+                let path = app_paths::resolve(cx.str_arg(0));
                 match write_file_atomic(&path, &cx.str_arg(1)) {
                     Ok(()) => ScriptValue::Bool(true),
                     Err(e) => {
-                        warn_line!("write_file({path}): {e}");
+                        warn_line!("write_file({}): {e}", path.display());
                         ScriptValue::Bool(false)
                     }
                 }
             },
+        ),
+        // Where saved state lives: one directory per app under the platform's
+        // user-data location, created on the first call so a write into it
+        // needs no other step.
+        value(
+            "data_dir",
+            "The directory this app saves data in, created if missing.",
+            &[],
+            T::Str,
+            |_| ScriptValue::Str(app_paths::data_dir().to_string_lossy().into_owned()),
         ),
         // A template instance prefixes the ids inside it. Given `user-card:btn`
         // as the source, `local_id(source, "label")` is `user-card:label`; a

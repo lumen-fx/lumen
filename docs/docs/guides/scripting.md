@@ -233,6 +233,24 @@ issues a GET without holding up a tick and calls `on_fetch(tag, body)` or
 or a request body, `http(request)` takes the whole request and answers on
 `on_http(tag, response)`.
 
+## Saving data
+
+```rust
+let seed = lumen::read_file("data/seed.json");
+lumen::write_file(lumen::data_dir() + "/session.json", session);
+```
+
+`read_file` and `write_file` resolve a relative path against the app directory,
+so a file the app ships is named the same way wherever the app was started
+from.
+
+State the app writes back belongs somewhere else. An installed app directory is
+read-only, and an update replaces what is in it, so a save written there is
+either refused or lost. `data_dir()` answers with a directory of this app's
+own, under the platform's user-data location and named by
+[`[app] id`](../reference/lumen-toml.md); it exists by the time the call
+returns.
+
 ## Functions the app's Rust adds
 
 An app with Rust behind it can hand the script functions of its own, through the

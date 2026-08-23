@@ -8,6 +8,7 @@
 #![warn(missing_docs)]
 
 pub mod app;
+pub mod app_paths;
 pub mod command;
 pub mod components;
 pub mod i18n;

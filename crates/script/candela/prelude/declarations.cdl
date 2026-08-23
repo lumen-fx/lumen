@@ -68,6 +68,7 @@ host "lumen" {
     string tr(string);
     string read_file(string);
     bool write_file(string, string);
+    string data_dir();
     string local_id(string, string);
     string dump_tree();
     int[] node_query(string);
