@@ -7,12 +7,14 @@
 //! rasterizer.
 
 use lumen_core::prelude::*;
-use lumen_core::render_world::{RenderEntityMap, build_parent_map, paint_order_of};
+use lumen_render_wgpu::vello::peniko::BlendMode;
 use lumen_render_wgpu::vello::peniko::Fill as VelloFill;
 use lumen_render_wgpu::vello::peniko::color::{AlphaColor, Srgb};
 use lumen_render_wgpu::vello::peniko::kurbo::{Affine, Rect as KurboRect};
-use lumen_render_wgpu::{WgpuRenderer, WgpuRendererPlugin, gpu_unavailable_reason};
-use std::sync::Arc;
+use lumen_render_wgpu::{
+    WalkContext, WgpuRenderer, WgpuRendererPlugin, gpu_unavailable_reason, walk_node,
+};
+use std::sync::{Arc, Mutex};
 
 const W: u32 = 64;
 const H: u32 = 64;
@@ -69,12 +71,13 @@ fn extract_solids(main: &mut World, render: &mut World) {
         .get_resource::<ExtensionId>()
         .map(|id| id.0.clone())
         .unwrap_or_else(|| EXTENSION.into());
-    let (parents, mut depth_cache) = build_parent_map(main);
+    let mut place = NativeExtract::new(main);
     let mut q = main.query::<(Entity, &Transform, &Solid)>();
-    let pairs: Vec<(Entity, ExtractedNative)> = q
+    let leaves: Vec<(Entity, ExtractedNative)> = q
         .iter(main)
-        .map(|(e, transform, solid)| {
-            (
+        .filter_map(|(e, transform, solid)| {
+            let placed = place.place(e, transform, None)?;
+            Some((
                 e,
                 ExtractedNative {
                     extension_id: extension.clone(),
@@ -82,39 +85,15 @@ fn extract_solids(main: &mut World, render: &mut World) {
                         color: solid.color,
                         overhang: solid.overhang,
                     }),
-                    bounds: Rect::new(transform.absolute, transform.size),
-                    order: paint_order_of(e, &parents, &mut depth_cache),
+                    bounds: placed.bounds,
+                    order: placed.order,
                     revision: solid.revision,
                     clip_to_bounds: solid.clip_to_bounds,
                 },
-            )
+            ))
         })
         .collect();
-
-    let prior = std::mem::take(&mut render.resource_mut::<RenderEntityMap>().native);
-    let mut next: std::collections::HashMap<Entity, Entity> = std::collections::HashMap::new();
-    for (main_e, leaf) in pairs {
-        let reuse = prior
-            .get(&main_e)
-            .copied()
-            .filter(|&re| render.get_entity(re).is_ok());
-        let render_e = match reuse {
-            Some(re) => {
-                render.entity_mut(re).insert(leaf);
-                re
-            }
-            None => render.spawn(leaf).id(),
-        };
-        next.insert(main_e, render_e);
-    }
-    for (main_e, render_e) in &prior {
-        if !next.contains_key(main_e)
-            && let Ok(em) = render.get_entity_mut(*render_e)
-        {
-            em.despawn();
-        }
-    }
-    render.resource_mut::<RenderEntityMap>().native = next;
+    upsert_native_leaves(render, &extension, leaves);
 }
 
 /// The id the extract fn stamps on its leaves, so a test can ship a leaf no painter answers for.
@@ -372,5 +351,184 @@ fn a_native_leaf_paints_over_the_box_that_styles_it() {
     assert!(
         g > 200 && r < 40,
         "the extension should cover its own background: {r},{g}"
+    );
+}
+
+/// Fills the leaf's bounds with one opaque colour and records the opacity it was handed. It does
+/// not apply that opacity itself, so anything the backend composited on top shows up in the pixels.
+struct OpaqueFill {
+    color: Color,
+    seen_opacity: Arc<Mutex<Vec<f32>>>,
+}
+
+impl NativePainter for OpaqueFill {
+    fn paint(&self, ctx: &mut NativePaintCtx<'_>) {
+        self.seen_opacity.lock().expect("lock").push(ctx.opacity);
+        let bounds = ctx.bounds;
+        let [r, g, b, a] = self.color.to_rgba8();
+        let color = AlphaColor::<Srgb>::from_rgba8(r, g, b, a);
+        let transform = Affine::new(ctx.device_transform().coeffs);
+        let Some(scene) = ctx.target_as::<lumen_render_wgpu::vello::Scene>() else {
+            return;
+        };
+        scene.fill(
+            VelloFill::NonZero,
+            transform,
+            color,
+            None,
+            &KurboRect::new(
+                bounds.origin.x as f64,
+                bounds.origin.y as f64,
+                (bounds.origin.x + bounds.size.x) as f64,
+                (bounds.origin.y + bounds.size.y) as f64,
+            ),
+        );
+    }
+}
+
+/// A painter that opens a clip layer and never closes it - the shape of an extension bug, or of a
+/// painter that returned early out of the middle of its own drawing.
+struct LeavesALayerOpen;
+
+impl NativePainter for LeavesALayerOpen {
+    fn paint(&self, ctx: &mut NativePaintCtx<'_>) {
+        let transform = Affine::new(ctx.device_transform().coeffs);
+        let Some(scene) = ctx.target_as::<lumen_render_wgpu::vello::Scene>() else {
+            return;
+        };
+        scene.push_layer(
+            VelloFill::NonZero,
+            BlendMode::default(),
+            1.0,
+            transform,
+            &KurboRect::new(0.0, 0.0, (W / 2) as f64, (H / 2) as f64),
+        );
+    }
+}
+
+fn native_node(bounds: (f32, f32, f32, f32), clip_to_bounds: bool) -> Arc<Node> {
+    Arc::new(Node::Native {
+        extension_id: EXTENSION.into(),
+        payload: Arc::new(()),
+        bounds: Rect::new(
+            glam::Vec2::new(bounds.0, bounds.1),
+            glam::Vec2::new(bounds.2, bounds.3),
+        ),
+        revision: 1,
+        clip_to_bounds,
+    })
+}
+
+fn rect_node(bounds: (f32, f32, f32, f32), color: Color) -> Arc<Node> {
+    Arc::new(Node::Rect {
+        bounds: Rect::new(
+            glam::Vec2::new(bounds.0, bounds.1),
+            glam::Vec2::new(bounds.2, bounds.3),
+        ),
+        brush: Brush::Solid(color),
+        corner: 0.0,
+        corners: None,
+    })
+}
+
+/// Walks a hand-built tree straight into an offscreen renderer, so a test can place a leaf under
+/// nodes the tree builder does not emit yet, like opacity groups.
+fn render_tree(root: &Arc<Node>, painters: &NativePainters) -> Vec<u8> {
+    let mut renderer = WgpuRenderer::new_offscreen(W, H).expect("offscreen renderer");
+    renderer.scene.reset();
+    {
+        let mut ctx = WalkContext::new_with_dpr(&mut renderer.scene, None, None, 1.0)
+            .with_native_painters(painters);
+        walk_node(&mut ctx, root);
+    }
+    renderer.render_current(Color::rgb(0.0, 0.0, 0.0));
+    renderer.read_rgba8().expect("readback")
+}
+
+/// Opacity has one owner, the painter. A bounds clip composites nothing, so asking to be clipped
+/// cannot change what a leaf's alpha comes out as.
+#[test]
+fn asking_for_a_bounds_clip_does_not_change_the_leafs_alpha() {
+    if let Some(why) = gpu_unavailable_reason() {
+        eprintln!("skipping: {why}");
+        return;
+    }
+
+    let seen_opacity = Arc::new(Mutex::new(Vec::new()));
+    let mut painters = NativePainters::default();
+    painters.register(
+        EXTENSION,
+        OpaqueFill {
+            color: Color::rgb(0.0, 1.0, 0.0),
+            seen_opacity: seen_opacity.clone(),
+        },
+    );
+
+    let under_half_opacity = |clip_to_bounds: bool| {
+        let tree = Arc::new(Node::Opacity {
+            alpha: 0.5,
+            child: native_node((16.0, 16.0, 32.0, 32.0), clip_to_bounds),
+        });
+        render_tree(&tree, &painters)
+    };
+
+    let clipped = under_half_opacity(true);
+    let unclipped = under_half_opacity(false);
+    assert_eq!(
+        pixel(&clipped, 32, 32),
+        pixel(&unclipped, 32, 32),
+        "the clip must not composite: same painter, same pixels",
+    );
+    assert_eq!(
+        seen_opacity.lock().expect("lock").as_slice(),
+        [0.5, 0.5],
+        "the ancestor opacity reaches the painter, both times",
+    );
+}
+
+/// A painter that leaves a layer open must not cost the rest of the frame its clips. The walker
+/// closes whatever the painter left behind, and closes no more than that.
+#[test]
+fn a_painter_that_leaves_a_layer_open_does_not_disturb_the_rest_of_the_scene() {
+    if let Some(why) = gpu_unavailable_reason() {
+        eprintln!("skipping: {why}");
+        return;
+    }
+
+    let mut painters = NativePainters::default();
+    painters.register(EXTENSION, LeavesALayerOpen);
+
+    let half = (W / 2) as f32;
+    // A clip over the left half holds a rogue leaf and a green rect covering everything. After the
+    // clip closes, a blue rect covers the right half.
+    let tree = Arc::new(Node::Container {
+        children: vec![
+            Arc::new(Node::Clip {
+                shape: ClipShape::Rect(Rect::new(
+                    glam::Vec2::ZERO,
+                    glam::Vec2::new(half, H as f32),
+                )),
+                child: Arc::new(Node::Container {
+                    children: vec![
+                        native_node((0.0, 0.0, 4.0, 4.0), false),
+                        rect_node((0.0, 0.0, W as f32, H as f32), Color::rgb(0.0, 1.0, 0.0)),
+                    ],
+                }),
+            }),
+            rect_node((half, 0.0, half, H as f32), Color::rgb(0.0, 0.0, 1.0)),
+        ],
+    });
+
+    let pixels = render_tree(&tree, &painters);
+
+    let (_, g, _) = pixel(&pixels, 8, H - 8);
+    assert!(
+        g > 200,
+        "the rect after the rogue leaf keeps the clip it was given, not the painter's",
+    );
+    let (_, _, b) = pixel(&pixels, W - 8, H - 8);
+    assert!(
+        b > 200,
+        "the clip closes where the walker said it does, so later content is not clipped away",
     );
 }

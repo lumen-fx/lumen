@@ -261,7 +261,7 @@ fn capture_requested(render_world: &World) -> bool {
 /// == None` - reports damage so the initial paint always runs.
 ///
 /// Conservative: the diff assumes-changed for any leaf it cannot compare
-/// (images, SVGs, native), so it never under-reports the dirty region.
+/// (images, SVGs), so it never under-reports the dirty region.
 fn scene_has_damage(render_world: &World) -> bool {
     let previous = render_world.get_resource::<PreviousScene>();
     let retained = render_world.get_resource::<RetainedScene>();
