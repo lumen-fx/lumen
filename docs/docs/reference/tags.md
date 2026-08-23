@@ -476,6 +476,11 @@ change them.
 | `<option>` | `label` | Display text. Defaults to `value`. |
 | `<option>` | `disabled` | Unclickable, skipped by arrow navigation. |
 
+The closed header reads the selected option's `label`. The signal holds
+that option's `value`, which is what your script reads and what a click
+writes, so the two differ whenever an option carries a label of its own.
+A value no option declares is shown as it stands.
+
 The first `<option>` seeds the signal, so the dropdown opens on a real
 selection. Add `placeholder` to start unselected instead. A value your
 script writes first always wins over the seed.
