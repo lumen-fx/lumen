@@ -47,6 +47,10 @@ every page in. Everything else in the app directory travels: images, fonts,
 sounds, translation catalogues, data files. Dotfiles and a `target/` directory
 are left behind, and so is the output folder itself.
 
+One thing does not travel: the candela standard library, which the toolchain
+carries and a package does not, so a script that reaches for `import "std/..."`
+or an array method works under `lumenc run` and not in the folder this writes.
+
 Packaging a markup app needs no Rust toolchain. It copies a prebuilt launcher
 and appends your compiled app to the copy. On macOS it links the app in
 instead, because a signed Mach-O executable cannot carry trailing data, and

@@ -354,6 +354,9 @@ serde_json = "1"
 # crate's build script, which generates the per-host tables. Build-time only:
 # no shipped binary links it, and nothing parses RON at run time.
 ron = "0.11"
+# Finds the C compiler for the target in `lumen-script-candela`'s build script,
+# which builds candela's C-backed standard library modules. Build-time only.
+cc = "1"
 # Compact binary codec for the AOT compiled-app artifact (`lumenc build`).
 # Chosen over RON/JSON because bincode drops all field-name/schema overhead;
 # the artifact is embedded/shipped, so on-disk size is the priority.

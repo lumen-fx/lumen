@@ -73,8 +73,9 @@ jobs:
           Copy-Item target\debug\lumenc.exe dist\bin\
           Copy-Item target\debug\lumen.dll dist\bin\
           Copy-Item target\debug\lumen-launcher.exe dist\bin\
+          Copy-Item -Recurse target\debug\libs dist\bin\libs
           Compress-Archive -Path dist\* -DestinationPath lumen-windows-x86_64.zip -Force
-          Copy-Item dist\bin\* msi-stage\bin\
+          Copy-Item -Recurse dist\bin\* msi-stage\bin\
 
       - name: Install WiX
         shell: pwsh
@@ -114,7 +115,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:LOCALAPPDATA 'Programs\Lumen'
-          foreach ($relative in 'bin\lumenc.exe', 'bin\lumen.dll', 'bin\lumen-launcher.exe', 'share\lumen\lumen.receipt') {
+          foreach ($relative in 'bin\lumenc.exe', 'bin\lumen.dll', 'bin\lumen-launcher.exe', 'bin\libs\std\list.cdl', 'bin\libs\std_src\time\time.dll', 'share\lumen\lumen.receipt') {
             $path = Join-Path $root $relative
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
               throw "the install is missing $path"

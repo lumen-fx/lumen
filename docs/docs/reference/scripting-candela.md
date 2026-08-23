@@ -93,6 +93,32 @@ let n = lumen::signal_array_len("rows");         // not nested in the next call
 lumen::signal_set_int("row_count", n);
 ```
 
+## The candela standard library
+
+The toolchain carries candela's own standard library, so a script imports a
+module by name and gets the functions the candela documentation describes:
+
+```rust
+import "std/time";
+
+fn on_start() {
+    lumen::signal_set("started", str(now()));
+}
+
+fn main() {}
+```
+
+The array methods (`arr.map(f)`, `arr.sum()`, and the rest) come from
+`std/list`, which the compiler loads whether or not a program imports anything.
+
+The modules are read from disk when the program compiles, which puts two limits
+on where they reach. A packaged app compiles its scripts as it starts and
+carries no library beside it, so an import that resolves under `lumenc run`
+fails from `lumenc package` output. A web build compiles ahead of time, so the
+text modules travel into the browser inside the compiled image; `std/math`,
+`std/random`, and `std/time` bind a C library the browser cannot open, and an
+image naming one is refused whole.
+
 ## Lifecycle hooks
 
 Define these as free functions. Each is optional; a missing hook is a no-op.
