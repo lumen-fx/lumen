@@ -174,12 +174,13 @@ fn font_system_new_yields_a_shaper_that_can_shape() {
 /// machine is.
 ///
 /// Stability: warms the cache up front so the timed samples don't pay
-/// one-time setup cost, takes the median of many samples rather than a
-/// single reading, and requires an order-of-magnitude gap - shaping
-/// (font resolution, cosmic-text layout) is intrinsically far more
-/// expensive than an LRU lookup plus an `Arc` clone, so a healthy cache
-/// clears this bar with room to spare while a degraded one (reshaping
-/// on every "hit") cannot.
+/// one-time setup cost, then compares the minimum of many samples on
+/// each side. Scheduler noise on a loaded runner only ever adds time to
+/// a sample, so the minimum is the one statistic it cannot inflate: the
+/// fastest warm hit is a true LRU lookup plus an `Arc` clone, the
+/// fastest cold miss still resolves fonts and lays text out, and the
+/// order-of-magnitude gap between those holds on any machine while a
+/// degraded cache (reshaping on every "hit") cannot produce it.
 #[test]
 fn warm_hit_is_at_least_an_order_of_magnitude_faster_than_a_cold_miss() {
     let mut shaper = CosmicShaper::new();
@@ -212,22 +213,20 @@ fn warm_hit_is_at_least_an_order_of_magnitude_faster_than_a_cold_miss() {
         cold.push(start.elapsed());
     }
 
-    warm.sort();
-    cold.sort();
-    let warm_median = warm[warm.len() / 2];
-    let cold_median = cold[cold.len() / 2];
+    let warm_min = warm.iter().min().copied().unwrap();
+    let cold_min = cold.iter().min().copied().unwrap();
 
     assert!(
-        warm_median.saturating_mul(10) <= cold_median,
-        "warm cache hit ({warm_median:?} median) should be at least 10x \
-         faster than a cold miss ({cold_median:?} median); if this fails \
+        warm_min.saturating_mul(10) <= cold_min,
+        "the fastest warm cache hit ({warm_min:?}) should be at least 10x \
+         faster than the fastest cold miss ({cold_min:?}); if this fails \
          the shape cache key may have stopped discriminating and every \
          call is reshaping from scratch"
     );
     // Generous backstop far above the doc's <1us warm-hit target: this
     // only fires on a catastrophic regression, never on a loaded runner.
     assert!(
-        warm_median < Duration::from_millis(5),
-        "warm cache hit took {warm_median:?}, expected well under 1ms"
+        warm_min < Duration::from_millis(5),
+        "the fastest warm cache hit took {warm_min:?}, expected well under 1ms"
     );
 }
