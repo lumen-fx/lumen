@@ -275,6 +275,10 @@ The document element. Lays out as a column and fills the window.
 | `skin` | `default`, `macos`, `windows`, `linux`, `auto` | Loads a built-in skin beneath your CSS. `auto` picks the skin for the current OS. |
 | `frameless` | boolean | Removes the OS window frame. Pair with `<title-bar>`. |
 
+In a multi-page app, `skin` and `frameless` are read from the home page only.
+Every other attribute on a page's `<root>` styles that page. See
+[multi-page apps](../guides/pages.md).
+
 ### `<column>`
 
 Stacks children vertically.

@@ -251,13 +251,35 @@ pub fn assemble(
             .map_err(|e| format!("parse page {}: {e}", page.path.display()))?;
 
         // A synthetic `<if>` gate keyed on the reserved active-page signal.
+        //
+        // The gate is the box the page mounts inside, so a page's own
+        // `<root>` attributes ride on it: `<root bg="..." padding="...">`
+        // in `settings.lmn` paints and insets the settings page. The entry
+        // is the exception: its `<root>` is itself the app's root element,
+        // spawned with those attributes already, so repeating them on the
+        // gate would paint and inset the home page twice. `skin` and
+        // `frameless` are document metadata rather than layout attributes
+        // (they live on the `LayoutIR`, not in `Attributes`), so a page
+        // cannot smuggle a window setting through here.
+        let is_entry = page.key == plan.entry_key;
+        let mut attrs = if is_entry {
+            Attributes::default()
+        } else {
+            pir.root.attrs.clone()
+        };
+        attrs.if_signal = Some(nav::PATH_SIGNAL.to_string());
+        attrs.if_eq = Some(page.key.clone());
+        attrs.if_mode = IfModeSpec::Render;
         let gate = Element {
             tag: "if".to_string(),
-            attrs: Attributes {
-                if_signal: Some(nav::PATH_SIGNAL.to_string()),
-                if_eq: Some(page.key.clone()),
-                if_mode: IfModeSpec::Render,
-                ..Attributes::default()
+            attrs,
+            // The placeholder catalog travels with the attributes it
+            // describes, or a `bg="{theme}"` on a page root resolves
+            // against nothing.
+            interpolations: if is_entry {
+                Vec::new()
+            } else {
+                pir.root.interpolations.clone()
             },
             children: pir.root.children.clone(),
             ..Element::default()
