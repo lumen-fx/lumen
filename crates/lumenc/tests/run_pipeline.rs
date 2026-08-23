@@ -876,6 +876,32 @@ mod virtualization_tests {
         out
     }
 
+    /// Park the scroller at a pixel offset, skipping the wheel's inertia
+    /// so a test lands on the window it asks for.
+    fn scroll_to(app: &mut App, y: f32) {
+        let mut q = app
+            .world
+            .query_filtered::<&mut lumen_core::input::ScrollOffset, With<lumen_core::input::Scroll>>(
+            );
+        for mut offset in q.iter_mut(&mut app.world) {
+            offset.0.y = y;
+        }
+    }
+
+    /// The row index behind each mounted row, in the order the block's
+    /// children read.
+    fn row_indices(app: &mut App) -> Vec<u32> {
+        row_entities(app)
+            .iter()
+            .map(|(_, label)| {
+                label
+                    .trim_start_matches("Item ")
+                    .parse()
+                    .unwrap_or_else(|_| panic!("row label {label:?} is not an Item row"))
+            })
+            .collect()
+    }
+
     /// Spec section 15.3 (windowed reuse): scrolling the window by a few rows
     /// must not respawn rows that stay inside the window - their entities
     /// survive the shift.
@@ -918,6 +944,54 @@ mod virtualization_tests {
             reused, overlapping,
             "rows still inside the window must keep their entities \
              ({reused}/{overlapping} reused)"
+        );
+    }
+
+    /// Scrolling back up pulls rows in at the front of the window, and
+    /// those mount after the rows already there. The block still has to
+    /// read in row order: the hierarchy is what `node.children()` walks,
+    /// and what `DocumentOrder`, and with it Tab order, is restated from.
+    #[test]
+    fn rows_entering_at_the_front_read_in_row_order() {
+        let _serial = crate::serial();
+        let mut app = build_virtual_grid(500);
+
+        // Down 50 rows, then back up 10, so ten rows enter the window
+        // above the ones that stayed mounted.
+        scroll_to(&mut app, 50.0 * 32.0);
+        for _ in 0..3 {
+            app.tick();
+        }
+        let before = row_indices(&mut app);
+        scroll_to(&mut app, 40.0 * 32.0);
+        for _ in 0..3 {
+            app.tick();
+        }
+
+        let rows = row_entities(&mut app);
+        assert!(rows.len() > 10, "expected a populated window");
+        let indices = row_indices(&mut app);
+        assert!(
+            indices.iter().min() < before.iter().min(),
+            "test setup: rows must enter at the front of the window"
+        );
+        assert!(
+            indices.windows(2).all(|w| w[0] < w[1]),
+            "children read in row order, got {indices:?}"
+        );
+
+        let orders: Vec<u32> = rows
+            .iter()
+            .map(|(e, _)| {
+                app.world
+                    .get::<lumen_core::components::DocumentOrder>(*e)
+                    .expect("mounted rows carry DocumentOrder")
+                    .0
+            })
+            .collect();
+        assert!(
+            orders.windows(2).all(|w| w[0] < w[1]),
+            "document order follows row order, got {orders:?}"
         );
     }
 

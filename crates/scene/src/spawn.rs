@@ -2162,21 +2162,12 @@ pub fn reconcile_for_blocks(
                 marker.cascaded_body = None;
             }
 
-            // Steady state: same window membership -> nothing to do.
-            // NOTE: `win_rows` is in MOUNT order (keep-path retains rows
-            // in their existing child-slice order, new rows append), which
-            // permanently diverges from `desired`'s index order after any
-            // scroll that pulls rows in at the front - an ordered `==`
-            // here would never match again and the diff below would run
-            // every tick forever. Compare membership order-insensitively;
-            // `win_rows` itself must stay in mount order because the
-            // keep-path slices the children list by its positions.
-            if children.is_some() && desired.len() == marker.win_rows.len() {
-                let mut mounted_sorted = marker.win_rows.clone();
-                mounted_sorted.sort_unstable_by_key(|(idx, _)| *idx);
-                if mounted_sorted == desired {
-                    continue;
-                }
+            // Steady state: same window -> nothing to do. Both lists run
+            // in row-index order: `desired` is built that way and
+            // `win_rows` is re-sorted into it at the end of this branch,
+            // in step with the children list it indexes into.
+            if children.is_some() && marker.win_rows == desired {
+                continue;
             }
 
             let body_len = marker.body.len().max(1);
@@ -2276,6 +2267,24 @@ pub fn reconcile_for_blocks(
                     spawn_body_child(&mut commands, &inst, parent_id, Placeholders::Resolved);
                 }
                 new_win.push((*i, key.clone()));
+            }
+            // Rows reach `Children` in mount order: a kept row holds the
+            // slot it already had and a row entering the window appends
+            // at the end, so a scroll that pulls rows in at the front
+            // leaves the hierarchy out of row order. Everything that
+            // walks the tree reads that order: `node.children()`, the
+            // document order selectors resolve against,
+            // `renumber_document_order` and the Tab order it feeds. So
+            // sort the mounted rows back by row index, and move
+            // `win_rows` with them since the keep-path above slices the
+            // children list by its positions.
+            let mut row_order: Vec<usize> = (0..new_win.len()).collect();
+            row_order.sort_unstable_by_key(|&r| new_win[r].0);
+            if row_order.iter().enumerate().any(|(slot, &r)| slot != r) {
+                new_win = row_order.iter().map(|&r| new_win[r].clone()).collect();
+                commands.queue(move |world: &mut World| {
+                    sort_virtual_rows(world, parent_id, body_len, &row_order);
+                });
             }
             marker.win_rows = new_win;
             continue;
@@ -2462,6 +2471,32 @@ fn spawn_body_child(
             world.entity_mut(id).insert(bundle);
         }
     });
+}
+
+/// Put a virtualized `<for>` block's mounted rows back in row-index
+/// order. `row_order[slot]` is the current position of the row that
+/// belongs at `slot`, and every row owns `body_len` consecutive
+/// children. Queued as a command so this tick's row spawns and despawns
+/// have landed by the time it reads the child list, and so the write
+/// lands before [`renumber_document_order`] walks the hierarchy.
+fn sort_virtual_rows(world: &mut World, parent: Entity, body_len: usize, row_order: &[usize]) {
+    let Some(kids) = world
+        .get::<bevy_ecs::hierarchy::Children>(parent)
+        .map(|c| c.iter().collect::<Vec<Entity>>())
+    else {
+        return;
+    };
+    // Something else touched the child list, so the per-row slices no
+    // longer line up. Leave it to the next reconcile, which rebuilds the
+    // block on the same mismatch.
+    if kids.len() != row_order.len() * body_len {
+        return;
+    }
+    let mut ordered: Vec<Entity> = Vec::with_capacity(kids.len());
+    for &row in row_order {
+        ordered.extend_from_slice(&kids[row * body_len..(row + 1) * body_len]);
+    }
+    world.entity_mut(parent).insert_children(0, &ordered);
 }
 
 /// Build the `(Opacity(0), OpacityTransition(0 -> target))` pair for a
