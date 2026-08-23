@@ -51,6 +51,7 @@ use crate::render_world::{
     Brush, ExtractedBorder, ExtractedClipBox, ExtractedImage, ExtractedOutline, ExtractedRect,
     ExtractedScrollbar, ExtractedShadow, ExtractedText, PaintOrder, Rect,
 };
+use bevy_ecs::entity::Entity;
 use bevy_ecs::prelude::Resource;
 use glam::Vec2;
 use std::any::Any;
@@ -563,7 +564,7 @@ pub fn transform_extracted_to_nodes(
     texts: bevy_ecs::system::Query<&ExtractedText>,
     images: bevy_ecs::system::Query<(&ExtractedImage, Option<&ImageBlob>)>,
     svgs: bevy_ecs::system::Query<&SvgPayload>,
-    natives: bevy_ecs::system::Query<&ExtractedNative>,
+    natives: bevy_ecs::system::Query<(bevy_ecs::entity::Entity, &ExtractedNative)>,
     clips: bevy_ecs::system::Query<&ExtractedClipBox>,
     scrollbars: bevy_ecs::system::Query<&ExtractedScrollbar>,
 ) {
@@ -614,16 +615,19 @@ pub fn transform_extracted_to_nodes(
         entries.push((s.order, Arc::new(Node::from(s))));
     }
     // Plugin-painted leaves. Query iteration follows archetype order, which
-    // shifts as plugins add and drop components, so sort by
-    // (order, extension_id) first: at a shared paint-order key two extensions
-    // then always stack the same way from frame to frame.
-    let mut native_leaves: Vec<&ExtractedNative> = natives.iter().collect();
-    native_leaves.sort_by(|a, b| {
+    // shifts as plugins add and drop components, so sort on a key that is
+    // total: paint order, then extension id, then the render entity that
+    // carries the leaf. The entity is stable across frames (the extract
+    // helper reuses it), so one extension's several leaves at a shared order
+    // also keep their relative order from frame to frame.
+    let mut native_leaves: Vec<(Entity, &ExtractedNative)> = natives.iter().collect();
+    native_leaves.sort_by(|(ae, a), (be, b)| {
         a.order
             .cmp(&b.order)
             .then_with(|| a.extension_id.cmp(&b.extension_id))
+            .then_with(|| ae.cmp(be))
     });
-    for n in native_leaves {
+    for (_, n) in native_leaves {
         entries.push((n.order, Arc::new(Node::from(n))));
     }
     // Overlay scrollbars: pushed LAST so the stable sort keeps them

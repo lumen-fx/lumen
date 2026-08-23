@@ -1030,7 +1030,6 @@ pub fn cull_hidden(
         &mut map.svg,
         &mut map.clip,
         &mut map.scrollbar,
-        &mut map.native,
     ] {
         m.retain(|main_e, render_e| {
             if h.contains(main_e) {
@@ -1041,6 +1040,15 @@ pub fn cull_hidden(
             }
         });
     }
+    // Plugin leaves key on their extension id as well as the entity.
+    map.native.retain(|(_, main_e), render_e| {
+        if h.contains(main_e) {
+            victims.push(*render_e);
+            false
+        } else {
+            true
+        }
+    });
     // Shadows map one main entity to a stack of render entities.
     map.shadow.retain(|main_e, render_es| {
         if h.contains(main_e) {
@@ -1064,9 +1072,21 @@ pub fn cull_offscreen(
     viewport: Res<Viewport>,
     rects: Query<(Entity, &ExtractedRect)>,
     texts: Query<(Entity, &ExtractedText)>,
+    natives: Query<(Entity, &crate::native::ExtractedNative)>,
 ) {
     let vw = viewport.size.x;
     let vh = viewport.size.y;
+    // Plugin leaves declare their bounds, so they cull on the same AABB test as rects. Without it
+    // an off-screen leaf keeps calling its painter and keeps reporting damage outside the window.
+    for (e, n) in &natives {
+        if n.bounds.origin.x + n.bounds.size.x <= 0.0
+            || n.bounds.origin.y + n.bounds.size.y <= 0.0
+            || n.bounds.origin.x >= vw
+            || n.bounds.origin.y >= vh
+        {
+            commands.entity(e).despawn();
+        }
+    }
     for (e, r) in &rects {
         if r.origin.x + r.size.x <= 0.0
             || r.origin.y + r.size.y <= 0.0
@@ -1120,9 +1140,11 @@ pub struct RenderEntityMap {
     /// `main_entity -> render_entity` for [`ExtractedScrollbar`]; one
     /// entry per scroll container with visible overlay bars.
     pub scrollbar: std::collections::HashMap<Entity, Entity>,
-    /// `main_entity -> render_entity` for [`crate::native::ExtractedNative`]; one entry per
-    /// plugin-painted leaf.
-    pub native: std::collections::HashMap<Entity, Entity>,
+    /// `(extension_id, main_entity) -> render_entity` for
+    /// [`crate::native::ExtractedNative`]. Keyed by extension as well as entity so two plugins
+    /// painting in the same frame keep separate sets: each retires only the leaves it produced.
+    /// Maintained by [`crate::native::upsert_native_leaves`].
+    pub native: std::collections::HashMap<(std::sync::Arc<str>, Entity), Entity>,
 }
 
 /// Despawns transient render-world entities carrying `Extracted*` components, called once per frame before any [`ExtractFn`] runs.
@@ -1506,7 +1528,7 @@ pub fn parent_scroll_clip_rects(
 /// any-part-outside test made every child that overhangs its scroll container by even one
 /// pixel - e.g. `width: 100%` plus a horizontal margin, or a row straddling the container's
 /// bottom edge - vanish entirely (W6 T2, the invisible counter tiles).
-fn aabb_outside(origin: Vec2, size: Vec2, clip: (Vec2, Vec2)) -> bool {
+pub(crate) fn aabb_outside(origin: Vec2, size: Vec2, clip: (Vec2, Vec2)) -> bool {
     let (co, cs) = clip;
     origin.x + size.x <= co.x
         || origin.y + size.y <= co.y

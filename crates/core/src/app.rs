@@ -610,6 +610,10 @@ impl App {
     ///
     /// The backend calls it when the leaf's turn comes in paint order; a backend with no painter
     /// for an id skips the leaf. See [`crate::native`] for the seam's contracts.
+    ///
+    /// Registering during a run repaints the next frame. Painters are not part of the scene, so
+    /// the frame diff cannot see one arrive; without forcing the repaint, leaves already in the
+    /// tree would stay unpainted until something else changed.
     pub fn register_native_painter<P: crate::native::NativePainter>(
         &mut self,
         extension_id: impl Into<std::sync::Arc<str>>,
@@ -618,6 +622,14 @@ impl App {
         self.render_world
             .get_resource_or_insert_with(crate::native::NativePainters::default)
             .register(extension_id, painter);
+        if let Some(mut dirty) = self.world.get_resource_mut::<FrameDirty>() {
+            dirty.dirty = true;
+        }
+        // Dropping the last painted tree makes the next frame a first frame, which is what gets
+        // past the damage gate: the leaves themselves did not change, only who paints them.
+        if let Some(mut previous) = self.render_world.get_resource_mut::<PreviousScene>() {
+            previous.root = None;
+        }
         self
     }
 

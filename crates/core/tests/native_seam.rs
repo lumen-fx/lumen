@@ -6,7 +6,7 @@
 //! frames, out of the tree when an ancestor hides it, and not into the tree at all on a clean tick.
 
 use lumen_core::prelude::*;
-use lumen_core::render_world::{RenderEntityMap, build_parent_map, paint_order_of};
+use lumen_core::render_world::RenderEntityMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -35,6 +35,7 @@ impl Sparkline {
 /// this type.
 struct SparklinePayload {
     samples: Vec<f32>,
+    opacity: f32,
 }
 
 const SPARKLINE: &str = "test.sparkline";
@@ -77,54 +78,32 @@ fn redraw_when_samples_change(
     }
 }
 
-/// Deliberately does not filter hidden entities: the render world's hidden sweep is what has to
-/// keep this leaf out of a hidden subtree, and that is what the hidden test checks.
+/// Places every leaf through the shared extract context, so scroll offsets, inherited opacity, and
+/// hidden subtrees are handled the same way the built-in extractors handle them.
 fn extract_sparklines(main: &mut World, render: &mut World) {
-    let (parents, mut depth_cache) = build_parent_map(main);
-    let mut q = main.query::<(Entity, &Transform, &Sparkline)>();
-    let pairs: Vec<(Entity, ExtractedNative)> = q
+    let mut place = NativeExtract::new(main);
+    let mut q = main.query::<(Entity, &Transform, &Sparkline, Option<&Opacity>)>();
+    let leaves: Vec<(Entity, ExtractedNative)> = q
         .iter(main)
-        .map(|(e, transform, sparkline)| {
-            (
+        .filter_map(|(e, transform, sparkline, opacity)| {
+            let placed = place.place(e, transform, opacity)?;
+            Some((
                 e,
                 ExtractedNative {
                     extension_id: SPARKLINE.into(),
                     payload: Arc::new(SparklinePayload {
                         samples: sparkline.samples.clone(),
+                        opacity: placed.opacity,
                     }),
-                    bounds: Rect::new(transform.absolute, transform.size),
-                    order: paint_order_of(e, &parents, &mut depth_cache),
+                    bounds: placed.bounds,
+                    order: placed.order,
                     revision: sparkline.revision,
                     clip_to_bounds: true,
                 },
-            )
+            ))
         })
         .collect();
-
-    let prior = std::mem::take(&mut render.resource_mut::<RenderEntityMap>().native);
-    let mut next: std::collections::HashMap<Entity, Entity> = std::collections::HashMap::new();
-    for (main_e, leaf) in pairs {
-        let reuse = prior
-            .get(&main_e)
-            .copied()
-            .filter(|&re| render.get_entity(re).is_ok());
-        let render_e = match reuse {
-            Some(re) => {
-                render.entity_mut(re).insert(leaf);
-                re
-            }
-            None => render.spawn(leaf).id(),
-        };
-        next.insert(main_e, render_e);
-    }
-    for (main_e, render_e) in &prior {
-        if !next.contains_key(main_e)
-            && let Ok(em) = render.get_entity_mut(*render_e)
-        {
-            em.despawn();
-        }
-    }
-    render.resource_mut::<RenderEntityMap>().native = next;
+    upsert_native_leaves(render, SPARKLINE, leaves);
 }
 
 fn app_with_one_sparkline() -> (App, Entity) {
@@ -146,6 +125,20 @@ fn app_with_one_sparkline() -> (App, Entity) {
 
 /// Every native leaf in the retained tree, in paint order.
 fn native_leaves(app: &App) -> Vec<(String, u64)> {
+    native_nodes(app)
+        .iter()
+        .map(|node| match node.as_ref() {
+            Node::Native {
+                extension_id,
+                revision,
+                ..
+            } => (extension_id.to_string(), *revision),
+            other => panic!("expected Native, got {other:?}"),
+        })
+        .collect()
+}
+
+fn native_nodes(app: &App) -> Vec<Arc<Node>> {
     let mut found = Vec::new();
     if let Some(root) = app.render_world.resource::<RetainedScene>().root.as_ref() {
         collect(root, &mut found);
@@ -153,7 +146,7 @@ fn native_leaves(app: &App) -> Vec<(String, u64)> {
     found
 }
 
-fn collect(node: &Arc<Node>, out: &mut Vec<(String, u64)>) {
+fn collect(node: &Arc<Node>, out: &mut Vec<Arc<Node>>) {
     match node.as_ref() {
         Node::Container { children } => {
             for child in children {
@@ -163,11 +156,7 @@ fn collect(node: &Arc<Node>, out: &mut Vec<(String, u64)>) {
         Node::Transform { child, .. } | Node::Opacity { child, .. } | Node::Clip { child, .. } => {
             collect(child, out)
         }
-        Node::Native {
-            extension_id,
-            revision,
-            ..
-        } => out.push((extension_id.to_string(), *revision)),
+        Node::Native { .. } => out.push(node.clone()),
         _ => {}
     }
 }
@@ -176,32 +165,49 @@ fn clear_dirty(app: &mut App) {
     app.world.resource_mut::<FrameDirty>().dirty = false;
 }
 
-/// The whole point of the seam: a plugin contributes a leaf and it arrives in the tree the renderer
-/// walks, with the geometry and the registered painter the plugin gave it.
+/// The whole point of the seam: a plugin contributes a leaf, and what a backend finds in the tree
+/// is enough to reach that plugin's painter with that leaf's own payload. This is the lookup a
+/// backend walker performs, done here without one.
 #[test]
-fn a_plugin_leaf_reaches_the_retained_tree_and_its_painter() {
+fn a_leaf_in_the_tree_routes_to_its_own_painter() {
     let (mut app, _) = app_with_one_sparkline();
     app.tick();
 
-    assert_eq!(native_leaves(&app).len(), 1, "one leaf in the tree");
+    let leaves = native_nodes(&app);
+    assert_eq!(leaves.len(), 1, "one leaf in the tree");
+    let Node::Native {
+        extension_id,
+        payload,
+        bounds,
+        ..
+    } = leaves[0].as_ref()
+    else {
+        panic!("expected a native leaf");
+    };
+    assert_eq!(bounds.origin, glam::Vec2::new(10.0, 20.0));
 
     let painters = app.render_world.resource::<NativePainters>().clone();
-    let painter = painters.get(SPARKLINE).expect("registered painter").clone();
+    let painter = painters
+        .get(extension_id)
+        .expect("the leaf's id resolves to the plugin's painter")
+        .clone();
     let before = PAINTED_SAMPLES.load(Ordering::Relaxed);
-    let payload: Arc<dyn std::any::Any + Send + Sync> = Arc::new(SparklinePayload {
-        samples: vec![1.0, 2.0],
-    });
     let mut target = ();
     painter.paint(&mut NativePaintCtx::new(
         payload.as_ref(),
         &mut target,
         "test.backend",
-        Rect::new(glam::Vec2::ZERO, glam::Vec2::new(1.0, 1.0)),
+        *bounds,
         lumen_core::node_ir::Affine2::IDENTITY,
         1.0,
         1.0,
     ));
-    assert_eq!(PAINTED_SAMPLES.load(Ordering::Relaxed), before + 2);
+
+    assert_eq!(
+        PAINTED_SAMPLES.load(Ordering::Relaxed),
+        before + 3,
+        "the painter was handed the three samples the plugin extracted",
+    );
 }
 
 /// The leaf lives on the same per-frame lifecycle as every other extracted drawable: re-extracting
@@ -229,6 +235,174 @@ fn re_extracting_updates_the_leaf_instead_of_duplicating_it() {
     assert_eq!(
         app.render_world.resource::<RenderEntityMap>().native.len(),
         1,
+    );
+}
+
+/// Two plugins painting in the same frame keep their own leaves. The lifecycle is keyed by
+/// extension, so one plugin's extract fn retiring its leaves cannot evict the other's - which is
+/// what a single shared map would have done, every frame, in whichever order they ran.
+#[test]
+fn two_extensions_extracting_in_one_frame_do_not_evict_each_other() {
+    const OTHER: &str = "test.gauge";
+
+    fn extract_gauges(main: &mut World, render: &mut World) {
+        let mut place = NativeExtract::new(main);
+        let mut q = main.query::<(Entity, &Transform, &Gauge)>();
+        let leaves: Vec<(Entity, ExtractedNative)> = q
+            .iter(main)
+            .filter_map(|(e, transform, _)| {
+                let placed = place.place(e, transform, None)?;
+                Some((
+                    e,
+                    ExtractedNative {
+                        extension_id: OTHER.into(),
+                        payload: Arc::new(()),
+                        bounds: placed.bounds,
+                        order: placed.order,
+                        revision: 1,
+                        clip_to_bounds: false,
+                    },
+                ))
+            })
+            .collect();
+        upsert_native_leaves(render, OTHER, leaves);
+    }
+
+    #[derive(Component)]
+    struct Gauge;
+
+    let (mut app, _) = app_with_one_sparkline();
+    app.add_extract_fn(extract_gauges);
+    app.world.spawn((
+        Transform {
+            absolute: glam::Vec2::new(50.0, 60.0),
+            size: glam::Vec2::new(20.0, 20.0),
+            baseline_y: None,
+        },
+        Gauge,
+    ));
+
+    for _ in 0..3 {
+        app.world.resource_mut::<FrameDirty>().dirty = true;
+        app.tick();
+
+        let ids: Vec<String> = native_leaves(&app).into_iter().map(|(id, _)| id).collect();
+        assert!(
+            ids.contains(&SPARKLINE.to_string()) && ids.contains(&OTHER.to_string()),
+            "both extensions should be in the tree, got {ids:?}",
+        );
+        assert_eq!(
+            app.render_world.resource::<RenderEntityMap>().native.len(),
+            2,
+            "one render entity per extension per entity",
+        );
+    }
+}
+
+/// A leaf inside a scroll container moves with the content. Placing it from the entity's absolute
+/// position alone would pin it while everything around it scrolled.
+#[test]
+fn a_leaf_inside_a_scroll_container_moves_with_the_content() {
+    let mut app = App::new();
+    app.add_plugin(SparklinePlugin);
+    let scroller = app
+        .world
+        .spawn((
+            Transform {
+                absolute: glam::Vec2::ZERO,
+                size: glam::Vec2::new(200.0, 200.0),
+                baseline_y: None,
+            },
+            ScrollOffset(glam::Vec2::new(0.0, 30.0)),
+        ))
+        .id();
+    app.world.spawn((
+        ChildOf(scroller),
+        Transform {
+            absolute: glam::Vec2::new(10.0, 100.0),
+            size: glam::Vec2::new(120.0, 40.0),
+            baseline_y: None,
+        },
+        Sparkline::new(vec![1.0]),
+    ));
+    app.tick();
+
+    let bounds = match native_nodes(&app)[0].as_ref() {
+        Node::Native { bounds, .. } => *bounds,
+        other => panic!("expected Native, got {other:?}"),
+    };
+    assert_eq!(
+        bounds.origin,
+        glam::Vec2::new(10.0, 70.0),
+        "the ancestor's scroll offset should have moved the leaf",
+    );
+}
+
+/// Inherited opacity reaches the plugin as a number it folds into its own drawing, the same way the
+/// built-in extractors fold it into their colours.
+#[test]
+fn inherited_opacity_reaches_the_payload() {
+    let mut app = App::new();
+    app.add_plugin(SparklinePlugin);
+    let parent = app.world.spawn(Opacity(0.5)).id();
+    app.world.spawn((
+        ChildOf(parent),
+        Transform {
+            absolute: glam::Vec2::ZERO,
+            size: glam::Vec2::new(10.0, 10.0),
+            baseline_y: None,
+        },
+        Opacity(0.5),
+        Sparkline::new(vec![1.0]),
+    ));
+    app.tick();
+
+    let payload = match native_nodes(&app)[0].as_ref() {
+        Node::Native { payload, .. } => payload.clone(),
+        other => panic!("expected Native, got {other:?}"),
+    };
+    let payload = payload
+        .downcast_ref::<SparklinePayload>()
+        .expect("the plugin's own payload type");
+    assert!(
+        (payload.opacity - 0.25).abs() < 1e-6,
+        "own opacity times the ancestor's, got {}",
+        payload.opacity,
+    );
+}
+
+/// A painter registered while the app is running has to repaint the leaves already on screen.
+/// Nothing about the scene changed when it arrived, so the frame diff cannot notice it.
+#[test]
+fn registering_a_painter_mid_run_forces_the_next_frame() {
+    let mut app = App::new();
+    app.add_extract_fn(extract_sparklines);
+    app.world.spawn((
+        Transform {
+            absolute: glam::Vec2::ZERO,
+            size: glam::Vec2::new(10.0, 10.0),
+            baseline_y: None,
+        },
+        Sparkline::new(vec![1.0]),
+    ));
+    app.tick();
+    clear_dirty(&mut app);
+    app.render_world
+        .resource_mut::<lumen_core::node_ir::PreviousScene>()
+        .root = app.render_world.resource::<RetainedScene>().root.clone();
+
+    app.register_native_painter(SPARKLINE, SparklinePainter);
+
+    assert!(
+        app.world.resource::<FrameDirty>().dirty,
+        "registration marks the frame dirty",
+    );
+    assert!(
+        app.render_world
+            .resource::<lumen_core::node_ir::PreviousScene>()
+            .root
+            .is_none(),
+        "and drops the last painted tree so the damage gate cannot skip the frame",
     );
 }
 
@@ -265,6 +439,29 @@ fn hiding_an_ancestor_takes_the_leaf_out_of_the_tree() {
             .native
             .is_empty(),
         "and drops its render-world entity",
+    );
+}
+
+/// A leaf that sits entirely off screen is dropped before it reaches the tree, like any other
+/// drawable. Keeping it would call its painter every frame and report damage nobody can see.
+#[test]
+fn a_leaf_entirely_off_screen_is_culled() {
+    let mut app = App::new();
+    app.add_plugin(SparklinePlugin);
+    let viewport = app.render_world.resource::<Viewport>().size;
+    app.world.spawn((
+        Transform {
+            absolute: glam::Vec2::new(viewport.x + 50.0, 10.0),
+            size: glam::Vec2::new(120.0, 40.0),
+            baseline_y: None,
+        },
+        Sparkline::new(vec![1.0]),
+    ));
+    app.tick();
+
+    assert!(
+        native_leaves(&app).is_empty(),
+        "a leaf past the right edge should not reach the tree",
     );
 }
 
