@@ -867,3 +867,76 @@ fn a_full_height_page_shell_fits_the_window() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `<root>` on a page other than the home page styles that page.
+///
+/// A page mounts inside its own box, and that box is what the page's `<root>`
+/// describes, so a background and a padding written there reach the screen
+/// instead of having to move to a wrapper inside the page. The home page is
+/// the exception: its `<root>` is the app's root element, so its attributes
+/// apply once, on the root, and not a second time on the box.
+#[test]
+fn a_page_root_keeps_its_attributes() {
+    let _guard = nav_test_guard();
+    let dir = std::env::temp_dir().join(format!("lumen_pages_rootattrs_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
+    std::fs::write(
+        dir.join("index.lmn"),
+        r#"<root id="home-root" padding="17">
+  <label text="INDEX_PAGE"/>
+</root>"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("settings.lmn"),
+        r##"<root id="settings-root" bg="#102030" padding="24">
+  <label text="SETTINGS_PAGE"/>
+</root>"##,
+    )
+    .unwrap();
+
+    let mut opts = RunOptions::new(&dir);
+    opts.hot_reload = false;
+    let (mut app, _window) = build_headless_app(opts).expect("build_headless_app");
+    tick_n(&mut app, 4);
+
+    // The home page's padding lands on the root element and nowhere else.
+    let home = entity_by_id(&mut app, "home-root");
+    let home_style = app
+        .world
+        .get::<lumen_core::components::Style>(home)
+        .expect("the root element carries a style");
+    assert_eq!(home_style.padding.top, 17.0);
+    let mut styles = app.world.query::<&lumen_core::components::Style>();
+    let padded = styles
+        .iter(&app.world)
+        .filter(|s| s.padding.top == 17.0)
+        .count();
+    assert_eq!(padded, 1, "the home page's padding should apply once");
+
+    lumen_core::nav::navigate("settings");
+    tick_n(&mut app, 5);
+    assert!(texts(&mut app).iter().any(|t| t == "SETTINGS_PAGE"));
+
+    let page = entity_by_id(&mut app, "settings-root");
+    let style = app
+        .world
+        .get::<lumen_core::components::Style>(page)
+        .expect("the page box carries a style");
+    assert_eq!(
+        style.padding.left, 24.0,
+        "padding on a page's <root> should inset that page"
+    );
+    let visuals = app
+        .world
+        .get::<lumen_core::components::Visuals>(page)
+        .expect("the page box carries visuals");
+    assert!(
+        visuals.fill.is_some(),
+        "bg on a page's <root> should paint that page"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

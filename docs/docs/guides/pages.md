@@ -24,6 +24,11 @@ Each page file is a complete markup document with its own `<root>` element:
 </root>
 ```
 
+Styling attributes on that `<root>` style that page: `bg` paints behind it,
+`padding` insets it, and a `class` puts it in reach of your stylesheet. On the
+home page `<root>` is the app's root element, so what you write there sits
+behind every page instead of just one.
+
 Multi-page mode switches on as soon as the app directory holds more than one
 `.lmn` file. An app with a single `main.lmn` keeps loading exactly as before.
 
@@ -144,14 +149,13 @@ the bottom row sits on the bottom edge of the window rather than below it, and
 `grow` on the middle column takes whatever is left between them. Nothing here
 needs `position: absolute`.
 
-The box supplies size and nothing else: no padding, background, or spacing of
-its own. Everything visible on screen is the page's own markup. Because it
-covers `<root>` edge to edge, padding written on `<root>` does not inset a
-page - put the breathing room on the page's own shell instead.
+The box is what a page's own `<root>` styles: `bg` paints it and `padding`
+insets it, so a page's breathing room goes on its own `<root>`. The box covers
+the window edge to edge either way; padding on the home page's `<root>` does
+not inset a page.
 
 The home page's `<root>` is the app's root element, so its attributes apply
-under every page. On any other page `<root>` is only a wrapper: its children
-mount, and attributes written on it are ignored.
+under every page rather than on one page's box.
 
 ## Page state
 
