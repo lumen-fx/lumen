@@ -185,13 +185,20 @@ fn every_fixture_app_runs_clean() {
 
 /// Every template `lumenc new` offers, scaffolded through the CLI and run.
 ///
-/// The names come from the registry the CLI itself reads, so a template
-/// added to the gallery is covered the moment it lands. Scaffolding goes
-/// through `lumenc new` rather than the registry constant: what a user gets
-/// is whatever the writer put on disk, including the files it does not
-/// write.
+/// The names come from the gallery the CLI itself reads, so a template added
+/// to it is covered the moment it lands. Scaffolding goes through `lumenc
+/// new` rather than the files behind it: what a user gets is whatever the
+/// command put on disk.
+///
+/// Those files are downloaded rather than kept in the repository
+/// (`tools/fetch-templates.sh`), so a checkout that has not run the script has
+/// nothing to scaffold and this says so. CI fetches before it tests.
 #[test]
 fn every_template_runs_clean() {
+    if let Err(why) = lumenc::scaffold::payload_dir() {
+        eprintln!("skipping: {why}");
+        return;
+    }
     let workdir = std::env::temp_dir().join(format!("lumenc_template_run_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(&workdir).expect("create the scaffold workdir");

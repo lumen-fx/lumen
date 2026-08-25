@@ -60,7 +60,7 @@ jobs:
             # docs/docs/ is in the list because the suite compiles the
             # complete programs the documentation shows, so a page can turn
             # the test job red on its own.
-            pattern='^(src/|crates/|sdk/rust/|include/|tests/|apps/|fixtures/|docs/docs/|Cargo|rust-toolchain|\.cargo/|\.github/(workflows/ci\.yml|scripts/))'
+            pattern='^(src/|crates/|sdk/rust/|include/|tests/|apps/|fixtures/|docs/docs/|Cargo|rust-toolchain|\.cargo/|tools/fetch-templates\.sh|\.github/(workflows/ci\.yml|scripts/))'
             if ! git diff --name-only "$BASE" "$HEAD" | grep -Eq "$pattern"; then
               rust=false
             fi
@@ -130,6 +130,16 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: test
+      # The `lumenc new` templates, each downloaded from the repository it is
+      # maintained in. A release ships them beside the toolchain and the suite
+      # reads them from disk the way an installed lumenc does, so a run
+      # without them leaves every case that scaffolds skipping itself.
+      # `shell: bash` because the Windows leg defaults to PowerShell; curl and
+      # tar are on all three runner images.
+      - name: Fetch the app templates
+        if: needs.changes.outputs.rust == 'true'
+        shell: bash
+        run: tools/fetch-templates.sh target/templates
       - if: needs.changes.outputs.rust == 'true'
         run: cargo build --workspace
       # Runners have no display and no GPU. Every test that needs one probes

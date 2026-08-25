@@ -22,6 +22,15 @@ Rhai. The three read closely enough that any of them is a fine starting point,
 and an app can mix them, since a script file picks its host from its own
 extension.
 
+Each template is also a repository of its own under the
+[lumen-fx](https://github.com/lumen-fx) organisation, named after the template:
+`lumen-fx/counter`, `lumen-fx/todo`, and so on. Those repositories are where
+the templates are maintained, and you can clone one, or use it as a GitHub
+template repository, to start an app without the CLI. Installing Lumen brings a
+copy of every one with it, which is what `lumenc new` writes, so scaffolding
+needs no network. A fix to a template lands in its repository and arrives with
+the next Lumen release.
+
 ## blank
 
 An empty starting point: a bare `<root>` and a `lumen.toml`, nothing else.

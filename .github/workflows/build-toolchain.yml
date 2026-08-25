@@ -4,9 +4,11 @@ name: build-toolchain
 # tools/release/install.sh expects: one lumen-<target>.tar.gz per Unix target
 # and, for Windows, lumen-windows-x86_64.zip as the portable archive plus
 # lumen-windows-x86_64.msi as the install channel. Every one of them holds
-# bin/lumenc, the liblumen shared library, and bin/lumen-launcher; the Unix
-# archives also carry the shell completions under share/. That layout comes
-# from three places, not from guessing:
+# bin/lumenc, the liblumen shared library, bin/lumen-launcher, and the two
+# trees lumenc reads from beside itself: the candela standard library in
+# bin/libs and the `lumenc new` templates in bin/templates. The Unix archives
+# also carry the shell completions under share/. That layout comes from four
+# places, not from guessing:
 #
 #   - install.sh requires a top-level bin/ directory in the archive (its
 #     unpack step fails otherwise) and looks up the asset by the exact name
@@ -20,6 +22,10 @@ name: build-toolchain
 #     it looks for liblumen, so `lumenc package` on an installed toolchain
 #     finds it without being told where it is. An archive without the stub
 #     leaves that command with nothing to build an app executable from.
+#   - crates/lumenc/src/scaffold.rs reads the `lumenc new` templates from a
+#     templates/ directory beside the executable. The templates are not in
+#     this repository at all: each is its own repository under lumen-fx, and
+#     tools/fetch-templates.sh downloads the copy that ships here.
 #
 # It also builds one artifact that belongs to no platform: lumen-web.tar.gz,
 # holding the browser runtime `lumenc web` copies beside the pages it emits.
@@ -144,6 +150,15 @@ jobs:
       - name: Build the app launcher stub
         run: cargo build --release -p lumen-launcher
 
+      # The `lumenc new` templates. Each is maintained in a repository of its
+      # own under lumen-fx and published there as an archive of its tree;
+      # Lumen keeps no copy of any of them, so the copy the toolchain ships is
+      # downloaded here and packaged below. `shell: bash` because the Windows
+      # leg defaults to PowerShell; curl and tar are on every runner image.
+      - name: Fetch the app templates
+        shell: bash
+        run: tools/fetch-templates.sh target/templates
+
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -156,6 +171,11 @@ jobs:
           # "std/..."` (and the array methods) out of `libs/` next to the
           # running executable, so it belongs beside lumenc, not in share/.
           cp -R target/release/libs dist/bin/libs
+          # The app templates, beside lumenc for the same reason: `lumenc new`
+          # reads them from next to its own executable
+          # (crates/lumenc/src/scaffold.rs), so an archive without them ships a
+          # compiler that can scaffold nothing.
+          cp -R target/templates dist/bin/templates
           # Shell completions, each under the directory its shell searches, so
           # a prefix on the usual search paths picks them up as installed. The
           # same scripts are embedded in lumenc (`lumenc completions <shell>`)
@@ -177,6 +197,7 @@ jobs:
           Copy-Item target\release\${{ matrix.libname }} dist\bin\
           Copy-Item target\release\lumen-launcher.exe dist\bin\
           Copy-Item -Recurse target\release\libs dist\bin\libs
+          Copy-Item -Recurse target\templates dist\bin\templates
           Compress-Archive -Path dist\* -DestinationPath lumen-${{ matrix.target }}.zip
 
       # The MSI payload is staged separately from dist\, and only after the

@@ -56,6 +56,21 @@ fn candela_app_checks_clean() {
     assert!(report.has_script, "candela-smoke has a <script> block");
 }
 
+/// Whether the templates the toolchain ships are on this machine.
+///
+/// They are downloaded rather than kept in the repository
+/// (`tools/fetch-templates.sh`), so a checkout that has not run the script has
+/// nothing for these cases to read. CI fetches before it tests.
+fn templates_present() -> bool {
+    match lumenc::scaffold::payload_dir() {
+        Ok(_) => true,
+        Err(why) => {
+            eprintln!("skipping: {why}");
+            false
+        }
+    }
+}
+
 /// Every scaffold template checks clean as written. `check` compiles the
 /// markup, the CSS, and the script under the host the script's extension
 /// selects, so this is what proves a template a user scaffolds runs: the
@@ -63,6 +78,9 @@ fn candela_app_checks_clean() {
 /// ones parse on theirs.
 #[test]
 fn every_template_checks_clean() {
+    if !templates_present() {
+        return;
+    }
     for template in lumenc::scaffold::TEMPLATES {
         let dir = std::env::temp_dir().join(format!(
             "lumenc_template_check_{}_{}",
@@ -70,16 +88,8 @@ fn every_template_checks_clean() {
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("mkdir temp app");
-        for (path, body) in template.files {
-            let file = dir.join(path);
-            if let Some(parent) = file.parent() {
-                std::fs::create_dir_all(parent)
-                    .unwrap_or_else(|e| panic!("mkdir {}/{path}: {e}", template.name));
-            }
-            std::fs::write(&file, body)
-                .unwrap_or_else(|e| panic!("write {}/{path}: {e}", template.name));
-        }
+        lumenc::scaffold::write_template(template.name, &dir)
+            .unwrap_or_else(|e| panic!("scaffolding `{}`: {e}", template.name));
 
         let report = lumenc::check_app(&dir)
             .unwrap_or_else(|e| panic!("template `{}` should check clean: {e}", template.name));
@@ -111,11 +121,20 @@ fn every_candela_template_builds_an_image_the_vm_accepts() {
     use lumen_script_candela::candela::{HostRegistry, LoadError, load_program};
     use lumen_script_candela::compile_bytecode;
 
+    if !templates_present() {
+        return;
+    }
     for template in lumenc::scaffold::TEMPLATES {
-        let Some((_, source)) = template.files.iter().find(|(p, _)| *p == "src/main.cdl") else {
+        let script = lumenc::scaffold::template_dir(template.name)
+            .unwrap_or_else(|e| panic!("reading `{}`: {e}", template.name))
+            .join("src")
+            .join("main.cdl");
+        if !script.is_file() {
             continue;
-        };
-        let bytes = compile_bytecode(source, "main.cdl", None)
+        }
+        let source = std::fs::read_to_string(&script)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", script.display()));
+        let bytes = compile_bytecode(&source, "main.cdl", None)
             .unwrap_or_else(|e| panic!("template `{}` compiles: {e}", template.name));
         match load_program(&bytes, &HostRegistry::new()) {
             Ok(_) | Err(LoadError::HostBinding(_)) => {}

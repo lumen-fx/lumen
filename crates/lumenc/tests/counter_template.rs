@@ -28,19 +28,20 @@ use lumenc::{RunOptions, build_headless_app};
 /// `case` keeps two tests apart: they run on threads of one process, and each
 /// removes its directory when it is done, so a shared name lets one delete the
 /// app the other is still reading.
-fn scaffolded_counter(case: &str) -> std::path::PathBuf {
+///
+/// The files come from the copy of the gallery the toolchain ships, which
+/// `tools/fetch-templates.sh` downloads. A checkout that has not run the
+/// script has nothing to scaffold, so the case says what it needs and returns;
+/// CI fetches before it tests.
+fn scaffolded_counter(case: &str) -> Option<std::path::PathBuf> {
     let dir = std::env::temp_dir().join(format!(
         "lumenc-counter-template-{}-{case}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("mkdir temp app");
-    for (path, body) in lumenc::scaffold::COUNTER {
-        let file = dir.join(path);
-        if let Some(parent) = file.parent() {
-            std::fs::create_dir_all(parent).unwrap_or_else(|e| panic!("mkdir for {path}: {e}"));
-        }
-        std::fs::write(&file, body).unwrap_or_else(|e| panic!("write {path}: {e}"));
+    if let Err(why) = lumenc::scaffold::write_template("counter", &dir) {
+        eprintln!("skipping: {why}");
+        return None;
     }
     // Same [app] / [window] config the template ships, plus the port pin.
     std::fs::write(
@@ -49,7 +50,7 @@ fn scaffolded_counter(case: &str) -> std::path::PathBuf {
          [mcp]\nport = 0\n",
     )
     .expect("write lumen.toml");
-    dir
+    Some(dir)
 }
 
 /// Every `TextContent` string currently in the world.
@@ -88,7 +89,9 @@ fn scaffolded_counter_counts_clicks() {
 }
 
 fn run_case() {
-    let dir = scaffolded_counter("clicks");
+    let Some(dir) = scaffolded_counter("clicks") else {
+        return;
+    };
     let (mut app, _window) = build_headless_app(RunOptions::new(dir.clone())).expect("build app");
 
     // A few ticks so the tree mounts, the candela `on_ready` fires, its
@@ -152,7 +155,9 @@ fn click_lands_in_one_tick_with_extra_systems_installed() {
 fn run_padded_case() {
     use lumen_core::prelude::TickStage;
 
-    let dir = scaffolded_counter("padded");
+    let Some(dir) = scaffolded_counter("padded") else {
+        return;
+    };
     let (mut app, _window) = build_headless_app(RunOptions::new(dir.clone())).expect("build app");
     for _ in 0..8 {
         app.add_systems(TickStage::Systems, || {});
@@ -201,7 +206,9 @@ fn run_edge_case() {
     use lumen_scene::script_commands::apply_scene_script_commands;
     use lumen_script::ScriptSet;
 
-    let dir = scaffolded_counter("edge");
+    let Some(dir) = scaffolded_counter("edge") else {
+        return;
+    };
     let (mut app, _window) = build_headless_app(RunOptions::new(dir.clone())).expect("build app");
     // One tick so every plugin has registered and the graph is whole.
     app.tick();

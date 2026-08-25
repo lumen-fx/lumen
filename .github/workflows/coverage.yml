@@ -74,6 +74,12 @@ jobs:
 
       - uses: taiki-e/install-action@cargo-llvm-cov
 
+      # The same templates ci.yml fetches. Every case that scaffolds an app
+      # reads them off disk and skips itself without them, so a run that does
+      # not fetch reports their coverage as zero.
+      - name: Fetch the app templates
+        run: tools/fetch-templates.sh target/templates
+
       - name: Collect coverage
         run: cargo llvm-cov --workspace --no-fail-fast --lcov --output-path lcov.info
 

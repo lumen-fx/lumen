@@ -1,4 +1,9 @@
 /target
+# The `lumenc new` templates, which tools/fetch-templates.sh downloads from
+# the repository each one is maintained in. They belong to no checkout: by
+# default they land in cargo's target directory, ignored above, and this
+# covers a fetch pointed at the checkout instead.
+/templates
 # Where `wasm-bindgen` puts the browser runtime module and its JS glue.
 /web-dist
 **/*.rs.bk

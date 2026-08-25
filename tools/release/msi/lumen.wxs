@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   The Lumen Windows installer: lumenc, the liblumen runtime library, the app
-  launcher stub, the candela standard library, and an install receipt,
-  installed for the current user.
+  launcher stub, the candela standard library, the `lumenc new` templates, and
+  an install receipt, installed for the current user.
 
   It installs into the user profile so it never asks for administrator
   rights, which is the same shape VS Code's user installer uses. The payload
@@ -94,6 +94,16 @@
         because the module list belongs to candela, not to this package.
       -->
       <Files Include="$(var.StageDir)\bin\libs\**" Directory="BINFOLDER" Subdirectory="libs" />
+
+      <!--
+        The `lumenc new` templates, under bin\templates. lumenc reads them
+        from beside its own executable (crates/lumenc/src/scaffold.rs), the
+        same directory rule the two above follow. Harvested for the same
+        reason the library is: each template is maintained in a repository of
+        its own, so the files it is made of belong to that repository rather
+        than to this package.
+      -->
+      <Files Include="$(var.StageDir)\bin\templates\**" Directory="BINFOLDER" Subdirectory="templates" />
 
       <!--
         The receipt marks this as an installed copy, which is what turns the

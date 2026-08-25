@@ -718,9 +718,10 @@ Exits non-zero on the first failure.";
 }
 
 /// Handles `lumenc new <name> [template]` and `lumenc new --list`.
-/// Scaffolds a directory `<name>` from one of the built-in gallery
-/// templates (see [`lumenc::scaffold::TEMPLATES`]); with no template
-/// argument it scaffolds `blank`.
+/// Scaffolds a directory `<name>` from one of the gallery templates the
+/// toolchain ships (see [`lumenc::scaffold`]); with no template argument it
+/// scaffolds `blank`. `--list` reads the gallery alone, so it answers on a
+/// machine whose template files are missing.
 fn cmd_new(args: impl Iterator<Item = String>) -> ExitCode {
     const NEW_USAGE: &str = "lumenc new - scaffold an app directory
 
@@ -763,32 +764,19 @@ template demonstrates.
         eprintln!("lumenc new: {name} already exists; refusing to overwrite");
         return ExitCode::FAILURE;
     }
-    let files = match lumenc::scaffold::find(&template) {
-        Some(t) => t.files,
-        None => {
-            eprintln!(
-                "lumenc new: unknown template '{template}' (available: {})",
-                lumenc::scaffold::template_names(),
-            );
-            return ExitCode::from(2);
-        }
-    };
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("lumenc new: create {}: {e}", dir.display());
-        return ExitCode::FAILURE;
+    if lumenc::scaffold::find(&template).is_none() {
+        eprintln!(
+            "lumenc new: unknown template '{template}' (available: {})",
+            lumenc::scaffold::template_names(),
+        );
+        return ExitCode::from(2);
     }
-    for (rel, body) in files {
-        let path = dir.join(rel);
-        if let Some(parent) = path.parent()
-            && let Err(e) = std::fs::create_dir_all(parent)
-        {
-            eprintln!("lumenc new: create {}: {e}", parent.display());
-            return ExitCode::FAILURE;
-        }
-        if let Err(e) = std::fs::write(&path, body) {
-            eprintln!("lumenc new: write {}: {e}", path.display());
-            return ExitCode::FAILURE;
-        }
+    // The files come off disk, from the copy of the gallery the toolchain
+    // ships. Nothing is created until they have been found, so a toolchain
+    // without them leaves no half-written directory behind.
+    if let Err(e) = lumenc::scaffold::write_template(&template, &dir) {
+        eprintln!("lumenc new: {e}");
+        return ExitCode::FAILURE;
     }
     println!("created {name}/ from template '{template}'.\nrun it with: lumenc run {name}");
     ExitCode::SUCCESS
