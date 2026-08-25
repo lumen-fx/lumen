@@ -610,7 +610,7 @@ anywhere in the tree.
 
 | Attribute | Value | Effect |
 | --- | --- | --- |
-| `src` | path | Script file to load, relative to the app directory. |
+| `src` | path | Script file to load, relative to the app's `src/` directory. |
 
 Without `src`, the tag's text content is the script. Each `src` file runs
 under the host its extension names (`.cdl`, `.rhai`, `.lua`); sources of one

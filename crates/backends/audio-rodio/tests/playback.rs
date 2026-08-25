@@ -100,7 +100,7 @@ fn ogg_reports_nonzero_duration() {
 /// With a correct non-zero Ogg duration, seeking to the app's "half-way"
 /// target lands near the midpoint - not snapped back to 0.
 ///
-/// This mirrors `apps/music/main.rhai`'s seek math: the slider computes the
+/// This mirrors `apps/music/src/main.cdl`'s seek math: the slider computes the
 /// target as `(fraction) * audio_duration`. When the duration was 0 (the
 /// bug), every target was `0.5 * 0 = 0` and the thumb snapped to the start.
 /// Proving the target lands mid-track covers both the duration probe and the

@@ -14,12 +14,13 @@ lumenc run my-app
 A window opens with a large `0` and two buttons. Click `+1` and the number
 goes up; click `reset` and it goes back to zero.
 
-Four files were written into `my-app/`: the markup, a stylesheet, a script, and
-a small config file. Take them one at a time.
+`my-app/` holds a small config file and a README at its root, and the code
+under `my-app/src/`: the markup, a stylesheet, and a script. Take them one at a
+time.
 
 ## The markup
 
-`main.lmn` is the element tree. It is the only required file in an app.
+`src/main.lmn` is the element tree. It is the only required file in an app.
 
 ```html
 <root bg="#0c1c30" padding="32" gap="20" align="center" justify="center">
@@ -56,8 +57,8 @@ Full tag and attribute list: [Tags reference](../reference/tags.md). The
 
 ## The styling
 
-`main.css` sits next to `main.lmn` and is picked up automatically. You never
-link it from the markup.
+`src/main.css` sits next to the markup and is picked up automatically. You
+never link it from the markup.
 
 ```css
 :root {
@@ -93,7 +94,8 @@ skins: [styling guide](../guides/styling.md).
 
 ## The script
 
-`main.cdl` is written in candela, Lumen's default scripting language.
+`src/main.cdl` is written in candela, Lumen's default scripting language. The
+`src=` path in the `<script>` tag resolves beside the markup.
 
 ```rust
 import "lumen.cdl";
@@ -109,12 +111,12 @@ fn on_ready() {
 
 // A handler is called with the event id. Wrap it with `event(ev)` to read the
 // event itself: `event(ev).target()`, `.shift()`, `.prevent_default()`.
-fn on_bump(ev) {
+fn on_bump(ev: int) {
     let n = lumen::signal_get_int("clicks");
     lumen::signal_set_int("clicks", n + 1);
 }
 
-fn on_reset(ev) {
+fn on_reset(ev: int) {
     lumen::signal_set_int("clicks", 0);
 }
 
@@ -177,9 +179,9 @@ the starting size. Every key: [lumen.toml reference](../reference/lumen-toml.md)
 
 ## Change something
 
-Leave the app running and edit a file. Save `main.css` with a different
-`--color-accent`, or add a button to `main.lmn`, and the window updates without
-a restart.
+Leave the app running and edit a file. Save `src/main.css` with a different
+`--color-accent`, or add a button to `src/main.lmn`, and the window updates
+without a restart.
 
 Two more commands are worth knowing early:
 

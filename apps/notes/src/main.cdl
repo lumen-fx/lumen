@@ -8,9 +8,10 @@
 // (#note-list-body, #preview-body) and this script fills them.
 //
 // Markdown rendering runs in C. The `dylib "md"` block below imports libmd.so
-// (built from md.c next to this file); the script splits a note body into lines
-// and calls md_class / md_text per line to classify and render each block. This
-// demonstrates candela calling a bundled C library on the host runtime.
+// (built from md.c at the app root into lib/); the script splits a note body
+// into lines and calls md_class / md_text per line to classify and render each
+// block. This demonstrates candela calling a bundled C library on the host
+// runtime.
 //
 // Per-note state lives in signals, since each event handler is a fresh call
 // into the program: `note_ids` holds the id list, `body:<id>` holds each note's
@@ -21,7 +22,7 @@ import "lumen.cdl";
 
 // Markdown block classification in C. md_class returns the CSS block class for
 // a source line; md_text returns the text to display for it. candela resolves
-// the bare name "md" to libmd.so / libmd.dylib in this file's directory.
+// the bare name "md" to libmd.so / libmd.dylib in the app's lib/.
 dylib "md" {
     string md_class(string);
     string md_text(string);

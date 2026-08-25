@@ -2,7 +2,7 @@
 """Runnable todo app - a :class:`lumen.Model` with a *list* field.
 
 Shows array signals: the ``items`` field is a typed list signal backing a
-``<for each="items">`` block in ``todo_app/main.lmn``. Each row is a
+``<for each="items">`` block in ``todo_app/src/main.lmn``. Each row is a
 ``dict`` (``{"id": ..., "text": ...}``); reassigning ``state.items``
 re-renders the list. The scalar ``summary`` field is a plain string
 signal, updated alongside.

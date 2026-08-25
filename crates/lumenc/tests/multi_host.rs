@@ -122,8 +122,9 @@ fn hot_reload_replaces_each_host_with_its_own_language() {
     let mut app = run_ticks(dir.clone(), 5);
     assert_eq!(signal(&app, "seen_by_lua").as_deref(), Some("candela+lua"));
 
-    let candela_src = std::fs::read_to_string(dir.join("model.cdl")).expect("read model.cdl");
-    let lua_src = std::fs::read_to_string(dir.join("report.lua")).expect("read report.lua");
+    let src = dir.join("src");
+    let candela_src = std::fs::read_to_string(src.join("model.cdl")).expect("read model.cdl");
+    let lua_src = std::fs::read_to_string(src.join("report.lua")).expect("read report.lua");
 
     // Regrouping by language is what makes reload work at all: handing one host
     // the other language's source is a compile error, which is what a
@@ -265,17 +266,18 @@ fn set_color_scheme_applies_on_every_host() {
         let dir =
             std::env::temp_dir().join(format!("lumen_scheme_{engine}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
         std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
         std::fs::write(
-            dir.join("main.lmn"),
+            src.join("main.lmn"),
             format!(
                 "<root>\n  <label id=\"only\" text=\"scheme\"/>\n  \
                  <script src=\"{script_name}\"/>\n</root>"
             ),
         )
         .unwrap();
-        std::fs::write(dir.join(script_name), script).unwrap();
+        std::fs::write(src.join(script_name), script).unwrap();
 
         let mut opts = RunOptions::new(&dir);
         opts.hot_reload = false;

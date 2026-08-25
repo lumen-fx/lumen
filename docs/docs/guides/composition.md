@@ -141,7 +141,7 @@ A template is visible to the whole file it is declared in, and to any file that
 includes it.
 
 In a [multi-page app](pages.md), templates are visible app-wide: a
-`<template>` in any `.lmn` file in the app directory can be used from any page.
+`<template>` in any `.lmn` file in `src/` can be used from any page.
 Put a shared frame in `layout.lmn`, which contributes its templates but is not
 itself a page:
 

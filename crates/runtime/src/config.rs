@@ -505,13 +505,14 @@ impl BundleCapabilities {
     }
 }
 
-/// The script engines an app directory needs, in [`ScriptEngine::ALL`] order.
+/// The script engines the app rooted at `dir` needs, in [`ScriptEngine::ALL`]
+/// order.
 ///
 /// `[script] engine` forces the answer to that one engine. Otherwise every
-/// script file in the directory contributes its extension's engine (`.cdl` ->
-/// candela, `.lua` -> Lua, `.rhai` -> Rhai), so a directory holding two
-/// languages comes back with two engines. A directory with no script at all
-/// comes back with candela, the language an inline `<script>` block is read as.
+/// script file in the app's `src/` contributes its extension's engine (`.cdl`
+/// -> candela, `.lua` -> Lua, `.rhai` -> Rhai), so an app holding two
+/// languages comes back with two engines. An app with no script at all comes
+/// back with candela, the language an inline `<script>` block is read as.
 ///
 /// This is the directory-scan answer, used before the markup is parsed: by
 /// `lumenc build` to pick which hosts to compile into a bundle, and by the
@@ -522,7 +523,7 @@ pub fn infer_script_hosts(dir: &Path, cfg: &LumenToml) -> Vec<ScriptEngine> {
         return vec![cfg.script.engine_kind()];
     }
     let mut found: Vec<ScriptEngine> = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(dir) {
+    if let Ok(rd) = std::fs::read_dir(crate::app_layout::src_dir(dir)) {
         for entry in rd.flatten().take(512) {
             if let Some(engine) = ScriptEngine::from_path(&entry.path())
                 && !found.contains(&engine)
@@ -1209,13 +1210,15 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        std::fs::create_dir_all(&dir).unwrap();
+        // The app's code, and so every marker the scan reads, is under `src/`.
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
 
         // Bare UI app: audio + http-fetch inferred OFF; mcp/async default OFF;
         // candela host (the default when no script file names a language), so
         // the feature list carries only that host.
         std::fs::write(
-            dir.join("main.lmn"),
+            src.join("main.lmn"),
             "<root><button id=\"inc\">+</button></root>",
         )
         .unwrap();
@@ -1227,7 +1230,7 @@ mod tests {
 
         // Audio + fetch markers flip inference ON.
         std::fs::write(
-            dir.join("app.rhai"),
+            src.join("app.rhai"),
             "fn f(){ audio_play(\"x.wav\"); fetch(\"http://h\", \"t\"); }",
         )
         .unwrap();
@@ -1244,7 +1247,7 @@ mod tests {
 
         // A file-dialog builtin keeps the async runtime in the bundle: on
         // macOS it is the only path that opens a dialog at all.
-        std::fs::write(dir.join("dialogs.rhai"), "fn f(){ pick_file(\"import\"); }").unwrap();
+        std::fs::write(src.join("dialogs.rhai"), "fn f(){ pick_file(\"import\"); }").unwrap();
         let caps = BundleCapabilities::resolve(&dir, &cfg);
         assert!(caps.async_rt);
         assert!(caps.to_features().contains(&"async".to_string()));
@@ -1253,11 +1256,11 @@ mod tests {
         let mut cfg_no_async = LumenToml::default();
         cfg_no_async.capabilities.async_rt = Some(false);
         assert!(!BundleCapabilities::resolve(&dir, &cfg_no_async).async_rt);
-        std::fs::remove_file(dir.join("dialogs.rhai")).unwrap();
+        std::fs::remove_file(src.join("dialogs.rhai")).unwrap();
 
         // A .lua file alongside the .rhai one needs both hosts compiled in,
         // and each host names its own feature.
-        std::fs::write(dir.join("logic.lua"), "-- lua").unwrap();
+        std::fs::write(src.join("logic.lua"), "-- lua").unwrap();
         let caps = BundleCapabilities::resolve(&dir, &LumenToml::default());
         assert_eq!(caps.hosts, vec![ScriptEngine::Lua, ScriptEngine::Rhai]);
         let feats = caps.to_features();

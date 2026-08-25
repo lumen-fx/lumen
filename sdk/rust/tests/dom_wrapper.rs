@@ -23,9 +23,9 @@ fn app_dir(markup: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
-    std::fs::write(dir.join("main.lmn"), markup).unwrap();
+    std::fs::write(dir.join("src").join("main.lmn"), markup).unwrap();
     dir
 }
 

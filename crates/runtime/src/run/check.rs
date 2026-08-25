@@ -1,4 +1,5 @@
 use super::*;
+use crate::app_layout::AppLayout;
 
 /// Summary returned by [`check_app`].
 #[derive(Debug, Clone, Copy)]
@@ -44,11 +45,12 @@ pub fn compile_app_with_skin(
     skin: Option<&str>,
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
+    let layout = AppLayout::resolve(dir, &cfg)?;
     // The same discovery the run path does, so compiling sees the app the way
     // running it does: the entry file it would open, and every sibling page.
-    let plan = crate::pages::discover(dir, &cfg);
+    let plan = crate::pages::discover(&layout.src_dir, &cfg);
     let html_path = plan.entry_file.clone();
-    let css_path = dir.join("main.css");
+    let css_path = layout.css_path;
     let asset_roots = cfg.resolved_asset_roots(dir);
     let skin_override = skin.map(str::to_string).or_else(|| cfg.skin.name.clone());
     let loaded = load_ir(
@@ -82,7 +84,7 @@ pub fn compile_app_with_skin(
             // An engine with an ahead-of-time form compiles here, so the
             // artifact carries the program a compiler-free runtime can run.
             // The others have none, and are run from the source beside it.
-            bytecode: compiled_bytecode(engine, &source, &uri)?,
+            bytecode: compiled_bytecode(engine, &source, &uri, &layout.lib_dir)?,
             source,
         });
     }
@@ -119,15 +121,16 @@ fn compiled_bytecode(
     engine: crate::config::ScriptEngine,
     source: &str,
     uri: &str,
+    lib_dir: &Path,
 ) -> Result<Option<Vec<u8>>, RunError> {
     #[cfg(feature = "host-candela")]
     if engine == crate::config::ScriptEngine::Candela {
-        return lumen_script_candela::compile_bytecode(source, uri)
+        return lumen_script_candela::compile_bytecode(source, uri, Some(lib_dir))
             .map(Some)
             .map_err(|e| RunError::Script(e.to_string()));
     }
     #[cfg(not(feature = "host-candela"))]
-    let _ = (engine, source, uri);
+    let _ = (engine, source, uri, lib_dir);
     Ok(None)
 }
 
@@ -158,8 +161,8 @@ pub fn script_exports(
     }
 }
 
-/// Parse `<dir>/main.lmn` + optional `<dir>/main.css` and validate them
-/// without spawning a window. Used by CI / pre-commit hooks.
+/// Parse `<dir>/src/main.lmn` + optional `<dir>/src/main.css` and validate
+/// them without spawning a window. Used by CI / pre-commit hooks.
 ///
 /// Parse-time `LayoutIR.lint_findings` (an unknown attribute, a
 /// boolean attribute with an off-list value, bare `{name}`
@@ -175,18 +178,19 @@ pub fn check_app(
     plugins: &dyn crate::compiler_plugins::CompilerPlugins,
 ) -> Result<CheckReport, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
+    let layout = AppLayout::resolve(dir, &cfg)?;
     let roots = cfg.resolved_asset_roots(dir);
     // File-based pages: validate the whole assembled multi-page tree (entry +
     // grafted sibling pages + global templates), not just the entry file in
     // isolation - otherwise an entry that `<use>`s a shared `layout` template
     // would falsely fail `check`.
-    let plan = crate::pages::discover(dir, &cfg);
+    let plan = crate::pages::discover(&layout.src_dir, &cfg);
     let entry_path = plan.entry_file.clone();
     let LoadResult { ir, .. } = load_ir(
         parser,
         plugins,
         &entry_path,
-        &dir.join("main.css"),
+        &layout.css_path,
         dir,
         &roots,
         cfg.skin.name.as_deref(),

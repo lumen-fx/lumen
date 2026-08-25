@@ -292,7 +292,7 @@ What is available is up to the app's Rust, so look in its source, not here.
 
 ## Hot reload
 
-`lumenc run` watches the app directory. Editing markup, CSS, an included
+`lumenc run` watches every file the app loads. Editing markup, CSS, an included
 fragment, a stylesheet import, a script, or a translation catalogue updates the
 running window without restarting it.
 

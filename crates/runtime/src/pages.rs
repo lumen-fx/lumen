@@ -3,8 +3,8 @@
 //!
 //! ## The model (Next.js / SvelteKit file-based routing, real-HTML `<a>`)
 //!
-//! Every `.lmn` file in the app directory is a page, keyed by its filename
-//! stem. The home page is `index.lmn` (falling back to the `[app] entry`
+//! Every `.lmn` file in the app's `src/` directory is a page, keyed by its
+//! filename stem. The home page is `index.lmn` (falling back to the `[app] entry`
 //! stem, then `main.lmn` for single-file compat). All pages load up front,
 //! and the fragments declared in ANY of the app's files are merged into one
 //! table every page parses against, so a shared `layout.lmn` template (with
@@ -84,7 +84,7 @@ pub struct PagePlan {
     /// [`collect_fragments`]; wider than [`Self::pages`] so `layout.lmn`
     /// (which is not itself a page) still shares its fragments app-wide.
     pub fragment_files: Vec<PathBuf>,
-    /// App directory the pages live in.
+    /// Directory the page files live in: the app's `src/`.
     pub dir: PathBuf,
 }
 
@@ -100,18 +100,19 @@ impl PagePlan {
 
 // -- discovery ---------------------------------------------------------------
 
-/// Discover the pages for `dir`, honouring `[pages]` / `[app]` config.
+/// Discover the pages in `src_dir` (the app's `src/`, from
+/// [`crate::app_layout::AppLayout`]), honouring `[pages]` / `[app]` config.
 ///
 /// Single-file apps (a lone `main.lmn` or `index.lmn`, and no `[pages]
 /// enabled = true`) come back with `multipage = false` and the existing
 /// single-file load path runs unchanged - the compat guarantee.
-pub fn discover(dir: &Path, cfg: &LumenToml) -> PagePlan {
+pub fn discover(src_dir: &Path, cfg: &LumenToml) -> PagePlan {
     // 1. Scan the directory once for every `.lmn` file. This set feeds the
     //    app-wide fragment table (so a shared `layout.lmn` is usable from
     //    every page) and, absent an explicit `[pages] include`, the navigable
     //    page set.
     let mut all_lmn: Vec<PageFile> = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(dir) {
+    if let Ok(rd) = std::fs::read_dir(src_dir) {
         for entry in rd.flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("lmn") {
@@ -133,7 +134,7 @@ pub fn discover(dir: &Path, cfg: &LumenToml) -> PagePlan {
         list.iter()
             .map(|name| PageFile {
                 key: stem(name),
-                path: dir.join(name),
+                path: src_dir.join(name),
             })
             .collect()
     } else {
@@ -181,7 +182,7 @@ pub fn discover(dir: &Path, cfg: &LumenToml) -> PagePlan {
         .map(|f| f.path.clone())
         // Nothing discovered (empty dir / in-memory source): keep the legacy
         // default so the caller still resolves `main.lmn`.
-        .unwrap_or_else(|| dir.join(cfg.app.entry.as_deref().unwrap_or("main.lmn")));
+        .unwrap_or_else(|| src_dir.join(cfg.app.entry.as_deref().unwrap_or("main.lmn")));
 
     // Every `.lmn` in the dir contributes fragments (pages plus `layout.lmn`).
     let fragment_files: Vec<PathBuf> = all_lmn.iter().map(|f| f.path.clone()).collect();
@@ -206,7 +207,7 @@ pub fn discover(dir: &Path, cfg: &LumenToml) -> PagePlan {
         entry_file,
         pages: files,
         fragment_files,
-        dir: dir.to_path_buf(),
+        dir: src_dir.to_path_buf(),
     }
 }
 

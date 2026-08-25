@@ -17,6 +17,7 @@
 //! parameter.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use bevy_ecs::prelude::*;
 use candela_vm::{CallError, HostRegistry, RuntimeProgram, Value, load_program};
@@ -28,6 +29,7 @@ use lumen_script::{
 };
 
 use crate::host_fns::{Registries, register_lumen_host_fns, register_script_fn};
+use crate::library_dir::LibraryDir;
 use crate::value::{candela_value_to_script, script_value_to_candela};
 
 /// The registry awaiting a load, and the program once loaded, behind a
@@ -89,6 +91,9 @@ pub struct CandelaVmHost {
     /// the image loads, so the store only has something to put back when a
     /// reset happens before that.
     script_fns: ScriptFnStore,
+    /// Where a `dylib "..."` recipe recorded in the image re-opens its library:
+    /// the app's `lib/`.
+    library_dir: Option<PathBuf>,
 }
 
 impl CandelaVmHost {
@@ -107,7 +112,17 @@ impl CandelaVmHost {
             registries,
             image,
             script_fns: ScriptFnStore::default(),
+            library_dir: None,
         }
+    }
+
+    /// Point the image's `dylib` recipes at `dir`, the app's `lib/`.
+    ///
+    /// A `.cdlb` records a library by name rather than by location, so the
+    /// directory has to be named again at load or the library has nowhere to
+    /// resolve.
+    pub fn set_library_dir(&mut self, dir: impl Into<PathBuf>) {
+        self.library_dir = Some(dir.into());
     }
 
     /// Mutable access to the pending [`HostRegistry`] so an embedder can
@@ -158,6 +173,7 @@ impl ScriptHost for CandelaVmHost {
         let registry = self.vm.registry.take().ok_or_else(|| {
             ScriptError::Runtime(format!("{uri}: this candela artifact host already loaded"))
         })?;
+        let _library_dir = LibraryDir::set(self.library_dir.as_deref());
         let mut program = load_program(&self.image, &registry).map_err(|e| {
             // Put the registry back so a retry after a swapped image can bind.
             ScriptError::Compile {
@@ -346,13 +362,19 @@ pub struct ScriptCandelaVmPlugin {
     pub image: Vec<u8>,
     /// Name reported in load errors. Defaults to `<artifact>`.
     pub uri: Option<String>,
+    /// Where a `dylib "..."` recipe in the image re-opens its library.
+    pub library_dir: Option<PathBuf>,
 }
 
 impl ScriptCandelaVmPlugin {
     /// Wrap a `.cdlb` image.
     #[must_use]
     pub fn new(image: Vec<u8>) -> Self {
-        Self { image, uri: None }
+        Self {
+            image,
+            uri: None,
+            library_dir: None,
+        }
     }
 
     /// Set the name reported in load errors (typically the artifact path).
@@ -361,11 +383,22 @@ impl ScriptCandelaVmPlugin {
         self.uri = Some(uri.into());
         self
     }
+
+    /// Set the directory the image's `dylib` recipes resolve their libraries
+    /// in, so a bare `dylib "md"` finds `lib/libmd.so` at the app root.
+    #[must_use]
+    pub fn with_library_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.library_dir = Some(dir.into());
+        self
+    }
 }
 
 impl Plugin for ScriptCandelaVmPlugin {
     fn build(self, app: &mut App) {
-        let host = CandelaVmHost::new(self.image);
+        let mut host = CandelaVmHost::new(self.image);
+        if let Some(dir) = self.library_dir {
+            host.set_library_dir(dir);
+        }
         // The artifact host takes its program from the image, so the generic
         // plugin's source string is empty; the uri is what names it.
         ScriptPlugin::new(host, String::new())

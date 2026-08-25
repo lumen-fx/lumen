@@ -1,7 +1,7 @@
 // expose - a native C++ function callable from the app's script.
 //
 // `app.expose(name, arity, fn)` registers a native builtin; the Rhai
-// script in apps/expose/main.lmn calls `cpp_greeting("Lumen")` from its
+// script in apps/expose/src/main.lmn calls `cpp_greeting("Lumen")` from its
 // `on_start` hook, and the return value flows back across the FFI. The
 // callback receives a `lumen::Args` view and returns a `lumen::Value`.
 //

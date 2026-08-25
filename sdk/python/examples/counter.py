@@ -4,7 +4,7 @@
 Shows the effortless surface: a :class:`lumen.Model` whose fields are
 typed reactive signals, ``@app.on_click`` handlers that mutate them with
 plain Python (``state.count += 1``), and the model's ``label`` field
-driving the ``bind-text="label"`` markup in ``counter_app/main.lmn``.
+driving the ``bind-text="label"`` markup in ``counter_app/src/main.lmn``.
 
 Run from the Lumen workspace root (build the C library first):
 

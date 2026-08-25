@@ -354,7 +354,7 @@ fn a_function_the_program_cannot_be_called_by_is_named() {
     // compiler is in the process there. The build has to say so.
     let scratch = scratch("exports");
     let app = scratch.join("app");
-    std::fs::create_dir_all(&app).expect("create the app directory");
+    std::fs::create_dir_all(app.join("src")).expect("create the app directory");
     std::fs::write(
         app.join("lumen.toml"),
         "[app]\nentry = \"main.lmn\"\nid = \"lumen.test.exports\"\n\n[script]\nengine = \
@@ -362,12 +362,12 @@ fn a_function_the_program_cannot_be_called_by_is_named() {
     )
     .expect("write lumen.toml");
     std::fs::write(
-        app.join("main.lmn"),
+        app.join("src").join("main.lmn"),
         "<root>\n  <label bind-text=\"label\" />\n  <script src=\"main.cdl\" />\n</root>\n",
     )
     .expect("write the markup");
     std::fs::write(
-        app.join("main.cdl"),
+        app.join("src").join("main.cdl"),
         "import \"lumen.cdl\";\n\nfn calc_label(n) { return \"seen\"; }\n\nfn on_start() {\n    \
          lumen::derive(\"label\", [\"count\"], \"calc_label\");\n}\n\nfn main() {}\n",
     )
@@ -531,9 +531,9 @@ fn the_command_says_what_it_cannot_do() {
 fn a_list_named_in_the_config_is_in_the_document() {
     let scratch = scratch("seed-rows");
     let app = scratch.join("app");
-    std::fs::create_dir_all(&app).expect("create the app directory");
+    std::fs::create_dir_all(app.join("src")).expect("create the app directory");
     std::fs::write(
-        app.join("main.lmn"),
+        app.join("src").join("main.lmn"),
         "<root>\n  <for each=\"todos\" key=\"id\">\n    <label class=\"todo\" \
          text=\"{row.title}\" />\n  </for>\n</root>\n",
     )
@@ -570,16 +570,16 @@ fn a_list_named_in_the_config_is_in_the_document() {
 /// the page can be traced back to a declared value.
 fn app_that_publishes_on_start(scratch: &Path) -> PathBuf {
     let app = scratch.join("app");
-    std::fs::create_dir_all(&app).expect("create the app directory");
+    std::fs::create_dir_all(app.join("src")).expect("create the app directory");
     std::fs::write(
-        app.join("main.lmn"),
+        app.join("src").join("main.lmn"),
         "<root>\n  <if signal=\"loaded\">\n    <label class=\"banner\" text=\"ready\" />\n  \
          </if>\n  <for each=\"todos\" key=\"id\">\n    <label class=\"todo\" \
          text=\"{row.title}\" />\n  </for>\n  <script src=\"main.cdl\" />\n</root>\n",
     )
     .expect("write the markup");
     std::fs::write(
-        app.join("main.cdl"),
+        app.join("src").join("main.cdl"),
         "import \"lumen.cdl\";\n\nfn main() {}\n\nfn on_start() {\n    \
          lumen::signal_set(\"loaded\", \"true\");\n    lumen::signal_array_set(\"todos\", \
          [\n        {\"id\": \"1\", \"title\": \"written by the app\"},\n        {\"id\": \"2\", \
@@ -653,15 +653,15 @@ fn a_page_written_from_a_run_carries_the_state_the_runtime_adopts() {
 fn an_address_a_run_will_not_ask_for_is_reported() {
     let scratch = scratch("prerender-run-fetch");
     let app = scratch.join("app");
-    std::fs::create_dir_all(&app).expect("create the app directory");
+    std::fs::create_dir_all(app.join("src")).expect("create the app directory");
     std::fs::write(
-        app.join("main.lmn"),
+        app.join("src").join("main.lmn"),
         "<root>\n  <label bind-text=\"status\" text=\"\" />\n  <script src=\"main.cdl\" \
          />\n</root>\n",
     )
     .expect("write the markup");
     std::fs::write(
-        app.join("main.cdl"),
+        app.join("src").join("main.cdl"),
         "import \"lumen.cdl\";\n\nfn main() {}\n\nfn on_start() {\n    \
          lumen::fetch(\"https://example.invalid/items.json\", \"items\");\n}\n",
     )

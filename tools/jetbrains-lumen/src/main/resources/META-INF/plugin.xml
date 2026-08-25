@@ -38,7 +38,7 @@
                                 serverId="lumen"
                                 languageId="lumen-rhai"/>
         <!-- Lumen stylesheets are ordinary .css files, so a stylesheet only
-             reaches the server when it sits in a Lumen app directory. -->
+             reaches the server when it sits beside an app's markup. -->
         <fileNamePatternMapping patterns="*.css"
                                 serverId="lumen"
                                 languageId="lumen-css"

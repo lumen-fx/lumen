@@ -1,8 +1,9 @@
 # lumen.toml reference
 
-`lumen.toml` sits in the app directory and declares everything static about
-the app: its entry file, window, skin, locale, script engine, build hooks, and
-subsystem settings. The file is optional; every key has a default.
+`lumen.toml` sits at the app root, beside the `src/` directory holding the
+app's code, and declares everything static about the app: its entry file,
+window, skin, locale, script engine, build hooks, and subsystem settings. The
+file is optional; every key has a default.
 
 Unknown top-level sections and unknown keys inside a section are rejected with
 a parse error naming the offending key. A parse error aborts the command.
@@ -29,7 +30,7 @@ engine = "candela"
 
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
-| `entry` | string | `"main.lmn"` | Markup entry filename, relative to the app directory. |
+| `entry` | string | `"main.lmn"` | Markup entry filename, resolved under the app's `src/` directory. |
 | `id` | string | the app directory name | Stable identifier for per-app state directories, including the one a script's `data_dir()` writes to, and the app id notifications are attributed to. |
 | `kind` | `"markup"`, `"rust"`, `"cpp"`, `"python"` | auto-detected | Pins the build and run route instead of letting the directory contents decide. |
 | `locale` | BCP-47 tag | the OS locale, else `en-US` | The locale the app starts in. Selects which `locale/<tag>.ftl` catalogue `translatable` markup and the scripts' `t()` builtin resolve against; every catalogue in the directory is loaded regardless. A tag that is not valid BCP-47 is a parse error. |
@@ -53,15 +54,15 @@ Multi-page navigation. See [Pages](../guides/pages.md).
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
 | `entry` | string | see below | Home page key: a filename stem with no `.lmn`. Ignored when no page has that key. |
-| `enabled` | bool | on when more than one `.lmn` file is present, or `include` names more than one page | Forces multi-page mode on or off. |
-| `include` | array of strings | directory discovery | Explicit ordered page-file list. When set, only these files are pages. Paths are relative to the app directory and may point into a subdirectory. |
+| `enabled` | bool | on when `src/` holds more than one `.lmn` file, or `include` names more than one page | Forces multi-page mode on or off. |
+| `include` | array of strings | directory discovery | Explicit ordered page-file list. When set, only these files are pages. Paths are relative to `src/` and may point into a subdirectory. |
 
-Without `include`, every `.lmn` file in the app directory is a page except
-`layout.lmn`, which contributes its `<template>` declarations to every page
-instead of becoming one. Discovery does not descend into subdirectories, so a
-page kept in one needs an `include` entry naming it, plus `enabled = true`
-when the app directory itself holds fewer than two `.lmn` files. A page's key
-is its filename stem either way: `pages/settings.lmn` is `settings`.
+Without `include`, every `.lmn` file in `src/` is a page except `layout.lmn`,
+which contributes its `<template>` declarations to every page instead of
+becoming one. Discovery does not descend into subdirectories, so a page kept in
+one needs an `include` entry naming it, plus `enabled = true` when `src/`
+itself holds fewer than two `.lmn` files. A page's key is its filename stem
+either way: `pages/settings.lmn` is `settings`.
 
 The entry key resolves in this order: `[pages] entry` when it names an
 existing page, then `index`, then the `[app] entry` stem, then `main`, then

@@ -69,6 +69,27 @@ fn asset_server_resolves_lumen_uri_via_bundle() {
     let _ = std::fs::remove_file(&lpak);
 }
 
+/// An app's code is compiled into the executable and never looked up by name,
+/// so `src/` stays out of the archive. A directory of the same name deeper in
+/// the tree is an asset folder and travels.
+#[test]
+fn packing_an_app_leaves_its_source_directory_out() {
+    let dir = tempfile_path("app");
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("icons").join("src")).unwrap();
+    std::fs::write(dir.join("src").join("main.lmn"), b"<root></root>").unwrap();
+    std::fs::write(dir.join("icons").join("src").join("dot.txt"), b"x").unwrap();
+    let out = tempfile_path("app.lpak");
+
+    LumenBundle::pack_dir(&dir, &out).expect("pack");
+    let bundle = LumenBundle::open(&out).expect("open lpak");
+    assert!(!bundle.contains("src/main.lmn"));
+    assert!(bundle.contains("icons/src/dot.txt"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_file(&out);
+}
+
 #[test]
 fn bundle_round_trips_through_open() {
     let (src, lpak) = write_test_dir();

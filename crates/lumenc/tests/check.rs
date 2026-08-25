@@ -72,7 +72,12 @@ fn every_template_checks_clean() {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mkdir temp app");
         for (path, body) in template.files {
-            std::fs::write(dir.join(path), body)
+            let file = dir.join(path);
+            if let Some(parent) = file.parent() {
+                std::fs::create_dir_all(parent)
+                    .unwrap_or_else(|e| panic!("mkdir {}/{path}: {e}", template.name));
+            }
+            std::fs::write(&file, body)
                 .unwrap_or_else(|e| panic!("write {}/{path}: {e}", template.name));
         }
 
@@ -107,10 +112,10 @@ fn every_candela_template_builds_an_image_the_vm_accepts() {
     use lumen_script_candela::compile_bytecode;
 
     for template in lumenc::scaffold::TEMPLATES {
-        let Some((_, source)) = template.files.iter().find(|(p, _)| *p == "main.cdl") else {
+        let Some((_, source)) = template.files.iter().find(|(p, _)| *p == "src/main.cdl") else {
             continue;
         };
-        let bytes = compile_bytecode(source, "main.cdl")
+        let bytes = compile_bytecode(source, "main.cdl", None)
             .unwrap_or_else(|e| panic!("template `{}` compiles: {e}", template.name));
         match load_program(&bytes, &HostRegistry::new()) {
             Ok(_) | Err(LoadError::HostBinding(_)) => {}
@@ -125,9 +130,9 @@ fn every_candela_template_builds_an_image_the_vm_accepts() {
 #[test]
 fn unknown_attribute_prints_a_warning_on_check() {
     let dir = std::env::temp_dir().join(format!("lumenc-unknown-attr-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create app dir");
+    std::fs::create_dir_all(dir.join("src")).expect("create app dir");
     std::fs::write(
-        dir.join("main.lmn"),
+        dir.join("src").join("main.lmn"),
         "<root><label tect=\"typo\" text=\"hi\"/></root>\n",
     )
     .expect("write main.lmn");

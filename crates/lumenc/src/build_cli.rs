@@ -1,6 +1,6 @@
 //! `lumenc build <app_dir> <out>` - ahead-of-time compile a Lumen app.
 //!
-//! Parses `<app_dir>/main.lmn` + optional `main.css` **once**, runs the full
+//! Parses `<app_dir>/src/main.lmn` + optional `src/main.css` **once**, runs the full
 //! cascade, resolves asset / include / import paths, bakes the combined
 //! script source, and writes the result as a precompiled
 //! [`crate::artifact`] blob. A runtime built without the `runtime-parse`
@@ -24,7 +24,8 @@ pub fn cmd_build(args: impl Iterator<Item = String>) -> ExitCode {
 USAGE:
     lumenc build <app_dir> <out.lmna> [--no-hooks]
 
-Parses main.lmn + main.css once, runs the cascade, and bakes the scripts
+Parses src/main.lmn + src/main.css once, runs the cascade, and bakes the
+scripts
 into a precompiled artifact. Run it with
 `lumenc run <dir> --artifact <out.lmna>`; a runtime built with no parser
 loads only this. An SDK app is rerouted to its own toolchain, and the

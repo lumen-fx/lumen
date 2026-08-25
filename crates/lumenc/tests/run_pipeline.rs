@@ -503,7 +503,8 @@ mod pipeline_integration_tests {
             "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
         )
         .unwrap();
-        std::fs::write(dir.join("main.lmn"), markup).unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src").join("main.lmn"), markup).unwrap();
         dir
     }
 
@@ -1205,8 +1206,10 @@ mod aot_roundtrip_tests {
             "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
         )
         .unwrap();
-        std::fs::write(dir.join("main.lmn"), markup).unwrap();
-        std::fs::write(dir.join("main.css"), css).unwrap();
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("main.lmn"), markup).unwrap();
+        std::fs::write(src.join("main.css"), css).unwrap();
         dir
     }
 

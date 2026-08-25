@@ -1294,10 +1294,11 @@ struct CopyRules {
 
 impl CopyRules {
     /// A markup app: the markup, the stylesheet, and the scripts are all
-    /// compiled into the executable, so they stay behind.
+    /// compiled into the executable, so they stay behind. They are what `src/`
+    /// holds, and the directory itself has nothing else to ship.
     fn markup() -> Self {
         Self {
-            skip_dirs: &["target"],
+            skip_dirs: &["target", "src"],
             skip_exts: &["lmn", "css", "rhai", "lua", "cdl"],
             skip_files: &[],
         }
@@ -1306,10 +1307,14 @@ impl CopyRules {
     /// An SDK app: its markup, stylesheet, and scripts are read at run time by
     /// the app itself, so they travel. What stays behind is the source it was
     /// compiled from and the build tree that compile left.
+    ///
+    /// `src/` holds both of those - the app's markup beside the C++ / Rust /
+    /// Python source it was built from - so the walk descends it and decides
+    /// per file by extension rather than skipping the directory whole.
     fn sdk(kind: AppKind) -> Self {
         match kind {
             AppKind::Cpp => Self {
-                skip_dirs: &["target", "build", "src", "include"],
+                skip_dirs: &["target", "build", "include"],
                 skip_exts: &["cpp", "cc", "cxx", "h", "hpp"],
                 skip_files: &["CMakeLists.txt"],
             },
@@ -1322,7 +1327,7 @@ impl CopyRules {
                 skip_files: &["pyproject.toml", "requirements.txt"],
             },
             _ => Self {
-                skip_dirs: &["target", "src"],
+                skip_dirs: &["target"],
                 skip_exts: &["rs"],
                 skip_files: &["Cargo.toml", "Cargo.lock"],
             },
@@ -2331,6 +2336,20 @@ mod tests {
         // What the app reads at run time still travels.
         assert!(!rules.skip_exts.contains(&"lmn"));
         assert!(!rules.skip_exts.contains(&"css"));
+    }
+
+    /// An SDK app keeps its markup under `src/`, beside the source it was
+    /// built from. The packager has to descend that directory to tell the two
+    /// apart, so the decision is per extension rather than per directory.
+    #[test]
+    fn an_sdk_package_descends_src() {
+        for kind in [AppKind::Rust, AppKind::Cpp, AppKind::Python] {
+            let rules = CopyRules::sdk(kind);
+            assert!(!rules.skip_dirs.contains(&"src"), "{kind:?}");
+            assert!(!rules.skip_exts.contains(&"lmn"), "{kind:?}");
+        }
+        assert!(CopyRules::sdk(AppKind::Rust).skip_exts.contains(&"rs"));
+        assert!(CopyRules::sdk(AppKind::Cpp).skip_exts.contains(&"cpp"));
     }
 
     #[test]

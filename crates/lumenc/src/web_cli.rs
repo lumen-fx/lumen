@@ -25,6 +25,7 @@ use lumen_i18n::{I18n, LanguageIdentifier, SharedI18n, translated_or_authored};
 use lumen_ir::artifact::CompiledApp;
 use lumen_ir::layout_ir::{Element, LayoutIR, relativize_asset_paths};
 use lumen_prerender::{self as prerender, Budget, Prerendered, Settled};
+use lumen_runtime::app_layout::src_dir;
 use lumen_runtime::config::{
     LumenToml, WebCssMode, WebHost, WebNavigation, WebPrerender, WebRender, WebSeedValue,
 };
@@ -366,7 +367,7 @@ fn build(options: &Options) -> Result<Report, String> {
         );
     }
 
-    let plan = lumen_runtime::pages::discover(dir, &cfg);
+    let plan = lumen_runtime::pages::discover(&src_dir(dir), &cfg);
 
     // A component that has to run is resolved here, before anything else reads
     // the tree. Its body is markup like any other once it is in: the asset

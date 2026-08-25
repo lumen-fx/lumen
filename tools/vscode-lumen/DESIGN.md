@@ -56,7 +56,7 @@ Lumen stylesheets are plain `.css` files that use a Lumen-specific property
 subset. Claiming the `.css` extension globally would break unrelated projects,
 so the extension registers a `lumen-css` language **without** a file-extension
 association and, on document open, retags a `.css` file to `lumen-css` **only**
-when it sits in a Lumen app directory (next to `main.lmn`). Global CSS is never
+when it sits in an app's `src` directory, beside the markup. Global CSS is never
 touched. The built-in `css` language id is still routed to `lumen-lsp` by
 document selector so stylesheet diagnostics work regardless.
 

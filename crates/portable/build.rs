@@ -29,8 +29,11 @@ fn main() {
         println!("cargo::rerun-if-changed={}", source_path.display());
         let source = fs::read_to_string(&source_path)
             .unwrap_or_else(|e| panic!("reading {}: {e}", source_path.display()));
-        let image = lumen_script_candela::compile_bytecode(&source, &source_path.to_string_lossy())
-            .unwrap_or_else(|e| panic!("compiling {}: {e}", source_path.display()));
+        // These fixtures import no native library, so nothing has to be
+        // searched for.
+        let image =
+            lumen_script_candela::compile_bytecode(&source, &source_path.to_string_lossy(), None)
+                .unwrap_or_else(|e| panic!("compiling {}: {e}", source_path.display()));
         let out_path = Path::new(&out_dir).join(format!("{stem}.cdlb"));
         fs::write(&out_path, image)
             .unwrap_or_else(|e| panic!("writing {}: {e}", out_path.display()));

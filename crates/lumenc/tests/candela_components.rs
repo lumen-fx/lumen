@@ -365,7 +365,7 @@ fn a_component_fills_the_slot_it_left_behind() {
 fn a_block_naming_a_component_expands_to_no_call() {
     let _serial = isolate();
     let dir = fixture();
-    let source = std::fs::read_to_string(dir.join("main.cdl")).expect("read main.cdl");
+    let source = std::fs::read_to_string(dir.join("src").join("main.cdl")).expect("read main.cdl");
     let index = lumen_script_candela::lmn::FnIndex::scan(&source);
     let body = "<column id=\"app\"><Home name=\"bob\"/></column>";
     let expansion = lumen_script_candela::lmn::expand(body, &index).expect("expands");
@@ -563,14 +563,15 @@ fn a_block_instantiates_a_markup_template() {
 fn check(name: &str, markup: &str, script: &str) -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!("lumen_lmn_{name}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("temp app dir");
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).expect("temp app dir");
     std::fs::write(
         dir.join("lumen.toml"),
         "[script]\nengine = \"candela\"\n\n[mcp]\nport = 0\n",
     )
     .expect("write lumen.toml");
-    std::fs::write(dir.join("main.lmn"), markup).expect("write main.lmn");
-    std::fs::write(dir.join("main.cdl"), script).expect("write main.cdl");
+    std::fs::write(src.join("main.lmn"), markup).expect("write main.lmn");
+    std::fs::write(src.join("main.cdl"), script).expect("write main.cdl");
     let result = lumenc::check_app(&dir)
         .map(|_| ())
         .map_err(|e| e.to_string());
@@ -675,10 +676,12 @@ fn a_hot_reload_re_extracts_and_re_mounts() {
     let _serial = isolate();
     let dir = std::env::temp_dir().join(format!("lumen_lmn_reload_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("temp app dir");
+    std::fs::create_dir_all(dir.join("src")).expect("temp app dir");
     let fixture = fixture();
-    for name in ["lumen.toml", "main.lmn", "main.cdl"] {
-        std::fs::copy(fixture.join(name), dir.join(name)).expect("copy fixture file");
+    std::fs::copy(fixture.join("lumen.toml"), dir.join("lumen.toml")).expect("copy the config");
+    for name in ["main.lmn", "main.cdl"] {
+        std::fs::copy(fixture.join("src").join(name), dir.join("src").join(name))
+            .expect("copy fixture file");
     }
 
     let mut opts = RunOptions::new(&dir);
@@ -687,10 +690,11 @@ fn a_hot_reload_re_extracts_and_re_mounts() {
     settle(&mut app);
     assert!(dump(&mut app).contains("home for bob"));
 
-    let edited = std::fs::read_to_string(dir.join("main.cdl"))
+    let script = dir.join("src").join("main.cdl");
+    let edited = std::fs::read_to_string(&script)
         .expect("read the script")
         .replace("home for $name", "welcome, $name");
-    std::fs::write(dir.join("main.cdl"), edited).expect("write the script");
+    std::fs::write(&script, edited).expect("write the script");
     // The watcher's fallback driver polls on a wall-clock interval, so give it
     // one before ticking the reload through.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

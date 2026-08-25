@@ -56,7 +56,7 @@ cargo run -p lumen-audio --bin lumen-gen-test-tracks -- apps/music/assets
   `AssetServer` as images: `audio_play("assets/x.wav")` sets an `AudioSource`
   on a player entity, the worker pool reads and caches the bytes off-thread,
   and playback starts when the `LoadedAudio` handle resolves.
-- **Library table built through the DOM API** - `main.lmn` ships an empty
+- **Library table built through the DOM API** - `src/main.lmn` ships an empty
   `#playlist` container and the script fills it element by element with
   `node_spawn` and `node_append`, one row per track, rebuilt when the playlist
   changes. The playing row gets a highlight class on each rebuild.

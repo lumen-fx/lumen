@@ -36,12 +36,12 @@ bevy_ecs.workspace = true
 # name on crates.io is an unrelated 2020 crate); its library keeps the
 # `candela` import name. The git source drives a development build, and the
 # version resolves to the release in a published one.
-candela = { package = "candela-lang", git = "https://github.com/lumen-fx/candela", branch = "main", version = "0.0.5", optional = true }
+candela = { package = "candela-lang", git = "https://github.com/lumen-fx/candela", branch = "main", version = "0.0.6", optional = true }
 # The runtime half of the same toolchain: the executor, the value marshalling,
 # and the `.cdlb` load/call API. Always present - the builtin surface and the
 # artifact host are written against it, and `candela` re-exports it, so the two
 # hosts share one implementation of both.
-candela-vm = { git = "https://github.com/lumen-fx/candela", branch = "main", version = "0.0.5" }
+candela-vm = { git = "https://github.com/lumen-fx/candela", branch = "main", version = "0.0.6" }
 # `parse_json`: JSON text -> candela values. Same dep the Rhai and Lua hosts
 # carry for their own `parse_json`.
 serde_json.workspace = true

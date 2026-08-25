@@ -8,8 +8,9 @@
 //! runtime's headless build (the same `build_headless_app` the golden suite
 //! uses), and confirms:
 //!
-//! 1. startup reads `main.lmn` from disk (the label text comes from the file),
-//! 2. editing `main.lmn` on disk while the app is live swaps the tree in -
+//! 1. startup reads `src/main.lmn` from disk (the label text comes from the
+//!    file),
+//! 2. editing `src/main.lmn` on disk while the app is live swaps the tree in -
 //!    reusing the runtime's `hot_reload` system, no watcher of our own.
 //!
 //! `LUMEN_HOT_RELOAD_POLL=1` selects the deterministic mtime-diff driver so the
@@ -34,7 +35,7 @@ fn scratch_dir() -> PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
     // Disable the MCP server so the test never binds a TCP port.
     std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
     dir
@@ -57,11 +58,8 @@ fn debug_source_reads_from_disk_and_hot_reloads() {
     // No `id` on the label: the runtime's hot reload preserves per-`id`
     // TextContent (so input values survive edits), which would mask a text
     // change. An anonymous label reflects the freshly parsed markup.
-    std::fs::write(
-        dir.join("main.lmn"),
-        r#"<root><label text="ALPHA"/></root>"#,
-    )
-    .unwrap();
+    let entry = dir.join("src").join("main.lmn");
+    std::fs::write(&entry, r#"<root><label text="ALPHA"/></root>"#).unwrap();
 
     // Exactly the RunOptions shape `Source::Disk` yields: dir set, no in-memory
     // markup, hot reload on.
@@ -82,7 +80,7 @@ fn debug_source_reads_from_disk_and_hot_reloads() {
     // Edit the file on disk. The poll throttle is 300 ms wall-clock; wait it
     // out so the next tick's mtime sweep is due, then tick.
     std::thread::sleep(Duration::from_millis(400));
-    std::fs::write(dir.join("main.lmn"), r#"<root><label text="BETA"/></root>"#).unwrap();
+    std::fs::write(&entry, r#"<root><label text="BETA"/></root>"#).unwrap();
     for _ in 0..5 {
         app.tick();
         std::thread::sleep(Duration::from_millis(80));

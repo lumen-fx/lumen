@@ -33,7 +33,7 @@ lumenc new my-app counter
 lumenc run my-app
 ```
 
-`my-app/main.lmn` is the whole interface:
+`my-app/src/main.lmn` is the whole interface:
 
 ```html
 <root bg="#0c1c30" padding="32" gap="20" align="center" justify="center">
@@ -61,8 +61,8 @@ the app runs and the window updates.
 - **Reactive by default.** Named signals hold state; `bind-*`, `<for>`, and
   `<if>` keep the UI in step. Writing a signal is the whole update.
 - **Scripting in candela, Rhai, or Lua.** The file extension picks the host.
-- **Multi-page apps.** Every `.lmn` file is a page, reachable by its filename,
-  with `<a href>` links.
+- **Multi-page apps.** Every `.lmn` file in `src/` is a page, reachable by its
+  filename, with `<a href>` links.
 - **The desktop around your app.** Menus, tray icons, notifications, global
   hotkeys, file dialogs, clipboard, drag and drop, audio, and accessibility
   through AccessKit.

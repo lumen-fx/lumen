@@ -116,7 +116,7 @@ pub mod web_ssr;
 pub use lumen_runtime::devtools_mount;
 #[cfg(feature = "dev-run")]
 pub use lumen_runtime::{
-    app_kind, config, pages, profile, run, run_headless, skins, spawn, window_state,
+    app_kind, app_layout, config, pages, profile, run, run_headless, skins, spawn, window_state,
 };
 
 // The IR data model - LayoutIR, the CSS AST + Cascade-5 application, the

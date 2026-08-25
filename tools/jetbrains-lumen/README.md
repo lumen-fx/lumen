@@ -48,9 +48,8 @@ file. See the
 [tooling reference](https://docs.lumenfx.dev/reference/tooling/) for what the
 server offers per file kind.
 
-A `.css` file reaches the server only when it sits next to a `main.lmn`, that
-is, inside a Lumen app directory, so stylesheets elsewhere keep the IDE's own
-CSS support.
+A `.css` file reaches the server only when it sits in an app's `src` directory,
+beside the markup, so stylesheets elsewhere keep the IDE's own CSS support.
 
 ## Limitations
 

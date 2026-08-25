@@ -17,10 +17,11 @@ fn app(tag: &str, markup: &str, css: &str, configs: &[&str]) -> PathBuf {
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("main.lmn"), markup).unwrap();
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("main.lmn"), markup).unwrap();
     if !css.is_empty() {
-        std::fs::write(dir.join("main.css"), css).unwrap();
+        std::fs::write(src.join("main.css"), css).unwrap();
     }
     let lib = fixture_cdylib();
     let mut toml = String::new();
@@ -189,9 +190,9 @@ fn a_version_source_resolves_through_cache_and_lock() {
     std::fs::copy(&lib, &cached).unwrap();
 
     let dir = base.join("app");
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
-        dir.join("main.lmn"),
+        dir.join("src").join("main.lmn"),
         "<root><label text=\"FROM_PLUGIN_MARKUP\"/></root>",
     )
     .unwrap();
@@ -244,7 +245,7 @@ fn a_plugin_synthesizes_the_stylesheet_when_the_app_ships_none() {
         "",
         &["inject_text = \"styled\"\nsynthesize_css = \".from-plugin { color: #00ff00; }\""],
     );
-    assert!(!dir.join("main.css").exists());
+    assert!(!dir.join("src").join("main.css").exists());
     let compiled = lumenc::compile_app(&dir).unwrap();
     let injected = find_injected(&compiled.ir.root).expect("injected element");
     assert!(

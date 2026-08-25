@@ -688,7 +688,7 @@ fn cmd_check(mut args: impl Iterator<Item = String>) -> ExitCode {
 USAGE:
     lumenc check <dir>
 
-Parses <dir>/main.lmn (+ optional main.css), applies the cascade, and
+Parses <dir>/src/main.lmn (+ optional src/main.css), applies the cascade, and
 compiles the app's scripts with the same engine settings `run` uses. Runs
 no [[hooks]] and opens no window; declared [[plugins]] do run, with their
 emit outputs discarded (a `version` source may still update lumen.lock).
@@ -729,8 +729,9 @@ USAGE:
     lumenc new --list
 
 The template defaults to `blank`, an empty <root> plus lumen.toml. Every
-template ships main.lmn + lumen.toml and a README explaining the concepts
-it demonstrates.
+template writes lumen.toml and a README at the app root and the app's code
+under src/, starting with src/main.lmn. The README explains the concepts the
+template demonstrates.
 
     --list, -l        Print the template gallery with one-line
                       descriptions.";
@@ -850,7 +851,8 @@ USAGE:
     lumenc run <dir> [--profile chrome|tracy|stderr]
                      [--headless [--size WxH] [--dpr N] [--ticks N]]
                      [--no-hooks]
-                          Run <dir>/main.lmn (+ optional main.css).
+                          Run <dir>/src/main.lmn (+ optional
+                          <dir>/src/main.css).
                           --profile chrome writes lumen-trace.json (open
                           in chrome://tracing or https://ui.perfetto.dev).
                           --profile tracy connects to tracy-profiler.
@@ -888,10 +890,12 @@ USAGE:
                           template gallery: blank | hello | counter |
                           form | todo | dashboard | settings | hotkeys.
                           The template defaults to `blank`, an empty
-                          <root> plus lumen.toml. Every template ships
-                          main.lmn + lumen.toml and a README explaining
-                          the concepts it demonstrates; `counter` is
-                          scripted in candela, the rest in Rhai.
+                          <root> plus lumen.toml. Every template writes
+                          lumen.toml and a README at the app root and the
+                          app's code under src/, starting with
+                          src/main.lmn. The scripted templates use
+                          candela, except `dashboard` (Lua) and
+                          `hotkeys` (Rhai).
     lumenc new --list     Print the template gallery with one-line
                           descriptions.
     lumenc fmt <file>     Reformat a `.lmn` markup file in place. Pass
@@ -929,9 +933,9 @@ USAGE:
                           last-wins ordering. Exits non-zero with at
                           least one divergence.
     lumenc lint --signals [<app-dir>] [--json] [--strict]
-                          Offline signal lint. Reads <app-dir>/main.lmn
-                          + the app script (main.cdl / main.rhai /
-                          main.lua) and the optional [signals]
+                          Offline signal lint. Reads <app-dir>/src/main.lmn
+                          + the app script (src/main.cdl / src/main.rhai
+                          / src/main.lua) and the optional [signals]
                           schema in lumen.toml; flags untyped writes,
                           bare {name} interpolation ambiguities,
                           schema mismatches, untracked binds, and
@@ -949,7 +953,8 @@ USAGE:
                           JSON.
     lumenc build <app_dir> <out.lmna> [--no-hooks]
                           Ahead-of-time compile `<app_dir>` (parse
-                          main.lmn + main.css once, run the cascade, bake
+                          src/main.lmn + src/main.css once, run the
+                          cascade, bake
                           scripts) into a precompiled artifact. Run it with
                           `lumenc run <dir> --artifact <out.lmna>`; a runtime
                           built with `--no-default-features` (no parser)
@@ -1036,8 +1041,9 @@ USAGE:
     lumenc --help         Show this help
     lumenc --version      Print version
 
-A markup app directory must contain `main.lmn`; `main.css` is optional and
-the `<script>` tag inside `main.lmn` loads into the app's script host
+A markup app directory holds `lumen.toml` at its root and its code under
+`src/`: `src/main.lmn` is required, `src/main.css` is optional, and the
+`<script>` tag inside the markup loads into the app's script host
 (candela unless a `.rhai` / `.lua` file or `[script] engine` says
 otherwise). `run` and `build` auto-detect SDK-authored apps (Rust:
 `Cargo.toml` depending on `lumen`; C++: `CMakeLists.txt`; Python: a `.py`

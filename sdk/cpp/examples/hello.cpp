@@ -1,6 +1,6 @@
 // hello - the smallest possible Lumen C++ app.
 //
-// Constructs an `App` over an app directory (lumen.toml + main.lmn),
+// Constructs an `App` over an app directory (lumen.toml + src/main.lmn),
 // prints the negotiated ABI version, and builds-then-drops it headless
 // (`run_headless(0)`) so it needs no display. Pass `--window` to open a
 // real OS window instead, or a directory to point at a different app.

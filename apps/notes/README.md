@@ -13,7 +13,7 @@ cargo run -p lumenc -- run apps/notes
 ## What it demonstrates
 
 - **Markdown parsed in C** - the preview's markdown is classified by a small
-  C library (`md.c`, built to `libmd.so`). The candela script imports it with
+  C library (`md.c`, built to `lib/libmd.so`). The candela script imports it with
   a `dylib "md"` block, splits the note body into lines, and calls
   `md_class` / `md_text` per line to get each block's CSS class and text. This
   is candela calling a bundled C library on the host runtime.
@@ -35,17 +35,18 @@ cargo run -p lumenc -- run apps/notes
 (levels 4 to 6 render as level 3), unordered list items, thematic breaks,
 indented code, and paragraphs. candela resolves the bare name `md` to
 `libmd.so` (Linux), `libmd.dylib` (macOS), or `md.dll` (Windows, which takes
-no `lib` prefix) in the app directory.
+no `lib` prefix) in the app's `lib/`.
 
 None of those are committed; they are build artifacts, not source.
 `lumen.toml` declares a `[[hooks]]` entry per OS that compiles the library
-from `md.c` before the app runs. `lumenc run` fires it automatically; pass
-`--no-hooks` to skip it:
+from `md.c` into `lib/` before the app runs. `lumenc run` fires it
+automatically; pass `--no-hooks` to skip it:
 
 ```
-cc -shared -fPIC -O2 -o apps/notes/libmd.so apps/notes/md.c    # Linux
-cc -shared -fPIC -O2 -o apps/notes/libmd.dylib apps/notes/md.c # macOS
-cc -shared -O2 -o apps/notes/md.dll apps/notes/md.c            # Windows
+mkdir -p apps/notes/lib
+cc -shared -fPIC -O2 -o apps/notes/lib/libmd.so apps/notes/md.c    # Linux
+cc -shared -fPIC -O2 -o apps/notes/lib/libmd.dylib apps/notes/md.c # macOS
+cc -shared -O2 -o apps/notes/lib/md.dll apps/notes/md.c            # Windows
 ```
 
 The Windows line assumes a MinGW-flavored `cc` (MSYS2 or MinGW-w64) is on

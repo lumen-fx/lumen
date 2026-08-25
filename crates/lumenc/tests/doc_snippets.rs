@@ -103,6 +103,9 @@ fn doc_blocks() -> Vec<Block> {
 
 /// Write a throwaway app directory and hand it to `lumenc check`. `Err`
 /// carries what a reader copying the block would see.
+///
+/// `files` are the app's code, so they land under `src/`; the paths a
+/// document writes in `<script src>` and `<include src>` resolve there.
 fn check_app(label: &str, files: &[(&str, &str)]) -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!(
         "lumenc_doc_snippet_{}_{}",
@@ -117,7 +120,7 @@ fn check_app(label: &str, files: &[(&str, &str)]) -> Result<(), String> {
     )
     .expect("write lumen.toml");
     for (rel, body) in files {
-        let path = dir.join(rel);
+        let path = dir.join("src").join(rel);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("create the snippet subdirectory");
         }

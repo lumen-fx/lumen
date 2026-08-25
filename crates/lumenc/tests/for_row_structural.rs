@@ -53,10 +53,11 @@ fn nth_child_stripes_a_for_list() {
             static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
             SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         }));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("main.lmn"), MARKUP).unwrap();
-    std::fs::write(dir.join("main.css"), CSS).unwrap();
-    std::fs::write(dir.join("main.rhai"), SCRIPT).unwrap();
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("main.lmn"), MARKUP).unwrap();
+    std::fs::write(src.join("main.css"), CSS).unwrap();
+    std::fs::write(src.join("main.rhai"), SCRIPT).unwrap();
     // Port 0 keeps parallel test binaries off a shared socket.
     std::fs::write(
         dir.join("lumen.toml"),
