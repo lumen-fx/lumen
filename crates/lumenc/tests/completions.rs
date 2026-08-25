@@ -8,10 +8,14 @@
 //! - the subcommand sets match, in both directions;
 //! - every flag a script offers for a subcommand appears in that
 //!   subcommand's own `--help`;
+//! - the templates offered for `lumenc new` are the scaffold gallery, in
+//!   gallery order;
 //! - `lumenc completions <shell>` prints the shipped file byte for byte.
 
 use std::collections::BTreeSet;
 use std::process::Command;
+
+use lumenc::scaffold::TEMPLATES;
 
 const BASH: &str = include_str!("../completions/lumenc.bash");
 const ZSH: &str = include_str!("../completions/_lumenc");
@@ -238,6 +242,51 @@ fn every_completed_flag_exists_in_that_subcommand_s_help() {
                  `lumenc {command} --help` does not mention it"
             );
         }
+    }
+}
+
+/// The template names one script offers as the second argument to
+/// `lumenc new`, in the order the script lists them.
+fn templates_from_script(shell: &str) -> Vec<String> {
+    let list = match shell {
+        // The bash script has two `new)` arms: a one-line one listing the
+        // flags, and the argument arm, which is the one that opens a block.
+        // Read only inside that arm, so a list moved out of it fails here
+        // rather than matching the next subcommand's word list.
+        "bash" => BASH
+            .split_once("        new)\n")
+            .and_then(|(_, rest)| rest.split_once("\n            ;;"))
+            .and_then(|(arm, _)| arm.split_once("compgen -W \""))
+            .and_then(|(_, rest)| rest.split('"').next()),
+        "zsh" => ZSH
+            .split_once("'2:template:(")
+            .and_then(|(_, rest)| rest.split(')').next()),
+        "fish" => FISH
+            .lines()
+            .find(|line| line.contains("__fish_seen_subcommand_from new") && line.contains(" -a '"))
+            .and_then(|line| line.split_once(" -a '"))
+            .and_then(|(_, rest)| rest.split('\'').next()),
+        other => panic!("no reader for the {other} completion"),
+    };
+    list.unwrap_or_else(|| panic!("the {shell} completion offers no templates for `new`"))
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn every_script_offers_the_scaffold_gallery_in_gallery_order() {
+    let expected: Vec<String> = TEMPLATES.iter().map(|t| t.name.to_string()).collect();
+    assert!(
+        expected.len() > 1,
+        "the scaffold gallery is implausibly small: {expected:?}"
+    );
+    for shell in ["bash", "zsh", "fish"] {
+        assert_eq!(
+            templates_from_script(shell),
+            expected,
+            "the {shell} completion offers other `lumenc new` templates than the gallery"
+        );
     }
 }
 

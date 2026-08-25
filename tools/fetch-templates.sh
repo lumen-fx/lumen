@@ -48,7 +48,7 @@ for name in "$@"; do
     echo "fetch-templates.sh: $url carries no lumen.toml at its root" >&2
     exit 1
   fi
-  rm -rf "$DEST/$name"
+  rm -rf "${DEST:?}/$name"
   mv "$TMP/$name" "$DEST/$name"
 done
 

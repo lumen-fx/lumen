@@ -83,14 +83,32 @@ interface TemplateItem {
 
 // Kept in sync with lumenc's scaffold::TEMPLATES gallery.
 const TEMPLATES: TemplateItem[] = [
-    { label: "blank", description: "Empty starting point: a bare <root> and a lumen.toml." },
-    { label: "hello", description: "Minimal one-screen app." },
-    { label: "counter", description: "Buttons, bind-text, per-id click routing." },
-    { label: "form", description: "Two-way bound form: input, toggle, slider." },
-    { label: "todo", description: "List + input + <for> loop + array signals." },
-    { label: "dashboard", description: "Multi-panel layout with derived signals." },
-    { label: "settings", description: "Settings/login panel scaffold." },
-    { label: "hotkeys", description: "Native shell: global hotkeys, tray, notifications." },
+    {
+        label: "blank",
+        description: "Empty starting point: a bare <root>, a lumen.toml, nothing else.",
+    },
+    { label: "hello", description: "Smallest runnable app: one label + a script that says hi." },
+    {
+        label: "counter",
+        description: "Click-to-bump counter: buttons, bind-text, per-element click handlers.",
+    },
+    { label: "form", description: "Two-way bound form: input, toggle, slider, live status line." },
+    {
+        label: "todo",
+        description: "The canonical tutorial app: list + input + <for> loop + array signals.",
+    },
+    {
+        label: "dashboard",
+        description: "Stat tiles + progress bars + activity feed, driven by a timer.",
+    },
+    {
+        label: "settings",
+        description: "Settings panel: checkbox / radio / dropdown / slider groups + derive().",
+    },
+    {
+        label: "hotkeys",
+        description: "Native shell showcase: global hotkeys, tray icon, OS notifications.",
+    },
 ];
 
 async function cmdNewFromTemplate(): Promise<void> {
