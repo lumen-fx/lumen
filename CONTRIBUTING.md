@@ -45,6 +45,22 @@ Security tab.
 3. FFI surfaces use `#[repr(C)]`, never `#[repr(C, packed)]`.
 4. No Rust panics may escape across the C-ABI boundary.
 
+## Templates
+
+The apps `lumenc new` scaffolds are not in this repository. Each is maintained
+in a repository of its own under the
+[lumen-fx](https://github.com/lumen-fx) organisation, named after the template,
+and a Lumen release ships a copy of every one beside the toolchain. So a fix to
+a template's markup, CSS, script, or README goes to that repository, and
+reaches users with the next release.
+
+What lives here is the gallery: which templates `lumenc new` offers, in which
+order, and the one-line description of each (`crates/lumenc/src/scaffold.rs`).
+Adding a template means a new repository upstream and an entry here.
+
+Run `tools/fetch-templates.sh` to download the templates for a local test run.
+Cases that scaffold an app skip themselves with a printed reason without them.
+
 ## Style
 
 - `cargo fmt` is law.

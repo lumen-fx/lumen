@@ -77,9 +77,13 @@ checklist.
      `-p lumen`, and `-p lumen-launcher`; the workspace
      `[profile.release]` already strips symbols, so there is no separate
      strip step);
+   - downloads the `lumenc new` templates with `tools/fetch-templates.sh`, one
+     per template from the repository it is maintained in under `lumen-fx`;
    - packages `bin/lumenc` (`lumenc.exe` on Windows), the liblumen shared
      library, and `bin/lumen-launcher` into one archive, all in the *same*
-     `bin/` directory. See the note on `crates/lumenc/src/loader.rs` below;
+     `bin/` directory, along with the two trees `lumenc` reads from beside
+     itself: the candela standard library in `bin/libs` and the templates in
+     `bin/templates`. See the note on `crates/lumenc/src/loader.rs` below;
    - on Windows, also stages an install receipt and builds
      `lumen-windows-x86_64.msi` from `tools/release/msi/lumen.wxs`. The
      receipt is staged after the zip is closed, so only the MSI carries one: a

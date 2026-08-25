@@ -67,6 +67,19 @@ uses for the other native dependencies. candela reads the tree from beside the
 running executable, so it goes there rather than into `OUT_DIR`, and the
 release archive ships the same tree next to `lumenc`.
 
+The apps `lumenc new` scaffolds are maintained outside this repository, one per
+template under [lumen-fx](https://github.com/lumen-fx), and a release ships a
+copy of every one beside the toolchain. Download them for a local run with:
+
+```sh
+tools/fetch-templates.sh
+```
+
+They land at the root of cargo's target directory, where `lumenc` finds them
+the way an installed copy finds the ones next to it. Until they are there,
+`lumenc new` says so and every test that scaffolds an app skips itself with a
+printed reason; CI fetches them before it tests.
+
 ## Developing without a window
 
 Add `--headless` to run the whole pipeline (layout, shaping, GPU render, MCP
@@ -252,9 +265,12 @@ turns it away. These cases run on Linux, since the set of lines a clean run
 prints is what makes the check sharp and that set is per environment; the app
 sources are the same everywhere.
 
-Two families of test skip themselves rather than fail when the machine cannot
+Three families of test skip themselves rather than fail when the machine cannot
 support them, printing the reason:
 
+- Every case that scaffolds an app, when the templates have not been
+  downloaded. `tools/fetch-templates.sh` is what they want; CI runs it before
+  the suite.
 - Framebuffer readback on a software adapter. Direct3D's WARP rasterizer faults
   the test process when a texture is read back, so those cases want a real GPU.
 - The screenshot goldens in `crates/lumenc/tests/golden.rs`. Baselines carry

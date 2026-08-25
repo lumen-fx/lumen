@@ -376,6 +376,11 @@ The scripted templates use candela, except `dashboard`, which is Lua, and
 An existing `<name>` exits 1 without writing anything. An unknown template
 exits 2 and names the available set.
 
+The gallery is part of `lumenc`, so `--list` answers on any copy. The files are
+installed beside it, so scaffolding wants an installed toolchain: a copy
+without them writes nothing, exits 1, and names the directories it looked in.
+See [Templates](../getting-started/templates.md).
+
 ## fmt
 
 ```

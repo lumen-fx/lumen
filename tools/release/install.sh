@@ -57,7 +57,9 @@
 # the same bin/ directory (see crates/lumenc/src/loader.rs and
 # crates/lumenc/src/package_cli.rs: both look next to the running executable,
 # then an LUMEN_LIB_DIR override, then the platform loader's default search
-# path, and never in a sibling lib/ directory), plus a shell completion script
+# path, and never in a sibling lib/ directory), plus the two trees lumenc
+# reads from beside itself - the candela standard library in bin/libs and the
+# `lumenc new` templates in bin/templates - and a shell completion script
 # per shell under share/. Every installed path is recorded in a
 # receipt under <prefix>/share/lumen, so a later run can replace an old version
 # exactly and --uninstall can undo it.
