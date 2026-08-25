@@ -20,8 +20,12 @@ fn isolate() -> std::sync::MutexGuard<'static, ()> {
 fn fixture(tag: &str, plugins_toml: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("lumenui-run-paths-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("main.lmn"), "<root><label text=\"hi\"/></root>").unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("src").join("main.lmn"),
+        "<root><label text=\"hi\"/></root>",
+    )
+    .unwrap();
     std::fs::write(
         dir.join("lumen.toml"),
         format!("[mcp]\nport = 0\n{plugins_toml}"),

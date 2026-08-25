@@ -49,7 +49,7 @@ fn scratch_dir() -> PathBuf {
         static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }));
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("lumen.toml"),
         "[mcp]\nport = 0\n\n[pages]\nentry = \"index\"\n",
@@ -57,7 +57,7 @@ fn scratch_dir() -> PathBuf {
     .unwrap();
     // Shared, global layout template (a template-only file).
     std::fs::write(
-        dir.join("layout.lmn"),
+        dir.join("src").join("layout.lmn"),
         r#"<root>
   <template name="layout">
     <column>
@@ -75,7 +75,7 @@ fn scratch_dir() -> PathBuf {
     )
     .unwrap();
     std::fs::write(
-        dir.join("index.lmn"),
+        dir.join("src").join("index.lmn"),
         r#"<root>
   <use template="layout">
     <label id="page-marker" text="INDEX_PAGE"/>
@@ -84,7 +84,7 @@ fn scratch_dir() -> PathBuf {
     )
     .unwrap();
     std::fs::write(
-        dir.join("settings.lmn"),
+        dir.join("src").join("settings.lmn"),
         r#"<root>
   <use template="layout">
     <label id="page-marker" text="SETTINGS_PAGE"/>
@@ -93,7 +93,7 @@ fn scratch_dir() -> PathBuf {
     )
     .unwrap();
     std::fs::write(
-        dir.join("user.lmn"),
+        dir.join("src").join("user.lmn"),
         r#"<root>
   <use template="layout">
     <label id="page-marker" text="USER_PAGE"/>
@@ -231,7 +231,7 @@ fn auto_scratch_dir() -> PathBuf {
         static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }));
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
     // No `[pages]` block: routing is entirely default-driven.
     std::fs::write(
         dir.join("lumen.toml"),
@@ -239,7 +239,7 @@ fn auto_scratch_dir() -> PathBuf {
     )
     .unwrap();
     std::fs::write(
-        dir.join("layout.lmn"),
+        dir.join("src").join("layout.lmn"),
         r#"<root>
   <!-- Shared layout. This `<template>` is hoisted into the global preamble. -->
   <template name="layout">
@@ -257,7 +257,7 @@ fn auto_scratch_dir() -> PathBuf {
     )
     .unwrap();
     std::fs::write(
-        dir.join("index.lmn"),
+        dir.join("src").join("index.lmn"),
         r#"<root>
   <use template="layout">
     <label id="page-marker" text="INDEX_PAGE"/>
@@ -266,7 +266,7 @@ fn auto_scratch_dir() -> PathBuf {
     )
     .unwrap();
     std::fs::write(
-        dir.join("settings.lmn"),
+        dir.join("src").join("settings.lmn"),
         r#"<root>
   <use template="layout">
     <label id="page-marker" text="SETTINGS_PAGE"/>
@@ -350,14 +350,14 @@ fn artifact_scratch_dir() -> PathBuf {
         static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }));
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("lumen.toml"),
         "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
     )
     .unwrap();
     std::fs::write(
-        dir.join("layout.lmn"),
+        dir.join("src").join("layout.lmn"),
         r#"<root>
   <template name="layout">
     <column>
@@ -372,7 +372,7 @@ fn artifact_scratch_dir() -> PathBuf {
     )
     .unwrap();
     std::fs::write(
-        dir.join("index.lmn"),
+        dir.join("src").join("index.lmn"),
         r#"<root>
   <use template="layout">
     <label id="page-marker" text="INDEX_PAGE"/>
@@ -387,7 +387,7 @@ fn on_click(id) {
     )
     .unwrap();
     std::fs::write(
-        dir.join("settings.lmn"),
+        dir.join("src").join("settings.lmn"),
         r#"<root>
   <use template="layout">
     <label id="page-marker" text="SETTINGS_PAGE"/>
@@ -503,10 +503,10 @@ fn multi_page_navigation_from_an_artifact() {
 #[test]
 fn a_single_page_app_compiles_without_a_page_set() {
     let dir = std::env::temp_dir().join(format!("lumen_pages_single_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
     std::fs::write(
-        dir.join("main.lmn"),
+        dir.join("src").join("main.lmn"),
         "<root><label id=\"only\" text=\"ONE_PAGE\"/></root>",
     )
     .unwrap();
@@ -558,18 +558,22 @@ fn page_current_reads_the_active_page_on_every_host() {
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
         std::fs::write(
-            dir.join("index.lmn"),
+            dir.join("src").join("index.lmn"),
             format!(
                 "<root>\n  <label id=\"seen\" bind-text=\"seen\" text=\"(none)\"/>\n  \
                  <script src=\"{script_name}\"/>\n</root>"
             ),
         )
         .unwrap();
-        std::fs::write(dir.join("settings.lmn"), "<root><label text=\"S\"/></root>").unwrap();
-        std::fs::write(dir.join(script_name), script).unwrap();
+        std::fs::write(
+            dir.join("src").join("settings.lmn"),
+            "<root><label text=\"S\"/></root>",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src").join(script_name), script).unwrap();
 
         let mut opts = RunOptions::new(&dir);
         opts.hot_reload = false;
@@ -610,18 +614,22 @@ fn page_back_returns_whether_the_step_was_queued() {
         let dir =
             std::env::temp_dir().join(format!("lumen_page_back_{engine}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
         std::fs::write(
-            dir.join("index.lmn"),
+            dir.join("src").join("index.lmn"),
             format!(
                 "<root>\n  <label id=\"went\" bind-text=\"went\" text=\"(none)\"/>\n  \
                  <script src=\"{script_name}\"/>\n</root>"
             ),
         )
         .unwrap();
-        std::fs::write(dir.join("settings.lmn"), "<root><label text=\"S\"/></root>").unwrap();
-        std::fs::write(dir.join(script_name), script).unwrap();
+        std::fs::write(
+            dir.join("src").join("settings.lmn"),
+            "<root><label text=\"S\"/></root>",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src").join(script_name), script).unwrap();
 
         let mut opts = RunOptions::new(&dir);
         opts.hot_reload = false;
@@ -665,18 +673,22 @@ fn page_with_no_arguments_reads_the_active_page() {
         let dir =
             std::env::temp_dir().join(format!("lumen_page_noarg_{engine}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
         std::fs::write(
-            dir.join("index.lmn"),
+            dir.join("src").join("index.lmn"),
             format!(
                 "<root>\n  <label id=\"seen\" bind-text=\"seen\" text=\"(none)\"/>\n  \
                  <script src=\"{script_name}\"/>\n</root>"
             ),
         )
         .unwrap();
-        std::fs::write(dir.join("settings.lmn"), "<root><label text=\"S\"/></root>").unwrap();
-        std::fs::write(dir.join(script_name), script).unwrap();
+        std::fs::write(
+            dir.join("src").join("settings.lmn"),
+            "<root><label text=\"S\"/></root>",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src").join(script_name), script).unwrap();
 
         let mut opts = RunOptions::new(&dir);
         opts.hot_reload = false;
@@ -701,10 +713,10 @@ fn a_fragment_declared_in_one_page_is_usable_from_another() {
     let _guard = nav_test_guard();
     let dir = std::env::temp_dir().join(format!("lumen_pages_shared_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
     std::fs::write(
-        dir.join("index.lmn"),
+        dir.join("src").join("index.lmn"),
         r#"<root>
   <template name="chip"><label class="chip" text="{label}"/></template>
   <label text="INDEX_PAGE"/>
@@ -712,7 +724,7 @@ fn a_fragment_declared_in_one_page_is_usable_from_another() {
     )
     .unwrap();
     std::fs::write(
-        dir.join("settings.lmn"),
+        dir.join("src").join("settings.lmn"),
         r#"<root>
   <label text="SETTINGS_PAGE"/>
   <chip label="FROM_INDEX"/>
@@ -744,9 +756,9 @@ fn editing_a_fragment_file_renders_the_new_body() {
     let _guard = nav_test_guard();
     let dir = std::env::temp_dir().join(format!("lumen_pages_reload_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
-    let layout = dir.join("layout.lmn");
+    let layout = dir.join("src").join("layout.lmn");
     std::fs::write(
         &layout,
         r#"<root>
@@ -755,7 +767,7 @@ fn editing_a_fragment_file_renders_the_new_body() {
     )
     .unwrap();
     std::fs::write(
-        dir.join("index.lmn"),
+        dir.join("src").join("index.lmn"),
         r#"<root><use template="layout"><label text="INDEX_PAGE"/></use></root>"#,
     )
     .unwrap();
@@ -800,7 +812,7 @@ fn shell_scratch_dir() -> PathBuf {
         static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }));
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
     let page = |marker: &str| {
         format!(
@@ -815,8 +827,8 @@ fn shell_scratch_dir() -> PathBuf {
 </root>"#
         )
     };
-    std::fs::write(dir.join("index.lmn"), page("INDEX_PAGE")).unwrap();
-    std::fs::write(dir.join("settings.lmn"), page("SETTINGS_PAGE")).unwrap();
+    std::fs::write(dir.join("src").join("index.lmn"), page("INDEX_PAGE")).unwrap();
+    std::fs::write(dir.join("src").join("settings.lmn"), page("SETTINGS_PAGE")).unwrap();
     dir
 }
 
@@ -880,17 +892,17 @@ fn a_page_root_keeps_its_attributes() {
     let _guard = nav_test_guard();
     let dir = std::env::temp_dir().join(format!("lumen_pages_rootattrs_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").unwrap();
     std::fs::write(
-        dir.join("index.lmn"),
+        dir.join("src/index.lmn"),
         r#"<root id="home-root" padding="17">
   <label text="INDEX_PAGE"/>
 </root>"#,
     )
     .unwrap();
     std::fs::write(
-        dir.join("settings.lmn"),
+        dir.join("src/settings.lmn"),
         r##"<root id="settings-root" bg="#102030" padding="24">
   <label text="SETTINGS_PAGE"/>
 </root>"##,

@@ -1,7 +1,7 @@
 //! In-process source -> LMNA compile for the link-not-embed launcher.
 //!
-//! [`compile_dir_to_lmna`] turns an app directory (`main.lmn` + optional
-//! `main.css` + inline / external `<script>`) into precompiled
+//! [`compile_dir_to_lmna`] turns an app directory (`src/main.lmn` + optional
+//! `src/main.css` + inline / external `<script>`) into precompiled
 //! [`lumen_ir::artifact`] bytes using only the compiler front-end
 //! (`parser_html` / `parser_css` / `resolve`), the shared CSS cascade
 //! (`lumen_ir::css`), and the artifact codec, with no dependency on
@@ -62,16 +62,22 @@ pub enum CompileError {
     /// message names the plugin.
     #[error("{0}")]
     Plugin(String),
+    /// The app's code is at its root rather than under `src/`. Carries the
+    /// migration hint verbatim; see [`resolve_src_dir`].
+    #[error("{0}")]
+    Layout(String),
 }
 
-/// Compile `<dir>/main.lmn` (+ optional `main.css`, `<include>`, `@import`,
-/// inline `:root` `var()`, and inline / external `<script>`) into precompiled
-/// LMNA artifact bytes. No filesystem is touched beyond the source files; the
-/// result is what [`lumen_ir::artifact::serialize`] would write to a `.lmna`.
+/// Compile `<dir>/src/main.lmn` (+ optional `src/main.css`, `<include>`,
+/// `@import`, inline `:root` `var()`, and inline / external `<script>`) into
+/// precompiled LMNA artifact bytes. No filesystem is touched beyond the source
+/// files; the result is what [`lumen_ir::artifact::serialize`] would write to a
+/// `.lmna`.
 ///
-/// The `[app] entry` key in `lumen.toml` (if present) selects the markup entry
-/// file; otherwise `main.lmn` is used. Asset (`<image src>`) paths are rewritten
-/// absolute against `dir` so they survive a cwd shift at run time.
+/// The `[app] entry` key in `lumen.toml` (if present) names the markup entry
+/// file inside `src/`; otherwise `main.lmn` is used. Asset (`<image src>`) paths
+/// are rewritten absolute against `dir`, the app root, so they survive a cwd
+/// shift at run time.
 pub fn compile_dir_to_lmna(dir: &Path) -> Result<Vec<u8>, CompileError> {
     // The same `[[plugins]]` chain the fat compile paths run; this path
     // reads the declarations itself because it links no `lumen-runtime`.
@@ -96,9 +102,10 @@ fn compile_dir(
 ) -> Result<lumen_ir::artifact::CompiledApp, CompileError> {
     use lumenc_plugin::SourceKind;
 
+    let src_dir = resolve_src_dir(dir)?;
     let entry = entry_name(dir);
-    let html_path = dir.join(&entry);
-    let css_path = dir.join("main.css");
+    let html_path = src_dir.join(&entry);
+    let css_path = src_dir.join("main.css");
 
     let html = std::fs::read_to_string(&html_path)
         .map_err(|e| CompileError::Read(html_path.clone(), e))?;
@@ -203,7 +210,7 @@ fn compile_dir(
     // the blocks are in the table this parse instantiates against.
     // Reads the (possibly rewritten) entry text, so its errors carry the
     // same attribution as the other markup errors.
-    let scripted = script_fragments(&spliced, &html_path, dir).map_err(|e| match e {
+    let scripted = script_fragments(&spliced, &html_path, &src_dir).map_err(|e| match e {
         CompileError::ParseHtml(msg) => CompileError::ParseHtml(attribute(msg)),
         other => other,
     })?;
@@ -293,8 +300,8 @@ fn compile_dir(
 
     // Bake inline + external `<script>` into one string; strip both from the IR
     // so the parser-free runtime reconstructs the exact script-host input.
-    let script_source = combined_script_source(&ir, dir)?;
-    let scripts = grouped_script_sources(&ir, dir)?;
+    let script_source = combined_script_source(&ir, &src_dir)?;
+    let scripts = grouped_script_sources(&ir, &src_dir)?;
     // Expand the use sites the fragment bodies hold against each other, so
     // every body the artifact carries is the whole subtree it stands for.
     crate::fragments::link(&mut fragments).map_err(|e| CompileError::ParseHtml(e.to_string()))?;
@@ -321,7 +328,7 @@ fn compile_dir(
 fn script_fragments(
     html: &str,
     html_path: &Path,
-    dir: &Path,
+    src_dir: &Path,
 ) -> Result<lumen_ir::fragment::FragmentTable, CompileError> {
     let refs = crate::collect_script_refs(html, html_path, None)
         .map_err(|e| CompileError::ParseHtml(e.to_string()))?;
@@ -340,7 +347,7 @@ fn script_fragments(
         if engine_for(Path::new(rel)) != Some("candela") {
             continue;
         }
-        let path = dir.join(rel);
+        let path = src_dir.join(rel);
         let body =
             std::fs::read_to_string(&path).map_err(|e| CompileError::Read(path.clone(), e))?;
         fold(&body, &path.display().to_string())?;
@@ -368,7 +375,7 @@ fn engine_for(path: &Path) -> Option<&'static str> {
 /// without the `[script] engine` override, which the runtime applies itself.
 fn grouped_script_sources(
     ir: &lumen_ir::layout_ir::LayoutIR,
-    dir: &Path,
+    src_dir: &Path,
 ) -> Result<Vec<lumen_ir::artifact::CompiledScript>, CompileError> {
     let externals: Vec<(&'static str, &String)> = ir
         .external_scripts
@@ -407,12 +414,51 @@ fn grouped_script_sources(
     };
     push(inline_engine, &ir.script_source);
     for (engine, rel) in &externals {
-        let path = dir.join(rel);
+        let path = src_dir.join(rel);
         let body =
             std::fs::read_to_string(&path).map_err(|e| CompileError::Read(path.clone(), e))?;
         push(engine, &body);
     }
     Ok(out)
+}
+
+/// The directory `dir`'s code lives in, rejecting an app whose code is still
+/// at its root.
+///
+/// Mirror of `lumen_runtime::app_layout::AppLayout::resolve`, which this path
+/// cannot reach (see the module doc comment), down to the message: an author
+/// gets the same migration hint whichever tool found the flat directory.
+fn resolve_src_dir(dir: &Path) -> Result<PathBuf, CompileError> {
+    let code = |d: &Path| -> Vec<String> {
+        let Ok(rd) = std::fs::read_dir(d) else {
+            return Vec::new();
+        };
+        let mut found: Vec<String> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| matches!(e, "lmn" | "css" | "rhai" | "lua" | "cdl"))
+            })
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .collect();
+        found.sort();
+        found.truncate(3);
+        found
+    };
+    let src_dir = dir.join("src");
+    let stray = code(dir);
+    if !stray.is_empty() && code(&src_dir).is_empty() {
+        return Err(CompileError::Layout(format!(
+            "{}: found code files at the app root ({}). Lumen apps keep their \
+             code under src/. Move the .lmn, .css and script files into src/; \
+             assets and locale/ stay at the app root.",
+            dir.display(),
+            stray.join(", ")
+        )));
+    }
+    Ok(src_dir)
 }
 
 /// Read the `[app] entry` key from `lumen.toml`, falling back to `main.lmn`.
@@ -444,11 +490,11 @@ fn entry_name(dir: &Path) -> String {
 /// `lumen_runtime::run::combined_script_source`.
 fn combined_script_source(
     ir: &lumen_ir::layout_ir::LayoutIR,
-    dir: &Path,
+    src_dir: &Path,
 ) -> Result<String, CompileError> {
     let mut combined = ir.script_source.clone();
     for rel in &ir.external_scripts {
-        let path = dir.join(rel);
+        let path = src_dir.join(rel);
         let body =
             std::fs::read_to_string(&path).map_err(|e| CompileError::Read(path.clone(), e))?;
         if !combined.is_empty() {
@@ -509,13 +555,14 @@ mod tests {
     #[test]
     fn compiles_dir_to_valid_lmna() {
         let tmp = std::env::temp_dir().join(format!("lumenc-compile-test-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).expect("mkdir");
+        let src = tmp.join("src");
+        std::fs::create_dir_all(&src).expect("mkdir");
         std::fs::write(
-            tmp.join("main.lmn"),
+            src.join("main.lmn"),
             "<root><label id=\"a\" text=\"hi\"/><script>let x = 1;</script></root>",
         )
         .expect("write lmn");
-        std::fs::write(tmp.join("main.css"), "#a { bg: #ff0000; }").expect("write css");
+        std::fs::write(src.join("main.css"), "#a { bg: #ff0000; }").expect("write css");
 
         let bytes = compile_dir_to_lmna(&tmp).expect("compile");
         let app = lumen_ir::artifact::read_bytes(&bytes).expect("decode");
@@ -545,9 +592,10 @@ mod tests {
     #[test]
     fn ua_css_reaches_dlopen_run_compile_path() {
         let tmp = std::env::temp_dir().join(format!("lumenc-compile-ua-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).expect("mkdir");
+        let src = tmp.join("src");
+        std::fs::create_dir_all(&src).expect("mkdir");
         std::fs::write(
-            tmp.join("main.lmn"),
+            src.join("main.lmn"),
             "<root><button id=\"b\" text=\"Go\"/></root>",
         )
         .expect("write lmn");
@@ -571,6 +619,21 @@ mod tests {
             "ua.css's `button {{ min-height: 36 }}` must reach this compile path"
         );
 
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Code at the app root is the layout Lumen used before `src/`, and the
+    /// launcher path says so in the same words the runtime does.
+    #[test]
+    fn code_at_the_app_root_is_rejected() {
+        let tmp = std::env::temp_dir().join(format!("lumenc-compile-flat-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).expect("mkdir");
+        std::fs::write(tmp.join("main.lmn"), "<root/>").expect("write lmn");
+        let err = compile_dir_to_lmna(&tmp).expect_err("a flat app is rejected");
+        assert!(matches!(err, CompileError::Layout(_)), "{err}");
+        let msg = err.to_string();
+        assert!(msg.contains("main.lmn"), "{msg}");
+        assert!(msg.contains("under src/"), "{msg}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

@@ -380,7 +380,7 @@ async fn tools_call(
 // --- Resources ----------------------------------------------------------
 //
 // Surfaces the small set of files an agent typically needs context on
-// (lumen.toml, main.lmn, main.css, TODO.md, docs/*.md) as read-only MCP
+// (lumen.toml, src/main.lmn, src/main.css, TODO.md, docs/*.md) as read-only MCP
 // `resources/`. The catalogue is discovered relative to the working
 // directory at startup - we walk up to six parents looking for a TODO.md
 // to anchor the project root.
@@ -405,7 +405,7 @@ fn enumerate_resources() -> Vec<std::path::PathBuf> {
     let Some(root) = project_root() else {
         return out;
     };
-    for tail in ["TODO.md", "lumen.toml", "main.lmn", "main.css"] {
+    for tail in ["TODO.md", "lumen.toml", "src/main.lmn", "src/main.css"] {
         let p = root.join(tail);
         if p.is_file() {
             out.push(p);
@@ -413,7 +413,7 @@ fn enumerate_resources() -> Vec<std::path::PathBuf> {
     }
     if let Ok(apps) = std::fs::read_dir(root.join("apps")) {
         for entry in apps.flatten() {
-            for tail in ["main.lmn", "main.css", "lumen.toml"] {
+            for tail in ["src/main.lmn", "src/main.css", "lumen.toml"] {
                 let p = entry.path().join(tail);
                 if p.is_file() && out.len() < RESOURCE_GLOB_LIMIT {
                     out.push(p);

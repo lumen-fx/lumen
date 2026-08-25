@@ -39,7 +39,7 @@ TextMate grammars ship for:
 
 Lumen CSS lives in ordinary `.css` files. To avoid hijacking `.css` in
 unrelated projects, the extension retags a stylesheet as Lumen CSS only when it
-sits next to a `main.lmn`, that is, inside a Lumen app directory.
+sits in an app's `src` directory, beside the markup.
 
 ### Commands (Command Palette -> "Lumen: ...")
 
@@ -58,8 +58,9 @@ same order: blank, hello, counter, form, todo, dashboard, settings, hotkeys.
 `blank` comes first and is what `lumenc new <name>` scaffolds when you give no
 template.
 
-The app directory is resolved from the active file (nearest ancestor with a
-`main.lmn`), the single workspace folder, or a quick-pick of discovered apps.
+The app directory is resolved from the active file (nearest ancestor holding a
+`lumen.toml` or a `src/main.lmn`), the single workspace folder, or a quick-pick
+of discovered apps.
 
 ### Live preview
 

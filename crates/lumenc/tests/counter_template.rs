@@ -36,7 +36,11 @@ fn scaffolded_counter(case: &str) -> std::path::PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("mkdir temp app");
     for (path, body) in lumenc::scaffold::COUNTER {
-        std::fs::write(dir.join(path), body).unwrap_or_else(|e| panic!("write {path}: {e}"));
+        let file = dir.join(path);
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent).unwrap_or_else(|e| panic!("mkdir for {path}: {e}"));
+        }
+        std::fs::write(&file, body).unwrap_or_else(|e| panic!("write {path}: {e}"));
     }
     // Same [app] / [window] config the template ships, plus the port pin.
     std::fs::write(

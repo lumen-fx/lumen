@@ -1,4 +1,5 @@
 use super::*;
+use crate::app_layout::AppLayout;
 use lumen_core::window::{Menu, MenuEntry, MenuModel, WindowGeometry};
 use lumen_ir::layout_ir::MenuEntrySpec;
 
@@ -30,6 +31,13 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // on the first tick.
     let app_id = cfg.app.id.clone().unwrap_or_else(|| derive_app_id(&dir));
     lumen_core::app_paths::set_app(dir.clone(), app_id.clone());
+    // Where this app's code is. In-memory markup has no source tree to check,
+    // so it takes the paths without one.
+    let layout = if opts.markup.is_some() {
+        AppLayout::of(&dir, &cfg)
+    } else {
+        AppLayout::resolve(&dir, &cfg)?
+    };
     // File-based pages: discover the page set up front. The entry file is
     // `index.lmn` (else the `[app] entry` stem, else `main.lmn`). Single-file
     // apps come back `multipage = false` and take the untouched legacy path.
@@ -37,13 +45,14 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     let page_plan = if opts.markup.is_some() {
         None
     } else {
-        Some(crate::pages::discover(&dir, &cfg))
+        Some(crate::pages::discover(&layout.src_dir, &cfg))
     };
     let html_path = match &page_plan {
         Some(plan) => plan.entry_file.clone(),
-        None => dir.join(cfg.app.entry.as_deref().unwrap_or("main.lmn")),
+        None => layout.entry_path,
     };
-    let css_path = dir.join("main.css");
+    let css_path = layout.css_path;
+    let lib_dir = layout.lib_dir;
     let asset_roots = cfg.resolved_asset_roots(&dir);
     let skin_override = cfg.skin.name.clone();
     // The injected compiler-plugin chain (loaded by lumenc, like the parser),
@@ -221,9 +230,9 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
             }
             #[cfg(feature = "host-candela")]
             crate::config::ScriptEngine::Candela => {
-                // Pass the entry path so a `dylib "..."` import in the app
-                // resolves its library next to the app under `lumenc run`,
-                // matching how `lumenc check` resolves it.
+                // Pass the entry path so an error names the file the author
+                // wrote, and `lib/` so a `dylib "..."` import finds its
+                // library where the app's hooks build it.
                 //
                 // The runtime's own functions carry `RHAI | LUA` and so pass
                 // this host by: candela already declares `set_color_scheme`
@@ -233,7 +242,9 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
                 // bus. Everything else reaches candela as `native::<name>(...)`
                 // once the script declares `host "native" { ... }`.
                 app.add_plugin(
-                    ScriptCandelaPlugin::new(combined).with_uri(html_path.display().to_string()),
+                    ScriptCandelaPlugin::new(combined)
+                        .with_uri(html_path.display().to_string())
+                        .with_library_dir(lib_dir.clone()),
                 );
                 register_script_host_systems::<CandelaHost>(&mut app, multi_host);
                 reloaders.push(engine, reload_script::<CandelaHost>);
@@ -251,6 +262,9 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     }
     #[cfg(feature = "host-rhai")]
     let _ = &rhai_extensions;
+    // candela is the only host with a native-library import.
+    #[cfg(not(feature = "host-candela"))]
+    let _ = &lib_dir;
     app.world.insert_resource(reloaders);
     use crate::spawn::SpawnIntoWorld;
     let root = ir.spawn_into(&mut app.world);

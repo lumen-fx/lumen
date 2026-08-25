@@ -71,8 +71,9 @@ logs to stderr. Point any LSP-capable editor at it as a stdio server.
 
 It treats files by extension: `.lmn` as markup, `.css` as stylesheets, and
 `.rhai` as script. It discovers the rest of a project from the sibling files in
-the same directory, preferring `main.lmn`, `main.css`, and `main.rhai`, which
-is what lets it resolve an id in a script back to the element that defines it.
+the same directory, an app's `src/`, preferring `main.lmn`, `main.css`, and
+`main.rhai`, which is what lets it resolve an id in a script back to the
+element that defines it.
 
 ### What it provides
 
@@ -106,7 +107,8 @@ npm run compile`, package it with `vsce package`, and install the resulting
 It activates on a `.lmn`, `.rhai`, or Lumen CSS file, and on any workspace
 containing a `.lmn` file or a `lumen.toml`. It contributes syntax highlighting
 for markup (with embedded script and CSS), for Lumen CSS, and for Rhai. A
-`.css` file is treated as Lumen CSS when it sits next to a `main.lmn`.
+`.css` file is treated as Lumen CSS when it sits in an app's `src/`, beside the
+markup.
 
 Commands, all under the `Lumen` category:
 
@@ -157,7 +159,7 @@ The plugin highlights `.lmn` (with embedded script and CSS) and `.rhai` using
 the same TextMate grammars as the VS Code extension. Every other feature is the
 server's: diagnostics, completion, hover, signature help, go to definition,
 find usages, rename, structure view, and reformatting a `.lmn` file. A `.css`
-file reaches the server when it sits next to a `main.lmn`. Server status and
+file reaches the server when it sits in an app's `src/`. Server status and
 the LSP traffic are in View | Tool Windows | Language Servers.
 
 Settings, under Settings | Languages & Frameworks | Lumen:
@@ -317,8 +319,8 @@ in a headless run, they refresh every tick so a driver sees each frame.
 ### Resources and prompts
 
 Through the bridge, an agent can also list and read project files: the
-`TODO.md` that roots the project, `lumen.toml`, `main.lmn`, `main.css`, the
-example apps, and the docs. Reads are restricted to that catalogue.
+`TODO.md` that roots the project, `lumen.toml`, `src/main.lmn`, `src/main.css`,
+the example apps, and the docs. Reads are restricted to that catalogue.
 
 These come from the bridge, which runs in your checkout. Talking to the
 app's socket directly gets tools only.

@@ -1,7 +1,7 @@
 # Multi-page apps
 
 A Lumen app can be more than one screen. Each screen is its own `.lmn` file in
-the app directory, and the filename is its name. There is no router to
+the app's `src/` directory, and the filename is its name. There is no router to
 configure and no route table to keep in sync: add a file, get a page.
 
 ## Add a page
@@ -29,12 +29,12 @@ Styling attributes on that `<root>` style that page: `bg` paints behind it,
 home page `<root>` is the app's root element, so what you write there sits
 behind every page instead of just one.
 
-Multi-page mode switches on as soon as the app directory holds more than one
-`.lmn` file. An app with a single `main.lmn` keeps loading exactly as before.
+Multi-page mode switches on as soon as `src/` holds more than one `.lmn` file.
+An app with a single `main.lmn` keeps loading exactly as before.
 
-The home page is `index.lmn`. If there is no `index.lmn`, Lumen uses the file
-named by `[app] entry` in `lumen.toml`, then `main.lmn`, then the first page it
-finds.
+The home page is `src/index.lmn`. If there is no `index.lmn`, Lumen uses the
+file named by `[app] entry` in `lumen.toml`, then `main.lmn`, then the first
+page it finds.
 
 ## Link between pages
 
@@ -114,8 +114,8 @@ there.
 
 Styling and scripting are app-wide, not per page.
 
-- One stylesheet. `main.css` styles the whole app; split it with `@import` if it
-  grows. See [styling](styling.md).
+- One stylesheet. `src/main.css` styles the whole app; split it with `@import`
+  if it grows. See [styling](styling.md).
 - One script program per language. The `<script>` sources from every page are
   grouped by host and combined, so define each function once across the app
   rather than once per page. `on_start` runs once at startup, not on every
@@ -179,8 +179,8 @@ include = ["index.lmn", "settings.lmn", "user.lmn"]
 `include` replaces directory discovery with an explicit list. Full key
 descriptions are in the [lumen.toml reference](../reference/lumen-toml.md).
 
-`include` paths are relative to the app directory and may point into a
-subdirectory, which is the way to keep pages in a folder of their own:
+`include` paths are relative to `src/` and may point into a subdirectory, which
+is the way to keep pages in a folder of their own:
 
 ```toml
 [pages]
@@ -190,8 +190,8 @@ include = ["index.lmn", "pages/settings.lmn", "pages/user.lmn"]
 A page's name is still its filename stem, so `pages/settings.lmn` is reachable
 as `settings`. Discovery itself never looks inside a subdirectory: a `.lmn`
 file down there is a page only when `include` names it, and `layout.lmn` is
-picked up from the app directory only. An `include` naming more than one page
-switches multi-page mode on by itself; `enabled = false` still turns it off.
+picked up from `src/` only. An `include` naming more than one page switches
+multi-page mode on by itself; `enabled = false` still turns it off.
 
 ## During development
 

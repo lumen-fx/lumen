@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::app_layout::src_dir;
 use crate::compiler_plugins::CompilerPlugins;
 use crate::config::ScriptEngine;
 
@@ -35,9 +36,9 @@ pub(crate) struct LoadResult {
 
 /// Produce a [`LoadResult`] for [`build_app`] from whichever source the
 /// caller configured: a precompiled AOT artifact ([`RunOptions::artifact`])
-/// or, when the `runtime-parse` feature is on, `main.lmn` + `main.css`
-/// parsed from source. A parser-free build with no artifact returns
-/// [`RunError::ParserDisabled`].
+/// or, when the `runtime-parse` feature is on, `src/main.lmn` +
+/// `src/main.css` parsed from source. A parser-free build with no artifact
+/// returns [`RunError::ParserDisabled`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn load_inputs(
     opts: &RunOptions,
@@ -496,7 +497,12 @@ pub(crate) fn load_ir(
     for line in plugins.finish(&ir, html_path).map_err(RunError::Plugin)? {
         eprintln!("{line}");
     }
-    let script_paths: Vec<PathBuf> = ir.external_scripts.iter().map(|p| dir.join(p)).collect();
+    let script_root = src_dir(dir);
+    let script_paths: Vec<PathBuf> = ir
+        .external_scripts
+        .iter()
+        .map(|p| script_root.join(p))
+        .collect();
     let script_mtimes: Vec<Option<SystemTime>> = script_paths.iter().map(|p| mtime(p)).collect();
     Ok(LoadResult {
         ir,
@@ -527,7 +533,7 @@ pub(crate) fn load_ir(
 ///
 /// Reading the files here rather than taking them from the caller keeps the
 /// ahead-of-time compile, the from-source run, and each hot reload on one code
-/// path.
+/// path. `dir` is the app root; the script files sit in its `src/`.
 #[cfg(feature = "runtime-parse")]
 fn script_fragments(
     html: &str,
@@ -548,6 +554,7 @@ fn script_fragments(
         }
     }
 
+    let script_root = src_dir(dir);
     let mut table = lumen_ir::fragment::FragmentTable::new();
     let mut seen: Vec<PathBuf> = Vec::new();
     let fold = |table: &mut lumen_ir::fragment::FragmentTable,
@@ -579,7 +586,7 @@ fn script_fragments(
             if ScriptEngine::from_path(Path::new(rel)) != Some(ScriptEngine::Candela) {
                 continue;
             }
-            let script = dir.join(rel);
+            let script = script_root.join(rel);
             if seen.contains(&script) {
                 continue;
             }
@@ -599,13 +606,17 @@ fn script_fragments(
 /// source string into the artifact) and by the `[script] engine` override,
 /// which puts the whole app on one engine by definition. The from-source run
 /// path groups per language instead; see [`grouped_script_sources`].
+///
+/// `dir` is the app root, and a `<script src>` path resolves against its
+/// `src/`, beside the markup that names it.
 pub(crate) fn combined_script_source(
     ir: &lumen_ir::layout_ir::LayoutIR,
     dir: &Path,
 ) -> Result<String, RunError> {
+    let script_root = src_dir(dir);
     let mut combined = ir.script_source.clone();
     for rel in &ir.external_scripts {
-        let path = dir.join(rel);
+        let path = script_root.join(rel);
         let body = std::fs::read_to_string(&path).map_err(|e| RunError::Read(path.clone(), e))?;
         if !combined.is_empty() {
             combined.push('\n');
@@ -632,6 +643,9 @@ pub(crate) type GroupedScripts = Vec<(ScriptEngine, String)>;
 ///
 /// `[script] engine` overrides all of it: every script, inline and external,
 /// joins the named engine as a single program.
+///
+/// `dir` is the app root, and a `<script src>` path resolves against its
+/// `src/`, beside the markup that names it.
 pub(crate) fn grouped_script_sources(
     ir: &lumen_ir::layout_ir::LayoutIR,
     dir: &Path,
@@ -676,6 +690,7 @@ pub(crate) fn grouped_script_sources(
         _ => ScriptEngine::default(),
     };
 
+    let script_root = src_dir(dir);
     let mut sources: Vec<(ScriptEngine, String)> = Vec::new();
     let mut push = |engine: ScriptEngine, body: &str| {
         if body.trim().is_empty() {
@@ -691,7 +706,7 @@ pub(crate) fn grouped_script_sources(
     };
     push(inline_engine, &ir.script_source);
     for (engine, rel) in &externals {
-        let path = dir.join(rel);
+        let path = script_root.join(rel);
         let body = std::fs::read_to_string(&path).map_err(|e| RunError::Read(path.clone(), e))?;
         push(*engine, &body);
     }

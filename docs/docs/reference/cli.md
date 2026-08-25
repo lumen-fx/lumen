@@ -34,8 +34,8 @@ lumenc run <dir> [--profile chrome|tracy|stderr]
                  [--artifact <file>] [--assets <file.lpak>] [--no-hooks]
 ```
 
-Runs the app in `<dir>`. The directory must contain `main.lmn` unless
-`--artifact` is given; `main.css` is optional.
+Runs the app in `<dir>`. The directory must contain `src/main.lmn` unless
+`--artifact` is given; `src/main.css` is optional.
 
 | Flag | Value | Default | Effect |
 |------|-------|---------|--------|
@@ -103,7 +103,7 @@ lumenc build <app_dir> <out.lmna> [--no-hooks]
 ```
 
 Compiles the app ahead of time into a `.lmna` artifact: parses the entry
-`.lmn` file and `main.css` once, runs the cascade, resolves asset and include
+`.lmn` file and `src/main.css` once, runs the cascade, resolves asset and include
 paths, bakes the script source, and records which engine runs each part of it.
 A candela script is also compiled to bytecode and stored beside its source.
 Prints the element count, the output path, and the artifact size.
@@ -258,8 +258,8 @@ are the one dot-prefixed tree that ships. Prints one line naming the executable 
 how many app files travelled with it.
 
 For a markup app the executable is the launcher with the compiled app inside
-it, and the markup, stylesheet, and scripts are compiled in rather than copied.
-A multi-page app packages whole, routing included.
+it, and the markup, stylesheet, and scripts are compiled in rather than copied,
+so `src/` does not travel. A multi-page app packages whole, routing included.
 
 For an SDK app the app's own toolchain builds it first, exactly as `lumenc
 build` would, and the folder is assembled around what that produced:
@@ -332,8 +332,9 @@ lumenc bundle --static <app_dir> <out_dir> [--no-hooks]
 ```
 
 Without `--static`, packs every regular file under `<app_dir>` into a single
-`.lpak` archive, skipping dotfiles and `target/` directories, and prints the
-file count. Entries are keyed by their path relative to `<app_dir>`. Run
+`.lpak` archive, skipping dotfiles, `target/`, and the app's `src/`, and prints
+the file count. An archive holds assets; the code is compiled rather than
+looked up by name. Entries are keyed by their path relative to `<app_dir>`. Run
 against the archive with `lumenc run <app_dir> --assets <out.lpak>`.
 
 With `--static`, resolves the app's capability set from `[capabilities]` plus
@@ -353,8 +354,9 @@ lumenc new --list
 ```
 
 Scaffolds a directory `<name>` from a template. The template argument is
-optional and defaults to `blank`. Every template writes `main.lmn`,
-`lumen.toml`, and a README.
+optional and defaults to `blank`. Every template writes `lumen.toml` and a
+README at the app root and the app's code under `src/`, starting with
+`src/main.lmn`.
 
 | Template | Contents |
 |----------|----------|
@@ -367,7 +369,8 @@ optional and defaults to `blank`. Every template writes `main.lmn`,
 | `settings` | Checkbox, radio, dropdown, and slider groups with `derive()`. |
 | `hotkeys` | Global hotkeys, tray icon, OS notifications. |
 
-`counter` is scripted in candela; the rest are scripted in Rhai.
+The scripted templates use candela, except `dashboard`, which is Lua, and
+`hotkeys`, which is Rhai. `blank` ships no script.
 
 `--list` (or `-l`) prints the gallery with one-line descriptions and exits 0.
 An existing `<name>` exits 1 without writing anything. An unknown template
@@ -550,13 +553,14 @@ Plain `lumenc lint` queries the running app and prints one finding per line as
 `<severity> <entity> <category>: <hint>`. It exits 1 when any finding has
 error severity.
 
-`--css-cascade` is offline: it parses `<dir>/main.css` and reports every rule
-whose resolved value differs between first-wins and last-wins cascade
+`--css-cascade` is offline: it parses `<dir>/src/main.css` and reports every
+rule whose resolved value differs between first-wins and last-wins cascade
 ordering. It exits 1 when it finds any divergence, and 0 when the app has no
-`main.css`.
+stylesheet.
 
-`--signals` is offline: it reads `<app-dir>/main.lmn`, the app script
-(`main.cdl`, `main.rhai`, or `main.lua`), and the optional `[signals]` schema.
+`--signals` is offline: it reads `<app-dir>/src/main.lmn`, the app script
+(`src/main.cdl`, `src/main.rhai`, or `src/main.lua`), and the optional
+`[signals]` schema.
 Findings are printed as `<severity> <file>:<line>:<col> [<kind>] <signal>:
 <message>` with an optional hint line. Kinds: `untyped-write`,
 `schema-mismatch`, `bare-interpolation`, `untracked-signal`, `orphan-write`.

@@ -71,7 +71,7 @@ CDATA sections and doctype declarations are not handled.
 ```sh
 npx tree-sitter generate --abi 14
 npx tree-sitter test
-npx tree-sitter parse ../../apps/widget-garden/main.lmn
+npx tree-sitter parse ../../apps/widget-garden/src/main.lmn
 ```
 
 Commit the regenerated `src/` along with `grammar.js`. Corpus cases in

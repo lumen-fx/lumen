@@ -162,7 +162,7 @@ Three checks need no running app and belong in the same CI job:
 
 ```sh
 lumenc check myapp
-lumenc fmt myapp/main.lmn --check
+lumenc fmt myapp/src/main.lmn --check
 lumenc lint --signals myapp --strict
 ```
 

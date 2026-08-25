@@ -42,10 +42,10 @@ itself, so unpacking it gives the same directory back rather than scattering an
 executable and its libraries.
 
 The markup, the stylesheet, and the scripts are compiled into the executable,
-so none of them appear in the folder; a [multi-page app](pages.md) compiles
-every page in. Everything else in the app directory travels: images, fonts,
-sounds, translation catalogues, data files. Dotfiles and a `target/` directory
-are left behind, and so is the output folder itself.
+so `src/` stays behind; a [multi-page app](pages.md) compiles every page in.
+Everything else in the app directory travels: images, fonts, sounds,
+translation catalogues, data files. Dotfiles and a `target/` directory are left
+behind, and so is the output folder itself.
 
 One thing does not travel: the candela standard library, which the toolchain
 carries and a package does not, so a script that reaches for `import "std/..."`
@@ -100,7 +100,7 @@ number of ticks, which is how you smoke-test a package in CI.
 lumenc build myapp myapp.lmna
 ```
 
-It parses `main.lmn` and the stylesheet, runs the whole cascade, splices
+It parses `src/main.lmn` and the stylesheet, runs the whole cascade, splices
 includes and imports, records which engine runs each part of the script, and
 writes one artifact. A candela script is compiled to bytecode as well, and both
 forms go in: the artifact runs the same either way, and the bytecode is what a
@@ -149,8 +149,9 @@ lumenc bundle myapp myapp.lpak
 ```
 
 This packs every regular file under the app directory into one `.lpak`
-archive, skipping dotfiles and `target/` directories. Use it when you want the
-app's files as a single addressable blob rather than a folder, for instance to
+archive, skipping dotfiles, `target/`, and `src/`; an archive holds the app's
+assets, and the code is compiled rather than read by name. Use it when you want
+those files as a single addressable blob rather than a folder, for instance to
 serve them from one file or to keep a build output tidy.
 
 Run against the archive with `--assets`:

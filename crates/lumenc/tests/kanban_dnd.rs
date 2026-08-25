@@ -34,9 +34,10 @@ fn isolated_kanban() -> std::path::PathBuf {
         .join("apps")
         .join("kanban");
     let dir = std::env::temp_dir().join(format!("lumenc-kanban-dnd-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("mkdir temp app");
+    std::fs::create_dir_all(dir.join("src")).expect("mkdir temp app");
     for f in ["main.lmn", "main.css", "main.rhai"] {
-        std::fs::copy(src.join(f), dir.join(f)).unwrap_or_else(|e| panic!("copy {f}: {e}"));
+        std::fs::copy(src.join("src").join(f), dir.join("src").join(f))
+            .unwrap_or_else(|e| panic!("copy {f}: {e}"));
     }
     std::fs::write(
         dir.join("lumen.toml"),

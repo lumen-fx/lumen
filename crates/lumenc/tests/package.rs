@@ -84,15 +84,16 @@ fn scratch(name: &str) -> Scratch {
 /// A one-page app with an external Rhai script and a file the markup names.
 fn write_app(dir: &Path) {
     std::fs::create_dir_all(dir.join("assets")).expect("create assets dir");
+    std::fs::create_dir_all(dir.join("src")).expect("create src dir");
     std::fs::write(
-        dir.join("main.lmn"),
+        dir.join("src").join("main.lmn"),
         "<root>\n  <label id=\"greeting\" text=\"packaged\"/>\n  \
          <image id=\"logo\" src=\"assets/logo.png\"/>\n  \
          <script src=\"main.rhai\"/>\n</root>\n",
     )
     .expect("write markup");
     std::fs::write(
-        dir.join("main.rhai"),
+        dir.join("src").join("main.rhai"),
         "fn on_start() { print(\"alive\"); }\n",
     )
     .expect("write script");
@@ -174,7 +175,7 @@ fn a_packaged_app_runs_from_anywhere() {
         "the app's files keep their relative paths"
     );
     assert!(
-        !out.join("main.lmn").exists(),
+        !out.join("src").exists() && !out.join("main.lmn").exists(),
         "the markup is compiled in, not copied"
     );
 
@@ -419,14 +420,15 @@ fn a_packaged_multi_page_app_runs() {
         "[mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
     )
     .expect("write config");
+    std::fs::create_dir_all(app.join("src")).expect("create src dir");
     std::fs::write(
-        app.join("index.lmn"),
+        app.join("src").join("index.lmn"),
         "<root>\n  <label id=\"home\" text=\"HOME\"/>\n  <a href=\"about\" text=\"About\"/>\n  \
          <script>\nfn on_start() { print(\"pages alive\"); }\n</script>\n</root>\n",
     )
     .expect("write entry page");
     std::fs::write(
-        app.join("about.lmn"),
+        app.join("src").join("about.lmn"),
         "<root>\n  <label id=\"about\" text=\"ABOUT\"/>\n</root>\n",
     )
     .expect("write second page");
@@ -451,7 +453,7 @@ fn a_packaged_multi_page_app_runs() {
     });
     assert!(exe.is_file(), "no app executable at {}", exe.display());
     assert!(
-        !out.join("index.lmn").exists() && !out.join("about.lmn").exists(),
+        !out.join("src").exists(),
         "the pages are compiled in, not copied"
     );
 
@@ -486,7 +488,8 @@ fn a_python_app_packages_for_this_machine_only() {
     let app = root.join("demo");
     std::fs::create_dir_all(&app).expect("create app dir");
     std::fs::write(app.join("main.py"), "import lumen\n").expect("write entry");
-    std::fs::write(app.join("main.lmn"), "<root/>").expect("write markup");
+    std::fs::create_dir_all(app.join("src")).expect("create src dir");
+    std::fs::write(app.join("src").join("main.lmn"), "<root/>").expect("write markup");
 
     let other = if cfg!(target_os = "windows") {
         "linux-x86_64"
@@ -590,7 +593,8 @@ fn cross_packaging_a_cpp_app_needs_a_toolchain_file() {
     let app = root.join("demo");
     std::fs::create_dir_all(&app).expect("create app dir");
     std::fs::write(app.join("CMakeLists.txt"), "project(demo)\n").expect("write manifest");
-    std::fs::write(app.join("main.lmn"), "<root/>").expect("write markup");
+    std::fs::create_dir_all(app.join("src")).expect("create src dir");
+    std::fs::write(app.join("src").join("main.lmn"), "<root/>").expect("write markup");
 
     let other = if cfg!(target_os = "windows") {
         "linux-x86_64"

@@ -13,8 +13,10 @@ lumenc new --list            # the gallery with one-line descriptions
 The template argument is optional and defaults to `blank`. `lumenc new` refuses
 to write into a directory that already exists.
 
-Every template ships `main.lmn` and `lumen.toml`. Most also ship a `main.css`
-and a script. Scripts are written in candela, the default host, except for two
+Every template writes `lumen.toml` and a README at the app root and the app's
+code under `src/`, starting with `src/main.lmn`. Most also ship a
+`src/main.css` and a script beside it. Scripts are written in candela, the
+default host, except for two
 that show what the other hosts look like: `dashboard` is Lua and `hotkeys` is
 Rhai. The three read closely enough that any of them is a fine starting point,
 and an app can mix them, since a script file picks its host from its own
@@ -25,8 +27,8 @@ extension.
 An empty starting point: a bare `<root>` and a `lumen.toml`, nothing else.
 
 Use it when you know what you are building. The README points at the three ways
-to grow it: add children to `<root>`, drop a `main.css` beside the markup, and
-attach a script with `<script src="main.cdl" />`.
+to grow it: add children to `<root>`, drop a `src/main.css` beside the markup,
+and attach a script with `<script src="main.cdl" />`.
 
 ## hello
 

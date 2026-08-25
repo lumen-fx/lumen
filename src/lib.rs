@@ -38,7 +38,7 @@ use lumen_core::property_store::{
     PropertyKey, PropertyValue, external_property_snapshot, push_external_property,
 };
 use lumen_core::signals::{push_external_array, push_external_clear};
-use lumen_runtime::RunOptions;
+use lumen_runtime::{RunError, RunOptions};
 use lumen_script::{ScriptFn, ScriptValue};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -557,7 +557,7 @@ where
 // ============================================================
 
 /// Allocate a new app rooted at `dir` (UTF-8, NUL-terminated). The
-/// directory must exist and contain `main.lmn` and/or `lumen.toml`.
+/// directory must exist and contain `lumen.toml` and/or `src/main.lmn`.
 /// Returns null on error; call `lumen_last_error` for details.
 ///
 /// ABI 0.3 made this validation eager: prior versions accepted any
@@ -583,9 +583,14 @@ pub unsafe extern "C" fn lumen_app_new(dir: *const c_char) -> *mut LumenApp {
         if !meta.is_dir() {
             return Err(format!("lumen_app_new: {s:?} is not a directory"));
         }
-        if !path.join("main.lmn").is_file() && !path.join("lumen.toml").is_file() {
+        // An app is `lumen.toml` at its root with its code under `src/`.
+        // Either one present is enough to treat this as an app directory; a
+        // flat app, or a missing entry file, gets its own message from the
+        // layout resolution (`lumen_runtime::app_layout`) at load, which says
+        // more than this check can.
+        if !path.join("lumen.toml").is_file() && !path.join("src").join("main.lmn").is_file() {
             return Err(format!(
-                "lumen_app_new: app directory {s:?} contains neither main.lmn nor lumen.toml"
+                "lumen_app_new: app directory {s:?} contains neither lumen.toml nor src/main.lmn"
             ));
         }
         // The `[[plugins]]` chain resolves as eagerly as the directory
@@ -1255,7 +1260,7 @@ fn run_inner(app: LumenApp) -> LumenStatus {
         Ok(()) => LumenStatus::Ok,
         Err(e) => {
             set_last_error(format!("{e}"));
-            classify_runtime_error(&format!("{e}"))
+            classify_run_error(&e)
         }
     }
 }
@@ -1266,8 +1271,23 @@ fn run_headless_inner(app: LumenApp, ticks: u32) -> LumenStatus {
         Ok(()) => LumenStatus::Ok,
         Err(e) => {
             set_last_error(format!("{e}"));
-            classify_runtime_error(&format!("{e}"))
+            classify_run_error(&e)
         }
+    }
+}
+
+/// Map a [`RunError`] onto the richest [`LumenStatus`] variant.
+///
+/// One variant is matched outright rather than read: an app whose code is
+/// still at its root reports the migration hint, and that hint names the
+/// `.css` and `.lmn` files to move, which the text classifier below would
+/// read as a stylesheet failure.
+fn classify_run_error(e: &RunError) -> LumenStatus {
+    match e {
+        // The directory handed in is not an app directory this runtime can
+        // resolve paths in.
+        RunError::Layout(_) => LumenStatus::ErrBadPath,
+        other => classify_runtime_error(&other.to_string()),
     }
 }
 
@@ -3706,6 +3726,17 @@ mod tests {
             classify_runtime_error("completely opaque thing"),
             LumenStatus::ErrRuntime
         );
+    }
+
+    #[test]
+    fn a_flat_app_directory_is_a_path_error_not_a_css_error() {
+        // The migration hint names the `.css` files to move, so reading the
+        // message would classify the app's layout as a stylesheet failure.
+        let err = RunError::Layout(lumen_runtime::app_layout::FlatLayout {
+            dir: std::path::PathBuf::from("/apps/demo"),
+            files: vec!["main.css".to_owned(), "main.lmn".to_owned()],
+        });
+        assert_eq!(classify_run_error(&err), LumenStatus::ErrBadPath);
     }
 
     #[test]

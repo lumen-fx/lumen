@@ -50,11 +50,11 @@ add_custom_target(lumen DEPENDS ${LUMEN_LIB})
 # target with the <lumen.hpp> + <lumen.h> include paths and C++17).
 add_subdirectory(${LUMEN_REPO}/sdk/cpp ${CMAKE_BINARY_DIR}/lumen_cpp)
 
-add_executable(sysmon main.cpp)
+add_executable(sysmon src/main.cpp)
 add_dependencies(sysmon lumen)
 target_link_libraries(sysmon PRIVATE lumen::cpp ${LUMEN_LIB} pthread stdc++fs)
 # Bake the source dir as a default app dir so `./build/sysmon` finds
-# main.lmn without an argv. Override via argv[1].
+# src/main.lmn without an argv. Override via argv[1].
 target_compile_definitions(sysmon PRIVATE
     LUMEN_APP_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 # Embed the cargo target dir as RPATH so the binary finds liblumen.so

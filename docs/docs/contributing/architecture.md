@@ -317,8 +317,8 @@ subcommand; a direct parser dependency the other way would be a cycle.
 
 The load path:
 
-1. Parse `main.lmn` into the layout IR, splicing `<include>` directives, and
-   parse `main.css`, resolving `@import`.
+1. Parse `src/main.lmn` into the layout IR, splicing `<include>` directives,
+   and parse `src/main.css`, resolving `@import`.
 2. Build the combined stylesheet. The built-in palette goes first, then the
    always-on user-agent baseline, then the selected skin, then the app's own
    CSS. The first three share a user-agent origin and are ordered among

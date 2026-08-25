@@ -1,8 +1,8 @@
 # Writing markup
 
 A Lumen app describes its interface in a `.lmn` file: an XML-shaped tree of
-tags with attributes. `main.lmn` is the entry point, and everything the window
-shows starts there.
+tags with attributes. `src/main.lmn` is the entry point, and everything the
+window shows starts there.
 
 ## Anatomy of a file
 

@@ -18,6 +18,9 @@
 
 /// SDK app-kind detection + external (Rust/C++/Python) build/run dispatch.
 pub mod app_kind;
+/// Where an app keeps its code: `lumen.toml` at the root, everything the
+/// compiler front-end reads under `src/`.
+pub mod app_layout;
 /// Per-app `lumen.toml` configuration model.
 pub mod config;
 #[cfg(feature = "devtools")]

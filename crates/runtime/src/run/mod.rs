@@ -4,13 +4,15 @@
 //!
 //! ```text
 //! <dir>/
-//!   main.lmn     # required: markup (with optional inline <script>)
-//!   main.css     # optional: stylesheet
+//!   lumen.toml   # optional: app config
+//!   src/
+//!     main.lmn   # required: markup (with optional inline <script>)
+//!     main.css   # optional: stylesheet
 //! ```
 //!
 //! - Wires the default plugin stack: taffy layout, winit window, cosmic text, input, hover/press/drag/scroll primitives, optional Rhai script host, optional MCP server.
 //! - Runs winit's event loop and returns when the window closes or a fatal error occurs.
-//! - Hot reload: a `notify` file watcher (inotify / FSEvents / ReadDirectoryChangesW) covers `main.lmn`, `main.css`, and every included / imported source; an fs event wakes the loop for one tick and the `hot_reload` system re-checks mtimes. On change it despawns the spawned root, re-parses, re-applies CSS, re-spawns, and reloads the Rhai script against a fresh `Scope`. Parse errors keep the previous tree intact and log to stderr. `LUMEN_HOT_RELOAD_POLL=1` (or watcher init failure) falls back to the legacy 300 ms mtime poll.
+//! - Hot reload: a `notify` file watcher (inotify / FSEvents / ReadDirectoryChangesW) covers `src/main.lmn`, `src/main.css`, and every included / imported source; an fs event wakes the loop for one tick and the `hot_reload` system re-checks mtimes. On change it despawns the spawned root, re-parses, re-applies CSS, re-spawns, and reloads the Rhai script against a fresh `Scope`. Parse errors keep the previous tree intact and log to stderr. `LUMEN_HOT_RELOAD_POLL=1` (or watcher init failure) falls back to the legacy 300 ms mtime poll.
 //! - Script commands: `SetText` updates the matching `LumenId`'s [`TextContent`]; other variants (`Print`, `AddClicks`, `SetString`) no-op here.
 
 use bevy_ecs::component::Mutable;
@@ -117,7 +119,7 @@ pub struct WindowSetup {
 
 /// Options for `lumenc run`.
 pub struct RunOptions {
-    /// Path to the app directory (must contain `main.lmn`).
+    /// Path to the app directory (must contain `src/main.lmn`).
     pub dir: PathBuf,
     /// Window title. Defaults to the directory name.
     pub title: Option<String>,
@@ -151,20 +153,20 @@ pub struct RunOptions {
     /// `host "native" { any <name>(...); }`; Rhai and Lua see plain globals.
     pub native_fns: Vec<ScriptFn>,
     /// In-memory markup source. When `Some`, the runtime parses this
-    /// string instead of reading `<dir>/main.lmn` from disk, and hot
+    /// string instead of reading `<dir>/src/main.lmn` from disk, and hot
     /// reload is disabled (there is no file to watch). Set by the Rust
     /// SDK's `include_str!`-based embedding path; `dir` is still used
     /// to resolve relative asset paths and `lumen.toml`.
     pub markup: Option<String>,
     /// In-memory stylesheet source. When `Some`, used instead of
-    /// `<dir>/main.css`. Independent of [`Self::markup`]; `None` falls
+    /// `<dir>/src/main.css`. Independent of [`Self::markup`]; `None` falls
     /// back to the on-disk lookup.
     pub css: Option<String>,
     /// Callbacks invoked on the fully-built [`App`] just before the
     /// event loop starts. See [`AppHook`].
     pub app_hooks: Vec<AppHook>,
     /// Load a precompiled AOT artifact (`lumenc build`) instead of parsing
-    /// `<dir>/main.lmn` + `main.css` from source. When `Some`, the parser is
+    /// `<dir>/src/main.lmn` + `src/main.css` from source. When `Some`, the parser is
     /// bypassed entirely (and hot reload is disabled); `dir` is still used to
     /// resolve `lumen.toml`. Required for a runtime built without the
     /// `runtime-parse` feature.
@@ -310,7 +312,7 @@ impl RunOptions {
     }
 
     /// Builder: parse this in-memory markup string instead of reading
-    /// `<dir>/main.lmn` from disk. Disables hot reload. See
+    /// `<dir>/src/main.lmn` from disk. Disables hot reload. See
     /// [`Self::markup`].
     pub fn with_markup(mut self, src: impl Into<String>) -> Self {
         self.markup = Some(src.into());
@@ -318,7 +320,7 @@ impl RunOptions {
     }
 
     /// Builder: apply this in-memory stylesheet instead of reading
-    /// `<dir>/main.css` from disk. See [`Self::css`].
+    /// `<dir>/src/main.css` from disk. See [`Self::css`].
     pub fn with_css(mut self, src: impl Into<String>) -> Self {
         self.css = Some(src.into());
         self
@@ -426,6 +428,10 @@ pub enum RunError {
     /// `lumen.toml` is invalid (parse / read error).
     #[error("lumen.toml: {0}")]
     Config(#[from] crate::config::ConfigError),
+    /// The app's code is at its root rather than under `src/`; carries the
+    /// migration hint. See [`crate::app_layout::FlatLayout`].
+    #[error("{0}")]
+    Layout(#[from] crate::app_layout::FlatLayout),
     /// A `locale/*.ftl` catalogue could not be read or parsed, or its
     /// filename is not a BCP-47 tag.
     #[error("i18n: {0}")]
@@ -456,7 +462,7 @@ pub enum RunError {
     NoScriptHostAvailable,
 }
 
-/// Read `<dir>/main.lmn` + optional `<dir>/main.css`, build a default
+/// Read `<dir>/src/main.lmn` + optional `<dir>/src/main.css`, build a default
 /// `App`, spawn the parsed tree, and enter winit's event loop.
 pub fn run_app(opts: RunOptions) -> Result<(), RunError> {
     let (dir, assets) = (opts.dir.clone(), opts.assets.clone());

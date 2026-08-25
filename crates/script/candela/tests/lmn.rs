@@ -101,6 +101,7 @@ fn a_block_compiles_to_bytecode() {
          fn Home(name) { return lmn!(<label text=\"home for $name\"/>); }\n\
          fn main() {}\n",
         "app.cdl",
+        None,
     )
     .expect("the program compiles");
     assert!(!bytes.is_empty());

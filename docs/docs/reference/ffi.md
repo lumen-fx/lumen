@@ -96,7 +96,7 @@ size, then again to fill.
 
 | Function | Behaviour |
 | --- | --- |
-| `LumenApp *lumen_app_new(const char *dir)` | Build an app rooted at `dir`, which must exist and contain `main.lmn` and/or `lumen.toml`. Returns null on error. |
+| `LumenApp *lumen_app_new(const char *dir)` | Build an app rooted at `dir`, which must exist and contain `lumen.toml` and/or `src/main.lmn`. Returns null on error. |
 | `LumenApp *lumen_app_new_from_lmna(const uint8_t *data, size_t len, const char *base_dir)` | Build an app from precompiled artifact bytes, with no parser involved. The bytes are copied immediately. `base_dir` is what relative asset paths resolve against; null means the current directory. |
 | `LumenStatus lumen_app_set_title(LumenApp *app, const char *title)` | Override the window title. |
 | `LumenStatus lumen_app_set_size(LumenApp *app, uint32_t w, uint32_t h)` | Override the initial window size, in logical pixels. |

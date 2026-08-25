@@ -321,7 +321,7 @@ extern "C" {
 
 /*
  Allocate a new app rooted at `dir` (UTF-8, NUL-terminated). The
- directory must exist and contain `main.lmn` and/or `lumen.toml`.
+ directory must exist and contain `lumen.toml` and/or `src/main.lmn`.
  Returns null on error; call `lumen_last_error` for details.
 
  ABI 0.3 made this validation eager: prior versions accepted any

@@ -172,6 +172,9 @@ impl LumenBundle {
     /// entry keyed by its path RELATIVE to `root`, with forward
     /// slashes. Symlinks are followed.
     ///
+    /// A `src/` directory at `root` is left out: an app's code is compiled,
+    /// never looked up by name at run time, so a bundle holds assets only.
+    ///
     /// Returns the number of entries written.
     pub fn pack_dir(root: impl AsRef<Path>, out: impl AsRef<Path>) -> Result<usize, BundleError> {
         let root = root.as_ref();
@@ -218,8 +221,10 @@ fn walk_dir(
         let path = entry.path();
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        // Skip dotfiles, `target/`, and known editor noise.
-        if name_str.starts_with('.') || name_str == "target" {
+        // Skip dotfiles, `target/`, and known editor noise. The app's `src/`
+        // goes too, but only at the root: deeper down the name is an asset
+        // folder's, not the app's code.
+        if name_str.starts_with('.') || name_str == "target" || (dir == root && name_str == "src") {
             continue;
         }
         let metadata = std::fs::metadata(&path)?;

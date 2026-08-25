@@ -25,7 +25,7 @@ fn main() {}
 
 #[test]
 fn a_compiled_program_runs_under_the_vm_alone() {
-    let bytes = compile_bytecode(STANDALONE, "standalone.cdl").expect("the program compiles");
+    let bytes = compile_bytecode(STANDALONE, "standalone.cdl", None).expect("the program compiles");
     let hosts = HostRegistry::new();
     let mut program = load_program(&bytes, &hosts).expect("the image loads");
     program.run();
@@ -38,7 +38,7 @@ fn a_compiled_program_runs_under_the_vm_alone() {
 
 #[test]
 fn only_an_annotated_function_is_callable_by_name() {
-    let bytes = compile_bytecode(STANDALONE, "standalone.cdl").expect("the program compiles");
+    let bytes = compile_bytecode(STANDALONE, "standalone.cdl", None).expect("the program compiles");
     let hosts = HostRegistry::new();
     let program = load_program(&bytes, &hosts).expect("the image loads");
     let exports: Vec<&str> = program.exports().collect();
@@ -75,7 +75,7 @@ fn on_ready() {}
 
 fn main() {}
 "#;
-    let bytes = compile_bytecode(HANDLERS, "handlers.cdl").expect("the handlers compile");
+    let bytes = compile_bytecode(HANDLERS, "handlers.cdl", None).expect("the handlers compile");
     let program = load_program(&bytes, &HostRegistry::new()).expect("the image loads");
     let exports: Vec<&str> = program.exports().collect();
 
@@ -109,7 +109,7 @@ fn on_start() {
 
 fn main() {}
 "#;
-    let bytes = compile_bytecode(source, "smoke.cdl").expect("the program compiles");
+    let bytes = compile_bytecode(source, "smoke.cdl", None).expect("the program compiles");
 
     let mut hosts = HostRegistry::new();
     hosts.register_host_fn(
@@ -137,7 +137,7 @@ fn main() {}
 
 #[test]
 fn a_program_that_does_not_compile_reports_where() {
-    let error = compile_bytecode("fn main() { let x = ", "broken.cdl")
+    let error = compile_bytecode("fn main() { let x = ", "broken.cdl", None)
         .expect_err("an unfinished statement is a compile error");
     let ScriptError::Compile { uri, line, .. } = error else {
         panic!("a build tool gets the position, not just a message: {error:?}");
@@ -160,7 +160,8 @@ fn go() { return gpio::level(21); }
 
 fn main() {}
 "#;
-    let bytes = compile_bytecode(UNDECLARED, "undeclared.cdl").expect("the build does not object");
+    let bytes =
+        compile_bytecode(UNDECLARED, "undeclared.cdl", None).expect("the build does not object");
     let mut hosts = HostRegistry::new();
     hosts.register_host_fn("gpio", "level", |pin: i64| -> i64 { pin * 2 });
 
@@ -187,7 +188,7 @@ fn go() { return gpio::level(21); }
 
 fn main() {}
 "#;
-    let bytes = compile_bytecode(DECLARED, "gpio.cdl").expect("the program compiles");
+    let bytes = compile_bytecode(DECLARED, "gpio.cdl", None).expect("the program compiles");
 
     let Err(error) = load_program(&bytes, &HostRegistry::new()) else {
         panic!("nothing is registered under `gpio`, so the load fails");

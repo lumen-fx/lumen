@@ -85,10 +85,11 @@ impl Fixture {
                 .unwrap()
                 .as_nanos()
         ));
-        std::fs::create_dir_all(&dir).expect("create fixture dir");
-        std::fs::write(dir.join("a.rhai"), RHAI).expect("write rhai");
-        std::fs::write(dir.join("b.lua"), LUA).expect("write lua");
-        std::fs::write(dir.join("c.cdl"), CDL).expect("write candela");
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).expect("create fixture dir");
+        std::fs::write(src.join("a.rhai"), RHAI).expect("write rhai");
+        std::fs::write(src.join("b.lua"), LUA).expect("write lua");
+        std::fs::write(src.join("c.cdl"), CDL).expect("write candela");
         Self(dir)
     }
 

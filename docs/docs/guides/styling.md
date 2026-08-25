@@ -6,8 +6,8 @@ selectors, properties, and value forms is in [CSS](../reference/css.md).
 
 ## Where the stylesheet comes from
 
-Put a `main.css` next to `main.lmn` and it is picked up automatically. Nothing
-in the markup references it.
+Put a `main.css` in the app's `src/` directory, next to `main.lmn`, and it is
+picked up automatically. Nothing in the markup references it.
 
 Split it across files with `@import`:
 

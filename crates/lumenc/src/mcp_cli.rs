@@ -16,6 +16,9 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::app_layout::AppLayout;
+use crate::config::LumenToml;
+
 const DEFAULT_PORT: u16 = 7878;
 const CONNECT_TIMEOUT_MS: u64 = 1_000;
 const READ_TIMEOUT_MS: u64 = 5_000;
@@ -170,7 +173,7 @@ pub fn cmd_screenshot(args: impl Iterator<Item = String>) -> ExitCode {
 /// surface snapshot-only findings (default) or, with `--css-cascade`, run
 /// an offline static analysis that flags rules whose resolved value flips
 /// between the old first-wins cascade and the new CSS Cascade-5 last-wins
-/// cascade. The static mode reads `<dir>/main.css` directly - no running
+/// cascade. The static mode reads `<dir>/src/main.css` directly - no running
 /// MCP server required.
 pub fn cmd_lint(args: impl Iterator<Item = String>) -> ExitCode {
     const LINT_USAGE: &str = "lumenc lint - lint the running app, or lint sources offline
@@ -306,21 +309,28 @@ error.
     }
 }
 
-/// Static `--css-cascade` lint: parse `<dir>/main.css`, walk every
+/// Static `--css-cascade` lint: parse `<dir>/src/main.css`, walk every
 /// (selector, property) pair, and emit a finding wherever the legacy
 /// first-wins ordering would resolve to a different value than the
 /// new CSS Cascade-5 last-wins ordering. Exits non-zero when any
 /// divergence is found (CI gate).
 fn run_css_cascade_lint(dir: &std::path::Path, as_json: bool) -> ExitCode {
-    let css_path = dir.join("main.css");
+    let cfg = LumenToml::load_or_default(dir).unwrap_or_default();
+    let css_path = match AppLayout::resolve(dir, &cfg) {
+        Ok(layout) => layout.css_path,
+        Err(e) => {
+            eprintln!("lumenc lint --css-cascade: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let src = match std::fs::read_to_string(&css_path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // No main.css -> no divergence, no findings.
+            // No stylesheet -> no divergence, no findings.
             if as_json {
                 println!("{{\"findings\":[]}}");
             } else {
-                println!("# {}: no main.css - nothing to lint", dir.display());
+                println!("# {}: no src/main.css - nothing to lint", dir.display());
             }
             return ExitCode::SUCCESS;
         }

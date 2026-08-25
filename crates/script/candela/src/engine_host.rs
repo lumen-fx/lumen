@@ -7,6 +7,7 @@
 //! ([`crate::vm_host`]) runs the same builtins without a compiler.
 
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use bevy_ecs::prelude::*;
@@ -19,6 +20,7 @@ use lumen_script::{
 
 use crate::declare;
 use crate::host_fns::{Registries, register_lumen_host_fns, register_script_fn};
+use crate::library_dir::LibraryDir;
 use crate::lmn;
 use crate::prelude;
 use crate::value::{candela_value_to_script, script_value_to_candela};
@@ -68,6 +70,8 @@ pub struct CandelaHost {
     /// `.cdl` sources plugins ship with their namespaces, spliced ahead of the
     /// app's own program.
     wrappers: Vec<(String, String)>,
+    /// Where a `dylib "..."` import looks for its library: the app's `lib/`.
+    library_dir: Option<PathBuf>,
 }
 
 impl Default for CandelaHost {
@@ -92,7 +96,22 @@ impl CandelaHost {
             source: String::new(),
             script_fns: ScriptFnStore::default(),
             wrappers: Vec::new(),
+            library_dir: None,
         }
+    }
+
+    /// Point every `dylib "..."` import at `dir`, the app's `lib/`.
+    ///
+    /// Unset, a library is looked for beside the file that imports it, which
+    /// under the `src/` layout is the script directory rather than the one an
+    /// app's `[[hooks]]` build its libraries into.
+    pub fn set_library_dir(&mut self, dir: impl Into<PathBuf>) {
+        self.library_dir = Some(dir.into());
+    }
+
+    /// Name the library directory for the span of a compile.
+    fn library_dir(&self) -> LibraryDir {
+        LibraryDir::set(self.library_dir.as_deref())
     }
 
     /// Mutable access to the inner candela [`Engine`](candela::Engine) so an
@@ -253,6 +272,7 @@ impl ScriptHost for CandelaHost {
         // is what the app runs.
         let prepared = self.prepare(source);
         *scratch.fn_index.lock().unwrap() = lmn::FnIndex::scan(&prepared.text);
+        let _library_dir = self.library_dir();
         engine
             .compile(&prepared.text, uri)
             .map(|_| ())
@@ -262,6 +282,7 @@ impl ScriptHost for CandelaHost {
     fn load(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
         let prepared = self.prepare(source);
         self.index_source(&prepared.text);
+        let _library_dir = self.library_dir();
         let program = self
             .vm
             .engine
@@ -285,6 +306,7 @@ impl ScriptHost for CandelaHost {
 
         let prepared = self.prepare(source);
         self.index_source(&prepared.text);
+        let _library_dir = self.library_dir();
         match self.vm.engine.compile(&prepared.text, uri) {
             Ok(program) => {
                 self.source = source.to_owned();
@@ -508,12 +530,20 @@ impl ScriptContext for CandelaScriptContext<'_> {
 /// so the runtime that loads it registers the same closures
 /// [`CandelaHost`] does or the load fails naming what is missing.
 ///
+/// `library_dir` is where a `dylib "..."` import's library is looked for: the
+/// app's `lib/`, or `None` for a source that imports none.
+///
 /// # Errors
 ///
 /// [`ScriptError::Compile`] when the program does not compile, carrying the
 /// line and column in the user's own source, and [`ScriptError::Runtime`]
 /// when a compiled program cannot be serialized.
-pub fn compile_bytecode(source: &str, uri: &str) -> Result<Vec<u8>, ScriptError> {
+pub fn compile_bytecode(
+    source: &str,
+    uri: &str,
+    library_dir: Option<&Path>,
+) -> Result<Vec<u8>, ScriptError> {
+    let _library_dir = LibraryDir::set(library_dir);
     let resolved = prelude::resolve_prelude(source);
     // `build_bytecode` is a free function with no engine behind it, so the
     // `lmn!` expander comes from an environment installed for this compile.
@@ -561,11 +591,11 @@ type CandelaExtension = Box<dyn FnOnce(&mut candela::Engine) + Send + 'static>;
 pub struct ScriptCandelaPlugin {
     /// Inline candela source loaded on app start.
     pub source: String,
-    /// Source URI reported in compile errors and used as the base directory for
-    /// a `dylib "..."` import's library search. Defaults to `<inline>`; set it
-    /// to the entry file path so a bare `dylib "md"` resolves `libmd.so` next to
-    /// the app under `lumenc run`, matching `lumenc check`.
+    /// Source URI reported in compile errors. Defaults to `<inline>`; set it to
+    /// the entry file path so an error names a file the author wrote.
     pub uri: Option<String>,
+    /// Where a `dylib "..."` import looks for its library: the app's `lib/`.
+    pub library_dir: Option<PathBuf>,
     /// Extension callbacks invoked on the inner `candela::Engine` after Lumen's
     /// built-in `host "lumen" { ... }` registrations but before the script is
     /// compiled. Use this to register app-specific host functions (`page()`,
@@ -580,15 +610,24 @@ impl ScriptCandelaPlugin {
         Self {
             source: source.into(),
             uri: None,
+            library_dir: None,
             extensions: Vec::new(),
         }
     }
 
     /// Set the source URI (typically the entry file path). Reported in compile
-    /// errors and used as the base directory for `dylib` library resolution.
+    /// errors.
     #[must_use]
     pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
         self.uri = Some(uri.into());
+        self
+    }
+
+    /// Set the directory a `dylib "..."` import resolves its library in, so a
+    /// bare `dylib "md"` finds `lib/libmd.so` at the app root.
+    #[must_use]
+    pub fn with_library_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.library_dir = Some(dir.into());
         self
     }
 
@@ -608,6 +647,9 @@ impl ScriptCandelaPlugin {
 impl Plugin for ScriptCandelaPlugin {
     fn build(self, app: &mut App) {
         let mut host = CandelaHost::new();
+        if let Some(dir) = self.library_dir {
+            host.set_library_dir(dir);
+        }
         for ext in self.extensions {
             ext(host.engine_mut());
         }

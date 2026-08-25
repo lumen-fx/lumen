@@ -114,7 +114,7 @@ async function cmdNewFromTemplate(): Promise<void> {
     runInTerminal([lumenc(), "new", name, pick.label], folder);
 
     // Offer to open the scaffolded main.lmn once the CLI has written it.
-    const target = Uri.file(path.join(folder, name, "main.lmn"));
+    const target = Uri.file(path.join(folder, name, "src", "main.lmn"));
     setTimeout(() => {
         workspace.fs.stat(target).then(
             () => {

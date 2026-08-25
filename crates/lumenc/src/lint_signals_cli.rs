@@ -1,8 +1,9 @@
 //! `lumenc lint --signals <app-dir>` - static signal lint.
 //!
-//! Scans `<app-dir>/main.lmn` and the app's script (`main.cdl`,
-//! `main.rhai`, or `main.lua`) against the optional `[signals]` schema
-//! declared in `<app-dir>/lumen.toml` and reports four classes of finding:
+//! Scans the app's markup entry and its script (`main.cdl`, `main.rhai`, or
+//! `main.lua`), both under `<app-dir>/src`, against the optional `[signals]`
+//! schema declared in `<app-dir>/lumen.toml` and reports four classes of
+//! finding:
 //!
 //! - **Untyped write** - `signal_set("count", "5")` reaches the
 //!   string-typed sink and bypasses the typed PropertyStore variant.
@@ -50,6 +51,7 @@ use std::process::ExitCode;
 
 use serde_json::json;
 
+use crate::app_layout::AppLayout;
 use crate::config::{LumenToml, SignalType, SignalsCfg};
 use crate::layout_ir::{LintFinding, LintKind, LintSeverity};
 
@@ -185,8 +187,8 @@ pub fn cmd_lint_signals(args: impl Iterator<Item = String>) -> ExitCode {
 USAGE:
     lumenc lint --signals [<app-dir>] [--json] [--strict]
 
-Reads <app-dir>/main.lmn, the app script (main.cdl / main.rhai /
-main.lua), and the optional [signals] schema in lumen.toml, then flags
+Reads <app-dir>/src/main.lmn, the app script (src/main.cdl / src/main.rhai
+/ src/main.lua), and the optional [signals] schema in lumen.toml, then flags
 untyped writes, bare {name} interpolation ambiguities, schema mismatches,
 untracked binds, and orphan writes.
 
@@ -231,7 +233,14 @@ untracked binds, and orphan writes.
         }
     };
 
-    let lmn_path = dir.join("main.lmn");
+    let layout = match AppLayout::resolve(&dir, &cfg) {
+        Ok(layout) => layout,
+        Err(e) => {
+            eprintln!("lumenc lint --signals: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let lmn_path = layout.entry_path;
     let lmn_src = std::fs::read_to_string(&lmn_path).unwrap_or_default();
     // The app's script, whichever host it targets. The scanner matches call
     // sites by substring, so a candela `lumen::signal_set_int(...)` and a Rhai
@@ -240,9 +249,9 @@ untracked binds, and orphan writes.
     // the one an author would go on to create.
     let script_path = ["main.cdl", "main.rhai", "main.lua"]
         .iter()
-        .map(|f| dir.join(f))
+        .map(|f| layout.src_dir.join(f))
         .find(|p| p.is_file())
-        .unwrap_or_else(|| dir.join("main.cdl"));
+        .unwrap_or_else(|| layout.src_dir.join("main.cdl"));
     let script_src = std::fs::read_to_string(&script_path).unwrap_or_default();
 
     let report = analyze(&cfg.signals, &lmn_src, &lmn_path, &script_src, &script_path);

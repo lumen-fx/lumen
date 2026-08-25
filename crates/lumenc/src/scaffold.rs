@@ -80,7 +80,7 @@ pub fn template_names() -> String {
 
 /// Empty starting point: the default when `lumenc new` gets no template.
 pub const BLANK: &[(&str, &str)] = &[
-    ("main.lmn", "<root />\n"),
+    ("src/main.lmn", "<root />\n"),
     (
         "lumen.toml",
         "[app]\nentry = \"main.lmn\"\n\n[window]\ntitle = \"App\"\n",
@@ -93,9 +93,10 @@ An empty Lumen app: one bare `<root>` and a `lumen.toml`.
 
 Build up from here:
 
-- Add children inside `<root>` in `main.lmn`.
-- Add a `main.css` next to it; it is picked up automatically.
-- Attach a script with `<script src="main.cdl" />` (or `.rhai` / `.lua`).
+- Add children inside `<root>` in `src/main.lmn`.
+- Add a `src/main.css` next to it; it is picked up automatically.
+- Attach a script with `<script src="main.cdl" />` (or `.rhai` / `.lua`),
+  written beside the markup in `src/`.
 
 Run it:
 
@@ -109,7 +110,7 @@ lumenc run .
 /// Smallest runnable app: a single label + script that says hi.
 pub const HELLO: &[(&str, &str)] = &[
     (
-        "main.lmn",
+        "src/main.lmn",
         r##"<root bg="#0c1c30">
   <label width="100%" height="100%" text-align="center" font-size="48"
          text-color="#ffffff" text="Hello, Lumen" />
@@ -118,7 +119,7 @@ pub const HELLO: &[(&str, &str)] = &[
 "##,
     ),
     (
-        "main.cdl",
+        "src/main.cdl",
         r##"import "lumen.cdl";
 
 fn on_start() {
@@ -140,7 +141,8 @@ The smallest runnable Lumen app.
 
 Concepts demonstrated:
 
-- **`main.lmn`** - every app is one `<root>` element; a `<label>` fills it.
+- **`src/main.lmn`** - every app is one `<root>` element; a `<label>` fills
+  it. An app keeps its code in `src/` and its `lumen.toml` at the root.
 - **`<script src="main.cdl" />`** - attaches a candela script; `on_start()`
   runs once when the app loads. `import "lumen.cdl";` pulls in the whole
   Lumen surface, and `main()` stays empty because a Lumen app works through
@@ -161,7 +163,7 @@ lumenc run .
 /// returned node handle + typed signals.
 pub const COUNTER: &[(&str, &str)] = &[
     (
-        "main.lmn",
+        "src/main.lmn",
         r##"<root bg="#0c1c30" padding="32" gap="20" align="center" justify="center">
   <label class="display" id="counter" width="100%" height="120px" text="0"
          bind-text="clicks" />
@@ -174,7 +176,7 @@ pub const COUNTER: &[(&str, &str)] = &[
 "##,
     ),
     (
-        "main.css",
+        "src/main.css",
         r##":root {
   --color-accent:  #5fd9e0;
   --color-bg:      #163459;
@@ -199,7 +201,7 @@ pub const COUNTER: &[(&str, &str)] = &[
 "##,
     ),
     (
-        "main.cdl",
+        "src/main.cdl",
         r##"import "lumen.cdl";
 
 // on_ready runs on the first tick, once the tree is mounted, so the elements
@@ -268,7 +270,7 @@ lumenc run .
 /// A starting point for settings panels, login screens, etc.
 pub const FORM: &[(&str, &str)] = &[
     (
-        "main.lmn",
+        "src/main.lmn",
         r##"<root bg="#0c1c30" padding="32" gap="18">
   <label class="title" width="100%" height="44px" text="Profile" />
 
@@ -298,7 +300,7 @@ pub const FORM: &[(&str, &str)] = &[
 "##,
     ),
     (
-        "main.css",
+        "src/main.css",
         r##":root {
   --color-accent: #5fd9e0;
   --color-bg:     #163459;
@@ -325,7 +327,7 @@ pub const FORM: &[(&str, &str)] = &[
 "##,
     ),
     (
-        "main.cdl",
+        "src/main.cdl",
         r##"import "lumen.cdl";
 
 // Each control mirrors into its signal, so one function rebuilds the status
@@ -387,7 +389,7 @@ lumenc run .
 /// per-row action buttons routed through the global `on_click` fallback.
 pub const TODO: &[(&str, &str)] = &[
     (
-        "main.lmn",
+        "src/main.lmn",
         r##"<root bg="#0c1c30" padding="28" gap="16">
   <label class="title" height="40px" text="Todo" />
 
@@ -420,7 +422,7 @@ pub const TODO: &[(&str, &str)] = &[
 "##,
     ),
     (
-        "main.css",
+        "src/main.css",
         r##":root {
   --color-accent:   #5fd9e0;
   --color-bg:       #163459;
@@ -496,7 +498,7 @@ pub const TODO: &[(&str, &str)] = &[
 "##,
     ),
     (
-        "main.cdl",
+        "src/main.cdl",
         r##"import "lumen.cdl";
 
 // Rows live in the "todos" array signal; `<for each="todos" key="id">`
@@ -663,7 +665,7 @@ lumenc run .
 /// repeating timer so the UI visibly updates without user input.
 pub const DASHBOARD: &[(&str, &str)] = &[
     (
-        "main.lmn",
+        "src/main.lmn",
         r##"<root bg="#0b1420" padding="24" gap="16">
   <row align="center" gap="12" height="40px">
     <label class="title" text="Ops dashboard" />
@@ -715,7 +717,7 @@ pub const DASHBOARD: &[(&str, &str)] = &[
 "##,
     ),
     (
-        "main.css",
+        "src/main.css",
         r##":root {
   --color-accent:   #5fd9e0;
   --color-card:     #101d2e;
@@ -755,7 +757,7 @@ progress { bg: var(--color-row); radius: 5; }
 "##,
     ),
     (
-        "main.lua",
+        "src/main.lua",
         r##"-- A repeating timer walks the metrics through a deterministic
 -- pseudo-random sequence (LCG), so the dashboard animates without any
 -- backend. Swap `step()` for `fetch(...)` + `on_fetch` to drive it
@@ -873,7 +875,7 @@ lumenc run .
 /// derive()-computed summary. The forms pattern.
 pub const SETTINGS: &[(&str, &str)] = &[
     (
-        "main.lmn",
+        "src/main.lmn",
         r##"<root bg="#0c1c30" padding="28" gap="18">
   <label class="title" height="40px" text="Settings" />
 
@@ -919,7 +921,7 @@ pub const SETTINGS: &[(&str, &str)] = &[
 "##,
     ),
     (
-        "main.css",
+        "src/main.css",
         r##":root {
   --color-accent:   #5fd9e0;
   --color-bg:       #163459;
@@ -945,7 +947,7 @@ slider:focus     { outline: 2 var(--color-accent); }
 "##,
     ),
     (
-        "main.cdl",
+        "src/main.cdl",
         r##"import "lumen.cdl";
 
 // Every control writes a signal; `derive` recomputes the summary from the
@@ -1038,7 +1040,7 @@ lumenc run .
 /// notifications, with an in-app event log.
 pub const HOTKEYS: &[(&str, &str)] = &[
     (
-        "main.lmn",
+        "src/main.lmn",
         r##"<root bg="#0c1c30" padding="28" gap="16">
   <label class="title" height="40px" text="Native shell" />
   <label class="caption" wrap="word"
@@ -1081,7 +1083,7 @@ pub const HOTKEYS: &[(&str, &str)] = &[
 "##,
     ),
     (
-        "main.css",
+        "src/main.css",
         r##":root {
   --color-accent:   #5fd9e0;
   --color-bg:       #163459;
@@ -1135,7 +1137,7 @@ pub const HOTKEYS: &[(&str, &str)] = &[
 "##,
     ),
     (
-        "main.rhai",
+        "src/main.rhai",
         r##"// Global hotkeys, a tray icon with a context menu, and notifications
 // with an action button. Everything lands in the in-app log, so the
 // demo stays observable even where a shell surface is missing.
@@ -1260,7 +1262,7 @@ Concepts demonstrated:
   armed" toggle registers and unregisters live.
 - **`tray_icon_menu(id, icon_path, tooltip, menu, template)`** - system
   tray entry with a right-click menu whose picks reach `on_menu(id)`.
-  Ship an icon at `icons/tray.png` and uncomment the call in `main.rhai`
+  Ship an icon at `icons/tray.png` and uncomment the call in `src/main.rhai`
   to light it up.
 - **`notify_ex(id, title, body, options, actions)`** - a notification
   carrying a button; a press reaches

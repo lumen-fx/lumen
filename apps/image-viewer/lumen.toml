@@ -1,0 +1,7 @@
+[app]
+entry = "main.lmn"
+id    = "com.lumen.examples.image-viewer"
+
+[window]
+title = "Lumen Image Viewer"
+size  = [900, 700]

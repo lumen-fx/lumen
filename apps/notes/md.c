@@ -16,10 +16,10 @@
  * single reused static buffer is safe: md_class's result is copied before
  * md_text runs, and each call overwrites the buffer for the next copy.
  *
- * Build (Linux):   cc -shared -fPIC -O2 -o libmd.so md.c
- * Build (macOS):   cc -shared -fPIC -O2 -o libmd.dylib md.c
- * The library sits next to main.cdl; candela resolves a bare `dylib "md"` to
- * libmd.so / libmd.dylib in the app directory.
+ * Build (Linux):   cc -shared -fPIC -O2 -o lib/libmd.so md.c
+ * Build (macOS):   cc -shared -fPIC -O2 -o lib/libmd.dylib md.c
+ * The library sits in the app's lib/; candela resolves a bare `dylib "md"` to
+ * libmd.so / libmd.dylib there.
  */
 
 #include <stdio.h>

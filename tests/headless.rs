@@ -46,14 +46,14 @@ fn write_fixture(name: &str) -> PathBuf {
     let mut dir = std::env::temp_dir();
     dir.push(format!("lumen_headless_{name}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("lumen.toml"),
         "[app]\nentry = \"main.lmn\"\n\n[mcp]\nport = 0\n",
     )
     .unwrap();
     std::fs::write(
-        dir.join("main.lmn"),
+        dir.join("src").join("main.lmn"),
         "<root>\n  <label id=\"lbl\" bind-text=\"msg\" text=\"hi\" />\n</root>\n",
     )
     .unwrap();
@@ -97,7 +97,7 @@ fn app_new_rejects_dir_without_manifest() {
     let handle = unsafe { lumen_app_new(cdir.as_ptr()) };
     assert!(
         handle.is_null(),
-        "a directory with neither main.lmn nor lumen.toml must be rejected"
+        "a directory with neither src/main.lmn nor lumen.toml must be rejected"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -456,7 +456,7 @@ fn write_script_fixture(name: &str, script_name: &str, script: &str) -> PathBuf 
     let mut dir = std::env::temp_dir();
     dir.push(format!("lumen_expose_{name}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(
         dir.join("lumen.toml"),
         "[app]\nentry = \"main.lmn\"\n\n[mcp]\nport = 0\n",
@@ -465,8 +465,8 @@ fn write_script_fixture(name: &str, script_name: &str, script: &str) -> PathBuf 
     let markup = format!(
         "<root>\n  <label id=\"lbl\" text=\"hi\" />\n  <script src=\"{script_name}\" />\n</root>\n"
     );
-    std::fs::write(dir.join("main.lmn"), markup).unwrap();
-    std::fs::write(dir.join(script_name), script).unwrap();
+    std::fs::write(dir.join("src").join("main.lmn"), markup).unwrap();
+    std::fs::write(dir.join("src").join(script_name), script).unwrap();
     dir
 }
 
