@@ -171,7 +171,7 @@ These predate the chained form and remain available.
 | `signal_get_bool(name)` | `bool` | Read as a boolean; `()` on miss. |
 | `signal_set_bool(name, value)` | | Write a boolean. |
 | `signal_get_color(name)` | `map` | Read as `#{ r, g, b, a }` with integer channels; `()` on miss. |
-| `signal_set_color(name, hex)` | | Write a `#rrggbb` or `#rrggbbaa` colour. An unparseable value is ignored. |
+| `signal_set_color(name, hex)` | | Write a hex colour: `#rgb`, `#rgba`, `#rrggbb`, or `#rrggbbaa`. An unparseable value is ignored. |
 | `signals_all()` | `map` | The whole signal set as a name-to-value map. |
 | `is_valid(id)` | `bool` | Whether the element with that `id` currently passes validation. `true` for an element with no validation state. |
 

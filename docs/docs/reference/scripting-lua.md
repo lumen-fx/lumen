@@ -169,7 +169,7 @@ These predate the chained form and remain available.
 | `signal_get_bool(name)` | boolean | Read as a boolean; `nil` on miss. |
 | `signal_set_bool(name, value)` | | Write a boolean. |
 | `signal_get_color(name)` | table | Read as `{ r, g, b, a }` with integer channels; `nil` on miss. |
-| `signal_set_color(name, hex)` | | Write a `#rrggbb` or `#rrggbbaa` colour. An unparseable value is ignored. |
+| `signal_set_color(name, hex)` | | Write a hex colour: `#rgb`, `#rgba`, `#rrggbb`, or `#rrggbbaa`. An unparseable value is ignored. |
 | `signals_all()` | table | The whole signal set as a name-to-value table. |
 | `is_valid(id)` | boolean | Whether the element with that `id` currently passes validation. `true` for an element with no validation state. |
 
