@@ -366,7 +366,7 @@ fn install_engine_module(
                 .copied()
                 .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
                 .unwrap_or("(non-string panic payload)");
-            eprintln!("lumen-modules: the module's install entry panicked: {msg}");
+            eprintln!("lumen-runtime: the module's install entry panicked: {msg}");
             INSTALL_PANICKED
         })
     };

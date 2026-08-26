@@ -267,7 +267,7 @@ Each entry declares exactly one source:
 |-----|------|--------|
 | `bundled` | `true` | The library ships with the toolchain; the runtime looks beside the running engine (the executable's directory, then `LUMEN_LIB_DIR`, then a `modules/` directory beside either). |
 | `version` | string | A version requirement. `lumenc run` and `lumenc package` resolve it through the shared plugin cache (`~/.lumen/plugins`) and pin the answer in `lumen.lock`, exactly as `[[plugins]]` versions resolve; the runtime never fetches or resolves one itself, it only loads what was resolved or already staged in a `modules/` directory, and fails with a banner otherwise. A bare string value (`name = "1.2"`) is shorthand for this key. |
-| `path` | string | A built library, relative to the app directory unless absolute. Without an extension the platform spellings are probed (`lib<m>.so`, `lib<m>.dylib`, plus the underscored variants cargo produces for a hyphenated name). |
+| `path` | string | A built library, relative to the app directory unless absolute. Without an extension the platform spellings are probed (`lib<m>.so`, `lib<m>.dylib`, `<m>.dll` - the Windows spelling matters for portable plugins, the kind that loads there - plus the underscored variants cargo produces for a hyphenated name). |
 | `config` | table | Handed to the library verbatim at install. |
 
 The table is unordered, so entries load in sorted-name order; where an entry
@@ -276,8 +276,8 @@ sits in the file carries no meaning.
 Each kind carries its own handshake, verified at load. A runtime module is
 version-locked to the exact engine build it was compiled against and loads
 only on Linux and macOS, into a dynamically linked engine. A portable plugin
-is checked against the plugin ABI version and the script and paint wire
-versions, and loads on every desktop platform, static builds included. Any
+is checked against the plugin ABI version and the script wire version, and
+loads on every desktop platform, static builds included. Any
 failure - a missing file, a failed handshake, a library exporting neither
 entry symbol (the banner names both; a compiler plugin is pointed at
 [`[[plugins]]`](#plugins)) - is an unmissable stderr banner naming the entry
@@ -290,7 +290,7 @@ that declares this table (a browser cannot load native libraries).
 
 A declared library is native code loaded into the app's process, the same
 trust model as [`[[hooks]]`](#hooks). A `permissions` key is reserved and
-rejected; capability declarations are not supported yet. `git` and
+rejected; capability declarations are not supported yet. `git`, `rev`, and
 `registry` sources are reserved and rejected the same way.
 
 ## [[hooks]]
@@ -310,10 +310,14 @@ is one command.
 [[hooks]]
 when    = "prebuild"
 os      = "linux"
-run     = "cc -shared -fPIC -O2 -o libmd.so md.c"
+run     = "mkdir -p lib && cc -shared -fPIC -O2 -o lib/libmd.so md.c"
 inputs  = ["md.c"]
-outputs = ["libmd.so"]
+outputs = ["lib/libmd.so"]
 ```
+
+The output lands in `lib/`, the directory a script's `dylib` import loads
+shared libraries from (see
+[the project layout](../getting-started/project-layout.md)).
 
 `prebuild` hooks fire for `lumenc run`, `build`, and `bundle`. `prerun` hooks
 fire for `lumenc run` only, after every `prebuild` hook. `lumenc check` never
@@ -359,8 +363,10 @@ name = "local-dev"
 path = "plugins/local-dev"
 ```
 
-Declare exactly one source per entry. `git` and `registry` sources are not
-supported yet and error saying so.
+Declare exactly one source per entry. `git`, `rev`, and `registry` sources
+are not supported yet and error saying so, and a `permissions` key is
+rejected the same way: a plugin is native code running in the compiler's
+process, the same trust model as a build script.
 
 A `version` source resolves to a prebuilt, per-platform cdylib in the plugin
 cache (`~/.lumen/plugins`, `%LOCALAPPDATA%\Programs\Lumen\plugins` on

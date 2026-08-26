@@ -62,8 +62,9 @@ source resolves through the plugin cache and pins itself in `lumen.lock`
 (see [lumen.toml](lumen-toml.md#dependencies)). A module that fails to
 resolve or load is a startup banner, and the app runs without it. An
 installed `lumenc` on Linux or macOS loads modules directly; one built from
-source without the `dynamic-engine` cargo feature refuses them, with a
-banner saying so.
+source without the `dynamic-engine` cargo feature skips engine-locked
+modules with a single stderr line (its capabilities are compiled in) and
+still loads portable plugins.
 
 If the directory is a Rust, C++, or Python SDK app (detected from its
 contents, or declared with `[app] kind`), `run` hands off to `cargo`,

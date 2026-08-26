@@ -683,9 +683,11 @@ than speaking a serialized ABI, and it sets the contract:
   `liblumen` links the shared engine beside it), and a Rust SDK app built
   `prefer-dynamic`. A process that compiled the engine into itself instead
   (a static `--bundle`, a plain `cargo run` binary, a source-built `lumenc`
-  without the `dynamic-engine` feature) refuses every module with a banner,
-  because loading one there would map a second engine instance that shares
-  no state with the first.
+  without the `dynamic-engine` feature) skips every declared module with a
+  single stderr line rather than the failure banner - that build shape
+  carries its capabilities compiled in, and loading a module there would
+  map a second engine instance that shares no state with the first.
+  Portable plugins still load; the skip is for engine-locked modules.
 - **A loaded module is never unloaded.** The schedules hold function
   pointers into the library for as long as the app lives.
 - **Windows is not supported** for prebuilt modules; no linkable engine
@@ -781,9 +783,9 @@ it. That trade defines it:
   plugin that needs systems and components is a runtime module.
 - **No engine build lock.** The plugin and the engine exchange bytes, so a
   built plugin works across engine builds as long as the handshake passes:
-  the plugin ABI version plus the script and paint wire versions, each
-  checked at load with an error naming both numbers. In practice a plugin is
-  built once per release tag rather than per engine binary.
+  the plugin ABI version plus the script wire version, each checked at load
+  with an error naming both numbers. In practice a plugin is built once per
+  release tag rather than per engine binary.
 - **Every desktop platform, every host shape.** No engine dylib is needed,
   so a portable plugin loads on Windows and into statically linked builds -
   the shapes that refuse runtime modules.
