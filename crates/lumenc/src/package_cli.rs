@@ -681,8 +681,13 @@ fn copy_c_engine(out: &Path, target: Target, toolchain: &Toolchain) -> Result<()
 ///
 /// The standard library is matched by its `libstd-<hash>` name in the same
 /// directory; when the directory holds none (a source tree running against
-/// `target/release`), the compiler that built it is asked, which is the same
-/// build only in that source-tree case.
+/// `target/release`), the compiler that built it is asked. That fallback is
+/// meaningful only when packaging for this machine's own target: a
+/// cross-target engine was built by the release's compiler, not the local
+/// one, and a locally resolved libstd would fail symbol resolution at the
+/// app's first start rather than here. Cross-target packaging therefore
+/// requires the libstd staged beside the fetched engine, and reports the
+/// missing file now instead.
 fn copy_dynamic_runtime(
     out: &Path,
     target: Target,
@@ -713,8 +718,14 @@ fn copy_dynamic_runtime(
         Os::Macos => ("libstd-", "dylib"),
         _ => ("libstd-", "so"),
     };
-    let std_lib = find_shared_std(&toolchain.dir, prefix, ext)
-        .or_else(|| local_shared_std(target).ok().flatten());
+    let std_lib = find_shared_std(&toolchain.dir, prefix, ext).or_else(|| {
+        // Host-target only: see the doc comment - asking the local rustc for
+        // a libstd to pair with another release's engine defers the failure
+        // to the packaged app's first start.
+        (target == Target::host())
+            .then(|| local_shared_std(target).ok().flatten())
+            .flatten()
+    });
     match std_lib {
         Some(std_lib) => {
             let dest = out.join(std_lib.file_name().unwrap_or_default());
