@@ -9,11 +9,15 @@ name: coverage
 # headless; the tests that need a display or a real GPU already detect the
 # runner and skip themselves, exactly as they do in ci.yml.
 #
-# Nothing is excluded from instrumentation. Tests that drive a built binary
-# (lumenc's package and check suites) still count: cargo-llvm-cov instruments
-# the binaries too and collects the profiles those child processes write.
-# codecov.yml drops one path from the report afterwards, for a file that
-# needs a physical GPU to run at all.
+# Nothing is excluded from instrumentation or from the report. Tests that
+# drive a built binary (lumenc's package and check suites) still count:
+# cargo-llvm-cov instruments the binaries too and collects the profiles
+# those child processes write. The fixture cdylibs the plugin and module
+# suites build with a nested cargo are instrumented the same way (the
+# nested build inherits the rustc wrapper and builds into the measured
+# target tree), so their lines grade too. Code the runner cannot execute -
+# the device-bound half of the wgpu surface, the wasm32-only browser crates
+# - grades at whatever the suite actually reaches.
 #
 # Doctests are not measured. Collecting coverage from them needs nightly, and
 # the pinned toolchain is stable; ci.yml still runs them.
