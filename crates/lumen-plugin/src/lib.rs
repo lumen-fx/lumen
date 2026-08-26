@@ -41,22 +41,13 @@ use crate::abi::{HostVtable, LogLevel};
 pub use host::{FailureReason, HostHooks, InitEnv, LoadFailure, PluginSet, ResolvedModule};
 pub use wire::{Call, CallOut, FnDecl, InitCx, Manifest, PluginEvent};
 
-/// The color a fill or a stroke is painted with.
-pub use lumen_core::components::Color;
-/// The paint list a plugin describes drawing with, and the ops it is built
-/// from. Data types, from the engine's own module, so a list a plugin builds
-/// decodes into the one the renderer replays.
-pub use lumen_core::paint::{
-    Cap, FillRule, GradientStop, Join, PAINT_WIRE_VERSION, PaintBrush, PaintList, PaintOp,
-    PaintPath, PathEl,
-};
 // The wire codec is shared with the compiler plugin system; it lives in
 // `lumen-plugin-abi` and is re-exported here so a plugin crate names only
 // this one.
 pub use lumen_plugin_abi::codec;
 /// The script surface a plugin describes its functions in and answers calls
-/// with. Data types, from the engine's own crate, for the same reason as the
-/// paint ops above.
+/// with. Data types, from the engine's own crate, so a value a plugin builds
+/// decodes into the one the script layer routes.
 pub use lumen_script::{
     HostSet, SCRIPT_WIRE_VERSION, ScriptCommand, ScriptNs, ScriptParam, ScriptPrelude, ScriptSig,
     ScriptTy, ScriptValue,

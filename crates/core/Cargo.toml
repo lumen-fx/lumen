@@ -37,16 +37,9 @@ unicode-segmentation.workspace = true
 # graphics API, so the "no backend deps" rule holds. Already in the tree via
 # wgpu and winit, which speak the same version.
 raw-window-handle = "0.6"
-# Encoding for `crate::paint`, the draw-command list that gets written to bytes
-# when its producer lives outside the engine. Derive macros and traits only, no
-# format and no backend, so the "no backend deps" rule holds.
-serde.workspace = true
 
 # `std::time::Instant::now` panics on wasm32-unknown-unknown, so `crate::time`
 # resolves to this on that target only. Nothing links it on a native build.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-time.workspace = true
 
-[dev-dependencies]
-bincode.workspace = true
-proptest.workspace = true

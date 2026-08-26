@@ -19,7 +19,7 @@ use lumen_script::{ScriptFn, ScriptFnAppExt, ScriptFnCx, ScriptNs, ScriptPrelude
 
 use crate::abi::{self, Buf, Desc, HostVtable, LogLevel};
 use crate::wire::{Call, CallOut, FnDecl, InitCx, Manifest, PluginEvent};
-use crate::{PAINT_WIRE_VERSION, SCRIPT_WIRE_VERSION, codec};
+use crate::{SCRIPT_WIRE_VERSION, codec};
 
 /// One module to load: a name, a library file that already exists, and the
 /// configuration the app declared for it.
@@ -90,10 +90,6 @@ pub enum FailureReason {
         "built against script wire version {got}, this runtime speaks {want}; rebuild the plugin against the matching Lumen tag"
     )]
     ScriptWireMismatch { want: u16, got: u16 },
-    #[error(
-        "built against paint wire version {got}, this runtime speaks {want}; rebuild the plugin against the matching Lumen tag"
-    )]
-    PaintWireMismatch { want: u16, got: u16 },
     #[error("bad descriptor: {0}")]
     BadDescriptor(String),
     #[error(
@@ -366,12 +362,6 @@ fn verify(declared: &str, desc: *const Desc) -> Result<(), FailureReason> {
             got: desc.script_wire_version,
         });
     }
-    if desc.paint_wire_version != PAINT_WIRE_VERSION {
-        return Err(FailureReason::PaintWireMismatch {
-            want: PAINT_WIRE_VERSION,
-            got: desc.paint_wire_version,
-        });
-    }
     let c_str = |ptr: *const std::os::raw::c_char, what: &str| {
         unsafe { dlopen::c_string(ptr, what) }.map_err(FailureReason::BadDescriptor)
     };
@@ -583,7 +573,6 @@ mod tests {
             abi_version: ABI_VERSION,
             struct_size: std::mem::size_of::<Desc>() as u32,
             script_wire_version: SCRIPT_WIRE_VERSION,
-            paint_wire_version: PAINT_WIRE_VERSION,
             flags: 0,
             reserved: 0,
             name: c"demo".as_ptr(),
@@ -627,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn each_wire_version_mismatch_names_both_numbers() {
+    fn a_wire_version_mismatch_names_both_numbers() {
         let mut d = good_desc();
         d.script_wire_version = SCRIPT_WIRE_VERSION + 7;
         let err = verify("demo", &d as *const Desc).unwrap_err().to_string();
@@ -637,13 +626,6 @@ mod tests {
             "{err}"
         );
         assert!(err.contains(&SCRIPT_WIRE_VERSION.to_string()), "{err}");
-
-        let mut d = good_desc();
-        d.paint_wire_version = PAINT_WIRE_VERSION + 7;
-        let err = verify("demo", &d as *const Desc).unwrap_err().to_string();
-        assert!(err.contains("paint wire version"), "{err}");
-        assert!(err.contains(&(PAINT_WIRE_VERSION + 7).to_string()), "{err}");
-        assert!(err.contains(&PAINT_WIRE_VERSION.to_string()), "{err}");
     }
 
     #[test]

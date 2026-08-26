@@ -215,7 +215,6 @@ macro_rules! lumen_plugin {
                 abi_version: $crate::abi::ABI_VERSION,
                 struct_size: ::std::mem::size_of::<$crate::abi::Desc>() as u32,
                 script_wire_version: $crate::SCRIPT_WIRE_VERSION,
-                paint_wire_version: $crate::PAINT_WIRE_VERSION,
                 flags: if ::std::cfg!(panic = "abort") {
                     $crate::abi::FLAG_PANIC_ABORT
                 } else {

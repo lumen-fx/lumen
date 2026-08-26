@@ -164,7 +164,6 @@ fn the_exported_descriptor_dispatches_every_arm() {
     assert_eq!(desc.abi_version, lumen_plugin::abi::ABI_VERSION);
     assert_eq!(desc.struct_size, std::mem::size_of::<Desc>() as u32);
     assert_eq!(desc.script_wire_version, lumen_plugin::SCRIPT_WIRE_VERSION);
-    assert_eq!(desc.paint_wire_version, lumen_plugin::PAINT_WIRE_VERSION);
     assert_eq!(desc.flags, 0);
     assert_eq!(
         unsafe { CStr::from_ptr(desc.name) }.to_str().unwrap(),

@@ -31,10 +31,12 @@ pub use lumen_plugin_abi::raw::{
 /// Version of this descriptor layout and of the SDK-owned wire shapes.
 /// Bump on any change to [`Desc`], [`HostVtable`], [`Buf`], the status codes,
 /// or any serde type this crate sends across the boundary (`InitCx`,
-/// `Manifest`, `Call`, `CallOut`); the `lumen_script` and `lumen_core::paint`
-/// types - `PluginEvent` among them - are covered by
-/// [`Desc::script_wire_version`] and [`Desc::paint_wire_version`] instead.
-pub const ABI_VERSION: u32 = 1;
+/// `Manifest`, `Call`, `CallOut`); the `lumen_script` types - `PluginEvent`
+/// among them - are covered by [`Desc::script_wire_version`] instead.
+///
+/// 2: dropped `Desc::paint_wire_version` (no paint types cross the
+/// boundary), widening `reserved` in its place.
+pub const ABI_VERSION: u32 = 2;
 
 /// The one symbol a plugin cdylib exports:
 /// `unsafe extern "C" fn lumen_plugin_v1() -> *const Desc`.
@@ -71,12 +73,10 @@ pub struct Desc {
     /// values, commands, and signatures it exchanges are only meaningful when
     /// it matches the host's.
     pub script_wire_version: u16,
-    /// `lumen_core::paint::PAINT_WIRE_VERSION` the plugin was built against.
-    pub paint_wire_version: u16,
     /// Bit set of [`FLAG_PANIC_ABORT`] and future flags; zero otherwise.
     pub flags: u16,
     /// Zero. Keeps the pointer fields below 8-aligned on every target.
-    pub reserved: u16,
+    pub reserved: u32,
     /// NUL-terminated UTF-8, `'static`. Must match the name the app declared
     /// the module under.
     pub name: *const c_char,
