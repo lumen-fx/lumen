@@ -426,7 +426,7 @@ fn a_mismatched_build_id_banners_both_strings() {
         "skewed",
         "#[no_mangle]\n\
          pub extern \"C\" fn lumen_module_probe() -> *const u8 {\n\
-             b\"lumen-engine 9.9.9 git:feedface rustc:0000000000000000 features:none\\0\"\n\
+             b\"lumen-engine 9.9.9 git:feedface rustc:0000000000000000\\0\"\n\
                  .as_ptr()\n\
          }\n\
          #[no_mangle]\n\
