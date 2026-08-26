@@ -69,6 +69,7 @@ symphonia = { version = "0.5", default-features = false, features = [
 # loader end to end over a subprocess. The shipping crate stays on
 # `lumen-module` alone.
 [dev-dependencies]
+lumen-assets = { workspace = true }
 lumen-core = { workspace = true }
 lumen-ir = { workspace = true }
 lumen-runtime = { workspace = true }

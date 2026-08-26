@@ -25,7 +25,7 @@ pub mod source;
 pub use bundle::{BundleError, LumenBundle, parse_lumen_uri};
 pub use loader::{AssetKind, AssetLoader, AssetLoaders, LoadContext, LoadedAsset, asset_extension};
 pub use loaders::{ImageLoader, SvgLoader};
-pub use source::{AssetSource, BundleSource};
+pub use source::{AssetSource, BundleSource, SourceReader};
 
 use bevy_ecs::message::MessageWriter;
 use bevy_ecs::prelude::*;
@@ -580,9 +580,15 @@ impl AssetServer {
     /// then anything passed to [`Self::register_source`]. `None` leaves the
     /// read to the loader, which means the filesystem.
     fn resolve_source_bytes(&self, path: &Path) -> Option<Vec<u8>> {
-        self.bundle_source
-            .read(path)
-            .or_else(|| self.sources.iter().find_map(|s| s.read(path)))
+        source::read_chain(&self.bundle_source, &self.sources, path)
+    }
+
+    /// A [`SourceReader`] snapshot of the current source chain, for reading
+    /// raw bytes off the main thread. See the type's docs for the contract;
+    /// take a fresh one per request, because a snapshot does not see sources
+    /// registered after it.
+    pub fn source_reader(&self) -> SourceReader {
+        SourceReader::new(self.bundle_source.clone(), self.sources.clone())
     }
 
     /// Returns the approximate CPU bytes held by the image and SVG content caches.

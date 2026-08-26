@@ -19,9 +19,11 @@
 //! the functions talk to the systems through the module's own command queue:
 //! the body pushes a command and wakes the event loop, and [`tick_audio`]
 //! drains the queue on the next tick. Track bytes are read on a short-lived
-//! loader thread, so the UI thread never touches the filesystem; the loaded
-//! bytes come back over a channel and start playing on the tick that receives
-//! them.
+//! loader thread through a [`SourceReader`] snapshot of the app's asset
+//! sources - the same chain images resolve through, so a track packed in an
+//! `.lpak` bundle or named by a `lumen://app/...` URI plays like a loose
+//! file - and the UI thread never blocks on the read; the loaded bytes come
+//! back over a channel and start playing on the tick that receives them.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -37,6 +39,7 @@ use lumen_module::lumen_script::{
     PluginEvent, ScriptFn, ScriptFnAppExt, ScriptNs, ScriptSet, ScriptTy as T, ScriptValue,
     push_plugin_event,
 };
+use lumen_module::{AssetServer, SourceReader};
 
 use crate::backend::RodioAudio;
 
@@ -224,6 +227,7 @@ fn float_arg(args: &[ScriptValue], i: usize) -> f64 {
 /// transport, publish the signals, and fire the end-of-track event.
 fn tick_audio(
     mut state: NonSendMut<AudioState>,
+    server: Option<Res<AssetServer>>,
     store: Option<ResMut<PropertyStore>>,
     waker: Option<Res<EventLoopWaker>>,
 ) {
@@ -248,14 +252,26 @@ fn tick_audio(
     for cmd in queued {
         match cmd {
             AudioCmd::Play(path) => {
-                // Resolve the way every app-relative path resolves: against
-                // the app directory, not the process's working directory.
-                let resolved = app_paths::resolve(&path);
+                // Resolve the way every app-relative asset resolves: against
+                // the app directory, not the process's working directory. A
+                // `lumen://app/...` URI passes through untouched - the
+                // bundle source claims the scheme itself.
+                let resolved = if path.starts_with("lumen://") {
+                    PathBuf::from(&path)
+                } else {
+                    app_paths::resolve(&path)
+                };
+                // A fresh snapshot per play, taken here on the main thread
+                // where the resource lives, so a bundle or source registered
+                // since the last track is seen. `None` (no asset pipeline in
+                // this app) leaves the loader on the plain filesystem.
+                let reader = server.as_ref().map(|s| s.source_reader());
                 state.current_path = path.clone();
                 let generation = state.load_gen.fetch_add(1, Ordering::AcqRel) + 1;
                 spawn_loader(
                     path,
                     resolved,
+                    reader,
                     generation,
                     state.loaded_tx.clone(),
                     state.shared.waker.clone(),
@@ -306,10 +322,14 @@ fn tick_audio(
 }
 
 /// Read one track's bytes off-thread and hand them back to [`tick_audio`],
-/// waking the loop so a parked app starts playback promptly.
+/// waking the loop so a parked app starts playback promptly. The read goes
+/// through the app's asset sources (bundles first, then registered sources,
+/// then the filesystem); `SourceReader` blocks freely here because this
+/// thread exists to wait on it.
 fn spawn_loader(
     path: String,
     resolved: PathBuf,
+    reader: Option<SourceReader>,
     generation: u64,
     tx: Sender<LoadResult>,
     waker: Arc<Mutex<Option<EventLoopWaker>>>,
@@ -317,7 +337,10 @@ fn spawn_loader(
     let spawned = std::thread::Builder::new()
         .name("lumen-audio-load".into())
         .spawn(move || {
-            let outcome = std::fs::read(&resolved);
+            let outcome = match reader {
+                Some(reader) => reader.read(&resolved),
+                None => std::fs::read(&resolved),
+            };
             let _ = tx.send((path, generation, outcome));
             if let Ok(guard) = waker.lock()
                 && let Some(w) = guard.as_ref()

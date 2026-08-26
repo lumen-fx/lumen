@@ -352,7 +352,10 @@ fn handle_pause(ev) { audio_pause(); }
 ```
 
 The transport is `audio_play(path)`, `audio_pause()`, `audio_resume()`,
-`audio_stop()`, `audio_seek(seconds)`, and `audio_volume(level)`.
+`audio_stop()`, `audio_seek(seconds)`, and `audio_volume(level)`. Track
+paths resolve like any asset: relative to the app directory, out of the
+app's packed archive when it ships one, and a `lumen://app/...` URI names a
+packed track directly.
 
 Playback state is published as signals you can bind to without polling:
 

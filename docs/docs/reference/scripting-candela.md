@@ -672,7 +672,7 @@ when the app declares it under `[dependencies]` in `lumen.toml`; see
 
 | Builtin | Behaviour |
 | --- | --- |
-| `lumen::audio_play(path: string)` | Load and play the track at `path` (app-relative wav or ogg); resets position to zero. |
+| `lumen::audio_play(path: string)` | Load and play the track at `path` (app-relative wav or ogg, resolved through the app's asset sources, so a packed archive and `lumen://app/...` URIs work); resets position to zero. |
 | `lumen::audio_pause()` | Pause, holding position. |
 | `lumen::audio_resume()` | Resume a paused transport. |
 | `lumen::audio_stop()` | Stop and rewind. |
