@@ -18,12 +18,14 @@
 //! A script-function body runs inside a host call with no world access, so
 //! the functions talk to the systems through the module's own command queue:
 //! the body pushes a command and wakes the event loop, and [`tick_audio`]
-//! drains the queue on the next tick. Track bytes are read on a short-lived
-//! loader thread through a [`SourceReader`] snapshot of the app's asset
-//! sources - the same chain images resolve through, so a track packed in an
-//! `.lpak` bundle or named by a `lumen://app/...` URI plays like a loose
-//! file - and the UI thread never blocks on the read; the loaded bytes come
-//! back over a channel and start playing on the tick that receives them.
+//! drains the queue on the next tick. Track bytes are read off the tick
+//! loop, on the installed [`SpawnService`]'s blocking pool or a short-lived
+//! thread when the app carries no async backend, through a [`SourceReader`]
+//! snapshot of the app's asset sources: the same chain images resolve
+//! through, so a track packed in an `.lpak` bundle or named by a
+//! `lumen://app/...` URI plays like a loose file, and the UI thread never
+//! blocks on the read. The loaded bytes come back over a channel and start
+//! playing on the tick that receives them.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,6 +37,7 @@ use lumen_module::lumen_core::app_paths;
 use lumen_module::lumen_core::prelude::{
     IntoScheduleConfigs, NonSendMut, PropertyStore, Res, ResMut, TickStage,
 };
+use lumen_module::lumen_core::task::{Spawn, SpawnService};
 use lumen_module::lumen_script::{
     PluginEvent, ScriptFn, ScriptFnAppExt, ScriptNs, ScriptSet, ScriptTy as T, ScriptValue,
     push_plugin_event,
@@ -230,6 +233,7 @@ fn tick_audio(
     server: Option<Res<AssetServer>>,
     store: Option<ResMut<PropertyStore>>,
     waker: Option<Res<EventLoopWaker>>,
+    spawn: Option<Res<SpawnService>>,
 ) {
     let state = &mut *state;
     // Wire the loop waker lazily: the resource appears once a windowing
@@ -269,6 +273,7 @@ fn tick_audio(
                 state.current_path = path.clone();
                 let generation = state.load_gen.fetch_add(1, Ordering::AcqRel) + 1;
                 spawn_loader(
+                    spawn.as_ref().map(|s| s.handle()),
                     path,
                     resolved,
                     reader,
@@ -321,12 +326,18 @@ fn tick_audio(
     }
 }
 
-/// Read one track's bytes off-thread and hand them back to [`tick_audio`],
-/// waking the loop so a parked app starts playback promptly. The read goes
-/// through the app's asset sources (bundles first, then registered sources,
-/// then the filesystem); `SourceReader` blocks freely here because this
-/// thread exists to wait on it.
+/// Read one track's bytes off the tick loop and hand them back to
+/// [`tick_audio`], waking the loop so a parked app starts playback promptly.
+/// The read goes through the app's asset sources (bundles first, then
+/// registered sources, then the filesystem) and blocks freely off-thread.
+///
+/// The work runs on the engine's spawn seam - the blocking pool of whatever
+/// [`SpawnService`] the app installed - like every other module that reads
+/// off the tick loop. An app with no async backend gets a short-lived plain
+/// thread instead; the read must still leave the tick loop, because a track
+/// on slow storage would otherwise stall the frame.
 fn spawn_loader(
+    spawn: Option<Arc<dyn Spawn>>,
     path: String,
     resolved: PathBuf,
     reader: Option<SourceReader>,
@@ -334,21 +345,27 @@ fn spawn_loader(
     tx: Sender<LoadResult>,
     waker: Arc<Mutex<Option<EventLoopWaker>>>,
 ) {
-    let spawned = std::thread::Builder::new()
-        .name("lumen-audio-load".into())
-        .spawn(move || {
-            let outcome = match reader {
-                Some(reader) => reader.read(&resolved),
-                None => std::fs::read(&resolved),
-            };
-            let _ = tx.send((path, generation, outcome));
-            if let Ok(guard) = waker.lock()
-                && let Some(w) = guard.as_ref()
-            {
-                w.wake();
+    let load = move || {
+        let outcome = match reader {
+            Some(reader) => reader.read(&resolved),
+            None => std::fs::read(&resolved),
+        };
+        let _ = tx.send((path, generation, outcome));
+        if let Ok(guard) = waker.lock()
+            && let Some(w) = guard.as_ref()
+        {
+            w.wake();
+        }
+    };
+    match spawn {
+        Some(spawn) => spawn.spawn_blocking(Box::new(load)),
+        None => {
+            let spawned = std::thread::Builder::new()
+                .name("lumen-audio-load".into())
+                .spawn(load);
+            if let Err(e) = spawned {
+                eprintln!("lumen-audio: could not spawn the loader thread: {e}");
             }
-        });
-    if let Err(e) = spawned {
-        eprintln!("lumen-audio: could not spawn the loader thread: {e}");
+        }
     }
 }
