@@ -1,0 +1,36 @@
+[package]
+name = "lumen-plugin-abi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The byte-level plumbing shared by Lumen's plugin systems: the C-ABI scalars, the wire codec, the lumen.toml schema, the plugin cache, and the loader helpers."
+# Not published: it reaches plugin authors through the SDK crate that depends
+# on it, as a cargo git dependency on the Lumen repo at a release tag.
+publish = false
+
+[lib]
+name = "lumen_plugin_abi"
+path = "src/lib.rs"
+
+[features]
+default = []
+# dlopen a plugin library, verify the frozen prefix of its descriptor, and
+# drive its hooks. Only a loader enables this; plugin authors never do.
+dlopen = ["dep:libloading"]
+# Resolve `version` sources against the plugin cache and keep lumen.lock.
+resolve = ["dep:semver", "dep:sha2"]
+
+[dependencies]
+serde = { workspace = true }
+bincode = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+libloading = { workspace = true, optional = true }
+semver = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+
+[dev-dependencies]
+lumen-plugin-abi = { workspace = true, features = ["dlopen", "resolve"] }

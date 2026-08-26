@@ -174,15 +174,21 @@ fn a_timer_carries_its_repeat_flag() {
     );
 }
 
-/// An integer reaches a float parameter: `audio_seek(30)` is what an author
+/// An integer reaches a float parameter: `seek(30)` is what an author
 /// writes, and every host spells the literal that way.
 #[test]
 fn a_float_parameter_takes_an_integer_argument() {
-    let seek = builtin("candela", "audio_seek");
+    let seek = ScriptFn::new("seek")
+        .param("secs", lumen_script::ScriptTy::Float)
+        .ret(lumen_script::ScriptTy::Unit)
+        .build(|cx| {
+            cx.emit(ScriptCommand::Print(format!("{}", cx.float_arg(0))));
+            Ok(ScriptValue::Unit)
+        });
     assert!(seek.sig.check_args(&[ScriptValue::I64(30)]).is_ok());
     let queued = commands(&seek, &[ScriptValue::I64(30)]);
     assert!(
-        matches!(&queued[..], [ScriptCommand::AudioSeek { secs }] if *secs == 30.0),
+        matches!(&queued[..], [ScriptCommand::Print(secs)] if secs == "30"),
         "unexpected commands: {queued:?}"
     );
 }

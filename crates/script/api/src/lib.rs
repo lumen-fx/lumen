@@ -61,9 +61,15 @@ pub mod builtin_fns;
 /// through free functions over an interned node id.
 mod node_fns;
 
+/// The encoded form of the script surface: the version the shapes below are
+/// pinned at, and the adapters for the two property-store types
+/// [`ScriptCommand::SetProperty`] carries.
+pub mod wire;
+
 use std::collections::HashSet;
 
 use lumen_core::warn_line;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::runtime::prefix;
@@ -83,6 +89,9 @@ pub use script_fn::{
     ScriptParam, ScriptPrelude, ScriptResult, ScriptRet, ScriptSig, ScriptTy, ScriptType,
     with_call_scratch,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use wire::push_plugin_event;
+pub use wire::{PluginEvent, SCRIPT_WIRE_VERSION};
 
 /// Errors a [`ScriptHost`] can surface from `load` or `tick`.
 ///
@@ -133,7 +142,9 @@ impl ScriptError {
 /// variants will cover `SetComponent`, `SpawnEntity`, `DespawnEntity`,
 /// `RegisterTimer`, etc., keyed by an entity id type that's stable across
 /// the script ABI boundary.
-#[derive(Debug, Clone)]
+///
+/// Variants are append-only; see [`SCRIPT_WIRE_VERSION`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ScriptCommand {
     /// Append a line to the app's diagnostic output.
     Print(String),
@@ -278,8 +289,12 @@ pub enum ScriptCommand {
     /// frame to coalesce typed writes).
     SetProperty {
         /// Property key (global or entity-scoped).
+        #[serde(with = "crate::wire::property_key")]
         key: lumen_core::property_store::PropertyKey,
-        /// New typed value.
+        /// New typed value. A
+        /// [`Custom`](lumen_core::property_store::PropertyValue::Custom)
+        /// payload cannot be encoded; see [`crate::wire::property_value`].
+        #[serde(with = "crate::wire::property_value")]
         value: lumen_core::property_store::PropertyValue,
     },
     /// Replace the named entry in the reactive `ArraySignals` map with a
@@ -449,32 +464,6 @@ pub enum ScriptCommand {
         /// Identifier matching the previous `RegisterHotkey` call.
         name: String,
     },
-    /// Load and start playing an audio track. `path` is app-relative and
-    /// resolved against the app directory by the embedder's applier.
-    /// Replaces any current track and resets position to 0. The
-    /// web-`<audio src>` + `play()` analog; Qt's `setSource` + `play`.
-    AudioPlay {
-        /// App-relative path to a decodable audio file (wav / ogg).
-        path: String,
-    },
-    /// Pause the audio transport, holding its position. Qt: `pause`.
-    AudioPause,
-    /// Resume a paused transport. Qt: `play` from `PausedState`.
-    AudioResume,
-    /// Stop the transport and rewind to 0. Qt: `stop`.
-    AudioStop,
-    /// Seek the transport to `secs` seconds (clamped to the track
-    /// duration). Qt: `setPosition`.
-    AudioSeek {
-        /// Target position in seconds.
-        secs: f64,
-    },
-    /// Set output volume in `0.0..=1.0`. Qt: `QAudioOutput::setVolume`.
-    AudioVolume {
-        /// Linear gain, clamped to `0.0..=1.0` by the applier.
-        level: f32,
-    },
-
     // -- dynamic DOM: change things (phase 2) --------------------------
     /// Set an attribute on a node addressed by packed handle. KNOWN attrs
     /// (`id`, `class`, `src`, `text`, `disabled`, ...) route to their typed
@@ -702,7 +691,7 @@ impl ScriptCommand {
 }
 
 /// File dialog flavour for [`ScriptCommand::OpenFileDialog`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FileDialogKind {
     /// Pick one existing file. Fires `on_file_picked(tag, path)`.
     Open,
@@ -722,7 +711,9 @@ pub enum FileDialogKind {
 /// Mirrors what `rhai::Dynamic` would carry - scalars, arrays, maps -
 /// without leaking the Rhai type into the trait. Backends translate
 /// to / from their native value type.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// Variants are append-only; see [`SCRIPT_WIRE_VERSION`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ScriptValue {
     /// Absence of a value (Rhai `()`).
     Unit,

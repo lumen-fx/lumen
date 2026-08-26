@@ -5,11 +5,16 @@
 //! compiled into the plugin cdylib through this crate, so the generated code
 //! is a handful of one-line thunks.
 
-use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+
+use lumen_plugin_abi::raw::{fill, panic_message};
 
 use crate::abi::{Buf, ERR, OK, PANICKED, UNCHANGED};
 use crate::{CompilerPlugin, Ctx, codec};
+
+/// The `free` entry every generated descriptor carries.
+#[doc(hidden)]
+pub use lumen_plugin_abi::raw::free_buf;
 
 /// Which hook a thunk serves.
 #[doc(hidden)]
@@ -20,28 +25,6 @@ pub enum HookKind {
     Ir,
     Lint,
     Emit,
-}
-
-/// Move a byte vector across the boundary. The host returns it through
-/// [`free_buf`].
-fn fill(out: &mut Buf, bytes: Vec<u8>) {
-    let mut v = ManuallyDrop::new(bytes);
-    out.ptr = v.as_mut_ptr();
-    out.len = v.len();
-    out.cap = v.capacity();
-}
-
-/// The `free` entry every generated descriptor carries: rebuilds the vector
-/// [`fill`] leaked and drops it.
-///
-/// # Safety
-/// `ptr`/`len`/`cap` must be exactly the triple a hook of this plugin
-/// returned, unfreed.
-#[doc(hidden)]
-pub unsafe extern "C" fn free_buf(ptr: *mut u8, len: usize, cap: usize) {
-    if !ptr.is_null() {
-        unsafe { drop(Vec::from_raw_parts(ptr, len, cap)) };
-    }
 }
 
 fn dispatch(
@@ -143,14 +126,7 @@ pub unsafe fn hook_entry(
     let (status, bytes) =
         match catch_unwind(AssertUnwindSafe(|| dispatch(plugin(), kind, input, ctx))) {
             Ok(r) => r,
-            Err(payload) => {
-                let msg = payload
-                    .downcast_ref::<&str>()
-                    .map(|s| s.to_string())
-                    .or_else(|| payload.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "non-string panic payload".to_string());
-                (PANICKED, msg.into_bytes())
-            }
+            Err(payload) => (PANICKED, panic_message(payload.as_ref()).into_bytes()),
         };
     if !bytes.is_empty() {
         fill(unsafe { &mut *out }, bytes);

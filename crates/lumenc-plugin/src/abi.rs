@@ -5,8 +5,16 @@
 //! a plugin built by any compiler works against any lumenc built from the
 //! same release tag. Compatibility is enforced by the handshake fields on
 //! [`Desc`], not by hoping both sides agree.
+//!
+//! [`Desc`] is what makes this the *compiler's* ABI; the buffer, the hook
+//! signature, and the status codes below come from `lumen_plugin_abi::raw`
+//! and mean the same thing at every Lumen plugin boundary.
 
 use std::os::raw::c_char;
+
+pub use lumen_plugin_abi::raw::{
+    Buf, ERR, FLAG_PANIC_ABORT, FreeFn, HookFn, OK, PANICKED, UNCHANGED,
+};
 
 /// Version of this descriptor layout and of the SDK-owned wire shapes.
 /// Bump on any change to [`Desc`], [`Buf`], the status codes, or any serde
@@ -17,55 +25,6 @@ pub const ABI_VERSION: u32 = 1;
 /// The one symbol a plugin cdylib exports:
 /// `unsafe extern "C" fn lumenc_plugin_v1() -> *const Desc`.
 pub const ENTRY: &[u8] = b"lumenc_plugin_v1\0";
-
-/// A byte buffer allocated by the plugin. The host reads it, then returns it
-/// through [`Desc::free`]; it never frees plugin memory with its own
-/// allocator.
-#[repr(C)]
-pub struct Buf {
-    pub ptr: *mut u8,
-    pub len: usize,
-    pub cap: usize,
-}
-
-impl Buf {
-    /// An empty buffer, the state a hook receives `out` in.
-    pub const fn empty() -> Self {
-        Buf {
-            ptr: std::ptr::null_mut(),
-            len: 0,
-            cap: 0,
-        }
-    }
-}
-
-/// One hook entry point. `input`/`ctx` are borrowed for the call; on return
-/// the status code says what `out` holds.
-pub type HookFn = unsafe extern "C" fn(
-    input: *const u8,
-    input_len: usize,
-    ctx: *const u8,
-    ctx_len: usize,
-    out: *mut Buf,
-) -> i32;
-
-/// Frees a buffer previously returned by any hook of the same plugin.
-pub type FreeFn = unsafe extern "C" fn(ptr: *mut u8, len: usize, cap: usize);
-
-/// Set in [`Desc::flags`] by a plugin built with `panic = "abort"`. The host
-/// refuses such a plugin at load: the panic-to-error contract depends on
-/// unwinding, and an aborting plugin would kill the compiler on any hook
-/// panic.
-pub const FLAG_PANIC_ABORT: u16 = 1;
-
-/// `out` holds the hook's payload.
-pub const OK: i32 = 0;
-/// `out` holds a UTF-8 error message; the compile fails with it.
-pub const ERR: i32 = 1;
-/// The hook panicked; `out` holds the panic message.
-pub const PANICKED: i32 = 2;
-/// `out` is empty; the host keeps the input unchanged.
-pub const UNCHANGED: i32 = 3;
 
 /// The descriptor a plugin's entry function returns. Lives for the process;
 /// the host reads it after the handshake below.

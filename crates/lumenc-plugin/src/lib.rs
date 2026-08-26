@@ -11,14 +11,10 @@
 //! from the same release tag (enforced by a version handshake at load).
 
 pub mod abi;
-pub mod codec;
-mod config;
 #[doc(hidden)]
 pub mod export;
 #[cfg(feature = "host")]
 mod host;
-#[cfg(feature = "host")]
-pub mod resolve;
 #[cfg(feature = "testing")]
 pub mod testing;
 
@@ -27,7 +23,6 @@ use std::path::PathBuf;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-pub use config::{PluginCfg, PluginSource, resolve_plugin_path};
 #[cfg(feature = "host")]
 pub use host::{PluginError, PluginSet, SourceKind};
 /// The IR the hooks operate on, re-exported so a plugin crate never declares
@@ -35,6 +30,13 @@ pub use host::{PluginError, PluginSet, SourceKind};
 /// version pin lives here either way).
 pub use lumen_ir;
 pub use lumen_ir::layout_ir::LayoutIR;
+// The wire codec, the `[[plugins]]` schema, and the plugin cache are shared
+// with the runtime plugin system; they live in `lumen-plugin-abi` and are
+// re-exported here so a plugin crate names only this one.
+pub use lumen_plugin_abi::codec;
+pub use lumen_plugin_abi::config::{PluginCfg, PluginSource, resolve_plugin_path};
+#[cfg(feature = "host")]
+pub use lumen_plugin_abi::resolve;
 
 /// What a compiler plugin can do. Every hook has a default no-op body;
 /// implement the ones the plugin needs.

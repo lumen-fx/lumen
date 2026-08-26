@@ -37,9 +37,12 @@ use crate::render_world::{
 };
 use crate::tick::TickStage;
 use crate::time::Instant;
+use bevy_ecs::error::{BevyError, ErrorContext};
 use bevy_ecs::message::{Message, MessageRegistry};
 use bevy_ecs::prelude::*;
-use bevy_ecs::schedule::ScheduleLabel;
+use bevy_ecs::schedule::{
+    FixedBitSet, ScheduleLabel, SystemExecutor, SystemSchedule, default_executor,
+};
 use bevy_ecs::system::ScheduleSystem;
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
@@ -459,9 +462,15 @@ impl App {
         s.world
             .insert_resource(crate::components::StyleManager::default());
         s.add_systems(TickStage::Systems, crate::signals::style_manager_to_signal);
+        // Explicitly after the producer: the dirty queue is cleared at end of
+        // tick, so a consumer scheduled ahead of the producer would observe
+        // the `__theme__` write on no tick at all, and whether it was ahead
+        // used to depend on the incidental topological order of the whole
+        // stage.
         s.add_systems(
             TickStage::Systems,
-            crate::signals::apply_theme_signal_to_root_classes,
+            crate::signals::apply_theme_signal_to_root_classes
+                .after(crate::signals::style_manager_to_signal),
         );
         // W5.4 - install the [`DefaultLayoutDirection`] resource (Ltr
         // by default; the i18n plugin overrides it from the detected
@@ -651,7 +660,7 @@ impl App {
         if let Some(mut tick) = self.world.get_resource_mut::<crate::tick::Tick>() {
             tick.advance();
         }
-        self.world.run_schedule(Tick);
+        run_schedule_resilient(&mut self.world, Tick);
 
         // Rotate the main world's removal/despawn event buffers once per tick.
         // Standalone bevy_ecs (no bevy_app) never rotates `RemovedComponentEvents`
@@ -705,9 +714,9 @@ impl App {
         // Run extract systems registered via `add_extract_systems`. These read already-extracted render-world state
         // (e.g. `Changed<ExtractedText>` filters) and queue further render-world work. Foundation ships the schedule
         // empty; wave 2 wires migrations.
-        self.render_world.run_schedule(ExtractSchedule);
+        run_schedule_resilient(&mut self.render_world, ExtractSchedule);
 
-        self.render_world.run_schedule(Render);
+        run_schedule_resilient(&mut self.render_world, Render);
 
         // Rotate the render world's removal buffers. `clear_extracted` despawns
         // the entire transient `Extracted*` set every dirty frame, recording a
@@ -742,6 +751,84 @@ impl App {
             + Clone,
     {
         crate::property_store::Property::<T>::new(name)
+    }
+}
+
+/// [`World::run_schedule`], surviving an unwind.
+///
+/// bevy's `schedule_scope` takes the schedule out of the [`Schedules`]
+/// resource for the duration of the run and reinserts it on the way out - but
+/// not on the way out of a panic. A system panic caught above (a module tick,
+/// an embedder's `catch_unwind`) would then leave the schedule missing, and
+/// every later tick would die on "schedule not found" long after the panic
+/// itself was survived. This twin reinserts the schedule whether the run
+/// returned or unwound, then lets the unwind continue.
+fn run_schedule_resilient(world: &mut World, label: impl ScheduleLabel) {
+    use bevy_ecs::schedule::Schedules;
+    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+
+    let label = label.intern();
+    let Some(mut schedule) = world
+        .get_resource_mut::<Schedules>()
+        .and_then(|mut schedules| schedules.remove(label))
+    else {
+        // Parity with `World::run_schedule`, which panics on a label no
+        // schedule carries.
+        panic!("The schedule with the label {label:?} was not found.");
+    };
+    let outcome = catch_unwind(AssertUnwindSafe(|| schedule.run(world)));
+    if outcome.is_err() {
+        // The executor unwound mid-run, so its progress state (completed /
+        // ready bitsets) still describes the dead run; left in place it makes
+        // the next run a silent no-op. A fresh executor re-initializes from
+        // the schedule on that next run. The replacement is the same platform
+        // default a new `Schedule` is born with, so a recovered schedule keeps
+        // the executor kind (and its parallelism) it had before the panic.
+        schedule.set_executor(PlatformDefaultExecutor::new());
+    }
+    world
+        .get_resource_or_insert_with(Schedules::default)
+        .insert(schedule);
+    if let Err(payload) = outcome {
+        resume_unwind(payload);
+    }
+}
+
+/// The executor a fresh [`Schedule`](bevy_ecs::schedule::Schedule) starts
+/// with, in a shape [`Schedule::set_executor`](bevy_ecs::schedule::Schedule::set_executor)
+/// accepts.
+///
+/// `bevy_ecs::schedule::default_executor()` picks the executor for the
+/// compiled feature set - multi-threaded where `std` + `multi_threaded` are
+/// on, single-threaded on Wasm and without them - but returns it boxed, and
+/// `set_executor` wants an unboxed `impl SystemExecutor`. This forwards the
+/// box, so panic recovery installs exactly the kind the schedule was built
+/// with instead of hardcoding one.
+struct PlatformDefaultExecutor(Box<dyn SystemExecutor>);
+
+impl PlatformDefaultExecutor {
+    fn new() -> Self {
+        Self(default_executor())
+    }
+}
+
+impl SystemExecutor for PlatformDefaultExecutor {
+    fn init(&mut self, schedule: &SystemSchedule) {
+        self.0.init(schedule);
+    }
+
+    fn run(
+        &mut self,
+        schedule: &mut SystemSchedule,
+        world: &mut World,
+        skip_systems: Option<&FixedBitSet>,
+        error_handler: fn(BevyError, ErrorContext),
+    ) {
+        self.0.run(schedule, world, skip_systems, error_handler);
+    }
+
+    fn set_apply_final_deferred(&mut self, value: bool) {
+        self.0.set_apply_final_deferred(value);
     }
 }
 

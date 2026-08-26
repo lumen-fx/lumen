@@ -5,6 +5,12 @@ id    = "com.lumen.examples.music"
 [script]
 engine = "candela"
 
+# Audio is a runtime module: declaring it is what makes the audio_* script
+# functions exist at all. A statically built runtime compiles the module's
+# plugin in instead and banners that this entry cannot load there.
+[dependencies]
+lumen-audio = { bundled = true }
+
 [window]
 title = "Waveform - Player"
 size  = [1080, 760]

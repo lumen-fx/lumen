@@ -42,6 +42,12 @@
 #
 #   lumen-<target>.tar.gz     target in {linux-x86_64, linux-aarch64,
 #                              macos-x86_64, macos-aarch64}
+#   lumen-modules-<target>.tar.gz
+#                             the bundled runtime modules for the same
+#                             targets, installed into the same bin/ beside
+#                             the engine unless --no-modules is given.
+#                             Optional per release; absent for Windows,
+#                             which compiles the capabilities in.
 #   lumen-windows-x86_64.msi  the Windows installer. This script never
 #                             fetches or runs it; the windows branch below
 #                             prints its URL and stops.
@@ -79,6 +85,7 @@ PREFIX="${LUMEN_PREFIX:-$HOME/.lumen}"
 PIN_VERSION=""
 NO_CONFIRM=0
 MODIFY_PATH=1
+INSTALL_MODULES=1
 FORCE=0
 UNINSTALL=0
 
@@ -102,6 +109,10 @@ Options:
   --no-confirm         Run without prompting; still writes a PATH line to a
                        shell rc file unless --no-modify-path is also given.
   --no-modify-path     Never write a PATH line to a shell rc file.
+  --no-modules         Skip the bundled runtime modules (the standard module
+                       library apps name with `bundled = true`); install the
+                       toolchain alone. --uninstall still removes previously
+                       installed modules through the receipt.
   --force              Reinstall even if already at the target version.
   --uninstall          Remove every file this installer put under the prefix.
   -h, --help           Show this help.
@@ -131,6 +142,7 @@ while [ "$#" -gt 0 ]; do
     --version=*) PIN_VERSION="${1#--version=}"; shift ;;
     --no-confirm) NO_CONFIRM=1; shift ;;
     --no-modify-path) MODIFY_PATH=0; shift ;;
+    --no-modules) INSTALL_MODULES=0; shift ;;
     --force) FORCE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -262,6 +274,7 @@ published_targets() {
       name = $2
       sub(/^\*/, "", name)
       if (name == "lumen-web.tar.gz") { next }
+      if (index(name, "lumen-modules-") == 1) { next }
       if (index(name, "lumen-") != 1) { next }
       if (name !~ /\.tar\.gz$/) { next }
       t = substr(name, length("lumen-") + 1)
@@ -518,6 +531,31 @@ if [ ! -d "$root/bin" ]; then
   fi
 fi
 [ -d "$root/bin" ] || fail "the lumen archive has no bin/ directory"
+
+# The bundled runtime modules ship as their own asset beside the toolchain
+# archive. Unpacked into the same tree they land in bin/, beside the engine,
+# which is where the runtime's `bundled = true` probe looks; merging them
+# here also puts them on the same file list, so the receipt and any later
+# upgrade cover them. A release without the asset installs the toolchain
+# alone, and --no-modules chooses the same shape on purpose; an upgrade that
+# skips them then removes any previously installed copies through the
+# receipt's file list, the same way --uninstall does.
+MODULES_NAME="lumen-modules-$TARGET.tar.gz"
+MODULES_SHA="$(asset_sha "$MODULES_NAME")"
+if [ "$INSTALL_MODULES" -eq 1 ] && [ -n "$MODULES_SHA" ]; then
+  say "Downloading the bundled modules"
+  if ! fetch_shown "$(asset_url "$MODULES_NAME")" "$TMP/dl/lumen-modules.tar.gz"; then
+    fail "download failed: $(asset_url "$MODULES_NAME")"
+  fi
+  got="$(sha256_of "$TMP/dl/lumen-modules.tar.gz")"
+  if [ "$got" != "$MODULES_SHA" ]; then
+    fail "checksum mismatch for the bundled modules
+  expected $MODULES_SHA
+  got      $got
+Nothing was installed. The download was corrupted, or the asset does not match the checksum published with release $TAG."
+  fi
+  tar -xzf "$TMP/dl/lumen-modules.tar.gz" -C "$root" || fail "could not unpack the modules archive"
+fi
 
 ( cd "$root" && find . \( -type f -o -type l \) -print ) | sed 's|^\./||' | sort > "$TMP/files"
 [ -s "$TMP/files" ] || fail "the lumen archive is empty"

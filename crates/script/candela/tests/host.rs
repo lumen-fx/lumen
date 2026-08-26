@@ -18,7 +18,7 @@ host "lumen" {
     signal_set_int(string, int);
     add_clicks(int);
     on(string, string, string);
-    audio_play(string);
+    open_url(string);
     set_class(string, string);
     set_timeout(string, int);
 }
@@ -39,7 +39,7 @@ fn on_start_dispatches_and_drains_commands() {
 fn on_start() {
     lumen::add_clicks(3);
     lumen::signal_set("greeting", "hi");
-    lumen::audio_play("track.wav");
+    lumen::open_url("https://lumenfx.dev");
     lumen::set_class("box", "active");
 }
 fn main() {}
@@ -63,7 +63,7 @@ fn main() {}
     );
     assert!(commands.iter().any(|c| matches!(
         c,
-        ScriptCommand::AudioPlay { path } if path == "track.wav"
+        ScriptCommand::OpenUrl { url } if url == "https://lumenfx.dev"
     )));
     assert!(commands.iter().any(|c| matches!(
         c,
@@ -386,4 +386,66 @@ fn every_registered_lumen_fn_is_tabled() {
         "these builtins are registered on the engine but absent from \
          builtins::BUILTINS: {missing:?}"
     );
+}
+
+/// A panic out of the VM stays inside the host.
+///
+/// A diagnostic thrown mid-execution (here: a call into a `lumen::` function
+/// nothing declared) can leave values behind on the VM stack, and the next
+/// call into the program then dies on an internal type assertion instead of
+/// returning an error. That panic used to cross the host boundary and kill
+/// the process - a music app whose audio module could not load died this way
+/// on its second lifecycle hook. The host must hand back errors, never abort.
+#[test]
+fn a_vm_panic_is_contained_and_disables_the_program() {
+    let mut host = CandelaHost::new();
+    load(
+        &mut host,
+        r#"
+struct Track { id: string, title: string }
+fn mk(id, title) { return Track { id: id, title: title }; }
+fn tracks() {
+    let l = [];
+    l.push(mk("a", "b"));
+    l.push(mk("c", "d"));
+    return l;
+}
+fn set_meta(t: any) { lumen::signal_set("now_title", t.title); }
+fn on_start() {
+    lumen::signal_set("x", "1");
+    let list = tracks();
+    set_meta(list[0]);
+    lumen::no_such_builtin(0.7);
+}
+fn on_ready() {
+    let list = tracks();
+    let i = 0;
+    while i < list.len() {
+        lumen::signal_set("y", list[i].title);
+        i = i + 1;
+    }
+}
+fn main() {}
+"#,
+    );
+
+    // The first hook fails on the undeclared call; candela reports it as an
+    // ordinary diagnostic.
+    let started = host.call("on_start", &[]);
+    assert!(started.is_err(), "the undeclared call errors: {started:?}");
+
+    // The next hook must come back as a value, never abort the process. On
+    // the current candela pin the corrupted VM panics and the host reports
+    // it; a candela with the corruption fixed returns Ok, and both are fine.
+    match host.call("on_ready", &[]) {
+        Ok(_) => {}
+        Err(ScriptError::Runtime(msg)) => {
+            assert!(msg.contains("candela VM panicked"), "{msg}");
+        }
+        Err(other) => panic!("unexpected error shape: {other}"),
+    }
+
+    // Whatever happened above, later probes still answer instead of dying.
+    let after = host.call("on_ready", &[]).expect("a later probe answers");
+    let _ = after.found;
 }

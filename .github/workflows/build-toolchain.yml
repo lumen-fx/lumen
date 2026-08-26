@@ -6,9 +6,11 @@ name: build-toolchain
 # lumen-windows-x86_64.msi as the install channel. Every one of them holds
 # bin/lumenc, the liblumen shared library, bin/lumen-launcher, and the two
 # trees lumenc reads from beside itself: the candela standard library in
-# bin/libs and the `lumenc new` templates in bin/templates. The Unix archives
-# also carry the shell completions under share/. That layout comes from four
-# places, not from guessing:
+# bin/libs and the `lumenc new` templates in bin/templates. The Unix
+# archives also carry the shared engine (liblumen_engine + the Rust libstd
+# it was built against - see the dynamic-engine build step) and the shell
+# completions under share/. That layout comes from four places, not from
+# guessing:
 #
 #   - install.sh requires a top-level bin/ directory in the archive (its
 #     unpack step fails otherwise) and looks up the asset by the exact name
@@ -27,6 +29,13 @@ name: build-toolchain
 #     this repository at all: each is its own repository under lumen-fx, and
 #     tools/fetch-templates.sh downloads the copy that ships here.
 #
+# The Unix legs also produce lumen-modules-<target>.tar.gz: the bundled
+# runtime modules (std/ in the tree, `bundled = true` in an app's
+# [dependencies]), built in the same cargo invocation as the engine so their
+# build ids match it exactly, and shipped as their own archive with the same
+# bin/ layout. install.sh unpacks it over the same prefix. Windows gets no
+# modules archive; the capabilities are compiled into its binaries.
+#
 # It also builds one artifact that belongs to no platform: lumen-web.tar.gz,
 # holding the browser runtime `lumenc web` copies beside the pages it emits.
 # WebAssembly is the same everywhere, so it is built once and downloaded by
@@ -35,9 +44,7 @@ name: build-toolchain
 # exact name, so a publish without it leaves `lumenc web` with nothing to give
 # a page to load.
 #
-# lumenc does not link lumen at compile time (that is the whole point of
-# the dlopen seam), so it and liblumen are two separate `cargo build`
-# invocations, both under the workspace's [profile.release] (opt-level "s",
+# All builds run under the workspace's [profile.release] (opt-level "s",
 # fat LTO, strip = "symbols" - already stripped, no separate strip step
 # needed here).
 #
@@ -131,20 +138,64 @@ jobs:
         with:
           key: release-${{ matrix.target }}
 
-      # Three crates, three artifacts: the lumenc binary, the liblumen shared library
-      # (crate lumen), and the launcher stub `lumenc package` turns into a
-      # shipped app. None of them depends on another at compile time - lumenc
-      # and the stub both dlopen liblumen at run time - so each is its own
-      # build.
-      - name: Build lumenc
-        run: cargo build --release -p lumenc
+      # Three crates, four-plus artifacts: the lumenc binary, the liblumen
+      # shared library (crate lumen), the launcher stub `lumenc package` turns
+      # into a shipped app, and - on Linux and macOS - the shared engine both
+      # binaries link.
+      #
+      # The Unix leg builds lumenc and liblumen TOGETHER, dynamic-engine: one
+      # cargo invocation resolves one engine feature graph, so the two link
+      # the same liblumen_engine, which ships in bin/ beside them along with
+      # the Rust standard library they were built against (`prefer-dynamic`
+      # applies to libstd too). The `$ORIGIN` / `@loader_path` rpath is what
+      # lets both resolve from bin/ with nothing else installed. The explicit
+      # --target keeps prefer-dynamic off build scripts and proc macros. A
+      # process shaped like this shares one engine instance with the runtime
+      # modules it dlopens, which is what makes `[dependencies]` work in
+      # shipped apps.
+      #
+      # The launcher stub stays a static self-contained binary on every
+      # platform: it dlopens liblumen, and liblumen's own NEEDED entries bring
+      # the engine into the process.
+      #
+      # Windows keeps the fully-static shape - its import-library format
+      # cannot describe the engine's export count, so no engine dylib exists
+      # there (see sdk/rust-dylib/Cargo.toml).
+      - name: Build lumenc + liblumen (dynamic engine, Unix)
+        if: runner.os != 'Windows'
         env:
           # The engine is fetched and built by lumenc's build script only when
           # it is installed from outside a checkout; say so explicitly here so
           # a workspace change can never turn a release build into a download.
           LUMEN_SKIP_ENGINE_BUILD: "1"
+        run: |
+          triple="$(rustc -vV | sed -n 's/^host: //p')"
+          echo "triple=$triple" >> "$GITHUB_ENV"
+          case "$(uname -s)" in
+            Darwin) rpath='@loader_path' ;;
+            *)      rpath='$ORIGIN' ;;
+          esac
+          export RUSTFLAGS="-C prefer-dynamic -C link-arg=-Wl,-rpath,$rpath"
+          # LTO cannot cross a dynamic-library boundary (rustc refuses
+          # prefer-dynamic under LTO outright), so the dynamic shape trades
+          # the release profile's fat LTO away.
+          # The bundled runtime modules (std/) build in the same invocation:
+          # one feature graph, so each module records the exact build id of
+          # the engine shipping beside it. They ship in their own archive
+          # (see the modules packaging step below).
+          cargo build --release --target "$triple" -p lumenc -p lumen \
+            -p lumen-audio \
+            --config 'profile.release.lto="off"' \
+            --features lumenc/dynamic-engine,lumen/dynamic-engine
 
-      - name: Build liblumen (the shared engine)
+      - name: Build lumenc (Windows)
+        if: runner.os == 'Windows'
+        run: cargo build --release -p lumenc
+        env:
+          LUMEN_SKIP_ENGINE_BUILD: "1"
+
+      - name: Build liblumen (Windows)
+        if: runner.os == 'Windows'
         run: cargo build --release -p lumen
 
       - name: Build the app launcher stub
@@ -163,19 +214,57 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist/bin
-          cp target/release/lumenc dist/bin/
-          cp target/release/${{ matrix.libname }} dist/bin/
+          cp "target/$triple/release/lumenc" dist/bin/
+          cp "target/$triple/release/${{ matrix.libname }}" dist/bin/
           cp target/release/lumen-launcher dist/bin/
+          # The shared engine the two binaries above link. cargo writes a
+          # dependency's dylib into deps/ (unhashed - a shared library's file
+          # name is its identity); tolerate either layout.
+          for engine in \
+            "target/$triple/release/liblumen_engine.so" \
+            "target/$triple/release/liblumen_engine.dylib" \
+            "target/$triple/release/deps/liblumen_engine.so" \
+            "target/$triple/release/deps/liblumen_engine.dylib"; do
+            if [ -f "$engine" ]; then cp "$engine" dist/bin/; break; fi
+          done
+          test -f dist/bin/liblumen_engine.so || test -f dist/bin/liblumen_engine.dylib
+          # The engine ships to be loaded, never to be compiled against: its
+          # consumers linked it in the build above. So the Rust crate
+          # metadata rustc embeds in every dylib and any leftover debug info
+          # are dead weight in the archive; drop both, keep the dynamic
+          # symbols - they are what the linked binaries and the dlopen'd
+          # runtime modules resolve. rustup's llvm-objcopy handles ELF and
+          # Mach-O alike; on macOS the strip invalidates the ad-hoc code
+          # signature, so it is re-signed. The `lumenc --version` run below
+          # is what proves the stripped engine still loads.
+          rustup component add llvm-tools
+          objcopy="$(rustc --print sysroot)/lib/rustlib/$triple/bin/llvm-objcopy"
+          for engine in dist/bin/liblumen_engine.so dist/bin/liblumen_engine.dylib; do
+            [ -f "$engine" ] || continue
+            "$objcopy" --strip-debug --remove-section=.rustc \
+              --remove-section=__DATA,.rustc "$engine"
+            if [ "$(uname -s)" = Darwin ]; then codesign -f -s - "$engine"; fi
+          done
+          # The shared Rust standard library everything above was built
+          # against; prefer-dynamic makes every binary and dylib here open it.
+          libdir="$(rustc --print target-libdir --target "$triple")"
+          case "$(uname -s)" in
+            Darwin) cp "$libdir"/libstd-*.dylib dist/bin/ ;;
+            *)      cp "$libdir"/libstd-*.so dist/bin/ ;;
+          esac
           # The candela standard library, staged beside the binaries by
           # lumen-script-candela's build script. candela reads `import
           # "std/..."` (and the array methods) out of `libs/` next to the
           # running executable, so it belongs beside lumenc, not in share/.
-          cp -R target/release/libs dist/bin/libs
+          cp -R "target/$triple/release/libs" dist/bin/libs
           # The app templates, beside lumenc for the same reason: `lumenc new`
           # reads them from next to its own executable
           # (crates/lumenc/src/scaffold.rs), so an archive without them ships a
           # compiler that can scaffold nothing.
           cp -R target/templates dist/bin/templates
+          # The rpath wiring is what this exercises: a dynamic lumenc that
+          # cannot find its engine or libstd beside itself dies right here.
+          ./dist/bin/lumenc --version
           # Shell completions, each under the directory its shell searches, so
           # a prefix on the usual search paths picks them up as installed. The
           # same scripts are embedded in lumenc (`lumenc completions <shell>`)
@@ -187,6 +276,25 @@ jobs:
           cp crates/lumenc/completions/_lumenc dist/share/zsh/site-functions/_lumenc
           cp crates/lumenc/completions/lumenc.fish dist/share/fish/vendor_completions.d/lumenc.fish
           tar -czf lumen-${{ matrix.target }}.tar.gz -C dist .
+
+      # The bundled runtime modules, as their own archive beside the
+      # toolchain one. Same bin/ layout, so unpacking it over the same
+      # prefix drops each module beside the engine - which is where the
+      # loader's `bundled = true` probe looks. Engine-locked modules are a
+      # Unix shape; Windows compiles the same capabilities in.
+      - name: Package the bundled modules (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p modules-dist/bin
+          for module in liblumen_audio.so liblumen_audio.dylib; do
+            for built in \
+              "target/$triple/release/$module" \
+              "target/$triple/release/deps/$module"; do
+              if [ -f "$built" ]; then cp "$built" modules-dist/bin/; break; fi
+            done
+          done
+          test -f modules-dist/bin/liblumen_audio.so || test -f modules-dist/bin/liblumen_audio.dylib
+          tar -czf lumen-modules-${{ matrix.target }}.tar.gz -C modules-dist .
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -243,6 +351,7 @@ jobs:
           name: lumen-${{ matrix.target }}
           path: |
             lumen-${{ matrix.target }}.tar.gz
+            lumen-modules-${{ matrix.target }}.tar.gz
             lumen-${{ matrix.target }}.zip
             lumen-${{ matrix.target }}.msi
           if-no-files-found: error

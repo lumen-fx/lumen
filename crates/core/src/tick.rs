@@ -4,6 +4,7 @@
 //! - Ordering is enforced by `.chain()` in [`crate::app::App::new`].
 //! - The render schedule runs after the main schedule and the extract step; see [`crate::render_world`].
 
+use crate::plugin_events::plugin_events_pending;
 use crate::property_store::external_properties_pending;
 use crate::render_world::{AnimationsActive, FrameDirty};
 use crate::time::{Duration, Instant};
@@ -66,25 +67,28 @@ impl Tick {
 /// Whether the tick that just ran left work behind, so a driver that only
 /// wakes on events has to schedule another frame.
 ///
-/// Three sources, each of which reaches `false` on its own once the system
+/// Four sources, each of which reaches `false` on its own once the system
 /// settles, so a caller that loops on this can never spin forever:
 ///
 /// 1. The external typed-property bus still holds undrained writes, from a
 ///    cross-thread producer or a main-thread script write that landed after
 ///    this tick's drain. It empties once drained.
-/// 2. An animation driver (a hover or press tween, an opacity transition,
+/// 2. The plugin-event bus still holds events a portable plugin pushed (see
+///    [`crate::plugin_events`]). It likewise empties once drained.
+/// 3. An animation driver (a hover or press tween, an opacity transition,
 ///    scroll inertia) reported motion this tick through [`AnimationsActive`],
 ///    which is cleared at the top of every tick and re-raised only while a
 ///    value is mid-flight.
-/// 3. [`FrameDirty`] is still set, which a system dirtying state after the
+/// 4. [`FrameDirty`] is still set, which a system dirtying state after the
 ///    encode leaves behind. The next present clears it.
 ///
 /// This is a frame predicate, not a state predicate: an app with a permanent
-/// animation raises the second source forever. A caller that needs to know
+/// animation raises the third source forever. A caller that needs to know
 /// when an app's *state* stopped moving compares the state itself, as the
 /// prerenderer does.
 pub fn work_pending(world: &World) -> bool {
     external_properties_pending()
+        || plugin_events_pending()
         || world
             .get_resource::<AnimationsActive>()
             .is_some_and(|a| a.get())

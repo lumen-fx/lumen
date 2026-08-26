@@ -2221,7 +2221,7 @@ impl RhaiHost {
             Ok(v) => Some(v),
             Err(e) if is_function_not_found(&e, fn_name) => None,
             Err(e) => {
-                // A handler that queued commands (audio_play, set_text,
+                // A handler that queued commands (set_text, notify,
                 // set_signal, fetch, ...) and *then* errored must contribute
                 // NO commands: draining only on the success path would leak
                 // them into the sink, where the next unrelated event's
@@ -2835,8 +2835,8 @@ fn rhai_arg_type(ty: &ScriptTy) -> TypeId {
 ///
 /// Rhai resolves a call by argument type, and an integer literal is an `INT`
 /// even where the author means a number, so a declared float is bound at both
-/// `FLOAT` and `INT` and `audio_seek(30)` resolves alongside
-/// `audio_seek(30.5)`. Beyond three float parameters the shapes are left at the
+/// `FLOAT` and `INT` and `seek(30)` resolves alongside
+/// `seek(30.5)`. Beyond three float parameters the shapes are left at the
 /// declared form: the combinations double each time, and no builtin is written
 /// that way.
 fn rhai_arg_shapes(slots: &[&ScriptTy]) -> Vec<Vec<TypeId>> {

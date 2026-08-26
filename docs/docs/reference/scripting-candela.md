@@ -132,7 +132,7 @@ Define these as free functions. Each is optional; a missing hook is a no-op.
 | `on_start()` | Once at app construction, before the first tick. No element is queryable yet: `node_get_by_id` returns `0`. |
 | `on_ready()` | Once per mount, on the first tick after the element tree is published. Queries resolve here. Re-armed after a hot reload, so it runs again on the fresh tree. |
 | `on_close()` | On an OS close request, before teardown. Return `false` to veto the close and keep the window open. |
-| `on_audio_end()` | When the audio transport reaches the end of a track. |
+| `on_audio_end(path: string)` | When a track played through the `lumen-audio` module reaches its end; `path` is the path passed to `audio_play`. |
 | `main()` | candela's module entry point, run once at compile time. Keep it empty unless the app needs module-level setup. |
 
 Across a hot reload the signal values, the `on(...)` routing table, and live
@@ -666,6 +666,10 @@ the method when you are holding a handle.
 
 ## Audio
 
+These functions come from the `lumen-audio` runtime module and exist only
+when the app declares it under `[dependencies]` in `lumen.toml`; see
+[OS integration](../guides/os-integration.md#audio).
+
 | Builtin | Behaviour |
 | --- | --- |
 | `lumen::audio_play(path: string)` | Load and play the track at `path` (app-relative wav or ogg); resets position to zero. |
@@ -675,7 +679,7 @@ the method when you are holding a handle.
 | `lumen::audio_seek(secs: float)` | Seek to `secs`, clamped to the track duration. |
 | `lumen::audio_volume(level: float)` | Set output volume in `0.0` to `1.0`. |
 
-The transport writes the `audio_position`, `audio_duration`, and `audio_playing`
+The module writes the `audio_position`, `audio_duration`, and `audio_playing`
 signals each tick, so markup binds to them directly.
 
 ## Networking

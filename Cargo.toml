@@ -65,6 +65,11 @@ crossbeam-channel.workspace = true
 [build-dependencies]
 cbindgen.workspace = true
 
+# The engine as a shared library, for the `dynamic-engine` release shape (see
+# [features]). Only off Windows - no linkable engine exists there.
+[target.'cfg(not(windows))'.dependencies]
+lumen-dylib = { workspace = true, optional = true }
+
 [features]
 # The DEFAULT shared/static library is FULL-featured: one shared library serves
 # every app (the whole point of link-not-embed). Per-app trimming applies ONLY
@@ -74,9 +79,9 @@ default = [
     "embed-parser",
     "runtime-parse",
     "http-fetch",
-    "audio-rodio",
     "mcp",
     "async",
+    "modules",
     "host-rhai",
     "host-lua",
     "host-candela",
@@ -87,34 +92,47 @@ embed-parser = ["dep:lumenc", "runtime-parse"]
 # Forwards to the runtime's Part B tree-shaking knobs.
 runtime-parse = ["lumen-runtime/runtime-parse"]
 http-fetch = ["lumen-runtime/http-fetch"]
-# `audio` compiles the audio subsystem against whichever backend is selected;
-# `audio-rodio` adds the one Lumen ships, and is what the default build picks.
-audio = ["lumen-runtime/audio"]
-audio-rodio = ["lumen-runtime/audio-rodio"]
 mcp = ["lumen-runtime/mcp"]
 async = ["lumen-runtime/async"]
+# Runtime modules: the `[dependencies]` dylib loader.
+modules = ["lumen-runtime/modules"]
 host-rhai = ["lumen-runtime/host-rhai", "dep:rhai"]
 host-lua = ["lumen-runtime/host-lua"]
 host-candela = ["lumen-runtime/host-candela"]
+# Link the engine as the shared `liblumen_engine` library instead of compiling
+# it into `liblumen`. The release shape on Linux and macOS: built with
+# `-C prefer-dynamic` (and an `$ORIGIN` / `@loader_path` rpath), `liblumen`
+# keeps only the C ABI and the parser and shares one engine instance -
+# `liblumen_engine` beside it - with the `lumenc` binary's own build and with
+# the runtime modules the loader dlopens. Off by default: a plain build stays
+# fully static. Windows has no linkable engine; the feature resolves to
+# nothing there.
+dynamic-engine = ["dep:lumen-dylib"]
 
 [workspace]
 resolver = "2"
-# The four grouped directories glob cleanly. The flat spine is listed crate by
+# The grouped directories glob cleanly. The flat spine is listed crate by
 # crate, because a `crates/*` glob would also match the group directories,
 # which hold crates rather than being one.
 members = [
     "crates/assets",
-    "crates/audio",
     "crates/core",
     "crates/html",
     "crates/i18n",
     "crates/input",
     "crates/ir",
     "crates/launcher",
+    "crates/lumen-module",
+    "crates/lumen-module/fixture",
+    "crates/lumen-module/fixture-host",
+    "crates/lumen-plugin",
+    "crates/lumen-plugin/fixture",
     "crates/lumenc",
     "crates/lumenc-plugin",
     "crates/lumenc-plugin/fixture",
     "crates/mcp",
+    "crates/modules",
+    "crates/plugin-abi",
     "crates/portable",
     "crates/prerender",
     "crates/primitives",
@@ -130,6 +148,7 @@ members = [
     "crates/dev/*",
     "crates/os/*",
     "crates/script/*",
+    "std/*",
     "sdk/rust",
 ]
 # The linkable engine is built through the Rust SDK's own dependency on it, on
@@ -178,8 +197,7 @@ lumen = { path = "." }
 lumen-a11y-accesskit = { path = "crates/backends/a11y-accesskit" }
 lumen-assets = { path = "crates/assets" }
 lumen-async-tokio = { path = "crates/backends/async-tokio" }
-lumen-audio = { path = "crates/audio" }
-lumen-audio-rodio = { path = "crates/backends/audio-rodio" }
+lumen-audio = { path = "std/audio" }
 lumen-core = { path = "crates/core" }
 lumen-devtools = { path = "crates/dev/devtools" }
 # The engine in the form a Rust app links instead of compiling in. Excluded from
@@ -193,6 +211,8 @@ lumen-input = { path = "crates/input" }
 lumen-ir = { path = "crates/ir" }
 lumen-layout-taffy = { path = "crates/backends/layout-taffy" }
 lumen-mcp = { path = "crates/mcp" }
+lumen-module = { path = "crates/lumen-module" }
+lumen-modules = { path = "crates/modules" }
 lumen-os-clipboard = { path = "crates/os/clipboard" }
 lumen-os-dnd = { path = "crates/os/dnd" }
 lumen-os-filedialog = { path = "crates/os/filedialog" }
@@ -203,6 +223,12 @@ lumen-os-mime = { path = "crates/os/mime" }
 lumen-os-notify = { path = "crates/os/notify" }
 lumen-os-power = { path = "crates/os/power" }
 lumen-os-tray = { path = "crates/os/tray" }
+# Runtime-plugin SDK and loader. Defaults off: plugin authors take the trait
+# and macro only; the runtime asks for the `host` loader feature.
+lumen-plugin = { path = "crates/lumen-plugin", default-features = false }
+# The plugin plumbing both plugin systems sit on. Defaults off: the loader
+# halves ask for `dlopen` and `resolve`, a plugin author's crate takes neither.
+lumen-plugin-abi = { path = "crates/plugin-abi", default-features = false }
 # `host-candela` is the default on both, and the browser build takes them
 # without it: a page runs precompiled bytecode and has no use for the compiler.
 lumen-portable = { path = "crates/portable", default-features = false }
@@ -342,6 +368,8 @@ semver = "1"
 
 # Unix signal -> flag bridge (lumenc --headless graceful SIGINT/SIGTERM).
 signal-hook = "0.4"
+# Raw dlopen flags (RTLD_NOLOAD) for the module loader's engine probe.
+libc = "0.2"
 # Windows console-control (Ctrl+C / Ctrl+Break / close) -> graceful close.
 # The Unix arm uses signal-hook directly; ctrlc wraps SetConsoleCtrlHandler
 # so the windows arms mirror the SIGINT/SIGTERM behavior.

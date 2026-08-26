@@ -12,7 +12,7 @@ Kevin MacLeod (incompetech.com), delivered via Git LFS as OGG Vorbis:
 | Cipher | Kevin MacLeod (incompetech.com) | https://incompetech.com/music/royalty-free/mp3-royaltyfree/Cipher2.mp3 | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 
 The source MP3s were transcoded to OGG Vorbis (`libvorbis -q:a 4`, 44.1 kHz)
-because the Lumen audio runtime decodes OGG Vorbis and WAV only.
+because the lumen-audio module decodes OGG Vorbis and WAV only.
 
 The Pure Tones and Moving Tones playlists use synthetic test tones generated
 in-repo (see `README.md`); those are not third-party works.

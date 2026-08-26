@@ -1,0 +1,44 @@
+# The runtime-module seam: the `[dependencies]` schema every runtime build
+# parses, and (behind the `loader` feature) the dlopen loader that brings a
+# prebuilt module into the app. Its own crate rather than a module of
+# `lumen-runtime` because the loader is unsafe by nature (dlopen, dlsym, a
+# call through a raw symbol) and the runtime forbids unsafe code.
+[package]
+name = "lumen-modules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen runtime-module loader: the lumen.toml [dependencies] schema and the version-locked dylib loader behind it."
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[dependencies]
+lumen-core = { workspace = true }
+# The one copy of the library-name spellings every by-name probe shares.
+lumen-plugin-abi = { workspace = true }
+bevy_ecs = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+libloading = { workspace = true, optional = true }
+# The portable-plugin half of the loader: the C-ABI host loader the kind
+# dispatch hands a `lumen_plugin_v1` library to.
+lumen-plugin = { workspace = true, optional = true, features = ["host"] }
+
+# RTLD_NOLOAD for the "is the engine mapped in this process" probe, which
+# libloading does not expose. Unix only: Windows has no engine dylib.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true, optional = true }
+
+[dev-dependencies]
+# The loader-arms suite points the kind dispatch at a built compiler plugin,
+# which is the one wrong-kind library the tests can build on any machine.
+lumenc-plugin = { workspace = true, features = ["testing"] }
+
+[features]
+# The dlopen half. Off, the crate is the config schema alone, which is what a
+# runtime built without module support still parses.
+loader = ["dep:libloading", "dep:libc", "dep:lumen-plugin"]

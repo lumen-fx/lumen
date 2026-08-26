@@ -1,18 +1,22 @@
 # Waveform - Music player
 
 A desktop player shell: a selectable playlist sidebar, a scrolling library
-table, and a now-playing bar whose transport drives audio through
-`lumen-audio-rodio`.
+table, and a now-playing bar whose transport drives audio through the
+`lumen-audio` module the app declares in its `lumen.toml`; the module is
+what gives the script its `audio_*` functions.
 
 ## Run
 
 ```
-cargo run -p lumenc -- run apps/music
+lumenc run apps/music
 ```
 
 Click a library row (or press Play) to hear a track. On a machine with a
 working audio device you hear the track; on a deviceless box playback runs
-silent and the transport UI still works.
+silent and the transport UI still works. The `audio_*` functions come from
+the `lumen-audio` module, so a source-built (`cargo run -p lumenc`) binary,
+which compiles the engine in and cannot load modules, runs the app without
+its audio surface.
 
 ## Soundtracks
 
@@ -47,15 +51,12 @@ cargo run -p lumen-audio --bin lumen-gen-test-tracks -- apps/music/assets
 
 - **Audio transport** - the play/pause button drives `audio_pause` and
   `audio_resume`, prev/next call `audio_play` on the adjacent track, and the
-  seek slider drives `audio_seek`. The host writes `audio_position`,
+  seek slider drives `audio_seek`. The module writes `audio_position`,
   `audio_duration`, and `audio_playing` into signals on every woken tick;
   there is no per-frame poll, and a paused player goes idle. The script
   `derive()`s the seek percentage, elapsed and total time, and the play glyph
-  from them.
-- **Asset-pipeline audio loading** - tracks load through the same async
-  `AssetServer` as images: `audio_play("assets/x.wav")` sets an `AudioSource`
-  on a player entity, the worker pool reads and caches the bytes off-thread,
-  and playback starts when the `LoadedAudio` handle resolves.
+  from them. When a track ends the module calls `on_audio_end(path)`, which
+  is what advances the playlist.
 - **Library table built through the DOM API** - `src/main.lmn` ships an empty
   `#playlist` container and the script fills it element by element with
   `node_spawn` and `node_append`, one row per track, rebuilt when the playlist

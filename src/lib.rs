@@ -26,6 +26,13 @@
 
 #![allow(clippy::missing_safety_doc)]
 
+// The linkage anchor for the `dynamic-engine` shape: naming the engine dylib
+// is what puts `liblumen_engine` in this library's link graph, and with
+// `-C prefer-dynamic` the engine crates below resolve into it instead of
+// compiling in. See the feature note in Cargo.toml.
+#[cfg(all(feature = "dynamic-engine", not(windows)))]
+use lumen_engine as _;
+
 use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::panic::AssertUnwindSafe;

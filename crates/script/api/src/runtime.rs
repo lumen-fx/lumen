@@ -52,6 +52,8 @@ use lumen_core::time::Instant;
 use lumen_core::warn_line;
 use std::sync::Arc;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::PluginEvent;
 use crate::dnd;
 use crate::http::{
     DisabledHttpClient, HttpClient, HttpDispatch, HttpDone, HttpRequest, HttpResponse,
@@ -143,6 +145,9 @@ pub enum ScriptSet {
     Timers,
     /// [`fire_fetched_responses`]: `on_fetch` / `on_http` delivery, per host.
     Fetch,
+    /// [`fire_plugin_events`]: delivery of the handler calls portable
+    /// plugins pushed, per host.
+    PluginEvents,
     /// [`fire_on_ready`]: the once-per-mount `on_ready` dispatch, per host.
     /// Registered by the embedder, not by [`ScriptPlugin`].
     Ready,
@@ -161,9 +166,6 @@ pub enum ScriptSet {
     /// one set covering both could not be ordered against the appliers
     /// without a cycle.
     DomState,
-    /// The embedder's `on_audio_end` dispatch, per host. Declared here so the
-    /// runtime's audio wiring has a set to order against.
-    AudioEnded,
 }
 
 /// Marker for the once-per-app half of [`ScriptPlugin::build`]: the shared
@@ -290,6 +292,15 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
                 app.world.insert_resource(FetchRegistry::default());
             }
             app.world.insert_resource(PendingFetchReplies::default());
+            // Portable plugins are dlopened native libraries; a browser page
+            // has no way to load one, so the plugin-event pipeline does not
+            // exist on wasm and its decode path stays out of the module a
+            // site downloads.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                app.world.insert_resource(PendingPluginEvents::default());
+                lumen_core::plugin_events::init_plugin_events();
+            }
             register_script_commands(&mut app.world);
             // Toggle / slider dispatchers below read these messages. In
             // production `lumen-primitives::ControlsPlugin` registers them
@@ -348,6 +359,19 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
                 TickStage::Systems,
                 clear_fetch_replies.after(ScriptSet::Fetch),
             );
+            // The plugin-event pipeline mirrors the fetch one above: one
+            // host-neutral collect, one per-host delivery set, one clear.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                app.add_systems(
+                    TickStage::Systems,
+                    collect_plugin_events.before(ScriptSet::PluginEvents),
+                );
+                app.add_systems(
+                    TickStage::Systems,
+                    clear_plugin_events.after(ScriptSet::PluginEvents),
+                );
+            }
             app.add_systems(
                 TickStage::Systems,
                 drain_fetch_commands.after(ScriptSet::Tick),
@@ -404,6 +428,11 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
         app.add_systems(
             TickStage::Systems,
             fire_fetched_responses::<H>.in_set(ScriptSet::Fetch),
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(
+            TickStage::Systems,
+            fire_plugin_events::<H>.in_set(ScriptSet::PluginEvents),
         );
         // Event dispatchers: forward Click / LongPress / DoubleClick to
         // the script's `on_click(id)` / `on_long_press(id)` /
@@ -1143,6 +1172,85 @@ pub fn fire_fetched_responses<H: ScriptHost + Resource<Mutability = Mutable>>(
                     );
                 }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// Plugin events
+// ---------------------------------------------------------------------
+
+/// Handler calls that portable plugins pushed and this tick delivers,
+/// mirroring [`PendingFetchReplies`]: filled by [`collect_plugin_events`],
+/// offered to every active host by [`fire_plugin_events`], and emptied by
+/// [`clear_plugin_events`].
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Resource, Default)]
+pub struct PendingPluginEvents(Vec<PluginEvent>);
+
+/// Move the events portable plugins pushed off the cross-thread bus
+/// ([`lumen_core::plugin_events`]) into [`PendingPluginEvents`]. Host-neutral
+/// and registered once, so a handler call is offered to every active host
+/// rather than taken by whichever ran first; a [`PluginEvent::Commands`]
+/// batch goes straight onto the command bus here instead, so it applies once
+/// however many hosts run.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn collect_plugin_events(
+    mut pending: ResMut<PendingPluginEvents>,
+    mut out: MessageWriter<ScriptCommandEvent>,
+) {
+    for bytes in lumen_core::plugin_events::drain_plugin_events() {
+        match lumen_plugin_abi::codec::decode::<PluginEvent>(&bytes) {
+            Ok(PluginEvent::Commands(commands)) => {
+                for command in commands {
+                    out.write(ScriptCommandEvent(command));
+                }
+            }
+            Ok(event) => pending.0.push(event),
+            Err(e) => warn_line!("lumen-script: a plugin event did not decode: {e}"),
+        }
+    }
+}
+
+/// Drop this tick's delivered plugin events. Runs after every host's
+/// [`fire_plugin_events`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn clear_plugin_events(mut pending: ResMut<PendingPluginEvents>) {
+    pending.0.clear();
+}
+
+/// Invoke the script's handler once for each call [`collect_plugin_events`]
+/// gathered. Routing matches the fetch pipeline exactly: a per-key
+/// `on(event, key, fn)` registration wins, else the event's fallback, and the
+/// key rides as the handler's first argument ahead of the event's own.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn fire_plugin_events<H: ScriptHost + Resource<Mutability = Mutable>>(
+    mut host: ResMut<H>,
+    pending: Res<PendingPluginEvents>,
+    mut out: MessageWriter<ScriptCommandEvent>,
+) {
+    for event in &pending.0 {
+        let PluginEvent::Call {
+            event,
+            key,
+            fallback,
+            args,
+        } = event
+        else {
+            // Commands never reach the buffer; `collect_plugin_events` put
+            // them on the bus already.
+            continue;
+        };
+        let target = resolve_handler(&*host, event, key, fallback);
+        if target.is_empty() {
+            continue;
+        }
+        let mut call_args = Vec::with_capacity(args.len() + 1);
+        call_args.push(ScriptValue::Str(key.clone()));
+        call_args.extend(args.iter().cloned());
+        match host.call(&target, &call_args) {
+            Ok(outcome) => forward_outcome(outcome, &mut out),
+            Err(e) => warn_line!("{}: {target}({key}) failed: {e}", prefix(host.lang())),
         }
     }
 }

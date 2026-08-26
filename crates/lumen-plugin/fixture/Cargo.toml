@@ -1,0 +1,17 @@
+[package]
+name = "lumen-plugin-fixture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Test-only runtime plugin exercising every registration, call, and failure mode."
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+lumen-plugin = { workspace = true }
+serde = { workspace = true }

@@ -63,14 +63,14 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         .unwrap_or_else(|| std::sync::Arc::new(crate::compiler_plugins::NoCompilerPlugins));
 
     // Subsystem gating (measured startup quick-wins): resolve, from one bounded
-    // source scan + `lumen.toml` + run-mode flags, which optional subsystems
+    // source scan + run-mode flags, which optional subsystems
     // this app actually uses so `build_app` can skip initialising the ones it
-    // does not (audio device + ticker thread; the X11 global-hotkey manager).
+    // does not (the X11 global-hotkey manager; the dialog tokio bridge).
     // See [`SubsystemUsage`] for the conservative, err-toward-ON contract. The
     // image / SVG decode worker pool needs no gate - `lumen-assets` spawns it
     // lazily on the first decode - and the HTTP surface likewise starts a
     // thread only per outbound request, so neither costs an idle app.
-    let usage = SubsystemUsage::detect(&opts, &dir, &cfg, !app_hooks.is_empty());
+    let usage = SubsystemUsage::detect(&opts, &dir, !app_hooks.is_empty());
 
     let mut app = App::new();
     // `[runtime] threads` overrides the `min(cores, 4)` default budget
@@ -81,7 +81,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // -- Subsystem register units (see `run/subsystems.rs`) -----------------
     // `build_app` installs the default stack as a sequence of per-subsystem
     // `register_*` calls. The core visual stack is unconditional; the gated
-    // units (hotkey / audio / MCP) are skipped when `usage` / run-mode proves
+    // units (hotkey / MCP) are skipped when `usage` / run-mode proves
     // them unused. The OS host-resource units (filedialog / notify / tray /
     // clipboard / launcher / power) are cheap constructors left default-on
     // (see their `TODO(tree-shake)` notes).
@@ -100,9 +100,6 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     register_os_notify(&mut app, &cfg);
     register_os_tray(&mut app);
     register_os_misc(&mut app, &cfg);
-    // Audio - GATED on `usage.audio`; a no-audio app gets the inert
-    // `AudioService::disabled()` (no device, no ticker thread).
-    register_audio(&mut app, usage.audio);
     // MCP introspection server - GATED on run-mode + `[mcp]` config.
     register_mcp(&mut app, opts.bounded, &cfg);
     // Reactive bindings, reconcilers, dialog lifecycle, error overlay - the
@@ -203,6 +200,44 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // to bind says so instead of going quiet. The builtin table is not in it;
     // each host binds that itself when it is constructed, so a name registered
     // here shadows a builtin of the same name.
+    // Runtime dependencies (`[dependencies]`): prebuilt dylibs of either
+    // kind - engine-locked modules installed as ordinary Plugins, portable
+    // plugins bound through the C-ABI loader - each told apart by its
+    // exports. Before the embedder's plugin phase on purpose: registrations
+    // shadow in arrival order, so a later embedder registration of the same
+    // script-fn name wins over a module's. Any load failure is a stderr
+    // banner plus a `LoadedModules` failure entry, and the app keeps booting
+    // without that module.
+    #[cfg(feature = "modules")]
+    {
+        let env = crate::modules::InitEnv {
+            app_dir: dir.clone(),
+            app_id: cfg
+                .app
+                .id
+                .clone()
+                .unwrap_or_else(|| derive_app_id(&opts.dir)),
+            // `bounded` is the run-mode bit that says "no interactive
+            // window session", which is what a plugin needs to know.
+            headless: opts.bounded,
+            hot_reload: opts.hot_reload && !opts.bounded,
+        };
+        crate::modules::load_modules(
+            &mut app,
+            &dir,
+            &cfg.dependencies,
+            &opts.resolved_modules,
+            &env,
+        );
+    }
+    #[cfg(not(feature = "modules"))]
+    for dep in &cfg.dependencies.0 {
+        eprintln!(
+            "lumen-runtime: dependency '{}' is declared but this runtime was built without \
+             the `modules` feature; the app runs without it",
+            dep.name
+        );
+    }
     for install in std::mem::take(&mut opts.plugins) {
         install(&mut app);
     }

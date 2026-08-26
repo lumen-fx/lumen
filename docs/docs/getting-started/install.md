@@ -43,6 +43,7 @@ See [shell completions](../reference/cli.md#completions).
 | `--version VERSION` | Install a specific release and pin to it. |
 | `--no-confirm` | Accept the defaults without prompting. |
 | `--no-modify-path` | Never write to a shell startup file. |
+| `--no-modules` | Skip the bundled runtime modules and install the toolchain alone. |
 | `--force` | Reinstall even when already at the target version. |
 | `--uninstall` | Remove every file the installer wrote. |
 | `-h`, `--help` | Show the installer's own help. |

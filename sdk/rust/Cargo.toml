@@ -10,13 +10,12 @@ description = "Lumen UI framework Rust SDK: the single dependency for building a
 keywords = ["ui", "gui", "framework", "desktop", "sdk"]
 categories = ["gui"]
 
-# One dependency, and it is the engine: everything the SDK is written against
-# - the runtime, the ECS app, the DOM surface, the widget trait, the parser,
-# `bevy_ecs` itself - is reached through it rather than depended on again, so
-# an app gets exactly one copy of each. A second path to any of them would
-# compile a second copy, and two copies of, say, `lumen-core` are two
-# different types to the compiler with two different signal stores behind
-# them.
+# The engine: everything the SDK is written against - the runtime, the ECS
+# app, the DOM surface, the widget trait, `bevy_ecs` itself - is reached
+# through it rather than depended on again, so an app gets exactly one copy
+# of each. A second path to any of them would compile a second copy, and two
+# copies of, say, `lumen-core` are two different types to the compiler with
+# two different signal stores behind them.
 #
 # Which engine differs by platform, and only by which form of the library it
 # is. `lumen-dylib` is the form an app links instead of compiling in; naming
@@ -26,8 +25,15 @@ categories = ["gui"]
 # crate - its linker cannot produce the library at all, see
 # sdk/rust-dylib/Cargo.toml - so there the engine crate is named directly and a
 # Rust app links the runtime in.
+#
+# The parser and compiler front-end (`lumenc`, a library here) sits outside
+# the shared engine - the `lumenc` binary is itself a consumer of the engine
+# library, and a crate cannot be on both sides of a dylib. It is small, its
+# heavy dependencies resolve into the engine, and it compiles into the app
+# beside the SDK's own code.
 [target.'cfg(not(windows))'.dependencies]
 lumen-dylib = { workspace = true }
+lumenc = { workspace = true, features = ["runtime-parse", "dev-run"] }
 
 [target.'cfg(windows)'.dependencies]
 lumen = { workspace = true }
@@ -36,10 +42,11 @@ lumen = { workspace = true }
 default = ["host-rhai"]
 # The `AppBuilder::rhai_extension` passthrough, which takes a `rhai::Engine`
 # and so binds to one host. `AppBuilder::native_fn` exposes a function to
-# every host the app runs and needs no feature. Forwarded to whichever of the
-# two the platform carries; the one it does not is not in the graph, and a
-# feature naming an absent dependency is ignored rather than an error.
-host-rhai = ["lumen-dylib/host-rhai", "lumen/host-rhai"]
+# every host the app runs and needs no feature. The shared engine library
+# always carries the Rhai host, so off Windows there is nothing to forward;
+# the Windows static engine still takes the flag. A feature naming a
+# dependency the platform does not carry is ignored rather than an error.
+host-rhai = ["lumen/host-rhai"]
 
 [dev-dependencies]
 # Tests construct `ClickEvent { position: Vec2, .. }` directly.

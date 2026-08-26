@@ -18,6 +18,11 @@
 
 /// SDK app-kind detection + external (Rust/C++/Python) build/run dispatch.
 pub mod app_kind;
+
+/// Runtime modules: the `[dependencies]` schema and, behind the `modules`
+/// feature, the version-locked dylib loader `build_app` runs it through.
+pub use lumen_modules as modules;
+
 /// Where an app keeps its code: `lumen.toml` at the root, everything the
 /// compiler front-end reads under `src/`.
 pub mod app_layout;

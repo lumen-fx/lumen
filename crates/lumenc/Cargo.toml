@@ -131,6 +131,14 @@ serde.workspace = true
 base64.workspace = true
 image.workspace = true
 
+# The engine as a shared library, for the `dynamic-engine` release shape (see
+# [features]). Only off Windows - no linkable engine exists there. This table
+# sits last in the dependency section on purpose: a `[target...]` header
+# claims every bare `key = value` line after it, so an unconditional
+# dependency added below it would quietly become non-Windows-only.
+[target.'cfg(not(windows))'.dependencies]
+lumen-dylib = { workspace = true, optional = true }
+
 # Golden-image screenshot suite (tests/golden.rs) + the headless-render and
 # kanban DnD integration tests: offscreen wgpu+vello renderer / real app world
 # driven fully in-process - never a real window. Test-only, so these never
@@ -204,7 +212,7 @@ package = ["dep:ureq", "dep:sha2", "dep:tar", "dep:flate2", "dep:zip"]
 # compiler library omits it with `--no-default-features`.
 bundle = ["dep:lumen-assets"]
 # Link the runtime (run loop, plugin stack, script hosts, GPU renderer, window
-# backend, audio, OS surfaces) so the `lumenc` binary can actually run / build /
+# backend, OS surfaces) so the `lumenc` binary can actually run / build /
 # check / drive apps. ON by default. Build the library `--no-default-features`
 # (as `lumen-lsp` does) to drop the runtime and every heavy backend it pulls -
 # this is the compiler-slimming knob. The forwards below all use the weak
@@ -212,19 +220,27 @@ bundle = ["dep:lumen-assets"]
 # they only augment it when `dev-run` has already pulled it.
 # The dev path stays FULL-featured (owner decision): `dev-run` turns on every
 # runtime subsystem so `lumenc run` / `build` / `check` and the integration
-# tests keep audio, MCP, the async bridge, and all three script hosts.
+# tests keep MCP, the async bridge, and all three script hosts.
 # Per-app trimming is exclusive to `lumenc bundle --static` (which builds
 # `lumen` with its own trimmed feature set), never the dev path.
 dev-run = [
     "dep:lumen-runtime",
     "dep:rhai",
-    "lumen-runtime/audio",
     "lumen-runtime/mcp",
     "lumen-runtime/async",
+    "lumen-runtime/modules",
     "lumen-runtime/host-rhai",
     "lumen-runtime/host-lua",
     "lumen-runtime/host-candela",
 ]
+# Link the engine as the shared `liblumen_engine` library instead of compiling
+# it into this binary. The release shape on Linux and macOS: built together
+# with `-C prefer-dynamic` (and an `$ORIGIN` / `@loader_path` rpath), the
+# `lumenc` process then shares one engine instance with the runtime modules
+# the loader dlopens - the shape the module loader requires. Off by default:
+# a plain build stays fully static, byte-for-byte as before. Windows has no
+# linkable engine, so the feature resolves to nothing there.
+dynamic-engine = ["dep:lumen-dylib"]
 # link-not-embed launcher: build a THIN `lumenc` that compiles source to LMNA
 # in-process (via `runtime-parse`) and dlopens the shared liblumen over the
 # C-ABI to run it, instead of static-linking `lumen-runtime` via `dev-run`.

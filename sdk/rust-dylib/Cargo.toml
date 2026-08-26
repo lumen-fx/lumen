@@ -1,13 +1,28 @@
 # The engine as a library a Rust program can link, rather than open.
 #
-# Lives beside the Rust SDK because the SDK is its only consumer: nothing else
-# links the engine, and everything under crates/ is a piece of the engine
-# rather than a form of it. Beside it rather than inside it: a workspace cannot
-# exclude a directory that sits within one of its members, because the member
-# owns its whole subtree, and being excluded is the point.
+# Lives beside the Rust SDK because the SDK was its first consumer; today the
+# shipped `lumenc` and `liblumen` link it too (their `dynamic-engine`
+# feature), which is what lets one engine instance serve the process and the
+# runtime modules it dlopens. Beside the SDK rather than inside it: a
+# workspace cannot exclude a directory that sits within one of its members,
+# because the member owns its whole subtree, and being excluded is the point.
 #
-# Deliberately NOT a member of the workspace, and reached only through a
-# `cfg(not(windows))` dependency in the SDK. Both facts are load-bearing:
+# The dependency list below IS the engine: the runtime with every shipped
+# subsystem turned on, plus the crates the SDK surface re-exports. It names
+# the engine's pieces directly - never the root `lumen` crate or `lumenc` -
+# because those two are consumers of this library: `liblumen` and the `lumenc`
+# binary link it under their `dynamic-engine` feature, and a dependency in
+# either direction from here would close a package cycle. What they add on
+# top (the C ABI, the parser and CLI) is compiled into them, not into the
+# shared engine.
+#
+# The feature set of `lumen-runtime` (and the `compiler` default of
+# `lumen-script-candela`) is pinned to the union the shipped binaries enable.
+# A runtime module is only loadable against an engine built from the same
+# graph, so this list changing is an engine-ABI event, not a tidy-up.
+#
+# Deliberately NOT a member of the workspace, and reached only through
+# `cfg(not(windows))` dependencies. Both facts are load-bearing:
 #
 #   - A `dylib` exports every symbol of the crate graph behind it. On Windows
 #     the import library that describes those exports caps at 65535 entries,
@@ -51,10 +66,33 @@ name = "lumen_engine"
 crate-type = ["lib", "dylib"]
 
 [dependencies]
-lumen = { path = "../.." }
-
-[features]
-# Passed straight through to the engine. The Rust SDK reaches the engine only
-# through this crate on the platforms where it is built, so a feature it
-# cannot forward is a feature an app cannot turn on.
-host-rhai = ["lumen/host-rhai"]
+# The runtime, with the full shipped subsystem set: the union of what the
+# `lumenc` binary (dev-run + devtools) and `liblumen` (the default shared
+# library) enable, so the one engine those builds share is the same engine a
+# standalone build of this crate produces.
+lumen-runtime = { path = "../../crates/runtime", default-features = false, features = [
+    "runtime-parse",
+    "http-fetch",
+    "mcp",
+    "async",
+    "modules",
+    "host-rhai",
+    "host-lua",
+    "host-candela",
+    "devtools",
+] }
+# The rest of the SDK surface, re-exported through `sdk` below.
+lumen-core = { path = "../../crates/core" }
+lumen-script = { path = "../../crates/script/api", default-features = false }
+lumen-widget = { path = "../../crates/widget" }
+lumen-widget-macros = { path = "../../crates/widget-macros" }
+# Same spec as the workspace pin; spelled out because this manifest cannot
+# inherit it.
+bevy_ecs = { version = "0.19", default-features = false, features = [
+    "multi_threaded",
+] }
+rhai = { version = "1.24", features = ["sync"] }
+# Not re-exported: named to pin its `compiler` default into the engine build,
+# because the `lumenc` binary enables it and a module built against an engine
+# without it would resolve nothing. See the feature-pinning note above.
+lumen-script-candela = { path = "../../crates/script/candela", default-features = true }

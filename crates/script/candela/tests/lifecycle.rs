@@ -9,7 +9,7 @@
 //!
 //! | shape          | callbacks using it                                        |
 //! |----------------|-----------------------------------------------------------|
-//! | `[]`           | `on_start`, `on_audio_end`                                 |
+//! | `[]`           | `on_start`                                                |
 //! | `[Str]`        | `on_click`, `on_long_press`, `on_hotkey`                   |
 //! | `[Str, Str]`   | `on_text_input`, `on_file_picked`, `on_file_dropped`,     |
 //! |                | `on_drop`, `on_fetch`, `on_fetch_error`                    |
@@ -17,8 +17,8 @@
 //! | `[Str, Bool]`  | `on_toggle`                                               |
 //!
 //! Each test drives a callback with the exact `ScriptValue` argument types the
-//! matching dispatcher passes (see `lumen_script::runtime::route_event*` and
-//! `lumen_runtime::run::audio::fire_audio_ended`) and asserts the handler ran
+//! matching dispatcher passes (see `lumen_script::runtime::route_event*`)
+//! and asserts the handler ran
 //! and its arguments crossed the boundary intact.
 //!
 //! Note: Lumen's runtime is reactive-only; there is no per-frame `on_tick`
@@ -37,7 +37,6 @@ fn host_with_handlers() -> CandelaHost {
 import "lumen.cdl";
 
 fn on_start()                { lumen::signal_set("fired_start", "yes"); }
-fn on_audio_end()            { lumen::signal_set("fired_audio_end", "yes"); }
 
 fn on_click(id)              { lumen::signal_set("clicked_id", id); }
 fn on_long_press(id)         { lumen::signal_set("long_pressed_id", id); }
@@ -88,7 +87,6 @@ fn assert_str_signal(
 fn zero_arg_callbacks_dispatch() {
     let mut host = host_with_handlers();
     assert_str_signal(&mut host, "on_start", &[], "fired_start", "yes");
-    assert_str_signal(&mut host, "on_audio_end", &[], "fired_audio_end", "yes");
 }
 
 #[test]

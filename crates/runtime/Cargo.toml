@@ -29,6 +29,10 @@ lumen-primitives = { workspace = true }
 # `lumen_runtime::pages` still name what they always did.
 lumen-scene = { workspace = true }
 lumen-assets = { workspace = true }
+# The `[dependencies]` runtime-module schema, always parsed; the dlopen loader
+# inside it follows the `modules` feature. Its own crate because the loader is
+# unsafe by nature and this crate forbids unsafe code.
+lumen-modules = { workspace = true }
 # Translation catalogues + locale-aware formatters. The runtime resolves the
 # app's locale, loads `locale/*.ftl`, and publishes the translator that
 # `translatable="..."` markup and the scripts' `t()` builtin read.
@@ -53,12 +57,6 @@ lumen-os-power = { workspace = true }
 # trimmed bundle drops the crate and falls back to the blocking path.
 
 lumen-async-tokio = { workspace = true, optional = true }
-# Audio capability: the transport model + the `AudioBackend` trait, with no
-# device and no decoder behind it. Part B: OPTIONAL behind `audio`.
-lumen-audio = { workspace = true, optional = true }
-# The audio backend Lumen ships (rodio + cpal + symphonia). OPTIONAL behind
-# `audio-rodio`; without it the audio systems run against the silent backend.
-lumen-audio-rodio = { workspace = true, optional = true }
 # The HTTP client the scripts' `fetch()` / `http()` builtins run on. OPTIONAL
 # behind `http-fetch`; without it the builtins report that no client is
 # installed, and an embedder can install its own `lumen_script::HttpClient`.
@@ -113,6 +111,13 @@ tracing-tracy = { version = "0.11", optional = true, features = [
     "delayed-init",
 ] }
 
+[dev-dependencies]
+# The loader dispatch tests build the real fixture cdylibs: the portable
+# plugin (the kind a static host loads) and a compiler plugin (the wrong
+# kind, named as one in the banner).
+lumen-plugin = { workspace = true, features = ["testing"] }
+lumenc-plugin = { workspace = true, features = ["testing"] }
+
 # Headless mode graceful shutdown (SIGINT/SIGTERM). Unix-only.
 [target.'cfg(unix)'.dependencies]
 signal-hook.workspace = true
@@ -122,27 +127,21 @@ signal-hook.workspace = true
 ctrlc.workspace = true
 
 [features]
-# The DEFAULT set is FULL: the shared dlopen'd `liblumen` and the
-# dev `lumenc run` path build with every subsystem so one shared library serves
-# every app. Per-app trimming happens ONLY on the static `--bundle` path, where
-# lumenc selects `--no-default-features --features "<resolved capabilities>"`.
+# The DEFAULT set is FULL: it is what `cargo test -p lumen-runtime`
+# exercises. The shipped shared engine takes the pinned list in
+# sdk/rust-dylib instead. Per-app trimming happens
+# ONLY on the static `--bundle` path, where lumenc selects
+# `--no-default-features --features "<resolved capabilities>"`.
 default = [
     "http-fetch",
     "runtime-parse",
-    "audio-rodio",
     "mcp",
     "async",
+    "modules",
     "host-rhai",
     "host-lua",
     "host-candela",
 ]
-# Audio subsystem: the transport, the player entity, and the script transport
-# commands, against whichever backend is selected. Part B tree-shaking knob.
-audio = ["dep:lumen-audio"]
-# The audio backend Lumen ships (rodio/cpal/symphonia), and the one the default
-# build selects. Turn it off and the audio subsystem runs silent, which is what
-# an app that supplies its own backend wants.
-audio-rodio = ["audio", "dep:lumen-audio-rodio"]
 # MCP introspection server. Part B tree-shaking knob (dev-only capability).
 mcp = ["dep:lumen-mcp"]
 # Async spawn/timer (tokio) bridge. Part B tree-shaking knob.
@@ -154,6 +153,11 @@ host-lua = ["dep:lumen-script-lua", "dep:mlua"]
 host-candela = ["dep:lumen-script-candela"]
 # Dev-only in-window devtools overlay (F12). OFF by default.
 devtools = ["dep:lumen-devtools"]
+# Runtime modules: load the prebuilt engine-linked dylibs an app declares in
+# `[dependencies]`. The schema is always parsed; this gates the dlopen loader.
+# A Part B tree-shaking knob like the rest, but the `[capabilities]` resolver
+# keeps it ON for any app that declares a dependency.
+modules = ["lumen-modules/loader"]
 # The HTTP client behind the scripts' `fetch(url, tag)` / `http(#{...})`
 # builtins, and the one the default build selects. On by default; a packager
 # size knob, since ureq's rustls+ring stack is about a megabyte of release

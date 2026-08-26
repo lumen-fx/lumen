@@ -25,7 +25,7 @@ pub fn fixture_cdylib() -> PathBuf {
         .args([
             "build",
             "-p",
-            "lumen-plugin-fixture",
+            "lumenc-plugin-fixture",
             "--message-format=json-render-diagnostics",
         ])
         .arg("--target-dir")
@@ -46,7 +46,7 @@ pub fn fixture_cdylib() -> PathBuf {
         // underscored across versions; accept either.
         let name = msg["target"]["name"].as_str().unwrap_or_default();
         if msg["reason"] != "compiler-artifact"
-            || !matches!(name, "lumen_plugin_fixture" | "lumen-plugin-fixture")
+            || !matches!(name, "lumenc_plugin_fixture" | "lumenc-plugin-fixture")
         {
             continue;
         }

@@ -27,7 +27,7 @@ fn app(tag: &str, markup: &str, css: &str, configs: &[&str]) -> PathBuf {
     let mut toml = String::new();
     for config in configs {
         toml.push_str(&format!(
-            "[[plugins]]\nname = \"lumen-plugin-fixture\"\npath = '{}'\n[plugins.config]\n{config}\n",
+            "[[plugins]]\nname = \"lumenc-plugin-fixture\"\npath = '{}'\n[plugins.config]\n{config}\n",
             lib.display()
         ));
     }
@@ -102,7 +102,7 @@ fn check_runs_plugins_without_writing_outputs() {
     );
     // The same chain under build writes them.
     lumenc::compile_app(&dir).unwrap();
-    let report = dir.join(".lumen/generated/lumen-plugin-fixture/report.txt");
+    let report = dir.join(".lumen/generated/lumenc-plugin-fixture/report.txt");
     assert!(report.is_file(), "build did not write {}", report.display());
 }
 
@@ -147,13 +147,13 @@ fn a_failing_hook_fails_build_and_check_naming_the_plugin() {
     let dir = app("fail", "<root/>", "", &["fail = \"ir\""]);
     let build_err = lumenc::compile_app(&dir).unwrap_err().to_string();
     assert!(
-        build_err.contains("plugin 'lumen-plugin-fixture'"),
+        build_err.contains("plugin 'lumenc-plugin-fixture'"),
         "{build_err}"
     );
     assert!(build_err.contains("fixture failure in ir"), "{build_err}");
     let check_err = lumenc::check_app(&dir).unwrap_err().to_string();
     assert!(
-        check_err.contains("plugin 'lumen-plugin-fixture'"),
+        check_err.contains("plugin 'lumenc-plugin-fixture'"),
         "{check_err}"
     );
 }
@@ -176,14 +176,14 @@ fn a_version_source_resolves_through_cache_and_lock() {
     ));
     let _ = std::fs::remove_dir_all(&base);
     let cache = base.join("cache");
-    let ver_dir = cache.join("lumen-plugin-fixture").join("1.0.0");
+    let ver_dir = cache.join("lumenc-plugin-fixture").join("1.0.0");
     std::fs::create_dir_all(&ver_dir).unwrap();
     let lib = fixture_cdylib();
     // The cache spelling the resolver probes: `lib<name>.<ext>` on unix,
     // `<name>.dll` on Windows.
     let spelled = match lib.extension().and_then(|e| e.to_str()) {
-        Some("dll") => "lumen-plugin-fixture.dll".to_string(),
-        Some(ext) => format!("liblumen-plugin-fixture.{ext}"),
+        Some("dll") => "lumenc-plugin-fixture.dll".to_string(),
+        Some(ext) => format!("liblumenc-plugin-fixture.{ext}"),
         None => panic!("fixture cdylib has no extension"),
     };
     let cached = ver_dir.join(spelled);
@@ -198,7 +198,7 @@ fn a_version_source_resolves_through_cache_and_lock() {
     .unwrap();
     std::fs::write(
         dir.join("lumen.toml"),
-        "[[plugins]]\nname = \"lumen-plugin-fixture\"\nversion = \"1\"\n",
+        "[[plugins]]\nname = \"lumenc-plugin-fixture\"\nversion = \"1\"\n",
     )
     .unwrap();
 
@@ -384,7 +384,7 @@ fn the_headless_wrapper_runs_the_declared_chain() {
     opts.hot_reload = false;
     lumenc::run_app_headless(opts, 1).unwrap();
     assert!(
-        dir.join(".lumen/generated/lumen-plugin-fixture/ran.txt")
+        dir.join(".lumen/generated/lumenc-plugin-fixture/ran.txt")
             .is_file()
     );
 }

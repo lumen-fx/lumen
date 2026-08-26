@@ -19,6 +19,7 @@ use std::sync::Arc;
 use bevy_ecs::prelude::Resource;
 use lumen_core::app::App;
 use lumen_core::warn_line;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{ScriptCommand, ScriptValue};
 
@@ -28,7 +29,9 @@ use crate::{ScriptCommand, ScriptValue};
 /// call by argument type) and checks the argument where it cannot (Lua binds
 /// variadically and raises on a mismatch). [`ScriptTy::Any`] accepts whatever
 /// the script passes.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Variants are append-only; see [`SCRIPT_WIRE_VERSION`](crate::SCRIPT_WIRE_VERSION).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScriptTy {
     /// Any value; no check.
     Any,
@@ -54,7 +57,7 @@ impl ScriptTy {
     /// elements.
     ///
     /// An integer satisfies a declared float: every scripting language Lumen
-    /// hosts spells `1` and `1.0` as the same literal kind, so `audio_seek(30)`
+    /// hosts spells `1` and `1.0` as the same literal kind, so `seek(30)`
     /// is the call an author writes. The reverse does not hold; a float where
     /// an integer is declared would silently drop its fraction.
     pub fn accepts(&self, value: &ScriptValue) -> bool {
@@ -104,7 +107,7 @@ fn value_ty_name(value: &ScriptValue) -> &'static str {
 }
 
 /// One declared parameter: the name a doc or an editor shows, and its type.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScriptParam {
     /// Parameter name, for docs and diagnostics.
     pub name: String,
@@ -113,7 +116,7 @@ pub struct ScriptParam {
 }
 
 /// The declared signature of a [`ScriptFn`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScriptSig {
     /// Positional parameters, in order.
     pub params: Vec<ScriptParam>,
@@ -209,7 +212,9 @@ impl Default for ScriptSig {
 }
 
 /// Where a function lives in the script's name space.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Variants are append-only; see [`SCRIPT_WIRE_VERSION`](crate::SCRIPT_WIRE_VERSION).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScriptNs {
     /// The runtime's own surface. Global on Rhai and Lua; the `lumen` host
     /// namespace on candela.
@@ -283,6 +288,22 @@ impl std::ops::BitOr for HostSet {
 impl std::ops::BitOrAssign for HostSet {
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0;
+    }
+}
+
+/// A set travels as its bits, so it stays one byte on the wire.
+impl Serialize for HostSet {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(s)
+    }
+}
+
+/// A bit no language claims is dropped rather than refused: a peer built
+/// against a later Lumen may name a host this one does not ship, and the set
+/// that reaches it here is the languages both sides know.
+impl<'de> Deserialize<'de> for HostSet {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Self(u8::deserialize(d)? & Self::ALL.0))
     }
 }
 
@@ -1029,7 +1050,7 @@ impl fmt::Debug for ScriptFnStore {
 /// and an `impl` block in that language, so a script calls `Gpio::read(pin)`
 /// rather than the free function. Only the host whose language it names sees
 /// it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScriptPrelude {
     /// The language tag the source is written in (`"candela"`, `"rhai"`,
     /// `"lua"`).

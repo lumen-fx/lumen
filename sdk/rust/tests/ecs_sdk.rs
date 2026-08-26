@@ -13,7 +13,7 @@ use lumenui::prelude::*;
 #[derive(Resource)]
 struct PhysicsInstalled;
 #[derive(Resource)]
-struct AudioInstalled;
+struct TelemetryInstalled;
 
 struct Physics;
 impl Plugin for Physics {
@@ -22,10 +22,10 @@ impl Plugin for Physics {
     }
 }
 
-struct Audio;
-impl Plugin for Audio {
+struct Telemetry;
+impl Plugin for Telemetry {
     fn build(self, app: &mut EcsApp) {
-        app.world.insert_resource(AudioInstalled);
+        app.world.insert_resource(TelemetryInstalled);
     }
 }
 
@@ -34,12 +34,12 @@ fn plugin_group_installs_enabled_entries() {
     let mut app = EcsApp::new();
     PluginGroupBuilder::new("test")
         .add(Physics)
-        .add(Audio)
+        .add(Telemetry)
         .finish(&mut app);
     assert!(app.is_plugin_added::<Physics>());
-    assert!(app.is_plugin_added::<Audio>());
+    assert!(app.is_plugin_added::<Telemetry>());
     assert!(app.world.get_resource::<PhysicsInstalled>().is_some());
-    assert!(app.world.get_resource::<AudioInstalled>().is_some());
+    assert!(app.world.get_resource::<TelemetryInstalled>().is_some());
 }
 
 #[test]
@@ -47,19 +47,19 @@ fn plugin_group_disable_skips_entry() {
     let mut app = EcsApp::new();
     PluginGroupBuilder::new("test")
         .add(Physics)
-        .add(Audio)
-        .disable::<Audio>()
+        .add(Telemetry)
+        .disable::<Telemetry>()
         .finish(&mut app);
     assert!(app.is_plugin_added::<Physics>());
-    assert!(!app.is_plugin_added::<Audio>());
-    assert!(app.world.get_resource::<AudioInstalled>().is_none());
+    assert!(!app.is_plugin_added::<Telemetry>());
+    assert!(app.world.get_resource::<TelemetryInstalled>().is_none());
 }
 
 #[test]
 fn plugin_group_enabled_names_reflect_disable() {
     let names: Vec<_> = PluginGroupBuilder::new("test")
         .add(Physics)
-        .add(Audio)
+        .add(Telemetry)
         .disable::<Physics>()
         .enabled_names()
         .collect();

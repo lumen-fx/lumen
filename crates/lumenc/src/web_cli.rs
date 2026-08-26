@@ -307,6 +307,16 @@ fn build(options: &Options) -> Result<Report, String> {
             "only a markup app is emitted as a site; this one is a {kind:?} app"
         ));
     }
+    // Runtime modules are native shared libraries the engine dlopens, and a
+    // browser has no dynamic loader to hand one to.
+    if let Some(dep) = cfg.dependencies.0.first() {
+        return Err(format!(
+            "this app declares [dependencies] ('{}'), and runtime modules do not exist on the \
+             web: a module is a native library the engine loads, which a browser cannot do. \
+             Drop the declaration or ship the app as a desktop package.",
+            dep.name
+        ));
+    }
     let mut warnings: Vec<String> = Vec::new();
 
     if !options.no_hooks {

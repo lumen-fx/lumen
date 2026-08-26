@@ -63,7 +63,7 @@ Define these as free functions. Each is optional; a missing hook is a no-op.
 | `on_start()` | Once at app construction, before the first tick. No element is queryable yet: `get_by_id` returns `()`. |
 | `on_ready()` | Once per mount, on the first tick after the element tree is published. Queries resolve here. Re-armed after a hot reload, so it runs again on the fresh tree. |
 | `on_close()` | On an OS close request, before teardown. Return `false` to veto the close and keep the window open. |
-| `on_audio_end()` | When the audio transport reaches the end of a track. |
+| `on_audio_end(path)` | When a track played through the `lumen-audio` module reaches its end; `path` is the path passed to `audio_play`. |
 
 Top-level statements run once when the script loads, against a scope that
 persists for the app's lifetime, so a top-level `let` is state every later
@@ -450,6 +450,10 @@ method when you are holding a handle.
 
 ## Audio
 
+These functions come from the `lumen-audio` runtime module and exist only
+when the app declares it under `[dependencies]` in `lumen.toml`; see
+[OS integration](../guides/os-integration.md#audio).
+
 | Builtin | Behaviour |
 | --- | --- |
 | `audio_play(path)` | Load and play the track at `path` (app-relative wav or ogg); resets position to zero. |
@@ -459,7 +463,7 @@ method when you are holding a handle.
 | `audio_seek(secs)` | Seek to `secs`, clamped to the track duration. Accepts an integer or a float. |
 | `audio_volume(level)` | Set output volume in `0.0` to `1.0`. Accepts an integer or a float. |
 
-The transport writes the `audio_position`, `audio_duration`, and `audio_playing`
+The module writes the `audio_position`, `audio_duration`, and `audio_playing`
 signals each tick, so markup binds to them directly.
 
 ## Networking
