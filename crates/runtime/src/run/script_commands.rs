@@ -36,7 +36,6 @@ pub(crate) fn apply_script_commands(
     mut hotkeys: Option<NonSendMut<OsHotkeyRegistry>>,
     file_dialog: Res<FileDialogService>,
     mut tray: NonSendMut<OsTrayService>,
-    hot: Option<Res<HotReloadState>>,
     document_root: Option<Res<crate::run::restyle::DocumentRoot>>,
     // The file dialog runs on the app's executor when one is installed; the
     // resource is absent in a build with no async backend, and the dialog
@@ -46,20 +45,16 @@ pub(crate) fn apply_script_commands(
 ) {
     // Asset paths from script (`set_src`) get the same dir-relative
     // resolution as parser-time paths, so authors can write
-    // `set_src("hero-icon", "icons/sun.png")` regardless of cwd.
-    let dir: PathBuf = hot
-        .as_ref()
-        .map(|h| h.dir.clone())
-        .unwrap_or_else(|| PathBuf::from("."));
+    // `set_src("hero-icon", "icons/sun.png")` regardless of cwd. The app
+    // directory comes from the published process-global cache
+    // ([`lumen_core::app_paths`]), which the runtime fills for every run;
+    // reading the hot-reload state here would fall back to the process cwd
+    // in packaged, artifact and headless runs, where no watcher exists.
+    let dir: PathBuf = lumen_core::app_paths::app_dir();
     for ev in events.read() {
         match &ev.0 {
             ScriptCommand::SetSrc { target_id, path } => {
-                let p = Path::new(path);
-                let resolved = if p.is_relative() {
-                    dir.join(p)
-                } else {
-                    p.to_path_buf()
-                };
+                let resolved = resolve_asset_src(path);
                 for (e, id, _) in &ids {
                     if id.0 == *target_id {
                         let mut ent = commands.entity(e);
@@ -173,10 +168,10 @@ pub(crate) fn apply_script_commands(
                 );
             }
             ScriptCommand::CopyImageToClipboard { path } => {
-                handle_copy_image_to_clipboard(path, &dir);
+                handle_copy_image_to_clipboard(path);
             }
             ScriptCommand::SaveClipboardImage { path } => {
-                handle_save_clipboard_image(path, &dir);
+                handle_save_clipboard_image(path);
             }
             ScriptCommand::RegisterTrayIcon {
                 id,
@@ -275,12 +270,7 @@ pub(crate) fn apply_os_script_commands(
     clipboard: Option<NonSend<ClipboardHost>>,
     mut inhibits: NonSendMut<InhibitHolder>,
     mut clipboard_out: MessageWriter<lumen_core::input::ClipboardRead>,
-    hot: Option<Res<HotReloadState>>,
 ) {
-    let dir: PathBuf = hot
-        .as_ref()
-        .map(|h| h.dir.clone())
-        .unwrap_or_else(|| PathBuf::from("."));
     for ev in events.read() {
         match &ev.0 {
             ScriptCommand::Notify { title, body } => {
@@ -331,7 +321,7 @@ pub(crate) fn apply_os_script_commands(
                 report_launch(&launcher.open_url(url), "open_url", url);
             }
             ScriptCommand::OpenPath { path } => {
-                let resolved = resolve_app_path(path, &dir);
+                let resolved = lumen_core::app_paths::resolve(path);
                 report_launch(
                     &launcher.open_path(&resolved),
                     "open_path",
@@ -339,7 +329,7 @@ pub(crate) fn apply_os_script_commands(
                 );
             }
             ScriptCommand::RevealPath { path } => {
-                let resolved = resolve_app_path(path, &dir);
+                let resolved = lumen_core::app_paths::resolve(path);
                 report_launch(
                     &launcher.reveal_in_file_manager(&resolved),
                     "reveal_path",
@@ -406,15 +396,16 @@ pub(crate) fn apply_os_script_commands(
     }
 }
 
-/// Resolve a script-supplied path against the app directory, matching how
-/// `set_src` and the tray icon path resolve, so authors can write
-/// app-relative paths regardless of cwd.
-fn resolve_app_path(path: &str, dir: &Path) -> PathBuf {
-    let p = Path::new(path);
-    if p.is_relative() {
-        dir.join(p)
+/// Resolve a `set_src` path the way every asset path resolves: a
+/// `lumen://app/...` URI passes through verbatim (the bundle source claims
+/// the scheme itself; joining it against the app dir would mangle it), and
+/// everything else resolves app-relative. The same rule the audio module's
+/// `audio_play` applies.
+fn resolve_asset_src(path: &str) -> PathBuf {
+    if path.starts_with("lumen://") {
+        PathBuf::from(path)
     } else {
-        p.to_path_buf()
+        lumen_core::app_paths::resolve(path)
     }
 }
 
@@ -434,13 +425,8 @@ fn report_launch(result: &lumen_os_launcher::OpenResult, builtin: &str, target: 
 
 /// Decodes the PNG at `path` (resolved relative to the app dir when relative) to RGBA8 and copies it to the system clipboard.
 /// Errors log to stderr; the clipboard backend is not always available (e.g. headless CI).
-fn handle_copy_image_to_clipboard(path: &str, dir: &Path) {
-    let p = Path::new(path);
-    let resolved = if p.is_relative() {
-        dir.join(p)
-    } else {
-        p.to_path_buf()
-    };
+fn handle_copy_image_to_clipboard(path: &str) {
+    let resolved = lumen_core::app_paths::resolve(path);
     let img = match image::open(&resolved) {
         Ok(i) => i.to_rgba8(),
         Err(e) => {
@@ -460,7 +446,7 @@ fn handle_copy_image_to_clipboard(path: &str, dir: &Path) {
 }
 
 /// Pulls the current clipboard image (when present) and writes it as PNG to `path` (resolved relative to the app dir when relative).
-fn handle_save_clipboard_image(path: &str, dir: &Path) {
+fn handle_save_clipboard_image(path: &str) {
     let Some(clip) = lumen_os_clipboard::ClipboardHost::try_new() else {
         eprintln!("lumenc: save_clipboard_image: no clipboard backend");
         return;
@@ -469,12 +455,7 @@ fn handle_save_clipboard_image(path: &str, dir: &Path) {
         eprintln!("lumenc: save_clipboard_image: clipboard has no image");
         return;
     };
-    let p = Path::new(path);
-    let resolved = if p.is_relative() {
-        dir.join(p)
-    } else {
-        p.to_path_buf()
-    };
+    let resolved = lumen_core::app_paths::resolve(path);
     let Some(img) = image::RgbaImage::from_raw(w, h, rgba) else {
         eprintln!("lumenc: save_clipboard_image: bad rgba dims {w}x{h}");
         return;
@@ -489,3 +470,36 @@ fn handle_save_clipboard_image(path: &str, dir: &Path) {
 // `Res<FileDialogService>` and translates `lumen_script::
 // FileDialogKind` -> `lumen_os_filedialog::FileDialogKind` at the
 // `ScriptCommand::OpenFileDialog` call site.
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_asset_src;
+    use std::path::{Path, PathBuf};
+
+    /// The `set_src` resolution rule, mirroring the audio module's: the app
+    /// dir comes from the published process-global cache (never the process
+    /// cwd, so packaged and headless runs resolve like dev runs), and a
+    /// `lumen://app/...` URI passes through verbatim instead of being
+    /// mangled by an app-dir join.
+    #[test]
+    fn set_src_paths_resolve_like_every_asset_path() {
+        let dir = std::env::temp_dir().join(format!("lumen-set-src-{}", std::process::id()));
+        lumen_core::app_paths::set_app(&dir, "lumen-set-src-test");
+
+        assert_eq!(
+            resolve_asset_src("icons/sun.png"),
+            dir.join("icons/sun.png")
+        );
+        let absolute = dir.join("elsewhere.png");
+        assert_eq!(
+            resolve_asset_src(absolute.to_str().expect("utf8 path")),
+            absolute
+        );
+        assert_eq!(
+            resolve_asset_src("lumen://app/icons/sun.png"),
+            PathBuf::from("lumen://app/icons/sun.png"),
+            "a bundle URI must reach the source chain unresolved"
+        );
+        assert!(!resolve_asset_src("lumen://app/x").starts_with(Path::new(&dir)));
+    }
+}
