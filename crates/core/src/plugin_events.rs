@@ -20,6 +20,7 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 
 static PLUGIN_EVENT_TX: OnceLock<Sender<Vec<u8>>> = OnceLock::new();
 static PLUGIN_EVENT_RX: OnceLock<Mutex<Receiver<Vec<u8>>>> = OnceLock::new();
+static PLUGIN_EVENT_WAKER: Mutex<Option<crate::app::EventLoopWaker>> = Mutex::new(None);
 
 fn init_plugin_event_channel() -> &'static Sender<Vec<u8>> {
     PLUGIN_EVENT_TX.get_or_init(|| {
@@ -35,12 +36,32 @@ pub fn init_plugin_events() {
     let _ = init_plugin_event_channel();
 }
 
+/// Install the waker a push nudges, so an event arriving while the app sits
+/// parked in its event loop's `Wait` state triggers the tick that drains it
+/// instead of waiting for an unrelated wake. The backends install it beside
+/// the [`crate::app::EventLoopWaker`] resource; a later install replaces the
+/// earlier one, because a process can run apps in sequence and the bus
+/// belongs to whichever loop is live.
+pub fn set_plugin_event_waker(waker: crate::app::EventLoopWaker) {
+    if let Ok(mut slot) = PLUGIN_EVENT_WAKER.lock() {
+        *slot = Some(waker);
+    }
+}
+
 /// Queue one encoded plugin event from any thread. Picked up on the next
-/// tick by the script layer's drain.
+/// tick by the script layer's drain; a parked event loop is woken to run
+/// that tick when a waker is installed ([`set_plugin_event_waker`]).
 ///
 /// Returns `false` when the channel has disconnected.
 pub fn push_plugin_event(bytes: Vec<u8>) -> bool {
-    init_plugin_event_channel().send(bytes).is_ok()
+    let sent = init_plugin_event_channel().send(bytes).is_ok();
+    if sent
+        && let Ok(slot) = PLUGIN_EVENT_WAKER.lock()
+        && let Some(waker) = slot.as_ref()
+    {
+        waker.wake();
+    }
+    sent
 }
 
 /// Take every queued event, in arrival order. Returns the empty vector when
@@ -115,6 +136,45 @@ mod tests {
         discard_plugin_events();
         assert!(!plugin_events_pending());
         assert!(drain_plugin_events().is_empty());
+    }
+
+    #[test]
+    fn a_push_wakes_a_parked_loop() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        discard_plugin_events();
+        // Stand-in for a backend's parked `Wait` state: a thread blocks on a
+        // condvar until the waker fires, then drains the bus - the same
+        // wake-then-tick sequence the real loops run.
+        let parked = std::sync::Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let waker_side = std::sync::Arc::clone(&parked);
+        set_plugin_event_waker(crate::app::EventLoopWaker(std::sync::Arc::new(move || {
+            let (flag, cv) = &*waker_side;
+            *flag.lock().unwrap_or_else(|e| e.into_inner()) = true;
+            cv.notify_all();
+        })));
+
+        let loop_side = std::sync::Arc::clone(&parked);
+        let parked_loop = std::thread::spawn(move || {
+            let (flag, cv) = &*loop_side;
+            let mut woken = flag.lock().unwrap_or_else(|e| e.into_inner());
+            while !*woken {
+                let (g, timed_out) = cv
+                    .wait_timeout(woken, std::time::Duration::from_secs(10))
+                    .unwrap_or_else(|e| e.into_inner());
+                woken = g;
+                assert!(!timed_out.timed_out(), "the push never woke the loop");
+            }
+            drain_plugin_events()
+        });
+
+        assert!(push_plugin_event(vec![5]));
+        let delivered = parked_loop.join().expect("parked loop");
+        assert_eq!(delivered, vec![vec![5]]);
+
+        // Put the slot back so later tests see the uninstalled state.
+        if let Ok(mut slot) = PLUGIN_EVENT_WAKER.lock() {
+            *slot = None;
+        }
     }
 
     #[test]
