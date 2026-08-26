@@ -25,16 +25,17 @@
 //! [asset_roots]
 //! paths = ["icons", "../shared"]   # extra dirs scanned for relative src=
 //!
-//! [dependencies]                   # runtime modules, loaded in sorted-name order
+//! [dependencies]                   # runtime modules + portable plugins, sorted-name order
 //! lumen-audio = { bundled = true }
 //! shape-tools = { path = "modules/shape-tools", config = { units = "mm" } }
+//! weather-feed = "1.2"             # portable plugin from the plugin cache, pinned in lumen.lock
 //!
 //! [[hooks]]                        # project build/setup commands; see `crate::hooks`
 //! when    = "prebuild"             # "prebuild" | "prerun"
 //! os      = "linux"                # optional: "linux" | "macos" | "windows"
-//! run     = "cc -shared -fPIC -O2 -o libmd.so md.c"
+//! run     = "mkdir -p lib && cc -shared -fPIC -O2 -o lib/libmd.so md.c"
 //! inputs  = ["md.c"]
-//! outputs = ["libmd.so"]
+//! outputs = ["lib/libmd.so"]
 //!
 //! [[plugins]]                      # compiler plugins, run in declaration order
 //! name    = "markdown"             # must match what the cdylib reports

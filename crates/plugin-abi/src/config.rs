@@ -58,6 +58,7 @@ struct RawPluginCfg {
     git: Option<String>,
     rev: Option<String>,
     registry: Option<String>,
+    permissions: Option<toml::Value>,
     #[serde(default)]
     config: toml::Table,
 }
@@ -81,6 +82,13 @@ impl<'de> Deserialize<'de> for PluginCfg {
         if let Some((key, _)) = reserved.iter().find(|(_, v)| v.is_some()) {
             return Err(serde::de::Error::custom(format!(
                 "plugin '{}': `{key}` sources are not supported yet; use `version` (registry cache) or `path` (a built cdylib)",
+                raw.name
+            )));
+        }
+        if raw.permissions.is_some() {
+            return Err(serde::de::Error::custom(format!(
+                "plugin '{}': capability declarations are not supported yet; a plugin is native \
+                 code running in the compiler's process, the same trust model as a build script",
                 raw.name
             )));
         }
@@ -240,6 +248,13 @@ mod tests {
             let err = parse(&format!("[[plugins]]\nname = \"x\"\n{key} = \"1\"\n")).unwrap_err();
             assert!(err.contains("not supported yet"), "{key}: {err}");
         }
+    }
+
+    #[test]
+    fn permissions_are_rejected_with_the_trust_model() {
+        let err =
+            parse("[[plugins]]\nname = \"x\"\npath = \"x\"\npermissions = [\"fs\"]\n").unwrap_err();
+        assert!(err.contains("trust model"), "{err}");
     }
 
     #[test]
