@@ -216,7 +216,7 @@ friends.
 | `lumen::signal_set_float(name: string, value: float)` | | Write a float. |
 | `lumen::signal_get_bool(name: string)` | `bool` | Read as a boolean. `false` on miss or an unparseable value. |
 | `lumen::signal_set_bool(name: string, value: bool)` | | Write a boolean. |
-| `lumen::signal_set_color(name: string, hex: string)` | | Write a `#rrggbb` or `#rrggbbaa` color. The six-digit form is opaque. Unparseable input is ignored. |
+| `lumen::signal_set_color(name: string, hex: string)` | | Write a hex color: `#rgb`, `#rgba`, `#rrggbb`, or `#rrggbbaa`. The alpha-free forms are opaque. Unparseable input is ignored. |
 | `lumen::signal_get_color(name: string)` | `{string: int}` | Read a color as an `{ r, g, b, a }` map of 0-255 channels. Empty when the signal holds no color. |
 | `lumen::signals_all()` | `{string: string}` | The whole signal set as a name-to-value map. |
 

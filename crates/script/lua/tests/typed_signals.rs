@@ -112,6 +112,28 @@ fn signal_set_color_get_color_round_trip() {
 }
 
 #[test]
+fn signal_set_color_survives_arbitrary_input() {
+    // Script input is arbitrary: a multi-byte string whose byte length
+    // matches a hex shape used to panic the shared parser on a char
+    // boundary. It must be a quiet no-op instead.
+    let mut host = LuaHost::new();
+    // Two euro signs: six bytes, so the length check matches `rrggbb` while
+    // byte index 2 sits inside a character.
+    let euro = '\u{20ac}';
+    host.load(&format!(
+        r##"
+        function on_load()
+            signal_set_color("accent", "{euro}{euro}")
+            print("still-running")
+        end
+        "##
+    ))
+    .expect("load");
+    let cmds = host.call_event("on_load", &[]).expect("call");
+    assert!(drain_prints(&cmds).iter().any(|s| s == "still-running"));
+}
+
+#[test]
 fn typed_setter_does_not_emit_set_signal() {
     // Typed setters bypass the command sink entirely - they push
     // PropertyValue directly through the foundation typed-property bus.

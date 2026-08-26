@@ -1331,21 +1331,13 @@ fn register_http<S: HostFnSink>(engine: &mut S, r: &Registries) {
     });
 }
 
-/// Parse a `"#rrggbb"` or `"#rrggbbaa"` hex color into RGBA bytes. The leading
-/// `#` is optional. `None` when the input matches neither shape.
+/// Parse a hex color string into RGBA bytes through the engine's shared
+/// parser ([`lumen_core::components::Color::from_hex`]), so every host reads
+/// the same spellings. The leading `#` is optional. `None` when the input
+/// matches no hex shape.
 fn parse_hex_color(s: &str) -> Option<(u8, u8, u8, u8)> {
-    let s = s.strip_prefix('#').unwrap_or(s);
-    let channel = |range: std::ops::Range<usize>| u8::from_str_radix(s.get(range)?, 16).ok();
-    match s.len() {
-        6 => Some((channel(0..2)?, channel(2..4)?, channel(4..6)?, 0xff)),
-        8 => Some((
-            channel(0..2)?,
-            channel(2..4)?,
-            channel(4..6)?,
-            channel(6..8)?,
-        )),
-        _ => None,
-    }
+    let [r, g, b, a] = lumen_core::components::Color::from_hex(s)?.to_rgba8();
+    Some((r, g, b, a))
 }
 
 #[cfg(test)]

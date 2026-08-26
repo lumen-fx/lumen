@@ -2220,6 +2220,38 @@ impl Color {
         let q = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
         [q(self.r), q(self.g), q(self.b), q(self.a)]
     }
+
+    /// Parse a CSS hex color literal: `#rgb`, `#rgba`, `#rrggbb`, or
+    /// `#rrggbbaa`, the leading `#` optional. `None` when the input matches
+    /// none of the shapes.
+    ///
+    /// The engine's one hex parser: the palette literals and every script
+    /// host's color builtins (`signal_set_color`, `set_color`) go through
+    /// it, so a color spelled anywhere means the same bytes. Safe on
+    /// arbitrary input - script strings arrive unchecked, and a multi-byte
+    /// character is a parse miss, never a slicing panic.
+    pub fn from_hex(hex: &str) -> Option<Self> {
+        fn nibble(b: u8) -> Option<u8> {
+            (b as char).to_digit(16).map(|d| d as u8)
+        }
+        let hex = hex.strip_prefix('#').unwrap_or(hex).as_bytes();
+        let pair = |i: usize| Some(nibble(hex[i])? * 16 + nibble(hex[i + 1])?);
+        let rgba = match hex.len() {
+            // Short forms double each digit: `#f80` is `#ff8800`.
+            3 => [nibble(hex[0])?, nibble(hex[1])?, nibble(hex[2])?, 0xf].map(|n| n * 17),
+            4 => [
+                nibble(hex[0])?,
+                nibble(hex[1])?,
+                nibble(hex[2])?,
+                nibble(hex[3])?,
+            ]
+            .map(|n| n * 17),
+            6 => [pair(0)?, pair(2)?, pair(4)?, 0xff],
+            8 => [pair(0)?, pair(2)?, pair(4)?, pair(6)?],
+            _ => return None,
+        };
+        Some(Self::from_rgba8(rgba))
+    }
 }
 
 impl From<[u8; 4]> for Color {

@@ -196,25 +196,12 @@ fn lua_value_stringify(v: &LuaValue) -> String {
     }
 }
 
-/// Parse a `"#rrggbb"` / `"#rrggbbaa"` hex color into RGBA bytes. Leading
-/// `#` optional. `None` when the input matches neither shape.
+/// Parse a hex color string into RGBA bytes through the engine's shared
+/// parser ([`lumen_core::components::Color::from_hex`]), so every host reads
+/// the same spellings and arbitrary script input never panics. Leading `#`
+/// optional. `None` when the input matches no hex shape.
 fn parse_hex_color(s: &str) -> Option<(u8, u8, u8, u8)> {
-    let s = s.strip_prefix('#').unwrap_or(s);
-    let (r, g, b, a) = match s.len() {
-        6 => (
-            u8::from_str_radix(&s[0..2], 16).ok()?,
-            u8::from_str_radix(&s[2..4], 16).ok()?,
-            u8::from_str_radix(&s[4..6], 16).ok()?,
-            0xffu8,
-        ),
-        8 => (
-            u8::from_str_radix(&s[0..2], 16).ok()?,
-            u8::from_str_radix(&s[2..4], 16).ok()?,
-            u8::from_str_radix(&s[4..6], 16).ok()?,
-            u8::from_str_radix(&s[6..8], 16).ok()?,
-        ),
-        _ => return None,
-    };
+    let [r, g, b, a] = lumen_core::components::Color::from_hex(s)?.to_rgba8();
     Some((r, g, b, a))
 }
 

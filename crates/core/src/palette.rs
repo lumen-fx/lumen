@@ -231,37 +231,13 @@ impl From<(u8, u8, u8, u8)> for Color {
 }
 
 impl From<&'static str> for Color {
-    /// Parses `#rgb`, `#rgba`, `#rrggbb`, or `#rrggbbaa` literals.
-    /// Falls back to [`Color::default`] on any parse error - this
-    /// impl is intended for the Adwaita defaults table where every
-    /// literal is known-good at compile time.
+    /// Parses `#rgb`, `#rgba`, `#rrggbb`, or `#rrggbbaa` literals through
+    /// [`Color::from_hex`]. Falls back to [`Color::default`] on any parse
+    /// error - this impl is intended for the Adwaita defaults table where
+    /// every literal is known-good at compile time.
     fn from(hex: &'static str) -> Self {
-        parse_hex(hex).unwrap_or_default()
+        Color::from_hex(hex).unwrap_or_default()
     }
-}
-
-fn parse_hex(s: &str) -> Option<Color> {
-    let h = s.strip_prefix('#').unwrap_or(s);
-    let bytes: Vec<u8> = match h.len() {
-        3 => h
-            .chars()
-            .map(|c| u8::from_str_radix(&format!("{c}{c}"), 16).ok())
-            .collect::<Option<Vec<_>>>()?,
-        4 => h
-            .chars()
-            .map(|c| u8::from_str_radix(&format!("{c}{c}"), 16).ok())
-            .collect::<Option<Vec<_>>>()?,
-        6 | 8 => (0..h.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&h[i..i + 2], 16).ok())
-            .collect::<Option<Vec<_>>>()?,
-        _ => return None,
-    };
-    Some(match *bytes.as_slice() {
-        [r, g, b] => (r, g, b).into(),
-        [r, g, b, a] => (r, g, b, a).into(),
-        _ => return None,
-    })
 }
 
 #[cfg(test)]

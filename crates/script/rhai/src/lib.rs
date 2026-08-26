@@ -889,29 +889,16 @@ fn bind_event(
 /// deadlocks.
 type HandlerMap = Arc<RwLock<std::collections::HashMap<(String, String), String>>>;
 
-/// Parse a `"#rrggbb"` or `"#rrggbbaa"` hex color into RGBA bytes. Leading `#`
-/// is optional. Returns `None` when the input doesn't match either shape.
+/// Parse a hex color string into RGBA bytes through the engine's shared
+/// parser ([`lumen_core::components::Color::from_hex`]), so every host reads
+/// the same spellings and arbitrary script input never panics. `None` when
+/// the input matches no hex shape.
 ///
 /// Helper for the typed `signal_set_color` / `signal_get_color` Rhai builtins;
 /// the parsed channels are stored as a Rhai `Map` with `{ r, g, b, a }` i64
 /// fields so script code reads channels as plain integers.
 fn parse_hex_color(s: &str) -> Option<(u8, u8, u8, u8)> {
-    let s = s.strip_prefix('#').unwrap_or(s);
-    let (r, g, b, a) = match s.len() {
-        6 => (
-            u8::from_str_radix(&s[0..2], 16).ok()?,
-            u8::from_str_radix(&s[2..4], 16).ok()?,
-            u8::from_str_radix(&s[4..6], 16).ok()?,
-            0xffu8,
-        ),
-        8 => (
-            u8::from_str_radix(&s[0..2], 16).ok()?,
-            u8::from_str_radix(&s[2..4], 16).ok()?,
-            u8::from_str_radix(&s[4..6], 16).ok()?,
-            u8::from_str_radix(&s[6..8], 16).ok()?,
-        ),
-        _ => return None,
-    };
+    let [r, g, b, a] = lumen_core::components::Color::from_hex(s)?.to_rgba8();
     Some((r, g, b, a))
 }
 
