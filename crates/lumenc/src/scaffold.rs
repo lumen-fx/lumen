@@ -228,3 +228,119 @@ fn copy_dir(from: &Path, to: &Path, prefix: &str, written: &mut Vec<String>) -> 
     }
     Ok(())
 }
+
+// The env-var setters are unsafe on edition 2024; the override guard keeps
+// them serialized behind a lock, which is the soundness condition.
+#[cfg(test)]
+#[allow(unsafe_code)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    /// `LUMEN_TEMPLATES_DIR` is process-global, so the tests that point it at
+    /// a scratch payload take this lock and restore the variable on drop.
+    static ENV: Mutex<()> = Mutex::new(());
+
+    struct PayloadOverride {
+        _guard: MutexGuard<'static, ()>,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl PayloadOverride {
+        fn set(dir: &Path) -> Self {
+            let guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+            let previous = std::env::var_os("LUMEN_TEMPLATES_DIR");
+            unsafe { std::env::set_var("LUMEN_TEMPLATES_DIR", dir) };
+            Self {
+                _guard: guard,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for PayloadOverride {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(v) => unsafe { std::env::set_var("LUMEN_TEMPLATES_DIR", v) },
+                None => unsafe { std::env::remove_var("LUMEN_TEMPLATES_DIR") },
+            }
+        }
+    }
+
+    /// A scratch payload holding one gallery template with a nested file.
+    fn scratch_payload(root: &Path) -> PathBuf {
+        let payload = root.join("templates");
+        std::fs::create_dir_all(payload.join("blank/src")).unwrap();
+        std::fs::write(payload.join("blank/lumen.toml"), "[app]\n").unwrap();
+        std::fs::write(payload.join("blank/src/main.lmn"), "<root />\n").unwrap();
+        payload
+    }
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("lumenc_scaffold_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_usage_list_names_every_template_in_gallery_order() {
+        let names = template_names();
+        let expected = TEMPLATES.iter().map(|t| t.name).collect::<Vec<_>>();
+        assert_eq!(names, expected.join(" | "));
+    }
+
+    #[test]
+    fn the_environment_override_wins_and_writes_the_tree() {
+        let root = scratch_dir("env");
+        let payload = scratch_payload(&root);
+        let _env = PayloadOverride::set(&payload);
+
+        assert_eq!(payload_dir().unwrap(), payload);
+        let dest = root.join("out");
+        let written = write_template("blank", &dest).unwrap();
+        assert_eq!(written, ["lumen.toml", "src/main.lmn"]);
+        assert!(dest.join("src/main.lmn").is_file());
+
+        let missing = template_dir("counter").unwrap_err();
+        assert!(matches!(missing, Error::NotInPayload { .. }));
+    }
+
+    #[test]
+    fn a_payload_that_holds_no_gallery_template_is_walked_past() {
+        let root = scratch_dir("empty");
+        let payload = root.join("templates");
+        std::fs::create_dir_all(payload.join("unrelated")).unwrap();
+        let _env = PayloadOverride::set(&payload);
+
+        let err = payload_dir().unwrap_err();
+        let Error::NoPayload { looked } = &err else {
+            panic!("expected NoPayload, got {err}");
+        };
+        assert_eq!(looked, &[payload]);
+        assert!(err.to_string().contains("fetch-templates"));
+    }
+
+    #[test]
+    fn a_destination_that_is_a_file_reports_the_path_it_choked_on() {
+        let root = scratch_dir("blocked");
+        let payload = scratch_payload(&root);
+        let _env = PayloadOverride::set(&payload);
+
+        let dest = root.join("occupied");
+        std::fs::write(&dest, "").unwrap();
+        let err = write_template("blank", &dest).unwrap_err();
+        assert!(matches!(err, Error::Io { .. }));
+        assert!(err.to_string().contains("occupied"));
+    }
+
+    #[test]
+    fn an_unreadable_source_reports_the_path_it_choked_on() {
+        let root = scratch_dir("unreadable");
+        let missing = root.join("nowhere");
+        let err = copy_dir(&missing, &root.join("out"), "", &mut Vec::new()).unwrap_err();
+        assert!(matches!(err, Error::Io { .. }));
+        assert!(err.to_string().contains("nowhere"));
+    }
+}
