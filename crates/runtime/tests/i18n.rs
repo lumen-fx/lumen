@@ -168,7 +168,10 @@ fn catalogue_reload_replaces_strings() {
     assert_eq!(shared.t("greet"), "Hello!");
 
     write_catalogue(&dir, "en-US", "greet = Hi again!\n");
-    shared.write().load_dir(&dir.join("locale")).unwrap();
+    shared
+        .write()
+        .load_dir(&dir.join("locale"), |p| std::fs::read(p))
+        .unwrap();
     assert_eq!(shared.t("greet"), "Hi again!");
     assert_eq!(lumen_core::i18n::translate("greet"), "Hi again!");
 

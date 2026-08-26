@@ -908,7 +908,8 @@ fn translated_ir(
         .map(|fallback| vec![fallback])
         .unwrap_or_default();
     let mut i18n = I18n::new(lang, fallback);
-    i18n.load_dir(&locale_dir(dir))
+    // A build reads the author's loose files; no asset chain exists yet.
+    i18n.load_dir(&locale_dir(dir), |p| std::fs::read(p))
         .map_err(|e| format!("locale catalogues: {e}"))?;
     // The same no-argument lookup markup gets at run time.
     translate(&mut out.root, &SharedI18n::new(i18n));

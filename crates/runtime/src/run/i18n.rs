@@ -22,6 +22,19 @@ pub fn locale_dir(app_dir: &Path) -> PathBuf {
     app_dir.join("locale")
 }
 
+/// The byte-read seam catalogue loads go through: the app's asset source
+/// chain when the asset server is up (so a source overlaying a catalogue
+/// path wins, like every other asset read), else the plain filesystem.
+fn catalogue_reader(world: &World) -> impl Fn(&Path) -> std::io::Result<Vec<u8>> + use<> {
+    let reader = world
+        .get_resource::<lumen_assets::AssetServer>()
+        .map(|s| s.source_reader());
+    move |path: &Path| match &reader {
+        Some(reader) => reader.read(path),
+        None => std::fs::read(path),
+    }
+}
+
 /// Resolve the locale, install [`SharedI18n`] + `LocaleFormatter`, load
 /// every catalogue under `<dir>/locale`, and publish the translator every
 /// script host's `t()` builtin calls.
@@ -38,7 +51,7 @@ pub(crate) fn register_i18n(
     let shared = app.world.resource::<SharedI18n>().clone();
     let loaded = shared
         .write()
-        .load_dir(&locale_dir(dir))
+        .load_dir(&locale_dir(dir), catalogue_reader(&app.world))
         .map_err(|e| RunError::I18n(e.to_string()))?;
     tracing::debug!(locale = %current, catalogues = loaded.len(), "i18n ready");
 
@@ -55,7 +68,10 @@ pub(crate) fn reload_catalogues(world: &mut World, dir: &Path) {
     let Some(shared) = world.get_resource::<SharedI18n>().cloned() else {
         return;
     };
-    if let Err(e) = shared.write().load_dir(&locale_dir(dir)) {
+    if let Err(e) = shared
+        .write()
+        .load_dir(&locale_dir(dir), catalogue_reader(world))
+    {
         eprintln!("lumenc hot-reload: locale catalogue failed to load: {e}");
     }
 }

@@ -165,11 +165,20 @@ impl I18n {
     /// locales it loaded, in filesystem order. A missing directory is
     /// not an error; it just loads nothing.
     ///
+    /// The directory listing comes from the filesystem; each file's
+    /// bytes come through `read`, the same seam the caller reads its
+    /// other app data through. The runtime hands in the app's asset
+    /// source chain, so a catalogue an asset source overlays loads
+    /// from there; a tool reading loose files passes `std::fs::read`.
+    /// This crate takes the function rather than naming an asset type
+    /// to stay independent of the asset stack.
+    ///
     /// Re-running replaces the bundles it touches, so this doubles as
     /// the catalogue-reload entry point.
     pub fn load_dir(
         &mut self,
         dir: &std::path::Path,
+        read: impl Fn(&std::path::Path) -> std::io::Result<Vec<u8>>,
     ) -> Result<Vec<LanguageIdentifier>, I18nError> {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return Ok(Vec::new());
@@ -185,7 +194,9 @@ impl I18n {
                 .and_then(|s| s.to_str())
                 .ok_or_else(|| I18nError::BadLocale(path.display().to_string()))?;
             let lang: LanguageIdentifier = Lang::try_from(stem)?.into();
-            let source = std::fs::read_to_string(&path)
+            let bytes =
+                read(&path).map_err(|e| I18nError::Parse(format!("{}: {e}", path.display())))?;
+            let source = String::from_utf8(bytes)
                 .map_err(|e| I18nError::Parse(format!("{}: {e}", path.display())))?;
             self.load_ftl(lang.clone(), &source)?;
             loaded.push(lang);
@@ -506,15 +517,30 @@ mod tests {
         std::fs::write(dir.join("notes.txt"), "not a catalogue").unwrap();
 
         let mut i = I18n::new(lang("de-DE"), vec![lang("en-US")]);
-        let loaded = i.load_dir(&dir).unwrap();
+        let loaded = i.load_dir(&dir, |p| std::fs::read(p)).unwrap();
         assert_eq!(loaded.len(), 2);
         let args = FluentArgs::new();
         assert_eq!(i.t("greet", &args), "Hallo!");
         assert_eq!(i.t_with_lang(&lang("en-US"), "greet", &args), "Hello!");
 
+        // The bytes come through the caller's read seam, not the raw
+        // filesystem: a source that overlays a catalogue path wins over the
+        // bytes on disk, exactly like every other asset read.
+        let overlaid = i
+            .load_dir(&dir, |p| {
+                if p.file_name().and_then(|n| n.to_str()) == Some("de-DE.ftl") {
+                    Ok(b"greet = Servus!\n".to_vec())
+                } else {
+                    std::fs::read(p)
+                }
+            })
+            .unwrap();
+        assert_eq!(overlaid.len(), 2);
+        assert_eq!(i.t("greet", &args), "Servus!");
+
         // A stem that is not a BCP-47 tag is a load error, not a silent skip.
         std::fs::write(dir.join("not a tag.ftl"), "greet = x\n").unwrap();
-        assert!(i.load_dir(&dir).is_err());
+        assert!(i.load_dir(&dir, |p| std::fs::read(p)).is_err());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -523,7 +549,9 @@ mod tests {
     fn load_dir_tolerates_a_missing_directory() {
         let mut i = I18n::default();
         let loaded = i
-            .load_dir(std::path::Path::new("/definitely/not/here"))
+            .load_dir(std::path::Path::new("/definitely/not/here"), |p| {
+                std::fs::read(p)
+            })
             .unwrap();
         assert!(loaded.is_empty());
     }
