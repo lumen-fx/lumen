@@ -141,7 +141,7 @@ where
     let table = match toml::from_str::<toml::Table>(config_toml) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("lumen-module: the module's config table did not parse: {e}");
+            eprintln!("lumen-runtime: the module's config table did not parse: {e}");
             return INSTALL_BAD_CONFIG;
         }
     };
@@ -155,7 +155,7 @@ where
             // app that installed a silent hook would otherwise swallow the
             // only explanation of why the module failed to install.
             eprintln!(
-                "lumen-module: the module's constructor panicked: {}",
+                "lumen-runtime: the module's constructor panicked: {}",
                 panic_message(payload.as_ref())
             );
             INSTALL_PANICKED
@@ -222,7 +222,7 @@ mod tests {
     fn build_id_has_the_documented_shape() {
         let id = super::BUILD_ID;
         let fields: Vec<&str> = id.split(' ').collect();
-        assert_eq!(fields.len(), 5, "{id}");
+        assert_eq!(fields.len(), 4, "{id}");
         assert_eq!(fields[0], "lumen-engine", "{id}");
         assert!(!fields[1].is_empty(), "{id}");
         assert!(
@@ -231,7 +231,16 @@ mod tests {
         );
         assert!(fields[3].starts_with("rustc:"), "{id}");
         assert_eq!(fields[3].len(), "rustc:".len() + 16, "{id}");
-        assert!(fields[4].starts_with("features:"), "{id}");
+        // A dirty build carries a content hash of the uncommitted state, so
+        // two different dirty builds never share an id; the bare `-dirty`
+        // marker alone would let them.
+        if fields[2].contains("-dirty") {
+            let (_, print) = fields[2]
+                .split_once("-dirty.")
+                .unwrap_or_else(|| panic!("dirty id without a fingerprint: {id}"));
+            assert_eq!(print.len(), 16, "{id}");
+            assert!(print.chars().all(|c| c.is_ascii_hexdigit()), "{id}");
+        }
     }
 
     #[test]

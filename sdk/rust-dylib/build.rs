@@ -5,25 +5,35 @@
 //! loader compares it against the running engine's value with exact equality
 //! before any Rust symbol is touched. Nothing else detects skew - the dynamic
 //! linker resolves happily across layout-changed rebuilds - so this string is
-//! the whole defense, and it must be deterministic: the same source state,
-//! toolchain, and feature set always produce the same value.
+//! the whole defense, and it must be deterministic: the same source state and
+//! toolchain always produce the same value, and different source states never
+//! share one.
 //!
 //! Format (single spaces, no whitespace inside a field):
 //!
 //! ```text
-//! lumen-engine <version> <source> rustc:<hash> features:<list>
+//! lumen-engine <version> <source> rustc:<hash>
 //! ```
 //!
 //! - `<version>` is `CARGO_PKG_VERSION`.
 //! - `<source>` is `git:<describe>` from `git describe --always --dirty
-//!   --tags` (commit, tag distance, and a `-dirty` suffix), or `nogit` when
-//!   the sources are not a git work tree (a release tarball); there the
-//!   version alone carries the identity, which is exactly as precise as a
-//!   tagged release needs.
+//!   --tags` (commit and tag distance), or `nogit` when the sources are not
+//!   a git work tree (a release tarball); there the version alone carries
+//!   the identity, which is exactly as precise as a tagged release needs.
+//!   A dirty tree extends the `-dirty` suffix with a content hash of the
+//!   uncommitted state (`-dirty.<hash>`), so the rule fails closed: two
+//!   builds from different dirty states never compare equal, while
+//!   rebuilding the same dirty state keeps its id, and a clean tagged
+//!   build (the release path) stays deterministic from the commit alone.
 //! - `<hash>` is an fnv1a64 of the full `rustc -vV` output, folding the
 //!   compiler version, its commit, and the host triple into one token.
-//! - `<list>` is the crate's enabled features, sorted, joined with `+`, or
-//!   `none`.
+//!
+//! There is no features field. This crate declares no cargo features by
+//! design: the engine graph's feature set is pinned in this manifest's
+//! dependency list, so feature skew between an engine and a module can only
+//! arrive as a manifest edit, which `<source>` already captures. A field
+//! that can only ever read `none` would claim an axis the handshake does
+//! not actually check.
 
 use std::env;
 use std::path::PathBuf;
@@ -35,10 +45,8 @@ fn main() {
 
     let source = git_describe(&manifest_dir).unwrap_or_else(|| "nogit".to_string());
     let rustc_hash = fnv1a64(rustc_identity().as_bytes());
-    let features = enabled_features();
 
-    let build_id =
-        format!("lumen-engine {version} {source} rustc:{rustc_hash:016x} features:{features}");
+    let build_id = format!("lumen-engine {version} {source} rustc:{rustc_hash:016x}");
 
     let out = PathBuf::from(env::var("OUT_DIR").expect("cargo sets this")).join("build_id.rs");
     let with_nul = format!("{build_id}\0");
@@ -79,31 +87,81 @@ fn git_describe(manifest_dir: &PathBuf) -> Option<String> {
         .collect();
     if described.is_empty() {
         None
+    } else if described.ends_with("-dirty") {
+        let print = dirty_fingerprint(manifest_dir);
+        Some(format!("git:{described}.{print:016x}"))
     } else {
         Some(format!("git:{described}"))
     }
+}
+
+/// A content hash of everything `--dirty` stands for: the diff of the work
+/// tree and index against `HEAD`, plus every untracked, unignored file's
+/// path and bytes. Two different dirty states never hash equal, so a stale
+/// module built from an earlier edit refuses against a rebuilt engine
+/// instead of matching it on the shared `-dirty` marker; rebuilding the
+/// same dirty state reproduces the same id, which keeps a module and the
+/// engine it was built beside agreeing.
+///
+/// Each dirty path also gets a rerun line, so editing it again restamps the
+/// id. A file that goes from clean to dirty is not watched yet; the stamp
+/// catches up on the next run of this script.
+fn dirty_fingerprint(manifest_dir: &PathBuf) -> u64 {
+    let toplevel = run(Command::new("git")
+        .arg("-C")
+        .arg(manifest_dir)
+        .args(["rev-parse", "--show-toplevel"]))
+    .map(|t| PathBuf::from(t.trim()))
+    .unwrap_or_else(|| manifest_dir.clone());
+
+    let mut state = Vec::new();
+    if let Some(diff) = run(Command::new("git").arg("-C").arg(&toplevel).args([
+        "-c",
+        "color.ui=false",
+        "diff",
+        "HEAD",
+        "--no-ext-diff",
+        "--binary",
+    ])) {
+        state.extend_from_slice(diff.as_bytes());
+    }
+    if let Some(untracked) = run(Command::new("git").arg("-C").arg(&toplevel).args([
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+    ])) {
+        for path in untracked.lines().filter(|l| !l.is_empty()) {
+            state.extend_from_slice(path.as_bytes());
+            state.push(0);
+            if let Ok(bytes) = std::fs::read(toplevel.join(path)) {
+                state.extend_from_slice(&bytes);
+            }
+            state.push(0);
+        }
+    }
+    if let Some(status) = run(Command::new("git")
+        .arg("-C")
+        .arg(&toplevel)
+        .args(["status", "--porcelain"]))
+    {
+        for line in status.lines() {
+            if let Some(path) = line.get(3..).filter(|p| !p.is_empty()) {
+                // Rename lines read `old -> new`; watch the side that exists.
+                let path = path.rsplit(" -> ").next().unwrap_or(path);
+                println!(
+                    "cargo:rerun-if-changed={}",
+                    toplevel.join(path.trim_matches('"')).display()
+                );
+            }
+        }
+    }
+    fnv1a64(&state)
 }
 
 /// Full `rustc -vV` output: version, commit hash and date, host triple, LLVM.
 fn rustc_identity() -> String {
     let rustc = env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
     run(Command::new(rustc).arg("-vV")).expect("rustc -vV runs")
-}
-
-/// The crate's enabled features, sorted and `+`-joined, or `none`.
-fn enabled_features() -> String {
-    let mut features: Vec<String> = env::vars()
-        .filter_map(|(k, _)| {
-            k.strip_prefix("CARGO_FEATURE_")
-                .map(|f| f.to_ascii_lowercase().replace('_', "-"))
-        })
-        .collect();
-    features.sort();
-    if features.is_empty() {
-        "none".to_string()
-    } else {
-        features.join("+")
-    }
 }
 
 fn run(cmd: &mut Command) -> Option<String> {
