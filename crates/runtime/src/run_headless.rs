@@ -326,6 +326,9 @@ pub fn run_app_headless_rendered(
     if let Some(capture) = app.world.get_resource::<SurfaceCapture>() {
         capture.set_waker(waker.clone());
     }
+    // A module event pushed onto the core bus while the loop is idle-parked
+    // wakes it, mirroring the windowed backend.
+    lumen_core::plugin_events::set_plugin_event_waker(waker.clone());
     app.world.insert_resource(waker);
 
     // Snapshot cadence: headless ticks are on-demand, so per-tick MCP

@@ -677,6 +677,43 @@ fn an_impossible_entity_is_refused() {
     assert!(err.contains("not an entity id"), "unhelpful error: {err}");
 }
 
+/// The in-process push wakes a parked event loop, exactly like a dlopened
+/// plugin's push does: an engine-locked module delivering `on_audio_end`
+/// while the app idles in `Wait` must trigger the tick that drains it, not
+/// wait for an unrelated wake.
+#[test]
+fn an_in_process_push_wakes_a_parked_loop() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    lumen_core::plugin_events::discard_plugin_events();
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&wakes);
+    lumen_core::plugin_events::set_plugin_event_waker(lumen_core::app::EventLoopWaker(Arc::new(
+        move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        },
+    )));
+
+    let event = PluginEvent::Call {
+        event: "on_audio_end".into(),
+        key: "player".into(),
+        fallback: String::new(),
+        args: Vec::new(),
+    };
+    assert!(lumen_script::push_plugin_event(&event));
+    assert_eq!(
+        wakes.load(Ordering::SeqCst),
+        1,
+        "the push must nudge the installed waker"
+    );
+    assert!(
+        lumen_core::plugin_events::plugin_events_pending(),
+        "the event must be on the bus for the woken tick to drain"
+    );
+    lumen_core::plugin_events::discard_plugin_events();
+}
+
 /// Prints the golden tables. Run with `--ignored --nocapture` and paste the
 /// output over the constants above.
 #[test]

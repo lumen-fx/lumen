@@ -161,6 +161,8 @@ pub enum PluginEvent {
 /// runtime module: encode the event with the same codec the boundary uses and
 /// hand it to [`lumen_core::plugin_events`], where the script layer's per-tick
 /// drain picks it up and routes it exactly like one a dlopened plugin pushed.
+/// The bus wakes a parked event loop, so an event pushed while the app idles
+/// in `Wait` runs on the tick it triggers, the same as the dlopen path.
 /// Returns `false` when the event does not encode or the bus is gone.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn push_plugin_event(event: &PluginEvent) -> bool {

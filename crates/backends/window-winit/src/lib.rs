@@ -330,6 +330,10 @@ pub fn run(
     {
         capture.set_waker(waker.clone());
     }
+    // The plugin-event bus wakes the loop too, so an event a module's worker
+    // thread pushes while the loop sits parked in `Wait` is delivered on the
+    // tick it triggers instead of riding the next unrelated OS event.
+    lumen_core::plugin_events::set_plugin_event_waker(waker.clone());
     app.world.insert_resource(waker);
 
     // Install backend-side messages and the redraw scheduler before any
