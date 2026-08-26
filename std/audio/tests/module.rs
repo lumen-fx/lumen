@@ -282,6 +282,35 @@ fn on_audio_end(path) { signal("fallback", "").set(path); }
     );
 }
 
+/// A path nothing holds is a per-track stderr report from the module, the
+/// transport stays idle, and the app keeps running.
+#[test]
+fn a_missing_track_reports_on_stderr() {
+    let f = fixtures();
+    let dir = write_app(
+        f,
+        "audio-missing",
+        "lumen-audio = { bundled = true }\n",
+        "fn on_start() { audio_play(\"no-such-track.wav\"); }\n",
+        0.5,
+    );
+    let (stdout, stderr) = run_host(f, &dir, 150, "audio_playing,audio_duration");
+
+    assert!(
+        stderr.contains("lumen-audio: track failed to load: no-such-track.wav"),
+        "{stderr}"
+    );
+    assert!(
+        stdout.contains("HOST signal audio_playing=false"),
+        "{stdout}"
+    );
+    assert_eq!(
+        signal_value(&stdout, "audio_duration"),
+        0.0,
+        "no track, no duration:\n{stdout}"
+    );
+}
+
 /// Without the module the functions do not exist: the script's call fails
 /// with the host's ordinary unknown-function error, the app survives its
 /// run, and the engine prints nothing audio-named.

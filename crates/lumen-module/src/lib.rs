@@ -65,6 +65,12 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+/// The byte-source seam: a module that reads app data (tracks, archives,
+/// shipped files) resolves it through the app's asset sources, not the raw
+/// filesystem, so bundled `.lpak` entries and `lumen://app/...` URIs work.
+/// Take a [`lumen_assets::SourceReader`] from the [`lumen_assets::AssetServer`]
+/// resource on the main thread and read on any thread.
+pub use lumen_assets::{AssetServer, SourceReader};
 pub use lumen_core;
 pub use lumen_core::app::{App, Plugin};
 /// The script surface a module extends: register functions with

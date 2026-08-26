@@ -40,6 +40,18 @@ fn app_dir_with_wav(name: &str, secs: f32) -> std::path::PathBuf {
 /// Build a headless app in `dir` running one script, with or without the
 /// plugin.
 fn build_app(dir: &std::path::Path, engine: &str, source: &str, with_plugin: bool) -> EcsApp {
+    build_app_with_assets(dir, engine, source, with_plugin, None)
+}
+
+/// [`build_app`] plus an optional `.lpak` archive served through the asset
+/// server, the way `lumenc run --assets` installs one.
+fn build_app_with_assets(
+    dir: &std::path::Path,
+    engine: &str,
+    source: &str,
+    with_plugin: bool,
+    assets: Option<&std::path::Path>,
+) -> EcsApp {
     lumen_core::plugin_events::discard_plugin_events();
     let bytes = artifact::serialize(&CompiledApp {
         ir: LayoutIR {
@@ -59,6 +71,9 @@ fn build_app(dir: &std::path::Path, engine: &str, source: &str, with_plugin: boo
     })
     .expect("serialize artifact");
     let mut opts = RunOptions::new(dir).with_artifact_bytes(bytes);
+    if let Some(lpak) = assets {
+        opts = opts.with_assets(lpak);
+    }
     if with_plugin {
         // The deviceless shape: everything but sound, and no device probe on
         // the test machine.
@@ -126,6 +141,113 @@ fn rhai_drives_playback_through_the_registry() {
         "the playhead must advance; got {:?}",
         signal(&app, "audio_position")
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A track that exists only inside the app's `.lpak` plays: the loader
+/// resolves the app-relative path through the bundle the way images do,
+/// instead of reading the filesystem directly.
+#[test]
+fn a_bundle_packed_track_plays() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let staging = app_dir_with_wav("tone.wav", 5.0);
+    let lpak = std::env::temp_dir().join(format!("lumen_audio_lpak_{}.lpak", std::process::id()));
+    lumen_assets::LumenBundle::pack_dir(&staging, &lpak).expect("pack lpak");
+    // The app dir holds no loose wav: the bundle is the only source.
+    std::fs::remove_file(staging.join("tone.wav")).expect("drop the loose wav");
+    let mut app = build_app_with_assets(
+        &staging,
+        "rhai",
+        r#"fn on_start() { audio_play("tone.wav"); }"#,
+        true,
+        Some(&lpak),
+    );
+
+    assert!(
+        tick_until(&mut app, 3.0, |app| parsed(app, "audio_duration") > 4.0),
+        "the bundled track must decode through the source chain; got {:?}",
+        signal(&app, "audio_duration")
+    );
+    assert_eq!(signal(&app, "audio_playing").as_deref(), Some("true"));
+
+    let _ = std::fs::remove_dir_all(&staging);
+    let _ = std::fs::remove_file(&lpak);
+}
+
+/// A `lumen://app/...` URI names the same bundled track directly, with no
+/// app-relative resolution in between.
+#[test]
+fn a_lumen_uri_track_plays() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let staging = app_dir_with_wav("tone.wav", 5.0);
+    let lpak = std::env::temp_dir().join(format!("lumen_audio_uri_{}.lpak", std::process::id()));
+    lumen_assets::LumenBundle::pack_dir(&staging, &lpak).expect("pack lpak");
+    std::fs::remove_file(staging.join("tone.wav")).expect("drop the loose wav");
+    let mut app = build_app_with_assets(
+        &staging,
+        "rhai",
+        r#"fn on_start() { audio_play("lumen://app/tone.wav"); }"#,
+        true,
+        Some(&lpak),
+    );
+
+    assert!(
+        tick_until(&mut app, 3.0, |app| parsed(app, "audio_duration") > 4.0),
+        "the URI-addressed track must decode; got {:?}",
+        signal(&app, "audio_duration")
+    );
+
+    let _ = std::fs::remove_dir_all(&staging);
+    let _ = std::fs::remove_file(&lpak);
+}
+
+/// An absolute path keeps working exactly as before: straight to the
+/// filesystem, no bundle root involved.
+#[test]
+fn an_absolute_path_still_plays() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir_with_wav("tone.wav", 5.0);
+    let abs = dir
+        .join("tone.wav")
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    let mut app = build_app(
+        &dir,
+        "rhai",
+        &format!(r#"fn on_start() {{ audio_play("{abs}"); }}"#),
+        true,
+    );
+
+    assert!(
+        tick_until(&mut app, 3.0, |app| parsed(app, "audio_duration") > 4.0),
+        "the absolute path must decode; got {:?}",
+        signal(&app, "audio_duration")
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A path nothing holds - no bundle entry, no source, no file - reports the
+/// per-track load error and leaves the transport idle instead of wedging it.
+#[test]
+fn a_missing_track_leaves_the_transport_idle() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir_with_wav("tone.wav", 1.0);
+    let mut app = build_app(
+        &dir,
+        "rhai",
+        r#"fn on_start() { audio_play("no-such-track.wav"); }"#,
+        true,
+    );
+
+    assert!(
+        !tick_until(&mut app, 1.0, |app| parsed(app, "audio_duration") > 0.0),
+        "a missing track must never produce a duration; got {:?}",
+        signal(&app, "audio_duration")
+    );
+    assert_eq!(signal(&app, "audio_playing").as_deref(), Some("false"));
 
     let _ = std::fs::remove_dir_all(&dir);
 }

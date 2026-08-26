@@ -644,6 +644,14 @@ another with `AssetServer::register_source` to serve assets from somewhere
 else, such as bytes embedded in the binary. Sources run on the main thread
 while the load is being queued, so keep them to an index lookup.
 
+The same chain serves plugins and modules that load their own data. Take a
+`SourceReader` from `AssetServer::source_reader` on the main thread and read
+on any thread you like; it resolves bundles, then registered sources, then
+the filesystem, so app data reaches you the way every other asset does
+rather than through a direct filesystem read that a packaged app would miss.
+The reader is a snapshot of the chain, so take a fresh one per request. The
+audio module's track loading is the in-tree example.
+
 ## Runtime modules
 
 A runtime module is a plugin the app does not compile in: a shared library

@@ -17,6 +17,10 @@ publish = false
 
 [dependencies]
 lumen-core = { workspace = true }
+# The byte-source seam a module reads app data through: `AssetServer` and
+# `SourceReader`, re-exported so a module resolves bundled and registered
+# sources instead of assuming the raw filesystem.
+lumen-assets = { workspace = true }
 # The script-surface types a module registers through: `ScriptFn`, the
 # registry extension trait, the ordering sets, and the plugin-event wire.
 # Re-exported below so a module crate needs no dependency of its own.
