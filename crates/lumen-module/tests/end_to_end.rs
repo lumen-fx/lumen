@@ -61,6 +61,25 @@ fn target_libdir(triple: &str) -> PathBuf {
     PathBuf::from(String::from_utf8_lossy(&out.stdout).trim())
 }
 
+/// Where the nested cargo builds: `<target>/module-fixture` normally, and
+/// `<coverage target>/debug/module-fixture` under `cargo llvm-cov`. The
+/// nested build is instrumented by the inherited rustc wrapper and the host
+/// subprocess writes its counters through the inherited `LLVM_PROFILE_FILE`,
+/// whose directory is the coverage target dir; the report step walks that
+/// tree's `debug` profile directory for the objects that map the counters.
+fn nested_target_dir(root: &Path) -> PathBuf {
+    if std::env::var_os("CARGO_LLVM_COV").is_some()
+        && let Some(profile_pattern) = std::env::var_os("LLVM_PROFILE_FILE")
+        && let Some(coverage_root) = Path::new(&profile_pattern).parent()
+    {
+        return coverage_root.join("debug").join("module-fixture");
+    }
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("target"))
+        .join("module-fixture")
+}
+
 /// Build the module and the host once, prefer-dynamic, and remember where
 /// everything landed.
 fn fixtures() -> &'static Fixtures {
@@ -68,10 +87,7 @@ fn fixtures() -> &'static Fixtures {
     F.get_or_init(|| {
         let root = workspace_root();
         let triple = host_triple();
-        let target_dir = std::env::var_os("CARGO_TARGET_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| root.join("target"))
-            .join("module-fixture");
+        let target_dir = nested_target_dir(&root);
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
         let rustflags = {
             let existing = std::env::var("RUSTFLAGS").unwrap_or_default();

@@ -17,40 +17,8 @@ coverage:
       default:
         target: "80%"
 
-# Measured and tested, but not graded. Presenting to a window needs a real
-# adapter, a real swap chain, and a window to own them, none of which a CI
-# runner has; the GPU tests that do exist skip themselves there anyway,
-# since all it offers is a software rasterizer. The device-bound half of
-# this file therefore reads as uncovered whatever the suite does. Codecov
-# excludes whole paths only, so the file goes with it. The parts that need
-# no device (the present gate, the damage diff, the init watchdog) are
-# still tested and still run under `cargo test`.
-#
-# The browser crates are the same case for a different reason: they call the
-# DOM, so they run on wasm32 and nowhere else, while coverage is measured on
-# the host. What drives them is a suite in a real browser and a test that
-# opens an emitted page, both in the web job, on a target llvm-cov does not
-# instrument here. Reading them as uncovered says nothing about whether they
-# are tested. Everything they are built on stays graded: the scene layer, the
-# emitter, the contract types, and the host-neutral scripting layer are all
-# ordinary crates that run under `cargo test`.
-#
-# The compiler-plugin test scaffolding is the same case at a smaller scale:
-# the fixture is a cdylib the tests dlopen, built by a nested cargo without
-# instrumentation, so its hooks execute outside the measured process; the
-# `testing` module is the helper that builds it. Both exist only for the
-# tests that drive them, and the SDK surface they exercise is graded through
-# its own unit tests. The runtime-plugin and runtime-module fixtures repeat
-# the pattern: a portable-plugin cdylib, an engine-locked module cdylib, and
-# the dylib-linked host binary the module suite boots, all built by a nested
-# uninstrumented cargo and executed outside the measured process.
-ignore:
-  - "crates/backends/render-wgpu/src/surface.rs"
-  - "crates/backends/web-dom"
-  - "crates/web-runtime"
-  - "crates/lumenc-plugin/fixture"
-  - "crates/lumenc-plugin/src/testing.rs"
-  - "crates/lumen-plugin/fixture"
-  - "crates/lumen-plugin/src/testing.rs"
-  - "crates/lumen-module/fixture"
-  - "crates/lumen-module/fixture-host"
+# Nothing is excluded from the report. Code a CI runner cannot execute -
+# the device-bound half of the wgpu surface, the wasm32-only browser crates
+# - grades at the number the suite actually reaches. The fixture cdylibs
+# and the helpers that build them are instrumented by their nested builds
+# and grade like everything else.
