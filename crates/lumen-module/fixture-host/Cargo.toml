@@ -1,0 +1,24 @@
+[package]
+name = "lumen-module-fixture-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Test-only host runner: links the engine dynamically, boots an app directory headless, and prints what the module loader did."
+publish = false
+
+[[bin]]
+name = "lumen-module-fixture-host"
+path = "src/main.rs"
+
+# The engine as a shared library, like a packaged Rust app. The harness
+# builds this binary with `-C prefer-dynamic` so the running process carries
+# `liblumen_engine` - the shape the module loader requires. The parser and
+# the compiler-side injections (`lumenc`, a library here) sit outside the
+# shared engine and compile into the host, exactly as they compile into the
+# shipped `lumenc` binary.
+[target.'cfg(not(windows))'.dependencies]
+lumen-dylib = { workspace = true }
+lumenc = { workspace = true, features = ["runtime-parse", "dev-run"] }

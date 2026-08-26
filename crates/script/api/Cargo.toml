@@ -20,7 +20,22 @@ lumen-primitives = { workspace = true }
 lumen-os-dnd = { workspace = true }
 bevy_ecs.workspace = true
 crossbeam-channel.workspace = true
+glam.workspace = true
+# Encoding for the value, command, and signature types a script host is spoken
+# to in, for a host that does not share the engine's address space. See the
+# `wire` module.
+serde.workspace = true
 thiserror.workspace = true
+
+# The plugin boundary's byte codec, for decoding the events portable plugins
+# push onto the core bus. Default features only: the dlopen half stays in the
+# loader crates. Native only: a browser page cannot load a portable plugin,
+# so the wasm module carries neither the pipeline nor the codec.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lumen-plugin-abi.workspace = true
+
+[dev-dependencies]
+bincode.workspace = true
 
 [build-dependencies]
 # Reads `builtins.ron` when this crate compiles, so the builtin metadata

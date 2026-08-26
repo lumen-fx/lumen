@@ -205,6 +205,13 @@ pub struct RunOptions {
     /// app's `[[plugins]]` declarations and hands it in here. `None` runs
     /// the empty chain.
     pub compiler_plugins: Option<std::sync::Arc<dyn crate::compiler_plugins::CompilerPlugins>>,
+    /// Injected `version`-source module resolutions, mirroring
+    /// [`Self::compiler_plugins`]: the runtime never resolves a `version`
+    /// entry of `[dependencies]` itself (no semver, no cache in its graph);
+    /// `lumenc` resolves each one through the shared plugin cache and
+    /// `lumen.lock` and hands the outcome in here for the module loader to
+    /// consult before its own on-disk probe.
+    pub resolved_modules: crate::modules::ResolvedModules,
 }
 
 impl RunOptions {
@@ -238,6 +245,7 @@ impl RunOptions {
             assets: None,
             parser: None,
             compiler_plugins: None,
+            resolved_modules: crate::modules::ResolvedModules::default(),
         }
     }
 
@@ -530,8 +538,6 @@ pub fn build_headless_app(opts: RunOptions) -> Result<(App, WindowSetup), RunErr
 // block and (via the private glob re-exports below) every sibling's items, so
 // intra-`run` references resolve unchanged.
 mod app_build;
-#[cfg(feature = "audio")]
-mod audio;
 mod caret_scroll;
 mod check;
 mod hot_reload;
@@ -548,8 +554,6 @@ pub(crate) mod subsystems;
 // Private glob re-exports: make every submodule item visible inside `run`
 // (and, transitively, to each submodule's `use super::*`). Behaviourally this
 // reconstructs the flat namespace the single-file module had.
-#[cfg(feature = "audio")]
-use audio::*;
 use caret_scroll::*;
 use check::*;
 use hot_reload::*;

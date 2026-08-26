@@ -6,16 +6,21 @@
 use bevy_ecs::prelude::*;
 use bevy_ecs::system::RunSystemOnce;
 use lumen_assets::{
-    AssetKind, AssetLoader, AssetServer, AudioData, AudioSource, LoadContext, LoadErrorKind,
-    LoadedAsset, LoadedAudio, drain_completed_decodes, spawn_pending_audio_decodes,
+    AssetKind, AssetLoader, AssetServer, ImageSource, LoadContext, LoadErrorKind, LoadedAsset,
+    LoadedSvg, SvgData, drain_completed_decodes, spawn_pending_decodes,
 };
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// Claims `.blip`, a container this crate knows nothing about, and carries
-/// its bytes through as an audio track after checking a four-byte header.
+/// Claims `.blip`, a format this crate knows nothing about: a four-byte
+/// magic followed by a body the loader turns into a vector payload of its
+/// own choosing. The fixed intrinsic size is the tell that this loader ran
+/// rather than a built-in one.
 struct BlipLoader;
+
+/// Intrinsic size every `.blip` decodes to, chosen so it cannot be mistaken
+/// for a size any real file would report.
+const BLIP_INTRINSIC: glam::Vec2 = glam::Vec2::new(16.0, 16.0);
 
 impl AssetLoader for BlipLoader {
     fn extensions(&self) -> &[&str] {
@@ -23,7 +28,7 @@ impl AssetLoader for BlipLoader {
     }
 
     fn kind(&self) -> AssetKind {
-        AssetKind::Audio
+        AssetKind::Svg
     }
 
     fn load(&self, ctx: &LoadContext<'_>) -> Result<LoadedAsset, LoadErrorKind> {
@@ -32,8 +37,14 @@ impl AssetLoader for BlipLoader {
             let path = ctx.path();
             return Err(LoadErrorKind::DecodeFailed(format!("{path:?}: not a blip")));
         }
-        let bytes: Arc<[u8]> = Arc::from(&bytes[4..]);
-        Ok(LoadedAsset::Audio(LoadedAudio(AudioData { bytes }.into())))
+        let data = SvgData {
+            intrinsic: BLIP_INTRINSIC,
+            scene: vello::Scene::new(),
+            // The body past the magic is what this format costs; the header
+            // is not part of the payload.
+            source_bytes: bytes.len() - 4,
+        };
+        Ok(LoadedAsset::Svg(LoadedSvg(data.into())))
     }
 }
 
@@ -54,14 +65,14 @@ fn custom_loader_serves_an_extension_the_crate_does_not_know() {
     server.register_loader(BlipLoader);
     assert_eq!(
         server.loaders().kind_for(&path),
-        Some(AssetKind::Audio),
+        Some(AssetKind::Svg),
         "the registry routes .blip to the registered loader"
     );
     world.insert_resource(server);
 
-    let entity = world.spawn(AudioSource(path.clone())).id();
+    let entity = world.spawn(ImageSource(path.clone())).id();
     world
-        .run_system_once(spawn_pending_audio_decodes)
+        .run_system_once(spawn_pending_decodes)
         .expect("enqueue the load");
 
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -69,8 +80,8 @@ fn custom_loader_serves_an_extension_the_crate_does_not_know() {
         world
             .run_system_once(drain_completed_decodes)
             .expect("drain completed loads");
-        if let Some(audio) = world.get::<LoadedAudio>(entity) {
-            break audio.bytes.to_vec();
+        if let Some(svg) = world.get::<LoadedSvg>(entity) {
+            break (svg.intrinsic, svg.source_bytes);
         }
         assert!(
             Instant::now() < deadline,
@@ -78,16 +89,20 @@ fn custom_loader_serves_an_extension_the_crate_does_not_know() {
         );
         std::thread::sleep(Duration::from_millis(10));
     };
-    assert_eq!(loaded, b"payload", "the loader's own bytes come through");
+    assert_eq!(
+        loaded,
+        (BLIP_INTRINSIC, b"payload".len()),
+        "the loader's own payload comes through"
+    );
 
     // Second entity on the same path is served from the cache, so the
     // custom payload is cached like a built-in one.
-    let second = world.spawn(AudioSource(path.clone())).id();
+    let second = world.spawn(ImageSource(path.clone())).id();
     world
-        .run_system_once(spawn_pending_audio_decodes)
+        .run_system_once(spawn_pending_decodes)
         .expect("serve from cache");
     assert!(
-        world.get::<LoadedAudio>(second).is_some(),
+        world.get::<LoadedSvg>(second).is_some(),
         "a cached custom asset is attached synchronously"
     );
 
@@ -98,32 +113,37 @@ fn custom_loader_serves_an_extension_the_crate_does_not_know() {
 fn a_registered_loader_replaces_a_built_in_extension() {
     let mut server = AssetServer::default();
     assert_eq!(
-        server.loaders().kind_for(Path::new("icon.svg")),
-        Some(AssetKind::Svg)
+        server.loaders().kind_for(Path::new("photo.png")),
+        Some(AssetKind::Image)
     );
 
-    struct SvgAsAudio;
-    impl AssetLoader for SvgAsAudio {
+    struct PngAsSvg;
+    impl AssetLoader for PngAsSvg {
         fn extensions(&self) -> &[&str] {
-            &["svg"]
+            &["png"]
         }
         fn kind(&self) -> AssetKind {
-            AssetKind::Audio
+            AssetKind::Svg
         }
         fn load(&self, _ctx: &LoadContext<'_>) -> Result<LoadedAsset, LoadErrorKind> {
             Err(LoadErrorKind::Unsupported)
         }
     }
 
-    server.register_loader(SvgAsAudio);
+    server.register_loader(PngAsSvg);
     assert_eq!(
-        server.loaders().kind_for(Path::new("icon.svg")),
-        Some(AssetKind::Audio),
+        server.loaders().kind_for(Path::new("photo.png")),
+        Some(AssetKind::Svg),
         "the later registration wins the extension"
     );
     assert_eq!(
-        server.loaders().kind_for(Path::new("photo.png")),
+        server.loaders().kind_for(Path::new("icon.svg")),
+        Some(AssetKind::Svg),
+        "an extension the new loader did not name keeps its own loader"
+    );
+    assert_eq!(
+        server.loaders().kind_for(Path::new("mystery.dat")),
         Some(AssetKind::Image),
-        "other extensions are untouched"
+        "and the fallback that catches unclaimed extensions is untouched"
     );
 }

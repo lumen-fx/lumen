@@ -7,10 +7,8 @@
 //! never opening a real window:
 //!
 //! ```text
-//! # minimal (no audio/mcp/async/host-lua/host-candela):
+//! # minimal (no mcp/async/host-lua/host-candela):
 //! cargo test -p lumen-runtime --no-default-features --features runtime-parse --test headless_min
-//! # audio only:
-//! cargo test -p lumen-runtime --no-default-features --features runtime-parse,audio --test headless_min
 //! # full:
 //! cargo test -p lumen-runtime --test headless_min
 //! ```

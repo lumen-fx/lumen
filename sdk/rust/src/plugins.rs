@@ -90,13 +90,13 @@ impl<P: Plugin + Send + 'static> BoxedPlugin for P {
 /// use lumenui::plugins::{PluginGroup, PluginGroupBuilder};
 ///
 /// # struct Physics; impl lumenui::ecs_app::Plugin for Physics { fn build(self, _: &mut lumenui::ecs_app::App) {} }
-/// # struct Audio; impl lumenui::ecs_app::Plugin for Audio { fn build(self, _: &mut lumenui::ecs_app::App) {} }
+/// # struct Telemetry; impl lumenui::ecs_app::Plugin for Telemetry { fn build(self, _: &mut lumenui::ecs_app::App) {} }
 /// struct GamePlugins;
 /// impl PluginGroup for GamePlugins {
 ///     fn build(self) -> PluginGroupBuilder {
 ///         PluginGroupBuilder::new("GamePlugins")
 ///             .add(Physics)
-///             .add(Audio)
+///             .add(Telemetry)
 ///     }
 /// }
 /// ```

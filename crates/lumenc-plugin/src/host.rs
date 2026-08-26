@@ -2,12 +2,12 @@
 //! their hooks. Compiled only under the `host` feature; lumenc and
 //! lumen-runtime are the consumers, never plugin authors.
 
-use std::ffi::CStr;
 use std::path::{Path, PathBuf};
 
 use libloading::Library;
+use lumen_plugin_abi::dlopen::{self, CallError, HookOut, PrefixError};
 
-use crate::abi::{self, Buf, Desc};
+use crate::abi::{self, Desc};
 use crate::resolve::LockFile;
 use crate::{Ctx, Finding, LayoutIR, Output, PluginCfg, PluginSource, codec};
 
@@ -115,12 +115,6 @@ pub struct PluginSet {
     check_only: bool,
 }
 
-/// One hook's outcome at the byte level.
-enum HookOut {
-    Unchanged,
-    Bytes(Vec<u8>),
-}
-
 impl PluginSet {
     /// Load every declared plugin, in order, verifying each descriptor.
     /// `version` sources resolve through the plugin cache and pin into
@@ -153,21 +147,18 @@ impl PluginSet {
                 )
                 .map_err(PluginError::Resolve)?,
             };
-            let lib = unsafe { Library::new(&path) }.map_err(|e| PluginError::Open {
+            let lib = dlopen::open_library(&path).map_err(|message| PluginError::Open {
                 name: cfg.name.clone(),
                 path: path.clone(),
-                // libloading's Display is a bare "dlopen failed"; the OS
-                // reason (missing dependency, wrong architecture, not a
-                // library) sits in the source chain, and it is the only
-                // actionable part.
-                message: error_chain(&e),
+                message,
             })?;
-            let entry: libloading::Symbol<unsafe extern "C" fn() -> *const Desc> =
-                unsafe { lib.get(abi::ENTRY) }.map_err(|_| PluginError::MissingEntry {
+            let desc = unsafe { dlopen::entry_descriptor(&lib, abi::ENTRY) }.ok_or_else(|| {
+                PluginError::MissingEntry {
                     name: cfg.name.clone(),
                     path: path.clone(),
-                })?;
-            let desc = non_null(&cfg.name, unsafe { entry() })?;
+                }
+            })?;
+            let desc = non_null(&cfg.name, desc.cast::<Desc>())?;
             verify(&cfg.name, desc)?;
             // A `toml::Table` always re-serializes: keys are strings and the
             // serializer orders values ahead of tables itself.
@@ -455,24 +446,18 @@ impl PluginSet {
 /// frozen prefix.
 fn verify(declared: &str, desc: *const Desc) -> Result<(), PluginError> {
     let name = declared.to_string();
-    let abi_version = unsafe { (desc as *const u32).read() };
-    let struct_size = unsafe { (desc as *const u32).add(1).read() };
-    if abi_version != abi::ABI_VERSION {
-        return Err(PluginError::AbiMismatch {
-            name,
-            want: abi::ABI_VERSION,
-            got: abi_version,
-        });
-    }
-    if (struct_size as usize) < std::mem::size_of::<Desc>() {
-        return Err(PluginError::BadDescriptor {
-            name,
-            reason: format!(
-                "descriptor is {struct_size} bytes, expected at least {}",
-                std::mem::size_of::<Desc>()
-            ),
-        });
-    }
+    unsafe { dlopen::verify_prefix(desc.cast(), abi::ABI_VERSION, std::mem::size_of::<Desc>()) }
+        .map_err(|e| match e {
+            PrefixError::AbiMismatch { want, got } => PluginError::AbiMismatch {
+                name: name.clone(),
+                want,
+                got,
+            },
+            short => PluginError::BadDescriptor {
+                name: name.clone(),
+                reason: short.to_string(),
+            },
+        })?;
     let desc: &Desc = unsafe { &*desc };
     if desc.flags & abi::FLAG_PANIC_ABORT != 0 {
         return Err(PluginError::BadDescriptor {
@@ -490,19 +475,10 @@ fn verify(declared: &str, desc: *const Desc) -> Result<(), PluginError> {
         });
     }
     let c_str = |ptr: *const std::os::raw::c_char, what: &str| -> Result<String, PluginError> {
-        if ptr.is_null() {
-            return Err(PluginError::BadDescriptor {
-                name: declared.to_string(),
-                reason: format!("null {what}"),
-            });
-        }
-        unsafe { CStr::from_ptr(ptr) }
-            .to_str()
-            .map(str::to_string)
-            .map_err(|_| PluginError::BadDescriptor {
-                name: declared.to_string(),
-                reason: format!("{what} is not UTF-8"),
-            })
+        unsafe { dlopen::c_string(ptr, what) }.map_err(|reason| PluginError::BadDescriptor {
+            name: declared.to_string(),
+            reason,
+        })
     };
     let reported = c_str(desc.name, "name")?;
     c_str(desc.version, "version")?;
@@ -537,20 +513,7 @@ fn non_null(name: &str, desc: *const Desc) -> Result<*const Desc, PluginError> {
     Ok(desc)
 }
 
-/// Join an error with its source chain, most specific last.
-fn error_chain(e: &dyn std::error::Error) -> String {
-    let mut out = e.to_string();
-    let mut cur = e.source();
-    while let Some(s) = cur {
-        out.push_str(": ");
-        out.push_str(&s.to_string());
-        cur = s.source();
-    }
-    out
-}
-
-/// One FFI hook call: borrowed input in, plugin-owned buffer out, freed here
-/// through the plugin's own `free` after copying.
+/// One hook call, with this plugin's name and the hook's on every failure.
 fn call(
     plugin: &Loaded,
     hook: abi::HookFn,
@@ -558,48 +521,29 @@ fn call(
     input: &[u8],
     ctx: &[u8],
 ) -> Result<HookOut, PluginError> {
-    let mut out = Buf::empty();
-    let status = unsafe {
-        hook(
-            input.as_ptr(),
-            input.len(),
-            ctx.as_ptr(),
-            ctx.len(),
-            &mut out,
-        )
-    };
-    let bytes = if out.ptr.is_null() {
-        Vec::new()
-    } else {
-        let copied = unsafe { std::slice::from_raw_parts(out.ptr, out.len) }.to_vec();
-        let free = plugin.desc().free.expect("verified at load");
-        unsafe { free(out.ptr, out.len, out.cap) };
-        copied
-    };
-    match status {
-        abi::OK => Ok(HookOut::Bytes(bytes)),
-        abi::UNCHANGED => Ok(HookOut::Unchanged),
-        abi::ERR => Err(PluginError::Hook {
+    let free = plugin.desc().free.expect("verified at load");
+    unsafe { dlopen::call_hook(hook, free, input, ctx) }.map_err(|e| match e {
+        CallError::Failed(message) => PluginError::Hook {
             plugin: plugin.name.clone(),
             hook: hook_name,
-            message: String::from_utf8_lossy(&bytes).into_owned(),
-        }),
-        abi::PANICKED => Err(PluginError::Panicked {
+            message,
+        },
+        CallError::Panicked(message) => PluginError::Panicked {
             plugin: plugin.name.clone(),
             hook: hook_name,
-            message: String::from_utf8_lossy(&bytes).into_owned(),
-        }),
-        other => Err(PluginError::BadDescriptor {
+            message,
+        },
+        CallError::UnknownStatus(status) => PluginError::BadDescriptor {
             name: plugin.name.clone(),
-            reason: format!("{hook_name} returned unknown status {other}"),
-        }),
-    }
+            reason: format!("{hook_name} returned unknown status {status}"),
+        },
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abi::ABI_VERSION;
+    use crate::abi::{ABI_VERSION, Buf};
 
     fn good_desc() -> Desc {
         Desc {
@@ -738,24 +682,6 @@ mod tests {
         d.name = c"".as_ptr();
         let err = verify("", &d as *const Desc).unwrap_err().to_string();
         assert!(err.contains("empty name"), "{err}");
-    }
-
-    #[test]
-    fn error_chains_join_every_source() {
-        #[derive(Debug)]
-        struct Outer(std::io::Error);
-        impl std::fmt::Display for Outer {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "outer")
-            }
-        }
-        impl std::error::Error for Outer {
-            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                Some(&self.0)
-            }
-        }
-        let joined = error_chain(&Outer(std::io::Error::other("inner reason")));
-        assert_eq!(joined, "outer: inner reason");
     }
 
     #[test]

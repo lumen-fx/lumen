@@ -201,8 +201,13 @@ pub fn accumulate_wheel(
     }
     let target = if chain.is_empty() {
         // Cursor over chrome with no scrollable ancestor: legacy
-        // fallback to the world's first scroller.
-        scrolls.iter().next().map(|(e, ..)| e)
+        // fallback to the world's first scroller. First-SPAWNED (minimum
+        // entity row), not first in query order: iteration order is
+        // archetype order, which reshuffles with unrelated world changes
+        // (`Entity`'s own `Ord` is not spawn order either), and the
+        // devtools overlay contributes a hidden scroller of its own -
+        // spawn order is the only stable "first" that lands on the app's.
+        scrolls.iter().map(|(e, ..)| e).min_by_key(|e| e.index())
     } else {
         chain
             .iter()

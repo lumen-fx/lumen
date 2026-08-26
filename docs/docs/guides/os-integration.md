@@ -327,6 +327,19 @@ your window into another application does not.
 
 ## Audio
 
+Audio is a runtime module. Declaring it in `lumen.toml` is what makes the
+`audio_*` functions exist:
+
+```toml
+[dependencies]
+lumen-audio = { bundled = true }
+```
+
+Without the declaration there is no audio surface at all: a script calling
+`audio_play` gets the host's ordinary unknown-function error, the same as any
+other name nothing registered. A statically built app compiles the module's
+plugin in instead of loading it.
+
 One track plays at a time:
 
 ```rhai
@@ -351,13 +364,9 @@ Playback state is published as signals you can bind to without polling:
 <label bind-text="audio_position"/>
 ```
 
-`on_audio_end()` runs once when a track finishes, which is where you advance a
-playlist.
+`on_audio_end(path)` runs once when a track finishes, with the path you
+passed to `audio_play`; that is where you advance a playlist. A per-track
+handler registered with `on("audio_end", path, "fn_name")` wins over it.
 
 WAV and Ogg Vorbis decode. On a machine with no working audio device the calls
 succeed and the position keeps advancing, with nothing audible.
-
-Audio initialises automatically when your app mentions it. Force it either way
-with `[runtime] audio` in `lumen.toml`, and drop it from a static bundle with
-`[capabilities] audio`; see the
-[lumen.toml reference](../reference/lumen-toml.md).

@@ -99,9 +99,9 @@ impl lumen_core::traits::WindowBackend for WinitWindow {}
 ///
 /// The pump gates on VISIBILITY, not focus. On tiling WMs (Hyprland,
 /// sway) an unfocused window stays fully on-screen, so it must keep
-/// animating: the audio position pump (`poll_audio`), restyle tweens,
+/// animating: a module's off-thread position pump, restyle tweens,
 /// and scroll inertia all ride the redraw loop, and freezing them the
-/// moment focus leaves is the "audio slider stops advancing while
+/// moment focus leaves is the "slider stops advancing while
 /// unfocused" bug. Only a truly occluded / minimized window parks
 /// (preserving the battery/idle win).
 ///
@@ -165,7 +165,7 @@ impl RedrawScheduler {
     /// Pure forward-gate decision used by `about_to_wait`: forward a
     /// `request_redraw` to winit only when a paint is pending AND the
     /// window is not parked. Anything that wants a frame while unfocused
-    /// (the audio ticker's `EventLoopWaker`, a restyle tween, scroll
+    /// (a worker thread's `EventLoopWaker`, a restyle tween, scroll
     /// inertia) sets `pending`; this gate no longer swallows it just
     /// because focus left.
     fn should_forward_redraw(&self) -> bool {
@@ -666,8 +666,8 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
                 // to `Window::request_redraw` only when the window isn't
                 // paused (occluded), so this still can't spin a covered /
                 // minimized window - but a visible-but-unfocused window
-                // (tiling WM) does wake, which is how the audio ticker's
-                // `EventLoopWaker` keeps `poll_audio` advancing off-focus.
+                // (tiling WM) does wake, which is how a worker thread's
+                // `EventLoopWaker` keeps its pump advancing off-focus.
                 if let Some(mut sch) = self.app.world.get_resource_mut::<RedrawScheduler>() {
                     sch.pending = true;
                 }
@@ -1112,8 +1112,8 @@ impl ApplicationHandler<UserEvent> for WinitHandler {
             WindowEvent::Focused(focused) => {
                 // Emit a `WindowFocused` message and track focus state.
                 // Focus does not pause the redraw pump: a visible-but-
-                // unfocused window (tiling WMs) must keep animating so the
-                // audio position pump / tweens / inertia advance while
+                // unfocused window (tiling WMs) must keep animating so
+                // worker-thread pumps / tweens / inertia advance while
                 // unfocused. `recompute_paused` therefore leaves `paused`
                 // driven by occlusion alone; we still call it so the field
                 // stays consistent if the policy ever changes.
@@ -1978,7 +1978,7 @@ mod tests {
     /// The pump-gate policy: only occlusion parks the loop. Focus is not a
     /// factor, so a visible-but-unfocused window (Hyprland/sway, where an
     /// unfocused window is still fully on-screen) keeps animating. This is
-    /// the "audio slider freeze while unfocused on a tiling WM" fix.
+    /// the "slider freeze while unfocused on a tiling WM" fix.
     #[test]
     fn visibility_not_focus_gates_the_pump() {
         // Visible + focused -> run.
@@ -2002,13 +2002,13 @@ mod tests {
     }
 
     /// `about_to_wait` forwards a `request_redraw` iff `should_forward_redraw`.
-    /// A pending paint raised while UNFOCUSED-but-VISIBLE (the audio ticker's
+    /// A pending paint raised while UNFOCUSED-but-VISIBLE (a worker thread's
     /// `EventLoopWaker`, a restyle tween, or scroll inertia all set `pending`)
     /// must forward; an occluded window must not.
     #[test]
     fn forward_redraw_wakes_unfocused_visible_but_parks_occluded() {
-        // Audio playing / tween in flight while unfocused-but-visible: the
-        // ticker/tween set `pending = true`; the gate must forward it.
+        // A pump or tween in flight while unfocused-but-visible: it set
+        // `pending = true`; the gate must forward it.
         assert!(scheduler(true, false, false).should_forward_redraw());
         // Focused + pending: unchanged from before the fix.
         assert!(scheduler(true, true, false).should_forward_redraw());

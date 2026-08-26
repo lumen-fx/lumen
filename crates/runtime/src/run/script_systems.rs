@@ -15,7 +15,7 @@ use lumen_scene::script_commands::apply_scene_script_commands;
 ///
 /// The binding / push systems are unconditional: they run even with no script
 /// installed, in which case their set edges are inert (the sets have zero
-/// members). The audio + `apply_script_commands` systems (`has_script`) only
+/// members). The `apply_script_commands` systems (`has_script`) only
 /// exist when the app ships a script.
 pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
     // Same-tick signal commit: a script `on_click` handler pushes its
@@ -292,9 +292,7 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
                 .before(lumen_core::signals::apply_text_bindings)
                 .before(lumen_core::signals::apply_checked_bindings)
                 .before(lumen_core::signals::apply_value_bindings)
-                .before(crate::spawn::reconcile_for_blocks)
-                // on_audio_end (auto-advance) may emit SetSignal commands.
-                .after(ScriptSet::AudioEnded),
+                .before(crate::spawn::reconcile_for_blocks),
         );
         // The commands that need what a window has: an asset path resolved
         // against the app dir, a hotkey, a tray icon, a file dialog, the
@@ -306,8 +304,7 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
                 .after(ScriptSet::Tick)
                 .after(ScriptSet::Dispatch)
                 .after(ScriptSet::DomInput)
-                .after(ScriptSet::Fill)
-                .after(ScriptSet::AudioEnded),
+                .after(ScriptSet::Fill),
         );
         // Third applier, for the OS-host commands (notifications, clipboard,
         // launcher, sleep inhibit); its doc has why they are not arms of
@@ -319,44 +316,6 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
                 .after(ScriptSet::Dispatch)
                 .after(ScriptSet::DomInput),
         );
-        // Audio transport wiring. COMPILE-TIME GATE (Part B tree-shaking):
-        // only registered when the `audio` feature is compiled in. The
-        // `.after(ScriptSet::AudioEnded)` edge on `apply_script_commands` above
-        // stays valid in a no-audio build: the set then has no members and the
-        // edge is a no-op.
-        //
-        // `poll_audio` pushes position/duration/playing into the store
-        // *before* the host mirror sync so `derive()`s over them recompute
-        // this tick (the same store->mirror->derive discipline every other
-        // signal follows).
-        #[cfg(feature = "audio")]
-        {
-            app.add_systems(
-                TickStage::Systems,
-                poll_audio.before(ScriptSet::SyncSignals),
-            );
-            // `apply_loaded_audio` starts playback once the AssetServer resolves
-            // the track bytes; runs after the shared decode drain.
-            app.add_systems(
-                TickStage::Systems,
-                apply_loaded_audio.after(lumen_assets::drain_completed_decodes),
-            );
-            // The end-of-track flag is cleared once, after every host has been
-            // offered `on_audio_end`, so a second host still sees it.
-            app.add_systems(
-                TickStage::Systems,
-                clear_audio_ended.after(ScriptSet::AudioEnded),
-            );
-            // `apply_audio_commands` applies transport commands + routes
-            // `audio_play` through the AssetServer.
-            app.add_systems(
-                TickStage::Systems,
-                apply_audio_commands
-                    .after(ScriptSet::Tick)
-                    .after(ScriptSet::Dispatch)
-                    .after(ScriptSet::AudioEnded),
-            );
-        }
     }
 }
 
@@ -467,14 +426,4 @@ pub(crate) fn register_script_host_systems<
             .after(ScriptSet::SyncSignals),
     );
     register_dom_event_dispatchers::<H>(app);
-    // `fire_audio_ended` invokes the optional `on_audio_end()` after the script
-    // tick; its emitted commands are drained by the appliers ordered
-    // `.after(ScriptSet::AudioEnded)`.
-    #[cfg(feature = "audio")]
-    app.add_systems(
-        TickStage::Systems,
-        fire_audio_ended::<H>
-            .in_set(ScriptSet::AudioEnded)
-            .after(ScriptSet::Tick),
-    );
 }

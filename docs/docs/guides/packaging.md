@@ -22,8 +22,18 @@ same relative paths your markup names them by. Copy that folder to another
 machine, run the executable, and the app starts. Nobody needs Lumen installed,
 and nobody needs a compiler.
 
-The Lumen runtime library sits in the folder next to the executable. It
-belongs to the app; keep the two together when you move it.
+The Lumen runtime library sits in the folder next to the executable. On
+Linux and macOS the shared engine and the Rust standard library it was built
+against travel beside it, and any [runtime
+modules](../reference/lumen-toml.md#dependencies) the app declares are
+staged into a `modules/` subfolder: `path` and `bundled` modules are copied
+from where the declaration points, and a `version` module resolves through
+the same cache and `lumen.lock` as `lumenc run`, so the shipped folder
+carries the exact library the lock pins. All of it belongs to the app; keep
+the folder together when you move it.
+
+A Windows package stays one library plus the executable: runtime modules are
+not supported there, and an app declaring them runs without them.
 
 Choose the name and the destination yourself:
 
@@ -81,6 +91,13 @@ lumenc package myapp --target windows-x86_64 --lib-dir /path/to/files
 A macOS package built from another platform ships the compiled app as a file
 beside the executable rather than inside it, since linking it in needs a macOS
 linker. It runs the same way.
+
+An app declaring `[dependencies]` cross-packages when its modules are
+`bundled`: the target's module archive is downloaded from the same release
+as the toolchain files, verified, and cached beside them. A `path` module
+cannot cross-package - a local library is built for one platform - and
+neither can a `version` one until the module registry exists; package those
+on a machine of the target platform instead.
 
 ### What a packaged app does at startup
 
@@ -178,9 +195,9 @@ stops the run rather than quietly falling back to the directory.
 
 ## Trim the runtime
 
-An app that plays no audio and makes no network calls does not need the code
-for either. `lumenc bundle --static` works out which subsystems an app uses
-and builds a runtime library carrying only those.
+An app that makes no network calls and opens no file dialogs does not need
+the code for either. `lumenc bundle --static` works out which subsystems an
+app uses and builds a runtime library carrying only those.
 
 ```sh
 lumenc bundle --static myapp out/
@@ -197,8 +214,8 @@ either direction in `lumen.toml`:
 
 ```toml
 [capabilities]
-audio = false
 http-fetch = false
+async = false
 ```
 
 See [the capabilities table](../reference/lumen-toml.md#capabilities) for what

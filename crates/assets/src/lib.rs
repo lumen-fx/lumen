@@ -5,7 +5,7 @@
 //! - On a cold miss, the request is pushed onto a bounded `crossbeam-channel` job queue drained by an N-worker thread pool (`N = available_parallelism().min(4)`).
 //!   Subsequent entities requesting the same path join a pending fan-out list.
 //! - Every request carries a monotonic per-entity `request_id`; results whose id no longer matches the entity's current id are discarded on completion. This kills the stale-decode race after rapid `ScriptCommand::SetSrc` storms.
-//! - What a path decodes *into* is decided by the loader registry: each [`AssetLoader`] claims file extensions and produces one [`AssetKind`], and the built-in image, SVG, and audio paths are ordinary registered loaders. An app or plugin adds a format by registering another one; see [`register_asset_loader`].
+//! - What a path decodes *into* is decided by the loader registry: each [`AssetLoader`] claims file extensions and produces one [`AssetKind`], and the built-in image and SVG paths are ordinary registered loaders. An app or plugin adds a format by registering another one; see [`register_asset_loader`].
 //! - Where the bytes come from is decided by the [`AssetSource`] list, consulted before the job is queued. [`BundleSource`] (`.lpak` archives, `lumen://app/...` URIs) is installed by default.
 //! - [`drain_completed_decodes`] delivers the resulting `Handle` to every still-valid waiter; failures attach [`ImageLoadFailed`] carrying a typed [`LoadErrorKind`].
 //! - Handles are strong [`Arc`]s to decoded data; the cache holds [`Handle<T>`] entries that share identity across consumers.
@@ -24,7 +24,7 @@ pub mod source;
 
 pub use bundle::{BundleError, LumenBundle, parse_lumen_uri};
 pub use loader::{AssetKind, AssetLoader, AssetLoaders, LoadContext, LoadedAsset, asset_extension};
-pub use loaders::{AudioLoader, ImageLoader, SvgLoader};
+pub use loaders::{ImageLoader, SvgLoader};
 pub use source::{AssetSource, BundleSource};
 
 use bevy_ecs::message::MessageWriter;
@@ -78,8 +78,8 @@ macro_rules! insert_cached_asset {
 /// Handles one successful decode outcome in [`drain_completed_decodes`]:
 /// inserts the payload into its cache (LRU-bumping recency) via `$insert`,
 /// then attaches a clone to every surviving waiter, clearing its `Enqueued`
-/// tag. The Image / Svg / Audio arms differ only in the cache insert method
-/// and the payload binding.
+/// tag. The Image and Svg arms differ only in the cache insert method and the
+/// payload binding.
 macro_rules! dispatch_decoded {
     ($server:ident, $commands:ident, $path:expr, $insert:ident, $payload:ident, $surviving:ident) => {{
         $server.$insert($path, $payload.clone());
@@ -233,50 +233,6 @@ pub struct LoadedSvg(pub Handle<SvgData>);
 
 deref_newtype!(LoadedSvg => SvgData);
 
-/// Source path for an audio track, first-class alongside [`ImageSource`].
-/// Attach it to the audio-player entity (the embedder's `apply_audio_commands`
-/// does this on `audio_play`); the asset pipeline reads + caches the encoded
-/// bytes off-thread and replaces it with [`LoadedAudio`] (or
-/// [`AudioLoadFailed`]).
-#[derive(Component, Clone, Debug)]
-pub struct AudioSource(pub PathBuf);
-
-/// Decoded-container payload for an audio track: the raw *encoded* file
-/// bytes (wav / ogg), shared `Arc`-cheap via [`Handle<AudioData>`].
-///
-/// Audio deliberately does **not** decode to PCM in the worker: songs are
-/// large and rodio streams-decodes on the cpal audio thread. The asset
-/// pipeline's job is the expensive part that must stay off the UI thread -
-/// the filesystem read (or bundle fetch) and a cheap container probe. The
-/// playback layer wraps these bytes in a `Cursor` and hands them to rodio,
-/// which decodes lazily as it mixes.
-pub struct AudioData {
-    /// Encoded file bytes (a complete wav / ogg container).
-    pub bytes: Arc<[u8]>,
-}
-
-impl AssetSize for AudioData {
-    fn bytes(&self) -> usize {
-        self.bytes.len()
-    }
-}
-
-/// Strong handle to a loaded audio track, attached once its bytes resolve.
-/// `Deref<Target = AudioData>` exposes `.bytes`.
-#[derive(Component, Clone)]
-pub struct LoadedAudio(pub Handle<AudioData>);
-
-deref_newtype!(LoadedAudio => AudioData);
-
-impl std::fmt::Debug for LoadedAudio {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LoadedAudio")
-            .field("bytes", &self.0.bytes.len())
-            .field("handle_id", &self.0.id())
-            .finish()
-    }
-}
-
 /// Typed asset load-failure category.
 ///
 /// Replaces the previous `String`-typed failure surface. Renderers branch on `kind` (a "broken image" icon for
@@ -341,25 +297,6 @@ impl From<LoadErrorKind> for ImageLoadFailed {
     }
 }
 
-/// Attached to the audio-player entity when a track fails to load/probe.
-/// The audio analog of [`ImageLoadFailed`], carrying the same typed
-/// [`LoadErrorKind`].
-#[derive(Component, Debug)]
-pub struct AudioLoadFailed {
-    /// Categorized failure variant.
-    pub kind: LoadErrorKind,
-    /// Stringified failure detail for logs.
-    pub detail: String,
-}
-
-impl AudioLoadFailed {
-    /// Wraps a [`LoadErrorKind`], formatting `detail` via `Display`.
-    pub fn new(kind: LoadErrorKind) -> Self {
-        let detail = kind.to_string();
-        Self { kind, detail }
-    }
-}
-
 /// Monotonic per-entity asset request id. Attached to every entity carrying an [`ImageSource`].
 /// Every `ScriptCommand::SetSrc` runs through [`AssetServer::bump_request_id`] which increments this counter;
 /// in-flight decode jobs carrying an older id are discarded on completion.
@@ -411,9 +348,8 @@ pub struct AssetServer {
     ///
     /// Empty until the first decode is actually enqueued: the pool is
     /// spawned lazily by [`Self::ensure_workers`] so an app that never
-    /// loads an image / SVG / audio track (the common case for a plain
-    /// counter / form UI) pays zero decode threads. See
-    /// [`Self::worker_count`].
+    /// loads an image or SVG (the common case for a plain counter / form
+    /// UI) pays zero decode threads. See [`Self::worker_count`].
     workers: Vec<JoinHandle<()>>,
     /// Receiver end handed to each worker at spawn time. Held here so the
     /// pool can be spawned lazily on first enqueue rather than eagerly at
@@ -430,8 +366,6 @@ pub struct AssetServer {
     image_cache: LruCache<PathBuf, LoadedImage>,
     /// Cached successful SVG decodes; cloning is `Arc`-cheap. LRU-ordered.
     svg_cache: LruCache<PathBuf, LoadedSvg>,
-    /// Cached loaded audio tracks (encoded bytes); cloning is `Arc`-cheap. LRU-ordered.
-    audio_cache: LruCache<PathBuf, LoadedAudio>,
     /// Cached decode failures keyed by source path. LRU-ordered.
     failed_cache: LruCache<PathBuf, ImageLoadFailed>,
     /// Entities awaiting an in-flight decode; one `DecodeResult` per path fans out to all matching waiters.
@@ -464,7 +398,7 @@ pub struct AssetServer {
     shutdown_flag: Arc<Mutex<bool>>,
     /// Extension-keyed loader registry. Decides which [`AssetLoader`] runs
     /// for a path and therefore what kind of asset it becomes. Defaults to
-    /// the built-in image / SVG / audio loaders.
+    /// the built-in image and SVG loaders.
     loaders: AssetLoaders,
     /// The built-in `.lpak` source. Kept as its own field so
     /// [`Self::register_bundle`] and the font-registration path in
@@ -507,10 +441,6 @@ struct DecodeResult {
     path: PathBuf,
     /// Request id forwarded from the originating `DecodeJob`; see [`DecodeJob::request_id`].
     request_id: u64,
-    /// Kind declared by the loader that ran. Used on the failure path to
-    /// pick the failure component, so a load that failed before producing a
-    /// payload still lands as the right kind.
-    kind: AssetKind,
     outcome: Result<LoadedAsset, LoadErrorKind>,
 }
 
@@ -518,7 +448,6 @@ struct DecodeResult {
 enum CacheLookup {
     HitImage(LoadedImage),
     HitSvg(LoadedSvg),
-    HitAudio(LoadedAudio),
     HitFailed(ImageLoadFailed),
     /// The path is already mid-flight; the entity has been appended to the pending list and the caller inserts `Enqueued`.
     InFlight,
@@ -560,7 +489,6 @@ impl AssetServer {
             worker_count,
             image_cache: LruCache::unbounded(),
             svg_cache: LruCache::unbounded(),
-            audio_cache: LruCache::unbounded(),
             failed_cache: LruCache::unbounded(),
             pending: HashMap::new(),
             request_ids: HashMap::new(),
@@ -685,9 +613,6 @@ impl AssetServer {
         for (_, svg) in self.svg_cache.iter() {
             total = total.saturating_add(svg.0.bytes());
         }
-        for (_, audio) in self.audio_cache.iter() {
-            total = total.saturating_add(audio.0.bytes());
-        }
         total
     }
 
@@ -702,10 +627,6 @@ impl AssetServer {
             }
             if let Some((_, svg)) = self.svg_cache.pop_lru() {
                 self.bytes_used = self.bytes_used.saturating_sub(svg.0.bytes());
-                continue;
-            }
-            if let Some((_, audio)) = self.audio_cache.pop_lru() {
-                self.bytes_used = self.bytes_used.saturating_sub(audio.0.bytes());
                 continue;
             }
             break;
@@ -768,9 +689,6 @@ impl AssetServer {
         }
         if let Some(svg) = self.svg_cache.get(&path) {
             return CacheLookup::HitSvg(svg.clone());
-        }
-        if let Some(audio) = self.audio_cache.get(&path) {
-            return CacheLookup::HitAudio(audio.clone());
         }
         if let Some(failed) = self.failed_cache.get(&path) {
             return CacheLookup::HitFailed(ImageLoadFailed {
@@ -863,10 +781,6 @@ impl AssetServer {
             self.bytes_used = self.bytes_used.saturating_sub(svg.0.bytes());
             hit = true;
         }
-        if let Some(audio) = self.audio_cache.pop(path) {
-            self.bytes_used = self.bytes_used.saturating_sub(audio.0.bytes());
-            hit = true;
-        }
         if self.failed_cache.pop(path).is_some() {
             hit = true;
         }
@@ -920,11 +834,6 @@ impl AssetServer {
     /// Inserts a decoded SVG into the cache.
     fn insert_svg(&mut self, path: PathBuf, svg: LoadedSvg) {
         insert_cached_asset!(self, svg_cache, path, svg);
-    }
-
-    /// Inserts a loaded audio track into the cache.
-    fn insert_audio(&mut self, path: PathBuf, audio: LoadedAudio) {
-        insert_cached_asset!(self, audio_cache, path, audio);
     }
 
     /// Inserts a decode failure into the cache. Watches the path so a fix-on-disk invalidates the entry;
@@ -991,11 +900,9 @@ fn worker_loop(
         }
         let ctx = LoadContext::new(&job.path, job.resolved_bytes.as_deref());
         let outcome = job.loader.load(&ctx);
-        let kind = job.loader.kind();
         let _ = result_tx.send(DecodeResult {
             path: job.path,
             request_id: job.request_id,
-            kind,
             outcome,
         });
     }
@@ -1012,14 +919,9 @@ impl Plugin for AssetsPlugin {
         app.world.init_resource::<AssetServer>();
         app.add_message::<AssetReloadRequested>();
         app.add_systems(TickStage::Systems, spawn_pending_decodes);
-        // Audio shares the same worker pool + result channel; its spawn
-        // system feeds the same `drain_completed_decodes` drain below.
-        app.add_systems(TickStage::Systems, spawn_pending_audio_decodes);
         app.add_systems(
             TickStage::Systems,
-            drain_completed_decodes
-                .after(spawn_pending_decodes)
-                .after(spawn_pending_audio_decodes),
+            drain_completed_decodes.after(spawn_pending_decodes),
         );
         app.add_systems(
             TickStage::Systems,
@@ -1266,47 +1168,6 @@ pub fn spawn_pending_decodes(
             CacheLookup::InFlight | CacheLookup::Enqueued => {
                 commands.entity(entity).insert(Enqueued);
             }
-            CacheLookup::HitAudio(_) => {
-                // An audio track cached at an image entity's path is
-                // impossible in practice; ignore to keep the image path
-                // total.
-            }
-        }
-    }
-}
-
-/// Audio analog of [`spawn_pending_decodes`]. Consults the cache for each
-/// [`AudioSource`] entity lacking [`LoadedAudio`] / [`AudioLoadFailed`] /
-/// [`Enqueued`]; cache hits attach synchronously, misses enqueue one
-/// off-thread read+probe job on the shared worker pool.
-#[allow(clippy::type_complexity)]
-pub fn spawn_pending_audio_decodes(
-    mut server: ResMut<AssetServer>,
-    pending: Query<
-        (Entity, &AudioSource),
-        (
-            Without<LoadedAudio>,
-            Without<AudioLoadFailed>,
-            Without<Enqueued>,
-        ),
-    >,
-    mut commands: Commands,
-) {
-    for (entity, source) in &pending {
-        match server.lookup_or_enqueue(entity, source.0.clone()) {
-            CacheLookup::HitAudio(audio) => {
-                commands.entity(entity).insert(audio);
-            }
-            CacheLookup::HitFailed(failed) => {
-                commands
-                    .entity(entity)
-                    .insert(AudioLoadFailed::new(failed.kind));
-            }
-            CacheLookup::InFlight | CacheLookup::Enqueued => {
-                commands.entity(entity).insert(Enqueued);
-            }
-            // Impossible for an audio path; ignore.
-            CacheLookup::HitImage(_) | CacheLookup::HitSvg(_) => {}
         }
     }
 }
@@ -1347,22 +1208,11 @@ pub fn drain_completed_decodes(mut server: ResMut<AssetServer>, mut commands: Co
             Ok(LoadedAsset::Svg(svg)) => {
                 dispatch_decoded!(server, commands, result.path, insert_svg, svg, surviving);
             }
-            Ok(LoadedAsset::Audio(audio)) => {
-                dispatch_decoded!(
-                    server,
-                    commands,
-                    result.path,
-                    insert_audio,
-                    audio,
-                    surviving
-                );
-            }
             Err(kind) => {
-                // Attach the failure type matching the asset kind so audio
-                // entities get `AudioLoadFailed` (image/svg get `ImageLoadFailed`).
-                // The kind is the one the selected loader declared, so a
-                // format registered by a plugin fails as its own kind too.
-                let is_audio = result.kind == AssetKind::Audio;
+                // The failure is cached once under the path and cloned onto
+                // every surviving waiter, so a second entity requesting the
+                // same path gets the same verdict without re-running the
+                // loader.
                 let failure = ImageLoadFailed::new(kind);
                 let detail = failure.detail.clone();
                 let kind_copy = clone_kind(&failure.kind);
@@ -1370,17 +1220,10 @@ pub fn drain_completed_decodes(mut server: ResMut<AssetServer>, mut commands: Co
                 for w in surviving {
                     let mut ec = commands.entity(w.entity);
                     ec.remove::<Enqueued>();
-                    if is_audio {
-                        ec.insert(AudioLoadFailed {
-                            kind: clone_kind(&kind_copy),
-                            detail: detail.clone(),
-                        });
-                    } else {
-                        ec.insert(ImageLoadFailed {
-                            kind: clone_kind(&kind_copy),
-                            detail: detail.clone(),
-                        });
-                    }
+                    ec.insert(ImageLoadFailed {
+                        kind: clone_kind(&kind_copy),
+                        detail: detail.clone(),
+                    });
                 }
             }
         }
@@ -1685,26 +1528,9 @@ mod tests {
         assert_eq!(svg.bytes(), 12_345);
     }
 
-    /// Build a minimal valid 16-bit-PCM mono WAV with `n` silent samples.
-    fn tiny_wav(n: usize) -> Vec<u8> {
-        let data_len = (n * 2) as u32;
-        let mut w = Vec::with_capacity(44 + n * 2);
-        w.extend_from_slice(b"RIFF");
-        w.extend_from_slice(&(36 + data_len).to_le_bytes());
-        w.extend_from_slice(b"WAVE");
-        w.extend_from_slice(b"fmt ");
-        w.extend_from_slice(&16u32.to_le_bytes());
-        w.extend_from_slice(&1u16.to_le_bytes()); // PCM
-        w.extend_from_slice(&1u16.to_le_bytes()); // mono
-        w.extend_from_slice(&44_100u32.to_le_bytes());
-        w.extend_from_slice(&88_200u32.to_le_bytes());
-        w.extend_from_slice(&2u16.to_le_bytes());
-        w.extend_from_slice(&16u16.to_le_bytes());
-        w.extend_from_slice(b"data");
-        w.extend_from_slice(&data_len.to_le_bytes());
-        w.resize(44 + n * 2, 0);
-        w
-    }
+    /// A minimal well-formed SVG with a known intrinsic size. Its file
+    /// length is what the loader budgets as the payload's byte cost.
+    const TINY_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>"#;
 
     /// Runs a loader the way a worker would: the path, plus bytes only when
     /// a source already produced them.
@@ -1717,11 +1543,12 @@ mod tests {
     #[test]
     fn default_registry_routes_by_extension() {
         let kind = |p: &str| AssetLoaders::default().kind_for(Path::new(p));
-        assert_eq!(kind("song.wav"), Some(AssetKind::Audio));
-        assert_eq!(kind("a/b/track.OGG"), Some(AssetKind::Audio));
-        assert_eq!(kind("lumen://app/assets/x.mp3"), Some(AssetKind::Audio));
         assert_eq!(kind("pic.png"), Some(AssetKind::Image));
         assert_eq!(kind("icon.svg"), Some(AssetKind::Svg));
+        // Extension matching is case-insensitive, and a `lumen://` URI
+        // resolves the same way a filesystem path does.
+        assert_eq!(kind("a/b/glyph.SVG"), Some(AssetKind::Svg));
+        assert_eq!(kind("lumen://app/assets/x.svg"), Some(AssetKind::Svg));
         // Anything unclaimed falls back to the image loader, which is what
         // the pipeline did before extensions were registered explicitly.
         assert_eq!(kind("mystery.dat"), Some(AssetKind::Image));
@@ -1740,31 +1567,30 @@ mod tests {
     }
 
     #[test]
-    fn load_audio_reads_bytes_and_caches() {
-        let dir = std::env::temp_dir().join(format!("lumen-assets-audio-{}", std::process::id()));
+    fn load_reads_from_disk_and_caches() {
+        let dir = std::env::temp_dir().join(format!("lumen-assets-load-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("silence.wav");
-        let wav = tiny_wav(1000);
-        std::fs::write(&path, &wav).unwrap();
+        let path = dir.join("badge.svg");
+        std::fs::write(&path, TINY_SVG).unwrap();
 
-        let LoadedAsset::Audio(loaded) = load_from_disk(&path).expect("load audio container")
-        else {
-            panic!("a .wav path must load as audio");
+        let LoadedAsset::Svg(loaded) = load_from_disk(&path).expect("load the svg") else {
+            panic!("a .svg path must load as an svg");
         };
+        assert_eq!(loaded.intrinsic, glam::Vec2::new(8.0, 8.0));
         assert_eq!(
-            loaded.0.bytes.len(),
-            wav.len(),
-            "carries full encoded bytes"
+            loaded.source_bytes,
+            TINY_SVG.len(),
+            "the source length is the payload's byte cost"
         );
 
-        // Inserting into the server accounts bytes + lookup returns a HitAudio.
+        // Inserting into the server accounts bytes + lookup returns a HitSvg.
         let mut server = AssetServer::default();
-        server.insert_audio(path.clone(), loaded);
-        assert_eq!(server.bytes_used(), wav.len());
+        server.insert_svg(path.clone(), loaded);
+        assert_eq!(server.bytes_used(), TINY_SVG.len());
         let e = Entity::from_raw_u32(7).unwrap();
         assert!(matches!(
             server.lookup_or_enqueue(e, path.clone()),
-            CacheLookup::HitAudio(_)
+            CacheLookup::HitSvg(_)
         ));
         assert_eq!(server.bytes_used(), server.recompute_bytes_used());
 
@@ -1772,11 +1598,11 @@ mod tests {
     }
 
     #[test]
-    fn load_audio_rejects_truncated_container() {
+    fn load_rejects_bytes_the_decoder_refuses() {
         let dir = std::env::temp_dir().join(format!("lumen-assets-bad-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("broken.wav");
-        std::fs::write(&path, b"RIFFnope").unwrap();
+        let path = dir.join("broken.svg");
+        std::fs::write(&path, b"<svg not really").unwrap();
         assert!(matches!(
             load_from_disk(&path),
             Err(LoadErrorKind::DecodeFailed(_))
@@ -1785,13 +1611,13 @@ mod tests {
     }
 
     #[test]
-    fn worker_pool_decodes_audio_off_thread() {
-        // End-to-end through the real crossbeam worker pool: enqueue an
-        // AudioSource path, then read the decoded result off the channel.
+    fn worker_pool_decodes_off_thread() {
+        // End-to-end through the real crossbeam worker pool: enqueue a path,
+        // then read the decoded result off the channel.
         let dir = std::env::temp_dir().join(format!("lumen-assets-pool-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("pool.wav");
-        std::fs::write(&path, tiny_wav(500)).unwrap();
+        let path = dir.join("pool.svg");
+        std::fs::write(&path, TINY_SVG).unwrap();
 
         let mut server = AssetServer::default();
         let e = Entity::from_raw_u32(3).unwrap();
@@ -1804,10 +1630,9 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("worker produced a decode result");
         assert_eq!(result.path, path);
-        assert_eq!(result.kind, AssetKind::Audio);
         assert!(
-            matches!(result.outcome, Ok(LoadedAsset::Audio(_))),
-            "audio path decodes to an Audio asset off the worker thread"
+            matches!(result.outcome, Ok(LoadedAsset::Svg(_))),
+            "an svg path decodes to an Svg asset off the worker thread"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1,0 +1,40 @@
+# The authoring side of runtime modules: what a prebuilt-dylib plugin crate
+# depends on. Small on purpose - the macro, the config wrapper, and the
+# re-exports an author writes against; the loading half lives in
+# `lumen-modules` inside the engine.
+[package]
+name = "lumen-module"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen runtime-module SDK: implement the Plugin trait, export it with lumen_module!, ship it as a version-locked dylib."
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[dependencies]
+lumen-core = { workspace = true }
+# The script-surface types a module registers through: `ScriptFn`, the
+# registry extension trait, the ordering sets, and the plugin-event wire.
+# Re-exported below so a module crate needs no dependency of its own.
+lumen-script = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+
+# The engine as a linkable dylib: depending on it is what resolves
+# `lumen-core` (and everything else the module touches) into the shared
+# engine instance instead of a second static copy, and what records the
+# module's `NEEDED` entry on `liblumen_engine`. Windows has no such library
+# (see sdk/rust-dylib/Cargo.toml), so prebuilt modules do not exist there and
+# the macro says so at expansion.
+[target.'cfg(not(windows))'.dependencies]
+lumen-dylib = { workspace = true }
+
+[dev-dependencies]
+# The end-to-end harness parses cargo's JSON artifact messages to find the
+# fixture module, the dylib-linked host runner, and the engine library.
+serde_json = { workspace = true }
+

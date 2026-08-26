@@ -2,8 +2,8 @@
 
 `lumen.toml` sits at the app root, beside the `src/` directory holding the
 app's code, and declares everything static about the app: its entry file,
-window, skin, locale, script engine, build hooks, and subsystem settings. The
-file is optional; every key has a default.
+window, skin, locale, script engine, runtime modules, build hooks, and
+subsystem settings. The file is optional; every key has a default.
 
 Unknown top-level sections and unknown keys inside a section are rejected with
 a parse error naming the offending key. A parse error aborts the command.
@@ -141,7 +141,6 @@ Every key is optional; leaving one out keeps the automatic behaviour.
 
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
-| `audio` | bool | detected from app usage | Starts the audio subsystem, or keeps it off. |
 | `mcp` | bool | on for a windowed run, off for a headless one | Runs the introspection server. `[mcp] port = 0` still disables it. |
 | `hot_reload` | bool | on only for a windowed run from source | Watches source files and reloads on change. Off for headless, bounded, and artifact runs. |
 | `threads` | integer | `min(cpu count, 4)` | Worker-thread budget. `LUMEN_THREADS` overrides this. |
@@ -157,7 +156,6 @@ runtime carrying only the listed subsystems. The shared runtime and
 
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
-| `audio` | bool | inferred from `audio_*` calls and audio files in the app | Compiles the audio subsystem and its playback backend in. |
 | `http-fetch` | bool | inferred from a `fetch(` call in the app | Compiles the HTTP client behind the scripts' `fetch()` and `http()` builtins in. Without it both calls report the missing client. |
 | `mcp` | bool | `false` | Compiles the introspection server in. Never inferred. |
 | `async` | bool | inferred from a file-dialog call in the app | Compiles the async bridge in. File dialogs resolve on it, and on macOS they do not open without it. |
@@ -236,6 +234,64 @@ would have set, and a script that publishes the signal itself beats both.
 to the site's.
 
 See [the web guide](../guides/web.md).
+
+## [dependencies]
+
+Prebuilt shared libraries the app loads at startup. One table covers both
+runtime kinds - the kind is detected at load from the symbols the file
+exports, never declared:
+
+- A [runtime module](../contributing/plugins.md#runtime-modules)
+  (`lumen_module_probe`): an engine-locked Rust dylib with full ECS reach.
+- A [portable plugin](../contributing/plugins.md#portable-plugins)
+  (`lumen_plugin_v1`): a C-ABI library offering script functions, language
+  preludes, and events.
+
+One table entry per library; the key is its name.
+
+```toml
+[dependencies]
+lumen-audio = { bundled = true }
+markdown-widgets = "1.2"
+shape-tools = { path = "modules/shape-tools", config = { units = "mm" } }
+```
+
+`lumen-audio` is the first-party module shipped today: the whole audio
+surface, from the `audio_*` script functions to the playback backend behind
+them. An app that plays sound declares it; a statically built app compiles
+the module's plugin in instead and the declaration is skipped with a notice.
+
+Each entry declares exactly one source:
+
+| Key | Type | Effect |
+|-----|------|--------|
+| `bundled` | `true` | The library ships with the toolchain; the runtime looks beside the running engine (the executable's directory, then `LUMEN_LIB_DIR`, then a `modules/` directory beside either). |
+| `version` | string | A version requirement. `lumenc run` and `lumenc package` resolve it through the shared plugin cache (`~/.lumen/plugins`) and pin the answer in `lumen.lock`, exactly as `[[plugins]]` versions resolve; the runtime never fetches or resolves one itself, it only loads what was resolved or already staged in a `modules/` directory, and fails with a banner otherwise. A bare string value (`name = "1.2"`) is shorthand for this key. |
+| `path` | string | A built library, relative to the app directory unless absolute. Without an extension the platform spellings are probed (`lib<m>.so`, `lib<m>.dylib`, plus the underscored variants cargo produces for a hyphenated name). |
+| `config` | table | Handed to the library verbatim at install. |
+
+The table is unordered, so entries load in sorted-name order; where an entry
+sits in the file carries no meaning.
+
+Each kind carries its own handshake, verified at load. A runtime module is
+version-locked to the exact engine build it was compiled against and loads
+only on Linux and macOS, into a dynamically linked engine. A portable plugin
+is checked against the plugin ABI version and the script and paint wire
+versions, and loads on every desktop platform, static builds included. Any
+failure - a missing file, a failed handshake, a library exporting neither
+entry symbol (the banner names both; a compiler plugin is pointed at
+[`[[plugins]]`](#plugins)) - is an unmissable stderr banner naming the entry
+and the reason, and the app starts without it. One case is quieter: a
+runtime module declared to a statically linked build is skipped with a
+single stderr line rather than the banner, because that build shape carries
+its capabilities compiled in; `lumenc bundle --static` says the same thing
+at build time, naming the declared modules. `lumenc web` refuses an app
+that declares this table (a browser cannot load native libraries).
+
+A declared library is native code loaded into the app's process, the same
+trust model as [`[[hooks]]`](#hooks). A `permissions` key is reserved and
+rejected; capability declarations are not supported yet. `git` and
+`registry` sources are reserved and rejected the same way.
 
 ## [[hooks]]
 

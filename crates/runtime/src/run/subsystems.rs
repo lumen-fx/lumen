@@ -7,9 +7,9 @@
 //!
 //! 1. **Startup / RSS gating (today).** [`SubsystemUsage`] is computed once
 //!    from a single bounded source scan + `lumen.toml` + run-mode flags, and
-//!    the gated units (audio, MCP, global hotkeys) are skipped when the app
-//!    provably does not use them - so a pure-UI app opens no audio device,
-//!    binds no MCP port, and grabs no X11 hotkey manager.
+//!    the gated units (MCP, global hotkeys, file dialogs) are skipped when the
+//!    app provably does not use them - so a pure-UI app binds no MCP port and
+//!    grabs no X11 hotkey manager.
 //! 2. **Compile-time tree-shaking (future).** With the wiring already carved
 //!    per subsystem, dropping one from a build becomes a one-line `cfg` /
 //!    manifest gate on its `register_*` call - no untangling first.
@@ -33,9 +33,6 @@ use super::*;
 /// markers, with `lumen.toml` overrides taking precedence where they exist.
 /// Every signal errs toward ON (see the module contract).
 pub(crate) struct SubsystemUsage {
-    /// Install the full audio service (output device + position ticker thread)
-    /// rather than an inert, device-less one.
-    pub(crate) audio: bool,
     /// Install the global-hotkey OS manager (`OsHotkeyRegistry`) + the
     /// per-tick `poll_hotkeys` drain. The manager opens an X11 connection on
     /// Linux, so skipping it for a hotkey-free app is a real idle win.
@@ -51,15 +48,9 @@ impl SubsystemUsage {
     ///
     /// `has_app_hooks` is `true` when the embedder supplied `RunOptions`
     /// `app_hooks` (Rust SDK closures). Their code is not scannable here, so
-    /// it downgrades a *newly-gated* subsystem's "unused" verdict to on - an
-    /// SDK app may drive that subsystem from Rust. It does not affect audio,
-    /// whose gating predates this refactor and must stay byte-identical.
-    pub(crate) fn detect(
-        opts: &RunOptions,
-        dir: &Path,
-        cfg: &crate::config::LumenToml,
-        has_app_hooks: bool,
-    ) -> Self {
+    /// it downgrades a gated subsystem's "unused" verdict to on - an
+    /// SDK app may drive that subsystem from Rust.
+    pub(crate) fn detect(opts: &RunOptions, dir: &Path, has_app_hooks: bool) -> Self {
         // A precompiled artifact carries no readable source at this point.
         let no_source = opts.artifact.is_some();
 
@@ -70,15 +61,6 @@ impl SubsystemUsage {
             let mut budget: usize = 128;
             scan_sources(dir, &mut hay, &mut budget, 0);
         }
-
-        // Audio: identical to the pre-refactor `detect_audio_usage` - explicit
-        // `[runtime] audio` wins; else artifact (source unreadable) or a marker
-        // scan. Embedder hooks are deliberately not force-on here, matching the
-        // prior behaviour exactly.
-        let audio = match cfg.runtime.audio {
-            Some(v) => v,
-            None => no_source || audio_markers_present(&hay),
-        };
 
         // Hotkey: previously always-on, now gated (a strict subset removal).
         // Gate on the `register_hotkey` script builtin (also matches
@@ -93,7 +75,6 @@ impl SubsystemUsage {
         let file_dialog = no_source || has_app_hooks || file_dialog_markers_present(&hay);
 
         Self {
-            audio,
             hotkey,
             file_dialog,
         }
@@ -141,19 +122,6 @@ fn scan_sources(dir: &Path, hay: &mut String, budget: &mut usize, depth: u8) {
             *budget -= 1;
         }
     }
-}
-
-/// True when `hay` (concatenated markup + script source) contains an audio
-/// usage marker: an `audio_*` script builtin call/name, or a recognised
-/// audio-file extension anywhere (covers `<audio src>`, `audio_play("x.wav")`,
-/// `<for>`-templated asset lists, etc.). Case-insensitive on extensions.
-pub(crate) fn audio_markers_present(hay: &str) -> bool {
-    if hay.contains("audio_") {
-        return true;
-    }
-    let lower = hay.to_ascii_lowercase();
-    const AUDIO_EXTS: [&str; 7] = [".wav", ".ogg", ".oga", ".mp3", ".flac", ".m4a", ".aac"];
-    AUDIO_EXTS.iter().any(|ext| lower.contains(ext))
 }
 
 /// True when `hay` (concatenated markup + script source) calls one of the
@@ -585,64 +553,6 @@ pub(crate) fn register_os_misc(app: &mut App, cfg: &crate::config::LumenToml) {
         .insert_non_send(InhibitHolder::new().with_app_name(app_name));
 }
 
-/// The audio service, the player entity, and the end-of-track flag. GATED on
-/// `audio_used` ([`SubsystemUsage::audio`]).
-///
-/// The service is NonSend (an output device is rarely Send: rodio's
-/// MixerDeviceSink wraps a !Send cpal stream). A dedicated player entity carries
-/// the current `AudioSource` so tracks load through the same async AssetServer
-/// pipeline as images.
-///
-/// Startup gating: an app with no detected audio usage gets an inert backend -
-/// no output device is opened and no ticker thread is spawned - so a pure-UI app
-/// (the counter) pays neither. All transport systems still no-op safely against
-/// it. An app that uses audio (the music demo: `.wav` refs + `audio_*`
-/// builtins) or forces it via `[runtime] audio = true` gets the full service.
-///
-/// An embedder that ships its own backend replaces this one from an app hook:
-/// hooks run last on the built app, so a NonSend `AudioService::from(MyBackend)`
-/// inserted there wins. Pair it with `[runtime] audio = false` to keep the
-/// default backend from opening a device it will not use.
-///
-/// COMPILE-TIME GATE (Part B tree-shaking): the subsystem lives behind the
-/// `audio` cargo feature and the shipped backend behind `audio-rodio`. The full
-/// shared / dev build compiles both; a trimmed static `--bundle` for a no-audio
-/// app drops them entirely and this becomes the inert no-op below.
-#[cfg(feature = "audio")]
-pub(crate) fn register_audio(app: &mut App, audio_used: bool) {
-    app.world.insert_non_send(default_audio_service(audio_used));
-    let audio_player = app.world.spawn(()).id();
-    app.world.insert_resource(AudioPlayerEntity(audio_player));
-    app.world.init_resource::<AudioEndedFlag>();
-}
-
-/// The backend a default build selects: rodio, opening a device only for an app
-/// that uses audio.
-#[cfg(feature = "audio-rodio")]
-fn default_audio_service(audio_used: bool) -> lumen_audio::AudioService {
-    if audio_used {
-        lumen_audio_rodio::RodioAudio::new().into()
-    } else {
-        lumen_audio_rodio::RodioAudio::disabled().into()
-    }
-}
-
-/// With the audio subsystem on and no backend compiled in, playback runs silent:
-/// the transport, the script commands, and the position signals all behave, and
-/// nothing reaches an audio device. This is the build an embedder starts from
-/// when it supplies its own backend.
-#[cfg(all(feature = "audio", not(feature = "audio-rodio")))]
-fn default_audio_service(_audio_used: bool) -> lumen_audio::AudioService {
-    lumen_audio::AudioService::default()
-}
-
-/// Inert audio register unit for a build compiled WITHOUT the `audio` feature:
-/// `lumen-audio` is absent, so no `AudioService` / player entity is installed.
-/// The audio transport systems are likewise not registered (see
-/// `register_script_systems`), so no runtime path reads the missing resources.
-#[cfg(not(feature = "audio"))]
-pub(crate) fn register_audio(_app: &mut App, _audio_used: bool) {}
-
 /// The HTTP client the scripts' `fetch()` / `http()` builtins run on.
 ///
 /// Installed as the `FetchRegistry` the script plugin would otherwise create
@@ -774,23 +684,9 @@ fn print_mcp_help_snippet(port: Option<u16>, simulate_enabled: bool) {
 mod tests {
     use super::*;
 
-    /// The audio marker scan: `audio_*` builtins and audio file extensions
-    /// flip it on; plain UI markup leaves it off (the gating win - a no-audio
-    /// app takes the `AudioService::disabled()` branch).
-    #[test]
-    fn audio_markers_detect_usage() {
-        assert!(audio_markers_present(
-            "fn on_start() { audio_play(\"a.wav\"); }"
-        ));
-        assert!(audio_markers_present("<audio src=\"track.OGG\" />"));
-        assert!(audio_markers_present(".mp3"));
-        assert!(!audio_markers_present("<button id=\"inc\">+</button>"));
-        assert!(!audio_markers_present(""));
-    }
-
-    /// A bare UI app (no audio markers, no hotkey builtin, from-disk source,
-    /// no hooks) resolves both gated OS signals OFF - the no-audio /
-    /// no-hotkey skip paths. An audio/hotkey app flips them on.
+    /// A bare UI app (no hotkey builtin, from-disk source, no hooks) resolves
+    /// the gated OS signals OFF - the no-hotkey / no-dialog skip paths. A
+    /// hotkey app flips its signal on.
     #[test]
     fn usage_detect_gates_bare_app_off() {
         let dir = std::env::temp_dir().join(format!(
@@ -805,33 +701,28 @@ mod tests {
 
         let bare = RunOptions::new(&dir)
             .with_markup("<root><button id=\"inc\">+</button></root>".to_string());
-        let cfg = crate::config::LumenToml::default();
-        let usage = SubsystemUsage::detect(&bare, &dir, &cfg, false);
-        assert!(!usage.audio, "bare UI app must skip audio init");
+        let usage = SubsystemUsage::detect(&bare, &dir, false);
         assert!(!usage.hotkey, "bare UI app must skip hotkey manager");
-
-        let audio_app = RunOptions::new(&dir).with_markup(
-            "<root><script>fn f(){ audio_play(\"x.wav\"); }</script></root>".to_string(),
+        assert!(
+            !usage.file_dialog,
+            "bare UI app must skip the dialog bridge"
         );
-        let usage = SubsystemUsage::detect(&audio_app, &dir, &cfg, false);
-        assert!(usage.audio, "audio app must init audio");
 
         let hotkey_app = RunOptions::new(&dir).with_markup(
             "<root><script>fn f(){ register_hotkey(\"Ctrl+S\",\"save\"); }</script></root>"
                 .to_string(),
         );
-        let usage = SubsystemUsage::detect(&hotkey_app, &dir, &cfg, false);
+        let usage = SubsystemUsage::detect(&hotkey_app, &dir, false);
         assert!(usage.hotkey, "hotkey app must init the manager");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Conservative fallback for the newly-gated hotkey unit: an embedder-hook
+    /// Conservative fallback for the gated hotkey unit: an embedder-hook
     /// app (opaque Rust that may register a hotkey) forces hotkey ON even with
-    /// no marker. Audio is deliberately unaffected by hooks - it stays on its
-    /// pre-refactor marker/artifact logic (OFF here, no audio marker present).
+    /// no marker.
     #[test]
-    fn app_hooks_force_hotkey_on_but_not_audio() {
+    fn app_hooks_force_hotkey_on() {
         let dir = std::env::temp_dir().join(format!(
             "lumen_subsys_hooks_{}_{}",
             std::process::id(),
@@ -841,44 +732,10 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let cfg = crate::config::LumenToml::default();
 
         let hooked = RunOptions::new(&dir).with_markup("<root/>".to_string());
-        let usage = SubsystemUsage::detect(&hooked, &dir, &cfg, true);
+        let usage = SubsystemUsage::detect(&hooked, &dir, true);
         assert!(usage.hotkey, "app_hooks must force the hotkey manager ON");
-        assert!(
-            !usage.audio,
-            "app_hooks must NOT change the audio decision (no marker -> OFF)"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// `[runtime] audio` overrides the scan in both directions.
-    #[test]
-    fn runtime_audio_override_wins() {
-        let dir = std::env::temp_dir().join(format!(
-            "lumen_subsys_override_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-
-        // Force ON despite no markers.
-        let mut cfg = crate::config::LumenToml::default();
-        cfg.runtime.audio = Some(true);
-        let bare = RunOptions::new(&dir).with_markup("<root/>".to_string());
-        assert!(SubsystemUsage::detect(&bare, &dir, &cfg, false).audio);
-
-        // Force OFF despite an audio marker.
-        cfg.runtime.audio = Some(false);
-        let audio_app = RunOptions::new(&dir).with_markup(
-            "<root><script>fn f(){ audio_play(\"x.wav\"); }</script></root>".to_string(),
-        );
-        assert!(!SubsystemUsage::detect(&audio_app, &dir, &cfg, false).audio);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

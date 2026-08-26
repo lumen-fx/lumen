@@ -3416,6 +3416,7 @@ dependencies = [
  "cbindgen",
  "crossbeam-channel",
  "lumen-core",
+ "lumen-dylib",
  "lumen-runtime",
  "lumen-script",
  "lumen-widget",
@@ -3469,14 +3470,12 @@ name = "lumen-audio"
 version = "0.0.6"
 dependencies = [
  "lumen-core",
-]
-
-[[package]]
-name = "lumen-audio-rodio"
-version = "0.0.6"
-dependencies = [
- "lumen-audio",
+ "lumen-ir",
+ "lumen-module",
+ "lumen-runtime",
+ "lumen-script",
  "rodio",
+ "serde_json",
  "symphonia",
 ]
 
@@ -3486,12 +3485,14 @@ version = "0.0.6"
 dependencies = [
  "bevy_ecs",
  "bevy_tasks",
+ "bincode",
  "bitflags 2.13.1",
  "crossbeam-channel",
  "glam 0.33.3",
  "proptest",
  "raw-window-handle",
  "ropey",
+ "serde",
  "smallvec",
  "thiserror 2.0.19",
  "unicode-segmentation",
@@ -3512,7 +3513,14 @@ dependencies = [
 name = "lumen-dylib"
 version = "0.0.6"
 dependencies = [
- "lumen",
+ "bevy_ecs",
+ "lumen-core",
+ "lumen-runtime",
+ "lumen-script",
+ "lumen-script-candela",
+ "lumen-widget",
+ "lumen-widget-macros",
+ "rhai",
 ]
 
 [[package]]
@@ -3636,6 +3644,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-module"
+version = "0.0.6"
+dependencies = [
+ "lumen-core",
+ "lumen-dylib",
+ "lumen-script",
+ "serde",
+ "serde_json",
+ "toml 1.1.4+spec-1.1.0",
+]
+
+[[package]]
+name = "lumen-module-fixture"
+version = "0.0.6"
+dependencies = [
+ "bevy_ecs",
+ "lumen-core",
+ "lumen-module",
+ "lumen-script",
+]
+
+[[package]]
+name = "lumen-module-fixture-host"
+version = "0.0.6"
+dependencies = [
+ "lumen-dylib",
+ "lumenc",
+]
+
+[[package]]
+name = "lumen-modules"
+version = "0.0.6"
+dependencies = [
+ "bevy_ecs",
+ "libc",
+ "libloading 0.9.0",
+ "lumen-core",
+ "lumen-plugin",
+ "lumen-plugin-abi",
+ "lumenc-plugin",
+ "serde",
+ "toml 1.1.4+spec-1.1.0",
+]
+
+[[package]]
 name = "lumen-os-clipboard"
 version = "0.0.6"
 dependencies = [
@@ -3752,10 +3805,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-plugin"
+version = "0.0.6"
+dependencies = [
+ "libloading 0.9.0",
+ "lumen-core",
+ "lumen-plugin",
+ "lumen-plugin-abi",
+ "lumen-script",
+ "lumenc-plugin",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "toml 1.1.4+spec-1.1.0",
+]
+
+[[package]]
+name = "lumen-plugin-abi"
+version = "0.0.6"
+dependencies = [
+ "bincode",
+ "libloading 0.9.0",
+ "lumen-plugin-abi",
+ "semver",
+ "serde",
+ "sha2",
+ "thiserror 2.0.19",
+ "toml 1.1.4+spec-1.1.0",
+]
+
+[[package]]
 name = "lumen-plugin-fixture"
 version = "0.0.6"
 dependencies = [
- "lumenc-plugin",
+ "lumen-plugin",
  "serde",
 ]
 
@@ -3848,8 +3931,6 @@ dependencies = [
  "lumen-a11y-accesskit",
  "lumen-assets",
  "lumen-async-tokio",
- "lumen-audio",
- "lumen-audio-rodio",
  "lumen-core",
  "lumen-devtools",
  "lumen-http-ureq",
@@ -3858,6 +3939,7 @@ dependencies = [
  "lumen-ir",
  "lumen-layout-taffy",
  "lumen-mcp",
+ "lumen-modules",
  "lumen-os-clipboard",
  "lumen-os-dnd",
  "lumen-os-filedialog",
@@ -3866,6 +3948,7 @@ dependencies = [
  "lumen-os-notify",
  "lumen-os-power",
  "lumen-os-tray",
+ "lumen-plugin",
  "lumen-primitives",
  "lumen-render-wgpu",
  "lumen-scene",
@@ -3876,6 +3959,7 @@ dependencies = [
  "lumen-text",
  "lumen-text-cosmic",
  "lumen-window-winit",
+ "lumenc-plugin",
  "mlua",
  "notify",
  "rhai",
@@ -3912,11 +3996,14 @@ name = "lumen-script"
 version = "0.0.6"
 dependencies = [
  "bevy_ecs",
+ "bincode",
  "crossbeam-channel",
+ "glam 0.33.3",
  "lumen-core",
  "lumen-input",
  "lumen-ir",
  "lumen-os-dnd",
+ "lumen-plugin-abi",
  "lumen-primitives",
  "ron",
  "serde",
@@ -4126,6 +4213,7 @@ dependencies = [
  "lumen-assets",
  "lumen-core",
  "lumen-devtools",
+ "lumen-dylib",
  "lumen-html",
  "lumen-i18n",
  "lumen-ir",
@@ -4164,16 +4252,22 @@ dependencies = [
 name = "lumenc-plugin"
 version = "0.0.6"
 dependencies = [
- "bincode",
  "libloading 0.9.0",
  "lumen-ir",
+ "lumen-plugin-abi",
  "lumenc-plugin",
- "semver",
  "serde",
  "serde_json",
- "sha2",
  "thiserror 2.0.19",
  "toml 1.1.4+spec-1.1.0",
+]
+
+[[package]]
+name = "lumenc-plugin-fixture"
+version = "0.0.6"
+dependencies = [
+ "lumenc-plugin",
+ "serde",
 ]
 
 [[package]]
@@ -4183,6 +4277,7 @@ dependencies = [
  "glam 0.33.3",
  "lumen",
  "lumen-dylib",
+ "lumenc",
 ]
 
 [[package]]

@@ -25,6 +25,10 @@
 //! [asset_roots]
 //! paths = ["icons", "../shared"]   # extra dirs scanned for relative src=
 //!
+//! [dependencies]                   # runtime modules, loaded in sorted-name order
+//! lumen-audio = { bundled = true }
+//! shape-tools = { path = "modules/shape-tools", config = { units = "mm" } }
+//!
 //! [[hooks]]                        # project build/setup commands; see `crate::hooks`
 //! when    = "prebuild"             # "prebuild" | "prerun"
 //! os      = "linux"                # optional: "linux" | "macos" | "windows"
@@ -66,7 +70,7 @@ pub struct LumenToml {
     pub script: ScriptCfg,
     /// `[perf]` section - per-cache memory budgets.
     pub perf: PerfCfg,
-    /// `[runtime]` section - subsystem init overrides (audio / MCP /
+    /// `[runtime]` section - subsystem init overrides (MCP /
     /// hot-reload / thread budget).
     pub runtime: RuntimeCfg,
     /// `[capabilities]` section - per-app COMPILE-TIME subsystem trim toggles
@@ -88,6 +92,13 @@ pub struct LumenToml {
     /// [`crate::compiler_plugins::CompilerPlugins`] boundary, the same
     /// inversion the parser uses.
     pub plugins: Vec<toml::Value>,
+    /// `[dependencies]` table - prebuilt dylibs loaded at startup in
+    /// sorted-name order: engine-linked runtime modules and portable C-ABI
+    /// plugins, told apart by their exports. The schema, the loader, and
+    /// the failure policy live in `lumen-modules` (re-exported as
+    /// [`crate::modules`]); `build_app` runs the table through the loader
+    /// when the `modules` feature is on.
+    pub dependencies: lumen_modules::DependenciesCfg,
     /// `[signals]` table - optional typed schema. Each key declares
     /// the expected `SignalType`. Used by `lumenc lint --signals`
     /// to flag untyped writes / schema mismatches. Schema entries
@@ -328,26 +339,18 @@ pub struct PerfCfg {
 
 /// `[runtime]` block - per-app overrides for the startup subsystem-gating
 /// (measured startup quick-wins). Every field is `Option`: `None` keeps the
-/// automatic behaviour (usage-detection for audio; run-mode gating for MCP /
+/// automatic behaviour (run-mode gating for MCP /
 /// hot-reload; `min(cores, 4)` for threads), while `Some(v)` forces it.
 ///
 /// ```toml
 /// [runtime]
-/// audio = true        # force the audio subsystem on (or false = off)
 /// mcp = false         # force the MCP server off (or true = on)
 /// hot_reload = false  # force the source watcher off (or true = on)
 /// threads = 2         # bevy_ecs worker-thread budget
 /// ```
-///
-/// Full compile-time crate exclusion (dropping the rodio / asset-decode
-/// code from the binary entirely) is deferred until the lumenc/runtime
-/// crate split; these knobs gate *initialization*, not linkage.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RuntimeCfg {
-    /// Force the audio subsystem (rodio `MixerDeviceSink` + position ticker
-    /// thread) on/off. `None` = auto-detect from app usage.
-    pub audio: Option<bool>,
     /// Force the MCP introspection server on/off. `None` = on for an
     /// interactive windowed run, off for a headless / bounded run (unless
     /// `[mcp] simulate = true`). Interacts with `[mcp] port` (a `port = 0`
@@ -376,7 +379,6 @@ pub struct RuntimeCfg {
 ///
 /// ```toml
 /// [capabilities]
-/// audio = false           # default inferred; explicit wins
 /// http-fetch = false
 /// mcp = false
 /// async = false
@@ -387,9 +389,6 @@ pub struct RuntimeCfg {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CapabilitiesCfg {
-    /// Force the audio subsystem (rodio/cpal/symphonia) into/out of the bundle.
-    /// `None` = infer from `audio_*` builtins / audio-file markers.
-    pub audio: Option<bool>,
     /// Force the MCP introspection server into/out of the bundle. `None` = OFF
     /// (MCP is a dev/introspection capability, never inferred into a release
     /// bundle).
@@ -416,14 +415,16 @@ pub struct CapabilitiesCfg {
 /// config always overrides inference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleCapabilities {
-    /// Audio subsystem present.
-    pub audio: bool,
     /// MCP introspection server present.
     pub mcp: bool,
     /// Async (tokio) bridge present.
     pub async_rt: bool,
     /// Scripts' HTTP `fetch()` builtin present.
     pub http_fetch: bool,
+    /// Runtime-module loader present. Follows `[dependencies]`: any declared
+    /// module keeps it, because a build without the loader would drop the
+    /// modules in silence rather than with the load banner.
+    pub modules: bool,
     /// The script hosts compiled into the bundle, one per language the app
     /// ships, in [`ScriptEngine::ALL`] order.
     pub hosts: Vec<ScriptEngine>,
@@ -431,18 +432,9 @@ pub struct BundleCapabilities {
 
 impl BundleCapabilities {
     /// Resolve the capability set for the app rooted at `dir` from `cfg` plus a
-    /// bounded source scan. Explicit `[capabilities]` wins, then legacy
-    /// `[runtime] audio`, then inference.
+    /// bounded source scan. Explicit `[capabilities]` wins, then inference.
     pub fn resolve(dir: &Path, cfg: &LumenToml) -> Self {
         let hay = crate::run::subsystems::scan_app_sources(dir);
-
-        // Audio: explicit [capabilities] audio, else legacy [runtime] audio,
-        // else the same marker scan the runtime startup gate uses.
-        let audio = cfg
-            .capabilities
-            .audio
-            .or(cfg.runtime.audio)
-            .unwrap_or_else(|| crate::run::subsystems::audio_markers_present(&hay));
 
         // MCP: a dev/introspection capability, never inferred ON for a release
         // bundle; only an explicit toggle pulls it in.
@@ -462,13 +454,17 @@ impl BundleCapabilities {
             .http_fetch
             .unwrap_or_else(|| hay.contains("fetch("));
 
+        // Modules: any declared `[dependencies]` entry keeps the loader in,
+        // so a missing module banners at startup instead of vanishing.
+        let modules = !cfg.dependencies.0.is_empty();
+
         let hosts = infer_script_hosts(dir, cfg);
 
         Self {
-            audio,
             mcp,
             async_rt,
             http_fetch,
+            modules,
             hosts,
         }
     }
@@ -480,11 +476,6 @@ impl BundleCapabilities {
     /// feature, so a bundle links only the languages the app ships.
     pub fn to_features(&self) -> Vec<String> {
         let mut f: Vec<String> = Vec::new();
-        if self.audio {
-            // The backend comes with the capability: a bundled app that plays
-            // audio wants sound, not the silent transport.
-            f.push("audio-rodio".into());
-        }
         if self.mcp {
             f.push("mcp".into());
         }
@@ -493,6 +484,9 @@ impl BundleCapabilities {
         }
         if self.http_fetch {
             f.push("http-fetch".into());
+        }
+        if self.modules {
+            f.push("modules".into());
         }
         for host in &self.hosts {
             match host {
@@ -1214,7 +1208,7 @@ mod tests {
         let src = dir.join("src");
         std::fs::create_dir_all(&src).unwrap();
 
-        // Bare UI app: audio + http-fetch inferred OFF; mcp/async default OFF;
+        // Bare UI app: http-fetch inferred OFF; mcp/async default OFF;
         // candela host (the default when no script file names a language), so
         // the feature list carries only that host.
         std::fs::write(
@@ -1224,26 +1218,25 @@ mod tests {
         .unwrap();
         let cfg = LumenToml::default();
         let caps = BundleCapabilities::resolve(&dir, &cfg);
-        assert!(!caps.audio && !caps.http_fetch && !caps.mcp && !caps.async_rt);
+        assert!(!caps.http_fetch && !caps.mcp && !caps.async_rt);
         assert_eq!(caps.hosts, vec![ScriptEngine::Candela]);
         assert_eq!(caps.to_features(), vec!["host-candela".to_string()]);
 
-        // Audio + fetch markers flip inference ON.
+        // A fetch marker flips inference ON.
         std::fs::write(
             src.join("app.rhai"),
-            "fn f(){ audio_play(\"x.wav\"); fetch(\"http://h\", \"t\"); }",
+            "fn f(){ fetch(\"http://h\", \"t\"); }",
         )
         .unwrap();
         let caps = BundleCapabilities::resolve(&dir, &cfg);
-        assert!(caps.audio && caps.http_fetch);
+        assert!(caps.http_fetch);
         let feats = caps.to_features();
-        assert!(feats.contains(&"audio-rodio".to_string()));
         assert!(feats.contains(&"http-fetch".to_string()));
 
-        // Explicit [capabilities] audio = false overrides the marker.
+        // Explicit [capabilities] http-fetch = false overrides the marker.
         let mut cfg2 = LumenToml::default();
-        cfg2.capabilities.audio = Some(false);
-        assert!(!BundleCapabilities::resolve(&dir, &cfg2).audio);
+        cfg2.capabilities.http_fetch = Some(false);
+        assert!(!BundleCapabilities::resolve(&dir, &cfg2).http_fetch);
 
         // A file-dialog builtin keeps the async runtime in the bundle: on
         // macOS it is the only path that opens a dialog at all.
@@ -1279,16 +1272,46 @@ mod tests {
     }
 
     #[test]
+    fn dependencies_table_parses_and_keeps_the_modules_capability() {
+        use lumen_modules::ModuleSource;
+        let src = r#"
+            [dependencies]
+            zeta = "1.2"
+            alpha = { path = "modules/alpha", config = { units = "mm" } }
+        "#;
+        let cfg: LumenToml = toml::from_str(src).unwrap();
+        // Sorted by name: the table is unordered, so sorted order is the
+        // documented load order.
+        assert_eq!(cfg.dependencies.0.len(), 2);
+        assert_eq!(cfg.dependencies.0[0].name, "alpha");
+        assert_eq!(
+            cfg.dependencies.0[0].source,
+            ModuleSource::Path("modules/alpha".into())
+        );
+        assert_eq!(cfg.dependencies.0[1].name, "zeta");
+
+        // Declared dependencies keep the loader in a bundle.
+        let dir = std::env::temp_dir().join("lumen-deps-caps-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let caps = BundleCapabilities::resolve(&dir, &cfg);
+        assert!(caps.modules);
+        assert!(caps.to_features().contains(&"modules".to_string()));
+
+        // No dependencies, no loader.
+        let caps = BundleCapabilities::resolve(&dir, &LumenToml::default());
+        assert!(!caps.modules);
+        assert!(!caps.to_features().contains(&"modules".to_string()));
+    }
+
+    #[test]
     fn capabilities_table_parses() {
         let src = r#"
             [capabilities]
-            audio = false
             http-fetch = true
             mcp = false
             async = true
         "#;
         let cfg: LumenToml = toml::from_str(src).unwrap();
-        assert_eq!(cfg.capabilities.audio, Some(false));
         assert_eq!(cfg.capabilities.http_fetch, Some(true));
         assert_eq!(cfg.capabilities.mcp, Some(false));
         assert_eq!(cfg.capabilities.async_rt, Some(true));

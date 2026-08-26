@@ -31,6 +31,7 @@ crates/backends/   swappable capability implementations
 crates/os/         one desktop capability per crate
 crates/script/     the scripting API and its three hosts
 crates/dev/        tools that never ship inside an app
+std/               first-party runtime modules, shipped beside the engine
 sdk/               the Rust, C++, and Python SDKs
 apps/              example apps
 fixtures/          small apps the test suite drives
@@ -86,12 +87,14 @@ tools/             the release plumbing and the editor plugins
   renderer and an accessibility bridge are handed to it, and it drives both
   through their traits, so it compiles without naming a graphics API or an
   accessibility library.
-- **lumen-audio**: the playback abstraction (`AudioBackend`) plus the transport
-  it drives: playing, paused, stopped, playhead, duration, seek, and volume. It
-  also carries a silent backend, for a build or a test that must not touch a
-  device.
-- **lumen-audio-rodio**: the playback implementation Lumen ships. Decodes wav
-  and ogg over a rodio sink, and runs silent when no output device exists.
+- **lumen-audio** (`std/audio`): the whole audio capability, as a
+  self-contained module the engine knows nothing about. It registers the
+  `audio_*` script functions through the generic registry, runs playback in
+  its own systems (wav and ogg over a rodio sink, silent when no output
+  device exists), and delivers end-of-track over the plugin-event bus. One
+  crate builds both link shapes: the cdylib is the bundled `lumen-audio`
+  runtime module an app declares in `lumen.toml`, and a static build
+  compiles the same plugin in.
 - **lumen-http-ureq**: the HTTP client behind the scripts' `fetch()` and
   `http()` builtins. One blocking request per call over ureq, with a bounded
   body read.
@@ -203,15 +206,18 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   the shared `liblumen` plus a static library. That shared form is a `cdylib`:
   it exports the `extern "C"` surface and nothing else, which is what the
   launcher and the C++ and Python SDKs open.
-- **lumen-dylib** (in `sdk/rust-dylib`): the same engine built as a Rust `dylib`,
-  which carries Rust metadata and so can be *linked* rather than opened. One
-  crate target cannot be both a `cdylib` and a `dylib`, hence two crates. It is
-  deliberately not a workspace member: a `dylib` exports the whole crate graph,
-  and on Windows the import library describing those exports overflows its
-  65535-entry limit, so it is reached only through a `cfg(not(windows))`
-  dependency in the Rust SDK. Building an app with `-C prefer-dynamic` selects
-  the shared form; without the flag, and on Windows, cargo takes the static one
-  and the app carries the runtime.
+- **lumen-dylib** (in `sdk/rust-dylib`): the engine built as a Rust `dylib`
+  (`liblumen_engine`), which carries Rust metadata and so can be *linked*
+  rather than opened. It names the engine crates directly - never `lumen` or
+  `lumenc`, which are its consumers: the Rust SDK links it always (off
+  Windows), and the shipped `lumenc` binary and `liblumen` link it under
+  their `dynamic-engine` feature, which is how one engine instance comes to
+  be shared by the process and the runtime modules it loads. Deliberately
+  not a workspace member: a `dylib` exports the whole crate graph, and on
+  Windows the import library describing those exports overflows its
+  65535-entry limit. Building with `-C prefer-dynamic` selects the shared
+  form; without the flag, and on Windows, cargo takes the static one and
+  the binary carries the runtime.
 - **lumen-launcher**: the executable stub `lumenc package` turns into a shipped
   app. It reads the artifact packaging put inside it, opens the shared runtime
   library beside it, and runs. It links the dlopen seam and nothing else, so it

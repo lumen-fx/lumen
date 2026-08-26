@@ -1,9 +1,15 @@
 # Writing plugins
 
-Lumen has two plugin kinds: runtime plugins join a running app (systems,
-resources, script functions), and [compiler plugins](#compiler-plugins) change
-what `lumenc` produces from an app's sources. The first part of this page
-covers runtime plugins; compiler plugins have their own section at the end.
+Lumen has four plugin kinds. Runtime plugins join a running app (systems,
+resources, script functions) and are compiled into it. [Runtime
+modules](#runtime-modules) are the same plugins built as prebuilt shared
+libraries an app declares in `lumen.toml` and the engine loads at startup.
+[Portable plugins](#portable-plugins) are prebuilt libraries too, declared in
+the same table, but speak a serialized C ABI instead of linking the engine:
+narrower reach, no version lock to one engine build. [Compiler
+plugins](#compiler-plugins) change what `lumenc` produces from an app's
+sources. The first part of this page covers runtime plugins; the other kinds
+have their own sections at the end.
 
 A runtime plugin is how Rust code joins a Lumen app. It registers systems into
 the tick and render schedules, installs resources, and can replace parts of
@@ -575,8 +581,8 @@ function.
 
 The asset pipeline decides what a path becomes through a registry of loaders.
 An `AssetLoader` claims file extensions, declares which kind of asset it
-produces, and turns one load into a payload. The built-in image, SVG, and
-audio paths are loaders like any other, registered by default and replaceable.
+produces, and turns one load into a payload. The built-in image and SVG
+paths are loaders like any other, registered by default and replaceable.
 
 ```rust
 use lumen_assets::{AssetKind, AssetLoader, LoadContext, LoadErrorKind, LoadedAsset};
@@ -638,6 +644,221 @@ another with `AssetServer::register_source` to serve assets from somewhere
 else, such as bytes embedded in the binary. Sources run on the main thread
 while the load is being queued, so keep them to an index lookup.
 
+## Runtime modules
+
+A runtime module is a plugin the app does not compile in: a shared library
+built from the same `Plugin` trait as everything above, declared in the app's
+`lumen.toml` (see the
+[`[dependencies]` reference](../reference/lumen-toml.md#dependencies)), and
+loaded at startup. The loader tells a runtime module from a
+[portable plugin](#portable-plugins) by the entry symbol the file exports, so
+the table entry looks the same for both. Once installed a module has the same
+reach as any plugin: real systems in the tick stages, its own components and
+resources, queries over the app's entities.
+
+That reach comes from linking the engine as a Rust dynamic library rather
+than speaking a serialized ABI, and it sets the contract:
+
+- **A module is version-locked to the exact engine build.** At load the
+  engine reads the module's build id, inlined when the module compiled, and
+  compares it against its own for exact equality. Nothing looser is safe:
+  Rust's layout is not stable across rebuilds, and a skewed module would
+  corrupt memory rather than fail. Rebuild modules for every engine release.
+- **Any load failure is a banner, not a dead app.** A missing file, a
+  mismatched build id, a library that is not a module, or a panicking
+  constructor prints an unmissable stderr banner naming the module and the
+  reason, and the app boots without that module. The outcome is queryable
+  from the `LoadedModules` resource.
+- **Modules load only into a dynamically linked engine.** On Linux and
+  macOS that is every ordinary path: the installed `lumenc` (so `lumenc run`
+  markup apps load modules), a `lumenc package` folder (the launcher's
+  `liblumen` links the shared engine beside it), and a Rust SDK app built
+  `prefer-dynamic`. A process that compiled the engine into itself instead
+  (a static `--bundle`, a plain `cargo run` binary, a source-built `lumenc`
+  without the `dynamic-engine` feature) refuses every module with a banner,
+  because loading one there would map a second engine instance that shares
+  no state with the first.
+- **A loaded module is never unloaded.** The schedules hold function
+  pointers into the library for as long as the app lives.
+- **Windows is not supported** for prebuilt modules; no linkable engine
+  library exists there. Compile the plugin into the app instead.
+
+### Authoring a module
+
+A module crate is a `cdylib` depending on the SDK crate at the engine release
+it targets:
+
+```toml
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+lumen-module = { git = "https://github.com/lumen-fx/lumen", tag = "v0.0.6" }
+lumen-core = { git = "https://github.com/lumen-fx/lumen", tag = "v0.0.6" }
+bevy_ecs = "0.19"
+```
+
+Implement `Plugin` as usual and export it with `lumen_module!`, whose
+constructor expression receives the `config` table the app declared:
+
+```rust
+use lumen_module::{lumen_module, App, ModuleConfig, Plugin};
+
+struct ShapeTools {
+    units: String,
+}
+
+impl Plugin for ShapeTools {
+    fn build(self, app: &mut App) {
+        // Systems, resources, components - the full surface above.
+    }
+}
+
+lumen_module!(|config: ModuleConfig| ShapeTools {
+    units: config.str("units").unwrap_or("px").to_string(),
+});
+```
+
+The macro generates the module's two exports - the build-id probe and the
+install entry - and pulls in the engine-dylib linkage, so the crate contains
+no unsafe code and cannot forget the link. A panic in the constructor or in
+`build` is caught inside the module and reported to the loader as a failed
+install.
+
+Build with the engine taken as a shared library. `-C prefer-dynamic` selects
+it; passing an explicit `--target` keeps the flag off build scripts and proc
+macros. Scope both in the module crate's `.cargo/config.toml`:
+
+```toml
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "prefer-dynamic"]
+
+[build]
+target = "x86_64-unknown-linux-gnu"
+```
+
+Declare the result in the app:
+
+```toml
+[dependencies]
+shape-tools = { path = "modules/shape-tools/target/x86_64-unknown-linux-gnu/release/shape_tools", config = { units = "mm" } }
+```
+
+### A worked example: the audio module
+
+`std/audio` in the tree is the shape above in production, and the engine
+knows nothing about it. The one crate builds both link shapes (`lib` plus
+`cdylib`), depends on `lumen-module` alone, and brings its whole surface
+through the generic seams: the `audio_*` functions register through
+`add_script_fns`, playback runs in the module's own systems and `NonSend`
+state, the position lands in shared signals through the `PropertyStore`, and
+end-of-track goes out as a plugin event the script's `on_audio_end(path)`
+handler receives. A script-function body has no world access, so the
+functions hand commands to the systems over a queue the module owns.
+First-party modules under `std/` build in the release's own cargo
+invocation, which is what keeps their build ids equal to the engine they
+ship beside.
+
+## Portable plugins
+
+A portable plugin is the other prebuilt kind: a cdylib declared in the same
+[`[dependencies]` table](../reference/lumen-toml.md#dependencies), loaded at
+startup, that talks to the engine over a serialized C ABI instead of linking
+it. That trade defines it:
+
+- **Narrower reach, by design.** A portable plugin does not touch the ECS.
+  It registers native functions the app's scripts call, ships language
+  source that wraps them, and pushes events at the app from its own threads.
+  A plugin wrapping a device, a service, or a native library fits here; a
+  plugin that needs systems and components is a runtime module.
+- **No engine build lock.** The plugin and the engine exchange bytes, so a
+  built plugin works across engine builds as long as the handshake passes:
+  the plugin ABI version plus the script and paint wire versions, each
+  checked at load with an error naming both numbers. In practice a plugin is
+  built once per release tag rather than per engine binary.
+- **Every desktop platform, every host shape.** No engine dylib is needed,
+  so a portable plugin loads on Windows and into statically linked builds -
+  the shapes that refuse runtime modules.
+- **The same failure policy.** A load failure banners and the app boots
+  without the plugin; the outcome lands in the same `LoadedModules` resource.
+
+### Authoring a portable plugin
+
+A plugin crate is a `cdylib` depending on the SDK crate at a release tag:
+
+```toml
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+lumen-plugin = { git = "https://github.com/lumen-fx/lumen", tag = "v0.0.6" }
+```
+
+Implement `RuntimePlugin` and export it with `lumen_plugin!`. Registration
+describes functions with the same shapes the in-process
+[script-function surface](#exposing-functions-to-scripts) uses:
+
+```rust
+use lumen_plugin::{
+    lumen_plugin, Error, InitCx, PluginFn, Registrar, RuntimePlugin, ScriptTy, ScriptValue,
+};
+
+struct Gpio;
+
+impl RuntimePlugin for Gpio {
+    fn register(&self, r: &mut Registrar, cx: &InitCx) -> Result<(), Error> {
+        r.script_fn(
+            PluginFn::new("gpio_read")
+                .param("pin", ScriptTy::Int)
+                .ret(ScriptTy::Bool)
+                .doc("Read a GPIO pin.")
+                .build(|cx| {
+                    let level = read_pin(cx.int_arg(0)).map_err(|e| e.to_string())?;
+                    Ok(ScriptValue::Bool(level))
+                }),
+        );
+        r.prelude("candela", "gpio", "struct Gpio {}\n/* wrappers */");
+        Ok(())
+    }
+}
+
+lumen_plugin!(|| Gpio);
+```
+
+The macro generates the whole C-ABI surface; a plugin crate contains no
+unsafe code, and a panic in a function body reaches the script as an error
+rather than an abort. `register` runs once, before the app's scripts load,
+and receives the app's directory, id, and the entry's `config` table through
+`InitCx`. A function body gets the call's arguments and a command sink
+(`Cx::emit`), so a call applies signal and tree writes on the tick it ran.
+
+### Events from a plugin's own threads
+
+`Registrar::host` hands out a `Host`: a cheap, thread-safe handle a worker
+thread keeps for the life of the process. Through it a plugin that watches a
+file, polls a device, or waits on a socket delivers what it found without
+being asked:
+
+- `host.call_handler(event, key, fallback, args)` calls a handler in the
+  app's script. A per-key `on(event, key, fn)` registration wins, else the
+  `fallback` fires; either way the handler receives `key` as its first
+  argument, then `args`. One handler serves many sources by branching on the
+  key.
+- `host.emit(commands)` applies script commands - signal writes, tree
+  edits - with no handler involved.
+- `host.log(level, message)` writes a line to the engine's diagnostic
+  output, prefixed with the plugin's name.
+
+Delivery is asynchronous: an event queues, wakes a parked app, and fires on
+the next tick, on every active script host. Both calls return `false` once
+the engine stops taking events, which is what a worker thread sees while the
+app shuts down; the plugin's `shutdown` runs then, best effort.
+
+One limit worth knowing: `lumenc package` currently applies the runtime
+module gates to the whole `[dependencies]` table, so packaging an app whose
+only entries are portable plugins still requires the shared engine and skips
+Windows staging.
+
 ## Compiler plugins
 
 A compiler plugin is a Rust cdylib that `lumenc` loads while compiling an app.
@@ -658,7 +879,7 @@ name = "markdown"
 crate-type = ["cdylib"]
 
 [dependencies]
-lumenc-plugin = { git = "https://github.com/FizzWizZleDazzle/Lumen", tag = "v0.0.6" }
+lumenc-plugin = { git = "https://github.com/lumen-fx/lumen", tag = "v0.0.6" }
 ```
 
 Implement the `CompilerPlugin` trait and export it. Every hook has a default

@@ -57,6 +57,14 @@ error.
 `run` executes the app's `[[hooks]]` entries: every `prebuild` hook, then
 every `prerun` hook. See [lumen.toml](lumen-toml.md#hooks).
 
+`run` resolves the app's `[dependencies]` before the app builds: a `version`
+source resolves through the plugin cache and pins itself in `lumen.lock`
+(see [lumen.toml](lumen-toml.md#dependencies)). A module that fails to
+resolve or load is a startup banner, and the app runs without it. An
+installed `lumenc` on Linux or macOS loads modules directly; one built from
+source without the `dynamic-engine` cargo feature refuses them, with a
+banner saying so.
+
 If the directory is a Rust, C++, or Python SDK app (detected from its
 contents, or declared with `[app] kind`), `run` hands off to `cargo`,
 `cmake`, or the Python interpreter. Combining a handoff with `--headless`,
@@ -78,7 +86,10 @@ lumenc check <dir>
 Parses and validates the app without opening a window and without running
 hooks. Declared compiler plugins do run, in check-only mode: the tree being
 validated is the tree a build produces, and emit outputs are discarded (a
-`version` source may still update `lumen.lock`).
+`version` source may still update `lumen.lock`). The app's `[dependencies]`
+resolve too; a `version` module that does not resolve prints an advisory
+`warning:` line, since at run time it would be a startup banner and the app
+would run without the module.
 Prints `<dir>: ok (N elements, script: yes|none)` and exits 0, or
 prints the parse error and exits 1. A missing `<dir>` exits 2.
 
@@ -241,7 +252,9 @@ A missing `<app_dir>`, an unknown flag, or a mode neither `--render` nor
 fails the build: a page is written with the state a run settled into here, or
 with the state the app settles into for the request, and not both. So does a
 runtime setting that contradicts the `--render` mode. Only a markup app can be
-emitted as a site.
+emitted as a site, and not one declaring
+[`[dependencies]`](lumen-toml.md#dependencies): a declared dependency is a
+native library, which a browser cannot load.
 
 ## package
 
@@ -299,6 +312,28 @@ comes out of its own build: the engine library cargo produced and the shared
 Rust standard library both were compiled against. On Windows no linkable
 engine exists, so the runtime is inside the executable and nothing travels.
 
+On Linux and macOS every other kind carries the shared runtime too: the
+runtime library there links `liblumen_engine`, so the engine and the Rust
+standard library from the toolchain travel beside it. A toolchain without
+them (an older release, a static build behind `--lib-dir`) still packages -
+its runtime library needs nothing beside it - unless the app declares
+`[dependencies]`, which exits 1 naming the gap, because runtime modules need
+the shared engine.
+
+Declared `[dependencies]` stage into a `modules/` subfolder of the package,
+each under the file name the runtime probes for. `path` sources copy the
+declared library, `bundled` sources copy the toolchain's, and `version`
+sources resolve through the plugin cache and `lumen.lock` exactly as
+`lumenc run` resolves them; a module that cannot be found or resolved exits
+1. On a `--target` for another platform, `bundled` modules come from the
+`lumen-modules-<target>` archive published with the same release the
+toolchain files come from, fetched, verified, and cached the same way; a
+release that ships no modules archive, or one whose archive does not carry a
+declared module, exits 1 naming it. `path` and `version` sources cannot
+cross-package - a local library is built for one platform, and version
+resolution has no registry yet - and exit 2. A Windows target stages nothing
+with a warning (modules are not supported there).
+
 The launcher stub and the runtime library are looked up in this order:
 `--lib-dir`, then, for this machine's own platform, the directory holding the
 running `lumenc` and then `$LUMEN_LIB_DIR`, then the download cache. When none
@@ -341,7 +376,10 @@ With `--static`, resolves the app's capability set from `[capabilities]` plus
 a source scan, maps it to a cargo feature list, builds the trimmed runtime
 library with only those subsystems, and copies the result into `<out_dir>`.
 It prints each resolved capability and the feature list. This needs the Lumen
-source tree; set `LUMEN_WORKSPACE_DIR` to point at it.
+source tree; set `LUMEN_WORKSPACE_DIR` to point at it. An app that declares
+`[dependencies]` gets a warning naming the declared modules: a static build
+compiles the engine into the binary, and engine-locked modules load only
+against the dynamically linked engine, so the bundled app runs without them.
 
 Runs the app's `prebuild` hooks first unless `--no-hooks` is given. A missing
 argument or an extra positional argument exits 2.

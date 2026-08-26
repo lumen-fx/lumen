@@ -40,10 +40,17 @@ coverage:
 # instrumentation, so its hooks execute outside the measured process; the
 # `testing` module is the helper that builds it. Both exist only for the
 # tests that drive them, and the SDK surface they exercise is graded through
-# its own unit tests.
+# its own unit tests. The runtime-plugin and runtime-module fixtures repeat
+# the pattern: a portable-plugin cdylib, an engine-locked module cdylib, and
+# the dylib-linked host binary the module suite boots, all built by a nested
+# uninstrumented cargo and executed outside the measured process.
 ignore:
   - "crates/backends/render-wgpu/src/surface.rs"
   - "crates/backends/web-dom"
   - "crates/web-runtime"
   - "crates/lumenc-plugin/fixture"
   - "crates/lumenc-plugin/src/testing.rs"
+  - "crates/lumen-plugin/fixture"
+  - "crates/lumen-plugin/src/testing.rs"
+  - "crates/lumen-module/fixture"
+  - "crates/lumen-module/fixture-host"

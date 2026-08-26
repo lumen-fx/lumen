@@ -37,13 +37,12 @@ const TICKS: &str = "6";
 
 /// Every stderr line a clean headless run is allowed to print.
 ///
-/// Most of these are the environment talking: a runner has no display and no
-/// sound card, so the clipboard, global-hotkey and audio backends report
-/// themselves absent, ALSA prints its own search for a card, and the runner
+/// Most of these are the environment talking: a runner has no display, so
+/// the clipboard and global-hotkey backends report
+/// themselves absent and the runner
 /// announces the mode it was put in. `[script]` is an app's own `print`.
 /// `info` and its `hint:` continuation are lint findings, which are style
-/// nudges rather than defects. The last is rodio saying an audio sink went
-/// away when the music app shut down.
+/// nudges rather than defects.
 ///
 /// A backend reporting itself absent is the environment, not the app. A
 /// backend reporting a failure while it is present is the app, and there is
@@ -59,9 +58,13 @@ const ALLOWED_STDERR: &[&str] = &[
     "[script] ",
     "info  ",
     "      hint: ",
-    "Dropping DeviceSink,",
-    "ALSA lib ",
-    "lumen-audio-rodio: no output device",
+    // This test binary compiles the engine in, so a runtime module an app
+    // declares (the music app's `lumen-audio`) cannot load here: the loader
+    // says so once and the app boots without it. The line is the build shape
+    // talking, not the app; the dynamic e2e suites cover the module-loaded
+    // run. The app's own boot path never touches a module function, so this
+    // notice is the only thing the skip may print.
+    "lumen-runtime: dependency 'lumen-audio' skipped: this build compiles the engine in",
 ];
 
 fn workspace_root() -> PathBuf {

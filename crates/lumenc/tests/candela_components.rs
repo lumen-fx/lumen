@@ -121,12 +121,19 @@ root
     label.card = from a block
 ";
 
+/// [`EXPECTED`] with the root line a headless run produces: the OS theme
+/// follow writes the effective theme class onto the root on the first tick,
+/// which the windowless prerender assembly (no theme follow) does not.
+fn themed(expected: &str) -> String {
+    expected.replacen("root\n", "root.theme-light\n", 1)
+}
+
 #[test]
 fn a_component_tree_builds_from_source() {
     let _serial = isolate();
     let (mut app, _window) = build_headless_app(RunOptions::new(fixture())).expect("headless app");
     settle(&mut app);
-    assert_eq!(dump(&mut app), EXPECTED);
+    assert_eq!(dump(&mut app), themed(EXPECTED));
 }
 
 /// The same app, compiled and run from the artifact with no parser installed.
@@ -167,7 +174,7 @@ fn the_artifact_builds_the_same_tree_with_no_parser() {
     let opts = RunOptions::new(&dir).with_artifact_bytes(bytes);
     let (mut app, _window) = build_headless_app(opts).expect("headless app");
     settle(&mut app);
-    assert_eq!(dump(&mut app), EXPECTED);
+    assert_eq!(dump(&mut app), themed(EXPECTED));
 }
 
 /// The same artifact through the assembly that has no window.

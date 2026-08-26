@@ -58,12 +58,6 @@ host "lumen" {
     response_header(string, string);
     redirect(string);
     fetch(string, string);
-    audio_play(string);
-    audio_pause();
-    audio_resume();
-    audio_stop();
-    audio_seek(float);
-    audio_volume(float);
     string t(string);
     string tr(string);
     string read_file(string);

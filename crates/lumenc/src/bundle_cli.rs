@@ -147,6 +147,9 @@ fn cmd_bundle_static(src_path: &std::path::Path, out_path: &std::path::Path) -> 
         }
     };
     let caps = BundleCapabilities::resolve(src_path, &cfg);
+    if let Some(warning) = static_module_warning(&cfg.dependencies) {
+        eprintln!("{warning}");
+    }
     let features = caps.to_features();
     let feature_arg = features.join(",");
 
@@ -154,7 +157,6 @@ fn cmd_bundle_static(src_path: &std::path::Path, out_path: &std::path::Path) -> 
         "lumenc bundle --static: resolved capabilities for {}",
         src_path.display()
     );
-    println!("    audio      = {}", caps.audio);
     println!("    http-fetch = {}", caps.http_fetch);
     println!("    mcp        = {}", caps.mcp);
     println!("    async      = {}", caps.async_rt);
@@ -278,4 +280,51 @@ fn cmd_bundle_static(_src_path: &std::path::Path, _out_path: &std::path::Path) -
          inference lives in lumen-runtime)"
     );
     ExitCode::FAILURE
+}
+
+/// The build-time half of the static-build module refusal: a static bundle
+/// compiles the engine into the binary, and an engine-locked runtime module
+/// loaded there would run against a second engine instance, so the loader
+/// skips it at startup. That skip prints when the app first runs; this is the
+/// same fact at build time, so the author learns it from the bundle command
+/// that made the choice. Returns the warning when the app declares
+/// `[dependencies]`, `None` otherwise.
+#[cfg(feature = "dev-run")]
+pub fn static_module_warning(deps: &lumen_runtime::modules::DependenciesCfg) -> Option<String> {
+    if deps.0.is_empty() {
+        return None;
+    }
+    let names: Vec<&str> = deps.0.iter().map(|d| d.name.as_str()).collect();
+    Some(format!(
+        "lumenc bundle --static: warning: this app declares runtime modules ({}) that a \
+         static build cannot load: engine-locked modules need the dynamically linked \
+         engine, and a static bundle compiles the engine into the binary. The bundled \
+         app runs without them.",
+        names.join(", ")
+    ))
+}
+
+#[cfg(all(test, feature = "dev-run"))]
+mod tests {
+    use super::static_module_warning;
+    use crate::config::LumenToml;
+
+    #[test]
+    fn a_static_bundle_warns_about_declared_modules_by_name() {
+        let cfg: LumenToml = toml::from_str(
+            "[dependencies]\nlumen-audio = { path = \"modules\" }\nacme-charts = \"1\"\n",
+        )
+        .expect("parse config");
+        let warning = static_module_warning(&cfg.dependencies).expect("declared modules warn");
+        // Every declared module is named; the wording stays generic.
+        assert!(warning.contains("acme-charts"), "{warning}");
+        assert!(warning.contains("lumen-audio"), "{warning}");
+        assert!(warning.contains("static build cannot load"), "{warning}");
+    }
+
+    #[test]
+    fn no_declared_modules_means_no_warning() {
+        let cfg = LumenToml::default();
+        assert_eq!(static_module_warning(&cfg.dependencies), None);
+    }
 }

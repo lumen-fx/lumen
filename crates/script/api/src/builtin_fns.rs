@@ -65,7 +65,6 @@ pub fn builtin_script_fns() -> Vec<ScriptFn> {
     fns.extend(dialog_fns());
     fns.extend(navigation_fns());
     fns.extend(request_fns());
-    fns.extend(audio_fns());
     fns.extend(misc_fns());
     fns.extend(crate::node_fns::node_script_fns());
     fns
@@ -598,47 +597,6 @@ fn request_fns() -> Vec<ScriptFn> {
     ]
 }
 
-/// Audio transport. Each entry queues a command the embedder's applier runs
-/// against the audio service, so every binding drives the same seam. The
-/// read-backs (position, duration, playing) are signals, not builtins.
-fn audio_fns() -> Vec<ScriptFn> {
-    vec![
-        emit(
-            "audio_play",
-            "Play the audio file at that path.",
-            &[("path", T::Str)],
-            |cx| ScriptCommand::AudioPlay {
-                path: cx.str_arg(0),
-            },
-        ),
-        emit("audio_pause", "Pause playback.", &[], |_| {
-            ScriptCommand::AudioPause
-        }),
-        emit("audio_resume", "Resume playback.", &[], |_| {
-            ScriptCommand::AudioResume
-        }),
-        emit("audio_stop", "Stop playback.", &[], |_| {
-            ScriptCommand::AudioStop
-        }),
-        emit(
-            "audio_seek",
-            "Seek to that position, in seconds.",
-            &[("secs", T::Float)],
-            |cx| ScriptCommand::AudioSeek {
-                secs: cx.float_arg(0),
-            },
-        ),
-        emit(
-            "audio_volume",
-            "Set the output volume, 0.0 to 1.0.",
-            &[("level", T::Float)],
-            |cx| ScriptCommand::AudioVolume {
-                level: cx.float_arg(0) as f32,
-            },
-        ),
-    ]
-}
-
 /// Write `contents` to `path` without a truncated-read window.
 ///
 /// `std::fs::write` truncates the file before writing, so a reader racing
@@ -708,7 +666,7 @@ fn misc_fns() -> Vec<ScriptFn> {
             |cx| ScriptValue::Str(lumen_core::i18n::translate(&cx.str_arg(0))),
         ),
         // A relative path resolves against the app directory, the same rule
-        // `open_path` and `audio_play` apply, so a file an app ships is named
+        // `open_path` applies, so a file an app ships is named
         // the same way wherever the app was started from. Saved state belongs
         // under `data_dir()` instead: the app directory is read-only once the
         // app is installed.

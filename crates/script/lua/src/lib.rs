@@ -1580,7 +1580,7 @@ impl ScriptHost for LuaHost {
                     Ok(v) => Some(lua_value_to_script_value(&v)),
                     Err(e) => {
                         // A handler that queued commands (set_text, set_signal,
-                        // audio_play, fetch, ...) and *then* errored must
+                        // fetch, notify, ...) and *then* errored must
                         // contribute NO commands: draining only on the success
                         // path would leak them into the sink, where the next
                         // unrelated event's outcome would apply them. Discard

@@ -1,0 +1,19 @@
+[package]
+name = "lumen-module-fixture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Test-only runtime module: real ECS registrations, config read, and the panic paths the loader must survive."
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+lumen-module = { workspace = true }
+lumen-core = { workspace = true }
+lumen-script = { workspace = true }
+bevy_ecs = { workspace = true }

@@ -133,7 +133,25 @@ impl CandelaHost {
     /// Put the prelude, the synthesized namespace declarations, and any plugin
     /// wrappers in front of `source`.
     fn prepare(&self, source: &str) -> prelude::PreparedSource {
-        prelude::prepare(source, &self.namespace_blocks(), &self.wrappers)
+        prelude::prepare(
+            source,
+            &self.namespace_blocks(),
+            &self.wrappers,
+            &self.prelude_extras(),
+        )
+    }
+
+    /// Declaration lines for the functions an embedder registered under the
+    /// prelude's own `lumen` namespace: what a runtime module contributes to
+    /// the builtin surface. `prelude::prepare` folds them into the prelude's
+    /// `host "lumen"` block, because candela resolves a namespace against its
+    /// first block only.
+    fn prelude_extras(&self) -> Vec<String> {
+        self.script_fns
+            .iter()
+            .filter(|f| declare::namespace(f) == crate::host_fns::HOST_NAMESPACE)
+            .map(declare::declaration)
+            .collect()
     }
 
     /// One folded `host "<ns>" { .. }` block per namespace an embedder
@@ -146,8 +164,8 @@ impl CandelaHost {
         let mut blocks: Vec<(String, Vec<ScriptFn>)> = Vec::new();
         for f in self.script_fns.iter() {
             let ns = declare::namespace(f).to_string();
-            // The `lumen` namespace is the prelude's; an app that wants it
-            // imports it.
+            // The `lumen` namespace is the prelude's; a registration under it
+            // rides `prelude_extras` into the prelude's own block instead.
             if ns == crate::host_fns::HOST_NAMESPACE {
                 continue;
             }
@@ -190,6 +208,48 @@ impl CandelaHost {
                 col: at.col,
                 message: d.message.clone(),
             },
+        }
+    }
+
+    /// One call into the loaded program, with a panic out of the VM contained.
+    ///
+    /// candela reports script problems as `Err` diagnostics; a panic instead
+    /// means an assertion inside the VM itself fired, and the interpreter
+    /// state can no longer be trusted. One known way in: a diagnostic thrown
+    /// mid-execution (a call into a host function no module registered, say)
+    /// can leave values behind on the VM stack, and the next call then dies
+    /// on an internal type assertion. The app must survive its script, so the
+    /// program is dropped - every later probe misses silently, the shape a
+    /// failed load already has - and the one returned diagnostic says why.
+    ///
+    /// Returns `None` when no program is loaded.
+    fn vm_call(
+        &mut self,
+        fn_name: &str,
+        args: &[Value],
+    ) -> Option<Result<Value, candela::Diagnostic>> {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let program = self.vm.program.as_mut()?;
+        match catch_unwind(AssertUnwindSafe(|| program.call(fn_name, args))) {
+            Ok(outcome) => Some(outcome),
+            Err(payload) => {
+                self.vm.program = None;
+                let detail = payload
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "non-string panic payload".to_owned());
+                Some(Err(candela::Diagnostic {
+                    filename: String::new(),
+                    span: 0..0,
+                    message: format!(
+                        "the candela VM panicked calling `{fn_name}` ({detail}); its state \
+                         cannot be trusted after the panic, so the script is disabled"
+                    ),
+                    code: "vm_panic".to_owned(),
+                }))
+            }
         }
     }
 }
@@ -349,8 +409,8 @@ impl ScriptHost for CandelaHost {
         let mut runtime_err: Option<ScriptError> = None;
         let mut ret: Option<ScriptValue> = None;
 
-        if let Some(program) = self.vm.program.as_mut() {
-            match program.call(fn_name, &kargs) {
+        if let Some(outcome) = self.vm_call(fn_name, &kargs) {
+            match outcome {
                 Ok(value) => ret = Some(candela_value_to_script(&value)),
                 // A missing function is silent success - the runtime probes
                 // optional handlers (`on_start`, `on_click`, ...) and treats a
@@ -381,13 +441,8 @@ impl ScriptHost for CandelaHost {
         args: &[ScriptValue],
     ) -> Result<ScriptValue, ScriptError> {
         let kargs: Vec<Value> = args.iter().map(script_value_to_candela).collect();
-        let program = self
-            .vm
-            .program
-            .as_mut()
-            .ok_or_else(|| ScriptError::Runtime("no candela program loaded".to_owned()))?;
-        program
-            .call(closure, &kargs)
+        self.vm_call(closure, &kargs)
+            .ok_or_else(|| ScriptError::Runtime("no candela program loaded".to_owned()))?
             .map(|v| candela_value_to_script(&v))
             .map_err(|d| ScriptError::Runtime(d.message))
     }
@@ -399,14 +454,12 @@ impl ScriptHost for CandelaHost {
         // The handler receives the event id (the token); its `event_*`
         // accessors read the current-event cell. Commands it queues drain
         // through the normal sink path.
-        let Some(program) = self.vm.program.as_mut() else {
-            return Ok(false);
-        };
         let arg = [Value::Int(token as i64)];
-        match program.call(&name, &arg) {
-            Ok(_) => Ok(true),
-            Err(d) if d.code == "unknown_function" && d.message.contains(&name) => Ok(false),
-            Err(d) => Err(ScriptError::Runtime(d.message)),
+        match self.vm_call(&name, &arg) {
+            None => Ok(false),
+            Some(Ok(_)) => Ok(true),
+            Some(Err(d)) if d.code == "unknown_function" && d.message.contains(&name) => Ok(false),
+            Some(Err(d)) => Err(ScriptError::Runtime(d.message)),
         }
     }
 

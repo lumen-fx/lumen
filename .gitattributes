@@ -3,7 +3,7 @@
 # Small audio test fixtures must be present as raw bytes for offline/CI tests
 # (an LFS pointer would break tests without a prior `git lfs pull`). Keep them
 # out of LFS; the app's large soundtrack assets above stay on LFS.
-crates/backends/audio-rodio/tests/fixtures/*.ogg -filter -diff -merge -text
+std/audio/tests/fixtures/*.ogg -filter -diff -merge -text
 
 # Linguist has no grammar for candela or .lmn markup yet, so map them to the
 # nearest languages: candela highlights well as Rust, .lmn as XML. XML is a

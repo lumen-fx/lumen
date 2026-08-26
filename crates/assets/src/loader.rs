@@ -3,8 +3,8 @@
 //! [`AssetLoader`] is the extension point: a loader claims one or more file
 //! extensions, declares which [`AssetKind`] it produces, and turns one
 //! [`LoadContext`] into a [`LoadedAsset`]. [`AssetLoaders`] is the registry
-//! the [`crate::AssetServer`] resolves through, and the built-in image, SVG,
-//! and audio paths are ordinary loaders registered into it by
+//! the [`crate::AssetServer`] resolves through, and the built-in image and
+//! SVG paths are ordinary loaders registered into it by
 //! [`AssetLoaders::default`].
 //!
 //! The shape follows Bevy's `AssetLoader`, adapted to how this crate loads:
@@ -24,21 +24,19 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::loaders::{AudioLoader, ImageLoader, SvgLoader};
-use crate::{LoadErrorKind, LoadedAudio, LoadedImage, LoadedSvg};
+use crate::loaders::{ImageLoader, SvgLoader};
+use crate::{LoadErrorKind, LoadedImage, LoadedSvg};
 
 /// Which family of asset a loader produces.
 ///
-/// The kind selects the content cache the decoded payload lands in and, when
-/// a load fails, which failure component the waiting entities get.
+/// The kind selects the content cache the decoded payload lands in, and it
+/// is what [`AssetLoaders::kind_for`] reports for a path without loading it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AssetKind {
     /// Raster image, cached as [`LoadedImage`].
     Image,
     /// Vector image, cached as [`LoadedSvg`].
     Svg,
-    /// Audio track, cached as [`LoadedAudio`].
-    Audio,
 }
 
 /// One successfully loaded asset, tagged by family.
@@ -49,8 +47,6 @@ pub enum LoadedAsset {
     Image(LoadedImage),
     /// A pre-rendered SVG.
     Svg(LoadedSvg),
-    /// An audio track's encoded bytes.
-    Audio(LoadedAudio),
 }
 
 impl LoadedAsset {
@@ -59,7 +55,6 @@ impl LoadedAsset {
         match self {
             Self::Image(_) => AssetKind::Image,
             Self::Svg(_) => AssetKind::Svg,
-            Self::Audio(_) => AssetKind::Audio,
         }
     }
 }
@@ -130,7 +125,7 @@ pub trait AssetLoader: Send + Sync + 'static {
 
 /// Extension-keyed loader registry.
 ///
-/// [`Self::default`] registers the built-in image, SVG, and audio loaders and
+/// [`Self::default`] registers the built-in image and SVG loaders and
 /// installs the image loader as the fallback, which is what makes a path with
 /// an unrecognised extension attempt an image decode.
 pub struct AssetLoaders {
@@ -144,7 +139,6 @@ impl Default for AssetLoaders {
         let image: Arc<dyn AssetLoader> = Arc::new(ImageLoader);
         loaders.register_arc(image.clone());
         loaders.register(SvgLoader);
-        loaders.register(AudioLoader);
         loaders.set_fallback(Some(image));
         loaders
     }

@@ -11,7 +11,7 @@ fn a_panicking_constructor_fails_the_compile_not_the_process() {
     std::fs::create_dir_all(&dir).unwrap();
     let lib = testing::fixture_cdylib();
     let doc: toml::Table = toml::from_str(&format!(
-        "[[plugins]]\nname = \"lumen-plugin-fixture\"\npath = '{}'\n",
+        "[[plugins]]\nname = \"lumenc-plugin-fixture\"\npath = '{}'\n",
         lib.display()
     ))
     .unwrap();

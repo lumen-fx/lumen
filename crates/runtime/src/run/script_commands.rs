@@ -226,14 +226,6 @@ pub(crate) fn apply_script_commands(
             // `Http` is handled off-thread by script-runtime's
             // `drain_fetch_commands` (same seam as `Fetch`); no-op here.
             | ScriptCommand::Http { .. }
-            // Audio transport is applied by `apply_audio_commands` against
-            // the `AudioService` + `AssetServer`; no-op here.
-            | ScriptCommand::AudioPlay { .. }
-            | ScriptCommand::AudioPause
-            | ScriptCommand::AudioResume
-            | ScriptCommand::AudioStop
-            | ScriptCommand::AudioSeek { .. }
-            | ScriptCommand::AudioVolume { .. }
             // Dynamic DOM mutation + window setters are applied by
             // `lumen_scene::dom::apply_dom_commands` (an exclusive system that
             // needs `&mut World` for spawn / despawn / reparent); no-op here.
@@ -363,8 +355,8 @@ pub(crate) fn apply_os_script_commands(
                 );
             }
             ScriptCommand::AllowSleep { name } => inhibits.stop(name),
-            // Everything else is applied by `apply_script_commands`, by
-            // the audio applier, or by the exclusive DOM applier. Listed
+            // Everything else is applied by `apply_script_commands` or by
+            // the exclusive DOM applier. Listed
             // rather than caught by `_` so a new command has to be placed
             // deliberately instead of silently going nowhere.
             ScriptCommand::Print(_)
@@ -388,12 +380,6 @@ pub(crate) fn apply_os_script_commands(
             | ScriptCommand::OpenFileDialog { .. }
             | ScriptCommand::RegisterHotkey { .. }
             | ScriptCommand::UnregisterHotkey { .. }
-            | ScriptCommand::AudioPlay { .. }
-            | ScriptCommand::AudioPause
-            | ScriptCommand::AudioResume
-            | ScriptCommand::AudioStop
-            | ScriptCommand::AudioSeek { .. }
-            | ScriptCommand::AudioVolume { .. }
             | ScriptCommand::SetAttr { .. }
             | ScriptCommand::RemoveAttr { .. }
             | ScriptCommand::SetNodeText { .. }

@@ -1,0 +1,76 @@
+# The audio capability Lumen ships, as a self-contained runtime module. The
+# engine knows nothing about audio: this crate registers the whole `audio_*`
+# script surface through the generic `ScriptFnRegistry`, drives playback with
+# its own ECS systems, writes the position signals into the shared
+# `PropertyStore`, and delivers end-of-track through the generic plugin-event
+# bus. Two link shapes from one crate: the `cdylib` target is the bundled
+# `lumen-audio` module an app declares in `lumen.toml`, and the `lib` target
+# is the same plugin compiled into a static build.
+[package]
+name = "lumen-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's audio module (rodio/cpal/symphonia): registers the audio_* script functions and plays wav/ogg; bundled as a runtime module or compiled in as a plugin."
+keywords = ["ui", "gui", "audio", "playback", "rodio"]
+categories = ["multimedia", "gui"]
+publish = false
+
+[lib]
+# `lumen_audio` is the spelling the module loader's bundled probe derives
+# from the app's `lumen-audio = { bundled = true }` declaration: the cdylib
+# builds to `liblumen_audio.so`.
+name = "lumen_audio"
+crate-type = ["lib", "cdylib"]
+
+[[bin]]
+name = "lumen-gen-test-tracks"
+path = "src/bin/gen_test_tracks.rs"
+
+[dependencies]
+# The one engine-facing dependency: the Plugin trait, the ECS surface, the
+# script-fn registry, and the plugin-event bus all arrive through the module
+# SDK's re-exports.
+lumen-module = { workspace = true }
+
+# rodio provides the cpal device sink + Player control handle and the
+# symphonia-backed decoders. Lean feature set: `playback` (cpal output),
+# `wav` (symphonia PCM/WAV) and `vorbis` (symphonia OGG/Vorbis) only -
+# the mp3 / mp4 / flac symphonia codecs are dropped to keep the decoder
+# table and binary small. Matches the wav+ogg minimum; user-supplied
+# .ogg files decode because `vorbis` is on.
+rodio = { version = "0.22", default-features = false, features = [
+    "playback",
+    "wav",
+    "vorbis",
+] }
+
+# symphonia (already in-tree via rodio's decoders) is depended on directly
+# so we can *probe* a track's total duration from its encoded bytes. rodio's
+# `Source::total_duration()` returns `None` for Ogg/Vorbis (Vorbis streams
+# don't expose a frame count without reading the final Ogg page's granule
+# position), leaving the seek bar's total time blank. We probe metadata only:
+# one cheap pass at load, no full decode. Feature set mirrors rodio's:
+# ogg+vorbis and wav+pcm, `default-features = false`. Version pinned to the
+# rodio-resolved 0.5: rodio 0.22 still depends on symphonia 0.5, and a direct
+# 0.6 here would put two symphonia majors in the tree.
+symphonia = { version = "0.5", default-features = false, features = [
+    "ogg",
+    "vorbis",
+    "wav",
+    "pcm",
+] }
+
+# Tests only: the compiled-in-shape tests build a headless app around the
+# plugin the way `lumenc run` would, and the module-shape test drives the
+# loader end to end over a subprocess. The shipping crate stays on
+# `lumen-module` alone.
+[dev-dependencies]
+lumen-core = { workspace = true }
+lumen-ir = { workspace = true }
+lumen-runtime = { workspace = true }
+lumen-script = { workspace = true }
+serde_json = { workspace = true }

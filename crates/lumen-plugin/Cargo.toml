@@ -1,0 +1,47 @@
+[package]
+name = "lumen-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "SDK for Lumen runtime plugins: the RuntimePlugin trait, the C-ABI export macro, and the loader the runtime itself uses."
+# Not published: plugin authors take this crate as a cargo git dependency on
+# the Lumen repo at a release tag, which resolves lumen-core and its closure as
+# path dependencies inside the clone.
+publish = false
+
+[lib]
+name = "lumen_plugin"
+path = "src/lib.rs"
+
+[features]
+default = []
+# The loader side: dlopen a plugin cdylib, verify its descriptor, run its
+# init, and bind what it registered onto an app. Only the runtime enables
+# this; plugin authors never do.
+#
+# `lumen-plugin-abi/resolve` is deliberately absent: the runtime loader takes
+# paths that are already resolved, so the plugin cache, semver, and sha2 stay
+# out of its dependency graph.
+host = ["dep:libloading", "lumen-plugin-abi/dlopen"]
+# Test-only helper that builds the fixture plugin cdylib once per tree.
+testing = ["dep:serde_json"]
+
+[dependencies]
+lumen-core = { workspace = true }
+lumen-plugin-abi = { workspace = true }
+lumen-script = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+libloading = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[dev-dependencies]
+lumen-plugin = { workspace = true, features = ["host", "testing"] }
+# A built compiler plugin, as the wrong kind of cdylib to point the runtime
+# loader at.
+lumenc-plugin = { workspace = true, features = ["testing"] }
+toml = { workspace = true }

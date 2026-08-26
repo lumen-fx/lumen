@@ -11,13 +11,14 @@
 // list survives an AOT/precompiled build (the from-source markup parser is
 // dev-only; inner markup is a no-op on the bundled path).
 //
-// The transport is driven by lumen-audio through the audio_* builtins. The
-// host writes audio_position / audio_duration / audio_playing every woken
-// tick; the display signals below are DERIVED from those and never run a
-// clock, so a paused app goes idle.
+// The transport is driven by the lumen-audio module through the audio_*
+// functions it registers. The module writes audio_position / audio_duration /
+// audio_playing every woken tick; the display signals below are DERIVED from
+// those and never run a clock, so a paused app goes idle.
 
 // One import pulls in the whole Lumen host surface: scalar signals, the DOM
-// read and write sides, audio, on, derive, set_class, and the lm_append helper.
+// read and write sides, on, derive, set_class, and the lm_append helper;
+// the declared lumen-audio module adds its audio_* functions to it.
 import "lumen.cdl";
 
 struct Track {
@@ -170,6 +171,14 @@ fn play_track(id) {
     let t = list[idx];
     highlight_now(t.id);
     set_meta(t);
+    let started = lumen::signal_get_bool("started");
+    if started == false {
+        // First playback: apply the slider's default (70%) before any sound.
+        // The audio_* functions exist only when the lumen-audio module
+        // loaded, so no boot path may touch one; the first play is the
+        // earliest moment audio is known to be there to configure.
+        lumen::audio_volume(0.7);
+    }
     lumen::signal_set_bool("started", true);
     lumen::audio_play(file);
 }
@@ -235,9 +244,6 @@ fn on_start() {
     lumen::on("click", "pl|tones", "sel_tones");
     lumen::on("click", "pl|pure", "sel_pure");
     lumen::on("click", "pl|moving", "sel_moving");
-
-    // Initial output volume from the slider default (70%).
-    lumen::audio_volume(0.7);
 }
 
 // on_ready fires on the first tick, after the DOM index is published, so the
@@ -268,8 +274,9 @@ fn sel_tones(id: any) { select_playlist("tones", "Featured"); }
 fn sel_pure(id: any) { select_playlist("pure", "Pure Tones"); }
 fn sel_moving(id: any) { select_playlist("moving", "Moving Tones"); }
 
-// Auto-advance: the host calls this when a track reaches its end.
-fn on_audio_end() { step_track(1); }
+// Auto-advance: the audio module calls this when a track reaches its end,
+// with the path of the track that finished.
+fn on_audio_end(path: string) { step_track(1); }
 
 // Manual seek + volume drags land here with the slider value as a float.
 fn on_slider(id: string, value: float) {

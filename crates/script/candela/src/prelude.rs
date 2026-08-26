@@ -152,7 +152,13 @@ pub fn line_col(source: &str, byte: usize) -> (u32, u32) {
 ///
 /// `blocks` are `(namespace, declaration block)` pairs, each already folded
 /// onto one line; `wrappers` are `(namespace, source)` pairs written by the
-/// plugin that registered the namespace.
+/// plugin that registered the namespace. `prelude_extras` are single
+/// declaration lines for functions an embedder registered under the prelude's
+/// own `lumen` namespace: candela resolves a namespace against the FIRST
+/// `host` block of that name, so they cannot ship as a second block. When the
+/// source imports the prelude they are spliced into its `host "lumen"` block;
+/// when it does not, they become the only `lumen` block. Either way the whole
+/// text stays on the import statement's line, so no author line moves.
 ///
 /// A namespace already declared is skipped: the check is a text search for
 /// `host "<ns>"`, which is what a hand-written block looks like, so a source
@@ -169,15 +175,43 @@ pub fn prepare(
     source: &str,
     blocks: &[(String, String)],
     wrappers: &[(String, String)],
+    prelude_extras: &[String],
 ) -> PreparedSource {
-    let resolved = resolve_prelude(source);
-    if blocks.is_empty() && wrappers.is_empty() {
+    let mut resolved = resolve_prelude(source);
+    let mut extra_lumen_block: Option<String> = None;
+    if !prelude_extras.is_empty() {
+        let opener = format!("host \"{}\" {{", crate::host_fns::HOST_NAMESPACE);
+        if let Some(at) = resolved.find(&opener) {
+            // The prelude (or the author) opened the block; extend it in
+            // place. The splice sits on one physical line, so inserting here
+            // moves no author line.
+            let insert_at = at + opener.len();
+            let mut text = resolved.into_owned();
+            text.insert_str(insert_at, &format!(" {}", prelude_extras.join(" ")));
+            resolved = Cow::Owned(text);
+        } else {
+            // No prelude import: the registered functions become the only
+            // `lumen` block, folded onto one prefix line like any other
+            // namespace block.
+            extra_lumen_block = Some(format!(
+                "host \"{}\" {{ {} }}",
+                crate::host_fns::HOST_NAMESPACE,
+                prelude_extras.join(" ")
+            ));
+        }
+    }
+    if blocks.is_empty() && wrappers.is_empty() && extra_lumen_block.is_none() {
         return PreparedSource::plain(resolved.into_owned());
     }
 
     let mut prefix = String::new();
     let mut line = 0u32;
     let mut spans = Vec::new();
+    if let Some(block) = extra_lumen_block {
+        prefix.push_str(&block);
+        prefix.push('\n');
+        line += 1;
+    }
     for (ns, block) in blocks {
         if declares_namespace(&resolved, ns) {
             // Declared by the author is the supported case and says nothing.

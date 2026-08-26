@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use lumen_core::app::App;
+use lumen_core::plugin_events::discard_plugin_events;
 use lumen_core::property_store::{
     PropertyStore, discard_external_properties, external_properties_pending,
 };
@@ -135,6 +136,7 @@ pub fn boot(
     // to start empty.
     discard_external_properties();
     discard_external_signals();
+    discard_plugin_events();
 
     let mut app = portable_app();
 

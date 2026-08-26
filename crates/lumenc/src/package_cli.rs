@@ -39,6 +39,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use lumen_ir::layout_ir::relativize_asset_paths;
+use lumen_runtime::modules::{DependenciesCfg, ModuleSource, library_spellings};
 
 use crate::app_kind::AppKind;
 use crate::release;
@@ -303,6 +304,13 @@ impl Target {
             _ => format!("lumen-{}.tar.gz", self.name),
         }
     }
+
+    /// Release asset holding this target's bundled runtime modules, published
+    /// beside the toolchain archive by the Unix release legs. Windows has no
+    /// modules archive: the same capabilities are compiled in there.
+    fn modules_archive_name(self) -> String {
+        format!("lumen-modules-{}.tar.gz", self.name)
+    }
 }
 
 /// Entry: `lumenc package <app_dir> [<out_dir>] [--name <n>] [--target <t>]
@@ -399,6 +407,51 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
         return ExitCode::from(2);
     }
 
+    // Runtime modules are native libraries. A Windows package never carries
+    // them, whoever builds it: no shared engine exists there, so the runtime
+    // cannot load one. A package for another Unix platform can only ship that
+    // platform's builds: a `bundled` module comes out of the release's
+    // modules archive, but a `path` or `version` source names a library that
+    // only exists as this machine's build, and a folder that silently shipped
+    // without its modules is worse than stopping.
+    if !cfg.dependencies.0.is_empty() {
+        if target.os == Os::Windows {
+            eprintln!(
+                "lumenc package: warning: runtime modules are not supported on Windows \
+                 (no shared engine exists there); the app will run without its \
+                 [dependencies]"
+            );
+        } else if target != Target::host() {
+            for dep in &cfg.dependencies.0 {
+                let refusal = match &dep.source {
+                    ModuleSource::Bundled => continue,
+                    ModuleSource::Path(_) => format!(
+                        "dependency '{}' comes from a path, and a local library is built \
+                         for one platform: the file it names is a {} build, not a {} one. \
+                         Package on a {} machine with its own build, or use a bundled \
+                         module.",
+                        dep.name,
+                        Target::host().name,
+                        target.name,
+                        target.name
+                    ),
+                    ModuleSource::Version(_) => format!(
+                        "dependency '{}' names a version, and a version resolves through \
+                         this machine's module cache, which holds {} builds, not {} ones. \
+                         Cross-packaging a version source needs the module registry, \
+                         which does not exist yet; package on a {} machine instead.",
+                        dep.name,
+                        Target::host().name,
+                        target.name,
+                        target.name
+                    ),
+                };
+                eprintln!("lumenc package: {refusal}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+
     let app_name = name.unwrap_or_else(|| {
         src_path
             .file_name()
@@ -426,7 +479,14 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
     }
 
     let assembled = match kind {
-        AppKind::Markup => package(&src_path, &out_dir, &app_name, target, lib_dir.as_deref()),
+        AppKind::Markup => package(
+            &src_path,
+            &out_dir,
+            &app_name,
+            target,
+            lib_dir.as_deref(),
+            &cfg.dependencies,
+        ),
         _ => package_sdk(
             &src_path,
             &out_dir,
@@ -434,6 +494,7 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             target,
             lib_dir.as_deref(),
             kind,
+            &cfg.dependencies,
         ),
     };
     let summary = match assembled {
@@ -501,6 +562,7 @@ fn package_sdk(
     target: Target,
     lib_dir: Option<&Path>,
     kind: AppKind,
+    deps: &DependenciesCfg,
 ) -> Result<String, String> {
     let built = match kind {
         AppKind::Rust => build_rust_app(src, target)?,
@@ -518,8 +580,10 @@ fn package_sdk(
     } else {
         let toolchain = locate_toolchain(target, lib_dir)?;
         copy_c_engine(out, target, &toolchain)?;
-        1
+        1 + copy_dynamic_runtime(out, target, &toolchain, deps)?
     };
+
+    let modules = stage_modules(src, out, target, lib_dir, deps)?;
 
     // The freezer's own scratch directories sit under the output so they never
     // touch the app; the package itself has no use for them.
@@ -529,7 +593,7 @@ fn package_sdk(
 
     let copied = copy_app_files(src, out, CopyRules::sdk(kind))?;
     Ok(format!(
-        "wrote {} from the {} build ({} app file{} beside it, {})",
+        "wrote {} from the {} build ({} app file{} beside it, {}{})",
         exe_path.display(),
         language_of(kind),
         copied,
@@ -537,6 +601,10 @@ fn package_sdk(
         match carried {
             0 => "runtime linked in".to_string(),
             n => format!("with {n} shared librar{}", if n == 1 { "y" } else { "ies" }),
+        },
+        match modules {
+            0 => String::new(),
+            n => format!(", {n} module{}", if n == 1 { "" } else { "s" }),
         },
     ))
 }
@@ -596,6 +664,294 @@ fn copy_c_engine(out: &Path, target: Target, toolchain: &Toolchain) -> Result<()
                 lib_dest.display()
             )
         })
+}
+
+/// Copy the shared engine and standard library a dynamic `liblumen` opens
+/// its process with, from the toolchain directory beside it. Returns how
+/// many files travelled.
+///
+/// A toolchain whose `liblumen` links the engine dynamically (the Linux and
+/// macOS release shape) ships `liblumen_engine` and the Rust standard
+/// library beside it, and a package assembled from it must carry both or the
+/// app will not start. A toolchain without them is the static shape - older
+/// releases, a trimmed `--lib-dir` - and its `liblumen` needs nothing
+/// beside it, so their absence only matters when the app declares
+/// `[dependencies]`: runtime modules need the shared engine, and a package
+/// that quietly shipped without it would refuse every module at startup.
+///
+/// The standard library is matched by its `libstd-<hash>` name in the same
+/// directory; when the directory holds none (a source tree running against
+/// `target/release`), the compiler that built it is asked, which is the same
+/// build only in that source-tree case.
+fn copy_dynamic_runtime(
+    out: &Path,
+    target: Target,
+    toolchain: &Toolchain,
+    deps: &DependenciesCfg,
+) -> Result<usize, String> {
+    if target.os == Os::Windows {
+        return Ok(0);
+    }
+    let engine = target.linked_engine_name();
+    let engine_src = toolchain.dir.join(engine);
+    if !engine_src.is_file() {
+        if deps.0.is_empty() {
+            return Ok(0);
+        }
+        return Err(format!(
+            "this app declares [dependencies], but the toolchain in {} has no {engine} to \
+             ship beside it, and runtime modules need the shared engine. Use a toolchain \
+             built with the dynamic engine (any current release), or pass --lib-dir at one.",
+            toolchain.dir.display()
+        ));
+    }
+    std::fs::copy(&engine_src, out.join(engine))
+        .map_err(|e| format!("copy {} -> {}: {e}", engine_src.display(), out.display()))?;
+    let mut carried = 1;
+
+    let (prefix, ext) = match target.os {
+        Os::Macos => ("libstd-", "dylib"),
+        _ => ("libstd-", "so"),
+    };
+    let std_lib = find_shared_std(&toolchain.dir, prefix, ext)
+        .or_else(|| local_shared_std(target).ok().flatten());
+    match std_lib {
+        Some(std_lib) => {
+            let dest = out.join(std_lib.file_name().unwrap_or_default());
+            std::fs::copy(&std_lib, &dest)
+                .map_err(|e| format!("copy {} -> {}: {e}", std_lib.display(), dest.display()))?;
+            carried += 1;
+        }
+        None => {
+            return Err(format!(
+                "the toolchain in {} ships {engine} but no libstd beside it, and the \
+                 dynamic engine cannot start without the standard library it was built \
+                 against",
+                toolchain.dir.display()
+            ));
+        }
+    }
+    Ok(carried)
+}
+
+/// Stage the app's declared runtime modules into `<out>/modules/`, each
+/// under the platform file name the loader probes a `modules/` directory
+/// for. Returns how many were staged.
+///
+/// Every source stages a copy, wherever the declaration points: the loader
+/// probes the declared path first and `modules/` after it, so a declaration
+/// naming a path that exists only on the build machine (an absolute path, a
+/// build tree the packager leaves behind) still resolves in the shipped
+/// folder. `version` sources resolve through the same cache and `lumen.lock`
+/// as `lumenc run`; a version that cannot be resolved fails the package,
+/// because a shipped folder is complete or it is wrong.
+///
+/// Windows targets stage nothing: no shared engine exists there, so the
+/// runtime cannot load a module and the loader says so at startup.
+///
+/// For a target other than this machine's, only `bundled` sources reach
+/// here - the other kinds were refused up front - and the library comes from
+/// the release's modules archive for that target, fetched and cached the way
+/// the target's toolchain files are.
+fn stage_modules(
+    src: &Path,
+    out: &Path,
+    target: Target,
+    lib_dir: Option<&Path>,
+    deps: &DependenciesCfg,
+) -> Result<usize, String> {
+    if deps.0.is_empty() || target.os == Os::Windows {
+        return Ok(0);
+    }
+    let modules_dir = out.join("modules");
+    let mut lock = None;
+    let mut cross_modules = None;
+    let mut staged = 0usize;
+    for dep in &deps.0 {
+        let staged_name = module_file_names(&dep.name, target)
+            .into_iter()
+            .next()
+            .expect("a name always has at least one spelling");
+        let file = match &dep.source {
+            ModuleSource::Path(declared) => resolve_module_path(src, declared, &dep.name)?,
+            ModuleSource::Bundled if target != Target::host() => {
+                cross_bundled_module(&dep.name, target, lib_dir, deps, &mut cross_modules)?
+            }
+            ModuleSource::Bundled => {
+                let dirs = search_dirs(lib_dir, true);
+                library_spellings(&dep.name)
+                    .iter()
+                    .flat_map(|name| dirs.iter().map(move |dir| dir.join(name)))
+                    .find(|candidate| candidate.is_file())
+                    .ok_or_else(|| {
+                        format!(
+                            "dependency '{}': no bundled module library found beside this \
+                             toolchain. Looked in: {}.",
+                            dep.name,
+                            searched(&dirs)
+                        )
+                    })?
+            }
+            ModuleSource::Version(req) => {
+                let lock = match &mut lock {
+                    Some(lock) => lock,
+                    None => lock.insert(lumenc_plugin::resolve::LockFile::read(src)?),
+                };
+                lumenc_plugin::resolve::resolve_version_source(&dep.name, req, lock)?
+            }
+        };
+        std::fs::create_dir_all(&modules_dir)
+            .map_err(|e| format!("create {}: {e}", modules_dir.display()))?;
+        let dest = modules_dir.join(&staged_name);
+        std::fs::copy(&file, &dest)
+            .map_err(|e| format!("copy {} -> {}: {e}", file.display(), dest.display()))?;
+        staged += 1;
+    }
+    if let Some(lock) = lock {
+        lock.store()?;
+    }
+    Ok(staged)
+}
+
+/// The candidate file names of module `name` on `target`, staged spelling
+/// first: the platform's library prefix and extension around the name, then
+/// around cargo's underscored variant of it, which is how the release
+/// archives spell a hyphenated module. [`library_spellings`] answers for the
+/// platform the code runs on; a cross-target package needs the target's.
+fn module_file_names(name: &str, target: Target) -> Vec<String> {
+    let (prefix, suffix) = match target.os {
+        Os::Windows => ("", ".dll"),
+        Os::Macos => ("lib", ".dylib"),
+        Os::Linux => ("lib", ".so"),
+    };
+    let mut names = vec![format!("{prefix}{name}{suffix}")];
+    if name.contains('-') {
+        names.push(format!("{prefix}{}{suffix}", name.replace('-', "_")));
+    }
+    names
+}
+
+/// The first of `names` that exists as a file in `dir`.
+fn find_in_dir(dir: &Path, names: &[String]) -> Option<PathBuf> {
+    names
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|c| c.is_file())
+}
+
+/// The release modules archive a cross-target package stages `bundled`
+/// dependencies from, resolved at most once per package and downloaded at
+/// most once per cache.
+struct CrossModules {
+    version: String,
+    dir: PathBuf,
+    fetched: bool,
+}
+
+/// Resolve a `bundled` module for a target other than this machine's. The
+/// `--lib-dir` flag wins when it holds the library; otherwise the modules
+/// archive the release publishes for the target answers, cached and fetched
+/// exactly the way the target's toolchain archive is. A module the archive
+/// does not carry fails the package naming both.
+fn cross_bundled_module(
+    name: &str,
+    target: Target,
+    lib_dir: Option<&Path>,
+    deps: &DependenciesCfg,
+    cross: &mut Option<CrossModules>,
+) -> Result<PathBuf, String> {
+    let names = module_file_names(name, target);
+    let dirs = search_dirs(lib_dir, false);
+    if let Some(hit) = dirs.iter().find_map(|dir| find_in_dir(dir, &names)) {
+        return Ok(hit);
+    }
+    let cross = match cross {
+        Some(cross) => cross,
+        None => {
+            let (version, dir) = component_cache(target.name).map_err(|why| {
+                format!(
+                    "dependency '{name}': no {} module library on this machine, and none \
+                     could be fetched: {why}. Pass --lib-dir at a directory holding it.",
+                    target.name
+                )
+            })?;
+            cross.insert(CrossModules {
+                version,
+                dir,
+                fetched: false,
+            })
+        }
+    };
+    if let Some(hit) = find_in_dir(&cross.dir, &names) {
+        return Ok(hit);
+    }
+    if !cross.fetched {
+        fetch_modules_archive(&cross.version, target, &cross.dir, deps)?;
+        cross.fetched = true;
+        if let Some(hit) = find_in_dir(&cross.dir, &names) {
+            return Ok(hit);
+        }
+    }
+    Err(missing_from_archive(name, target, &cross.version, &names))
+}
+
+/// A module the release's modules archive does not carry. Naming the archive
+/// and the file separates a module that does not exist from a release too
+/// old to ship it.
+fn missing_from_archive(name: &str, target: Target, version: &str, names: &[String]) -> String {
+    format!(
+        "dependency '{name}': {} from the v{version} release carries no {}, so the \
+         package cannot ship it. Pass --lib-dir at a directory holding the {} build of \
+         the module.",
+        target.modules_archive_name(),
+        names.join(" or "),
+        target.name
+    )
+}
+
+/// Resolve a `path`-source module declaration to the library file it names,
+/// the way the runtime's loader does: the declared path itself when it has an
+/// extension, otherwise the platform spellings of its final component, plus
+/// the app's own `modules/` directory as the fallback.
+fn resolve_module_path(src: &Path, declared: &str, name: &str) -> Result<PathBuf, String> {
+    let base = {
+        let declared = Path::new(declared);
+        if declared.is_absolute() {
+            declared.to_path_buf()
+        } else {
+            src.join(declared)
+        }
+    };
+    let mut probed: Vec<PathBuf> = Vec::new();
+    if base.extension().is_some() {
+        if base.is_file() {
+            return Ok(base);
+        }
+        probed.push(base);
+    } else {
+        let stem = base
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let parent = base.parent().unwrap_or(Path::new(".")).to_path_buf();
+        for file in library_spellings(&stem) {
+            probed.push(parent.join(file));
+        }
+    }
+    for file in library_spellings(name) {
+        probed.push(src.join("modules").join(file));
+    }
+    if let Some(hit) = probed.iter().find(|candidate| candidate.is_file()) {
+        return Ok(hit.clone());
+    }
+    Err(format!(
+        "dependency '{name}': no module library found to package.\nProbed:\n{}",
+        probed
+            .iter()
+            .map(|p| format!("  {}", p.display()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    ))
 }
 
 /// The shared standard library this machine's Rust compiler holds for
@@ -907,6 +1263,7 @@ fn package(
     app_name: &str,
     target: Target,
     lib_dir: Option<&Path>,
+    deps: &DependenciesCfg,
 ) -> Result<String, String> {
     let compiled = crate::compile_app(src).map_err(|e| e.to_string())?;
     let artifact = build_artifact(compiled, src)?;
@@ -935,6 +1292,8 @@ fn package(
     }
 
     copy_c_engine(out, target, &toolchain)?;
+    copy_dynamic_runtime(out, target, &toolchain, deps)?;
+    let modules = stage_modules(src, out, target, lib_dir, deps)?;
 
     let copied = copy_app_files(src, out, CopyRules::markup())?;
     // Compiler-plugin outputs live under the dot-prefixed `.lumen/generated`
@@ -949,11 +1308,15 @@ fn package(
         );
     }
     Ok(format!(
-        "wrote {} for {} ({} app file{} beside it)",
+        "wrote {} for {} ({} app file{} beside it{})",
         exe_path.display(),
         target.name,
         copied,
-        if copied == 1 { "" } else { "s" }
+        if copied == 1 { "" } else { "s" },
+        match modules {
+            0 => String::new(),
+            n => format!(", {n} module{}", if n == 1 { "" } else { "s" }),
+        }
     ))
 }
 
@@ -976,11 +1339,14 @@ fn build_artifact(
     lumen_ir::artifact::serialize(&compiled).map_err(|e| e.to_string())
 }
 
-/// The two toolchain files a package is assembled from.
+/// The toolchain files a package is assembled from, and the directory they
+/// were found in - the launcher's shared runtime companions (the engine
+/// dylib, the Rust standard library) are looked for there too.
 #[derive(Debug)]
 struct Toolchain {
     stub: PathBuf,
     lib: PathBuf,
+    dir: PathBuf,
 }
 
 /// Find the launcher stub and the shared runtime library for `target`.
@@ -999,6 +1365,7 @@ fn locate_toolchain(target: Target, lib_dir: Option<&Path>) -> Result<Toolchain,
         return Ok(Toolchain {
             stub: dir.join(&wanted[0]),
             lib: dir.join(&wanted[1]),
+            dir,
         });
     }
     // Another platform's files are not on this machine until they are
@@ -1012,6 +1379,7 @@ fn locate_toolchain(target: Target, lib_dir: Option<&Path>) -> Result<Toolchain,
                 &version,
                 &target.archive_name(),
                 &wanted,
+                &dynamic_runtime_patterns(target),
                 &dir,
                 &format!(
                     "A release older than app packaging ships no launcher; build the {} files \
@@ -1023,6 +1391,7 @@ fn locate_toolchain(target: Target, lib_dir: Option<&Path>) -> Result<Toolchain,
         return Ok(Toolchain {
             stub: dir.join(&wanted[0]),
             lib: dir.join(&wanted[1]),
+            dir,
         });
     }
 
@@ -1083,6 +1452,7 @@ pub fn locate_web_runtime(lib_dir_flag: Option<&Path>) -> Result<WebRuntimeFiles
             &version,
             WEB_ARCHIVE,
             &wanted,
+            &[],
             &dir,
             "A release older than the web target ships no web runtime; build it yourself \
              and pass --lib-dir instead.",
@@ -1503,12 +1873,18 @@ fn holds(dir: &Path, inner: &Path) -> bool {
 /// `dest`. `hint` closes the message when the release does not carry them, and
 /// says how to supply them by hand instead.
 ///
+/// `optional` names members taken along when the archive carries them and
+/// passed over silently when it does not (patterns, see [`name_matches`]):
+/// the launcher's shared-runtime companions, which a release older than the
+/// dynamic engine never published and whose static `liblumen` never needs.
+///
 /// `version` is a release that exists, resolved by [`release::resolve`]. It is
 /// never this binary's own version, which says nothing about what is published.
 fn fetch_release_files(
     version: &str,
     archive: &str,
     wanted: &[String],
+    optional: &[String],
     dest: &Path,
     hint: &str,
 ) -> Result<(), String> {
@@ -1516,6 +1892,19 @@ fn fetch_release_files(
 
     println!("lumenc: fetching {archive} from {base}");
 
+    let sums = fetch_checksums(version, &base)?;
+
+    let archive_url = format!("{base}/{archive}");
+    let bytes =
+        http_get(&archive_url).map_err(|e| format!("cannot download {archive_url}: {e}"))?;
+
+    install_release_files(
+        version, archive, &sums, &bytes, wanted, optional, dest, hint,
+    )
+}
+
+/// Download and read the `sha256sums.txt` published with release `version`.
+fn fetch_checksums(version: &str, base: &str) -> Result<String, String> {
     let sums_url = format!("{base}/sha256sums.txt");
     let sums = http_get(&sums_url).map_err(|e| match e {
         // Every release publishes checksums, so a status here says the release
@@ -1524,15 +1913,99 @@ fn fetch_release_files(
         HttpError::Status(status) => no_checksums(version, status),
         HttpError::Transport(message) => format!("cannot download {sums_url}: {message}"),
     })?;
-    let sums = String::from_utf8(sums).map_err(|_| {
-        "the release checksums are not text; refusing to install from it".to_string()
-    })?;
+    String::from_utf8(sums)
+        .map_err(|_| "the release checksums are not text; refusing to install from it".to_string())
+}
+
+/// The [`name_matches`] pattern that takes every archive member: an empty
+/// prefix and an empty suffix around the `*`.
+const EVERY_MEMBER: &str = "*";
+
+/// Download the modules archive published for `target` with release
+/// `version`, verify it against the release's checksums, and unpack every
+/// module library in it into `dest`. The whole archive lands, so the next
+/// package that declares another module finds it cached.
+///
+/// A release without the asset is answered with what it means - the app
+/// declares modules and the release predates shipping them - rather than
+/// with a bare download error.
+fn fetch_modules_archive(
+    version: &str,
+    target: Target,
+    dest: &Path,
+    deps: &DependenciesCfg,
+) -> Result<(), String> {
+    let archive = target.modules_archive_name();
+    let base = release::asset_base(version);
+
+    println!("lumenc: fetching {archive} from {base}");
+
+    let sums = fetch_checksums(version, &base)?;
 
     let archive_url = format!("{base}/{archive}");
-    let bytes =
-        http_get(&archive_url).map_err(|e| format!("cannot download {archive_url}: {e}"))?;
+    let bytes = http_get(&archive_url).map_err(|e| match e {
+        HttpError::Status(_) => no_modules_archive(version, target, deps),
+        HttpError::Transport(message) => format!("cannot download {archive_url}: {message}"),
+    })?;
 
-    install_release_files(version, archive, &sums, &bytes, wanted, dest, hint)
+    install_release_files(
+        version,
+        &archive,
+        &sums,
+        &bytes,
+        &[],
+        &[EVERY_MEMBER.to_string()],
+        dest,
+        "Pass --lib-dir at a directory holding the module libraries instead.",
+    )
+}
+
+/// What a release without a modules archive means for an app that declares
+/// `[dependencies]`: there is nothing to package the modules from, said with
+/// what the app declares so the reader knows what the package would lose.
+fn no_modules_archive(version: &str, target: Target, deps: &DependenciesCfg) -> String {
+    let declared: Vec<&str> = deps.0.iter().map(|dep| dep.name.as_str()).collect();
+    format!(
+        "the v{version} release ships no modules archive ({}), and this app declares {}. \
+         A release older than runtime modules cannot supply them; pass --lib-dir at a \
+         directory holding the {} module libraries, or package on a {} machine.",
+        target.modules_archive_name(),
+        declared.join(", "),
+        target.name,
+        target.name
+    )
+}
+
+/// The shared-runtime companions a dynamic `liblumen` ships beside itself,
+/// as [`name_matches`] patterns: the engine dylib by name, the standard
+/// library by its hashed-name shape. Empty for Windows, whose `liblumen`
+/// is always static.
+fn dynamic_runtime_patterns(target: Target) -> Vec<String> {
+    match target.os {
+        Os::Windows => Vec::new(),
+        Os::Macos => vec![
+            target.linked_engine_name().to_string(),
+            "libstd-*.dylib".to_string(),
+        ],
+        Os::Linux => vec![
+            target.linked_engine_name().to_string(),
+            "libstd-*.so".to_string(),
+        ],
+    }
+}
+
+/// Whether an archive member `name` answers for `pattern`: equality, or -
+/// with one `*` in the pattern - the prefix and suffix around it. Enough to
+/// name a `libstd-<hash>.so` whose hash nobody knows ahead of the download.
+fn name_matches(pattern: &str, name: &str) -> bool {
+    match pattern.split_once('*') {
+        Some((prefix, suffix)) => {
+            name.len() >= prefix.len() + suffix.len()
+                && name.starts_with(prefix)
+                && name.ends_with(suffix)
+        }
+        None => pattern == name,
+    }
 }
 
 /// What a release that answers for no `sha256sums.txt` means.
@@ -1545,16 +2018,19 @@ fn no_checksums(version: &str, status: u16) -> String {
 }
 
 /// Everything after the download: check `bytes` against the checksum published
-/// for `archive`, then write the `wanted` members out into `dest`.
+/// for `archive`, then write the `wanted` (and any present `optional`)
+/// members out into `dest`.
 ///
 /// Split from the download so the verification and the unpacking are the same
 /// code whether the bytes arrived over the network or from a test.
+#[allow(clippy::too_many_arguments)]
 fn install_release_files(
     version: &str,
     archive: &str,
     sums: &str,
     bytes: &[u8],
     wanted: &[String],
+    optional: &[String],
     dest: &Path,
     hint: &str,
 ) -> Result<(), String> {
@@ -1571,11 +2047,12 @@ fn install_release_files(
         ));
     }
 
+    let patterns: Vec<String> = wanted.iter().chain(optional).cloned().collect();
     std::fs::create_dir_all(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
     let found = if archive.ends_with(".zip") {
-        extract_zip(bytes, wanted, dest)?
+        extract_zip(bytes, &patterns, dest)?
     } else {
-        extract_tar_gz(bytes, wanted, dest)?
+        extract_tar_gz(bytes, &patterns, dest)?
     };
     for name in wanted {
         if !found.contains(name) {
@@ -1651,7 +2128,7 @@ fn extract_tar_gz(bytes: &[u8], wanted: &[String], dest: &Path) -> Result<Vec<St
         let Some(name) = file_name_of(&path) else {
             continue;
         };
-        if !wanted.contains(&name) {
+        if !wanted.iter().any(|pattern| name_matches(pattern, &name)) {
             continue;
         }
         let out = dest.join(&name);
@@ -1676,7 +2153,7 @@ fn extract_zip(bytes: &[u8], wanted: &[String], dest: &Path) -> Result<Vec<Strin
         let Some(name) = member.enclosed_name().as_deref().and_then(file_name_of) else {
             continue;
         };
-        if !wanted.contains(&name) {
+        if !wanted.iter().any(|pattern| name_matches(pattern, &name)) {
             continue;
         }
         let out = dest.join(&name);
@@ -1714,6 +2191,106 @@ mod tests {
         // by that name alone, so no target may be called "web".
         assert_eq!(WEB_ARCHIVE, format!("lumen-{WEB_COMPONENT}.tar.gz"));
         assert!(Target::parse(WEB_COMPONENT).is_none());
+    }
+
+    /// The modules archive is published beside the toolchain one under the
+    /// same naming, and the file names inside it follow the target platform,
+    /// so a cross package stages the spelling the target's loader probes for.
+    #[test]
+    fn a_module_file_is_spelled_the_targets_way() {
+        let linux = Target::parse("linux-x86_64").expect("known target");
+        assert_eq!(
+            linux.modules_archive_name(),
+            "lumen-modules-linux-x86_64.tar.gz"
+        );
+        assert_eq!(
+            module_file_names("lumen-audio", linux),
+            vec!["liblumen-audio.so", "liblumen_audio.so"]
+        );
+        let macos = Target::parse("macos-aarch64").expect("known target");
+        assert_eq!(
+            module_file_names("lumen-audio", macos),
+            vec!["liblumen-audio.dylib", "liblumen_audio.dylib"]
+        );
+        let windows = Target::parse("windows-x86_64").expect("known target");
+        assert_eq!(
+            module_file_names("lumen-audio", windows),
+            vec!["lumen-audio.dll", "lumen_audio.dll"]
+        );
+        assert_eq!(module_file_names("solo", linux), vec!["libsolo.so"]);
+    }
+
+    /// The modules archive is unpacked whole - the next package may declare a
+    /// module this one does not - and its members carry cargo's underscored
+    /// spelling, which the staging probe finds through the name's variants.
+    #[test]
+    fn the_whole_modules_archive_unpacks_into_the_cache() {
+        let linux = Target::parse("linux-x86_64").expect("known target");
+        let archive = linux.modules_archive_name();
+        let bytes = tar_gz(&[("bin/liblumen_audio.so", b"audio-module")]);
+
+        let tmp = std::env::temp_dir().join(format!("lumen-modarchive-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        install_release_files(
+            "0.0.9",
+            &archive,
+            &sums_line(&archive, &bytes),
+            &bytes,
+            &[],
+            &[EVERY_MEMBER.to_string()],
+            &tmp,
+            "HINT",
+        )
+        .expect("the checksum matches, so every member installs");
+
+        let names = module_file_names("lumen-audio", linux);
+        assert_eq!(
+            find_in_dir(&tmp, &names),
+            Some(tmp.join("liblumen_audio.so")),
+            "the staging probe finds the underscored member"
+        );
+        assert_eq!(find_in_dir(&tmp, &module_file_names("ghost", linux)), None);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A release published before the modules archive existed cannot supply
+    /// a cross package's bundled modules, and the message says what the app
+    /// declares rather than reading as a download error.
+    #[test]
+    fn a_release_without_a_modules_archive_names_what_the_app_declares() {
+        use lumen_runtime::modules::DepCfg;
+        let linux = Target::parse("linux-x86_64").expect("known target");
+        let deps = DependenciesCfg(vec![DepCfg {
+            name: "lumen-audio".to_string(),
+            source: ModuleSource::Bundled,
+            config: toml::Table::new(),
+        }]);
+
+        let message = no_modules_archive("0.0.9", linux, &deps);
+        assert!(message.contains("v0.0.9"), "{message}");
+        assert!(
+            message.contains("lumen-modules-linux-x86_64.tar.gz"),
+            "{message}"
+        );
+        assert!(message.contains("declares lumen-audio"), "{message}");
+        assert!(message.contains("--lib-dir"), "{message}");
+    }
+
+    /// A module the archive does not carry names both the archive and the
+    /// file spellings that were looked for.
+    #[test]
+    fn a_module_the_archive_does_not_carry_is_named_with_the_archive() {
+        let linux = Target::parse("linux-x86_64").expect("known target");
+        let names = module_file_names("lumen-audio", linux);
+        let message = missing_from_archive("lumen-audio", linux, "0.0.9", &names);
+        assert!(message.contains("dependency 'lumen-audio'"), "{message}");
+        assert!(
+            message.contains("lumen-modules-linux-x86_64.tar.gz"),
+            "{message}"
+        );
+        assert!(message.contains("liblumen-audio.so"), "{message}");
+        assert!(message.contains("v0.0.9"), "{message}");
     }
 
     #[test]
@@ -1921,8 +2498,17 @@ mod tests {
         let bytes = tar_gz(&[(WEB_WASM, b"wasm-bytes"), (WEB_JS, b"js-bytes")]);
         let sums = sums_line(WEB_ARCHIVE, &bytes);
 
-        install_release_files("0.0.9", WEB_ARCHIVE, &sums, &bytes, &wanted, &tmp, "HINT")
-            .expect("the checksum matches, so both files install");
+        install_release_files(
+            "0.0.9",
+            WEB_ARCHIVE,
+            &sums,
+            &bytes,
+            &wanted,
+            &[],
+            &tmp,
+            "HINT",
+        )
+        .expect("the checksum matches, so both files install");
         assert_eq!(
             std::fs::read(tmp.join(WEB_WASM)).expect("read"),
             b"wasm-bytes"
@@ -1936,6 +2522,7 @@ mod tests {
             &sums,
             &tampered,
             &wanted,
+            &[],
             &tmp,
             "HINT",
         )
@@ -1950,6 +2537,7 @@ mod tests {
             "abc123  something-else.tar.gz\n",
             &bytes,
             &wanted,
+            &[],
             &tmp,
             "HINT",
         )
@@ -1966,6 +2554,7 @@ mod tests {
             &sums_line(WEB_ARCHIVE, &older),
             &older,
             &wanted,
+            &[],
             &tmp,
             "HINT",
         )
@@ -2000,6 +2589,7 @@ mod tests {
             &sums_line(&archive, &bytes),
             &bytes,
             &wanted,
+            &[],
             &tmp,
             "HINT",
         )
@@ -2285,6 +2875,7 @@ mod tests {
             &Toolchain {
                 stub: tmp.join("unused"),
                 lib: source,
+                dir: tmp.clone(),
             },
         )
         .expect("copy");

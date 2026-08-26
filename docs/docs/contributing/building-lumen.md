@@ -25,7 +25,8 @@ authoritative list is `.github/scripts/linux-deps.sh`, which CI runs verbatim:
 
 - `pkg-config` to resolve the rest.
 - `libgtk-3-dev` for the GTK file dialog behind `lumen-os-filedialog`.
-- `libasound2-dev` for ALSA, reached through cpal under `lumen-audio-rodio`.
+- `libasound2-dev` for ALSA, reached through cpal under the audio backend in
+  `std/audio`.
 - `libxkbcommon-dev` and `libwayland-dev` for keyboard and Wayland handling
   under winit.
 - `libvulkan1` for the Vulkan loader, since wgpu builds the Vulkan backend on
@@ -208,7 +209,7 @@ it still serves those.
 host. `AppBuilder::native_fn` registers into every host and is always
 available.
 
-**`lumen-runtime`** defaults to every subsystem on: `audio-rodio`, `mcp`,
+**`lumen-runtime`** defaults to every subsystem on: `mcp`,
 `async`, `host-rhai`, `host-lua`, `host-candela`, `http-fetch`,
 `runtime-parse`. Each script host is its own feature, so a build can carry
 exactly the languages its app ships. Per-app trimming happens only on the
@@ -221,11 +222,6 @@ and `compile_bytecode`, the build step that produces a `.cdlb` image. Off, the
 crate keeps the whole builtin surface and the host that runs such an image, and
 the compiler front end leaves the dependency graph. That is what the browser
 runtime builds against.
-
-`audio` compiles the audio subsystem, and `audio-rodio` adds the playback
-backend Lumen ships. Selecting `audio` alone gives a build whose transport
-works and makes no sound, which is where an embedder supplying its own
-`AudioBackend` starts.
 
 `http-fetch` adds the HTTP client behind the scripts' `fetch()` and `http()`
 builtins, and costs about a megabyte of release text for the TLS stack. A build
