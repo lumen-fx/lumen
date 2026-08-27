@@ -12,10 +12,10 @@ use std::sync::{Arc, RwLock};
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::Schedule;
-use lumen_core::components::{LumenId, TextContent, Visible};
+use lumen_core::components::{Color, LumenId, TextContent, TextStyle, Visible};
 use lumen_devtools::{
-    BODY_ID, DevtoolsMarker, DevtoolsState, NetworkCapture, ROWS_ID, RowTarget, Tab,
-    rebuild_element_rows, refresh_panes,
+    BODY_ID, DevtoolsMarker, DevtoolsState, NetworkCapture, OverlayPalette, ROWS_ID, RowTarget,
+    Tab, rebuild_element_rows, refresh_panes,
 };
 use lumen_mcp::{EntityInspect, EntityView, Snapshot, SnapshotHandle};
 
@@ -77,6 +77,14 @@ fn rebuild_spawns_rows_and_excludes_overlay() {
 
     world.insert_resource(SnapshotHandle(Arc::new(RwLock::new(snap))));
     world.insert_resource(state(true, Tab::Elements));
+    // Distinct from the default fallback: proves a row label's color comes
+    // from the resource (what a resolved `--dt-tag-color` would supply),
+    // not a compiled-in constant.
+    let palette = OverlayPalette {
+        tag_color: Color::rgb(0.9, 0.1, 0.9),
+        ..OverlayPalette::default()
+    };
+    world.insert_resource(palette);
 
     let mut sched = Schedule::default();
     sched.add_systems(rebuild_element_rows);
@@ -88,15 +96,20 @@ fn rebuild_spawns_rows_and_excludes_overlay() {
     assert!(rows.iter().all(|(_, p)| *p == container));
 
     // Label parts are children of the rows, colored per part.
-    let mut labels = world.query_filtered::<&TextContent, With<DevtoolsMarker>>();
+    let mut labels = world.query_filtered::<(&TextContent, &TextStyle), With<DevtoolsMarker>>();
     let joined: String = labels
         .iter(&world)
-        .map(|t| t.0.clone())
+        .map(|(t, _)| t.0.clone())
         .collect::<Vec<_>>()
         .join("|");
     assert!(joined.contains("<column>"), "got: {joined}");
     assert!(joined.contains("#app-root"), "got: {joined}");
     assert!(joined.contains("<text>"), "got: {joined}");
+    let tag_label = labels
+        .iter(&world)
+        .find(|(t, _)| t.0.contains("<column>"))
+        .expect("a tag label part");
+    assert_eq!(tag_label.1.color, palette.tag_color);
     assert!(
         !joined.contains("dt-secret"),
         "overlay must not inspect itself: {joined}"
@@ -122,6 +135,7 @@ fn leaving_the_elements_tab_clears_rows_and_reflows_the_scroll() {
     snap.inspect.insert(1, insp("root", None, None, vec![]));
     world.insert_resource(SnapshotHandle(Arc::new(RwLock::new(snap))));
     world.insert_resource(state(true, Tab::Elements));
+    world.insert_resource(OverlayPalette::default());
 
     let mut sched = Schedule::default();
     sched.add_systems(rebuild_element_rows);
@@ -157,6 +171,7 @@ fn rebuild_skips_unchanged_trees_replaces_changed_ones_and_needs_a_container() {
     world.spawn((LumenId(ROWS_ID.into()), Visible(true)));
     world.insert_resource(SnapshotHandle(Arc::new(RwLock::new(snap_of(&[1])))));
     world.insert_resource(state(true, Tab::Elements));
+    world.insert_resource(OverlayPalette::default());
 
     let mut sched = Schedule::default();
     sched.add_systems(rebuild_element_rows);
@@ -189,6 +204,7 @@ fn rebuild_skips_unchanged_trees_replaces_changed_ones_and_needs_a_container() {
     let mut bare = World::new();
     bare.insert_resource(SnapshotHandle(Arc::new(RwLock::new(snap_of(&[1])))));
     bare.insert_resource(state(true, Tab::Elements));
+    bare.insert_resource(OverlayPalette::default());
     let mut bare_sched = Schedule::default();
     bare_sched.add_systems(rebuild_element_rows);
     bare_sched.run(&mut bare);
@@ -201,6 +217,7 @@ fn rebuild_noop_when_hidden() {
     world.spawn((LumenId(ROWS_ID.into()), Visible(true)));
     world.insert_resource(SnapshotHandle(Arc::new(RwLock::new(Snapshot::default()))));
     world.insert_resource(state(false, Tab::Elements));
+    world.insert_resource(OverlayPalette::default());
 
     let mut sched = Schedule::default();
     sched.add_systems(rebuild_element_rows);

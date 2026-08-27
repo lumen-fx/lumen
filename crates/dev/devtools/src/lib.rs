@@ -15,7 +15,10 @@
 //! the app (the click that picks still reaches the app). Entities spawned
 //! after the mount are outside the overlay stylesheet's reach, so the
 //! dynamic states (row/tab hover, selection, the highlight box) are styled
-//! here with constants mirroring the `.css` palette.
+//! here in Rust rather than through a selector. Their colors come from
+//! [`OverlayPalette`], which the lumenc dev-mount resolves once from
+//! `assets/overlay.css`'s `--dt-*` custom properties, so the stylesheet
+//! stays the palette's one definition.
 //!
 //! ## Data sources (all in-process, no server)
 //! * **Elements** and **Signals + Perf** read the shared
@@ -83,27 +86,76 @@ pub const EDIT_ID: &str = "dt-edit";
 /// enables it.
 pub const OPEN_ENV: &str = "LUMEN_DEVTOOLS_OPEN";
 
-// Dynamic-state palette, the Chrome DevTools dark scheme. Mirrors
-// assets/overlay.css - the stylesheet cannot reach entities spawned after
-// the mount, so the interactive states carry their one Rust fallback here
-// (same contract as the tooltip defaults).
-const TAB_TEXT: Color = Color::from_rgba8([0x9a, 0xa0, 0xa6, 0xff]);
-const TAB_TEXT_ACTIVE: Color = Color::from_rgba8([0xe8, 0xea, 0xed, 0xff]);
-const TAB_UNDERLINE: Color = Color::from_rgba8([0x8a, 0xb4, 0xf8, 0xff]);
-const TAB_FILL_HOVER: Color = Color::from_rgba8([0x35, 0x36, 0x3a, 0xff]);
-const ROW_FILL_HOVER: Color = Color::from_rgba8([0x2f, 0x30, 0x33, 0xff]);
-const ROW_FILL_SELECTED: Color = Color::from_rgba8([0x21, 0x41, 0x66, 0xff]);
-// Markup syntax colors (Chrome Elements panel).
-const TAG_COLOR: Color = Color::from_rgba8([0x5d, 0xb0, 0xd7, 0xff]);
-const META_COLOR: Color = Color::from_rgba8([0xf2, 0x8b, 0x54, 0xff]);
-const DIM_COLOR: Color = Color::from_rgba8([0x9a, 0xa0, 0xa6, 0xff]);
-const FLAG_COLOR: Color = Color::from_rgba8([0xd7, 0xae, 0xfb, 0xff]);
-// Element highlight + its tag tooltip.
-const HIGHLIGHT_FILL: Color = Color::from_rgba8([0x6f, 0xa8, 0xdc, 0x66]);
-const HIGHLIGHT_BORDER: Color = Color::from_rgba8([0x6f, 0xa8, 0xdc, 0xcc]);
-const TIP_FILL: Color = Color::from_rgba8([0x20, 0x21, 0x24, 0xf2]);
-const TIP_BORDER: Color = Color::from_rgba8([0x3c, 0x40, 0x43, 0xff]);
-const TIP_TEXT: Color = Color::from_rgba8([0xe8, 0xea, 0xed, 0xff]);
+/// Dynamic-state colors for the entities the overlay spawns after the
+/// mount: element-row syntax colors, tab/row interaction states, and the
+/// element highlight box with its tag tooltip. `assets/overlay.css`
+/// declares the matching `--dt-*` custom property for every field; the
+/// lumenc dev-mount resolves each one once from the parsed stylesheet
+/// (via [`lumen_ir::css::Stylesheet::resolve_root_var`]) and inserts the
+/// result as this resource before [`DevtoolsPlugin`] builds, so a color
+/// changed in `overlay.css` reaches these entities the next run.
+///
+/// [`OverlayPalette::default`] is the fallback for a field whose token the
+/// mount could not resolve (no stylesheet, a parse error, or a rule that
+/// never defines it) - the Chrome DevTools dark palette `overlay.css`
+/// ships today. It is the one place these values are allowed to be
+/// literals; every call site reads the resource instead.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct OverlayPalette {
+    /// Inactive tab-button text (`--dt-tab-text`).
+    pub tab_text: Color,
+    /// Active tab-button text (`--dt-tab-text-active`).
+    pub tab_text_active: Color,
+    /// Active tab's bottom underline (`--dt-tab-underline`).
+    pub tab_underline: Color,
+    /// Hovered tab-button fill (`--dt-tab-fill-hover`).
+    pub tab_fill_hover: Color,
+    /// Hovered Elements-row fill (`--dt-row-fill-hover`).
+    pub row_fill_hover: Color,
+    /// Selected Elements-row fill (`--dt-row-fill-selected`).
+    pub row_fill_selected: Color,
+    /// Element-row tag-name text (`--dt-tag-color`).
+    pub tag_color: Color,
+    /// Element-row `#id.class` text (`--dt-meta-color`).
+    pub meta_color: Color,
+    /// Element-row `[WxH]` dimension text (`--dt-dim-color`).
+    pub dim_color: Color,
+    /// Element-row `:hover`/`:focus`/`:press` state-flag text (`--dt-flag-color`).
+    pub flag_color: Color,
+    /// Element-highlight box fill (`--dt-highlight-fill`).
+    pub highlight_fill: Color,
+    /// Element-highlight box border (`--dt-highlight-border`).
+    pub highlight_border: Color,
+    /// Highlight tag-tooltip fill (`--dt-tip-fill`).
+    pub tip_fill: Color,
+    /// Highlight tag-tooltip border (`--dt-tip-border`).
+    pub tip_border: Color,
+    /// Highlight tag-tooltip text (`--dt-tip-text`).
+    pub tip_text: Color,
+}
+
+impl Default for OverlayPalette {
+    fn default() -> Self {
+        Self {
+            tab_text: Color::from_rgba8([0x9a, 0xa0, 0xa6, 0xff]),
+            tab_text_active: Color::from_rgba8([0xe8, 0xea, 0xed, 0xff]),
+            tab_underline: Color::from_rgba8([0x8a, 0xb4, 0xf8, 0xff]),
+            tab_fill_hover: Color::from_rgba8([0x35, 0x36, 0x3a, 0xff]),
+            row_fill_hover: Color::from_rgba8([0x2f, 0x30, 0x33, 0xff]),
+            row_fill_selected: Color::from_rgba8([0x21, 0x41, 0x66, 0xff]),
+            tag_color: Color::from_rgba8([0x5d, 0xb0, 0xd7, 0xff]),
+            meta_color: Color::from_rgba8([0xf2, 0x8b, 0x54, 0xff]),
+            dim_color: Color::from_rgba8([0x9a, 0xa0, 0xa6, 0xff]),
+            flag_color: Color::from_rgba8([0xd7, 0xae, 0xfb, 0xff]),
+            highlight_fill: Color::from_rgba8([0x6f, 0xa8, 0xdc, 0x66]),
+            highlight_border: Color::from_rgba8([0x6f, 0xa8, 0xdc, 0xcc]),
+            tip_fill: Color::from_rgba8([0x20, 0x21, 0x24, 0xf2]),
+            tip_border: Color::from_rgba8([0x3c, 0x40, 0x43, 0xff]),
+            tip_text: Color::from_rgba8([0xe8, 0xea, 0xed, 0xff]),
+        }
+    }
+}
+
 const ROW_FONT_PX: f32 = 12.0;
 const ROW_HEIGHT_PX: f32 = 18.0;
 const ROW_INDENT_PX: f32 = 12.0;
@@ -192,6 +244,10 @@ pub struct DevtoolsPlugin;
 
 impl Plugin for DevtoolsPlugin {
     fn build(self, app: &mut App) {
+        // Only inserted when the lumenc dev-mount did not already resolve
+        // one from `overlay.css` (a bare `DevtoolsPlugin` in a test, or a
+        // stylesheet parse failure) - see [`OverlayPalette`].
+        app.world.init_resource::<OverlayPalette>();
         app.world.init_resource::<DevtoolsState>();
         app.world.init_resource::<NetworkCapture>();
         app.world.init_resource::<DockInsets>();
@@ -199,6 +255,8 @@ impl Plugin for DevtoolsPlugin {
         if env_open() {
             app.world.resource_mut::<DevtoolsState>().visible = true;
         }
+
+        let palette = *app.world.resource::<OverlayPalette>();
 
         // The element-highlight box: its own top-layer root, placed over the
         // target by writing its `Transform` directly - it deliberately has no
@@ -213,8 +271,8 @@ impl Plugin for DevtoolsPlugin {
             Visible(false),
             Transform::default(),
             Visuals {
-                fill: Some(Fill::Solid(HIGHLIGHT_FILL)),
-                border: Some(Border::uniform(Edges::all(1.0), HIGHLIGHT_BORDER)),
+                fill: Some(Fill::Solid(palette.highlight_fill)),
+                border: Some(Border::uniform(Edges::all(1.0), palette.highlight_border)),
                 ..Default::default()
             },
         ));
@@ -228,15 +286,15 @@ impl Plugin for DevtoolsPlugin {
             Transform::default(),
             TextContent(String::new()),
             TextStyle {
-                color: TIP_TEXT,
+                color: palette.tip_text,
                 size_px: TIP_FONT_PX,
                 wrap: TextWrap::None,
                 ..Default::default()
             },
             Visuals {
-                fill: Some(Fill::Solid(TIP_FILL)),
+                fill: Some(Fill::Solid(palette.tip_fill)),
                 radius: 3.0,
-                border: Some(Border::uniform(Edges::all(1.0), TIP_BORDER)),
+                border: Some(Border::uniform(Edges::all(1.0), palette.tip_border)),
                 ..Default::default()
             },
         ));
@@ -403,6 +461,7 @@ pub fn handle_clicks(
 pub fn rebuild_element_rows(
     mut commands: Commands,
     state: Res<DevtoolsState>,
+    palette: Res<OverlayPalette>,
     snapshot: Res<SnapshotHandle>,
     own: Query<Entity, With<DevtoolsMarker>>,
     ids: Query<(Entity, &LumenId)>,
@@ -471,10 +530,10 @@ pub fn rebuild_element_rows(
             ))
             .id();
         let parts: [(&str, Color); 4] = [
-            (&r.tag, TAG_COLOR),
-            (&r.meta, META_COLOR),
-            (&r.dims, DIM_COLOR),
-            (&r.flags, FLAG_COLOR),
+            (&r.tag, palette.tag_color),
+            (&r.meta, palette.meta_color),
+            (&r.dims, palette.dim_color),
+            (&r.flags, palette.flag_color),
         ];
         for (text, color) in parts {
             if text.is_empty() {
@@ -508,6 +567,7 @@ pub fn rebuild_element_rows(
 pub fn style_tabs(
     mut commands: Commands,
     state: Res<DevtoolsState>,
+    palette: Res<OverlayPalette>,
     mut tabs: Query<(
         Entity,
         &LumenId,
@@ -527,7 +587,7 @@ pub fn style_tabs(
         // Chrome-style flat tabs: no fill at rest, subtle fill on hover, and
         // the active tab gets bright text plus a blue bottom underline.
         let fill = if hovered.is_some() {
-            Some(Fill::Solid(TAB_FILL_HOVER))
+            Some(Fill::Solid(palette.tab_fill_hover))
         } else {
             None
         };
@@ -536,10 +596,14 @@ pub fn style_tabs(
                 bottom: 2.0,
                 ..Default::default()
             },
-            color: TAB_UNDERLINE,
+            color: palette.tab_underline,
             side_colors: None,
         });
-        let color = if active { TAB_TEXT_ACTIVE } else { TAB_TEXT };
+        let color = if active {
+            palette.tab_text_active
+        } else {
+            palette.tab_text
+        };
         match visuals {
             Some(mut visuals) => {
                 if visuals.fill != fill {
@@ -570,13 +634,14 @@ pub fn style_tabs(
 /// on change.
 pub fn style_rows(
     state: Res<DevtoolsState>,
+    palette: Res<OverlayPalette>,
     mut rows: Query<(&RowTarget, &mut Visuals, Option<&Hovered>)>,
 ) {
     for (target, mut visuals, hovered) in &mut rows {
         let fill = if state.selected == Some(target.0) {
-            Some(Fill::Solid(ROW_FILL_SELECTED))
+            Some(Fill::Solid(palette.row_fill_selected))
         } else if hovered.is_some() {
-            Some(Fill::Solid(ROW_FILL_HOVER))
+            Some(Fill::Solid(palette.row_fill_hover))
         } else {
             None
         };

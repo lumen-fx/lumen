@@ -14,13 +14,13 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::Schedule;
 use glam::Vec2;
 use lumen_core::components::{
-    Color, DirtyLayout, LumenId, TextContent, TextStyle, Transform, Visible, Visuals,
+    Color, DirtyLayout, Fill, LumenId, TextContent, TextStyle, Transform, Visible, Visuals,
 };
 use lumen_core::input::{ClickEvent, Hovered, Key, KeyPressed, Modifiers, PointerButton};
 use lumen_core::render_world::DockInsets;
 use lumen_devtools::{
-    DevtoolsRoot, DevtoolsState, HighlightBox, HighlightTip, PANEL_ID, RowTarget, Tab,
-    handle_clicks, style_rows, style_tabs, sync_dock_inset, toggle_devtools_on_f12,
+    DevtoolsRoot, DevtoolsState, HighlightBox, HighlightTip, OverlayPalette, PANEL_ID, RowTarget,
+    Tab, handle_clicks, style_rows, style_tabs, sync_dock_inset, toggle_devtools_on_f12,
     update_highlight,
 };
 use lumen_mcp::{EntityInspect, Snapshot, SnapshotHandle};
@@ -150,6 +150,20 @@ fn tabs_and_rows_style_by_state() {
         selected: Some(7),
         picking: true,
     });
+    // A palette distinct from `OverlayPalette::default()` in every field
+    // these systems read - proves `style_tabs`/`style_rows` paint from the
+    // resource (what a resolved `overlay.css` token would supply) rather
+    // than a compiled-in color.
+    let palette = OverlayPalette {
+        tab_text: Color::rgb(0.1, 0.1, 0.1),
+        tab_text_active: Color::rgb(0.2, 0.2, 0.2),
+        tab_underline: Color::rgb(0.3, 0.3, 0.3),
+        tab_fill_hover: Color::rgb(0.4, 0.4, 0.4),
+        row_fill_hover: Color::rgb(0.5, 0.5, 0.5),
+        row_fill_selected: Color::rgb(0.6, 0.6, 0.6),
+        ..OverlayPalette::default()
+    };
+    world.insert_resource(palette);
 
     // Active tab (Signals), hovered tab with a Visuals to update, armed
     // Pick button, and one without Visuals (seeded by the system).
@@ -173,6 +187,28 @@ fn tabs_and_rows_style_by_state() {
     assert!(world.get::<Visuals>(pick).unwrap().border.is_some());
     assert!(world.get::<Visuals>(hovered).unwrap().fill.is_some());
     assert!(world.get::<Visuals>(hovered).unwrap().border.is_none());
+    // The painted values are the palette's, not a compiled-in fallback.
+    assert_eq!(
+        world.get::<Visuals>(active).unwrap().border.unwrap().color,
+        palette.tab_underline
+    );
+    assert_eq!(
+        world.get::<Visuals>(hovered).unwrap().fill,
+        Some(Fill::Solid(palette.tab_fill_hover))
+    );
+    assert_eq!(
+        world.get::<TextStyle>(active).unwrap().color,
+        palette.tab_text_active
+    );
+    // Pick is also "active" here (`DevtoolsState::picking` is true).
+    assert_eq!(
+        world.get::<TextStyle>(pick).unwrap().color,
+        palette.tab_text_active
+    );
+    assert_eq!(
+        world.get::<TextStyle>(hovered).unwrap().color,
+        palette.tab_text
+    );
     run!(&mut world, style_tabs); // second pass: the write-only-on-change arms
     world.resource_mut::<DevtoolsState>().tab = Tab::Network;
     run!(&mut world, style_tabs); // active flips: borders rewrite both ways
@@ -183,8 +219,14 @@ fn tabs_and_rows_style_by_state() {
         .id();
     let plain_row = world.spawn((RowTarget(9), Visuals::default())).id();
     run!(&mut world, style_rows);
-    assert!(world.get::<Visuals>(selected_row).unwrap().fill.is_some());
-    assert!(world.get::<Visuals>(hovered_row).unwrap().fill.is_some());
+    assert_eq!(
+        world.get::<Visuals>(selected_row).unwrap().fill,
+        Some(Fill::Solid(palette.row_fill_selected))
+    );
+    assert_eq!(
+        world.get::<Visuals>(hovered_row).unwrap().fill,
+        Some(Fill::Solid(palette.row_fill_hover))
+    );
     assert!(world.get::<Visuals>(plain_row).unwrap().fill.is_none());
 }
 
