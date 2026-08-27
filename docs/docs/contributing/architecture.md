@@ -20,17 +20,20 @@ trait, and the schedules are Lumen's own.
 ## Where the crates live
 
 The workspace root is the engine itself: `src/` builds `liblumen`, the shared
-library every app executable, launcher stub, and SDK loads. Everything else
-sits under `crates/`, grouped by the role it plays.
+library every app executable, launcher stub, and SDK loads. Internal crates
+sit under `crates/`, grouped by the role they play. The crates external code
+depends on directly (the compiler, the plugin and module SDKs, the engine
+carrier) sit under `public/`.
 
 ```
 src/               the engine crate (package `lumen`, builds liblumen)
 include/           the C ABI headers
-crates/            the flat spine: core, ir, runtime, lumenc, the widgets
+crates/            the internal spine: core, ir, runtime, the widgets
 crates/backends/   swappable capability implementations
 crates/os/         one desktop capability per crate
 crates/script/     the scripting API and its three hosts
 crates/dev/        tools that never ship inside an app
+public/            author-facing crates: lumenc, the plugin and module SDKs
 std/               first-party runtime modules, shipped beside the engine
 sdk/               the Rust, C++, and Python SDKs
 apps/              example apps
@@ -206,7 +209,7 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   the shared `liblumen` plus a static library. That shared form is a `cdylib`:
   it exports the `extern "C"` surface and nothing else, which is what the
   launcher and the C++ and Python SDKs open.
-- **lumen-dylib** (in `sdk/rust-dylib`): the engine built as a Rust `dylib`
+- **lumen-dylib** (in `public/lumen-dylib`): the engine built as a Rust `dylib`
   (`liblumen_engine`), which carries Rust metadata and so can be *linked*
   rather than opened. It names the engine crates directly - never `lumen` or
   `lumenc`, which are its consumers: the Rust SDK links it always (off

@@ -5,15 +5,15 @@
 #
 # Layout is load-bearing, not taste. lumenc dlopens the runtime library from
 # the directory holding its own executable, and `lumenc package` looks for the
-# launcher stub in that same directory (crates/lumenc/src/loader.rs,
-# crates/lumenc/src/package_cli.rs). All three files therefore live together in
+# launcher stub in that same directory (public/lumenc/src/loader.rs,
+# public/lumenc/src/package_cli.rs). All three files therefore live together in
 # /usr/lib/lumen, and /usr/bin/lumenc is a symlink into it: Linux resolves
 # /proc/self/exe through the symlink, so the running lumenc still sees
 # /usr/lib/lumen as its own directory.
 #
 # Nothing here installs a receipt under share/lumen. That file is what marks a
 # copy as installed and turns the built-in update check on
-# (crates/lumenc/src/update_check.rs); without it lumenc never checks for a
+# (public/lumenc/src/update_check.rs); without it lumenc never checks for a
 # newer release, which is what you want when pacman owns the version.
 #
 # The `licenses` package already ships the MPL-2.0 text as

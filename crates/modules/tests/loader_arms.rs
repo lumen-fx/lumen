@@ -1,6 +1,6 @@
 //! The loader's refusal arms, driven in-process where the profiler can see
 //! them. Nothing here is a working module on purpose: the end-to-end proof
-//! that a real one loads lives in `crates/lumen-module/tests/end_to_end.rs`,
+//! that a real one loads lives in `public/lumen-module/tests/end_to_end.rs`,
 //! and these are the arms a real module never reaches.
 
 #![cfg(all(feature = "loader", not(windows)))]

@@ -55,7 +55,7 @@ name: publish
 # twice and racing on it.
 #
 # Every other crate in the workspace is `publish = false`, because the engine
-# reaches a `cargo install lumenc` through crates/lumenc/build.rs rather than
+# reaches a `cargo install lumenc` through public/lumenc/build.rs rather than
 # through the registry. `lumenc` still names those crates as dependencies, so
 # the script refuses to start and this job fails until that is unwound; see the
 # registries section of tools/release/release-checklist.md.

@@ -12,9 +12,9 @@
  * fill - which the desktop draws from entities that never reach the IR.
  *
  * That second half is a copy, and the original is `build_element` in
- * crates/lumenc/src/parser_html.rs, which sets the same defaults on
+ * public/lumenc/src/parser_html.rs, which sets the same defaults on
  * `Attributes`. Change one and change the other; the parity test in
- * crates/lumenc/tests/web_css.rs is what notices when they disagree.
+ * public/lumenc/tests/web_css.rs is what notices when they disagree.
  *
  * The per-tag defaults Lumen writes as an ordinary stylesheet instead
  * (crates/runtime/src/skins/ua.css) are not repeated here: they reach the

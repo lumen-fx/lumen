@@ -15,16 +15,16 @@ name: build-toolchain
 #   - install.sh requires a top-level bin/ directory in the archive (its
 #     unpack step fails otherwise) and looks up the asset by the exact name
 #     lumen-<target>.tar.gz / lumen-windows-x86_64.msi.
-#   - crates/lumenc/src/loader.rs dlopens liblumen from next to its own executable
+#   - public/lumenc/src/loader.rs dlopens liblumen from next to its own executable
 #     (or an LUMEN_LIB_DIR override, or the platform loader's default
 #     search path) - never from a sibling lib/ directory. So the shared
 #     library goes in bin/, next to lumenc, or a normal `~/.lumen` install
 #     would put a lumenc on PATH that cannot find its own runtime.
-#   - crates/lumenc/src/package_cli.rs looks for the launcher stub in the same place
+#   - public/lumenc/src/package_cli.rs looks for the launcher stub in the same place
 #     it looks for liblumen, so `lumenc package` on an installed toolchain
 #     finds it without being told where it is. An archive without the stub
 #     leaves that command with nothing to build an app executable from.
-#   - crates/lumenc/src/scaffold.rs reads the `lumenc new` templates from a
+#   - public/lumenc/src/scaffold.rs reads the `lumenc new` templates from a
 #     templates/ directory beside the executable. The templates are not in
 #     this repository at all: each is its own repository under lumen-fx, and
 #     tools/fetch-templates.sh downloads the copy that ships here.
@@ -40,7 +40,7 @@ name: build-toolchain
 # holding the browser runtime `lumenc web` copies beside the pages it emits.
 # WebAssembly is the same everywhere, so it is built once and downloaded by
 # every `lumenc` that emits a site, into a cache keyed on the version rather
-# than on a target. crates/lumenc/src/package_cli.rs looks for it under that
+# than on a target. public/lumenc/src/package_cli.rs looks for it under that
 # exact name, so a publish without it leaves `lumenc web` with nothing to give
 # a page to load.
 #
@@ -160,7 +160,7 @@ jobs:
       #
       # Windows keeps the fully-static shape - its import-library format
       # cannot describe the engine's export count, so no engine dylib exists
-      # there (see sdk/rust-dylib/Cargo.toml).
+      # there (see public/lumen-dylib/Cargo.toml).
       - name: Build lumenc + liblumen (dynamic engine, Unix)
         if: runner.os != 'Windows'
         env:
@@ -259,7 +259,7 @@ jobs:
           cp -R "target/$triple/release/libs" dist/bin/libs
           # The app templates, beside lumenc for the same reason: `lumenc new`
           # reads them from next to its own executable
-          # (crates/lumenc/src/scaffold.rs), so an archive without them ships a
+          # (public/lumenc/src/scaffold.rs), so an archive without them ships a
           # compiler that can scaffold nothing.
           cp -R target/templates dist/bin/templates
           # The rpath wiring is what this exercises: a dynamic lumenc that
@@ -272,9 +272,9 @@ jobs:
           mkdir -p dist/share/bash-completion/completions \
                    dist/share/zsh/site-functions \
                    dist/share/fish/vendor_completions.d
-          cp crates/lumenc/completions/lumenc.bash dist/share/bash-completion/completions/lumenc
-          cp crates/lumenc/completions/_lumenc dist/share/zsh/site-functions/_lumenc
-          cp crates/lumenc/completions/lumenc.fish dist/share/fish/vendor_completions.d/lumenc.fish
+          cp public/lumenc/completions/lumenc.bash dist/share/bash-completion/completions/lumenc
+          cp public/lumenc/completions/_lumenc dist/share/zsh/site-functions/_lumenc
+          cp public/lumenc/completions/lumenc.fish dist/share/fish/vendor_completions.d/lumenc.fish
           tar -czf lumen-${{ matrix.target }}.tar.gz -C dist .
 
       # The bundled runtime modules, as their own archive beside the
@@ -362,7 +362,7 @@ jobs:
   #
   # The two files sit at the root of the archive. Nothing unpacks this one into
   # an install prefix: `lumenc` picks the members it wants out by name and
-  # ignores their directories (crates/lumenc/src/package_cli.rs), so a flat
+  # ignores their directories (public/lumenc/src/package_cli.rs), so a flat
   # archive is also what someone unpacking it by hand for `--lib-dir` ends up
   # wanting.
   web:

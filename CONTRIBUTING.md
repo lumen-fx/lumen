@@ -55,7 +55,7 @@ a template's markup, CSS, script, or README goes to that repository, and
 reaches users with the next release.
 
 What lives here is the gallery: which templates `lumenc new` offers, in which
-order, and the one-line description of each (`crates/lumenc/src/scaffold.rs`).
+order, and the one-line description of each (`public/lumenc/src/scaffold.rs`).
 Adding a template means a new repository upstream and an entry here.
 
 Run `tools/fetch-templates.sh` to download the templates for a local test run.

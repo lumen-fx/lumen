@@ -325,7 +325,7 @@ pub struct ImePreedit {
 ///
 /// - Attached alongside `TextInput` by the bootstrap system in
 ///   `lumen-text-edit` so spawn-side compatibility holds without touching
-///   `crates/lumenc/src/spawn.rs`.
+///   `public/lumenc/src/spawn.rs`.
 /// - Future migration: replace `TextInput` with this + a policy bundle.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct TextEditable;

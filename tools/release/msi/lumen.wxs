@@ -8,9 +8,9 @@
   rights, which is the same shape VS Code's user installer uses. The payload
   is authored file by file rather than harvested, because where the files
   land is load-bearing: lumenc dlopens lumen.dll from beside its own
-  executable (crates/lumenc/src/loader.rs), so the two must share one directory, and
+  executable (public/lumenc/src/loader.rs), so the two must share one directory, and
   the update check reads the receipt at ..\share\lumen\lumen.receipt relative
-  to that directory (crates/lumenc/src/update_check.rs).
+  to that directory (public/lumenc/src/update_check.rs).
 
   Built by build-msi.ps1 in this directory, which passes the two preprocessor
   variables this file needs:
@@ -78,7 +78,7 @@
 
       <!--
         The stub `lumenc package` copies to make an app executable. It sits
-        beside lumenc.exe because that is where crates/lumenc/src/package_cli.rs
+        beside lumenc.exe because that is where public/lumenc/src/package_cli.rs
         looks for it, the same directory rule the library above follows.
         Nobody runs it directly: on its own it carries no app.
       -->
@@ -97,7 +97,7 @@
 
       <!--
         The `lumenc new` templates, under bin\templates. lumenc reads them
-        from beside its own executable (crates/lumenc/src/scaffold.rs), the
+        from beside its own executable (public/lumenc/src/scaffold.rs), the
         same directory rule the two above follow. Harvested for the same
         reason the library is: each template is maintained in a repository of
         its own, so the files it is made of belong to that repository rather

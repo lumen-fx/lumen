@@ -59,7 +59,7 @@
 //! ## Parser integration
 //!
 //! The lumenc HTML parser checks its built-in tag table
-//! (`KNOWN_TAGS` in `crates/lumenc/src/parser_html.rs`) first and falls back
+//! (`KNOWN_TAGS` in `public/lumenc/src/parser_html.rs`) first and falls back
 //! to [`is_widget_tag_registered`]. The plugin the derive generates
 //! calls `<Type>::register()` when it is added, so adding that plugin
 //! before the parser runs is enough for `<my-thing>` markup to be
@@ -97,7 +97,7 @@ pub fn register_widget_tag(tag: &'static str) {
 }
 
 /// Returns `true` when `tag` was registered via [`register_widget_tag`]
-/// earlier in this process. Consulted by `crates/lumenc/src/parser_html.rs`'s
+/// earlier in this process. Consulted by `public/lumenc/src/parser_html.rs`'s
 /// `KNOWN_TAGS` fallback path.
 pub fn is_widget_tag_registered(tag: &str) -> bool {
     REGISTERED_WIDGET_TAGS

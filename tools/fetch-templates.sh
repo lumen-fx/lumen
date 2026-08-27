@@ -6,7 +6,7 @@
 # release downloads them with this script and packages them beside the
 # toolchain, and a checkout downloads them with this script so `lumenc new`,
 # and the tests that scaffold, find them the same way an installed lumenc does
-# (crates/lumenc/src/scaffold.rs).
+# (public/lumenc/src/scaffold.rs).
 #
 #   tools/fetch-templates.sh [directory]
 #
@@ -24,7 +24,7 @@ OWNER="${LUMEN_TEMPLATE_OWNER:-lumen-fx}"
 DEST="${1:-${CARGO_TARGET_DIR:-target}/templates}"
 
 # The gallery, which is also scaffold::TEMPLATES in gallery order. The two
-# lists are compared by crates/lumenc/tests/templates.rs, so a template added
+# lists are compared by public/lumenc/tests/templates.rs, so a template added
 # to one and not the other turns the suite red rather than going unnoticed.
 set -- blank hello counter form todo dashboard settings hotkeys
 

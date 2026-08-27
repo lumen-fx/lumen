@@ -20,7 +20,7 @@ world.
 - `crates/primitives/src/lib.rs` - plugin registration and exports.
 - `crates/runtime/src/spawn.rs` - wire the new tag or attribute to the
   component.
-- `crates/lumenc/src/parser_html.rs` - parse the markup form if it is new.
+- `public/lumenc/src/parser_html.rs` - parse the markup form if it is new.
 - `crates/dev/lsp/src/docs.rs` - add the tag or attribute to `TAGS` /
   `ATTRS`, its hover documentation, and any fixed value set.
 

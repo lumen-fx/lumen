@@ -11,8 +11,8 @@
 #
 # The three files stay in one directory because lumenc dlopens the runtime
 # library from beside its own executable, and `lumenc package` looks for the
-# launcher stub in that same directory (crates/lumenc/src/loader.rs,
-# crates/lumenc/src/package_cli.rs). libexec holds all three and bin gets a
+# launcher stub in that same directory (public/lumenc/src/loader.rs,
+# public/lumenc/src/package_cli.rs). libexec holds all three and bin gets a
 # script that execs the real lumenc, so the running executable is the one in
 # libexec no matter how it was invoked. A plain symlink in bin would not do:
 # macOS reports the path used to launch, not the resolved one, and the library
@@ -20,7 +20,7 @@
 #
 # Nothing here installs a receipt under share/lumen. That file is what marks a
 # copy as installed and turns the built-in update check on
-# (crates/lumenc/src/update_check.rs); without it lumenc never checks for a
+# (public/lumenc/src/update_check.rs); without it lumenc never checks for a
 # newer release, which is what you want when brew owns the version.
 #
 # The Linux archives link the distribution's GTK 3, ALSA, and Wayland or X11

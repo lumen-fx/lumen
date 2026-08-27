@@ -19,7 +19,7 @@
 # The latest tag comes from the redirect that
 # https://github.com/lumen-fx/lumen/releases/latest sends: its final URL ends
 # in the tag, which is the same resolution lumenc's own update check uses
-# (crates/lumenc/src/update_check.rs). A pinned --version needs no lookup at
+# (public/lumenc/src/update_check.rs). A pinned --version needs no lookup at
 # all; it becomes a tag directly, tried as given and then with a "v" prefix.
 #
 # Checksums live in one asset per release, sha256sums.txt, in sha256sum's own
@@ -60,8 +60,8 @@
 # tools/release/release-checklist.md documents producing the asset under this
 # scheme. The archive holds the tree to install: bin/ for lumenc, with the
 # liblumen shared library and the lumen-launcher app stub right next to it in
-# the same bin/ directory (see crates/lumenc/src/loader.rs and
-# crates/lumenc/src/package_cli.rs: both look next to the running executable,
+# the same bin/ directory (see public/lumenc/src/loader.rs and
+# public/lumenc/src/package_cli.rs: both look next to the running executable,
 # then an LUMEN_LIB_DIR override, then the platform loader's default search
 # path, and never in a sibling lib/ directory), plus the two trees lumenc
 # reads from beside itself - the candela standard library in bin/libs and the
@@ -293,7 +293,7 @@ published_targets() {
 #
 # The "pinned" line is present only for a --version install, and carries the
 # resolved release, so it always agrees with the "version" line above it.
-# lumenc's update check (crates/lumenc/src/update_check.rs) treats its
+# lumenc's update check (public/lumenc/src/update_check.rs) treats its
 # presence as "leave this install alone".
 
 RECEIPT="$RECEIPT_DIR/lumen.receipt"

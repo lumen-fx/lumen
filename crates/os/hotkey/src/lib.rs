@@ -5,7 +5,7 @@
 //! every Qt app rolls via `QHotkey`) and GTK 4's
 //! `GtkShortcutController` + the XDG `GlobalShortcuts` portal.
 //!
-//! Extracted from `crates/lumenc/src/run.rs:951-1026` (the `HotkeyRegistry`
+//! Extracted from `public/lumenc/src/run.rs:951-1026` (the `HotkeyRegistry`
 //! struct + `register_hotkey` / `unregister_hotkey` /
 //! `poll_global_hotkeys` helpers) per W6.5.
 //!
