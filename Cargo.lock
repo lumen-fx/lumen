@@ -4032,8 +4032,10 @@ dependencies = [
  "lumen-os-dnd",
  "lumen-plugin-abi",
  "lumen-primitives",
+ "pulldown-cmark",
  "ron",
  "serde",
+ "serde_json",
  "thiserror 2.0.19",
 ]
 
@@ -4047,7 +4049,6 @@ dependencies = [
  "cc",
  "lumen-core",
  "lumen-script",
- "pulldown-cmark",
  "serde_json",
 ]
 
@@ -4060,8 +4061,6 @@ dependencies = [
  "lumen-script",
  "mlua",
  "parking_lot",
- "pulldown-cmark",
- "serde_json",
  "tracing",
 ]
 
@@ -4073,9 +4072,7 @@ dependencies = [
  "lumen-core",
  "lumen-script",
  "parking_lot",
- "pulldown-cmark",
  "rhai",
- "serde_json",
  "tracing",
 ]
 

@@ -26,6 +26,12 @@ glam.workspace = true
 # `wire` module.
 serde.workspace = true
 thiserror.workspace = true
+# `parse_json`: JSON text -> `ScriptValue`, behind the `json` feature so a
+# build that links no script host does not carry it. See [features].
+serde_json = { workspace = true, optional = true }
+# `parse_markdown`: markdown -> a block-record `ScriptValue`, behind the
+# `markdown` feature.
+pulldown-cmark = { workspace = true, optional = true }
 
 # The plugin boundary's byte codec, for decoding the events portable plugins
 # push onto the core bus. Default features only: the dlopen half stays in the
@@ -43,3 +49,10 @@ bincode.workspace = true
 # dependency, so the parser never reaches a shipped binary.
 ron.workspace = true
 serde.workspace = true
+
+[features]
+# The `parse_json` builtin. Every script host crate enables this; a build
+# that links none of them carries neither the feature nor `serde_json`.
+json = ["dep:serde_json"]
+# The `parse_markdown` builtin, same shape as `json`.
+markdown = ["dep:pulldown-cmark"]

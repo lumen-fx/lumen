@@ -62,6 +62,8 @@ host "lumen" {
     string tr(string);
     string local_id(string, string);
     string dump_tree();
+    any parse_json(...);
+    any parse_markdown(...);
     int[] node_query(string);
     int node_get_by_id(string);
     int node_document();
@@ -161,8 +163,6 @@ host "lumen" {
     {string: string} signals_all();
     any matched_rules(...);
     http(...);
-    any parse_json(...);
-    any parse_markdown(...);
     print(...);
     on(string, string, string);
     derive(string, string[], string);

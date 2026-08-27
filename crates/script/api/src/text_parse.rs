@@ -1,44 +1,46 @@
 //! Text-to-value parsers behind the `parse_json` and `parse_markdown`
-//! builtins.
+//! builtins in [`crate::builtin_fns::builtin_script_fns`].
 //!
-//! Both hand back a candela [`Value`] rather than a string, so a
-//! script indexes the result directly. They are registered variadically: a
-//! fixed host-fn signature must name one concrete return type, and neither
-//! result has one (JSON is a map, an array, or a scalar; a markdown block mixes
-//! string and int fields).
-//!
-//! Map keys built here cross the boundary through candela's `marshal_value`,
-//! which interns them into the string pool, so `block.get("level")` resolves
-//! whatever the key's length. candela's own `json_parse` skips that interning,
-//! which is why `parse_json` parses host-side instead of delegating.
+//! Both hand back a [`ScriptValue`] rather than a string, so a script indexes
+//! the result directly instead of parsing text itself; each host converts the
+//! result into its own value type the same way it converts any other
+//! builtin's return. `parse_json` and `parse_markdown` are each behind their
+//! own Cargo feature (`json`, `markdown`) so a build that links no script
+//! host carries neither `serde_json` nor `pulldown-cmark`.
 
-use std::collections::BTreeMap;
+#[cfg(any(feature = "json", feature = "markdown"))]
+use crate::ScriptValue;
 
-use candela_vm::Value;
-
-/// Parse `src` as JSON into a candela value. Objects become maps, arrays become
-/// arrays, and scalars keep their JSON type. Malformed input yields null.
+/// Parse `src` as JSON into a [`ScriptValue`]. An object becomes a
+/// [`ScriptValue::Map`], an array a [`ScriptValue::Array`], and a scalar
+/// keeps its JSON type. Malformed input yields [`ScriptValue::Unit`].
+#[cfg(feature = "json")]
 #[must_use]
-pub fn json(src: &str) -> Value {
+pub fn parse_json(src: &str) -> ScriptValue {
     match serde_json::from_str::<serde_json::Value>(src) {
         Ok(v) => json_value(&v),
-        Err(_) => Value::Null,
+        Err(_) => ScriptValue::Unit,
     }
 }
 
-/// Recursive [`serde_json::Value`] -> [`Value`] projection. A JSON
-/// number lands as an int when it is integral and as a float otherwise, so
-/// `as_int` works on `5` and `as_float` on `5.5`.
-fn json_value(v: &serde_json::Value) -> Value {
+/// Recursive [`serde_json::Value`] -> [`ScriptValue`] projection. A JSON
+/// number lands as [`ScriptValue::I64`] when it is integral and
+/// [`ScriptValue::F64`] otherwise, so `as_int` works on `5` and `as_float` on
+/// `5.5`.
+#[cfg(feature = "json")]
+fn json_value(v: &serde_json::Value) -> ScriptValue {
     match v {
-        serde_json::Value::Null => Value::Null,
-        serde_json::Value::Bool(b) => Value::Bool(*b),
-        serde_json::Value::Number(n) => n
-            .as_i64()
-            .map_or_else(|| Value::Float(n.as_f64().unwrap_or_default()), Value::Int),
-        serde_json::Value::String(s) => Value::String(s.clone()),
-        serde_json::Value::Array(items) => Value::Array(items.iter().map(json_value).collect()),
-        serde_json::Value::Object(fields) => Value::Map(
+        serde_json::Value::Null => ScriptValue::Unit,
+        serde_json::Value::Bool(b) => ScriptValue::Bool(*b),
+        serde_json::Value::Number(n) => n.as_i64().map_or_else(
+            || ScriptValue::F64(n.as_f64().unwrap_or_default()),
+            ScriptValue::I64,
+        ),
+        serde_json::Value::String(s) => ScriptValue::Str(s.clone()),
+        serde_json::Value::Array(items) => {
+            ScriptValue::Array(items.iter().map(json_value).collect())
+        }
+        serde_json::Value::Object(fields) => ScriptValue::Map(
             fields
                 .iter()
                 .map(|(k, val)| (k.clone(), json_value(val)))
@@ -48,6 +50,7 @@ fn json_value(v: &serde_json::Value) -> Value {
 }
 
 /// The block kinds `parse_markdown` recognises.
+#[cfg(feature = "markdown")]
 #[derive(Clone, Copy)]
 enum BlockKind {
     Heading(u8),
@@ -56,6 +59,7 @@ enum BlockKind {
     Item,
 }
 
+#[cfg(feature = "markdown")]
 impl BlockKind {
     /// The `kind` field value a block of this shape carries.
     const fn tag(self) -> &'static str {
@@ -77,15 +81,16 @@ impl BlockKind {
 }
 
 /// Build one block record: `{ id, kind, level, text, lang }`.
-fn block(counter: &mut usize, kind: &str, level: i64, text: String, lang: String) -> Value {
+#[cfg(feature = "markdown")]
+fn block(counter: &mut usize, kind: &str, level: i64, text: String, lang: String) -> ScriptValue {
     let id = format!("blk-{counter}");
     *counter += 1;
-    Value::Map(BTreeMap::from([
-        ("id".to_owned(), Value::String(id)),
-        ("kind".to_owned(), Value::String(kind.to_owned())),
-        ("level".to_owned(), Value::Int(level)),
-        ("text".to_owned(), Value::String(text)),
-        ("lang".to_owned(), Value::String(lang)),
+    ScriptValue::Map(std::collections::HashMap::from([
+        ("id".to_owned(), ScriptValue::Str(id)),
+        ("kind".to_owned(), ScriptValue::Str(kind.to_owned())),
+        ("level".to_owned(), ScriptValue::I64(level)),
+        ("text".to_owned(), ScriptValue::Str(text)),
+        ("lang".to_owned(), ScriptValue::Str(lang)),
     ]))
 }
 
@@ -95,11 +100,12 @@ fn block(counter: &mut usize, kind: &str, level: i64, text: String, lang: String
 /// Lumen labels render plain text, so inline emphasis keeps its markdown
 /// delimiters in the block text rather than being dropped. Links flatten to
 /// their text.
+#[cfg(feature = "markdown")]
 #[must_use]
-pub fn markdown(src: &str) -> Value {
+pub fn parse_markdown(src: &str) -> ScriptValue {
     use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 
-    let mut out: Vec<Value> = Vec::new();
+    let mut out: Vec<ScriptValue> = Vec::new();
     let mut counter: usize = 0;
     let mut cur_kind: Option<BlockKind> = None;
     let mut cur_text = String::new();
@@ -169,57 +175,75 @@ pub fn markdown(src: &str) -> Value {
             _ => {}
         }
     }
-    Value::Array(out)
+    ScriptValue::Array(out)
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "json", feature = "markdown")))]
 mod tests {
     use super::*;
 
-    fn field<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
-        v.as_map().and_then(|m| m.get(key))
+    #[cfg(feature = "json")]
+    fn field<'a>(v: &'a ScriptValue, key: &str) -> Option<&'a ScriptValue> {
+        match v {
+            ScriptValue::Map(m) => m.get(key),
+            _ => None,
+        }
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn json_keeps_scalar_types() {
-        let v = json(r#"{"n": 5, "f": 2.5, "b": true, "s": "x", "z": null}"#);
-        assert_eq!(field(&v, "n"), Some(&Value::Int(5)));
-        assert_eq!(field(&v, "f"), Some(&Value::Float(2.5)));
-        assert_eq!(field(&v, "b"), Some(&Value::Bool(true)));
-        assert_eq!(field(&v, "s"), Some(&Value::String("x".to_owned())));
-        assert_eq!(field(&v, "z"), Some(&Value::Null));
+        let v = parse_json(r#"{"n": 5, "f": 2.5, "b": true, "s": "x", "z": null}"#);
+        assert_eq!(field(&v, "n"), Some(&ScriptValue::I64(5)));
+        assert_eq!(field(&v, "f"), Some(&ScriptValue::F64(2.5)));
+        assert_eq!(field(&v, "b"), Some(&ScriptValue::Bool(true)));
+        assert_eq!(field(&v, "s"), Some(&ScriptValue::Str("x".to_owned())));
+        assert_eq!(field(&v, "z"), Some(&ScriptValue::Unit));
     }
 
+    #[cfg(feature = "json")]
     #[test]
-    fn json_malformed_is_null() {
-        assert_eq!(json("{"), Value::Null);
+    fn json_malformed_is_unit() {
+        assert_eq!(parse_json("{"), ScriptValue::Unit);
     }
 
+    #[cfg(feature = "markdown")]
+    fn field_md<'a>(v: &'a ScriptValue, key: &str) -> Option<&'a ScriptValue> {
+        match v {
+            ScriptValue::Map(m) => m.get(key),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "markdown")]
     #[test]
     fn markdown_blocks_carry_kind_level_and_lang() {
-        let v = markdown("# Title\n\nBody text\n\n```rust\nfn f() {}\n```\n\n---\n");
-        let blocks = v.as_array().expect("array of blocks");
+        let v = parse_markdown("# Title\n\nBody text\n\n```rust\nfn f() {}\n```\n\n---\n");
+        let blocks = match &v {
+            ScriptValue::Array(items) => items,
+            _ => panic!("array of blocks"),
+        };
         assert_eq!(blocks.len(), 4);
         assert_eq!(
-            field(&blocks[0], "kind"),
-            Some(&Value::String("h".to_owned()))
+            field_md(&blocks[0], "kind"),
+            Some(&ScriptValue::Str("h".to_owned()))
         );
-        assert_eq!(field(&blocks[0], "level"), Some(&Value::Int(1)));
+        assert_eq!(field_md(&blocks[0], "level"), Some(&ScriptValue::I64(1)));
         assert_eq!(
-            field(&blocks[1], "kind"),
-            Some(&Value::String("p".to_owned()))
-        );
-        assert_eq!(
-            field(&blocks[2], "lang"),
-            Some(&Value::String("rust".to_owned()))
+            field_md(&blocks[1], "kind"),
+            Some(&ScriptValue::Str("p".to_owned()))
         );
         assert_eq!(
-            field(&blocks[3], "kind"),
-            Some(&Value::String("hr".to_owned()))
+            field_md(&blocks[2], "lang"),
+            Some(&ScriptValue::Str("rust".to_owned()))
         );
         assert_eq!(
-            field(&blocks[0], "id"),
-            Some(&Value::String("blk-0".to_owned()))
+            field_md(&blocks[3], "kind"),
+            Some(&ScriptValue::Str("hr".to_owned()))
+        );
+        assert_eq!(
+            field_md(&blocks[0], "id"),
+            Some(&ScriptValue::Str("blk-0".to_owned()))
         );
     }
 }
