@@ -3438,6 +3438,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-archive"
+version = "0.0.6"
+dependencies = [
+ "bevy_ecs",
+ "flate2",
+ "lumen-core",
+ "lumen-ir",
+ "lumen-module",
+ "lumen-runtime",
+ "lumen-script",
+ "serde_json",
+ "tar",
+ "zip",
+]
+
+[[package]]
 name = "lumen-assets"
 version = "0.0.6"
 dependencies = [
