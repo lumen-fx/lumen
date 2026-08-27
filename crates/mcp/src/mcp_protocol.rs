@@ -212,7 +212,7 @@ fn tools_list_result() -> Value {
         ),
         tool_descriptor(
             "lumen_framework_status",
-            "Open issue count for the repository this checkout's origin remote points at, plus the last main-world tick duration as a liveness check.",
+            "Open issue count for the repository this checkout's origin remote points at, plus the last main-world tick duration as a liveness check. Off unless [mcp] issues = true.",
             json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         ),
         tool_descriptor(

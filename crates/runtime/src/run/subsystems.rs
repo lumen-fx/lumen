@@ -607,6 +607,11 @@ pub(crate) fn register_mcp(app: &mut App, bounded: bool, cfg: &crate::config::Lu
     // `Option`-guarded there) and skips capture - a plain tick bench needs
     // neither.
     let simulate_enabled = cfg.mcp.simulate.unwrap_or(false);
+    // Off by default like `simulate`: `lumen_framework_status` shells out to
+    // `git`/`gh` when this is on, and the introspection port has no
+    // authentication, so a shipped app leaves subprocess execution off that
+    // surface unless a developer opts in.
+    let issues_enabled = cfg.mcp.issues.unwrap_or(false);
     let mcp_enabled = match cfg.runtime.mcp {
         Some(v) => v,
         None => !(bounded && !simulate_enabled),
@@ -614,15 +619,23 @@ pub(crate) fn register_mcp(app: &mut App, bounded: bool, cfg: &crate::config::Lu
     let mcp_port: Option<u16> = match (mcp_enabled, cfg.mcp.port) {
         (false, _) | (_, Some(0)) => None,
         (true, Some(p)) => {
-            app.add_plugin(LumenMcpPlugin::with_port(p).with_simulate_enabled(simulate_enabled));
+            app.add_plugin(
+                LumenMcpPlugin::with_port(p)
+                    .with_simulate_enabled(simulate_enabled)
+                    .with_issues_enabled(issues_enabled),
+            );
             Some(p)
         }
         (true, None) => {
-            app.add_plugin(LumenMcpPlugin::default().with_simulate_enabled(simulate_enabled));
+            app.add_plugin(
+                LumenMcpPlugin::default()
+                    .with_simulate_enabled(simulate_enabled)
+                    .with_issues_enabled(issues_enabled),
+            );
             Some(7878)
         }
     };
-    print_mcp_help_snippet(mcp_port, simulate_enabled);
+    print_mcp_help_snippet(mcp_port, simulate_enabled, issues_enabled);
 
     // Input-simulation automation (benchmarks, UI tests) drives the app
     // through the MCP `lumen.simulate` queue and observes progress through
@@ -651,14 +664,14 @@ pub(crate) fn register_mcp(app: &mut App, bounded: bool, cfg: &crate::config::Lu
 /// the "disabled" hint so tooling sees a consistent line.
 #[cfg(not(feature = "mcp"))]
 pub(crate) fn register_mcp(_app: &mut App, _bounded: bool, _cfg: &crate::config::LumenToml) {
-    print_mcp_help_snippet(None, false);
+    print_mcp_help_snippet(None, false, false);
 }
 
 /// Print a copy-pasteable MCP setup hint on stdout. Designed for one-shot
 /// scan by an AI agent: the port number on the first line, then a JSON
 /// fragment ready to drop into a Claude Code `.mcp.json`. Skipped when the
 /// MCP server is disabled (`[mcp] port = 0`).
-fn print_mcp_help_snippet(port: Option<u16>, simulate_enabled: bool) {
+fn print_mcp_help_snippet(port: Option<u16>, simulate_enabled: bool, issues_enabled: bool) {
     let Some(port) = port else {
         // `port` is `None` for any of: `[mcp] port = 0`, `[runtime] mcp =
         // false`, or a headless/bounded run (where the server is gated off
@@ -671,7 +684,13 @@ fn print_mcp_help_snippet(port: Option<u16>, simulate_enabled: bool) {
     } else {
         "off - set [mcp] simulate = true in lumen.toml to enable input injection"
     };
+    let issues = if issues_enabled {
+        "ON"
+    } else {
+        "off - set [mcp] issues = true in lumen.toml to let lumen_framework_status list open issues"
+    };
     println!("lumenc: MCP server on 127.0.0.1:{port} (simulate: {sim})");
+    println!("        issue lookup: {issues}");
     println!("        try: lumenc snapshot --port {port}");
     println!("        Claude Code config snippet (drop into .mcp.json under \"mcpServers\"):");
     println!("        \"lumen\": {{");

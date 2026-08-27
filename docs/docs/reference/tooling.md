@@ -232,6 +232,10 @@ simulate = true
 ```
 
 `simulate` gates input injection only. Reading the UI works either way.
+`issues` gates `lumen_framework_status`'s GitHub issue lookup, off by
+default: the port has no authentication, so a shipped app leaves the `git`
+and `gh` subprocesses that tool runs off that surface unless a developer
+opts in.
 
 On startup the app prints its port and a ready-to-paste agent configuration
 fragment, or `lumenc: MCP server disabled`.
@@ -292,7 +296,7 @@ HTTP request line comes back as a `-32700` parse error.
 | `lumen_diff_since` | `tick` | Entity ids added, removed, and changed since that tick. |
 | `lumen_lint` | none | UI findings with category, severity, fix hint, and entity. |
 | `lumen_screenshot` | `highlight_ids`, `highlight_lint`, `include_bounds_map` | A base64 PNG, its size, and optionally an entity bounds map. |
-| `lumen_framework_status` | none | Open issue count (and the first 10 titles) for the repository the checkout's `origin` remote points at, plus the last tick duration. |
+| `lumen_framework_status` | none | Open issue count (and the first 10 titles) for the repository the checkout's `origin` remote points at, plus the last tick duration. Requires `[mcp] issues = true`. |
 
 Simulate kinds: `pointer_move`, `pointer_down`, `pointer_up`, `click`, `key`,
 `type`, and `scroll`. Point kinds take `x` and `y` in logical pixels, button
@@ -309,10 +313,14 @@ Message ring names, for `wait_for` and `lumen_recent_messages`:
 `KeyPressed`, `KeyReleased`, `MouseWheel`, `FocusedKey`. Each holds its last
 256 entries.
 
-`lumen_framework_status` resolves the repository from the checkout's `origin`
-git remote and lists its open issues through the `gh` CLI, bounded by a
-timeout. With no network, no `gh` on `PATH`, or no GitHub `origin` remote, the
-result carries `issues_error` describing why instead of an issue count.
+`lumen_framework_status` is off unless `[mcp] issues = true`; with it off the
+result carries `enabled: false` and a hint instead of spawning anything. With
+it on, the tool resolves the repository from the checkout's `origin` git
+remote and lists its open issues through the `gh` CLI, bounded by a timeout.
+With no network, no `gh` on `PATH`, or no GitHub `origin` remote, the result
+carries `issues_error` describing why instead of an issue count. A result
+past the tool's cap on how many issues it counts exactly sets `truncated:
+true` and reports `open_issues` as a floor rather than an exact total.
 
 Every result carries a short human-readable `summary`, a `confidence` value,
 and a `next_suggested_tools` list, so an agent can chain calls without knowing

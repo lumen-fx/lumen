@@ -73,6 +73,11 @@ impl Default for McpTransport {
 /// `lumenc` CLI) drive pointer/key/scroll events. Without that flag the
 /// `lumen.simulate` / `tools/call(name=lumen_simulate)` RPC short-circuits
 /// to `enabled=false`.
+///
+/// `lumen_framework_status`'s issue lookup is off by default the same way;
+/// opt in with [`LumenMcpPlugin::with_issues_enabled`]. The introspection
+/// port has no authentication, so leaving it off keeps subprocess execution
+/// (`git`, `gh`) off that surface unless a developer asks for it.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LumenMcpPlugin {
     /// Wire transport.
@@ -80,14 +85,19 @@ pub struct LumenMcpPlugin {
     /// Drain the `SimulateQueue` each tick and inject the requested input
     /// events into the main world. Default `false`.
     pub simulate_enabled: bool,
+    /// Let `lumen_framework_status` shell out to `git`/`gh` to list open
+    /// issues. Default `false`.
+    pub issues_enabled: bool,
 }
 
 impl LumenMcpPlugin {
-    /// Override the bind port. Keeps `simulate_enabled = false`.
+    /// Override the bind port. Keeps `simulate_enabled` and
+    /// `issues_enabled` at `false`.
     pub fn with_port(port: u16) -> Self {
         Self {
             transport: McpTransport::Tcp(port),
             simulate_enabled: false,
+            issues_enabled: false,
         }
     }
 
@@ -96,6 +106,7 @@ impl LumenMcpPlugin {
         Self {
             transport: McpTransport::Stdio,
             simulate_enabled: false,
+            issues_enabled: false,
         }
     }
 
@@ -111,6 +122,14 @@ impl LumenMcpPlugin {
     /// drains the `SimulateQueue` each tick.
     pub fn with_simulate_enabled(mut self, on: bool) -> Self {
         self.simulate_enabled = on;
+        self
+    }
+
+    /// Builder-style toggle for `lumen_framework_status`'s issue lookup.
+    /// When `off` (the default), the tool reports that it is disabled and
+    /// how to enable it, and never spawns `git` or `gh`.
+    pub fn with_issues_enabled(mut self, on: bool) -> Self {
+        self.issues_enabled = on;
         self
     }
 }
@@ -524,6 +543,7 @@ impl Plugin for LumenMcpPlugin {
             surface_capture: Some(surface_capture),
             simulate_queue,
             simulate_enabled: self.simulate_enabled,
+            issues_enabled: self.issues_enabled,
             timer,
         };
         std::thread::Builder::new()
