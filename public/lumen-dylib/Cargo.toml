@@ -87,9 +87,11 @@ lumen-script = { path = "../../crates/script/api", default-features = false }
 lumen-widget = { path = "../../crates/widget" }
 lumen-widget-macros = { path = "../../crates/widget-macros" }
 # Same spec as the workspace pin; spelled out because this manifest cannot
-# inherit it.
+# inherit it. `std` is required for the multi-threaded executor; see the
+# workspace Cargo.toml's bevy_ecs comment.
 bevy_ecs = { version = "0.19", default-features = false, features = [
     "multi_threaded",
+    "std",
 ] }
 rhai = { version = "1.24", features = ["sync"] }
 # Not re-exported: named to pin its `compiler` default into the engine build,

@@ -41,10 +41,15 @@ use crate::value::{candela_value_to_script, script_value_to_candela};
 /// the VM's heap pools, so both are `!Send`/`!Sync`, while [`ScriptHost`]
 /// requires `Send + Sync` because a host sits in a plain bevy `Resource`. The
 /// assertion is sound for the same reason it is on the compiler host: Lumen
-/// only reaches this state through `&mut CandelaVmHost`, which bevy hands out
-/// under exclusive access, and every `&self` method reads the `Arc`-guarded
-/// [`Registries`] instead. It is stronger here than there, because the browser
-/// target this host exists for is single-threaded outright.
+/// only mutates this state through `&mut CandelaVmHost`, which bevy hands out
+/// under exclusive access, and no `&self` method reaches `vm`. [`CandelaVmHost::exports`]
+/// is the one export a `Res<CandelaVmHost>` system could call; it reads
+/// [`CandelaVmHost::exported_names`], a plain `Vec<String>` cached from `vm.program`
+/// when [`ScriptHost::load`] and [`ScriptHost::reset`] already hold `&mut self`,
+/// not `vm` itself. Every other `&self` method reads the `Arc`-guarded
+/// [`Registries`]. This is stronger than the same assertion on the compiler
+/// host, because the browser target this host exists for is single-threaded
+/// outright.
 struct VmState {
     registry: Option<HostRegistry>,
     program: Option<RuntimeProgram>,
@@ -94,6 +99,11 @@ pub struct CandelaVmHost {
     /// Where a `dylib "..."` recipe recorded in the image re-opens its library:
     /// the app's `lib/`.
     library_dir: Option<PathBuf>,
+    /// The loaded program's export names, cached by [`ScriptHost::load`] and
+    /// cleared by [`ScriptHost::reset`]. [`Self::exports`] reads this instead
+    /// of `vm.program`, so it stays a plain `Send + Sync` read even though
+    /// `vm` is not; see the `VmState` doc comment.
+    exported_names: Vec<String>,
 }
 
 impl CandelaVmHost {
@@ -113,6 +123,7 @@ impl CandelaVmHost {
             image,
             script_fns: ScriptFnStore::default(),
             library_dir: None,
+            exported_names: Vec::new(),
         }
     }
 
@@ -137,13 +148,10 @@ impl CandelaVmHost {
     }
 
     /// The names of every function the loaded image exports, or an empty list
-    /// before the load.
+    /// before the load. Reads the cache [`ScriptHost::load`] fills, not
+    /// `vm.program`: see [`Self::exported_names`].
     pub fn exports(&self) -> Vec<String> {
-        self.vm
-            .program
-            .as_ref()
-            .map(|p| p.exports().map(str::to_owned).collect())
-            .unwrap_or_default()
+        self.exported_names.clone()
     }
 }
 
@@ -187,6 +195,9 @@ impl ScriptHost for CandelaVmHost {
         // handler call, exactly as `Engine::compile` runs it on the compiler
         // host.
         program.run();
+        // Cached now, under the exclusive access this method already holds,
+        // so `Self::exports` never has to reach into `vm`.
+        self.exported_names = program.exports().map(str::to_owned).collect();
         self.vm.program = Some(program);
         Ok(())
     }
@@ -199,6 +210,7 @@ impl ScriptHost for CandelaVmHost {
 
     fn reset(&mut self) {
         self.vm.program = None;
+        self.exported_names.clear();
         self.registries.reset();
         // Only reachable before the load: `candela-vm` takes the registry when
         // it binds the image, and a closure registered after that has nothing

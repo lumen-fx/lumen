@@ -20,6 +20,8 @@
 use std::sync::Arc;
 
 use bevy_ecs::prelude::*;
+use bevy_ecs::schedule::{Schedules, SingleThreadedExecutor};
+use lumen_core::app::Tick;
 use lumen_core::prelude::{App, TickStage};
 use lumen_core::property_store::{PropertyKey, PropertyStore, commit_external_properties};
 use lumen_core::signals::{
@@ -47,6 +49,25 @@ use lumen_web_http::WebFetchDispatch;
 /// desktop uses too.
 pub fn portable_app() -> App {
     let mut app = App::new();
+    // Keep the `Tick` schedule on bevy_ecs's single-threaded executor
+    // rather than the platform default. Two reasons, both specific to this
+    // assembly. First, it excludes layout, paint, and the font stack, the
+    // systems the multi-threaded executor is meant to fan out, so there is
+    // nothing here for it to parallelize; app logic in this assembly stays
+    // serial within a tick, and SSR's parallelism comes from running many
+    // requests at once, not from splitting one request's tick across
+    // threads. Second, a per-request renderer builds this app on its own
+    // worker thread and depends on every system in the tick running there
+    // too. A dispatcher that calls out to `HttpDispatch` from a
+    // `ComputeTaskPool` worker instead is a value planted and later
+    // dropped on the wrong thread. `NonSendMut` cannot express "pin the
+    // whole schedule", only individual systems, so the executor is pinned
+    // instead.
+    if let Some(mut schedules) = app.world.get_resource_mut::<Schedules>() {
+        if let Some(schedule) = schedules.get_mut(Tick) {
+            schedule.set_executor(SingleThreadedExecutor::new());
+        }
+    }
     // Whatever this app is put into lays out and paints it; no extract here.
     app.extract_fns.clear();
     app.world.init_resource::<PropertyStore>();

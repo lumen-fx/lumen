@@ -278,7 +278,16 @@ lumenc-plugin = { path = "public/lumenc-plugin", default-features = false }
 # there. Parent -> ChildOf.
 # Do NOT add a separate bevy_hierarchy dep - it is stuck at 0.15 and would
 # create a duplicate-type graph.
-bevy_ecs = { version = "0.19", default-features = false, features = ["multi_threaded"] }
+#
+# `multi_threaded` alone does not select the multi-threaded executor: bevy_ecs
+# only compiles `MultiThreadedExecutor` and returns it from `default_executor()`
+# when its own `std` feature is also on (`default-features = false` here drops
+# it, since bevy_ecs's default set, not `multi_threaded`, is what pulls it in
+# upstream). Without `std`, every schedule silently falls back to
+# `SingleThreadedExecutor` on every platform. `std` is a weak-dependency
+# passthrough (`bevy_reflect?/std`, ...), so adding it does not pull in
+# `bevy_reflect` or any other default-feature extra this workspace left off.
+bevy_ecs = { version = "0.19", default-features = false, features = ["multi_threaded", "std"] }
 bevy_tasks = { version = "0.19", default-features = false, features = ["multi_threaded"] }
 crossbeam-channel = "0.5"
 # Vector/matrix math for our own boundary types (Vec2 rects, Mat4 transforms).
