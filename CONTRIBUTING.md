@@ -30,6 +30,16 @@ cargo test --workspace
 macOS, and Windows; that matrix is also the release parity check, so a failure
 on one OS is a portability gap to fix rather than an OS to drop.
 
+A fifth gate, also Linux-only, checks that the engine dylib
+(`public/lumen-dylib`) still resolves the same crate graph the release ships:
+
+```sh
+python3 tools/verify-engine-crate-graph.py
+```
+
+See [Gates](docs/docs/contributing/building-lumen.md#gates) for what a
+failure here means and how to fix it.
+
 Tests that need a GPU or a display probe for one and skip themselves with a
 printed reason, so the suite runs unmodified on a headless machine.
 

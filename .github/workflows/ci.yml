@@ -85,6 +85,30 @@ jobs:
           rustc --version
       - run: cargo fmt --all --check
 
+  # public/lumen-dylib (the engine dylib, `lumen-dylib`) is its own Cargo
+  # workspace, built in total isolation from everything else here. Nothing
+  # unifies its resolved crate graph with the one build-toolchain.yml ships
+  # unless public/lumen-dylib/Cargo.lock is kept pinned to match; see
+  # tools/verify-engine-crate-graph.py for what "match" means and why a gap
+  # here is a dlopen failure waiting for a module author, not a compile
+  # error anyone catches first.
+  engine-graph:
+    name: engine graph
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Install pinned toolchain
+        run: |
+          rustup show active-toolchain
+          rustc --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: engine-graph
+      - run: python3 tools/verify-engine-crate-graph.py
+
   clippy:
     name: clippy
     runs-on: ubuntu-latest
