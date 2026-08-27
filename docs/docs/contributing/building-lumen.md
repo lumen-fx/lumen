@@ -318,6 +318,49 @@ Tests run on Linux, macOS, and Windows. That three-way matrix is also the
 release parity check, so a red macOS or Windows leg is a portability gap to
 fix, not a platform to drop.
 
+A fourth Linux-only gate checks that `public/lumen-dylib` (the engine dylib,
+`lumen-dylib`) resolves the same crate graph as the release build gives it.
+`public/lumen-dylib` is its own Cargo workspace, and deliberately carries no
+committed `Cargo.lock`: the check resolves it fresh against its own
+manifests on every run instead, the same way a module author's own
+from-scratch build would, and compares that against the root workspace's
+committed `Cargo.lock`, which stays the pin of record for what a release
+ships:
+
+```sh
+python3 tools/verify-engine-crate-graph.py
+```
+
+The job runs on a Linux runner, but the check itself resolves the graph for
+every target build-toolchain.yml links a dynamic engine for
+(`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+`aarch64-apple-darwin`, `x86_64-apple-darwin`) via `cargo tree --target`,
+which needs only that target's built-in spec data, not an installed
+toolchain for it. Windows carries no engine dylib at all (see the comment
+at the top of `public/lumen-dylib/Cargo.toml`), so it is not in that list.
+
+A version or feature gap here means a module built against `lumen-dylib`
+resolves different code than the engine a release ships, which shows up as
+an undefined symbol the first time something dlopens the mismatched pair,
+not as a compile error. For a package the check names, either run `cargo
+update -p <crate>` against the root `Cargo.lock` to move the release side
+(when the engine side's fresher resolve is the one to trust), or edit the
+feature list on the dependency in `public/lumen-dylib/Cargo.toml` when
+`lumenc`'s or `lumen`'s own default features have grown past what it
+requests; either way, re-run the script until it passes. There is nothing
+to regenerate on the engine side: it is already fresh on every run, by
+design, which is also why a stray `public/lumen-dylib/Cargo.lock` should
+never be committed (`.gitignore` covers it).
+
+`lumen-script-candela` depends on `candela-lang` and `candela-vm` as git
+dependencies tracking the `candela` repository's `main` branch, not a fixed
+commit, so a `candela` push can move what the engine side resolves at any
+time, independent of anything landing in this repository. Because that side
+always resolves fresh, a `candela` bump shows up as an ordinary version or
+feature difference in the check's output, the same as any other drift it
+catches; a red `engine graph` leg right after a `candela` bump is expected,
+and the fix is the same as for any other reported package.
+
 The suite also runs every app the repository ships. Each directory under
 `apps/` and `fixtures/`, and each app `lumenc new` scaffolds, is run headless
 for a few ticks and has to exit clean with nothing on stderr beyond the lines
