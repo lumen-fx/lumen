@@ -8,6 +8,7 @@
 //! [app]
 //! entry = "main.lmn"          # default
 //! locale = "de-DE"            # default: the OS locale, else en-US
+//! single_instance = true      # default: false; second launch forwards argv and exits
 //!
 //! [window]
 //! title = "My App"            # default: app directory name
@@ -130,6 +131,17 @@ pub struct AppCfg {
     /// valid BCP-47 is a `lumen.toml` error.
     #[serde(default, deserialize_with = "de_locale")]
     pub locale: Option<lumen_i18n::LanguageIdentifier>,
+    /// When `true`, a second launch of this app forwards its command-line
+    /// arguments to the already-running instance and exits instead of
+    /// opening a second window; the primary sees them as
+    /// `on_second_instance(args)`. Defaults to `false`: most apps are fine
+    /// with more than one window open, and the lock has a real
+    /// side effect (a bound socket / named pipe) that an app should opt
+    /// into rather than acquire by surprise. Windowed runs only - a
+    /// headless / `--headless` run never locks, so CI and the SDK's
+    /// non-interactive embedding never contend over one socket.
+    #[serde(default)]
+    pub single_instance: bool,
 }
 
 /// Parse `[app] locale` into a validated language identifier, so a typo

@@ -474,6 +474,19 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             )
                 .in_set(ScriptSet::Dispatch),
         );
+        // App-lifecycle dispatchers, split into their own `add_systems` call
+        // rather than folded into the tuple above: recent files, autostart,
+        // and single-instance are one family (`lumen-os-lifecycle`), and the
+        // tuple above is already sized against the systems-tuple limit.
+        app.add_systems(
+            TickStage::Systems,
+            (
+                dispatch_recent_files_to_script::<H>,
+                dispatch_autostart_to_script::<H>,
+                dispatch_second_instance_to_script::<H>,
+            )
+                .in_set(ScriptSet::Dispatch),
+        );
     }
 }
 
@@ -1785,6 +1798,75 @@ pub fn dispatch_file_picks_to_script<H: ScriptHost + Resource<Mutability = Mutab
             route_event_two_args(&mut *host, event_name, handler, &ev.tag, &joined, &mut out)
         {
             warn_line!("{}: {handler} failed: {e}", prefix(host.lang()));
+        }
+    }
+}
+
+/// Forward [`lumen_core::input::RecentFilesRead`] to the script as
+/// `on_recent_files(tag, paths)`, with the per-tag
+/// `on("recent_files", tag, fn)` router applying first. `paths` arrives
+/// already joined by `|`, matching [`dispatch_file_picks_to_script`].
+pub fn dispatch_recent_files_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
+    mut host: ResMut<H>,
+    mut events: MessageReader<lumen_core::input::RecentFilesRead>,
+    mut out: MessageWriter<ScriptCommandEvent>,
+) {
+    for ev in events.read() {
+        if let Err(e) = route_event_two_args(
+            &mut *host,
+            "recent_files",
+            "on_recent_files",
+            &ev.tag,
+            &ev.paths,
+            &mut out,
+        ) {
+            warn_line!("{}: on_recent_files failed: {e}", prefix(host.lang()));
+        }
+    }
+}
+
+/// Forward [`lumen_core::input::AutostartRead`] to the script:
+/// `enabled = true` routes as `on_autostart_enabled(tag)` /
+/// `on("autostart_enabled", tag, fn)`, `enabled = false` as
+/// `on_autostart_disabled(tag)` / `on("autostart_disabled", tag, fn)` - the
+/// same accepted/rejected split [`dispatch_dialog_closes_to_script`] uses.
+pub fn dispatch_autostart_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
+    mut host: ResMut<H>,
+    mut events: MessageReader<lumen_core::input::AutostartRead>,
+    mut out: MessageWriter<ScriptCommandEvent>,
+) {
+    for ev in events.read() {
+        let (event_name, fallback) = if ev.enabled {
+            ("autostart_enabled", "on_autostart_enabled")
+        } else {
+            ("autostart_disabled", "on_autostart_disabled")
+        };
+        if let Err(e) = route_event(&mut *host, event_name, fallback, &ev.tag, &mut out) {
+            warn_line!("{}: {fallback} failed: {e}", prefix(host.lang()));
+        }
+    }
+}
+
+/// Forward [`lumen_core::input::SecondInstanceLaunched`] to the script as
+/// `on_second_instance(args)`, args joined by `|` (matching
+/// [`dispatch_file_picks_to_script`]'s multi-path join). Fires when a
+/// second launch of a single-instance app (`[app] single_instance = true`)
+/// forwards its argv to this, the already-running primary.
+pub fn dispatch_second_instance_to_script<H: ScriptHost + Resource<Mutability = Mutable>>(
+    mut host: ResMut<H>,
+    mut events: MessageReader<lumen_core::input::SecondInstanceLaunched>,
+    mut out: MessageWriter<ScriptCommandEvent>,
+) {
+    for ev in events.read() {
+        let joined = ev.args.join("|");
+        if let Err(e) = route_event(
+            &mut *host,
+            "second_instance",
+            "on_second_instance",
+            &joined,
+            &mut out,
+        ) {
+            warn_line!("{}: on_second_instance failed: {e}", prefix(host.lang()));
         }
     }
 }

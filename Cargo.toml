@@ -234,6 +234,7 @@ lumen-os-dnd = { path = "crates/os/dnd" }
 lumen-os-filedialog = { path = "crates/os/filedialog" }
 lumen-os-hotkey = { path = "crates/os/hotkey" }
 lumen-os-launcher = { path = "crates/os/launcher" }
+lumen-os-lifecycle = { path = "crates/os/lifecycle" }
 lumen-os-menu = { path = "crates/os/menu" }
 lumen-os-mime = { path = "crates/os/mime" }
 lumen-os-notify = { path = "crates/os/notify" }

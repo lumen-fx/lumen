@@ -177,6 +177,10 @@ ships, and is then never called.
 | `on_clipboard(tag, text)` | Read tag, clipboard text. Empty when the clipboard holds no text. |
 | `on_menu(id)` | Menu item id. |
 | `on_tray(id)` | Tray icon id. |
+| `on_recent_files(tag, paths)` | Request tag, recorded paths joined with `\|`, most recent first. |
+| `on_autostart_enabled(tag)` | Request tag; the app is set to launch at login. |
+| `on_autostart_disabled(tag)` | Request tag; the app is not set to launch at login. |
+| `on_second_instance(args)` | A second launch's command-line arguments, joined with `\|`. |
 | `on_dialog_accepted(id)` | Dialog id. |
 | `on_dialog_rejected(id)` | Dialog id. |
 | `on_timer(name)` | Timer name. |
@@ -656,6 +660,11 @@ keyed by `tag`. A cancelled dialog still fires once, with an empty path.
 | `lumen::reveal_path(path: string)` | Show `path` in the platform's file manager. |
 | `lumen::keep_awake(name: string, reason: string)` | Hold off the screensaver and system sleep under `name`. Repeating a live name replaces its request. |
 | `lumen::allow_sleep(name: string)` | Release the inhibit registered under `name`. |
+| `lumen::add_recent_file(path: string, label: string)` | Record `path` as recently opened. An empty `label` derives one from the path's file name. |
+| `lumen::list_recent_files(tag: string)` | Request the recent-files list; fires `on_recent_files(tag, paths)` with paths joined by `\|`, most recent first. |
+| `lumen::clear_recent_files()` | Remove every entry from the recent-files list. |
+| `lumen::set_autostart(on: bool)` | Enable or disable launching this app at login. |
+| `lumen::query_autostart(tag: string)` | Request the autostart state; fires `on_autostart_enabled(tag)` or `on_autostart_disabled(tag)`. |
 | `lumen::open_menu(id: string)` | Open menu `id` by setting the `__menu_open:id` signal to true. |
 | `lumen::close_menu(id: string)` | Close menu `id`. |
 

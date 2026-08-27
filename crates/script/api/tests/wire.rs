@@ -385,6 +385,23 @@ fn command_samples() -> Vec<(&'static str, ScriptCommand)> {
                 height: 480.0,
             },
         ),
+        (
+            "AddRecentFile",
+            ScriptCommand::AddRecentFile {
+                path: s("notes.txt"),
+                label: s("Notes"),
+            },
+        ),
+        (
+            "ListRecentFiles",
+            ScriptCommand::ListRecentFiles { tag: s("g") },
+        ),
+        ("ClearRecentFiles", ScriptCommand::ClearRecentFiles),
+        ("SetAutostart", ScriptCommand::SetAutostart { on: true }),
+        (
+            "QueryAutostart",
+            ScriptCommand::QueryAutostart { tag: s("g") },
+        ),
     ]
 }
 
@@ -524,6 +541,14 @@ const COMMAND_GOLDEN: &[(&str, &str)] = &[
     ("UnbindEvent", "310000000400000000000000"),
     ("WindowSetTitle", "32000000010000000000000074"),
     ("WindowSetSize", "33000000000020440000f043"),
+    (
+        "AddRecentFile",
+        "3400000009000000000000006e6f7465732e74787405000000000000004e6f746573",
+    ),
+    ("ListRecentFiles", "35000000010000000000000067"),
+    ("ClearRecentFiles", "36000000"),
+    ("SetAutostart", "3700000001"),
+    ("QueryAutostart", "38000000010000000000000067"),
 ];
 
 const VALUE_GOLDEN: &[(&str, &str)] = &[

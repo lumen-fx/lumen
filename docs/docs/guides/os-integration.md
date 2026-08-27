@@ -1,8 +1,9 @@
 # OS integration
 
 Menus, a tray icon, notifications, global hotkeys, file dialogs, the clipboard,
-drag and drop, opening links, keeping the machine awake, and audio. Some of
-these are markup, the rest are script calls with a callback.
+drag and drop, opening links, keeping the machine awake, recent files,
+autostart, single-instance launches, and audio. Some of these are markup, the
+rest are script calls with a callback.
 
 Examples here are written in Rhai. Lua uses the same names with Lua syntax;
 candela puts them in the `lumen` namespace, so `notify(...)` becomes
@@ -274,6 +275,81 @@ The name pairs the two calls, so several jobs can hold their own request.
 Repeating a live name replaces its request rather than stacking a second one.
 The reason string is what the platform's power settings show. Nothing is held
 after the app exits.
+
+## Recent files
+
+Keep a per-app "recently opened" list, most recent first:
+
+```rhai
+fn on_file_picked(tag, path) {
+    if path == "" { return; }
+    add_recent_file(path, "");   // empty label derives one from the file name
+}
+
+fn on_ready() { list_recent_files("startup"); }
+
+fn on_recent_files(tag, paths) {
+    if tag == "startup" { /* paths is joined by "|" */ }
+}
+```
+
+`add_recent_file(path, label)` records a path, moving it to the front if it
+was already there; the list caps at 32 entries, dropping the oldest.
+`list_recent_files(tag)` is a request - the answer arrives on
+`on_recent_files(tag, paths)` with the paths joined by `|`, most recent
+first. `clear_recent_files()` empties the list. The list is stored per app
+under the platform's user-data directory, the same root `data_dir()` uses.
+
+## Autostart
+
+```rhai
+fn on_ready() {
+    get_by_id("autostart-toggle").on("click", Fn("handle_toggle"));
+    query_autostart("startup-toggle");
+}
+
+fn handle_toggle(ev) { set_autostart(true); }
+
+fn on_autostart_enabled(tag)  { set_text("autostart-toggle", "Autostart: on"); }
+fn on_autostart_disabled(tag) { set_text("autostart-toggle", "Autostart: off"); }
+```
+
+`set_autostart(on)` writes (or removes) the platform's login-item entry: a
+`.desktop` file under `~/.config/autostart` on Linux, a LaunchAgent plist on
+macOS, or a `Run` registry value on Windows. `query_autostart(tag)` reads the
+current state back, split across `on_autostart_enabled(tag)` /
+`on_autostart_disabled(tag)` rather than a boolean argument, the same way
+dialog results split into `on_dialog_accepted` / `on_dialog_rejected`.
+
+## Single-instance launches
+
+Set `single_instance = true` under `[app]` in `lumen.toml` to make a second
+launch forward its command-line arguments to the already-running window and
+exit, instead of opening a second one:
+
+```toml
+[app]
+single_instance = true
+```
+
+```rhai
+fn on_second_instance(args) {
+    // args is the second launch's argv, joined by "|"
+}
+```
+
+Off by default: most apps are fine with more than one window open, and
+holding the lock (a bound socket on Linux/macOS, a named pipe on Windows) is
+a real side effect an app should opt into rather than acquire by surprise.
+The lock is windowed-run only - a headless run (`lumenc run --headless`,
+the Rust SDK's non-interactive embedding) never takes it, so nothing there
+contends with a real running instance over the same socket.
+
+On Linux/macOS the socket is scoped to `$XDG_RUNTIME_DIR`, which the XDG
+spec requires to be private to your user, and is locked to your user alone
+right after it binds. When `$XDG_RUNTIME_DIR` is unset, the app runs without
+the lock rather than falling back to a shared directory another local user
+could reach.
 
 ## Drag and drop
 

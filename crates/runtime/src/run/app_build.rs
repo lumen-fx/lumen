@@ -99,6 +99,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     register_os_notify(&mut app, &cfg);
     register_os_tray(&mut app);
     register_os_misc(&mut app, &cfg);
+    register_os_lifecycle(&mut app);
     // MCP introspection server - GATED on run-mode + `[mcp]` config.
     register_mcp(&mut app, opts.bounded, &cfg);
     // Reactive bindings, reconcilers, dialog lifecycle, error overlay - the
@@ -599,7 +600,7 @@ pub(crate) fn remap_trimmed_hosts(grouped: GroupedScripts) -> Result<GroupedScri
 /// Lowercase + dash-only fallback `app-id` when `lumen.toml [app] id`
 /// is unset. Mirrors the convention used by other crates that need
 /// per-app state dirs.
-fn derive_app_id(dir: &std::path::Path) -> String {
+pub(crate) fn derive_app_id(dir: &std::path::Path) -> String {
     dir.file_name()
         .and_then(|n| n.to_str())
         .map(|s| {

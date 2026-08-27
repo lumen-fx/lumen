@@ -553,6 +553,45 @@ pub(crate) fn register_os_misc(app: &mut App, cfg: &crate::config::LumenToml) {
         .insert_non_send(InhibitHolder::new().with_app_name(app_name));
 }
 
+/// Recent-files, autostart, and single-instance hosts. DEFAULT-ON.
+///
+/// `LifecycleService`, `RecentFilesService`, and `AutostartService` are all
+/// cheap to construct - a couple of cloned `PathBuf`s, no thread, no
+/// connection - so, like the launcher and the inhibit holder above, they are
+/// left in unconditionally rather than gated on a script marker.
+///
+/// The app id comes off [`lumen_core::app_paths::app_id`], published by
+/// `build_app` before this runs, rather than off `cfg` directly: it is the
+/// same id `read_file` / `data_dir` resolve against, so the recent-files
+/// store lands in the identical `<data-dir>/lumen/<id>` directory a script's
+/// own `data_dir()` call would see.
+///
+/// Single-instance locking itself does not happen here: binding a socket is
+/// not cheap-and-side-effect-free the way these constructors are, and doing
+/// it for every headless / test run of `build_app` would make CI runs and
+/// SDK embedders fight each other over one socket. See [`super::run_app`]'s
+/// single-instance gate, which runs before `build_app` and, on the primary
+/// path, hands its already-bound `LifecycleService` in through an
+/// `app_hooks` closure so the poll system below drains the SAME inbox the
+/// gate's listener thread feeds - not a second, freshly constructed one
+/// whose inbox nothing writes to. A `single_instance`-free app (the common
+/// case) gets the default, never-bound `LifecycleService` this function
+/// inserts; the poll system is a no-op for it.
+pub(crate) fn register_os_lifecycle(app: &mut App) {
+    let id = lumen_os_lifecycle::AppId::from(lumen_core::app_paths::app_id());
+    let lifecycle = lumen_os_lifecycle::LifecycleService::new();
+    let recent = lumen_os_lifecycle::RecentFilesService::new(lifecycle.data_dir(&id));
+    // The autostart entry has to point somewhere; a `lumenc run` dev session
+    // launches through the `lumenc` binary itself, which is the best answer
+    // available without a packaged app's own launcher path.
+    let exe = std::env::current_exe().unwrap_or_default();
+    let autostart = lumen_os_lifecycle::AutostartService::new(id, exe);
+    app.world.insert_resource(lifecycle);
+    app.world.insert_resource(recent);
+    app.world.insert_resource(autostart);
+    app.add_systems(TickStage::Systems, lumen_os_lifecycle::poll_second_instance);
+}
+
 /// The HTTP client the scripts' `fetch()` / `http()` builtins run on.
 ///
 /// Installed as the `FetchRegistry` the script plugin would otherwise create

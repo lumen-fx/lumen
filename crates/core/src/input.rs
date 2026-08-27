@@ -953,6 +953,31 @@ pub struct FilePicked {
     pub paths: Vec<std::path::PathBuf>,
 }
 
+/// Emitted once a `list_recent_files(tag)` request has read the on-disk recent-files list. Routed as `on_recent_files(tag, paths)`, paths joined by `|` (most recent first), matching [`FilePicked`]'s multi-path join.
+#[derive(Message, Clone, Debug)]
+pub struct RecentFilesRead {
+    /// Identifier the script passed to `list_recent_files(tag)`.
+    pub tag: String,
+    /// Recorded paths, most recent first, joined by `|`.
+    pub paths: String,
+}
+
+/// Emitted once a `query_autostart(tag)` request has read the autostart entry's state. `enabled = true` routes as `on_autostart_enabled(tag)`, `false` as `on_autostart_disabled(tag)` - the same accepted/rejected split [`DialogClosed`] uses.
+#[derive(Message, Clone, Debug)]
+pub struct AutostartRead {
+    /// Identifier the script passed to `query_autostart(tag)`.
+    pub tag: String,
+    /// Whether the app is currently set to launch at login.
+    pub enabled: bool,
+}
+
+/// Emitted when a secondary launch of a single-instance app (`[app] single_instance = true`) forwards its command-line arguments to the already-running primary. Routed as `on_second_instance(args)`, args joined by `|`.
+#[derive(Message, Clone, Debug)]
+pub struct SecondInstanceLaunched {
+    /// The secondary launch's argv (excluding the binary path).
+    pub args: Vec<String>,
+}
+
 /// IME (input-method editor) state-machine event forwarded by window backends. The variant set mirrors winit's `Ime` enum.
 ///
 /// A typical CJK composition produces: `Enabled` -> `Preedit("ni")` -> `Preedit("nih", caret)` -> `Preedit(composed)` -> `Commit(composed)` -> `Preedit("")` -> `Disabled`.
