@@ -789,24 +789,65 @@ See [Translation](../guides/i18n.md) for the catalogue format.
 
 ## Filesystem
 
+These functions come from the `lumen-fs` runtime module and exist only when
+the app declares it under `[dependencies]` in `lumen.toml`:
+
+```toml
+[dependencies]
+lumen-fs = { bundled = true }
+```
+
+They live in their own `files` namespace, so no `import` line reaches them:
+the host declares the namespace from what the module registered.
+
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |
-| `lumen::read_file(path: string)` | `string` | File contents; empty string on error. Relative paths resolve against the app directory. |
-| `lumen::write_file(path: string, contents: string)` | `bool` | `true` on success. Relative paths resolve against the app directory; the write is atomic (temp file + rename), so a reader never sees a truncated file. |
-| `lumen::data_dir()` | `string` | The directory this app saves data in, created when missing. |
+| `files::exists(path: string)` | `bool` | Whether anything exists at `path`. Symlinks are followed. |
+| `files::is_dir(path: string)` | `bool` | Whether `path` is a directory that exists. |
+| `files::list(path: string)` | `string[]` | The entry names directly inside `path`, sorted. Names, not paths, and one level deep. A directory that cannot be read gives an empty array. |
+| `files::mkdir(path: string)` | `bool` | Create `path` and every directory above it. A directory already there is success. |
+| `files::remove(path: string)` | `bool` | Remove one file, or one directory that is already empty. A directory holding anything is refused; a path that is not there answers `false`. |
+| `files::copy(src: string, dest: string)` | `bool` | Copy one file, creating the directories `dest` sits under. A directory source is refused. |
+| `files::read(path: string)` | `string` | The utf-8 contents of `path`, or an empty string when it is not there. |
+| `files::write(path: string, contents: string)` | `bool` | Write `contents` to `path`. The write is atomic (temp file + rename), so a reader never sees a truncated file. |
+| `files::read_bytes(path: string)` | `int[]` | The bytes of `path` as integers of 0 to 255. A missing file, or one past the cap, gives an empty array. |
+| `files::write_bytes(path: string, bytes: int[])` | `bool` | Write an array of 0-to-255 integers as raw bytes, atomically. A value outside that range refuses the whole write. |
+| `files::data_dir()` | `string` | The directory this app saves data in, created when missing. |
+
+candela ships a filesystem library of its own under `fs`, which is a
+different surface: it resolves a path against the process working directory
+and raises on failure. The module's `files` functions resolve against the app
+and report instead.
 
 A relative path names a file the app ships, so it reads the same wherever the
-app was started from. Saved state goes under `data_dir()` instead, because the
-app directory is read-only once the app is installed:
+app was started from; an absolute path is left alone. Saved state goes under
+`files::data_dir()` instead, because the app directory is read-only once the
+app is installed:
 
 ```rust
-lumen::write_file(lumen::data_dir() + "/session.json", state);
+files::write(files::data_dir() + "/session.json", state);
 ```
 
 `data_dir()` follows the platform convention for user data (`$XDG_DATA_HOME`,
 else `~/.local/share`, on Linux; `~/Library/Application Support` on macOS;
 `%APPDATA%` on Windows) and names one directory per app from
 [`[app] id`](lumen-toml.md), so two apps on a machine keep their saves apart.
+
+A call that cannot do what it was asked answers `false` or an empty value and
+prints one `lumen-fs:` line on stderr, so a script branches on the value it
+got back. Two cases stay silent, because probing for state that has not been
+saved yet is ordinary: reading a file that is not there, and removing one.
+
+`files::read_bytes` reads up to 8 MiB by default. Raise or lower it with the
+module's `read_bytes_cap` setting, in bytes, between 1 KiB and 256 MiB:
+
+```toml
+[dependencies]
+lumen-fs = { bundled = true, config = { read_bytes_cap = 33554432 } }
+```
+
+Windows builds have no runtime modules yet, so this surface is unavailable
+there.
 
 ## Diagnostics
 

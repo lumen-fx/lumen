@@ -1,0 +1,42 @@
+# The filesystem capability Lumen ships, as a self-contained runtime module.
+# The engine knows nothing about files: this crate registers the whole
+# `files` script namespace through the generic `ScriptFnRegistry` and answers
+# each call in place. Two link shapes from one crate: the `cdylib` target is the
+# bundled `lumen-fs` module an app declares in `lumen.toml`, and the `lib`
+# target is the same plugin compiled into a static build.
+[package]
+name = "lumen-fs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's filesystem module: registers the files script namespace (read, write, list, copy, remove, binary access) as a runtime module or a compiled-in plugin."
+keywords = ["ui", "gui", "filesystem", "scripting"]
+categories = ["filesystem", "gui"]
+publish = false
+
+[lib]
+# `lumen_fs` is the spelling the module loader's bundled probe derives from
+# the app's `lumen-fs = { bundled = true }` declaration: the cdylib builds to
+# `liblumen_fs.so`.
+name = "lumen_fs"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+# The one dependency: the Plugin trait, the script-fn registry, and the app's
+# path resolution all arrive through the module SDK's re-exports. Everything
+# else is `std::fs`.
+lumen-module = { workspace = true }
+
+# Tests only: the compiled-in-shape tests build a headless app around the
+# plugin the way `lumenc run` would, and the module-shape test drives the
+# loader end to end over a subprocess. The shipping crate stays on
+# `lumen-module` alone.
+[dev-dependencies]
+lumen-core = { workspace = true }
+lumen-ir = { workspace = true }
+lumen-runtime = { workspace = true }
+lumen-script = { workspace = true }
+serde_json = { workspace = true }

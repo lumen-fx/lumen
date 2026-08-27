@@ -98,6 +98,14 @@ tools/             the release plumbing and the editor plugins
   crate builds both link shapes: the cdylib is the bundled `lumen-audio`
   runtime module an app declares in `lumen.toml`, and a static build
   compiles the same plugin in.
+- **lumen-fs** (`std/fs`): the whole filesystem capability, as a
+  self-contained module the engine knows nothing about. It registers the
+  `files` script namespace through the generic registry and answers each call
+  in place, with no systems of its own: paths resolve against the app
+  directory, and a refusal degrades to a false or an empty value with one
+  stderr line. One crate builds both link shapes: the cdylib is the bundled
+  `lumen-fs` runtime module an app declares in `lumen.toml`, and a static
+  build compiles the same plugin in.
 - **lumen-http-ureq**: the HTTP client behind the scripts' `fetch()` and
   `http()` builtins. One blocking request per call over ureq, with a bounded
   body read.

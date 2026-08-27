@@ -240,21 +240,43 @@ or a request body, `http(request)` takes the whole request and answers on
 
 ## Saving data
 
-```rust
-let seed = lumen::read_file("data/seed.json");
-lumen::write_file(lumen::data_dir() + "/session.json", session);
+Reading and writing files is a runtime module rather than a builtin, so an app
+that wants it says so in `lumen.toml`:
+
+```toml
+[dependencies]
+lumen-fs = { bundled = true }
 ```
 
-`read_file` and `write_file` resolve a relative path against the app directory,
-so a file the app ships is named the same way wherever the app was started
-from.
+That puts a `files` namespace in front of every script the app runs:
+
+```rust
+let seed = files::read("data/seed.json");
+files::write(files::data_dir() + "/session.json", session);
+```
+
+A relative path resolves against the app directory, so a file the app ships is
+named the same way wherever the app was started from.
 
 State the app writes back belongs somewhere else. An installed app directory is
 read-only, and an update replaces what is in it, so a save written there is
-either refused or lost. `data_dir()` answers with a directory of this app's
-own, under the platform's user-data location and named by
+either refused or lost. `files::data_dir()` answers with a directory of this
+app's own, under the platform's user-data location and named by
 [`[app] id`](../reference/lumen-toml.md); it exists by the time the call
 returns.
+
+Beyond reading and writing text there are `files::exists`, `files::is_dir`,
+`files::list`, `files::mkdir`, `files::remove`, `files::copy`, and byte-level
+`files::read_bytes` and `files::write_bytes`. A call that cannot do what it
+was asked answers `false` or an empty value and explains itself on stderr, so
+a script branches on what it got back. The full surface is in the scripting
+reference for each host ([candela](../reference/scripting-candela.md#filesystem),
+[Rhai](../reference/scripting-rhai.md#filesystem),
+[Lua](../reference/scripting-lua.md#filesystem)); Lua spells the calls
+`files.read(..)`.
+
+Windows builds have no runtime modules yet, so this surface is unavailable
+there.
 
 ## Functions the app's Rust adds
 

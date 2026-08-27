@@ -1,12 +1,11 @@
 //! Process-global app location: the directory an app was loaded from, and
 //! the per-user directory it keeps saved data in.
 //!
-//! Script builtins that name a file (`read_file`, `write_file`, `data_dir`)
-//! run outside the world, so they cannot look the app up through a `&World`.
-//! They read this cache instead, the way [`crate::i18n`] and
-//! [`crate::window_state`] carry their own process-global seams. The runtime
-//! publishes both values with [`set_app`] while it builds the app, before any
-//! script host loads, so `on_start` already sees them.
+//! A script function that names a file runs outside the world, so it cannot
+//! look the app up through a `&World`. It reads this cache instead, the way
+//! [`crate::i18n`] and [`crate::window_state`] carry their own process-global
+//! seams. The runtime publishes both values with [`set_app`] while it builds
+//! the app, before any script host loads, so `on_start` already sees them.
 //!
 //! Until then the app directory reads as the process working directory and
 //! the id as `lumen-app`, which keeps a bare host in a test or in
@@ -67,7 +66,7 @@ pub fn app_id() -> String {
 /// Resolve a path an app author wrote: a relative path against the app
 /// directory, an absolute path unchanged. It is the rule the runtime already
 /// applies to the paths its script commands carry, so
-/// `read_file("data/tasks.json")` names the same file wherever the app was
+/// `"data/tasks.json"` names the same file wherever the app was
 /// started from.
 pub fn resolve(path: impl AsRef<Path>) -> PathBuf {
     let path = path.as_ref();

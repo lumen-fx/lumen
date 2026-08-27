@@ -31,7 +31,7 @@ engine = "candela"
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
 | `entry` | string | `"main.lmn"` | Markup entry filename, resolved under the app's `src/` directory. |
-| `id` | string | the app directory name | Stable identifier for per-app state directories, including the one a script's `data_dir()` writes to, and the app id notifications are attributed to. |
+| `id` | string | the app directory name | Stable identifier for per-app state directories, including the one a script's `files::data_dir()` writes to, and the app id notifications are attributed to. |
 | `kind` | `"markup"`, `"rust"`, `"cpp"`, `"python"` | auto-detected | Pins the build and run route instead of letting the directory contents decide. |
 | `locale` | BCP-47 tag | the OS locale, else `en-US` | The locale the app starts in. Selects which `locale/<tag>.ftl` catalogue `translatable` markup and the scripts' `t()` builtin resolve against; every catalogue in the directory is loaded regardless. A tag that is not valid BCP-47 is a parse error. |
 
@@ -252,14 +252,21 @@ One table entry per library; the key is its name.
 ```toml
 [dependencies]
 lumen-audio = { bundled = true }
+lumen-fs = { bundled = true }
 markdown-widgets = "1.2"
 shape-tools = { path = "modules/shape-tools", config = { units = "mm" } }
 ```
 
-`lumen-audio` is the first-party module shipped today: the whole audio
-surface, from the `audio_*` script functions to the playback backend behind
-them. An app that plays sound declares it; a statically built app compiles
-the module's plugin in instead and the declaration is skipped with a notice.
+The first-party modules ship with the toolchain, so `bundled = true` is all
+they need:
+
+| Module | What it adds | Config |
+|--------|--------------|--------|
+| `lumen-audio` | The whole audio surface, from the `audio_*` script functions to the playback backend behind them. | |
+| `lumen-fs` | The `files` script namespace: read, write, list, copy, remove, and byte-level file access, resolved against the app directory. | `read_bytes_cap` |
+
+A statically built app compiles a module's plugin in instead, and the
+declaration is skipped with a notice.
 
 Each entry declares exactly one source:
 

@@ -183,8 +183,11 @@ jobs:
           # one feature graph, so each module records the exact build id of
           # the engine shipping beside it. They ship in their own archive
           # (see the modules packaging step below).
-          cargo build --release --target "$triple" -p lumenc -p lumen \
+          cargo build --release --target "$triple" \
+            -p lumen \
             -p lumen-audio \
+            -p lumen-fs \
+            -p lumenc \
             --config 'profile.release.lto="off"' \
             --features lumenc/dynamic-engine,lumen/dynamic-engine
 
@@ -286,14 +289,30 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p modules-dist/bin
-          for module in liblumen_audio.so liblumen_audio.dylib; do
-            for built in \
-              "target/$triple/release/$module" \
-              "target/$triple/release/deps/$module"; do
-              if [ -f "$built" ]; then cp "$built" modules-dist/bin/; break; fi
+          # One entry per module; the two spellings are the Linux and macOS
+          # library names of the same build.
+          modules=(
+            "liblumen_audio.so liblumen_audio.dylib"
+            "liblumen_fs.so liblumen_fs.dylib"
+          )
+          for spellings in "${modules[@]}"; do
+            found=""
+            for module in $spellings; do
+              for built in \
+                "target/$triple/release/$module" \
+                "target/$triple/release/deps/$module"; do
+                if [ -f "$built" ]; then
+                  cp "$built" modules-dist/bin/
+                  found="$module"
+                  break 2
+                fi
+              done
             done
+            if [ -z "$found" ]; then
+              echo "no library built for: $spellings" >&2
+              exit 1
+            fi
           done
-          test -f modules-dist/bin/liblumen_audio.so || test -f modules-dist/bin/liblumen_audio.dylib
           tar -czf lumen-modules-${{ matrix.target }}.tar.gz -C modules-dist .
 
       - name: Package (Windows)

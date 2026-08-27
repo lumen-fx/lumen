@@ -515,24 +515,57 @@ See [Translation](../guides/i18n.md) for the catalogue format.
 
 ## Filesystem
 
+These functions come from the `lumen-fs` runtime module and exist only when
+the app declares it under `[dependencies]` in `lumen.toml`:
+
+```toml
+[dependencies]
+lumen-fs = { bundled = true }
+```
+
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |
-| `read_file(path)` | string | File contents; empty string on error. Relative paths resolve against the app directory. |
-| `write_file(path, contents)` | boolean | `true` on success. Relative paths resolve against the app directory; the write is atomic (temp file + rename), so a reader never sees a truncated file. |
-| `data_dir()` | string | The directory this app saves data in, created when missing. |
+| `files.exists(path)` | boolean | Whether anything exists at `path`. Symlinks are followed. |
+| `files.is_dir(path)` | boolean | Whether `path` is a directory that exists. |
+| `files.list(path)` | table | The entry names directly inside `path`, sorted. Names, not paths, and one level deep. A directory that cannot be read gives an empty list. |
+| `files.mkdir(path)` | boolean | Create `path` and every directory above it. A directory already there is success. |
+| `files.remove(path)` | boolean | Remove one file, or one directory that is already empty. A directory holding anything is refused; a path that is not there answers `false`. |
+| `files.copy(src, dest)` | boolean | Copy one file, creating the directories `dest` sits under. A directory source is refused. |
+| `files.read(path)` | string | The utf-8 contents of `path`, or an empty string when it is not there. |
+| `files.write(path, contents)` | boolean | Write `contents` to `path`. The write is atomic (temp file + rename), so a reader never sees a truncated file. |
+| `files.read_bytes(path)` | table | The bytes of `path` as numbers of 0 to 255. A missing file, or one past the cap, gives an empty list. |
+| `files.write_bytes(path, bytes)` | boolean | Write a list of 0-to-255 numbers as raw bytes, atomically. A value outside that range refuses the whole write. |
+| `files.data_dir()` | string | The directory this app saves data in, created when missing. |
 
 A relative path names a file the app ships, so it reads the same wherever the
-app was started from. Saved state goes under `data_dir()` instead, because the
-app directory is read-only once the app is installed:
+app was started from; an absolute path is left alone. Saved state goes under
+`files.data_dir()` instead, because the app directory is read-only once the
+app is installed:
 
 ```lua
-write_file(data_dir() .. "/session.json", state)
+files.write(files.data_dir() .. "/session.json", state)
 ```
 
 `data_dir()` follows the platform convention for user data (`$XDG_DATA_HOME`,
 else `~/.local/share`, on Linux; `~/Library/Application Support` on macOS;
 `%APPDATA%` on Windows) and names one directory per app from
 [`[app] id`](lumen-toml.md), so two apps on a machine keep their saves apart.
+
+A call that cannot do what it was asked answers `false` or an empty value and
+prints one `lumen-fs:` line on stderr, so a script branches on the value it
+got back. Two cases stay silent, because probing for state that has not been
+saved yet is ordinary: reading a file that is not there, and removing one.
+
+`files.read_bytes` reads up to 8 MiB by default. Raise or lower it with the
+module's `read_bytes_cap` setting, in bytes, between 1 KiB and 256 MiB:
+
+```toml
+[dependencies]
+lumen-fs = { bundled = true, config = { read_bytes_cap = 33554432 } }
+```
+
+Windows builds have no runtime modules yet, so this surface is unavailable
+there.
 
 ## Embedder commands
 

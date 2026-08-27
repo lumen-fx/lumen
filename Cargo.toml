@@ -207,6 +207,7 @@ lumen-devtools = { path = "crates/dev/devtools" }
 # the workspace, so it is the one internal crate that cannot inherit this table;
 # see public/lumen-dylib/Cargo.toml for why it sits outside.
 lumen-dylib = { path = "public/lumen-dylib" }
+lumen-fs = { path = "std/fs" }
 lumen-html = { path = "crates/html" }
 lumen-http-ureq = { path = "crates/backends/http-ureq" }
 lumen-i18n = { path = "crates/i18n" }
