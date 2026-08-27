@@ -3524,6 +3524,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-download"
+version = "0.0.6"
+dependencies = [
+ "lumen-core",
+ "lumen-ir",
+ "lumen-module",
+ "lumen-runtime",
+ "lumen-script",
+ "serde_json",
+ "sha2",
+ "ureq",
+]
+
+[[package]]
 name = "lumen-dylib"
 version = "0.0.6"
 dependencies = [

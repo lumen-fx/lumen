@@ -238,6 +238,39 @@ issues a GET without holding up a tick and calls `on_fetch(tag, body)` or
 or a request body, `http(request)` takes the whole request and answers on
 `on_http(tag, response)`.
 
+### Downloading a file
+
+`fetch` answers with a string held in memory and hands it to a handler in one
+piece. When what you are after is a file, the `lumen-download` module streams
+it to disk instead:
+
+```toml
+[dependencies]
+lumen-download = { bundled = true }
+```
+
+```rust
+download::to_file("https://example.com/pack.zip", "cache/pack.zip", "pack", "");
+```
+
+The call returns as soon as the transfer is running, and reports under the tag
+it was given: `on_download_progress(tag, received, total)` while it runs, then
+`on_download_done(tag, path)` or `on_download_error(tag, message)`. Give the
+fourth argument a `sha256:` digest and the file is verified before it is put in
+place; give it an empty string to take whatever arrives. Either way the
+destination is written by a rename at the end, so a transfer that fails leaves
+no half file where the real one goes.
+
+Reach for it over `fetch` when the answer is large or binary, when you want it
+on disk, when a progress bar has to move, or when you have a checksum to check
+it against. The full surface is in the scripting reference for each host
+([candela](../reference/scripting-candela.md#downloads),
+[Rhai](../reference/scripting-rhai.md#downloads),
+[Lua](../reference/scripting-lua.md#downloads)); Lua spells the call
+`download.to_file(..)`.
+
+Windows builds have no runtime modules yet, so this is unavailable there.
+
 ## Saving data
 
 Reading and writing files is a runtime module rather than a builtin, so an app

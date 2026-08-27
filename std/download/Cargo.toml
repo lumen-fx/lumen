@@ -1,0 +1,50 @@
+# File downloads, as a self-contained runtime module. The engine knows nothing
+# about them: this crate registers the whole `download` script namespace through
+# the generic `ScriptFnRegistry` and streams each transfer to disk on its own
+# thread. Two link shapes from one crate: the `cdylib` target is the bundled
+# `lumen-download` module an app declares in `lumen.toml`, and the `lib` target
+# is the same plugin compiled into a static build.
+[package]
+name = "lumen-download"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's download module: registers the download script namespace, streaming a URL to a file with progress, checksum verification, and an atomic finish."
+keywords = ["ui", "gui", "http", "download", "scripting"]
+categories = ["gui", "web-programming::http-client"]
+publish = false
+
+[lib]
+# `lumen_download` is the spelling the module loader's bundled probe derives
+# from the app's `lumen-download = { bundled = true }` declaration: the cdylib
+# builds to `liblumen_download.so`.
+name = "lumen_download"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+# The Plugin trait, the script-fn registry, the plugin-event bus, the spawn
+# seam, and the app's path resolution all arrive through the module SDK's
+# re-exports.
+lumen-module = { workspace = true }
+
+# The transport. Not the engine's `HttpClient`: that one answers with a string
+# body under a memory cap, and a download is a stream to disk of a size nobody
+# declared in advance.
+ureq.workspace = true
+
+# Checksum verification, hashed in the same pass that writes the file.
+sha2.workspace = true
+
+# Tests only: the compiled-in-shape tests build a headless app around the
+# plugin the way `lumenc run` would, and the module-shape test drives the
+# loader end to end over a subprocess. The shipping crate stays on the three
+# dependencies above.
+[dev-dependencies]
+lumen-core = { workspace = true }
+lumen-ir = { workspace = true }
+lumen-runtime = { workspace = true }
+lumen-script = { workspace = true }
+serde_json = { workspace = true }

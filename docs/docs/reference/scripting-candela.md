@@ -182,6 +182,9 @@ ships, and is then never called.
 | `on_timer(name)` | Timer name. |
 | `on_fetch(tag, body)` | Request tag, response body (2xx only). |
 | `on_fetch_error(tag, message)` | Request tag, error text (transport failure or non-2xx). |
+| `on_download_progress(tag, received, total)` | Download tag, bytes so far, the size the server declared or `-1`. Fires only for a transfer started by the `lumen-download` module. |
+| `on_download_done(tag, path)` | Download tag, the path the downloaded file was written to. |
+| `on_download_error(tag, message)` | Download tag, error text. |
 
 ### Per-element routing
 
@@ -920,6 +923,106 @@ lumen-archive = { bundled = true, config = { max_concurrent = 2 } }
 Selecting part of an archive, stripping leading path components, per-entry
 progress, listing an archive without unpacking it, and writing an archive are
 not part of this surface.
+
+Windows builds have no runtime modules yet, so this surface is unavailable
+there.
+
+## Downloads
+
+This function comes from the `lumen-download` runtime module and exists only
+when the app declares it under `[dependencies]` in `lumen.toml`:
+
+```toml
+[dependencies]
+lumen-download = { bundled = true }
+```
+
+It lives in its own `download` namespace, so no `import` line reaches it: the
+host declares the namespace from what the module registered.
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `download::to_file(url: string, path: string, tag: string, checksum: string)` | `bool` | Start downloading `url` to `path`, reporting under `tag`. True once the transfer is running, false when the call was refused. |
+
+Every argument is required, which is what keeps the call typed; there is no
+shorter form that omits the checksum. `checksum` is `sha256:` followed by 64
+hex digits, or a bare 64-digit hex string, or an empty string to check nothing;
+neither the prefix nor the digits are case sensitive. Any other spelling fails
+the call.
+
+The call answers as soon as the transfer starts, and the transfer reports
+through three handlers keyed by the tag it was given:
+
+| Handler | Arguments |
+| --- | --- |
+| `on_download_progress(tag: string, received: int, total: int)` | Download tag, bytes so far, the size the server declared or `-1`. |
+| `on_download_done(tag: string, path: string)` | Download tag, the path the file was written to. |
+| `on_download_error(tag: string, message: string)` | Download tag, error text. |
+
+A per-tag `on("download_done", tag, handler)` registration wins over the
+fallback, the same routing every event gets.
+
+Every refusal arrives as `download_error` under the tag the call named, and
+the call itself answers false.
+
+```rust
+fn on_start() {
+    download::to_file("https://example.com/pack.zip", "cache/pack.zip", "pack", "");
+}
+
+fn on_download_progress(tag: string, received: int, total: int) {
+    if total > 0 {
+        lumen::signal_set_int("pack_progress", received * 100 / total);
+    }
+}
+
+fn on_download_done(tag: string, path: string) {
+    lumen::signal_set("pack_path", path);
+}
+
+fn on_download_error(tag: string, message: string) {
+    lumen::print("pack failed: " + message);
+}
+```
+
+A relative `path` names a file beside the app and an absolute one is left
+alone, the way every app path resolves; directories that do not exist yet are
+created on the way. The bytes land in a sibling temp file and are renamed into
+place only once the body has finished and the checksum has verified, so the
+destination never holds a half file and a failed transfer never replaces what
+was already there.
+
+Progress is reported at most ten times a second per tag, so a handler that
+writes a signal cannot become the transfer's bottleneck, and once more with the
+final count just before the done handler runs.
+
+A reply that is not 2xx fails the download, which is where this parts company
+with `lumen::fetch`: `fetch` hands a script whatever came back so it can branch
+on the status, and a download that did not get the file has nothing to write.
+
+Redirects are followed, up to ten in a chain, and an `https` URL is verified
+against the bundled web-PKI roots.
+
+Three settings, all optional:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `timeout_ms` | none | How long a stalled server has to start answering: name resolution, connecting, and the response headers. The body is not on a deadline, so a large download is never cut off part way. |
+| `max_bytes` | none | The largest body accepted. Anything past it fails and writes nothing. |
+| `max_concurrent` | `4` | How many transfers run at once, from 1 to 64. A call past the limit fails. |
+
+```toml
+[dependencies]
+lumen-download = { bundled = true, config = { timeout_ms = 15000, max_concurrent = 2 } }
+```
+
+One tag means one download: a call naming a tag that is already downloading is
+refused rather than replacing the transfer under way, because both would report
+under the same key. A call with no tag has nowhere to report, so it answers
+false and prints one `lumen-download:` line on stderr.
+
+Windows builds have no runtime modules yet, so this surface is unavailable
+there.
 
 Windows builds have no runtime modules yet, so this surface is unavailable
 there.

@@ -107,6 +107,15 @@ tools/             the release plumbing and the editor plugins
   crate builds both link shapes: the cdylib is the bundled `lumen-audio`
   runtime module an app declares in `lumen.toml`, and a static build
   compiles the same plugin in.
+- **lumen-download** (`std/download`): file downloads, as a self-contained
+  module the engine knows nothing about. It registers the `download` script
+  namespace through the generic registry and streams each transfer to disk on
+  the app's spawn seam, hashing as it writes, reporting progress and the
+  outcome over the plugin-event bus. A body lands in a temp file and is
+  renamed into place only once it is complete and its checksum verifies. One
+  crate builds both link shapes: the cdylib is the bundled `lumen-download`
+  runtime module an app declares in `lumen.toml`, and a static build compiles
+  the same plugin in.
 - **lumen-fs** (`std/fs`): the whole filesystem capability, as a
   self-contained module the engine knows nothing about. It registers the
   `files` script namespace through the generic registry and answers each call
