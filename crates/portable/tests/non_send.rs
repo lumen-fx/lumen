@@ -5,11 +5,12 @@
 //! resource anywhere in the assembly is a thread-affine value reached and
 //! dropped somewhere it does not belong.
 //!
-//! bevy's own guard against that is compiled out here: it lives behind
-//! `bevy_ecs`'s `std` feature, and this workspace takes `bevy_ecs` with
-//! `default-features = false`. So the check below is the only one there is,
-//! and it looks at the storage rather than waiting for a panic that will not
-//! come.
+//! bevy's own guard against that panics on the access that gets it wrong:
+//! useful, but late, and it names only the one resource that happened to be
+//! touched first. The check below looks at the storage directly, so a
+//! portable app that picks up a non-send resource fails here, at the point
+//! it was assembled, naming every offender at once instead of one panic per
+//! test run.
 
 use std::thread;
 

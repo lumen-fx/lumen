@@ -216,7 +216,13 @@ struct SimulateProgress {
 /// the same `MessageWriter<...>` events the winit backend would emit. Runs
 /// in `TickStage::Input` BEFORE the real input dispatch so the events are
 /// visible to hit-test, focus-routing, and the click router on the same
-/// tick.
+/// tick. Ordered after [`bevy_ecs::message::message_update_system`]: that
+/// system takes exclusive `World` access to cycle every registered message
+/// type's double buffer, which conflicts with every `MessageWriter` this
+/// system holds, and an executor is free to run two conflicting,
+/// unordered systems in either order. Writing before the cycle instead of
+/// after it moves this tick's messages into the buffer the cycle is about
+/// to retire, so a reader later in the same tick sees none.
 ///
 /// One-request-per-tick (W6 T4): rapid-fire requests - e.g. a click
 /// followed immediately by an Escape - previously drained into a single
@@ -397,7 +403,9 @@ impl Plugin for LumenMcpPlugin {
             app.world.init_resource::<SimulateProgress>();
             app.add_systems(
                 TickStage::Input,
-                drain_simulate_queue.after(wire_simulate_waker),
+                drain_simulate_queue
+                    .after(wire_simulate_waker)
+                    .after(bevy_ecs::message::message_update_system),
             );
             // W6 T4: tick-completion publisher - the last stage of the
             // main schedule, so a handler observing the seq knows the
@@ -1373,7 +1381,10 @@ mod simulate_tests {
         let mut app = App::new();
         app.world.insert_resource(queue.clone());
         app.world.init_resource::<SimulateProgress>();
-        app.add_systems(TickStage::Input, drain_simulate_queue);
+        app.add_systems(
+            TickStage::Input,
+            drain_simulate_queue.after(bevy_ecs::message::message_update_system),
+        );
         app.add_systems(TickStage::A11ySync, publish_simulate_completion);
         app
     }

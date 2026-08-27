@@ -197,7 +197,13 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   the reconcilers, the two-way bindings, the script command stream) and the
   script host for the engine an app names, and leaves out layout, paint,
   windowing and the OS surface. Nothing it installs is bound to one thread, so
-  the app it builds can be built, ticked and dropped anywhere.
+  the app it builds can be built, ticked and dropped anywhere; its `Tick`
+  schedule keeps the single-threaded executor rather than the platform
+  default to hold that guarantee, since it has no layout or render work for
+  a second thread to pick up anyway. Its app logic stays serial within a
+  tick too. A renderer built on this crate, such as `lumen-ssr`, gets its
+  parallelism from running many requests at once on separate threads, not
+  from splitting one request's tick across threads.
 - **lumen-runtime**: the runtime core. The run loop, `RunOptions`, the default
   plugin stack, hot reload, page discovery, `lumen.toml` config, the skins,
   and the loaders for both compiled artifacts and source. Links no parser.
@@ -276,6 +282,17 @@ lookups; `Render` submits draw work.
 
 `Viewport` is a resource in both worlds. The window backend writes both copies
 on resize, which is why layout and rendering agree on the coordinate space.
+
+Each schedule runs on `bevy_ecs`'s multi-threaded executor: systems within a
+stage that touch disjoint data run across the worker pool, while systems the
+scheduler finds in conflict (same resource, same component set) still run in
+the order `.chain()` or `.after()` puts them in. Some systems take
+`NonSendMut` params, though: the layout shaper, the wgpu renderer, and the
+clipboard. Those stay pinned to the thread that calls `App::tick`, which is
+the window backend's event-loop thread. The worker count comes from
+`App::desired_threads` (`min(cpu count, 4)` by default, raised by a plugin
+via `request_threads_at_least` or overridden by `[runtime] threads` /
+`LUMEN_THREADS`) and is read once, at the first tick.
 
 ## A tick
 
