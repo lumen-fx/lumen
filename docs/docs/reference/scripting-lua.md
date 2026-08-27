@@ -104,6 +104,9 @@ optional.
 | `on_download_progress(tag, received, total)` | Download tag, bytes so far, the size the server declared or `-1`. Fires only for a transfer started by the `lumen-download` module. |
 | `on_download_done(tag, path)` | Download tag, the path the downloaded file was written to. |
 | `on_download_error(tag, message)` | Download tag, error text. |
+| `on_process_stdout(tag, line)` | Tag given to `process.start`, one line the program wrote to standard output. |
+| `on_process_stderr(tag, line)` | Tag, one line the program wrote to standard error. |
+| `on_process_exit(tag, code)` | Tag, the program's exit code. Always the last event for a tag. |
 
 ### Per-element routing
 
@@ -725,6 +728,69 @@ One tag means one download: a call naming a tag that is already downloading is
 refused rather than replacing the transfer under way, because both would report
 under the same key. A call with no tag has nowhere to report, so it answers
 false and prints one `lumen-download:` line on stderr.
+
+Windows builds have no runtime modules yet, so this surface is unavailable
+there.
+
+Windows builds have no runtime modules yet, so this surface is unavailable
+there.
+
+## Processes
+
+These functions come from the `lumen-process` runtime module and exist only
+when the app declares it under `[dependencies]` in `lumen.toml`:
+
+```toml
+[dependencies]
+lumen-process = { bundled = true }
+```
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `process.start(cmd, args, tag)` | boolean | Start `cmd` with the argument list `args`, reporting under `tag`. `true` once the program is running. |
+
+`args` is a list of strings. A `cmd` with a path separator in it names a
+program the app ships and resolves against the app directory; a bare `cmd` is
+looked up on `PATH`. The child runs in the app directory, reads end of file
+from its input, and has both its output streams captured.
+
+The call answers as soon as the program is running. Everything after that
+arrives as an event carrying the tag, so one handler serves several children:
+
+| Event | Fallback handler |
+| --- | --- |
+| `process_stdout` | `on_process_stdout(tag, line)` |
+| `process_stderr` | `on_process_stderr(tag, line)` |
+| `process_exit` | `on_process_exit(tag, code)` |
+
+A per-child `on("process_exit", tag, handler)` registration wins over the
+fallback, like every other event.
+
+`process_exit` is always the last event for a tag. Its `code` is the program's
+own exit code, 128 plus the signal that killed it on Unix, or `-1` for an
+ending the system does not describe.
+
+A line is what the program wrote before a newline; the newline is not part of
+it, and the last stretch before the program ends is a line even without one.
+Bytes that are not utf-8 are replaced, and a line longer than 64 KiB arrives in
+pieces. There is one handler call per line, so a chatty program calls the
+handler a lot.
+
+A program that cannot start answers `false` and prints one `lumen-process:`
+line on stderr. It fires no event at all, because the tag never named a running
+program, so branch on the value the call gave back rather than waiting for an
+exit that never comes.
+
+There is no way to write to a child's input, no way to end a child from a
+script, and no per-child environment or working directory. A child is not
+ended when the app exits: a program still running outlives the app that
+started it.
+
+Windows builds have no runtime modules yet, so this surface is unavailable
+there.
+
+Windows builds have no runtime modules yet, so this surface is unavailable
+there.
 
 Windows builds have no runtime modules yet, so this surface is unavailable
 there.

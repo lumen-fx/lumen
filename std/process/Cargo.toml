@@ -1,0 +1,48 @@
+# The child-process capability Lumen ships, as a self-contained runtime
+# module. The engine knows nothing about processes: this crate registers the
+# `process` script namespace through the generic `ScriptFnRegistry`, supervises
+# each child on threads of its own, and delivers output and exit through the
+# generic plugin-event bus. Two link shapes from one crate: the `cdylib` target
+# is the bundled `lumen-process` module an app declares in `lumen.toml`, and
+# the `lib` target is the same plugin compiled into a static build.
+[package]
+name = "lumen-process"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's process module: registers the process script namespace, streams a child's output into script handlers, and reports its exit."
+keywords = ["ui", "gui", "process", "subprocess", "scripting"]
+categories = ["os", "gui"]
+publish = false
+
+[lib]
+# `lumen_process` is the spelling the module loader's bundled probe derives
+# from the app's `lumen-process = { bundled = true }` declaration: the cdylib
+# builds to `liblumen_process.so`.
+name = "lumen_process"
+crate-type = ["lib", "cdylib"]
+
+# The program the tests run as a child: it echoes its arguments, writes one
+# line to stderr, and exits with the code it was asked for.
+[[bin]]
+name = "lumen-process-test-child"
+path = "src/bin/test_child.rs"
+
+[dependencies]
+# The one dependency: the Plugin trait, the script-fn registry, the app's path
+# resolution, and the plugin-event bus all arrive through the module SDK's
+# re-exports. Everything else is `std::process`.
+lumen-module = { workspace = true }
+
+# Tests only: the compiled-in-shape tests build a headless app around the
+# plugin the way `lumenc run` would, and the module-shape test drives the
+# loader end to end over a subprocess. The shipping crate stays on
+# `lumen-module` alone.
+[dev-dependencies]
+lumen-core = { workspace = true }
+lumen-ir = { workspace = true }
+lumen-runtime = { workspace = true }
+serde_json = { workspace = true }

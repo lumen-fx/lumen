@@ -373,3 +373,77 @@ handler registered with `on("audio_end", path, "fn_name")` wins over it.
 
 WAV and Ogg Vorbis decode. On a machine with no working audio device the calls
 succeed and the position keeps advancing, with nothing audible.
+
+## Running a program
+
+Running another program is a runtime module. Declaring it in `lumen.toml` is
+what makes `process::start` exist:
+
+```toml
+[dependencies]
+lumen-process = { bundled = true }
+```
+
+Start a program with the arguments it takes and a tag you choose. The tag is
+how you tell one child from another when its output comes back:
+
+```rhai
+fn on_ready() {
+    signals.status.set("building");
+    process::start("./tools/build.sh", ["--release"], "build");
+}
+```
+
+`./tools/build.sh` is a program the app ships: a `cmd` with a path separator in
+it resolves against the app directory, and a bare name like `git` is looked up
+on `PATH`. Either way the child runs in the app directory.
+
+The call answers as soon as the program is running, and `false` when it could
+not start at all. Branch on that, because a program that never started sends
+nothing afterwards:
+
+```rhai
+fn on_ready() {
+    if !process::start("git", ["status", "--short"], "git") {
+        signals.status.set("git is not installed");
+    }
+}
+```
+
+Output arrives a line at a time, and the exit is always the last thing you hear
+about a tag:
+
+```rhai
+fn on_process_stdout(tag, line) {
+    signals.log.set(signals.log.get() + line + "\n");
+}
+
+fn on_process_exit(tag, code) {
+    if code == 0 {
+        signals.status.set("done");
+    } else {
+        signals.status.set("failed");
+    }
+}
+```
+
+`code` is the program's own exit code, or 128 plus the signal that ended it.
+Route one child to handlers of its own with
+`on("process_exit", "build", "build_done")`, the same per-key routing every
+event has.
+
+candela is the same call, with the handler's parameters annotated:
+
+```rust
+fn on_process_exit(tag: string, code: int) {
+    if code == 0 {
+        lumen::signal_set("status", "done");
+    } else {
+        lumen::signal_set("status", "failed");
+    }
+}
+```
+
+There is no way to write to a child's input and no way to end one from a
+script. A child is also not ended when the app exits: a program still running
+outlives the app that started it, so start a long-running one deliberately.
