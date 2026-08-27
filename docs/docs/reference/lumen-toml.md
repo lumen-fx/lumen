@@ -100,12 +100,18 @@ and [Tooling](tooling.md#mcp-server).
 |-----|------|---------|--------|
 | `port` | integer | `7878` | TCP port the server listens on, bound to `127.0.0.1`. `0` disables the server outright. |
 | `simulate` | bool | `false` | Lets the server inject pointer, key, and scroll events. Required by `lumenc click`, `type`, `key`, and `scroll`. |
+| `issues` | bool | `false` | Lets `lumen_framework_status` shell out to `git` and `gh` to list the checkout's open GitHub issues. |
 
 The server runs by default for a windowed run. A headless run turns it off
 unless `simulate = true` or `[runtime] mcp = true`.
 
 With `simulate` on, the server snapshots every tick instead of once a second,
 so an automation driver sees each frame.
+
+The introspection port has no authentication, so `issues` defaults to off:
+turning it on lets any caller that can reach `127.0.0.1:<port>` trigger a
+`git`/`gh` subprocess. With it off, `lumen_framework_status` reports that
+the lookup is disabled instead of running either command.
 
 ## [profile]
 

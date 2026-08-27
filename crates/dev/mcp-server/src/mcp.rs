@@ -182,7 +182,7 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "lumen_framework_status",
-                "description": "Open issue count (and the first ~10 titles) for the repository this checkout's origin git remote points at, fetched through the gh CLI, plus the most recent main-world tick duration as a liveness check. Reports issues_error instead of a count when gh, the network, or the origin remote isn't available.",
+                "description": "Open issue count (and the first ~10 titles) for the repository this checkout's origin git remote points at, fetched through the gh CLI, plus the most recent main-world tick duration as a liveness check. Off unless the app sets [mcp] issues = true; reports enabled:false without spawning anything until then. Reports issues_error instead of a count when gh, the network, or the origin remote isn't available, and truncated:true when the repository has more open issues than the tool counts exactly.",
                 "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
             },
             {
@@ -382,11 +382,13 @@ async fn tools_call(
 // Surfaces the small set of files an agent typically needs context on
 // (lumen.toml, src/main.lmn, src/main.css, docs/*.md) as read-only MCP
 // `resources/`. The catalogue is discovered relative to the working
-// directory at startup - we walk up to six parents looking for the same
-// anchor the rest of the toolchain uses for a project root: a `lumen.toml`
-// (a single app checkout) or a `Cargo.toml` declaring `[workspace]` (the
-// Lumen framework checkout itself, the way `lumenc bundle --static` locates
-// its own workspace).
+// directory at startup - we walk up to six parents looking for a
+// `lumen.toml` (a single app checkout, the file every Lumen app already
+// treats as its one static source of truth) or a `Cargo.toml` declaring
+// `[workspace]` (the Lumen framework checkout itself). The `[workspace]`
+// check is the same test `lumenc bundle --static` uses to find the
+// framework's own workspace root, though that walk starts from a
+// compile-time path rather than the current directory.
 
 const RESOURCE_GLOB_LIMIT: usize = 64;
 

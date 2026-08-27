@@ -41,6 +41,11 @@ pub(crate) struct ServerCtx {
     pub surface_capture: Option<SurfaceCapture>,
     pub simulate_queue: SimulateQueue,
     pub simulate_enabled: bool,
+    /// Gates `lumen_framework_status`'s issue lookup. Off by default: the
+    /// introspection port has no authentication, so a shipped app leaves
+    /// subprocess execution (`git`, `gh`) off that surface unless a
+    /// developer opts in with `[mcp] issues = true`.
+    pub issues_enabled: bool,
     /// What the request handlers wait on while they poll for a frame, a
     /// committed signal, or a finished tick. The app's `TimerService` when
     /// it installed one, [`TokioTimer`] otherwise.
@@ -669,14 +674,44 @@ fn plot(rgba8: &mut [u8], width: u32, height: u32, x: i32, y: i32, color: [u8; 4
 /// `dispatch_with_ctx` case: that dispatch table is synchronous snapshot
 /// reads only. A checkout with no network, no `gh`, or no GitHub `origin`
 /// remote gets `issues_error` set instead of a hang or a silent zero.
+///
+/// Gated by `ctx.issues_enabled` (`[mcp] issues = true`, off by default):
+/// the introspection port has no authentication, so spawning `git`/`gh`
+/// from an unauthenticated caller is opt-in the same way `lumen.simulate`
+/// gates input injection. Off, this never touches a subprocess.
 async fn run_framework_status(ctx: &ServerCtx) -> Value {
     let (frame, last_tick_micros) = match ctx.snapshot.read() {
         Ok(snap) => (snap.frame, snap.last_tick_micros),
         Err(_) => (0, 0),
     };
+
+    if !ctx.issues_enabled {
+        return json!({
+            "summary": format!("issue lookup disabled; last tick {last_tick_micros}us"),
+            "enabled": false,
+            "hint": "enable with [mcp] issues = true in lumen.toml (or LumenMcpPlugin::with_issues_enabled(true))",
+            "repo": Value::Null,
+            "open_issues": Value::Null,
+            "truncated": false,
+            "first_open_issues": Value::Array(Vec::new()),
+            "issues_error": Value::Null,
+            "last_tick_micros": last_tick_micros,
+            "frame": frame,
+            "next_suggested_tools": [
+                { "name": "lumen_snapshot_text", "params": {}, "why": "verify a fix end-to-end" },
+            ],
+            "confidence": "high",
+        });
+    }
+
     let report = crate::issues::framework_issues_report(&crate::issues::GhConfig::default()).await;
 
     let summary = match (&report.repo, report.open_issues, &report.error) {
+        (Some(repo), Some(n), None) if report.truncated => {
+            format!(
+                "{n}+ open issue(s) on {repo} (list truncated at {n}); last tick {last_tick_micros}us"
+            )
+        }
         (Some(repo), Some(n), None) => {
             format!("{n} open issue(s) on {repo}; last tick {last_tick_micros}us")
         }
@@ -690,16 +725,18 @@ async fn run_framework_status(ctx: &ServerCtx) -> Value {
         }
         _ => format!("last tick {last_tick_micros}us"),
     };
-    let confidence = if report.error.is_none() {
-        "high"
-    } else {
-        "low"
+    let confidence = match (&report.error, report.truncated) {
+        (Some(_), _) => "low",
+        (None, true) => "medium",
+        (None, false) => "high",
     };
 
     json!({
         "summary": summary,
+        "enabled": true,
         "repo": report.repo,
         "open_issues": report.open_issues,
+        "truncated": report.truncated,
         "first_open_issues": report.first_open,
         "issues_error": report.error,
         "last_tick_micros": last_tick_micros,
@@ -1021,6 +1058,7 @@ mod capture_tests {
             surface_capture: capture,
             simulate_queue: SimulateQueue::default(),
             simulate_enabled: false,
+            issues_enabled: false,
             timer: Arc::new(CountingTimer(Arc::clone(waits))),
         }
     }

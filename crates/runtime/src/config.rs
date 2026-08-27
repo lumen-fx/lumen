@@ -215,6 +215,11 @@ pub struct McpCfg {
     pub port: Option<u16>,
     /// When `true`, the MCP plugin drains the `SimulateQueue` each tick and injects pointer, key, and scroll events. Defaults to off.
     pub simulate: Option<bool>,
+    /// When `true`, `lumen_framework_status` shells out to `git` and `gh` to
+    /// list the checkout's open GitHub issues. Defaults to off: the
+    /// introspection port has no authentication, so a shipped app leaves
+    /// subprocess execution off that surface unless a developer opts in.
+    pub issues: Option<bool>,
 }
 
 /// `[profile]` block.
