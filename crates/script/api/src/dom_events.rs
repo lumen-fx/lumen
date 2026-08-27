@@ -328,7 +328,7 @@ pub fn dispatch_state_events<H: ScriptHost + Resource<Mutability = Mutable>>(
 }
 
 #[cfg(test)]
-mod text_event_tests {
+pub(crate) mod text_event_tests {
     use super::*;
     use bevy_ecs::message::Messages;
     use bevy_ecs::system::RunSystemOnce;
@@ -346,8 +346,12 @@ mod text_event_tests {
     /// `Option<ResMut<H>>` and these tests leave the resource out, so the
     /// events route through native bindings only. The type exists to name
     /// `H`.
+    ///
+    /// `pub(crate)` so `runtime`'s derivation tests can build on it instead
+    /// of writing a second `ScriptHost` stub with the same unimplemented /
+    /// trivial bodies.
     #[derive(Resource)]
-    struct NoHost;
+    pub(crate) struct NoHost;
 
     impl ScriptHost for NoHost {
         type Closure = ();

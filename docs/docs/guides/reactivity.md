@@ -140,6 +140,11 @@ value. Nothing calls it; a write to any dependency does. Derived values may
 depend on other derived values, and a whole chain settles within the tick that
 started it.
 
+A derivation that fails, whether its function raises an error or the script
+engine trips internally, is reported the same way a failed call is and does not
+stop the app. That one recompute is skipped, and the derivation retries every
+tick until it succeeds.
+
 In candela the function is named rather than written inline, and each parameter
 carries a declared type that has to match the kind its signal holds. Declare it
 `any` when you are not sure. See

@@ -328,8 +328,10 @@ fn calc_label(n: any) {
 
 A derivation runs once after registration, then on every change to a
 dependency. Derived-of-derived chains settle within the same tick. A derivation
-that errors is retried on the next tick, so a parameter type that never matches
-fails and logs on every tick for the life of the app.
+that errors, including an internal engine crash mid-evaluation, is contained
+the same way a failed call is: the app keeps running, that one recompute is
+skipped, and the derivation is retried on the next tick, so a parameter type
+that never matches fails and logs on every tick for the life of the app.
 
 ## Timers
 
