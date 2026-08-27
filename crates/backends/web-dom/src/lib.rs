@@ -91,9 +91,15 @@ impl Plugin for WebDomPlugin {
 /// installed them and the world does not own them: they are handed to the
 /// browser, and they push onto a queue the app drains each tick.
 ///
+/// `soft_navigation` is `[web] navigation = "soft"`: whether a click on a
+/// same-page `<a href>` this crate spawned is kept from reaching the
+/// browser's own navigation, so the in-app router swaps the page in place
+/// instead. Passed straight through to the click listener, which is the only
+/// place a browser event is still in hand to prevent.
+///
 /// # Errors
 ///
 /// The browser refused a listener.
-pub fn listen(root: &Element) -> Result<(), wasm_bindgen::JsValue> {
-    events::listen(root)
+pub fn listen(root: &Element, soft_navigation: bool) -> Result<(), wasm_bindgen::JsValue> {
+    events::listen(root, soft_navigation)
 }

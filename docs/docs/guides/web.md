@@ -465,10 +465,25 @@ means anything without an absolute address.
 - Keyboard input other than typing into a focused field does not reach the app,
   so a keyboard shortcut and arrow-key navigation between tabs do not work.
   Escape on an open dialog is the exception; the browser closes it.
-- Following a link loads the next document. Soft navigation, which swaps the
-  page in place and keeps the app running, is not wired up.
+- `[web] navigation = "soft"` (the default) swaps a same-page link's target
+  page in without a reload, keeping the app running; `navigation = "hard"`
+  lets every link load the next document, the same as an ordinary site. Soft
+  navigation does not update the address bar, so reloading or copying the
+  link while on a page reached that way returns to the page the document was
+  first loaded as, and the browser's own back and forward buttons are not
+  wired to it.
 - A `<input>` is edited by the browser, so Lumen's own caret, selection and
   IME handling are not in play; what an app sees is the value after each edit.
+- `:drag-over` on a `drop-target` lights up while a file is dragged in from
+  the desktop, and clears on a drop, matching the desktop. `on_file_dropped`
+  and the in-app `drag-payload` / `on_drop` pair, which read what was
+  dropped, are desktop only: `draggable="true"` has no effect in a browser,
+  so an element cannot start a drag there in the first place.
+- On the desktop, `accept="..."` keeps `:drag-over` off a `drop-target` a
+  drag's payload does not match. The web target does not read `accept` at
+  all: `:drag-over` lights up for any drag over the element, matched payload
+  or not. What the drop itself does with a payload is not wired up on the
+  web target regardless, per the point above.
 
 ## Reference
 

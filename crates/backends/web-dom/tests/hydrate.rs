@@ -15,12 +15,15 @@
 
 #![cfg(target_arch = "wasm32")]
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use bevy_ecs::prelude::*;
 use lumen_core::components::{LumenClasses, SliderValue, TextContent, Visible};
 use lumen_core::prelude::{App, TickStage};
 use lumen_core::property_store::PropertyStore;
 use lumen_core::signals::{ArrayItem, ArraySignals};
-use lumen_html::contract::{DATA_LM, DATA_LM_HIDDEN};
+use lumen_html::contract::{DATA_LM, DATA_LM_DRAG_OVER, DATA_LM_HIDDEN};
 use lumen_ir::layout_ir::{
     Attributes, BindKind, BindSpec, Element as IrElement, IfModeSpec, InterpolationSlot, LayoutIR,
 };
@@ -29,6 +32,7 @@ use lumen_scene::spawn::SpawnIntoWorld;
 use lumen_web::{PageSpec, SignalEnv, SiteSpec, WebSpec};
 use lumen_web_dom::{NodeTable, WebDomPlugin};
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::Closure;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::Element;
 
@@ -244,7 +248,7 @@ fn a_click_reaches_the_entity_the_element_stands_for() {
     app.add_systems(TickStage::Systems, record_clicks);
     app.world.init_resource::<Clicked>();
 
-    lumen_web_dom::listen(&root).expect("the page takes listeners");
+    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
     let target: web_sys::HtmlElement = root
         .query_selector(&format!("[{DATA_LM}=\"0.1.1\"]"))
         .unwrap()
@@ -263,6 +267,218 @@ fn a_click_reaches_the_entity_the_element_stands_for() {
     );
 }
 
+/// A page whose whole content is a link to another page of the same site.
+fn link_tree() -> LayoutIR {
+    let mut link = element("a", Some("settings"), Vec::new());
+    link.attrs.href = Some("settings".to_string());
+    LayoutIR {
+        root: element("root", None, vec![link]),
+        ..LayoutIR::default()
+    }
+}
+
+/// Dispatch a `click` `MouseEvent` at `target` and report whether *Lumen's*
+/// listener on `root` asked the browser not to follow the link.
+///
+/// A real browser does perform an `<a href>`'s default action - following
+/// the link - for an untrusted, script-dispatched click that nothing
+/// prevented, which is exactly what a `navigation = "hard"` test (and a
+/// modifier-held one, and a same-document fragment one) needs to observe.
+/// Left to happen, that navigation tears down this test binary's own page
+/// before the suite is done with it, which is a wasm-bindgen-test run that
+/// never reports rather than a failing assertion. So a listener this
+/// function owns is added to `root` after Lumen's own - same phase, later
+/// in registration order, so it runs right behind it - reads
+/// `defaultPrevented` at that point (which is Lumen's answer, whatever it
+/// was), and then calls `preventDefault` itself unconditionally. The
+/// observation happens first, the safety net closes immediately after, and
+/// the browser never leaves the page either way.
+fn click_and_check_prevented(root: &Element, target: &Element, ctrl_key: bool) -> bool {
+    let observed = Rc::new(Cell::new(false));
+    let observed_write = observed.clone();
+    let guard = Closure::wrap(Box::new(move |event: web_sys::Event| {
+        observed_write.set(event.default_prevented());
+        event.prevent_default();
+    }) as Box<dyn FnMut(web_sys::Event)>);
+    root.add_event_listener_with_callback("click", guard.as_ref().unchecked_ref())
+        .expect("the test's own safety-net listener attaches");
+
+    let init = web_sys::MouseEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    init.set_button(0);
+    init.set_ctrl_key(ctrl_key);
+    let click = web_sys::MouseEvent::new_with_mouse_event_init_dict("click", &init).unwrap();
+    target.dispatch_event(&click).unwrap();
+
+    root.remove_event_listener_with_callback("click", guard.as_ref().unchecked_ref())
+        .expect("the test's own safety-net listener detaches");
+    observed.get()
+}
+
+#[wasm_bindgen_test]
+fn soft_navigation_keeps_the_browser_from_loading_the_next_document() {
+    let root = prerender(link_tree());
+    let _app = hydrate(link_tree(), root.clone());
+    lumen_web_dom::listen(&root, true).expect("the page takes listeners");
+
+    let anchor = root
+        .query_selector("a")
+        .unwrap()
+        .expect("the emitter wrote the link");
+    assert!(
+        click_and_check_prevented(&root, &anchor, false),
+        "`navigation = \"soft\"` intercepts the click so the in-app router \
+         swaps the page instead of the browser loading it"
+    );
+}
+
+#[wasm_bindgen_test]
+fn hard_navigation_leaves_the_browser_s_own_click_alone() {
+    let root = prerender(link_tree());
+    let _app = hydrate(link_tree(), root.clone());
+    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+
+    let anchor = root
+        .query_selector("a")
+        .unwrap()
+        .expect("the emitter wrote the link");
+    assert!(
+        !click_and_check_prevented(&root, &anchor, false),
+        "`navigation = \"hard\"` never intercepts; the browser loads the \
+         next document exactly as it does for an ordinary site"
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_modifier_click_still_reaches_the_browser_under_soft_navigation() {
+    let root = prerender(link_tree());
+    let _app = hydrate(link_tree(), root.clone());
+    lumen_web_dom::listen(&root, true).expect("the page takes listeners");
+
+    let anchor = root
+        .query_selector("a")
+        .unwrap()
+        .expect("the emitter wrote the link");
+    assert!(
+        !click_and_check_prevented(&root, &anchor, true),
+        "a visitor asking to open the link in a new tab still gets one"
+    );
+}
+
+/// A page whose whole content is a same-page fragment link - a "back to
+/// top" or table-of-contents entry, not a link to another page.
+fn fragment_link_tree() -> LayoutIR {
+    let mut link = element("a", Some("top"), Vec::new());
+    link.attrs.href = Some("#section".to_string());
+    LayoutIR {
+        root: element("root", None, vec![link]),
+        ..LayoutIR::default()
+    }
+}
+
+#[wasm_bindgen_test]
+fn a_same_document_fragment_link_reaches_the_browser_under_soft_navigation() {
+    let root = prerender(fragment_link_tree());
+    let _app = hydrate(fragment_link_tree(), root.clone());
+    lumen_web_dom::listen(&root, true).expect("the page takes listeners");
+
+    let anchor = root
+        .query_selector("a")
+        .unwrap()
+        .expect("the emitter wrote the link");
+    assert!(
+        !click_and_check_prevented(&root, &anchor, false),
+        "`href=\"#section\"` names this document, not another page; the \
+         browser's own scroll-to-anchor has to run, which intercepting the \
+         click would have replaced with a bounce to the entry page"
+    );
+}
+
+/// A page with a `drop="true"` container holding a plain label - the pointer
+/// lands on the label as often as on the container itself.
+fn drop_target_tree() -> LayoutIR {
+    let mut row = element(
+        "row",
+        None,
+        vec![element("label", Some("drop here"), vec![])],
+    );
+    row.attrs.drop_target = true;
+    LayoutIR {
+        root: element("root", None, vec![row]),
+        ..LayoutIR::default()
+    }
+}
+
+/// Dispatch a bubbling drag event of `kind` at `target`.
+fn dispatch_drag(target: &Element, kind: &str) {
+    let init = web_sys::EventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    let event = web_sys::Event::new_with_event_init_dict(kind, &init).unwrap();
+    target.dispatch_event(&event).unwrap();
+}
+
+#[wasm_bindgen_test]
+fn a_drag_over_a_drop_target_marks_it_and_leaving_clears_it() {
+    let root = prerender(drop_target_tree());
+    let mut app = hydrate(drop_target_tree(), root.clone());
+    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+
+    let target = root.first_element_child().expect("the drop-target row");
+
+    dispatch_drag(&target, "dragenter");
+    app.tick();
+    assert!(
+        target.has_attribute(DATA_LM_DRAG_OVER),
+        "a drag entering the target sets `:drag-over`'s mirror attribute"
+    );
+
+    dispatch_drag(&target, "dragleave");
+    app.tick();
+    assert!(
+        !target.has_attribute(DATA_LM_DRAG_OVER),
+        "the drag leaving clears it"
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_drag_over_a_drop_target_s_child_marks_the_target_not_the_child() {
+    let root = prerender(drop_target_tree());
+    let mut app = hydrate(drop_target_tree(), root.clone());
+    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+
+    let target = root.first_element_child().expect("the drop-target row");
+    // `label` is a Lumen tag, not an HTML one - the emitter writes it as
+    // `<span class="lm-label">` (`html_tag_for("label")` maps it to `span`),
+    // so the child has to be found by that class, not by an element name
+    // this document never has.
+    let child = target
+        .query_selector(".lm-label")
+        .unwrap()
+        .expect("the row's label");
+
+    dispatch_drag(&child, "dragenter");
+    app.tick();
+    assert!(
+        target.has_attribute(DATA_LM_DRAG_OVER),
+        "the marker belongs on the entity the stylesheet's `:drag-over` \
+         rule is written against, not on whichever descendant the pointer \
+         happened to land on"
+    );
+    assert!(
+        !child.has_attribute(DATA_LM_DRAG_OVER),
+        "the label itself is not a drop target"
+    );
+
+    dispatch_drag(&child, "drop");
+    app.tick();
+    assert!(
+        !target.has_attribute(DATA_LM_DRAG_OVER),
+        "a drop clears the marker the same way leaving does"
+    );
+}
+
 #[wasm_bindgen_test]
 fn a_slider_the_visitor_moves_moves_in_the_world_too() {
     let mut slider = element("slider", None, Vec::new());
@@ -275,7 +491,7 @@ fn a_slider_the_visitor_moves_moves_in_the_world_too() {
     };
     let root = prerender(ir.clone());
     let mut app = hydrate(ir, root.clone());
-    lumen_web_dom::listen(&root).expect("the page takes listeners");
+    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
 
     let range: web_sys::HtmlInputElement = root
         .query_selector("input[type=range]")
@@ -423,7 +639,7 @@ fn a_dialog_opens_and_closes_as_the_browser_s_own() {
 fn a_dialog_the_browser_dismisses_takes_its_signal_with_it() {
     let root = prerender(dialog_tree());
     let mut app = hydrate_reactive(dialog_tree(), root.clone());
-    lumen_web_dom::listen(&root).expect("the page takes listeners");
+    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
     let dialog: web_sys::HtmlDialogElement = root
         .query_selector("dialog")
         .unwrap()

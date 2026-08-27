@@ -8,7 +8,7 @@
 use std::sync::Once;
 
 use lumen_core::request::RequestContext;
-use lumen_html::contract::DATA_LM;
+use lumen_html::contract::{DATA_LM, Manifest, NavigationMode};
 use lumen_scene::spawn::SpawnIntoWorld;
 use lumen_web_dom::WebDomPlugin;
 use wasm_bindgen::JsCast;
@@ -85,20 +85,28 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
         // The document is one page of the site, and which one is what it
         // says it is: a visitor who asked for `/settings` was served that
         // document, so the app opens on it rather than on the entry.
+        //
+        // Installed whichever way `[web] navigation` reads: `route.path` has
+        // to seed correctly for the page this document is, and a script's
+        // own `page()` call always swaps in place. What the setting decides
+        // is narrower - only whether a click on a same-page `<a href>` is
+        // one of those swaps or a real document load - and `listen` below is
+        // where that is decided, because only there is a browser event still
+        // in hand to prevent.
         lumen_scene::routing::install_routing(&mut app, page.page.clone(), pages.keys.clone());
     }
     apply_seed(&mut app.world, &loaded.seed);
     let root_entity = loaded.artifact.spawn_into(&mut app.world);
 
     let root = page_root(&page)?;
-    lumen_web_dom::listen(&root).map_err(|_| BootError::Listeners)?;
+    lumen_web_dom::listen(&root, wants_soft_navigation(&manifest))
+        .map_err(|_| BootError::Listeners)?;
     app.add_plugin(WebDomPlugin { root, root_entity });
 
     let app = LumenWebApp::from_parts(app, loaded.scripts.first().map(|s| s.engine.clone()));
     if let Some(error) = app.script_error() {
         web_sys::console::error_1(&JsValue::from_str(&format!("lumen: {error}")));
     }
-    let _ = manifest;
     app.start_frame_loop().map_err(|_| BootError::NoWindow)
 }
 
@@ -127,6 +135,12 @@ fn install_location() {
         secure: location.protocol().unwrap_or_default() == "https:",
         ..RequestContext::default()
     });
+}
+
+/// Whether `[web] navigation` says a same-page `<a href>` click should be
+/// handled in-app rather than left to the browser.
+fn wants_soft_navigation(manifest: &Manifest) -> bool {
+    manifest.navigation == NavigationMode::Soft
 }
 
 /// The element the app's root node is.
@@ -178,3 +192,32 @@ impl std::fmt::Display for BootError {
 }
 
 impl std::error::Error for BootError {}
+
+#[cfg(test)]
+mod tests {
+    use super::wants_soft_navigation;
+    use lumen_html::contract::{Manifest, NavigationMode};
+
+    /// `navigation = "soft"` (the default) means the runtime intercepts a
+    /// same-page link click; before this was wired up, `start` read the
+    /// manifest and then discarded it (`let _ = manifest;`), so soft and
+    /// hard navigation were indistinguishable no matter what the site
+    /// declared.
+    #[test]
+    fn soft_navigation_asks_to_intercept() {
+        let manifest = Manifest {
+            navigation: NavigationMode::Soft,
+            ..Manifest::default()
+        };
+        assert!(wants_soft_navigation(&manifest));
+    }
+
+    #[test]
+    fn hard_navigation_does_not() {
+        let manifest = Manifest {
+            navigation: NavigationMode::Hard,
+            ..Manifest::default()
+        };
+        assert!(!wants_soft_navigation(&manifest));
+    }
+}
