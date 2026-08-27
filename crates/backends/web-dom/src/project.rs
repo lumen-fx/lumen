@@ -13,10 +13,12 @@
 
 use bevy_ecs::prelude::*;
 use lumen_core::components::{
-    Disabled, InlineStyle, LumenAttributes, LumenClasses, LumenTag, Selected, SliderValue,
-    TextContent, Toggleable, Visible,
+    Disabled, DropHovered, InlineStyle, LumenAttributes, LumenClasses, LumenTag, Selected,
+    SliderValue, TextContent, Toggleable, Visible,
 };
-use lumen_html::contract::{DATA_LM_CHECKED, DATA_LM_DISABLED, DATA_LM_HIDDEN, DATA_LM_SELECTED};
+use lumen_html::contract::{
+    DATA_LM_CHECKED, DATA_LM_DISABLED, DATA_LM_DRAG_OVER, DATA_LM_HIDDEN, DATA_LM_SELECTED,
+};
 use lumen_html::is_disableable;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, HtmlDialogElement, HtmlInputElement, HtmlTextAreaElement};
@@ -195,6 +197,7 @@ fn show_dialog(dialog: &HtmlDialogElement, show: bool) {
 /// Project the states a Lumen widget carries as components and a browser
 /// carries as attributes: which tab is current, whether a toggle is on,
 /// whether a control is disabled, where a slider sits.
+#[allow(clippy::too_many_arguments)] // ECS system: each arg is a query/param
 pub fn project_control_state(
     table: NonSend<NodeTable>,
     selected: Query<Entity, Added<Selected>>,
@@ -203,6 +206,8 @@ pub fn project_control_state(
     disabled: Query<Entity, Added<Disabled>>,
     mut enabled: RemovedComponents<Disabled>,
     values: Query<(Entity, &SliderValue), Changed<SliderValue>>,
+    drag_over: Query<Entity, Added<DropHovered>>,
+    mut drag_left: RemovedComponents<DropHovered>,
 ) {
     let flag = |entity: Entity, name: &str, on: bool| {
         if let Some(element) = table.element(entity) {
@@ -253,6 +258,16 @@ pub fn project_control_state(
         {
             set_attribute(element, "aria-checked", Some(&toggle.checked.to_string()));
         }
+    }
+    // Mirror of the desktop's `DropHovered` marker (`lumen-os-dnd`'s
+    // pointer-gesture pipeline there, this crate's native `dragenter` /
+    // `dragleave` / `drop` listeners here), so a `:drag-over` rule matches
+    // the element currently under a drag the same way on both platforms.
+    for entity in &drag_over {
+        flag(entity, DATA_LM_DRAG_OVER, true);
+    }
+    for entity in drag_left.read() {
+        flag(entity, DATA_LM_DRAG_OVER, false);
     }
     for (entity, value) in &values {
         let Some(element) = table.element(entity) else {
