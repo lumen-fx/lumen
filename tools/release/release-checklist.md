@@ -91,7 +91,7 @@ checklist.
      library, and `bin/lumen-launcher` into one archive, all in the *same*
      `bin/` directory, along with the two trees `lumenc` reads from beside
      itself: the candela standard library in `bin/libs` and the templates in
-     `bin/templates`. See the note on `crates/lumenc/src/loader.rs` below;
+     `bin/templates`. See the note on `public/lumenc/src/loader.rs` below;
    - on Windows, also stages an install receipt and builds
      `lumen-windows-x86_64.msi` from `tools/release/msi/lumen.wxs`. The
      receipt is staged after the zip is closed, so only the MSI carries one: a
@@ -145,7 +145,7 @@ checklist.
    address. Every version-keyed lookup asks the releases page what exists:
    `lumenc` resolves the release its toolchain files come from through
    `releases/latest` (or through its install receipt), the update check
-   compares against `releases/latest`, and `crates/lumenc/build.rs` confirms
+   compares against `releases/latest`, and `public/lumenc/build.rs` confirms
    the tag it needs is published before fetching source from it. A number with
    no tag behind it resolves to nothing and says so.
 
@@ -159,7 +159,7 @@ checklist.
    To go somewhere else, run `tools/release/bump-version.py 0.2.0` and land
    that. The script takes the version to set and moves every place the version
    is written out: the workspace package, each internal dependency pin,
-   `sdk/rust-dylib` (outside the workspace, so it cannot inherit one),
+   `public/lumen-dylib` (outside the workspace, so it cannot inherit one),
    `Cargo.lock`, and the Python SDK. It writes nothing at all if one of those
    comes out unchanged, so a file that grew a version literal nobody told it
    about stops the bump instead of shipping a skew.
@@ -195,7 +195,7 @@ checklist.
 ## Why liblumen goes in bin/, not lib/
 
 `lumenc` does not link `lumen` at compile time; it `dlopen`s the shared
-`liblumen` library at run time (see `crates/lumenc/src/loader.rs`). Its search
+`liblumen` library at run time (see `public/lumenc/src/loader.rs`). Its search
 order is: next to its own executable, then an `LUMEN_LIB_DIR` override,
 then the platform loader's default search path. It does not look in a
 sibling `lib/` directory. A prebuilt install that put `lumenc` in `bin/`
@@ -241,8 +241,8 @@ were uploaded to.
 
 `lumen-web.tar.gz` is named the same way and is not a target. The installer
 skips it, and `lumenc` fetches it by that exact name
-(`crates/lumenc/src/package_cli.rs`) from the release
-`crates/lumenc/src/release.rs` resolves, verifying it against the same
+(`public/lumenc/src/package_cli.rs`) from the release
+`public/lumenc/src/release.rs` resolves, verifying it against the same
 `sha256sums.txt`.
 
 `lumenc` follows the same split when it offers an update. On Unix it re-runs
@@ -271,7 +271,7 @@ checkout at run time (`sdk/python/README.md` documents the search order).
 
 That table is the whole list. Every other crate in the workspace is
 `publish = false`, because the engine does not travel through crates.io:
-`crates/lumenc/build.rs` fetches the tagged source and builds `liblumen` and
+`public/lumenc/build.rs` fetches the tagged source and builds `liblumen` and
 the launcher beside the installed binary, so a `cargo install lumenc` gets the
 engine without any of its pieces being registry packages.
 

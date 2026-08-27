@@ -523,7 +523,7 @@ pub fn run_app_headless(mut opts: RunOptions, ticks: u32) -> Result<(), RunError
 /// validation. Used by [`run_app_headless`] (no renderer; FFI/test
 /// contract), [`crate::run_headless::run_app_headless_rendered`] (full
 /// offscreen-GPU mode), and the golden-image screenshot suite
-/// (`crates/lumenc/tests/golden.rs`), which installs an offscreen
+/// (`public/lumenc/tests/golden.rs`), which installs an offscreen
 /// `WgpuRendererPlugin` on top and reads the framebuffer back.
 pub fn build_headless_app(opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     let (dir, assets) = (opts.dir.clone(), opts.assets.clone());

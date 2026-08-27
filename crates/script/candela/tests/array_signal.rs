@@ -3,7 +3,7 @@
 //! builtins and the prelude's `ArraySignal` method sugar.
 //!
 //! The end-to-end proof that a candela app drives `<for each>` lives in
-//! `crates/lumenc/tests/candela_for_each.rs`; this file pins the semantics.
+//! `public/lumenc/tests/candela_for_each.rs`; this file pins the semantics.
 //!
 //! The sugar tests bind each record or list to a variable before passing it to
 //! a method. A collection literal written directly in a call to a script-level

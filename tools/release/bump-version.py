@@ -53,7 +53,7 @@ REQUIRED = {
     # The version itself, which every workspace member inherits.
     "Cargo.toml": "the workspace version",
     # Outside the workspace, so it cannot inherit and spells the version out.
-    "sdk/rust-dylib/Cargo.toml": "the linkable engine's version",
+    "public/lumen-dylib/Cargo.toml": "the linkable engine's version",
     # The Python SDK ships at the version of the ABI it binds, and
     # sdk/python/tests/test_version.py fails when the two disagree.
     "sdk/python/lumen/_version.py": "the Python SDK's version",

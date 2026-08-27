@@ -535,7 +535,7 @@ fn engine_build_id() -> Option<String> {
     #[cfg(not(unix))]
     {
         // Windows has no linkable engine dylib at all (see
-        // sdk/rust-dylib/Cargo.toml), so no process qualifies.
+        // public/lumen-dylib/Cargo.toml), so no process qualifies.
         None
     }
 }

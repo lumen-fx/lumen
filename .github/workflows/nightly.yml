@@ -25,8 +25,8 @@ name: nightly
 #   - The release is a prerelease. Every version-keyed lookup in the product
 #     resolves through the `releases/latest` redirect, which skips prereleases:
 #     `lumenc` picks the release its toolchain files come from that way
-#     (crates/lumenc/src/release.rs), the update check compares against it, and
-#     crates/lumenc/build.rs confirms a tag is published before fetching source
+#     (public/lumenc/src/release.rs), the update check compares against it, and
+#     public/lumenc/build.rs confirms a tag is published before fetching source
 #     for it. A nightly published as an ordinary release would become the
 #     version every installed copy is offered.
 #

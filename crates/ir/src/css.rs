@@ -5209,7 +5209,7 @@ mod inline_style_tests {
 /// Stylesheet-declaration coverage for the skin-tokens property batch
 /// (widget geometry, caret/text, scrollbar). Each property here also has
 /// an inline-markup-attribute counterpart in
-/// `crates/lumenc/tests/parse_skin_tokens.rs`; a property landing in only one of
+/// `public/lumenc/tests/parse_skin_tokens.rs`; a property landing in only one of
 /// the two tables is the exact bug this batch is guarding against.
 #[cfg(test)]
 mod skin_token_property_tests {
@@ -5652,8 +5652,8 @@ mod root_vars_tests {
 mod palette_root_css_tests {
     //! `lumen-ir` has no CSS parser of its own (it lives in `lumenc`), so
     //! these check `palette_root_css`'s generated text structurally rather
-    //! than by parsing it; `crates/lumenc/tests/palette_theme.rs` and
-    //! `crates/lumenc/tests/window_clear_color.rs` exercise it through the real
+    //! than by parsing it; `public/lumenc/tests/palette_theme.rs` and
+    //! `public/lumenc/tests/window_clear_color.rs` exercise it through the real
     //! parser + cascade.
     use super::*;
 
