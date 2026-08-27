@@ -18,8 +18,6 @@ use crate::ScriptValue;
 use crate::{
     FileDialogKind, HostSet, ScriptCommand, ScriptFn, ScriptFnCx, ScriptNs, ScriptTy as T,
 };
-use lumen_core::app_paths;
-use lumen_core::warn_line;
 
 /// Describe a builtin whose whole effect is one queued [`ScriptCommand`].
 fn emit<F>(name: &str, doc: &str, params: &[(&str, T)], build: F) -> ScriptFn
@@ -597,55 +595,7 @@ fn request_fns() -> Vec<ScriptFn> {
     ]
 }
 
-/// Write `contents` to `path` without a truncated-read window.
-///
-/// `std::fs::write` truncates the file before writing, so a reader racing
-/// the write (a file watcher, another process, the app reloading its own
-/// save file) can see a zero-length or partial file. Writing to a sibling
-/// temp file and renaming it into place avoids that: rename is atomic on a
-/// given filesystem, so a concurrent reader always sees either the old
-/// contents or the new ones.
-fn write_file_atomic(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    let dir = match path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p,
-        _ => std::path::Path::new("."),
-    };
-    let file_name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "write_file: path has no file name",
-        )
-    })?;
-
-    // A per-process counter so two writes racing the same path in the same
-    // tick never pick the same temp name.
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let tmp_path = dir.join(format!(
-        ".{}.tmp-{}-{}",
-        file_name.to_string_lossy(),
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed),
-    ));
-
-    let write_result = (|| -> std::io::Result<()> {
-        let mut f = std::fs::File::create(&tmp_path)?;
-        f.write_all(contents.as_bytes())?;
-        f.sync_all()
-    })();
-
-    match write_result {
-        Ok(()) => std::fs::rename(&tmp_path, path),
-        Err(e) => {
-            let _ = std::fs::remove_file(&tmp_path);
-            Err(e)
-        }
-    }
-}
-
-/// Translation, the filesystem, template-local ids, and the tree dump.
+/// Translation, template-local ids, and the tree dump.
 fn misc_fns() -> Vec<ScriptFn> {
     vec![
         // The catalogue lives behind the process-wide i18n hook the runtime
@@ -664,60 +614,6 @@ fn misc_fns() -> Vec<ScriptFn> {
             &[("key", T::Str)],
             T::Str,
             |cx| ScriptValue::Str(lumen_core::i18n::translate(&cx.str_arg(0))),
-        ),
-        // A relative path resolves against the app directory, the same rule
-        // `open_path` applies, so a file an app ships is named
-        // the same way wherever the app was started from. Saved state belongs
-        // under `data_dir()` instead: the app directory is read-only once the
-        // app is installed.
-        value(
-            "read_file",
-            "The contents of that file, or an empty string.",
-            &[("path", T::Str)],
-            T::Str,
-            |cx| {
-                let path = app_paths::resolve(cx.str_arg(0));
-                match std::fs::read_to_string(&path) {
-                    Ok(text) => ScriptValue::Str(text),
-                    Err(e) => {
-                        // A missing file is the expected way for a script to
-                        // probe for optional state (a config that has not
-                        // been saved yet, say), not a fault to report; only
-                        // warn about the errors that mean something went
-                        // wrong reading a file that is there.
-                        if e.kind() != std::io::ErrorKind::NotFound {
-                            warn_line!("read_file({}): {e}", path.display());
-                        }
-                        ScriptValue::Str(String::new())
-                    }
-                }
-            },
-        ),
-        value(
-            "write_file",
-            "Write contents to that path; false when the write failed.",
-            &[("path", T::Str), ("contents", T::Str)],
-            T::Bool,
-            |cx| {
-                let path = app_paths::resolve(cx.str_arg(0));
-                match write_file_atomic(&path, &cx.str_arg(1)) {
-                    Ok(()) => ScriptValue::Bool(true),
-                    Err(e) => {
-                        warn_line!("write_file({}): {e}", path.display());
-                        ScriptValue::Bool(false)
-                    }
-                }
-            },
-        ),
-        // Where saved state lives: one directory per app under the platform's
-        // user-data location, created on the first call so a write into it
-        // needs no other step.
-        value(
-            "data_dir",
-            "The directory this app saves data in, created if missing.",
-            &[],
-            T::Str,
-            |_| ScriptValue::Str(app_paths::data_dir().to_string_lossy().into_owned()),
         ),
         // A template instance prefixes the ids inside it. Given `user-card:btn`
         // as the source, `local_id(source, "label")` is `user-card:label`; a

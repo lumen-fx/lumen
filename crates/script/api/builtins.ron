@@ -651,27 +651,6 @@
             doc: "Alias for `t(key)`.",
         ),
         (
-            name: "read_file",
-            hosts: [Rhai, Lua, Candela],
-            params: [("path", "string")],
-            ret: "string",
-            doc: "Read a file to a string (app-relative path); empty string on error.",
-        ),
-        (
-            name: "write_file",
-            hosts: [Rhai, Lua, Candela],
-            params: [("path", "string"), ("contents", "string")],
-            ret: "bool",
-            doc: "Write `contents` to `path` (app-relative); returns true on success.",
-        ),
-        (
-            name: "data_dir",
-            hosts: [Rhai, Lua, Candela],
-            params: [],
-            ret: "string",
-            doc: "The directory this app saves data in, created if missing.",
-        ),
-        (
             name: "signal_get",
             hosts: [Candela],
             params: [("name", "string")],

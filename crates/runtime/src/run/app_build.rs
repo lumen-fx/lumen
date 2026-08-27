@@ -26,9 +26,8 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     let dir = opts.dir.clone();
     let cfg = crate::config::LumenToml::load_or_default(&dir).map_err(RunError::Config)?;
     // Where this app lives and what it is called, published before anything
-    // that resolves a path runs: the script builtins `read_file`,
-    // `write_file` and `data_dir` read them, and a script's `on_start` fires
-    // on the first tick.
+    // that resolves a path runs: every path a script names is resolved
+    // against these, and a script's `on_start` fires on the first tick.
     let app_id = cfg.app.id.clone().unwrap_or_else(|| derive_app_id(&dir));
     lumen_core::app_paths::set_app(dir.clone(), app_id.clone());
     // Where this app's code is. In-memory markup has no source tree to check,

@@ -3522,6 +3522,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-fs"
+version = "0.0.6"
+dependencies = [
+ "lumen-core",
+ "lumen-ir",
+ "lumen-module",
+ "lumen-runtime",
+ "lumen-script",
+ "serde_json",
+]
+
+[[package]]
 name = "lumen-html"
 version = "0.0.6"
 dependencies = [

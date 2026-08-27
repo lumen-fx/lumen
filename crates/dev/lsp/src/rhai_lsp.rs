@@ -6,7 +6,7 @@
 //! uses, with every Lumen builtin registered - so calls to `signal`,
 //! `derive`, `on`, timers, etc. never surface as "unknown function"
 //! errors. Optimization is disabled before compiling so constant-folding
-//! can never execute a builtin (e.g. `read_file`/`write_file`) as a side
+//! can never execute a builtin (e.g. `notify`/`open_path`) as a side
 //! effect of analysis; only genuine syntax/parse errors are reported.
 //!
 //! Completion, hover, and signature help are driven by
@@ -29,8 +29,8 @@ pub fn compute_rhai_diagnostics(src: &str) -> Vec<Diagnostic> {
     let mut host = RhaiHost::new();
     let engine = host.engine_mut();
     // Never run the optimizer during analysis: with builtins registered
-    // it could evaluate constant-argument calls (`read_file("x")`) and
-    // touch the filesystem. We only want parse errors.
+    // it could evaluate constant-argument calls (`open_path("x")`) and
+    // reach outside the editor. We only want parse errors.
     engine.set_optimization_level(rhai::OptimizationLevel::None);
     match engine.compile(src) {
         Ok(_) => Vec::new(),

@@ -19,7 +19,7 @@ them rather than anyone typing them.
 | `sha256sums.txt`               | GitHub Actions, the publish job        |
 
 `lumen-modules-<target>.tar.gz` carries the bundled runtime modules (today:
-`lumen-audio`), built by the same cargo invocation as
+`lumen-audio` and `lumen-fs`), built by the same cargo invocation as
 the engine so their build ids match it, in the same `bin/` layout as the
 toolchain archive. `install.sh` unpacks it over the same prefix. Windows has
 no modules archive: no engine dylib exists there, so a module's plugin is
