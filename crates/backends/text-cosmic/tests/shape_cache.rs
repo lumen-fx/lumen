@@ -178,11 +178,13 @@ fn font_system_new_yields_a_shaper_that_can_shape() {
 /// each side. Scheduler noise on a loaded runner only ever adds time to
 /// a sample, so the minimum is the one statistic it cannot inflate: the
 /// fastest warm hit is a true LRU lookup plus an `Arc` clone, the
-/// fastest cold miss still resolves fonts and lays text out, and the
-/// order-of-magnitude gap between those holds on any machine while a
-/// degraded cache (reshaping on every "hit") cannot produce it.
+/// fastest cold miss still resolves fonts and lays text out. A degraded
+/// cache (reshaping on every "hit") puts the two within a whisker of
+/// each other, so a 3x gap separates the failure cleanly while leaving
+/// room for a busy virtualised runner, where the observed gap has
+/// dipped below 10x.
 #[test]
-fn warm_hit_is_at_least_an_order_of_magnitude_faster_than_a_cold_miss() {
+fn warm_hit_is_several_times_faster_than_a_cold_miss() {
     let mut shaper = CosmicShaper::new();
     let opts = wrapped_opts();
     let _ = shaper.shape(LABEL, 16.0, opts.clone());
@@ -217,8 +219,8 @@ fn warm_hit_is_at_least_an_order_of_magnitude_faster_than_a_cold_miss() {
     let cold_min = cold.iter().min().copied().unwrap();
 
     assert!(
-        warm_min.saturating_mul(10) <= cold_min,
-        "the fastest warm cache hit ({warm_min:?}) should be at least 10x \
+        warm_min.saturating_mul(3) <= cold_min,
+        "the fastest warm cache hit ({warm_min:?}) should be at least 3x \
          faster than the fastest cold miss ({cold_min:?}); if this fails \
          the shape cache key may have stopped discriminating and every \
          call is reshaping from scratch"
