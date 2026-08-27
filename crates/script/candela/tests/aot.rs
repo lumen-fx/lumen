@@ -1,14 +1,15 @@
 //! Compiling a script ahead of time and running the result without the
 //! compiler.
 //!
-//! `compile_bytecode` is the build-time half of the candela host: it produces
-//! the `.cdlb` image a runtime that links only `candela-vm` loads. These tests
-//! drive that image through the VM the way such a runtime would, so the two
-//! halves are held to the same contract from one place.
+//! `CandelaHost::compile_bytecode` is the build-time half of the candela
+//! host: it produces the `.cdlb` image a runtime that links only
+//! `candela-vm` loads. These tests drive that image through the VM the way
+//! such a runtime would, so the two halves are held to the same contract
+//! from one place.
 
-use lumen_script::ScriptError;
+use lumen_script::{ScriptError, ScriptFn, ScriptHost, ScriptNs, ScriptTy, ScriptValue};
 use lumen_script_candela::candela::{HostRegistry, LoadError, Value, load_program};
-use lumen_script_candela::{HOST_NAMESPACE, compile_bytecode};
+use lumen_script_candela::{CandelaHost, CandelaVmHost, HOST_NAMESPACE};
 
 /// A program with no `host` block, so an empty registry is enough to load it.
 const STANDALONE: &str = r#"
@@ -25,7 +26,9 @@ fn main() {}
 
 #[test]
 fn a_compiled_program_runs_under_the_vm_alone() {
-    let bytes = compile_bytecode(STANDALONE, "standalone.cdl", None).expect("the program compiles");
+    let bytes = CandelaHost::new()
+        .compile_bytecode(STANDALONE, "standalone.cdl")
+        .expect("the program compiles");
     let hosts = HostRegistry::new();
     let mut program = load_program(&bytes, &hosts).expect("the image loads");
     program.run();
@@ -38,7 +41,9 @@ fn a_compiled_program_runs_under_the_vm_alone() {
 
 #[test]
 fn only_an_annotated_function_is_callable_by_name() {
-    let bytes = compile_bytecode(STANDALONE, "standalone.cdl", None).expect("the program compiles");
+    let bytes = CandelaHost::new()
+        .compile_bytecode(STANDALONE, "standalone.cdl")
+        .expect("the program compiles");
     let hosts = HostRegistry::new();
     let program = load_program(&bytes, &hosts).expect("the image loads");
     let exports: Vec<&str> = program.exports().collect();
@@ -75,7 +80,9 @@ fn on_ready() {}
 
 fn main() {}
 "#;
-    let bytes = compile_bytecode(HANDLERS, "handlers.cdl", None).expect("the handlers compile");
+    let bytes = CandelaHost::new()
+        .compile_bytecode(HANDLERS, "handlers.cdl")
+        .expect("the handlers compile");
     let program = load_program(&bytes, &HostRegistry::new()).expect("the image loads");
     let exports: Vec<&str> = program.exports().collect();
 
@@ -109,7 +116,9 @@ fn on_start() {
 
 fn main() {}
 "#;
-    let bytes = compile_bytecode(source, "smoke.cdl", None).expect("the program compiles");
+    let bytes = CandelaHost::new()
+        .compile_bytecode(source, "smoke.cdl")
+        .expect("the program compiles");
 
     let mut hosts = HostRegistry::new();
     hosts.register_host_fn(
@@ -137,7 +146,8 @@ fn main() {}
 
 #[test]
 fn a_program_that_does_not_compile_reports_where() {
-    let error = compile_bytecode("fn main() { let x = ", "broken.cdl", None)
+    let error = CandelaHost::new()
+        .compile_bytecode("fn main() { let x = ", "broken.cdl")
         .expect_err("an unfinished statement is a compile error");
     let ScriptError::Compile { uri, line, .. } = error else {
         panic!("a build tool gets the position, not just a message: {error:?}");
@@ -160,8 +170,9 @@ fn go() { return gpio::level(21); }
 
 fn main() {}
 "#;
-    let bytes =
-        compile_bytecode(UNDECLARED, "undeclared.cdl", None).expect("the build does not object");
+    let bytes = CandelaHost::new()
+        .compile_bytecode(UNDECLARED, "undeclared.cdl")
+        .expect("the build does not object");
     let mut hosts = HostRegistry::new();
     hosts.register_host_fn("gpio", "level", |pin: i64| -> i64 { pin * 2 });
 
@@ -188,7 +199,9 @@ fn go() { return gpio::level(21); }
 
 fn main() {}
 "#;
-    let bytes = compile_bytecode(DECLARED, "gpio.cdl", None).expect("the program compiles");
+    let bytes = CandelaHost::new()
+        .compile_bytecode(DECLARED, "gpio.cdl")
+        .expect("the program compiles");
 
     let Err(error) = load_program(&bytes, &HostRegistry::new()) else {
         panic!("nothing is registered under `gpio`, so the load fails");
@@ -209,5 +222,127 @@ fn main() {}
     assert_eq!(
         program.call("go", &[]).expect("go is callable"),
         Value::Int(42)
+    );
+}
+
+/// A plugin's own namespace ([`ScriptNs::Named`]), the shape a portable
+/// plugin registers under.
+fn gpio_level() -> ScriptFn {
+    ScriptFn::new("level")
+        .ns(ScriptNs::Named("gpio".to_owned()))
+        .param("pin", ScriptTy::Int)
+        .ret(ScriptTy::Int)
+        .build(|cx| Ok(ScriptValue::I64(cx.int_arg(0) * 2)))
+}
+
+/// A std module's namespace ([`ScriptNs::Builtin`]), the shape `std/audio`
+/// registers under: it rides the prelude's own `host "lumen" { .. }` block,
+/// so there is no namespace of its own to hand-write a declaration for.
+fn module_echo_len() -> ScriptFn {
+    ScriptFn::new("echo_len")
+        .ns(ScriptNs::Builtin)
+        .param("text", ScriptTy::Str)
+        .ret(ScriptTy::Int)
+        .build(|cx| Ok(ScriptValue::I64(cx.str_arg(0).len() as i64)))
+}
+
+/// #206: a plugin function registered before the compile is declared in the
+/// image without the source hand-writing `host "gpio" { .. }`, the same fold
+/// [`CandelaHost::load`] and [`CandelaHost::compile_check`] already do.
+///
+/// Before the fix, `compile_bytecode` never saw the registration:
+/// `gpio::level` read as a call into an undeclared namespace exactly like
+/// [`a_call_into_an_undeclared_namespace_does_not_reach_the_image`], so `go`
+/// compiled clean but was left out of the image and calling it returned
+/// nothing. That is a silent no-op an author would only find by testing the
+/// shipped artifact by hand.
+#[test]
+fn a_registered_named_namespace_fn_needs_no_hand_written_block() {
+    const SOURCE: &str = r#"
+fn go() -> int { return gpio::level(21); }
+
+fn main() {}
+"#;
+    let mut host = CandelaHost::new();
+    host.register_script_fn(&gpio_level())
+        .expect("gpio::level declares");
+    let bytes = host
+        .compile_bytecode(SOURCE, "gpio_plugin.cdl")
+        .expect("the registration folds a declaration in, so the call resolves");
+
+    let mut hosts = HostRegistry::new();
+    hosts.register_host_fn("gpio", "level", |pin: i64| -> i64 { pin * 2 });
+    let mut program = load_program(&bytes, &hosts).expect("the folded declaration binds");
+    program.run();
+    assert_eq!(
+        program.call("go", &[]).expect("go is callable"),
+        Value::Int(42)
+    );
+}
+
+/// #206: a std module's function, registered under the reserved `lumen`
+/// namespace, needs no `host` block at all: it rides the prelude's own,
+/// exactly as it does for a live-compiled app. Before the fix this namespace
+/// was already declared (by the spliced prelude) but the specific function
+/// was not, which candela treats the same as a fully undeclared namespace:
+/// `go` compiled but dropped out of the image silently.
+#[test]
+fn a_registered_module_fn_under_the_lumen_namespace_needs_no_hand_written_block() {
+    const SOURCE: &str = r#"
+import "lumen.cdl";
+
+fn go() -> int { return lumen::echo_len("hello"); }
+
+fn main() {}
+"#;
+    let mut host = CandelaHost::new();
+    host.register_script_fn(&module_echo_len())
+        .expect("lumen::echo_len declares");
+    let bytes = host
+        .compile_bytecode(SOURCE, "module_fn.cdl")
+        .expect("the registration folds into the prelude's own lumen block");
+
+    // The artifact host binds the closure the same way the source declared
+    // it: the same registration, made again before the image loads.
+    let mut vm_host = CandelaVmHost::new(bytes);
+    vm_host
+        .register_script_fn(&module_echo_len())
+        .expect("the same registration binds before the image loads");
+    vm_host.load("", "module_fn.cdl").expect("the image loads");
+    let outcome = vm_host.call("go", &[]).expect("go is callable");
+    assert_eq!(outcome.ret, Some(ScriptValue::I64(5)));
+}
+
+/// #206, the failure side: a `.cdlb` declares a module function (because
+/// something registered it at compile time) but nothing registers the
+/// closure before the artifact loads, because the app was built against a
+/// module that is not present at load time. This is a load failure naming the
+/// function, not a panic and not a silent no-op: the same contract
+/// [`a_declared_plugin_function_nobody_registered_fails_the_load_by_name`]
+/// already holds a hand-written `host` block to.
+#[test]
+fn a_folded_module_fn_nobody_registers_at_load_fails_the_load_by_name() {
+    const SOURCE: &str = r#"
+import "lumen.cdl";
+
+fn go() -> int { return lumen::echo_len("hello"); }
+
+fn main() {}
+"#;
+    let mut host = CandelaHost::new();
+    host.register_script_fn(&module_echo_len())
+        .expect("lumen::echo_len declares");
+    let bytes = host
+        .compile_bytecode(SOURCE, "module_fn.cdl")
+        .expect("the registration folds into the prelude's own lumen block");
+
+    let mut vm_host = CandelaVmHost::new(bytes);
+    let err = vm_host
+        .load("", "module_fn.cdl")
+        .expect_err("nothing registered echo_len for this load, so it fails");
+    let message = err.to_string();
+    assert!(
+        message.contains("echo_len"),
+        "the failure names the missing function: {message}"
     );
 }

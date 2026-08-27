@@ -5,7 +5,7 @@
 //! expansion, the host-function signatures, and candela's diagnostics meet.
 
 use lumen_script::{ScriptError, ScriptHost};
-use lumen_script_candela::{CandelaHost, compile_bytecode, lmn};
+use lumen_script_candela::{CandelaHost, lmn};
 
 /// A script whose block spans five lines, with an unparseable statement on
 /// line 11. candela parses an expansion as its own expression and pins every
@@ -96,14 +96,14 @@ fn a_block_naming_no_component_fails_the_compile() {
 /// the same way it compiles to a program.
 #[test]
 fn a_block_compiles_to_bytecode() {
-    let bytes = compile_bytecode(
-        "import \"lumen.cdl\";\n\
-         fn Home(name) { return lmn!(<label text=\"home for $name\"/>); }\n\
-         fn main() {}\n",
-        "app.cdl",
-        None,
-    )
-    .expect("the program compiles");
+    let bytes = CandelaHost::new()
+        .compile_bytecode(
+            "import \"lumen.cdl\";\n\
+             fn Home(name) { return lmn!(<label text=\"home for $name\"/>); }\n\
+             fn main() {}\n",
+            "app.cdl",
+        )
+        .expect("the program compiles");
     assert!(!bytes.is_empty());
 }
 

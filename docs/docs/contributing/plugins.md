@@ -567,9 +567,12 @@ something in the world does not; pass an id and look it up.
 Editor tooling reads the builtin metadata tables, which describe the runtime's
 own surface, so a plugin's functions do not appear in completion or hover.
 
-A precompiled `.cdlb` carries the declarations its source spelled: the build
-compiles the script on its own, with no plugin present to declare anything. A
-script that will be compiled ahead of time therefore writes the
+A precompiled `.cdlb` gets the same declarations a live compile gets, folded
+in from whatever was registered on the host before it compiled;
+`CandelaHost::compile_bytecode` folds a registered function into its
+namespace's block exactly as `lumenc check` and `lumenc run` do. `lumenc build`
+does not register a plugin before it compiles your script's `.cdlb`, though, so
+a script that will be compiled ahead of time still writes the
 `host "<ns>" { .. }` block itself. The build does not object when it is missing;
 the call compiles, the function holding it is left out of the image, and the
 app starts without it. For the same reason a `.cdl` wrapper cannot reach an

@@ -218,10 +218,10 @@ the development path stays full featured.
 
 **`lumen-script-candela`** has `compiler`, on by default. It carries the
 candela compiler, and with it source compilation, hot reload, `lumenc check`,
-and `compile_bytecode`, the build step that produces a `.cdlb` image. Off, the
-crate keeps the whole builtin surface and the host that runs such an image, and
-the compiler front end leaves the dependency graph. That is what the browser
-runtime builds against.
+and `CandelaHost::compile_bytecode`, the build step that produces a `.cdlb`
+image. Off, the crate keeps the whole builtin surface and the host that runs
+such an image, and the compiler front end leaves the dependency graph. That is
+what the browser runtime builds against.
 
 `http-fetch` adds the HTTP client behind the scripts' `fetch()` and `http()`
 builtins, and costs about a megabyte of release text for the TLS stack. A build
