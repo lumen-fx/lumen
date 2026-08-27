@@ -13,16 +13,15 @@ categories = ["gui"]
 publish = false
 
 [dependencies]
-lumen-script = { workspace = true }
+# `json` and `markdown` pull in the shared `parse_json` / `parse_markdown`
+# walk (and, with it, serde_json / pulldown-cmark) through the builtin table.
+lumen-script = { workspace = true, features = ["json", "markdown"] }
 lumen-core = { workspace = true }
 bevy_ecs.workspace = true
 rhai.workspace = true
-serde_json.workspace = true
 # T5.3: non-poisoning, faster-on-uncontested, smaller-sizeof Mutex.
 # Already pulled transitively by taffy + winit; we just opt in directly.
 parking_lot = "0.12"
-# D1.2: markdown -> block list for mdeditor demo.
-pulldown-cmark.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

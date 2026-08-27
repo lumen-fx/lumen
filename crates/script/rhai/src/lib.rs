@@ -1838,18 +1838,6 @@ impl RhaiHost {
             });
         });
 
-        // parse_json(s) - convert a JSON string to a Rhai Map/Array/scalar
-        // for ergonomic field access from scripts.
-        engine.register_fn(
-            "parse_json",
-            move |s: rhai::ImmutableString| -> rhai::Dynamic {
-                match serde_json::from_str::<serde_json::Value>(s.as_str()) {
-                    Ok(v) => json_to_dynamic(v),
-                    Err(_) => rhai::Dynamic::UNIT,
-                }
-            },
-        );
-
         // derive(name, deps, fn) - register a computed signal. `deps`
         // is either an array of `Signal` handles (`derive("sum", [a,b],
         // |a,b| a+b)`) or an array of strings (`derive("sum", ["a",
@@ -1916,148 +1904,6 @@ impl RhaiHost {
                 if let Ok(mut h) = handlers_for_on.write() {
                     h.insert((event.to_string(), id.to_string()), fn_name.to_string());
                 }
-            },
-        );
-
-        // Translate markdown into a block list by walking pulldown-cmark events and folding inline text into the surrounding block.
-        // Recognised block kinds: `h` (h1-h6), `p`, `code` (with optional lang), `li`, `hr`.
-        // Inline emphasis, links, and code-span flatten to plain text inside the current block.
-        engine.register_fn(
-            "parse_markdown",
-            move |src: rhai::ImmutableString| -> rhai::Array {
-                use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
-                #[derive(Clone, Copy)]
-                enum BlockKind {
-                    Heading(u8),
-                    Paragraph,
-                    CodeBlock,
-                    Item,
-                }
-                let mut out: rhai::Array = Vec::new();
-                let mut counter: usize = 0;
-                let mut cur_kind: Option<BlockKind> = None;
-                let mut cur_text = String::new();
-                let mut cur_lang = String::new();
-
-                fn push_block(
-                    out: &mut rhai::Array,
-                    counter: &mut usize,
-                    kind: BlockKind,
-                    text: String,
-                    lang: String,
-                ) {
-                    let mut m = rhai::Map::new();
-                    m.insert("id".into(), rhai::Dynamic::from(format!("blk-{counter}")));
-                    *counter += 1;
-                    match kind {
-                        BlockKind::Heading(level) => {
-                            m.insert("kind".into(), rhai::Dynamic::from("h".to_string()));
-                            m.insert("level".into(), rhai::Dynamic::from(level as i64));
-                            m.insert("text".into(), rhai::Dynamic::from(text));
-                            m.insert("lang".into(), rhai::Dynamic::from(String::new()));
-                        }
-                        BlockKind::Paragraph => {
-                            m.insert("kind".into(), rhai::Dynamic::from("p".to_string()));
-                            m.insert("level".into(), rhai::Dynamic::from(0_i64));
-                            m.insert("text".into(), rhai::Dynamic::from(text));
-                            m.insert("lang".into(), rhai::Dynamic::from(String::new()));
-                        }
-                        BlockKind::CodeBlock => {
-                            m.insert("kind".into(), rhai::Dynamic::from("code".to_string()));
-                            m.insert("level".into(), rhai::Dynamic::from(0_i64));
-                            m.insert("text".into(), rhai::Dynamic::from(text));
-                            m.insert("lang".into(), rhai::Dynamic::from(lang));
-                        }
-                        BlockKind::Item => {
-                            m.insert("kind".into(), rhai::Dynamic::from("li".to_string()));
-                            m.insert("level".into(), rhai::Dynamic::from(0_i64));
-                            m.insert("text".into(), rhai::Dynamic::from(text));
-                            m.insert("lang".into(), rhai::Dynamic::from(String::new()));
-                        }
-                    }
-                    out.push(rhai::Dynamic::from(m));
-                }
-
-                for ev in Parser::new(src.as_str()) {
-                    match ev {
-                        Event::Start(Tag::Heading { level, .. }) => {
-                            cur_kind = Some(BlockKind::Heading(match level {
-                                HeadingLevel::H1 => 1,
-                                HeadingLevel::H2 => 2,
-                                HeadingLevel::H3 => 3,
-                                HeadingLevel::H4 => 4,
-                                HeadingLevel::H5 => 5,
-                                HeadingLevel::H6 => 6,
-                            }));
-                            cur_text.clear();
-                            cur_lang.clear();
-                        }
-                        Event::Start(Tag::Paragraph) => {
-                            cur_kind = Some(BlockKind::Paragraph);
-                            cur_text.clear();
-                            cur_lang.clear();
-                        }
-                        Event::Start(Tag::CodeBlock(kind)) => {
-                            cur_kind = Some(BlockKind::CodeBlock);
-                            cur_text.clear();
-                            cur_lang = match kind {
-                                pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
-                                pulldown_cmark::CodeBlockKind::Indented => String::new(),
-                            };
-                        }
-                        Event::Start(Tag::Item) => {
-                            cur_kind = Some(BlockKind::Item);
-                            cur_text.clear();
-                            cur_lang.clear();
-                        }
-                        // Lumen labels render plain text only - no
-                        // rich-text runs in one entity. Preserve the
-                        // markdown delimiters around inline emphasis
-                        // so the rendered preview at least shows the
-                        // author's intent until a span renderer
-                        // ships.
-                        Event::Start(Tag::Emphasis) => cur_text.push('*'),
-                        Event::End(TagEnd::Emphasis) => cur_text.push('*'),
-                        Event::Start(Tag::Strong) => cur_text.push_str("**"),
-                        Event::End(TagEnd::Strong) => cur_text.push_str("**"),
-                        Event::Start(Tag::Strikethrough) => cur_text.push('~'),
-                        Event::End(TagEnd::Strikethrough) => cur_text.push('~'),
-                        Event::End(TagEnd::Heading(_))
-                        | Event::End(TagEnd::Paragraph)
-                        | Event::End(TagEnd::CodeBlock)
-                        | Event::End(TagEnd::Item) => {
-                            if let Some(kind) = cur_kind.take() {
-                                push_block(
-                                    &mut out,
-                                    &mut counter,
-                                    kind,
-                                    std::mem::take(&mut cur_text),
-                                    std::mem::take(&mut cur_lang),
-                                );
-                            }
-                        }
-                        Event::Text(t) => cur_text.push_str(&t),
-                        Event::Code(t) => {
-                            cur_text.push('`');
-                            cur_text.push_str(&t);
-                            cur_text.push('`');
-                        }
-                        Event::SoftBreak => cur_text.push(' '),
-                        Event::HardBreak => cur_text.push('\n'),
-                        Event::Rule => {
-                            let mut m = rhai::Map::new();
-                            m.insert("id".into(), rhai::Dynamic::from(format!("blk-{counter}")));
-                            counter += 1;
-                            m.insert("kind".into(), rhai::Dynamic::from("hr".to_string()));
-                            m.insert("level".into(), rhai::Dynamic::from(0_i64));
-                            m.insert("text".into(), rhai::Dynamic::from(String::new()));
-                            m.insert("lang".into(), rhai::Dynamic::from(String::new()));
-                            out.push(rhai::Dynamic::from(m));
-                        }
-                        _ => {}
-                    }
-                }
-                out
             },
         );
 
@@ -3113,40 +2959,6 @@ impl Plugin for ScriptRhaiPlugin {
         // resource install + the full system set with its 7bfc0f2
         // ordering - is host-generic and lives in lumen-script.
         ScriptPlugin::new(host, self.source).build(app);
-    }
-}
-
-/// Recursively translate a [`serde_json::Value`] into a Rhai
-/// [`rhai::Dynamic`]. Numbers become i64 or f64, objects become
-/// [`rhai::Map`], arrays become [`rhai::Array`]. Used by the
-/// `parse_json` builtin so scripts can read JSON responses with
-/// normal `.field` / `["key"]` syntax.
-pub fn json_to_dynamic(v: serde_json::Value) -> rhai::Dynamic {
-    match v {
-        serde_json::Value::Null => rhai::Dynamic::UNIT,
-        serde_json::Value::Bool(b) => b.into(),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                i.into()
-            } else if let Some(f) = n.as_f64() {
-                f.into()
-            } else {
-                rhai::Dynamic::UNIT
-            }
-        }
-        serde_json::Value::String(s) => s.into(),
-        serde_json::Value::Array(arr) => arr
-            .into_iter()
-            .map(json_to_dynamic)
-            .collect::<rhai::Array>()
-            .into(),
-        serde_json::Value::Object(obj) => {
-            let mut map = rhai::Map::new();
-            for (k, val) in obj {
-                map.insert(k.into(), json_to_dynamic(val));
-            }
-            map.into()
-        }
     }
 }
 

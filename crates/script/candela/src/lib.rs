@@ -121,7 +121,6 @@ mod engine_host;
 mod host_fns;
 mod library_dir;
 pub mod lmn;
-pub mod parse;
 pub mod prelude;
 mod value;
 mod vm_host;

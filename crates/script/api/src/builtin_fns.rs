@@ -64,6 +64,7 @@ pub fn builtin_script_fns() -> Vec<ScriptFn> {
     fns.extend(navigation_fns());
     fns.extend(request_fns());
     fns.extend(misc_fns());
+    fns.extend(text_fns());
     fns.extend(crate::node_fns::node_script_fns());
     fns
 }
@@ -643,6 +644,57 @@ fn misc_fns() -> Vec<ScriptFn> {
     ]
 }
 
+/// `parse_json` and `parse_markdown`: text parsed into a dynamically-shaped
+/// value, the one case where the shared table declares a return type it
+/// cannot pin down further than [`T::Any`]. Every host reads the result with
+/// its own downcasts (`as_map` / `as_list` / ... on candela; ordinary
+/// indexing on Rhai and Lua), so the walk itself is written once in
+/// [`crate::text_parse`] rather than once per host.
+///
+/// Each entry is missing when its Cargo feature (`json`, `markdown`) is off,
+/// which is how a build linking no script host avoids `serde_json` and
+/// `pulldown-cmark`.
+fn text_fns() -> Vec<ScriptFn> {
+    [parse_json_fn(), parse_markdown_fn()]
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// `parse_json`, or `None` when the `json` feature is off.
+#[cfg(feature = "json")]
+fn parse_json_fn() -> Option<ScriptFn> {
+    Some(value(
+        "parse_json",
+        "Parse a JSON string into a map, array, or scalar. Null on a parse error.",
+        &[("json", T::Str)],
+        T::Any,
+        |cx| crate::text_parse::parse_json(&cx.str_arg(0)),
+    ))
+}
+
+#[cfg(not(feature = "json"))]
+fn parse_json_fn() -> Option<ScriptFn> {
+    None
+}
+
+/// `parse_markdown`, or `None` when the `markdown` feature is off.
+#[cfg(feature = "markdown")]
+fn parse_markdown_fn() -> Option<ScriptFn> {
+    Some(value(
+        "parse_markdown",
+        "Parse markdown into a list of block records: id, kind, level, text, lang.",
+        &[("src", T::Str)],
+        T::Any,
+        |cx| crate::text_parse::parse_markdown(&cx.str_arg(0)),
+    ))
+}
+
+#[cfg(not(feature = "markdown"))]
+fn parse_markdown_fn() -> Option<ScriptFn> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -656,8 +708,18 @@ mod tests {
     /// candela is the language that has to name it in a declaration. Rhai and
     /// Lua resolve `page()` and `page(path)` through one entry whose result
     /// depends on which one the script called.
+    ///
+    /// The builder's `ret` defaults to `Any` when a builtin never calls it,
+    /// so an untyped return is normally a forgotten declaration, which is
+    /// what this asserts against. `parse_json` and `parse_markdown` are the
+    /// deliberate exception: their result has no shape narrower than `any`
+    /// (a JSON value or a markdown block list), and candela already has a
+    /// checked way to name that (a variadic binding, declared `any
+    /// name(...);`), so listing them here is a conscious choice rather than
+    /// a hole in the check.
     #[test]
     fn every_entry_is_a_documented_builtin() {
+        const DYNAMIC_RETURN: &[&str] = &["parse_json", "parse_markdown"];
         for f in builtin_script_fns() {
             assert_eq!(f.ns, ScriptNs::Builtin, "{}", f.name);
             assert!(!f.sig.doc.is_empty(), "{} has no doc line", f.name);
@@ -671,7 +733,7 @@ mod tests {
                     p.name
                 );
             }
-            if f.visible_to("candela") {
+            if f.visible_to("candela") && !DYNAMIC_RETURN.contains(&f.name.as_str()) {
                 assert_ne!(f.sig.ret, T::Any, "{}: return type is untyped", f.name);
             }
         }

@@ -13,16 +13,14 @@ categories = ["gui"]
 publish = false
 
 [dependencies]
-lumen-script = { workspace = true }
+# `json` and `markdown` pull in the shared `parse_json` / `parse_markdown`
+# walk (and, with it, serde_json / pulldown-cmark) through the builtin table.
+lumen-script = { workspace = true, features = ["json", "markdown"] }
 lumen-core = { workspace = true }
 bevy_ecs.workspace = true
 # Lua 5.4, statically vendored, Send+Sync (see workspace dep comment).
 mlua.workspace = true
-serde_json.workspace = true
 # Non-poisoning, smaller-sizeof Mutex; matches the Rhai host's choice so
 # the two hosts stay behaviourally aligned. Already in the dep graph.
 parking_lot = "0.12"
-# markdown -> block list for the `parse_markdown` builtin (parity with
-# the Rhai host).
-pulldown-cmark.workspace = true
 tracing.workspace = true

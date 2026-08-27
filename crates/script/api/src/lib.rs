@@ -57,6 +57,10 @@ pub mod script_fn;
 /// The builtin surface every host shares, described once as [`ScriptFn`]s.
 pub mod builtin_fns;
 
+/// The `parse_json` and `parse_markdown` walks behind two of those builtins,
+/// each gated by its own Cargo feature. See the module docs.
+pub mod text_parse;
+
 /// The DOM and event surface a language without receiver methods reaches
 /// through free functions over an interned node id.
 mod node_fns;

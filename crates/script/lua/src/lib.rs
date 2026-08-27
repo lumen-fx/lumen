@@ -230,40 +230,6 @@ fn color_map(r: f32, g: f32, b: f32, a: f32) -> HashMap<String, ScriptValue> {
     m
 }
 
-/// Recursively translate a [`serde_json::Value`] into an `mlua::Value`
-/// (numbers -> integer or float, objects -> string-keyed tables, arrays ->
-/// 1-indexed tables). Backs the `parse_json` builtin.
-fn json_to_lua(lua: &Lua, v: serde_json::Value) -> mlua::Result<LuaValue> {
-    Ok(match v {
-        serde_json::Value::Null => LuaValue::Nil,
-        serde_json::Value::Bool(b) => LuaValue::Boolean(b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                LuaValue::Integer(i)
-            } else if let Some(f) = n.as_f64() {
-                LuaValue::Number(f)
-            } else {
-                LuaValue::Nil
-            }
-        }
-        serde_json::Value::String(s) => LuaValue::String(lua.create_string(&s)?),
-        serde_json::Value::Array(arr) => {
-            let t = lua.create_table()?;
-            for (i, e) in arr.into_iter().enumerate() {
-                t.set(i as i64 + 1, json_to_lua(lua, e)?)?;
-            }
-            LuaValue::Table(t)
-        }
-        serde_json::Value::Object(obj) => {
-            let t = lua.create_table()?;
-            for (k, val) in obj {
-                t.set(k, json_to_lua(lua, val)?)?;
-            }
-            LuaValue::Table(t)
-        }
-    })
-}
-
 // ---------------------------------------------------------------------
 // Lua-facing signal handles (UserData)
 // ---------------------------------------------------------------------
@@ -1123,118 +1089,6 @@ impl UserData for SignalRef {
             _ => Ok(LuaValue::Nil),
         });
     }
-}
-
-// ---------------------------------------------------------------------
-// Markdown -> block list (parity with the Rhai `parse_markdown` builtin)
-// ---------------------------------------------------------------------
-
-/// Translate markdown into a block-record list. Each record carries
-/// `id` / `kind` (`h`/`p`/`code`/`li`/`hr`) / `level` / `text` / `lang`.
-fn parse_markdown_blocks(src: &str) -> Vec<HashMap<String, ScriptValue>> {
-    use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
-
-    #[derive(Clone, Copy)]
-    enum BlockKind {
-        Heading(u8),
-        Paragraph,
-        CodeBlock,
-        Item,
-    }
-
-    let mut out: Vec<HashMap<String, ScriptValue>> = Vec::new();
-    let mut counter: usize = 0;
-    let mut cur_kind: Option<BlockKind> = None;
-    let mut cur_text = String::new();
-    let mut cur_lang = String::new();
-
-    fn record(
-        counter: &mut usize,
-        kind: &str,
-        level: i64,
-        text: String,
-        lang: String,
-    ) -> HashMap<String, ScriptValue> {
-        let mut m = HashMap::with_capacity(5);
-        m.insert("id".into(), ScriptValue::Str(format!("blk-{counter}")));
-        *counter += 1;
-        m.insert("kind".into(), ScriptValue::Str(kind.to_string()));
-        m.insert("level".into(), ScriptValue::I64(level));
-        m.insert("text".into(), ScriptValue::Str(text));
-        m.insert("lang".into(), ScriptValue::Str(lang));
-        m
-    }
-
-    for ev in Parser::new(src) {
-        match ev {
-            Event::Start(Tag::Heading { level, .. }) => {
-                cur_kind = Some(BlockKind::Heading(match level {
-                    HeadingLevel::H1 => 1,
-                    HeadingLevel::H2 => 2,
-                    HeadingLevel::H3 => 3,
-                    HeadingLevel::H4 => 4,
-                    HeadingLevel::H5 => 5,
-                    HeadingLevel::H6 => 6,
-                }));
-                cur_text.clear();
-                cur_lang.clear();
-            }
-            Event::Start(Tag::Paragraph) => {
-                cur_kind = Some(BlockKind::Paragraph);
-                cur_text.clear();
-                cur_lang.clear();
-            }
-            Event::Start(Tag::CodeBlock(kind)) => {
-                cur_kind = Some(BlockKind::CodeBlock);
-                cur_text.clear();
-                cur_lang = match kind {
-                    pulldown_cmark::CodeBlockKind::Fenced(lang) => lang.to_string(),
-                    pulldown_cmark::CodeBlockKind::Indented => String::new(),
-                };
-            }
-            Event::Start(Tag::Item) => {
-                cur_kind = Some(BlockKind::Item);
-                cur_text.clear();
-                cur_lang.clear();
-            }
-            Event::Start(Tag::Emphasis) | Event::End(TagEnd::Emphasis) => cur_text.push('*'),
-            Event::Start(Tag::Strong) | Event::End(TagEnd::Strong) => cur_text.push_str("**"),
-            Event::Start(Tag::Strikethrough) | Event::End(TagEnd::Strikethrough) => {
-                cur_text.push('~')
-            }
-            Event::End(TagEnd::Heading(_))
-            | Event::End(TagEnd::Paragraph)
-            | Event::End(TagEnd::CodeBlock)
-            | Event::End(TagEnd::Item) => {
-                if let Some(kind) = cur_kind.take() {
-                    let text = std::mem::take(&mut cur_text);
-                    let lang = std::mem::take(&mut cur_lang);
-                    let rec = match kind {
-                        BlockKind::Heading(level) => {
-                            record(&mut counter, "h", level as i64, text, String::new())
-                        }
-                        BlockKind::Paragraph => record(&mut counter, "p", 0, text, String::new()),
-                        BlockKind::CodeBlock => record(&mut counter, "code", 0, text, lang),
-                        BlockKind::Item => record(&mut counter, "li", 0, text, String::new()),
-                    };
-                    out.push(rec);
-                }
-            }
-            Event::Text(t) => cur_text.push_str(&t),
-            Event::Code(t) => {
-                cur_text.push('`');
-                cur_text.push_str(&t);
-                cur_text.push('`');
-            }
-            Event::SoftBreak => cur_text.push(' '),
-            Event::HardBreak => cur_text.push('\n'),
-            Event::Rule => {
-                out.push(record(&mut counter, "hr", 0, String::new(), String::new()));
-            }
-            _ => {}
-        }
-    }
-    out
 }
 
 // ---------------------------------------------------------------------
@@ -2297,17 +2151,6 @@ fn build_lua(
         )?;
     }
 
-    // parse_json(s)
-    g.set(
-        "parse_json",
-        lua.create_function(move |lua, s: String| {
-            Ok(match serde_json::from_str::<serde_json::Value>(&s) {
-                Ok(v) => json_to_lua(lua, v)?,
-                Err(_) => LuaValue::Nil,
-            })
-        })?,
-    )?;
-
     // -- derive(name, deps, fn) ----------------------------------------
     {
         let derivations = derivations.clone();
@@ -2359,16 +2202,6 @@ fn build_lua(
             })?,
         )?;
     }
-
-    // parse_markdown(src)
-    g.set(
-        "parse_markdown",
-        lua.create_function(move |lua, src: String| {
-            let blocks = parse_markdown_blocks(&src);
-            let arr = ScriptValue::Array(blocks.into_iter().map(ScriptValue::Map).collect());
-            script_value_to_lua(lua, &arr)
-        })?,
-    )?;
 
     drop(g);
     Ok(lua)

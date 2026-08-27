@@ -17,7 +17,6 @@ use lumen_script::{
     ScriptCommand, ScriptFn, ScriptNs, ScriptTy, ScriptValue, builtin_script_fns, with_call_scratch,
 };
 
-use crate::parse;
 use crate::value::{array_to_rows, candela_value_to_script, script_value_to_candela};
 
 /// The candela host namespace every Lumen builtin is registered under. Scripts
@@ -75,10 +74,6 @@ pub(crate) const RESIDUAL_DECLARATIONS: &[(&str, &str)] = &[
     ("lumen", "any matched_rules(...);"),
     // One request map whose fields mix types, so it is variadic.
     ("lumen", "http(...);"),
-    // Text parsers: both hand back a dynamically-shaped value, read with the
-    // as_map / as_list / as_str / as_int downcasts.
-    ("lumen", "any parse_json(...);"),
-    ("lumen", "any parse_markdown(...);"),
     // Diagnostics, handler routing, and derived signals.
     ("lumen", "print(...);"),
     ("lumen", "on(string, string, string);"),
@@ -653,22 +648,11 @@ pub(crate) fn register_lumen_host_fns<S: HostFnSink>(engine: &mut S, r: &Registr
 
     register_http(engine, r);
 
-    // -- the request being rendered for ------------------------------
-    // The headers, the cookies and the body are too large to publish as
-    // signals, so they stay in the per-thread `lumen_core::request`
-    // context and a script asks for one part at a time. The address
-    // parts are reserved `request.*` signals instead, read with
-    // `signal_get`. Outside a server render nothing is installed and
-    // every reader gives back an empty string.
-    // -- text parsers ------------------------------------------------
-    // Both return a dynamically-shaped value, so both register
-    // variadically and are declared `any name(...)`; see the crate docs.
-    engine.register_host_fn_variadic(HOST_NAMESPACE, "parse_json", |args: &[Value]| {
-        Ok(parse::json(&arg_text(args, 0)))
-    });
-    engine.register_host_fn_variadic(HOST_NAMESPACE, "parse_markdown", |args: &[Value]| {
-        Ok(parse::markdown(&arg_text(args, 0)))
-    });
+    // `request_header` / `request_cookie` / `request_body`, and
+    // `parse_json` / `parse_markdown`, are in the shared table registered
+    // above. The text parsers each return a dynamically-shaped value, so
+    // both bind variadically and are declared `any name(...)`; see the
+    // crate docs.
 
     // -- diagnostics -------------------------------------------------
     // candela's own `print` writes to process stdout. `lumen::print`
@@ -1346,17 +1330,29 @@ mod tests {
 
     use super::*;
 
-    /// Every shared builtin candela is offered binds typed.
+    /// Every shared builtin candela is offered binds typed, except the ones
+    /// whose result has no shape narrower than `any`.
     ///
     /// The alternative is variadic, which would turn a checked
     /// `set_text(string, string)` declaration into `any set_text(...)` and hand
     /// a whole class of mistakes to run time. A table entry that stops being
     /// nameable fails here rather than quietly widening the prelude.
+    ///
+    /// `parse_json` and `parse_markdown` are the deliberate exception: a JSON
+    /// value and a markdown block list are genuinely dynamically shaped, so
+    /// they bind variadically on purpose and are declared `any name(...);`
+    /// (see [`crate::declare::declaration`]), the same as `http` and
+    /// `signal_array_get`.
     #[test]
     fn every_shared_builtin_binds_typed() {
+        const DYNAMIC_RETURN: &[&str] = &["parse_json", "parse_markdown"];
         let untyped: Vec<String> = builtin_script_fns()
             .into_iter()
-            .filter(|f| f.visible_to("candela") && !binds_typed(f))
+            .filter(|f| {
+                f.visible_to("candela")
+                    && !binds_typed(f)
+                    && !DYNAMIC_RETURN.contains(&f.name.as_str())
+            })
             .map(|f| f.name)
             .collect();
         assert!(

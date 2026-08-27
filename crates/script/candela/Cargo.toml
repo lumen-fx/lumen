@@ -23,7 +23,9 @@ default = ["compiler"]
 compiler = ["dep:candela"]
 
 [dependencies]
-lumen-script = { workspace = true }
+# `json` and `markdown` pull in the shared `parse_json` / `parse_markdown`
+# walk (and, with it, serde_json / pulldown-cmark) through the builtin table.
+lumen-script = { workspace = true, features = ["json", "markdown"] }
 lumen-core = { workspace = true }
 bevy_ecs.workspace = true
 # candela embedding API (Engine/Program) lives on the crate's `main` branch.
@@ -42,11 +44,6 @@ candela = { package = "candela-lang", git = "https://github.com/lumen-fx/candela
 # artifact host are written against it, and `candela` re-exports it, so the two
 # hosts share one implementation of both.
 candela-vm = { git = "https://github.com/lumen-fx/candela", branch = "main", version = "0.0.6" }
-# `parse_json`: JSON text -> candela values. Same dep the Rhai and Lua hosts
-# carry for their own `parse_json`.
-serde_json.workspace = true
-# `parse_markdown`: markdown -> block list, matching the Rhai and Lua hosts.
-pulldown-cmark.workspace = true
 
 [build-dependencies]
 # Reads the resolved dependency graph, the only place a dependency's own source
