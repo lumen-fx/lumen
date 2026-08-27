@@ -185,6 +185,7 @@ jobs:
           # (see the modules packaging step below).
           cargo build --release --target "$triple" \
             -p lumen \
+            -p lumen-archive \
             -p lumen-audio \
             -p lumen-fs \
             -p lumenc \
@@ -292,6 +293,7 @@ jobs:
           # One entry per module; the two spellings are the Linux and macOS
           # library names of the same build.
           modules=(
+            "liblumen_archive.so liblumen_archive.dylib"
             "liblumen_audio.so liblumen_audio.dylib"
             "liblumen_fs.so liblumen_fs.dylib"
           )

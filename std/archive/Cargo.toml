@@ -1,0 +1,53 @@
+# The archive capability Lumen ships, as a self-contained runtime module. The
+# engine knows nothing about archives: this crate registers the whole
+# `archive` script namespace through the generic `ScriptFnRegistry`, unpacks
+# off the tick loop on the engine's spawn seam, and reports each finished job
+# through the generic plugin-event bus. Two link shapes from one crate: the
+# `cdylib` target is the bundled `lumen-archive` module an app declares in
+# `lumen.toml`, and the `lib` target is the same plugin compiled into a static
+# build.
+[package]
+name = "lumen-archive"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's archive module: registers the archive script namespace, unpacking zip, tar, and tar.gz files off the tick loop; bundled as a runtime module or compiled in as a plugin."
+keywords = ["ui", "gui", "archive", "zip", "tar"]
+categories = ["compression", "gui"]
+publish = false
+
+[lib]
+# `lumen_archive` is the spelling the module loader's bundled probe derives
+# from the app's `lumen-archive = { bundled = true }` declaration: the cdylib
+# builds to `liblumen_archive.so`.
+name = "lumen_archive"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+# The engine-facing dependency: the Plugin trait, the script-fn registry, the
+# app's path resolution, the spawn seam, and the plugin-event bus all arrive
+# through the module SDK's re-exports.
+lumen-module = { workspace = true }
+# The module keeps a resource of its own, so it names the ECS derive directly
+# the way every other plugin crate does.
+bevy_ecs = { workspace = true }
+
+# The three container formats. `flate2` supplies the gzip layer `tar` reads
+# through; `zip` carries the deflate decoder only, which is what a `.zip` in
+# the wild uses.
+flate2 = { workspace = true }
+tar = { workspace = true }
+zip = { workspace = true }
+
+# Tests only: the compiled-in-shape tests build a headless app around the
+# plugin the way `lumenc run` would, and the module-shape test drives the
+# loader end to end over a subprocess.
+[dev-dependencies]
+lumen-core = { workspace = true }
+lumen-ir = { workspace = true }
+lumen-runtime = { workspace = true }
+lumen-script = { workspace = true }
+serde_json = { workspace = true }

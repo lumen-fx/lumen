@@ -198,6 +198,7 @@ categories = ["gui"]
 # `default-features = true` and gets them.
 lumen = { path = "." }
 lumen-a11y-accesskit = { path = "crates/backends/a11y-accesskit" }
+lumen-archive = { path = "std/archive" }
 lumen-assets = { path = "crates/assets" }
 lumen-async-tokio = { path = "crates/backends/async-tokio" }
 lumen-audio = { path = "std/audio" }

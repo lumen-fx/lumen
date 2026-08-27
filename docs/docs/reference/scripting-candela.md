@@ -132,6 +132,8 @@ Define these as free functions. Each is optional; a missing hook is a no-op.
 | `on_start()` | Once at app construction, before the first tick. No element is queryable yet: `node_get_by_id` returns `0`. |
 | `on_ready()` | Once per mount, on the first tick after the element tree is published. Queries resolve here. Re-armed after a hot reload, so it runs again on the fresh tree. |
 | `on_close()` | On an OS close request, before teardown. Return `false` to veto the close and keep the window open. |
+| `on_archive_done(tag: string, dest: string, count: int)` | When an extraction started through the `lumen-archive` module finishes; `count` is the number of files written. |
+| `on_archive_error(tag: string, message: string)` | When an extraction started through the `lumen-archive` module is refused or fails. |
 | `on_audio_end(path: string)` | When a track played through the `lumen-audio` module reaches its end; `path` is the path passed to `audio_play`. |
 | `main()` | candela's module entry point, run once at compile time. Keep it empty unless the app needs module-level setup. |
 
@@ -845,6 +847,79 @@ module's `read_bytes_cap` setting, in bytes, between 1 KiB and 256 MiB:
 [dependencies]
 lumen-fs = { bundled = true, config = { read_bytes_cap = 33554432 } }
 ```
+
+Windows builds have no runtime modules yet, so this surface is unavailable
+there.
+
+## Archives
+
+These functions come from the `lumen-archive` runtime module and exist only
+when the app declares it under `[dependencies]` in `lumen.toml`:
+
+```toml
+[dependencies]
+lumen-archive = { bundled = true }
+```
+
+They live in their own `archive` namespace, so no `import` line reaches them:
+the host declares the namespace from what the module registered.
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `archive::extract(src: string, dest: string, tag: string)` | `bool` | Unpack the archive at `src` into the directory `dest`, creating it. `true` when the job was taken; `false` when it was not, which also fires `archive_error`. |
+
+Both paths resolve against the app directory, and the extraction runs off the
+tick loop, so the call answers before any bytes are read. The outcome arrives
+as an event keyed by `tag`:
+
+| Event | Handler | Arguments |
+| --- | --- | --- |
+| `archive_done` | `on_archive_done` | `tag: string`, `dest: string` (the resolved destination), `count: int` (files written) |
+| `archive_error` | `on_archive_error` | `tag: string`, `message: string` |
+
+`lumen::on("archive_done", tag, fn_name)` registers a handler for one job and
+wins over the fallback, the same as any other event.
+
+```rust
+fn on_start() {
+    archive::extract("themes.zip", "themes", "themes");
+}
+
+fn on_archive_done(tag: string, dest: string, count: int) {
+    lumen::signal_set_int("files", count);
+}
+
+fn on_archive_error(tag: string, message: string) {
+    lumen::signal_set("status", message);
+}
+```
+
+zip, tar, and gzip-compressed tar are read. The container is taken from the
+file's leading bytes, so an archive saved under a name that disagrees with its
+contents still unpacks; the extension decides only when the bytes say nothing.
+
+What an archive may write is settled before anything is written. An entry
+naming an absolute path, climbing out with `..`, carrying a Windows drive or
+UNC prefix, or resolving outside `dest` ends the whole extraction with an
+`archive_error` naming it, rather than being passed over. Entries written
+before the refused one stay on disk, so a destination that took a failed
+extraction is one to discard rather than keep using. Symbolic and hard links
+are skipped, because a link inside the destination can point outside it once
+extraction is over; `count` is the files written, so it leaves them out.
+Existing files are overwritten and missing parent directories are created.
+
+Four extractions run at once by default; a fifth is refused until one
+finishes, as is a second job under a tag already running. Change the limit
+with the module's `max_concurrent` setting:
+
+```toml
+[dependencies]
+lumen-archive = { bundled = true, config = { max_concurrent = 2 } }
+```
+
+Selecting part of an archive, stripping leading path components, per-entry
+progress, listing an archive without unpacking it, and writing an archive are
+not part of this surface.
 
 Windows builds have no runtime modules yet, so this surface is unavailable
 there.

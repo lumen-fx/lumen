@@ -278,6 +278,51 @@ reference for each host ([candela](../reference/scripting-candela.md#filesystem)
 Windows builds have no runtime modules yet, so this surface is unavailable
 there.
 
+## Unpacking archives
+
+Content an app ships or downloads often arrives as one file: a theme pack, a
+set of templates, an update. Unpacking it is a runtime module of its own:
+
+```toml
+[dependencies]
+lumen-archive = { bundled = true }
+```
+
+That adds `archive::extract(src, dest, tag)`, which reads zip, tar, and
+gzip-compressed tar. Downloading and unpacking is the usual pairing, so the
+call is built for it: extraction never happens inside the call, because an
+archive of any size would hold up the frame. The call answers with whether the
+job was taken, and the result arrives later as an event named by the tag you
+passed:
+
+```rust
+fn on_start() {
+    archive::extract("themes.zip", "themes", "themes");
+}
+
+fn on_archive_done(tag, dest, count) { signal("status", "").set("unpacked " + count); }
+fn on_archive_error(tag, message)    { signal("status", "").set(message); }
+```
+
+Both paths resolve against the app directory, the same as everywhere else.
+`on("archive_done", tag, fn)` handles one job on its own, so several
+extractions in flight stay apart.
+
+An archive from the network is untrusted input, and the module treats it that
+way. An entry that would write outside `dest`, by naming an absolute path or
+climbing out with `..`, ends the whole extraction with an error naming it
+rather than being quietly passed over; symbolic and hard links are skipped,
+because a link can point outside the destination once extraction is over. The
+container is decided by the file's leading bytes, so an archive saved under
+the wrong name still unpacks. The full rules are in the scripting reference
+for each host ([candela](../reference/scripting-candela.md#archives),
+[Rhai](../reference/scripting-rhai.md#archives),
+[Lua](../reference/scripting-lua.md#archives)); Lua spells the call
+`archive.extract(..)`.
+
+Windows builds have no runtime modules yet, so this surface is unavailable
+there.
+
 ## Functions the app's Rust adds
 
 An app with Rust behind it can hand the script functions of its own, through the

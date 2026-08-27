@@ -90,6 +90,15 @@ tools/             the release plumbing and the editor plugins
   renderer and an accessibility bridge are handed to it, and it drives both
   through their traits, so it compiles without naming a graphics API or an
   accessibility library.
+- **lumen-archive** (`std/archive`): the whole archive capability, as a
+  self-contained module the engine knows nothing about. It registers the
+  `archive` script namespace through the generic registry, unpacks zip, tar,
+  and gzip-compressed tar on the engine's spawn seam so the tick loop never
+  waits on one, and reports each finished job over the plugin-event bus. An
+  entry that would write outside the destination ends the extraction. One
+  crate builds both link shapes: the cdylib is the bundled `lumen-archive`
+  runtime module an app declares in `lumen.toml`, and a static build compiles
+  the same plugin in.
 - **lumen-audio** (`std/audio`): the whole audio capability, as a
   self-contained module the engine knows nothing about. It registers the
   `audio_*` script functions through the generic registry, runs playback in

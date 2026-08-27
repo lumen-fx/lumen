@@ -251,6 +251,7 @@ One table entry per library; the key is its name.
 
 ```toml
 [dependencies]
+lumen-archive = { bundled = true }
 lumen-audio = { bundled = true }
 lumen-fs = { bundled = true }
 markdown-widgets = "1.2"
@@ -262,6 +263,7 @@ they need:
 
 | Module | What it adds | Config |
 |--------|--------------|--------|
+| `lumen-archive` | The `archive` script namespace: unpacking zip, tar, and gzip-compressed tar into a directory, off the tick loop. | `max_concurrent` |
 | `lumen-audio` | The whole audio surface, from the `audio_*` script functions to the playback backend behind them. | |
 | `lumen-fs` | The `files` script namespace: read, write, list, copy, remove, and byte-level file access, resolved against the app directory. | `read_bytes_cap` |
 
