@@ -274,9 +274,9 @@ async fn handle_request(line: &str, ctx: &ServerCtx) -> Value {
     };
 
     // Transport-side intercepts. These methods touch resources
-    // (`SurfaceCapture`, `SimulateQueue`) that the protocol layer
-    // doesn't carry. Handled both via legacy `lumen.screenshot` and
-    // via `tools/call(name="lumen_screenshot")`.
+    // (`SurfaceCapture`, `SimulateQueue`, an awaited `gh` subprocess) that
+    // the protocol layer doesn't carry. Handled both via the legacy dotted
+    // name and via `tools/call(name="lumen_...")`.
     let intercepted_tool = (method == "tools/call")
         .then(|| {
             params
@@ -292,21 +292,23 @@ async fn handle_request(line: &str, ctx: &ServerCtx) -> Value {
         None
     };
 
-    let (screenshot_args, simulate_args, set_signal_args, wrap_in_tool_envelope) =
+    let (screenshot_args, simulate_args, set_signal_args, framework_status, wrap_in_tool_envelope) =
         match (method.as_str(), intercepted_tool.as_deref()) {
-            ("lumen.screenshot", _) => (Some(params.clone()), None, None, false),
-            ("lumen.simulate", _) => (None, Some(params.clone()), None, false),
-            ("lumen.set_signal", _) => (None, None, Some(params.clone()), false),
+            ("lumen.screenshot", _) => (Some(params.clone()), None, None, false, false),
+            ("lumen.simulate", _) => (None, Some(params.clone()), None, false, false),
+            ("lumen.set_signal", _) => (None, None, Some(params.clone()), false, false),
+            ("lumen.framework_status", _) => (None, None, None, true, false),
             ("tools/call", Some("lumen_screenshot")) => {
-                (Some(intercepted_args.clone()), None, None, true)
+                (Some(intercepted_args.clone()), None, None, false, true)
             }
             ("tools/call", Some("lumen_simulate")) => {
-                (None, Some(intercepted_args.clone()), None, true)
+                (None, Some(intercepted_args.clone()), None, false, true)
             }
             ("tools/call", Some("lumen_set_signal")) => {
-                (None, None, Some(intercepted_args.clone()), true)
+                (None, None, Some(intercepted_args.clone()), false, true)
             }
-            _ => (None, None, None, false),
+            ("tools/call", Some("lumen_framework_status")) => (None, None, None, true, true),
+            _ => (None, None, None, false, false),
         };
 
     if let Some(args) = screenshot_args {
@@ -319,6 +321,10 @@ async fn handle_request(line: &str, ctx: &ServerCtx) -> Value {
     }
     if let Some(args) = set_signal_args {
         let result = run_set_signal(ctx, args.as_ref()).await;
+        return wrap_or_raw(id, result, wrap_in_tool_envelope);
+    }
+    if framework_status {
+        let result = run_framework_status(ctx).await;
         return wrap_or_raw(id, result, wrap_in_tool_envelope);
     }
 
@@ -652,6 +658,57 @@ fn plot(rgba8: &mut [u8], width: u32, height: u32, x: i32, y: i32, color: [u8; 4
     if idx + 4 <= rgba8.len() {
         rgba8[idx..idx + 4].copy_from_slice(&color);
     }
+}
+
+/// `lumen_framework_status`: open-issue count for the repository this
+/// checkout's `origin` git remote points at, plus the same tick-liveness
+/// numbers every other tool reports.
+///
+/// Fetching issues means awaiting a `gh` subprocess with a network round
+/// trip, which is why this is a transport-side intercept rather than a
+/// `dispatch_with_ctx` case: that dispatch table is synchronous snapshot
+/// reads only. A checkout with no network, no `gh`, or no GitHub `origin`
+/// remote gets `issues_error` set instead of a hang or a silent zero.
+async fn run_framework_status(ctx: &ServerCtx) -> Value {
+    let (frame, last_tick_micros) = match ctx.snapshot.read() {
+        Ok(snap) => (snap.frame, snap.last_tick_micros),
+        Err(_) => (0, 0),
+    };
+    let report = crate::issues::framework_issues_report(&crate::issues::GhConfig::default()).await;
+
+    let summary = match (&report.repo, report.open_issues, &report.error) {
+        (Some(repo), Some(n), None) => {
+            format!("{n} open issue(s) on {repo}; last tick {last_tick_micros}us")
+        }
+        (Some(repo), _, Some(err)) => {
+            format!("could not list open issues on {repo}: {err}; last tick {last_tick_micros}us")
+        }
+        (None, _, Some(err)) => {
+            format!(
+                "could not determine which repository to query: {err}; last tick {last_tick_micros}us"
+            )
+        }
+        _ => format!("last tick {last_tick_micros}us"),
+    };
+    let confidence = if report.error.is_none() {
+        "high"
+    } else {
+        "low"
+    };
+
+    json!({
+        "summary": summary,
+        "repo": report.repo,
+        "open_issues": report.open_issues,
+        "first_open_issues": report.first_open,
+        "issues_error": report.error,
+        "last_tick_micros": last_tick_micros,
+        "frame": frame,
+        "next_suggested_tools": [
+            { "name": "lumen_snapshot_text", "params": {}, "why": "verify a fix end-to-end" },
+        ],
+        "confidence": confidence,
+    })
 }
 
 /// Write one global signal through the external typed-property bus - the

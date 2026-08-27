@@ -292,7 +292,7 @@ HTTP request line comes back as a `-32700` parse error.
 | `lumen_diff_since` | `tick` | Entity ids added, removed, and changed since that tick. |
 | `lumen_lint` | none | UI findings with category, severity, fix hint, and entity. |
 | `lumen_screenshot` | `highlight_ids`, `highlight_lint`, `include_bounds_map` | A base64 PNG, its size, and optionally an entity bounds map. |
-| `lumen_framework_status` | none | Progress read from the project's `TODO.md`. |
+| `lumen_framework_status` | none | Open issue count (and the first 10 titles) for the repository the checkout's `origin` remote points at, plus the last tick duration. |
 
 Simulate kinds: `pointer_move`, `pointer_down`, `pointer_up`, `click`, `key`,
 `type`, and `scroll`. Point kinds take `x` and `y` in logical pixels, button
@@ -309,6 +309,11 @@ Message ring names, for `wait_for` and `lumen_recent_messages`:
 `KeyPressed`, `KeyReleased`, `MouseWheel`, `FocusedKey`. Each holds its last
 256 entries.
 
+`lumen_framework_status` resolves the repository from the checkout's `origin`
+git remote and lists its open issues through the `gh` CLI, bounded by a
+timeout. With no network, no `gh` on `PATH`, or no GitHub `origin` remote, the
+result carries `issues_error` describing why instead of an issue count.
+
 Every result carries a short human-readable `summary`, a `confidence` value,
 and a `next_suggested_tools` list, so an agent can chain calls without knowing
 the surface in advance.
@@ -318,9 +323,11 @@ in a headless run, they refresh every tick so a driver sees each frame.
 
 ### Resources and prompts
 
-Through the bridge, an agent can also list and read project files: the
-`TODO.md` that roots the project, `lumen.toml`, `src/main.lmn`, `src/main.css`,
-the example apps, and the docs. Reads are restricted to that catalogue.
+Through the bridge, an agent can also list and read project files: `lumen.toml`,
+`src/main.lmn`, `src/main.css`, the example apps, and the docs. The bridge
+finds the project root by walking up from its working directory for a
+`lumen.toml` (an app checkout) or a `Cargo.toml` declaring `[workspace]` (the
+Lumen framework checkout). Reads are restricted to that catalogue.
 
 These come from the bridge, which runs in your checkout. Talking to the
 app's socket directly gets tools only.

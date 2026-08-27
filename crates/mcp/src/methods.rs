@@ -23,9 +23,12 @@ pub enum DispatchResult {
 
 /// Top-level dispatch for all snapshot-only methods.
 ///
-/// `lumen.screenshot` is handled out-of-band by the server because it may
-/// drive the on-screen `SurfaceCapture` flag and await a fresh frame - those
-/// concerns sit outside the read-only snapshot model.
+/// `lumen.screenshot`, `lumen.simulate`, `lumen.set_signal`, and
+/// `lumen.framework_status` are handled out-of-band by the server: each
+/// needs something this read-only snapshot dispatch doesn't carry (the
+/// `SurfaceCapture` flag, the simulate queue, the property bus, or an
+/// awaited subprocess), so the transport layer intercepts them before a
+/// call reaches here.
 pub fn dispatch_with_ctx(method: &str, params: Option<&Value>, snap: &Snapshot) -> DispatchResult {
     match method {
         "lumen.tick" => DispatchResult::Ok(method_tick(snap)),
@@ -50,7 +53,6 @@ pub fn dispatch_with_ctx(method: &str, params: Option<&Value>, snap: &Snapshot) 
             Ok(p) => DispatchResult::Ok(method_element_at(snap, &p)),
             Err(e) => DispatchResult::InvalidParams(e),
         },
-        "lumen.framework_status" => DispatchResult::Ok(method_framework_status(snap)),
         "lumen.lint" => DispatchResult::Ok(method_lint(snap)),
         "lumen.diff_since" => match parse_diff(params) {
             Ok(p) => DispatchResult::Ok(method_diff_since(snap, &p)),
@@ -818,111 +820,6 @@ fn method_element_at(snap: &Snapshot, p: &ElementAtParams) -> Value {
     }
 }
 
-/// Surfaces TODO.md punch-list signal so an MCP client can orient itself when
-/// working on Lumen itself (rather than on a Lumen app). Includes per-section open
-/// counts, the first ~10 open items verbatim, and the most recent main-world
-/// tick duration as a liveness check.
-fn method_framework_status(snap: &Snapshot) -> Value {
-    let todo_path = std::env::var("LUMEN_TODO_PATH")
-        .map(std::path::PathBuf::from)
-        .ok()
-        .or_else(find_todo_md);
-    let todo = todo_path
-        .as_ref()
-        .and_then(|p| std::fs::read_to_string(p).ok());
-
-    let (sections, open_items) = match todo.as_deref() {
-        Some(body) => parse_todo_md(body),
-        None => (Vec::new(), Vec::new()),
-    };
-    let total_open: usize = sections.iter().map(|s| s.open).sum();
-    let total_done: usize = sections.iter().map(|s| s.done).sum();
-
-    json!({
-        "summary": format!(
-            "{} open items across {} sections ({} done); last tick {}us",
-            total_open,
-            sections.len(),
-            total_done,
-            snap.last_tick_micros,
-        ),
-        "todo_path": todo_path.as_ref().map(|p| p.display().to_string()),
-        "sections": sections,
-        "first_open_items": open_items,
-        "last_tick_micros": snap.last_tick_micros,
-        "frame": snap.frame,
-        "next_suggested_tools": [
-            { "name": "lumen_snapshot_text", "params": {}, "why": "verify a fix end-to-end" },
-        ],
-        "stale_for_ms": staleness_ms(snap),
-        "confidence": "high",
-    })
-}
-
-#[derive(serde::Serialize)]
-struct TodoSection {
-    title: String,
-    open: usize,
-    partial: usize,
-    done: usize,
-}
-
-fn parse_todo_md(body: &str) -> (Vec<TodoSection>, Vec<String>) {
-    let mut sections: Vec<TodoSection> = Vec::new();
-    let mut open_items: Vec<String> = Vec::new();
-    let mut current_title = String::from("(preamble)");
-    let (mut open, mut partial, mut done) = (0usize, 0usize, 0usize);
-    let push =
-        |sections: &mut Vec<TodoSection>, title: &str, open: usize, partial: usize, done: usize| {
-            if open + partial + done > 0 {
-                sections.push(TodoSection {
-                    title: title.to_string(),
-                    open,
-                    partial,
-                    done,
-                });
-            }
-        };
-    for raw in body.lines() {
-        let line = raw.trim_start();
-        if let Some(rest) = line.strip_prefix("## ") {
-            push(&mut sections, &current_title, open, partial, done);
-            current_title = rest.trim().to_string();
-            open = 0;
-            partial = 0;
-            done = 0;
-            continue;
-        }
-        let stripped = line.trim_start_matches(['*', '-', ' ']);
-        if let Some(rest) = stripped.strip_prefix("[ ]") {
-            open += 1;
-            if open_items.len() < 10 {
-                open_items.push(format!("{}: {}", current_title, rest.trim()));
-            }
-        } else if stripped.starts_with("[~]") {
-            partial += 1;
-        } else if stripped.starts_with("[x]") || stripped.starts_with("[X]") {
-            done += 1;
-        }
-    }
-    push(&mut sections, &current_title, open, partial, done);
-    (sections, open_items)
-}
-
-fn find_todo_md() -> Option<std::path::PathBuf> {
-    let mut cwd = std::env::current_dir().ok()?;
-    for _ in 0..6 {
-        let candidate = cwd.join("TODO.md");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        if !cwd.pop() {
-            break;
-        }
-    }
-    None
-}
-
 /// Snapshot-only lint pass. Surfaces structural issues an agent (or human)
 /// would otherwise have to discover by running the UI: zero-sized visible
 /// rects, text without style, focusable nodes without labels, half-broken
@@ -1598,21 +1495,6 @@ mod tests {
         let p = ElementAtParams { x: 100.0, y: 100.0 };
         let out = method_element_at(&snap, &p);
         assert_eq!(out["hit"], json!(false));
-    }
-
-    #[test]
-    fn framework_status_parses_todo_sections() {
-        let body =
-            "# H\n\n## A\n\n* [x] done\n* [ ] open one\n* [~] partial\n\n## B\n\n* [ ] open two\n";
-        let (sections, open_items) = parse_todo_md(body);
-        assert_eq!(sections.len(), 2);
-        assert_eq!(sections[0].title, "A");
-        assert_eq!(sections[0].done, 1);
-        assert_eq!(sections[0].open, 1);
-        assert_eq!(sections[0].partial, 1);
-        assert_eq!(sections[1].open, 1);
-        assert!(open_items.iter().any(|s| s.contains("open one")));
-        assert!(open_items.iter().any(|s| s.contains("open two")));
     }
 
     #[test]
