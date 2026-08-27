@@ -1,11 +1,35 @@
 /*
   Lumen devtools panel styling - the static chrome, in the Chrome DevTools
   dark palette (#202124 surfaces, #292a2d bars, #3c4043 borders, #e8eaed
-  text). Everything spawned after the mount (element rows, tab and row
-  interaction states, the highlight box) is styled by the crate's systems,
-  since this sheet is applied once at parse time; the colors there mirror
-  this palette.
+  text).
+
+  Everything spawned after the mount (element rows, the tab and row
+  interaction states, the highlight box and its tooltip) is styled by the
+  crate's systems instead of a selector, since this sheet is applied once
+  at parse time and cannot reach entities that do not exist yet. Those
+  systems read the `--dt-*` custom properties below (`lumen_devtools::
+  OverlayPalette`, resolved once at mount time) rather than carrying their
+  own color literals, so this `:root` block is the one place the overlay's
+  full palette is declared.
 */
+
+:root {
+  --dt-tab-text: #9aa0a6;
+  --dt-tab-text-active: #e8eaed;
+  --dt-tab-underline: #8ab4f8;
+  --dt-tab-fill-hover: #35363a;
+  --dt-row-fill-hover: #2f3033;
+  --dt-row-fill-selected: #214166;
+  --dt-tag-color: #5db0d7;
+  --dt-meta-color: #f28b54;
+  --dt-dim-color: #9aa0a6;
+  --dt-flag-color: #d7aefb;
+  --dt-highlight-fill: #6fa8dc66;
+  --dt-highlight-border: #6fa8dccc;
+  --dt-tip-fill: #202124f2;
+  --dt-tip-border: #3c4043;
+  --dt-tip-text: #e8eaed;
+}
 
 .dt-panel {
   background: #202124;

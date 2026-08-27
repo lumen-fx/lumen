@@ -15,8 +15,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use bevy_ecs::prelude::*;
-use lumen_core::components::{LumenId, TextContent, Visible};
-use lumen_devtools::{BODY_ID, DevtoolsMarker, DevtoolsRoot, DevtoolsState, RowTarget, Tab};
+use lumen_core::components::{Color, LumenId, TextContent, Visible};
+use lumen_devtools::{
+    BODY_ID, DevtoolsMarker, DevtoolsRoot, DevtoolsState, OverlayPalette, RowTarget, Tab,
+};
 use lumen_mcp::{EntityInspect, EntityView, Snapshot, SnapshotHandle};
 use lumenc::{RunOptions, build_headless_app};
 
@@ -37,6 +39,16 @@ fn devtools_overlay_mounts_and_refreshes() {
     assert!(
         overlay.is_some(),
         "overlay root lifted into the top paint band"
+    );
+
+    // The dynamic-state palette the mount resolved matches the value
+    // `overlay.css` declares for `--dt-tag-color` (the fallback/override
+    // cases live in `lumen_runtime::devtools_mount`'s own unit tests).
+    let palette = *app.world.resource::<OverlayPalette>();
+    assert_eq!(
+        palette.tag_color,
+        Color::from_rgba8([0x5d, 0xb0, 0xd7, 0xff]),
+        "tag_color resolved from overlay.css's --dt-tag-color"
     );
 
     // The data-driven body entity exists and carries DevtoolsMarker (so the
