@@ -705,6 +705,10 @@ pub fn sync_signals_into_host<H: ScriptHost + Resource<Mutability = Mutable>>(
 /// stays pending and retries next tick. Equal writes don't propagate
 /// (`set_global_str` skips the dirty push).
 ///
+/// A panicking evaluation is contained the same way: caught, reported
+/// through the same failed-derivation log line an `Err` gets, and left
+/// pending so it retries next tick. See the `catch_unwind` call below.
+///
 /// Each write is also mirrored as a [`ScriptCommand::SetSignal`] event so
 /// bare-plugin embedders that drain [`ScriptCommandEvent`] keep observing
 /// derived values; under lumenc that replay is a next-tick equal-value
@@ -750,7 +754,27 @@ pub fn apply_derivations<H: ScriptHost + Resource<Mutability = Mutable>>(
         let mut wrote: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (name, deps, closure) in derivations {
             let needs_initial = pending.contains(&name);
-            match host.eval_derivation(&closure, &deps, &name) {
+            // A panic out of the script engine (a VM assertion tripped by
+            // corrupted interpreter state, say) must not unwind through the
+            // tick and take the process with it. Every host's `call` /
+            // `call_closure` is expected to turn its own panics into a
+            // `ScriptError` before returning (`CandelaHost::vm_call` does
+            // this); this is the backstop for a panic that escapes anyway -
+            // one containment point, feeding the same failed-derivation
+            // path below rather than a second reporting mechanism. Neither
+            // `store` nor the property-store dirty set is touched before
+            // this call returns, so a caught panic leaves them exactly as
+            // they were before this derivation ran.
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                host.eval_derivation(&closure, &deps, &name)
+            }))
+            .unwrap_or_else(|payload| {
+                Err(ScriptError::Runtime(format!(
+                    "derivation panicked: {}",
+                    panic_payload_text(payload.as_ref())
+                )))
+            });
+            match outcome {
                 Ok(text) => {
                     if store.set_global_str(&name, text.as_str()) {
                         wrote.insert(name.clone());
@@ -781,6 +805,20 @@ pub fn apply_derivations<H: ScriptHost + Resource<Mutability = Mutable>>(
     if !evaluated.is_empty() {
         host.clear_pending(&evaluated);
     }
+}
+
+/// Best-effort text for a caught panic payload.
+///
+/// `Any` only carries the payload types `panic!` produces: `&'static str`
+/// for a literal message, `String` for a formatted one. Any other payload (a
+/// `panic_any` caller reaching in with something else) reports as unknown
+/// rather than failing to build a message.
+fn panic_payload_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "non-string panic payload".to_owned())
 }
 
 // ---------------------------------------------------------------------
@@ -1973,5 +2011,183 @@ mod http_tests {
             .send(&HttpRequest::default(), MAX_HTTP_BODY_BYTES)
             .expect_err("the disabled client always errors");
         assert!(err.contains("http-fetch"), "error names the feature: {err}");
+    }
+}
+
+#[cfg(test)]
+mod derivation_panic_tests {
+    use super::*;
+    use crate::dom_events::text_event_tests::NoHost;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A host whose one derivation panics on every evaluation, standing in
+    /// for the corrupted-VM-state panic issue #204 describes. Wraps the
+    /// crate's existing "no host" test double (`NoHost`) instead of
+    /// reimplementing its unimplemented / trivial stubs a second time:
+    /// every method `apply_derivations` doesn't reach for this test just
+    /// forwards to it. `derivations_matching` and `pending_initial` are
+    /// real overrides (this test needs an actual pending derivation, which
+    /// `NoHost` never has), and `eval_derivation` is the panic under test.
+    #[derive(Resource)]
+    struct PanickingDerivationHost {
+        inner: NoHost,
+        eval_calls: Arc<AtomicUsize>,
+    }
+
+    impl ScriptHost for PanickingDerivationHost {
+        type Closure = ();
+
+        fn compile_check(&self, source: &str, uri: &str) -> Result<(), ScriptError> {
+            self.inner.compile_check(source, uri)
+        }
+        fn load(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
+            self.inner.load(source, uri)
+        }
+        fn replace(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
+            self.inner.replace(source, uri)
+        }
+        fn reset(&mut self) {
+            self.inner.reset()
+        }
+        fn call(
+            &mut self,
+            fn_name: &str,
+            args: &[ScriptValue],
+        ) -> Result<CallOutcome, ScriptError> {
+            self.inner.call(fn_name, args)
+        }
+        fn call_closure(
+            &mut self,
+            closure: &Self::Closure,
+            args: &[ScriptValue],
+        ) -> Result<ScriptValue, ScriptError> {
+            self.inner.call_closure(closure, args)
+        }
+        fn eval_derivation(
+            &mut self,
+            _closure: &Self::Closure,
+            _deps: &[String],
+            _name: &str,
+        ) -> Result<String, ScriptError> {
+            self.eval_calls.fetch_add(1, Ordering::SeqCst);
+            panic!("simulated VM index-out-of-bounds");
+        }
+        fn drain_commands(&mut self) -> Vec<ScriptCommand> {
+            self.inner.drain_commands()
+        }
+        fn push_commands(&mut self, cmds: Vec<ScriptCommand>) {
+            self.inner.push_commands(cmds)
+        }
+        fn mirror_get(&self, name: &str) -> Option<ScriptValue> {
+            self.inner.mirror_get(name)
+        }
+        fn mirror_set(&mut self, name: &str, value: ScriptValue) {
+            self.inner.mirror_set(name, value)
+        }
+        fn mirror_sync_str(&mut self, name: &str, value: &str) {
+            self.inner.mirror_sync_str(name, value)
+        }
+        fn handler_for(&self, event: &str, key: &str) -> Option<String> {
+            self.inner.handler_for(event, key)
+        }
+        fn derivations_matching(
+            &self,
+            _dirty: &HashSet<&str>,
+            pending: &HashSet<String>,
+        ) -> Vec<(String, Vec<String>, Self::Closure)> {
+            pending
+                .iter()
+                .map(|name| (name.clone(), Vec::new(), ()))
+                .collect()
+        }
+        fn pending_initial(&self) -> HashSet<String> {
+            [String::from("doubled")].into_iter().collect()
+        }
+        fn clear_pending(&mut self, evaluated: &[String]) {
+            self.inner.clear_pending(evaluated)
+        }
+        fn register_script_fn(&mut self, f: &crate::ScriptFn) -> Result<(), ScriptError> {
+            self.inner.register_script_fn(f)
+        }
+        fn lang(&self) -> &'static str {
+            self.inner.lang()
+        }
+        fn builtins(&self) -> &'static [crate::BuiltinFn] {
+            self.inner.builtins()
+        }
+    }
+
+    /// Issue #204: a derivation whose evaluation panics (a corrupted VM
+    /// tripping an internal assertion, in production) must not unwind past
+    /// `apply_derivations` and take the process with it. Before the
+    /// `catch_unwind` this test guards, `schedule.run` below unwinds out of
+    /// the test itself; after it, the system returns normally, the panic is
+    /// reported through the same log line a failed (`Err`) derivation gets,
+    /// and the property store is left exactly as it was.
+    #[test]
+    fn a_panicking_derivation_does_not_unwind_past_apply_derivations() {
+        let mut world = World::new();
+        MessageRegistry::register_message::<ScriptCommandEvent>(&mut world);
+        world.insert_resource(lumen_core::property_store::PropertyStore::default());
+        let eval_calls = Arc::new(AtomicUsize::new(0));
+        world.insert_resource(PanickingDerivationHost {
+            inner: NoHost,
+            eval_calls: eval_calls.clone(),
+        });
+
+        let mut schedule = Schedule::default();
+        schedule.add_systems(apply_derivations::<PanickingDerivationHost>);
+
+        // A panic escaping `apply_derivations` would unwind out of this
+        // call and fail the test with the raw panic message rather than an
+        // assertion - the containment under test is that it does not.
+        schedule.run(&mut world);
+
+        assert_eq!(
+            eval_calls.load(Ordering::SeqCst),
+            1,
+            "the derivation ran (and panicked) exactly once"
+        );
+        let store = world.resource::<lumen_core::property_store::PropertyStore>();
+        assert!(
+            store.get_global_str("doubled").is_none(),
+            "a caught panic must not leave a half-written store entry"
+        );
+
+        // The panicking derivation stays pending (never reaches
+        // `evaluated`), so the next tick retries it rather than disabling
+        // it permanently.
+        schedule.run(&mut world);
+        assert_eq!(
+            eval_calls.load(Ordering::SeqCst),
+            2,
+            "the derivation is retried on the next tick, not silently dropped"
+        );
+    }
+
+    /// `panic_payload_text` reads a caught panic's payload, and `Any` only
+    /// ever carries one of three shapes: `panic!("literal")` boxes a
+    /// `&'static str`, `panic!("{}", x)` boxes a `String`, and
+    /// `panic_any(v)` can box anything else. All three are real, so all
+    /// three get their own case rather than trusting the `&str` arm alone.
+    #[test]
+    fn panic_payload_text_reads_all_three_payload_shapes() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let str_payload = catch_unwind(AssertUnwindSafe(|| panic!("literal"))).unwrap_err();
+        assert_eq!(panic_payload_text(str_payload.as_ref()), "literal");
+
+        let string_payload =
+            catch_unwind(AssertUnwindSafe(|| panic!("{} {}", "formatted", 1))).unwrap_err();
+        assert_eq!(panic_payload_text(string_payload.as_ref()), "formatted 1");
+
+        let other_payload =
+            catch_unwind(AssertUnwindSafe(|| std::panic::panic_any(42u32))).unwrap_err();
+        assert_eq!(
+            panic_payload_text(other_payload.as_ref()),
+            "non-string panic payload"
+        );
     }
 }
