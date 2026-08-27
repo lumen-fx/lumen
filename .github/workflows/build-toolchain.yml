@@ -187,6 +187,7 @@ jobs:
             -p lumen \
             -p lumen-archive \
             -p lumen-audio \
+            -p lumen-download \
             -p lumen-fs \
             -p lumenc \
             --config 'profile.release.lto="off"' \
@@ -295,6 +296,7 @@ jobs:
           modules=(
             "liblumen_archive.so liblumen_archive.dylib"
             "liblumen_audio.so liblumen_audio.dylib"
+            "liblumen_download.so liblumen_download.dylib"
             "liblumen_fs.so liblumen_fs.dylib"
           )
           for spellings in "${modules[@]}"; do

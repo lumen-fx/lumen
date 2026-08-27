@@ -204,6 +204,7 @@ lumen-async-tokio = { path = "crates/backends/async-tokio" }
 lumen-audio = { path = "std/audio" }
 lumen-core = { path = "crates/core" }
 lumen-devtools = { path = "crates/dev/devtools" }
+lumen-download = { path = "std/download" }
 # The engine in the form a Rust app links instead of compiling in. Excluded from
 # the workspace, so it is the one internal crate that cannot inherit this table;
 # see public/lumen-dylib/Cargo.toml for why it sits outside.
