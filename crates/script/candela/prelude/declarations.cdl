@@ -42,6 +42,11 @@ host "lumen" {
     allow_sleep(string);
     register_hotkey(string, string);
     unregister_hotkey(string);
+    add_recent_file(string, string);
+    list_recent_files(string);
+    clear_recent_files();
+    set_autostart(bool);
+    query_autostart(string);
     pick_file(string);
     pick_files(string);
     pick_folder(string);

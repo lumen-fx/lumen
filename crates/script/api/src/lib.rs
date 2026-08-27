@@ -658,6 +658,36 @@ pub enum ScriptCommand {
         /// Logical height.
         height: f32,
     },
+
+    // -- app lifecycle (recent files, autostart) ------------------------
+    /// Record `path` as recently opened (move-to-front, capped list).
+    /// Relative paths resolve against the app directory.
+    AddRecentFile {
+        /// File path to record.
+        path: String,
+        /// Display label; empty derives one from the path's file name.
+        label: String,
+    },
+    /// Request the recent-files list. The runtime reads it and fires
+    /// `on_recent_files(tag, paths)`, most recent first, paths joined by
+    /// `|`.
+    ListRecentFiles {
+        /// Identifier the script gets back in the event handler.
+        tag: String,
+    },
+    /// Remove every entry from the recent-files list.
+    ClearRecentFiles,
+    /// Enable or disable launching this app at login.
+    SetAutostart {
+        /// Whether the app should autostart.
+        on: bool,
+    },
+    /// Request the current autostart state. The runtime reads it and fires
+    /// `on_autostart_enabled(tag)` or `on_autostart_disabled(tag)`.
+    QueryAutostart {
+        /// Identifier the script gets back in the event handler.
+        tag: String,
+    },
 }
 
 impl ScriptCommand {

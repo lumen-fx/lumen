@@ -354,6 +354,39 @@ fn os_fns() -> Vec<ScriptFn> {
                 name: cx.str_arg(0),
             },
         ),
+        emit(
+            "add_recent_file",
+            "Record path as recently opened; empty label derives one from the path.",
+            &[("path", T::Str), ("label", T::Str)],
+            |cx| ScriptCommand::AddRecentFile {
+                path: cx.str_arg(0),
+                label: cx.str_arg(1),
+            },
+        ),
+        emit(
+            "list_recent_files",
+            "Request the recent-files list; delivers to on_recent_files(tag, paths).",
+            &[("tag", T::Str)],
+            |cx| ScriptCommand::ListRecentFiles { tag: cx.str_arg(0) },
+        ),
+        emit(
+            "clear_recent_files",
+            "Remove every entry from the recent-files list.",
+            &[],
+            |_| ScriptCommand::ClearRecentFiles,
+        ),
+        emit(
+            "set_autostart",
+            "Enable or disable launching this app at login.",
+            &[("on", T::Bool)],
+            |cx| ScriptCommand::SetAutostart { on: cx.bool_arg(0) },
+        ),
+        emit(
+            "query_autostart",
+            "Request the autostart state; delivers to on_autostart_enabled(tag) or on_autostart_disabled(tag).",
+            &[("tag", T::Str)],
+            |cx| ScriptCommand::QueryAutostart { tag: cx.str_arg(0) },
+        ),
     ]
 }
 

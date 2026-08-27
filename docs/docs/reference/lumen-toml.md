@@ -34,6 +34,7 @@ engine = "candela"
 | `id` | string | the app directory name | Stable identifier for per-app state directories, including the one a script's `files::data_dir()` writes to, and the app id notifications are attributed to. |
 | `kind` | `"markup"`, `"rust"`, `"cpp"`, `"python"` | auto-detected | Pins the build and run route instead of letting the directory contents decide. |
 | `locale` | BCP-47 tag | the OS locale, else `en-US` | The locale the app starts in. Selects which `locale/<tag>.ftl` catalogue `translatable` markup and the scripts' `t()` builtin resolve against; every catalogue in the directory is loaded regardless. A tag that is not valid BCP-47 is a parse error. |
+| `single_instance` | bool | `false` | A second launch forwards its command-line arguments to the already-running window (`on_second_instance(args)`) and exits instead of opening a second one. Windowed runs only; a `--headless` run never locks. See [OS integration](../guides/os-integration.md#single-instance-launches). |
 
 Auto-detection for `kind` looks for a `Cargo.toml` depending on `lumen`
 (`rust`), a `CMakeLists.txt` (`cpp`), or a `.py` file importing `lumen`

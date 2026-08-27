@@ -3783,6 +3783,7 @@ name = "lumen-os-lifecycle"
 version = "0.0.6"
 dependencies = [
  "bevy_ecs",
+ "libc",
  "lumen-core",
  "serde",
  "serde_json",
@@ -3986,6 +3987,7 @@ dependencies = [
  "lumen-os-filedialog",
  "lumen-os-hotkey",
  "lumen-os-launcher",
+ "lumen-os-lifecycle",
  "lumen-os-notify",
  "lumen-os-power",
  "lumen-os-tray",

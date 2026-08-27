@@ -2,20 +2,32 @@
 //!
 //! Three independent surfaces (per audit section 416-447):
 //!
-//! - [`LifecycleService::ensure_single_instance`] - Linux/macOS bind a Unix domain socket at
-//!   `$XDG_RUNTIME_DIR/<app_id>.sock`; Windows uses a named pipe at `\\.\pipe\<app_id>`. The second
+//! - [`LifecycleService::ensure_single_instance`] - Linux and macOS bind a Unix domain socket at
+//!   `<app_id>.sock` under a private, per-user directory resolved per platform (`$XDG_RUNTIME_DIR` on
+//!   Linux, `confstr(_CS_DARWIN_USER_TEMP_DIR)` on macOS - both verified by ownership and mode, not
+//!   assumed), locked to `0600` right after bind so another local user cannot connect and feed argv
+//!   into a running app. When no such directory can be resolved and verified, the lock fails closed
+//!   (no lock, runs as primary) rather than falling back to a world-writable temp directory a local
+//!   attacker could squat ahead of the real launch. Windows uses a named pipe at `\\.\pipe\<app_id>`. The second
 //!   launch connects, sends its argv as length-prefixed JSON, and exits. The primary spawns a recv thread
-//!   that reads incoming args and pushes them into [`LifecycleService::take_secondary_args`] so the
-//!   embedder (e.g. `lumenc`) can emit `SecondInstanceLaunched { args: Vec<String> }` ECS messages.
+//!   that reads incoming args and pushes them into [`LifecycleService::take_secondary_args`], which
+//!   [`poll_second_instance`] drains every tick into `lumen_core::input::SecondInstanceLaunched` ECS
+//!   messages, reaching a script as `on_second_instance(args)`. The runtime gates the check itself
+//!   behind `lumen.toml [app] single_instance`; this crate carries no config surface of its own.
 //!   Mirrors `GApplication`'s "unique by default" behaviour and Qt's `QSingleInstance` pattern.
 //! - [`AutostartService`] - writes a `.desktop` entry on Linux, a LaunchAgent plist on macOS, or a
-//!   `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` value on Windows.
+//!   `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` value on Windows. Reachable
+//!   from script as `set_autostart(on)` / `query_autostart(tag)`.
 //! - [`RecentFilesService`] - per-app JSON list under XDG_DATA_HOME (Linux), `~/Library/Application
 //!   Support` (macOS), or `%APPDATA%` (Windows). Mirrors `GtkRecentManager` / `QSettings`'s "recent
-//!   documents" patterns.
+//!   documents" patterns. Reachable from script as `add_recent_file(path, label)` /
+//!   `list_recent_files(tag)` / `clear_recent_files()`.
 //!
 //! All three pieces share an [`AppId`] for path scoping. The id maps to `lumen.toml [app] id` at the
-//! caller layer; this crate is ECS-clean and doesn't read TOML.
+//! caller layer; this crate is ECS-clean and doesn't read TOML. The runtime crate
+//! (`crates/runtime/src/run/subsystems.rs`) is what installs these as resources, translates the shared
+//! `ScriptCommand` variants into calls on them, and dispatches their replies back to script - this
+//! crate itself names no script host and no config key.
 
 #![warn(missing_docs)]
 
@@ -115,14 +127,19 @@ impl LifecycleService {
         self
     }
 
-    /// Resolve the per-app data dir as `<root>/<app_id>` where root is
-    /// `$XDG_DATA_HOME` / `$HOME/.local/share` (Linux),
+    /// Resolve the per-app data dir, same shape as
+    /// [`lumen_core::app_paths::data_dir`]: `<root>/lumen/<app_id>` where
+    /// root is `$XDG_DATA_HOME` / `$HOME/.local/share` (Linux),
     /// `$HOME/Library/Application Support` (macOS), or `%APPDATA%`
-    /// (Windows). Falls back to a relative `./` path when nothing
-    /// resolves (tests, sandboxes).
+    /// (Windows). Falls back to the process's app directory when nothing
+    /// resolves (tests, sandboxes). Delegates to `app_paths` rather than
+    /// resolving the root itself, so there is one definition of the shape
+    /// shared by every per-app data directory in Lumen.
     pub fn data_dir(&self, app: &AppId) -> PathBuf {
-        let root = self.data_root.clone().unwrap_or_else(default_data_root);
-        root.join(&app.0)
+        match &self.data_root {
+            Some(root) => lumen_core::app_paths::data_dir_under(root, &app.0),
+            None => lumen_core::app_paths::data_dir_for(&app.0),
+        }
     }
 
     /// Returns the secondary-args inbox so embedders can drain it each tick.
@@ -138,11 +155,13 @@ impl LifecycleService {
 
     /// Try to acquire a single-instance lock for `app`.
     ///
-    /// On Linux + macOS this binds a Unix domain socket at `$XDG_RUNTIME_DIR/<app_id>.sock` (falling back
-    /// to `$TMPDIR`); on Windows it opens a named pipe at `\\.\pipe\<app_id>`. On a successful bind the
+    /// On Linux + macOS this binds a Unix domain socket at `<app_id>.sock` under a private, per-user
+    /// directory resolved and verified per platform (see the module docs) - never a shared temp
+    /// directory; on Windows it opens a named pipe at `\\.\pipe\<app_id>`. On a successful bind the
     /// caller becomes the primary and a recv thread spawns. On a bind-already-in-use, the caller connects
     /// as a secondary, forwards `args` as length-prefixed JSON, and returns
-    /// [`SingleInstance::Secondary`] so the caller can exit.
+    /// [`SingleInstance::Secondary`] so the caller can exit. When no private directory can be resolved
+    /// (unix only), the lock is skipped and the caller runs as [`SingleInstance::Primary`] unlocked.
     pub fn ensure_single_instance(&self, app: &AppId, args: &[String]) -> SingleInstance {
         #[cfg(unix)]
         {
@@ -157,6 +176,22 @@ impl LifecycleService {
             let _ = (app, args);
             SingleInstance::Primary
         }
+    }
+}
+
+/// Per-tick drain: forward argv batches a secondary launch sent this tick as
+/// [`lumen_core::input::SecondInstanceLaunched`] messages.
+///
+/// A no-op when [`LifecycleService::ensure_single_instance`] was never
+/// called (the inbox stays empty forever), so this is safe to register
+/// unconditionally - the same DEFAULT-ON shape the other OS host crates use
+/// for their own idle-cost-nil per-tick drains.
+pub fn poll_second_instance(
+    svc: Res<LifecycleService>,
+    mut out: MessageWriter<lumen_core::input::SecondInstanceLaunched>,
+) {
+    for args in svc.take_secondary_args() {
+        out.write(lumen_core::input::SecondInstanceLaunched { args });
     }
 }
 
@@ -352,24 +387,27 @@ impl AutostartService {
     }
 
     /// True when the autostart entry currently exists.
-    pub fn is_enabled(&self) -> bool {
+    ///
+    /// `None` when the platform helper could not even resolve where to
+    /// look (Linux/macOS: `XDG_CONFIG_HOME` and `HOME` both unset) - a
+    /// distinct outcome from a resolved, absent entry, and the caller
+    /// must not read it as "disabled".
+    pub fn is_enabled(&self) -> Option<bool> {
         #[cfg(target_os = "linux")]
         {
-            self.linux_desktop_path()
-                .map(|p| p.exists())
-                .unwrap_or(false)
+            self.linux_desktop_path().map(|p| p.exists())
         }
         #[cfg(target_os = "macos")]
         {
-            self.macos_plist_path().map(|p| p.exists()).unwrap_or(false)
+            self.macos_plist_path().map(|p| p.exists())
         }
         #[cfg(target_os = "windows")]
         {
-            self.windows_run_key_exists()
+            Some(self.windows_run_key_exists())
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
-            false
+            Some(false)
         }
     }
 
@@ -564,33 +602,6 @@ impl AutostartService {
     }
 }
 
-/// Resolve the platform's per-user data root. Used by
-/// [`LifecycleService::data_dir`] when no override is set.
-fn default_data_root() -> PathBuf {
-    #[cfg(target_os = "linux")]
-    {
-        if let Ok(v) = std::env::var("XDG_DATA_HOME") {
-            return PathBuf::from(v);
-        }
-        if let Ok(h) = std::env::var("HOME") {
-            return PathBuf::from(h).join(".local").join("share");
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(h) = std::env::var("HOME") {
-            return PathBuf::from(h).join("Library").join("Application Support");
-        }
-    }
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(v) = std::env::var("APPDATA") {
-            return PathBuf::from(v);
-        }
-    }
-    PathBuf::from(".")
-}
-
 #[cfg(target_os = "macos")]
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -608,29 +619,162 @@ mod unix {
     //! once.
 
     use super::{AppId, SecondaryArgsInbox, SingleInstance};
+    #[cfg(target_os = "macos")]
+    use std::ffi::CStr;
     use std::io::{Read, Write};
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::os::unix::net::{UnixListener, UnixStream};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
-    fn runtime_dir() -> PathBuf {
-        if let Ok(v) = std::env::var("XDG_RUNTIME_DIR") {
-            return PathBuf::from(v);
-        }
-        std::env::temp_dir()
+    /// The private, per-user directory a single-instance socket lives
+    /// under, or `None` when no such directory can be resolved AND
+    /// verified.
+    ///
+    /// No fallback to [`std::env::temp_dir`]: that directory is world-writable
+    /// on most systems, so a socket path under it is squattable by any local
+    /// user ahead of the real launch. A squatter's listener accepts the real
+    /// launch's connect, the real launch reads that as "an instance is
+    /// already running", and exits having forwarded its actual argv to the
+    /// squatter without ever starting. Failing closed - no lock, run as
+    /// [`SingleInstance::Primary`] - is strictly safer than trusting an
+    /// unauthenticated shared directory.
+    ///
+    /// The candidate itself is platform-specific ([`candidate_runtime_dir`]):
+    /// `XDG_RUNTIME_DIR` is a Linux-only convention, so a rule of "that
+    /// variable or nothing" leaves single-instance permanently unavailable
+    /// on macOS, which has no such variable but does have its own
+    /// OS-provided private-per-user directory. Either way the candidate is
+    /// verified, not assumed private: [`verified_private_dir`] checks
+    /// ownership and mode rather than trusting a spec or a convention.
+    // `pub(crate)`, not `pub`: this is the exact question the production
+    // path (`socket_path` -> `ensure` -> `ensure_at`) asks; a test that
+    // wants to know whether THIS machine offers a private directory asks
+    // it too, rather than hardcoding the Linux half of the platform split.
+    pub(crate) fn runtime_dir() -> Option<PathBuf> {
+        candidate_runtime_dir().and_then(verified_private_dir)
     }
 
-    fn socket_path(app: &AppId) -> PathBuf {
-        runtime_dir().join(format!("{}.sock", app.0))
+    /// `$XDG_RUNTIME_DIR` on Linux: the XDG base-directory spec requires it
+    /// to be created by the OS as `0700` and owned by the user, which is
+    /// exactly what [`verified_private_dir`] checks rather than assumes.
+    #[cfg(target_os = "linux")]
+    fn candidate_runtime_dir() -> Option<PathBuf> {
+        std::env::var("XDG_RUNTIME_DIR").ok().map(PathBuf::from)
+    }
+
+    /// macOS has no `XDG_RUNTIME_DIR` convention, but the OS provides the
+    /// same shape of thing under a different name: a per-user, per-boot
+    /// directory it creates and owns exclusively for the calling user,
+    /// returned by `confstr(_CS_DARWIN_USER_TEMP_DIR)` (the same directory
+    /// `$TMPDIR` usually already names in an interactive session - this
+    /// asks the OS directly instead of trusting an inherited environment
+    /// variable that a bare launchd job or a CI runner may not set).
+    #[cfg(target_os = "macos")]
+    fn candidate_runtime_dir() -> Option<PathBuf> {
+        let mut buf = vec![0u8; 1024];
+        // SAFETY: `buf` is a valid, uniquely-owned buffer of `buf.len()`
+        // bytes; `confstr` writes at most that many bytes into it and
+        // returns the length it needed (including the NUL), which we check
+        // against the buffer's capacity before reading anything back out.
+        let needed = unsafe {
+            libc::confstr(
+                libc::_CS_DARWIN_USER_TEMP_DIR,
+                buf.as_mut_ptr() as *mut libc::c_char,
+                buf.len(),
+            )
+        };
+        if needed == 0 || needed > buf.len() {
+            return None;
+        }
+        // SAFETY: `needed > 0` and `needed <= buf.len()` was just checked, so
+        // `buf` holds a NUL-terminated string confstr wrote within bounds.
+        let cstr = unsafe { CStr::from_ptr(buf.as_ptr() as *const libc::c_char) };
+        Some(PathBuf::from(cstr.to_str().ok()?))
+    }
+
+    /// Every other unix this crate's `#[cfg(unix)]` reaches (the BSDs) has
+    /// neither convention; fail closed rather than guessing a path.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    fn candidate_runtime_dir() -> Option<PathBuf> {
+        None
+    }
+
+    /// Accept `dir` as the private runtime directory only once checked:
+    /// it must exist, be a directory, be owned by the calling process's
+    /// user, and be unreadable and unwritable by anyone else (mode `0700`
+    /// or tighter). A directory that fails any of these is not a safe
+    /// place to bind a socket another local user must not reach, whatever
+    /// convention says it should be. `pub(crate)`, not `pub`: a check
+    /// this crate's own tests exercise directly, not public API.
+    pub(crate) fn verified_private_dir(dir: PathBuf) -> Option<PathBuf> {
+        let meta = std::fs::metadata(&dir).ok()?;
+        if !meta.is_dir() {
+            return None;
+        }
+        // SAFETY: `getuid` takes no arguments, performs no memory access,
+        // and cannot fail - it is `unsafe` only because it crosses the FFI
+        // boundary.
+        let uid = unsafe { libc::getuid() };
+        if meta.uid() != uid {
+            return None;
+        }
+        // Reject anything readable or writable by group or other.
+        if meta.mode() & 0o077 != 0 {
+            return None;
+        }
+        Some(dir)
+    }
+
+    fn socket_path(app: &AppId) -> Option<PathBuf> {
+        runtime_dir().map(|dir| dir.join(format!("{}.sock", app.0)))
+    }
+
+    /// Restrict the socket to this user right after bind.
+    ///
+    /// `bind` creates the special file under the process umask, which on a
+    /// permissive umask could leave it group- or world-accessible; forcing
+    /// `0600` closes that regardless of umask, so a co-resident user cannot
+    /// connect and feed attacker-chosen argv into `on_second_instance`. A
+    /// TOCTOU window remains between `bind` and this call - the standard
+    /// caveat for this fix on any platform whose bind+chmod aren't one
+    /// syscall - but it is a window inside a directory the XDG spec already
+    /// requires to be `0700` and user-owned, not an open one.
+    fn lock_down(path: &Path) {
+        if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
+            tracing::debug!(
+                "lumen-os-lifecycle: chmod 0600 {} failed: {e}",
+                path.display()
+            );
+        }
     }
 
     pub fn ensure(app: &AppId, args: &[String], inbox: SecondaryArgsInbox) -> SingleInstance {
-        let path = socket_path(app);
+        ensure_at(socket_path(app), args, inbox)
+    }
+
+    /// Core of [`ensure`], parameterized on the resolved socket path so a
+    /// test can drive the "no `XDG_RUNTIME_DIR`" (`None`) branch without
+    /// mutating the process environment, which would race every other test
+    /// in this binary. `pub(crate)`, not `pub`: a branch point for this
+    /// crate's own tests, not public API.
+    pub(crate) fn ensure_at(
+        path: Option<PathBuf>,
+        args: &[String],
+        inbox: SecondaryArgsInbox,
+    ) -> SingleInstance {
+        let Some(path) = path else {
+            tracing::debug!(
+                "lumen-os-lifecycle: XDG_RUNTIME_DIR is unset; running without a single-instance lock"
+            );
+            return SingleInstance::Primary;
+        };
 
         // Try to bind first. If the path is held by a live primary, this fails with AddrInUse and we
         // fall through to the secondary path. If the path is a stale leftover, the connect will fail
         // and we unlink + retry once.
         match UnixListener::bind(&path) {
             Ok(listener) => {
+                lock_down(&path);
                 spawn_recv(listener, inbox);
                 SingleInstance::Primary
             }
@@ -646,6 +790,7 @@ mod unix {
                         let _ = std::fs::remove_file(&path);
                         match UnixListener::bind(&path) {
                             Ok(listener) => {
+                                lock_down(&path);
                                 spawn_recv(listener, inbox);
                                 SingleInstance::Primary
                             }
@@ -985,21 +1130,159 @@ mod tests {
 
     #[cfg(unix)]
     fn cleanup_uds(app: &AppId) {
-        let rt = std::env::var("XDG_RUNTIME_DIR")
-            .ok()
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
-        let _ = std::fs::remove_file(rt.join(format!("{}.sock", app.0)));
+        // Ask the same question the production path does rather than
+        // hardcoding `XDG_RUNTIME_DIR` - on macOS the real socket lives
+        // under `confstr(_CS_DARWIN_USER_TEMP_DIR)`, not that variable, and
+        // a `runtime_dir()` of `None` means nothing was ever bound to
+        // clean up.
+        if let Some(rt) = unix::runtime_dir() {
+            let _ = std::fs::remove_file(rt.join(format!("{}.sock", app.0)));
+        }
     }
     #[cfg(not(unix))]
     fn cleanup_uds(_app: &AppId) {}
+
+    /// The bound socket is `0600` - other local users on the same machine
+    /// cannot connect and feed `on_second_instance` attacker-chosen argv.
+    ///
+    /// Asks [`unix::runtime_dir`] the same question the production path
+    /// asks, rather than hardcoding `XDG_RUNTIME_DIR`: that's the Linux
+    /// half of the platform split this crate now resolves per-OS, and
+    /// hardcoding it here would make this test fail on macOS even though
+    /// `confstr(_CS_DARWIN_USER_TEMP_DIR)` resolves a real directory there.
+    /// A machine offering neither skips with a printed reason, the same
+    /// house pattern used for a display or a GPU the sandbox lacks.
+    #[cfg(unix)]
+    #[test]
+    fn single_instance_socket_is_user_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let Some(rt) = unix::runtime_dir() else {
+            eprintln!(
+                "skip: this machine offers no private per-user directory (checked \
+                 the same way the production path does) to bind a single-instance \
+                 socket under"
+            );
+            return;
+        };
+
+        let id = AppId::from(format!("test.lumen.mode.{}", std::process::id()));
+        let svc = LifecycleService::new();
+        let res = svc.ensure_single_instance(&id, &[]);
+        assert_eq!(res, SingleInstance::Primary);
+
+        let path = rt.join(format!("{}.sock", id.0));
+        let mode = std::fs::metadata(&path)
+            .unwrap_or_else(|e| panic!("stat {}: {e}", path.display()))
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "socket permissions: {mode:o}");
+        cleanup_uds(&id);
+    }
+
+    /// No `XDG_RUNTIME_DIR` means no lock, not a `std::env::temp_dir()`
+    /// fallback: a world-writable directory is squattable by another local
+    /// user ahead of the real launch. Drives the branch directly (rather
+    /// than unsetting the process environment) so it cannot race any other
+    /// test in this binary that depends on `XDG_RUNTIME_DIR` being set.
+    #[cfg(unix)]
+    #[test]
+    fn unset_runtime_dir_takes_the_primary_branch() {
+        let res = unix::ensure_at(None, &[], SecondaryArgsInbox::new());
+        assert_eq!(
+            res,
+            SingleInstance::Primary,
+            "no runtime dir means run unlocked, never a temp-dir fallback"
+        );
+    }
+
+    /// A candidate directory readable or writable by group or other is
+    /// rejected regardless of platform convention - the check this crate
+    /// now runs instead of assuming `XDG_RUNTIME_DIR` (or its macOS
+    /// equivalent) is private just because the spec says it should be.
+    #[cfg(unix)]
+    #[test]
+    fn verified_private_dir_rejects_a_world_readable_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tmpdir("insecure");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("chmod 0755");
+        assert_eq!(
+            unix::verified_private_dir(dir.clone()),
+            None,
+            "0755 is readable by group and other; must not be trusted"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The owned, `0700` case that `verified_private_dir` is meant to
+    /// accept - the positive side of the same check.
+    #[cfg(unix)]
+    #[test]
+    fn verified_private_dir_accepts_an_owned_0700_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tmpdir("secure");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("chmod 0700");
+        assert_eq!(unix::verified_private_dir(dir.clone()), Some(dir.clone()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// [`poll_second_instance`] drains whatever a secondary launch pushed
+    /// into the inbox into a [`lumen_core::input::SecondInstanceLaunched`]
+    /// message, the half of the pipeline before script dispatch (which
+    /// `lumen-runtime`'s `script_fn_lifecycle_commands` integration test
+    /// covers from there, since it needs a real `ScriptHost`).
+    #[test]
+    fn poll_second_instance_drains_pending_args_into_a_message() {
+        use bevy_ecs::message::Messages;
+        use bevy_ecs::system::RunSystemOnce;
+        use bevy_ecs::world::World;
+
+        let mut world = World::new();
+        world.init_resource::<Messages<lumen_core::input::SecondInstanceLaunched>>();
+        let svc = LifecycleService::new();
+        svc.secondary_args_inbox()
+            .push(vec!["--open".to_string(), "report.pdf".to_string()]);
+        world.insert_resource(svc);
+
+        world.run_system_once(poll_second_instance).unwrap();
+
+        let drained: Vec<_> = world
+            .resource_mut::<Messages<lumen_core::input::SecondInstanceLaunched>>()
+            .drain()
+            .collect();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(
+            drained[0].args,
+            vec!["--open".to_string(), "report.pdf".to_string()]
+        );
+    }
 
     #[test]
     fn data_dir_uses_override() {
         let root = tmpdir("data-dir");
         let svc = LifecycleService::new().with_data_root(&root);
         let dir = svc.data_dir(&AppId::from("foo"));
-        assert_eq!(dir, root.join("foo"));
+        // Same `<root>/lumen/<id>` shape `lumen_core::app_paths` uses, with
+        // the override standing in for the resolved platform root.
+        assert_eq!(dir, root.join("lumen").join("foo"));
+    }
+
+    /// With no override, the shape agrees with
+    /// `lumen_core::app_paths::data_dir_for` - the crate delegates rather
+    /// than keeping its own copy of the root-resolution logic.
+    #[test]
+    fn data_dir_agrees_with_app_paths() {
+        let svc = LifecycleService::new();
+        let app = AppId::from("agree-check");
+        assert_eq!(
+            svc.data_dir(&app),
+            lumen_core::app_paths::data_dir_for(&app.0)
+        );
     }
 
     #[test]

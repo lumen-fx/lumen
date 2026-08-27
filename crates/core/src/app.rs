@@ -333,6 +333,9 @@ impl App {
         MessageRegistry::register_message::<MenuClicked>(&mut world);
         MessageRegistry::register_message::<crate::input::DialogClosed>(&mut world);
         MessageRegistry::register_message::<TrayClicked>(&mut world);
+        MessageRegistry::register_message::<crate::input::RecentFilesRead>(&mut world);
+        MessageRegistry::register_message::<crate::input::AutostartRead>(&mut world);
+        MessageRegistry::register_message::<crate::input::SecondInstanceLaunched>(&mut world);
         MessageRegistry::register_message::<ShowContextMenu>(&mut world);
         // Close-request bus. Registered here (not only by the window
         // backend plugin) so app-level close hooks - the script host's

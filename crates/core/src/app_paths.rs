@@ -86,18 +86,38 @@ pub fn resolve(path: impl AsRef<Path>) -> PathBuf {
 /// keep their saves apart. A machine that offers no per-user data root at
 /// all falls back to the app directory.
 pub fn data_dir() -> PathBuf {
-    let dir = data_dir_at(data_root(), &app_id());
+    let dir = data_dir_for(&app_id());
     if let Err(e) = std::fs::create_dir_all(&dir) {
         crate::warn_line!("data_dir({}): {e}", dir.display());
     }
     dir
 }
 
+/// The directory a given app id keeps saved data in, without touching (or
+/// creating) it and without going through the process-global published app.
+///
+/// Same platform root and shape as [`data_dir`] (`<root>/lumen/<id>`), but
+/// takes the id explicitly: an OS-capability crate that scopes storage to
+/// an app id of its own - rather than the current process's published one -
+/// resolves its storage through this, so there is one definition of the
+/// shape and not a second copy of it.
+pub fn data_dir_for(id: &str) -> PathBuf {
+    data_dir_at(data_root(), id)
+}
+
+/// Join a resolved root and an app id into the one path shape every
+/// per-app data directory uses. Exposed so a caller that already holds an
+/// override root (a test, an embedder) can place a directory the same way
+/// [`data_dir_for`] does, instead of reimplementing the join.
+pub fn data_dir_under(root: &Path, id: &str) -> PathBuf {
+    root.join("lumen").join(id)
+}
+
 /// Place one app's data under a resolved root. Split out so the fallback
 /// arm is reachable without a machine that lacks a data root.
 fn data_dir_at(root: Option<PathBuf>, id: &str) -> PathBuf {
     match root {
-        Some(root) => root.join("lumen").join(id),
+        Some(root) => data_dir_under(&root, id),
         None => app_dir(),
     }
 }
@@ -157,6 +177,14 @@ mod tests {
             root.join("lumen").join("lumen-core-app-paths-test")
         );
         assert_eq!(data_dir_at(None, "lumen-core-app-paths-test"), dir);
+
+        // `data_dir_under` is the one join every per-app data directory goes
+        // through; an id-scoped crate (an OS capability that is not the
+        // published app) reaches the same shape through it directly.
+        assert_eq!(
+            data_dir_under(&root, "other-app"),
+            root.join("lumen").join("other-app")
+        );
 
         // The live directory exists once asked for, and sits under the app id.
         let live = data_dir();

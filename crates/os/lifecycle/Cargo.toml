@@ -32,3 +32,9 @@ windows = { version = "0.62", features = [
     "Win32_Security",
     "Win32_System_IO",
 ] }
+
+# Unix: resolving and verifying the private per-user directory the
+# single-instance socket binds under (`getuid`, and on macOS
+# `confstr(_CS_DARWIN_USER_TEMP_DIR)`, which has no std equivalent).
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }

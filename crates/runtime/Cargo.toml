@@ -50,6 +50,7 @@ lumen-os-tray = { workspace = true }
 lumen-os-notify = { workspace = true }
 lumen-os-hotkey = { workspace = true }
 lumen-os-launcher = { workspace = true }
+lumen-os-lifecycle = { workspace = true }
 lumen-os-power = { workspace = true }
 # Async spawn/timer bridge (tokio rt-multi-thread). Part B tree-shaking:
 # OPTIONAL behind the `async` feature. File dialogs resolve on this runtime,

@@ -214,6 +214,14 @@ pub(crate) fn apply_script_commands(
             | ScriptCommand::RevealPath { .. }
             | ScriptCommand::KeepAwake { .. }
             | ScriptCommand::AllowSleep { .. }
+            // Recent files, autostart, and single-instance are applied by
+            // `apply_os_script_commands` below, which holds those hosts;
+            // no-op here.
+            | ScriptCommand::AddRecentFile { .. }
+            | ScriptCommand::ListRecentFiles { .. }
+            | ScriptCommand::ClearRecentFiles
+            | ScriptCommand::SetAutostart { .. }
+            | ScriptCommand::QueryAutostart { .. }
             | ScriptCommand::SetString { .. }
             | ScriptCommand::SetTimer { .. }
             | ScriptCommand::CancelTimer { .. }
@@ -263,13 +271,18 @@ pub(crate) fn apply_script_commands(
 ///
 /// The clipboard host is absent on a machine whose backend refused, and
 /// the two clipboard commands warn rather than fail the tick.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_os_script_commands(
     mut events: MessageReader<ScriptCommandEvent>,
     notifier: Res<NotificationService>,
     launcher: Res<Launcher>,
     clipboard: Option<NonSend<ClipboardHost>>,
     mut inhibits: NonSendMut<InhibitHolder>,
+    recent_files: Res<RecentFilesService>,
+    autostart: Res<AutostartService>,
     mut clipboard_out: MessageWriter<lumen_core::input::ClipboardRead>,
+    mut recent_files_out: MessageWriter<lumen_core::input::RecentFilesRead>,
+    mut autostart_out: MessageWriter<lumen_core::input::AutostartRead>,
 ) {
     for ev in events.read() {
         match &ev.0 {
@@ -345,6 +358,52 @@ pub(crate) fn apply_os_script_commands(
                 );
             }
             ScriptCommand::AllowSleep { name } => inhibits.stop(name),
+            ScriptCommand::AddRecentFile { path, label } => {
+                let resolved = lumen_core::app_paths::resolve(path);
+                let label = (!label.is_empty()).then(|| label.clone());
+                recent_files.add(lumen_os_lifecycle::RecentFile {
+                    path: resolved,
+                    label,
+                    mime: None,
+                    last_opened: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                });
+            }
+            ScriptCommand::ListRecentFiles { tag } => {
+                let paths = recent_files
+                    .list(recent_files.max_entries)
+                    .into_iter()
+                    .map(|e| e.path.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("|");
+                recent_files_out.write(lumen_core::input::RecentFilesRead {
+                    tag: tag.clone(),
+                    paths,
+                });
+            }
+            ScriptCommand::ClearRecentFiles => recent_files.clear(),
+            ScriptCommand::SetAutostart { on } => {
+                if !autostart.set_enabled(*on) {
+                    eprintln!("lumenc: set_autostart({on}): platform helper failed");
+                }
+            }
+            ScriptCommand::QueryAutostart { tag } => match autostart.is_enabled() {
+                Some(enabled) => {
+                    autostart_out.write(lumen_core::input::AutostartRead {
+                        tag: tag.clone(),
+                        enabled,
+                    });
+                }
+                // The platform helper could not resolve where to look
+                // (e.g. `HOME` unset). That is not the same thing as
+                // "disabled", so the query goes unanswered rather than
+                // reporting a state nobody observed.
+                None => eprintln!(
+                    "lumenc: query_autostart({tag}): could not resolve the autostart location"
+                ),
+            },
             // Everything else is applied by `apply_script_commands` or by
             // the exclusive DOM applier. Listed
             // rather than caught by `_` so a new command has to be placed
