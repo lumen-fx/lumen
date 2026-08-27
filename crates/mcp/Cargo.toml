@@ -17,7 +17,7 @@ lumen-primitives = { workspace = true }
 lumen-assets = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true
-tokio = { version = "1.52", features = ["rt-multi-thread", "net", "io-util", "io-std", "sync", "macros", "time"] }
+tokio = { version = "1.52", features = ["rt-multi-thread", "net", "io-util", "io-std", "sync", "macros", "time", "process"] }
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

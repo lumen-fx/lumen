@@ -41,6 +41,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod issues;
 mod mcp_protocol;
 mod methods;
 mod plugin;

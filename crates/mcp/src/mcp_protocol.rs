@@ -212,7 +212,7 @@ fn tools_list_result() -> Value {
         ),
         tool_descriptor(
             "lumen_framework_status",
-            "TODO.md progress + liveness check.",
+            "Open issue count for the repository this checkout's origin remote points at, plus the last main-world tick duration as a liveness check.",
             json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         ),
         tool_descriptor(
@@ -304,9 +304,12 @@ fn tool_descriptor(name: &str, description: &str, input_schema: Value) -> Value 
 }
 
 /// Handle a `tools/call` request synchronously against the snapshot.
-/// `lumen_screenshot` and `lumen_simulate` cannot be routed here because
-/// they require the live surface-capture / simulate queue handles -
-/// `server.rs` intercepts those names before delegating here.
+/// `lumen_screenshot`, `lumen_simulate`, `lumen_set_signal`, and
+/// `lumen_framework_status` cannot be routed here because they need
+/// something this synchronous snapshot dispatch doesn't carry (the
+/// surface-capture flag, the simulate queue, the property bus, or an
+/// awaited subprocess) - `server.rs` intercepts those names before
+/// delegating here.
 pub fn handle_tools_call(
     id: Value,
     params: Option<&Value>,
@@ -323,17 +326,19 @@ pub fn handle_tools_call(
     };
     let arguments = p.get("arguments").cloned();
     let legacy_method = tool_name_to_legacy(name);
-    // Screenshot / simulate / set_signal are intercepted by the server
-    // transport (they need the surface-capture / simulate-queue / property
-    // bus handles this layer doesn't carry).
+    // Screenshot / simulate / set_signal / framework_status are intercepted
+    // by the server transport (they need the surface-capture / simulate-
+    // queue / property-bus handles, or an awaited subprocess, that this
+    // layer doesn't carry).
     if legacy_method == "lumen.screenshot"
         || legacy_method == "lumen.simulate"
         || legacy_method == "lumen.set_signal"
+        || legacy_method == "lumen.framework_status"
     {
         return error_response(
             id,
             -32603,
-            "internal: screenshot/simulate/set_signal must be handled by transport layer",
+            "internal: screenshot/simulate/set_signal/framework_status must be handled by transport layer",
         );
     }
     let snap = match snapshot.read() {

@@ -182,7 +182,7 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "lumen_framework_status",
-                "description": "Parses TODO.md (`LUMEN_TODO_PATH` env, or walks up from CWD) and surfaces per-section open/partial/done counts, the first ~10 open items verbatim, plus the most recent main-world tick duration. Use this when working on the Lumen framework itself to find the next thing to ship.",
+                "description": "Open issue count (and the first ~10 titles) for the repository this checkout's origin git remote points at, fetched through the gh CLI, plus the most recent main-world tick duration as a liveness check. Reports issues_error instead of a count when gh, the network, or the origin remote isn't available.",
                 "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
             },
             {
@@ -380,17 +380,28 @@ async fn tools_call(
 // --- Resources ----------------------------------------------------------
 //
 // Surfaces the small set of files an agent typically needs context on
-// (lumen.toml, src/main.lmn, src/main.css, TODO.md, docs/*.md) as read-only MCP
+// (lumen.toml, src/main.lmn, src/main.css, docs/*.md) as read-only MCP
 // `resources/`. The catalogue is discovered relative to the working
-// directory at startup - we walk up to six parents looking for a TODO.md
-// to anchor the project root.
+// directory at startup - we walk up to six parents looking for the same
+// anchor the rest of the toolchain uses for a project root: a `lumen.toml`
+// (a single app checkout) or a `Cargo.toml` declaring `[workspace]` (the
+// Lumen framework checkout itself, the way `lumenc bundle --static` locates
+// its own workspace).
 
 const RESOURCE_GLOB_LIMIT: usize = 64;
+
+fn is_project_root(dir: &std::path::Path) -> bool {
+    if dir.join("lumen.toml").is_file() {
+        return true;
+    }
+    std::fs::read_to_string(dir.join("Cargo.toml"))
+        .is_ok_and(|manifest| manifest.contains("[workspace]"))
+}
 
 fn project_root() -> Option<std::path::PathBuf> {
     let mut cwd = std::env::current_dir().ok()?;
     for _ in 0..6 {
-        if cwd.join("TODO.md").is_file() {
+        if is_project_root(&cwd) {
             return Some(cwd);
         }
         if !cwd.pop() {
@@ -405,7 +416,7 @@ fn enumerate_resources() -> Vec<std::path::PathBuf> {
     let Some(root) = project_root() else {
         return out;
     };
-    for tail in ["TODO.md", "lumen.toml", "src/main.lmn", "src/main.css"] {
+    for tail in ["lumen.toml", "src/main.lmn", "src/main.css"] {
         let p = root.join(tail);
         if p.is_file() {
             out.push(p);
@@ -594,5 +605,58 @@ mod tests {
             assert_eq!(schema["type"], json!("object"), "{}", t["name"]);
             assert!(t["description"].is_string(), "{}", t["name"]);
         }
+    }
+
+    /// A scratch directory under the OS temp dir, cleaned up on drop, so
+    /// `is_project_root` can be exercised against synthetic markers without
+    /// touching the process's actual working directory (which the other
+    /// `project_root` tests would race on if run in parallel).
+    struct ScratchDir(std::path::PathBuf);
+
+    impl ScratchDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "lumen-mcp-server-test-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            std::fs::create_dir_all(&dir).expect("create scratch dir");
+            Self(dir)
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_bare_directory_is_not_a_project_root() {
+        let dir = ScratchDir::new("bare");
+        assert!(!is_project_root(&dir.0));
+    }
+
+    #[test]
+    fn a_lumen_toml_marks_an_app_root() {
+        let dir = ScratchDir::new("app");
+        std::fs::write(dir.0.join("lumen.toml"), "").expect("write lumen.toml");
+        assert!(is_project_root(&dir.0));
+    }
+
+    #[test]
+    fn a_workspace_cargo_toml_marks_the_framework_checkout_root() {
+        let dir = ScratchDir::new("workspace");
+        std::fs::write(dir.0.join("Cargo.toml"), "[workspace]\nmembers = []\n")
+            .expect("write Cargo.toml");
+        assert!(is_project_root(&dir.0));
+    }
+
+    #[test]
+    fn a_plain_crate_cargo_toml_does_not_mark_a_root() {
+        let dir = ScratchDir::new("crate");
+        std::fs::write(dir.0.join("Cargo.toml"), "[package]\nname = \"x\"\n")
+            .expect("write Cargo.toml");
+        assert!(!is_project_root(&dir.0));
     }
 }
