@@ -266,6 +266,7 @@ they need:
 | `lumen-archive` | The `archive` script namespace: unpacking zip, tar, and gzip-compressed tar into a directory, off the tick loop. | `max_concurrent` |
 | `lumen-audio` | The whole audio surface, from the `audio_*` script functions to the playback backend behind them. | |
 | `lumen-fs` | The `files` script namespace: read, write, list, copy, remove, and byte-level file access, resolved against the app directory. | `read_bytes_cap` |
+| `lumen-process` | The `process` script namespace: start another program, and take its output a line at a time and its exit as events. | |
 
 A statically built app compiles a module's plugin in instead, and the
 declaration is skipped with a notice.

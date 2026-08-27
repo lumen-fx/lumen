@@ -189,6 +189,7 @@ jobs:
             -p lumen-audio \
             -p lumen-download \
             -p lumen-fs \
+            -p lumen-process \
             -p lumenc \
             --config 'profile.release.lto="off"' \
             --features lumenc/dynamic-engine,lumen/dynamic-engine
@@ -298,6 +299,7 @@ jobs:
             "liblumen_audio.so liblumen_audio.dylib"
             "liblumen_download.so liblumen_download.dylib"
             "liblumen_fs.so liblumen_fs.dylib"
+            "liblumen_process.so liblumen_process.dylib"
           )
           for spellings in "${modules[@]}"; do
             found=""

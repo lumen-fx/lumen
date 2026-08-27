@@ -240,6 +240,7 @@ lumen-plugin-abi = { path = "crates/plugin-abi", default-features = false }
 lumen-portable = { path = "crates/portable", default-features = false }
 lumen-prerender = { path = "crates/prerender", default-features = false }
 lumen-primitives = { path = "crates/primitives" }
+lumen-process = { path = "std/process" }
 lumen-render-headless = { path = "crates/backends/render-headless" }
 lumen-render-wgpu = { path = "crates/backends/render-wgpu" }
 # Every subsystem is a default feature, and every consumer picks its own set:

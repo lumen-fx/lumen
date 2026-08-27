@@ -3928,6 +3928,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-process"
+version = "0.0.6"
+dependencies = [
+ "lumen-core",
+ "lumen-ir",
+ "lumen-module",
+ "lumen-runtime",
+ "serde_json",
+]
+
+[[package]]
 name = "lumen-render-headless"
 version = "0.0.6"
 dependencies = [

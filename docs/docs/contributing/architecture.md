@@ -124,6 +124,13 @@ tools/             the release plumbing and the editor plugins
   stderr line. One crate builds both link shapes: the cdylib is the bundled
   `lumen-fs` runtime module an app declares in `lumen.toml`, and a static
   build compiles the same plugin in.
+- **lumen-process** (`std/process`): the whole child-process capability, as a
+  self-contained module the engine knows nothing about. It registers the
+  `process` script namespace through the generic registry and supervises each
+  child on threads of its own, delivering the output lines and the exit over
+  the plugin-event bus. One crate builds both link shapes: the cdylib is the
+  bundled `lumen-process` runtime module an app declares in `lumen.toml`, and
+  a static build compiles the same plugin in.
 - **lumen-http-ureq**: the HTTP client behind the scripts' `fetch()` and
   `http()` builtins. One blocking request per call over ureq, with a bounded
   body read.
