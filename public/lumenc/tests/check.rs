@@ -118,8 +118,8 @@ fn every_template_checks_clean() {
 /// image itself is wrong.
 #[test]
 fn every_candela_template_builds_an_image_the_vm_accepts() {
+    use lumen_script_candela::CandelaHost;
     use lumen_script_candela::candela::{HostRegistry, LoadError, load_program};
-    use lumen_script_candela::compile_bytecode;
 
     if !templates_present() {
         return;
@@ -134,7 +134,8 @@ fn every_candela_template_builds_an_image_the_vm_accepts() {
         }
         let source = std::fs::read_to_string(&script)
             .unwrap_or_else(|e| panic!("reading {}: {e}", script.display()));
-        let bytes = compile_bytecode(&source, "main.cdl", None)
+        let bytes = CandelaHost::new()
+            .compile_bytecode(&source, "main.cdl")
             .unwrap_or_else(|e| panic!("template `{}` compiles: {e}", template.name));
         match load_program(&bytes, &HostRegistry::new()) {
             Ok(_) | Err(LoadError::HostBinding(_)) => {}

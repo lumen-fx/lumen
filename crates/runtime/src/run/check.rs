@@ -125,7 +125,10 @@ fn compiled_bytecode(
 ) -> Result<Option<Vec<u8>>, RunError> {
     #[cfg(feature = "host-candela")]
     if engine == crate::config::ScriptEngine::Candela {
-        return lumen_script_candela::compile_bytecode(source, uri, Some(lib_dir))
+        let mut host = CandelaHost::new();
+        host.set_library_dir(lib_dir);
+        return host
+            .compile_bytecode(source, uri)
             .map(Some)
             .map_err(|e| RunError::Script(e.to_string()));
     }

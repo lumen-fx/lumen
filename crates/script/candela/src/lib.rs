@@ -18,8 +18,11 @@
 //!   anything.
 //! - [`CandelaVmHost`] loads a precompiled `.cdlb` image on `candela-vm`. No
 //!   compiler is in the process, which is what a shipped app and the browser
-//!   target want; `compile_bytecode` is the build step that produces the
-//!   image.
+//!   target want; `CandelaHost::compile_bytecode` is the build step that
+//!   produces the image, folding in whatever the build host had registered
+//!   through [`ScriptHost::register_script_fn`](lumen_script::ScriptHost::register_script_fn)
+//!   exactly as a live compile does, so a module or plugin function needs no
+//!   hand-written `host "<ns>" { .. }` block to reach the image.
 //!
 //! Both register the identical builtin list, written once in `host_fns` behind
 //! [`HostFnSink`]. `candela::Engine` binds those closures against the `host`
@@ -131,7 +134,7 @@ pub use prelude::{PRELUDE_MODULE, PRELUDE_SOURCE, resolve_prelude};
 pub use vm_host::{CandelaVmHost, ScriptCandelaVmPlugin, image_exports};
 
 #[cfg(feature = "compiler")]
-pub use engine_host::{CandelaHost, CandelaScriptContext, ScriptCandelaPlugin, compile_bytecode};
+pub use engine_host::{CandelaHost, CandelaScriptContext, ScriptCandelaPlugin};
 
 // Re-export the underlying candela crate so embedders (lumenc) can name
 // `candela::Engine` / `candela::Value` for `ScriptCandelaPlugin::with_extension`

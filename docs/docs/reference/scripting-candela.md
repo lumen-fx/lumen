@@ -1112,10 +1112,17 @@ choice; `pin(21).level()` in place of `gpio::level(21)` is the shape to expect.
 
 Two things follow from where the declarations come from. An app calling a
 function nothing registered fails the compile, naming it, so `lumenc check` and
-`lumenc run` reject a call meant for an embedder they do not carry. And a script
-compiled ahead of time to a `.cdlb` gets no synthesized declarations, because the
-build compiles the script alone: write the `host` block by hand in a script you
-will build to an artifact.
+`lumenc run` reject a call meant for an embedder they do not carry. And a
+`.cdlb` build gets the same synthesized declarations a live compile gets, from
+whatever was registered on the host before it compiled; `lumenc build` does
+not register a plugin or a runtime module before it compiles your script's
+`.cdlb`, so write the `host` block by hand in a script you will build to an
+artifact, exactly as you would for an embedder `lumenc` does not carry.
+
+At the artifact's own load, a declaration with no closure behind it fails the
+load and names the function, rather than the call silently doing nothing. That
+is what happens when the app was built against a plugin or module that is not
+installed where it runs.
 
 Rhai and Lua receive the same functions as plain globals (`now_ms()`), or as a
 module or table for a named namespace, because neither needs a declaration to

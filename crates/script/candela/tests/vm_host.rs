@@ -14,7 +14,7 @@ use lumen_script::{
     ScriptCommand, ScriptError, ScriptFn, ScriptHost, ScriptLoadFailure, ScriptNs, ScriptTy,
     ScriptValue,
 };
-use lumen_script_candela::{CandelaHost, CandelaVmHost, ScriptCandelaVmPlugin, compile_bytecode};
+use lumen_script_candela::{CandelaHost, CandelaVmHost, ScriptCandelaVmPlugin};
 
 use bevy_ecs::world::World;
 
@@ -117,7 +117,9 @@ fn main() {}
 "##;
 
 fn host_for(source: &str, uri: &str) -> CandelaVmHost {
-    let image = compile_bytecode(source, uri, None).expect("the fixture compiles");
+    let image = CandelaHost::new()
+        .compile_bytecode(source, uri)
+        .expect("the fixture compiles");
     CandelaVmHost::new(image)
 }
 
@@ -588,7 +590,9 @@ fn the_artifact_host_offers_the_compiler_host_s_builtin_surface() {
 
 #[test]
 fn the_plugin_boots_an_image_and_a_tick_runs_its_derivation() {
-    let image = compile_bytecode(DERIVED, "derived.cdl", None).expect("the fixture compiles");
+    let image = CandelaHost::new()
+        .compile_bytecode(DERIVED, "derived.cdl")
+        .expect("the fixture compiles");
     let mut app = App::new();
     app.add_plugin(ScriptCandelaVmPlugin::new(image).with_uri("derived.cdlb"));
     assert!(

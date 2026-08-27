@@ -7,7 +7,7 @@
 //! ([`crate::vm_host`]) runs the same builtins without a compiler.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use bevy_ecs::prelude::*;
@@ -209,6 +209,59 @@ impl CandelaHost {
                 message: d.message.clone(),
             },
         }
+    }
+
+    /// Compile `source` to the `.cdlb` bytecode image a compiler-free runtime
+    /// loads, folding in the same namespace blocks [`Self::prepare`] gives
+    /// [`ScriptHost::load`] and [`ScriptHost::compile_check`].
+    ///
+    /// A function registered through [`ScriptHost::register_script_fn`]
+    /// before this call is declared in the image exactly as it is for a live
+    /// compile: an app calling a module or plugin function through it needs
+    /// no hand-written `host "<ns>" { .. }` block of its own, and the
+    /// artifact host binds the declaration by name once the same
+    /// registration happens again ahead of the image's own load. A function
+    /// nothing ever registered stays opt-in, as it already is for a live
+    /// compile: the call site compiles, and the function that makes it is
+    /// left out of the image.
+    ///
+    /// This is the ahead-of-time counterpart to
+    /// [`compile_check`](ScriptHost::compile_check): same source, same
+    /// prelude, same fold, same diagnostics, but the product is an image
+    /// rather than a verdict. A build step calls it so a shipped app carries
+    /// the compiled program beside its source, and a host that links
+    /// `candela-vm` without the compiler has something to run.
+    ///
+    /// The image binds its `host "..." { ... }` declarations by name at
+    /// load, so the runtime that loads it registers the same closures this
+    /// host does or the load fails naming what is missing.
+    ///
+    /// # Errors
+    ///
+    /// [`ScriptError::Compile`] when the program does not compile, carrying
+    /// the line and column in the user's own source, and
+    /// [`ScriptError::Runtime`] when a compiled program cannot be
+    /// serialized.
+    pub fn compile_bytecode(&self, source: &str, uri: &str) -> Result<Vec<u8>, ScriptError> {
+        let prepared = self.prepare(source);
+        // `build_bytecode` is a free function with no engine behind it, so the
+        // `lmn!` expander comes from an environment installed for this compile.
+        let mut macros = candela::macros::MacroEnv::new();
+        macros.register(
+            lmn::MACRO_NAME,
+            lmn_expander(Arc::new(Mutex::new(lmn::FnIndex::scan(&prepared.text)))),
+        );
+        let _library_dir = self.library_dir();
+        // candela reports a compile error by unwinding into the diagnostic
+        // sink `collect_diagnostic` installs. Without the sink the same error
+        // ends the process, which a build tool must not do to the shell it
+        // was run from.
+        macros
+            .scope(|| {
+                candela::collect_diagnostic(|| candela::build_bytecode(prepared.text.clone(), uri))
+            })
+            .map_err(|d| self.compile_error(&prepared, &d, uri))?
+            .map_err(ScriptError::Runtime)
     }
 
     /// One call into the loaded program, with a panic out of the VM contained.
@@ -566,62 +619,6 @@ impl ScriptContext for CandelaScriptContext<'_> {
     fn array_clear(&mut self, name: &str) {
         self.host.registries.set_array(name, Vec::new());
     }
-}
-
-/// Compile a candela program to the `.cdlb` bytecode image a compiler-free
-/// runtime loads, with the `lumen.cdl` prelude spliced in exactly as
-/// [`CandelaHost::load`] splices it.
-///
-/// This is the ahead-of-time counterpart to
-/// [`compile_check`](ScriptHost::compile_check): same source, same prelude,
-/// same diagnostics, but the product is an image rather than a verdict. A
-/// build step calls it so a shipped app carries the compiled program beside
-/// its source, and a host that links `candela-vm` without the compiler has
-/// something to run.
-///
-/// The image binds its `host "lumen" { ... }` declarations by name at load,
-/// so the runtime that loads it registers the same closures
-/// [`CandelaHost`] does or the load fails naming what is missing.
-///
-/// `library_dir` is where a `dylib "..."` import's library is looked for: the
-/// app's `lib/`, or `None` for a source that imports none.
-///
-/// # Errors
-///
-/// [`ScriptError::Compile`] when the program does not compile, carrying the
-/// line and column in the user's own source, and [`ScriptError::Runtime`]
-/// when a compiled program cannot be serialized.
-pub fn compile_bytecode(
-    source: &str,
-    uri: &str,
-    library_dir: Option<&Path>,
-) -> Result<Vec<u8>, ScriptError> {
-    let _library_dir = LibraryDir::set(library_dir);
-    let resolved = prelude::resolve_prelude(source);
-    // `build_bytecode` is a free function with no engine behind it, so the
-    // `lmn!` expander comes from an environment installed for this compile.
-    let mut macros = candela::macros::MacroEnv::new();
-    macros.register(
-        lmn::MACRO_NAME,
-        lmn_expander(Arc::new(Mutex::new(lmn::FnIndex::scan(resolved.as_ref())))),
-    );
-    // candela reports a compile error by unwinding into the diagnostic sink
-    // `collect_diagnostic` installs. Without the sink the same error ends the
-    // process, which a build tool must not do to the shell it was run from.
-    macros
-        .scope(|| {
-            candela::collect_diagnostic(|| candela::build_bytecode(resolved.to_string(), uri))
-        })
-        .map_err(|d| {
-            let (line, col) = prelude::line_col(resolved.as_ref(), d.span.start);
-            ScriptError::Compile {
-                uri: uri.to_owned(),
-                line,
-                col,
-                message: d.message,
-            }
-        })?
-        .map_err(ScriptError::Runtime)
 }
 
 // -----------------------------------------------------------------------------
