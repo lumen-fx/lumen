@@ -13,7 +13,9 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-lumen-module = { workspace = true }
+# Defaults back on: the harness opens this fixture as a library, which is the
+# shape the probe-and-install pair exists for.
+lumen-module = { workspace = true, default-features = true }
 lumen-core = { workspace = true }
 lumen-script = { workspace = true }
 bevy_ecs = { workspace = true }

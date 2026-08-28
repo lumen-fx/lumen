@@ -1,10 +1,15 @@
 //! The `[dependencies]` loader inside a static host. This test binary
 //! compiles the engine in statically, which is exactly the process shape
-//! that must never install an engine-locked module (the module would map
+//! that must never *open* an engine-locked module (the module would map
 //! `liblumen_engine` as a second engine instance sharing no worlds or
 //! statics with this one) - and exactly the shape a portable plugin loads
-//! into all the same. The kind dispatch is what these tests exercise: each
-//! declared file takes the arm its exported symbols name.
+//! into all the same. What a static host does carry is a module compiled
+//! into it, which the loader takes from the registry without opening
+//! anything.
+//!
+//! The dispatch is what these tests exercise: a declared name is answered
+//! from the registry, or by the arm the resolved file's exported symbols
+//! name.
 
 #![cfg(all(feature = "modules", not(windows)))]
 
@@ -12,10 +17,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use lumen_core::app::App;
+use lumen_module_registry::{StaticModule, register};
 use lumen_runtime::modules::{
     DependenciesCfg, InitEnv, LoadedKind, LoadedModules, ResolvedModules, load_modules,
 };
-use lumen_script::{ScriptFnRegistry, ScriptValue};
+use lumen_script::{ScriptFn, ScriptFnAppExt, ScriptFnRegistry, ScriptTy, ScriptValue};
 
 fn scratch(tag: &str) -> PathBuf {
     let dir =
@@ -66,18 +72,59 @@ fn build_stub(dir: &Path, name: &str, source: &str) -> PathBuf {
     out_path
 }
 
+/// A module compiled into a static host installs, which is the shape a
+/// static build carries its capabilities in. It takes the registry arm, so
+/// nothing on disk is looked for and no engine dylib is needed.
+#[test]
+fn a_static_host_installs_a_module_compiled_into_it() {
+    fn install(app: &mut App, config_toml: &str) -> u32 {
+        assert!(config_toml.contains("units = \"mm\""), "{config_toml}");
+        app.add_script_fn(
+            ScriptFn::new("compiled_in_double")
+                .param("n", ScriptTy::Int)
+                .build(|cx| Ok(ScriptValue::I64(cx.int_arg(0) * 2))),
+        );
+        0
+    }
+    // The call a real module's pre-main constructor makes.
+    register(StaticModule {
+        name: "compiled-in",
+        install,
+    });
+
+    let dir = scratch("compiled-in");
+    let app = load(
+        &dir,
+        "compiled-in = { bundled = true, config = { units = \"mm\" } }\n",
+    );
+    let state = app.world.resource::<LoadedModules>();
+    assert!(state.failed.is_empty(), "{:?}", state.failed);
+    assert_eq!(state.loaded.len(), 1);
+    assert_eq!(state.loaded[0].kind, LoadedKind::Static);
+    assert_eq!(state.loaded[0].build_id, "");
+
+    let registry = app.world.resource::<ScriptFnRegistry>();
+    let double = registry
+        .fns()
+        .iter()
+        .find(|f| f.name == "compiled_in_double")
+        .expect("the module's function is bound");
+    let (result, _commands) = double.invoke(&[ScriptValue::I64(21)]);
+    assert_eq!(result, Ok(ScriptValue::I64(42)));
+}
+
 #[test]
 fn a_static_host_refuses_an_engine_locked_module() {
     let dir = scratch("engine-locked");
     let stub = build_stub(
         &dir,
         "locked",
-        "#[no_mangle]\n\
-         pub extern \"C\" fn lumen_module_probe() -> *const u8 {\n\
+        "#[export_name = \"lumen_module_probe_locked\"]\n\
+         pub extern \"C\" fn probe() -> *const u8 {\n\
              b\"lumen-engine 0.0.0 nogit rustc:0 features:none\\0\".as_ptr()\n\
          }\n\
-         #[no_mangle]\n\
-         pub extern \"C\" fn lumen_module_install() {}\n",
+         #[export_name = \"lumen_module_install_locked\"]\n\
+         pub extern \"C\" fn install() {}\n",
     );
     let app = load(
         &dir,
@@ -88,7 +135,7 @@ fn a_static_host_refuses_an_engine_locked_module() {
     assert_eq!(state.failed.len(), 1);
     let reason = &state.failed[0].reason;
     assert!(
-        reason.contains("does not link the engine dynamically"),
+        reason.contains("does not compile the module in"),
         "{reason}"
     );
     // The refusal points at the kind that does load here.
@@ -130,8 +177,8 @@ fn both_kinds_dispatch_side_by_side_in_a_static_host() {
     let stub = build_stub(
         &dir,
         "locked2",
-        "#[no_mangle]\n\
-         pub extern \"C\" fn lumen_module_probe() -> *const u8 {\n\
+        "#[export_name = \"lumen_module_probe_zz_locked\"]\n\
+         pub extern \"C\" fn probe() -> *const u8 {\n\
              b\"lumen-engine 0.0.0 nogit rustc:0 features:none\\0\".as_ptr()\n\
          }\n",
     );
@@ -152,7 +199,7 @@ fn both_kinds_dispatch_side_by_side_in_a_static_host() {
     assert!(
         state.failed[0]
             .reason
-            .contains("does not link the engine dynamically"),
+            .contains("does not compile the module in"),
         "{}",
         state.failed[0].reason
     );
@@ -173,7 +220,7 @@ fn a_library_exporting_neither_symbol_names_both() {
     let state = app.world.resource::<LoadedModules>();
     assert_eq!(state.failed.len(), 1);
     let reason = &state.failed[0].reason;
-    assert!(reason.contains("lumen_module_probe"), "{reason}");
+    assert!(reason.contains("lumen_module_probe_neither"), "{reason}");
     assert!(reason.contains("lumen_plugin_v1"), "{reason}");
 }
 

@@ -261,7 +261,7 @@ native library, which a browser cannot load.
 
 ```
 lumenc package <app_dir> [<out_dir>] [--name <name>] [--target <target>]
-                         [--lib-dir <dir>] [--zip] [--no-hooks]
+                         [--lib-dir <dir>] [--static] [--zip] [--no-hooks]
 ```
 
 Assembles a folder that runs on a machine with no Lumen installation: the app
@@ -295,6 +295,7 @@ the most recent and names the rest.
 | `--name` | string | the app directory's name | Names the executable, and the default output directory. |
 | `--target` | see below | this machine's platform | Packages for another platform. |
 | `--lib-dir` | path | none | Directory holding the launcher stub and the runtime library to use, instead of looking them up. |
+| `--static` | - | off | Links one executable holding the engine and the app's declared modules, instead of assembling a folder of shared libraries. |
 | `--zip` | - | off | Also writes `<out_dir>.zip`, holding the folder itself. |
 | `--no-hooks` | - | off | Skips the `prebuild` hooks. |
 
@@ -321,6 +322,20 @@ its runtime library needs nothing beside it - unless the app declares
 `[dependencies]`, which exits 1 naming the gap, because runtime modules need
 the shared engine.
 
+`--static` writes the same folder with one executable in it: no runtime
+library, no shared engine, no `libstd`, and no `modules/`, because all of that
+is inside the file. It links the app from the
+[link kit published for the target](#which-release-toolchain-files-come-from),
+so it needs a linker on this machine - a C toolchain on Linux, the Xcode
+Command Line Tools on macOS, the Visual Studio Build Tools and Windows SDK on
+Windows - and says which one is missing when the link cannot start. Exits 2
+for a request it cannot answer: an SDK app (those bring their own executable),
+a `--target` other than this machine's platform (the link runs through the
+tools installed here), a non-empty `[capabilities]` (the linked engine is the
+full one, and trimming is what `bundle --static` compiles from source), or a
+`path` or `version` module (only the toolchain's own `bundled` modules are in
+the kit). A module the kit does not carry exits 1 naming what it does carry.
+
 Declared `[dependencies]` stage into a `modules/` subfolder of the package,
 each under the file name the runtime probes for. `path` sources copy the
 declared library, `bundled` sources copy the toolchain's, and `version`
@@ -332,8 +347,9 @@ toolchain files come from, fetched, verified, and cached the same way; a
 release that ships no modules archive, or one whose archive does not carry a
 declared module, exits 1 naming it. `path` and `version` sources cannot
 cross-package - a local library is built for one platform, and version
-resolution has no registry yet - and exit 2. A Windows target stages nothing
-with a warning (modules are not supported there).
+resolution has no registry yet - and exit 2. A Windows target with a non-empty
+`[dependencies]` exits 2: nothing loads a module beside a Windows executable,
+and `--static` is what compiles one in there.
 
 The launcher stub and the runtime library are looked up in this order:
 `--lib-dir`, then, for this machine's own platform, the directory holding the
@@ -657,10 +673,11 @@ The check never changes the command's exit code.
 
 ## Which release toolchain files come from
 
-`package --target` and `web` download files that were published with a
-release: another platform's launcher stub and runtime library, and the browser
-runtime. Which release they come from is read from the releases page, never
-from the version `lumenc --version` prints. A version number on its own says
+`package --target`, `package --static`, and `web` download files that were
+published with a release: another platform's launcher stub and runtime
+library, a platform's link kit (`lumen-linkkit-<target>.tar.gz`), and the
+browser runtime. Which release they come from is read from the releases page,
+never from the version `lumenc --version` prints. A version number on its own says
 what a copy of `lumenc` is, and a copy can be newer than anything published.
 
 Two things answer, in this order:
@@ -681,7 +698,9 @@ files come from.
 Downloads are cached per release and per component under the platform cache
 directory (`~/.cache/lumen/toolchain/<release>/<component>` on Linux), so
 resolving a different release downloads into a different directory and never
-reuses files from another one. Old directories are left in place; they are a
+reuses files from another one. The component is the target name for a
+platform's toolchain files, `linkkit-<target>` for its link kit, and `web` for
+the browser runtime. Old directories are left in place; they are a
 cache and can be deleted at any time.
 
 A repository that has published no releases and a releases page that cannot be
@@ -707,4 +726,5 @@ from and the one the update check compares against.
 | `LUMEN_TRACE_FRAME_DIRTY` | Logs which source marked each frame dirty. |
 | `LUMEN_WORKSPACE_DIR` | Lumen source tree that `bundle --static` builds the trimmed runtime from. |
 | `LUMEN_LIB_DIR` | Directory searched for the shared Lumen library and the launcher stub, after the directory holding `lumenc`. |
+| `LUMEN_LINK_KIT_DIR` | Link kit `package --static` replays, instead of the one published for the target. |
 | `LUMEN_GH_REPO` | Repository, as `owner/name`, whose releases toolchain downloads and the update check read. Defaults to `lumen-fx/lumen`. |

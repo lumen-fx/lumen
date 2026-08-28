@@ -78,6 +78,11 @@ fn dispatch(cmd: &str, args: Vec<String>) -> ExitCode {
         // feature.
         #[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "package"))]
         "package" => lumenc::package_cli::cmd_package(args),
+        // A step of the release workflow, run on the machine that just built
+        // the toolchain. Deliberately absent from USAGE and from the shell
+        // completions: it reads a link record no ordinary checkout has.
+        #[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "package"))]
+        "link-kit" => lumenc::link_kit_cli::cmd_link_kit(args),
         "i18n" => lumenc::i18n_cli::cmd_i18n(args),
         // Ungated: the completion scripts are static text, so every build
         // shape can print them.

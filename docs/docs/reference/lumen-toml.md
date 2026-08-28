@@ -153,6 +153,8 @@ subsystem out of a build, use `[capabilities]`.
 Compile-time subsystem selection for `lumenc bundle --static`, which builds a
 runtime carrying only the listed subsystems. The shared runtime and
 `lumenc run` always ship everything, and ignore this section.
+`lumenc package --static` links a prebuilt full engine rather than compiling
+one, so it refuses an app that declares this section instead of ignoring it.
 
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
@@ -237,12 +239,15 @@ See [the web guide](../guides/web.md).
 
 ## [dependencies]
 
-Prebuilt shared libraries the app loads at startup. One table covers both
-runtime kinds - the kind is detected at load from the symbols the file
-exports, never declared:
+The runtime capabilities the app declares, brought in at startup. A name is
+answered by a module the binary was built with, or by a library beside the
+app; one table covers both runtime kinds, and the kind is detected at load
+from the symbols the file exports, never declared:
 
-- A [runtime module](../contributing/plugins.md#runtime-modules)
-  (`lumen_module_probe`): an engine-locked Rust dylib with full ECS reach.
+- A [runtime module](../contributing/plugins.md#runtime-modules): an
+  engine-locked Rust dylib with full ECS reach. Its entries carry the name
+  the table key gives it, so a module found under another name is not
+  loaded.
 - A [portable plugin](../contributing/plugins.md#portable-plugins)
   (`lumen_plugin_v1`): a C-ABI library offering script functions, language
   preludes, and events.
@@ -268,8 +273,9 @@ they need:
 | `lumen-fs` | The `files` script namespace: read, write, list, copy, remove, and byte-level file access, resolved against the app directory. | `read_bytes_cap` |
 | `lumen-process` | The `process` script namespace: start another program, and take its output a line at a time and its exit as events. | |
 
-A statically built app compiles a module's plugin in instead, and the
-declaration is skipped with a notice.
+A build that compiles a declared module in answers the name from that copy
+and opens nothing. A name it neither compiles in nor can open beside a shared
+engine is skipped with a notice.
 
 Each entry declares exactly one source:
 
@@ -283,20 +289,25 @@ Each entry declares exactly one source:
 The table is unordered, so entries load in sorted-name order; where an entry
 sits in the file carries no meaning.
 
-Each kind carries its own handshake, verified at load. A runtime module is
-version-locked to the exact engine build it was compiled against and loads
-only on Linux and macOS, into a dynamically linked engine. A portable plugin
-is checked against the plugin ABI version and the script wire version, and
-loads on every desktop platform, static builds included. Any
-failure - a missing file, a failed handshake, a library exporting neither
-entry symbol (the banner names both; a compiler plugin is pointed at
-[`[[plugins]]`](#plugins)) - is an unmissable stderr banner naming the entry
-and the reason, and the app starts without it. One case is quieter: a
-runtime module declared to a statically linked build is skipped with a
-single stderr line rather than the banner, because that build shape carries
-its capabilities compiled in; `lumenc bundle --static` says the same thing
-at build time, naming the declared modules. `lumenc web` refuses an app
-that declares this table (a browser cannot load native libraries).
+Each kind carries its own handshake, verified at load. A runtime module read
+off disk is version-locked to the exact engine build it was compiled against
+and opens only on Linux and macOS, into a dynamically linked engine; a module
+compiled into the executable has nothing to verify and answers on every
+platform. Windows only has the second shape, which is what
+`lumenc package --static` produces, so a Windows package of an app declaring
+this table is that one. A portable plugin is checked against the plugin ABI
+version and the script wire version, and loads on every desktop platform,
+static builds included. Any failure - a missing file, a failed handshake, a
+library exporting neither entry symbol (the banner names both; a compiler
+plugin is pointed at [`[[plugins]]`](#plugins)) - is an unmissable stderr
+banner naming the entry and the reason, and the app starts without it. One
+case is quieter: a runtime module a statically linked build neither compiled
+in nor can open is skipped with a single stderr line rather than the banner,
+because that is a property of how the binary was put together; the line
+points at `lumenc package --static`, which compiles the declared modules in.
+`lumenc bundle --static` says the same thing at build time, naming the
+declared modules. `lumenc web` refuses an app that declares this table (a
+browser cannot load native libraries).
 
 A declared library is native code loaded into the app's process, the same
 trust model as [`[[hooks]]`](#hooks). A `permissions` key is reserved and

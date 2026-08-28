@@ -57,7 +57,9 @@ mod plugin;
 
 pub use plugin::{ArchivePlugin, DEFAULT_MAX_CONCURRENT, MAX_MAX_CONCURRENT};
 
-// The bundled-module entry: the loader constructs the shipping plugin from
-// the app's `config` table.
-#[cfg(not(windows))]
-lumen_module::lumen_module!(|config: lumen_module::ModuleConfig| ArchivePlugin::new(config));
+// The module entry: the loader constructs the shipping plugin from the app's
+// `config` table, whether it opened this crate's library or found it linked
+// in.
+lumen_module::lumen_module!("lumen-archive", |config: lumen_module::ModuleConfig| {
+    ArchivePlugin::new(config)
+});

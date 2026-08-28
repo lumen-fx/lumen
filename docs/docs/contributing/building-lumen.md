@@ -165,6 +165,74 @@ the workspace needs. `getrandom` has no default for a target that names no
 operating system, so it asks to be told, and the flag points it at the
 browser's crypto interface.
 
+## The link kit
+
+A packaged app normally finds its runtime modules as shared libraries beside
+it. The other shape is one executable with the engine and the modules the app
+declares linked in, and producing that on a machine with no Rust toolchain is
+what the link kit is for.
+
+Every leg of `build-toolchain.yml` publishes one, `lumen-linkkit-<target>.tar.gz`.
+It holds `manifest.json`, the link command that produced the static launcher,
+with each argument typed so a replay knows which ones name files that travel
+with the kit, and `stage/`, those files. A module is selected in by forcing its
+registration symbol onto the line and left out by dropping its object, which is
+why the manifest records which files and which native libraries belong to which
+module.
+
+Linux and macOS replay through the machine's own `cc`, which contributes the C
+runtime startup files and the system library paths, and the linker behind it.
+The toolchain's own linker choice is dropped on the way into the kit: rustc
+points `cc` at the LLD inside the Rust installation, and that LLD loads the
+toolchain's shared LLVM, so carrying it would mean carrying most of a Rust
+installation for a line that asks nothing only LLD can do. Windows has no `cc`
+to borrow, so its kit carries `rust-lld` in `bin/` and the manifest names it as
+the driver.
+
+The command cannot be read back after the fact. Half of what a link reads is
+temporary files rustc deletes as soon as the linker returns, so the leg builds
+the launcher with `tools/link-recorder` in the linker's place: it copies each
+input aside while the link is still running, writes the command as JSON, and
+then runs the real linker. `lumenc link-kit emit` turns that recording into the
+kit.
+
+Two things about the recorded build are load-bearing. LTO is off, because fat
+LTO re-generates code for every rlib at link time and leaves no per-module
+object to select. Codegen units stay at the release profile's one, or a
+module's registration function and the constructor that calls it can land in
+different objects and forcing the symbol pulls in half a module.
+
+Raw, a kit is most of a target directory. Two levers bring it down to
+something a release can carry: every staged rlib has its `lib.rmeta` member
+deleted, which is the Rust metadata nothing links against, and everything
+staged is stripped of debug information. Between them they take out most of
+the weight, and the archive compresses what is left.
+
+A module also puts native libraries on the line that nothing else asks for -
+`-lasound` for the audio module - and dropping the module has to drop those
+too, or the executable declares a dependency it makes no calls into.
+`.github/scripts/module-native-libs.sh` works out which library belongs to
+which module from the recorded build's `--message-format=json` output, and the
+leg passes the answer to `link-kit emit --module-libs`.
+
+### Building a kit to work against
+
+`lumenc package --static` is the consumer, and it reads a kit from the release
+channel. To try it against one you built, run the two steps the release leg
+runs - the recorded launcher build and `lumenc link-kit emit` - and then point
+`LUMEN_LINK_KIT_DIR` at the result. That variable is also what the consumer's
+test suite looks for:
+
+```sh
+LUMEN_LINK_KIT_DIR=/path/to/kit cargo test -p lumenc --test package_static
+```
+
+Without it the tests that need a published kit say so and pass, because the
+alternative is downloading a release kit in the middle of a test run. The
+replay itself still runs: the suite builds a kit of its own, with one
+`cc`-compiled object standing in for the launcher and another for a module,
+and links an app out of it.
+
 ## Debug info in dev builds
 
 Dev builds keep line tables for the workspace crates, so panic backtraces

@@ -14,14 +14,20 @@
 //!   serialized bytes: script functions, language preludes, and events. It
 //!   needs no dynamic engine and loads into static hosts too.
 //!
+//! A module the binary was built with takes neither path. It has no file to
+//! open, so its constructor put its install entry on the registry before
+//! `main`, and the loader answers the declared name from there before it
+//! looks for anything on disk. That arm works on every platform, needs no
+//! shared engine, and skips both hazards below: the module is this build.
+//!
 //! Two hazards shape the engine-locked arm, and both are checked before any
 //! Rust symbol is touched:
 //!
 //! - **Build skew.** Nothing detects a layout-changed rebuild naturally: the
 //!   dynamic linker resolves happily and `TypeId` equality still passes while
 //!   field reads are shifted. The only defense is the C-ABI probe
-//!   (`lumen_module_probe`), compared against the engine's own
-//!   `lumen_dylib::BUILD_ID` for exact equality.
+//!   (`lumen_module_probe_<name>`, spelled from the declared name), compared
+//!   against the engine's own `lumen_dylib::BUILD_ID` for exact equality.
 //! - **A second engine instance.** If the host process compiled the engine in
 //!   (a plain `cargo` binary, a static bundle), dlopening a module maps
 //!   `liblumen_engine` a second time; the probe strings would match while
@@ -32,10 +38,10 @@
 //! The failure policy is banner-and-continue: any load failure prints an
 //! unmissable stderr banner naming the module, the reason, and every probed
 //! path, and the app keeps booting without that module. One refusal speaks
-//! quietly instead: an engine-locked module declared to a host that compiled
-//! the engine in gets a single stderr line, because that shape is a property
-//! of the build (a static build carries its capabilities compiled in), not a
-//! defect in the app. A loaded library is never unloaded: the schedules hold
+//! quietly instead: a name that this build neither compiles in nor can open
+//! beside a shared engine gets a single stderr line, because that is a
+//! property of how the binary was put together, not a defect in the app. A
+//! loaded library is never unloaded: the schedules hold
 //! function pointers into it for as long as the app lives.
 //!
 //! ```toml
@@ -53,12 +59,45 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+pub mod link_kit;
+
 #[cfg(feature = "loader")]
 mod loader;
 #[cfg(feature = "loader")]
 pub use loader::{
     InitEnv, LoadedKind, LoadedModule, LoadedModules, ModuleFailure, PortablePlugins, load_modules,
 };
+
+/// The prefix of the C-ABI probe an engine-locked module exports; the module's
+/// declared name completes it. The probe returns the module's NUL-terminated
+/// `BUILD_ID`, read before any Rust symbol is touched.
+pub const PROBE_PREFIX: &str = "lumen_module_probe_";
+/// The prefix of the Rust-ABI install entry, called only after the probe
+/// matched exactly.
+pub const INSTALL_PREFIX: &str = "lumen_module_install_";
+/// The prefix of the registration entry every module exports, opened or
+/// linked. Naming it on a link line is what pulls a module out of an archive
+/// that nothing else references.
+pub const REGISTER_PREFIX: &str = "lumen_module_register_";
+
+/// One module's entry symbol: the prefix, then the declared name with every
+/// character a symbol cannot carry replaced by `_`.
+///
+/// `lumen-module-macros` spells the same names at the module's compile time,
+/// from the name its author passed to `lumen_module!`. The two spellings are
+/// the contract between a module and the loader: a module declared under a
+/// name it was not built with reads as a library exporting nothing. They live
+/// here rather than beside the loader because a link kit spells them with no
+/// loader in the build at all.
+pub fn entry_symbol(prefix: &str, name: &str) -> String {
+    let mut symbol = String::with_capacity(prefix.len() + name.len());
+    symbol.push_str(prefix);
+    symbol.extend(
+        name.chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }),
+    );
+    symbol
+}
 
 /// `version`-source resolutions handed to the loader by the compiler, keyed
 /// by module name.

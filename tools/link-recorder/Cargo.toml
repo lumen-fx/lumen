@@ -1,0 +1,30 @@
+# The linker shim `-Clinker` points at while CI records the link line of the
+# static launcher. It is build tooling: no release archive carries it, and
+# nothing in the engine depends on it. It is a workspace member so the same
+# fmt / clippy / test gates cover it as everything else.
+[package]
+name = "link-recorder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Records the link command rustc runs and stages its inputs, then runs the real linker."
+keywords = ["linker", "build", "lumen"]
+categories = ["development-tools::build-utils"]
+publish = false
+
+[[bin]]
+name = "link-recorder"
+path = "src/main.rs"
+
+[dependencies]
+# The record is JSON Lines; `crates/modules/src/link_kit.rs` holds the typed
+# reader. Deliberately not a dependency here: this binary sits on the critical
+# path of every link in a build, so it stays as small and as fast to build as
+# a shim can be.
+serde_json.workspace = true
+# Content hash for the staged file names, which is what lets two links that
+# pass the same rlib share one staged copy.
+sha2.workspace = true

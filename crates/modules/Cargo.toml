@@ -24,6 +24,9 @@ bevy_ecs = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 libloading = { workspace = true, optional = true }
+# The list a module compiled into this binary put itself on, consulted before
+# any file is looked for. Generic: it names no module and no capability.
+lumen-module-registry = { workspace = true, optional = true }
 # The portable-plugin half of the loader: the C-ABI host loader the kind
 # dispatch hands a `lumen_plugin_v1` library to.
 lumen-plugin = { workspace = true, optional = true, features = ["host"] }
@@ -34,11 +37,18 @@ lumen-plugin = { workspace = true, optional = true, features = ["host"] }
 libc = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The link-kit manifest is JSON on the wire; the schema tests read it back.
+serde_json = { workspace = true }
 # The loader-arms suite points the kind dispatch at a built compiler plugin,
 # which is the one wrong-kind library the tests can build on any machine.
 lumenc-plugin = { workspace = true, features = ["testing"] }
 
 [features]
-# The dlopen half. Off, the crate is the config schema alone, which is what a
+# The loading half. Off, the crate is the config schema alone, which is what a
 # runtime built without module support still parses.
-loader = ["dep:libloading", "dep:libc", "dep:lumen-plugin"]
+loader = [
+    "dep:libloading",
+    "dep:libc",
+    "dep:lumen-plugin",
+    "dep:lumen-module-registry",
+]

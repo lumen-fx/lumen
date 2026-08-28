@@ -379,9 +379,10 @@ fn a_library_without_the_probe_is_refused_as_not_a_module() {
     );
     let (stdout, stderr) = run_host(f, &dir, 1, &[]);
     assert!(stderr.contains("MODULE LOAD FAILED: wrongkind"), "{stderr}");
-    // The refusal names both entry symbols, one per kind.
+    // The refusal names both entry symbols, one per kind, and the
+    // engine-locked one carries the name the app declared.
     assert!(
-        stderr.contains("exports neither lumen_module_probe nor lumen_plugin_v1"),
+        stderr.contains("exports neither lumen_module_probe_wrongkind nor lumen_plugin_v1"),
         "{stderr}"
     );
     assert!(stdout.contains("HOST failed name=wrongkind"), "{stdout}");
@@ -440,13 +441,13 @@ fn a_mismatched_build_id_banners_both_strings() {
     let stub = build_stub(
         f,
         "skewed",
-        "#[no_mangle]\n\
-         pub extern \"C\" fn lumen_module_probe() -> *const u8 {\n\
+        "#[export_name = \"lumen_module_probe_skewed\"]\n\
+         pub extern \"C\" fn probe() -> *const u8 {\n\
              b\"lumen-engine 9.9.9 git:feedface rustc:0000000000000000\\0\"\n\
                  .as_ptr()\n\
          }\n\
-         #[no_mangle]\n\
-         pub extern \"C\" fn lumen_module_install() {}\n",
+         #[export_name = \"lumen_module_install_skewed\"]\n\
+         pub extern \"C\" fn install() {}\n",
     );
     let dir = write_app(
         f,

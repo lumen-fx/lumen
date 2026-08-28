@@ -2,9 +2,9 @@
 //! own component and resource, a per-tick mutating system, a query over a
 //! host component (`TextContent`, spawned from the app's markup), a config
 //! read, and config-driven panic paths. The subprocess harness in
-//! `public/lumen-module/tests` asserts on the lines it prints.
+//! `public/lumen-module/tests` asserts on the lines it prints. Every test
+//! declares it under the name `fixture`, which is the name its entries carry.
 
-#[cfg(not(windows))]
 mod module {
     use bevy_ecs::prelude::*;
     use lumen_core::components::TextContent;
@@ -73,7 +73,7 @@ mod module {
         }
     }
 
-    lumen_module!(|config: ModuleConfig| {
+    lumen_module!("fixture", |config: ModuleConfig| {
         if config.bool("panic_in_ctor").unwrap_or(false) {
             panic!("fixture module constructor panics on request");
         }

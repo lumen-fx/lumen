@@ -1,14 +1,20 @@
-//! The dlopen half: resolve each declared dependency to a library file, tell
-//! which of the two runtime kinds it is from the symbols it exports, verify
-//! it, and bring it into the app.
+//! The loading half: for each declared dependency, find what answers to that
+//! name, tell which runtime kind it is, verify it, and bring it into the app.
 //!
-//! One `[dependencies]` table declares both kinds, and the file itself says
-//! which it is:
+//! A name is answered from the registry first. A module compiled into the
+//! running binary has no file to open, so its constructor put it on
+//! [`lumen_module_registry`] before `main`; a name found there installs
+//! straight away, on every platform, and nothing is resolved or opened.
 //!
-//! - A library exporting `lumen_module_probe` is an **engine-locked runtime
-//!   module** (`lumen-module`): a Rust dylib sharing the running engine, with
-//!   full ECS reach. It loads only into a process that links the engine
-//!   dynamically, and only when its build id equals the engine's exactly.
+//! Otherwise the name resolves to a library file, and the file itself says
+//! which kind it is:
+//!
+//! - A library exporting `lumen_module_probe_<name>` is an **engine-locked
+//!   runtime module** (`lumen-module`): a Rust dylib sharing the running
+//!   engine, with full ECS reach. It loads only into a process that links
+//!   the engine dynamically, and only when its build id equals the engine's
+//!   exactly. The `<name>` half is the declared name, so two modules linked
+//!   into one binary never define the same entry.
 //! - A library exporting `lumen_plugin_v1` is a **portable plugin**
 //!   (`lumen-plugin`): a C-ABI cdylib exchanging serialized bytes. It loads
 //!   into any process, static hosts included, as long as its ABI and wire
@@ -31,22 +37,23 @@ use bevy_ecs::resource::Resource;
 use lumen_core::app::{App, EventLoopWaker};
 use lumen_core::plugin_events::push_plugin_event;
 use lumen_core::tick::TickStage;
+use lumen_module_registry::StaticModule;
 use lumen_plugin::abi::LogLevel;
 use lumen_plugin::{HostHooks, PluginEvent, PluginSet, codec};
 
-use crate::{DepCfg, DependenciesCfg, ModuleSource, ResolvedModules, library_spellings};
+use crate::{
+    DepCfg, DependenciesCfg, INSTALL_PREFIX, ModuleSource, PROBE_PREFIX, ResolvedModules,
+    entry_symbol, library_spellings,
+};
 
 pub use lumen_plugin::InitEnv;
 
-/// The C-ABI probe every engine-locked module exports: returns its
-/// NUL-terminated `BUILD_ID`, read before any Rust symbol is touched.
-pub const PROBE_SYMBOL: &[u8] = b"lumen_module_probe\0";
-/// The Rust-ABI install entry, called only after the probe matched exactly.
-pub const INSTALL_SYMBOL: &[u8] = b"lumen_module_install\0";
-/// The C-ABI entry a portable plugin exports.
-pub const PLUGIN_ENTRY_SYMBOL: &[u8] = b"lumen_plugin_v1\0";
+/// The C-ABI entry a portable plugin exports. One name for every plugin: a
+/// portable plugin is opened, never linked in, so two of them never share a
+/// symbol table.
+pub const PLUGIN_ENTRY_SYMBOL: &str = "lumen_plugin_v1";
 /// The entry a compiler plugin exports - the wrong kind to declare here.
-const COMPILER_ENTRY_SYMBOL: &[u8] = b"lumenc_plugin_v1\0";
+const COMPILER_ENTRY_SYMBOL: &str = "lumenc_plugin_v1";
 
 type ProbeFn = unsafe extern "C" fn() -> *const c_char;
 /// Rust ABI on purpose: probe equality has already proven both sides are the
@@ -61,6 +68,16 @@ const INSTALL_OK: u32 = 0;
 const INSTALL_PANICKED: u32 = 1;
 /// The module rejected its `config` table.
 const INSTALL_BAD_CONFIG: u32 = 2;
+
+/// Every module compiled into this binary, whatever put it there.
+///
+/// A thin wrapper so the one call the loader makes into the registry reads
+/// as an arm of the search rather than as a dependency on any module.
+fn registered(name: &str) -> Option<StaticModule> {
+    lumen_module_registry::registered()
+        .into_iter()
+        .find(|m| m.name == name)
+}
 
 /// What the loader did, queryable for the life of the app.
 ///
@@ -81,7 +98,10 @@ pub struct LoadedModules {
 /// Which runtime kind a loaded dependency turned out to be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadedKind {
-    /// An engine-locked runtime module (`lumen_module_probe`).
+    /// A runtime module compiled into this binary, found on the registry its
+    /// pre-main constructor put it on. No file was opened.
+    Static,
+    /// An engine-locked runtime module (`lumen_module_probe_<name>`).
     EngineModule,
     /// A portable C-ABI plugin (`lumen_plugin_v1`).
     PortablePlugin,
@@ -92,13 +112,15 @@ pub enum LoadedKind {
 pub struct LoadedModule {
     /// The declared name.
     pub name: String,
-    /// The library file that was opened.
+    /// The library file that was opened, or the running executable for a
+    /// module that was compiled into it.
     pub path: PathBuf,
-    /// Which kind the file's exports said it is.
+    /// Which kind the search found.
     pub kind: LoadedKind,
     /// The build id an engine-locked module reported; equal to the engine's
-    /// own. Empty for a portable plugin, whose handshake is the ABI and wire
-    /// versions instead of a build id.
+    /// own. Empty for the other two kinds: a portable plugin's handshake is
+    /// the ABI and wire versions instead, and a compiled-in module is this
+    /// build.
     pub build_id: String,
 }
 
@@ -113,11 +135,10 @@ pub struct ModuleFailure {
 }
 
 /// Why one dependency did not load, and how loudly to say so. A genuine
-/// failure gets the unmissable banner; the static-host refusal of an
-/// engine-locked module gets one line, because that shape is a property of
-/// the build rather than a defect - a static bundle compiles the module's
-/// plugin in instead, and shouting MODULE LOAD FAILED on every
-/// launch of a working app would teach users to ignore the banner.
+/// failure gets the unmissable banner; a name that no shape of this build
+/// can answer gets one line, because that is a property of how the binary
+/// was put together rather than a defect in the app, and shouting MODULE
+/// LOAD FAILED on every launch would teach users to ignore the banner.
 struct LoadError {
     reason: String,
     banner: bool,
@@ -205,9 +226,10 @@ pub fn load_modules(
                     banner(&dep.name, &err.reason);
                 } else {
                     eprintln!(
-                        "lumen-runtime: dependency '{}' skipped: this build compiles the \
-                         engine in; a bundled or engine-locked module loads only beside the \
-                         shared engine. The app runs without it.",
+                        "lumen-runtime: dependency '{}' skipped: this build does not compile \
+                         the module in and no engine dylib is present to load it dynamically. \
+                         The app runs without it. Package it with `lumenc package --static` to \
+                         compile the declared modules into the executable.",
                         dep.name
                     );
                 }
@@ -225,7 +247,7 @@ pub fn load_modules(
     app.world.insert_resource(portable);
 }
 
-/// Resolve, verify, and install one dependency. `Err` carries the reason and
+/// Find, verify, and install one dependency. `Err` carries the reason and
 /// how loudly to report it.
 #[allow(clippy::too_many_arguments)]
 fn load_one(
@@ -239,10 +261,17 @@ fn load_one(
     portable: &mut PortablePlugins,
     already: &[LoadedModule],
 ) -> Result<LoadedModule, LoadError> {
-    // A `bundled` dependency missing from a host that compiled the engine in
-    // is the same build-shape condition the engine-locked refusal below
-    // notices quietly: bundled modules ship beside the shared engine, and
-    // this process has none. Every other resolution failure banners.
+    // The registry first, before anything is resolved or opened: a module
+    // compiled into this binary is already here, and a file of the same name
+    // beside the executable would be a second copy of it.
+    if let Some(module) = registered(&dep.name) {
+        return install_static_module(app, dep, module);
+    }
+    // A `bundled` dependency the registry did not answer, in a host that
+    // compiled the engine in, is the same build-shape condition the
+    // engine-locked refusal below notices quietly: the module is neither in
+    // this binary nor loadable beside a shared engine this process does not
+    // have. Every other resolution failure banners.
     let path = resolve(dir, dep, resolved).map_err(|reason| {
         if engine_id.is_none() && matches!(dep.source, ModuleSource::Bundled) {
             LoadError::notice(reason)
@@ -266,14 +295,17 @@ fn load_one(
     let lib = unsafe { libloading::Library::new(&path) }
         .map_err(|e| LoadError::banner(format!("could not open {}: {e}", path.display())))?;
 
-    // Kind dispatch: the exported entry says what the file is.
-    let has = |symbol: &[u8]| {
+    // Kind dispatch: the exported entry says what the file is. The
+    // engine-locked entries carry the declared name, so what is probed for
+    // depends on what the app called this dependency.
+    let has = |symbol: &str| {
         // SAFETY: presence probe only; the symbol is never called through
         // this lookup.
         unsafe { lib.get::<ProbeFn>(symbol) }.is_ok()
     };
-    if has(PROBE_SYMBOL) {
-        return install_engine_module(app, dep, path, lib, engine_id);
+    let probe_symbol = entry_symbol(PROBE_PREFIX, &dep.name);
+    if has(&probe_symbol) {
+        return install_engine_module(app, dep, path, lib, engine_id, &probe_symbol);
     }
     if has(PLUGIN_ENTRY_SYMBOL) {
         return install_portable_plugin(app, dep, path, env, hooks, portable);
@@ -286,10 +318,33 @@ fn load_one(
         )));
     }
     Err(LoadError::banner(format!(
-        "{} exports neither lumen_module_probe nor lumen_plugin_v1; the library is not a \
-         Lumen runtime module or portable plugin",
-        path.display()
+        "{} exports neither {probe_symbol} nor lumen_plugin_v1; the library is not a Lumen \
+         runtime module built as '{}', or a portable plugin",
+        path.display(),
+        dep.name
     )))
+}
+
+/// The compiled-in arm: hand the registered entry the app and the config
+/// table, exactly as the opened arm hands them to the entry it looked up.
+///
+/// No build-id check, and none possible: the module was compiled into this
+/// binary, so it is this build by construction and there is no second engine
+/// instance for it to run against.
+fn install_static_module(
+    app: &mut App,
+    dep: &DepCfg,
+    module: StaticModule,
+) -> Result<LoadedModule, LoadError> {
+    let config_toml = config_toml(dep)?;
+    let status = guarded_install(|| (module.install)(app, &config_toml));
+    read_install_status(status)?;
+    Ok(LoadedModule {
+        name: dep.name.clone(),
+        path: std::env::current_exe().unwrap_or_else(|_| PathBuf::from(dep.name.clone())),
+        kind: LoadedKind::Static,
+        build_id: String::new(),
+    })
 }
 
 /// The engine-locked arm: verify the build id against the running engine and
@@ -300,33 +355,33 @@ fn install_engine_module(
     path: PathBuf,
     lib: libloading::Library,
     engine_id: Option<&str>,
+    probe_symbol: &str,
 ) -> Result<LoadedModule, LoadError> {
     // Hazard check: a host that compiled the engine in must never install an
     // engine-locked module (a second engine instance shares no worlds or
     // statics with the first, and the probe cannot tell). A portable plugin
-    // took the other arm before this check on purpose. A notice rather than
-    // the banner: the refusal is a property of the build shape, and a static
-    // build of an app that declares a bundled module compiles the module's
-    // plugin in instead.
+    // took the other arm before this check on purpose, and a module compiled
+    // into this binary answered from the registry before either. A notice
+    // rather than the banner: the refusal is a property of the build shape.
     let Some(engine_id) = engine_id else {
         return Err(LoadError::notice(
-            "this build does not link the engine dynamically; engine-locked runtime modules \
-             need the dynamic engine.\nA static bundle, or a plain cargo-built binary, \
-             compiles the engine into itself,\nand a module loaded there would run against a \
-             second engine instance.\nA portable plugin (lumen-plugin) loads here; an \
-             engine-locked module (lumen-module) does not.",
+            "this build does not compile the module in and no engine dylib is present to load \
+             it dynamically.\nThe binary compiles the engine into itself, and a module opened \
+             here would run against a second engine instance.\nA portable plugin \
+             (lumen-plugin) loads here; an engine-locked module (lumen-module) has to be \
+             compiled in.",
         ));
     };
     // SAFETY: the probe is a C-ABI symbol returning a NUL-terminated static;
     // it is the one symbol safe to call across a build-skewed boundary.
     let module_id = unsafe {
         let probe: libloading::Symbol<ProbeFn> = lib
-            .get(PROBE_SYMBOL)
+            .get(probe_symbol)
             .expect("presence was probed before dispatch");
         let p = probe();
         if p.is_null() {
             return Err(LoadError::banner(format!(
-                "{}: lumen_module_probe returned null",
+                "{}: {probe_symbol} returned null",
                 path.display()
             )));
         }
@@ -340,55 +395,21 @@ fn install_engine_module(
         )));
     }
 
-    let config_toml = toml::to_string(&dep.config).map_err(|e| {
-        LoadError::banner(format!(
-            "could not serialize the module's config table: {e}"
-        ))
-    })?;
+    let config_toml = config_toml(dep)?;
     // SAFETY: exact build-id equality just proved the module and the running
     // engine are one build, which is the contract that makes the Rust-ABI
     // signature (`&mut App`, `&str`) sound to call.
-    let status = unsafe {
-        let install: libloading::Symbol<InstallFn> = lib.get(INSTALL_SYMBOL).map_err(|_| {
+    let install_symbol = entry_symbol(INSTALL_PREFIX, &dep.name);
+    let install: libloading::Symbol<InstallFn> = unsafe { lib.get(install_symbol.as_str()) }
+        .map_err(|_| {
             LoadError::banner(format!(
-                "{} does not export lumen_module_install",
+                "{} does not export {install_symbol}",
                 path.display()
             ))
         })?;
-        // The module's own macro catches construction panics; this catch is
-        // the belt for a panic escaping the module anyway (shared libstd, so
-        // the unwind crosses cleanly). Print the payload ourselves: an app's
-        // own panic hook may be silent, and the banner below promises the
-        // message was printed.
-        catch_unwind(AssertUnwindSafe(|| install(app, &config_toml))).unwrap_or_else(|payload| {
-            let msg = payload
-                .downcast_ref::<&str>()
-                .copied()
-                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-                .unwrap_or("(non-string panic payload)");
-            eprintln!("lumen-runtime: the module's install entry panicked: {msg}");
-            INSTALL_PANICKED
-        })
-    };
-    match status {
-        INSTALL_OK => {}
-        INSTALL_PANICKED => {
-            return Err(LoadError::banner(
-                "the module's constructor panicked during install (its message is printed \
-                 above)",
-            ));
-        }
-        INSTALL_BAD_CONFIG => {
-            return Err(LoadError::banner(
-                "the module rejected its `config` table (its message is printed above)",
-            ));
-        }
-        other => {
-            return Err(LoadError::banner(format!(
-                "the module's install entry failed (code {other})"
-            )));
-        }
-    }
+    // SAFETY: as above - the probe already proved one build.
+    let status = guarded_install(|| unsafe { install(app, &config_toml) });
+    read_install_status(status)?;
 
     // Load-forever: see [`LoadedModules`] for why unloading is never sound.
     std::mem::forget(lib);
@@ -398,6 +419,53 @@ fn install_engine_module(
         kind: LoadedKind::EngineModule,
         build_id: module_id,
     })
+}
+
+/// The module's `config` table in the wire form every install entry reads.
+/// One copy for both module arms, so a module cannot see a different table
+/// depending on how it reached the app.
+fn config_toml(dep: &DepCfg) -> Result<String, LoadError> {
+    toml::to_string(&dep.config).map_err(|e| {
+        LoadError::banner(format!(
+            "could not serialize the module's config table: {e}"
+        ))
+    })
+}
+
+/// Call an install entry and turn an escaping panic into a status.
+///
+/// The module's own macro catches construction panics; this catch is the belt
+/// for a panic escaping it anyway (one libstd either way, so the unwind
+/// crosses cleanly). The payload is printed here rather than left to the
+/// panic hook: an app's own hook may be silent, and the banner promises the
+/// message was printed.
+fn guarded_install(call: impl FnOnce() -> u32) -> u32 {
+    catch_unwind(AssertUnwindSafe(call)).unwrap_or_else(|payload| {
+        let msg = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("(non-string panic payload)");
+        eprintln!("lumen-runtime: the module's install entry panicked: {msg}");
+        INSTALL_PANICKED
+    })
+}
+
+/// What an install status means, in the words the banner carries. Shared by
+/// both module arms: the codes are one set, so the messages are too.
+fn read_install_status(status: u32) -> Result<(), LoadError> {
+    match status {
+        INSTALL_OK => Ok(()),
+        INSTALL_PANICKED => Err(LoadError::banner(
+            "the module's constructor panicked during install (its message is printed above)",
+        )),
+        INSTALL_BAD_CONFIG => Err(LoadError::banner(
+            "the module rejected its `config` table (its message is printed above)",
+        )),
+        other => Err(LoadError::banner(format!(
+            "the module's install entry failed (code {other})"
+        ))),
+    }
 }
 
 /// The portable arm: hand the file to the C-ABI loader, bind what it
@@ -691,6 +759,24 @@ fn banner(name: &str, reason: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_entry_symbol_carries_the_declared_name() {
+        assert_eq!(
+            entry_symbol(PROBE_PREFIX, "lumen-audio"),
+            "lumen_module_probe_lumen_audio"
+        );
+        assert_eq!(
+            entry_symbol(INSTALL_PREFIX, "fixture"),
+            "lumen_module_install_fixture"
+        );
+        // Anything a symbol cannot carry becomes an underscore, so a name
+        // the toml table accepts always maps to one that links.
+        assert_eq!(
+            entry_symbol(PROBE_PREFIX, "shape.tools+2"),
+            "lumen_module_probe_shape_tools_2"
+        );
+    }
 
     #[test]
     fn a_static_test_binary_has_no_dynamic_engine() {

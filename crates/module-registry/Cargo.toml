@@ -1,0 +1,21 @@
+# Where a compiled-in module announces itself, and the only thing the two
+# sides of a static link share. It names no module and knows no capability:
+# every entry arrives from a module's own constructor at startup.
+[package]
+name = "lumen-module-registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The registry a statically linked Lumen module registers itself into before main."
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[dependencies]
+# The one dependency, and only for the `App` type an install entry takes.
+# Anything more would put engine surface between a module and the list it
+# joins.
+lumen-core = { workspace = true }

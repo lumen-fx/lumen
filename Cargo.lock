@@ -3284,6 +3284,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4a5ff6bcca6c4867b1c4fd4ef63e4db7436ef363e0ad7531d1558856bae64f4"
 
 [[package]]
+name = "link-recorder"
+version = "0.0.6"
+dependencies = [
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3561,6 +3569,7 @@ dependencies = [
  "lumen-runtime",
  "lumen-script",
  "serde_json",
+ "toml 1.1.4+spec-1.1.0",
 ]
 
 [[package]]
@@ -3625,6 +3634,12 @@ dependencies = [
 name = "lumen-launcher"
 version = "0.0.6"
 dependencies = [
+ "lumen",
+ "lumen-archive",
+ "lumen-audio",
+ "lumen-download",
+ "lumen-fs",
+ "lumen-process",
  "lumenc",
 ]
 
@@ -3690,6 +3705,8 @@ dependencies = [
  "lumen-assets",
  "lumen-core",
  "lumen-dylib",
+ "lumen-module-macros",
+ "lumen-module-registry",
  "lumen-script",
  "serde",
  "serde_json",
@@ -3715,6 +3732,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-module-macros"
+version = "0.0.6"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
+name = "lumen-module-registry"
+version = "0.0.6"
+dependencies = [
+ "lumen-core",
+]
+
+[[package]]
 name = "lumen-modules"
 version = "0.0.6"
 dependencies = [
@@ -3722,10 +3755,12 @@ dependencies = [
  "libc",
  "libloading 0.9.0",
  "lumen-core",
+ "lumen-module-registry",
  "lumen-plugin",
  "lumen-plugin-abi",
  "lumenc-plugin",
  "serde",
+ "serde_json",
  "toml 1.1.4+spec-1.1.0",
 ]
 
@@ -3991,6 +4026,7 @@ dependencies = [
  "lumen-ir",
  "lumen-layout-taffy",
  "lumen-mcp",
+ "lumen-module-registry",
  "lumen-modules",
  "lumen-os-clipboard",
  "lumen-os-dnd",
@@ -4267,6 +4303,7 @@ dependencies = [
  "lumen-i18n",
  "lumen-ir",
  "lumen-mcp",
+ "lumen-modules",
  "lumen-os-dnd",
  "lumen-os-tray",
  "lumen-prerender",

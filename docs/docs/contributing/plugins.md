@@ -677,30 +677,34 @@ than speaking a serialized ABI, and it sets the contract:
   constructor prints an unmissable stderr banner naming the module and the
   reason, and the app boots without that module. The outcome is queryable
   from the `LoadedModules` resource.
-- **Modules load only into a dynamically linked engine.** On Linux and
-  macOS that is every ordinary path: the installed `lumenc` (so `lumenc run`
-  markup apps load modules), a `lumenc package` folder (the launcher's
-  `liblumen` links the shared engine beside it), and a Rust SDK app built
-  `prefer-dynamic`. A process that compiled the engine into itself instead
-  (a static `--bundle`, a plain `cargo run` binary, a source-built `lumenc`
-  without the `dynamic-engine` feature) skips every declared module with a
-  single stderr line rather than the failure banner - that build shape
-  carries its capabilities compiled in, and loading a module there would
+- **A prebuilt module is opened only by a dynamically linked engine.** On
+  Linux and macOS that is every ordinary path: the installed `lumenc` (so
+  `lumenc run` markup apps load modules), a `lumenc package` folder (the
+  launcher's `liblumen` links the shared engine beside it), and a Rust SDK
+  app built `prefer-dynamic`. A process that compiled the engine into itself
+  instead (a static `--bundle`, a plain `cargo run` binary, a source-built
+  `lumenc` without the `dynamic-engine` feature) cannot open one: it would
   map a second engine instance that shares no state with the first.
-  Portable plugins still load; the skip is for engine-locked modules.
+  Portable plugins still load there.
+- **A module the binary was built with loads anywhere.** Compiled in, a
+  module has no file to open and nothing to verify: its constructor puts it
+  on a registry before `main`, and the loader answers the declared name from
+  there. That works on every platform, Windows included, and takes
+  precedence over anything of the same name on disk. A name that this build
+  neither compiles in nor can open gets a single stderr line rather than the
+  failure banner, pointing at `lumenc package --static`, which is how an app
+  gets that shape without a Rust toolchain.
 - **A loaded module is never unloaded.** The schedules hold function
   pointers into the library for as long as the app lives.
-- **Windows is not supported** for prebuilt modules; no linkable engine
-  library exists there. Compile the plugin into the app instead.
 
 ### Authoring a module
 
-A module crate is a `cdylib` depending on the SDK crate at the engine release
-it targets:
+A module crate builds both link shapes from one source, and depends on the
+SDK crate at the engine release it targets:
 
 ```toml
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["lib", "cdylib"]
 
 [dependencies]
 lumen-module = { git = "https://github.com/lumen-fx/lumen", tag = "v0.0.6" }
@@ -708,8 +712,9 @@ lumen-core = { git = "https://github.com/lumen-fx/lumen", tag = "v0.0.6" }
 bevy_ecs = "0.19"
 ```
 
-Implement `Plugin` as usual and export it with `lumen_module!`, whose
-constructor expression receives the `config` table the app declared:
+Implement `Plugin` as usual and export it with `lumen_module!`. The first
+argument is the name apps declare the module under; the constructor
+expression after it receives the `config` table the app declared:
 
 ```rust
 use lumen_module::{lumen_module, App, ModuleConfig, Plugin};
@@ -724,16 +729,17 @@ impl Plugin for ShapeTools {
     }
 }
 
-lumen_module!(|config: ModuleConfig| ShapeTools {
+lumen_module!("shape-tools", |config: ModuleConfig| ShapeTools {
     units: config.str("units").unwrap_or("px").to_string(),
 });
 ```
 
-The macro generates the module's two exports - the build-id probe and the
-install entry - and pulls in the engine-dylib linkage, so the crate contains
-no unsafe code and cannot forget the link. A panic in the constructor or in
-`build` is caught inside the module and reported to the loader as a failed
-install.
+The macro generates the entries the engine calls, names them after the
+module so two modules can live in one binary, and pulls in the engine-dylib
+linkage, so the crate contains no unsafe code and cannot forget the link. An
+app that declares the module under a different name will not find it. A
+panic in the constructor or in `build` is caught inside the module and
+reported to the loader as a failed install.
 
 Build with the engine taken as a shared library. `-C prefer-dynamic` selects
 it; passing an explicit `--target` keeps the flag off build scripts and proc
@@ -767,7 +773,10 @@ handler receives. A script-function body has no world access, so the
 functions hand commands to the systems over a queue the module owns.
 First-party modules under `std/` build in the release's own cargo
 invocation, which is what keeps their build ids equal to the engine they
-ship beside.
+ship beside. A crate added there is also in the link kit that release
+publishes, so `lumenc package --static` can compile it into an app the day it
+ships; there is no equivalent for a module from outside the toolchain, which
+travels beside the executable instead.
 
 ## Portable plugins
 

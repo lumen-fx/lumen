@@ -36,6 +36,15 @@ name: build-toolchain
 # bin/ layout. install.sh unpacks it over the same prefix. Windows gets no
 # modules archive; the capabilities are compiled into its binaries.
 #
+# Every leg, Windows included, also produces lumen-linkkit-<target>.tar.gz:
+# the recorded link line of the fat static launcher and every file that link
+# read, which is what `lumenc package --static` replays to put an app's
+# declared modules inside one executable. It is built by an extra cargo
+# invocation of its own, with a recorder standing in for the linker; see the
+# steps that produce it. The leg then links an app from that kit, because a
+# kit and a lumenc that reads it exist together nowhere else until this run
+# publishes both.
+#
 # It also builds one artifact that belongs to no platform: lumen-web.tar.gz,
 # holding the browser runtime `lumenc web` copies beside the pages it emits.
 # WebAssembly is the same everywhere, so it is built once and downloaded by
@@ -100,7 +109,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     # The release profile (fat LTO, one codegen unit) is slower to build
     # than the dev-ish builds in ci.yml's test job, hence the longer budget.
-    timeout-minutes: 120
+    # A leg compiles the graph three times and shares nothing between them:
+    # once for the shipped binaries, once for the link kit (its own RUSTFLAGS,
+    # LTO off), and once unoptimized for the test that links an app from the
+    # kit.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -292,18 +305,16 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p modules-dist/bin
-          # One entry per module; the two spellings are the Linux and macOS
-          # library names of the same build.
-          modules=(
-            "liblumen_archive.so liblumen_archive.dylib"
-            "liblumen_audio.so liblumen_audio.dylib"
-            "liblumen_download.so liblumen_download.dylib"
-            "liblumen_fs.so liblumen_fs.dylib"
-            "liblumen_process.so liblumen_process.dylib"
-          )
-          for spellings in "${modules[@]}"; do
+          # The module list comes from the tree, so a crate added under std/
+          # ships without this step being touched. Read into a variable and
+          # checked first: a list produced inside the loop's redirection could
+          # fail and leave the archive quietly empty. The two spellings tried
+          # per module are the Linux and macOS library names of one build.
+          modules="$(.github/scripts/first-party-modules.sh)"
+          test -n "$modules"
+          while IFS=$'\t' read -r _name package lib; do
             found=""
-            for module in $spellings; do
+            for module in "lib$lib.so" "lib$lib.dylib"; do
               for built in \
                 "target/$triple/release/$module" \
                 "target/$triple/release/deps/$module"; do
@@ -315,10 +326,10 @@ jobs:
               done
             done
             if [ -z "$found" ]; then
-              echo "no library built for: $spellings" >&2
+              echo "no library built for $package" >&2
               exit 1
             fi
-          done
+          done <<<"$modules"
           tar -czf lumen-modules-${{ matrix.target }}.tar.gz -C modules-dist .
 
       - name: Package (Windows)
@@ -332,6 +343,148 @@ jobs:
           Copy-Item -Recurse target\release\libs dist\bin\libs
           Copy-Item -Recurse target\templates dist\bin\templates
           Compress-Archive -Path dist\* -DestinationPath lumen-${{ matrix.target }}.zip
+
+      # The MSVC linker is not on PATH until the Visual Studio environment
+      # script has run, and the same script is what fills LIB, the variable
+      # link.exe resolves the C runtime and the Windows SDK through. rustc
+      # sets that environment up for the linker it runs itself; the recorder
+      # standing in its place needs to be told.
+      - name: Find the MSVC linker (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do set VSROOT=%%i
+          call "%VSROOT%\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64 >nul
+          for /f "usebackq delims=" %%l in (`where link.exe`) do (if not defined LNK set LNK=%%l)
+          >>%GITHUB_ENV% echo LIB=%LIB%
+          >>%GITHUB_ENV% echo LUMEN_REAL_LINKER=%LNK%
+          echo link.exe: %LNK%
+
+      # The launcher again, in its other shape: the engine and every
+      # first-party module compiled in, linked through a recorder that keeps
+      # the command and copies the files it read. That pair is the link kit,
+      # and it is what a machine with no Rust toolchain replays to put an
+      # app's declared modules inside one executable.
+      #
+      # An invocation of its own because it shares nothing with the builds
+      # above: a different feature graph, a different RUSTFLAGS, and no
+      # prefer-dynamic. The kit is coherent with itself and needs to be with
+      # nothing else - a module linked into a binary IS that binary's build,
+      # so the build-id check that guards a dlopen'd module has nothing to
+      # compare here, and the dylibs shipped above are a separate build.
+      #
+      # LTO is off because fat LTO re-codegens every rlib at link time and
+      # leaves no per-module object to select; codegen-units stays at the
+      # profile's 1, or a module's registration function and the constructor
+      # that calls it can land in different objects and forcing the symbol
+      # would pull in half a module.
+      - name: Build the static launcher and record the link
+        shell: bash
+        env:
+          LUMEN_SKIP_ENGINE_BUILD: "1"
+        run: |
+          set -eo pipefail
+          triple="$(rustc -vV | sed -n 's/^host: //p' | tr -d '\r')"
+          echo "linkkit_triple=$triple" >> "$GITHUB_ENV"
+          cargo build --release -p link-recorder
+          # A Windows rustc cannot follow a POSIX path, so every path handed
+          # across that boundary is the drive-letter form.
+          if [ "$RUNNER_OS" = Windows ]; then
+            root="$(pwd -W)"
+            recorder="$root/target/release/link-recorder.exe"
+            export LUMEN_LINK_RSP_STYLE=msvc
+          else
+            root="$PWD"
+            recorder="$root/target/release/link-recorder"
+            export LUMEN_REAL_LINKER="$(command -v cc)"
+          fi
+          echo "recording links through ${LUMEN_REAL_LINKER}"
+          rm -rf link-stage link-record.jsonl
+          # The messages are kept because a build script is the only place
+          # that says which package asked the linker for which system library,
+          # and rustc has forgotten it by the time the line is classified.
+          LUMEN_LINK_RECORD="$root/link-record.jsonl" \
+          LUMEN_LINK_STAGE="$root/link-stage" \
+          RUSTFLAGS="-Clinker=$recorder" \
+            cargo build --release --target "$triple" \
+              -p lumen-launcher --features lumen-launcher/static-run \
+              --config 'profile.release.lto="off"' \
+              --message-format=json-render-diagnostics > "$root/link-build.jsonl"
+
+      # The kit itself: the classified line and the files it reads, plus - on
+      # Windows, where a consumer has no C compiler to borrow - the linker
+      # that replays it. Then the two levers that decide its size. Dropping
+      # `lib.rmeta` is the large one: it is the Rust crate metadata rustc
+      # reads to compile against a library, and nothing links against a kit.
+      - name: Package the link kit
+        shell: bash
+        run: |
+          set -eo pipefail
+          shopt -s nullglob
+          triple="$linkkit_triple"
+          sysroot="$(rustc --print sysroot | tr '\\' '/')"
+          driver=()
+          if [ "$RUNNER_OS" = Windows ]; then
+            root="$(pwd -W)"
+            lumenc=dist/bin/lumenc.exe
+            # No C compiler to borrow on a consumer's Windows machine, so the
+            # kit carries the linker rustc would have used itself.
+            driver=(--driver-path "$sysroot/lib/rustlib/$triple/bin/rust-lld.exe")
+          else
+            root="$PWD"
+            lumenc=dist/bin/lumenc
+          fi
+          # Read and checked before the loop, so a list that failed to build
+          # cannot pass as a kit with no modules in it.
+          list="$(.github/scripts/first-party-modules.sh)"
+          test -n "$list"
+          modules=()
+          while IFS=$'\t' read -r name _package lib; do
+            modules+=(--module "$name=$lib")
+          done <<<"$list"
+          # Which system libraries each module alone put on the line, so a
+          # replay without the module drops them and the executable does not
+          # depend on a library it makes no calls into.
+          libs=()
+          while IFS=$'\t' read -r name names; do
+            [ -n "$name" ] && libs+=(--module-libs "$name=$names")
+          done < <(.github/scripts/module-native-libs.sh \
+                     "$root/link-build.jsonl" "$triple")
+          echo "module libraries: ${libs[*]:-none attributed}"
+          rm -rf linkkit
+          "$lumenc" link-kit emit \
+            --record "$root/link-record.jsonl" \
+            --stage "$root/link-stage" \
+            --out "$root/linkkit" \
+            --target ${{ matrix.target }} \
+            --target-dir "$root/target" \
+            --rustc "$(rustc --version)" \
+            "${driver[@]}" "${modules[@]}" "${libs[@]}"
+
+          rustup component add llvm-tools
+          bin="$sysroot/lib/rustlib/$triple/bin"
+          for archive in linkkit/stage/*.rlib; do
+            "$bin/llvm-ar" d "$archive" lib.rmeta
+            "$bin/llvm-objcopy" --strip-debug "$archive"
+          done
+          for object in linkkit/stage/*.o linkkit/stage/*.a; do
+            "$bin/llvm-objcopy" --strip-debug "$object"
+          done
+
+          tar -czf lumen-linkkit-${{ matrix.target }}.tar.gz -C linkkit .
+          du -sh linkkit
+          ls -l lumen-linkkit-${{ matrix.target }}.tar.gz
+
+      # The kit is what `lumenc package --static` consumes, and the only place
+      # a kit and a lumenc that can read it exist together is right here: the
+      # release channel has neither until this run publishes them. So the
+      # consumer is exercised against the kit this leg just wrote, on every
+      # platform, before anything is uploaded.
+      - name: Link an app from the kit
+        shell: bash
+        env:
+          LUMEN_LINK_KIT_DIR: ${{ github.workspace }}/linkkit
+        run: cargo test -p lumenc --test package_static
 
       # The MSI payload is staged separately from dist\, and only after the
       # zip is closed, because the two differ by one file. The MSI installs a
@@ -377,6 +530,7 @@ jobs:
           path: |
             lumen-${{ matrix.target }}.tar.gz
             lumen-modules-${{ matrix.target }}.tar.gz
+            lumen-linkkit-${{ matrix.target }}.tar.gz
             lumen-${{ matrix.target }}.zip
             lumen-${{ matrix.target }}.msi
           if-no-files-found: error

@@ -22,4 +22,33 @@ path = "src/main.rs"
 # (wgpu / winit / cosmic-text / the script hosts), and the stub must carry none
 # of it, because it finds liblumen beside itself at run time.
 # Check with `cargo tree -p lumen-launcher` after any dependency change.
+#
+# `static-run` below is the one deliberate exception: that shape links the
+# engine and its modules in on purpose, and nothing it pulls reaches the
+# default stub.
 lumenc = { workspace = true, features = ["dlopen-run"] }
+
+# The engine compiled in rather than opened. Default features, which is a
+# static engine: `dynamic-engine` is what would put `liblumen_engine` beside
+# the executable again, and this shape exists to need no file beside it.
+lumen = { workspace = true, optional = true }
+# The first-party modules this shape carries. Without defaults, so none of
+# them anchors the engine dylib; each still registers itself before `main`.
+lumen-archive = { workspace = true, optional = true }
+lumen-audio = { workspace = true, optional = true }
+lumen-download = { workspace = true, optional = true }
+lumen-fs = { workspace = true, optional = true }
+lumen-process = { workspace = true, optional = true }
+
+[features]
+# One self-contained executable: the engine and the first-party modules
+# compiled in, and no shared library to find at run time. Off by default -
+# the shipped stub is the thin one, and `lumenc package` copies that.
+static-run = [
+    "dep:lumen",
+    "dep:lumen-archive",
+    "dep:lumen-audio",
+    "dep:lumen-download",
+    "dep:lumen-fs",
+    "dep:lumen-process",
+]

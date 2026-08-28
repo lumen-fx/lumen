@@ -47,6 +47,17 @@ pub mod formatter;
 #[cfg(feature = "runtime-parse")]
 pub mod fragments;
 pub mod i18n_cli;
+/// `lumenc package --static` - link one executable out of the per-target link
+/// kit a release publishes, with the app's declared runtime modules compiled
+/// in. Gated with `package_cli`, whose folder assembly it is one arm of.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "package"))]
+pub mod link_kit;
+/// `lumenc link-kit emit` - write the per-target link kit a release ships,
+/// out of a recorded link and the files that link read. A release step rather
+/// than a command anyone runs by hand, so it is absent from `lumenc --help`.
+/// Gated with `package_cli`, whose target table names the release assets.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "package"))]
+pub mod link_kit_cli;
 /// Static signal lint - walks the source parser (`runtime-parse`) and reads
 /// `lumen.toml` config (`lumen-runtime`, `dev-run`).
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]

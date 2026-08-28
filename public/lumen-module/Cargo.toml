@@ -1,7 +1,8 @@
-# The authoring side of runtime modules: what a prebuilt-dylib plugin crate
-# depends on. Small on purpose - the macro, the config wrapper, and the
-# re-exports an author writes against; the loading half lives in
-# `lumen-modules` inside the engine.
+# The authoring side of runtime modules: what a module crate depends on,
+# whether its library gets opened or its rlib gets linked in. Small on
+# purpose - the macro, the config wrapper, and the re-exports an author
+# writes against; the loading half lives in `lumen-modules` inside the
+# engine.
 [package]
 name = "lumen-module"
 version.workspace = true
@@ -10,13 +11,21 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Lumen runtime-module SDK: implement the Plugin trait, export it with lumen_module!, ship it as a version-locked dylib."
+description = "Lumen runtime-module SDK: implement the Plugin trait, export it with lumen_module!, ship it as a version-locked dylib or compile it in."
 keywords.workspace = true
 categories.workspace = true
 publish = false
 
 [dependencies]
 lumen-core = { workspace = true }
+# The expansion behind `lumen_module!`, re-exported so a module crate keeps
+# one dependency. A proc macro rather than a `macro_rules!` because the
+# exported entries carry the module's own name, which means building symbol
+# names from a string the caller passes.
+lumen-module-macros = { workspace = true }
+# Where the generated pre-main constructor leaves the module when it is
+# linked into a binary rather than opened as a library.
+lumen-module-registry = { workspace = true }
 # The byte-source seam a module reads app data through: `AssetServer` and
 # `SourceReader`, re-exported so a module resolves bundled and registered
 # sources instead of assuming the raw filesystem.
@@ -32,10 +41,18 @@ toml = { workspace = true }
 # `lumen-core` (and everything else the module touches) into the shared
 # engine instance instead of a second static copy, and what records the
 # module's `NEEDED` entry on `liblumen_engine`. Windows has no such library
-# (see public/lumen-dylib/Cargo.toml), so prebuilt modules do not exist there and
-# the macro says so at expansion.
+# (see public/lumen-dylib/Cargo.toml), so the entries that need it are absent
+# there whatever the feature says.
 [target.'cfg(not(windows))'.dependencies]
-lumen-dylib = { workspace = true }
+lumen-dylib = { workspace = true, optional = true }
+
+[features]
+default = ["engine-dylib"]
+# The shared engine, and with it the probe-and-install pair a loader looks up
+# after opening a module's library. A module that is only ever linked into a
+# binary drops the feature and stops anchoring the engine dylib; what it
+# registers before `main` is unaffected.
+engine-dylib = ["dep:lumen-dylib", "lumen-module-macros/engine-dylib"]
 
 [dev-dependencies]
 # The end-to-end harness parses cargo's JSON artifact messages to find the

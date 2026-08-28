@@ -1,0 +1,33 @@
+# The expansion half of the module SDK. Separate from `lumen-module` because
+# a module crate keeps `#![forbid(unsafe_code)]` and still has to export
+# entries the linker can find by name: the unsafe attributes that spell those
+# names out come from here, and an author's crate never writes one.
+#
+# Authors depend on `lumen-module`, which re-exports the macro; nothing takes
+# this crate directly.
+[package]
+name = "lumen-module-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The lumen_module! macro: exports a Lumen plugin as a runtime module and registers it for a static link."
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "3", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+
+[features]
+# Turned on by `lumen-module`'s feature of the same name; off here on its own
+# so a build that drops the engine dylib drops the entries that need it. See
+# the crate docs for what each shape emits.
+engine-dylib = []

@@ -30,6 +30,14 @@ crate-type = ["lib", "cdylib"]
 # else is `std::fs`.
 lumen-module = { workspace = true }
 
+[features]
+default = ["engine-dylib"]
+# The shared engine, and the probe-and-install pair a loader looks up after
+# opening this crate's `cdylib`. On by default, which is the shipping shape.
+# A binary that links the `lib` target in drops the feature and links no
+# engine dylib; what the module registers before `main` is unaffected.
+engine-dylib = ["lumen-module/engine-dylib"]
+
 # Tests only: the compiled-in-shape tests build a headless app around the
 # plugin the way `lumenc run` would, and the module-shape test drives the
 # loader end to end over a subprocess. The shipping crate stays on
@@ -40,3 +48,4 @@ lumen-ir = { workspace = true }
 lumen-runtime = { workspace = true }
 lumen-script = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }

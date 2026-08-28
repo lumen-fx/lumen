@@ -4,11 +4,13 @@
 //! The fixture module exercises the same surface end to end, but it is built
 //! by a nested cargo without instrumentation, so nothing it runs is measured.
 //! Expanding the macro here links its probe into this test binary, where a
-//! local extern block reaches it; the install entry keeps the Rust ABI the
-//! loader calls it with, so its body is driven through [`install_with`]
-//! directly, which is the whole of it.
+//! local extern block reaches it by the name the macro was given; the install
+//! entry keeps the Rust ABI the loader calls it with, so its body is driven
+//! through [`install_with`] directly, which is the whole of it. The
+//! constructor the expansion also emits registers the module before `main`,
+//! and the registry test below reads it back.
 
-#![cfg(not(windows))]
+#![cfg(all(feature = "engine-dylib", not(windows)))]
 
 use std::os::raw::c_char;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,18 +37,29 @@ impl Plugin for Probe {
     }
 }
 
-lumen_module!(|config: ModuleConfig| Probe {
+lumen_module!("sdk-probe", |config: ModuleConfig| Probe {
     units: config.str("units").unwrap_or("px").to_string(),
 });
 
 unsafe extern "C" {
-    fn lumen_module_probe() -> *const c_char;
+    fn lumen_module_probe_sdk_probe() -> *const c_char;
 }
 
 #[test]
-fn the_probe_answers_the_build_id() {
-    let probe = unsafe { std::ffi::CStr::from_ptr(lumen_module_probe()) };
+fn the_probe_answers_the_build_id_under_the_declared_name() {
+    let probe = unsafe { std::ffi::CStr::from_ptr(lumen_module_probe_sdk_probe()) };
     assert_eq!(probe.to_bytes_with_nul(), BUILD_ID_C.as_bytes());
+}
+
+#[test]
+fn the_constructor_registered_the_module_before_main() {
+    let entry = lumen_module::registry::registered()
+        .into_iter()
+        .find(|m| m.name == "sdk-probe")
+        .expect("the pre-main constructor ran");
+    let mut app = App::new();
+    assert_eq!((entry.install)(&mut app, "units = \"cm\""), INSTALL_OK);
+    assert!(BUILT.load(Ordering::SeqCst));
 }
 
 #[test]
