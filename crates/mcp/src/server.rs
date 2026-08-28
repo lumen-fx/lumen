@@ -686,44 +686,69 @@ async fn run_framework_status(ctx: &ServerCtx) -> Value {
     };
 
     if !ctx.issues_enabled {
-        return json!({
-            "summary": format!("issue lookup disabled; last tick {last_tick_micros}us"),
-            "enabled": false,
-            "hint": "enable with [mcp] issues = true in lumen.toml (or LumenMcpPlugin::with_issues_enabled(true))",
-            "repo": Value::Null,
-            "open_issues": Value::Null,
-            "truncated": false,
-            "first_open_issues": Value::Array(Vec::new()),
-            "issues_error": Value::Null,
-            "last_tick_micros": last_tick_micros,
-            "frame": frame,
-            "next_suggested_tools": [
-                { "name": "lumen_snapshot_text", "params": {}, "why": "verify a fix end-to-end" },
-            ],
-            "confidence": "high",
-        });
+        return disabled_framework_status_json(frame, last_tick_micros);
     }
 
     let report = crate::issues::framework_issues_report(&crate::issues::GhConfig::default()).await;
+    framework_status_json(&report, frame, last_tick_micros)
+}
 
-    let summary = match (&report.repo, report.open_issues, &report.error) {
-        (Some(repo), Some(n), None) if report.truncated => {
-            format!(
-                "{n}+ open issue(s) on {repo} (list truncated at {n}); last tick {last_tick_micros}us"
-            )
-        }
-        (Some(repo), Some(n), None) => {
-            format!("{n} open issue(s) on {repo}; last tick {last_tick_micros}us")
-        }
-        (Some(repo), _, Some(err)) => {
+/// The `[mcp] issues` opt-in is off: never touches `git`/`gh`, and says how
+/// to turn the lookup on.
+fn disabled_framework_status_json(frame: u64, last_tick_micros: u64) -> Value {
+    json!({
+        "summary": format!("issue lookup disabled; last tick {last_tick_micros}us"),
+        "enabled": false,
+        "hint": "enable with [mcp] issues = true in lumen.toml (or LumenMcpPlugin::with_issues_enabled(true))",
+        "repo": Value::Null,
+        "open_issues": Value::Null,
+        "truncated": false,
+        "first_open_issues": Value::Array(Vec::new()),
+        "issues_error": Value::Null,
+        "last_tick_micros": last_tick_micros,
+        "frame": frame,
+        "next_suggested_tools": [
+            { "name": "lumen_snapshot_text", "params": {}, "why": "verify a fix end-to-end" },
+        ],
+        "confidence": "high",
+    })
+}
+
+/// Shape a resolved [`crate::issues::IssuesReport`] into the
+/// `lumen_framework_status` response, alongside the tick-liveness numbers
+/// every other tool reports. Pure and synchronous - every summary and
+/// confidence branch is reachable with a hand-built `IssuesReport`, with no
+/// process or network involved.
+///
+/// `report.error` alone decides which branch this is in: a resolution
+/// failure carries no repo, a fetch failure carries a repo but no counts,
+/// and success (by construction, see `crate::issues::report_from_fetch_result`)
+/// always carries both a repo and a count when there is no error.
+fn framework_status_json(
+    report: &crate::issues::IssuesReport,
+    frame: u64,
+    last_tick_micros: u64,
+) -> Value {
+    let summary = match (&report.error, &report.repo) {
+        (Some(err), Some(repo)) => {
             format!("could not list open issues on {repo}: {err}; last tick {last_tick_micros}us")
         }
-        (None, _, Some(err)) => {
+        (Some(err), None) => {
             format!(
                 "could not determine which repository to query: {err}; last tick {last_tick_micros}us"
             )
         }
-        _ => format!("last tick {last_tick_micros}us"),
+        (None, _) => {
+            let n = report.open_issues.unwrap_or(0);
+            let repo = report.repo.as_deref().unwrap_or("?");
+            if report.truncated {
+                format!(
+                    "{n}+ open issue(s) on {repo} (list truncated at {n}); last tick {last_tick_micros}us"
+                )
+            } else {
+                format!("{n} open issue(s) on {repo}; last tick {last_tick_micros}us")
+            }
+        }
     };
     let confidence = match (&report.error, report.truncated) {
         (Some(_), _) => "low",
@@ -1135,5 +1160,156 @@ mod capture_tests {
 
         let response = run_screenshot(&ctx, None).await;
         assert_eq!(response["available"], serde_json::json!(false));
+    }
+}
+
+#[cfg(test)]
+mod framework_status_tests {
+    use super::*;
+    use crate::issues::IssuesReport;
+
+    /// Timer that never sleeps - nothing in this module's tests waits on a
+    /// frame or a GPU readback, so this keeps them instant.
+    struct InstantTimer;
+
+    impl Timer for InstantTimer {
+        fn sleep(&self, _duration: Duration) -> BoxFuture<()> {
+            Box::pin(std::future::ready(()))
+        }
+    }
+
+    fn test_ctx(issues_enabled: bool) -> ServerCtx {
+        ServerCtx {
+            snapshot: Arc::new(RwLock::new(Snapshot::default())),
+            surface_capture: None,
+            simulate_queue: SimulateQueue::default(),
+            simulate_enabled: false,
+            issues_enabled,
+            timer: Arc::new(InstantTimer),
+        }
+    }
+
+    fn report(
+        repo: Option<&str>,
+        open_issues: Option<usize>,
+        truncated: bool,
+        first_open: &[&str],
+        error: Option<&str>,
+    ) -> IssuesReport {
+        IssuesReport {
+            repo: repo.map(str::to_string),
+            open_issues,
+            truncated,
+            first_open: first_open.iter().map(|s| s.to_string()).collect(),
+            error: error.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_resolution_failure_carries_no_repo_and_low_confidence() {
+        let r = report(None, None, false, &[], Some("no 'origin' git remote"));
+        let v = framework_status_json(&r, 42, 1000);
+        assert_eq!(v["enabled"], json!(true));
+        assert_eq!(v["repo"], Value::Null);
+        assert_eq!(v["open_issues"], Value::Null);
+        assert_eq!(v["confidence"], json!("low"));
+        assert!(
+            v["summary"]
+                .as_str()
+                .unwrap()
+                .contains("could not determine which repository to query")
+        );
+    }
+
+    #[test]
+    fn a_fetch_failure_keeps_the_repo_and_reports_the_error() {
+        let r = report(
+            Some("lumen-fx/lumen"),
+            None,
+            false,
+            &[],
+            Some("gh not found"),
+        );
+        let v = framework_status_json(&r, 1, 1);
+        assert_eq!(v["repo"], json!("lumen-fx/lumen"));
+        assert_eq!(v["open_issues"], Value::Null);
+        assert_eq!(v["confidence"], json!("low"));
+        assert!(
+            v["summary"]
+                .as_str()
+                .unwrap()
+                .contains("could not list open issues on lumen-fx/lumen")
+        );
+    }
+
+    #[test]
+    fn an_exact_count_is_high_confidence() {
+        let r = report(
+            Some("lumen-fx/lumen"),
+            Some(3),
+            false,
+            &["#1 a", "#2 b"],
+            None,
+        );
+        let v = framework_status_json(&r, 7, 500);
+        assert_eq!(v["open_issues"], json!(3));
+        assert_eq!(v["truncated"], json!(false));
+        assert_eq!(v["confidence"], json!("high"));
+        assert_eq!(v["first_open_issues"], json!(["#1 a", "#2 b"]));
+        assert!(
+            v["summary"]
+                .as_str()
+                .unwrap()
+                .contains("3 open issue(s) on lumen-fx/lumen")
+        );
+    }
+
+    #[test]
+    fn a_truncated_count_is_medium_confidence_and_says_so() {
+        let r = report(Some("lumen-fx/lumen"), Some(200), true, &[], None);
+        let v = framework_status_json(&r, 7, 500);
+        assert_eq!(v["truncated"], json!(true));
+        assert_eq!(v["confidence"], json!("medium"));
+        let summary = v["summary"].as_str().unwrap();
+        assert!(summary.contains("200+ open issue(s)"));
+        assert!(summary.contains("truncated"));
+    }
+
+    #[tokio::test]
+    async fn disabled_by_default_never_builds_a_report_and_says_how_to_enable_it() {
+        let ctx = test_ctx(false);
+        let v = run_framework_status(&ctx).await;
+        assert_eq!(v["enabled"], json!(false));
+        assert_eq!(v["repo"], Value::Null);
+        assert_eq!(v["open_issues"], Value::Null);
+        assert_eq!(v["issues_error"], Value::Null);
+        assert_eq!(v["confidence"], json!("high"));
+        assert!(v["hint"].as_str().unwrap().contains("[mcp] issues = true"));
+    }
+
+    #[tokio::test]
+    async fn the_legacy_dotted_method_reaches_the_intercept_unwrapped() {
+        let ctx = test_ctx(false);
+        let resp = handle_request(
+            r#"{"jsonrpc":"2.0","id":1,"method":"lumen.framework_status"}"#,
+            &ctx,
+        )
+        .await;
+        assert_eq!(resp["result"]["enabled"], json!(false));
+        assert!(
+            resp["result"].get("content").is_none(),
+            "the dotted method must return the raw result, not the tool envelope"
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_call_wraps_the_same_result_in_the_tool_envelope() {
+        let ctx = test_ctx(false);
+        let line = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"lumen_framework_status","arguments":{}}}"#;
+        let resp = handle_request(line, &ctx).await;
+        assert_eq!(resp["result"]["isError"], json!(false));
+        assert_eq!(resp["result"]["structuredContent"]["enabled"], json!(false));
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"enabled\": false"));
     }
 }
