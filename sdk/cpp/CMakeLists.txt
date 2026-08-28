@@ -14,7 +14,7 @@
 # library (liblumen) is handled two ways:
 #   * if pkg-config can resolve `lumen` (installed lumen.pc), the link
 #     flags are attached to the interface automatically;
-#   * otherwise the consumer links the cargo-built staticlib/cdylib
+#   * otherwise the consumer links the cargo-built shared library
 #     directly (see apps/sysmon for the in-tree pattern).
 
 cmake_minimum_required(VERSION 3.20)

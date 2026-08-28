@@ -14,9 +14,29 @@
 //! - as a `<name>.lmna` file beside the executable. This is what a macOS
 //!   package cross-built from another platform ships, where appending is not
 //!   available (a Mach-O signature has to cover the whole file).
+//!
+//! The `static-run` feature builds the other shape of the same launcher: the
+//! engine and the first-party runtime modules compiled in, nothing opened at
+//! run time, and nothing that has to sit beside the executable. A macOS
+//! package built on macOS carries its artifact in a `__LUMEN,__lmna` section
+//! instead, which that shape reads as a third artifact source.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+
+// Link-line anchors. A cargo dependency nobody names puts nothing on the link
+// line, and these crates exist for what their constructors do before `main`:
+// each one leaves its module on the registry the loader reads.
+#[cfg(feature = "static-run")]
+use lumen_archive as _;
+#[cfg(feature = "static-run")]
+use lumen_audio as _;
+#[cfg(feature = "static-run")]
+use lumen_download as _;
+#[cfg(feature = "static-run")]
+use lumen_fs as _;
+#[cfg(feature = "static-run")]
+use lumen_process as _;
 
 /// Marks an appended artifact. The last bytes of a packaged executable are
 /// this magic followed by the payload length, and the payload sits directly
@@ -62,7 +82,13 @@ fn main() -> ExitCode {
         }
     };
 
-    match lumenc::loader::run_via_dlopen(&bytes, &base_dir, headless.then_some(ticks)) {
+    #[cfg(not(feature = "static-run"))]
+    let outcome = lumenc::loader::run_via_dlopen(&bytes, &base_dir, headless.then_some(ticks))
+        .map_err(|e| e.to_string());
+    #[cfg(feature = "static-run")]
+    let outcome = run_via_static(&bytes, &base_dir, headless.then_some(ticks));
+
+    match outcome {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("{e}");
@@ -71,13 +97,77 @@ fn main() -> ExitCode {
     }
 }
 
-/// The app's artifact bytes: appended to `exe` if it carries a footer,
-/// otherwise read from the sidecar file beside it.
+/// Run the app in this process. The same sequence
+/// `lumenc::loader::run_via_dlopen` drives across the dlopen seam, with the
+/// entry points called as ordinary functions: this binary compiled the engine
+/// in, so there is no library to find and no ABI version to agree on - the
+/// two sides are one build.
+#[cfg(feature = "static-run")]
+fn run_via_static(bytes: &[u8], base_dir: &Path, headless: Option<u32>) -> Result<(), String> {
+    use std::ffi::CString;
+
+    // Base dir as a C string for relative asset resolution.
+    let base = base_dir.to_string_lossy();
+    let c_base = CString::new(base.as_ref()).unwrap_or_default();
+
+    // SAFETY: the byte slice and the C string are both live across the call,
+    // which is all the entry borrows them for - it copies what it keeps.
+    let app =
+        unsafe { lumen::lumen_app_new_from_lmna(bytes.as_ptr(), bytes.len(), c_base.as_ptr()) };
+    if app.is_null() {
+        return Err(format!(
+            "failed to build the app from LMNA bytes: {}",
+            last_error()
+        ));
+    }
+
+    // SAFETY: the handle came from the call above and is passed exactly once;
+    // either entry point consumes and frees it.
+    let status = unsafe {
+        match headless {
+            Some(ticks) => lumen::lumen_app_run_headless(app, ticks),
+            None => lumen::lumen_app_run(app),
+        }
+    };
+    if status != lumen::LumenStatus::Ok {
+        return Err(format!(
+            "run failed (status {}): {}",
+            status as u32,
+            last_error()
+        ));
+    }
+    Ok(())
+}
+
+/// The engine's last error message as an owned string (best effort).
+#[cfg(feature = "static-run")]
+fn last_error() -> String {
+    // SAFETY: the export returns either null or a NUL-terminated string valid
+    // until the next call on this thread that records an error.
+    let p = unsafe { lumen::lumen_last_error() };
+    if p.is_null() {
+        return "(no error message)".to_string();
+    }
+    unsafe { std::ffi::CStr::from_ptr(p) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// The app's artifact bytes: from the executable's own `__LUMEN,__lmna`
+/// section where the platform has one, else appended to `exe` if it carries a
+/// footer, else read from the sidecar file beside it.
 ///
 /// Only the footer and the payload are read, never the program image around
 /// them, so an app starts without pulling its own executable through memory.
 fn load_artifact(exe: &Path) -> Result<Vec<u8>, String> {
     use std::io::{Read, Seek, SeekFrom};
+
+    // First, because a macOS package built on macOS has no footer to find:
+    // the artifact is linked into the image, not appended to it.
+    #[cfg(all(target_os = "macos", feature = "static-run"))]
+    if let Some(bytes) = section_artifact() {
+        return Ok(bytes);
+    }
 
     let read_error = |e: std::io::Error| format!("read {}: {e}", exe.display());
     let mut file = std::fs::File::open(exe).map_err(read_error)?;
@@ -103,6 +193,53 @@ fn load_artifact(exe: &Path) -> Result<Vec<u8>, String> {
             sidecar.display()
         )
     })
+}
+
+/// The artifact linked into this executable's `__LUMEN,__lmna` section, if it
+/// carries one.
+///
+/// `lumenc package` links a macOS executable rather than appending to it, so
+/// that the code signature covers the whole file: the artifact goes in with
+/// `-sectcreate`, and the generated C wrapper reads it back through
+/// `getsectiondata` against the image's own Mach-O header. This is the same
+/// read, from the Rust side of the same shape.
+#[cfg(all(target_os = "macos", feature = "static-run"))]
+fn section_artifact() -> Option<Vec<u8>> {
+    use std::os::raw::{c_char, c_ulong};
+
+    // SAFETY of the block below rests on these two: `_mh_execute_header` is
+    // the linker-provided Mach-O header of the running executable, present in
+    // every macOS executable image and used here only for its address; and
+    // `getsectiondata` is libSystem's section lookup, which returns either
+    // null or a pointer to `size` bytes inside the mapped image.
+    unsafe extern "C" {
+        static _mh_execute_header: c_char;
+        fn getsectiondata(
+            mhp: *const c_char,
+            segname: *const c_char,
+            sectname: *const c_char,
+            size: *mut c_ulong,
+        ) -> *mut u8;
+    }
+
+    let mut size: c_ulong = 0;
+    // SAFETY: the segment and section names are NUL-terminated literals, the
+    // header address is this image's own, and `size` is written only on a
+    // non-null return.
+    let data = unsafe {
+        getsectiondata(
+            &raw const _mh_execute_header,
+            c"__LUMEN".as_ptr(),
+            c"__lmna".as_ptr(),
+            &mut size,
+        )
+    };
+    if data.is_null() || size == 0 {
+        return None;
+    }
+    // SAFETY: the section is mapped for the life of the process, so the bytes
+    // are readable here and copied out before anything else runs.
+    Some(unsafe { std::slice::from_raw_parts(data, size as usize) }.to_vec())
 }
 
 /// Where the sidecar artifact lives: beside the executable, named after it.

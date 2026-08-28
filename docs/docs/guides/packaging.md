@@ -32,8 +32,10 @@ the same cache and `lumen.lock` as `lumenc run`, so the shipped folder
 carries the exact library the lock pins. All of it belongs to the app; keep
 the folder together when you move it.
 
-A Windows package stays one library plus the executable: runtime modules are
-not supported there, and an app declaring them runs without them.
+A Windows package stays one library plus the executable. Runtime modules do
+not load beside it, because there is no shared engine there for one to load
+into, so an app that declares them is packaged with
+[`--static`](#one-self-contained-executable) instead.
 
 Choose the name and the destination yourself:
 
@@ -99,10 +101,47 @@ cannot cross-package - a local library is built for one platform - and
 neither can a `version` one until the module registry exists; package those
 on a machine of the target platform instead.
 
+### One self-contained executable
+
+```sh
+lumenc package myapp --static
+```
+
+This writes the same folder with one difference: the app is a single
+executable. The engine is inside it, and so is every runtime module the app
+declares, so there is no runtime library beside it and no `modules/`
+subfolder. Copy the executable and the app's files, and that is the whole app.
+
+Reach for it when you want one file to hand over rather than a folder to keep
+together, and on Windows when your app declares `[dependencies]`, which is the
+only shape that loads a module there.
+
+It needs a linker on the machine doing the packaging: a C toolchain on Linux
+(`build-essential`, `base-devel`, or your distribution's equivalent), the
+Xcode Command Line Tools on macOS, and the Visual Studio Build Tools with the
+"Desktop development with C++" workload on Windows. The first `--static`
+package for a platform also downloads that platform's link kit from the
+release channel and caches it, which takes a moment and happens once.
+
+Four things it will not do, each with an exit code of 2 and a message saying
+so:
+
+- Package an app written against an SDK. Those bring their own executable from
+  their own toolchain.
+- Package for a platform other than the one you are on. The link runs through
+  the tools installed here.
+- Package an app declaring `[capabilities]`. The linked engine is the full
+  one; choosing which subsystems a runtime carries is what
+  [`bundle --static`](#trim-the-runtime) does, by compiling from source.
+- Link a `path` or `version` module. Only the modules that ship with the
+  toolchain (`bundled = true`) are in the kit; package without `--static` and
+  the library is staged beside the executable instead.
+
 ### What a packaged app does at startup
 
 The executable reads the app compiled into it, opens the runtime library
-sitting next to it, and runs. Its own directory is the app directory: relative
+sitting next to it, and runs; a `--static` executable skips the opening and
+runs what it already carries. Its own directory is the app directory: relative
 paths in your markup, and `lumen.toml`, resolve against it, so the folder works
 wherever it is copied.
 

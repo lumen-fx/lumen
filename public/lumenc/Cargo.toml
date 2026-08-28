@@ -116,6 +116,11 @@ libloading = { workspace = true, optional = true }
 # library costs only this crate plus libloading.
 lumenc-plugin = { workspace = true, features = ["host"] }
 
+# The runtime-module seam's data types. Taken without the `loader` feature:
+# what `lumenc` needs from here is the `[dependencies]` schema and the link-kit
+# manifest, never the dlopen machinery, which belongs to a running app.
+lumen-modules = { workspace = true }
+
 # `tracing` stays unconditional: lumenc emits plain warn!/debug! diagnostics
 # through it. The subscriber / chrome / tracy backends live in `lumen-runtime`
 # now and are reached via the `profiling` feature forward below.

@@ -1,39 +1,48 @@
-//! The runtime-module SDK: how a [`Plugin`] ships as a prebuilt shared
-//! library an app declares in `lumen.toml` instead of compiling in.
+//! The runtime-module SDK: how a [`Plugin`] ships as a module an app
+//! declares in `lumen.toml` instead of writing into its own source.
 //!
 //! A runtime module is the same [`lumen_core::app::Plugin`] an in-process
-//! plugin implements, built as a `cdylib` that links the engine dynamically
-//! and exported through [`lumen_module!`]. At startup the engine's loader
-//! opens the library, verifies it, and calls the generated install entry,
-//! which constructs the plugin from the app's `config` table and hands it to
-//! [`App::add_plugin`]. From there it is an ordinary plugin with full ECS
-//! reach: real systems, components, resources, and queries over the app's own
-//! state.
+//! plugin implements, exported through [`lumen_module!`]. It reaches an app
+//! two ways, from one crate:
+//!
+//! - **Opened.** A `cdylib` that links the engine dynamically. At startup
+//!   the engine's loader opens the library, verifies it, and calls the
+//!   generated install entry.
+//! - **Linked.** The `lib` target of the same crate, linked into the app's
+//!   binary. The module's constructor runs before `main` and puts the same
+//!   install entry on the registry the loader reads.
+//!
+//! Either way install constructs the plugin from the app's `config` table
+//! and hands it to [`App::add_plugin`]. From there it is an ordinary plugin
+//! with full ECS reach: real systems, components, resources, and queries
+//! over the app's own state.
 //!
 //! # The lockstep contract
 //!
-//! A module is version-locked to the **exact engine build** it compiled
-//! against. The generated probe returns [`BUILD_ID`], inlined at the module's
-//! compile time; the loader compares it against the running engine's value
-//! and refuses anything but exact equality, because nothing else detects a
-//! layout-changed rebuild - the dynamic linker resolves happily and `TypeId`
-//! equality still passes while field reads are shifted. A module is rebuilt
-//! per engine release, and a mismatch is a startup banner: the app boots
-//! without the module.
+//! An opened module is version-locked to the **exact engine build** it
+//! compiled against. The generated probe returns [`BUILD_ID`], inlined at
+//! the module's compile time; the loader compares it against the running
+//! engine's value and refuses anything but exact equality, because nothing
+//! else detects a layout-changed rebuild - the dynamic linker resolves
+//! happily and `TypeId` equality still passes while field reads are shifted.
+//! A module is rebuilt per engine release, and a mismatch is a startup
+//! banner: the app boots without the module. A linked module shares the
+//! binary's own build and has nothing to compare.
 //!
 //! Two more consequences of the design:
 //!
 //! - **Load-forever.** A loaded module is never unloaded; the app's schedules
 //!   hold function pointers into it for as long as the process lives.
-//! - **Windows is not supported** for prebuilt modules: no linkable engine
-//!   dylib exists there (its import-library format caps far below the
-//!   engine's export count). Compile the plugin into the app instead.
+//! - **Opening is a Linux and macOS path.** Windows has no linkable engine
+//!   dylib (its import-library format caps far below the engine's export
+//!   count), so a module reaches a Windows app by being linked in. Module
+//!   crates themselves build on every platform.
 //!
 //! # Authoring
 //!
 //! ```toml
 //! [lib]
-//! crate-type = ["cdylib"]
+//! crate-type = ["lib", "cdylib"]
 //!
 //! [dependencies]
 //! lumen-module = { git = "https://github.com/lumen-fx/lumen", tag = "v0.0.6" }
@@ -49,19 +58,23 @@
 //!     fn build(self, app: &mut lumen_module::App) { /* systems, resources */ }
 //! }
 //!
-//! lumen_module!(|config: ModuleConfig| ShapeTools {
+//! lumen_module!("shape-tools", |config: ModuleConfig| ShapeTools {
 //!     units: config.str("units").unwrap_or("px").to_string(),
 //! });
 //! ```
 //!
-//! Build with the engine taken as a shared library: `-C prefer-dynamic`
-//! together with an explicit `--target` (which keeps the flag off build
-//! scripts and proc macros). The module authoring guide in the Lumen docs
-//! carries the full recipe.
+//! The name is the one an app declares the module under; the generated
+//! entries carry it, which is what lets two modules live in one binary.
 //!
-//! Authors write no unsafe: the macro generates the two exported entries, and
-//! a panic in the constructor (or in `Plugin::build`) is caught here, its
-//! message printed to stderr, and reported to the loader as a failed install.
+//! Build the `cdylib` with the engine taken as a shared library: `-C
+//! prefer-dynamic` together with an explicit `--target` (which keeps the
+//! flag off build scripts and proc macros). The module authoring guide in
+//! the Lumen docs carries the full recipe.
+//!
+//! Authors write no unsafe: the macro generates the exported entries, and a
+//! panic in the constructor (or in `Plugin::build`) is caught here, its
+//! message printed to stderr, and reported to the loader as a failed
+//! install.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -73,6 +86,12 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 pub use lumen_assets::{AssetServer, SourceReader};
 pub use lumen_core;
 pub use lumen_core::app::{App, Plugin};
+/// Export a [`Plugin`] as a runtime module. See the crate docs for the
+/// authoring shape, and `lumen-module-macros` for what the expansion holds.
+pub use lumen_module_macros::lumen_module;
+/// Where a linked-in module leaves itself for the loader. Named by the
+/// generated constructor; a module author has no reason to reach it.
+pub use lumen_module_registry as registry;
 /// The script surface a module extends: register functions with
 /// [`lumen_script::ScriptFnAppExt::add_script_fn`], order systems against
 /// [`lumen_script::ScriptSet`], and deliver events through
@@ -80,9 +99,9 @@ pub use lumen_core::app::{App, Plugin};
 /// module crate depends on `lumen-module` alone.
 pub use lumen_script;
 
-#[cfg(not(windows))]
+#[cfg(all(feature = "engine-dylib", not(windows)))]
 pub use lumen_engine as lumen_dylib;
-#[cfg(not(windows))]
+#[cfg(all(feature = "engine-dylib", not(windows)))]
 pub use lumen_engine::{BUILD_ID, BUILD_ID_C};
 
 /// Install returned cleanly.
@@ -129,7 +148,7 @@ impl ModuleConfig {
     }
 }
 
-/// The body behind the generated `lumen_module_install`: parse the config,
+/// The body behind every generated install entry: parse the config,
 /// run the constructor, hand the plugin to the app, and turn any panic into a
 /// status the loader banners on instead of an unwind into it.
 #[doc(hidden)]
@@ -174,49 +193,7 @@ pub fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
         .unwrap_or("(non-string panic payload)")
 }
 
-/// Export a [`Plugin`] from a `cdylib` crate as a runtime module.
-///
-/// Takes a constructor expression called with the module's [`ModuleConfig`];
-/// it runs once, at load:
-///
-/// ```ignore
-/// lumen_module!(|config: ModuleConfig| MyPlugin::new(&config));
-/// ```
-///
-/// Expands to the module's two exports: the C-ABI `lumen_module_probe`
-/// returning [`BUILD_ID`] (the loader's exact-equality handshake) and the
-/// Rust-ABI `lumen_module_install` that constructs and installs the plugin.
-/// The expansion also names `lumen-dylib`, so the produced library records
-/// its dependency on the shared engine even before install is called.
-#[macro_export]
-macro_rules! lumen_module {
-    ($ctor:expr) => {
-        const _: () = {
-            #[cfg(windows)]
-            compile_error!(
-                "prebuilt runtime modules are not supported on Windows; compile the plugin \
-                 into the app instead"
-            );
-
-            // The linkage anchor: name the engine dylib from the module crate
-            // itself, so an author cannot build a module that forgot it.
-            #[cfg(not(windows))]
-            use $crate::lumen_dylib as _;
-
-            #[unsafe(no_mangle)]
-            pub extern "C" fn lumen_module_probe() -> *const ::std::os::raw::c_char {
-                $crate::BUILD_ID_C.as_ptr() as *const ::std::os::raw::c_char
-            }
-
-            #[unsafe(no_mangle)]
-            pub fn lumen_module_install(app: &mut $crate::App, config_toml: &str) -> u32 {
-                $crate::install_with(app, config_toml, $ctor)
-            }
-        };
-    };
-}
-
-#[cfg(all(test, not(windows)))]
+#[cfg(all(test, feature = "engine-dylib", not(windows)))]
 mod tests {
     #[test]
     fn build_id_has_the_documented_shape() {

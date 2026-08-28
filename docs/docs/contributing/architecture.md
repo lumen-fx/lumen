@@ -264,6 +264,11 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   app. It reads the artifact packaging put inside it, opens the shared runtime
   library beside it, and runs. It links the dlopen seam and nothing else, so it
   carries no renderer, window backend, or script host of its own.
+- **link-recorder** (in `tools/link-recorder`): a linker shim the release
+  workflow puts in the linker's place for one build, so the command that
+  produced the static launcher and the files it read can be kept and replayed
+  later. Build tooling: no archive carries it. See
+  [Building Lumen](building-lumen.md) for what the kit it feeds is for.
 - **lumenui** (in `sdk/rust`): the Rust SDK. Plugin groups, typed signals, safe
   node handles, and event-condition helpers. It reaches every other crate
   through the engine's `sdk` re-export module rather than depending on them

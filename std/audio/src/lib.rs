@@ -46,9 +46,11 @@ pub use plugin::AudioPlugin;
 pub use ticker::{PositionTicker, TICK_INTERVAL};
 pub use transport::{AudioSnapshot, PlaybackState, Resume, Transport};
 
-// The bundled-module entry: the loader constructs the shipping plugin. The
-// deviceless shape is not reachable from module config on purpose - an app
-// that declares the module wants sound, and a machine without a device
-// already degrades to silent.
-#[cfg(not(windows))]
-lumen_module::lumen_module!(|_config: lumen_module::ModuleConfig| AudioPlugin::new());
+// The module entry: the loader constructs the shipping plugin, whether it
+// opened this crate's library or found it linked in. The deviceless shape is
+// not reachable from module config on purpose - an app that declares the
+// module wants sound, and a machine without a device already degrades to
+// silent.
+lumen_module::lumen_module!("lumen-audio", |_config: lumen_module::ModuleConfig| {
+    AudioPlugin::new()
+});

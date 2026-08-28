@@ -411,10 +411,11 @@ fn a_cross_target_package_never_ships_silently_without_its_modules() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// A Windows target stages no modules whoever packages it - no shared engine
-/// exists there - and says so with a warning rather than an error.
+/// A folder-shaped Windows package has no shared engine for a module to load
+/// into, so an app that declares one is refused and pointed at the shape that
+/// answers there: the executable with the module linked in.
 #[test]
-fn a_windows_target_warns_and_stages_no_modules() {
+fn a_windows_target_refuses_declared_modules_and_names_the_static_package() {
     let root = scratch("windows-target");
     let app = write_app(&root, "demo-mod = { bundled = true }\n");
     let toolchain = root.join("win-toolchain");
@@ -425,8 +426,28 @@ fn a_windows_target_warns_and_stages_no_modules() {
 
     let output = run_package(&app, &out, &toolchain, &["--target", "windows-x86_64"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("lumenc package --static"), "{stderr}");
+    assert!(!out.exists(), "nothing was written");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The same app without `[dependencies]` still packages for Windows: the
+/// refusal is about the modules, not about the target.
+#[test]
+fn a_windows_target_without_modules_still_packages() {
+    let root = scratch("windows-no-modules");
+    let app = write_app(&root, "");
+    let toolchain = root.join("win-toolchain");
+    std::fs::create_dir_all(&toolchain).expect("toolchain dir");
+    write(&toolchain, "lumen-launcher.exe", "stub");
+    write(&toolchain, "lumen.dll", "library");
+    let out = root.join("dist");
+
+    let output = run_package(&app, &out, &toolchain, &["--target", "windows-x86_64"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{stderr}");
-    assert!(stderr.contains("not supported on Windows"), "{stderr}");
     assert!(out.join("app.exe").is_file(), "the launcher copy");
     assert!(!out.join("modules").exists(), "nothing staged");
 

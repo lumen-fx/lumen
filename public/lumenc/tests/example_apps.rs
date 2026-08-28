@@ -58,13 +58,14 @@ const ALLOWED_STDERR: &[&str] = &[
     "[script] ",
     "info  ",
     "      hint: ",
-    // This test binary compiles the engine in, so a runtime module an app
-    // declares (the music app's `lumen-audio`) cannot load here: the loader
-    // says so once and the app boots without it. The line is the build shape
-    // talking, not the app; the dynamic e2e suites cover the module-loaded
-    // run. The app's own boot path never touches a module function, so this
-    // notice is the only thing the skip may print.
-    "lumen-runtime: dependency 'lumen-audio' skipped: this build compiles the engine in",
+    // This test binary neither compiles a module in nor has an engine dylib
+    // beside it, so a runtime module an app declares (the music app's
+    // `lumen-audio`) cannot load here: the loader says so once and the app
+    // boots without it. The line is the build shape talking, not the app; the
+    // dynamic e2e suites cover the module-loaded run. The app's own boot path
+    // never touches a module function, so this notice is the only thing the
+    // skip may print.
+    "lumen-runtime: dependency 'lumen-audio' skipped: this build does not compile the module in",
 ];
 
 fn workspace_root() -> PathBuf {

@@ -50,7 +50,9 @@ mod plugin;
 
 pub use plugin::{DEFAULT_READ_BYTES_CAP, FsPlugin, MAX_READ_BYTES_CAP, MIN_READ_BYTES_CAP};
 
-// The bundled-module entry: the loader constructs the shipping plugin from
-// the app's `config` table.
-#[cfg(not(windows))]
-lumen_module::lumen_module!(|config: lumen_module::ModuleConfig| FsPlugin::new(config));
+// The module entry: the loader constructs the shipping plugin from the app's
+// `config` table, whether it opened this crate's library or found it linked
+// in.
+lumen_module::lumen_module!("lumen-fs", |config: lumen_module::ModuleConfig| {
+    FsPlugin::new(config)
+});

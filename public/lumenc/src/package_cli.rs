@@ -223,12 +223,17 @@ impl Target {
 
     /// The target name for a release-asset name, or `None` for a name no
     /// release covers.
-    fn parse(name: &str) -> Option<Target> {
+    pub(crate) fn parse(name: &str) -> Option<Target> {
         Target::ALL.into_iter().find(|t| t.name == name)
     }
 
+    /// The release-asset name of this target, e.g. `linux-x86_64`.
+    pub(crate) fn name(self) -> &'static str {
+        self.name
+    }
+
     /// The platform this `lumenc` is running on.
-    fn host() -> Target {
+    pub(crate) fn host() -> Target {
         let os = if cfg!(target_os = "windows") {
             "windows"
         } else if cfg!(target_os = "macos") {
@@ -287,7 +292,7 @@ impl Target {
 
     /// The Rust target triple for this platform, for an SDK app whose own
     /// toolchain does the cross-compiling.
-    fn rust_triple(self) -> &'static str {
+    pub(crate) fn rust_triple(self) -> &'static str {
         match self.name {
             "linux-x86_64" => "x86_64-unknown-linux-gnu",
             "linux-aarch64" => "aarch64-unknown-linux-gnu",
@@ -311,6 +316,14 @@ impl Target {
     fn modules_archive_name(self) -> String {
         format!("lumen-modules-{}.tar.gz", self.name)
     }
+
+    /// Release asset holding this target's link kit: the recorded link line of
+    /// the static launcher and every file that link read. Published by every
+    /// leg, Windows included - the kit is what lets a machine with no Rust
+    /// toolchain link an app's modules in, and that is not a Unix shape.
+    pub(crate) fn linkkit_archive_name(self) -> String {
+        format!("lumen-linkkit-{}.tar.gz", self.name)
+    }
 }
 
 /// Entry: `lumenc package <app_dir> [<out_dir>] [--name <n>] [--target <t>]
@@ -320,7 +333,7 @@ pub fn cmd_package(args: impl Iterator<Item = String>) -> ExitCode {
 
 USAGE:
     lumenc package <app_dir> [<out_dir>] [--name N] [--target T]
-                   [--lib-dir <dir>] [--zip] [--no-hooks]
+                   [--lib-dir <dir>] [--static] [--zip] [--no-hooks]
 
 Assembles the app executable, the Lumen runtime library, and the app's
 files into a folder that runs on a machine with no Lumen installation. A
@@ -336,10 +349,15 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
                       toolchain does the cross-compiling.
     --lib-dir DIR     Take the platform's files from DIR instead of the
                       release channel.
+    --static          Write one executable with the engine and the app's
+                      declared modules linked into it, instead of a
+                      folder of shared libraries. Markup apps, this
+                      machine's platform, and a C toolchain.
     --zip             Also write <out_dir>.zip, the whole folder in one
                       file to hand to someone.
     --no-hooks        Skip the app's prebuild [[hooks]].";
     let mut no_hooks = false;
+    let mut want_static = false;
     let mut want_zip = false;
     let mut name: Option<String> = None;
     let mut lib_dir: Option<PathBuf> = None;
@@ -353,6 +371,7 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
                 return ExitCode::SUCCESS;
             }
             "--no-hooks" => no_hooks = true,
+            "--static" => want_static = true,
             "--zip" => want_zip = true,
             "--name" => match args.next() {
                 Some(v) => name = Some(v),
@@ -407,20 +426,30 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
         return ExitCode::from(2);
     }
 
-    // Runtime modules are native libraries. A Windows package never carries
-    // them, whoever builds it: no shared engine exists there, so the runtime
-    // cannot load one. A package for another Unix platform can only ship that
-    // platform's builds: a `bundled` module comes out of the release's
-    // modules archive, but a `path` or `version` source names a library that
-    // only exists as this machine's build, and a folder that silently shipped
-    // without its modules is worse than stopping.
-    if !cfg.dependencies.0.is_empty() {
+    if want_static && let Some(refusal) = static_refusal(kind, target, &cfg) {
+        eprintln!("lumenc package: {refusal}");
+        return ExitCode::from(2);
+    }
+
+    // Runtime modules are native libraries. A dynamic Windows package never
+    // carries them, whoever builds it: no shared engine exists there, so the
+    // runtime has nothing to load one into, and the only Windows shape that
+    // answers a declared name is the one that compiled the module in. A
+    // package for another Unix platform can only ship that platform's builds:
+    // a `bundled` module comes out of the release's modules archive, but a
+    // `path` or `version` source names a library that only exists as this
+    // machine's build, and a folder that silently shipped without its modules
+    // is worse than stopping.
+    if !cfg.dependencies.0.is_empty() && !want_static {
         if target.os == Os::Windows {
             eprintln!(
-                "lumenc package: warning: runtime modules are not supported on Windows \
-                 (no shared engine exists there); the app will run without its \
-                 [dependencies]"
+                "lumenc package: this app declares [dependencies], and a Windows package \
+                 loads a runtime module only when the module is compiled into the \
+                 executable: no shared engine exists there for one to load into. Package it \
+                 on a Windows machine with `lumenc package --static`, which links the \
+                 declared modules in."
             );
+            return ExitCode::from(2);
         } else if target != Target::host() {
             for dep in &cfg.dependencies.0 {
                 let refusal = match &dep.source {
@@ -479,6 +508,14 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
     }
 
     let assembled = match kind {
+        AppKind::Markup if want_static => package_static(
+            &src_path,
+            &out_dir,
+            &app_name,
+            target,
+            lib_dir.as_deref(),
+            &cfg.dependencies,
+        ),
         AppKind::Markup => package(
             &src_path,
             &out_dir,
@@ -516,6 +553,103 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
         }
     }
     ExitCode::SUCCESS
+}
+
+/// Why `--static` cannot produce this package, or `None` when it can.
+///
+/// The four are all the same shape of answer: the static path links one
+/// executable out of a prebuilt kit, and the kit is one platform's link line
+/// holding the full engine and the toolchain's own modules. Anything that
+/// needs a different engine, a different platform, or a module that was never
+/// in the kit is a from-source build, which this path is not.
+fn static_refusal(kind: AppKind, target: Target, cfg: &crate::LumenToml) -> Option<String> {
+    if kind != AppKind::Markup {
+        return Some(format!(
+            "--static links the app into the launcher, and a {} app brings its own \
+             executable from its own toolchain. Package it without --static.",
+            language_of(kind)
+        ));
+    }
+    if target != Target::host() {
+        return Some(format!(
+            "--static is for this machine's own platform, and this package is for {}. The \
+             link runs through the tools installed here, which produce {} binaries. \
+             Package for {} on a {} machine, or drop --static.",
+            target.name,
+            Target::host().name,
+            target.name,
+            target.name
+        ));
+    }
+    let capabilities = &cfg.capabilities;
+    if capabilities.mcp.is_some()
+        || capabilities.async_rt.is_some()
+        || capabilities.http_fetch.is_some()
+    {
+        return Some(
+            "this app declares [capabilities], and --static links a prebuilt engine that \
+             carries every subsystem. Choosing which ones a runtime holds is a decision the \
+             engine is compiled with, so it belongs to a build from source - `lumenc bundle \
+             --static` is that build. Drop either the section or --static."
+                .to_string(),
+        );
+    }
+    for dep in &cfg.dependencies.0 {
+        let source = match &dep.source {
+            ModuleSource::Bundled => continue,
+            ModuleSource::Path(_) => "a path",
+            ModuleSource::Version(_) => "a version",
+        };
+        return Some(format!(
+            "dependency '{}' comes from {source}, and --static links only the modules the \
+             link kit was built with, which are the ones that ship with the toolchain \
+             (`bundled = true`). Package without --static, and the library is staged beside \
+             the executable instead.",
+            dep.name
+        ));
+    }
+    None
+}
+
+/// Compile the app and link it into one executable from the link kit for this
+/// platform. Returns the one-line summary to print.
+///
+/// Nothing travels beside the executable: the engine, the launcher, and the
+/// declared modules are inside it, so none of the shared-library staging the
+/// folder shape does applies here.
+fn package_static(
+    src: &Path,
+    out: &Path,
+    app_name: &str,
+    target: Target,
+    lib_dir: Option<&Path>,
+    deps: &DependenciesCfg,
+) -> Result<String, String> {
+    let compiled = crate::compile_app(src).map_err(|e| e.to_string())?;
+    let artifact = build_artifact(compiled, src)?;
+
+    std::fs::create_dir_all(out).map_err(|e| format!("create {}: {e}", out.display()))?;
+    let exe_path = out.join(target.exe_name(app_name));
+    let modules = crate::link_kit::link_app(&exe_path, &artifact, target, lib_dir, deps)?;
+
+    let copied = copy_app_files(src, out, CopyRules::markup())?;
+    copy_generated_outputs(src, out)?;
+
+    Ok(format!(
+        "linked {} for {} ({} app file{} beside it{})",
+        exe_path.display(),
+        target.name,
+        copied,
+        if copied == 1 { "" } else { "s" },
+        match modules.len() {
+            0 => String::new(),
+            n => format!(
+                ", {n} module{} compiled in: {}",
+                if n == 1 { "" } else { "s" },
+                modules.join(", ")
+            ),
+        }
+    ))
 }
 
 /// The language a kind is written in, for messages.
@@ -757,8 +891,9 @@ fn copy_dynamic_runtime(
 /// as `lumenc run`; a version that cannot be resolved fails the package,
 /// because a shipped folder is complete or it is wrong.
 ///
-/// Windows targets stage nothing: no shared engine exists there, so the
-/// runtime cannot load a module and the loader says so at startup.
+/// A Windows target never arrives here with anything declared: nothing loads
+/// a module beside a Windows executable, so that combination is refused
+/// before any of this runs.
 ///
 /// For a target other than this machine's, only `bundled` sources reach
 /// here - the other kinds were refused up front - and the library comes from
@@ -771,7 +906,7 @@ fn stage_modules(
     lib_dir: Option<&Path>,
     deps: &DependenciesCfg,
 ) -> Result<usize, String> {
-    if deps.0.is_empty() || target.os == Os::Windows {
+    if deps.0.is_empty() {
         return Ok(0);
     }
     let modules_dir = out.join("modules");
@@ -1392,6 +1527,7 @@ fn locate_toolchain(target: Target, lib_dir: Option<&Path>) -> Result<Toolchain,
                 &wanted,
                 &dynamic_runtime_patterns(target),
                 &dir,
+                Unpack::Flat,
                 &format!(
                     "A release older than app packaging ships no launcher; build the {} files \
                      yourself and pass --lib-dir instead.",
@@ -1465,6 +1601,7 @@ pub fn locate_web_runtime(lib_dir_flag: Option<&Path>) -> Result<WebRuntimeFiles
             &wanted,
             &[],
             &dir,
+            Unpack::Flat,
             "A release older than the web target ships no web runtime; build it yourself \
              and pass --lib-dir instead.",
         )?;
@@ -1484,7 +1621,7 @@ pub fn locate_web_runtime(lib_dir_flag: Option<&Path>) -> Result<WebRuntimeFiles
 /// The cache comes after all of these and is not in the list, because naming
 /// it means resolving which release this toolchain uses, and a build that
 /// finds its files here should not need the network to say so.
-fn search_dirs(lib_dir: Option<&Path>, installed: bool) -> Vec<PathBuf> {
+pub(crate) fn search_dirs(lib_dir: Option<&Path>, installed: bool) -> Vec<PathBuf> {
     let exe_dir = installed
         .then(|| std::env::current_exe().ok())
         .flatten()
@@ -1512,7 +1649,7 @@ fn ordered_dirs(
 /// The first of `dirs` holding every one of `names`. A directory carrying
 /// some of them is passed over: a half-populated one cannot assemble
 /// anything, and a later directory may be complete.
-fn first_dir_with(dirs: &[PathBuf], names: &[String]) -> Option<PathBuf> {
+pub(crate) fn first_dir_with(dirs: &[PathBuf], names: &[String]) -> Option<PathBuf> {
     dirs.iter()
         .find(|dir| names.iter().all(|name| dir.join(name).is_file()))
         .cloned()
@@ -1532,7 +1669,12 @@ fn searched(dirs: &[PathBuf]) -> String {
 /// Files that are neither on this machine nor fetchable, and why. `why` is the
 /// reason no release could be resolved, which is what separates a repository
 /// with nothing published from a page that could not be reached.
-fn cannot_fetch(names: &[String], target: Option<&str>, dirs: &[PathBuf], why: &str) -> String {
+pub(crate) fn cannot_fetch(
+    names: &[String],
+    target: Option<&str>,
+    dirs: &[PathBuf],
+    why: &str,
+) -> String {
     let for_target = target.map(|t| format!(" for {t}")).unwrap_or_default();
     format!(
         "cannot find {} and {}{for_target}. Looked in: {}. They could not be fetched \
@@ -1547,7 +1689,7 @@ fn cannot_fetch(names: &[String], target: Option<&str>, dirs: &[PathBuf], why: &
 /// The release this toolchain fetches published files from, and the directory
 /// they are cached in. Resolving the release is what makes the request, so
 /// this is called only once the local directories have come up empty.
-fn component_cache(component: &str) -> Result<(String, PathBuf), String> {
+pub(crate) fn component_cache(component: &str) -> Result<(String, PathBuf), String> {
     let version = release::resolve().map_err(|why| why.to_string())?;
     let dir = cache_dir_for(&version, component).ok_or_else(|| {
         "there is no cache directory to download into on this machine".to_string()
@@ -1601,7 +1743,7 @@ fn copy_executable(from: &Path, to: &Path) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn set_executable(path: &Path) -> Result<(), String> {
+pub(crate) fn set_executable(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     let mut perms = std::fs::metadata(path)
         .map_err(|e| format!("stat {}: {e}", path.display()))?
@@ -1611,12 +1753,12 @@ fn set_executable(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn set_executable(_path: &Path) -> Result<(), String> {
+pub(crate) fn set_executable(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
 /// Append the artifact and the footer that says where it starts.
-fn append_artifact(exe: &Path, artifact: &[u8]) -> Result<(), String> {
+pub(crate) fn append_artifact(exe: &Path, artifact: &[u8]) -> Result<(), String> {
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
         .append(true)
@@ -1891,12 +2033,14 @@ fn holds(dir: &Path, inner: &Path) -> bool {
 ///
 /// `version` is a release that exists, resolved by [`release::resolve`]. It is
 /// never this binary's own version, which says nothing about what is published.
-fn fetch_release_files(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fetch_release_files(
     version: &str,
     archive: &str,
     wanted: &[String],
     optional: &[String],
     dest: &Path,
+    layout: Unpack,
     hint: &str,
 ) -> Result<(), String> {
     let base = release::asset_base(version);
@@ -1910,8 +2054,21 @@ fn fetch_release_files(
         http_get(&archive_url).map_err(|e| format!("cannot download {archive_url}: {e}"))?;
 
     install_release_files(
-        version, archive, &sums, &bytes, wanted, optional, dest, hint,
+        version, archive, &sums, &bytes, wanted, optional, dest, layout, hint,
     )
+}
+
+/// Where an archive's members land under the destination directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Unpack {
+    /// By file name, with the archive's directories ignored. The toolchain
+    /// and module archives are a flat set of files under `bin/`, and what a
+    /// package copies out of them is named by file.
+    Flat,
+    /// At the path the member carries. A link kit is a tree whose manifest
+    /// names files by their path inside it, so flattening it would leave
+    /// every one of those names pointing at nothing.
+    Tree,
 }
 
 /// Download and read the `sha256sums.txt` published with release `version`.
@@ -1930,7 +2087,7 @@ fn fetch_checksums(version: &str, base: &str) -> Result<String, String> {
 
 /// The [`name_matches`] pattern that takes every archive member: an empty
 /// prefix and an empty suffix around the `*`.
-const EVERY_MEMBER: &str = "*";
+pub(crate) const EVERY_MEMBER: &str = "*";
 
 /// Download the modules archive published for `target` with release
 /// `version`, verify it against the release's checksums, and unpack every
@@ -1967,6 +2124,7 @@ fn fetch_modules_archive(
         &[],
         &[EVERY_MEMBER.to_string()],
         dest,
+        Unpack::Flat,
         "Pass --lib-dir at a directory holding the module libraries instead.",
     )
 }
@@ -2043,6 +2201,7 @@ fn install_release_files(
     wanted: &[String],
     optional: &[String],
     dest: &Path,
+    layout: Unpack,
     hint: &str,
 ) -> Result<(), String> {
     let want = checksum_for(sums, archive).ok_or_else(|| {
@@ -2061,9 +2220,9 @@ fn install_release_files(
     let patterns: Vec<String> = wanted.iter().chain(optional).cloned().collect();
     std::fs::create_dir_all(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
     let found = if archive.ends_with(".zip") {
-        extract_zip(bytes, &patterns, dest)?
+        extract_zip(bytes, &patterns, dest, layout)?
     } else {
-        extract_tar_gz(bytes, &patterns, dest)?
+        extract_tar_gz(bytes, &patterns, dest, layout)?
     };
     for name in wanted {
         if !found.contains(name) {
@@ -2122,8 +2281,14 @@ fn http_get(url: &str) -> Result<Vec<u8>, HttpError> {
     Ok(bytes)
 }
 
-/// Write out the named members of a `.tar.gz`, ignoring their directories.
-fn extract_tar_gz(bytes: &[u8], wanted: &[String], dest: &Path) -> Result<Vec<String>, String> {
+/// Write out the named members of a `.tar.gz`. Returns the file names that
+/// answered, which is what the caller checks its `wanted` list against.
+fn extract_tar_gz(
+    bytes: &[u8],
+    wanted: &[String],
+    dest: &Path,
+    layout: Unpack,
+) -> Result<Vec<String>, String> {
     let mut found = Vec::new();
     let decoder = flate2::read::GzDecoder::new(bytes);
     let mut archive = tar::Archive::new(decoder);
@@ -2142,7 +2307,13 @@ fn extract_tar_gz(bytes: &[u8], wanted: &[String], dest: &Path) -> Result<Vec<St
         if !wanted.iter().any(|pattern| name_matches(pattern, &name)) {
             continue;
         }
-        let out = dest.join(&name);
+        let Some(out) = member_path(dest, &path, &name, layout) else {
+            continue;
+        };
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        }
         entry
             .unpack(&out)
             .map_err(|e| format!("write {}: {e}", out.display()))?;
@@ -2152,8 +2323,14 @@ fn extract_tar_gz(bytes: &[u8], wanted: &[String], dest: &Path) -> Result<Vec<St
     Ok(found)
 }
 
-/// Write out the named members of a `.zip`, ignoring their directories.
-fn extract_zip(bytes: &[u8], wanted: &[String], dest: &Path) -> Result<Vec<String>, String> {
+/// Write out the named members of a `.zip`. Returns the file names that
+/// answered, as [`extract_tar_gz`] does.
+fn extract_zip(
+    bytes: &[u8],
+    wanted: &[String],
+    dest: &Path,
+    layout: Unpack,
+) -> Result<Vec<String>, String> {
     let mut found = Vec::new();
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
         .map_err(|e| format!("cannot read the release archive: {e}"))?;
@@ -2161,13 +2338,22 @@ fn extract_zip(bytes: &[u8], wanted: &[String], dest: &Path) -> Result<Vec<Strin
         let mut member = archive
             .by_index(i)
             .map_err(|e| format!("cannot read the release archive: {e}"))?;
-        let Some(name) = member.enclosed_name().as_deref().and_then(file_name_of) else {
+        let Some(path) = member.enclosed_name() else {
+            continue;
+        };
+        let Some(name) = file_name_of(&path) else {
             continue;
         };
         if !wanted.iter().any(|pattern| name_matches(pattern, &name)) {
             continue;
         }
-        let out = dest.join(&name);
+        let Some(out) = member_path(dest, &path, &name, layout) else {
+            continue;
+        };
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        }
         let mut file =
             std::fs::File::create(&out).map_err(|e| format!("write {}: {e}", out.display()))?;
         std::io::copy(&mut member, &mut file)
@@ -2175,6 +2361,25 @@ fn extract_zip(bytes: &[u8], wanted: &[String], dest: &Path) -> Result<Vec<Strin
         found.push(name);
     }
     Ok(found)
+}
+
+/// Where one archive member is written, or `None` for a path that would leave
+/// `dest`. A member naming `..` or an absolute path is dropped rather than
+/// followed: an archive is downloaded input, and the checksum says it is the
+/// file the release published, not that the release is harmless.
+fn member_path(dest: &Path, path: &Path, name: &str, layout: Unpack) -> Option<PathBuf> {
+    if layout == Unpack::Flat {
+        return Some(dest.join(name));
+    }
+    let mut out = dest.to_path_buf();
+    for part in path.components() {
+        match part {
+            std::path::Component::Normal(part) => out.push(part),
+            std::path::Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    Some(out)
 }
 
 /// The last component of an archive member path, as an owned string.
@@ -2195,6 +2400,10 @@ mod tests {
         assert_eq!(
             Target::parse("linux-aarch64").map(|t| t.archive_name()),
             Some("lumen-linux-aarch64.tar.gz".to_string())
+        );
+        assert_eq!(
+            Target::parse("macos-x86_64").map(|t| t.linkkit_archive_name()),
+            Some("lumen-linkkit-macos-x86_64.tar.gz".to_string())
         );
         assert!(Target::parse("plan9-x86_64").is_none());
         // The browser runtime is published under the same naming with a
@@ -2250,6 +2459,7 @@ mod tests {
             &[],
             &[EVERY_MEMBER.to_string()],
             &tmp,
+            Unpack::Flat,
             "HINT",
         )
         .expect("the checksum matches, so every member installs");
@@ -2429,7 +2639,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("lumen-web-archive-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).expect("mkdir");
         let wanted = [WEB_WASM.to_string(), WEB_JS.to_string()];
-        let found = extract_tar_gz(&bytes, &wanted, &tmp).expect("unpack");
+        let found = extract_tar_gz(&bytes, &wanted, &tmp, Unpack::Flat).expect("unpack");
 
         assert!(found.contains(&WEB_WASM.to_string()));
         assert!(found.contains(&WEB_JS.to_string()));
@@ -2444,6 +2654,83 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A link kit is a tree whose manifest names files by their path inside
+    /// it, so its members land where they were rather than flattened.
+    #[test]
+    fn a_link_kit_archive_unpacks_as_the_tree_its_manifest_names() {
+        let bytes = tar_gz(&[
+            ("manifest.json", b"{}".as_slice()),
+            ("stage/aa-launcher.o", b"an object"),
+            ("libdirs/0/libring.a", b"a static library"),
+        ]);
+
+        let tmp = std::env::temp_dir().join(format!("lumen-kit-tree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let found = extract_tar_gz(&bytes, &[EVERY_MEMBER.to_string()], &tmp, Unpack::Tree)
+            .expect("unpack");
+
+        assert_eq!(found.len(), 3, "{found:?}");
+        assert_eq!(
+            std::fs::read(tmp.join("stage").join("aa-launcher.o")).expect("read"),
+            b"an object"
+        );
+        assert_eq!(
+            std::fs::read(tmp.join("libdirs").join("0").join("libring.a")).expect("read"),
+            b"a static library"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A member that would leave the destination is dropped rather than
+    /// followed: the checksum says an archive is the file the release
+    /// published, not that the release is harmless.
+    #[test]
+    fn an_archive_member_that_leaves_the_destination_is_dropped() {
+        let dest = Path::new("/cache/linkkit");
+        assert_eq!(
+            member_path(
+                dest,
+                Path::new("stage/aa-launcher.o"),
+                "aa-launcher.o",
+                Unpack::Tree
+            ),
+            Some(dest.join("stage").join("aa-launcher.o"))
+        );
+        assert_eq!(
+            member_path(
+                dest,
+                Path::new("./manifest.json"),
+                "manifest.json",
+                Unpack::Tree
+            ),
+            Some(dest.join("manifest.json"))
+        );
+        assert_eq!(
+            member_path(
+                dest,
+                Path::new("../escape.json"),
+                "escape.json",
+                Unpack::Tree
+            ),
+            None
+        );
+        assert_eq!(
+            member_path(
+                dest,
+                Path::new("/etc/escape.json"),
+                "escape.json",
+                Unpack::Tree
+            ),
+            None
+        );
+        // A flat archive is taken by file name, wherever the member sat.
+        assert_eq!(
+            member_path(dest, Path::new("bin/lumenc"), "lumenc", Unpack::Flat),
+            Some(dest.join("lumenc"))
+        );
     }
 
     /// A `--lib-dir` says which copy of the runtime to use, so a directory
@@ -2517,6 +2804,7 @@ mod tests {
             &wanted,
             &[],
             &tmp,
+            Unpack::Flat,
             "HINT",
         )
         .expect("the checksum matches, so both files install");
@@ -2535,6 +2823,7 @@ mod tests {
             &wanted,
             &[],
             &tmp,
+            Unpack::Flat,
             "HINT",
         )
         .expect_err("the checksum does not match");
@@ -2550,6 +2839,7 @@ mod tests {
             &wanted,
             &[],
             &tmp,
+            Unpack::Flat,
             "HINT",
         )
         .expect_err("no checksum line for this archive");
@@ -2567,6 +2857,7 @@ mod tests {
             &wanted,
             &[],
             &tmp,
+            Unpack::Flat,
             "HINT",
         )
         .expect_err("the archive is missing a wanted file");
@@ -2602,6 +2893,7 @@ mod tests {
             &wanted,
             &[],
             &tmp,
+            Unpack::Flat,
             "HINT",
         )
         .expect("the checksum matches, so the members install");

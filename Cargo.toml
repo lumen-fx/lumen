@@ -30,7 +30,7 @@ name = "lumen"
 # type on one target, which cargo does not allow - so it lives in its own
 # crate, `public/lumen-dylib`. See the note there for why it is not a member
 # of this workspace.
-crate-type = ["lib", "cdylib", "staticlib"]
+crate-type = ["lib", "cdylib"]
 
 [dependencies]
 lumen-core = { workspace = true }
@@ -126,6 +126,7 @@ members = [
     "crates/ir",
     "crates/launcher",
     "crates/mcp",
+    "crates/module-registry",
     "crates/modules",
     "crates/plugin-abi",
     "crates/portable",
@@ -146,6 +147,7 @@ members = [
     "std/*",
     "sdk/rust",
     "public/lumen-module",
+    "public/lumen-module-macros",
     "public/lumen-module/fixture",
     "public/lumen-module/fixture-host",
     "public/lumen-plugin",
@@ -153,6 +155,7 @@ members = [
     "public/lumenc",
     "public/lumenc-plugin",
     "public/lumenc-plugin/fixture",
+    "tools/link-recorder",
 ]
 # The linkable engine is built through the Rust SDK's own dependency on it, on
 # the platforms whose linker can produce one. Listing it here would build it on
@@ -198,18 +201,21 @@ categories = ["gui"]
 # `default-features = true` and gets them.
 lumen = { path = "." }
 lumen-a11y-accesskit = { path = "crates/backends/a11y-accesskit" }
-lumen-archive = { path = "std/archive" }
+# The first-party runtime modules. Defaults off here, and on in each module's
+# own manifest: built on its own a module is the shipping shared library and
+# takes the engine dylib with it, while a binary that links one in must not.
+lumen-archive = { path = "std/archive", default-features = false }
 lumen-assets = { path = "crates/assets" }
 lumen-async-tokio = { path = "crates/backends/async-tokio" }
-lumen-audio = { path = "std/audio" }
+lumen-audio = { path = "std/audio", default-features = false }
 lumen-core = { path = "crates/core" }
 lumen-devtools = { path = "crates/dev/devtools" }
-lumen-download = { path = "std/download" }
+lumen-download = { path = "std/download", default-features = false }
 # The engine in the form a Rust app links instead of compiling in. Excluded from
 # the workspace, so it is the one internal crate that cannot inherit this table;
 # see public/lumen-dylib/Cargo.toml for why it sits outside.
 lumen-dylib = { path = "public/lumen-dylib" }
-lumen-fs = { path = "std/fs" }
+lumen-fs = { path = "std/fs", default-features = false }
 lumen-html = { path = "crates/html" }
 lumen-http-ureq = { path = "crates/backends/http-ureq" }
 lumen-i18n = { path = "crates/i18n" }
@@ -217,7 +223,11 @@ lumen-input = { path = "crates/input" }
 lumen-ir = { path = "crates/ir" }
 lumen-layout-taffy = { path = "crates/backends/layout-taffy" }
 lumen-mcp = { path = "crates/mcp" }
-lumen-module = { path = "public/lumen-module" }
+# The module SDK. Defaults off: a module crate forwards its own `engine-dylib`
+# feature here, so dropping that feature drops the shared engine with it.
+lumen-module = { path = "public/lumen-module", default-features = false }
+lumen-module-macros = { path = "public/lumen-module-macros" }
+lumen-module-registry = { path = "crates/module-registry" }
 lumen-modules = { path = "crates/modules" }
 lumen-os-clipboard = { path = "crates/os/clipboard" }
 lumen-os-dnd = { path = "crates/os/dnd" }
@@ -240,7 +250,7 @@ lumen-plugin-abi = { path = "crates/plugin-abi", default-features = false }
 lumen-portable = { path = "crates/portable", default-features = false }
 lumen-prerender = { path = "crates/prerender", default-features = false }
 lumen-primitives = { path = "crates/primitives" }
-lumen-process = { path = "std/process" }
+lumen-process = { path = "std/process", default-features = false }
 lumen-render-headless = { path = "crates/backends/render-headless" }
 lumen-render-wgpu = { path = "crates/backends/render-wgpu" }
 # Every subsystem is a default feature, and every consumer picks its own set:

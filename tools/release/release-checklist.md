@@ -14,6 +14,7 @@ them rather than anyone typing them.
 | `lumen-macos-aarch64.tar.gz`   | GitHub Actions, `macos-latest`         |
 | `lumen-macos-x86_64.tar.gz`    | GitHub Actions, `macos-26-intel`       |
 | `lumen-modules-<target>.tar.gz` | the same Unix legs, one each           |
+| `lumen-linkkit-<target>.tar.gz` | every leg, one each                    |
 | `lumen-windows-x86_64.msi`     | GitHub Actions, `windows-latest`       |
 | `lumen-windows-x86_64.zip`     | GitHub Actions, `windows-latest`       |
 | `sha256sums.txt`               | GitHub Actions, the publish job        |
@@ -25,6 +26,16 @@ build ids match it, in the same `bin/` layout as the toolchain archive.
 `install.sh` unpacks it over the same prefix. Windows has no modules archive:
 no engine dylib exists there, so a module's plugin is compiled into the app
 instead of loaded.
+
+`lumen-linkkit-<target>.tar.gz` carries the link kit: the recorded link line
+of the static launcher, every file that link read, and a `manifest.json`
+describing how to replay it. It is what `lumenc package --static` replays to
+put an app's declared modules inside one executable on a machine with no Rust
+toolchain, so unlike the modules archive it is published on every platform.
+`install.sh` never fetches it; `lumenc` downloads it when that command needs
+it, the way it downloads the browser runtime.
+`docs/docs/contributing/building-lumen.md` says what the kit holds and why it
+is the size it is.
 
 The `.msi` is the Windows install channel and the `.zip` is the portable
 alternative, so the Windows leg publishes both. `install.sh` never fetches

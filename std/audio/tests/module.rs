@@ -255,11 +255,14 @@ fn the_bundled_module_supplies_the_audio_surface() {
         (4.9..5.1).contains(&duration),
         "expected the wav's ~5s duration, got {duration}\n{stdout}"
     );
+    // A slow runner can drain the whole track on the silent path before the
+    // signals are sampled; a playhead at the end proves playback started the
+    // same way a mid-track sample does.
+    let position = signal_value(&stdout, "audio_position");
     assert!(
-        stdout.contains("HOST signal audio_playing=true"),
+        stdout.contains("HOST signal audio_playing=true") || position >= duration - 0.1,
         "{stdout}"
     );
-    let position = signal_value(&stdout, "audio_position");
     assert!(
         position > 0.0,
         "the playhead advanced: {position}\n{stdout}"
