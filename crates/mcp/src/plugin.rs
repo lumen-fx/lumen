@@ -134,6 +134,22 @@ impl LumenMcpPlugin {
     }
 }
 
+#[cfg(test)]
+mod builder_tests {
+    use super::*;
+
+    #[test]
+    fn issues_lookup_defaults_off_and_the_builder_flips_it() {
+        assert!(!LumenMcpPlugin::default().issues_enabled);
+        assert!(!LumenMcpPlugin::with_port(7878).issues_enabled);
+        assert!(
+            LumenMcpPlugin::default()
+                .with_issues_enabled(true)
+                .issues_enabled
+        );
+    }
+}
+
 /// Throttle controller for the 17 snap_* systems. The default 1 Hz
 /// rate keeps a JSON-RPC client's view at most ~1 s stale while
 /// dropping the per-tick MCP cost from ~570 us to ~10 us (only the
