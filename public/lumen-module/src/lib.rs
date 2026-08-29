@@ -66,6 +66,16 @@
 //! The name is the one an app declares the module under; the generated
 //! entries carry it, which is what lets two modules live in one binary.
 //!
+//! # Painting
+//!
+//! A module that draws its own pixels turns on the `paint` feature and takes
+//! the renderer through [`lumen_render_wgpu`] and the text shaper through
+//! [`lumen_text`]. Both are re-exports of the crates the engine itself uses,
+//! and taking them from here rather than declaring them is not a
+//! convenience: a painter receives its target as `&mut dyn Any` and
+//! downcasts it, so a module holding its own build of vello would compile,
+//! register, and paint nothing at all.
+//!
 //! Build the `cdylib` with the engine taken as a shared library: `-C
 //! prefer-dynamic` together with an explicit `--target` (which keeps the
 //! flag off build scripts and proc macros). The module authoring guide in
@@ -98,6 +108,23 @@ pub use lumen_module_registry as registry;
 /// [`lumen_script::push_plugin_event`]. Taken through the module SDK so a
 /// module crate depends on `lumen-module` alone.
 pub use lumen_script;
+
+/// The renderer a module paints through, behind the `paint` feature: the
+/// `vello` re-export is the scene type a
+/// [`lumen_core::native::NativePainter`] downcasts its target to.
+///
+/// It has to be this crate's vello and no other. The downcast is a `TypeId`
+/// match, and two builds of the same version are two different types as far
+/// as `TypeId` is concerned; a module that declared vello itself would
+/// compile, register, and then silently paint nothing. Taking the engine's
+/// re-export is what makes the match hold.
+#[cfg(feature = "paint")]
+pub use lumen_render_wgpu;
+/// The text seam a painting module shapes through, behind the `paint`
+/// feature. A module that draws glyphs shapes them with the app's own
+/// `ShaperService`, so its text picks up the fonts the rest of the app uses.
+#[cfg(feature = "paint")]
+pub use lumen_text;
 
 #[cfg(all(feature = "engine-dylib", not(windows)))]
 pub use lumen_engine as lumen_dylib;
