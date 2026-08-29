@@ -363,13 +363,28 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
                     .after(ScriptSet::Tick)
                     .before(ScriptSet::Frame),
             );
-            // After the delivery set: a `request_frame()` from inside
-            // `on_frame` arms the next tick rather than re-entering this one.
+            // After every set that calls into a host. A request is what
+            // raises the animation flag and wakes the loop, so one this
+            // system ran past does not arrive a tick late - it lets an idle
+            // app park with the request still in the buffer, and the
+            // animation never starts. `on_ready`, `on_timer`, `on_fetch`, a
+            // plugin event, and a DOM listener are all places a script starts
+            // one from, and none of them are ordered against this by
+            // anything else.
             app.add_systems(
                 TickStage::Systems,
                 drain_frame_requests
                     .after(ScriptSet::Tick)
-                    .after(ScriptSet::Frame),
+                    .after(ScriptSet::Dispatch)
+                    .after(ScriptSet::Derivations)
+                    .after(ScriptSet::Frame)
+                    .after(ScriptSet::Timers)
+                    .after(ScriptSet::Fetch)
+                    .after(ScriptSet::PluginEvents)
+                    .after(ScriptSet::Ready)
+                    .after(ScriptSet::Fill)
+                    .after(ScriptSet::DomInput)
+                    .after(ScriptSet::DomState),
             );
             // HTTP replies land in a per-tick buffer rather than being taken
             // straight off the channel, so every host is offered each reply
@@ -1057,24 +1072,31 @@ pub fn fire_frame_callbacks<H: ScriptHost + Resource<Mutability = Mutable>>(
 
 /// Read the `RequestFrame` commands emitted this tick and arm the hook.
 ///
-/// Registered after the delivery set, so a request made from inside
-/// `on_frame` is picked up on the tick it was made and served on the next
-/// one, which is what keeps a loop running at one callback per tick.
+/// Registered after every set that calls into a host, because a request is
+/// only worth anything on the tick it was made: arming is what raises the
+/// animation flag and wakes the loop, so a request this system ran past does
+/// not merely arrive late, it lets an idle app park and never arrive at all.
+/// A request made from inside `on_frame` therefore arms the next tick rather
+/// than re-entering this one, which is what keeps a loop at one callback per
+/// tick.
 ///
-/// Arming also has to wake the app: a request from a click handler on an
-/// otherwise idle app has to produce a tick, and a running loop has to keep
-/// producing them. Both resources are optional so a bare test can drive these
-/// systems without a window.
+/// Both the animation flag and the waker are optional so a bare test can
+/// drive these systems without a window.
 pub fn drain_frame_requests(
     mut events: MessageReader<ScriptCommandEvent>,
     mut hook: ResMut<FrameHook>,
     animations: Option<Res<lumen_core::render_world::AnimationsActive>>,
     waker: Option<Res<lumen_core::app::EventLoopWaker>>,
 ) {
-    if !events
+    // Counted rather than short-circuited: the reader's cursor advances as it
+    // yields, so stopping at the first request would leave the rest of this
+    // tick's commands unread, and the next tick would find a stale request
+    // sitting in the buffer and serve a frame nobody asked for.
+    let requested = events
         .read()
-        .any(|ev| matches!(ev.0, ScriptCommand::RequestFrame))
-    {
+        .filter(|ev| matches!(ev.0, ScriptCommand::RequestFrame))
+        .count();
+    if requested == 0 {
         return;
     }
     hook.requested = true;
@@ -2773,6 +2795,47 @@ mod frame_hook_tests {
 
         assert_eq!(first.lock().unwrap().len(), 1);
         assert_eq!(second.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn two_requests_in_one_tick_buy_one_frame() {
+        // A reader's cursor lives with the system across ticks, and it
+        // advances per message yielded. Stopping at the first request would
+        // leave the rest of this tick's commands unread, and the next tick
+        // would find the second request still sitting there and arm a frame
+        // the script asked for once.
+        //
+        // A `Schedule` rather than `run_system_once`, because the whole point
+        // is state that survives the tick: `run_system_once` builds a fresh
+        // reader every call and could not observe this either way.
+        let mut world = world_with(FrameHost::new(true));
+        let mut drain = bevy_ecs::schedule::Schedule::default();
+        drain.add_systems(drain_frame_requests);
+
+        {
+            let mut bus = world.resource_mut::<Messages<ScriptCommandEvent>>();
+            bus.write(ScriptCommandEvent(ScriptCommand::RequestFrame));
+            bus.write(ScriptCommandEvent(ScriptCommand::Print("between".into())));
+            bus.write(ScriptCommandEvent(ScriptCommand::RequestFrame));
+        }
+        drain.run(&mut world);
+        assert!(world.resource::<FrameHook>().requested, "the ask arrived");
+
+        // Serve it, then take the next tick with nothing written at all.
+        world
+            .run_system_once(retire_frame_request)
+            .expect("retire ran");
+        assert!(world.resource::<DueFrame>().0.is_some());
+        world
+            .resource_mut::<Messages<ScriptCommandEvent>>()
+            .update();
+        drain.run(&mut world);
+
+        assert!(
+            !world.resource::<FrameHook>().requested,
+            "both requests were the same ask; the second must not arm a tick \
+             nobody asked for"
+        );
     }
 
     #[test]

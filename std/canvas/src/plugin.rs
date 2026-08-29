@@ -28,6 +28,7 @@ use lumen_module::lumen_script::{
     ScriptFn, ScriptFnAppExt, ScriptNs, ScriptSet, ScriptTy as T, ScriptValue,
 };
 use lumen_module::lumen_text::ShaperService;
+use std::collections::HashMap;
 
 use crate::buffer::PixBuf;
 use crate::color::{self, Rgba};
@@ -242,17 +243,42 @@ fn adopt_canvases(
 
 /// Replay what the scripts recorded this tick, and say when a canvas changed.
 fn encode_canvases(
-    mut canvases: Query<(&mut Canvas, Option<&mut ImageComponent>)>,
+    mut canvases: Query<(Entity, &mut Canvas, Option<&mut ImageComponent>)>,
+    mut gone: RemovedComponents<Canvas>,
     mut frame_dirty: Option<ResMut<FrameDirty>>,
     shaper: Option<NonSendMut<ShaperService>>,
     mut encoder: Local<Encoder>,
+    mut named: Local<HashMap<Entity, String>>,
 ) {
     let mut store = store::store();
     let store = &mut *store;
+    // The tick the last wake asked for is this one, so the next recorded call
+    // is free to ask for another.
+    store.rearm_wake();
+    // Canvases whose element went away. The id is not on the entity any more
+    // by the time this runs, so it comes from the map built while the element
+    // was alive; without this a `<for>` block cycling through rows would
+    // leave a retained scene behind for every id it ever spawned.
+    let removed: Vec<Entity> = gone.read().collect();
+    if !removed.is_empty() {
+        let live: std::collections::HashSet<&str> = canvases
+            .iter()
+            .map(|(_, canvas, _)| canvas.id.as_str())
+            .collect();
+        let retired: Vec<String> = removed
+            .into_iter()
+            .filter_map(|entity| named.remove(&entity))
+            .filter(|id| !live.contains(id.as_str()))
+            .collect();
+        for id in retired {
+            store.retire(&id);
+        }
+    }
     encoder.blobs.retain(&store.buffers);
     let mut shaper = shaper;
     let mut any_drew = false;
-    for (mut canvas, image) in &mut canvases {
+    for (entity, mut canvas, image) in &mut canvases {
+        named.entry(entity).or_insert_with(|| canvas.id.clone());
         let Some(surface) = store.surfaces.get_mut(&canvas.id) else {
             continue;
         };
@@ -314,21 +340,29 @@ fn encode_canvases(
 }
 
 /// The drawing space an element declares, or the size the HTML canvas has
-/// always defaulted to.
+/// always defaulted to. Each axis defaults on its own, as it does there.
 ///
-/// `width` / `height` on a `<canvas>` are the drawing space, not the box:
-/// they say how many units the script draws in, and CSS then scales that onto
-/// whatever the box turns out to be. A declaration in any other unit says
-/// nothing about the drawing space, so it takes the default.
+/// `width` / `height` say how many units the script draws in, and they are
+/// read once, when the element is adopted. This is the resolved style rather
+/// than the attribute the author typed, because the two arrive in the same
+/// field: a `width` in CSS and a `width` in markup are the same declaration
+/// by the time an element exists. So CSS setting a canvas's width changes the
+/// drawing space rather than scaling it, which is where this parts company
+/// with the HTML canvas. The scaling is still real, and it is what happens
+/// whenever layout hands the element a box the declaration did not ask for:
+/// flex growth, a percentage width, a min or max size.
+///
+/// A declaration in any other unit says nothing about how many units to draw
+/// in, so that axis takes the default.
 fn declared_size(style: Option<&Style>) -> (f32, f32) {
-    match style {
-        Some(Style {
-            width: Length::Px(w),
-            height: Length::Px(h),
-            ..
-        }) if *w > 0.0 && *h > 0.0 => (*w, *h),
-        _ => UA_SIZE,
-    }
+    let axis = |length: Option<Length>, default: f32| match length {
+        Some(Length::Px(v)) if v > 0.0 => v,
+        _ => default,
+    };
+    (
+        axis(style.map(|s| s.width), UA_SIZE.0),
+        axis(style.map(|s| s.height), UA_SIZE.1),
+    )
 }
 
 // ---------------------------------------------------------------------
@@ -939,6 +973,11 @@ fn buffer_fns(f: Describe<'_>) -> Vec<ScriptFn> {
                 });
                 Ok(ScriptValue::Unit)
             }),
+        // No region cap here. The cap bounds how many values cross the
+        // script boundary, and a fill sends one colour however large the
+        // rectangle is; the buffer's own size is the bound that applies, and
+        // `PixBuf::fill_rect` clips to it. Capping this instead refused a
+        // legal buffer its own area.
         f(
             "buffer_fill_rect",
             "Fill a rectangle of a buffer with one color.",
@@ -954,9 +993,6 @@ fn buffer_fns(f: Describe<'_>) -> Vec<ScriptFn> {
             let width = u32::try_from(cx.int_arg(3)).unwrap_or(0);
             let height = u32::try_from(cx.int_arg(4)).unwrap_or(0);
             let rgba = pixel_of(cx.int_arg(5));
-            let Some(()) = check_region(width, height) else {
-                return Ok(ScriptValue::Unit);
-            };
             with_buffer_mut(cx.int_arg(0), |b| b.fill_rect(x, y, width, height, rgba));
             Ok(ScriptValue::Unit)
         }),
@@ -968,8 +1004,10 @@ fn buffer_fns(f: Describe<'_>) -> Vec<ScriptFn> {
         .ret(T::Int)
         .build(|cx| {
             let path = resolve(cx.str_arg(0));
-            let mut store = store::store();
-            let cap = store.caps.buffer_pixels;
+            // The cap is read under the lock and the decode happens without
+            // it: reading a file is slow, and every other canvas call in the
+            // process would queue behind it.
+            let cap = store::store().caps.buffer_pixels;
             let loaded = match PixBuf::load_png(&path, cap) {
                 Ok(buf) => buf,
                 Err(message) => {
@@ -977,10 +1015,7 @@ fn buffer_fns(f: Describe<'_>) -> Vec<ScriptFn> {
                     return Ok(ScriptValue::I64(0));
                 }
             };
-            let handle = degrade(store.new_buffer(loaded.width(), loaded.height()), 0);
-            if handle != 0 {
-                store.buffers.insert(handle, loaded);
-            }
+            let handle = degrade(store::store().adopt_buffer(loaded), 0);
             Ok(ScriptValue::I64(i64::from(handle)))
         }),
         f("buffer_save_png", "Write a buffer out as a PNG.")

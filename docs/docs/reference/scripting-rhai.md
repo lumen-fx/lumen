@@ -570,7 +570,8 @@ lumen-canvas = { bundled = true, tags = ["canvas"] }
 
 Every call names a canvas by the `id` on its [`<canvas>`](tags.md#canvas)
 element. Colours are components in 0..1, angles are radians, and coordinates
-are canvas units, which the element scales onto its box.
+are canvas units, which are scaled onto the element's box whenever layout
+gives it one the declaration did not ask for.
 
 | Builtin | Returns | Behaviour |
 | --- | --- | --- |

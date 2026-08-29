@@ -208,6 +208,15 @@ impl DependenciesCfg {
 /// is the declaration that works on both paths, and this is what turns it
 /// into the parser's answer. Call it after the config is read and before any
 /// markup is parsed.
+///
+/// The registry is process-wide and holds what it is given for the life of
+/// the process, which is the same shape a `#[derive(Widget)]` tag has always
+/// had. Every tool that calls this handles one app per process, so nothing
+/// today sees another app's tags; a process that compiled two apps would let
+/// the second parse markup the first declared. That is a missed error rather
+/// than a wrong artifact - the tag still resolves to nothing at run time -
+/// but it is why scoping the registry per compile is worth doing before
+/// anything compiles two apps at once.
 pub fn register_declared_tags(deps: &DependenciesCfg) {
     for tag in deps.declared_tags() {
         lumen_widget::register_widget_tag_owned(tag);

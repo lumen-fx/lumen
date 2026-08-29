@@ -311,12 +311,56 @@ fn on_start() { canvas::fill_rect("typo", 0.0, 0.0, 4.0, 4.0); }
     for _ in 0..5 {
         app.tick();
     }
-    // Reported means recorded: the set is what stops a draw loop printing a
-    // line a frame.
-    let store = lumen_canvas::store::store();
-    assert!(store.reported.contains("typo"), "{:?}", store.reported);
-    assert!(!store.reported.contains("chart"));
-    drop(store);
+    // Five ticks with a drawing nothing answers for, and one report: the
+    // second call through `report_once` is the one that has to stay quiet, so
+    // asking it again here is what proves the emission was a one-off rather
+    // than something that merely happened to be printed once.
+    assert!(lumen_canvas::store::was_reported("typo"));
+    assert!(!lumen_canvas::store::was_reported("chart"));
+    assert!(
+        !lumen_canvas::store::store().report_once("typo", "again"),
+        "the id was already reported, so nothing else prints for it"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_canvas_whose_element_goes_away_is_forgotten() {
+    // A `<for>` block cycling rows spawns and despawns canvases with distinct
+    // ids. Without retirement every one it ever showed keeps its recorded
+    // calls and its encoded scene for the life of the app.
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    lumen_canvas::store::reset();
+    let dir = app_dir("retire");
+    let mut app = build_app(
+        &dir,
+        "rhai",
+        r#"
+fn on_ready() { canvas::fill_rect("chart", 0.0, 0.0, 10.0, 10.0); }
+"#,
+        vec![canvas_element("chart", Some((40.0, 40.0)))],
+        Some(CanvasPlugin::default()),
+    );
+    app.tick();
+    app.tick();
+    assert!(canvas_of(&mut app, "chart").is_some());
+    assert!(lumen_canvas::store::store().surfaces.contains_key("chart"));
+
+    let entity = {
+        let mut q = app.world.query::<(bevy_ecs::prelude::Entity, &Canvas)>();
+        q.iter(&app.world)
+            .find(|(_, c)| c.id == "chart")
+            .map(|(e, _)| e)
+            .expect("the canvas element")
+    };
+    app.world.entity_mut(entity).despawn();
+    app.tick();
+
+    assert!(
+        !lumen_canvas::store::store().surfaces.contains_key("chart"),
+        "the surface goes with the element"
+    );
+    assert!(!lumen_canvas::store::store().answered.contains("chart"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

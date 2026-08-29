@@ -27,34 +27,56 @@ use crate::color::Rgba;
 use crate::ops::{LineCap, LineJoin, Op};
 use crate::store::Surface;
 
-/// The peniko image for a buffer, kept until the buffer is written again.
+/// The peniko blobs an encode hands the renderer, kept across ticks.
 ///
-/// vello keys its GPU upload cache off the blob's identity, so handing it a
-/// freshly built blob every frame would re-upload every frame. The write
-/// count is what says the pixels changed.
+/// vello keys its GPU upload caches off blob identity, so a freshly built
+/// blob means a fresh upload. Both halves of this exist to stop that: a
+/// buffer's pixels re-upload only when the buffer has been written since, and
+/// a font's bytes are uploaded once for the life of the process rather than
+/// once per `fill_text`.
 #[derive(Default)]
-pub struct BlobCache(HashMap<u32, (u64, Blob<u8>)>);
+pub struct BlobCache {
+    /// Buffer pixels, keyed by handle and stamped with the write count that
+    /// produced them.
+    buffers: HashMap<u32, (u64, Blob<u8>)>,
+    /// Font bytes, keyed by the shaper's own font id and the face index
+    /// within the file.
+    fonts: HashMap<(u64, u32), Blob<u8>>,
+}
 
 impl BlobCache {
     /// The blob for a buffer, rebuilt only when it has been written since.
-    fn blob(&mut self, handle: u32, buffer: &PixBuf) -> Blob<u8> {
+    fn buffer(&mut self, handle: u32, buffer: &PixBuf) -> Blob<u8> {
         let generation = buffer.generation();
-        match self.0.get(&handle) {
+        match self.buffers.get(&handle) {
             Some((cached, blob)) if *cached == generation => blob.clone(),
             _ => {
                 let blob = Blob::new(Arc::new(buffer.bytes().to_vec()));
-                self.0.insert(handle, (generation, blob.clone()));
+                self.buffers.insert(handle, (generation, blob.clone()));
                 blob
             }
         }
     }
 
+    /// The blob for a shaped run's font. The shaper hands out the same
+    /// `font_id` for the same face every time, which is what makes one entry
+    /// serve every `fill_text` drawn in that font.
+    fn font(&mut self, font_id: u64, index: u32, data: &Arc<Vec<u8>>) -> Blob<u8> {
+        self.fonts
+            .entry((font_id, index))
+            .or_insert_with(|| Blob::new(data.clone()))
+            .clone()
+    }
+
     /// Drop the blobs of buffers that no longer exist, so a script that
     /// creates and frees buffers in a loop does not grow this forever.
+    ///
+    /// Unconditional: a tick that frees one buffer and creates another leaves
+    /// the map the same length while its contents have moved on, so a length
+    /// comparison would keep the freed buffer's pixels alive for good.
     pub fn retain(&mut self, buffers: &std::collections::BTreeMap<u32, PixBuf>) {
-        if self.0.len() > buffers.len() {
-            self.0.retain(|handle, _| buffers.contains_key(handle));
-        }
+        self.buffers
+            .retain(|handle, _| buffers.contains_key(handle));
     }
 }
 
@@ -100,6 +122,12 @@ pub fn encode(
         if surface.gfx.apply(op) {
             continue;
         }
+        // The scene is shared with whatever the render world is still
+        // holding, so the first draw after a publish copies it and every draw
+        // after that writes in place. A `clear` costs nothing at all, because
+        // `reset` hands over a fresh scene instead of copying one to throw
+        // away - which is the shape an animation that redraws each frame
+        // takes.
         let scene = Arc::make_mut(&mut surface.scene);
         let gfx = &surface.gfx;
         match op {
@@ -145,7 +173,7 @@ pub fn encode(
             }
             Op::FillText { text, x, y } => {
                 if let Some(shaper) = shaper.as_deref_mut()
-                    && draw_text(scene, gfx, shaper, text, *x, *y)
+                    && draw_text(scene, gfx, blobs, shaper, text, *x, *y)
                 {
                     drew = true;
                 }
@@ -178,8 +206,14 @@ pub fn encode(
 
 /// Empty a surface: a fresh scene and a fresh drawing state. A resize does
 /// this too, which is what writing `width` on an HTML canvas does.
+///
+/// A fresh `Arc` rather than resetting the one that is there: the scene is
+/// shared with the render world, so resetting it in place would first copy
+/// every command it accumulated, only to discard the copy. A canvas that
+/// clears and redraws every frame would pay for the whole previous frame each
+/// time.
 fn reset(surface: &mut Surface) {
-    Arc::make_mut(&mut surface.scene).reset();
+    surface.scene = Arc::new(Scene::new());
     surface.gfx = crate::ops::Gfx::default();
 }
 
@@ -203,6 +237,7 @@ fn stroke_style(gfx: &crate::ops::Gfx) -> KurboStroke {
 fn draw_text(
     scene: &mut Scene,
     gfx: &crate::ops::Gfx,
+    blobs: &mut BlobCache,
     shaper: &mut dyn TextShaper,
     text: &str,
     x: f64,
@@ -223,7 +258,7 @@ fn draw_text(
         if seg.glyphs.is_empty() {
             continue;
         }
-        let blob = Blob::new(seg.font_data.clone());
+        let blob = blobs.font(seg.font_id, seg.font_index, &seg.font_data);
         let font_data = peniko::FontData::new(blob, seg.font_index);
         scene
             .draw_glyphs(&font_data)
@@ -260,7 +295,7 @@ fn draw_buffer(
         return;
     }
     let image = peniko::ImageData {
-        data: blobs.blob(handle, buffer),
+        data: blobs.buffer(handle, buffer),
         format: peniko::ImageFormat::Rgba8,
         // Straight, because that is how a buffer stores its pixels; the
         // renderer multiplies, so nothing rounds on the way in.
@@ -285,5 +320,51 @@ fn draw_buffer(
     scene.draw_image(&peniko::ImageBrush::new(image), transform);
     if alpha < 1.0 {
         scene.pop_layer();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_buffers_pixels_upload_once_until_they_change() {
+        let mut blobs = BlobCache::default();
+        let mut buffer = PixBuf::new(2, 2);
+
+        let first = blobs.buffer(1, &buffer);
+        let again = blobs.buffer(1, &buffer);
+        assert_eq!(
+            first.id(),
+            again.id(),
+            "an untouched buffer keeps the blob the renderer already uploaded"
+        );
+
+        buffer.set_pixel(0, 0, 0xffffffff);
+        let after = blobs.buffer(1, &buffer);
+        assert_ne!(
+            first.id(),
+            after.id(),
+            "a written buffer has to upload again"
+        );
+    }
+
+    #[test]
+    fn a_freed_buffer_takes_its_pixels_with_it() {
+        // The tick that frees one buffer and creates another leaves the cache
+        // the same length while its contents have moved on, which is why the
+        // sweep cannot be gated on a length comparison.
+        let mut blobs = BlobCache::default();
+        blobs.buffer(1, &PixBuf::new(64, 64));
+        blobs.buffer(2, &PixBuf::new(64, 64));
+        assert_eq!(blobs.buffers.len(), 2);
+
+        let mut live = std::collections::BTreeMap::new();
+        live.insert(2, PixBuf::new(64, 64));
+        live.insert(3, PixBuf::new(64, 64));
+        blobs.retain(&live);
+
+        assert_eq!(blobs.buffers.len(), 1, "buffer 1 was freed");
+        assert!(blobs.buffers.contains_key(&2));
     }
 }

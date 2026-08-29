@@ -106,7 +106,7 @@ impl PixBuf {
         let mut out = Vec::with_capacity(width as usize * height as usize);
         for row in 0..i64::from(height) {
             for col in 0..i64::from(width) {
-                out.push(self.get_pixel(x + col, y + row));
+                out.push(self.get_pixel(x.saturating_add(col), y.saturating_add(row)));
             }
         }
         out
@@ -121,29 +121,59 @@ impl PixBuf {
                 let Some(value) = pixels.get(row as usize * width as usize + col as usize) else {
                     return;
                 };
-                self.set_pixel(x + col, y + row, *value);
+                self.set_pixel(x.saturating_add(col), y.saturating_add(row), *value);
             }
         }
     }
 
     /// Fill a rectangle with one color.
+    ///
+    /// The rectangle is clipped to the buffer before anything is written, so
+    /// the work is bounded by the buffer rather than by the numbers a script
+    /// passed: filling a whole buffer costs its pixels, and filling a
+    /// rectangle a thousand times larger costs the same.
     pub fn fill_rect(&mut self, x: i64, y: i64, width: u32, height: u32, rgba: u32) {
-        for row in 0..i64::from(height) {
-            for col in 0..i64::from(width) {
-                self.set_pixel(x + col, y + row, rgba);
+        let Some((left, top, right, bottom)) = self.clip_rect(x, y, width, height) else {
+            return;
+        };
+        for row in top..bottom {
+            for col in left..right {
+                self.set_pixel(col, row, rgba);
             }
         }
     }
 
+    /// The part of a requested rectangle that is inside the buffer, as
+    /// `(left, top, right, bottom)`, or `None` when none of it is.
+    ///
+    /// Saturating throughout: `x` and the width come from a script, so
+    /// `i64::MAX` with a width is an ordinary argument rather than an
+    /// impossible one.
+    fn clip_rect(&self, x: i64, y: i64, width: u32, height: u32) -> Option<(i64, i64, i64, i64)> {
+        let left = x.max(0);
+        let top = y.max(0);
+        let right = x
+            .saturating_add(i64::from(width))
+            .min(i64::from(self.width));
+        let bottom = y
+            .saturating_add(i64::from(height))
+            .min(i64::from(self.height));
+        (left < right && top < bottom).then_some((left, top, right, bottom))
+    }
+
     /// Decode a PNG into a fresh buffer, or say why not.
+    ///
+    /// The file is opened once and its header read before anything is
+    /// decoded, so an image over the cap costs a header rather than its
+    /// pixels.
     pub fn load_png(path: &Path, pixel_cap: u64) -> Result<PixBuf, String> {
-        let reader = image::ImageReader::open(path)
+        let decoder = image::ImageReader::open(path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?
             .with_guessed_format()
-            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        let (width, height) = reader
-            .into_dimensions()
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?
+            .into_decoder()
             .map_err(|e| format!("{} is not an image: {e}", path.display()))?;
+        let (width, height) = image::ImageDecoder::dimensions(&decoder);
         let pixels = u64::from(width) * u64::from(height);
         if pixels > pixel_cap {
             return Err(format!(
@@ -151,7 +181,7 @@ impl PixBuf {
                 path.display()
             ));
         }
-        let decoded = image::open(path)
+        let decoded = image::DynamicImage::from_decoder(decoder)
             .map_err(|e| format!("cannot decode {}: {e}", path.display()))?
             .to_rgba8();
         Ok(PixBuf {
@@ -206,15 +236,53 @@ mod tests {
         let mut buf = PixBuf::new(4, 4);
         buf.put_region(1, 1, 2, 2, &[1, 2, 3, 4]);
         assert_eq!(buf.get_region(1, 1, 2, 2), [1, 2, 3, 4]);
-        // A region hanging over the edge comes back the size it asked for,
-        // padded with transparent.
-        assert_eq!(buf.get_region(3, 3, 2, 2), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_region_off_the_edge_is_padded_rather_than_clamped() {
+        // Every pixel is set, so a read that clamped to the nearest edge
+        // would come back opaque; only padding gives transparent.
+        let mut buf = PixBuf::new(2, 2);
+        buf.fill_rect(0, 0, 2, 2, 0xffffffff);
+        // The 2x2 at (1, 1) covers one real pixel and three off the edge.
+        assert_eq!(
+            buf.get_region(1, 1, 2, 2),
+            [0xffffffff, 0, 0, 0],
+            "an off-edge read pads with transparent"
+        );
+        // Entirely outside: nothing to clamp to at all.
+        assert_eq!(buf.get_region(9, 9, 2, 1), [0, 0]);
+        assert_eq!(buf.get_region(-4, 0, 2, 1), [0, 0]);
+    }
+
+    #[test]
+    fn a_hostile_coordinate_neither_panics_nor_writes() {
+        // A script can pass any integer. The arithmetic that walks a
+        // rectangle has to survive the far end of the range.
+        let mut buf = PixBuf::new(2, 2);
+        buf.fill_rect(i64::MAX, i64::MAX, u32::MAX, u32::MAX, 0xffffffff);
+        buf.put_region(i64::MIN, i64::MIN, 2, 2, &[1, 2, 3, 4]);
+        assert_eq!(buf.get_region(i64::MAX, 0, 2, 1), [0, 0]);
+        assert_eq!(buf.get_pixel(0, 0), 0, "nothing landed in the buffer");
+        assert_eq!(buf.generation(), 0);
+    }
+
+    #[test]
+    fn a_fill_larger_than_the_buffer_costs_the_buffer() {
+        // The rectangle is clipped before anything is written, so a script
+        // asking for a billion pixels of a four-pixel buffer writes four.
+        let mut buf = PixBuf::new(2, 2);
+        buf.fill_rect(-1000, -1000, u32::MAX, u32::MAX, 0x00ff00ff);
+        assert_eq!(buf.get_pixel(0, 0), 0x00ff00ff);
+        assert_eq!(buf.get_pixel(1, 1), 0x00ff00ff);
+        assert_eq!(buf.generation(), 4, "four pixels written, not four billion");
     }
 
     #[test]
     fn filling_and_the_generation_track_the_writes() {
         let mut buf = PixBuf::new(3, 3);
         buf.fill_rect(0, 0, 2, 2, 0x00ff00ff);
+        assert_eq!(buf.get_pixel(0, 0), 0x00ff00ff);
         assert_eq!(buf.get_pixel(1, 1), 0x00ff00ff);
         assert_eq!(buf.get_pixel(2, 2), 0);
         assert_eq!(buf.generation(), 4);
