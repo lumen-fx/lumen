@@ -209,6 +209,11 @@ deleted, which is the Rust metadata nothing links against, and everything
 staged is stripped of debug information. Between them they take out most of
 the weight, and the archive compresses what is left.
 
+The second lever does not reach everything. A crate that reaches a DLL
+through `raw-dylib` has rustc write short import entries into its rlib, and
+`llvm-objcopy` reads none of them, so on Windows a handful of archives keep
+their debug information and ship as they are. The step reports how many.
+
 A module also puts native libraries on the line that nothing else asks for -
 `-lasound` for the audio module - and dropping the module has to drop those
 too, or the executable declares a dependency it makes no calls into.
