@@ -444,12 +444,16 @@ jobs:
           done <<<"$list"
           # Which system libraries each module alone put on the line, so a
           # replay without the module drops them and the executable does not
-          # depend on a library it makes no calls into.
+          # depend on a library it makes no calls into. Read before the loop
+          # for the same reason the list above is: a pipeline into `while`
+          # loses the exit status, so an attribution that failed to run would
+          # read as a build where no module asked for anything.
+          attributed="$(.github/scripts/module-native-libs.sh \
+                          "$root/link-build.jsonl" "$triple")"
           libs=()
           while IFS=$'\t' read -r name names; do
             [ -n "$name" ] && libs+=(--module-libs "$name=$names")
-          done < <(.github/scripts/module-native-libs.sh \
-                     "$root/link-build.jsonl" "$triple")
+          done <<<"$attributed"
           echo "module libraries: ${libs[*]:-none attributed}"
           rm -rf linkkit
           "$lumenc" link-kit emit \
