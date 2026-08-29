@@ -275,9 +275,13 @@ fn copy(from: &Path, to: &Path) -> Result<(), String> {
 }
 
 /// Copy a directory whole, making what it needs on the way.
+///
+/// The source is read before the destination is made, so a build that staged
+/// no tree reports that and leaves nothing behind rather than an empty
+/// directory in the installation.
 fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(to).map_err(|e| format!("create {}: {e}", to.display()))?;
     let entries = std::fs::read_dir(from).map_err(|e| format!("read {}: {e}", from.display()))?;
+    std::fs::create_dir_all(to).map_err(|e| format!("create {}: {e}", to.display()))?;
     for entry in entries {
         let entry = entry.map_err(|e| format!("read {}: {e}", from.display()))?;
         let source = entry.path();

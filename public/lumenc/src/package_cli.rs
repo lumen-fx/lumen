@@ -952,9 +952,14 @@ fn holds_something(dir: &Path) -> bool {
 }
 
 /// Copy a directory whole, making what it needs on the way.
+///
+/// The source is read before the destination is made, so a directory that
+/// cannot be read leaves nothing behind. [`stage_script_library`] has already
+/// ruled that out for the tree it stages; the order is what keeps this and the
+/// same walk in `build.rs` one behaviour.
 fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(to).map_err(|e| format!("create {}: {e}", to.display()))?;
     let entries = std::fs::read_dir(from).map_err(|e| format!("read {}: {e}", from.display()))?;
+    std::fs::create_dir_all(to).map_err(|e| format!("create {}: {e}", to.display()))?;
     for entry in entries {
         let entry = entry.map_err(|e| format!("read {}: {e}", from.display()))?;
         let source = entry.path();
@@ -2940,6 +2945,31 @@ mod tests {
 
             let _ = std::fs::remove_dir_all(&tmp);
         }
+    }
+
+    /// A source that cannot be read leaves no destination behind. The same
+    /// walk runs in `build.rs` against a build that staged no tree, where an
+    /// empty directory in the installation is litter nothing cleans up.
+    #[test]
+    fn copying_a_tree_that_is_not_there_makes_nothing() {
+        let tmp = std::env::temp_dir().join(format!("lumen-copytree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("mkdir");
+
+        let to = tmp.join("dest");
+        copy_tree(&tmp.join("absent"), &to).expect_err("there is nothing to read");
+        assert!(!to.exists(), "a failed copy leaves no directory behind");
+
+        let from = tmp.join("present");
+        std::fs::create_dir_all(from.join("std")).expect("mkdir");
+        std::fs::write(from.join("std").join("list.cdl"), b"fn sum() {}").expect("write");
+        copy_tree(&from, &to).expect("a tree that is there copies");
+        assert_eq!(
+            std::fs::read(to.join("std").join("list.cdl")).expect("read"),
+            b"fn sum() {}"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// A release older than the script standard library carries no tree, and
