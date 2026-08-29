@@ -153,6 +153,45 @@ active.
 
 These properties are listed in the [CSS reference](../reference/css.md).
 
+## Frame callbacks
+
+A transition moves a property from one setting to another. Something that
+moves continuously - a clock hand, a game loop, a chart that redraws as data
+arrives - needs a callback per frame instead, and `request_frame()` is it:
+
+```rhai
+fn on_ready() { request_frame(); }
+
+fn on_frame(dt) {
+    signals.angle.set(signals.angle.get() + dt);
+    request_frame();
+}
+```
+
+One request buys one callback. A handler that wants to keep going asks again;
+one that is finished stops asking, and the app parks with no frames running.
+That is what makes an idle animation cost nothing.
+
+`dt` is the seconds since the previous callback, so multiply anything that
+moves by it and the speed stays the same on a fast machine and a slow one. It
+is zero on the frame that starts a loop, because no time has passed yet, and
+it is capped, so a stalled tick slows the animation down rather than jumping
+it forward.
+
+Reach for this rather than `set_interval`: a timer fires on a wall-clock
+schedule that has nothing to do with when the app draws, so an animation
+driven by one stutters against the frames it is trying to land on.
+
+A frame callback pairs naturally with a [`<canvas>`](../reference/tags.md#canvas),
+which is where a script draws something CSS cannot describe:
+
+```lmn
+<root>
+  <canvas id="dial" width="120" height="120" />
+  <script src="main.rhai" />
+</root>
+```
+
 ## What does not animate
 
 - A gradient background. Gradients snap; only a solid `bg` tweens.
@@ -160,8 +199,8 @@ These properties are listed in the [CSS reference](../reference/css.md).
 - The selected state of a `tabs` strip, a `toggle`, and a slider thumb, which
   set their own colours and snap.
 
-There is no script API for animating a value directly; transitions in CSS are
-the whole surface.
+CSS transitions do not take a script API for tweening a value directly; a
+frame callback is what a script drives motion from.
 
 `@media (prefers-reduced-motion: reduce)` parses but never matches yet, so give
 people their own way to turn off anything heavily animated. See

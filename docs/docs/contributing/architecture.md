@@ -107,6 +107,16 @@ tools/             the release plumbing and the editor plugins
   crate builds both link shapes: the cdylib is the bundled `lumen-audio`
   runtime module an app declares in `lumen.toml`, and a static build
   compiles the same plugin in.
+- **lumen-canvas** (`std/canvas`): the whole drawing capability, as a
+  self-contained module the engine knows nothing about. It registers the
+  `canvas` script namespace through the generic registry, the `<canvas>` tag
+  through the generic tag registry, and paints through the generic
+  native-paint seam. A drawing call records into a journal rather than
+  drawing, because a script-function body has no world; one system per tick
+  replays the journal into a retained vello scene, which the extract hands the
+  render world. One crate builds both link shapes: the cdylib is the bundled
+  `lumen-canvas` runtime module an app declares in `lumen.toml`, and a static
+  build compiles the same plugin in.
 - **lumen-download** (`std/download`): file downloads, as a self-contained
   module the engine knows nothing about. It registers the `download` script
   namespace through the generic registry and streams each transfer to disk on

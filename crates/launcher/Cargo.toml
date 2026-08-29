@@ -36,6 +36,7 @@ lumen = { workspace = true, optional = true }
 # them anchors the engine dylib; each still registers itself before `main`.
 lumen-archive = { workspace = true, optional = true }
 lumen-audio = { workspace = true, optional = true }
+lumen-canvas = { workspace = true, optional = true }
 lumen-download = { workspace = true, optional = true }
 lumen-fs = { workspace = true, optional = true }
 lumen-process = { workspace = true, optional = true }
@@ -48,6 +49,7 @@ static-run = [
     "dep:lumen",
     "dep:lumen-archive",
     "dep:lumen-audio",
+    "dep:lumen-canvas",
     "dep:lumen-download",
     "dep:lumen-fs",
     "dep:lumen-process",

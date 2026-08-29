@@ -347,6 +347,48 @@ Loads and draws an image file.
 | `alt` | text | What the image shows, for a reader who is not looking at it. Write `alt=""` for an image that carries no meaning of its own, such as a divider. Carried into the compiled app; the desktop accessibility tree does not read it yet. |
 | `fit` | `fill`, `cover`, `contain`, `none`, `scale-down` | How the image fills its box. |
 
+### `<canvas>`
+
+A surface a script draws on: paths, rectangles, arcs, text, and pixel
+buffers. The drawing functions come from the `canvas` namespace; see
+[Rhai](scripting-rhai.md), [Lua](scripting-lua.md), or
+[candela](scripting-candela.md) for the catalog.
+
+The tag comes from the `lumen-canvas` module, so an app declares it before
+it can write one:
+
+```toml
+[dependencies]
+lumen-canvas = { bundled = true, tags = ["canvas"] }
+```
+
+| Attribute | Value | Effect |
+| --- | --- | --- |
+| `id` | text | Names the canvas. Every drawing call takes it as its first argument, so a canvas without one cannot be drawn on. |
+| `width` | px | Drawing width, in canvas units. Defaults to 300. |
+| `height` | px | Drawing height, in canvas units. Defaults to 150. |
+
+`width` and `height` are the drawing space, not the size of the box. They
+say what coordinates a script draws in, and the drawing is then scaled onto
+whatever box the element ends up with, so CSS can resize a canvas without the
+script changing. An element with neither draws in a 300 by 150 space, which
+is what an HTML canvas has always defaulted to.
+
+The drawing space is the element's, so a script reads it once the element is
+mounted: `on_ready`, not `on_start`. Drawing from `on_start` works either
+way; the calls are kept and appear when the element does.
+
+A canvas is retained. What a script draws stays until `canvas::clear`, or
+until `canvas::resize`, which empties it the same way writing `width` on an
+HTML canvas does. Drawing outside the element's box is clipped.
+
+Not here yet: `clear_rect`, clipping, blend and composite modes, gradients,
+patterns, shadows, `measure_text`, `stroke_text`, text alignment and
+baselines, `ellipse` and `arc_to`, dashed strokes, image smoothing, drawing
+an image file or another canvas directly, reading a composed canvas back, and
+a per-canvas device pixel ratio. Canvas does not exist on the web target,
+which refuses `[dependencies]` outright.
+
 ## Controls
 
 ### `<button>`

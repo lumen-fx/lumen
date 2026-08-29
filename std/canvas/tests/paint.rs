@@ -1,7 +1,7 @@
 //! The pixels, on a real GPU.
 //!
 //! Everything else about this module can be checked without one; whether a
-//! canvas actually appears cannot. These cases run the wgpu/vello backend
+//! canvas appears cannot. These cases run the wgpu/vello backend
 //! offscreen, draw through the module the way a script would, and read the
 //! framebuffer back.
 //!

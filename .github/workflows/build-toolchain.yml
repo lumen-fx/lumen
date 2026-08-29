@@ -216,6 +216,7 @@ jobs:
             -p lumen \
             -p lumen-archive \
             -p lumen-audio \
+            -p lumen-canvas \
             -p lumen-download \
             -p lumen-fs \
             -p lumen-process \

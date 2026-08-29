@@ -265,6 +265,7 @@ One table entry per library; the key is its name.
 [dependencies]
 lumen-archive = { bundled = true }
 lumen-audio = { bundled = true }
+lumen-canvas = { bundled = true, tags = ["canvas"] }
 lumen-fs = { bundled = true }
 markdown-widgets = "1.2"
 shape-tools = { path = "modules/shape-tools", config = { units = "mm" } }
@@ -277,6 +278,8 @@ they need:
 |--------|--------------|--------|
 | `lumen-archive` | The `archive` script namespace: unpacking zip, tar, and gzip-compressed tar into a directory, off the tick loop. | `max_concurrent` |
 | `lumen-audio` | The whole audio surface, from the `audio_*` script functions to the playback backend behind them. | |
+| `lumen-canvas` | The [`<canvas>`](tags.md#canvas) element and the `canvas` script namespace that draws on it. Declare `tags = ["canvas"]` alongside it. | `region_cap`, `buffer_pixel_cap`, `buffer_count_cap` |
+| `lumen-download` | The `download` script namespace: fetch a URL to a file off the tick loop, reporting progress, completion, and failure as events. | `timeout_ms`, `max_bytes`, `max_concurrent` |
 | `lumen-fs` | The `files` script namespace: read, write, list, copy, remove, and byte-level file access, resolved against the app directory. | `read_bytes_cap` |
 | `lumen-process` | The `process` script namespace: start another program, and take its output a line at a time and its exit as events. | |
 
@@ -292,6 +295,18 @@ Each entry declares exactly one source:
 | `version` | string | A version requirement. `lumenc run` and `lumenc package` resolve it through the shared plugin cache (`~/.lumen/plugins`) and pin the answer in `lumen.lock`, exactly as `[[plugins]]` versions resolve; the runtime never fetches or resolves one itself, it only loads what was resolved or already staged in a `modules/` directory, and fails with a banner otherwise. A bare string value (`name = "1.2"`) is shorthand for this key. |
 | `path` | string | A built library, relative to the app directory unless absolute. Without an extension the platform spellings are probed (`lib<m>.so`, `lib<m>.dylib`, `<m>.dll` - the Windows spelling matters for portable plugins, the kind that loads there - plus the underscored variants cargo produces for a hyphenated name). |
 | `config` | table | Handed to the library verbatim at install. |
+
+A module that brings a markup element declares it too:
+
+| Key | Type | Effect |
+|-----|------|--------|
+| `tags` | array of strings | Markup tags this module answers for, so the parser accepts them. Lowercase letters, digits, and dashes; a tag the language already owns is refused. |
+
+A compile loads nothing, so `lumenc build`, `lumenc check`, and
+`lumenc package` know an element exists only because the app said so. A run
+also learns it from the module itself, which registers its tags as it
+installs - so an app missing the key runs and fails to build. Declare it
+either way and both paths agree.
 
 The table is unordered, so entries load in sorted-name order; where an entry
 sits in the file carries no meaning.

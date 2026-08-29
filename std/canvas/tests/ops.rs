@@ -3,7 +3,7 @@
 //! Everything here runs without a world, a GPU, or a script host, because
 //! `Gfx::apply` is deliberately the half of the replay that has no vello in
 //! it. What it decides - which brush a fill uses, where the transform puts
-//! it, what `restore` restores - is what a canvas author actually observes,
+//! it, what `restore` restores - is what a canvas author observes,
 //! so it is worth testing where the failures are readable.
 
 use lumen_canvas::color::{Rgba, parse_css};
