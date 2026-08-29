@@ -488,13 +488,27 @@ jobs:
 
           rustup component add llvm-tools
           bin="$sysroot/lib/rustlib/$triple/bin"
+          # Dropping the debug info is a size lever, not a correctness one, and
+          # there is one archive it cannot be pulled on. A crate reaching a DLL
+          # through `raw-dylib` has rustc write short import entries into its
+          # rlib, named for the DLL rather than for an object, and llvm-objcopy
+          # reads none of them: it stops at "unsupported object file format"
+          # and rewrites nothing. Only the MSVC target produces them, so this
+          # is where the kit was first built for Windows that the loop met one.
+          # Such an archive keeps its debug info and stays exactly as it was,
+          # which is worth more than failing a release over a lever. The count
+          # is printed so one that starts climbing is visible.
+          kept=0
           for archive in linkkit/stage/*.rlib; do
             "$bin/llvm-ar" d "$archive" lib.rmeta
-            "$bin/llvm-objcopy" --strip-debug "$archive"
+            "$bin/llvm-objcopy" --strip-debug "$archive" 2>/dev/null ||
+              kept=$((kept + 1))
           done
           for object in linkkit/stage/*.o linkkit/stage/*.a; do
-            "$bin/llvm-objcopy" --strip-debug "$object"
+            "$bin/llvm-objcopy" --strip-debug "$object" 2>/dev/null ||
+              kept=$((kept + 1))
           done
+          echo "kept whole rather than stripped: $kept"
 
           tar -czf lumen-linkkit-${{ matrix.target }}.tar.gz -C linkkit .
           du -sh linkkit
