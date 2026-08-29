@@ -208,6 +208,7 @@ lumen-archive = { path = "std/archive", default-features = false }
 lumen-assets = { path = "crates/assets" }
 lumen-async-tokio = { path = "crates/backends/async-tokio" }
 lumen-audio = { path = "std/audio", default-features = false }
+lumen-canvas = { path = "std/canvas", default-features = false }
 lumen-core = { path = "crates/core" }
 lumen-devtools = { path = "crates/dev/devtools" }
 lumen-download = { path = "std/download", default-features = false }

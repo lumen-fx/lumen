@@ -108,6 +108,12 @@ pub use lumen_module_registry as registry;
 /// [`lumen_script::push_plugin_event`]. Taken through the module SDK so a
 /// module crate depends on `lumen-module` alone.
 pub use lumen_script;
+/// The markup-tag registry: call
+/// [`lumen_widget::register_widget_tag_owned`] from `Plugin::build` and the
+/// parser accepts that element. A module that also has to compile ahead of
+/// time declares the same tag under `[dependencies]`, which is what a build
+/// with no module in it reads.
+pub use lumen_widget;
 
 /// The renderer a module paints through, behind the `paint` feature: the
 /// `vello` re-export is the scene type a

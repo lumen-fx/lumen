@@ -3505,6 +3505,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-canvas"
+version = "0.0.6"
+dependencies = [
+ "bevy_ecs",
+ "glam 0.33.3",
+ "image",
+ "lumen-core",
+ "lumen-ir",
+ "lumen-module",
+ "lumen-render-wgpu",
+ "lumen-runtime",
+ "lumen-script",
+ "serde_json",
+]
+
+[[package]]
 name = "lumen-core"
 version = "0.0.6"
 dependencies = [
@@ -3710,6 +3726,7 @@ dependencies = [
  "lumen-render-wgpu",
  "lumen-script",
  "lumen-text",
+ "lumen-widget",
  "serde",
  "serde_json",
  "toml 1.1.4+spec-1.1.0",
