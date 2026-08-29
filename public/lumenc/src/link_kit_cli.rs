@@ -395,7 +395,12 @@ fn classify(record: &Record, options: &Options) -> Result<Kit, String> {
     // out when the link fails. It means the recorded binary was built without
     // that module: the launcher's static shape has to carry every module a
     // kit offers.
-    let unlinked: Vec<&str> = kit
+    //
+    // The message names the library each module was looked up by, quoted, and
+    // the size of the line it was looked for on. Those two separate a launcher
+    // built without the module from a library name that arrived carrying a
+    // character nobody meant to send, and the two look identical otherwise.
+    let unlinked: Vec<String> = kit
         .modules
         .iter()
         .map(|module| module.name.as_str())
@@ -404,12 +409,22 @@ fn classify(record: &Record, options: &Options) -> Result<Kit, String> {
                 .iter()
                 .any(|arg| matches!(arg, LinkArg::File { module: Some(m), .. } if m == name))
         })
+        .map(|name| match options.modules.get(name) {
+            Some(lib) => format!("{name} ({lib:?})"),
+            None => name.to_string(),
+        })
         .collect();
     if !unlinked.is_empty() {
         return Err(format!(
-            "the recorded link read nothing belonging to: {}. The binary it \
-             produced was built without them, so a kit cannot offer them",
-            unlinked.join(", ")
+            "the recorded link read nothing belonging to: {}, each named beside \
+             the library its rlib was looked up by. The line carries {} \
+             arguments and names {} files, and {} modules were declared. The \
+             binary it produced was built without them, so a kit cannot offer \
+             them",
+            unlinked.join(", "),
+            kit.args.len(),
+            kit.staged.len(),
+            kit.modules.len(),
         ));
     }
 
@@ -626,7 +641,7 @@ mod tests {
         SCHEMA_VERSION,
     };
 
-    use super::{Options, classify, emit, pick};
+    use super::{Kit, Options, classify, emit, pick};
     use crate::package_cli::Target;
 
     /// A scratch directory that removes itself when the test ends.
@@ -706,6 +721,49 @@ mod tests {
         let mut options = options(target, "/b/target");
         options.modules.clear();
         options
+    }
+
+    /// The declared name and library name of every module under `std/`, the
+    /// pairs `.github/scripts/first-party-modules.sh` hands the release step.
+    fn first_party() -> BTreeMap<String, String> {
+        ["archive", "audio", "download", "fs", "process"]
+            .into_iter()
+            .map(|name| (format!("lumen-{name}"), format!("lumen_{name}")))
+            .collect()
+    }
+
+    /// A Windows line reading every first-party module's rlib, in the shape a
+    /// recorded MSVC link has them: absolute drive paths, staged under a
+    /// content hash and the file's own name.
+    fn msvc_line() -> (Vec<String>, Vec<String>) {
+        let deps = "D:\\b\\target\\x86_64-pc-windows-msvc\\release\\deps";
+        let mut argv = vec!["/NOLOGO".to_string()];
+        let mut staged = vec!["/NOLOGO".to_string()];
+        for (i, lib) in ["process", "fs", "download", "audio", "archive"]
+            .into_iter()
+            .enumerate()
+        {
+            argv.push(format!("{deps}\\liblumen_{lib}.rlib"));
+            staged.push(format!("1122334{i}-liblumen_{lib}.rlib"));
+        }
+        argv.push("kernel32.lib".to_string());
+        staged.push("kernel32.lib".to_string());
+        argv.push(format!("/OUT:{deps}\\lumen_launcher.exe"));
+        staged.push(format!("/OUT:{deps}\\lumen_launcher.exe"));
+        (argv, staged)
+    }
+
+    /// The module every entry on the line was attributed to, in order.
+    fn attributed(kit: &Kit) -> Vec<&str> {
+        kit.args
+            .iter()
+            .filter_map(|arg| match arg {
+                LinkArg::File {
+                    module: Some(name), ..
+                } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// A record whose staged list differs from the raw one exactly where an
@@ -884,6 +942,50 @@ mod tests {
         let error = classify(&record(&argv, &argv), &options("linux-x86_64", "/b/target"))
             .expect_err("lumen-fs was declared and never linked");
         assert!(error.contains("lumen-fs"), "{error}");
+    }
+
+    /// Windows is the one target whose line is written in the MSVC spellings,
+    /// and a module's rlib has to be found on it the same way it is on every
+    /// other target.
+    #[test]
+    fn every_module_on_an_msvc_line_is_attributed_to_its_rlib() {
+        let (argv, staged) = msvc_line();
+        let mut options = options("windows-x86_64", "D:\\b\\target");
+        options.modules = first_party();
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let staged: Vec<&str> = staged.iter().map(String::as_str).collect();
+        let kit = classify(&record(&argv, &staged), &options).expect("the record classifies");
+        assert_eq!(
+            attributed(&kit),
+            [
+                "lumen-process",
+                "lumen-fs",
+                "lumen-download",
+                "lumen-audio",
+                "lumen-archive"
+            ]
+        );
+    }
+
+    /// A library name is matched against the rlib's own name whole, so one
+    /// that arrives carrying a line ending matches nothing. What the refusal
+    /// owes its reader is the name it was given, quoted, because the
+    /// difference between that and a launcher built without the module is
+    /// invisible otherwise.
+    #[test]
+    fn a_library_name_carrying_a_line_ending_is_quoted_in_the_refusal() {
+        let (argv, staged) = msvc_line();
+        let mut options = options("windows-x86_64", "D:\\b\\target");
+        options.modules = first_party()
+            .into_iter()
+            .map(|(name, lib)| (name, format!("{lib}\r")))
+            .collect();
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let staged: Vec<&str> = staged.iter().map(String::as_str).collect();
+        let error = classify(&record(&argv, &staged), &options)
+            .expect_err("no library name matches an rlib");
+        assert!(error.contains(r#"lumen-fs ("lumen_fs\r")"#), "{error}");
+        assert!(error.contains("5 modules"), "{error}");
     }
 
     #[test]

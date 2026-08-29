@@ -82,6 +82,12 @@ name: build-toolchain
 # vX.Y.Z tag, and nightly.yml, which publishes it on the rolling `nightly`
 # prerelease. Both download the same artifact names, so anything that changes
 # the shape of an archive changes it for both at once.
+#
+# It can also be run on its own, against any branch, which is how a change to
+# a leg gets exercised without publishing anything: the archives land as run
+# artifacts and no tag moves. Nothing else builds for Windows, for an Intel
+# Mac, or for Arm Linux, so without this the only way to try a change to one
+# of those legs is to merge it and wait for the nightly.
 
 on:
   workflow_call:
@@ -92,6 +98,16 @@ on:
           "v". Leave it empty to build the portable zip alone and skip the
           MSI; a caller with no version behind a release has nothing safe to
           stamp one with.
+        type: string
+        required: false
+        default: ""
+  workflow_dispatch:
+    inputs:
+      msi_version:
+        description: >-
+          The version to stamp the Windows installer with, without a leading
+          "v". Leave it empty to build the portable zip alone and skip the
+          MSI.
         type: string
         required: false
         default: ""
@@ -442,6 +458,10 @@ jobs:
           while IFS=$'\t' read -r name _package lib; do
             modules+=(--module "$name=$lib")
           done <<<"$list"
+          # Printed the way the shell would quote it, so a name that picked up
+          # a line ending on the way here is visible in the log rather than
+          # only in the refusal it causes.
+          printf 'modules: %q\n' "${modules[*]}"
           # Which system libraries each module alone put on the line, so a
           # replay without the module drops them and the executable does not
           # depend on a library it makes no calls into. Read before the loop

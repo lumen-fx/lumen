@@ -234,6 +234,14 @@ replay itself still runs: the suite builds a kit of its own, with one
 `cc`-compiled object standing in for the launcher and another for a module,
 and links an app out of it.
 
+That covers the host you are on. A kit for another platform is built by the
+leg that builds that platform's toolchain, and `build-toolchain.yml` runs on
+its own against any branch for exactly that: run it from the Actions tab,
+pick the branch, and every leg's archives come back as run artifacts with no
+tag moved and nothing published. Windows, Intel macOS, and Arm Linux are
+built nowhere else, so this is the only way to try a change to one of them
+before it lands.
+
 ## Debug info in dev builds
 
 Dev builds keep line tables for the workspace crates, so panic backtraces
