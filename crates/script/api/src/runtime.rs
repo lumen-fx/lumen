@@ -2451,13 +2451,20 @@ mod frame_hook_tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     /// A host that records every `on_frame` step it is handed, and can ask
-    /// for another frame from inside the callback. Wraps `NoHost` so only
-    /// the two methods this suite reaches are written here.
+    /// for another frame from inside the callback.
+    ///
+    /// `LANG` exists to mint a second host type from one implementation: two
+    /// hosts is the case where a frame has to reach both, and two hand-rolled
+    /// `ScriptHost` impls would be the same forty lines of delegation twice
+    /// over. Everything the suite does not reach forwards to `NoHost`, the
+    /// crate's existing stub, rather than being written out again here.
     #[derive(Resource)]
-    struct FrameHost {
+    struct Host<const LANG: usize> {
         inner: NoHost,
         /// Whether this host declares `on_frame` at all.
         declares: bool,
+        /// Whether the call raises instead of answering.
+        fails: bool,
         /// Whether each callback asks for another frame.
         re_request: Arc<AtomicBool>,
         /// Every step handed to `on_frame`, in order.
@@ -2466,33 +2473,35 @@ mod frame_hook_tests {
         calls: Arc<std::sync::Mutex<Vec<String>>>,
     }
 
-    impl FrameHost {
+    /// The host a single-host case drives.
+    type FrameHost = Host<0>;
+    /// The second host, for the case where a frame has to reach every one.
+    type OtherHost = Host<1>;
+
+    impl<const LANG: usize> Host<LANG> {
         fn new(declares: bool) -> Self {
             Self {
                 inner: NoHost,
                 declares,
+                fails: false,
                 re_request: Arc::new(AtomicBool::new(false)),
                 seen: Arc::new(std::sync::Mutex::new(Vec::new())),
                 calls: Arc::new(std::sync::Mutex::new(Vec::new())),
             }
         }
+
+        /// A host whose handler raises.
+        fn failing() -> Self {
+            Self {
+                fails: true,
+                ..Self::new(true)
+            }
+        }
     }
 
-    impl ScriptHost for FrameHost {
+    impl<const LANG: usize> ScriptHost for Host<LANG> {
         type Closure = ();
 
-        fn compile_check(&self, source: &str, uri: &str) -> Result<(), ScriptError> {
-            self.inner.compile_check(source, uri)
-        }
-        fn load(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
-            self.inner.load(source, uri)
-        }
-        fn replace(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
-            self.inner.replace(source, uri)
-        }
-        fn reset(&mut self) {
-            self.inner.reset()
-        }
         fn call(
             &mut self,
             fn_name: &str,
@@ -2500,6 +2509,9 @@ mod frame_hook_tests {
         ) -> Result<CallOutcome, ScriptError> {
             if let Ok(mut calls) = self.calls.lock() {
                 calls.push(fn_name.to_string());
+            }
+            if self.fails {
+                return Err(ScriptError::Runtime("the handler raised".to_string()));
             }
             if !self.declares {
                 // What a host answers for a handler the script never wrote.
@@ -2524,6 +2536,28 @@ mod frame_hook_tests {
                 ret: None,
                 found: true,
             })
+        }
+
+        fn lang(&self) -> &'static str {
+            match LANG {
+                0 => "test",
+                _ => "other",
+            }
+        }
+
+        // Everything below is the rest of the trait, which the frame hook
+        // never reaches. It forwards rather than repeating `NoHost`'s bodies.
+        fn compile_check(&self, source: &str, uri: &str) -> Result<(), ScriptError> {
+            self.inner.compile_check(source, uri)
+        }
+        fn load(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
+            self.inner.load(source, uri)
+        }
+        fn replace(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
+            self.inner.replace(source, uri)
+        }
+        fn reset(&mut self) {
+            self.inner.reset()
         }
         fn call_closure(
             &mut self,
@@ -2566,87 +2600,8 @@ mod frame_hook_tests {
         fn register_script_fn(&mut self, f: &crate::ScriptFn) -> Result<(), ScriptError> {
             self.inner.register_script_fn(f)
         }
-        fn lang(&self) -> &'static str {
-            "test"
-        }
         fn builtins(&self) -> &'static [crate::BuiltinFn] {
-            &[]
-        }
-    }
-
-    /// A second host type, so the "every host is offered the frame" case can
-    /// name two resources.
-    #[derive(Resource)]
-    struct OtherHost(FrameHost);
-
-    impl ScriptHost for OtherHost {
-        type Closure = ();
-
-        fn compile_check(&self, source: &str, uri: &str) -> Result<(), ScriptError> {
-            self.0.compile_check(source, uri)
-        }
-        fn load(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
-            self.0.load(source, uri)
-        }
-        fn replace(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
-            self.0.replace(source, uri)
-        }
-        fn reset(&mut self) {
-            self.0.reset()
-        }
-        fn call(
-            &mut self,
-            fn_name: &str,
-            args: &[ScriptValue],
-        ) -> Result<CallOutcome, ScriptError> {
-            self.0.call(fn_name, args)
-        }
-        fn call_closure(
-            &mut self,
-            closure: &Self::Closure,
-            args: &[ScriptValue],
-        ) -> Result<ScriptValue, ScriptError> {
-            self.0.call_closure(closure, args)
-        }
-        fn drain_commands(&mut self) -> Vec<ScriptCommand> {
-            self.0.drain_commands()
-        }
-        fn push_commands(&mut self, cmds: Vec<ScriptCommand>) {
-            self.0.push_commands(cmds)
-        }
-        fn mirror_get(&self, name: &str) -> Option<ScriptValue> {
-            self.0.mirror_get(name)
-        }
-        fn mirror_set(&mut self, name: &str, value: ScriptValue) {
-            self.0.mirror_set(name, value)
-        }
-        fn mirror_sync_str(&mut self, name: &str, value: &str) {
-            self.0.mirror_sync_str(name, value)
-        }
-        fn handler_for(&self, event: &str, key: &str) -> Option<String> {
-            self.0.handler_for(event, key)
-        }
-        fn derivations_matching(
-            &self,
-            dirty: &std::collections::HashSet<&str>,
-            pending: &std::collections::HashSet<String>,
-        ) -> Vec<(String, Vec<String>, Self::Closure)> {
-            self.0.derivations_matching(dirty, pending)
-        }
-        fn pending_initial(&self) -> std::collections::HashSet<String> {
-            self.0.pending_initial()
-        }
-        fn clear_pending(&mut self, evaluated: &[String]) {
-            self.0.clear_pending(evaluated)
-        }
-        fn register_script_fn(&mut self, f: &crate::ScriptFn) -> Result<(), ScriptError> {
-            self.0.register_script_fn(f)
-        }
-        fn lang(&self) -> &'static str {
-            "other"
-        }
-        fn builtins(&self) -> &'static [crate::BuiltinFn] {
-            &[]
+            self.inner.builtins()
         }
     }
 
@@ -2778,9 +2733,9 @@ mod frame_hook_tests {
     #[test]
     fn every_active_host_is_offered_the_same_frame() {
         let mut world = world_with(FrameHost::new(true));
-        world.insert_resource(OtherHost(FrameHost::new(true)));
+        world.insert_resource(OtherHost::new(true));
         let first = Arc::clone(&world.resource::<FrameHost>().seen);
-        let second = Arc::clone(&world.resource::<OtherHost>().0.seen);
+        let second = Arc::clone(&world.resource::<OtherHost>().seen);
         request(&mut world);
 
         world
@@ -2836,6 +2791,48 @@ mod frame_hook_tests {
             "both requests were the same ask; the second must not arm a tick \
              nobody asked for"
         );
+    }
+
+    #[test]
+    fn arming_raises_the_animation_flag_and_wakes_the_loop() {
+        // A request is only worth anything if the tick it asks for happens.
+        // On an idle app nothing else is going to schedule one, so these two
+        // are the whole mechanism.
+        let mut world = world_with(FrameHost::new(true));
+        let woken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&woken);
+        world.insert_resource(lumen_core::app::EventLoopWaker(Arc::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        })));
+        world.init_resource::<lumen_core::render_world::AnimationsActive>();
+
+        request(&mut world);
+
+        assert!(
+            world
+                .resource::<lumen_core::render_world::AnimationsActive>()
+                .get(),
+            "a pending frame keeps the driver awake"
+        );
+        assert_eq!(woken.load(Ordering::SeqCst), 1, "and wakes it if it parked");
+    }
+
+    #[test]
+    fn a_handler_that_raises_leaves_the_app_running() {
+        // The callback is the app's code, so it can fail; the frame that
+        // carried it must not take the tick down with it.
+        let mut world = world_with(FrameHost::failing());
+        let calls = Arc::clone(&world.resource::<FrameHost>().calls);
+        request(&mut world);
+        drive(&mut world);
+
+        assert_eq!(calls.lock().unwrap().as_slice(), ["on_frame"]);
+
+        // The next tick finds nothing due: the frame was served, failure and
+        // all, and a handler that raised asked for no other.
+        drive(&mut world);
+        assert!(world.resource::<DueFrame>().0.is_none());
+        assert_eq!(calls.lock().unwrap().len(), 1);
     }
 
     #[test]

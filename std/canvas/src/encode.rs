@@ -197,7 +197,10 @@ pub fn encode(
                     drew = true;
                 }
             }
-            // Every remaining variant is state, and `Gfx::apply` took it.
+            // Unreachable: `Gfx::apply` answered for every state op above and
+            // the two that empty the canvas were taken before it. A no-op
+            // rather than a panic, because a drawing loop is the last place
+            // to discover a new variant by crashing.
             _ => {}
         }
     }
@@ -326,6 +329,356 @@ fn draw_buffer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ops::{FontSpec, LineCap, LineJoin};
+    use crate::store::Surface;
+    use lumen_text_cosmic::CosmicShaper;
+
+    /// Replay a list of calls into a fresh surface, and hand back the surface
+    /// and whether anything drew.
+    ///
+    /// Encoding is CPU work - a scene is a command buffer, and only
+    /// presenting one needs a device - so every case here runs with no
+    /// adapter.
+    fn encode_ops(ops: Vec<Op>) -> (Surface, bool) {
+        let mut surface = Surface::default();
+        let buffers = std::collections::BTreeMap::new();
+        let mut blobs = BlobCache::default();
+        let drew = encode(&mut surface, ops, &buffers, &mut blobs, None);
+        (surface, drew)
+    }
+
+    /// How many paths the surface's scene holds.
+    fn paths(surface: &Surface) -> u32 {
+        surface.scene.encoding().n_paths
+    }
+
+    #[test]
+    fn nothing_recorded_encodes_nothing() {
+        let (surface, drew) = encode_ops(Vec::new());
+        assert!(!drew);
+        assert!(surface.scene.encoding().is_empty());
+    }
+
+    #[test]
+    fn state_alone_draws_nothing() {
+        // Setting a colour is not drawing with it. A tick that only changed
+        // state must not tell the renderer the canvas moved.
+        let (surface, drew) = encode_ops(vec![
+            Op::SetFill(Rgba::new(1.0, 0.0, 0.0, 1.0)),
+            Op::SetLineWidth(4.0),
+            Op::Save,
+            Op::Restore,
+        ]);
+        assert!(!drew);
+        assert!(surface.scene.encoding().is_empty());
+    }
+
+    #[test]
+    fn each_way_of_filling_and_stroking_reaches_the_scene() {
+        for (name, ops) in [
+            ("fill_rect", vec![Op::FillRect(0.0, 0.0, 10.0, 10.0)]),
+            ("stroke_rect", vec![Op::StrokeRect(0.0, 0.0, 10.0, 10.0)]),
+            (
+                "fill",
+                vec![
+                    Op::MoveTo(0.0, 0.0),
+                    Op::LineTo(10.0, 0.0),
+                    Op::LineTo(10.0, 10.0),
+                    Op::ClosePath,
+                    Op::Fill,
+                ],
+            ),
+            (
+                "stroke",
+                vec![Op::MoveTo(0.0, 0.0), Op::LineTo(10.0, 10.0), Op::Stroke],
+            ),
+        ] {
+            let (surface, drew) = encode_ops(ops);
+            assert!(drew, "{name} drew nothing");
+            assert_eq!(paths(&surface), 1, "{name}");
+        }
+    }
+
+    #[test]
+    fn every_line_style_encodes() {
+        // The cap and join names map onto kurbo's, and a wrong mapping is
+        // invisible until someone looks at a stroke end.
+        for cap in [LineCap::Butt, LineCap::Round, LineCap::Square] {
+            for join in [LineJoin::Miter, LineJoin::Round, LineJoin::Bevel] {
+                let (surface, drew) = encode_ops(vec![
+                    Op::SetLineCap(cap),
+                    Op::SetLineJoin(join),
+                    Op::SetLineWidth(2.0),
+                    Op::MoveTo(0.0, 0.0),
+                    Op::LineTo(10.0, 10.0),
+                    Op::LineTo(20.0, 0.0),
+                    Op::Stroke,
+                ]);
+                assert!(drew, "{cap:?}/{join:?}");
+                assert_eq!(paths(&surface), 1, "{cap:?}/{join:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn clearing_hands_over_a_fresh_scene_rather_than_copying_one() {
+        let mut surface = Surface::default();
+        let buffers = std::collections::BTreeMap::new();
+        let mut blobs = BlobCache::default();
+
+        encode(
+            &mut surface,
+            vec![Op::FillRect(0.0, 0.0, 10.0, 10.0)],
+            &buffers,
+            &mut blobs,
+            None,
+        );
+        assert_eq!(paths(&surface), 1);
+        let before = std::sync::Arc::as_ptr(&surface.scene);
+
+        // What the render world holding the previous frame looks like.
+        let _published = surface.scene.clone();
+        let drew = encode(&mut surface, vec![Op::Clear], &buffers, &mut blobs, None);
+
+        assert!(drew, "emptying the canvas is a change the renderer sees");
+        assert!(surface.scene.encoding().is_empty());
+        assert_ne!(
+            std::sync::Arc::as_ptr(&surface.scene),
+            before,
+            "a clear swaps the scene out; copying one to discard it is the \
+             cost an animation would pay every frame"
+        );
+    }
+
+    #[test]
+    fn a_resize_sets_the_drawing_space_and_empties_the_canvas() {
+        let (surface, drew) = encode_ops(vec![
+            Op::FillRect(0.0, 0.0, 10.0, 10.0),
+            Op::SetGlobalAlpha(0.25),
+            Op::Resize(64.0, 32.0),
+        ]);
+        assert!(drew);
+        assert_eq!(surface.logical, (64.0, 32.0));
+        assert!(surface.scene.encoding().is_empty());
+        assert_eq!(surface.gfx.state.global_alpha, 1.0);
+    }
+
+    #[test]
+    fn the_transform_places_what_is_drawn_after_it() {
+        // A path is stored in canvas units and placed when it is filled, so
+        // the transform in force at the fill is the one that counts.
+        let (moved, _) = encode_ops(vec![
+            Op::Translate(100.0, 100.0),
+            Op::FillRect(0.0, 0.0, 10.0, 10.0),
+        ]);
+        let (still, _) = encode_ops(vec![Op::FillRect(0.0, 0.0, 10.0, 10.0)]);
+        assert_ne!(
+            moved.scene.encoding().transforms.len() + moved.scene.encoding().path_data.len(),
+            0
+        );
+        assert_eq!(paths(&moved), paths(&still));
+        assert_ne!(
+            moved.scene.encoding().transforms,
+            still.scene.encoding().transforms,
+            "the translate reached the encoded transform"
+        );
+    }
+
+    #[test]
+    fn a_buffer_is_drawn_at_its_own_size_and_stretched() {
+        let mut buffers = std::collections::BTreeMap::new();
+        let mut pixels = PixBuf::new(2, 2);
+        pixels.fill_rect(0, 0, 2, 2, 0xff0000ff);
+        buffers.insert(1, pixels);
+        let mut blobs = BlobCache::default();
+
+        let mut surface = Surface::default();
+        let drew = encode(
+            &mut surface,
+            vec![
+                Op::DrawBuffer {
+                    buffer: 1,
+                    x: 0.0,
+                    y: 0.0,
+                },
+                Op::DrawBufferScaled {
+                    buffer: 1,
+                    x: 4.0,
+                    y: 4.0,
+                    width: 32.0,
+                    height: 32.0,
+                },
+            ],
+            &buffers,
+            &mut blobs,
+            None,
+        );
+        assert!(drew);
+        assert_eq!(
+            surface.scene.encoding().draw_tags.len(),
+            2,
+            "both draws reached the scene"
+        );
+    }
+
+    #[test]
+    fn a_buffer_drawn_under_a_global_alpha_goes_through_a_layer() {
+        let mut buffers = std::collections::BTreeMap::new();
+        buffers.insert(1, PixBuf::new(2, 2));
+        let mut blobs = BlobCache::default();
+
+        let mut surface = Surface::default();
+        encode(
+            &mut surface,
+            vec![
+                Op::SetGlobalAlpha(0.5),
+                Op::DrawBuffer {
+                    buffer: 1,
+                    x: 0.0,
+                    y: 0.0,
+                },
+            ],
+            &buffers,
+            &mut blobs,
+            None,
+        );
+        assert!(surface.scene.encoding().n_clips > 0);
+        assert_eq!(surface.scene.encoding().n_open_clips, 0);
+    }
+
+    #[test]
+    fn a_buffer_that_is_not_there_draws_nothing() {
+        let buffers = std::collections::BTreeMap::new();
+        let mut blobs = BlobCache::default();
+        let mut surface = Surface::default();
+        let drew = encode(
+            &mut surface,
+            vec![
+                Op::DrawBuffer {
+                    buffer: 9,
+                    x: 0.0,
+                    y: 0.0,
+                },
+                Op::DrawBufferScaled {
+                    buffer: 9,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 4.0,
+                    height: 4.0,
+                },
+            ],
+            &buffers,
+            &mut blobs,
+            None,
+        );
+        assert!(!drew, "a stale handle is not a reason to repaint");
+        assert!(surface.scene.encoding().is_empty());
+    }
+
+    #[test]
+    fn a_buffer_with_no_pixels_draws_nothing() {
+        let mut buffers = std::collections::BTreeMap::new();
+        buffers.insert(1, PixBuf::new(0, 0));
+        let mut blobs = BlobCache::default();
+        let mut surface = Surface::default();
+        encode(
+            &mut surface,
+            vec![Op::DrawBuffer {
+                buffer: 1,
+                x: 0.0,
+                y: 0.0,
+            }],
+            &buffers,
+            &mut blobs,
+            None,
+        );
+        assert!(surface.scene.encoding().is_empty());
+    }
+
+    #[test]
+    fn text_needs_a_shaper_and_uses_the_apps_own_fonts() {
+        let buffers = std::collections::BTreeMap::new();
+        let mut blobs = BlobCache::default();
+        let ops = || {
+            vec![
+                Op::SetFont(FontSpec::parse("16px").expect("a size is all it needs")),
+                Op::FillText {
+                    text: "hi".to_string(),
+                    x: 0.0,
+                    y: 12.0,
+                },
+            ]
+        };
+
+        // Without one - a headless app with no text stack - the drawing is
+        // skipped and the rest of the canvas still encodes.
+        let mut bare = Surface::default();
+        let drew = encode(&mut bare, ops(), &buffers, &mut blobs, None);
+        assert!(!drew);
+        assert!(bare.scene.encoding().is_empty());
+
+        // With the app's shaper, the glyphs land.
+        let mut shaper = CosmicShaper::new();
+        let mut surface = Surface::default();
+        let drew = encode(
+            &mut surface,
+            ops(),
+            &buffers,
+            &mut blobs,
+            Some(&mut shaper as &mut dyn TextShaper),
+        );
+        assert!(drew, "the run reached the scene");
+        assert!(
+            !surface.scene.encoding().resources.glyph_runs.is_empty(),
+            "shaped glyphs, not an outline the canvas drew itself"
+        );
+    }
+
+    #[test]
+    fn text_that_shapes_to_nothing_visible_draws_nothing() {
+        // A zero-width space is text the shaper accepts and has no glyph for.
+        let buffers = std::collections::BTreeMap::new();
+        let mut blobs = BlobCache::default();
+        let mut shaper = CosmicShaper::new();
+        let mut surface = Surface::default();
+        encode(
+            &mut surface,
+            vec![
+                Op::SetFont(FontSpec::parse("16px").expect("a size")),
+                Op::FillText {
+                    text: "\u{200b}".to_string(),
+                    x: 0.0,
+                    y: 12.0,
+                },
+            ],
+            &buffers,
+            &mut blobs,
+            Some(&mut shaper as &mut dyn TextShaper),
+        );
+        // Whether it produced an empty run or an empty segment, nothing
+        // visible reached the scene.
+        assert!(surface.scene.encoding().is_empty());
+    }
+
+    #[test]
+    fn text_with_nothing_in_it_draws_nothing() {
+        let buffers = std::collections::BTreeMap::new();
+        let mut blobs = BlobCache::default();
+        let mut shaper = CosmicShaper::new();
+        let mut surface = Surface::default();
+        let drew = encode(
+            &mut surface,
+            vec![Op::FillText {
+                text: String::new(),
+                x: 0.0,
+                y: 0.0,
+            }],
+            &buffers,
+            &mut blobs,
+            Some(&mut shaper as &mut dyn TextShaper),
+        );
+        assert!(!drew);
+    }
 
     #[test]
     fn a_buffers_pixels_upload_once_until_they_change() {
