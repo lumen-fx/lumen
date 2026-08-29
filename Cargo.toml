@@ -563,6 +563,11 @@ proptest = "1.11"
 [profile.dev]
 opt-level = 0
 debug = "line-tables-only"
+# Debug info stays in the per-crate .o/.dwo files instead of being copied
+# into every leaf binary. The engine dylib and each /std module otherwise
+# carry tens of megabytes of DWARF each; debuggers read the split files
+# just as well, and links get faster because the linker stops moving it.
+split-debuginfo = "unpacked"
 
 # panic stays "unwind": lumen's C-ABI exports rely on catch_unwind to
 # convert panics into error codes; abort would kill the host process instead.
