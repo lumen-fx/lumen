@@ -281,6 +281,11 @@ fn the_run_path_accepts_the_tag_the_module_registers() {
 
 /// The frame hook, over a real app: a callback that asks again keeps running,
 /// and one that stops asking parks.
+///
+/// The loop starts from `on_ready`, which is what the documentation tells an
+/// author to do and is a handler the frame drain has to be ordered after: a
+/// request the drain runs past does not arrive late, it lets an idle app park
+/// with the request unread and the animation never starts.
 #[test]
 fn a_frame_loop_advances_and_then_parks() {
     let f = fixtures();
@@ -290,7 +295,7 @@ fn a_frame_loop_advances_and_then_parks() {
         "lumen-canvas = { bundled = true, tags = [\"canvas\"] }\n",
         "<root><canvas id=\"chart\" width=\"64\" height=\"64\" />\
          <script src=\"main.rhai\" /></root>\n",
-        "fn on_start() {\n\
+        "fn on_ready() {\n\
          signals.frames.set(0);\n\
          request_frame();\n\
          }\n\

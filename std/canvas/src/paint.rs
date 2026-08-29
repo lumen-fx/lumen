@@ -60,7 +60,7 @@ pub fn extract_canvases(main: &mut World, render: &mut World) {
                     }),
                     bounds: placed.bounds,
                     order: placed.order,
-                    revision: canvas.revision,
+                    revision: leaf_revision(canvas.revision, placed.opacity),
                     // A canvas draws in its own coordinate space and has no
                     // idea how big its box is, so anything it drew past the
                     // edge is clipped rather than spilling onto a sibling.
@@ -70,6 +70,22 @@ pub fn extract_canvases(main: &mut World, render: &mut World) {
         })
         .collect();
     upsert_native_leaves(render, EXTENSION_ID, leaves);
+}
+
+/// The stamp the seam compares leaves by: equal revision at equal geometry
+/// has to mean equal pixels.
+///
+/// A canvas's own revision moves when it is drawn on, and that is not the
+/// only thing that changes its pixels: the opacity it inherits is folded into
+/// the payload, and an ancestor fading in changes nothing else about the
+/// leaf. Left out, a fade over a canvas that is not being drawn on compares
+/// equal, contributes no damage, and keeps the alpha it had when it last
+/// drew. The two are packed rather than hashed so different pixels can never
+/// land on the same stamp; a canvas would have to be drawn on 2^48 times for
+/// the counter to reach the opacity's bits.
+fn leaf_revision(revision: u64, opacity: f32) -> u64 {
+    let quantized = u64::from((opacity.clamp(0.0, 1.0) * f32::from(u16::MAX)).round() as u16);
+    (revision << 16) | quantized
 }
 
 /// Appends a canvas's scene into the frame.

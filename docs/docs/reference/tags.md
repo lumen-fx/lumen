@@ -368,11 +368,19 @@ lumen-canvas = { bundled = true, tags = ["canvas"] }
 | `width` | px | Drawing width, in canvas units. Defaults to 300. |
 | `height` | px | Drawing height, in canvas units. Defaults to 150. |
 
-`width` and `height` are the drawing space, not the size of the box. They
-say what coordinates a script draws in, and the drawing is then scaled onto
-whatever box the element ends up with, so CSS can resize a canvas without the
-script changing. An element with neither draws in a 300 by 150 space, which
-is what an HTML canvas has always defaulted to.
+`width` and `height` say what coordinates a script draws in. They are also
+the element's default size, and layout is free to give it a different box:
+`flex-grow`, a percentage width, or a min or max size all do. When the box
+differs, the drawing is scaled onto it, so one script draws the same picture
+at any size. An axis with no declaration draws in 300 units across or 150
+down, which is what an HTML canvas has always defaulted to.
+
+Setting `width` in CSS changes the drawing space, because a `width` in CSS
+and a `width` in markup are the same declaration by the time the element
+exists. That is a difference from the HTML canvas, where the attribute is the
+drawing space and CSS scales it. The declaration is read once, when the
+element is first laid out, so a later theme or media change does not resize
+the drawing space under a script that is mid-drawing.
 
 The drawing space is the element's, so a script reads it once the element is
 mounted: `on_ready`, not `on_start`. Drawing from `on_start` works either

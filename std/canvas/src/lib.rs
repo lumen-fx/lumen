@@ -40,10 +40,16 @@
 //! canvas::fill_rect("chart", 10.0, 10.0, 80.0, 40.0);
 //! ```
 //!
-//! `width` and `height` are the drawing space, in canvas units, not the size
-//! of the box. CSS sizes the box, and the drawing is scaled onto it, so one
-//! script draws the same picture at any size. An element with neither gets
-//! 300 by 150, which is what the HTML canvas has always defaulted to.
+//! `width` and `height` are the drawing space, in canvas units. They are also
+//! the element's default size; when layout gives it a different box, the
+//! drawing is scaled onto that box, so one script draws the same picture at
+//! any size. An axis with no declaration gets 300 across or 150 down, which
+//! is what the HTML canvas has always defaulted to.
+//!
+//! A `width` in CSS is the same declaration as a `width` in markup by the
+//! time an element exists, so CSS changes the drawing space rather than
+//! scaling it. That is the one place this parts company with the HTML
+//! canvas.
 //!
 //! A canvas is retained: what a script draws stays until `canvas::clear` (or
 //! a `canvas::resize`, which empties it the same way). Drawing nothing on a

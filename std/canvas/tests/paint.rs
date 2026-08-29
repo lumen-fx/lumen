@@ -239,3 +239,41 @@ fn revision(app: &mut App) -> u64 {
     let mut q = app.world.query::<&Canvas>();
     q.iter(&app.world).map(|c| c.revision).next().unwrap_or(0)
 }
+
+#[test]
+fn a_fade_over_a_canvas_that_is_not_drawing_still_reaches_the_pixels() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(why) = gpu_unavailable_reason() {
+        eprintln!("skipping: {why}");
+        return;
+    }
+
+    // The seam compares native leaves by their stamp, and treats an equal
+    // stamp at equal geometry as equal pixels. A canvas that drew once and
+    // then only fades changes nothing else about its leaf, so an opacity left
+    // out of the stamp is an alpha that never updates again.
+    let mut app = app();
+    spawn_canvas(&mut app, "chart", (16.0, 16.0), (32.0, 32.0), (32.0, 32.0));
+    fill_green("chart", 0.0, 0.0, 32.0, 32.0);
+    let pixels = draw(&mut app);
+    let (_, opaque, _) = pixel(&pixels, 32, 32);
+    assert!(opaque > 200, "the canvas drew: {opaque}");
+
+    // Fade it, and draw nothing at all.
+    let entity = {
+        let mut q = app.world.query::<(bevy_ecs::prelude::Entity, &LumenTag)>();
+        q.iter(&app.world)
+            .map(|(e, _)| e)
+            .next()
+            .expect("the canvas element")
+    };
+    app.world.entity_mut(entity).insert(Opacity(0.5));
+    app.tick();
+    app.tick();
+
+    let (_, faded, _) = pixel(&read_back(&app), 32, 32);
+    assert!(
+        faded < opaque - 40,
+        "the fade reached the pixels: {faded} against {opaque}"
+    );
+}

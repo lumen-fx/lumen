@@ -113,6 +113,10 @@ pub struct CanvasStore {
     pub caps: Caps,
     /// How the module wakes a parked event loop after a call that drew.
     pub waker: Option<EventLoopWaker>,
+    /// Whether the loop has already been woken since the last encode. A
+    /// handler that records ten thousand calls needs one wake, not ten
+    /// thousand: the tick it asks for is the same tick either way.
+    woken: bool,
     /// Ids already reported as unmatched, so a call in a loop says it once.
     pub reported: BTreeSet<String>,
     /// Ids an element has been adopted for. Read to tell a canvas waiting
@@ -142,15 +146,45 @@ impl CanvasStore {
         self.wake();
     }
 
-    /// Wake a parked event loop so the tick that encodes runs.
-    pub fn wake(&self) {
+    /// Wake a parked event loop so the tick that encodes runs, once per tick.
+    ///
+    /// The waker is a cross-thread proxy on every backend that has one, so a
+    /// drawing loop calling it per operation would spend more time waking the
+    /// loop than drawing. One wake schedules the tick that drains everything
+    /// recorded since the last one.
+    pub fn wake(&mut self) {
+        if self.woken {
+            return;
+        }
         if let Some(waker) = self.waker.as_ref() {
             waker.wake();
+            self.woken = true;
         }
     }
 
-    /// Issue a buffer, or say why not.
+    /// Let the next recorded call wake the loop again. Called once per tick
+    /// by the encode, which is the tick the previous wake asked for.
+    pub fn rearm_wake(&mut self) {
+        self.woken = false;
+    }
+
+    /// Issue a transparent buffer, or say why not.
     pub fn new_buffer(&mut self, width: u32, height: u32) -> Result<u32, String> {
+        self.admit(width, height)?;
+        Ok(self.insert(PixBuf::new(width, height)))
+    }
+
+    /// Take a buffer whose pixels already exist, or say why not. What
+    /// `buffer_load_png` uses: allocating a transparent buffer first and
+    /// overwriting it would hold two of them at once, and at the cap that is
+    /// twice the largest image the app allows.
+    pub fn adopt_buffer(&mut self, buffer: PixBuf) -> Result<u32, String> {
+        self.admit(buffer.width(), buffer.height())?;
+        Ok(self.insert(buffer))
+    }
+
+    /// Whether one more buffer of this size is allowed.
+    fn admit(&self, width: u32, height: u32) -> Result<(), String> {
         if width == 0 || height == 0 {
             return Err(format!("a {width}x{height} buffer holds no pixels"));
         }
@@ -168,20 +202,41 @@ impl CanvasStore {
                 self.caps.buffer_count
             ));
         }
-        self.next_buffer += 1;
-        let handle = self.next_buffer;
-        self.buffers.insert(handle, PixBuf::new(width, height));
-        Ok(handle)
+        Ok(())
     }
 
-    /// Report an id nothing answers for, once per id.
+    /// File a buffer under a fresh handle. Handles are never reused, so a
+    /// script holding a stale one never reaches another script's pixels.
+    fn insert(&mut self, buffer: PixBuf) -> u32 {
+        self.next_buffer += 1;
+        let handle = self.next_buffer;
+        self.buffers.insert(handle, buffer);
+        handle
+    }
+
+    /// Forget a canvas: its recorded calls, its encoded scene, and the fact
+    /// that an element ever answered for it.
+    ///
+    /// Called when the element goes away. A `<for>` block whose rows carry
+    /// distinct canvas ids would otherwise leave a retained scene behind for
+    /// every row it ever spawned.
+    pub fn retire(&mut self, id: &str) {
+        self.surfaces.remove(id);
+        self.answered.remove(id);
+        self.reported.remove(id);
+    }
+
+    /// Report an id nothing answers for, once per id. Returns whether this
+    /// call was the one that reported it.
     ///
     /// Once, because the call that produced it is usually in a draw loop and
     /// a line per frame buries every other message the app prints.
-    pub fn report_once(&mut self, id: &str, message: &str) {
-        if self.reported.insert(id.to_string()) {
+    pub fn report_once(&mut self, id: &str, message: &str) -> bool {
+        let first = self.reported.insert(id.to_string());
+        if first {
             lumen_module::lumen_core::warn_line!("lumen-canvas: {message}");
         }
+        first
     }
 }
 
@@ -199,6 +254,14 @@ pub fn store() -> MutexGuard<'static, CanvasStore> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
+/// Whether an id has already been reported. What the once-per-id rule is
+/// decided by, exposed so a test can hold it to that rather than to the
+/// stderr line it produces.
+#[must_use]
+pub fn was_reported(id: &str) -> bool {
+    store().reported.contains(id)
+}
+
 /// Drop every surface and buffer. Tests that drive several apps in one
 /// process call it between them; nothing in a running app does.
 pub fn reset() {
@@ -208,4 +271,103 @@ pub fn reset() {
         caps,
         ..CanvasStore::default()
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The store is process-global, so these run one at a time.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn an_id_is_reported_once_however_often_it_comes_up() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        reset();
+        let mut store = store();
+        assert!(store.report_once("once-test", "first"));
+        for _ in 0..100 {
+            assert!(
+                !store.report_once("once-test", "again"),
+                "a draw loop must not print a line a frame"
+            );
+        }
+        assert!(store.report_once("once-test-other", "a different id still speaks"));
+    }
+
+    #[test]
+    fn retiring_a_canvas_forgets_everything_about_it() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        reset();
+        let mut store = store();
+        store.record("gone", Op::Clear);
+        store.answered.insert("gone".to_string());
+        store.report_once("gone", "reported");
+
+        store.retire("gone");
+        assert!(!store.surfaces.contains_key("gone"));
+        assert!(!store.answered.contains("gone"));
+        assert!(
+            !store.reported.contains("gone"),
+            "an id reported and then retired speaks again if it comes back"
+        );
+    }
+
+    #[test]
+    fn the_loop_is_woken_once_per_tick() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        reset();
+        let woken = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&woken);
+        let mut store = store();
+        store.waker = Some(EventLoopWaker(std::sync::Arc::new(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })));
+
+        for _ in 0..1000 {
+            store.record("chart", Op::Fill);
+        }
+        assert_eq!(
+            woken.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a thousand drawing calls ask for one tick, not a thousand"
+        );
+
+        // The encode is that tick; after it, the next call asks again.
+        store.rearm_wake();
+        store.record("chart", Op::Fill);
+        assert_eq!(woken.load(std::sync::atomic::Ordering::SeqCst), 2);
+        store.waker = None;
+    }
+
+    #[test]
+    fn a_loaded_buffer_is_taken_without_a_second_allocation() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        reset();
+        let mut store = store();
+        let mut pixels = PixBuf::new(2, 2);
+        pixels.set_pixel(0, 0, 0xff0000ff);
+        let handle = store.adopt_buffer(pixels).expect("adopted");
+        assert_eq!(
+            store.buffers[&handle].get_pixel(0, 0),
+            0xff0000ff,
+            "the pixels that were handed over are the ones filed"
+        );
+    }
+
+    #[test]
+    fn adopting_answers_to_the_same_caps_as_creating() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        reset();
+        let mut store = store();
+        store.caps = Caps {
+            buffer_pixels: 4,
+            ..Caps::default()
+        };
+        let err = store
+            .adopt_buffer(PixBuf::new(4, 4))
+            .expect_err("over the cap");
+        assert!(err.contains("over the"), "{err}");
+        store.caps = Caps::default();
+    }
 }

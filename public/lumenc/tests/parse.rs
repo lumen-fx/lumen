@@ -100,12 +100,28 @@ fn a_declared_tag_parses_once_its_dependency_is_registered() {
 #[test]
 fn no_module_can_claim_a_tag_the_language_owns() {
     // The refusal list and the parser's own table are spelled in different
-    // crates; this is what keeps them from drifting apart.
+    // crates; this is what keeps them from drifting apart, in both
+    // directions. A tag added to the parser and not to the list is a tag a
+    // module can quietly reinterpret; a tag removed from the parser and left
+    // on the list is a name refused for no reason anyone can find.
+    //
+    // The four names the list carries beyond the tag table are the parser's
+    // own structural elements, which are handled before the table is
+    // consulted and are just as much the language's.
+    const STRUCTURAL: &[&str] = &["menubar", "script", "slot", "template"];
+
     for tag in lumenc::parser_html::KNOWN_TAGS {
         assert!(
             lumen_modules::RESERVED_TAGS.contains(tag),
             "built-in tag '{tag}' is missing from lumen_modules::RESERVED_TAGS, so a module \
              could declare it"
+        );
+    }
+    for tag in lumen_modules::RESERVED_TAGS {
+        assert!(
+            lumenc::parser_html::KNOWN_TAGS.contains(tag) || STRUCTURAL.contains(tag),
+            "'{tag}' is refused to modules but is not a tag the language has; drop it from \
+             lumen_modules::RESERVED_TAGS"
         );
     }
 }
