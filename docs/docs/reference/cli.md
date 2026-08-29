@@ -325,10 +325,12 @@ the shared engine.
 The candela standard library travels in a `libs/` subfolder of the package,
 whatever the kind and whatever links the engine: scripts read it off disk as
 they compile, so a package without it fails every `import "std/..."` and every
-array method at startup. It comes from the same place the rest of the toolchain
-files do - the directory beside `lumenc`, `--lib-dir`, or the release archive
-for a `--target` - and a directory holding no `libs/` warns and packages
-without it, since an app importing nothing from the library needs none of it.
+array method at startup. It comes from wherever that package's engine came
+from. A Rust app takes the copy its own cargo build staged, beside the engine
+library that build produced. Every other kind takes the toolchain's, from the
+directory beside `lumenc`, from `--lib-dir`, or from the release archive for a
+`--target`. A source holding no `libs/` warns and packages without it, since an
+app importing nothing from the library needs none of it.
 
 `--static` writes the same folder with one executable in it: no runtime
 library, no shared engine, no `libstd`, and no `modules/`, because all of that
