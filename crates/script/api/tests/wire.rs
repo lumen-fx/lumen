@@ -402,6 +402,7 @@ fn command_samples() -> Vec<(&'static str, ScriptCommand)> {
             "QueryAutostart",
             ScriptCommand::QueryAutostart { tag: s("g") },
         ),
+        ("RequestFrame", ScriptCommand::RequestFrame),
     ]
 }
 
@@ -549,6 +550,7 @@ const COMMAND_GOLDEN: &[(&str, &str)] = &[
     ("ClearRecentFiles", "36000000"),
     ("SetAutostart", "3700000001"),
     ("QueryAutostart", "38000000010000000000000067"),
+    ("RequestFrame", "39000000"),
 ];
 
 const VALUE_GOLDEN: &[(&str, &str)] = &[
