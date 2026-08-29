@@ -35,6 +35,7 @@
 //! Finding a prebuilt file that ships with the toolchain lives here too, so a
 //! web build and a package look in the same places for the same reasons.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -55,6 +56,17 @@ const FOOTER_MAGIC: &[u8; 8] = b"LMNAPACK";
 /// Name of the launcher stub as the release channel and a workspace build
 /// both produce it.
 const STUB_STEM: &str = "lumen-launcher";
+
+/// Directory holding the script standard library, both where the toolchain
+/// stages it beside its own binaries and where a packaged app reads it.
+///
+/// candela resolves `import "std/..."` - and the array methods it pulls in
+/// whether a program imports anything or not - against this directory beside
+/// the running executable. Under `lumenc run` that executable is `lumenc`, and
+/// in a package it is the app, so the tree has to travel or every std import
+/// in a shipped app fails to compile at startup. The release archives and the
+/// Windows installer stage it under the same name for the same reason.
+const SCRIPT_LIBRARY_DIR: &str = "libs";
 
 /// The prebuilt wasm runtime a web build serves, and the module that
 /// instantiates it, under the names the release channel and a workspace build
@@ -614,9 +626,11 @@ fn static_refusal(kind: AppKind, target: Target, cfg: &crate::LumenToml) -> Opti
 /// Compile the app and link it into one executable from the link kit for this
 /// platform. Returns the one-line summary to print.
 ///
-/// Nothing travels beside the executable: the engine, the launcher, and the
-/// declared modules are inside it, so none of the shared-library staging the
-/// folder shape does applies here.
+/// No shared library travels beside the executable: the engine, the launcher,
+/// and the declared modules are inside it, so none of the library staging the
+/// folder shape does applies here. The script standard library still does -
+/// the compiler linked into the executable reads it off disk, and linking
+/// changes nothing about that.
 fn package_static(
     src: &Path,
     out: &Path,
@@ -631,6 +645,9 @@ fn package_static(
     std::fs::create_dir_all(out).map_err(|e| format!("create {}: {e}", out.display()))?;
     let exe_path = out.join(target.exe_name(app_name));
     let modules = crate::link_kit::link_app(&exe_path, &artifact, target, lib_dir, deps)?;
+    // `--static` is this machine's own platform, so the installation's own
+    // directories are the ones holding the library.
+    stage_script_library(&search_dirs(lib_dir, true), out)?;
 
     let copied = copy_app_files(src, out, CopyRules::markup())?;
     copy_generated_outputs(src, out)?;
@@ -709,13 +726,20 @@ fn package_sdk(
     let exe_path = out.join(target.exe_name(app_name));
     copy_executable(&built, &exe_path)?;
 
-    let carried = if kind == AppKind::Rust {
-        copy_linked_engine(&built, out, target)?
+    // A Rust app's engine comes out of its own cargo build, so the standard
+    // library that build staged is the one that belongs beside it; the other
+    // two open the toolchain's engine and take the toolchain's copy.
+    let (carried, library_dirs) = if kind == AppKind::Rust {
+        (copy_linked_engine(&built, out, target)?, build_dirs(&built))
     } else {
         let toolchain = locate_toolchain(target, lib_dir)?;
         copy_c_engine(out, target, &toolchain)?;
-        1 + copy_dynamic_runtime(out, target, &toolchain, deps)?
+        (
+            1 + copy_dynamic_runtime(out, target, &toolchain, deps)?,
+            vec![toolchain.dir],
+        )
     };
+    stage_script_library(&library_dirs, out)?;
 
     let modules = stage_modules(src, out, target, lib_dir, deps)?;
 
@@ -779,11 +803,21 @@ fn copy_linked_engine(built: &Path, out: &Path, target: Target) -> Result<usize,
 /// beside it for an ordinary binary, one level up for an example, which cargo
 /// writes into a subdirectory of the same profile.
 fn linked_engine_beside(built: &Path, engine: &str) -> Option<PathBuf> {
+    build_dirs(built)
+        .into_iter()
+        .map(|dir| dir.join(engine))
+        .find(|p| p.is_file())
+}
+
+/// The directories a cargo build leaves its companions in, relative to the
+/// executable it produced: the profile directory itself, and the one above it
+/// for an example, which cargo writes into a subdirectory of that profile.
+fn build_dirs(built: &Path) -> Vec<PathBuf> {
     [built.parent(), built.parent().and_then(Path::parent)]
         .into_iter()
         .flatten()
-        .map(|dir| dir.join(engine))
-        .find(|p| p.is_file())
+        .map(Path::to_path_buf)
+        .collect()
 }
 
 /// Copy the shared C library an app opens at run time, from the toolchain.
@@ -877,6 +911,62 @@ fn copy_dynamic_runtime(
         }
     }
     Ok(carried)
+}
+
+/// Copy the script standard library into the package, from the first of
+/// `dirs` that holds one.
+///
+/// It travels whole rather than as a file list: the C-backed modules sit in
+/// subdirectories under the names their `dylib` blocks record, so the shape of
+/// the tree is what its contents are found by. It travels whatever links the
+/// engine, too - a static executable and a folder of shared libraries both
+/// carry the compiler that reads it.
+///
+/// A directory set without one is a hand-assembled `--lib-dir`, or a release
+/// older than the tree, rather than an installation. That reports instead of
+/// failing: an app whose scripts import nothing from the library ships
+/// complete without it.
+///
+/// An empty tree counts as none. The download cache makes the root of every
+/// subtree it was asked for, so a release that carried no library leaves one
+/// behind, and a directory with nothing in it has nothing to copy either way.
+fn stage_script_library(dirs: &[PathBuf], out: &Path) -> Result<(), String> {
+    let Some(from) = dirs
+        .iter()
+        .map(|dir| dir.join(SCRIPT_LIBRARY_DIR))
+        .find(|tree| holds_something(tree))
+    else {
+        eprintln!(
+            "lumenc package: warning: no {SCRIPT_LIBRARY_DIR}/ in {}, so the script standard \
+             library does not travel and `import \"std/...\"` will not resolve in the package",
+            searched(dirs)
+        );
+        return Ok(());
+    };
+    copy_tree(&from, &out.join(SCRIPT_LIBRARY_DIR))
+}
+
+/// Whether `dir` is a directory holding at least one entry.
+fn holds_something(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_some())
+}
+
+/// Copy a directory whole, making what it needs on the way.
+fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(to).map_err(|e| format!("create {}: {e}", to.display()))?;
+    let entries = std::fs::read_dir(from).map_err(|e| format!("read {}: {e}", from.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("read {}: {e}", from.display()))?;
+        let source = entry.path();
+        let dest = to.join(entry.file_name());
+        if source.is_dir() {
+            copy_tree(&source, &dest)?;
+        } else {
+            std::fs::copy(&source, &dest)
+                .map_err(|e| format!("copy {} -> {}: {e}", source.display(), dest.display()))?;
+        }
+    }
+    Ok(())
 }
 
 /// Stage the app's declared runtime modules into `<out>/modules/`, each
@@ -1439,6 +1529,7 @@ fn package(
 
     copy_c_engine(out, target, &toolchain)?;
     copy_dynamic_runtime(out, target, &toolchain, deps)?;
+    stage_script_library(std::slice::from_ref(&toolchain.dir), out)?;
     let modules = stage_modules(src, out, target, lib_dir, deps)?;
 
     let copied = copy_app_files(src, out, CopyRules::markup())?;
@@ -1520,14 +1611,24 @@ fn locate_toolchain(target: Target, lib_dir: Option<&Path>) -> Result<Toolchain,
     if target != Target::host() {
         let (version, dir) = component_cache(target.name)
             .map_err(|why| cannot_fetch(&wanted, Some(target.name), &dirs, &why))?;
-        if first_dir_with(std::slice::from_ref(&dir), &wanted).is_none() {
+        // The script standard library is part of what a package takes from
+        // here, so a cache an older lumenc filled without it is as incomplete
+        // as an empty one. A fetch always leaves the tree's root behind, so a
+        // release that carries no library answers from the cache rather than
+        // being downloaded again for every package.
+        if first_dir_with(std::slice::from_ref(&dir), &wanted).is_none()
+            || !dir.join(SCRIPT_LIBRARY_DIR).is_dir()
+        {
             fetch_release_files(
                 &version,
                 &target.archive_name(),
-                &wanted,
-                &dynamic_runtime_patterns(target),
+                &Members {
+                    wanted: &wanted,
+                    optional: &dynamic_runtime_patterns(target),
+                    trees: &[SCRIPT_LIBRARY_DIR],
+                    layout: Unpack::Flat,
+                },
                 &dir,
-                Unpack::Flat,
                 &format!(
                     "A release older than app packaging ships no launcher; build the {} files \
                      yourself and pass --lib-dir instead.",
@@ -1598,10 +1699,8 @@ pub fn locate_web_runtime(lib_dir_flag: Option<&Path>) -> Result<WebRuntimeFiles
         fetch_release_files(
             &version,
             WEB_ARCHIVE,
-            &wanted,
-            &[],
+            &Members::flat(&wanted),
             &dir,
-            Unpack::Flat,
             "A release older than the web target ships no web runtime; build it yourself \
              and pass --lib-dir instead.",
         )?;
@@ -2022,25 +2121,17 @@ fn holds(dir: &Path, inner: &Path) -> bool {
 // ============================================================
 
 /// Download the `archive` published with release `version`, check it against
-/// the checksums published beside it, and put the `wanted` members of it in
+/// the checksums published beside it, and put the members `want` names in
 /// `dest`. `hint` closes the message when the release does not carry them, and
 /// says how to supply them by hand instead.
 ///
-/// `optional` names members taken along when the archive carries them and
-/// passed over silently when it does not (patterns, see [`name_matches`]):
-/// the launcher's shared-runtime companions, which a release older than the
-/// dynamic engine never published and whose static `liblumen` never needs.
-///
 /// `version` is a release that exists, resolved by [`release::resolve`]. It is
 /// never this binary's own version, which says nothing about what is published.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn fetch_release_files(
     version: &str,
     archive: &str,
-    wanted: &[String],
-    optional: &[String],
+    want: &Members<'_>,
     dest: &Path,
-    layout: Unpack,
     hint: &str,
 ) -> Result<(), String> {
     let base = release::asset_base(version);
@@ -2053,12 +2144,42 @@ pub(crate) fn fetch_release_files(
     let bytes =
         http_get(&archive_url).map_err(|e| format!("cannot download {archive_url}: {e}"))?;
 
-    install_release_files(
-        version, archive, &sums, &bytes, wanted, optional, dest, layout, hint,
-    )
+    install_release_files(version, archive, &sums, &bytes, want, dest, hint)
 }
 
-/// Where an archive's members land under the destination directory.
+/// What a release archive is read for: which of its members are taken, and
+/// where each one lands under the destination.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Members<'a> {
+    /// File-name patterns (see [`name_matches`]) the archive has to carry. A
+    /// pattern nothing answers fails the install.
+    pub(crate) wanted: &'a [String],
+    /// File-name patterns taken along when the archive carries them and passed
+    /// over in silence when it does not: the launcher's shared-runtime
+    /// companions, which a release older than the dynamic engine never
+    /// published and whose static `liblumen` never needs.
+    pub(crate) optional: &'a [String],
+    /// Directory names whose whole subtree is taken, each landing at
+    /// `<dest>/<name>` with the paths below it kept. A file list cannot stand
+    /// in for one: what the tree holds is found by its shape.
+    pub(crate) trees: &'a [&'a str],
+    /// Where the file-name matches land.
+    pub(crate) layout: Unpack,
+}
+
+impl<'a> Members<'a> {
+    /// Take `wanted` by file name, flattened, and nothing else.
+    pub(crate) fn flat(wanted: &'a [String]) -> Self {
+        Self {
+            wanted,
+            optional: &[],
+            trees: &[],
+            layout: Unpack::Flat,
+        }
+    }
+}
+
+/// Where an archive's file members land under the destination directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Unpack {
     /// By file name, with the archive's directories ignored. The toolchain
@@ -2121,10 +2242,13 @@ fn fetch_modules_archive(
         &archive,
         &sums,
         &bytes,
-        &[],
-        &[EVERY_MEMBER.to_string()],
+        &Members {
+            wanted: &[],
+            optional: &[EVERY_MEMBER.to_string()],
+            trees: &[],
+            layout: Unpack::Flat,
+        },
         dest,
-        Unpack::Flat,
         "Pass --lib-dir at a directory holding the module libraries instead.",
     )
 }
@@ -2187,44 +2311,47 @@ fn no_checksums(version: &str, status: u16) -> String {
 }
 
 /// Everything after the download: check `bytes` against the checksum published
-/// for `archive`, then write the `wanted` (and any present `optional`)
-/// members out into `dest`.
+/// for `archive`, then write the members `want` names out into `dest`.
 ///
 /// Split from the download so the verification and the unpacking are the same
 /// code whether the bytes arrived over the network or from a test.
-#[allow(clippy::too_many_arguments)]
 fn install_release_files(
     version: &str,
     archive: &str,
     sums: &str,
     bytes: &[u8],
-    wanted: &[String],
-    optional: &[String],
+    want: &Members<'_>,
     dest: &Path,
-    layout: Unpack,
     hint: &str,
 ) -> Result<(), String> {
-    let want = checksum_for(sums, archive).ok_or_else(|| {
+    let published = checksum_for(sums, archive).ok_or_else(|| {
         format!(
             "the v{version} release publishes no checksum for {archive}, so it cannot be \
              verified. {hint}"
         )
     })?;
-    if sha256(bytes) != want {
+    if sha256(bytes) != published {
         return Err(format!(
             "{archive} does not match the checksum published with the release; \
              nothing was installed"
         ));
     }
 
-    let patterns: Vec<String> = wanted.iter().chain(optional).cloned().collect();
     std::fs::create_dir_all(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
     let found = if archive.ends_with(".zip") {
-        extract_zip(bytes, &patterns, dest, layout)?
+        extract_zip(bytes, want, dest)?
     } else {
-        extract_tar_gz(bytes, &patterns, dest, layout)?
+        extract_tar_gz(bytes, want, dest)?
     };
-    for name in wanted {
+    // Every asked-for subtree gets its root whether or not the archive carried
+    // one, so the destination records the ask. A release older than the tree
+    // is then answered from what is already there instead of being downloaded
+    // again on every package.
+    for tree in want.trees {
+        let root = dest.join(tree);
+        std::fs::create_dir_all(&root).map_err(|e| format!("create {}: {e}", root.display()))?;
+    }
+    for name in want.wanted {
         if !found.contains(name) {
             return Err(format!("{archive} carries no {name}. {hint}"));
         }
@@ -2281,14 +2408,11 @@ fn http_get(url: &str) -> Result<Vec<u8>, HttpError> {
     Ok(bytes)
 }
 
-/// Write out the named members of a `.tar.gz`. Returns the file names that
-/// answered, which is what the caller checks its `wanted` list against.
-fn extract_tar_gz(
-    bytes: &[u8],
-    wanted: &[String],
-    dest: &Path,
-    layout: Unpack,
-) -> Result<Vec<String>, String> {
+/// Write out the members of a `.tar.gz` that `want` names. Returns the file
+/// names that answered, which is what the caller checks its `wanted` list
+/// against; a subtree answers for no name, since nothing asks the archive for
+/// one file of it.
+fn extract_tar_gz(bytes: &[u8], want: &Members<'_>, dest: &Path) -> Result<Vec<String>, String> {
     let mut found = Vec::new();
     let decoder = flate2::read::GzDecoder::new(bytes);
     let mut archive = tar::Archive::new(decoder);
@@ -2301,36 +2425,27 @@ fn extract_tar_gz(
             .path()
             .map_err(|e| format!("cannot read the release archive: {e}"))?
             .into_owned();
-        let Some(name) = file_name_of(&path) else {
+        let Some((out, name)) = destination_of(dest, &path, want) else {
             continue;
         };
-        if !wanted.iter().any(|pattern| name_matches(pattern, &name)) {
-            continue;
-        }
-        let Some(out) = member_path(dest, &path, &name, layout) else {
-            continue;
-        };
-        if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("create {}: {e}", parent.display()))?;
-        }
+        make_parent(&out)?;
         entry
             .unpack(&out)
             .map_err(|e| format!("write {}: {e}", out.display()))?;
-        set_executable(&out)?;
-        found.push(name);
+        if name.is_some() {
+            // A member asked for by name is a program or a library, and an
+            // archive can carry it without the bit that runs it. A subtree
+            // keeps the modes it was packed with.
+            set_executable(&out)?;
+        }
+        found.extend(name);
     }
     Ok(found)
 }
 
-/// Write out the named members of a `.zip`. Returns the file names that
-/// answered, as [`extract_tar_gz`] does.
-fn extract_zip(
-    bytes: &[u8],
-    wanted: &[String],
-    dest: &Path,
-    layout: Unpack,
-) -> Result<Vec<String>, String> {
+/// Write out the members of a `.zip` that `want` names, as [`extract_tar_gz`]
+/// does.
+fn extract_zip(bytes: &[u8], want: &Members<'_>, dest: &Path) -> Result<Vec<String>, String> {
     let mut found = Vec::new();
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
         .map_err(|e| format!("cannot read the release archive: {e}"))?;
@@ -2341,26 +2456,85 @@ fn extract_zip(
         let Some(path) = member.enclosed_name() else {
             continue;
         };
-        let Some(name) = file_name_of(&path) else {
+        let Some((out, name)) = destination_of(dest, &path, want) else {
             continue;
         };
-        if !wanted.iter().any(|pattern| name_matches(pattern, &name)) {
+        if member.is_dir() {
+            std::fs::create_dir_all(&out).map_err(|e| format!("create {}: {e}", out.display()))?;
             continue;
         }
-        let Some(out) = member_path(dest, &path, &name, layout) else {
-            continue;
-        };
-        if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("create {}: {e}", parent.display()))?;
-        }
+        make_parent(&out)?;
         let mut file =
             std::fs::File::create(&out).map_err(|e| format!("write {}: {e}", out.display()))?;
         std::io::copy(&mut member, &mut file)
             .map_err(|e| format!("write {}: {e}", out.display()))?;
-        found.push(name);
+        found.extend(name);
     }
     Ok(found)
+}
+
+/// Make the directory an extracted member is written into.
+fn make_parent(out: &Path) -> Result<(), String> {
+    let Some(parent) = out.parent() else {
+        return Ok(());
+    };
+    std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))
+}
+
+/// Where the archive member at `path` is written, with its file name when it
+/// answered a name pattern, or `None` when `want` asks for none of it.
+///
+/// A subtree wins over a name: a member inside one belongs at its place in the
+/// tree whatever it is called, and reporting its name would let a directory
+/// stand in for a file the caller asked the archive to carry.
+fn destination_of(
+    dest: &Path,
+    path: &Path,
+    want: &Members<'_>,
+) -> Option<(PathBuf, Option<String>)> {
+    if let Some(out) = tree_path(dest, path, want.trees) {
+        return Some((out, None));
+    }
+    let name = file_name_of(path)?;
+    let matched = want
+        .wanted
+        .iter()
+        .chain(want.optional)
+        .any(|pattern| name_matches(pattern, &name));
+    if !matched {
+        return None;
+    }
+    let out = member_path(dest, path, &name, want.layout)?;
+    Some((out, Some(name)))
+}
+
+/// Where a member of one of `trees` is written: under `<dest>/<tree>` at the
+/// path it carries below that directory. `None` when the member sits in none
+/// of them, or when its path would leave `dest`.
+fn tree_path(dest: &Path, path: &Path, trees: &[&str]) -> Option<PathBuf> {
+    use std::path::Component;
+
+    let mut parts = path.components();
+    let tree = loop {
+        match parts.next()? {
+            Component::Normal(part) => {
+                if let Some(tree) = trees.iter().find(|tree| part == OsStr::new(tree)) {
+                    break *tree;
+                }
+            }
+            Component::CurDir => {}
+            _ => return None,
+        }
+    };
+    let mut out = dest.join(tree);
+    for part in parts {
+        match part {
+            Component::Normal(part) => out.push(part),
+            Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    Some(out)
 }
 
 /// Where one archive member is written, or `None` for a path that would leave
@@ -2456,10 +2630,13 @@ mod tests {
             &archive,
             &sums_line(&archive, &bytes),
             &bytes,
-            &[],
-            &[EVERY_MEMBER.to_string()],
+            &Members {
+                wanted: &[],
+                optional: &[EVERY_MEMBER.to_string()],
+                trees: &[],
+                layout: Unpack::Flat,
+            },
             &tmp,
-            Unpack::Flat,
             "HINT",
         )
         .expect("the checksum matches, so every member installs");
@@ -2639,7 +2816,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("lumen-web-archive-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).expect("mkdir");
         let wanted = [WEB_WASM.to_string(), WEB_JS.to_string()];
-        let found = extract_tar_gz(&bytes, &wanted, &tmp, Unpack::Flat).expect("unpack");
+        let found = extract_tar_gz(&bytes, &Members::flat(&wanted), &tmp).expect("unpack");
 
         assert!(found.contains(&WEB_WASM.to_string()));
         assert!(found.contains(&WEB_JS.to_string()));
@@ -2668,8 +2845,17 @@ mod tests {
 
         let tmp = std::env::temp_dir().join(format!("lumen-kit-tree-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        let found = extract_tar_gz(&bytes, &[EVERY_MEMBER.to_string()], &tmp, Unpack::Tree)
-            .expect("unpack");
+        let found = extract_tar_gz(
+            &bytes,
+            &Members {
+                wanted: &[],
+                optional: &[EVERY_MEMBER.to_string()],
+                trees: &[],
+                layout: Unpack::Tree,
+            },
+            &tmp,
+        )
+        .expect("unpack");
 
         assert_eq!(found.len(), 3, "{found:?}");
         assert_eq!(
@@ -2682,6 +2868,152 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The toolchain archive carries the script standard library as a
+    /// directory under `bin/`, and a package for another platform needs it
+    /// whole: a C-backed module is found by the subdirectory it sits in, which
+    /// no list of file names can stand in for. The compiler's own directory
+    /// beside it is not asked for and stays in the archive.
+    ///
+    /// Both archive shapes are checked, because the Windows leg publishes a
+    /// `.zip` and every other one a `.tar.gz`.
+    #[test]
+    fn the_toolchain_archive_gives_up_its_script_library_tree() {
+        let members: [(&str, &[u8]); 5] = [
+            ("bin/lumen-launcher", b"stub"),
+            ("bin/liblumen.so", b"library"),
+            ("bin/libs/std/list.cdl", b"fn sum() {}"),
+            ("bin/libs/std_src/time/time.so", b"a shared library"),
+            ("bin/templates/counter/lumen.toml", b"the compiler's own"),
+        ];
+        let tarball = tar_gz(&members);
+        let zipped = zip_of(&members);
+
+        for (archive, bytes) in [
+            ("lumen-linux-x86_64.tar.gz", tarball),
+            ("lumen-windows-x86_64.zip", zipped),
+        ] {
+            let tmp = std::env::temp_dir().join(format!(
+                "lumen-libs-{}-{}",
+                std::process::id(),
+                archive.replace('.', "-")
+            ));
+            let _ = std::fs::remove_dir_all(&tmp);
+            let wanted = ["lumen-launcher".to_string(), "liblumen.so".to_string()];
+            install_release_files(
+                "0.0.9",
+                archive,
+                &sums_line(archive, &bytes),
+                &bytes,
+                &Members {
+                    wanted: &wanted,
+                    optional: &[],
+                    trees: &[SCRIPT_LIBRARY_DIR],
+                    layout: Unpack::Flat,
+                },
+                &tmp,
+                "HINT",
+            )
+            .expect("the checksum matches, so the members install");
+
+            let library = tmp.join(SCRIPT_LIBRARY_DIR);
+            assert_eq!(
+                std::fs::read(library.join("std").join("list.cdl")).expect("read"),
+                b"fn sum() {}",
+                "{archive}: a text module lands under the tree"
+            );
+            assert_eq!(
+                std::fs::read(library.join("std_src").join("time").join("time.so")).expect("read"),
+                b"a shared library",
+                "{archive}: a C-backed module keeps the directory it is found in"
+            );
+            assert!(
+                !tmp.join("templates").exists(),
+                "{archive}: only the tree that was asked for travels"
+            );
+            assert_eq!(
+                std::fs::read(tmp.join("lumen-launcher")).expect("read"),
+                b"stub",
+                "{archive}: the flat members still land by name"
+            );
+
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+    }
+
+    /// A release older than the script standard library carries no tree, and
+    /// the cache has to record that: the root is left behind so the next
+    /// package reads the answer instead of downloading the archive again, and
+    /// an empty tree is not staged into anything.
+    #[test]
+    fn a_release_without_the_library_is_not_downloaded_again_for_it() {
+        let archive = "lumen-linux-x86_64.tar.gz";
+        let bytes = tar_gz(&[
+            ("bin/lumen-launcher", b"stub".as_slice()),
+            ("bin/liblumen.so", b"library"),
+        ]);
+
+        let tmp = std::env::temp_dir().join(format!("lumen-nolibs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let wanted = ["lumen-launcher".to_string(), "liblumen.so".to_string()];
+        install_release_files(
+            "0.0.5",
+            archive,
+            &sums_line(archive, &bytes),
+            &bytes,
+            &Members {
+                wanted: &wanted,
+                optional: &[],
+                trees: &[SCRIPT_LIBRARY_DIR],
+                layout: Unpack::Flat,
+            },
+            &tmp,
+            "HINT",
+        )
+        .expect("the two files the archive does carry install");
+
+        assert!(
+            tmp.join(SCRIPT_LIBRARY_DIR).is_dir(),
+            "the cache records that the tree was asked for"
+        );
+        assert!(
+            !holds_something(&tmp.join(SCRIPT_LIBRARY_DIR)),
+            "and that the release answered with nothing"
+        );
+
+        let package = tmp.join("package");
+        stage_script_library(std::slice::from_ref(&tmp), &package)
+            .expect("a package without the library is still a package");
+        assert!(
+            !package.join(SCRIPT_LIBRARY_DIR).exists(),
+            "an empty tree is not copied into the folder"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A subtree member is placed by its path, so the guard that keeps a
+    /// member inside the destination has to hold there too.
+    #[test]
+    fn a_subtree_member_that_leaves_the_destination_is_dropped() {
+        let dest = Path::new("/cache/linux-x86_64");
+        let trees = [SCRIPT_LIBRARY_DIR];
+        assert_eq!(
+            tree_path(dest, Path::new("./bin/libs/std/list.cdl"), &trees),
+            Some(dest.join("libs").join("std").join("list.cdl"))
+        );
+        assert_eq!(
+            tree_path(dest, Path::new("bin/libs"), &trees),
+            Some(dest.join("libs")),
+            "the directory entry itself is the tree's own root"
+        );
+        assert_eq!(
+            tree_path(dest, Path::new("bin/libs/../../escape.cdl"), &trees),
+            None
+        );
+        assert_eq!(tree_path(dest, Path::new("bin/templates/x"), &trees), None);
+        assert_eq!(tree_path(dest, Path::new("bin/liblumen.so"), &[]), None);
     }
 
     /// A member that would leave the destination is dropped rather than
@@ -2801,10 +3133,8 @@ mod tests {
             WEB_ARCHIVE,
             &sums,
             &bytes,
-            &wanted,
-            &[],
+            &Members::flat(&wanted),
             &tmp,
-            Unpack::Flat,
             "HINT",
         )
         .expect("the checksum matches, so both files install");
@@ -2820,10 +3150,8 @@ mod tests {
             WEB_ARCHIVE,
             &sums,
             &tampered,
-            &wanted,
-            &[],
+            &Members::flat(&wanted),
             &tmp,
-            Unpack::Flat,
             "HINT",
         )
         .expect_err("the checksum does not match");
@@ -2836,10 +3164,8 @@ mod tests {
             WEB_ARCHIVE,
             "abc123  something-else.tar.gz\n",
             &bytes,
-            &wanted,
-            &[],
+            &Members::flat(&wanted),
             &tmp,
-            Unpack::Flat,
             "HINT",
         )
         .expect_err("no checksum line for this archive");
@@ -2854,10 +3180,8 @@ mod tests {
             WEB_ARCHIVE,
             &sums_line(WEB_ARCHIVE, &older),
             &older,
-            &wanted,
-            &[],
+            &Members::flat(&wanted),
             &tmp,
-            Unpack::Flat,
             "HINT",
         )
         .expect_err("the archive is missing a wanted file");
@@ -2890,10 +3214,8 @@ mod tests {
             &archive,
             &sums_line(&archive, &bytes),
             &bytes,
-            &wanted,
-            &[],
+            &Members::flat(&wanted),
             &tmp,
-            Unpack::Flat,
             "HINT",
         )
         .expect("the checksum matches, so the members install");

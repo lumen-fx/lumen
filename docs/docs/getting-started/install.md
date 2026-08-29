@@ -92,21 +92,21 @@ cargo install lumenc
 ```
 
 This needs a Rust toolchain. It builds `lumenc`, then fetches the matching
-Lumen source and builds the runtime library and the launcher from it, putting
-both beside the installed `lumenc` so packaging an app works the same as it
-does from a release. Expect it to take a while: it is compiling the engine.
+Lumen source and builds the runtime library, the launcher, and the candela
+standard library from it, putting all three beside the installed `lumenc` so
+running and packaging an app work the same as they do from a release. Expect it
+to take a while: it is compiling the engine.
 
-A source install carries neither the candela standard library nor the app
-templates, because cargo keeps only the binary it installed. A script that
-reaches for `import "std/..."` or an array method wants a release install, or a
-`libs/` directory copied beside `lumenc` by hand. `lumenc new` wants the same,
-or a clone of the [template repository](templates.md) you were going to
-scaffold from.
+A source install does not carry the app templates, because cargo keeps only the
+binary it installed. `lumenc new` wants a release install, or a clone of the
+[template repository](templates.md) you were going to scaffold from.
 
 Set `LUMEN_SKIP_ENGINE_BUILD=1` to install only the compiler, if you are
-building the other two yourself. `lumenc run`, `build`, and `check` work
-without them; `lumenc package` is the command that needs them, and it says so
-and names the directory to put them in.
+building the rest yourself. `lumenc run`, `build`, and `check` work without the
+runtime library and the launcher; `lumenc package` needs them, and it says so
+and names the directory to put them in. A script that reaches for
+`import "std/..."` or an array method needs the `libs/` directory beside
+`lumenc`, or `CANDELA_LIB_PATH` naming one elsewhere.
 
 ## Nightly builds
 

@@ -322,9 +322,17 @@ its runtime library needs nothing beside it - unless the app declares
 `[dependencies]`, which exits 1 naming the gap, because runtime modules need
 the shared engine.
 
+The candela standard library travels in a `libs/` subfolder of the package,
+whatever the kind and whatever links the engine: scripts read it off disk as
+they compile, so a package without it fails every `import "std/..."` and every
+array method at startup. It comes from the same place the rest of the toolchain
+files do - the directory beside `lumenc`, `--lib-dir`, or the release archive
+for a `--target` - and a directory holding no `libs/` warns and packages
+without it, since an app importing nothing from the library needs none of it.
+
 `--static` writes the same folder with one executable in it: no runtime
 library, no shared engine, no `libstd`, and no `modules/`, because all of that
-is inside the file. It links the app from the
+is inside the file. `libs/` still travels. It links the app from the
 [link kit published for the target](#which-release-toolchain-files-come-from),
 so it needs a linker on this machine - a C toolchain on Linux, the Xcode
 Command Line Tools on macOS, the Visual Studio Build Tools and Windows SDK on

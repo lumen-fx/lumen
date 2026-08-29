@@ -65,8 +65,9 @@ The build also writes `target/<profile>/libs`, the candela standard library
 that `lumen-script-candela`'s build script stages out of the candela source
 cargo resolved, with the C-backed modules built by the C compiler cargo already
 uses for the other native dependencies. candela reads the tree from beside the
-running executable, so it goes there rather than into `OUT_DIR`, and the
-release archive ships the same tree next to `lumenc`.
+running executable, so it goes there rather than into `OUT_DIR`. The release
+archive ships the same tree next to `lumenc`, a source install copies it beside
+the installed binary, and `lumenc package` copies it into the folder it writes.
 
 The apps `lumenc new` scaffolds are maintained outside this repository, one per
 template under [lumen-fx](https://github.com/lumen-fx), and a release ships a

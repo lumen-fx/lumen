@@ -115,13 +115,12 @@ fn main() {}
 The array methods (`arr.map(f)`, `arr.sum()`, and the rest) come from
 `std/list`, which the compiler loads whether or not a program imports anything.
 
-The modules are read from disk when the program compiles, which puts two limits
-on where they reach. A packaged app compiles its scripts as it starts and
-carries no library beside it, so an import that resolves under `lumenc run`
-fails from `lumenc package` output. A web build compiles ahead of time, so the
-text modules travel into the browser inside the compiled image; `std/math`,
-`std/random`, and `std/time` bind a C library the browser cannot open, and an
-image naming one is refused whole.
+The modules are read from disk when the program compiles, out of a `libs/`
+directory beside the running executable. `lumenc package` copies that directory
+into the folder it writes, so a shipped app resolves the same imports. A web
+build compiles ahead of time, so the text modules travel into the browser
+inside the compiled image; `std/math`, `std/random`, and `std/time` bind a C
+library the browser cannot open, and an image naming one is refused whole.
 
 ## Lifecycle hooks
 
