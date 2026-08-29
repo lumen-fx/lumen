@@ -13,7 +13,13 @@
 # one naming the modules a link kit carries. Adding a crate under std/ is then
 # the whole of adding a first-party module.
 #
-# Needs jq, which every GitHub runner image has.
+# Needs jq, which every GitHub runner image has. On the Windows runner the
+# shell is git bash and the tools in the pipeline below are native Windows
+# binaries, whose C runtime opens stdout in text mode and turns every newline
+# they write into CRLF. The shell splits on the newline alone, so the carriage
+# return stays on the last field of the line and reaches the caller as part of
+# the library name, which then matches no rlib. Carriage returns come off at
+# the end of the pipeline, so it does not matter which tool in it added them.
 set -euo pipefail
 
 # cargo is told where to look by the working directory rather than by
@@ -32,6 +38,7 @@ cargo metadata --format-version 1 --no-deps |
     | @tsv
   ' |
   sort |
+  tr -d '\r' |
   while IFS=$'\t' read -r package manifest lib; do
     src="$(dirname "$manifest")/src"
     name="$(grep -rhoE 'lumen_module!\("[^"]+"' "$src" | head -1 | sed 's/.*"\(.*\)"/\1/')"

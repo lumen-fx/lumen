@@ -25,7 +25,9 @@
 # library the rest of the graph also asks for stays unattributed and therefore
 # stays on every line, which is the answer that cannot break a link.
 #
-# Needs jq, which every GitHub runner image has.
+# Needs jq, which every GitHub runner image has. The Windows jq writes CRLF, so
+# its output is stripped of carriage returns before the shell reads fields off
+# it; `first-party-modules.sh` says the rest.
 set -euo pipefail
 
 messages="${1:?usage: module-native-libs.sh <build-messages.jsonl> <triple>}"
@@ -100,4 +102,5 @@ cargo metadata --format-version 1 --filter-platform "$triple" \
     | select($libs | length > 0)
     | [$name, ($libs | join(","))]
     | @tsv
-  '
+  ' |
+  tr -d '\r'
