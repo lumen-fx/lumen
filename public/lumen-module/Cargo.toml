@@ -37,6 +37,16 @@ lumen-script = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 
+# The painting surface, behind the off-by-default `paint` feature. These are
+# the engine's own renderer and text crates, not a second copy: a module
+# hands the painter a `vello::Scene` and the downcast that receives it is a
+# `TypeId` match, which only holds when both sides mean the same vello. The
+# workspace's one resolution is what makes them the same, and the release
+# build compiles the engine and its modules in one invocation so cargo's
+# feature unification cannot pull them apart.
+lumen-render-wgpu = { workspace = true, optional = true }
+lumen-text = { workspace = true, optional = true }
+
 # The engine as a linkable dylib: depending on it is what resolves
 # `lumen-core` (and everything else the module touches) into the shared
 # engine instance instead of a second static copy, and what records the
@@ -53,6 +63,11 @@ default = ["engine-dylib"]
 # binary drops the feature and stops anchoring the engine dylib; what it
 # registers before `main` is unaffected.
 engine-dylib = ["dep:lumen-dylib", "lumen-module-macros/engine-dylib"]
+
+# Painting: the vello scene a native painter draws into, and the text shaper
+# it shapes through. Off by default, because most modules never paint and
+# would otherwise carry the whole renderer in their graph.
+paint = ["dep:lumen-render-wgpu", "dep:lumen-text"]
 
 [dev-dependencies]
 # The end-to-end harness parses cargo's JSON artifact messages to find the
