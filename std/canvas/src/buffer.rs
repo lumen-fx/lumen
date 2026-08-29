@@ -239,6 +239,17 @@ mod tests {
     }
 
     #[test]
+    fn a_short_array_writes_what_it_has() {
+        // A script that computed fewer pixels than it asked to write gets
+        // those pixels written, not a refusal and not a panic.
+        let mut buf = PixBuf::new(4, 4);
+        buf.put_region(0, 0, 4, 4, &[1, 2, 3]);
+        assert_eq!(buf.get_region(0, 0, 4, 1), [1, 2, 3, 0]);
+        assert_eq!(buf.get_pixel(0, 1), 0, "the rest is untouched");
+        assert_eq!(buf.generation(), 3);
+    }
+
+    #[test]
     fn a_region_off_the_edge_is_padded_rather_than_clamped() {
         // Every pixel is set, so a read that clamped to the nearest edge
         // would come back opaque; only padding gives transparent.

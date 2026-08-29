@@ -188,6 +188,15 @@ mod tests {
         let b = parse_css("rgb(100%, 53.3%, 0%)").expect("percentages");
         assert!(approx(a.r, b.r) && approx(a.g, b.g) && approx(a.b, b.b));
         assert!(approx(parse_css("rgba(0,0,0,0.25)").expect("rgba").a, 0.25));
+        // CSS spells alpha either way, and a design tool writes the percent.
+        assert!(approx(parse_css("rgba(0,0,0,25%)").expect("rgba").a, 0.25));
+        // Space-separated, which is how CSS colour level 4 writes it.
+        assert!(approx(
+            parse_css("rgb(255 136 0 / 50%)").expect("slashed").a,
+            0.5
+        ));
+        // An alpha that is not a number at all is refused with the rest.
+        assert!(parse_css("rgba(0,0,0,none)").is_none());
     }
 
     #[test]

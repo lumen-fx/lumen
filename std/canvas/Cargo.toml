@@ -62,5 +62,9 @@ lumen-core = { workspace = true }
 lumen-ir = { workspace = true }
 lumen-render-wgpu = { workspace = true }
 lumen-runtime = { workspace = true }
+# The shaper the app itself installs, so the encode tests draw text with the
+# fonts a real app would rather than skipping the path.
+lumen-text = { workspace = true }
+lumen-text-cosmic = { workspace = true }
 lumen-script = { workspace = true }
 serde_json = { workspace = true }

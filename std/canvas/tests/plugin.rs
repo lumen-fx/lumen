@@ -365,6 +365,182 @@ fn on_ready() { canvas::fill_rect("chart", 0.0, 0.0, 10.0, 10.0); }
 }
 
 #[test]
+fn a_drawing_call_wakes_a_parked_loop() {
+    // An app with nothing else going on parks between events. A script that
+    // draws has to be able to ask for the tick that shows it.
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    lumen_canvas::store::reset();
+    let dir = app_dir("waker");
+    let mut app = build_app(
+        &dir,
+        "rhai",
+        "fn on_ready() { canvas::fill_rect(\"chart\", 0.0, 0.0, 4.0, 4.0); }\n",
+        vec![canvas_element("chart", Some((40.0, 40.0)))],
+        Some(CanvasPlugin::default()),
+    );
+    let woken = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = std::sync::Arc::clone(&woken);
+    app.world
+        .insert_resource(lumen_core::app::EventLoopWaker(std::sync::Arc::new(
+            move || {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            },
+        )));
+    app.tick();
+    app.tick();
+
+    lumen_canvas::store::store().rearm_wake();
+    lumen_canvas::store::store().record("chart", lumen_canvas::ops::Op::Clear);
+    assert_eq!(
+        woken.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the module took the app's waker when it adopted the element"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_resize_moves_the_drawing_space_and_leaves_the_box_where_css_put_it() {
+    // The element declared a size, so that is the box layout keeps. A script
+    // resizing the canvas changes how many units it draws in, and the painter
+    // scales those units onto the box it already has - which is the whole
+    // point of the two being separate.
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    lumen_canvas::store::reset();
+    let dir = app_dir("natural-size");
+    let mut app = build_app(
+        &dir,
+        "rhai",
+        "fn on_ready() { canvas::resize(\"chart\", 64.0, 32.0); }\n",
+        vec![canvas_element("chart", Some((200.0, 120.0)))],
+        Some(CanvasPlugin::default()),
+    );
+    for _ in 0..3 {
+        app.tick();
+    }
+
+    let (_, logical) = canvas_of(&mut app, "chart").expect("adopted");
+    assert_eq!(
+        logical,
+        (64.0, 32.0),
+        "the drawing space followed the script"
+    );
+
+    let mut q = app.world.query::<(&Canvas, &ImageComponent, &Transform)>();
+    let (_, image, transform) = q.iter(&app.world).next().expect("a laid-out canvas");
+    assert_eq!(
+        image.natural_size,
+        Some(glam::Vec2::new(64.0, 32.0)),
+        "and so did the size the element would take without a declaration"
+    );
+    assert_eq!(
+        (transform.size.x, transform.size.y),
+        (200.0, 120.0),
+        "the declared box is unmoved; the drawing is scaled onto it"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_canvas_drawn_at_forever_is_bounded() {
+    // A draw loop against an id nothing answers for is a typo, and the module
+    // says so once. What it must not do is keep every call the typo made.
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    lumen_canvas::store::reset();
+    let dir = app_dir("bounded");
+    let mut app = build_app(
+        &dir,
+        "rhai",
+        "fn on_ready() {}\n",
+        vec![canvas_element("chart", Some((40.0, 40.0)))],
+        Some(CanvasPlugin::default()),
+    );
+    app.tick();
+
+    {
+        let mut store = lumen_canvas::store::store();
+        for _ in 0..(lumen_canvas::store::UNANSWERED_JOURNAL_CAP + 500) {
+            store.record("typo", lumen_canvas::ops::Op::Fill);
+        }
+    }
+    app.tick();
+
+    assert_eq!(
+        lumen_canvas::store::store().surface("typo").pending.len(),
+        lumen_canvas::store::UNANSWERED_JOURNAL_CAP,
+        "the oldest calls fall off; the canvas may still be mounted"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_canvas_whose_surface_went_is_left_alone() {
+    // `reset()` is a test-only door, and it is the shape of any surface that
+    // is retired while its element is still there. The encode must skip it
+    // rather than resurrect one.
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    lumen_canvas::store::reset();
+    let dir = app_dir("no-surface");
+    let mut app = build_app(
+        &dir,
+        "rhai",
+        "fn on_ready() { canvas::fill_rect(\"chart\", 0.0, 0.0, 4.0, 4.0); }\n",
+        vec![canvas_element("chart", Some((40.0, 40.0)))],
+        Some(CanvasPlugin::default()),
+    );
+    app.tick();
+    app.tick();
+    let (revision, _) = canvas_of(&mut app, "chart").expect("adopted");
+
+    lumen_canvas::store::store().surfaces.remove("chart");
+    app.tick();
+
+    assert_eq!(
+        canvas_of(&mut app, "chart").expect("still adopted").0,
+        revision,
+        "the canvas keeps what it had rather than being emptied"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_canvas_that_was_never_given_a_box_still_encodes() {
+    // Adoption is what hands an element its box, and it is the only thing
+    // that does. A canvas the module did not adopt - one built by hand, or
+    // one whose element the app assembled itself - still draws; it simply has
+    // no size for layout to read.
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    lumen_canvas::store::reset();
+
+    let mut app = lumen_core::app::App::new();
+    app.add_plugin(CanvasPlugin::default());
+    app.world.spawn(Canvas {
+        id: "bare".to_string(),
+        logical: (32.0, 32.0),
+        scene: std::sync::Arc::new(lumen_render_wgpu::vello::Scene::new()),
+        revision: 0,
+    });
+    lumen_canvas::store::store()
+        .record("bare", lumen_canvas::ops::Op::FillRect(0.0, 0.0, 8.0, 8.0));
+    app.tick();
+
+    let mut q = app.world.query::<&Canvas>();
+    let canvas = q
+        .iter(&app.world)
+        .next()
+        .expect("the canvas is still there");
+    assert!(canvas.revision > 0, "the drawing was encoded");
+    assert!(
+        app.world
+            .query::<&ImageComponent>()
+            .iter(&app.world)
+            .next()
+            .is_none(),
+        "and nothing invented a box for it"
+    );
+}
+
+#[test]
 fn without_the_plugin_there_is_no_canvas_and_the_app_still_runs() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     lumen_canvas::store::reset();

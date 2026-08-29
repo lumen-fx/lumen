@@ -281,6 +281,25 @@ mod tests {
     }
 
     #[test]
+    fn two_threads_registering_one_tag_leak_one_string() {
+        // The set is checked before the lock is taken, so two callers can
+        // both find the tag absent. Only one of them may put it in.
+        let before = registered_widget_tags().len();
+        let threads: Vec<_> = (0..8)
+            .map(|_| std::thread::spawn(|| register_widget_tag_owned("owned-race-tag")))
+            .collect();
+        for t in threads {
+            t.join().expect("the registration does not panic");
+        }
+        assert!(is_widget_tag_registered("owned-race-tag"));
+        assert_eq!(
+            registered_widget_tags().len(),
+            before + 1,
+            "eight callers, one tag"
+        );
+    }
+
+    #[test]
     fn attributes_from_vec() {
         let a: Attributes = vec![
             ("text".to_string(), "Hi".to_string()),
