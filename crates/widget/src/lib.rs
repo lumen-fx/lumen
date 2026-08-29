@@ -96,6 +96,31 @@ pub fn register_widget_tag(tag: &'static str) {
     }
 }
 
+/// Register a tag whose name is only known at run time, so `<tag ...>`
+/// markup is accepted.
+///
+/// The derive knows its tag at compile time and passes a `&'static str`;
+/// a name read out of a file does not exist until the file is read. This
+/// takes the name by reference, checks the set first, and leaks the string
+/// only when the tag is new - a bounded, once-per-tag cost, because the
+/// registry outlives every caller and the parser consults it for the life
+/// of the process.
+pub fn register_widget_tag_owned(tag: &str) {
+    if is_widget_tag_registered(tag) {
+        return;
+    }
+    if let Ok(mut set) = REGISTERED_WIDGET_TAGS
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+    {
+        // Checked again under the lock: two threads racing the same new tag
+        // must leak one string, not two.
+        if !set.contains(tag) {
+            set.insert(Box::leak(tag.to_string().into_boxed_str()));
+        }
+    }
+}
+
 /// Returns `true` when `tag` was registered via [`register_widget_tag`]
 /// earlier in this process. Consulted by `public/lumenc/src/parser_html.rs`'s
 /// `KNOWN_TAGS` fallback path.
@@ -241,6 +266,18 @@ mod tests {
         let a: Attributes = [("text", "Hi"), ("delay", "100")].into();
         assert_eq!(a.get("text"), Some("Hi"));
         assert_eq!(a.parse::<u32>("delay"), Some(100));
+    }
+
+    #[test]
+    fn an_owned_tag_registers_once_and_is_accepted() {
+        assert!(!is_widget_tag_registered("owned-test-tag"));
+        register_widget_tag_owned(&String::from("owned-test-tag"));
+        assert!(is_widget_tag_registered("owned-test-tag"));
+        // The second call must not leak a second copy: the set is keyed by
+        // the string's contents, so its size is what proves that.
+        let before = registered_widget_tags().len();
+        register_widget_tag_owned("owned-test-tag");
+        assert_eq!(registered_widget_tags().len(), before);
     }
 
     #[test]
