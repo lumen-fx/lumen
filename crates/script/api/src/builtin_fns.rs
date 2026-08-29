@@ -165,8 +165,9 @@ fn menu_signal(id: &str) -> String {
     format!("__menu_open:{id}")
 }
 
-/// Timers. Both fire `on_timer(name)`; the interval keeps firing until
-/// `cancel_timer`.
+/// Timers and the frame hook. The two timers fire `on_timer(name)` and the
+/// interval keeps firing until `cancel_timer`; `request_frame` buys exactly
+/// one `on_frame(dt)` and a loop is a callback that asks again.
 fn timer_fns() -> Vec<ScriptFn> {
     vec![
         emit(
@@ -196,6 +197,12 @@ fn timer_fns() -> Vec<ScriptFn> {
             |cx| ScriptCommand::CancelTimer {
                 name: cx.str_arg(0),
             },
+        ),
+        emit(
+            "request_frame",
+            "Ask for one on_frame(dt) call on the next tick.",
+            &[],
+            |_| ScriptCommand::RequestFrame,
         ),
     ]
 }

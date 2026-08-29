@@ -26,6 +26,7 @@ host "lumen" {
     set_timeout(string, int);
     set_interval(string, int);
     cancel_timer(string);
+    request_frame();
     notify(string, string);
     notify_ex(string, string, string, string, string);
     clipboard_write(string);

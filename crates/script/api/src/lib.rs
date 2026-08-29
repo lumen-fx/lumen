@@ -688,6 +688,13 @@ pub enum ScriptCommand {
         /// Identifier the script gets back in the event handler.
         tag: String,
     },
+    /// Ask for one `on_frame(dt)` call on the next tick.
+    ///
+    /// The browser's `requestAnimationFrame`: one request buys one callback,
+    /// and a callback that wants another asks again. An app that stops asking
+    /// stops being ticked for it, so an animation costs frames only while it
+    /// is running.
+    RequestFrame,
 }
 
 impl ScriptCommand {

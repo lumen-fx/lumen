@@ -255,6 +255,9 @@ pub(crate) fn apply_script_commands(
             | ScriptCommand::SetResponseStatus { .. }
             | ScriptCommand::SetResponseHeader { .. }
             | ScriptCommand::Redirect { .. }
+            // The rAF hook is host-neutral: `lumen_script::drain_frame_requests`
+            // is the one reader.
+            | ScriptCommand::RequestFrame
             | ScriptCommand::WindowSetSize { .. } => {}
         }
     }
@@ -450,6 +453,7 @@ pub(crate) fn apply_os_script_commands(
             | ScriptCommand::SetResponseStatus { .. }
             | ScriptCommand::SetResponseHeader { .. }
             | ScriptCommand::Redirect { .. }
+            | ScriptCommand::RequestFrame
             | ScriptCommand::WindowSetSize { .. } => {}
         }
     }

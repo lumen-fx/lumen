@@ -85,6 +85,11 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
         TickStage::Systems,
         lumen_core::property_store::commit_external_properties
             .after(ScriptSet::Dispatch)
+            // A host that writes signals through the typed bus rather than
+            // the command stream (Rhai's `signal(..).set(..)`) needs this
+            // edge for the same reason: an `on_frame` write binds on the
+            // tick the callback ran.
+            .after(ScriptSet::Frame)
             .before(ScriptSet::Derivations),
     );
     // Signal -> TextContent must land BEFORE the keystroke / IME path so a
@@ -284,6 +289,9 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
                 .after(ScriptSet::Tick)
                 .after(ScriptSet::Dispatch)
                 .after(ScriptSet::DomInput)
+                // A signal an `on_frame` callback writes lands on the tick
+                // the callback ran, like one written from a click handler.
+                .after(ScriptSet::Frame)
                 // The use sites the build left for the script build their
                 // subtree through the appliers, so the tree is whole on the
                 // tick it was mounted rather than the one after.
@@ -304,6 +312,7 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
                 .after(ScriptSet::Tick)
                 .after(ScriptSet::Dispatch)
                 .after(ScriptSet::DomInput)
+                .after(ScriptSet::Frame)
                 .after(ScriptSet::Fill),
         );
         // Third applier, for the OS-host commands (notifications, clipboard,
@@ -314,7 +323,8 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
             apply_os_script_commands
                 .after(ScriptSet::Tick)
                 .after(ScriptSet::Dispatch)
-                .after(ScriptSet::DomInput),
+                .after(ScriptSet::DomInput)
+                .after(ScriptSet::Frame),
         );
     }
 }

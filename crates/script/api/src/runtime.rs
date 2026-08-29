@@ -166,6 +166,12 @@ pub enum ScriptSet {
     /// one set covering both could not be ordered against the appliers
     /// without a cycle.
     DomState,
+    /// [`fire_frame_callbacks`]: `on_frame(dt)` delivery, per host.
+    ///
+    /// Configured after [`ScriptSet::Dispatch`] so a callback sees the input
+    /// this tick carried, and before [`ScriptSet::Timers`] so a frame and a
+    /// timer coming due together always run in that order.
+    Frame,
 }
 
 /// Marker for the once-per-app half of [`ScriptPlugin::build`]: the shared
@@ -284,6 +290,8 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             app.world.insert_resource(OnReadyFired::default());
             app.world.insert_resource(TimerRegistry::default());
             app.world.insert_resource(DueTimers::default());
+            app.world.insert_resource(FrameHook::default());
+            app.world.insert_resource(DueFrame::default());
             // The HTTP client is chosen at the composition point (the runtime
             // installs `lumen-http-ureq`; an embedder installs its own), so
             // only fall back to the disabled client when nothing put a
@@ -345,6 +353,23 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
                 retire_due_timers
                     .after(ScriptSet::Tick)
                     .before(ScriptSet::Timers),
+            );
+            // The frame hook, on the same host-neutral shape as the timers:
+            // one decision before any host fires, one delivery set per host,
+            // one drain after it.
+            app.add_systems(
+                TickStage::Systems,
+                retire_frame_request
+                    .after(ScriptSet::Tick)
+                    .before(ScriptSet::Frame),
+            );
+            // After the delivery set: a `request_frame()` from inside
+            // `on_frame` arms the next tick rather than re-entering this one.
+            app.add_systems(
+                TickStage::Systems,
+                drain_frame_requests
+                    .after(ScriptSet::Tick)
+                    .after(ScriptSet::Frame),
             );
             // HTTP replies land in a per-tick buffer rather than being taken
             // straight off the channel, so every host is offered each reply
@@ -420,6 +445,16 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             apply_derivations::<H>
                 .in_set(ScriptSet::Derivations)
                 .after(ScriptSet::SyncSignals),
+        );
+        // Between the input dispatch and the timers: a callback reads the
+        // input this tick carried, and a frame and a timer coming due
+        // together always run in that order.
+        app.add_systems(
+            TickStage::Systems,
+            fire_frame_callbacks::<H>
+                .in_set(ScriptSet::Frame)
+                .after(ScriptSet::Dispatch)
+                .before(ScriptSet::Timers),
         );
         app.add_systems(
             TickStage::Systems,
@@ -938,6 +973,116 @@ pub fn fire_due_timers<H: ScriptHost + Resource<Mutability = Mutable>>(
         if let Err(e) = route_event(&mut *host, "timer", "on_timer", name, &mut out) {
             warn_line!("{}: on_timer({name}) failed: {e}", prefix(host.lang()));
         }
+    }
+}
+
+// ---------------------------------------------------------------------
+// Frame callbacks
+// ---------------------------------------------------------------------
+
+/// The longest step `on_frame` is ever handed, in seconds.
+///
+/// A tick can take arbitrarily long - a slow first frame, a stalled thread,
+/// a machine that went to sleep - and an animation integrating the real
+/// elapsed time would jump across the whole gap. The cap turns the worst
+/// case into a slow frame instead of a teleport, at the cost of an animation
+/// running slightly behind wall-clock after a stall, which is the trade every
+/// game loop makes.
+pub const MAX_FRAME_DT: f64 = 0.100;
+
+/// The state behind `request_frame()` / `on_frame(dt)`.
+///
+/// One request buys one callback. Nothing here schedules a second one, so an
+/// app that stops asking stops being ticked for it and the loop parks; that
+/// is what makes an idle animation free.
+#[derive(Resource, Default)]
+pub struct FrameHook {
+    /// A `request_frame()` arrived and has not been served yet.
+    requested: bool,
+    /// A callback ran on the previous tick, so the next one continues a loop
+    /// rather than starting one. It is what decides whether `dt` is elapsed
+    /// time or zero.
+    running: bool,
+}
+
+/// The step handed to `on_frame` this tick, or `None` when no frame is due.
+/// Rewritten every tick by [`retire_frame_request`] and read by
+/// [`fire_frame_callbacks`] on each active host.
+#[derive(Resource, Default)]
+pub struct DueFrame(pub Option<f64>);
+
+/// Decide whether a frame callback is due this tick and what step it gets.
+///
+/// Host-neutral and registered once, so every active host is offered the same
+/// frame instead of the first one to run taking it. The request is consumed
+/// here, before any host fires, so a callback that asks for another is asking
+/// for the next tick and cannot re-enter this one.
+///
+/// The first frame of a loop gets `0.0`: no callback ran before it, so there
+/// is no interval to report and a made-up one would move an animation before
+/// any time passed. Every frame after that gets the tick's own elapsed time,
+/// capped at [`MAX_FRAME_DT`].
+pub fn retire_frame_request(
+    mut hook: ResMut<FrameHook>,
+    tick: Res<lumen_core::tick::Tick>,
+    mut due: ResMut<DueFrame>,
+) {
+    let serve = std::mem::take(&mut hook.requested);
+    due.0 = serve.then(|| {
+        if hook.running {
+            tick.dt.as_secs_f64().min(MAX_FRAME_DT)
+        } else {
+            0.0
+        }
+    });
+    hook.running = serve;
+}
+
+/// Call `on_frame(dt)` on this host when [`retire_frame_request`] found a
+/// frame due. A host that declares no `on_frame` is silent, so in an app
+/// running several languages the callback reaches whichever host declared it.
+pub fn fire_frame_callbacks<H: ScriptHost + Resource<Mutability = Mutable>>(
+    mut host: ResMut<H>,
+    due: Res<DueFrame>,
+    mut out: MessageWriter<ScriptCommandEvent>,
+) {
+    let Some(dt) = due.0 else {
+        return;
+    };
+    match host.call("on_frame", &[ScriptValue::F64(dt)]) {
+        Ok(outcome) => forward_outcome(outcome, &mut out),
+        Err(e) => warn_line!("{}: on_frame failed: {e}", prefix(host.lang())),
+    }
+}
+
+/// Read the `RequestFrame` commands emitted this tick and arm the hook.
+///
+/// Registered after the delivery set, so a request made from inside
+/// `on_frame` is picked up on the tick it was made and served on the next
+/// one, which is what keeps a loop running at one callback per tick.
+///
+/// Arming also has to wake the app: a request from a click handler on an
+/// otherwise idle app has to produce a tick, and a running loop has to keep
+/// producing them. Both resources are optional so a bare test can drive these
+/// systems without a window.
+pub fn drain_frame_requests(
+    mut events: MessageReader<ScriptCommandEvent>,
+    mut hook: ResMut<FrameHook>,
+    animations: Option<Res<lumen_core::render_world::AnimationsActive>>,
+    waker: Option<Res<lumen_core::app::EventLoopWaker>>,
+) {
+    if !events
+        .read()
+        .any(|ev| matches!(ev.0, ScriptCommand::RequestFrame))
+    {
+        return;
+    }
+    hook.requested = true;
+    if let Some(animations) = animations.as_deref() {
+        animations.request();
+    }
+    if let Some(waker) = waker.as_deref() {
+        waker.wake();
     }
 }
 
@@ -2271,5 +2416,374 @@ mod derivation_panic_tests {
             panic_payload_text(other_payload.as_ref()),
             "non-string panic payload"
         );
+    }
+}
+
+#[cfg(test)]
+mod frame_hook_tests {
+    use super::*;
+    use crate::dom_events::text_event_tests::NoHost;
+    use bevy_ecs::message::Messages;
+    use bevy_ecs::system::RunSystemOnce;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// A host that records every `on_frame` step it is handed, and can ask
+    /// for another frame from inside the callback. Wraps `NoHost` so only
+    /// the two methods this suite reaches are written here.
+    #[derive(Resource)]
+    struct FrameHost {
+        inner: NoHost,
+        /// Whether this host declares `on_frame` at all.
+        declares: bool,
+        /// Whether each callback asks for another frame.
+        re_request: Arc<AtomicBool>,
+        /// Every step handed to `on_frame`, in order.
+        seen: Arc<std::sync::Mutex<Vec<f64>>>,
+        /// Every function name `call` was asked for.
+        calls: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl FrameHost {
+        fn new(declares: bool) -> Self {
+            Self {
+                inner: NoHost,
+                declares,
+                re_request: Arc::new(AtomicBool::new(false)),
+                seen: Arc::new(std::sync::Mutex::new(Vec::new())),
+                calls: Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl ScriptHost for FrameHost {
+        type Closure = ();
+
+        fn compile_check(&self, source: &str, uri: &str) -> Result<(), ScriptError> {
+            self.inner.compile_check(source, uri)
+        }
+        fn load(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
+            self.inner.load(source, uri)
+        }
+        fn replace(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
+            self.inner.replace(source, uri)
+        }
+        fn reset(&mut self) {
+            self.inner.reset()
+        }
+        fn call(
+            &mut self,
+            fn_name: &str,
+            args: &[ScriptValue],
+        ) -> Result<CallOutcome, ScriptError> {
+            if let Ok(mut calls) = self.calls.lock() {
+                calls.push(fn_name.to_string());
+            }
+            if !self.declares {
+                // What a host answers for a handler the script never wrote.
+                return Ok(CallOutcome {
+                    commands: Vec::new(),
+                    ret: None,
+                    found: false,
+                });
+            }
+            if let Some(ScriptValue::F64(dt)) = args.first()
+                && let Ok(mut seen) = self.seen.lock()
+            {
+                seen.push(*dt);
+            }
+            let commands = if self.re_request.load(Ordering::SeqCst) {
+                vec![ScriptCommand::RequestFrame]
+            } else {
+                Vec::new()
+            };
+            Ok(CallOutcome {
+                commands,
+                ret: None,
+                found: true,
+            })
+        }
+        fn call_closure(
+            &mut self,
+            closure: &Self::Closure,
+            args: &[ScriptValue],
+        ) -> Result<ScriptValue, ScriptError> {
+            self.inner.call_closure(closure, args)
+        }
+        fn drain_commands(&mut self) -> Vec<ScriptCommand> {
+            self.inner.drain_commands()
+        }
+        fn push_commands(&mut self, cmds: Vec<ScriptCommand>) {
+            self.inner.push_commands(cmds)
+        }
+        fn mirror_get(&self, name: &str) -> Option<ScriptValue> {
+            self.inner.mirror_get(name)
+        }
+        fn mirror_set(&mut self, name: &str, value: ScriptValue) {
+            self.inner.mirror_set(name, value)
+        }
+        fn mirror_sync_str(&mut self, name: &str, value: &str) {
+            self.inner.mirror_sync_str(name, value)
+        }
+        fn handler_for(&self, event: &str, key: &str) -> Option<String> {
+            self.inner.handler_for(event, key)
+        }
+        fn derivations_matching(
+            &self,
+            dirty: &std::collections::HashSet<&str>,
+            pending: &std::collections::HashSet<String>,
+        ) -> Vec<(String, Vec<String>, Self::Closure)> {
+            self.inner.derivations_matching(dirty, pending)
+        }
+        fn pending_initial(&self) -> std::collections::HashSet<String> {
+            self.inner.pending_initial()
+        }
+        fn clear_pending(&mut self, evaluated: &[String]) {
+            self.inner.clear_pending(evaluated)
+        }
+        fn register_script_fn(&mut self, f: &crate::ScriptFn) -> Result<(), ScriptError> {
+            self.inner.register_script_fn(f)
+        }
+        fn lang(&self) -> &'static str {
+            "test"
+        }
+        fn builtins(&self) -> &'static [crate::BuiltinFn] {
+            &[]
+        }
+    }
+
+    /// A second host type, so the "every host is offered the frame" case can
+    /// name two resources.
+    #[derive(Resource)]
+    struct OtherHost(FrameHost);
+
+    impl ScriptHost for OtherHost {
+        type Closure = ();
+
+        fn compile_check(&self, source: &str, uri: &str) -> Result<(), ScriptError> {
+            self.0.compile_check(source, uri)
+        }
+        fn load(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
+            self.0.load(source, uri)
+        }
+        fn replace(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
+            self.0.replace(source, uri)
+        }
+        fn reset(&mut self) {
+            self.0.reset()
+        }
+        fn call(
+            &mut self,
+            fn_name: &str,
+            args: &[ScriptValue],
+        ) -> Result<CallOutcome, ScriptError> {
+            self.0.call(fn_name, args)
+        }
+        fn call_closure(
+            &mut self,
+            closure: &Self::Closure,
+            args: &[ScriptValue],
+        ) -> Result<ScriptValue, ScriptError> {
+            self.0.call_closure(closure, args)
+        }
+        fn drain_commands(&mut self) -> Vec<ScriptCommand> {
+            self.0.drain_commands()
+        }
+        fn push_commands(&mut self, cmds: Vec<ScriptCommand>) {
+            self.0.push_commands(cmds)
+        }
+        fn mirror_get(&self, name: &str) -> Option<ScriptValue> {
+            self.0.mirror_get(name)
+        }
+        fn mirror_set(&mut self, name: &str, value: ScriptValue) {
+            self.0.mirror_set(name, value)
+        }
+        fn mirror_sync_str(&mut self, name: &str, value: &str) {
+            self.0.mirror_sync_str(name, value)
+        }
+        fn handler_for(&self, event: &str, key: &str) -> Option<String> {
+            self.0.handler_for(event, key)
+        }
+        fn derivations_matching(
+            &self,
+            dirty: &std::collections::HashSet<&str>,
+            pending: &std::collections::HashSet<String>,
+        ) -> Vec<(String, Vec<String>, Self::Closure)> {
+            self.0.derivations_matching(dirty, pending)
+        }
+        fn pending_initial(&self) -> std::collections::HashSet<String> {
+            self.0.pending_initial()
+        }
+        fn clear_pending(&mut self, evaluated: &[String]) {
+            self.0.clear_pending(evaluated)
+        }
+        fn register_script_fn(&mut self, f: &crate::ScriptFn) -> Result<(), ScriptError> {
+            self.0.register_script_fn(f)
+        }
+        fn lang(&self) -> &'static str {
+            "other"
+        }
+        fn builtins(&self) -> &'static [crate::BuiltinFn] {
+            &[]
+        }
+    }
+
+    /// A world with the hook's resources and the command bus.
+    fn world_with(host: FrameHost) -> World {
+        let mut world = World::new();
+        world.init_resource::<Messages<ScriptCommandEvent>>();
+        world.init_resource::<lumen_core::tick::Tick>();
+        world.insert_resource(FrameHook::default());
+        world.insert_resource(DueFrame::default());
+        world.insert_resource(host);
+        world
+    }
+
+    /// One tick's worth of the hook: decide, deliver, drain. `run_system_once`
+    /// builds fresh reader state every call, so the bus is cleared afterwards
+    /// to keep this tick's commands out of the next one.
+    fn drive(world: &mut World) {
+        world
+            .run_system_once(retire_frame_request)
+            .expect("retire ran");
+        world
+            .run_system_once(fire_frame_callbacks::<FrameHost>)
+            .expect("fire ran");
+        world
+            .run_system_once(drain_frame_requests)
+            .expect("drain ran");
+        world.resource_mut::<Messages<ScriptCommandEvent>>().clear();
+    }
+
+    /// Queue the command the builtin emits, as a script's call would.
+    fn request(world: &mut World) {
+        world
+            .resource_mut::<Messages<ScriptCommandEvent>>()
+            .write(ScriptCommandEvent(ScriptCommand::RequestFrame));
+        world
+            .run_system_once(drain_frame_requests)
+            .expect("drain ran");
+        world.resource_mut::<Messages<ScriptCommandEvent>>().clear();
+    }
+
+    #[test]
+    fn one_request_buys_exactly_one_callback() {
+        let mut world = world_with(FrameHost::new(true));
+        let seen = Arc::clone(&world.resource::<FrameHost>().seen);
+        request(&mut world);
+
+        drive(&mut world);
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        drive(&mut world);
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            1,
+            "a served request must not schedule another"
+        );
+        assert!(
+            world.resource::<DueFrame>().0.is_none(),
+            "no frame is due once the request was served"
+        );
+    }
+
+    #[test]
+    fn a_callback_that_asks_again_keeps_the_loop_running() {
+        let mut world = world_with(FrameHost::new(true));
+        let host = world.resource::<FrameHost>();
+        let (seen, re_request) = (Arc::clone(&host.seen), Arc::clone(&host.re_request));
+        re_request.store(true, Ordering::SeqCst);
+        request(&mut world);
+
+        for _ in 0..3 {
+            drive(&mut world);
+        }
+        assert_eq!(seen.lock().unwrap().len(), 3);
+
+        // Stop asking and the loop parks after the frame already armed.
+        re_request.store(false, Ordering::SeqCst);
+        drive(&mut world);
+        drive(&mut world);
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            4,
+            "the loop stops when it stops"
+        );
+    }
+
+    #[test]
+    fn no_request_is_no_frame_and_no_call() {
+        let mut world = world_with(FrameHost::new(true));
+        let calls = Arc::clone(&world.resource::<FrameHost>().calls);
+        drive(&mut world);
+        assert!(world.resource::<DueFrame>().0.is_none());
+        assert!(calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_first_frame_of_a_loop_reports_no_elapsed_time() {
+        let mut world = world_with(FrameHost::new(true));
+        let seen = Arc::clone(&world.resource::<FrameHost>().seen);
+        world.resource_mut::<lumen_core::tick::Tick>().dt = std::time::Duration::from_millis(16);
+        request(&mut world);
+        drive(&mut world);
+        assert_eq!(seen.lock().unwrap().as_slice(), [0.0]);
+    }
+
+    #[test]
+    fn a_stalled_tick_is_capped_rather_than_reported() {
+        let mut world = world_with(FrameHost::new(true));
+        let host = world.resource::<FrameHost>();
+        let (seen, re_request) = (Arc::clone(&host.seen), Arc::clone(&host.re_request));
+        re_request.store(true, Ordering::SeqCst);
+        world.resource_mut::<lumen_core::tick::Tick>().dt = std::time::Duration::from_secs(30);
+        request(&mut world);
+        drive(&mut world);
+        drive(&mut world);
+        assert_eq!(seen.lock().unwrap().as_slice(), [0.0, MAX_FRAME_DT]);
+    }
+
+    #[test]
+    fn a_host_that_declares_no_handler_is_silent() {
+        let mut world = world_with(FrameHost::new(false));
+        let host = world.resource::<FrameHost>();
+        let (seen, calls) = (Arc::clone(&host.seen), Arc::clone(&host.calls));
+        request(&mut world);
+        drive(&mut world);
+        assert_eq!(calls.lock().unwrap().as_slice(), ["on_frame"]);
+        assert!(seen.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn every_active_host_is_offered_the_same_frame() {
+        let mut world = world_with(FrameHost::new(true));
+        world.insert_resource(OtherHost(FrameHost::new(true)));
+        let first = Arc::clone(&world.resource::<FrameHost>().seen);
+        let second = Arc::clone(&world.resource::<OtherHost>().0.seen);
+        request(&mut world);
+
+        world
+            .run_system_once(retire_frame_request)
+            .expect("retire ran");
+        world
+            .run_system_once(fire_frame_callbacks::<FrameHost>)
+            .expect("first host ran");
+        world
+            .run_system_once(fire_frame_callbacks::<OtherHost>)
+            .expect("second host ran");
+
+        assert_eq!(first.lock().unwrap().len(), 1);
+        assert_eq!(second.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_builtin_queues_one_request() {
+        let f = crate::builtin_script_fns()
+            .into_iter()
+            .find(|f| f.name == "request_frame")
+            .expect("the builtin table carries request_frame");
+        let (result, commands) = f.invoke(&[]);
+        assert_eq!(result, Ok(ScriptValue::Unit));
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(commands[0], ScriptCommand::RequestFrame));
     }
 }

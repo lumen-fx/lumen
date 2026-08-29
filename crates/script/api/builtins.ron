@@ -313,6 +313,13 @@
             doc: "Cancel a timer previously created with `set_timeout`/`set_interval`.",
         ),
         (
+            name: "request_frame",
+            hosts: [Rhai, Lua, Candela],
+            params: [],
+            ret: "()",
+            doc: "Ask for one `on_frame(dt)` call on the next tick; call it again from the handler to keep animating.",
+        ),
+        (
             name: "notify",
             hosts: [Rhai, Lua, Candela],
             params: [("title", "string"), ("body", "string")],
