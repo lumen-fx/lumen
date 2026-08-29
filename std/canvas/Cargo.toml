@@ -1,0 +1,67 @@
+# The immediate-mode drawing surface Lumen ships, as a self-contained runtime
+# module. The engine knows nothing about canvases: this crate registers the
+# whole `canvas` script namespace through the generic `ScriptFnRegistry`,
+# adopts the elements it answers for through the generic tag registry, and
+# draws through the generic native-paint seam. Two link shapes from one crate:
+# the `cdylib` target is the bundled `lumen-canvas` module an app declares in
+# `lumen.toml`, and the `lib` target is the same plugin compiled into a static
+# build.
+[package]
+name = "lumen-canvas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lumen's canvas module: registers the canvas script namespace and paints <canvas> elements through vello, as a runtime module or a compiled-in plugin."
+keywords = ["ui", "gui", "canvas", "graphics", "scripting"]
+categories = ["graphics", "gui"]
+publish = false
+
+[lib]
+# `lumen_canvas` is the spelling the module loader's bundled probe derives
+# from the app's `lumen-canvas = { bundled = true }` declaration: the cdylib
+# builds to `liblumen_canvas.so`.
+name = "lumen_canvas"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+# The one engine-facing dependency. `paint` adds the renderer and the text
+# shaper: a painter downcasts its target to the engine's own vello scene, and
+# only the SDK's re-export is guaranteed to be that vello.
+lumen-module = { workspace = true, features = ["paint"] }
+
+# PNG, for `canvas::buffer_load_png` / `buffer_save_png`. Decoding only what
+# the module offers: no other format is exposed, so no other decoder ships.
+image = { workspace = true }
+
+# The vector type the engine's own components carry. The workspace pins one
+# version, which is what keeps this the same `Vec2` the layout engine reads.
+glam = { workspace = true }
+
+# Named directly for `#[derive(Component)]`, whose expansion spells the crate
+# by name. The types themselves arrive through the SDK; with the engine taken
+# as a shared library this resolves to the engine's own copy.
+bevy_ecs = { workspace = true }
+
+[features]
+default = ["engine-dylib"]
+# The shared engine, and the probe-and-install pair a loader looks up after
+# opening this crate's `cdylib`. On by default, which is the shipping shape.
+# A binary that links the `lib` target in drops the feature and links no
+# engine dylib; what the module registers before `main` is unaffected.
+engine-dylib = ["lumen-module/engine-dylib"]
+
+# Tests only: the compiled-in-shape tests build a headless app around the
+# plugin the way `lumenc run` would, the paint test drives a real GPU, and the
+# module-shape test drives the loader end to end over a subprocess. The
+# shipping crate stays on `lumen-module` and `image`.
+[dev-dependencies]
+lumen-core = { workspace = true }
+lumen-ir = { workspace = true }
+lumen-render-wgpu = { workspace = true }
+lumen-runtime = { workspace = true }
+lumen-script = { workspace = true }
+glam = { workspace = true }
+serde_json = { workspace = true }

@@ -34,6 +34,11 @@ lumen-assets = { workspace = true }
 # registry extension trait, the ordering sets, and the plugin-event wire.
 # Re-exported below so a module crate needs no dependency of its own.
 lumen-script = { workspace = true }
+# The markup-tag registry. A module that brings an element registers its tag
+# from `Plugin::build`, which is what makes a run accept the markup; the
+# `tags` key in `lumen.toml` is the same claim for a compile, where nothing is
+# loaded.
+lumen-widget = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 
