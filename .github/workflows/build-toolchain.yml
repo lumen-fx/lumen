@@ -200,14 +200,27 @@ jobs:
         run: |
           triple="$(rustc -vV | sed -n 's/^host: //p')"
           echo "triple=$triple" >> "$GITHUB_ENV"
+          case "$(uname -s)" in
+            Darwin) rpath='@loader_path' ;;
+            *)      rpath='$ORIGIN' ;;
+          esac
           # Identical-code-folding merges functions that compile to the same
           # bytes; "safe" only folds where address identity cannot be
-          # observed. lld-only, so Linux-only: macOS links with ld64, which
-          # has no such flag.
-          case "$(uname -s)" in
-            Darwin) rpath='@loader_path'; icf='' ;;
-            *)      rpath='$ORIGIN'; icf='-C link-arg=-Wl,--icf=safe' ;;
-          esac
+          # observed. lld and gold have it, ld64 has nothing like it, and GNU
+          # bfd ld - which is what `cc` reaches for on both Linux runners -
+          # rejects the option outright and fails the link. Which linker is
+          # behind `cc` is a property of the image, not of the platform, so
+          # the flag is offered to the one that is there and dropped when it
+          # says no.
+          icf=''
+          if [ "$(uname -s)" != Darwin ]; then
+            printf 'int main(void){return 0;}\n' > icf-probe.c
+            if cc -Wl,--icf=safe icf-probe.c -o icf-probe.out 2>/dev/null; then
+              icf='-C link-arg=-Wl,--icf=safe'
+            fi
+            rm -f icf-probe.c icf-probe.out
+          fi
+          echo "identical code folding: ${icf:-this linker does not offer it}"
           # The path remaps keep runner-specific cargo and checkout paths out
           # of the shipped binaries' panic strings: smaller .rodata, and the
           # bytes stop varying with the runner's home directory.
