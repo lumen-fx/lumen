@@ -143,12 +143,23 @@ impl Plugin for CanvasPlugin {
         app.add_script_fns(script_fns());
         app.add_extract_fn(extract_canvases);
         app.register_native_painter(EXTENSION_ID, CanvasPainter);
-        // After the input dispatch, the frame hook, and the timers: every
-        // handler that could draw has run, so one encode per tick covers all
-        // of them and the drawing is on screen on the tick it was made.
+        // Adoption runs before any handler does, so the first `on_ready` to
+        // ask how big a canvas is gets the size its markup declared rather
+        // than the default it would have had a moment earlier.
         app.add_systems(
             TickStage::Systems,
-            tick_canvas
+            adopt_canvases
+                .before(ScriptSet::Dispatch)
+                .before(ScriptSet::Ready)
+                .before(ScriptSet::Frame),
+        );
+        // Encoding runs after the input dispatch, the frame hook, and the
+        // timers: every handler that could draw has run, so one encode per
+        // tick covers all of them.
+        app.add_systems(
+            TickStage::Systems,
+            encode_canvases
+                .after(adopt_canvases)
                 .after(ScriptSet::Dispatch)
                 .after(ScriptSet::Frame)
                 .after(ScriptSet::Timers),
@@ -179,17 +190,17 @@ type NewElements<'w, 's> = Query<
     Added<LumenTag>,
 >;
 
-/// Adopt new `<canvas>` elements, encode what the script recorded, and say
-/// so when a canvas changed.
-#[allow(clippy::too_many_arguments)]
-fn tick_canvas(
+/// Adopt the `<canvas>` elements that appeared this tick.
+///
+/// Runs before any handler, so a script that asks how big its canvas is gets
+/// the size the markup declared. A canvas drawn on before its element existed
+/// keeps what it recorded; only the size is the element's to state, and a
+/// `canvas::resize` recorded afterwards still wins, because a resize is
+/// replayed after this.
+fn adopt_canvases(
     mut commands: Commands,
     new_elements: NewElements,
-    mut canvases: Query<(&mut Canvas, Option<&mut ImageComponent>)>,
     waker: Option<Res<EventLoopWaker>>,
-    mut frame_dirty: Option<ResMut<FrameDirty>>,
-    shaper: Option<NonSendMut<ShaperService>>,
-    mut encoder: Local<Encoder>,
 ) {
     let mut store = store::store();
     // Wire the loop waker lazily: the resource appears once a windowing
@@ -206,16 +217,8 @@ fn tick_canvas(
             continue;
         }
         let id = id.map(|i| i.0.clone()).unwrap_or_default();
-        // The element's `width` / `height` set the drawing space, unless a
-        // script already set one: a canvas drawn on before its element
-        // appeared keeps the size it was drawn at.
-        let first_mention = !store.surfaces.contains_key(&id);
-        let declared = declared_size(style);
-        let surface = store.surface(&id);
-        if first_mention {
-            surface.logical = declared;
-        }
-        let logical = surface.logical;
+        let logical = declared_size(style);
+        store.surface(&id).logical = logical;
         store.answered.insert(id.clone());
         commands.entity(entity).insert((
             Canvas {
@@ -235,7 +238,16 @@ fn tick_canvas(
             },
         ));
     }
+}
 
+/// Replay what the scripts recorded this tick, and say when a canvas changed.
+fn encode_canvases(
+    mut canvases: Query<(&mut Canvas, Option<&mut ImageComponent>)>,
+    mut frame_dirty: Option<ResMut<FrameDirty>>,
+    shaper: Option<NonSendMut<ShaperService>>,
+    mut encoder: Local<Encoder>,
+) {
+    let mut store = store::store();
     let store = &mut *store;
     encoder.blobs.retain(&store.buffers);
     let mut shaper = shaper;
