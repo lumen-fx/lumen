@@ -63,5 +63,4 @@ lumen-ir = { workspace = true }
 lumen-render-wgpu = { workspace = true }
 lumen-runtime = { workspace = true }
 lumen-script = { workspace = true }
-glam = { workspace = true }
 serde_json = { workspace = true }
