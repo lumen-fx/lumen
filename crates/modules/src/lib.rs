@@ -47,12 +47,17 @@
 //! ```toml
 //! [dependencies]
 //! lumen-audio = { bundled = true }
-//! markdown-widgets = "1.2"
+//! markdown-widgets = { version = "1.2", tags = ["markdown"] }
 //! shape-tools = { path = "modules/shape-tools", config = { units = "mm" } }
 //! ```
 //!
 //! The table is unordered, so load order is the sorted key order; declaring
 //! order in the file carries no meaning.
+//!
+//! `tags` is how a module introduces markup. A compile opens no module - a
+//! release build of an app runs the parser on a machine with nothing loaded -
+//! so an element the language does not know is refused unless the app said
+//! which module answers for it. See [`register_declared_tags`].
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -118,10 +123,120 @@ pub struct ResolvedModules(pub BTreeMap<String, Result<PathBuf, String>>);
 // read this re-export.
 pub use lumen_plugin_abi::config::library_spellings;
 
+/// The markup tags the language itself owns, which no module may claim.
+///
+/// A module declaring `tags = ["button"]` would not add a tag, it would
+/// quietly reinterpret one every app already writes, and whether it won
+/// would depend on load order. Refusing the declaration is what keeps a
+/// built-in tag meaning one thing.
+///
+/// The list is spelled here rather than imported because the parser sits
+/// above this crate, not below it; `lumenc` owns a test that fails when the
+/// two drift.
+pub const RESERVED_TAGS: &[&str] = &[
+    "a",
+    "button",
+    "checkbox",
+    "column",
+    "date-picker",
+    "dialog",
+    "div",
+    "dropdown",
+    "for",
+    "if",
+    "image",
+    "input",
+    "label",
+    "menu",
+    "menubar",
+    "menuitem",
+    "option",
+    "overlay",
+    "progress",
+    "radio",
+    "root",
+    "row",
+    "script",
+    "scroll",
+    "separator",
+    "slider",
+    "slot",
+    "spacer",
+    "switch",
+    "tab",
+    "tabs",
+    "template",
+    "textarea",
+    "tile",
+    "time-picker",
+    "title-bar",
+    "toggle",
+    "tooltip",
+];
+
 /// The parsed `[dependencies]` table: one [`DepCfg`] per declared module,
 /// sorted by name, which is the load order.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DependenciesCfg(pub Vec<DepCfg>);
+
+impl DependenciesCfg {
+    /// Every tag the table declares, in load order, deduplicated.
+    ///
+    /// Two modules may name the same tag; the parser only needs to know the
+    /// tag exists, and which module answers for it is settled later by which
+    /// one adopts the element.
+    pub fn declared_tags(&self) -> Vec<&str> {
+        let mut tags: Vec<&str> = Vec::new();
+        for dep in &self.0 {
+            for tag in &dep.tags {
+                let tag = tag.as_str();
+                if !tags.contains(&tag) {
+                    tags.push(tag);
+                }
+            }
+        }
+        tags
+    }
+}
+
+/// Publish the tags an app's `[dependencies]` table declares, so the markup
+/// parser accepts them.
+///
+/// A module that answers for a tag registers it from its `Plugin::build`,
+/// which is too late for a build that never loads a module: `lumenc build`
+/// compiles the markup on a machine where nothing is opened. The `tags` key
+/// is the declaration that works on both paths, and this is what turns it
+/// into the parser's answer. Call it after the config is read and before any
+/// markup is parsed.
+pub fn register_declared_tags(deps: &DependenciesCfg) {
+    for tag in deps.declared_tags() {
+        lumen_widget::register_widget_tag_owned(tag);
+    }
+}
+
+/// Check one declared tag name, or say why it is refused.
+fn validate_tag(module: &str, tag: &str) -> Result<(), String> {
+    if tag.is_empty() {
+        return Err(format!(
+            "dependency '{module}': a tag name must not be empty"
+        ));
+    }
+    if !tag
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Err(format!(
+            "dependency '{module}': tag '{tag}' must be lowercase letters, digits, and dashes"
+        ));
+    }
+    if RESERVED_TAGS.contains(&tag) {
+        return Err(format!(
+            "dependency '{module}': tag '{tag}' is a built-in tag and cannot be declared by a \
+             module"
+        ));
+    }
+    Ok(())
+}
 
 /// One `[dependencies]` entry.
 #[derive(Debug, Clone, PartialEq)]
@@ -132,6 +247,14 @@ pub struct DepCfg {
     pub source: ModuleSource,
     /// The module's own configuration, handed to it verbatim at install.
     pub config: toml::Table,
+    /// Markup tags this module answers for, so the parser accepts them
+    /// before anything is loaded.
+    ///
+    /// A compile has no module in it - `lumenc build` produces an artifact on
+    /// a machine that opens nothing - so a tag a module introduces has to be
+    /// declared for the parse to accept it. Declaring a tag no module answers
+    /// for costs an element that renders as an empty box.
+    pub tags: Vec<String>,
 }
 
 /// Where one module's library comes from. A bare string value is shorthand
@@ -178,6 +301,7 @@ impl DepCfg {
                     name,
                     source: ModuleSource::Version(version),
                     config: toml::Table::new(),
+                    tags: Vec::new(),
                 });
             }
             toml::Value::Table(t) => t,
@@ -192,6 +316,7 @@ impl DepCfg {
         let mut version: Option<String> = None;
         let mut path: Option<String> = None;
         let mut config = toml::Table::new();
+        let mut tags: Vec<String> = Vec::new();
         for (key, v) in table {
             match key.as_str() {
                 "bundled" => match v.as_bool() {
@@ -213,6 +338,26 @@ impl DepCfg {
                 "config" => match v {
                     toml::Value::Table(t) => config = t,
                     _ => return Err(format!("dependency '{name}': `config` must be a table")),
+                },
+                "tags" => match v {
+                    toml::Value::Array(items) => {
+                        for item in items {
+                            let Some(tag) = item.as_str() else {
+                                return Err(format!(
+                                    "dependency '{name}': `tags` must be an array of strings"
+                                ));
+                            };
+                            validate_tag(&name, tag)?;
+                            if !tags.iter().any(|t| t == tag) {
+                                tags.push(tag.to_string());
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(format!(
+                            "dependency '{name}': `tags` must be an array of strings"
+                        ));
+                    }
                 },
                 "git" | "rev" | "registry" => {
                     return Err(format!(
@@ -271,6 +416,7 @@ impl DepCfg {
             name,
             source,
             config,
+            tags,
         })
     }
 }
@@ -350,6 +496,49 @@ mod tests {
     fn no_source_is_refused() {
         let err = parse("x = { config = { a = 1 } }\n").unwrap_err();
         assert!(err.contains("a source is required"), "{err}");
+    }
+
+    #[test]
+    fn tags_parse_and_deduplicate_in_load_order() {
+        let deps = parse(
+            "zeta = { bundled = true, tags = [\"gauge\", \"gauge\"] }\n\
+             alpha = { bundled = true, tags = [\"spark-line\"] }\n",
+        )
+        .unwrap();
+        assert_eq!(deps.declared_tags(), ["spark-line", "gauge"]);
+    }
+
+    #[test]
+    fn a_dep_without_tags_declares_none() {
+        let deps = parse("md = \"1.2\"\n").unwrap();
+        assert!(deps.0[0].tags.is_empty());
+        assert!(deps.declared_tags().is_empty());
+    }
+
+    #[test]
+    fn tags_must_be_an_array_of_strings() {
+        let err = parse("x = { bundled = true, tags = \"gauge\" }\n").unwrap_err();
+        assert!(err.contains("array of strings"), "{err}");
+        let err = parse("x = { bundled = true, tags = [1] }\n").unwrap_err();
+        assert!(err.contains("array of strings"), "{err}");
+    }
+
+    #[test]
+    fn a_tag_outside_the_allowed_characters_is_refused() {
+        for bad in ["Gauge", "spark_line", "spark line", ""] {
+            let err =
+                parse(&format!("x = {{ bundled = true, tags = [\"{bad}\"] }}\n")).unwrap_err();
+            assert!(
+                err.contains("lowercase letters") || err.contains("must not be empty"),
+                "{bad}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_built_in_tag_cannot_be_claimed() {
+        let err = parse("x = { bundled = true, tags = [\"button\"] }\n").unwrap_err();
+        assert!(err.contains("built-in tag"), "{err}");
     }
 
     #[test]

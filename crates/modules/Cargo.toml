@@ -18,6 +18,10 @@ publish = false
 
 [dependencies]
 lumen-core = { workspace = true }
+# The tag registry the markup parser consults after its built-in table, which
+# is where a `tags = [..]` declaration lands. Unconditional: a build with no
+# loader still parses the table, and the parse is what has to accept the tag.
+lumen-widget = { workspace = true }
 # The one copy of the library-name spellings every by-name probe shares.
 lumen-plugin-abi = { workspace = true }
 bevy_ecs = { workspace = true }

@@ -67,6 +67,50 @@ fn unknown_tag_errors() {
 }
 
 #[test]
+fn an_unknown_tag_names_the_dependencies_key() {
+    // The parser cannot tell a typo from an element a module brings, so the
+    // message says what a module-provided tag needs.
+    let err = parse_html(r##"<root><nope/></root>"##)
+        .expect_err("unknown tag")
+        .to_string();
+    assert!(err.contains("tags = [\"nope\"]"), "{err}");
+    assert!(err.contains("[dependencies]"), "{err}");
+}
+
+#[test]
+fn a_declared_tag_parses_once_its_dependency_is_registered() {
+    // The generic mechanism, exercised with a tag no module ships: a tag the
+    // parser has never heard of is refused, and the same markup parses after
+    // the `[dependencies]` table that declares it is published.
+    let markup = r##"<root><parse-declared-tag/></root>"##;
+    assert!(matches!(
+        parse_html(markup),
+        Err(lumenc::ParseError::UnknownTag(ref t, _)) if t == "parse-declared-tag"
+    ));
+
+    let deps: lumen_modules::DependenciesCfg =
+        toml::from_str("mod-under-test = { bundled = true, tags = [\"parse-declared-tag\"] }")
+            .expect("dependencies table");
+    lumen_modules::register_declared_tags(&deps);
+
+    let ir = parse_html(markup).expect("the declared tag parses");
+    assert_eq!(ir.root.children[0].tag, "parse-declared-tag");
+}
+
+#[test]
+fn no_module_can_claim_a_tag_the_language_owns() {
+    // The refusal list and the parser's own table are spelled in different
+    // crates; this is what keeps them from drifting apart.
+    for tag in lumenc::parser_html::KNOWN_TAGS {
+        assert!(
+            lumen_modules::RESERVED_TAGS.contains(tag),
+            "built-in tag '{tag}' is missing from lumen_modules::RESERVED_TAGS, so a module \
+             could declare it"
+        );
+    }
+}
+
+#[test]
 fn bad_color_errors() {
     let r = parse_html(r##"<root><tile bg="not-hex"/></root>"##);
     assert!(matches!(r, Err(lumenc::ParseError::BadAttribute { name, .. }) if name == "bg"));

@@ -25,6 +25,11 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         opts.parser.take().map(std::sync::Arc::from);
     let dir = opts.dir.clone();
     let cfg = crate::config::LumenToml::load_or_default(&dir).map_err(RunError::Config)?;
+    // The tags this app's modules bring, published before the markup is
+    // parsed. A module registers its own tag when it installs, which covers
+    // the run path; the declaration is what covers a compile, where nothing
+    // is loaded at all.
+    register_declared_tags(&cfg);
     // Where this app lives and what it is called, published before anything
     // that resolves a path runs: every path a script names is resolved
     // against these, and a script's `on_start` fires on the first tick.
