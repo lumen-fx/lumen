@@ -115,6 +115,66 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // and before the script host loads so `t("key")` works from `on_start`.
     register_i18n(&mut app, &dir, &cfg)?;
 
+    // Command-bus drain, the FFI typed-read mirror, and the
+    // `set_color_scheme` `Command::Typed` handler. Always-on reactive plumbing.
+    register_commands(&mut app);
+    // The HTTP client for `fetch()` / `http()`. Must precede the host plugins:
+    // the first one to build installs a `FetchRegistry` if none exists yet.
+    // Ahead of the module phase, which is where it has always been: a module
+    // that installs a client of its own replaces this one, and moving the
+    // modules would have silently reversed that.
+    register_http_client(&mut app);
+    // The registration order is the shadowing order: a plugin's functions
+    // first, then the embedder's. Every host drains this one registry as it
+    // loads and seals it afterwards, so a registration that arrives too late
+    // to bind says so instead of going quiet. The builtin table is not in it;
+    // each host binds that itself when it is constructed, so a name registered
+    // here shadows a builtin of the same name.
+    // Runtime dependencies (`[dependencies]`): prebuilt dylibs of either
+    // kind - engine-locked modules installed as ordinary Plugins, portable
+    // plugins bound through the C-ABI loader - each told apart by its
+    // exports. Before the embedder's plugin phase on purpose: registrations
+    // shadow in arrival order, so a later embedder registration of the same
+    // script-fn name wins over a module's. Any load failure is a stderr
+    // banner plus a `LoadedModules` failure entry, and the app keeps booting
+    // without that module.
+    //
+    // Before the markup is parsed, too: a module that brings an element
+    // registers its tag from `Plugin::build`, and a parse that ran first
+    // would have refused the element the module exists to provide. Everything
+    // below this point needs the parse to have happened, so this is the last
+    // moment a module can be installed and still be ahead of it.
+    #[cfg(feature = "modules")]
+    {
+        let env = crate::modules::InitEnv {
+            app_dir: dir.clone(),
+            app_id: cfg
+                .app
+                .id
+                .clone()
+                .unwrap_or_else(|| derive_app_id(&opts.dir)),
+            // `bounded` is the run-mode bit that says "no interactive
+            // window session", which is what a plugin needs to know.
+            headless: opts.bounded,
+            hot_reload: opts.hot_reload && !opts.bounded,
+        };
+        crate::modules::load_modules(
+            &mut app,
+            &dir,
+            &cfg.dependencies,
+            &opts.resolved_modules,
+            &env,
+        );
+    }
+    #[cfg(not(feature = "modules"))]
+    for dep in &cfg.dependencies.0 {
+        eprintln!(
+            "lumen-runtime: dependency '{}' is declared but this runtime was built without \
+             the `modules` feature; the app runs without it",
+            dep.name
+        );
+    }
+
     // Initial load runs before the window exists, so there's no real
     // OS theme / viewport yet. Apply with the best-guess default
     // context; `detect_media_change` re-applies with the live context on
@@ -163,9 +223,6 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         &css_import_paths,
         &css_import_mtimes,
     );
-    // Command-bus drain, the FFI typed-read mirror, and the
-    // `set_color_scheme` `Command::Typed` handler. Always-on reactive plumbing.
-    register_commands(&mut app);
     // Script host selection. Each script file picks its host from its own
     // extension, so an app that ships two languages runs two hosts side by
     // side; `[script] engine` collapses everything onto one. Every host
@@ -195,54 +252,9 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     let has_script = !grouped.is_empty();
     let mut reloaders = ScriptReloaders::default();
     let multi_host = grouped.len() > 1;
-    // The HTTP client for `fetch()` / `http()`. Must precede the host plugins:
-    // the first one to build installs a `FetchRegistry` if none exists yet.
-    register_http_client(&mut app);
+    // The host-neutral half of the script wiring. It needs the parse: whether
+    // the app ships a script at all is read out of the document.
     register_script_common(&mut app, has_script);
-    // The registration order is the shadowing order: a plugin's functions
-    // first, then the embedder's. Every host drains this one registry as it
-    // loads and seals it afterwards, so a registration that arrives too late
-    // to bind says so instead of going quiet. The builtin table is not in it;
-    // each host binds that itself when it is constructed, so a name registered
-    // here shadows a builtin of the same name.
-    // Runtime dependencies (`[dependencies]`): prebuilt dylibs of either
-    // kind - engine-locked modules installed as ordinary Plugins, portable
-    // plugins bound through the C-ABI loader - each told apart by its
-    // exports. Before the embedder's plugin phase on purpose: registrations
-    // shadow in arrival order, so a later embedder registration of the same
-    // script-fn name wins over a module's. Any load failure is a stderr
-    // banner plus a `LoadedModules` failure entry, and the app keeps booting
-    // without that module.
-    #[cfg(feature = "modules")]
-    {
-        let env = crate::modules::InitEnv {
-            app_dir: dir.clone(),
-            app_id: cfg
-                .app
-                .id
-                .clone()
-                .unwrap_or_else(|| derive_app_id(&opts.dir)),
-            // `bounded` is the run-mode bit that says "no interactive
-            // window session", which is what a plugin needs to know.
-            headless: opts.bounded,
-            hot_reload: opts.hot_reload && !opts.bounded,
-        };
-        crate::modules::load_modules(
-            &mut app,
-            &dir,
-            &cfg.dependencies,
-            &opts.resolved_modules,
-            &env,
-        );
-    }
-    #[cfg(not(feature = "modules"))]
-    for dep in &cfg.dependencies.0 {
-        eprintln!(
-            "lumen-runtime: dependency '{}' is declared but this runtime was built without \
-             the `modules` feature; the app runs without it",
-            dep.name
-        );
-    }
     for install in std::mem::take(&mut opts.plugins) {
         install(&mut app);
     }

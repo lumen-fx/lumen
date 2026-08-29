@@ -4306,6 +4306,7 @@ dependencies = [
  "lumen-i18n",
  "lumen-ir",
  "lumen-mcp",
+ "lumen-module-registry",
  "lumen-modules",
  "lumen-os-dnd",
  "lumen-os-tray",

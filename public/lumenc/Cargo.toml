@@ -182,6 +182,10 @@ lumen-text = { workspace = true }
 # devtools_mount.rs (compiled only under `--features devtools`) names these.
 lumen-mcp = { workspace = true }
 lumen-devtools = { workspace = true }
+# module_phase_order.rs puts a module on the registry the way a module's own
+# constructor does, which is the only way to observe the build phases from a
+# test that opens no library.
+lumen-module-registry = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 
