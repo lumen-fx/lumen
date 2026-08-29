@@ -195,7 +195,7 @@ impl Default for FontSpec {
 impl FontSpec {
     /// Parse the shorthand, or `None`.
     ///
-    /// The subset is the part of the CSS `font` shorthand a canvas actually
+    /// The subset is the part of the CSS `font` shorthand a canvas
     /// uses: an optional weight (a number, or `bold` / `normal`), a size in
     /// `px`, and an optional family. The size is the one required piece,
     /// because without it there is nothing to shape.

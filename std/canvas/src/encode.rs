@@ -31,7 +31,7 @@ use crate::store::Surface;
 ///
 /// vello keys its GPU upload cache off the blob's identity, so handing it a
 /// freshly built blob every frame would re-upload every frame. The write
-/// count is what says the pixels actually changed.
+/// count is what says the pixels changed.
 #[derive(Default)]
 pub struct BlobCache(HashMap<u32, (u64, Blob<u8>)>);
 

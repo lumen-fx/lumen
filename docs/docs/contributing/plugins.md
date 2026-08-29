@@ -211,6 +211,19 @@ turn comes:
 app.register_native_painter("acme.sparkline", SparklinePainter);
 ```
 
+A painter receives its draw target as `&mut dyn Any` and downcasts it to the
+backend's scene type, which for the wgpu backend is a `vello::Scene`. That
+downcast is a `TypeId` match, and two builds of the same vello version are two
+different types as far as `TypeId` is concerned: a crate that declared vello
+itself would compile, register, and then quietly paint nothing. Take it from
+the one place that cannot drift - `lumen_render_wgpu::vello`, re-exported by
+the module SDK behind its off-by-default `paint` feature:
+
+```toml
+[dependencies]
+lumen-module = { workspace = true, features = ["paint"] }
+```
+
 **A system that raises `FrameDirty`** when your state changes. Nothing else
 will: the dirty roll-up watches the framework's own components, not yours, so
 a tick that only changed your state is a clean tick and extract never runs. If
@@ -403,6 +416,26 @@ plugin, so installing the plugin is enough. Registration has to happen before
 the app's markup is parsed. Suppressing the generated plugin also suppresses
 the registration, in which case call the generated `register` function
 yourself.
+
+A [runtime module](#runtime-modules) that brings a tag has the same job and
+one more problem: a compile loads no module. `lumenc build`, `lumenc check`,
+and `lumenc package` run the parser on a machine where nothing was opened, so
+the element would be refused however diligently the module registers it. The
+app states the claim instead:
+
+```toml
+[dependencies]
+acme-charts = { bundled = true, tags = ["sparkline"] }
+```
+
+Do both. The module registers its tags from `Plugin::build`
+(`lumen_module::lumen_widget::register_widget_tag_owned`), which is what makes
+a run accept them; the key is what makes a build accept them. Modules install
+before the markup is parsed precisely so the first half works, which means an
+app that forgot the key runs and then fails to build - so a module's
+documentation says to write it. A tag the language already owns is refused
+where it is declared, because a module reinterpreting `<button>` would be
+settled by load order rather than by anything an author wrote.
 
 ## Exposing functions to scripts
 
@@ -780,6 +813,24 @@ ship beside. A crate added there is also in the link kit that release
 publishes, so `lumenc package --static` can compile it into an app the day it
 ships; there is no equivalent for a module from outside the toolchain, which
 travels beside the executable instead.
+
+### A worked example: the canvas module
+
+`std/canvas` is the same shape with pixels in it. It brings a markup element
+rather than only functions, so it registers the `canvas` tag from
+`Plugin::build` and the app declares the same tag under `[dependencies]` for
+the compile. It adopts each element it answers for by watching for the tag,
+and gives it a box by inserting an `ImageComponent` with a natural size, which
+is the leaf shape the layout engine already sizes the way a canvas needs;
+nothing loads, because the asset pipeline keys off a source component a canvas
+never carries. It paints through the seam above, with the module's `paint`
+feature supplying the vello its painter downcasts to.
+
+The rest of its design is about where a script can run. A script-function body
+has no world, so a drawing call records into a journal the module owns and one
+system per tick replays the journal into a retained scene; the scene is what
+the extract hands the render world, and a tick that recorded nothing
+re-encodes nothing.
 
 ## Portable plugins
 

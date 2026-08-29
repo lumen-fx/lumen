@@ -3653,6 +3653,7 @@ dependencies = [
  "lumen",
  "lumen-archive",
  "lumen-audio",
+ "lumen-canvas",
  "lumen-download",
  "lumen-fs",
  "lumen-process",

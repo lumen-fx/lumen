@@ -352,6 +352,32 @@ Timer names are unique: setting a timer with an existing name replaces it.
 Negative delays clamp to zero. Cancelling from inside the timer's own handler
 takes effect before the next fire.
 
+## Frame callbacks
+
+| Builtin | Behaviour |
+| --- | --- |
+| `lumen::request_frame()` | Ask for one `on_frame(dt)` call on the next tick. |
+
+One request buys one callback. A handler that wants to keep animating asks
+again from inside itself, and an animation that is finished simply stops
+asking, which parks the app. `dt` is the seconds since the previous callback,
+capped so a stalled tick slows an animation instead of teleporting it, and
+zero on the frame that starts a loop because no interval has passed yet.
+
+```candela
+fn on_ready() {
+    lumen::request_frame();
+}
+
+fn on_frame(dt: float) {
+    lumen::signal_set_float("angle", lumen::signal_get_float("angle") + dt * 2.0);
+    lumen::request_frame();
+}
+```
+
+Use this rather than a repeating timer for anything visual: a timer fires on a
+wall-clock schedule that has nothing to do with when the app draws.
+
 ## Query and traverse the element tree
 
 Node handles are `int` ids; `0` means "no node". Reads resolve against the
@@ -805,6 +831,101 @@ plain text.
 | `lumen::tr(key: string)` | `string` | Alias for `t`. |
 
 See [Translation](../guides/i18n.md) for the catalogue format.
+
+## Canvas
+
+These functions come from the `lumen-canvas` runtime module and exist only
+when the app declares it under `[dependencies]` in `lumen.toml`, along with
+the tag it brings:
+
+```toml
+[dependencies]
+lumen-canvas = { bundled = true, tags = ["canvas"] }
+```
+
+They live in their own `canvas` namespace, so no `import` line reaches
+them: the host declares the namespace from what the module registered.
+
+Every call names a canvas by the `id` on its [`<canvas>`](tags.md#canvas)
+element. Colours are components in 0..1, angles are radians, and coordinates
+are canvas units, which the element scales onto its box.
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `canvas::width(id: string)` | `int` | The drawing width, in canvas units. |
+| `canvas::height(id: string)` | `int` | The drawing height, in canvas units. |
+| `canvas::resize(id: string, width: float, height: float)` | | Set the drawing space. This empties the canvas, as writing `width` on an HTML canvas does. |
+| `canvas::clear(id: string)` | | Erase everything the canvas holds. |
+| `canvas::begin_path(id: string)` | | Start a new path. |
+| `canvas::move_to(id: string, x: float, y: float)` | | Start a subpath at a point. |
+| `canvas::line_to(id: string, x: float, y: float)` | | Straight segment to a point. |
+| `canvas::quad_to(id: string, cx: float, cy: float, x: float, y: float)` | | Quadratic segment through one control point. |
+| `canvas::bezier_to(id: string, c1x: float, c1y: float, c2x: float, c2y: float, x: float, y: float)` | | Cubic segment through two control points. |
+| `canvas::arc(id: string, x: float, y: float, radius: float, start: float, end: float)` | | Circular arc, angles in radians, joined to the current subpath. |
+| `canvas::rect(id: string, x: float, y: float, width: float, height: float)` | | Add a closed rectangle to the path. |
+| `canvas::close_path(id: string)` | | Close the current subpath back to its start. |
+| `canvas::fill(id: string)` | | Fill the current path. |
+| `canvas::stroke(id: string)` | | Stroke the current path. |
+| `canvas::fill_rect(id: string, x: float, y: float, width: float, height: float)` | | Fill one rectangle, leaving the path alone. |
+| `canvas::stroke_rect(id: string, x: float, y: float, width: float, height: float)` | | Stroke one rectangle, leaving the path alone. |
+| `canvas::set_fill_rgba(id: string, r: float, g: float, b: float, a: float)` | | Set the fill colour from four components. |
+| `canvas::set_fill_style(id: string, color: string)` | `bool` | Set the fill colour from CSS text (`#rgb`, `#rrggbbaa`, `rgb()`, `rgba()`, the CSS level 1 names, `transparent`). `false` when the text is none of those, and the colour is left alone. |
+| `canvas::set_stroke_rgba(id: string, r: float, g: float, b: float, a: float)` | | Set the stroke colour from four components. |
+| `canvas::set_stroke_style(id: string, color: string)` | `bool` | Set the stroke colour from CSS text, on the same terms. |
+| `canvas::set_line_width(id: string, width: float)` | | Stroke width, in canvas units. |
+| `canvas::set_line_cap(id: string, cap: string)` | `bool` | `butt`, `round`, or `square`. |
+| `canvas::set_line_join(id: string, join: string)` | `bool` | `miter`, `round`, or `bevel`. |
+| `canvas::set_global_alpha(id: string, alpha: float)` | | Multiply every later draw by this alpha. |
+| `canvas::save(id: string)` | | Push the drawing state: colours, line style, alpha, transform. |
+| `canvas::restore(id: string)` | | Pop it. Popping past the bottom leaves the state alone. |
+| `canvas::translate(id: string, x: float, y: float)` | | Move the origin. |
+| `canvas::rotate(id: string, radians: float)` | | Rotate the transform. |
+| `canvas::scale(id: string, x: float, y: float)` | | Scale the transform. |
+| `canvas::reset_transform(id: string)` | | Drop back to the identity. |
+| `canvas::set_transform(id: string, a: float, b: float, c: float, d: float, e: float, f: float)` | | Replace the transform outright. |
+| `canvas::set_font(id: string, font: string)` | `bool` | `"[weight] <size>px [family]"`, as in `"bold 16px Inter"`. The size is required; `false` when it is missing. |
+| `canvas::fill_text(id: string, text: string, x: float, y: float)` | | Draw text in the fill colour, with `(x, y)` on the alphabetic baseline, shaped with the app's own fonts. |
+
+A path is stored in canvas units and placed by the transform at the moment it
+is filled or stroked, so changing the transform between building a path and
+filling it moves the result. The HTML canvas bakes the transform into each
+segment as it is added; this is the one place the two differ.
+
+### Pixel buffers
+
+A canvas is write-only: what it holds is a list of drawing calls bound for the
+GPU, not an image, so there is nothing to read a pixel back from. Buffers are
+the read-write half - plain CPU pixels a script creates, edits, loads from a
+PNG, saves to one, and draws onto a canvas. A pixel is one packed
+`0xRRGGBBAA` integer with straight (not premultiplied) alpha, so what a script
+writes is what it reads back.
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `canvas::buffer_new(width: int, height: int)` | `int` | A new transparent buffer; `0` when it was refused, with the reason on stderr. |
+| `canvas::buffer_free(buffer: int)` | `bool` | Release a buffer. `false` when the handle names none. |
+| `canvas::buffer_width(buffer: int)` | `int` | Its width, or `0`. |
+| `canvas::buffer_height(buffer: int)` | `int` | Its height, or `0`. |
+| `canvas::buffer_get_pixel(buffer: int, x: int, y: int)` | `int` | One pixel as `0xRRGGBBAA`. A pixel outside the buffer reads `0`. |
+| `canvas::buffer_set_pixel(buffer: int, x: int, y: int, rgba: int)` | | Write one pixel. Outside the buffer, nothing happens. |
+| `canvas::buffer_get_region(buffer: int, x: int, y: int, width: int, height: int)` | `int[]` | A rectangle of pixels, row-major. Pixels off the edge read `0`, so the result is always the size that was asked for. |
+| `canvas::buffer_put_region(buffer: int, x: int, y: int, width: int, height: int, pixels: int[])` | | Write a rectangle back. A short array is a partial write. |
+| `canvas::buffer_fill_rect(buffer: int, x: int, y: int, width: int, height: int, rgba: int)` | | Fill a rectangle with one colour. |
+| `canvas::buffer_load_png(path: string)` | `int` | Decode a PNG into a new buffer; `0` when it could not be read. The path resolves against the app directory. |
+| `canvas::buffer_save_png(buffer: int, path: string)` | `bool` | Write a buffer out as a PNG. |
+| `canvas::draw_buffer(id: string, buffer: int, x: float, y: float)` | | Draw a buffer onto a canvas at its own size. |
+| `canvas::draw_buffer_scaled(id: string, buffer: int, x: float, y: float, width: float, height: float)` | | Draw a buffer stretched into a box. |
+
+Three settings bound what one call may ask for, from the module's `config`
+table: `region_cap` (pixels in one region call), `buffer_pixel_cap` (pixels in
+one buffer), and `buffer_count_cap` (buffers at once). A call over a cap
+answers empty or `0` and says why on stderr.
+
+Refusals never raise. An unknown canvas id keeps the drawing, in case the
+element has not been mounted yet, and reports once if no element ever matches;
+an unknown buffer handle reads as an empty buffer. See
+[`<canvas>`](tags.md#canvas) for the element, its sizing, and what is not
+implemented yet.
 
 ## Filesystem
 

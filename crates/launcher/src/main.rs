@@ -32,6 +32,8 @@ use lumen_archive as _;
 #[cfg(feature = "static-run")]
 use lumen_audio as _;
 #[cfg(feature = "static-run")]
+use lumen_canvas as _;
+#[cfg(feature = "static-run")]
 use lumen_download as _;
 #[cfg(feature = "static-run")]
 use lumen_fs as _;
