@@ -200,14 +200,25 @@ jobs:
         run: |
           triple="$(rustc -vV | sed -n 's/^host: //p')"
           echo "triple=$triple" >> "$GITHUB_ENV"
+          # Identical-code-folding merges functions that compile to the same
+          # bytes; "safe" only folds where address identity cannot be
+          # observed. lld-only, so Linux-only: macOS links with ld64, which
+          # has no such flag.
           case "$(uname -s)" in
-            Darwin) rpath='@loader_path' ;;
-            *)      rpath='$ORIGIN' ;;
+            Darwin) rpath='@loader_path'; icf='' ;;
+            *)      rpath='$ORIGIN'; icf='-C link-arg=-Wl,--icf=safe' ;;
           esac
-          export RUSTFLAGS="-C prefer-dynamic -C link-arg=-Wl,-rpath,$rpath"
+          # The path remaps keep runner-specific cargo and checkout paths out
+          # of the shipped binaries' panic strings: smaller .rodata, and the
+          # bytes stop varying with the runner's home directory.
+          remap="--remap-path-prefix=$HOME/.cargo=/cargo --remap-path-prefix=$PWD=/lumen"
+          export RUSTFLAGS="-C prefer-dynamic -C link-arg=-Wl,-rpath,$rpath $icf $remap"
           # LTO cannot cross a dynamic-library boundary (rustc refuses
           # prefer-dynamic under LTO outright), so the dynamic shape trades
-          # the release profile's fat LTO away.
+          # the release profile's fat LTO away. opt-level 3 recovers part of
+          # what that costs: measured on this shape it is both faster per
+          # tick and smaller than the profile's "s" (inlining removes more
+          # code than it adds), so the dynamic leg overrides it.
           # The bundled runtime modules (std/) build in the same invocation:
           # one feature graph, so each module records the exact build id of
           # the engine shipping beside it. They ship in their own archive
@@ -221,6 +232,7 @@ jobs:
             -p lumen-process \
             -p lumenc \
             --config 'profile.release.lto="off"' \
+            --config 'profile.release.opt-level=3' \
             --features lumenc/dynamic-engine,lumen/dynamic-engine
 
       - name: Build lumenc (Windows)
