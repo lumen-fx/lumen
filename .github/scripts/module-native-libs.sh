@@ -41,12 +41,28 @@ packages="$(while IFS=$'\t' read -r name package _lib; do
   printf '%s\t%s\n' "$name" "$package"
 done <<<"$modules")"
 
+# jq opens both of the inputs below by path itself, so neither can be a
+# process substitution: on Windows the shell is git bash and jq is a native
+# Windows binary, which cannot open the `/proc/<pid>/fd/N` name msys hands it.
+# Real files work everywhere, and cygpath - present only under git bash -
+# gives jq a path in the shape it can resolve.
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+jq -c 'select(.reason == "build-script-executed")' "$messages" >"$work/messages.jsonl"
+printf '%s' "$packages" >"$work/packages.tsv"
+
+for_jq="$work"
+if command -v cygpath >/dev/null 2>&1; then
+  for_jq="$(cygpath -m "$work")"
+fi
+
 # The graph the recorded build resolved: `static-run` is the feature that puts
 # the modules in it at all.
 cargo metadata --format-version 1 --filter-platform "$triple" \
     --features lumen-launcher/static-run |
-  jq -r --slurpfile msgs <(jq -c 'select(.reason == "build-script-executed")' "$messages") \
-        --rawfile names <(printf '%s' "$packages") '
+  jq -r --slurpfile msgs "$for_jq/messages.jsonl" \
+        --rawfile names "$for_jq/packages.tsv" '
     # package id -> the ids it depends on, every kind of dependency followed.
     # More edges can only pull a package into the shared base and out of a
     # module|s exclusive set, which loses an attribution rather than inventing
