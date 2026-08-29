@@ -27,6 +27,7 @@ fn dep(name: &str, source: ModuleSource) -> DepCfg {
         name: name.to_string(),
         source,
         config: toml::Table::new(),
+        tags: Vec::new(),
     }
 }
 

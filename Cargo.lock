@@ -3758,6 +3758,7 @@ dependencies = [
  "lumen-module-registry",
  "lumen-plugin",
  "lumen-plugin-abi",
+ "lumen-widget",
  "lumenc-plugin",
  "serde",
  "serde_json",

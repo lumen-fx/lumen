@@ -66,6 +66,10 @@ pub enum CompileError {
     /// migration hint verbatim; see [`resolve_src_dir`].
     #[error("{0}")]
     Layout(String),
+    /// `lumen.toml` declares something this compile has to understand, and
+    /// the declaration is wrong. Today that is the `[dependencies]` table.
+    #[error("lumen.toml: {0}")]
+    Config(String),
 }
 
 /// Compile `<dir>/src/main.lmn` (+ optional `src/main.css`, `<include>`,
@@ -104,6 +108,10 @@ fn compile_dir(
 
     let src_dir = resolve_src_dir(dir)?;
     let entry = entry_name(dir);
+    // The tags the app's modules bring, published before the parse: a compile
+    // loads no module, so the declaration in `lumen.toml` is the only thing
+    // that can tell the parser those elements exist.
+    register_declared_tags(dir)?;
     let html_path = src_dir.join(&entry);
     let css_path = src_dir.join("main.css");
 
@@ -483,6 +491,31 @@ fn entry_name(dir: &Path) -> String {
         .and_then(|e| e.as_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| "main.lmn".to_string())
+}
+
+/// Publish the markup tags the app's `[dependencies]` table declares.
+///
+/// This path links no runtime, so it reads the table itself. A file that is
+/// absent or is not TOML at all leaves the parser with its built-in tags,
+/// which is what the rest of this module does with an unreadable config; a
+/// `[dependencies]` table that is present and wrong is reported, because a
+/// silent miss here surfaces later as an unexplained unknown tag.
+fn register_declared_tags(dir: &Path) -> Result<(), CompileError> {
+    let Ok(text) = std::fs::read_to_string(dir.join("lumen.toml")) else {
+        return Ok(());
+    };
+    let Ok(value) = toml::from_str::<toml::Value>(&text) else {
+        return Ok(());
+    };
+    let Some(table) = value.get("dependencies") else {
+        return Ok(());
+    };
+    let deps: lumen_modules::DependenciesCfg = table
+        .clone()
+        .try_into()
+        .map_err(|e| CompileError::Config(e.to_string()))?;
+    lumen_modules::register_declared_tags(&deps);
+    Ok(())
 }
 
 /// Concatenate the inline `<script>` body with every external script file

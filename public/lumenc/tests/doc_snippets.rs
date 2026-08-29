@@ -101,6 +101,35 @@ fn doc_blocks() -> Vec<Block> {
     blocks
 }
 
+/// Markup tags a runtime module brings, and the module that answers for each.
+///
+/// A tag outside the language is only accepted when the app declares the
+/// module that provides it, which is the whole point of the `tags` key. A
+/// documentation page showing such an element shows the markup, not the
+/// `lumen.toml` beside it, so the harness supplies the declaration the page's
+/// own prose tells a reader to write.
+const MODULE_TAGS: &[(&str, &str)] = &[("canvas", "lumen-canvas")];
+
+/// The `[dependencies]` table a snippet needs, given the code it ships.
+fn dependencies_for(files: &[(&str, &str)]) -> String {
+    let mut table = String::new();
+    for (tag, module) in MODULE_TAGS {
+        let open = format!("<{tag}");
+        if files
+            .iter()
+            .any(|(_, body)| body.contains(&open) || body.contains(&format!("</{tag}>")))
+        {
+            table.push_str(&format!(
+                "{module} = {{ bundled = true, tags = [\"{tag}\"] }}\n"
+            ));
+        }
+    }
+    if table.is_empty() {
+        return table;
+    }
+    format!("\n[dependencies]\n{table}")
+}
+
 /// Write a throwaway app directory and hand it to `lumenc check`. `Err`
 /// carries what a reader copying the block would see.
 ///
@@ -116,7 +145,10 @@ fn check_app(label: &str, files: &[(&str, &str)]) -> Result<(), String> {
     std::fs::create_dir_all(&dir).expect("create the snippet app dir");
     std::fs::write(
         dir.join("lumen.toml"),
-        "[app]\nentry = \"main.lmn\"\n\n[mcp]\nport = 0\n",
+        format!(
+            "[app]\nentry = \"main.lmn\"\n\n[mcp]\nport = 0\n{}",
+            dependencies_for(files)
+        ),
     )
     .expect("write lumen.toml");
     for (rel, body) in files {

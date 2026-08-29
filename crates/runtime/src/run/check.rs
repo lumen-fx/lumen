@@ -45,6 +45,7 @@ pub fn compile_app_with_skin(
     skin: Option<&str>,
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
+    register_declared_tags(&cfg);
     let layout = AppLayout::resolve(dir, &cfg)?;
     // The same discovery the run path does, so compiling sees the app the way
     // running it does: the entry file it would open, and every sibling page.
@@ -181,6 +182,7 @@ pub fn check_app(
     plugins: &dyn crate::compiler_plugins::CompilerPlugins,
 ) -> Result<CheckReport, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
+    register_declared_tags(&cfg);
     let layout = AppLayout::resolve(dir, &cfg)?;
     let roots = cfg.resolved_asset_roots(dir);
     // File-based pages: validate the whole assembled multi-page tree (entry +

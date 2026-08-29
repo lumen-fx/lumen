@@ -2486,6 +2486,7 @@ mod tests {
             name: "lumen-audio".to_string(),
             source: ModuleSource::Bundled,
             config: toml::Table::new(),
+            tags: Vec::new(),
         }]);
 
         let message = no_modules_archive("0.0.9", linux, &deps);

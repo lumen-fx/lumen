@@ -20,7 +20,10 @@ pub enum ParseError {
     #[error("xml parse error: {0}")]
     Xml(String),
     /// Unknown tag name (not in the supported set).
-    #[error("unknown tag '{0}' at position {1}")]
+    #[error(
+        "unknown tag '{0}' at position {1}; a tag a module brings needs \
+         `tags = [\"{0}\"]` on that module's [dependencies] entry"
+    )]
     UnknownTag(String, usize),
     /// Attribute value didn't match its expected form.
     #[error("bad attribute '{name}=\"{value}\"' on <{tag}>: {reason}")]
