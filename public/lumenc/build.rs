@@ -12,8 +12,12 @@
 //!
 //! So this script fetches the matching tagged source, builds `liblumen` and
 //! `lumen-launcher` from it, and puts them where `lumenc` looks first: the
-//! directory it was installed into. Afterwards `lumenc package` behaves the
-//! same as it does on a machine that installed from a release.
+//! directory it was installed into. The script standard library that build
+//! staged goes there too, under `libs/`, because candela resolves
+//! `import "std/..."` against that directory beside the running executable -
+//! which is `lumenc` itself while you develop, and the app once it is
+//! packaged. Afterwards `lumenc run` and `lumenc package` behave the same as
+//! they do on a machine that installed from a release.
 //!
 //! The tag has to match this crate's version, because the engine and the
 //! compiler are one tree. Whether that tag exists is the releases page's
@@ -26,6 +30,11 @@
 //! files themselves turns it off.
 
 use std::path::{Path, PathBuf};
+
+/// Directory the script standard library sits in, beside the binaries that
+/// read it. Matches `SCRIPT_LIBRARY_DIR` in `src/package_cli.rs`, the release
+/// archives, and the Windows installer.
+const SCRIPT_LIBRARY_DIR: &str = "libs";
 
 fn main() {
     println!("cargo:rerun-if-env-changed=LUMEN_SKIP_ENGINE_BUILD");
@@ -112,6 +121,24 @@ fn build_engine(bin_dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(bin_dir).map_err(|e| format!("create {}: {e}", bin_dir.display()))?;
     for name in [engine_library_name(), launcher_name()] {
         copy(&built.join(name), &bin_dir.join(name))?;
+    }
+
+    // The script standard library, staged into the profile directory by the
+    // candela host's own build script. It travels whole: the C-backed modules
+    // sit in subdirectories under the names their `dylib` blocks record.
+    //
+    // Reported on its own, because it costs something different from the two
+    // files above: an install without it packages and runs, right up to the
+    // first script that imports a module.
+    if let Err(message) = copy_tree(
+        &built.join(SCRIPT_LIBRARY_DIR),
+        &bin_dir.join(SCRIPT_LIBRARY_DIR),
+    ) {
+        warn(&format!(
+            "{message}, so the candela standard library is not beside lumenc. \
+             `import \"std/...\"` and the array methods will not resolve until a \
+             {SCRIPT_LIBRARY_DIR} tree is there or CANDELA_LIB_PATH names one."
+        ));
     }
     Ok(())
 }
@@ -245,6 +272,23 @@ fn copy(from: &Path, to: &Path) -> Result<(), String> {
     std::fs::copy(from, to)
         .map(|_| ())
         .map_err(|e| format!("copy {} -> {}: {e}", from.display(), to.display()))
+}
+
+/// Copy a directory whole, making what it needs on the way.
+fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(to).map_err(|e| format!("create {}: {e}", to.display()))?;
+    let entries = std::fs::read_dir(from).map_err(|e| format!("read {}: {e}", from.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("read {}: {e}", from.display()))?;
+        let source = entry.path();
+        let dest = to.join(entry.file_name());
+        if source.is_dir() {
+            copy_tree(&source, &dest)?;
+        } else {
+            copy(&source, &dest)?;
+        }
+    }
+    Ok(())
 }
 
 fn warn(message: &str) {

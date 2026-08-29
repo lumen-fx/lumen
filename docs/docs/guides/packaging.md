@@ -59,9 +59,9 @@ Everything else in the app directory travels: images, fonts, sounds,
 translation catalogues, data files. Dotfiles and a `target/` directory are left
 behind, and so is the output folder itself.
 
-One thing does not travel: the candela standard library, which the toolchain
-carries and a package does not, so a script that reaches for `import "std/..."`
-or an array method works under `lumenc run` and not in the folder this writes.
+The candela standard library travels too, in a `libs/` folder beside the
+executable. Scripts read it as they compile, so `import "std/..."` and the
+array methods resolve in the folder the same way they do under `lumenc run`.
 
 Packaging a markup app needs no Rust toolchain. It copies a prebuilt launcher
 and appends your compiled app to the copy. On macOS it links the app in
@@ -110,7 +110,9 @@ lumenc package myapp --static
 This writes the same folder with one difference: the app is a single
 executable. The engine is inside it, and so is every runtime module the app
 declares, so there is no runtime library beside it and no `modules/`
-subfolder. Copy the executable and the app's files, and that is the whole app.
+subfolder. The candela standard library still travels in `libs/`, because
+scripts read it off disk as they compile whatever links the engine. Copy the
+executable, `libs/`, and the app's files, and that is the whole app.
 
 Reach for it when you want one file to hand over rather than a folder to keep
 together, and on Windows when your app declares `[dependencies]`, which is the

@@ -101,6 +101,34 @@ fn write_app(dir: &Path) {
     std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").expect("write config");
 }
 
+/// A one-page candela app whose script reads the standard library two ways:
+/// an explicit import of a C-backed module, and an array method the compiler
+/// pulls in from `std/list` with no import at all. Both resolve off disk
+/// against the running executable, which in a package is the app.
+fn write_candela_std_app(dir: &Path) {
+    std::fs::create_dir_all(dir.join("src")).expect("create src dir");
+    std::fs::write(
+        dir.join("src").join("main.lmn"),
+        "<root>\n  <label id=\"greeting\" text=\"packaged\"/>\n  \
+         <script src=\"main.cdl\"/>\n</root>\n",
+    )
+    .expect("write markup");
+    std::fs::write(
+        dir.join("src").join("main.cdl"),
+        "import \"lumen.cdl\";\n\
+         import \"std/time\";\n\
+         \n\
+         fn on_start() {\n\
+             let counts = [1, 2, 3];\n\
+             lumen::print(\"std reached \" + str(counts.sum()) + \" at \" + str(now()));\n\
+         }\n\
+         \n\
+         fn main() {}\n",
+    )
+    .expect("write script");
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").expect("write config");
+}
+
 /// A 1x1 red PNG - small enough to inline, valid enough to decode.
 const RED_DOT_PNG: &[u8] = &[
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -200,6 +228,82 @@ fn a_packaged_app_runs_from_anywhere() {
     assert!(
         output.contains("alive"),
         "the app's script did not run: {output}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The candela standard library travels, so a shipped app resolves the same
+/// imports it resolves under `lumenc run`.
+///
+/// The library is read off disk from a tree beside the running executable, and
+/// nothing else in the package puts it there, so the script fails to compile
+/// at startup when it is missing - the app still opens, with every handler and
+/// signal dead. The printed line is what says it compiled and ran.
+#[test]
+fn a_packaged_app_reaches_the_script_standard_library() {
+    if !toolchain_present() {
+        eprintln!("skipping: the launcher stub and runtime library are not built");
+        return;
+    }
+    if cfg!(target_os = "macos") && Command::new("cc").arg("--version").output().is_err() {
+        eprintln!("skipping: cc is not installed, and a macOS package is built with it");
+        return;
+    }
+
+    let root = scratch("candela-std");
+    let app = root.join("demo");
+    std::fs::create_dir_all(&app).expect("create app dir");
+    write_candela_std_app(&app);
+    let out = root.join("out");
+
+    let result = run_package(&[
+        app.to_str().expect("utf-8 path"),
+        out.to_str().expect("utf-8 path"),
+        "--name",
+        "Std",
+    ]);
+    assert!(
+        result.status.success(),
+        "package failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    // The text modules and the C-backed ones both travel, and the C-backed
+    // ones keep the subdirectory their `dylib` block names them by.
+    let library = out.join("libs");
+    assert!(
+        library.join("std").join("list.cdl").is_file(),
+        "the text modules travel"
+    );
+    assert!(
+        library.join("std_src").join("time").is_dir(),
+        "a C-backed module keeps the directory its library is found in"
+    );
+
+    let exe = out.join(if cfg!(target_os = "windows") {
+        "Std.exe"
+    } else {
+        "Std"
+    });
+    let run = Command::new(&exe)
+        .args(["--headless", "--ticks", "3"])
+        .current_dir(&root)
+        .output()
+        .expect("start the packaged app");
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(run.status.success(), "the packaged app failed: {output}");
+    assert!(
+        !output.contains("SCRIPT LOAD FAILED"),
+        "the script compiled in the package: {output}"
+    );
+    assert!(
+        output.contains("std reached 6 at "),
+        "the array method and the wall clock both answered: {output}"
     );
 
     let _ = std::fs::remove_dir_all(&root);

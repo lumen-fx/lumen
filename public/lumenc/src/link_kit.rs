@@ -42,7 +42,7 @@ use lumen_modules::link_kit::{
 use lumen_runtime::modules::DependenciesCfg;
 
 use crate::package_cli::{
-    EVERY_MEMBER, Target, Unpack, append_artifact, cannot_fetch, component_cache,
+    EVERY_MEMBER, Members, Target, Unpack, append_artifact, cannot_fetch, component_cache,
     fetch_release_files, first_dir_with, search_dirs, set_executable,
 };
 
@@ -105,10 +105,13 @@ pub(crate) fn locate(target: Target, lib_dir: Option<&Path>) -> Result<PathBuf, 
         fetch_release_files(
             &version,
             &target.linkkit_archive_name(),
-            &wanted,
-            &[EVERY_MEMBER.to_string()],
+            &Members {
+                wanted: &wanted,
+                optional: &[EVERY_MEMBER.to_string()],
+                trees: &[],
+                layout: Unpack::Tree,
+            },
             &dir,
-            Unpack::Tree,
             &format!(
                 "A release older than static packaging ships no link kit; build the {} kit \
                  yourself and point {KIT_DIR_ENV} at it instead.",
