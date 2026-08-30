@@ -3,8 +3,23 @@
 Lumen is in alpha. Issues and pull requests are welcome. APIs are not yet
 stable, so open an issue to discuss larger changes before building them.
 
-Licensing: to keep future licensing options open, substantial contributions
-may be asked to sign a CLA before merge.
+## Licensing
+
+Lumen ships under the Mozilla Public License 2.0. To keep future licensing
+options open, every pull request needs its authors to have signed the
+[Contributor License Agreement](CLA.md). You keep the copyright in what you
+write; the agreement grants the project the right to publish it under other
+terms later.
+
+A bot checks this on each pull request and comments if a signature is missing.
+Sign by replying to the pull request with a comment containing exactly:
+
+```
+I have read the CLA Document and I hereby sign the CLA
+```
+
+That is once per GitHub account, not once per pull request. The check turns
+green on its own; comment `recheck` if it does not.
 
 ## Before you build
 
