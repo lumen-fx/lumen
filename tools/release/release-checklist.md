@@ -17,6 +17,8 @@ them rather than anyone typing them.
 | `lumen-linkkit-<target>.tar.gz` | every leg, one each                    |
 | `lumen-windows-x86_64.msi`     | GitHub Actions, `windows-latest`       |
 | `lumen-windows-x86_64.zip`     | GitHub Actions, `windows-latest`       |
+| `lumen-windows-aarch64.msi`    | GitHub Actions, `windows-11-arm`       |
+| `lumen-windows-aarch64.zip`    | GitHub Actions, `windows-11-arm`       |
 | `sha256sums.txt`               | GitHub Actions, the publish job        |
 
 `lumen-modules-<target>.tar.gz` carries the bundled runtime modules (today:
@@ -118,7 +120,7 @@ checklist.
      is not enough on its own here, because a path into the build tree still
      resolves on the machine that has the build tree;
    - on Windows, also stages an install receipt and builds
-     `lumen-windows-x86_64.msi` from `tools/release/msi/lumen.wxs`. The
+     `lumen-windows-<arch>.msi` from `tools/release/msi/lumen.wxs`. The
      receipt is staged after the zip is closed, so only the MSI carries one: a
      receipt
      marks a copy as installed, and an installed copy is the only kind that
@@ -272,10 +274,10 @@ skips it, and `lumenc` fetches it by that exact name
 
 `lumenc` follows the same split when it offers an update. On Unix it re-runs
 `install.sh`; on Windows it downloads
-`releases/latest/download/lumen-windows-x86_64.msi` and hands it to `msiexec`
-after the current command exits, because Windows will not replace a running
-`lumenc.exe`. That URL is fixed, so nothing here has to publish a per-release
-link.
+`releases/latest/download/lumen-windows-<arch>.msi` for the architecture it was
+built for and hands it to `msiexec` after the current command exits, because
+Windows will not replace a running `lumenc.exe`. Those URLs are fixed, so
+nothing here has to publish a per-release link.
 
 ## Publishing to the package registries
 
@@ -505,14 +507,10 @@ belongs in that list of calls rather than on a trigger of its own.
 
 ## Current limitations
 
-- `linux-aarch64` (`ubuntu-24.04-arm`) and `macos-x86_64`
-  (`macos-26-intel`) are not covered by `ci.yml`'s own matrix, so a
-  portability regression on either one is only caught when a release tag is
-  pushed, not on every pull request.
-- There is no GitHub-hosted Windows-on-Arm runner, so `windows-aarch64` is
-  never built. `install.sh` handles that target being absent already (it
-  prints the release page link instead of failing); nobody has asked for it
-  yet.
+- `linux-aarch64` (`ubuntu-24.04-arm`), `macos-x86_64` (`macos-26-intel`)
+  and `windows-aarch64` (`windows-11-arm`) are not covered by `ci.yml`'s own
+  matrix, so a portability regression on any of them is only caught when a
+  release tag is pushed, not on every pull request.
 - The MSI is unsigned. Every download trips SmartScreen until there is a
   code-signing certificate to sign it with. The community repository takes an
   unsigned package, so this does not hold winget up, but a winget install runs

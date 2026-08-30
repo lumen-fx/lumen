@@ -210,7 +210,7 @@ enum Os {
 
 impl Target {
     /// Every target the release channel publishes toolchain files for.
-    const ALL: [Target; 5] = [
+    const ALL: [Target; 6] = [
         Target {
             name: "linux-x86_64",
             os: Os::Linux,
@@ -229,6 +229,10 @@ impl Target {
         },
         Target {
             name: "windows-x86_64",
+            os: Os::Windows,
+        },
+        Target {
+            name: "windows-aarch64",
             os: Os::Windows,
         },
     ];
@@ -310,6 +314,7 @@ impl Target {
             "linux-aarch64" => "aarch64-unknown-linux-gnu",
             "macos-x86_64" => "x86_64-apple-darwin",
             "macos-aarch64" => "aarch64-apple-darwin",
+            "windows-aarch64" => "aarch64-pc-windows-msvc",
             _ => "x86_64-pc-windows-msvc",
         }
     }
@@ -356,9 +361,9 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
     --name N          Package name (default: the app directory's name).
     --target T        Package for another platform (linux-x86_64 |
                       linux-aarch64 | macos-x86_64 | macos-aarch64 |
-                      windows-x86_64), fetching that platform's files
-                      from the release channel. An SDK app's own
-                      toolchain does the cross-compiling.
+                      windows-x86_64 | windows-aarch64), fetching that
+                      platform's files from the release channel. An SDK
+                      app's own toolchain does the cross-compiling.
     --lib-dir DIR     Take the platform's files from DIR instead of the
                       release channel.
     --static          Write one executable with the engine and the app's

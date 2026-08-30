@@ -54,7 +54,7 @@
 #                             it is what lumenc downloads on its own for
 #                             `lumenc package --static`, the way it downloads
 #                             the browser runtime.
-#   lumen-windows-x86_64.msi  the Windows installer. This script never
+#   lumen-windows-<arch>.msi  the Windows installer. This script never
 #                             fetches or runs it; the windows branch below
 #                             prints its URL and stops.
 #   lumen-web.tar.gz          the browser runtime, which belongs to no

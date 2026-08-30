@@ -30,6 +30,13 @@
 .PARAMETER OutFile
     Where to write the .msi.
 
+.PARAMETER Arch
+    The architecture the package declares, x64 or arm64. It has to match the
+    binaries in the stage: Windows Installer refuses a package whose platform
+    the machine cannot run. The two share an UpgradeCode, so installing one
+    over the other replaces it rather than leaving two copies of Lumen in one
+    user profile.
+
 .EXAMPLE
     tools\release\msi\build-msi.ps1 -Version 0.1.0 -StageDir msi-stage -OutFile lumen-windows-x86_64.msi
 #>
@@ -37,7 +44,8 @@
 param(
     [Parameter(Mandatory = $true)][string] $Version,
     [Parameter(Mandatory = $true)][string] $StageDir,
-    [Parameter(Mandatory = $true)][string] $OutFile
+    [Parameter(Mandatory = $true)][string] $OutFile,
+    [ValidateSet('x64', 'arm64')][string] $Arch = 'x64'
 )
 
 Set-StrictMode -Version Latest
@@ -87,10 +95,10 @@ if (-not (Test-Path -LiteralPath $wxs -PathType Leaf)) {
 # flag with a line saying why it does not apply. Never pass -sval, which turns
 # validation off wholesale and lets a real packaging error through.
 
-Write-Host "building $out (version $Version) from $stage"
+Write-Host "building $out (version $Version, $Arch) from $stage"
 
 & wix build `
-    -arch x64 `
+    -arch $Arch `
     -d "Version=$Version" `
     -d "StageDir=$stage" `
     -o $out `

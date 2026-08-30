@@ -149,7 +149,8 @@ jobs:
           \`--force\` is what reinstalls over yesterday's nightly, since the
           version the receipt records does not change from one to the next.
 
-          On Windows, unpack \`lumen-windows-x86_64.zip\`. There is no installer
+          On Windows, unpack \`lumen-windows-x86_64.zip\` or
+          \`lumen-windows-aarch64.zip\`. There is no installer
           here; the one a release publishes cannot tell itself apart from a
           nightly of the same number.
 

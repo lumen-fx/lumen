@@ -85,6 +85,8 @@ MACOS_X86="$(require_hash lumen-macos-x86_64.tar.gz)"
 MACOS_ARM="$(require_hash lumen-macos-aarch64.tar.gz)"
 WINDOWS_ZIP="$(require_hash lumen-windows-x86_64.zip)"
 WINDOWS_MSI="$(require_hash lumen-windows-x86_64.msi)"
+WINDOWS_ARM_ZIP="$(require_hash lumen-windows-aarch64.zip)"
+WINDOWS_ARM_MSI="$(require_hash lumen-windows-aarch64.msi)"
 
 # --- helpers ------------------------------------------------------------------
 
@@ -210,11 +212,14 @@ done
 
 carries "$DIR/scoop/lumen.json" "\"version\": \"$VERSION\"" "version $VERSION"
 carries "$DIR/scoop/lumen.json" "$WINDOWS_ZIP" "the windows zip checksum"
+carries "$DIR/scoop/lumen.json" "$WINDOWS_ARM_ZIP" "the windows arm64 zip checksum"
 
 for file in "$DIR"/winget/LumenFX.Lumen*.yaml; do
   carries "$file" "^PackageVersion: $VERSION\$" "version $VERSION"
 done
 carries "$DIR/winget/LumenFX.Lumen.installer.yaml" "$WINDOWS_MSI" "the msi checksum"
+carries "$DIR/winget/LumenFX.Lumen.installer.yaml" "$WINDOWS_ARM_MSI" \
+        "the arm64 msi checksum"
 
 # Nothing may still point at the release that was there before.
 for file in "$DIR/aur/PKGBUILD" "$DIR/homebrew/lumen.rb" "$DIR/scoop/lumen.json" \

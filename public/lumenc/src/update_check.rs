@@ -44,10 +44,18 @@ use crate::release::{self, INTERVAL_SECS, State, current, is_newer};
 #[cfg(unix)]
 const INSTALL_COMMAND: &str = "curl -fsSL https://lumenfx.dev/install.sh | sh";
 
-/// The Windows installer for the newest release. The URL never changes:
+/// The Windows installer for the newest release, for the architecture this
+/// copy was built for. The URL itself never changes:
 /// `releases/latest/download/<asset>` redirects to whichever release is
-/// current.
-#[cfg(windows)]
+/// current. The architecture has to match the running copy - the two packages
+/// share an UpgradeCode, so handing an Arm64 machine the x64 package would
+/// replace a native install with an emulated one.
+#[cfg(all(windows, target_arch = "aarch64"))]
+const MSI_URL: &str =
+    "https://github.com/lumen-fx/lumen/releases/latest/download/lumen-windows-aarch64.msi";
+
+/// The x64 installer; see the Arm64 one above.
+#[cfg(all(windows, not(target_arch = "aarch64")))]
 const MSI_URL: &str =
     "https://github.com/lumen-fx/lumen/releases/latest/download/lumen-windows-x86_64.msi";
 

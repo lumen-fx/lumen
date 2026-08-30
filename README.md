@@ -23,8 +23,8 @@ Install the toolchain:
 curl -fsSL https://lumenfx.dev/install.sh | sh
 ```
 
-On Windows, run the per-user installer from the
-[latest release](https://github.com/lumen-fx/lumen/releases/latest/download/lumen-windows-x86_64.msi).
+On Windows, run the per-user installer for your machine, x86_64 or Arm64, from
+the [latest release](https://github.com/lumen-fx/lumen/releases/latest).
 
 Then scaffold an app and run it:
 

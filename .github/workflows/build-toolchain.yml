@@ -2,8 +2,8 @@ name: build-toolchain
 
 # Builds the Lumen toolchain archives, in the exact shape
 # tools/release/install.sh expects: one lumen-<target>.tar.gz per Unix target
-# and, for Windows, lumen-windows-x86_64.zip as the portable archive plus
-# lumen-windows-x86_64.msi as the install channel. Every one of them holds
+# and, for Windows, lumen-<target>.zip as the portable archive plus
+# lumen-<target>.msi as the install channel. Every one of them holds
 # bin/lumenc, the liblumen shared library, bin/lumen-launcher, and the two
 # trees lumenc reads from beside itself: the candela standard library in
 # bin/libs and the `lumenc new` templates in bin/templates. The Unix
@@ -14,7 +14,7 @@ name: build-toolchain
 #
 #   - install.sh requires a top-level bin/ directory in the archive (its
 #     unpack step fails otherwise) and looks up the asset by the exact name
-#     lumen-<target>.tar.gz / lumen-windows-x86_64.msi.
+#     lumen-<target>.tar.gz / lumen-<target>.msi.
 #   - public/lumenc/src/loader.rs dlopens liblumen from next to its own executable
 #     (or an LUMEN_LIB_DIR override, or the platform loader's default
 #     search path) - never from a sibling lib/ directory. So the shared
@@ -71,12 +71,11 @@ name: build-toolchain
 #                   workflow uses today, which is the freshest evidence
 #                   available that it is a real, current runner image.
 #   windows-x86_64  windows-latest, same image as ci.yml
-#
-# install.sh also accepts a windows-aarch64 target in principle (it derives
-# the target from `uname`/platform detection generically), but there is no
-# GitHub-hosted Windows-on-Arm runner to build it on, so it is not produced.
-# install.sh already handles a missing Windows asset gracefully (it prints
-# the release page link instead of failing).
+#   windows-aarch64 windows-11-arm, GitHub's hosted Arm64 Windows runner.
+#                   ci.yml has no leg on it, so like linux-aarch64 this is
+#                   the only place the target is built at all. The image
+#                   carries less than windows-latest does, so this leg
+#                   installs the Rust toolchain rather than expecting one.
 #
 # Two workflows call this: release.yml, which publishes the result on a
 # vX.Y.Z tag, and nightly.yml, which publishes it on the rolling `nightly`
@@ -149,10 +148,38 @@ jobs:
           - target: windows-x86_64
             os: windows-latest
             libname: lumen.dll
+            # Which Visual Studio environment the link recorder needs: the
+            # MSVC linker resolves the C runtime and the Windows SDK through
+            # LIB, and LIB is per-architecture.
+            msvcarch: amd64
+            # WiX names the same architecture differently than VsDevCmd does,
+            # so each tool gets the spelling it accepts rather than a mapping
+            # to get wrong.
+            wixarch: x64
+          - target: windows-aarch64
+            os: windows-11-arm
+            libname: lumen.dll
+            msvcarch: arm64
+            wixarch: arm64
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: false
+
+      # windows-11-arm carries a smaller toolset than windows-latest and does
+      # not ship rustup, so this leg brings its own. rust-toolchain.toml still
+      # decides the version: `--default-toolchain none` installs the
+      # multiplexer alone and leaves the channel to the file, so there is no
+      # second place a version is named.
+      - name: Install rustup (Arm64 Windows)
+        if: matrix.target == 'windows-aarch64'
+        shell: pwsh
+        run: |
+          if (Get-Command rustup -ErrorAction SilentlyContinue) { exit 0 }
+          $url = 'https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe'
+          Invoke-WebRequest -Uri $url -OutFile rustup-init.exe
+          .\rustup-init.exe -y --default-toolchain none --no-modify-path
+          "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install pinned toolchain
         run: |
@@ -435,7 +462,7 @@ jobs:
         shell: cmd
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do set VSROOT=%%i
-          call "%VSROOT%\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64 >nul
+          call "%VSROOT%\Common7\Tools\VsDevCmd.bat" -arch=${{ matrix.msvcarch }} -host_arch=${{ matrix.msvcarch }} >nul
           for /f "usebackq delims=" %%l in (`where link.exe`) do (if not defined LNK set LNK=%%l)
           >>%GITHUB_ENV% echo LIB=%LIB%
           >>%GITHUB_ENV% echo LUMEN_REAL_LINKER=%LNK%
@@ -605,7 +632,7 @@ jobs:
           Copy-Item -Recurse dist\bin\* msi-stage\bin\
           # LF line endings and no BOM: lumenc reads this with a plain line
           # split, and a BOM would land inside the first key.
-          $receipt = "version $env:MSI_VERSION`ntarget windows-x86_64`ninstaller msi`n"
+          $receipt = "version $env:MSI_VERSION`ntarget ${{ matrix.target }}`ninstaller msi`n"
           [IO.File]::WriteAllText("$PWD\msi-stage\share\lumen\lumen.receipt", $receipt, [Text.Encoding]::ASCII)
           Get-Content msi-stage\share\lumen\lumen.receipt
 
@@ -624,6 +651,7 @@ jobs:
         run: |
           tools\release\msi\build-msi.ps1 `
             -Version $env:MSI_VERSION `
+            -Arch ${{ matrix.wixarch }} `
             -StageDir "$PWD\msi-stage" `
             -OutFile "$PWD\lumen-${{ matrix.target }}.msi"
 
