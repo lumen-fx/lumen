@@ -969,7 +969,8 @@ USAGE:
                           --name defaults to the app directory's name.
                           --target packages a markup app for another platform
                           (linux-x86_64 | linux-aarch64 | macos-x86_64 |
-                          macos-aarch64 | windows-x86_64), fetching that
+                          macos-aarch64 | windows-x86_64 |
+                          windows-aarch64), fetching that
                           platform's files from the release channel into a
                           per-version cache; --lib-dir points at a directory
                           holding them instead.

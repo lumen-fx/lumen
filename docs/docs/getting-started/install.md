@@ -68,24 +68,26 @@ behind; delete it by hand.
 
 ## Windows
 
-Download and run the per-user installer:
+Download and run the per-user installer for your machine:
 
 ```
 https://github.com/lumen-fx/lumen/releases/latest/download/lumen-windows-x86_64.msi
+https://github.com/lumen-fx/lumen/releases/latest/download/lumen-windows-aarch64.msi
 ```
 
 It installs under your user profile, so it needs no administrator rights, and
 it adds `lumenc` to your user `PATH`. Open a new terminal afterwards. Remove it
 from Settings > Installed apps, which also removes the `PATH` entry.
 
-Each release also publishes `lumen-windows-x86_64.zip`, a portable archive you
-can unpack anywhere. A portable copy never checks for updates; you replace it
-by unpacking a newer zip.
+Each release also publishes `lumen-windows-x86_64.zip` and
+`lumen-windows-aarch64.zip`, portable archives you can unpack anywhere. A
+portable copy never checks for updates; you replace it by unpacking a newer
+zip.
 
 ## Platforms with no build
 
-Releases cover Linux and macOS on x86_64 and aarch64, and Windows on x86_64.
-On anything else - Windows on ARM, for instance - install from source:
+Releases cover Linux, macOS, and Windows, each on x86_64 and aarch64. On
+anything else install from source:
 
 ```sh
 cargo install lumenc

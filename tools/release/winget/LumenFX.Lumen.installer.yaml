@@ -6,6 +6,10 @@
 # points at. It installs under the user profile and needs no elevation, which
 # is what Scope: user records.
 #
+# One installer per architecture, sharing an UpgradeCode: an Arm64 machine
+# runs the x64 package under emulation, so without the arm64 entry winget
+# would hand it the emulated build even though a native one is published.
+#
 # ProductCode is left out on purpose. WiX generates a fresh one for every
 # build, so no value written here would survive the next release; wingetcreate
 # reads it out of the MSI when it raises the pull request. The UpgradeCode is
@@ -34,6 +38,15 @@ Installers:
 - Architecture: x64
   InstallerUrl: https://github.com/lumen-fx/lumen/releases/download/v0.0.3/lumen-windows-x86_64.msi
   InstallerSha256: 56552DB4C4E4F1937168115D224E97A0589BD65E973376E81B7FCF1D1585586B
+  AppsAndFeaturesEntries:
+  - DisplayName: Lumen
+    Publisher: Lumen FX
+    DisplayVersion: 0.0.3
+    UpgradeCode: '{35DA2664-F179-43DE-BFB6-9B18C7DD5F34}'
+    InstallerType: msi
+- Architecture: arm64
+  InstallerUrl: https://github.com/lumen-fx/lumen/releases/download/v0.0.3/lumen-windows-aarch64.msi
+  InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
   AppsAndFeaturesEntries:
   - DisplayName: Lumen
     Publisher: Lumen FX

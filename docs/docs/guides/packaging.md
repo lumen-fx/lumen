@@ -75,7 +75,7 @@ lumenc package myapp --target windows-x86_64
 ```
 
 The targets are `linux-x86_64`, `linux-aarch64`, `macos-x86_64`,
-`macos-aarch64`, and `windows-x86_64`. For a markup app packaging is file
+`macos-aarch64`, `windows-x86_64`, and `windows-aarch64`. For a markup app packaging is file
 assembly rather than compilation, so any host can produce any of them; an SDK
 app is compiled, and [what that needs](#cross-packaging-an-sdk-app) is below.
 

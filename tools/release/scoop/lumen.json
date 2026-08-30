@@ -16,7 +16,11 @@
         "which keeps lumenc.exe, lumen.dll, and lumen-launcher.exe together.",
         "lumenc loads the runtime library from beside its own executable and",
         "`lumenc package` looks for the launcher stub there too, so splitting them",
-        "up breaks both."
+        "up breaks both.",
+        "",
+        "Both Windows architectures are listed. Scoop picks the one matching the",
+        "machine, so an Arm64 machine gets the native build instead of the x64",
+        "one it would otherwise run under emulation."
     ],
     "version": "0.0.3",
     "description": "Toolchain for Lumen, a markup-first UI framework for native desktop apps",
@@ -26,6 +30,10 @@
         "64bit": {
             "url": "https://github.com/lumen-fx/lumen/releases/download/v0.0.3/lumen-windows-x86_64.zip",
             "hash": "00970037031eafa4bbd033c15f5d95791bb511bafba6655545377094a7e2fe34"
+        },
+        "arm64": {
+            "url": "https://github.com/lumen-fx/lumen/releases/download/v0.0.3/lumen-windows-aarch64.zip",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
         }
     },
     "extract_dir": "bin",
@@ -37,6 +45,9 @@
         "architecture": {
             "64bit": {
                 "url": "https://github.com/lumen-fx/lumen/releases/download/v$version/lumen-windows-x86_64.zip"
+            },
+            "arm64": {
+                "url": "https://github.com/lumen-fx/lumen/releases/download/v$version/lumen-windows-aarch64.zip"
             }
         },
         "hash": {

@@ -251,7 +251,8 @@ jobs:
           n=0
           for asset in lumen-linux-x86_64.tar.gz lumen-linux-aarch64.tar.gz \
                        lumen-macos-x86_64.tar.gz lumen-macos-aarch64.tar.gz \
-                       lumen-windows-x86_64.zip lumen-windows-x86_64.msi; do
+                       lumen-windows-x86_64.zip lumen-windows-x86_64.msi \
+                       lumen-windows-aarch64.zip lumen-windows-aarch64.msi; do
             n=$((n + 1))
             printf '%064d  %s\n' "$n" "$asset" >> "$sums"
           done

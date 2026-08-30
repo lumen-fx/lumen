@@ -25,7 +25,7 @@
 # Assets come out of .github/workflows/build-toolchain.yml:
 #
 #   lumen-<target>.tar.gz     linux and macos, x86_64 and aarch64
-#   lumen-windows-x86_64.zip  the portable Windows archive
+#   lumen-windows-<arch>.zip  the portable Windows archive
 #   sha256sums.txt            one "<hex>  <filename>" line per asset above
 #
 # The zip is what this installs on Windows, never the MSI beside it. The MSI
