@@ -197,6 +197,14 @@ input aside while the link is still running, writes the command as JSON, and
 then runs the real linker. `lumenc link-kit emit` turns that recording into the
 kit.
 
+An input is not always a bare path. When the target is a library, rustc hands
+the linker the list of symbols to export as a file, named inside a flag:
+`--version-script` on the GNU linkers, `-exported_symbols_list` on ld64,
+`/DEF:` on MSVC. Those files live in the same temporary directory as the
+objects, so the recorder stages them like any other input and rewrites the flag
+to the staged copy. Without that, replaying a library's link exports a
+different set of symbols than the build shipped.
+
 Two things about the recorded build are load-bearing. LTO is off, because fat
 LTO re-generates code for every rlib at link time and leaves no per-module
 object to select. Codegen units stay at the release profile's one, or a

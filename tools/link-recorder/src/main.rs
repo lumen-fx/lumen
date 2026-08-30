@@ -164,6 +164,37 @@ fn output_of(argv: &[String]) -> Option<String> {
     None
 }
 
+/// Split an argument that carries a path into the part that stays and the
+/// path that gets staged.
+///
+/// These are the shapes rustc uses to hand a linker the list of symbols a
+/// library exports: a version script on the GNU linkers, an exported-symbols
+/// list on ld64, a module-definition file on MSVC. Each is generated per link
+/// and deleted with the temporary directory that holds it.
+fn split_path_flag(arg: &str) -> Option<(&str, &str)> {
+    const PREFIXES: &[&str] = &[
+        "-Wl,--version-script=",
+        "-Wl,--dynamic-list=",
+        "-Wl,--retain-symbols-file=",
+        "-Wl,-exported_symbols_list,",
+        "--version-script=",
+        "-exported_symbols_list,",
+    ];
+    for prefix in PREFIXES {
+        if let Some(path) = arg.strip_prefix(prefix) {
+            return Some((prefix, path));
+        }
+    }
+    // MSVC spells its flags case-insensitively and with either lead character.
+    if arg.len() > 5 {
+        let (head, path) = arg.split_at(5);
+        if head.eq_ignore_ascii_case("/DEF:") || head.eq_ignore_ascii_case("-DEF:") {
+            return Some((head, path));
+        }
+    }
+    None
+}
+
 /// Copy `arg` into the stage directory if it names a file, and answer the
 /// name it was staged under.
 ///
@@ -172,6 +203,17 @@ fn output_of(argv: &[String]) -> Option<String> {
 /// the rlibs they all read, and it keeps two different files that happen to
 /// share a name apart.
 fn stage_input(arg: &str, stage: &Path) -> Result<Option<String>, String> {
+    // A few flags carry a path rather than being one. rustc writes the export
+    // list of a library target into the temporary directory it deletes when
+    // the link returns, so a record that kept the original path names a file
+    // that is already gone, and a replay without the list exports a different
+    // set of symbols than the build shipped.
+    if let Some((flag, path)) = split_path_flag(arg) {
+        return match stage_input(path, stage)? {
+            Some(name) => Ok(Some(format!("{flag}{name}"))),
+            None => Ok(None),
+        };
+    }
     let src = Path::new(arg);
     // A flag is never a file, and checking the file system for every one of
     // them is the bulk of what this shim does per link.
@@ -324,7 +366,7 @@ fn tokenize_gnu(text: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{output_of, parse_response, tokenize_gnu, tokenize_msvc};
+    use super::{output_of, parse_response, split_path_flag, tokenize_gnu, tokenize_msvc};
 
     fn utf16le(text: &str) -> Vec<u8> {
         let mut bytes = vec![0xFF, 0xFE];
@@ -332,6 +374,29 @@ mod tests {
             bytes.extend_from_slice(&unit.to_le_bytes());
         }
         bytes
+    }
+
+    #[test]
+    fn an_export_list_is_a_path_to_stage_rather_than_a_flag() {
+        assert_eq!(
+            split_path_flag("-Wl,--version-script=/tmp/rustcAbC/list"),
+            Some(("-Wl,--version-script=", "/tmp/rustcAbC/list"))
+        );
+        assert_eq!(
+            split_path_flag("-Wl,-exported_symbols_list,/tmp/rustcAbC/list"),
+            Some(("-Wl,-exported_symbols_list,", "/tmp/rustcAbC/list"))
+        );
+        assert_eq!(
+            split_path_flag("/def:C:\\t\\lib.def"),
+            Some(("/def:", "C:\\t\\lib.def"))
+        );
+    }
+
+    #[test]
+    fn an_ordinary_flag_carries_no_path() {
+        assert_eq!(split_path_flag("-Wl,--gc-sections"), None);
+        assert_eq!(split_path_flag("-lgtk-3"), None);
+        assert_eq!(split_path_flag("/DEBUG"), None);
     }
 
     #[test]
