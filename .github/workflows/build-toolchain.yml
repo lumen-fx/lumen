@@ -176,9 +176,12 @@ jobs:
       # cargo invocation resolves one engine feature graph, so the two link
       # the same liblumen_engine, which ships in bin/ beside them along with
       # the Rust standard library they were built against (`prefer-dynamic`
-      # applies to libstd too). The `$ORIGIN` / `@loader_path` rpath is what
-      # lets both resolve from bin/ with nothing else installed. The explicit
-      # --target keeps prefer-dynamic off build scripts and proc macros. A
+      # applies to libstd too). The `$ORIGIN` / `@loader_path` rpath below is
+      # half of what lets both resolve from bin/ with nothing else installed;
+      # on macOS the other half is the install-name rewrite in the packaging
+      # step, because an rpath there only answers a name that asks for it.
+      # The explicit --target keeps prefer-dynamic off build scripts and
+      # proc macros. A
       # process shaped like this shares one engine instance with the runtime
       # modules it dlopens, which is what makes `[dependencies]` work in
       # shipped apps.
@@ -323,8 +326,17 @@ jobs:
           # (public/lumenc/src/scaffold.rs), so an archive without them ships a
           # compiler that can scaffold nothing.
           cp -R target/templates dist/bin/templates
-          # The rpath wiring is what this exercises: a dynamic lumenc that
-          # cannot find its engine or libstd beside itself dies right here.
+          # macOS records the path a dylib was written to, in the dylib and in
+          # everything that links it, and an rpath cannot redirect an absolute
+          # name. So each Mach-O here is given an @rpath install name before
+          # the archive closes; the script says why this cannot be done at
+          # link time. It does nothing on Linux, where the basename in
+          # DT_NEEDED and `$ORIGIN` already say "beside me".
+          .github/scripts/macos-install-names.sh dist/bin
+          # A first, cheap look at the rpath wiring: a dynamic lumenc that
+          # cannot find its engine or libstd beside itself dies right here,
+          # before the archive is even built. The check that the archive runs
+          # somewhere else is further down, and it is the one that matters.
           ./dist/bin/lumenc --version
           # Shell completions, each under the directory its shell searches, so
           # a prefix on the usual search paths picks them up as installed. The
@@ -372,6 +384,12 @@ jobs:
               exit 1
             fi
           done <<<"$modules"
+          # A module carries the same absolute reference to the engine that
+          # the binaries above did, and it is dlopened into a process that has
+          # the engine open already; dyld matches the two by name, so a module
+          # asking for a path that is not the engine's own install name would
+          # load a second copy of the engine or fail outright.
+          .github/scripts/macos-install-names.sh modules-dist/bin
           tar -czf lumen-modules-${{ matrix.target }}.tar.gz -C modules-dist .
 
       - name: Package (Windows)
@@ -385,6 +403,27 @@ jobs:
           Copy-Item -Recurse target\release\libs dist\bin\libs
           Copy-Item -Recurse target\templates dist\bin\templates
           Compress-Archive -Path dist\* -DestinationPath lumen-${{ matrix.target }}.zip
+
+      # Nothing here used to launch what it was about to publish, and that is
+      # the only reason a macOS toolchain that aborts on every invocation
+      # reached a release. So every leg now unpacks its own archives into a
+      # fresh prefix, the way install.sh does on a user's machine, runs the
+      # lumenc inside it, and reads back what its binaries ask the loader for.
+      # The version comes from the workspace manifest, which is what
+      # `lumenc --version` prints and what release.yml has already checked the
+      # tag against.
+      - name: Check the archive runs
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          if [ "$RUNNER_OS" = Windows ]; then
+            .github/scripts/check-toolchain-archive.sh "$version" \
+              lumen-${{ matrix.target }}.zip
+          else
+            .github/scripts/check-toolchain-archive.sh "$version" \
+              lumen-${{ matrix.target }}.tar.gz \
+              lumen-modules-${{ matrix.target }}.tar.gz
+          fi
 
       # The MSVC linker is not on PATH until the Visual Studio environment
       # script has run, and the same script is what fills LIB, the variable

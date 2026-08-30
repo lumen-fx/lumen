@@ -104,6 +104,19 @@ checklist.
      `bin/` directory, along with the two trees `lumenc` reads from beside
      itself: the candela standard library in `bin/libs` and the templates in
      `bin/templates`. See the note on `public/lumenc/src/loader.rs` below;
+   - on macOS, rewrites the install name of every shared library it packaged,
+     and every reference to one, to `@rpath/<file name>`, then re-signs what
+     it touched. `ld64` writes the path a library was built at into the
+     library itself and into everything that links it, and an rpath answers
+     only a name that starts with `@rpath/`, so an archive left as linked
+     runs on the machine that built it and nowhere else;
+   - unpacks the archives it just built into a fresh prefix, the way
+     `install.sh` does on a user's machine, runs the `lumenc` inside it, and
+     checks that it reports the version being built. It also reads back what
+     every shipped binary asks the loader for and fails on anything outside
+     the archive that the operating system does not own; launching the binary
+     is not enough on its own here, because a path into the build tree still
+     resolves on the machine that has the build tree;
    - on Windows, also stages an install receipt and builds
      `lumen-windows-x86_64.msi` from `tools/release/msi/lumen.wxs`. The
      receipt is staged after the zip is closed, so only the MSI carries one: a

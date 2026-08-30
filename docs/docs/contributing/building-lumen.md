@@ -247,6 +247,14 @@ tag moved and nothing published. Windows, Intel macOS, and Arm Linux are
 built nowhere else, so this is the only way to try a change to one of them
 before it lands.
 
+Every leg finishes by unpacking the archives it built into a fresh prefix,
+running the `lumenc` inside it, and reading back what each shipped binary asks
+the loader for. A binary may name a library that sits beside it in the archive
+or one the operating system owns, and nothing else; a reference into the
+target directory that built it passes on the runner and fails everywhere else,
+which is what `.github/scripts/check-toolchain-archive.sh` exists to stop.
+`tools/release/release-checklist.md` describes the rest of what a leg does.
+
 ## Debug info in dev builds
 
 Dev builds keep line tables for the workspace crates, so panic backtraces
