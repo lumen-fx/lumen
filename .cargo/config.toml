@@ -14,5 +14,11 @@
 runner = "wasm-bindgen-test-runner"
 rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
 
+# Shorthands for what this workspace types most. `cargo lumenc` drives the
+# toolchain out of the checkout, so an app runs against the working tree rather
+# than an installed release: `cargo lumenc run apps/widget-garden`. `cargo lint`
+# is the clippy line CONTRIBUTING.md calls law, written once here so a local run
+# and the CI gate cannot drift apart.
 [alias]
-xtask = "run --package xtask --"
+lumenc = "run --package lumenc --"
+lint = "clippy --workspace --all-targets -- -D warnings"

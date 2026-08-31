@@ -1,0 +1,15 @@
+[package]
+name = "lumen-devsetup"
+description = "Points this checkout's git hooks at .githooks when the workspace is built."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# No library and no dependencies: everything this crate does happens in its
+# build script, and an empty target is what gives that script something to run
+# under. `cargo build --workspace` is what triggers it.
+[lib]
+path = "src/lib.rs"

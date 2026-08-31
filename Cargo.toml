@@ -155,6 +155,7 @@ members = [
     "public/lumenc",
     "public/lumenc-plugin",
     "public/lumenc-plugin/fixture",
+    "tools/devsetup",
     "tools/link-recorder",
 ]
 # The linkable engine is built through the Rust SDK's own dependency on it, on

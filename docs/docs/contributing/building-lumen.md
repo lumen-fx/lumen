@@ -52,8 +52,11 @@ cargo build --workspace
 Run one of the example apps in `apps/` through the CLI:
 
 ```sh
-cargo run -p lumenc -- run apps/widget-garden
+cargo lumenc run apps/widget-garden
 ```
+
+`cargo lumenc` is an alias for `cargo run -p lumenc --`, so the app runs
+against the toolchain in the checkout rather than an installed release.
 
 `apps/widget-garden` exercises every tag, attribute, and OS builtin, so it is
 the fastest way to see whether a change broke something visible. The other
@@ -342,6 +345,13 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
+
+`cargo lint` is an alias for the clippy line, so the local run and the gate
+cannot drift apart. The first workspace build also points `core.hooksPath` at
+`.githooks`, whose pre-commit hook runs format and clippy on any commit that
+touches Rust; `git commit --no-verify` skips it once, `LUMEN_SKIP_HOOKS=1` for
+a session, and `LUMEN_NO_HOOK_SETUP=1` stops the registration itself. A
+`core.hooksPath` you set yourself is never overwritten.
 
 Format and clippy run on Linux only, since neither depends on the platform.
 Tests run on Linux, macOS, and Windows. That three-way matrix is also the
