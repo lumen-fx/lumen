@@ -1,5 +1,9 @@
 # Lumen for Zed
 
+[![tools](https://github.com/lumen-fx/lumen/actions/workflows/tools.yml/badge.svg)](https://github.com/lumen-fx/lumen/actions/workflows/tools.yml)
+[![docs](https://img.shields.io/badge/docs-reference%2Ftooling-blue)](https://docs.lumenfx.dev/reference/tooling/)
+[![license](https://img.shields.io/badge/license-MPL--2.0-blue)](https://github.com/lumen-fx/lumen/blob/main/LICENSE)
+
 Zed extension for Lumen apps: `.lmn` files get syntax highlighting from the
 Lumen tree-sitter grammar, and `lumen-lsp` supplies diagnostics, completion,
 hover, navigation, and formatting. Control-flow and composition tags read as

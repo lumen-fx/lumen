@@ -1,5 +1,9 @@
 # Lumen - JetBrains IDE plugin
 
+[![tools](https://github.com/lumen-fx/lumen/actions/workflows/tools.yml/badge.svg)](https://github.com/lumen-fx/lumen/actions/workflows/tools.yml)
+[![docs](https://img.shields.io/badge/docs-reference%2Ftooling-blue)](https://docs.lumenfx.dev/reference/tooling/)
+[![license](https://img.shields.io/badge/license-MPL--2.0-blue)](https://github.com/lumen-fx/lumen/blob/main/LICENSE)
+
 Editor support for the [Lumen](https://lumenfx.dev) UI framework in
 IntelliJ IDEA, CLion, PyCharm, WebStorm, and the other IntelliJ-based IDEs:
 `.lmn` markup, Lumen CSS, and `.rhai` scripts.

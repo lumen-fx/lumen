@@ -1,5 +1,9 @@
 # lumen-mcp-server
 
+[![ci](https://github.com/lumen-fx/lumen/actions/workflows/ci.yml/badge.svg)](https://github.com/lumen-fx/lumen/actions/workflows/ci.yml)
+[![docs](https://img.shields.io/badge/docs-reference%2Ftooling-blue)](https://docs.lumenfx.dev/reference/tooling/)
+[![license](https://img.shields.io/badge/license-MPL--2.0-blue)](https://github.com/lumen-fx/lumen/blob/main/LICENSE)
+
 Standalone Model Context Protocol (MCP) server that bridges Claude Code (or
 any MCP client) to a running Lumen app. It lets the model inspect entities,
 components, resources, recent messages, and a rendered screenshot of a live

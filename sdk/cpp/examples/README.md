@@ -1,5 +1,9 @@
 # Lumen C++ SDK - examples
 
+[![ci](https://github.com/lumen-fx/lumen/actions/workflows/ci.yml/badge.svg)](https://github.com/lumen-fx/lumen/actions/workflows/ci.yml)
+![C++17](https://img.shields.io/badge/C%2B%2B-17-blue)
+[![license](https://img.shields.io/badge/license-MPL--2.0-blue)](https://github.com/lumen-fx/lumen/blob/main/LICENSE)
+
 Small, self-contained programs that each compile and link against the built
 `lumen` shared library and run headless, with no window and no display, so they
 double as smoke tests. They mirror the Python SDK's examples so the two SDKs

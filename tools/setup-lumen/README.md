@@ -1,5 +1,9 @@
 # setup-lumen
 
+[![setup-lumen](https://github.com/lumen-fx/lumen/actions/workflows/setup-lumen-test.yml/badge.svg)](https://github.com/lumen-fx/lumen/actions/workflows/setup-lumen-test.yml)
+[![docs](https://img.shields.io/badge/docs-getting--started%2Finstall-blue)](https://docs.lumenfx.dev/getting-started/install/)
+[![license](https://img.shields.io/badge/license-MPL--2.0-blue)](https://github.com/lumen-fx/lumen/blob/main/LICENSE)
+
 A GitHub Action that installs the Lumen toolchain on a runner and puts `lumenc`
 on `PATH`.
 

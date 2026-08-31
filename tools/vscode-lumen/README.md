@@ -1,5 +1,10 @@
 # Lumen - VS Code extension
 
+[![open vsx](https://img.shields.io/open-vsx/v/lumen-fx/lumen-ui)](https://open-vsx.org/extension/lumen-fx/lumen-ui)
+[![tools](https://github.com/lumen-fx/lumen/actions/workflows/tools.yml/badge.svg)](https://github.com/lumen-fx/lumen/actions/workflows/tools.yml)
+[![docs](https://img.shields.io/badge/docs-reference%2Ftooling-blue)](https://docs.lumenfx.dev/reference/tooling/)
+[![license](https://img.shields.io/badge/license-MPL--2.0-blue)](https://github.com/lumen-fx/lumen/blob/main/LICENSE)
+
 Editor support for the [Lumen](https://github.com/lumen-fx/lumen) UI
 framework: `.lmn` markup, Lumen CSS, and `.rhai` scripts, plus one-click
 `lumenc` workflows and an in-editor headless live preview.

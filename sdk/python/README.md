@@ -1,5 +1,10 @@
 # Lumen Python SDK
 
+[![ci](https://github.com/lumen-fx/lumen/actions/workflows/ci.yml/badge.svg)](https://github.com/lumen-fx/lumen/actions/workflows/ci.yml)
+![python](https://img.shields.io/badge/python-3.9%2B-blue)
+[![docs](https://img.shields.io/badge/docs-reference%2Fffi-blue)](https://docs.lumenfx.dev/reference/ffi/)
+[![license](https://img.shields.io/badge/license-MPL--2.0-blue)](https://github.com/lumen-fx/lumen/blob/main/LICENSE)
+
 Typed Python bindings for the [Lumen](https://lumenfx.dev) UI framework, over
 the C ABI (`include/lumen.h`). State is declarative and reactive: you write a
 `Model` whose fields are typed signals, mutate them with plain Python, and the

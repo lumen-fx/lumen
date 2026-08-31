@@ -1,5 +1,8 @@
 # Margin - Markdown notes
 
+[![docs](https://img.shields.io/badge/docs-guides%2Fstyling-blue)](https://docs.lumenfx.dev/guides/styling/)
+[![license](https://img.shields.io/badge/license-MPL--2.0-blue)](https://github.com/lumen-fx/lumen/blob/main/LICENSE)
+
 A markdown editor: a note list on the left, a text editor in the middle, and
 a live preview on the right. Switching notes preserves every note's text, and
 a theme toggle swaps the whole color scope.

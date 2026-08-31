@@ -1,5 +1,9 @@
 # tree-sitter-lumen
 
+[![npm](https://img.shields.io/npm/v/tree-sitter-lumen)](https://www.npmjs.com/package/tree-sitter-lumen)
+[![tools](https://github.com/lumen-fx/lumen/actions/workflows/tools.yml/badge.svg)](https://github.com/lumen-fx/lumen/actions/workflows/tools.yml)
+[![license](https://img.shields.io/badge/license-MPL--2.0-blue)](https://github.com/lumen-fx/lumen/blob/main/LICENSE)
+
 Tree-sitter grammar for Lumen markup (`.lmn`).
 
 Editors use it for syntax highlighting, structural selection, and bracket

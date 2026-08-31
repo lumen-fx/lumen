@@ -1,5 +1,10 @@
 # Lumen C++ SDK
 
+[![ci](https://github.com/lumen-fx/lumen/actions/workflows/ci.yml/badge.svg)](https://github.com/lumen-fx/lumen/actions/workflows/ci.yml)
+![C++17](https://img.shields.io/badge/C%2B%2B-17-blue)
+[![docs](https://img.shields.io/badge/docs-reference%2Fffi-blue)](https://docs.lumenfx.dev/reference/ffi/)
+[![license](https://img.shields.io/badge/license-MPL--2.0-blue)](https://github.com/lumen-fx/lumen/blob/main/LICENSE)
+
 Header-only C++17 bindings for the [Lumen](../../) UI framework, over the
 C ABI (`include/lumen.h`). The primary surface is the typed
 reactive handle `lumen::Signal<T>`: name a signal, read/write it with
