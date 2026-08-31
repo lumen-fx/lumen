@@ -1,5 +1,9 @@
 # lumen-lsp
 
+[![ci](https://github.com/lumen-fx/lumen/actions/workflows/ci.yml/badge.svg)](https://github.com/lumen-fx/lumen/actions/workflows/ci.yml)
+[![docs](https://img.shields.io/badge/docs-reference%2Ftooling-blue)](https://docs.lumenfx.dev/reference/tooling/)
+[![license](https://img.shields.io/badge/license-MPL--2.0-blue)](https://github.com/lumen-fx/lumen/blob/main/LICENSE)
+
 `tower-lsp` 0.20 language server for a Lumen app directory: `.lmn` markup,
 Lumen CSS in `.css`, and `.rhai` scripts. It calls `lumenc`'s own parser and a
 fully-registered Rhai engine, so the editor and the compiler always agree on

@@ -1,5 +1,8 @@
 # Waveform - Music player
 
+[![docs](https://img.shields.io/badge/docs-guides%2Fos--integration-blue)](https://docs.lumenfx.dev/guides/os-integration/)
+[![license](https://img.shields.io/badge/license-MPL--2.0-blue)](https://github.com/lumen-fx/lumen/blob/main/LICENSE)
+
 A desktop player shell: a selectable playlist sidebar, a scrolling library
 table, and a now-playing bar whose transport drives audio through the
 `lumen-audio` module the app declares in its `lumen.toml`; the module is

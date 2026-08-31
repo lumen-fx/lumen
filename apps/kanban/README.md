@@ -1,5 +1,8 @@
 # Lanes - Kanban board
 
+[![docs](https://img.shields.io/badge/docs-guides%2Freactivity-blue)](https://docs.lumenfx.dev/guides/reactivity/)
+[![license](https://img.shields.io/badge/license-MPL--2.0-blue)](https://github.com/lumen-fx/lumen/blob/main/LICENSE)
+
 A three-column board (Backlog / In progress / Done) with add, edit, move,
 delete, and live search. One `cards` ArraySignal is the single source of
 truth, and the three visible lists are rebuilt from it on every change.

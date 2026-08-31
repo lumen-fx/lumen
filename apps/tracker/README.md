@@ -1,5 +1,8 @@
 # Streak - Habit tracker
 
+[![docs](https://img.shields.io/badge/docs-guides%2Fstyling-blue)](https://docs.lumenfx.dev/guides/styling/)
+[![license](https://img.shields.io/badge/license-MPL--2.0-blue)](https://github.com/lumen-fx/lumen/blob/main/LICENSE)
+
 A weekly habit grid: four habits across seven days, each cell a toggle. The
 header keeps live stats, and a settings dialog holds the weekly goal and a
 clear-week action.

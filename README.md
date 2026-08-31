@@ -4,7 +4,12 @@
 
 # Lumen
 
+[![ci](https://github.com/lumen-fx/lumen/actions/workflows/ci.yml/badge.svg)](https://github.com/lumen-fx/lumen/actions/workflows/ci.yml)
 [![coverage](https://codecov.io/gh/lumen-fx/lumen/branch/main/graph/badge.svg)](https://codecov.io/gh/lumen-fx/lumen)
+[![release](https://img.shields.io/github/v/release/lumen-fx/lumen?include_prereleases&label=release)](https://github.com/lumen-fx/lumen/releases/latest)
+[![docs](https://img.shields.io/badge/docs-docs.lumenfx.dev-blue)](https://docs.lumenfx.dev)
+[![platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](https://docs.lumenfx.dev/getting-started/install/)
+[![license](https://img.shields.io/badge/license-MPL--2.0-blue)](LICENSE)
 
 Lumen is a markup-first UI framework for native desktop apps.
 
@@ -66,14 +71,20 @@ the app runs and the window updates.
 - **The desktop around your app.** Menus, tray icons, notifications, global
   hotkeys, file dialogs, clipboard, drag and drop, audio, and accessibility
   through AccessKit.
-- **Tooling.** One command to create, check, format, run, and package. A
-  headless mode runs the full pipeline with no window, so a UI can be driven
-  and screenshotted from CI.
+- **The same app at a URL.** `lumenc web` turns the app into a static site of
+  real HTML, CSS, and links, and `lumen-ssr` renders a page per request inside
+  a server you already have.
+- **Tooling.** One command to create, check, format, run, and package. Press
+  F12 during a run from source for docked devtools: the live element tree,
+  signal values, and captured network requests. A headless mode runs the full
+  pipeline with no window, so a UI can be driven and screenshotted from CI.
+  Editor support comes from a language server, with extensions for VS Code,
+  Zed, and the JetBrains IDEs.
 
 ## Limitations
 
 Lumen is in alpha, and APIs can change between releases. An app has one window.
-There is no web, iOS, or Android target. The CSS is a subset of the web's,
+There is no iOS or Android target. The CSS is a subset of the web's,
 aimed at application UI. Scripts in different languages share signals and
 nothing else.
 
