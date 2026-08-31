@@ -41,6 +41,16 @@ cargo build --workspace
 cargo test --workspace
 ```
 
+`cargo lint` is an alias for that clippy line, so the local run and the gate
+are the same command.
+
+The first workspace build points `core.hooksPath` at `.githooks`, and the
+pre-commit hook there runs `fmt` and `clippy` on any commit that touches Rust.
+A commit that touches none of it pays nothing. `git commit --no-verify` skips
+the hook once, `LUMEN_SKIP_HOOKS=1` skips it for a session, and
+`LUMEN_NO_HOOK_SETUP=1` stops the registration from happening at all. If you
+already point `core.hooksPath` somewhere of your own, that is left alone.
+
 `fmt` and `clippy` run on Linux only. The build and test jobs run on Linux,
 macOS, and Windows; that matrix is also the release parity check, so a failure
 on one OS is a portability gap to fix rather than an OS to drop.

@@ -3540,6 +3540,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-devsetup"
+version = "0.0.7"
+
+[[package]]
 name = "lumen-devtools"
 version = "0.0.7"
 dependencies = [

@@ -1,0 +1,30 @@
+#!/bin/sh
+# The two gates CONTRIBUTING.md calls law, run before a commit exists rather
+# than after CI has spent twenty minutes reaching them. Both are the exact
+# commands the pull request will be judged by, so a pass here means the same
+# thing there.
+#
+# `git commit --no-verify` skips this, and LUMEN_SKIP_HOOKS=1 skips it for a
+# whole session. Neither is cheating: a commit on a branch nobody will read is
+# not worth a clippy pass, and a bisect run wants to commit whatever compiles.
+#
+# Registered by tools/devsetup, which points core.hooksPath at this directory
+# the first time the workspace is built. See CONTRIBUTING.md.
+set -e
+
+if [ -n "${LUMEN_SKIP_HOOKS:-}" ]; then
+  exit 0
+fi
+
+# Nothing to check when the commit touches no Rust. A docs-only or manifest
+# commit pays nothing, which is most of what a hook this strict would
+# otherwise tax.
+if ! git diff --cached --name-only --diff-filter=ACMR | grep -q '\.rs$'; then
+  exit 0
+fi
+
+echo "pre-commit: cargo fmt --all --check"
+cargo fmt --all --check
+
+echo "pre-commit: cargo clippy --workspace --all-targets -- -D warnings"
+cargo clippy --workspace --all-targets -- -D warnings
