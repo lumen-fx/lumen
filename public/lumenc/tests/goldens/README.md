@@ -7,11 +7,19 @@ using the same plugin stack as `lumenc run` and no window.
 
 ## Running
 
+Every case is `#[ignore]`d, so a normal `cargo test` run does not execute them:
+
 ```sh
-cargo test -p lumenc --test golden
+cargo test -p lumenc --test golden -- --ignored
 ```
 
-Cases skip themselves, with a printed reason instead of a failure, when:
+The baselines only match on a machine with the fonts they were captured on,
+and the `CI` check below does not catch every such machine (#177). Until that
+is fixed the suite is opt-in, so an unrelated change is not blocked by a
+font difference it did not cause.
+
+When run, cases skip themselves, with a printed reason instead of a failure,
+when:
 
 - there is no usable GPU adapter, or only a software one;
 - `CI` is set in the environment, because a runner resolves a different
@@ -24,7 +32,7 @@ happens.
 ## Updating baselines
 
 ```sh
-LUMEN_GOLDEN_UPDATE=1 cargo test -p lumenc --test golden
+LUMEN_GOLDEN_UPDATE=1 cargo test -p lumenc --test golden -- --ignored
 ```
 
 rewrites every golden from the current build. Re-baseline after any
