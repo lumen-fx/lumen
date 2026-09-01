@@ -12,8 +12,13 @@
 //! offscreen wgpu+vello renderer, reads the framebuffer back, and
 //! compares against a checked-in PNG under `tests/goldens/`.
 //!
-//! - Update mode: `LUMEN_GOLDEN_UPDATE=1 cargo test -p lumenc --test golden`
-//!   rewrites the goldens instead of asserting. See `tests/goldens/README.md`.
+//! - Every case is `#[ignore]`d: the baselines only match on a machine with
+//!   the fonts they were captured on, and the `baseline_fonts` guard below
+//!   does not catch every such machine (#177). Run them with
+//!   `cargo test -p lumenc --test golden -- --ignored`.
+//! - Update mode: `LUMEN_GOLDEN_UPDATE=1 cargo test -p lumenc --test golden
+//!   -- --ignored` rewrites the goldens instead of asserting. See
+//!   `tests/goldens/README.md`.
 //! - No GPU adapter, only a software one, or a machine whose fonts are not the
 //!   baselines' -> every test skips with a message instead of failing. See
 //!   [`gpu_blocker`] and [`baseline_fonts`].
@@ -429,6 +434,7 @@ fn no_drive(_: &mut App) {}
 /// pointer-hovered, and disabled - all in one frame. `:active` needs the
 /// same (single) pointer, so the pressed state is its own case below.
 #[test]
+#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_button_states() {
     run_case(
         "button_states",
@@ -451,6 +457,7 @@ fn golden_button_states() {
 
 /// Pointer held down on a button: `:active` fill + press tint.
 #[test]
+#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_button_pressed() {
     run_case(
         "button_pressed",
@@ -470,6 +477,7 @@ fn golden_button_pressed() {
 /// Toggle track + knob: unchecked, checked (accent track, knob at far
 /// end), and disabled.
 #[test]
+#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_toggle_states() {
     run_case(
         "toggle_states",
@@ -490,6 +498,7 @@ fn golden_toggle_states() {
 /// is fully settled by the harness's 700 ms tick window, so the frame is
 /// time-stable.
 #[test]
+#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_switch_states() {
     run_case(
         "switch_states",
@@ -507,6 +516,7 @@ fn golden_switch_states() {
 
 /// Slider thumb at 0 / 50 / 100 along a 240px track.
 #[test]
+#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_slider_values() {
     run_case(
         "slider_values",
@@ -527,6 +537,7 @@ fn golden_slider_values() {
 /// The caret does not blink - it paints whenever focused - so the frame
 /// is time-stable.
 #[test]
+#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_text_input() {
     run_case(
         "text_input",
@@ -551,6 +562,7 @@ fn golden_text_input() {
 /// Dropdown closed: header button shows the placeholder, content below
 /// is unobscured.
 #[test]
+#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_dropdown_closed() {
     run_case("dropdown_closed", DROPDOWN_MARKUP, "", &no_drive);
 }
@@ -558,6 +570,7 @@ fn golden_dropdown_closed() {
 /// Dropdown open: options panel overlays the content band below the
 /// header (paint-order + popup regression).
 #[test]
+#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_dropdown_open() {
     run_case("dropdown_open", DROPDOWN_MARKUP, "", &|app| {
         set_signal(app, "__dropdown_open:choice", "true");
@@ -587,6 +600,7 @@ const DROPDOWN_MARKUP: &str = concat!(
 /// Tabs: strip with the first tab selected (accent fill) and its body
 /// visible.
 #[test]
+#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_tabs() {
     run_case(
         "tabs",
@@ -614,6 +628,7 @@ fn golden_tabs() {
 /// Modal dialog open: backdrop dims the underlying content, surface card
 /// centered on top.
 #[test]
+#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_dialog_open() {
     run_case(
         "dialog_open",
@@ -640,6 +655,7 @@ fn golden_dialog_open() {
 /// the container bounds. `inertia="0"` applies the delta immediately -
 /// no fling animation to race the capture.
 #[test]
+#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_scroll_offset() {
     run_case(
         "scroll_offset",
@@ -673,6 +689,7 @@ fn golden_scroll_offset() {
 /// current behavior - when ellipsis lands, this golden shifts and must
 /// be re-baselined deliberately.
 #[test]
+#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_text_ellipsis() {
     run_case(
         "text_ellipsis",
@@ -689,6 +706,7 @@ fn golden_text_ellipsis() {
 
 /// Corner radius + drop shadow tile row (sharp, rounded, pill+shadow).
 #[test]
+#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_decor_tiles() {
     run_case(
         "decor_tiles",
@@ -710,6 +728,7 @@ fn golden_decor_tiles() {
 /// fill and `linear-gradient(90deg, ...)` paints top->bottom rather than
 /// left->right; the golden captures current behavior.
 #[test]
+#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_gradient_tiles() {
     run_case(
         "gradient_tiles",
@@ -728,6 +747,7 @@ fn golden_gradient_tiles() {
 /// Overlay stacking: an `<overlay>` child paints above earlier siblings
 /// (document-order z regression - Lumen has no z-index property).
 #[test]
+#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_overlay_stacking() {
     run_case(
         "overlay_stacking",
@@ -754,6 +774,7 @@ fn golden_overlay_stacking() {
 /// down onto the opaque leaf, which renders solid white; the golden
 /// captures current behavior.
 #[test]
+#[ignore = "baselines depend on the machine's installed fonts, see #177"]
 fn golden_opacity_nesting() {
     run_case(
         "opacity_nesting",
