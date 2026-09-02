@@ -26,6 +26,10 @@ on:
   workflow_call:
   workflow_dispatch:
 
+# The dispatch authenticates as SITE_BUILD_TOKEN, so the built-in token needs
+# nothing at all.
+permissions: {}
+
 jobs:
   dispatch:
     runs-on: ubuntu-latest

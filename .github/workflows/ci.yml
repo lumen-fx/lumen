@@ -31,6 +31,11 @@ env:
   # across runners.
   CARGO_INCREMENTAL: 0
 
+# Every job here checks the tree out, builds it, and reports through the check
+# run GitHub creates on its own. None of them writes to the repository.
+permissions:
+  contents: read
+
 jobs:
   # Whether the diff can affect the Rust build at all. The test matrix is
   # skipped step-by-step rather than at the job level: a job-level skip on a

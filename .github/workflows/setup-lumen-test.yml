@@ -33,6 +33,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Checks the tree out and reads the release list. Nothing here writes.
+permissions:
+  contents: read
+
 jobs:
   latest:
     name: latest (${{ matrix.os }})
