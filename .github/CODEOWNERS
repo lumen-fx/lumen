@@ -1,0 +1,33 @@
+# Who gets a review request when a pull request touches a path.
+#
+# The list is the paths where a change is cheap to write and expensive to get
+# wrong: what the build pulls in, what CI is allowed to do, and what a release
+# ships. A plausible-looking edit to any of them can move the supply chain of
+# every install without changing a line of Lumen's own code, so those files get
+# a named reviewer rather than the general read-through the rest of the tree
+# gets.
+#
+# The last matching pattern wins, so the catch-all comes first.
+
+*                       @FizzWizzleDazzle
+
+# What the build resolves and from where. A dependency source or a pinned hash
+# is the one kind of diff whose effect is entirely outside the diff.
+/Cargo.toml             @FizzWizzleDazzle
+/Cargo.lock             @FizzWizzleDazzle
+**/Cargo.toml           @FizzWizzleDazzle
+/rust-toolchain.toml    @FizzWizzleDazzle
+/.cargo/                @FizzWizzleDazzle
+
+# What CI runs, what it is permitted to do, and which actions it trusts.
+/.github/               @FizzWizzleDazzle
+
+# What a release builds, signs, and publishes, and what users download.
+/tools/release/         @FizzWizzleDazzle
+/tools/setup-lumen/     @FizzWizzleDazzle
+
+# Licensing and contribution terms.
+/LICENSE                @FizzWizzleDazzle
+/CLA.md                 @FizzWizzleDazzle
+/CONTRIBUTING.md        @FizzWizzleDazzle
+/PHILOSOPHY.md          @FizzWizzleDazzle

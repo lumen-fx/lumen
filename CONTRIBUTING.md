@@ -72,6 +72,15 @@ CodeQL scans every pull request. A new security alert of high or higher
 severity blocks the merge; fix the finding or dismiss it with a reason on the
 Security tab.
 
+## Review
+
+Every pull request is read before it merges. A change under `.github/`, the
+Cargo manifests and lockfile, the toolchain pin, `tools/release/`, or
+`tools/setup-lumen/` also pulls in a review request automatically
+(`.github/CODEOWNERS`), because those paths decide what the build pulls in and
+what a release publishes. Expect a slower read on them, and say in the pull
+request why the change is needed rather than only what it does.
+
 ## Invariants you must not break
 
 1. `lumen-core` may not import any impl crate.
