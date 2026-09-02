@@ -35,7 +35,12 @@ mkdir -p "$DEST"
 for name in "$@"; do
   url="https://github.com/$OWNER/$name/releases/latest/download/template.tar.gz"
   printf 'fetching %s\n' "$url"
-  if ! curl -fsSL "$url" -o "$TMP/$name.tar.gz"; then
+  # A dropped connection on any one of these fails the whole job, and a CI run
+  # downloads all eight on each of three operating systems, so a transient
+  # reset is worth a few more attempts. An archive that is genuinely missing
+  # still fails, a couple of seconds later.
+  if ! curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+       "$url" -o "$TMP/$name.tar.gz"; then
     echo "fetch-templates.sh: cannot download $url" >&2
     exit 1
   fi
