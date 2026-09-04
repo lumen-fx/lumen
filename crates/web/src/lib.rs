@@ -20,6 +20,7 @@ pub mod bindings;
 pub mod css;
 pub mod error;
 pub mod html;
+pub mod i18n;
 pub mod markup;
 pub mod seo;
 pub mod site;
@@ -29,6 +30,7 @@ pub mod urls;
 
 pub use css::{RESET_CSS, rules_css, styles_css, token_warnings};
 pub use error::EmitError;
+pub use i18n::translate_ir;
 pub use markup::{MarkupSheet, lift as lift_markup_styles};
 pub use site::{NOT_FOUND_FILE, SITEMAP_FILE, document, emit, shell};
 pub use snapshot::{State, state_of};

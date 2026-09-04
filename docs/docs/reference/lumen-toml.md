@@ -194,7 +194,7 @@ with the toolchain, so there is nothing per-app to compile or trim.
 | `description` | string | none | Description any page without one of its own carries. |
 | `og_image` | string | none | Image for social previews, relative to the site root or absolute. |
 | `canonical` | string | `url` | Absolute URL the pages declare as canonical, for a site published at more than one address. |
-| `locales` | array of BCP-47 tags | the app's locale | Emit one document tree per locale. |
+| `locales` | array of BCP-47 tags | the app's locale | Emit the site in each locale. `render = "static"` and `render = "csr"` write one document tree per locale; `render = "ssr"` writes none and a render answers in the locale the request asks for. |
 | `default_locale` | BCP-47 tag | `[app] locale`, else `en-US` | The locale served from the site root; the others sit under `/<tag>/`. |
 | `skin` | string | `[skin] name`, else `default` | Skin the site is styled with. `auto` is not read here: it means the machine's own OS, and a site is served to every OS. |
 | `css` | `"sheet"`, `"computed"` | `sheet` | `sheet` emits the stylesheet the app was written with. `computed` writes the values Lumen's cascade resolved onto each element instead, which answers what Lumen resolved but loses states, media queries and anything created later. |

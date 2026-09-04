@@ -189,7 +189,7 @@ document of its own.
 |------|--------|
 | `--out <dir>` | Where the site is written. Default: `[web] out_dir`, else `<app_dir>/dist/web`. |
 | `--base <path>` | URL prefix the site is served under. Default: `[web] base_path`, else `/`. |
-| `--locale <tag>` | Emit a document tree for this locale; repeat for more. The first is served from the site root and the rest from `/<tag>/`. Default: `[web] locales`. |
+| `--locale <tag>` | Emit the site in this locale; repeat for more. The first is served from the site root and the rest from `/<tag>/`. Under `--render static` and `--render csr` each is a document tree; under `--render ssr` each is a tree a render answers in. Default: `[web] locales`. |
 | `--render static\|csr\|ssr` | Where a page's document comes from: `static` and `csr` write it at build time, and `ssr` produces it for the request that asks. Default: `[web] render`. |
 | `--runtime` / `--no-runtime` | Whether the documents carry the browser runtime. Refused against a `--render` mode that already says the opposite. Default: `[web] runtime`, else what `--render` implies. |
 | `--prerender seeds\|run\|none` | Where the state the pages are rendered with comes from: `seeds` uses `[web.seed]` and the defaults the markup declares, `run` starts from those and then runs the app here, writing each page with the state it settles into, `none` renders the markup alone. `run` with `--render ssr` is refused, because a rendered page settles its own state per request. Default: `[web] prerender`. |
@@ -221,8 +221,8 @@ is answered by the `user` page with `/42` on `route.segment`.
 A process renders one request at a time, and requests for pages queue.
 Serving more at once means more processes behind a proxy; the reason is in
 [Rendering on a server](../guides/server-rendering.md). A site emitted in
-several locales is rendered in the first one, and the other trees are served
-as the build wrote them.
+several locales is rendered in whichever of them the request asks for, by a
+`/<tag>/` prefix on the path or by `Accept-Language`.
 
 The browser runtime is looked up in this order: `--lib-dir`, the directory
 holding the running `lumenc`, `$LUMEN_LIB_DIR`, then the download cache. When

@@ -21,7 +21,7 @@ use lumen_core::{say_line, warn_line};
 use lumen_html::contract::{
     DEFAULT_ARTIFACT_FILE, NavigationMode, ScriptFormat, ScriptRef, Seed, SeedValue,
 };
-use lumen_i18n::{I18n, LanguageIdentifier, SharedI18n, translated_or_authored};
+use lumen_i18n::{I18n, LanguageIdentifier, SharedI18n};
 use lumen_ir::artifact::CompiledApp;
 use lumen_ir::layout_ir::{Element, LayoutIR, relativize_asset_paths};
 use lumen_prerender::{self as prerender, Budget, Prerendered, Settled};
@@ -71,9 +71,11 @@ a page loads them.
                       [web] out_dir, else dist/web).
     --base PATH       URL prefix the site is served under, such as /docs
                       (default: [web] base_path, else /).
-    --locale TAG      Emit a document tree for this locale. Repeat for
-                      more; the first is served from the site root
-                      (default: [web] locales, else [app] locale).
+    --locale TAG      Emit the site in this locale. Repeat for more; the
+                      first is served from the site root and the rest from
+                      /<tag>/. Under --render ssr no documents are written
+                      and a render answers in the locale the request asks
+                      for (default: [web] locales, else [app] locale).
     --render MODE     Where a page's document comes from: static writes it
                       with nothing to run it, csr writes it and the runtime
                       adopts it, ssr produces it for the request that asks
@@ -282,12 +284,9 @@ struct Report {
     per_request: bool,
     warnings: Vec<String>,
     /// The app a server renders per request, when one was asked for. It holds
-    /// the tree the documents were emitted from, so a rendered page and a
-    /// built one are the same page.
+    /// one tree per locale, so a rendered page reads in the language the
+    /// request asks for.
     site: Option<SsrSite>,
-    /// The locales other than the one a render answers in, which is what a
-    /// server hands to the documents on disk instead.
-    other_locales: Vec<String>,
 }
 
 fn build(options: &Options) -> Result<Report, String> {
@@ -503,16 +502,15 @@ fn build(options: &Options) -> Result<Report, String> {
         WebPrerender::Seeds | WebPrerender::None => BTreeMap::new(),
     };
     let mut pages_written = 0;
-    let mut served: Option<SiteSpec> = None;
+    let mut served: Vec<SiteSpec> = Vec::new();
     for (index, locale) in locales.iter().enumerate() {
         let mut spec = SiteSpec {
             pages: Vec::new(),
             web: WebSpec {
-                // A renderer holds one site and a site is in one language, so
-                // the tree at the site root is the one a render answers for.
-                // The others are answered by the documents beside it, which is
-                // why they are still written.
-                per_request: per_request && index == 0,
+                // A render answers for every locale, including the trees under
+                // a locale prefix, so writing documents for them would put two
+                // answers behind one address.
+                per_request,
                 ..web.clone()
             },
             locale: LocaleSpec {
@@ -547,13 +545,11 @@ fn build(options: &Options) -> Result<Report, String> {
         if index == 0 {
             pages_written = spec.pages.len();
             warnings.extend(site.warnings);
-            // A render answers in the locale served from the site root, which
-            // is the tree the pages at the root were emitted from. Serving a
-            // request in one of the other locales is the reverse proxy's to
-            // decide, and it has the built documents for it.
-            if per_request && options.serve {
-                served = Some(spec);
-            }
+        }
+        // A render answers in whichever of these the request asks for, so it
+        // is handed every one of them.
+        if per_request && options.serve {
+            served.push(spec);
         }
     }
 
@@ -575,13 +571,14 @@ fn build(options: &Options) -> Result<Report, String> {
     // the request asking, which is the whole difference between a rendered
     // page and a built one. The files beside the documents are still the
     // build's, and the server sends them from the directory.
-    let site = match served {
-        Some(spec) => {
-            let mut site = SsrSite::new(compiled, web).map_err(|e| e.to_string())?;
-            *site.spec_mut() = spec;
-            Some(site.with_seed(declared_seed(&seed)))
+    let site = if served.is_empty() {
+        None
+    } else {
+        let mut site = SsrSite::new(compiled, web).map_err(|e| e.to_string())?;
+        for tree in served {
+            site = site.with_locale(tree).map_err(|e| e.to_string())?;
         }
-        None => None,
+        Some(site.with_seed(declared_seed(&seed)))
     };
 
     Ok(Report {
@@ -591,7 +588,6 @@ fn build(options: &Options) -> Result<Report, String> {
         per_request,
         warnings,
         site,
-        other_locales: locales.into_iter().skip(1).collect(),
     })
 }
 
@@ -895,12 +891,11 @@ fn translated_ir(
     locale: &str,
     warnings: &mut Vec<String>,
 ) -> Result<LayoutIR, String> {
-    let mut out = ir.clone();
     let lang = match locale.parse::<LanguageIdentifier>() {
         Ok(lang) => lang,
         Err(e) => {
             warnings.push(format!("locale `{locale}` is not a valid BCP-47 tag: {e}"));
-            return Ok(out);
+            return Ok(ir.clone());
         }
     };
     let fallback = "en-US"
@@ -911,22 +906,9 @@ fn translated_ir(
     // A build reads the author's loose files; no asset chain exists yet.
     i18n.load_dir(&locale_dir(dir), |p| std::fs::read(p))
         .map_err(|e| format!("locale catalogues: {e}"))?;
-    // The same no-argument lookup markup gets at run time.
-    translate(&mut out.root, &SharedI18n::new(i18n));
-    Ok(out)
-}
-
-fn translate(element: &mut Element, i18n: &SharedI18n) {
-    if let Some(key) = element.attrs.translatable.clone() {
-        element.attrs.text = Some(translated_or_authored(
-            i18n.try_t(&key),
-            element.attrs.text.as_deref(),
-            &key,
-        ));
-    }
-    for child in &mut element.children {
-        translate(child, i18n);
-    }
+    // Resolving the text is the emitter's, because a server holding a tree
+    // per locale builds one the same way.
+    Ok(lumen_web::translate_ir(ir, &SharedI18n::new(i18n)))
 }
 
 /// Move every asset the markup points at into the site, and rewrite the
@@ -1320,7 +1302,7 @@ fn serve(report: Report, options: &Options) -> ExitCode {
             fetch,
             ..RenderOptions::default()
         };
-        let handler = match RenderHandler::start(site, render, report.other_locales) {
+        let handler = match RenderHandler::start(site, render) {
             Ok(handler) => handler,
             Err(message) => {
                 warn_line!("lumenc web: {message}");
