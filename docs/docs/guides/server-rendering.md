@@ -23,10 +23,17 @@ still comes from `lumenc web`:
 lumenc web myapp --render ssr
 ```
 
-That writes `styles.css`, `app.lmna`, `app.cdlb`, `lumen-web.wasm`,
-`lumen-web.js` and `assets/`, and no documents: serve those as static files
-and answer everything else with a render. The runtime adopts a rendered
-document the same way it adopts a built one.
+That writes the stylesheet, the compiled app, the compiled candela program,
+the browser runtime pair, `lumen.web.json` and `assets/`, and no documents:
+serve those as static files and answer everything else with a render. The
+runtime adopts a rendered document the same way it adopts a built one.
+
+Every one of those files but the manifest is named after its own contents, so
+the compiled app is `app.<hash>.lmna` rather than `app.lmna`. Read the name
+out of `lumen.web.json`, which lists it as `artifact`, rather than writing it
+into your server: it changes whenever the app does. `lumenc web --render ssr`
+also prints the name it just wrote, since that directory holds no document to
+read it from.
 
 Add `--no-runtime` to render pages that carry none:
 
@@ -36,9 +43,10 @@ lumenc web myapp --render ssr --no-runtime
 
 Each page is still produced for the request that asks, and now it is only a
 document: no wasm, no boot script, and nothing that takes it over once it is
-open. Links load the next page, which is another render. `app.lmna` is still
-written, because that is what you render from; the runtime files and the
-manifest are not, because nothing loads them.
+open. Links load the next page, which is another render. The compiled app is
+still written, because that is what you render from; the runtime files and the
+manifest are not, because nothing loads them. Without a manifest to read the
+name out of, the name the build printed is the one to render from.
 
 Build with `--render csr` instead when you want documents to fall back to.
 Which of the two answers a request is then yours to decide, and so is
@@ -82,7 +90,8 @@ use std::sync::Arc;
 use lumen_ssr::{FetchPolicy, RenderOptions, Renderer, SsrRequest, SsrSite};
 use lumen_web::WebSpec;
 
-let compiled = lumen_ir::artifact::read("dist/web/app.lmna".as_ref())?;
+// The name is the one `lumen.web.json` gives as `artifact`.
+let compiled = lumen_ir::artifact::read("dist/web/app.f2d1a07c9b3e5648.lmna".as_ref())?;
 let site = SsrSite::new(compiled, WebSpec::default())?;
 let options = RenderOptions {
     fetch: FetchPolicy::default().allow_host("api.example.com"),

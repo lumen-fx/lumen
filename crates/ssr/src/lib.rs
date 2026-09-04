@@ -16,7 +16,9 @@
 //! use lumen_ssr::{RenderOptions, Renderer, SsrRequest, SsrSite};
 //! use lumen_web::WebSpec;
 //!
-//! let compiled = lumen_ir::artifact::read("dist/web/app.lmna".as_ref())?;
+//! // Every file a build writes is named after its own contents; the name
+//! // here is the one `dist/web/lumen.web.json` gives as `artifact`.
+//! let compiled = lumen_ir::artifact::read("dist/web/app.f2d1a07c9b3e5648.lmna".as_ref())?;
 //! let site = SsrSite::new(compiled, WebSpec::default())?;
 //! let renderer = Renderer::start(Arc::new(site), RenderOptions::default())?;
 //!

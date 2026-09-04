@@ -960,13 +960,19 @@ fn a_page_title_beats_the_site_title() {
 
 #[test]
 fn every_page_boots_the_same_way() {
-    let site = emitted(&site(vec![
+    let spec = site(vec![
         simple_page(),
         PageSpec::new("about", ir(element("root", Attributes::default(), vec![]))),
-    ]));
-    let boot = r#"<script type="module">import init, { boot } from "/lumen-web.js";init({ module_or_path: "/lumen-web.wasm" }).then(boot);</script>"#;
+    ]);
+    let site = emitted(&spec);
+    // The manifest is the one file a site writes under a name of its own, so
+    // the URL a page fetches it from carries the build's marker instead.
+    let boot = format!(
+        r#"<script type="module">import init, {{ boot }} from "/lumen-web.js";init({{ module_or_path: "/lumen-web.wasm" }}).then(() => boot("/lumen.web.json?v={}"));</script>"#,
+        lumen_web::build_id(&spec)
+    );
     for file in site.files.iter().filter(|f| f.path.ends_with(".html")) {
-        assert!(file.contents.contains(boot), "{} has no boot", file.path);
+        assert!(file.contents.contains(&boot), "{} has no boot", file.path);
     }
 }
 
@@ -1209,6 +1215,7 @@ fn a_site_emitted_without_the_runtime_loads_nothing() {
     let html = page_html(&spec, "index.html");
     assert!(!html.contains("<script"), "{html}");
     assert!(!html.contains("lumen-web.wasm"), "{html}");
+    assert!(!html.contains("lumen.web.json"), "{html}");
     // The page itself is all there, which is the point of the mode.
     assert!(html.contains("Hello"));
     assert!(html.contains(r#"href="/styles.css""#));

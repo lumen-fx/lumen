@@ -83,18 +83,26 @@ pub const DIALOG_OPEN: &str = "open";
 pub const SEED_SCRIPT_ID: &str = "lm-seed";
 
 /// File name of the site manifest.
+///
+/// The one file a build writes under a fixed name, because it is what names
+/// all the others. A document fetches it with the build's marker on the URL.
 pub const DEFAULT_MANIFEST_FILE: &str = "lumen.web.json";
 
-/// File name of the compiled app artifact the runtime loads.
+/// The compiled app artifact the runtime loads, before it is named.
+///
+/// A build writes it with the hash of its contents in the name and puts that
+/// name in the [`Manifest`], so a redeploy is a URL nothing has cached. The
+/// three names below work the same way: each is what a file is called before
+/// its bytes are known, and what a hand-built [`Manifest`] falls back to.
 pub const DEFAULT_ARTIFACT_FILE: &str = "app.lmna";
 
-/// File name of the emitted stylesheet.
+/// The emitted stylesheet, before it is named.
 pub const DEFAULT_CSS_FILE: &str = "styles.css";
 
-/// File name of the prebuilt wasm runtime shipped with the toolchain.
+/// The prebuilt wasm runtime shipped with the toolchain, before it is named.
 pub const DEFAULT_WASM_FILE: &str = "lumen-web.wasm";
 
-/// File name of the JavaScript module that loads the wasm runtime.
+/// The JavaScript module that loads the wasm runtime, before it is named.
 pub const DEFAULT_JS_FILE: &str = "lumen-web.js";
 
 /// The names a selector written for a browser needs, gathered for

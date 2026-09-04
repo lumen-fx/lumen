@@ -86,6 +86,37 @@ fn files(root: &Path) -> BTreeSet<String> {
     found
 }
 
+/// `path` with the content hash taken back out, when it carries one.
+///
+/// Every file a build writes but the documents themselves is named after its
+/// own bytes, so a test asks for `styles.css` and gets the name the build
+/// chose for it.
+fn unhashed(path: &str) -> Option<String> {
+    let (before, ext) = path.rsplit_once('.')?;
+    let (stem, hash) = before.rsplit_once('.')?;
+    (hash.len() == 16 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| format!("{stem}.{ext}"))
+}
+
+/// The single file in the site that was written as `name`.
+fn hashed(root: &Path, name: &str) -> String {
+    let files = files(root);
+    let mut found: Vec<String> = files
+        .iter()
+        .filter(|path| unhashed(path).as_deref() == Some(name))
+        .cloned()
+        .collect();
+    assert_eq!(found.len(), 1, "no single `{name}` in {files:?}");
+    found.remove(0)
+}
+
+/// Whether the site carries a file that was written as `name`.
+fn carries(root: &Path, name: &str) -> bool {
+    files(root)
+        .iter()
+        .any(|path| unhashed(path).as_deref() == Some(name))
+}
+
 fn read(root: &Path, name: &str) -> String {
     std::fs::read_to_string(root.join(name)).unwrap_or_else(|e| panic!("read {name}: {e}"))
 }
@@ -169,22 +200,34 @@ fn assert_paths_are_unique(name: &str, html: &str) {
     );
 }
 
-/// Fail unless every link into the site reaches a document, or the shell
-/// that answers for a path with no document of its own.
+/// Fail unless every reference into the site reaches the file it names, or,
+/// for a page, the shell that answers a path with no document of its own.
+///
+/// A file the build wrote is named after its own contents, so a reference to
+/// one is either exactly right or points at nothing.
 fn assert_links_resolve(root: &Path, base: &str, name: &str, html: &str) {
-    for href in attribute_values(html, "href") {
-        if !href.starts_with(base) {
-            continue;
+    for attribute in ["href", "src"] {
+        for reference in attribute_values(html, attribute) {
+            if !reference.starts_with(base) {
+                continue;
+            }
+            let relative = reference.trim_start_matches(base);
+            let relative = relative.split('?').next().unwrap_or(relative);
+            if relative.is_empty() {
+                continue;
+            }
+            let target = root.join(relative);
+            // A page's URL is a document, and a path with no document of its
+            // own is served the shell.
+            if relative.ends_with(".html") || !relative.contains('.') {
+                assert!(
+                    target.exists() || root.join("404.html").exists(),
+                    "{name}: `{reference}` reaches neither a document nor the shell"
+                );
+                continue;
+            }
+            assert!(target.is_file(), "{name}: `{reference}` names no file");
         }
-        let relative = href.trim_start_matches(base);
-        if relative.is_empty() {
-            continue;
-        }
-        let target = root.join(relative);
-        assert!(
-            target.exists() || root.join("404.html").exists(),
-            "{name}: `{href}` reaches neither a file nor the shell"
-        );
     }
 }
 
@@ -204,18 +247,26 @@ fn a_page_of_the_app_becomes_a_document_of_the_site() {
     web("apps/pages-demo", &out, &[]);
 
     let files = files(&out);
+    // The documents are the site's URLs, so they keep their names.
     for expected in [
         "index.html",
         "settings.html",
         "user.html",
         "404.html",
-        "styles.css",
         "lumen.web.json",
-        "app.lmna",
-        "lumen-web.wasm",
-        "lumen-web.js",
     ] {
         assert!(files.contains(expected), "no `{expected}` in {files:?}");
+    }
+    // Everything else is named after its own contents.
+    for expected in ["styles.css", "app.lmna", "lumen-web.wasm", "lumen-web.js"] {
+        assert!(
+            carries(&out, expected),
+            "no hashed `{expected}` in {files:?}"
+        );
+        assert!(
+            !files.contains(expected),
+            "`{expected}` is unhashed in {files:?}"
+        );
     }
     check_documents(&out, "/");
 
@@ -266,17 +317,14 @@ fn a_static_site_is_the_same_pages_with_nothing_to_run_them() {
     );
 
     let files = files(&out);
-    for expected in ["index.html", "settings.html", "404.html", "styles.css"] {
+    for expected in ["index.html", "settings.html", "404.html"] {
         assert!(files.contains(expected), "no `{expected}` in {files:?}");
     }
-    for absent in [
-        "lumen-web.wasm",
-        "lumen-web.js",
-        "lumen.web.json",
-        "app.lmna",
-    ] {
-        assert!(!files.contains(absent), "`{absent}` in {files:?}");
+    assert!(carries(&out, "styles.css"), "no stylesheet in {files:?}");
+    for absent in ["lumen-web.wasm", "lumen-web.js", "app.lmna"] {
+        assert!(!carries(&out, absent), "`{absent}` in {files:?}");
     }
+    assert!(!files.contains("lumen.web.json"), "{files:?}");
     check_documents(&out, "/");
 
     // The markup is all there; what is gone is everything that would run it.
@@ -295,7 +343,7 @@ fn a_static_site_says_a_runtime_it_was_handed_has_nowhere_to_go() {
     let out = scratch.join("site");
     let printed = web("apps/pages-demo", &out, &["--render", "static"]);
     assert!(printed.contains("--lib-dir"), "{printed}");
-    assert!(!files(&out).contains("lumen-web.wasm"), "{:?}", files(&out));
+    assert!(!carries(&out, "lumen-web.wasm"), "{:?}", files(&out));
 }
 
 #[test]
@@ -328,7 +376,7 @@ fn an_app_s_assets_travel_with_the_site() {
         files.iter().any(|path| path.starts_with("assets/")),
         "no assets were copied: {files:?}"
     );
-    assert!(files.contains("assets/icons/close.png"), "{files:?}");
+    assert!(carries(&out, "assets/icons/close.png"), "{files:?}");
     check_documents(&out, "/");
 }
 
@@ -338,10 +386,15 @@ fn a_candela_app_ships_the_program_the_browser_runs() {
     let out = scratch.join("site");
     web("fixtures/candela-smoke", &out, &[]);
 
-    assert!(out.join("app.cdlb").is_file(), "no bytecode was written");
+    let bytecode = hashed(&out, "app.cdlb");
+    assert!(out.join(&bytecode).is_file(), "no bytecode was written");
     let manifest = read(&out, "lumen.web.json");
     assert!(manifest.contains(r#""engine": "candela""#), "{manifest}");
-    assert!(manifest.contains(r#""path": "app.cdlb""#), "{manifest}");
+    // The name in the manifest is the file that landed on disk.
+    assert!(
+        manifest.contains(&format!(r#""path": "{bytecode}""#)),
+        "{manifest}"
+    );
     assert!(manifest.contains(r#""format": "cdlb""#), "{manifest}");
     check_documents(&out, "/");
 }
@@ -395,7 +448,11 @@ fn a_base_path_roots_every_reference() {
     web("apps/pages-demo", &out, &["--base", "/docs"]);
 
     let index = read(&out, "index.html");
-    assert!(index.contains(r#"href="/docs/styles.css""#), "{index}");
+    let sheet = hashed(&out, "styles.css");
+    assert!(
+        index.contains(&format!(r#"href="/docs/{sheet}""#)),
+        "{index}"
+    );
     assert!(index.contains(r#"href="/docs/settings.html""#), "{index}");
     assert!(index.contains(r#"data-lm-base="/docs/""#), "{index}");
     check_documents(&out, "/docs/");
@@ -415,7 +472,8 @@ fn a_locale_gets_a_tree_of_its_own_under_its_tag() {
     assert!(files.contains("index.html"), "{files:?}");
     assert!(files.contains("de-DE/index.html"), "{files:?}");
     // What the whole site shares is written once, at its root.
-    assert!(!files.contains("de-DE/styles.css"), "{files:?}");
+    let sheet = hashed(&out, "styles.css");
+    assert!(!files.contains(&format!("de-DE/{sheet}")), "{files:?}");
     assert!(!files.contains("de-DE/lumen.web.json"), "{files:?}");
 
     let german = read(&out, "de-DE/index.html");
@@ -424,7 +482,16 @@ fn a_locale_gets_a_tree_of_its_own_under_its_tag() {
         german.contains(r#"href="/de-DE/settings.html""#),
         "{german}"
     );
-    assert!(german.contains(r#"href="/styles.css""#), "{german}");
+    assert!(german.contains(&format!(r#"href="/{sheet}""#)), "{german}");
+    // Both trees fetch the one manifest, under the one marker.
+    let index = read(&out, "index.html");
+    let marker = |html: &str| {
+        let at = html
+            .find("lumen.web.json?v=")
+            .expect("the manifest is fetched");
+        html[at..at + "lumen.web.json?v=".len() + 16].to_string()
+    };
+    assert_eq!(marker(&german), marker(&index));
     check_documents(&out, "/");
 }
 
@@ -446,6 +513,82 @@ fn two_builds_of_one_app_write_the_same_bytes() {
     }
 }
 
+/// A name is only worth anything if it is the name of the bytes under it: a
+/// stylesheet the build hashed and a stylesheet the emitter wrote have to be
+/// the same file.
+#[test]
+fn every_hashed_name_is_the_hash_of_the_file_it_names() {
+    let scratch = scratch("hash-names");
+    let out = scratch.join("site");
+    web("apps/kanban", &out, &[]);
+
+    let mut checked = 0;
+    for path in files(&out) {
+        let Some(name) = unhashed(&path) else {
+            continue;
+        };
+        let bytes = std::fs::read(out.join(&path)).expect("read the file");
+        assert_eq!(
+            lumen_web::content_name(&name, &bytes),
+            path,
+            "`{path}` is not named after what is in it"
+        );
+        checked += 1;
+    }
+    // The stylesheet, the artifact, the runtime pair and an asset.
+    assert!(
+        checked >= 5,
+        "only {checked} files carried a name of their own"
+    );
+}
+
+/// A build that changes one file changes that file's name and no other, which
+/// is what lets a host keep the rest.
+#[test]
+fn a_changed_style_renames_the_stylesheet_and_leaves_the_rest_alone() {
+    let scratch = scratch("rename");
+    let app = scratch.join("app");
+    std::fs::create_dir_all(app.join("src")).expect("create the app directory");
+    std::fs::write(
+        app.join("lumen.toml"),
+        "[app]\nentry = \"main.lmn\"\nid = \"lumen.test.rename\"\n",
+    )
+    .expect("write lumen.toml");
+    let markup = |color: &str| format!("<root>\n  <label text=\"hi\" bg=\"{color}\" />\n</root>\n");
+    std::fs::write(app.join("src").join("main.lmn"), markup("#101014")).expect("write the markup");
+
+    let before = scratch.join("before");
+    web(app.to_str().expect("a path"), &before, &[]);
+    let sheet = hashed(&before, "styles.css");
+    let wasm = hashed(&before, "lumen-web.wasm");
+
+    std::fs::write(app.join("src").join("main.lmn"), markup("#202024")).expect("restyle the app");
+    let after = scratch.join("after");
+    web(app.to_str().expect("a path"), &after, &[]);
+
+    assert_ne!(sheet, hashed(&after, "styles.css"));
+    // The runtime did not change, so neither did what a visitor fetches it as.
+    assert_eq!(wasm, hashed(&after, "lumen-web.wasm"));
+    // And the document that has to find the new one does.
+    let index = read(&after, "index.html");
+    assert!(
+        index.contains(&format!(r#"href="/{}""#, hashed(&after, "styles.css"))),
+        "{index}"
+    );
+    // A stale manifest would name files this build did not write, so the URL
+    // the pages fetch it from moves with it.
+    assert_ne!(
+        read(&before, "index.html")
+            .split("lumen.web.json?v=")
+            .nth(1)
+            .map(|rest| rest[..16].to_string()),
+        index
+            .split("lumen.web.json?v=")
+            .nth(1)
+            .map(|rest| rest[..16].to_string()),
+    );
+}
+
 #[test]
 fn the_served_site_is_what_a_browser_needs() {
     let scratch = scratch("serve");
@@ -462,8 +605,9 @@ fn the_served_site_is_what_a_browser_needs() {
     assert!(root.contains("<!doctype html>"), "{root}");
 
     // The one that breaks silently: a browser refuses to instantiate a
-    // streamed module served as anything else.
-    let wasm = request(address, "/lumen-web.wasm");
+    // streamed module served as anything else. The name comes from the
+    // manifest, which is where the runtime reads it.
+    let wasm = request(address, &format!("/{}", hashed(&out, "lumen-web.wasm")));
     assert!(wasm.starts_with("HTTP/1.1 200 "), "{wasm}");
     assert!(wasm.contains("Content-Type: application/wasm"), "{wasm}");
 
@@ -873,15 +1017,13 @@ fn a_rendered_site_is_the_files_a_render_needs_and_no_documents() {
     assert!(printed.contains("lumen-ssr"), "{printed}");
 
     let files = files(&out);
-    for expected in [
-        "styles.css",
-        "app.lmna",
-        "lumen.web.json",
-        "lumen-web.wasm",
-        "lumen-web.js",
-    ] {
-        assert!(files.contains(expected), "no `{expected}` in {files:?}");
+    assert!(files.contains("lumen.web.json"), "{files:?}");
+    for expected in ["styles.css", "app.lmna", "lumen-web.wasm", "lumen-web.js"] {
+        assert!(carries(&out, expected), "no `{expected}` in {files:?}");
     }
+    // Nothing here is a document, so the build says which file a server
+    // renders from.
+    assert!(printed.contains(&hashed(&out, "app.lmna")), "{printed}");
     assert!(
         documents(&out).is_empty(),
         "a rendered site wrote documents: {:?}",
@@ -904,15 +1046,11 @@ fn a_rendered_site_can_be_asked_for_pages_with_nothing_to_run_them() {
 
     let files = files(&out);
     // What the server renders from stays; what only a browser would load goes.
-    assert!(files.contains("styles.css"), "{files:?}");
-    assert!(files.contains("app.lmna"), "{files:?}");
-    for absent in [
-        "lumen.web.json",
-        "lumen-web.wasm",
-        "lumen-web.js",
-        "app.cdlb",
-    ] {
-        assert!(!files.contains(absent), "`{absent}` in {files:?}");
+    assert!(carries(&out, "styles.css"), "{files:?}");
+    assert!(carries(&out, "app.lmna"), "{files:?}");
+    assert!(!files.contains("lumen.web.json"), "{files:?}");
+    for absent in ["lumen-web.wasm", "lumen-web.js", "app.cdlb"] {
+        assert!(!carries(&out, absent), "`{absent}` in {files:?}");
     }
     assert!(
         documents(&out).is_empty(),
@@ -991,7 +1129,7 @@ fn a_runtime_setting_the_render_mode_agrees_with_is_taken() {
     );
     let files = files(&out);
     assert!(files.contains("index.html"), "{files:?}");
-    assert!(!files.contains("lumen-web.wasm"), "{files:?}");
+    assert!(!carries(&out, "lumen-web.wasm"), "{files:?}");
 }
 
 #[test]
