@@ -7,12 +7,13 @@
 //! travels as data.
 
 use lumen_html::contract::{
-    DATA_LM_BASE, DATA_LM_CONTRACT, DATA_LM_LOCALE, DATA_LM_PAGE, LM_CONTRACT_VERSION,
-    SEED_SCRIPT_ID,
+    DATA_LM_BASE, DATA_LM_CONTRACT, DATA_LM_LOCALE, DATA_LM_PAGE, DEFAULT_MANIFEST_FILE,
+    LM_CONTRACT_VERSION, SEED_SCRIPT_ID,
 };
 use lumen_html::{escape_attr, escape_text};
 
 use crate::error::EmitError;
+use crate::names;
 use crate::spec::{PageSpec, SiteSpec};
 use crate::urls;
 
@@ -126,20 +127,32 @@ pub fn open_document(out: &mut String, page: &PageSpec, spec: &SiteSpec) -> Resu
 /// The script is the same on every page of a site: it loads the runtime,
 /// which reads the page it landed on out of the document.
 ///
-/// The module is told where its wasm is rather than left to guess. The site
-/// is what names these files, and a loader that resolved a name of its own
-/// would be a second answer to the same question.
+/// The module is told where its wasm is rather than left to guess, and where
+/// its manifest is rather than left to build the URL. The site is what names
+/// these files, and a loader that resolved a name of its own would be a
+/// second answer to the same question.
+///
+/// The manifest URL carries the build's marker, because the manifest is the
+/// one file a site writes under a fixed name: without it a visitor holding a
+/// cached copy would be sent to the files of the build before this one.
 pub fn close_document(out: &mut String, spec: &SiteSpec) {
     if !spec.web.runtime {
         out.push_str("\n</body>\n</html>\n");
         return;
     }
     let base = urls::normalize_base(&spec.web.base_path);
+    let manifest = format!(
+        "{}?v={}",
+        urls::join(&base, DEFAULT_MANIFEST_FILE),
+        names::build_id(spec)
+    );
     out.push_str("\n<script type=\"module\">import init, { boot } from \"");
     out.push_str(&escape_text(&urls::join(&base, &spec.web.js)));
     out.push_str("\";init({ module_or_path: \"");
     out.push_str(&escape_text(&urls::join(&base, &spec.web.wasm)));
-    out.push_str("\" }).then(boot);</script>\n</body>\n</html>\n");
+    out.push_str("\" }).then(() => boot(\"");
+    out.push_str(&escape_text(&manifest));
+    out.push_str("\"));</script>\n</body>\n</html>\n");
 }
 
 fn attr(out: &mut String, name: &str, value: &str) {

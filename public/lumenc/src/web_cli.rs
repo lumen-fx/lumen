@@ -19,7 +19,8 @@ use lumen_core::nav::{PATH_SIGNAL, SEGMENT_SIGNAL, resolve_path};
 use lumen_core::signals::ArrayItem;
 use lumen_core::{say_line, warn_line};
 use lumen_html::contract::{
-    DEFAULT_ARTIFACT_FILE, NavigationMode, ScriptFormat, ScriptRef, Seed, SeedValue,
+    DEFAULT_ARTIFACT_FILE, DEFAULT_CSS_FILE, DEFAULT_JS_FILE, DEFAULT_WASM_FILE, NavigationMode,
+    ScriptFormat, ScriptRef, Seed, SeedValue,
 };
 use lumen_i18n::{I18n, LanguageIdentifier, SharedI18n, translated_or_authored};
 use lumen_ir::artifact::CompiledApp;
@@ -138,11 +139,14 @@ pub fn cmd_web(args: impl Iterator<Item = String>) -> ExitCode {
                 return serve(report, &options);
             }
             // A rendered site is the files a render needs and no documents, so
-            // there is nothing here for a file server to hand out.
+            // there is nothing here for a file server to hand out. The
+            // compiled app is named, because a name carries the hash of the
+            // file and there is no document here to read it out of.
             if report.per_request {
                 say_line!(
                     "lumenc web: pass --serve to render the pages here, or point a server built \
-                     on lumen-ssr at this directory"
+                     on lumen-ssr at this directory and render from {}",
+                    report.artifact
                 );
             }
             ExitCode::SUCCESS
@@ -277,6 +281,9 @@ struct Report {
     out: PathBuf,
     base: String,
     pages: usize,
+    /// The compiled app the site was written with, relative to its root. A
+    /// server renders from this one.
+    artifact: String,
     /// Whether the pages are produced for the request that asks for them, so
     /// the directory holds what a render needs rather than the documents.
     per_request: bool,
@@ -288,6 +295,40 @@ struct Report {
     /// The locales other than the one a render answers in, which is what a
     /// server hands to the documents on disk instead.
     other_locales: Vec<String>,
+}
+
+/// A file the site carries under a name taken from its own contents.
+///
+/// The build holds the bytes anyway, so it is the build that names the file
+/// and puts the name in the [`WebSpec`]; the emitter writes whatever the
+/// spec says.
+struct NamedFile {
+    /// Where it goes, relative to the site root.
+    path: String,
+    /// What goes there.
+    bytes: Vec<u8>,
+}
+
+impl NamedFile {
+    /// `bytes`, to be written as `name` with their hash in it.
+    fn new(name: &str, bytes: Vec<u8>) -> Self {
+        Self {
+            path: lumen_web::content_name(name, &bytes),
+            bytes,
+        }
+    }
+
+    /// The same, for a file that is already on disk somewhere else.
+    fn read(source: &Path, name: &str) -> Result<Self, String> {
+        let bytes = std::fs::read(source).map_err(|e| format!("read {}: {e}", source.display()))?;
+        Ok(Self::new(name, bytes))
+    }
+}
+
+/// The prebuilt browser runtime a site carries.
+struct WebRuntime {
+    wasm: NamedFile,
+    js: NamedFile,
 }
 
 fn build(options: &Options) -> Result<Report, String> {
@@ -427,9 +468,51 @@ fn build(options: &Options) -> Result<Report, String> {
         None
     };
 
+    // The runtime pair is read rather than copied straight across, because a
+    // file is named here after what is in it and the name has to be in the
+    // spec before a document can point at it.
+    let runtime = match &runtime {
+        Some(files) => Some(WebRuntime {
+            wasm: NamedFile::read(&files.wasm, DEFAULT_WASM_FILE)?,
+            js: NamedFile::read(&files.js, DEFAULT_JS_FILE)?,
+        }),
+        None => None,
+    };
+
     let scripts = script_refs(&compiled, &mut warnings);
     check_exports(&compiled, &mut warnings);
     let locales = locales(options, &cfg);
+    let css_mode = match cfg.web.css {
+        WebCssMode::Sheet => CssMode::Sheet,
+        WebCssMode::Computed => CssMode::Computed,
+    };
+
+    // A style written on an element becomes a class and a rule, and the class
+    // goes into the tree before the artifact is written: a row the browser
+    // builds later is spawned from this tree, so it arrives already wearing
+    // the class the stylesheet declares. In `computed` mode the cascade is
+    // already resolved onto each element, so there is nothing to lift.
+    let markup = match css_mode {
+        CssMode::Computed => lumen_web::MarkupSheet::default(),
+        CssMode::Sheet => lumen_web::lift_markup_styles(&mut compiled.ir.root),
+    };
+
+    // The compiled app carries the site's asset paths, so a node built from it
+    // points where the emitted markup points. The browser runtime loads it,
+    // and so does the server that renders the pages, so a rendered site keeps
+    // it whether or not its documents run anything.
+    let artifact = if runtime.is_some() || per_request {
+        let bytes = crate::artifact::serialize(&compiled)
+            .map_err(|e| format!("serialize the compiled app: {e}"))?;
+        Some(NamedFile::new(DEFAULT_ARTIFACT_FILE, bytes))
+    } else {
+        None
+    };
+    // The stylesheet is built twice, here to name it and again in the
+    // emitter to write it. The two agree because both read the same tree
+    // through the same function.
+    let sheet = lumen_web::styles_css(compiled.ir.combined_stylesheet.as_ref(), &markup, css_mode);
+
     let web = WebSpec {
         base_path: base.clone(),
         url: cfg.web.url.clone(),
@@ -438,9 +521,22 @@ fn build(options: &Options) -> Result<Report, String> {
         title: title(&cfg, dir),
         description: cfg.web.description.clone(),
         og_image: cfg.web.og_image.clone(),
-        css_mode: match cfg.web.css {
-            WebCssMode::Sheet => CssMode::Sheet,
-            WebCssMode::Computed => CssMode::Computed,
+        // Every file a build writes carries the hash of its own contents in
+        // its name, so a redeploy writes names nothing has cached and a
+        // visitor holding the last build's files fetches this one's.
+        artifact: match &artifact {
+            Some(file) => file.path.clone(),
+            None => DEFAULT_ARTIFACT_FILE.to_string(),
+        },
+        css: lumen_web::content_name(DEFAULT_CSS_FILE, sheet.as_bytes()),
+        css_mode,
+        wasm: match &runtime {
+            Some(runtime) => runtime.wasm.path.clone(),
+            None => DEFAULT_WASM_FILE.to_string(),
+        },
+        js: match &runtime {
+            Some(runtime) => runtime.js.path.clone(),
+            None => DEFAULT_JS_FILE.to_string(),
         },
         navigation: match cfg.web.navigation {
             WebNavigation::Soft => NavigationMode::Soft,
@@ -461,24 +557,9 @@ fn build(options: &Options) -> Result<Report, String> {
         ..WebSpec::default()
     };
 
-    // A style written on an element becomes a class and a rule, and the class
-    // goes into the tree before the artifact is written: a row the browser
-    // builds later is spawned from this tree, so it arrives already wearing
-    // the class the stylesheet declares. In `computed` mode the cascade is
-    // already resolved onto each element, so there is nothing to lift.
-    let markup = match web.css_mode {
-        CssMode::Computed => lumen_web::MarkupSheet::default(),
-        CssMode::Sheet => lumen_web::lift_markup_styles(&mut compiled.ir.root),
-    };
-
     std::fs::create_dir_all(&out).map_err(|e| format!("create {}: {e}", out.display()))?;
-    // The compiled app carries the site's asset paths, so a node built from it
-    // points where the emitted markup points. The browser runtime loads it,
-    // and so does the server that renders the pages, so a rendered site keeps
-    // it whether or not its documents run anything.
-    if web.runtime || per_request {
-        crate::artifact::write(&out.join(DEFAULT_ARTIFACT_FILE), &compiled)
-            .map_err(|e| format!("write {}: {e}", out.join(DEFAULT_ARTIFACT_FILE).display()))?;
+    if let Some(artifact) = &artifact {
+        write_file(&out.join(&artifact.path), &artifact.bytes)?;
     }
     // The compiled program beside it is the browser's copy: a render runs the
     // one inside the artifact. It is one of the two largest files a site would
@@ -561,8 +642,8 @@ fn build(options: &Options) -> Result<Report, String> {
         copy_file(&asset.source, &out.join(&asset.path))?;
     }
     if let Some(runtime) = &runtime {
-        copy_file(&runtime.wasm, &out.join(web.wasm.as_str()))?;
-        copy_file(&runtime.js, &out.join(web.js.as_str()))?;
+        write_file(&out.join(&runtime.wasm.path), &runtime.wasm.bytes)?;
+        write_file(&out.join(&runtime.js.path), &runtime.js.bytes)?;
     }
     // Which paths a file server has no file for is the build's to say; a
     // render answers every path with the page it names.
@@ -570,6 +651,7 @@ fn build(options: &Options) -> Result<Report, String> {
         note_deep_paths(&compiled, &keys, &entry);
     }
 
+    let artifact_path = web.artifact.clone();
     // A render starts from the compiled app rather than from the documents on
     // disk: the state a page is written with is what the app settles into for
     // the request asking, which is the whole difference between a rendered
@@ -588,6 +670,7 @@ fn build(options: &Options) -> Result<Report, String> {
         out,
         base,
         pages: pages_written,
+        artifact: artifact_path,
         per_request,
         warnings,
         site,
@@ -963,9 +1046,15 @@ fn rewrite_assets(
             dir.join(&src)
         };
         let path = placed.get(&source).cloned().unwrap_or_else(|| {
-            let path = site_path(&src, taken);
+            let bytes = std::fs::read(&source).ok();
+            let path = site_path(&src, bytes.as_deref());
+            // A name carries the hash of what is in the file, so two sources
+            // that reach the same name hold the same bytes: one file under
+            // one name, copied once, pointed at by both.
+            if taken.insert(path.clone()) {
+                assets.push(AssetRef::new(source.clone(), path.clone()));
+            }
             placed.insert(source.clone(), path.clone());
-            assets.push(AssetRef::new(source.clone(), path.clone()));
             path
         });
         element.attrs.src = Some(path);
@@ -976,9 +1065,13 @@ fn rewrite_assets(
 }
 
 /// Where one asset lands inside the site. A file from inside the app keeps
-/// the shape of its path; one from outside keeps its name alone, and gets a
-/// number if that name is already taken.
-fn site_path(src: &str, taken: &mut BTreeSet<String>) -> String {
+/// the shape of its path and one from outside keeps its name alone, and
+/// either way the name carries the hash of the file, so a redeploy of a
+/// changed image is a URL nothing has a copy of.
+///
+/// A file that could not be read keeps its plain name; the copy that follows
+/// is what reports it missing.
+fn site_path(src: &str, bytes: Option<&[u8]>) -> String {
     let relative = Path::new(src);
     let candidate = if relative.is_absolute() {
         relative
@@ -992,14 +1085,11 @@ fn site_path(src: &str, taken: &mut BTreeSet<String>) -> String {
             .collect::<Vec<_>>()
             .join("/")
     };
-    let mut path = format!("{ASSET_DIR}/{candidate}");
-    let mut n = 1;
-    while taken.contains(&path) {
-        path = format!("{ASSET_DIR}/{n}-{candidate}");
-        n += 1;
+    let path = format!("{ASSET_DIR}/{candidate}");
+    match bytes {
+        Some(bytes) => lumen_web::content_name(&path, bytes),
+        None => path,
     }
-    taken.insert(path.clone());
-    path
 }
 
 /// The scripts the browser runtime loads at boot.
@@ -1012,9 +1102,9 @@ fn script_refs(compiled: &CompiledApp, warnings: &mut Vec<String>) -> Vec<Script
     let mut refs = Vec::new();
     for script in &compiled.scripts {
         match &script.bytecode {
-            Some(_) => refs.push(ScriptRef {
+            Some(bytecode) => refs.push(ScriptRef {
                 engine: script.engine.clone(),
-                path: BYTECODE_FILE.to_string(),
+                path: lumen_web::content_name(BYTECODE_FILE, bytecode),
                 format: ScriptFormat::Cdlb,
             }),
             None => warnings.push(format!(
@@ -1159,7 +1249,10 @@ fn is_identifier(text: &str) -> bool {
 fn write_bytecode(compiled: &CompiledApp, out: &Path) -> Result<(), String> {
     for script in &compiled.scripts {
         if let Some(bytecode) = &script.bytecode {
-            write_file(&out.join(BYTECODE_FILE), bytecode)?;
+            write_file(
+                &out.join(lumen_web::content_name(BYTECODE_FILE, bytecode)),
+                bytecode,
+            )?;
         }
     }
     Ok(())

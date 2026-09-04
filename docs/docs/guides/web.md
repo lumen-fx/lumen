@@ -48,17 +48,33 @@ reads.
 ## What lands in the output directory
 
 ```
-index.html          the entry page
-settings.html       one document per page
-404.html            the shell a path with no document of its own falls back to
-styles.css          the app's stylesheet, plus the reset
-app.lmna            the compiled app
-app.cdlb            the compiled candela program, when the app has one
-lumen.web.json      what the browser runtime reads before anything else
-lumen-web.wasm      the runtime
-lumen-web.js        the module that loads it
-assets/             every file the markup points at
+index.html             the entry page
+settings.html          one document per page
+404.html               the shell a path with no document falls back to
+lumen.web.json         what the browser runtime reads before anything else
+styles.<hash>.css      the app's stylesheet, plus the reset
+app.<hash>.lmna        the compiled app
+app.<hash>.cdlb        the compiled candela program, when the app has one
+lumen-web.<hash>.wasm  the runtime
+lumen-web.<hash>.js    the module that loads it
+assets/                every file the markup points at
 ```
+
+`<hash>` is sixteen characters taken from the file itself, and it is there
+because a static host is told nothing about how long to keep a file, so it
+keeps it. A file whose contents change is written under a name nothing has a
+copy of, so a visitor holding the last deploy gets this one; a file that did
+not change keeps its name and is not fetched again. The documents are the
+site's URLs, so they keep the names a visitor types and shares, and
+`lumen.web.json` keeps its name because it is the one file that names all the
+others. The documents fetch it with a marker on the URL that moves whenever
+its contents do.
+
+A rebuild into a directory that already holds a site leaves the last build's
+files there: the build writes what the site needs and deletes nothing.
+Unchanged files are written under the names they already had, so only what
+changed accumulates. Delete the directory first for a build with nothing else
+in it.
 
 Nothing here is per-app code. The runtime is one prebuilt pair of files, the
 same for every app and every platform, and it loads the compiled app the way
@@ -68,8 +84,9 @@ it takes about as long as `lumenc build`.
 Under `render = "ssr"` that list holds everything except the documents. A page
 is produced when it is asked for, so writing one here would leave a second
 copy of it beside the one a visitor is sent. With `runtime = false` beside it,
-`app.cdlb`, `lumen.web.json`, `lumen-web.wasm` and `lumen-web.js` go too:
-nothing loads them. `app.lmna` stays, because the server renders from it.
+the candela program, `lumen.web.json` and the runtime pair go too: nothing
+loads them. The compiled app stays, because the server renders from it, and
+the build prints the name it wrote it under.
 
 ## How a page reaches the browser
 
@@ -96,7 +113,7 @@ Typing in a bound `<input>` writes its signal, and so does moving a bound
 
 ## How the styling reaches the page
 
-`styles.css` holds the whole cascade, in three parts. The reset and the app's
+The stylesheet holds the whole cascade, in three parts. The reset and the app's
 own stylesheet each sit in a layer, `lumen.reset` then `lumen.sheet`. A style
 written on an element sits in neither: it becomes a class the element carries
 and a rule at the end of the file, and an unlayered rule beats a layered one
