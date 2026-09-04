@@ -14,7 +14,7 @@ use lumen_ssr::{
     Budget, FetchPolicy, HeaderPolicy, RenderOptions, Renderer, SsrError, SsrRequest, SsrResponse,
     SsrSite,
 };
-use lumen_web::WebSpec;
+use lumen_web::{LocaleSpec, PageSpec, SiteSpec, WebSpec};
 
 /// A program that publishes what it can read of the request.
 const READS_REQUEST: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/reads_request.cdlb"));
@@ -614,4 +614,111 @@ fn an_unresolved_component_still_runs_and_its_marker_holds_its_place() {
         "{:?}",
         response.warnings
     );
+}
+
+/// A one-page app whose only text is `greeting`, so a document says which
+/// language it was rendered in without anything running.
+fn app_saying(greeting: &str) -> CompiledApp {
+    CompiledApp {
+        ir: LayoutIR {
+            root: element(
+                "root",
+                Attributes::default(),
+                vec![element(
+                    "label",
+                    Attributes {
+                        translatable: Some("greeting".to_string()),
+                        text: Some(greeting.to_string()),
+                        ..Attributes::default()
+                    },
+                    Vec::new(),
+                )],
+            ),
+            ..LayoutIR::default()
+        },
+        ..CompiledApp::default()
+    }
+}
+
+/// A site in English at the root and German under `/de-DE/`, the way a build
+/// hands one over: the same pages, from a tree translated for each.
+fn bilingual() -> Arc<SsrSite> {
+    let english =
+        SsrSite::new(app_saying("Hello"), WebSpec::default()).expect("the entry is the page");
+    let german = SiteSpec {
+        pages: vec![PageSpec::new("index", app_saying("Hallo").ir.clone())],
+        locale: LocaleSpec {
+            default_locale: "en-US".to_string(),
+            ..LocaleSpec::new("de-DE")
+        },
+        ..english.spec().clone()
+    };
+    Arc::new(english.with_locale(german).expect("it has every page"))
+}
+
+/// The value of `name`, whatever case the response wrote it in.
+fn header<'a>(response: &'a SsrResponse, name: &str) -> Option<&'a str> {
+    response
+        .headers
+        .iter()
+        .find(|(held, _)| held.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
+#[test]
+fn a_visitor_is_answered_in_the_language_they_asked_for() {
+    let _turn = in_turn();
+    let renderer =
+        Renderer::start(bilingual(), options(Arc::new(Silent))).expect("nothing running");
+
+    let asked = [
+        SsrRequest::get("/").with_header("Accept-Language", "de-DE,de;q=0.9,en;q=0.5"),
+        // The address an `hreflang` link points at reaches the same tree.
+        SsrRequest::get("/de-DE/index.html"),
+        // And so does a proxy that has already decided.
+        SsrRequest::get("/").with_locale("de-DE"),
+    ];
+    for request in asked {
+        let path = request.path.clone();
+        let page = renderer.render(request).expect("the document is written");
+        assert!(page.body.contains("Hallo"), "{path}: {}", page.body);
+        assert!(
+            page.body.contains(r#"lang="de-DE""#),
+            "{path}: {}",
+            page.body
+        );
+        assert_eq!(header(&page, "Content-Language"), Some("de-DE"), "{path}");
+        assert_eq!(header(&page, "Vary"), Some("Accept-Language"), "{path}");
+    }
+
+    // A language the site holds no tree for is answered from the site root.
+    let french = renderer
+        .render(SsrRequest::get("/").with_header("Accept-Language", "fr-FR"))
+        .expect("the document is written");
+    assert!(french.body.contains("Hello"), "{}", french.body);
+    assert_eq!(header(&french, "Content-Language"), Some("en-US"));
+
+    // An address no page answers for is a 404 in the language that asked.
+    let missing = renderer
+        .render(SsrRequest::get("/nowhere").with_locale("de-DE"))
+        .expect("the shell is written");
+    assert_eq!(missing.status, 404);
+    assert!(missing.body.contains("Hallo"), "{}", missing.body);
+    assert_eq!(header(&missing, "Content-Language"), Some("de-DE"));
+}
+
+#[test]
+fn a_site_in_one_language_says_nothing_about_varying() {
+    let _turn = in_turn();
+    let site = Arc::new(
+        SsrSite::new(app_saying("Hello"), WebSpec::default()).expect("the entry is the page"),
+    );
+    let renderer = Renderer::start(site, options(Arc::new(Silent))).expect("nothing running");
+    let page = renderer
+        .render(SsrRequest::get("/").with_header("Accept-Language", "de-DE"))
+        .expect("the document is written");
+
+    assert!(page.body.contains("Hello"), "{}", page.body);
+    assert_eq!(header(&page, "Content-Language"), Some("en-US"));
+    assert_eq!(header(&page, "Vary"), None);
 }

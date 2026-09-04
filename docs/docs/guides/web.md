@@ -388,9 +388,10 @@ writing direction follow the locale, and every document links to its
 counterparts with `hreflang`. What the whole site shares - the stylesheet, the
 compiled app, the runtime, the assets - is written once at the root.
 
-A renderer holds one site and a site is in one language, so under
-`render = "ssr"` the locale at the site root is the one a render answers in,
-and the trees of the other locales are written out as documents beside it.
+Under `render = "ssr"` no documents are written for any locale. A render
+answers every one of them: the request's own locale, then a `/de-DE/` prefix on
+the path, then `Accept-Language`, then the locale at the site root. The
+[server rendering guide](server-rendering.md) has the whole order.
 
 ## What a crawler sees
 

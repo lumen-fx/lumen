@@ -63,10 +63,6 @@ module are read from the directory the build wrote while a page is being
 rendered, so nothing a page needs waits behind the page. Renders queue, because
 a process renders one at a time.
 
-A renderer holds one site and a site is in one language, so a build emitted in
-several is rendered in the first one and the trees of the others are answered by
-the documents beside them.
-
 A render reaches no host unless you name it, the same policy an embedder sets
 in `FetchPolicy`:
 
@@ -78,10 +74,6 @@ Warnings a render comes back with are printed once each, so a page reloaded
 twenty times does not bury a new one. Whether anything is reading them is not
 the server's business: a log line that cannot be written is dropped, rather
 than ending a process in the middle of answering somebody.
-
-A render that panics takes the renderer with it, and the requests after it are
-answered with what happened and a 500. Start the server again once you have
-fixed what panicked.
 
 ## Rendering
 
@@ -110,6 +102,68 @@ your server does not have.
 
 `render` blocks until the document is written, and it is safe to call from any
 thread: calls queue.
+
+A render that panics takes the renderer with it, and the requests after it are
+answered with what happened and a 500. Start the server again once you have
+fixed what panicked.
+
+## More than one language
+
+A site holds one tree per language it answers in, and a request picks one. The
+trees are the app already translated: `translatable` text is resolved into the
+markup before a document is written from it, so a page arrives in its language
+with nothing running.
+
+`lumenc web` builds them from the `locale/*.ftl` catalogues beside your markup,
+one per `[web] locales` entry. An embedder builds one the same way and hands it
+over:
+
+```rust
+use lumen_web::{LocaleSpec, PageSpec, SiteSpec};
+
+// `catalogue` is a `SharedI18n` holding the German messages, loaded from
+// wherever your deployment keeps them.
+let german = SiteSpec {
+    pages: vec![PageSpec::new(
+        "index",
+        lumen_web::translate_ir(&compiled.ir, &catalogue),
+    )],
+    locale: LocaleSpec {
+        default_locale: "en-US".to_string(),
+        ..LocaleSpec::new("de-DE")
+    },
+    ..site.spec().clone()
+};
+let site = site.with_locale(german)?;
+```
+
+Every tree has to answer for every page the site has, because a request
+resolves to a page before it resolves to a language; a tree missing one is
+refused rather than answered from another language.
+
+Which tree answers is decided in this order:
+
+1. `SsrRequest::with_locale("de-DE")`, for a proxy or a language cookie that
+   has already decided. A tag the site holds no tree for falls through to the
+   rest, and the response says so in its warnings.
+2. A locale prefix on the path: `/de-DE/settings.html` is the `settings` page
+   of the German tree, which is what an `hreflang` link points at. The tree at
+   the site root has no prefix.
+3. `Accept-Language`, matched against the tags the site holds. A range reaches
+   a tag that continues it, so `de-AT` reaches a site that holds `de-DE`, and
+   `q=0` is a refusal rather than a low preference. This reads the header as it
+   arrived: which document the server sends is the server's decision, so a
+   `HeaderPolicy` that keeps `accept-language` from the app still negotiates.
+4. The site's default locale, which is the tree at the root.
+
+Every response names the language it is in with `Content-Language`, and a site
+holding more than one tree also sends `Vary: Accept-Language` so a shared cache
+does not hand one visitor's language to the next. Both are set before the app's
+own headers, so a page that sets either itself is the one that is sent.
+
+Under `render = "ssr"` a build writes no documents for any tree: the renderer
+answers `/de-DE/settings.html` itself, and a file beside it would be a second
+answer for one address.
 
 ## One render at a time, per process
 
@@ -303,6 +357,10 @@ Components are not among them, as long as you hand the renderer the app
 they are already markup in the artifact the renderer reads and every response
 carries them. An artifact compiled some other way still holds the markers, and
 those reach the document as empty elements for the browser to fill.
+
+A script's `t()` returns the key it was given. The translator is the desktop
+runtime's, and a render installs none; markup `translatable` is unaffected,
+because it is resolved into the tree before the document is written.
 
 The rest of the limits are the emitter's, and a rendered page has the same ones
 [a built page](web.md) has.

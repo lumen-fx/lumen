@@ -34,6 +34,16 @@
 //! visitor's page. Serve more requests at once by running more processes
 //! behind whatever balances them.
 //!
+//! # More than one language
+//!
+//! A site holds one tree per language it answers in, added with
+//! [`SsrSite::with_locale`] and handed over already translated;
+//! [`lumen_web::translate_ir`] is what builds one. Which tree answers a
+//! request is [`SsrRequest::locale`] first, then a locale prefix on the path,
+//! then `Accept-Language`, then the site's default. Every response names its
+//! language with `Content-Language`, and a site holding more than one tree
+//! also sends `Vary: Accept-Language`.
+//!
 //! # An address no page answers for
 //!
 //! A path that matches no page key, and is no document a build wrote, is
@@ -80,6 +90,7 @@
 
 pub mod error;
 pub mod fetch;
+mod locale;
 pub mod renderer;
 pub mod request;
 pub mod response;

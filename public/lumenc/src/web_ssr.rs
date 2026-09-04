@@ -24,8 +24,6 @@ const FORWARDED_PROTO: &str = "x-forwarded-proto";
 /// Answers every page by rendering the app for the request that asked for it.
 pub struct RenderHandler {
     renderer: Renderer,
-    /// Path prefixes this leaves to the documents on disk.
-    leave: Vec<String>,
     /// What has already been said, so a page reloaded twenty times does not
     /// bury a new warning under twenty copies of an old one.
     said: Mutex<BTreeSet<String>>,
@@ -34,19 +32,13 @@ pub struct RenderHandler {
 impl RenderHandler {
     /// Start rendering `site`.
     ///
-    /// A renderer holds one site, and a site is in one language, so the trees
-    /// of the other languages are answered by the documents the build wrote.
-    /// `leave` names their prefixes.
-    pub fn start(
-        site: SsrSite,
-        options: RenderOptions,
-        leave: Vec<String>,
-    ) -> Result<Self, String> {
+    /// The site holds a tree per language it was emitted in, and a render
+    /// answers every one of them, so nothing here is left to the directory.
+    pub fn start(site: SsrSite, options: RenderOptions) -> Result<Self, String> {
         let renderer =
             Renderer::start(Arc::new(site), options).map_err(|error| error.to_string())?;
         Ok(Self {
             renderer,
-            leave,
             said: Mutex::new(BTreeSet::new()),
         })
     }
@@ -59,12 +51,6 @@ impl RenderHandler {
             warn_line!("lumenc web: warning: {warning}");
         }
     }
-}
-
-/// Whether a path belongs to a tree the documents on disk answer for.
-fn left_to_the_directory(prefixes: &[String], path: &str) -> bool {
-    let first = path.trim_start_matches('/').split('/').next().unwrap_or("");
-    prefixes.iter().any(|prefix| prefix == first)
 }
 
 /// The request a render is asked for, from the request the server read.
@@ -92,9 +78,6 @@ fn render_request(request: &Request) -> SsrRequest {
 
 impl RequestHandler for RenderHandler {
     fn handle(&self, request: &Request) -> Option<Response> {
-        if left_to_the_directory(&self.leave, &request.path) {
-            return None;
-        }
         match self.renderer.render(render_request(request)) {
             Ok(response) => {
                 for warning in &response.warnings {
@@ -140,19 +123,6 @@ mod tests {
             path: path.to_string(),
             ..Request::default()
         }
-    }
-
-    #[test]
-    fn a_tree_in_another_language_is_the_directorys_to_answer() {
-        let leave = vec!["de-DE".to_string(), "fr-FR".to_string()];
-        assert!(left_to_the_directory(&leave, "/de-DE/settings.html"));
-        assert!(left_to_the_directory(&leave, "/fr-FR/"));
-        // The tree a render answers in, and a page whose key merely starts
-        // the same way.
-        assert!(!left_to_the_directory(&leave, "/settings.html"));
-        assert!(!left_to_the_directory(&leave, "/de-DE-notes.html"));
-        assert!(!left_to_the_directory(&leave, "/"));
-        assert!(!left_to_the_directory(&[], "/de-DE/settings.html"));
     }
 
     #[test]
@@ -219,9 +189,8 @@ mod tests {
     #[test]
     fn a_request_comes_back_as_the_document_it_was_rendered_into() {
         let site = SsrSite::new(one_page(), WebSpec::default()).expect("the entry is the page");
-        let handler =
-            RenderHandler::start(site, RenderOptions::default(), vec!["de-DE".to_string()])
-                .expect("nothing else in this process is rendering");
+        let handler = RenderHandler::start(site, RenderOptions::default())
+            .expect("nothing else in this process is rendering");
 
         let page = handler.handle(&asking("/")).expect("a page was rendered");
         assert_eq!(page.status, 200);
@@ -234,9 +203,5 @@ mod tests {
         );
         let body = String::from_utf8(page.body).expect("a document is text");
         assert!(body.contains("rendered here"), "{body}");
-
-        // A tree in another language is answered by the documents on disk,
-        // which is the directory's job and not this handler's.
-        assert!(handler.handle(&asking("/de-DE/index.html")).is_none());
     }
 }

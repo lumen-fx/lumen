@@ -25,6 +25,13 @@ pub enum SsrError {
         /// The pages the app does have.
         pages: Vec<String>,
     },
+    /// A tree handed in for a locale cannot answer for the site's pages.
+    LocaleTree {
+        /// The locale the tree was for.
+        locale: String,
+        /// What is wrong with it.
+        why: String,
+    },
     /// The document could not be written.
     Emit(EmitError),
 }
@@ -41,6 +48,10 @@ impl fmt::Display for SsrError {
                 f,
                 "entry page `{asked}` is not one of the app's pages ({})",
                 pages.join(", ")
+            ),
+            SsrError::LocaleTree { locale, why } => write!(
+                f,
+                "the tree for `{locale}` cannot answer for this site's pages: {why}"
             ),
             SsrError::Emit(error) => write!(f, "cannot write the document: {error}"),
         }

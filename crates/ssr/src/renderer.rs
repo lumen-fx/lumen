@@ -32,6 +32,13 @@ const HTML: &str = "text/html; charset=utf-8";
 /// not finished producing.
 const RENDER_HEADER: &str = "X-Lumen-Render";
 
+/// The header naming the language a document is written in.
+const CONTENT_LANGUAGE: &str = "Content-Language";
+
+/// The header telling a shared cache that the document depends on what the
+/// visitor asked for.
+const VARY: &str = "Vary";
+
 /// How a renderer answers requests.
 ///
 /// The defaults are the careful ones: an app reaches no host until it is
@@ -134,15 +141,25 @@ impl Renderer {
                 let flight = Arc::new(Flight::default());
                 // The answer to an address no page answers for is the shell,
                 // which holds no state and so is the same document every
-                // time. Written once, on the first request that needs it.
-                let mut missing: Option<Result<SsrResponse, SsrError>> = None;
+                // time. One per language, written on the first request that
+                // needs it, because the shell is the app in one of them.
+                let mut missing: Vec<Option<Result<SsrResponse, SsrError>>> =
+                    vec![None; site.locales().len()];
                 // Every app this thread builds is also dropped here, before
                 // the next request is taken.
                 for job in requests {
-                    let answer = match site.page_for(&job.request.path) {
-                        Some(page) => render_one(&site, &options, &flight, &job.request, page),
-                        None => missing.get_or_insert_with(|| not_found(&site)).clone(),
+                    let route = site.route(&job.request);
+                    let mut answer = match route.page {
+                        Some(page) => {
+                            render_one(&site, &options, &flight, &job.request, route.tree, page)
+                        }
+                        None => missing[route.tree]
+                            .get_or_insert_with(|| not_found(&site, route.tree))
+                            .clone(),
                     };
+                    if let Ok(response) = &mut answer {
+                        response.warnings.extend(route.warnings);
+                    }
                     let _ = job.reply.send(answer);
                 }
             });
@@ -202,6 +219,7 @@ fn render_one(
     options: &RenderOptions,
     flight: &Arc<Flight>,
     request: &SsrRequest,
+    tree: usize,
     page: (String, String),
 ) -> Result<SsrResponse, SsrError> {
     let mut warnings = Vec::new();
@@ -298,16 +316,20 @@ fn render_one(
         }
     };
 
+    let spec = site.tree(tree);
     if let Some(location) = &response.redirect {
-        return Ok(redirect(location, &response, partial, warnings));
+        return Ok(redirect(location, site, tree, &response, partial, warnings));
     }
 
-    let mut page = site.page(&key);
+    let mut page = site.page(&key, spec);
     page.signals = state.signals;
     page.seed = state.seed;
-    let body = lumen_web::document(&page, site.spec(), &mut warnings)?;
+    let body = lumen_web::document(&page, spec, &mut warnings)?;
 
     let mut headers = vec![("Content-Type".to_string(), HTML.to_string())];
+    language_headers(&mut headers, site, tree);
+    // The app's own headers go on last, so a page that sets one of these
+    // itself is the one that is sent.
     for (name, value) in &response.headers {
         set_header(&mut headers, name, value);
     }
@@ -328,24 +350,43 @@ fn render_one(
 /// The app is not built for it. The shell is the app with no page selected
 /// and no state, so running the app would spend a whole boot to arrive at a
 /// document that is the same every time, for an address anyone can guess.
-fn not_found(site: &SsrSite) -> Result<SsrResponse, SsrError> {
-    let (body, warnings) = site.not_found_body()?;
+fn not_found(site: &SsrSite, tree: usize) -> Result<SsrResponse, SsrError> {
+    let (body, warnings) = site.not_found_body(tree)?;
+    let mut headers = vec![("Content-Type".to_string(), HTML.to_string())];
+    language_headers(&mut headers, site, tree);
     Ok(SsrResponse {
         status: NOT_FOUND_STATUS,
-        headers: vec![("Content-Type".to_string(), HTML.to_string())],
+        headers,
         body,
         warnings,
     })
 }
 
+/// Say which language the response is in, and, for a site that holds more
+/// than one, that the answer depends on which one was asked for.
+///
+/// A single-language site sends no `Vary`: its documents are the same for
+/// every visitor, and saying otherwise would split a shared cache for
+/// nothing.
+fn language_headers(headers: &mut Vec<(String, String)>, site: &SsrSite, tree: usize) {
+    let locales = site.locales();
+    set_header(headers, CONTENT_LANGUAGE, locales[tree]);
+    if locales.len() > 1 {
+        set_header(headers, VARY, "Accept-Language");
+    }
+}
+
 /// The answer to a request the app sent somewhere else.
 fn redirect(
     location: &str,
+    site: &SsrSite,
+    tree: usize,
     response: &ResponseState,
     partial: bool,
     warnings: Vec<String>,
 ) -> SsrResponse {
     let mut headers = vec![("Location".to_string(), location.to_string())];
+    language_headers(&mut headers, site, tree);
     for (name, value) in &response.headers {
         set_header(&mut headers, name, value);
     }

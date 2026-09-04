@@ -27,6 +27,10 @@ pub struct SsrRequest {
     pub headers: Vec<(String, String)>,
     /// The request body, empty when there was none.
     pub body: String,
+    /// The locale to answer in, when something in front of the renderer has
+    /// already decided. Empty leaves the choice to the request: a locale
+    /// prefix on the path, then `Accept-Language`, then the site's default.
+    pub locale: String,
 }
 
 impl SsrRequest {
@@ -54,6 +58,16 @@ impl SsrRequest {
     /// Add a header.
     pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.push((name.into(), value.into()));
+        self
+    }
+
+    /// Answer in `locale`, whatever the path and the headers ask for.
+    ///
+    /// This is where a language cookie, a query parameter or a proxy that has
+    /// already picked goes. A tag the site holds no tree for is answered in
+    /// the site's default locale, with a warning naming it.
+    pub fn with_locale(mut self, locale: impl Into<String>) -> Self {
+        self.locale = locale.into();
         self
     }
 

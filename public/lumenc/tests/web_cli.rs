@@ -477,10 +477,15 @@ fn the_served_site_is_what_a_browser_needs() {
 
 /// One GET, start to finish.
 fn request(address: std::net::SocketAddr, path: &str) -> String {
+    asking(address, path, "")
+}
+
+/// A `GET`, with `extra` written in as further header lines.
+fn asking(address: std::net::SocketAddr, path: &str, extra: &str) -> String {
     let mut stream = TcpStream::connect(address).expect("connect to the server");
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {address}\r\n{extra}Connection: close\r\n\r\n"
     )
     .expect("send the request");
     let mut response = Vec::new();
@@ -806,6 +811,51 @@ fn a_served_render_answers_a_path_no_document_stands_for() {
     assert!(deep.contains(r#"data-lm-page="user""#), "{deep}");
     // Nothing on disk could have answered it: the pages are the render's, and
     // the directory holds what a render needs beside them.
+    assert!(
+        documents(&out).is_empty(),
+        "a rendered site wrote documents: {:?}",
+        documents(&out)
+    );
+}
+
+#[test]
+fn a_rendered_site_answers_in_the_locale_the_request_asks_for() {
+    let scratch = scratch("serve-ssr-locales");
+    let out = scratch.join("site");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lumenc"))
+        .arg("web")
+        .arg(repo().join("apps/pages-demo"))
+        .arg("--out")
+        .arg(&out)
+        .arg("--lib-dir")
+        .arg(runtime_dir(&scratch))
+        .args(["--locale", "en-US", "--locale", "de-DE"])
+        .args(["--render", "ssr", "--serve", "--port", "0"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("running lumenc web --render ssr");
+    let address = match serving_at(&mut child) {
+        Some(address) => address,
+        None => {
+            stop(child);
+            panic!("the server never said where it was listening");
+        }
+    };
+
+    let negotiated = asking(address, "/", "Accept-Language: de-DE,de;q=0.9,en;q=0.5\r\n");
+    // The address the site's own `hreflang` links point at.
+    let prefixed = request(address, "/de-DE/settings.html");
+    let english = asking(address, "/", "Accept-Language: fr-FR\r\n");
+    stop(child);
+
+    for answer in [&negotiated, &prefixed] {
+        assert!(answer.contains(r#"<html lang="de-DE""#), "{answer}");
+        assert!(answer.contains("Content-Language: de-DE"), "{answer}");
+        assert!(answer.contains("Vary: Accept-Language"), "{answer}");
+    }
+    assert!(english.contains(r#"<html lang="en-US""#), "{english}");
+    assert!(english.contains("Content-Language: en-US"), "{english}");
+    // Every locale is rendered, so the build wrote no tree for any of them.
     assert!(
         documents(&out).is_empty(),
         "a rendered site wrote documents: {:?}",
