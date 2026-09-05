@@ -16,12 +16,13 @@ use lumen_core::components::{
     Disabled, DropHovered, InlineStyle, LumenAttributes, LumenClasses, LumenTag, Selected,
     SliderValue, TextContent, Toggleable, Visible,
 };
+use lumen_core::input::Focused;
 use lumen_html::contract::{
     DATA_LM_CHECKED, DATA_LM_DISABLED, DATA_LM_DRAG_OVER, DATA_LM_HIDDEN, DATA_LM_SELECTED,
 };
 use lumen_html::is_disableable;
 use wasm_bindgen::JsCast;
-use web_sys::{Element, HtmlDialogElement, HtmlInputElement, HtmlTextAreaElement};
+use web_sys::{Element, HtmlDialogElement, HtmlElement, HtmlInputElement, HtmlTextAreaElement};
 
 use crate::nodes::NodeTable;
 
@@ -276,7 +277,7 @@ pub fn project_control_state(
         let text = value.value.to_string();
         // A range input stops reading its `value` attribute the moment the
         // visitor moves it, so what a script writes afterwards has to go to
-        // the value the browser is actually showing. A `<progress>` has no
+        // the value the browser is showing. A `<progress>` has no
         // such value and reads the attribute always.
         match element.dyn_ref::<HtmlInputElement>() {
             Some(input) => {
@@ -285,6 +286,37 @@ pub fn project_control_state(
                 }
             }
             None => set_attribute(element, "value", Some(&text)),
+        }
+    }
+}
+
+/// Follow a focus move Lumen made itself back into the page.
+///
+/// A tab strip's arrows, a dropdown's arrows and a radio group all move
+/// `Focused` on their own. The browser is not told, so without this the
+/// focus ring and `document.activeElement` stay on the element the visitor
+/// left while the world believes focus is elsewhere, and the next keystroke
+/// is delivered against the stale target.
+///
+/// The `Added` filter is what keeps this from fighting the browser:
+/// browser-driven focus arrives through the `focusin` listener, which
+/// inserts `Focused` on the element that is already active, and the
+/// comparison below finds nothing to do. Only a move the world made itself
+/// reaches `focus()`.
+pub fn project_focus(table: NonSend<NodeTable>, focused: Query<Entity, Added<Focused>>) {
+    for entity in &focused {
+        let Some(element) = table.element(entity) else {
+            continue;
+        };
+        let already_active = element
+            .owner_document()
+            .and_then(|document| document.active_element())
+            .is_some_and(|active| active.is_same_node(Some(element)));
+        if already_active {
+            continue;
+        }
+        if let Some(html) = element.dyn_ref::<HtmlElement>() {
+            let _ = html.focus();
         }
     }
 }

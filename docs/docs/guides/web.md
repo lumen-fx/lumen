@@ -480,9 +480,20 @@ means anything without an absolute address.
 - An element a script creates does not appear, and neither does a class it
   sets with `set_class` or `set_root_class`. Signals, arrays and `set_text`
   do.
-- Keyboard input other than typing into a focused field does not reach the app,
-  so a keyboard shortcut and arrow-key navigation between tabs do not work.
-  Escape on an open dialog is the exception; the browser closes it.
+- Keys reach the app, with the ones a native control already acts on held
+  back so nothing happens twice. Inside a text field the browser's own
+  editing keys stay with the field: the characters, Space, Backspace,
+  Delete, the arrows, Home and End, and the copy, cut, paste and undo
+  chords. Everything else reaches a handler from inside a field too, Enter,
+  Escape, the function keys and every other chord among them. Tab moves
+  focus and is never delivered as a key.
+- An app cannot cancel the browser's own behaviour for a key. Space still
+  scrolls the page, and find-as-you-type still opens. Whether an app has a
+  handler for a key is known a tick after the browser needs the answer.
+- Escape on an open `<dialog>` closes it, because the dialog is the
+  browser's own. An app that would have closed something inside the dialog
+  first, a `<dropdown>` panel say, loses that step: one press closes the
+  dialog itself.
 - `[web] navigation = "soft"` (the default) swaps a same-page link's target
   page in without a reload, keeping the app running; `navigation = "hard"`
   lets every link load the next document, the same as an ordinary site. Soft
