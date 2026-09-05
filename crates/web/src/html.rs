@@ -19,10 +19,12 @@
 //! string.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use lumen_html::contract::{DATA_LM, DATA_LM_HIDDEN, DATA_LM_SELECTED, DIALOG_OPEN, NodePath};
-use lumen_html::style::{Emission, rewrite_property};
+use lumen_html::contract::{
+    DATA_LM, DATA_LM_HIDDEN, DATA_LM_SELECTED, DIALOG_OPEN, NodePath, NodeSeed,
+};
+use lumen_html::style::{Emission, rewrite_property, style_value};
 use lumen_html::{escape_attr, escape_text, html_attrs, html_tag_for};
 use lumen_ir::css::computed_style_map;
 use lumen_ir::fragment::FRAGMENT_TAG;
@@ -30,6 +32,7 @@ use lumen_ir::interpolate::{Scope, substitute_attrs, substitute_element};
 use lumen_ir::layout_ir::{Attributes, Element, IfModeSpec};
 
 use crate::error::EmitError;
+use crate::snapshot::NodeState;
 use crate::spec::{CssMode, PageSpec, SignalEnv, SiteSpec};
 use crate::{bindings, urls};
 
@@ -53,16 +56,27 @@ struct Walk<'a> {
     keys: Vec<String>,
     entry: &'a str,
     seen: BTreeSet<String>,
+    /// What the app wrote onto each node while it ran, by node path.
+    nodes: &'a BTreeMap<String, NodeState>,
+    /// The difference between that and what the markup says, which is what
+    /// the document carries so the runtime does not write the markup's own
+    /// values back over it on the first tick.
+    seeded: BTreeMap<String, NodeSeed>,
+    /// True once a node path was found to name a different node in each
+    /// half, after which no override is written: every path from there on
+    /// belongs to a different node in the run than in the tree.
+    diverged: bool,
     /// Where the page could not be written the way the app meant it.
     warnings: &'a mut Vec<String>,
 }
 
-/// Write the page's element tree, starting at the page root.
+/// Write the page's element tree, starting at the page root, and the node
+/// seed that goes with it.
 pub fn emit_tree(
     page: &PageSpec,
     spec: &SiteSpec,
     warnings: &mut Vec<String>,
-) -> Result<String, EmitError> {
+) -> Result<(String, BTreeMap<String, NodeSeed>), EmitError> {
     let mut out = String::new();
     let base = urls::normalize_base(&spec.web.base_path);
     let mut walk = Walk {
@@ -75,10 +89,13 @@ pub fn emit_tree(
         keys: spec.keys(),
         entry: &spec.web.entry,
         seen: BTreeSet::new(),
+        nodes: &page.nodes,
+        seeded: BTreeMap::new(),
+        diverged: false,
         warnings,
     };
     emit_element(&mut out, &page.ir.root, &NodePath::root(), &mut walk)?;
-    Ok(out)
+    Ok((out, walk.seeded))
 }
 
 fn emit_element(
@@ -130,7 +147,11 @@ fn emit_element(
     // from its own attributes, which is what leaves the authored fallback in
     // the page.
     let bound = bindings::resolved(ir_tag, own, walk.signals);
-    let attrs = bound.as_ref().unwrap_or(own);
+    let resolved = bound.as_ref().unwrap_or(own);
+    // What the app wrote onto this node while it ran. The markup does not
+    // say it, so the document carries it, and the seed says the document did.
+    let written = node_overrides(element, resolved, &path_text, walk);
+    let attrs = written.attrs.as_ref().unwrap_or(resolved);
 
     let mut hidden = false;
     let mut open = false;
@@ -180,12 +201,23 @@ fn emit_element(
             _ => write_attr(out, name, &value),
         }
     }
+    for (name, value) in &written.extra {
+        write_attr(out, name, value);
+    }
     write_attr(out, DATA_LM, &path_text);
-    if walk.css_mode == CssMode::Computed {
-        let style = computed_style(attrs);
+    let mut style = if walk.css_mode == CssMode::Computed {
+        computed_style(attrs)
+    } else {
+        String::new()
+    };
+    if !written.style.is_empty() {
         if !style.is_empty() {
-            write_attr(out, "style", &style);
+            style.push(';');
         }
+        style.push_str(&style_value(&written.style));
+    }
+    if !style.is_empty() {
+        write_attr(out, "style", &style);
     }
     if open {
         write_attr(out, DIALOG_OPEN, "");
@@ -224,6 +256,93 @@ fn emit_element(
     out.push_str(tag.name);
     out.push('>');
     Ok(())
+}
+
+/// What one node wears that its markup does not say.
+#[derive(Default)]
+struct Overrides {
+    /// The element's attributes with the app's class list and text in them,
+    /// when either differs from the markup's.
+    attrs: Option<Attributes>,
+    /// Attributes with no place in the IR bag: `role`, `aria-*`, and
+    /// whatever else a script set by name.
+    extra: BTreeMap<String, String>,
+    /// The inline style the app set.
+    style: Vec<(String, String)>,
+}
+
+/// The difference between what the app wrote onto a node and what the markup
+/// says, recorded in the page's seed on the way past.
+///
+/// A path that names one node in the run and another in the tree means the
+/// app changed the shape of the tree while it ran, which renumbers every
+/// sibling after the change. Nothing later can be trusted to name the same
+/// node in both halves, so the overrides stop there and the page is written
+/// from its markup alone.
+fn node_overrides(
+    element: &Element,
+    attrs: &Attributes,
+    path: &str,
+    walk: &mut Walk<'_>,
+) -> Overrides {
+    if walk.diverged {
+        return Overrides::default();
+    }
+    let Some(record) = walk.nodes.get(path) else {
+        return Overrides::default();
+    };
+    if record.tag != element.tag {
+        walk.diverged = true;
+        walk.warnings.push(format!(
+            "page `{}`: the app changed the shape of the tree while it ran, so what it wrote \
+             onto nodes is not written into the document",
+            walk.page
+        ));
+        return Overrides::default();
+    }
+
+    let mut over = Overrides::default();
+    let mut seed = NodeSeed::default();
+    let mut own = attrs.clone();
+    let mut replaced = false;
+    if record.classes != attrs.classes {
+        seed.classes = Some(record.classes.clone());
+        own.classes = record.classes.clone();
+        replaced = true;
+    }
+    // A translatable element keeps the text the catalogue gave it. The app
+    // runs once and every locale is emitted from that one run, so its text
+    // is the default locale's and writing it here would put that string in
+    // every other locale's document.
+    //
+    // A node the run holds no text for is left alone rather than emptied: an
+    // element whose text lives somewhere other than a text node, such as a
+    // form control's value, has none to record.
+    if let Some(text) = &record.text
+        && element.attrs.translatable.is_none()
+        && text != attrs.text.as_deref().unwrap_or_default()
+    {
+        seed.text = Some(text.clone());
+        own.text = Some(text.clone());
+        replaced = true;
+    }
+    // The spawner writes neither of these, so whatever a node carries after a
+    // run is the app's, whole.
+    if !record.attrs.is_empty() {
+        seed.attrs = record.attrs.clone();
+        over.extra = record.attrs.clone();
+    }
+    if !record.style.is_empty() {
+        seed.style = record.style.clone();
+        over.style = record.style.clone();
+    }
+    if replaced {
+        over.attrs = Some(own);
+    }
+    if !seed.is_empty() {
+        walk.seeded.insert(path.to_string(), seed);
+    }
+    over
 }
 
 /// Write one instance of a `<for>` block's row template per row of the array

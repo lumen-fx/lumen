@@ -268,7 +268,7 @@ fn the_emitted_page_carries_every_component_body() {
         ..lumen_web::SiteSpec::default()
     };
     let mut warnings = Vec::new();
-    let html = lumen_web::html::emit_tree(&spec.pages[0], &spec, &mut warnings)
+    let (html, _) = lumen_web::html::emit_tree(&spec.pages[0], &spec, &mut warnings)
         .expect("the filled tree emits");
 
     // The three the build had to run for, each with the value its call worked

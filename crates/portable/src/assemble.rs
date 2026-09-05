@@ -22,6 +22,8 @@ use std::sync::Arc;
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::{Schedules, SingleThreadedExecutor};
 use lumen_core::app::Tick;
+use lumen_core::components::{InlineStyle, LumenAttributes, LumenClasses, LumenTag, TextContent};
+use lumen_core::prelude::Children;
 use lumen_core::prelude::{App, TickStage};
 use lumen_core::property_store::{PropertyKey, PropertyStore, commit_external_properties};
 use lumen_core::signals::{
@@ -29,12 +31,14 @@ use lumen_core::signals::{
     apply_text_bindings, apply_value_bindings, push_scroll_to_signal, push_slider_to_signal,
     push_textinput_to_signal, push_toggle_to_signal,
 };
-use lumen_html::contract::Seed;
+use lumen_html::contract::{NodePath, NodeSeed, Seed};
+use lumen_html::paths::walk_nodes;
 use lumen_primitives::{
     CheckboxPlugin, ControlsPlugin, PressPlugin, ProgressPlugin, RadioPlugin, TabsPlugin,
     ValidationPlugin,
 };
 use lumen_scene::spawn;
+use lumen_scene::spawn::ForMarker;
 #[cfg(target_arch = "wasm32")]
 use lumen_script::FetchRegistry;
 use lumen_script::ScriptSet;
@@ -246,6 +250,70 @@ pub fn apply_seed(world: &mut World, seed: &Seed) {
                     .map(|row| row.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                     .collect(),
             );
+        }
+    }
+}
+
+/// Apply what the page says the app wrote onto single nodes, after the scene
+/// is spawned.
+///
+/// Not part of [`apply_seed`], and it cannot be: a node seed names nodes, and
+/// there are none until the tree is there. It is applied for the same reason
+/// the signal seed is, one step later. Without it the browser spawns each
+/// entity with the class list the markup declares, the projection sees that
+/// as a change on the first tick, and the page loses the styling it was
+/// rendered with until the app happens to set it again.
+///
+/// The walk is the one the document names nodes by, so a path here reaches
+/// the entity the emitter wrote that path onto.
+pub fn apply_node_seed(world: &mut World, root: Entity, seed: &Seed) {
+    if seed.nodes.is_empty() {
+        return;
+    }
+    let mut writes: Vec<(Entity, &NodeSeed)> = Vec::new();
+    let scene: &World = world;
+    if let Some(node) = seed.nodes.get(&NodePath::root().to_string()) {
+        writes.push((root, node));
+    }
+    walk_nodes(
+        root,
+        (),
+        |entity| {
+            scene
+                .get::<Children>(entity)
+                .map(|kids| &**kids)
+                .unwrap_or(&[])
+        },
+        |entity| scene.get::<ForMarker>(entity).is_some(),
+        |entity| scene.get::<LumenTag>(entity).is_some(),
+        |visit| {
+            if let Some(node) = seed.nodes.get(&visit.path.to_string()) {
+                writes.push((visit.entity, node));
+            }
+            Some(())
+        },
+    );
+    for (entity, node) in writes {
+        let mut entity = world.entity_mut(entity);
+        if let Some(classes) = &node.classes {
+            entity.insert(LumenClasses::from(classes.clone()));
+        }
+        if !node.attrs.is_empty() {
+            let mut attrs = entity.take::<LumenAttributes>().unwrap_or_default();
+            for (name, value) in &node.attrs {
+                attrs.set(name, value.clone());
+            }
+            entity.insert(attrs);
+        }
+        if !node.style.is_empty() {
+            let mut style = entity.take::<InlineStyle>().unwrap_or_default();
+            for (property, value) in &node.style {
+                style.set(property, value.clone());
+            }
+            entity.insert(style);
+        }
+        if let Some(text) = &node.text {
+            entity.insert(TextContent(text.clone()));
         }
     }
 }

@@ -698,19 +698,15 @@ pub enum ScriptCommand {
 }
 
 impl ScriptCommand {
-    /// Whether the command changes the tree rather than the state behind it.
-    ///
-    /// A tree built by a script is built by running the script, so anything
-    /// producing a document without running one for the full life of the app
-    /// has to know that these went by: a page rendered on a server carries
-    /// the markup and the state, and the nodes a script went on to create
-    /// arrive when the browser runs it.
+    /// Whether the command changes the tree rather than the state behind it,
+    /// which is what the DOM applier answers for.
     pub fn mutates_dom(&self) -> bool {
         matches!(
             self,
             ScriptCommand::SetAttr { .. }
                 | ScriptCommand::RemoveAttr { .. }
                 | ScriptCommand::SetNodeText { .. }
+                | ScriptCommand::SetClasses { .. }
                 | ScriptCommand::ClassAdd { .. }
                 | ScriptCommand::ClassRemove { .. }
                 | ScriptCommand::ClassToggle { .. }
@@ -727,6 +723,27 @@ impl ScriptCommand {
                 | ScriptCommand::UnbindEvent { .. }
                 | ScriptCommand::WindowSetTitle { .. }
                 | ScriptCommand::WindowSetSize { .. }
+        )
+    }
+
+    /// Whether the command adds, removes or moves a node, rather than writing
+    /// onto one the markup already declares.
+    ///
+    /// A node a script builds is built by running the script, so anything
+    /// producing a document without running one for the full life of the app
+    /// has to know that these went by: a page rendered on a server carries the
+    /// markup, the state and what the run wrote onto the nodes it found, and
+    /// the nodes a script went on to create arrive when the browser runs it.
+    pub fn builds_nodes(&self) -> bool {
+        matches!(
+            self,
+            ScriptCommand::Spawn { .. }
+                | ScriptCommand::Insert { .. }
+                | ScriptCommand::ReplaceWith { .. }
+                | ScriptCommand::RemoveNode { .. }
+                | ScriptCommand::CloneNode { .. }
+                | ScriptCommand::SetInnerMarkup { .. }
+                | ScriptCommand::SpawnFragment { .. }
         )
     }
 }

@@ -33,10 +33,10 @@ use lumen_core::property_store::{
     PropertyStore, discard_external_properties, external_properties_pending,
 };
 use lumen_core::request;
-use lumen_core::signals::{ArraySignals, discard_external_signals};
+use lumen_core::signals::discard_external_signals;
 use lumen_html::contract::Seed;
 use lumen_ir::artifact::CompiledApp;
-use lumen_portable::{apply_seed, hosts, portable_app};
+use lumen_portable::{apply_node_seed, apply_seed, hosts, portable_app};
 use lumen_scene::routing::install_routing;
 use lumen_scene::spawn::SpawnIntoWorld;
 use lumen_script::{FetchRegistry, HttpDispatch};
@@ -174,7 +174,10 @@ pub fn boot(
     install_routing(&mut app, key.to_string(), keys);
 
     apply_seed(&mut app.world, seed);
-    compiled.spawn_into(&mut app.world);
+    let root = compiled.spawn_into(&mut app.world);
+    // What the app wrote onto a node the last time it ran, for a render that
+    // starts from a page rather than from nothing.
+    apply_node_seed(&mut app.world, root, seed);
 
     Booted {
         app,
@@ -262,8 +265,5 @@ pub fn settle_while(
 
 /// The state an app is holding right now, in the form a page is written from.
 pub fn state(app: &App) -> State {
-    state_of(
-        app.world.resource::<PropertyStore>(),
-        app.world.resource::<ArraySignals>(),
-    )
+    state_of(&app.world)
 }

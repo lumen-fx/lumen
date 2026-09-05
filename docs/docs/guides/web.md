@@ -314,6 +314,13 @@ markup declare, so `on_start` sees the route it is being built for and can
 publish something different per page. What the app writes wins over what was
 declared, exactly as it does in a browser.
 
+Signals are not the whole of what a run finds. `set_class`, `set_root_class`
+and the node API's `set_attr`, `set_style` and `set_text` write onto one
+element rather than onto a signal, and the page carries what they wrote: the
+document is emitted with the class, attribute, style or text the app arrived
+at, and the runtime starts from the same values instead of writing the
+markup's own back over them.
+
 The build stops when the app's state stops changing, not when it stops drawing,
 so an app with a spinner or a looping animation settles like any other. An app
 whose state never stops changing runs out of budget instead; the build says so
@@ -465,21 +472,26 @@ means anything without an absolute address.
 - A list whose rows only exist once a script has run is emitted empty under
   `prerender = "seeds"`. `[web.seed]` puts rows in the document without
   anything running, and `prerender = "run"` gets them from the app itself.
-- A run captures signals and lists, which is what the markup is written from.
-  It does not capture elements a script created, a property written on one
-  entity rather than on a signal, or a vector or a live Rust value, none of
-  which a document can carry; the build names any it found. Anything the app
-  would have learned from the network is missing too, and so is a value that
-  only appears after an animation longer than the run's budget.
+- A run captures signals, lists, and what the app wrote onto a node: its class
+  list, its attributes, its inline style and its text. It does not capture
+  elements a script created, a property written on one node rather than on a
+  signal, or a vector or a live Rust value, none of which a document can
+  carry; the build names any it found. Anything the app would have learned
+  from the network is missing too, and so is a value that only appears after
+  an animation longer than the run's budget.
 - A script written in Rhai or Lua does not run in the browser. candela does.
   An app written in one of them is still emitted and still reads: the pages
   show the state they were built with, and nothing runs.
 - A `<checkbox>` or a `<radio>` written with a `label` shows its box without
   the caption. The caption is a second element on the desktop and an HTML
   checkbox takes no children.
-- An element a script creates does not appear, and neither does a class it
-  sets with `set_class` or `set_root_class`. Signals, arrays and `set_text`
-  do.
+- A script that creates an element during a build run renumbers the nodes
+  after it, and then what the run wrote onto any node is left out of the
+  document rather than written onto the wrong one; the build warns when it
+  finds that.
+- A translatable element keeps the text the catalogue gave it, whatever the
+  run wrote onto it. The app runs once and every locale is emitted from that
+  one run, so its text is the default locale's.
 - Keyboard input other than typing into a focused field does not reach the app,
   so a keyboard shortcut and arrow-key navigation between tabs do not work.
   Escape on an open dialog is the exception; the browser closes it.

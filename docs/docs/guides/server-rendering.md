@@ -359,7 +359,11 @@ apply.
 
 Nodes a script builds by hand with the DOM API arrive when the browser runs that
 script. The render says so in `response.warnings` rather than leaving you to
-find out, and the page is complete once the runtime has started.
+find out, and the page is complete once the runtime has started. What a script
+writes onto an element the markup declares is another matter: a class set with
+`set_class` or `set_root_class`, an attribute, an inline style or text set
+through a node handle is in the document the render returns, and the runtime
+starts from the same values.
 
 Components are not among them, as long as you hand the renderer the app
 `lumenc web` compiled. Component bodies are resolved when the site is built, so

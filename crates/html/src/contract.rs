@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 /// `contract_version` field of the [`Manifest`], and the same field on a
 /// [`Seed`]. A runtime that reads a version it does not implement refuses
 /// the document rather than guessing.
-pub const LM_CONTRACT_VERSION: u32 = 1;
+pub const LM_CONTRACT_VERSION: u32 = 2;
 
 /// Node identity: the [`NodePath`] of the IR node this element came from.
 pub const DATA_LM: &str = "data-lm";
@@ -490,7 +490,7 @@ impl Error for UnsupportedSeedValue {}
 /// the state the page was rendered from; anything else shows up as a
 /// hydration mismatch.
 ///
-/// Both maps are ordered so the same state always serializes to the same
+/// Every map is ordered so the same state always serializes to the same
 /// bytes. Rows carry strings because that is what an array signal holds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Seed {
@@ -500,6 +500,45 @@ pub struct Seed {
     pub globals: BTreeMap<String, SeedValue>,
     /// Array signals by name, each a list of records.
     pub arrays: BTreeMap<String, Vec<BTreeMap<String, String>>>,
+    /// What the app wrote onto single nodes, by node path.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub nodes: BTreeMap<String, NodeSeed>,
+}
+
+/// What an app wrote onto one node while the page was being rendered.
+///
+/// A node path is the identity the emitter and the runtime already share, and
+/// the only one that survives a page load: an entity id means nothing on the
+/// other side of a fetch.
+///
+/// Only the difference from what the markup itself says is carried. A page
+/// whose app never touches a node has no entry for it, and a field the app
+/// did not write is absent rather than empty, so a document is no larger for
+/// carrying the seed than it was before there was one.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct NodeSeed {
+    /// The whole class list, when the app replaced the markup's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classes: Option<Vec<String>>,
+    /// Attributes the app set, by name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attrs: BTreeMap<String, String>,
+    /// Inline style properties the app set, in the order it set them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub style: Vec<(String, String)>,
+    /// The node's text, when the app replaced the markup's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+impl NodeSeed {
+    /// True when the app wrote nothing onto the node.
+    pub fn is_empty(&self) -> bool {
+        self.classes.is_none()
+            && self.attrs.is_empty()
+            && self.style.is_empty()
+            && self.text.is_none()
+    }
 }
 
 impl Default for Seed {
@@ -508,6 +547,7 @@ impl Default for Seed {
             contract_version: LM_CONTRACT_VERSION,
             globals: BTreeMap::new(),
             arrays: BTreeMap::new(),
+            nodes: BTreeMap::new(),
         }
     }
 }
@@ -520,7 +560,7 @@ impl Seed {
 
     /// True when there is nothing to apply.
     pub fn is_empty(&self) -> bool {
-        self.globals.is_empty() && self.arrays.is_empty()
+        self.globals.is_empty() && self.arrays.is_empty() && self.nodes.is_empty()
     }
 
     /// Serialize for an inline `<script type="application/json">` block.

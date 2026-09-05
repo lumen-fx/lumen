@@ -1181,3 +1181,62 @@ fn serving_at(child: &mut std::process::Child) -> Option<std::net::SocketAddr> {
         .parse()
         .ok()
 }
+
+/// What a run wrote onto a node is state too, and none of it is in the signal
+/// stores: `set_root_class` and `set_class` write onto elements, and a node
+/// handle's `set_style` writes onto one. A page written from the stores alone
+/// would carry none of them.
+#[test]
+fn what_the_app_wrote_onto_a_node_is_in_the_page() {
+    let scratch = scratch("prerender-run-nodes");
+    let out = scratch.join("site");
+    web(
+        "fixtures/web-prerender-nodes",
+        &out,
+        &["--prerender", "run"],
+    );
+
+    let index = read(&out, "index.html");
+    check_documents(&out, "/");
+    assert!(
+        index.contains(r#"<div class="lm-root theme-dark""#),
+        "the root wears the class the script set: {index}"
+    );
+    assert!(
+        index.contains(r#"<span class="lm-label lit""#),
+        "the labelled element wears its own: {index}"
+    );
+    assert!(
+        index.contains(r#"style="bg: #ff0000;""#),
+        "the inline style a node handle set is on the page: {index}"
+    );
+    // The seed says the same, so the runtime adopts what the page shows
+    // instead of writing the markup's own class list back over it.
+    assert!(
+        index.contains(
+            r##""nodes":{"0":{"classes":["theme-dark"]},"0.0":{"classes":["lit"],"style":[["bg","#ff0000"]]}}"##
+        ),
+        "{index}"
+    );
+}
+
+/// The same app with nothing run for it writes the document it always did. A
+/// page carries the difference between what the app wrote and what its markup
+/// says, so a page with no run behind it carries no node seed at all.
+#[test]
+fn a_page_no_run_wrote_carries_no_node_seed() {
+    let scratch = scratch("prerender-seeds-nodes");
+    let out = scratch.join("site");
+    web(
+        "fixtures/web-prerender-nodes",
+        &out,
+        &["--prerender", "seeds"],
+    );
+
+    let index = read(&out, "index.html");
+    assert!(index.contains(r#"<div class="lm-root""#), "{index}");
+    assert!(
+        !index.contains("theme-dark") && !index.contains("\"nodes\""),
+        "{index}"
+    );
+}

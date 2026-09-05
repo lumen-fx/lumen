@@ -10,8 +10,8 @@ use lumen_ir::layout_ir::{
     Attributes, BindKind, BindSpec, Element, FragmentUse, IfModeSpec, InterpolationSlot, LayoutIR,
 };
 use lumen_web::{
-    EmitError, HostRewrite, LocaleSpec, MarkupSheet, PageSpec, SignalEnv, Site, SiteSpec, WebSpec,
-    emit,
+    EmitError, HostRewrite, LocaleSpec, MarkupSheet, NodeState, PageSpec, SignalEnv, Site,
+    SiteSpec, WebSpec, emit,
 };
 
 fn element(tag: &str, attrs: Attributes, children: Vec<Element>) -> Element {
@@ -1255,4 +1255,177 @@ fn a_component_that_could_not_be_run_is_an_empty_box_in_the_page() {
         "{html}"
     );
     assert!(!html.contains("placeholder"), "{html}");
+}
+
+/// What a page's app wrote onto one node while it ran.
+fn node_state(tag: &str) -> NodeState {
+    NodeState {
+        tag: tag.to_string(),
+        ..NodeState::default()
+    }
+}
+
+/// A page whose run settled with `nodes` written onto it.
+fn run_page(root: Element, nodes: &[(&str, NodeState)]) -> PageSpec {
+    PageSpec {
+        nodes: nodes
+            .iter()
+            .map(|(path, state)| ((*path).to_string(), state.clone()))
+            .collect(),
+        ..PageSpec::new("index", ir(root))
+    }
+}
+
+/// The class a script set reaches both the element and the seed. The seed is
+/// what stops the runtime writing the markup's own list back over it on the
+/// first tick.
+#[test]
+fn a_class_the_app_set_reaches_the_page_and_the_seed() {
+    let page = run_page(
+        element(
+            "root",
+            Attributes::default(),
+            vec![element("label", labelled("Hello"), Vec::new())],
+        ),
+        &[
+            (
+                "0",
+                NodeState {
+                    classes: vec!["theme-dark".into()],
+                    ..node_state("root")
+                },
+            ),
+            (
+                "0.0",
+                NodeState {
+                    classes: vec!["lit".into()],
+                    ..node_state("label")
+                },
+            ),
+        ],
+    );
+    let html = page_html(&site(vec![page]), "index.html");
+    assert!(
+        html.contains(r#"<div class="lm-root theme-dark""#),
+        "{html}"
+    );
+    assert!(html.contains(r#"<span class="lm-label lit""#), "{html}");
+    assert!(
+        html.contains(r#""nodes":{"0":{"classes":["theme-dark"]}"#),
+        "{html}"
+    );
+}
+
+/// An attribute, an inline style and a text a script set all reach the page.
+#[test]
+fn what_a_script_set_on_a_node_reaches_the_page() {
+    let page = run_page(
+        element(
+            "root",
+            Attributes::default(),
+            vec![element("label", labelled("Hello"), Vec::new())],
+        ),
+        &[(
+            "0.0",
+            NodeState {
+                attrs: [("role".to_string(), "status".to_string())]
+                    .into_iter()
+                    .collect(),
+                style: vec![("color".to_string(), "red".to_string())],
+                text: Some("Goodbye".into()),
+                ..node_state("label")
+            },
+        )],
+    );
+    let html = page_html(&site(vec![page]), "index.html");
+    assert!(html.contains(r#"role="status""#), "{html}");
+    assert!(html.contains(r#"style="color: red;""#), "{html}");
+    assert!(html.contains(">Goodbye</span>"), "{html}");
+    assert!(!html.contains(">Hello<"), "{html}");
+}
+
+/// A node the app never touched is written the way it always was, so a page
+/// whose app writes onto nothing carries no node seed at all.
+#[test]
+fn a_node_the_app_left_alone_is_written_as_it_was() {
+    let root = element(
+        "root",
+        Attributes::default(),
+        vec![element("label", labelled("Hello"), Vec::new())],
+    );
+    let untouched = page_html(
+        &site(vec![PageSpec::new("index", ir(root.clone()))]),
+        "index.html",
+    );
+    let run = run_page(root, &[("0.0", node_state("label"))]);
+    assert_eq!(page_html(&site(vec![run]), "index.html"), untouched);
+}
+
+/// A translatable element keeps the text the catalogue gave it. The app runs
+/// once and every locale is emitted from that run, so writing its text here
+/// would put the default locale's string in every other locale's document.
+#[test]
+fn a_translatable_node_keeps_the_emitted_text() {
+    let label = element(
+        "label",
+        Attributes {
+            translatable: Some("greeting".into()),
+            ..labelled("Bonjour")
+        },
+        Vec::new(),
+    );
+    let page = run_page(
+        element("root", Attributes::default(), vec![label]),
+        &[(
+            "0.0",
+            NodeState {
+                text: Some("Hello".into()),
+                ..node_state("label")
+            },
+        )],
+    );
+    let html = page_html(&site(vec![page]), "index.html");
+    assert!(html.contains(">Bonjour</span>"), "{html}");
+    assert!(!html.contains("Hello"), "{html}");
+}
+
+/// A script that changes the shape of the tree while it runs renumbers every
+/// node after the change, so a path names a different node in each half. The
+/// page is written from its markup from there on, and the build says so.
+#[test]
+fn a_tree_the_app_reshaped_stops_the_overrides_and_warns() {
+    let page = run_page(
+        element(
+            "root",
+            Attributes::default(),
+            vec![
+                element("label", labelled("first"), Vec::new()),
+                element("label", labelled("second"), Vec::new()),
+            ],
+        ),
+        &[
+            ("0.0", node_state("box")),
+            (
+                "0.1",
+                NodeState {
+                    classes: vec!["lit".into()],
+                    ..node_state("label")
+                },
+            ),
+        ],
+    );
+    let site = emitted(&site(vec![page]));
+    let html = site
+        .file("index.html")
+        .expect("the page emits")
+        .contents
+        .clone();
+    assert!(!html.contains("lit"), "{html}");
+    assert_eq!(
+        site.warnings,
+        [
+            "page `index`: the app changed the shape of the tree while it ran, so what it wrote \
+          onto nodes is not written into the document"
+        ]
+    );
 }

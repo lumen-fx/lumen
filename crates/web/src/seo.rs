@@ -8,7 +8,7 @@
 
 use lumen_html::contract::{
     DATA_LM_BASE, DATA_LM_CONTRACT, DATA_LM_LOCALE, DATA_LM_PAGE, DEFAULT_MANIFEST_FILE,
-    LM_CONTRACT_VERSION, SEED_SCRIPT_ID,
+    LM_CONTRACT_VERSION, SEED_SCRIPT_ID, Seed,
 };
 use lumen_html::{escape_attr, escape_text};
 
@@ -18,7 +18,16 @@ use crate::spec::{PageSpec, SiteSpec};
 use crate::urls;
 
 /// Write everything above the page's own elements.
-pub fn open_document(out: &mut String, page: &PageSpec, spec: &SiteSpec) -> Result<(), EmitError> {
+///
+/// The seed is passed in rather than read off the page: what the app wrote
+/// onto a node is only known once the tree has been written, so the body is
+/// emitted first and the head is written from what it found.
+pub fn open_document(
+    out: &mut String,
+    page: &PageSpec,
+    spec: &SiteSpec,
+    seed: &Seed,
+) -> Result<(), EmitError> {
     let web = &spec.web;
     let base = urls::normalize_base(&web.base_path);
     let title = page.title.clone().unwrap_or_else(|| web.title.clone());
@@ -115,7 +124,7 @@ pub fn open_document(out: &mut String, page: &PageSpec, spec: &SiteSpec) -> Resu
         out.push_str("<script type=\"application/json\"");
         attr(out, "id", SEED_SCRIPT_ID);
         out.push('>');
-        out.push_str(&page.seed.to_script_json()?);
+        out.push_str(&seed.to_script_json()?);
         out.push_str("</script>\n");
     }
     out.push_str("</head>\n<body>\n");
