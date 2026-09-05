@@ -382,21 +382,37 @@ pub fn renumber_document_order(
 
 /// The text an element spawns with.
 ///
-/// Without `translatable="key"` this is just the authored `text`. With it,
-/// the key is resolved against the app's loaded catalogue, and what happens
-/// on a miss is [`lumen_i18n::translated_or_authored`]'s rule.
+/// Without `translatable="key"` this starts as the authored `text`. With
+/// it, the key is resolved against the app's loaded catalogue, and what
+/// happens on a miss is [`lumen_i18n::translated_or_authored`]'s rule.
+///
+/// A `format="<spec>"` renders whatever is left for the app's locale.
+/// The formatters come off the world rather than the process-wide hook
+/// core's bound-text path uses, for the reason the catalogue does: a
+/// process running two Lumen apps must not format one app's markup in
+/// the other's locale. Text the spec cannot read stands as it is, so a
+/// translated sentence under a `number` format is still the sentence.
 fn resolve_text(world: &World, el: &Element) -> Option<String> {
-    let Some(key) = &el.attrs.translatable else {
-        return el.attrs.text.clone();
+    let text = match &el.attrs.translatable {
+        None => el.attrs.text.clone(),
+        Some(key) => {
+            let translated = world
+                .get_resource::<lumen_i18n::SharedI18n>()
+                .and_then(|i18n| i18n.try_t(key));
+            Some(lumen_i18n::translated_or_authored(
+                translated,
+                el.attrs.text.as_deref(),
+                key,
+            ))
+        }
     };
-    let translated = world
-        .get_resource::<lumen_i18n::SharedI18n>()
-        .and_then(|i18n| i18n.try_t(key));
-    Some(lumen_i18n::translated_or_authored(
-        translated,
-        el.attrs.text.as_deref(),
-        key,
-    ))
+    let (Some(text), Some(spec)) = (&text, &el.attrs.format) else {
+        return text;
+    };
+    world
+        .get_resource::<lumen_i18n::SharedFormatter>()
+        .and_then(|fmt| lumen_i18n::format_spec(fmt.get(), spec, text))
+        .or_else(|| Some(text.clone()))
 }
 
 /// Alpha multiplier applied to a disabled entity when neither
@@ -930,6 +946,12 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     }
     if let Some(z) = el.attrs.z_index {
         entity.insert(lumen_core::components::ZIndex(z));
+    }
+    // The spec a `bind-text` write is rendered through: `resolve_text`
+    // formatted the text this element spawned with, and
+    // `apply_text_bindings` formats every value the signal writes after.
+    if let Some(spec) = &el.attrs.format {
+        entity.insert(lumen_core::components::TextFormat(spec.clone()));
     }
     if let Some(spec) = &el.attrs.bind {
         match spec.kind {

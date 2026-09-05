@@ -1,8 +1,9 @@
-//! Headless proof that translation round-trips: an app directory with a
-//! `locale/` catalogue starts in the locale `lumen.toml` names, markup
-//! marked `translatable="key"` spawns with the translated string, and the
-//! translator every script host's `t()` builtin calls resolves the same
-//! catalogue.
+//! Headless proof that translation and formatting round-trip: an app
+//! directory with a `locale/` catalogue starts in the locale `lumen.toml`
+//! names, markup marked `translatable="key"` spawns with the translated
+//! string, markup marked `format="<spec>"` spawns rendered for the locale,
+//! and the translator and formatter every script host's builtins call
+//! resolve the same catalogue and the same locale.
 //!
 //! Runs window-free through `build_headless_app`, the same path
 //! `run_app_headless` takes.
@@ -13,8 +14,8 @@ use lumen_ir::layout_ir::{Attributes, Element, LayoutIR};
 use lumen_runtime::{RunOptions, build_headless_app};
 use std::path::{Path, PathBuf};
 
-/// The script-side translator hook is a process-global singleton, so apps
-/// that install one run one at a time.
+/// The script-side translator and formatter hooks are process-global
+/// singletons, so apps that install them run one at a time.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn label(text: Option<&str>, translatable: Option<&str>) -> Element {
@@ -23,6 +24,19 @@ fn label(text: Option<&str>, translatable: Option<&str>) -> Element {
         attrs: Attributes {
             text: text.map(str::to_string),
             translatable: translatable.map(str::to_string),
+            ..Default::default()
+        },
+        children: Vec::new(),
+        ..Default::default()
+    }
+}
+
+fn formatted_label(text: &str, format: &str) -> Element {
+    Element {
+        tag: "label".to_string(),
+        attrs: Attributes {
+            text: Some(text.to_string()),
+            format: Some(format.to_string()),
             ..Default::default()
         },
         children: Vec::new(),
@@ -176,6 +190,103 @@ fn catalogue_reload_replaces_strings() {
     assert_eq!(lumen_core::i18n::translate("greet"), "Hi again!");
 
     lumen_core::i18n::clear_translator();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `format="<spec>"` markup spawns rendered for the app's locale, and text
+/// the spec cannot read spawns as it was authored rather than blank.
+#[test]
+fn formatted_markup_spawns_for_the_locale() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("format");
+    std::fs::write(dir.join("lumen.toml"), "[app]\nlocale = \"de-DE\"\n").unwrap();
+
+    let root = Element {
+        tag: "root".to_string(),
+        attrs: Attributes::default(),
+        children: vec![
+            formatted_label("1234.5", "currency:EUR"),
+            formatted_label("2024-06-15T09:30:00Z", "date"),
+            formatted_label("not a number", "number"),
+            formatted_label("hello", "wat"),
+        ],
+        ..Default::default()
+    };
+    let mut app = build(&dir, root);
+    let texts = texts(&mut app);
+    assert!(
+        texts.iter().any(|t| t.contains("1.234,50")),
+        "the euro amount reads in German: {texts:?}"
+    );
+    assert!(texts.contains(&"15.06.2024".to_string()), "{texts:?}");
+    assert!(texts.contains(&"not a number".to_string()), "{texts:?}");
+    assert!(texts.contains(&"hello".to_string()), "{texts:?}");
+
+    lumen_core::i18n::clear_formatter();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A `format` on a `bind-text` element renders every value the signal
+/// writes, not only the one the element spawned with.
+#[test]
+fn a_bound_signal_is_formatted_on_every_write() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("bound");
+    std::fs::write(dir.join("lumen.toml"), "[app]\nlocale = \"de-DE\"\n").unwrap();
+
+    let mut live = formatted_label("0", "number");
+    live.attrs.bind = Some(lumen_ir::layout_ir::BindSpec {
+        kind: lumen_ir::layout_ir::BindKind::Text,
+        name: "count".to_string(),
+    });
+    let root = Element {
+        tag: "root".to_string(),
+        attrs: Attributes::default(),
+        children: vec![live],
+        ..Default::default()
+    };
+    let mut app = build(&dir, root);
+    app.world
+        .resource_mut::<lumen_core::property_store::PropertyStore>()
+        .set_global_str("count", "12345.678");
+    app.tick();
+    let texts = texts(&mut app);
+    assert!(texts.contains(&"12.345,678".to_string()), "{texts:?}");
+
+    lumen_core::i18n::clear_formatter();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The hook every script host's `format_*` builtin calls renders for the
+/// app's locale, and declines a spec or a value it cannot read.
+#[test]
+fn script_formatter_hook_reads_the_app_locale() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("scriptformat");
+    std::fs::write(dir.join("lumen.toml"), "[app]\nlocale = \"de-DE\"\n").unwrap();
+
+    let _app = build(
+        &dir,
+        Element {
+            tag: "root".to_string(),
+            attrs: Attributes::default(),
+            children: Vec::new(),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        lumen_core::i18n::format("number", "12345.678").as_deref(),
+        Some("12.345,678")
+    );
+    assert!(
+        lumen_core::i18n::format("currency:EUR", "1234.5")
+            .expect("a euro amount formats")
+            .contains("1.234,50")
+    );
+    assert_eq!(lumen_core::i18n::format("wat", "hello"), None);
+    assert_eq!(lumen_core::i18n::format("number", "hello"), None);
+
+    lumen_core::i18n::clear_formatter();
     let _ = std::fs::remove_dir_all(&dir);
 }
 

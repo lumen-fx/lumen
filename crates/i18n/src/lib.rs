@@ -6,20 +6,19 @@
 //!   keyed by [`LanguageIdentifier`]. `load_ftl` parses `.ftl` source
 //!   strings; `t` / `t_with_lang` resolve keys with optional
 //!   [`FluentArgs`]. Falls through `fallback_chain` in order on a miss.
-//! - **Formatting** (W5.8) - [`LocaleFormatter`] wraps ICU4X
-//!   [`DecimalFormatter`] + [`DateTimeFormatter`] for the active
+//! - **Formatting** (W5.8) - [`LocaleFormatter`] wraps ICU4X's decimal,
+//!   date-time, currency and relative-time formatters for the active
 //!   locale. `format_number`, `format_date`, `format_time`,
-//!   `format_datetime`, `format_currency` return localized
-//!   `String`s. `format_relative` is a tiny "X units ago" stub -
-//!   `icu_relativetime` is still at 0.1.x which doesn't compose with
-//!   the 2.x `icu` line we pinned, so the precise CLDR-driven
-//!   relative-time path is deferred.
+//!   `format_datetime`, `format_currency` and `format_relative` return
+//!   localized `String`s, and [`formatter::format_spec`] reaches all of
+//!   them from one spec string, which is what markup's `format`
+//!   attribute and the scripts' `format_*` builtins carry.
 //!
 //! ECS integration: [`I18nPlugin`] installs [`SharedI18n`] (a shared
-//! handle to the registry) and [`LocaleFormatter`] as resources, for the
-//! locale the caller pins or the one `sys-locale` reports. The [`t!`]
-//! macro takes any `I18n` binding, including a [`SharedI18n::read`]
-//! guard.
+//! handle to the registry) and [`SharedFormatter`] (a shared handle to
+//! the formatters) as resources, for the locale the caller pins or the
+//! one `sys-locale` reports. The [`t!`] macro takes any `I18n` binding,
+//! including a [`SharedI18n::read`] guard.
 //!
 //! Conversions follow the project's `From`/`Into` convention - no
 //! bespoke `parse_lang` or `convert_locale_to_langid` helpers.
@@ -47,7 +46,7 @@ use thiserror::Error;
 pub use unic_langid::LanguageIdentifier;
 
 pub use fluent_bundle::FluentValue;
-pub use formatter::{FormatterError, LocaleFormatter};
+pub use formatter::{FormatterError, LocaleFormatter, format_spec};
 
 /// Errors surfaced by [`I18n`] when loading or resolving translations.
 #[derive(Debug, Error)]
@@ -311,6 +310,37 @@ impl From<I18n> for SharedI18n {
     }
 }
 
+/// A shared handle to one app's [`LocaleFormatter`], the way
+/// [`SharedI18n`] is a shared handle to its catalogues.
+///
+/// Two readers need the same formatters and neither owns them: markup
+/// (`format="number"`, resolved as an element spawns) reads this
+/// resource out of the world, and scripts reach it through the
+/// process-wide formatting hook the runtime installs from a clone of
+/// this handle.
+#[derive(Resource, Clone)]
+pub struct SharedFormatter(Arc<LocaleFormatter>);
+
+impl SharedFormatter {
+    /// Wrap `formatter` in a shareable handle.
+    pub fn new(formatter: LocaleFormatter) -> Self {
+        Self(Arc::new(formatter))
+    }
+
+    /// Borrow the formatters. There is no interior mutability here: a
+    /// locale switch builds a new [`LocaleFormatter`] rather than
+    /// editing one in place.
+    pub fn get(&self) -> &LocaleFormatter {
+        &self.0
+    }
+}
+
+impl From<LocaleFormatter> for SharedFormatter {
+    fn from(formatter: LocaleFormatter) -> Self {
+        Self::new(formatter)
+    }
+}
+
 /// The text a `translatable="key"` element shows.
 ///
 /// The catalogue's string wins; without one the authored text stands in; with
@@ -381,7 +411,7 @@ impl I18nPlugin {
         self
     }
 
-    /// Install [`SharedI18n`] + [`LocaleFormatter`] onto `world` for the
+    /// Install [`SharedI18n`] + [`SharedFormatter`] onto `world` for the
     /// resolved locale ([`Self::locale`], else the OS locale, else
     /// `en-US`). Returns that locale so callers can log it and load the
     /// matching catalogues.
@@ -393,7 +423,7 @@ impl I18nPlugin {
         let i18n = I18n::new(current.clone(), self.fallback_chain);
         let fmt = LocaleFormatter::new(current.clone());
         world.insert_resource(SharedI18n::new(i18n));
-        world.insert_resource(fmt);
+        world.insert_resource(SharedFormatter::new(fmt));
         current
     }
 }
@@ -581,7 +611,8 @@ mod tests {
         assert_eq!(current, lang("fr-FR"));
         let shared = world.resource::<SharedI18n>().clone();
         assert_eq!(shared.read().current, lang("fr-FR"));
-        assert!(world.get_resource::<LocaleFormatter>().is_some());
+        let fmt = world.resource::<SharedFormatter>().clone();
+        assert_eq!(fmt.get().lang, lang("fr-FR"));
     }
 
     #[test]

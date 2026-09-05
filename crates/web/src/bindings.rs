@@ -25,22 +25,36 @@
 //! - `bind-text` / `bind-value` / `bind-checked` in their `$self.` and
 //!   `$parent.` forms - nothing. Those read a property of one entity, and a
 //!   page's state is signals and rows; there is no entity to read yet.
+//!
+//! A `format` renders the text this leaves, bound or authored, for the
+//! locale the tree is emitted in. That is where a site emitted in more than
+//! one locale gets a German and an English form of one authored number.
 
 use lumen_core::components::SliderValue;
 use lumen_core::signals::signal_as_bool;
+use lumen_i18n::{LocaleFormatter, format_spec};
 use lumen_ir::layout_ir::{Attributes, BindKind};
 use lumen_primitives::ProgressBar;
 
 use crate::spec::SignalEnv;
 
 /// The attributes to emit an element with, once its bindings are resolved
-/// against `signals`.
+/// against `signals` and its text is formatted for `formatter`'s locale.
 ///
-/// `None` when no binding on the element resolved to anything, which is every
-/// element of a page with no state and most elements of a page with some.
-/// The caller emits from the element's own attributes then, and nothing is
-/// copied.
-pub fn resolved(ir_tag: &str, attrs: &Attributes, signals: &SignalEnv) -> Option<Attributes> {
+/// `formatter` is `None` for an element with no `format`, which is what
+/// keeps a page that formats nothing from building the locale's formatters
+/// at all.
+///
+/// `None` when no binding on the element resolved to anything and no format
+/// changed its text, which is every element of a page with no state and most
+/// elements of a page with some. The caller emits from the element's own
+/// attributes then, and nothing is copied.
+pub fn resolved(
+    ir_tag: &str,
+    attrs: &Attributes,
+    signals: &SignalEnv,
+    formatter: Option<&LocaleFormatter>,
+) -> Option<Attributes> {
     let text = bound(attrs, BindKind::Text, signals).map(|value| shown_as(attrs, value));
     let checked = bound(attrs, BindKind::Checked, signals).and_then(signal_as_bool);
     let value = bound(attrs, BindKind::Value, signals)
@@ -51,6 +65,16 @@ pub fn resolved(ir_tag: &str, attrs: &Attributes, signals: &SignalEnv) -> Option
         .as_deref()
         .and_then(|signal| signals.global(signal))
         .and_then(signal_as_bool);
+    // What the element ends up showing, formatted. A bound value takes the
+    // format the same way an authored one does, so a page the state answers
+    // for and one it does not read alike. Text the spec cannot read keeps
+    // the text, which is the rule everywhere else a format applies.
+    let text = formatter
+        .and_then(|fmt| {
+            let text = text.as_deref().or(attrs.text.as_deref())?;
+            format_spec(fmt, attrs.format.as_deref()?, text)
+        })
+        .or(text);
     if text.is_none() && checked.is_none() && value.is_none() && disabled.is_none() {
         return None;
     }
@@ -137,7 +161,7 @@ mod tests {
         let mut attrs = bind(BindKind::Text, "name");
         attrs.text = Some("(unknown)".to_string());
         let signals = SignalEnv::new().with_global("name", "Ada Lovelace");
-        let resolved = resolved("label", &attrs, &signals).expect("the state holds `name`");
+        let resolved = resolved("label", &attrs, &signals, None).expect("the state holds `name`");
         assert_eq!(resolved.text.as_deref(), Some("Ada Lovelace"));
     }
 
@@ -146,7 +170,7 @@ mod tests {
         let mut attrs = bind(BindKind::Text, "name");
         attrs.text = Some("(unknown)".to_string());
         assert!(
-            resolved("label", &attrs, &SignalEnv::new()).is_none(),
+            resolved("label", &attrs, &SignalEnv::new(), None).is_none(),
             "an unset signal leaves the element as the author wrote it"
         );
     }
@@ -157,14 +181,14 @@ mod tests {
         for (value, want) in [("true", true), ("1", true), ("false", false), ("0", false)] {
             let signals = SignalEnv::new().with_global("on", value);
             assert_eq!(
-                resolved("checkbox", &attrs, &signals).and_then(|a| a.checked),
+                resolved("checkbox", &attrs, &signals, None).and_then(|a| a.checked),
                 Some(want),
                 "`{value}` states a boolean"
             );
         }
         let signals = SignalEnv::new().with_global("on", "maybe");
         assert!(
-            resolved("checkbox", &attrs, &signals).is_none(),
+            resolved("checkbox", &attrs, &signals, None).is_none(),
             "and a value that states none leaves the control as it was"
         );
     }
@@ -176,7 +200,7 @@ mod tests {
         slider.max = Some(100.0);
         let signals = SignalEnv::new().with_global("level", "250");
         assert_eq!(
-            resolved("slider", &slider, &signals).and_then(|a| a.value),
+            resolved("slider", &slider, &signals, None).and_then(|a| a.value),
             Some(100.0)
         );
 
@@ -184,14 +208,14 @@ mod tests {
         bar.max = Some(10.0);
         let signals = SignalEnv::new().with_global("level", "-4");
         assert_eq!(
-            resolved("progress", &bar, &signals).and_then(|a| a.value),
+            resolved("progress", &bar, &signals, None).and_then(|a| a.value),
             Some(0.0),
             "a progress bar starts at zero however far below it the signal is"
         );
 
         let signals = SignalEnv::new().with_global("level", "loud");
         assert!(
-            resolved("slider", &slider, &signals).is_none(),
+            resolved("slider", &slider, &signals, None).is_none(),
             "a value that is not a number is not a position"
         );
     }
@@ -201,7 +225,7 @@ mod tests {
         let mut attrs = bind(BindKind::Text, "name");
         attrs.bind_disabled = Some("busy".to_string());
         let signals = SignalEnv::new().with_global("busy", "true");
-        let resolved = resolved("button", &attrs, &signals).expect("the state holds `busy`");
+        let resolved = resolved("button", &attrs, &signals, None).expect("the state holds `busy`");
         assert!(
             resolved.disabled,
             "`bind-disabled` sits beside another binding rather than replacing it"
@@ -220,6 +244,64 @@ mod tests {
             .with_global("offset", "120")
             .with_global("title", "Recent")
             .with_global("done", "true");
-        assert!(resolved("scroll", &attrs, &signals).is_none());
+        assert!(resolved("scroll", &attrs, &signals, None).is_none());
+    }
+
+    fn formatter(tag: &str) -> LocaleFormatter {
+        LocaleFormatter::new(tag.parse().expect("the test tag parses"))
+    }
+
+    #[test]
+    fn a_format_writes_the_authored_text_for_the_locale() {
+        let attrs = Attributes {
+            text: Some("1234.5".to_string()),
+            format: Some("currency:EUR".to_string()),
+            ..Attributes::default()
+        };
+        let de = resolved(
+            "label",
+            &attrs,
+            &SignalEnv::new(),
+            Some(&formatter("de-DE")),
+        )
+        .expect("a format changes the authored text");
+        let en = resolved(
+            "label",
+            &attrs,
+            &SignalEnv::new(),
+            Some(&formatter("en-US")),
+        )
+        .expect("a format changes the authored text");
+        assert!(de.text.as_deref().unwrap().contains("1.234,50"), "{de:?}");
+        assert!(en.text.as_deref().unwrap().contains("1,234.50"), "{en:?}");
+    }
+
+    #[test]
+    fn a_format_writes_a_bound_value_too() {
+        let mut attrs = bind(BindKind::Text, "count");
+        attrs.format = Some("number".to_string());
+        let signals = SignalEnv::new().with_global("count", "12345.678");
+        let de = resolved("label", &attrs, &signals, Some(&formatter("de-DE")))
+            .expect("the state holds `count`");
+        assert_eq!(de.text.as_deref(), Some("12.345,678"));
+    }
+
+    #[test]
+    fn text_the_format_cannot_read_stays_as_it_was() {
+        let attrs = Attributes {
+            text: Some("not a number".to_string()),
+            format: Some("number".to_string()),
+            ..Attributes::default()
+        };
+        assert!(
+            resolved(
+                "label",
+                &attrs,
+                &SignalEnv::new(),
+                Some(&formatter("de-DE"))
+            )
+            .is_none(),
+            "nothing resolved, so the element is emitted as the author wrote it"
+        );
     }
 }

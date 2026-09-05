@@ -400,7 +400,10 @@ locales = ["en-US", "de-DE"]
 The first locale is served from the site root and each of the others from a
 directory named after its tag, so the German settings page is
 `/de-DE/settings.html`. Text marked `translatable` is resolved while the site
-is built, so a page arrives already in its language; `<html lang>` and the
+is built, so a page arrives already in its language, and text carrying a
+`format` is written for that locale at the same point, so one authored amount
+reads as `1.234,50` with a trailing euro sign in the German tree and
+`1,234.50` with a leading one in the English tree; `<html lang>` and the
 writing direction follow the locale, and every document links to its
 counterparts with `hreflang`. What the whole site shares - the stylesheet, the
 compiled app, the runtime, the assets - is written once at the root.

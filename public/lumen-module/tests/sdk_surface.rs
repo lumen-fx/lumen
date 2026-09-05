@@ -26,6 +26,10 @@ use serde::Deserialize;
 static BUILT: AtomicBool = AtomicBool::new(false);
 static UNITS: Mutex<String> = Mutex::new(String::new());
 
+// `BUILT` and `UNITS` are one pair for the whole binary, so the tests that
+// drive a build through them run one at a time.
+static SERIAL: Mutex<()> = Mutex::new(());
+
 struct Probe {
     units: String,
 }
@@ -53,6 +57,7 @@ fn the_probe_answers_the_build_id_under_the_declared_name() {
 
 #[test]
 fn the_constructor_registered_the_module_before_main() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let entry = lumen_module::registry::registered()
         .into_iter()
         .find(|m| m.name == "sdk-probe")
@@ -64,6 +69,7 @@ fn the_constructor_registered_the_module_before_main() {
 
 #[test]
 fn install_parses_the_config_and_builds_the_plugin() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let mut app = App::new();
     let status = install_with(&mut app, "units = \"mm\"", |config: ModuleConfig| Probe {
         units: config.str("units").unwrap_or("px").to_string(),
@@ -93,6 +99,7 @@ fn install_turns_a_panicking_constructor_into_a_status() {
 
 #[test]
 fn the_config_wrapper_reads_each_shape() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let mut app = App::new();
     let status = install_with(
         &mut app,
