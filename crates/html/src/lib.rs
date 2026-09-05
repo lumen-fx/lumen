@@ -16,20 +16,22 @@
 pub mod attrs;
 pub mod contract;
 pub mod escape;
+pub mod paths;
 pub mod style;
 pub mod tags;
 
-pub use attrs::{MarkupRules, class_list, html_attrs, is_disableable, markup_rules};
+pub use attrs::{MarkupRules, class_list, class_value, html_attrs, is_disableable, markup_rules};
 pub use contract::{
     DATA_LM, DATA_LM_AUX, DATA_LM_BASE, DATA_LM_CHECKED, DATA_LM_CONTRACT, DATA_LM_DISABLED,
     DATA_LM_DRAG_OVER, DATA_LM_HIDDEN, DATA_LM_KEY, DATA_LM_LOCALE, DATA_LM_PAGE, DATA_LM_SELECTED,
     DATA_LM_WIDGET, DEFAULT_ARTIFACT_FILE, DEFAULT_CSS_FILE, DEFAULT_JS_FILE,
     DEFAULT_MANIFEST_FILE, DEFAULT_WASM_FILE, Dir, LM_CONTRACT_VERSION, Manifest, NavigationMode,
-    NodePath, PathError, PathStep, SEED_SCRIPT_ID, ScriptFormat, ScriptRef, Seed, SeedValue,
-    UnsupportedSeedValue, web_names,
+    NodePath, NodeSeed, PathError, PathStep, SEED_SCRIPT_ID, ScriptFormat, ScriptRef, Seed,
+    SeedValue, UnsupportedSeedValue, web_names,
 };
 pub use escape::{escape_attr, escape_text};
-pub use style::{Emission, WebDecl, rewrite_property};
+pub use paths::{Visit, walk_nodes};
+pub use style::{Emission, WebDecl, rewrite_property, style_value};
 pub use tags::{
     HtmlTag, LM_CLASS_PREFIX, MAPPED_TAGS, VOID_ELEMENTS, html_tag_for, is_void, lm_class,
 };

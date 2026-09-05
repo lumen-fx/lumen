@@ -1,0 +1,18 @@
+// What a run writes onto nodes rather than onto signals. One prelude import
+// pulls in the whole host surface.
+import "lumen.cdl";
+
+// Class writes are id-keyed, so they need no node handle and can run at load.
+fn on_start() {
+    lumen::set_root_class("theme-dark");
+    lumen::set_class("tile", "lit");
+}
+
+// A node handle needs the DOM index, which is published on the first tick, so
+// the style write waits for on_ready: node_get_by_id returns 0 in on_start.
+fn on_ready() {
+    let tile = lumen::node_get_by_id("tile");
+    lumen::node_set_style(tile, "bg", "#ff0000");
+}
+
+fn main() {}

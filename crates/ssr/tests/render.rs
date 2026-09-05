@@ -616,6 +616,27 @@ fn an_unresolved_component_still_runs_and_its_marker_holds_its_place() {
     );
 }
 
+/// A program that writes onto a node the markup declares.
+const WRITES_NODES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/writes_nodes.cdlb"));
+
+/// A render that writes onto the nodes the markup declares carries what it
+/// wrote, so it says nothing about nodes the browser has to build.
+#[test]
+fn a_class_a_script_set_is_in_the_document_and_is_not_reported_as_missing() {
+    let _turn = in_turn();
+    let response = render(WRITES_NODES, SsrRequest::get("/"));
+
+    assert!(response.body.contains("theme-dark"), "{}", response.body);
+    assert!(
+        !response
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("built nodes of their own")),
+        "{:?}",
+        response.warnings
+    );
+}
+
 /// A one-page app whose only text is `greeting`, so a document says which
 /// language it was rendered in without anything running.
 fn app_saying(greeting: &str) -> CompiledApp {

@@ -35,7 +35,7 @@ pub use i18n::translate_ir;
 pub use markup::{MarkupSheet, lift as lift_markup_styles};
 pub use names::{build_id, content_name, fnv1a64};
 pub use site::{NOT_FOUND_FILE, SITEMAP_FILE, document, emit, shell};
-pub use snapshot::{State, state_of};
+pub use snapshot::{NodeState, State, state_of};
 pub use spec::{
     AssetRef, CssMode, HostRewrite, LocaleSpec, OutputFile, PageSpec, SignalEnv, Site, SiteSpec,
     WebSpec, document_key, document_name,

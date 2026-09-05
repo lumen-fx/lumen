@@ -867,6 +867,7 @@ fn page_spec(
             description: page_cfg.and_then(|page| page.description.clone()),
             signals: state.signals.clone(),
             seed: state.seed.clone(),
+            nodes: state.nodes.clone(),
         };
     }
     let mut signals = SignalEnv::new();
@@ -901,6 +902,7 @@ fn page_spec(
         description: page_cfg.and_then(|page| page.description.clone()),
         signals,
         seed: page_seed,
+        nodes: BTreeMap::new(),
     }
 }
 

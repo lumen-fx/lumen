@@ -15,7 +15,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::Element;
 
-use crate::assemble::{apply_seed, portable_app};
+use crate::assemble::{apply_node_seed, apply_seed, portable_app};
 use crate::load::{LoadError, PageContext};
 use crate::{LumenWebApp, hosts};
 
@@ -97,6 +97,9 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
     }
     apply_seed(&mut app.world, &loaded.seed);
     let root_entity = loaded.artifact.spawn_into(&mut app.world);
+    // What the page says the app wrote onto its nodes. Applied after the
+    // spawn, because it names nodes and there are none before it.
+    apply_node_seed(&mut app.world, root_entity, &loaded.seed);
 
     let root = page_root(&page)?;
     lumen_web_dom::listen(&root, wants_soft_navigation(&manifest))

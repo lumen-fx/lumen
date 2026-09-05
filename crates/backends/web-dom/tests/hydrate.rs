@@ -91,8 +91,9 @@ fn prerender_with(ir: LayoutIR, signals: SignalEnv) -> Element {
         ..SiteSpec::default()
     };
     let mut warnings = Vec::new();
-    let html =
-        lumen_web::html::emit_tree(&spec.pages[0], &spec, &mut warnings).expect("the tree emits");
+    let html = lumen_web::html::emit_tree(&spec.pages[0], &spec, &mut warnings)
+        .expect("the tree emits")
+        .0;
 
     let document = web_sys::window().unwrap().document().unwrap();
     let host = document.create_element("div").unwrap();
@@ -903,8 +904,9 @@ fn a_style_on_an_element_beats_a_rule_that_targets_it() {
     document.body().unwrap().append_child(&style).unwrap();
 
     let mut warnings = Vec::new();
-    let html =
-        lumen_web::html::emit_tree(&spec.pages[0], &spec, &mut warnings).expect("the tree emits");
+    let html = lumen_web::html::emit_tree(&spec.pages[0], &spec, &mut warnings)
+        .expect("the tree emits")
+        .0;
     let host = document.create_element("div").unwrap();
     host.set_inner_html(&html);
     document.body().unwrap().append_child(&host).unwrap();

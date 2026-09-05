@@ -1,0 +1,4 @@
+<root>
+  <label id="tile" text="tile" />
+  <script src="main.cdl" />
+</root>

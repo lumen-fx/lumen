@@ -123,7 +123,7 @@ pub fn dismiss_error_banner_on_escape(
 /// and cost O(tree) per flip. See `docs/audits/theming.md` section 6.
 ///
 /// Today the function:
-/// 1. Reads the latest [`DocumentRoot`] `LumenClasses` (already mutated
+/// 1. Reads the latest [`lumen_scene::spawn::DocumentRoot`] `LumenClasses` (already mutated
 ///    in place by [`lumen_core::signals::apply_theme_signal_to_root_classes`]
 ///    or by `set_root_class`).
 /// 2. Diffs against [`RootClassesCache`]; no-ops when unchanged.
@@ -135,7 +135,10 @@ pub fn dismiss_error_banner_on_escape(
 ///    style depended on the changed classes / media features. The
 ///    parsed `Stylesheet` is reused - no disk read, no respawn.
 pub(crate) fn reapply_styles_on_root_class_change(world: &mut World) {
-    let Some(root) = world.get_resource::<DocumentRoot>().map(|r| r.0) else {
+    let Some(root) = world
+        .get_resource::<lumen_scene::spawn::DocumentRoot>()
+        .map(|r| r.0)
+    else {
         return;
     };
     // Alloc-free change gate: compare the live `Arc<str>` class list
@@ -192,31 +195,26 @@ pub(crate) fn reapply_styles_on_root_class_change(world: &mut World) {
     }
 }
 
-/// The entity the app's markup tree was spawned onto. Whoever writes the
-/// root - `set_root_class`, the OS theme follow, the class-change
-/// watcher - asks here rather than guessing from the hierarchy, so there
-/// is one answer and it does not depend on the root happening to carry a
-/// class or on hot reload being on. A respawn (hot reload) overwrites it.
-#[derive(Resource, Debug, Clone, Copy)]
-pub(crate) struct DocumentRoot(pub(crate) Entity);
-
-/// Record `root` as the [`DocumentRoot`] and make sure it carries a
+/// Make sure the root carries a
 /// [`LumenClasses`](lumen_core::components::LumenClasses) list.
 ///
 /// The spawn pass attaches that component only to elements whose markup
 /// declared a class, and a root usually declares none. Without it the OS
-/// theme follow has nothing to write `theme-dark` / `theme-light` onto,
-/// and `set_root_class` would have to create the component before it
-/// could set anything. An empty list is the root's real class list, so
-/// giving it one costs nothing and every writer finds it there.
-pub(crate) fn install_document_root(world: &mut World, root: Entity) {
+/// theme follow has nothing to write `theme-dark` / `theme-light` onto. An
+/// empty list is the class list a root that declares none has, so giving it
+/// one costs nothing and every writer finds it there.
+///
+/// A window's, and not every assembly's: the theme a class follows is the
+/// one the OS reports, and a browser page has no such reading. Writing
+/// `theme-light` onto a page's root because nothing said otherwise would
+/// hold every visitor to the light theme.
+pub(crate) fn install_root_class_list(world: &mut World, root: Entity) {
     use lumen_core::components::LumenClasses;
     if world.get::<LumenClasses>(root).is_none() {
         world
             .entity_mut(root)
             .insert(LumenClasses::from(Vec::<String>::new()));
     }
-    world.insert_resource(DocumentRoot(root));
 }
 
 /// Cached snapshot of the root entity's `LumenClasses` so

@@ -214,8 +214,29 @@ impl SpawnIntoWorld for LayoutIR {
         if let Some(sheet) = self.combined_stylesheet.clone() {
             world.insert_resource(LumenStylesheet(sheet));
         }
-        spawn_subtree(world, &self.root, None, Placeholders::Unresolved)
+        let root = spawn_subtree(world, &self.root, None, Placeholders::Unresolved);
+        install_document_root(world, root);
+        root
     }
+}
+
+/// The entity the app's markup tree was spawned onto. Whoever writes the
+/// root - `set_root_class`, the OS theme follow, the class-change
+/// watcher - asks here rather than guessing from the hierarchy, so there
+/// is one answer and it does not depend on the root happening to carry a
+/// class or on hot reload being on. A respawn (hot reload) overwrites it.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct DocumentRoot(pub Entity);
+
+/// Record `root` as the [`DocumentRoot`].
+///
+/// Every assembly records it, because everything that writes the root -
+/// `set_root_class`, the desktop's class-change watcher - asks here rather
+/// than guessing from the hierarchy. It used to be recorded by the desktop
+/// alone, which is why `set_root_class` reached nothing in a page or a
+/// server render.
+pub fn install_document_root(world: &mut World, root: Entity) {
+    world.insert_resource(DocumentRoot(root));
 }
 
 /// A compiled app spawns its tree and the fragments that tree names.

@@ -16,10 +16,12 @@ use lumen_core::components::{
     Disabled, DropHovered, InlineStyle, LumenAttributes, LumenClasses, LumenTag, Selected,
     SliderValue, TextContent, Toggleable, Visible,
 };
+use lumen_html::attrs::class_value;
 use lumen_html::contract::{
     DATA_LM_CHECKED, DATA_LM_DISABLED, DATA_LM_DRAG_OVER, DATA_LM_HIDDEN, DATA_LM_SELECTED,
 };
 use lumen_html::is_disableable;
+use lumen_html::style::style_value;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, HtmlDialogElement, HtmlInputElement, HtmlTextAreaElement};
 
@@ -44,21 +46,6 @@ fn set_attribute(element: &Element, name: &str, value: Option<&str>) {
 /// Set a boolean attribute, which is present or absent and never false.
 fn set_flag(element: &Element, name: &str, on: bool) {
     set_attribute(element, name, on.then_some(""));
-}
-
-/// The `style` value for an inline-style component, as a browser reads it.
-pub(crate) fn style_value(style: &InlineStyle) -> String {
-    let mut out = String::new();
-    for (property, value) in &style.0 {
-        if !out.is_empty() {
-            out.push(' ');
-        }
-        out.push_str(property);
-        out.push_str(": ");
-        out.push_str(value);
-        out.push(';');
-    }
-    out
 }
 
 /// An element's own text is the text node before its children, which is
@@ -116,7 +103,7 @@ pub fn project_classes(
 ) {
     for (entity, tag, classes) in &changed {
         if let Some(element) = table.element(entity) {
-            let value = crate::nodes::class_value(&tag.0, Some(classes));
+            let value = class_value(&tag.0, classes.0.iter().map(|c| &**c));
             set_attribute(element, "class", Some(&value));
         }
     }
@@ -146,7 +133,7 @@ pub fn project_inline_style(
 ) {
     for (entity, style) in &changed {
         if let Some(element) = table.element(entity) {
-            let value = style_value(style);
+            let value = style_value(&style.0);
             set_attribute(element, "style", (!value.is_empty()).then_some(&value));
         }
     }

@@ -1,0 +1,17 @@
+// Writes onto nodes rather than onto signals: a root class, an element class,
+// and an inline style through a node handle. What a build has to find in the
+// scene it snapshots.
+import "lumen.cdl";
+
+fn main() {}
+
+fn on_start() {
+    lumen::set_root_class("theme-dark");
+    lumen::set_class("tile", "lit");
+}
+
+// A node handle needs the DOM index, which is published on the first tick.
+fn on_ready() {
+    let tile = lumen::node_get_by_id("tile");
+    lumen::node_set_style(tile, "bg", "#ff0000");
+}
