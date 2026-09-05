@@ -1,5 +1,5 @@
-//! Translation wiring: locale resolution, catalogue loading, and the
-//! script-side translator hook.
+//! Locale wiring: locale resolution, catalogue loading, and the
+//! script-side translator and formatter hooks.
 //!
 //! An app's translations live in `<app_dir>/locale/<lang>.ftl`, one Fluent
 //! catalogue per locale, which `lumenc i18n extract` writes and translators
@@ -12,10 +12,18 @@
 //! resource, and scripts (`t("key")`) reach it through the process-wide
 //! [`lumen_core::i18n`] hook installed here. Both see a catalogue reload
 //! the moment it lands.
+//!
+//! Locale-aware formatting is split the same way and over the same pair of
+//! seams. [`lumen_i18n::SharedFormatter`] holds the app's ICU4X formatters;
+//! markup (`format="currency:EUR"`) reads the resource and scripts
+//! (`format_currency(...)`) reach it through the formatting hook installed
+//! here. Reading the per-app resource for markup is what keeps a process
+//! hosting two Lumen apps from formatting one app's text in the other's
+//! locale.
 
 use super::*;
 
-use lumen_i18n::{I18nPlugin, SharedI18n};
+use lumen_i18n::{I18nPlugin, SharedFormatter, SharedI18n};
 
 /// Directory holding an app's `.ftl` catalogues.
 pub fn locale_dir(app_dir: &Path) -> PathBuf {
@@ -35,9 +43,10 @@ fn catalogue_reader(world: &World) -> impl Fn(&Path) -> std::io::Result<Vec<u8>>
     }
 }
 
-/// Resolve the locale, install [`SharedI18n`] + `LocaleFormatter`, load
+/// Resolve the locale, install [`SharedI18n`] + [`SharedFormatter`], load
 /// every catalogue under `<dir>/locale`, and publish the translator every
-/// script host's `t()` builtin calls.
+/// script host's `t()` builtin calls and the formatter its `format_*`
+/// builtins call.
 pub(crate) fn register_i18n(
     app: &mut App,
     dir: &Path,
@@ -57,6 +66,11 @@ pub(crate) fn register_i18n(
 
     let for_scripts = shared.clone();
     lumen_core::i18n::set_translator(move |key| for_scripts.try_t(key));
+
+    let formatter = app.world.resource::<SharedFormatter>().clone();
+    lumen_core::i18n::set_formatter(move |spec, value| {
+        lumen_i18n::format_spec(formatter.get(), spec, value)
+    });
     Ok(())
 }
 

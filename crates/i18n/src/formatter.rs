@@ -16,12 +16,17 @@
 //!   per-locale cache.
 //! - Relative time - CLDR-driven via [`icu::experimental::relativetime::RelativeTimeFormatter`]
 //!   (round-7 upgrade: previously a hand-rolled English/German stub).
+//!
+//! [`format_spec`] is the one place a spec string becomes formatted text.
+//! Markup's `format` attribute carries the spec verbatim and the scripts'
+//! `format_*` builtins build one, so both front doors end at the same
+//! dispatch and every spec has one meaning.
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::str::FromStr;
 use std::sync::{Mutex, PoisonError};
 
-use bevy_ecs::resource::Resource;
 use fixed_decimal::FloatPrecision;
 use icu::calendar::Date;
 use icu::datetime::DateTimeFormatter;
@@ -102,13 +107,70 @@ impl YmdHms {
     }
 }
 
-/// Holds ICU4X formatters for one locale. Stored as a bevy_ecs
-/// [`Resource`] by [`crate::I18nPlugin`].
+impl FromStr for YmdHms {
+    type Err = FormatterError;
+
+    /// Parse `YYYY-MM-DD`, optionally followed by `T` or a space and
+    /// `HH:MM[:SS]`.
+    ///
+    /// A fractional-seconds part and a trailing zone designator (`Z`,
+    /// `+HH:MM`, `-HH:MM`) are accepted and discarded, so an RFC-3339
+    /// timestamp from an API parses. `YmdHms` carries no zone and no
+    /// formatter converts one, so the calendar fields are formatted
+    /// exactly as they were written.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        let (date, clock) = match s.find(['T', 't', ' ']) {
+            Some(at) => (&s[..at], Some(s[at + 1..].trim())),
+            None => (s, None),
+        };
+        let ymd: Vec<&str> = date.split('-').collect();
+        let [year, month, day] = ymd[..] else {
+            return Err(FormatterError::Date(format!("not a YYYY-MM-DD date: {s}")));
+        };
+        let mut out = Self::date(
+            year.parse().map_err(|_| bad_field("year", s))?,
+            month.parse().map_err(|_| bad_field("month", s))?,
+            day.parse().map_err(|_| bad_field("day", s))?,
+        );
+        let Some(clock) = clock else {
+            return Ok(out);
+        };
+        // Everything from the zone designator on is dropped, then the
+        // fractional part: neither reaches the calendar fields.
+        let zoneless = match clock.find(['Z', 'z', '+']).or_else(|| clock.rfind('-')) {
+            Some(at) => &clock[..at],
+            None => clock,
+        };
+        let hms: Vec<&str> = zoneless
+            .split('.')
+            .next()
+            .unwrap_or(zoneless)
+            .trim()
+            .split(':')
+            .collect();
+        let (hour, minute, second) = match hms[..] {
+            [h, m] => (h, m, "0"),
+            [h, m, sec] => (h, m, sec),
+            _ => return Err(FormatterError::Date(format!("not an HH:MM[:SS] time: {s}"))),
+        };
+        out.hour = hour.parse().map_err(|_| bad_field("hour", s))?;
+        out.minute = minute.parse().map_err(|_| bad_field("minute", s))?;
+        out.second = second.parse().map_err(|_| bad_field("second", s))?;
+        Ok(out)
+    }
+}
+
+fn bad_field(field: &str, input: &str) -> FormatterError {
+    FormatterError::Date(format!("bad {field} in {input}"))
+}
+
+/// Holds ICU4X formatters for one locale. [`crate::I18nPlugin`] builds
+/// one at startup and installs it behind a [`crate::SharedFormatter`].
 ///
 /// All formatters share `lang`; switching locales means
-/// re-constructing the resource (cheap - each `try_new` is a hash
-/// lookup against the baked-in CLDR data plus a few small allocations).
-#[derive(Resource)]
+/// re-constructing them (cheap - each `try_new` is a hash lookup
+/// against the baked-in CLDR data plus a few small allocations).
 pub struct LocaleFormatter {
     /// Active locale.
     pub lang: LanguageIdentifier,
@@ -342,6 +404,40 @@ impl LocaleFormatter {
     }
 }
 
+/// Format `value` the way `spec` asks for, in `fmt`'s locale.
+///
+/// The spec set, closed:
+///
+/// - `number` - `value` is a decimal number.
+/// - `currency:<code>` - `value` is a decimal amount, `<code>` an
+///   ISO-4217 currency code (`currency:EUR`).
+/// - `date` / `time` / `datetime` - `value` is `YYYY-MM-DD`, optionally
+///   with a time; see [`YmdHms`]'s `FromStr` for what it accepts and
+///   what it discards.
+/// - `relative` - `value` is whole seconds from now, past negative.
+///
+/// A spec outside that set, or a value the spec cannot parse, is `None`.
+/// Every caller shows the value unchanged then, the way an unresolved
+/// translation key shows itself: a mistyped spec must not blank an
+/// element, and neither must data that is briefly the wrong shape.
+pub fn format_spec(fmt: &LocaleFormatter, spec: &str, value: &str) -> Option<String> {
+    let value = value.trim();
+    match spec.trim() {
+        "number" => Some(fmt.format_number(value.parse().ok()?)),
+        "date" => fmt.format_date(value.parse().ok()?).ok(),
+        "time" => fmt.format_time(value.parse().ok()?).ok(),
+        "datetime" => fmt.format_datetime(value.parse().ok()?).ok(),
+        "relative" => Some(fmt.format_relative(value.parse().ok()?)),
+        other => {
+            let code = other.strip_prefix("currency:")?.trim();
+            if code.is_empty() {
+                return None;
+            }
+            Some(fmt.format_currency(value.parse().ok()?, code))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,13 +562,102 @@ mod tests {
 
     #[test]
     fn relative_time_spanish_now_works_too() {
-        // Round-7 win: not just en + de anymore. Any of CLDR's 700+
-        // locales work because the formatter is real, not a stub.
+        // Any of CLDR's locales format, not just en + de.
         let f = LocaleFormatter::new(lang("es-ES"));
         let s = f.format_relative(-3600 * 2);
         assert!(
             s.contains('h') || s.contains("hora"),
             "es-ES hour past: got {s}"
+        );
+    }
+
+    #[test]
+    fn parses_dates_datetimes_and_zoned_timestamps() {
+        assert_eq!(
+            "2024-06-15".parse::<YmdHms>().unwrap(),
+            YmdHms::date(2024, 6, 15)
+        );
+        assert_eq!(
+            "2024-06-15T09:30".parse::<YmdHms>().unwrap(),
+            YmdHms::datetime(2024, 6, 15, 9, 30, 0)
+        );
+        assert_eq!(
+            "2024-06-15 09:30:45".parse::<YmdHms>().unwrap(),
+            YmdHms::datetime(2024, 6, 15, 9, 30, 45)
+        );
+        // The fraction and the zone are dropped, so the calendar fields
+        // are what the timestamp wrote and nothing is converted.
+        assert_eq!(
+            "2024-06-15T09:30:45.250Z".parse::<YmdHms>().unwrap(),
+            YmdHms::datetime(2024, 6, 15, 9, 30, 45)
+        );
+        assert_eq!(
+            "2024-06-15T09:30:45+02:00".parse::<YmdHms>().unwrap(),
+            YmdHms::datetime(2024, 6, 15, 9, 30, 45)
+        );
+        assert_eq!(
+            "2024-06-15T09:30:45-05:00".parse::<YmdHms>().unwrap(),
+            YmdHms::datetime(2024, 6, 15, 9, 30, 45)
+        );
+    }
+
+    #[test]
+    fn unparseable_dates_error() {
+        assert!("not a date".parse::<YmdHms>().is_err());
+        assert!("2024-06".parse::<YmdHms>().is_err());
+        assert!("2024-06-15T09".parse::<YmdHms>().is_err());
+    }
+
+    #[test]
+    fn format_spec_covers_the_whole_set() {
+        let de = LocaleFormatter::new(lang("de-DE"));
+        assert_eq!(
+            format_spec(&de, "number", "12345.678").unwrap(),
+            de.format_number(12_345.678)
+        );
+        assert_eq!(
+            format_spec(&de, "currency:EUR", "1234.5").unwrap(),
+            de.format_currency(1234.5, "EUR")
+        );
+        assert_eq!(
+            format_spec(&de, "date", "2024-06-15").unwrap(),
+            de.format_date(YmdHms::date(2024, 6, 15)).unwrap()
+        );
+        assert_eq!(
+            format_spec(&de, "time", "2024-06-15T09:30:45").unwrap(),
+            de.format_time(YmdHms::datetime(2024, 6, 15, 9, 30, 45))
+                .unwrap()
+        );
+        assert_eq!(
+            format_spec(&de, "datetime", "2024-06-15T09:30:45").unwrap(),
+            de.format_datetime(YmdHms::datetime(2024, 6, 15, 9, 30, 45))
+                .unwrap()
+        );
+        assert_eq!(
+            format_spec(&de, "relative", "-7200").unwrap(),
+            de.format_relative(-7200)
+        );
+    }
+
+    #[test]
+    fn format_spec_declines_a_bad_spec_or_value() {
+        let f = LocaleFormatter::new(lang("en-US"));
+        assert_eq!(format_spec(&f, "wat", "hello"), None);
+        assert_eq!(format_spec(&f, "currency:", "1234.5"), None);
+        assert_eq!(format_spec(&f, "number", "not a number"), None);
+        assert_eq!(format_spec(&f, "date", "not a date"), None);
+        // Feb 30 parses as a triple and then fails the calendar.
+        assert_eq!(format_spec(&f, "date", "2024-02-30"), None);
+        assert_eq!(format_spec(&f, "relative", "soon"), None);
+    }
+
+    #[test]
+    fn format_spec_reads_the_locale() {
+        let en = LocaleFormatter::new(lang("en-US"));
+        let de = LocaleFormatter::new(lang("de-DE"));
+        assert_ne!(
+            format_spec(&en, "number", "1234.5"),
+            format_spec(&de, "number", "1234.5")
         );
     }
 

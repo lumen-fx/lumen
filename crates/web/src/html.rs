@@ -17,13 +17,18 @@
 //! halves of the web target share, so the page carries the value rather than
 //! the braces and the runtime that builds the same element arrives at the same
 //! string.
+//!
+//! Text carrying a `format` is written for the locale this tree is emitted
+//! in, the way `translatable` text is: the document a browser loads already
+//! says the formatted string, and nothing re-formats it there.
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::BTreeSet;
 
 use lumen_html::contract::{DATA_LM, DATA_LM_HIDDEN, DATA_LM_SELECTED, DIALOG_OPEN, NodePath};
 use lumen_html::style::{Emission, rewrite_property};
 use lumen_html::{escape_attr, escape_text, html_attrs, html_tag_for};
+use lumen_i18n::{LanguageIdentifier, LocaleFormatter};
 use lumen_ir::css::computed_style_map;
 use lumen_ir::fragment::FRAGMENT_TAG;
 use lumen_ir::interpolate::{Scope, substitute_attrs, substitute_element};
@@ -53,8 +58,29 @@ struct Walk<'a> {
     keys: Vec<String>,
     entry: &'a str,
     seen: BTreeSet<String>,
+    /// The locale this tree is emitted in, which is the locale a `format`
+    /// renders for.
+    locale: &'a str,
+    /// The formatters for that locale, built the first time an element
+    /// asks for them. A page that formats nothing loads no ICU data.
+    formatter: &'a OnceCell<LocaleFormatter>,
     /// Where the page could not be written the way the app meant it.
     warnings: &'a mut Vec<String>,
+}
+
+impl<'a> Walk<'a> {
+    /// The locale's formatters. A locale tag that does not parse formats
+    /// as `en-US`, which is the locale `LocaleFormatter` itself falls back
+    /// to when its data will not load.
+    fn formatter(&self) -> &'a LocaleFormatter {
+        self.formatter.get_or_init(|| {
+            let lang: LanguageIdentifier = self
+                .locale
+                .parse()
+                .unwrap_or_else(|_| "en-US".parse().expect("en-US is valid"));
+            LocaleFormatter::new(lang)
+        })
+    }
 }
 
 /// Write the page's element tree, starting at the page root.
@@ -65,6 +91,7 @@ pub fn emit_tree(
 ) -> Result<String, EmitError> {
     let mut out = String::new();
     let base = urls::normalize_base(&spec.web.base_path);
+    let formatter = OnceCell::new();
     let mut walk = Walk {
         page: &page.key,
         signals: &page.signals,
@@ -75,6 +102,8 @@ pub fn emit_tree(
         keys: spec.keys(),
         entry: &spec.web.entry,
         seen: BTreeSet::new(),
+        locale: &spec.locale.locale,
+        formatter: &formatter,
         warnings,
     };
     emit_element(&mut out, &page.ir.root, &NodePath::root(), &mut walk)?;
@@ -129,7 +158,8 @@ fn emit_element(
     // with. An element whose bindings the state answers nothing for is emitted
     // from its own attributes, which is what leaves the authored fallback in
     // the page.
-    let bound = bindings::resolved(ir_tag, own, walk.signals);
+    let formatter = own.format.as_ref().map(|_| walk.formatter());
+    let bound = bindings::resolved(ir_tag, own, walk.signals, formatter);
     let attrs = bound.as_ref().unwrap_or(own);
 
     let mut hidden = false;

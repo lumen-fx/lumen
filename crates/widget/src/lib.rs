@@ -249,6 +249,10 @@ pub trait Widget: Sized + Send + Sync + 'static {
 mod tests {
     use super::*;
 
+    // The tag set is process-global and these two size it, so a
+    // registration from one must not land inside the other's window.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn attributes_round_trip() {
         let mut a = Attributes::new();
@@ -270,6 +274,7 @@ mod tests {
 
     #[test]
     fn an_owned_tag_registers_once_and_is_accepted() {
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         assert!(!is_widget_tag_registered("owned-test-tag"));
         register_widget_tag_owned(&String::from("owned-test-tag"));
         assert!(is_widget_tag_registered("owned-test-tag"));
@@ -282,6 +287,7 @@ mod tests {
 
     #[test]
     fn two_threads_registering_one_tag_leak_one_string() {
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         // The set is checked before the lock is taken, so two callers can
         // both find the tag absent. Only one of them may put it in.
         let before = registered_widget_tags().len();

@@ -3026,6 +3026,26 @@ fn apply_attribute(
             }
             attrs.translatable = Some(trimmed.to_string());
         }
+        // Locale formatting. The value is a spec (`number`,
+        // `currency:EUR`, `date`, `time`, `datetime`, `relative`) that
+        // the runtime resolves against the app's locale. Which specs
+        // exist is `lumen-i18n`'s to say and the compiler does not link
+        // it on every path, so an unknown spec is not a parse error: it
+        // leaves the text as written, the way an unparseable value does.
+        // Empty is an error, the same as an empty catalogue key.
+        "format" => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(bad(
+                    tag,
+                    name,
+                    value,
+                    "format attribute requires a spec (e.g. \"number\" or \"currency:EUR\")"
+                        .to_string(),
+                ));
+            }
+            attrs.format = Some(trimmed.to_string());
+        }
         // Window / document metadata read straight off `<root>` in
         // `parse_html` before this walk: `skin` selects the user-agent
         // stylesheet, `frameless` drops the OS title bar. Neither is a

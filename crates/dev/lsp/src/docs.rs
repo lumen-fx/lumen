@@ -150,6 +150,7 @@ pub const ATTRS: &[&str] = &[
     "template",
     // i18n
     "translatable",
+    "format",
     // misc
     "frameless",
     "skin",
@@ -291,6 +292,9 @@ pub fn attr_doc(attr: &str) -> Option<&'static str> {
             "**`translatable`** - catalogue key. The element's text is looked up in the \
 app's active locale; `lumenc i18n extract` collects the key into `locale/<lang>.ftl`. \
 Falls back to the authored `text`, then to the key itself."
+        }
+        "format" => {
+            "**`format`** - `number` | `currency:<code>` | `date` | `time` | `datetime` | `relative`. Renders the element's text for the app's locale: a number, an amount in an ISO-4217 currency, a `YYYY-MM-DD[THH:MM[:SS]]` date, or seconds from now. A spec that is not one of these, or text the spec cannot read, leaves the text alone."
         }
         "id" => "**`id`** - string. Emits a `LumenId` marker for lookup.",
         "class" => "**`class`** - whitespace-separated class names for CSS matching.",
