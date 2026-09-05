@@ -669,6 +669,393 @@ fn a_dialog_the_browser_dismisses_takes_its_signal_with_it() {
     assert!(!dialog.open(), "and nothing showed it again");
 }
 
+/// An app with the pipeline a key runs through, which is the desktop's:
+/// `lumen-input`'s focus router and key routing, and the widget behaviour in
+/// `lumen-primitives`. `lumen-portable` assembles a browser app from the same
+/// parts, so what a forwarded key does here is what it does in a page.
+fn hydrate_interactive(ir: LayoutIR, root: Element) -> App {
+    let mut app = App::new();
+    app.extract_fns.clear();
+    app.world.init_resource::<PropertyStore>();
+    let root_entity = ir.spawn_into(&mut app.world);
+    app.add_plugin(WebDomPlugin { root, root_entity });
+    app.add_plugin(lumen_input::InputPlugin { clipboard: false });
+    app.add_plugin(lumen_primitives::ControlsPlugin);
+    app.add_plugin(lumen_primitives::TabsPlugin);
+    app.add_systems(TickStage::Systems, spawn::reconcile_if_blocks);
+    app.add_systems(
+        TickStage::Input,
+        spawn::close_dialogs_on_escape.after(lumen_input::cancel_press_on_escape),
+    );
+    app.tick();
+    app
+}
+
+/// Dispatch a bubbling `KeyboardEvent` of `kind` at `target`, the way a
+/// visitor's keystroke arrives at whatever holds focus.
+///
+/// An event a script dispatches is untrusted, so the browser performs none
+/// of its own default actions for it: it does not type into a field, click a
+/// button, or step a range. A test that needs the browser's half raises it
+/// alongside, the same way the tests above raise a `click` or an `input`.
+fn dispatch_key(target: &Element, kind: &str, key: &str, ctrl: bool) {
+    let init = web_sys::KeyboardEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    init.set_key(key);
+    init.set_ctrl_key(ctrl);
+    let event = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict(kind, &init).unwrap();
+    target.dispatch_event(&event).unwrap();
+}
+
+/// Give an element the browser's own focus, which is how focus arrives in a
+/// page: the `focusin` listener mirrors it onto the world.
+fn focus(element: &Element) {
+    element
+        .dyn_ref::<web_sys::HtmlElement>()
+        .expect("the element takes focus")
+        .focus()
+        .unwrap();
+}
+
+/// A strip of three tab buttons over the `active` signal.
+fn tab_strip_tree() -> LayoutIR {
+    let button = |value: &str| {
+        let mut button = element("button", Some(value), Vec::new());
+        button.attrs.tab_strip = Some(("active".to_string(), value.to_string()));
+        button
+    };
+    LayoutIR {
+        root: element(
+            "row",
+            None,
+            vec![button("one"), button("two"), button("three")],
+        ),
+        ..LayoutIR::default()
+    }
+}
+
+/// The case #275 names: the arrows between tabs. Three tabs, so a key
+/// delivered twice would overshoot rather than land where one press lands.
+#[wasm_bindgen_test]
+fn an_arrow_on_a_focused_tab_moves_the_strip_and_takes_the_page_s_focus_with_it() {
+    let root = prerender(tab_strip_tree());
+    let mut app = hydrate_interactive(tab_strip_tree(), root.clone());
+    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+    set_signal(&mut app, "active", "one");
+
+    let buttons = root.query_selector_all("button").unwrap();
+    let first: Element = buttons.item(0).unwrap().unchecked_into();
+    let second: Element = buttons.item(1).unwrap().unchecked_into();
+    focus(&first);
+    app.tick();
+
+    dispatch_key(&first, "keydown", "ArrowRight", false);
+    app.tick();
+
+    assert_eq!(
+        app.world
+            .resource::<PropertyStore>()
+            .get_global_str("active")
+            .as_deref(),
+        Some("two"),
+        "one press moves the strip on by one tab"
+    );
+    app.tick();
+    assert!(
+        second.is_same_node(
+            root.owner_document()
+                .and_then(|d| d.active_element())
+                .as_ref()
+                .map(AsRef::as_ref)
+        ),
+        "and the focus ring follows it, so the next keystroke is routed at \
+         the tab the world has focused"
+    );
+}
+
+/// A dropdown panel, which is the `<if>` block over the synthetic open
+/// signal the parser writes for one.
+fn dropdown_panel_tree() -> LayoutIR {
+    let mut panel = element("if", None, vec![element("label", Some("item"), vec![])]);
+    panel.attrs.if_signal = Some("__dropdown_open:menu".to_string());
+    panel.attrs.if_eq = Some("true".to_string());
+    panel.attrs.if_mode = IfModeSpec::Hide;
+    LayoutIR {
+        root: element("root", None, vec![panel]),
+        ..LayoutIR::default()
+    }
+}
+
+#[wasm_bindgen_test]
+fn escape_closes_an_open_panel() {
+    let root = prerender(dropdown_panel_tree());
+    let mut app = hydrate_interactive(dropdown_panel_tree(), root.clone());
+    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+    set_signal(&mut app, "__dropdown_open:menu", "true");
+
+    dispatch_key(&root, "keydown", "Escape", false);
+    app.tick();
+
+    assert_eq!(
+        app.world
+            .resource::<PropertyStore>()
+            .get_global_bool("__dropdown_open:menu"),
+        Some(false),
+        "Escape reaches the app and closes the panel it has open"
+    );
+}
+
+/// A page whose whole content is one single-line text entry.
+fn entry_tree() -> LayoutIR {
+    let mut entry = element("input", None, Vec::new());
+    entry.attrs.text = Some("ab".to_string());
+    LayoutIR {
+        root: element("root", None, vec![entry]),
+        ..LayoutIR::default()
+    }
+}
+
+#[wasm_bindgen_test]
+fn a_character_typed_into_a_field_is_the_browser_s_edit_and_not_a_second_one() {
+    let root = prerender(entry_tree());
+    let mut app = hydrate_interactive(entry_tree(), root.clone());
+    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+
+    let field: web_sys::HtmlInputElement = root
+        .query_selector("input")
+        .unwrap()
+        .expect("the emitter wrote an input")
+        .unchecked_into();
+    focus(&field);
+    app.tick();
+
+    dispatch_key(&field, "keydown", "c", false);
+    app.tick();
+    assert_eq!(
+        text_of(&mut app),
+        "ab",
+        "the key alone changes nothing: the browser is the editor here, and \
+         `type_into_focused` writing the same character would double it"
+    );
+
+    // The browser's half of a real keystroke, which is where the edit
+    // reaches the world from.
+    field.set_value("abc");
+    let typed = web_sys::Event::new_with_event_init_dict("input", &{
+        let init = web_sys::EventInit::new();
+        init.set_bubbles(true);
+        init
+    })
+    .unwrap();
+    field.dispatch_event(&typed).unwrap();
+    app.tick();
+    assert_eq!(
+        text_of(&mut app),
+        "abc",
+        "and the value the browser settled on is what the world takes"
+    );
+}
+
+#[wasm_bindgen_test]
+fn enter_in_a_single_line_field_commits_it() {
+    let root = prerender(entry_tree());
+    let mut app = hydrate_interactive(entry_tree(), root.clone());
+    app.world.init_resource::<Committed>();
+    app.add_systems(
+        TickStage::Systems,
+        record_commits.after(lumen_input::activate_focused_on_enter),
+    );
+    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+
+    let field = root
+        .query_selector("input")
+        .unwrap()
+        .expect("the emitter wrote an input");
+    focus(&field);
+    app.tick();
+
+    dispatch_key(&field, "keydown", "Enter", false);
+    app.tick();
+
+    assert_eq!(
+        app.world.resource::<Committed>().0.as_deref(),
+        Some("ab"),
+        "Enter mutates no buffer, so it reaches the app and raises the \
+         commit behind a script's `change` and `submit`"
+    );
+}
+
+#[wasm_bindgen_test]
+fn enter_on_a_button_clicks_it_once() {
+    let ir = LayoutIR {
+        root: element("root", None, vec![element("button", Some("go"), vec![])]),
+        ..LayoutIR::default()
+    };
+    let root = prerender(ir.clone());
+    let mut app = hydrate_interactive(ir, root.clone());
+    app.world.init_resource::<ClickCount>();
+    app.add_systems(
+        TickStage::Systems,
+        count_clicks.after(lumen_input::activate_focused_on_enter),
+    );
+    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+
+    let button: web_sys::HtmlElement = root
+        .query_selector("button")
+        .unwrap()
+        .expect("the emitter wrote a button")
+        .unchecked_into();
+    focus(&button);
+    app.tick();
+
+    dispatch_key(&button, "keydown", "Enter", false);
+    // What the browser does with a trusted Enter on a focused button, and
+    // what an untrusted one leaves to the test.
+    button.click();
+    dispatch_key(&button, "keyup", "Enter", false);
+    app.tick();
+
+    assert_eq!(
+        app.world.resource::<ClickCount>().0,
+        1,
+        "the browser's own click is the click; forwarding Enter as well \
+         would have `activate_focused_on_enter` raise a second one"
+    );
+}
+
+#[wasm_bindgen_test]
+fn an_arrow_on_a_range_steps_it_once() {
+    let mut slider = element("slider", None, Vec::new());
+    slider.attrs.min = Some(0.0);
+    slider.attrs.max = Some(100.0);
+    slider.attrs.value = Some(42.0);
+    let ir = LayoutIR {
+        root: element("root", None, vec![slider]),
+        ..LayoutIR::default()
+    };
+    let root = prerender(ir.clone());
+    let mut app = hydrate_interactive(ir, root.clone());
+    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+
+    let range: web_sys::HtmlInputElement = root
+        .query_selector("input[type=range]")
+        .unwrap()
+        .expect("the emitter wrote a range input")
+        .unchecked_into();
+    focus(&range);
+    app.tick();
+
+    dispatch_key(&range, "keydown", "ArrowRight", false);
+    // The step a trusted arrow takes, and the `input` the browser raises
+    // for it.
+    range.set_value("43");
+    let stepped = web_sys::Event::new_with_event_init_dict("input", &{
+        let init = web_sys::EventInit::new();
+        init.set_bubbles(true);
+        init
+    })
+    .unwrap();
+    range.dispatch_event(&stepped).unwrap();
+    app.tick();
+
+    assert_eq!(
+        slider_value(&mut app),
+        43.0,
+        "one press is one step: `move_slider_on_keys` stepping the same \
+         arrow would put it at 44"
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_shortcut_reaches_the_app_from_inside_a_field_but_an_editing_chord_does_not() {
+    let root = prerender(entry_tree());
+    let mut app = hydrate_interactive(entry_tree(), root.clone());
+    app.world.init_resource::<KeysSeen>();
+    app.add_systems(TickStage::Systems, record_keys);
+    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+
+    let field = root
+        .query_selector("input")
+        .unwrap()
+        .expect("the emitter wrote an input");
+    focus(&field);
+    app.tick();
+
+    dispatch_key(&field, "keydown", "k", true);
+    dispatch_key(&field, "keydown", "z", true);
+    app.tick();
+
+    let seen = &app.world.resource::<KeysSeen>().0;
+    assert!(
+        seen.contains(&"k".to_string()),
+        "Ctrl+K in a field is the app's shortcut and reaches it"
+    );
+    assert!(
+        !seen.contains(&"z".to_string()),
+        "Ctrl+Z is the browser's own undo, which it has already applied"
+    );
+}
+
+/// The text the tree's one entry holds.
+fn text_of(app: &mut App) -> String {
+    app.world
+        .query::<&TextContent>()
+        .iter(&app.world)
+        .map(|text| text.0.clone())
+        .next()
+        .expect("the tree has an entry")
+}
+
+/// Where the tree's one slider sits.
+fn slider_value(app: &mut App) -> f32 {
+    app.world
+        .query::<&SliderValue>()
+        .iter(&app.world)
+        .map(|slider| slider.value)
+        .next()
+        .expect("the tree has a slider")
+}
+
+/// The text of the last commit an entry raised.
+#[derive(Resource, Default)]
+struct Committed(Option<String>);
+
+fn record_commits(
+    mut commits: bevy_ecs::message::MessageReader<lumen_core::input::TextInputCommitted>,
+    mut seen: ResMut<Committed>,
+) {
+    for commit in commits.read() {
+        seen.0 = Some(commit.text.clone());
+    }
+}
+
+/// How many clicks reached the world.
+#[derive(Resource, Default)]
+struct ClickCount(u32);
+
+fn count_clicks(
+    mut clicks: bevy_ecs::message::MessageReader<lumen_core::input::ClickEvent>,
+    mut count: ResMut<ClickCount>,
+) {
+    count.0 += clicks.read().count() as u32;
+}
+
+/// The characters of every key that reached the world.
+#[derive(Resource, Default)]
+struct KeysSeen(Vec<String>);
+
+fn record_keys(
+    mut keys: bevy_ecs::message::MessageReader<lumen_core::input::KeyPressed>,
+    mut seen: ResMut<KeysSeen>,
+) {
+    for key in keys.read() {
+        if let lumen_core::input::Key::Character(name) = &key.key {
+            seen.0.push(name.clone());
+        }
+    }
+}
+
 /// The entity whose text is `text`.
 fn find(app: &mut App, text: &str) -> Entity {
     app.world

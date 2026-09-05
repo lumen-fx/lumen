@@ -8,6 +8,13 @@
 //! produces, and the tab strip, the toggle and the script event driver all
 //! read it without knowing where it came from.
 //!
+//! The keys are the exception to both halves of that. They listen on the
+//! document, because a key pressed while focus sits outside the app never
+//! reaches the root, and they are filtered before they are queued: the same
+//! pipeline runs here as on the desktop, so a key the browser's own control
+//! has already acted on would be acted on twice. [`browser_handles`] is that
+//! table.
+//!
 //! A listener runs whenever the browser says so, which is never during a
 //! tick, so what it records goes on a queue the app drains at the start of
 //! the next one.
@@ -20,21 +27,25 @@
 //! call `preventDefault` or the browser refuses the `drop` that would
 //! follow).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use bevy_ecs::hierarchy::ChildOf;
 use bevy_ecs::message::MessageWriter;
 use bevy_ecs::prelude::*;
 use lumen_core::components::{DropHovered, DropTarget, SliderValue, TextContent, Toggleable};
-use lumen_core::input::{ClickEvent, FocusTracker, Focused, PointerButton};
+use lumen_core::input::{
+    ClickEvent, FocusTracker, Focused, Key, KeyPressed, KeyReleased, Modifiers, ModifiersState,
+    NamedKey, PointerButton,
+};
 use lumen_core::property_store::PropertyStore;
 use lumen_html::contract::DATA_LM;
 use lumen_scene::spawn::IfMarker;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{
-    Element, Event, HtmlAnchorElement, HtmlInputElement, HtmlTextAreaElement, MouseEvent,
+    Element, Event, EventTarget, HtmlAnchorElement, HtmlElement, HtmlInputElement,
+    HtmlTextAreaElement, KeyboardEvent, MouseEvent,
 };
 
 /// One thing the browser told us, waiting for the next tick.
@@ -87,6 +98,20 @@ enum PendingEvent {
     /// A drag left the document entirely, so every drop target's hover
     /// marker clears regardless of which one it landed on last.
     DragCancelled,
+    /// A key the browser did not already act on for the element it landed
+    /// on. No path: the key bus is global on the desktop too, and what is
+    /// routed at an entity is routed off `FocusTracker`, which the focus
+    /// events above already maintain.
+    Key {
+        /// True for `keydown`, false for `keyup`.
+        down: bool,
+        /// The key, already in Lumen's spelling.
+        key: Key,
+        /// Modifier state the browser reported on this event.
+        modifiers: Modifiers,
+        /// `KeyboardEvent.repeat`: the OS repeating a held key.
+        repeat: bool,
+    },
 }
 
 thread_local! {
@@ -102,6 +127,15 @@ thread_local! {
     /// tick. Their own queue because what they need from the world is a
     /// different set of things entirely.
     static DISMISSED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+
+    /// Whether the document already carries the key listeners.
+    ///
+    /// Everything else listens on an app's own root, so a second app in the
+    /// same page gets its own listener for it. The keys listen on the
+    /// document, which the page has one of, and they push onto the queue
+    /// above, which the page also has one of: binding them twice queues
+    /// every keystroke twice.
+    static KEYS_BOUND: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The node path of the element an event landed on, or of the nearest
@@ -383,14 +417,206 @@ fn checked_of(event: &Event) -> Option<bool> {
     matches!(input.type_().as_str(), "checkbox" | "radio").then(|| input.checked())
 }
 
+/// The `KeyboardEvent.key` name in Lumen's spelling, or nothing for a key
+/// that is not one of Lumen's at all.
+///
+/// The named keys map onto the [`NamedKey`] variants that exist, and
+/// everything else becomes a `Key::Character`: a typed grapheme ("a",
+/// "e\u{301}") and every named key with no variant of its own ("F1",
+/// "PageUp", "Control") alike. That is the convention the window backend's
+/// own key mapping follows, so a binding written once matches on both
+/// targets.
+fn lumen_key(name: &str) -> Option<Key> {
+    Some(match name {
+        "Tab" => Key::Named(NamedKey::Tab),
+        "Enter" => Key::Named(NamedKey::Enter),
+        "Escape" => Key::Named(NamedKey::Escape),
+        "Backspace" => Key::Named(NamedKey::Backspace),
+        // The browser spells the space bar as the character it types.
+        // winit spells it `Space`, and the script layer renders that back
+        // as "Space", so mapping it here is what makes `event.key` read the
+        // same in a page as it does in a window.
+        " " => Key::Named(NamedKey::Space),
+        "ArrowUp" => Key::Named(NamedKey::ArrowUp),
+        "ArrowDown" => Key::Named(NamedKey::ArrowDown),
+        "ArrowLeft" => Key::Named(NamedKey::ArrowLeft),
+        "ArrowRight" => Key::Named(NamedKey::ArrowRight),
+        "Home" => Key::Named(NamedKey::Home),
+        "End" => Key::Named(NamedKey::End),
+        "Delete" => Key::Named(NamedKey::Delete),
+        // A composing keystroke is the IME's, and the desktop routes what
+        // it produces through `ImeEvent` rather than as a key.
+        "Dead" | "Process" | "Unidentified" => return None,
+        other => Key::Character(other.to_string()),
+    })
+}
+
+/// True for the canonical named-key strings that reach the world as
+/// `Key::Character` ("Shift", "F1", "PageUp", ...): multi-char pure-ASCII
+/// words, where typed text is a single grapheme - one scalar, or a cluster
+/// containing non-ASCII. The same test `lumen-input` applies to the keys it
+/// must not type, kept here rather than exported so the dependency
+/// direction stays as it is.
+fn is_named_key_string(name: &str) -> bool {
+    name.chars().count() > 1 && name.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// The kind of control a key landed on, which is what the browser's own
+/// behaviour for that key depends on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TargetKind {
+    /// An `<input>` of a text-like type, a `<textarea>`, or a
+    /// contenteditable element: the browser is the editor.
+    Text {
+        /// Enter inserts a newline instead of doing nothing.
+        multiline: bool,
+    },
+    /// `<button>`, `<a href>`, `<summary>`: the browser fires a click of
+    /// its own for the activation keys.
+    Activatable,
+    /// `<input type=checkbox>`.
+    Toggle,
+    /// `<input type=radio>`, which the browser navigates as a `name` group.
+    Radio,
+    /// `<input type=range>`, which the browser steps itself.
+    Range,
+    /// Anything else, where no key does anything until Lumen acts on it.
+    Other,
+}
+
+/// Which of those the element an event landed on is.
+fn target_kind(event: &Event) -> TargetKind {
+    let Some(element) = event.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+        return TargetKind::Other;
+    };
+    if let Some(input) = element.dyn_ref::<HtmlInputElement>() {
+        return match input.type_().as_str() {
+            "checkbox" => TargetKind::Toggle,
+            "radio" => TargetKind::Radio,
+            "range" => TargetKind::Range,
+            "button" | "submit" | "reset" | "image" => TargetKind::Activatable,
+            // Every other type is a field with a caret in it, down to the
+            // ones that carry a picker beside it.
+            _ => TargetKind::Text { multiline: false },
+        };
+    }
+    if element.dyn_ref::<HtmlTextAreaElement>().is_some() {
+        return TargetKind::Text { multiline: true };
+    }
+    if element
+        .dyn_ref::<HtmlElement>()
+        .is_some_and(HtmlElement::is_content_editable)
+    {
+        return TargetKind::Text { multiline: true };
+    }
+    match element.tag_name().to_ascii_lowercase().as_str() {
+        "button" | "summary" => TargetKind::Activatable,
+        "a" if element.has_attribute("href") => TargetKind::Activatable,
+        _ => TargetKind::Other,
+    }
+}
+
+/// Whether the browser has already done, for this element, what Lumen's own
+/// systems would do for this key.
+///
+/// A page runs the desktop input pipeline unchanged, so a key this answers
+/// `true` for and is forwarded anyway edits a buffer the browser just
+/// edited, clicks a button it just clicked, or steps a range it just
+/// stepped. Such a key is dropped and reaches neither `KeyPressed` nor
+/// `KeyReleased`. Everything else is forwarded, which is what an app-bound
+/// shortcut, an Escape handler and the arrows between tabs need.
+fn browser_handles(key: &Key, modifiers: Modifiers, target: TargetKind) -> bool {
+    // Focus movement is the browser's, whatever the key landed on;
+    // `cycle_focus_on_tab` would move Lumen's own `Focused` somewhere else
+    // without telling the page. Nothing is lost: `dispatch_focused_keys`
+    // never forwards Tab to a script on the desktop either.
+    if matches!(key, Key::Named(NamedKey::Tab)) {
+        return true;
+    }
+    match target {
+        TargetKind::Text { multiline } => match key {
+            // The newline the browser already inserted. On a single-line
+            // field Enter mutates nothing, and forwarding it is what makes
+            // `activate_focused_on_enter` raise the commit behind a script's
+            // `change` and `submit`.
+            Key::Named(NamedKey::Enter) => multiline,
+            // Everything `type_into_focused` would write into a buffer the
+            // browser's own editor owns.
+            Key::Named(
+                NamedKey::Space
+                | NamedKey::Backspace
+                | NamedKey::Delete
+                | NamedKey::ArrowUp
+                | NamedKey::ArrowDown
+                | NamedKey::ArrowLeft
+                | NamedKey::ArrowRight
+                | NamedKey::Home
+                | NamedKey::End,
+            ) => true,
+            // The six editing chords, and no others: Ctrl+K in a field is
+            // an app's shortcut and reaches it.
+            Key::Character(name) if modifiers.ctrl || modifiers.super_ => matches!(
+                name.to_ascii_lowercase().as_str(),
+                "a" | "c" | "x" | "v" | "z" | "y"
+            ),
+            Key::Character(name) => !is_named_key_string(name),
+            // Escape, and the function keys the arm above lets through.
+            Key::Named(_) => false,
+        },
+        // The click the browser fires for itself.
+        TargetKind::Activatable => matches!(key, Key::Named(NamedKey::Enter | NamedKey::Space)),
+        // The toggle, and the click the browser raises behind it.
+        TargetKind::Toggle => matches!(key, Key::Named(NamedKey::Space)),
+        // The same, plus the browser's own navigation inside the group the
+        // emitter wrote as `name`.
+        TargetKind::Radio => matches!(
+            key,
+            Key::Named(
+                NamedKey::Space
+                    | NamedKey::ArrowUp
+                    | NamedKey::ArrowDown
+                    | NamedKey::ArrowLeft
+                    | NamedKey::ArrowRight
+            )
+        ),
+        // The step `move_slider_on_keys` would take a second time.
+        TargetKind::Range => match key {
+            Key::Named(
+                NamedKey::ArrowUp
+                | NamedKey::ArrowDown
+                | NamedKey::ArrowLeft
+                | NamedKey::ArrowRight
+                | NamedKey::Home
+                | NamedKey::End,
+            ) => true,
+            Key::Character(name) => matches!(name.as_str(), "PageUp" | "PageDown"),
+            _ => false,
+        },
+        TargetKind::Other => false,
+    }
+}
+
+/// The modifier state the browser reported on a key event.
+fn modifiers_of(event: &KeyboardEvent) -> Modifiers {
+    Modifiers {
+        shift: event.shift_key(),
+        ctrl: event.ctrl_key(),
+        alt: event.alt_key(),
+        super_: event.meta_key(),
+    }
+}
+
 /// Push `event` onto the queue.
 fn queue(event: PendingEvent) {
     QUEUE.with_borrow_mut(|queue| queue.push(event));
 }
 
 /// Attach a listener that outlives this call.
-fn on(root: &Element, kind: &str, handler: Closure<dyn FnMut(Event)>) -> Result<(), JsValue> {
-    root.add_event_listener_with_callback(kind, handler.as_ref().unchecked_ref())?;
+///
+/// The target is the app root for everything that lands on an element, and
+/// the document for the keys, which land wherever focus happens to be.
+fn on(target: &EventTarget, kind: &str, handler: Closure<dyn FnMut(Event)>) -> Result<(), JsValue> {
+    target.add_event_listener_with_callback(kind, handler.as_ref().unchecked_ref())?;
     // Handed to the browser, which owns the callback from here.
     handler.forget();
     Ok(())
@@ -403,11 +629,15 @@ fn on(root: &Element, kind: &str, handler: Closure<dyn FnMut(Event)>) -> Result<
 /// descendant that would never travel back up. A dialog's dismissal is one
 /// of those.
 fn on_capture(
-    root: &Element,
+    target: &EventTarget,
     kind: &str,
     handler: Closure<dyn FnMut(Event)>,
 ) -> Result<(), JsValue> {
-    root.add_event_listener_with_callback_and_bool(kind, handler.as_ref().unchecked_ref(), true)?;
+    target.add_event_listener_with_callback_and_bool(
+        kind,
+        handler.as_ref().unchecked_ref(),
+        true,
+    )?;
     handler.forget();
     Ok(())
 }
@@ -567,6 +797,51 @@ pub(crate) fn listen(root: &Element, soft_navigation: bool) -> Result<(), JsValu
             }) as Box<dyn FnMut(Event)>),
         )?;
     }
+    // Keys listen on the document rather than on the app root. A key
+    // pressed while focus sits on `<body>` - which is the root's own
+    // ancestor, and where focus is on a freshly loaded page - targets
+    // `<body>` and never passes the root at all, so a listener there would
+    // miss every app-wide shortcut. The desktop's key bus is global for the
+    // same reason, and what it routes at an entity it routes through
+    // `FocusTracker`.
+    //
+    // Nothing below calls `prevent_default`. Whether an app has a handler
+    // bound for a key is only knowable a tick later, when the browser will
+    // no longer take the answer, so the page keeps its own behaviour for
+    // every key that is forwarded: Space and PageDown still scroll it.
+    if let Some(document) = root.owner_document().filter(|_| !KEYS_BOUND.get()) {
+        KEYS_BOUND.set(true);
+        for (kind, down) in [("keydown", true), ("keyup", false)] {
+            on(
+                &document,
+                kind,
+                Closure::wrap(Box::new(move |event: Event| {
+                    let Some(event) = event.dyn_ref::<KeyboardEvent>() else {
+                        return;
+                    };
+                    // A keystroke the IME is still composing belongs to the
+                    // composition, which reaches the world as the `input`
+                    // event carrying the text it settles on.
+                    if event.is_composing() {
+                        return;
+                    }
+                    let Some(key) = lumen_key(&event.key()) else {
+                        return;
+                    };
+                    let modifiers = modifiers_of(event);
+                    if browser_handles(&key, modifiers, target_kind(event)) {
+                        return;
+                    }
+                    queue(PendingEvent::Key {
+                        down,
+                        key,
+                        modifiers,
+                        repeat: event.repeat(),
+                    });
+                }) as Box<dyn FnMut(Event)>),
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -577,6 +852,9 @@ pub fn drain_dom_events(
     table: NonSend<crate::nodes::NodeTable>,
     mut commands: Commands,
     mut clicks: MessageWriter<ClickEvent>,
+    mut presses: MessageWriter<KeyPressed>,
+    mut releases: MessageWriter<KeyReleased>,
+    mut modifiers_state: ResMut<ModifiersState>,
     mut texts: Query<&mut TextContent>,
     mut toggles: Query<&mut Toggleable>,
     mut sliders: Query<&mut SliderValue>,
@@ -720,6 +998,27 @@ pub fn drain_dom_events(
                     commands.entity(target).remove::<DropHovered>();
                 }
             }
+            // The browser reports the modifier state on the event itself,
+            // so there is no separate modifiers event to mirror: the
+            // resource `type_into_focused` and `activate_focused_on_enter`
+            // read is refreshed from each key as it lands.
+            PendingEvent::Key {
+                down,
+                key,
+                modifiers,
+                repeat,
+            } => {
+                modifiers_state.0 = modifiers;
+                if down {
+                    presses.write(KeyPressed {
+                        key,
+                        modifiers,
+                        repeat,
+                    });
+                } else {
+                    releases.write(KeyReleased { key, modifiers });
+                }
+            }
         }
     }
 }
@@ -742,6 +1041,215 @@ pub fn drain_dismissed_dialogs(
         };
         if let Ok(branch) = branches.get(entity) {
             store.set_global_str(branch.signal_name.as_str(), "");
+        }
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::{Key, Modifiers, NamedKey, TargetKind, browser_handles, lumen_key};
+
+    /// No modifier held, which is how a key arrives unless a test says
+    /// otherwise.
+    fn plain() -> Modifiers {
+        Modifiers::default()
+    }
+
+    /// Ctrl held, the chord an app's shortcut and the browser's own editing
+    /// commands share.
+    fn ctrl() -> Modifiers {
+        Modifiers {
+            ctrl: true,
+            ..Modifiers::default()
+        }
+    }
+
+    #[test]
+    fn a_named_key_maps_onto_the_variant_of_the_same_name() {
+        assert_eq!(lumen_key("Enter"), Some(Key::Named(NamedKey::Enter)));
+        assert_eq!(
+            lumen_key("ArrowRight"),
+            Some(Key::Named(NamedKey::ArrowRight))
+        );
+        assert_eq!(lumen_key("Escape"), Some(Key::Named(NamedKey::Escape)));
+    }
+
+    /// The browser spells the space bar as the character it types; every
+    /// consumer on both targets reads it as `Space`.
+    #[test]
+    fn the_space_bar_arrives_as_the_named_key() {
+        assert_eq!(lumen_key(" "), Some(Key::Named(NamedKey::Space)));
+    }
+
+    #[test]
+    fn a_typed_grapheme_is_a_character() {
+        assert_eq!(lumen_key("a"), Some(Key::Character("a".to_string())));
+        assert_eq!(
+            lumen_key("e\u{301}"),
+            Some(Key::Character("e\u{301}".to_string()))
+        );
+    }
+
+    /// The same convention the window backend uses for a named key with no
+    /// `NamedKey` variant, so one binding matches on both targets.
+    #[test]
+    fn a_named_key_without_a_variant_keeps_its_w3c_name() {
+        assert_eq!(lumen_key("F1"), Some(Key::Character("F1".to_string())));
+        assert_eq!(
+            lumen_key("PageUp"),
+            Some(Key::Character("PageUp".to_string()))
+        );
+        assert_eq!(
+            lumen_key("Control"),
+            Some(Key::Character("Control".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_composition_key_is_not_a_lumen_key_at_all() {
+        assert_eq!(lumen_key("Dead"), None);
+        assert_eq!(lumen_key("Process"), None);
+        assert_eq!(lumen_key("Unidentified"), None);
+    }
+
+    #[test]
+    fn tab_is_the_browser_s_on_every_element() {
+        for target in [
+            TargetKind::Other,
+            TargetKind::Text { multiline: false },
+            TargetKind::Activatable,
+        ] {
+            assert!(browser_handles(&Key::Named(NamedKey::Tab), plain(), target));
+        }
+    }
+
+    /// The doubled-character case: the browser edited the field, the
+    /// `input` listener carried the result back, and `type_into_focused`
+    /// would write the same edit a second time.
+    #[test]
+    fn a_field_s_own_editing_keys_stay_with_the_field() {
+        let field = TargetKind::Text { multiline: false };
+        for key in [
+            Key::Character("a".to_string()),
+            Key::Named(NamedKey::Space),
+            Key::Named(NamedKey::Backspace),
+            Key::Named(NamedKey::Delete),
+            Key::Named(NamedKey::ArrowLeft),
+            Key::Named(NamedKey::Home),
+            Key::Named(NamedKey::End),
+        ] {
+            assert!(browser_handles(&key, plain(), field), "{key:?}");
+        }
+        for chord in ["a", "c", "x", "v", "z", "y", "Z"] {
+            assert!(
+                browser_handles(&Key::Character(chord.to_string()), ctrl(), field),
+                "Ctrl+{chord}"
+            );
+        }
+    }
+
+    /// What an app binds inside a field: a shortcut, an Escape handler, and
+    /// the commit `activate_focused_on_enter` raises for a single-line
+    /// entry.
+    #[test]
+    fn a_field_still_lets_an_app_s_own_keys_through() {
+        let field = TargetKind::Text { multiline: false };
+        assert!(!browser_handles(
+            &Key::Character("k".to_string()),
+            ctrl(),
+            field
+        ));
+        assert!(!browser_handles(
+            &Key::Named(NamedKey::Escape),
+            plain(),
+            field
+        ));
+        assert!(!browser_handles(
+            &Key::Character("F1".to_string()),
+            plain(),
+            field
+        ));
+        assert!(!browser_handles(
+            &Key::Named(NamedKey::Enter),
+            plain(),
+            field
+        ));
+    }
+
+    /// A textarea is the one field where Enter is an edit.
+    #[test]
+    fn enter_in_a_multiline_field_is_the_newline_the_browser_inserted() {
+        assert!(browser_handles(
+            &Key::Named(NamedKey::Enter),
+            plain(),
+            TargetKind::Text { multiline: true }
+        ));
+    }
+
+    /// Two clicks per keystroke is what forwarding these would give: the
+    /// browser fires its own click on a `<button>`, and
+    /// `activate_focused_on_enter` synthesizes another.
+    #[test]
+    fn the_activation_keys_stay_with_the_control_that_fires_a_click() {
+        for key in [Key::Named(NamedKey::Enter), Key::Named(NamedKey::Space)] {
+            assert!(browser_handles(&key, plain(), TargetKind::Activatable));
+        }
+        assert!(browser_handles(
+            &Key::Named(NamedKey::Space),
+            plain(),
+            TargetKind::Toggle
+        ));
+        assert!(!browser_handles(
+            &Key::Named(NamedKey::Escape),
+            plain(),
+            TargetKind::Activatable
+        ));
+    }
+
+    /// The browser owns arrow navigation inside a `name` group, so
+    /// `radio_group_keys` would move the selection a second time.
+    #[test]
+    fn a_radio_group_s_arrows_stay_with_the_browser() {
+        assert!(browser_handles(
+            &Key::Named(NamedKey::ArrowDown),
+            plain(),
+            TargetKind::Radio
+        ));
+    }
+
+    /// Two steps per press is what forwarding these would give:
+    /// `move_slider_on_keys` steps a value the browser already stepped.
+    #[test]
+    fn a_range_s_stepping_keys_stay_with_the_browser() {
+        for key in [
+            Key::Named(NamedKey::ArrowRight),
+            Key::Named(NamedKey::Home),
+            Key::Character("PageUp".to_string()),
+        ] {
+            assert!(browser_handles(&key, plain(), TargetKind::Range), "{key:?}");
+        }
+        assert!(!browser_handles(
+            &Key::Named(NamedKey::Enter),
+            plain(),
+            TargetKind::Range
+        ));
+    }
+
+    /// Everything outside a native control reaches the app, which is what
+    /// the arrows between tabs and an Escape that closes a panel are.
+    #[test]
+    fn nothing_is_withheld_from_an_element_the_browser_does_nothing_for() {
+        for key in [
+            Key::Named(NamedKey::ArrowRight),
+            Key::Named(NamedKey::Escape),
+            Key::Named(NamedKey::Enter),
+            Key::Named(NamedKey::Space),
+            Key::Character("k".to_string()),
+        ] {
+            assert!(
+                !browser_handles(&key, plain(), TargetKind::Other),
+                "{key:?}"
+            );
         }
     }
 }

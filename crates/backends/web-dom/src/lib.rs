@@ -8,7 +8,7 @@
 //!
 //! The document is already there when this starts. `lumenc web` prerendered
 //! it from the same IR the runtime loads, so the first thing that happens is
-//! not a build but an ADOPTION: the walk finds the element that carries each
+//! not a build but an adoption: the walk finds the element that carries each
 //! node's path and binds the entity to it, writing nothing. An element the
 //! walk cannot find is built from the entity instead. That second path is not
 //! a fallback bolted on the side; it is what mounts a `<for>` row, an `<if>`
@@ -16,10 +16,10 @@
 //! emitted without a prerender at all.
 //!
 //! Events run the other way and stay in Lumen's hands. The browser is the
-//! event SOURCE: one delegated listener per type on the app root turns a DOM
-//! event into the typed message the desktop input pipeline would have
-//! produced, and everything downstream (the widget primitives, the script
-//! event driver) runs unchanged.
+//! event source: one delegated listener per type turns a DOM event into the
+//! typed message the desktop input pipeline would have produced, and
+//! everything downstream (the widget primitives, the script event driver)
+//! runs unchanged.
 
 #![warn(missing_docs)]
 
@@ -61,10 +61,17 @@ impl Plugin for WebDomPlugin {
         app.world.init_resource::<PropertyStore>();
 
         // Reading the browser comes first, so a click this frame is a message
-        // the app's own systems see this frame.
+        // the app's own systems see this frame. After the message-buffer
+        // cycle, which takes exclusive world access to retire every
+        // registered message type: an executor is free to run two
+        // conflicting unordered systems in either order, and writing before
+        // the cycle puts this tick's clicks and keys in the buffer it is
+        // about to throw away.
         app.add_systems(
             TickStage::Input,
-            (events::drain_dom_events, events::drain_dismissed_dialogs),
+            (events::drain_dom_events, events::drain_dismissed_dialogs)
+                .after(bevy_ecs::message::message_update_system)
+                .before(lumen_scene::spawn::close_dialogs_on_escape),
         );
         // Projecting it comes last, after every system that could have
         // changed what the page should show.
@@ -79,6 +86,7 @@ impl Plugin for WebDomPlugin {
                 project::project_inline_style,
                 project::project_visibility,
                 project::project_control_state,
+                project::project_focus,
             )
                 .chain(),
         );
@@ -96,6 +104,10 @@ impl Plugin for WebDomPlugin {
 /// browser's own navigation, so the in-app router swaps the page in place
 /// instead. Passed straight through to the click listener, which is the only
 /// place a browser event is still in hand to prevent.
+///
+/// The keys are the one set that listens on the document rather than on
+/// `root`: a key pressed while focus sits outside the app never passes the
+/// root at all.
 ///
 /// # Errors
 ///

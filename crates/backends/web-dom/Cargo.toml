@@ -44,6 +44,7 @@ web-sys = { workspace = true, features = [
     "HtmlInputElement",
     "HtmlTextAreaElement",
     "InputEvent",
+    "KeyboardEvent",
     "Location",
     "MouseEvent",
     "Node",
@@ -58,6 +59,11 @@ web-sys = { workspace = true, features = [
 # emitter rather than checking against a copy of what it writes, because a
 # copy would agree with itself while the two halves drifted apart.
 lumen-web = { workspace = true }
+# The pipeline a page runs a key through, which is the desktop's own: what a
+# forwarded key does is this crate's question only because these two answer
+# it, so the key tests put them in rather than restating what they would do.
+lumen-input = { workspace = true }
+lumen-primitives = { workspace = true }
 wasm-bindgen-test.workspace = true
 # A test raises an event the way the browser raises it, which takes a
 # dictionary nothing in the crate itself constructs. Naming it here keeps it
@@ -65,5 +71,6 @@ wasm-bindgen-test.workspace = true
 web-sys = { workspace = true, features = [
     "CssStyleDeclaration",
     "EventInit",
+    "KeyboardEventInit",
     "MouseEventInit",
 ] }
