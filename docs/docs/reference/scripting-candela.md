@@ -829,7 +829,25 @@ plain text.
 | `lumen::t(key: string)` | `string` | The active locale's string for `key`, or `key` itself when untranslated. |
 | `lumen::tr(key: string)` | `string` | Alias for `t`. |
 
-See [Translation](../guides/i18n.md) for the catalogue format.
+See [Translation and formatting](../guides/i18n.md) for the catalogue format.
+
+## Formatting
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `lumen::format_number(n: float)` | `string` | `n` written the way the active locale writes numbers. |
+| `lumen::format_currency(amount: float, currency: string)` | `string` | `amount` as money in the ISO-4217 code `currency`, positioned and rounded the way the locale and the currency ask for. |
+| `lumen::format_date(iso: string)` | `string` | The date in `iso` (`YYYY-MM-DD`, time optional) written for the locale. |
+| `lumen::format_time(iso: string)` | `string` | The time in `iso` (`YYYY-MM-DDTHH:MM[:SS]`) written for the locale. |
+| `lumen::format_datetime(iso: string)` | `string` | Date and time from `iso` written for the locale. |
+| `lumen::format_relative(seconds: int)` | `string` | `seconds` from now as the locale says it: `-7200` is `2 hours ago`. |
+
+A trailing zone on a timestamp (`Z`, `+02:00`) is read and dropped; nothing is
+converted between time zones. A value the call cannot read comes back as it was
+given, the way `t` returns an untranslated key.
+
+See [Translation and formatting](../guides/i18n.md) for the markup attribute
+that formats an element's text.
 
 ## Canvas
 

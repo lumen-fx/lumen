@@ -3621,6 +3621,7 @@ dependencies = [
  "fluent",
  "fluent-bundle",
  "icu",
+ "lumen-core",
  "sys-locale",
  "thiserror 2.0.19",
  "tracing",

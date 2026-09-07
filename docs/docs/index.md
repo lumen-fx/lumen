@@ -59,7 +59,8 @@ page, and back and forward work.
 
 **Text and internationalisation.** Shaping with font fallback, bidirectional
 text, and selection. Fluent catalogues translate the UI, with plural rules and
-right-to-left layout.
+right-to-left layout, and numbers, dates and money are written for the app's
+locale.
 
 **The desktop around your app.** Native menus, tray icons, notifications,
 global hotkeys, file dialogs, clipboard, drag and drop, and audio playback.

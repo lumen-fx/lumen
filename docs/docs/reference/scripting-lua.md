@@ -554,7 +554,25 @@ none. The three writers queue an answer that only a server render applies.
 | `t(key)` | string | The active locale's string for `key`, or `key` itself when untranslated. |
 | `tr(key)` | string | Alias for `t`. |
 
-See [Translation](../guides/i18n.md) for the catalogue format.
+See [Translation and formatting](../guides/i18n.md) for the catalogue format.
+
+## Formatting
+
+| Builtin | Returns | Behaviour |
+| --- | --- | --- |
+| `format_number(n)` | `string` | `n` written the way the active locale writes numbers. |
+| `format_currency(amount, currency)` | `string` | `amount` as money in the ISO-4217 code `currency`, positioned and rounded the way the locale and the currency ask for. |
+| `format_date(iso)` | `string` | The date in `iso` (`YYYY-MM-DD`, time optional) written for the locale. |
+| `format_time(iso)` | `string` | The time in `iso` (`YYYY-MM-DDTHH:MM[:SS]`) written for the locale. |
+| `format_datetime(iso)` | `string` | Date and time from `iso` written for the locale. |
+| `format_relative(seconds)` | `string` | `seconds` from now as the locale says it: `-7200` is `2 hours ago`. |
+
+A trailing zone on a timestamp (`Z`, `+02:00`) is read and dropped; nothing is
+converted between time zones. A value the call cannot read comes back as it was
+given, the way `t` returns an untranslated key.
+
+See [Translation and formatting](../guides/i18n.md) for the markup attribute
+that formats an element's text.
 
 ## Canvas
 

@@ -636,7 +636,16 @@ fn request_fns() -> Vec<ScriptFn> {
     ]
 }
 
-/// Translation, template-local ids, and the tree dump.
+/// One `format_*` builtin's answer: what the process-wide formatting hook
+/// makes of `(spec, value)`, or `value` as it stands when no formatter is
+/// installed or it cannot read the value. That is the fallback `t` makes
+/// when it echoes an unresolved key: a script gets a string either way and
+/// never an error to handle.
+fn formatted(spec: &str, value: &str) -> String {
+    lumen_core::i18n::format(spec, value).unwrap_or_else(|| value.to_string())
+}
+
+/// Translation, locale formatting, template-local ids, and the tree dump.
 fn misc_fns() -> Vec<ScriptFn> {
     vec![
         // The catalogue lives behind the process-wide i18n hook the runtime
@@ -655,6 +664,57 @@ fn misc_fns() -> Vec<ScriptFn> {
             &[("key", T::Str)],
             T::Str,
             |cx| ScriptValue::Str(lumen_core::i18n::translate(&cx.str_arg(0))),
+        ),
+        // The app's locale formatters sit behind the process-wide
+        // formatting hook, so no host links ICU itself. One builtin per
+        // kind rather than one `format(spec, value)`: a builtin parameter
+        // may not be `any`, so a single entry would take its value as a
+        // string and every candela call site would have to stringify a
+        // number to pass it.
+        value(
+            "format_number",
+            "That number written the way the active locale writes numbers.",
+            &[("n", T::Float)],
+            T::Str,
+            |cx| ScriptValue::Str(formatted("number", &cx.float_arg(0).to_string())),
+        ),
+        value(
+            "format_currency",
+            "That amount as money in an ISO-4217 currency, for the active locale.",
+            &[("amount", T::Float), ("currency", T::Str)],
+            T::Str,
+            |cx| {
+                let spec = format!("currency:{}", cx.str_arg(1));
+                ScriptValue::Str(formatted(&spec, &cx.float_arg(0).to_string()))
+            },
+        ),
+        value(
+            "format_date",
+            "That `YYYY-MM-DD` date written for the active locale.",
+            &[("iso", T::Str)],
+            T::Str,
+            |cx| ScriptValue::Str(formatted("date", &cx.str_arg(0))),
+        ),
+        value(
+            "format_time",
+            "The time of that timestamp, written for the active locale.",
+            &[("iso", T::Str)],
+            T::Str,
+            |cx| ScriptValue::Str(formatted("time", &cx.str_arg(0))),
+        ),
+        value(
+            "format_datetime",
+            "That timestamp written for the active locale, date and time.",
+            &[("iso", T::Str)],
+            T::Str,
+            |cx| ScriptValue::Str(formatted("datetime", &cx.str_arg(0))),
+        ),
+        value(
+            "format_relative",
+            "That many seconds from now, as the active locale says it (past is negative).",
+            &[("seconds", T::Int)],
+            T::Str,
+            |cx| ScriptValue::Str(formatted("relative", &cx.int_arg(0).to_string())),
         ),
         // A template instance prefixes the ids inside it. Given `user-card:btn`
         // as the source, `local_id(source, "label")` is `user-card:label`; a

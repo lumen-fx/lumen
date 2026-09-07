@@ -25,7 +25,7 @@
 
 use crate::components::{
     BindChecked, BindDisabled, BindScroll, BindText, BindTextLabels, BindValue, Disabled, ImeState,
-    SliderValue, TextContent, TextInput, Toggleable,
+    SliderValue, TextContent, TextFormat, TextInput, Toggleable,
 };
 use crate::input::{Focused, Scroll, ScrollOffset};
 use crate::property_store::{PropertyKey, PropertyStore, PropertyValue, push_external_property};
@@ -327,6 +327,12 @@ pub fn clear_signal_dirty(signals: Option<ResMut<Signals>>) {
 /// its selected option's label while the signal holds that option's
 /// value. A value it does not name is written as it stands.
 ///
+/// A [`TextFormat`] renders what is left for the app's locale, through
+/// [`crate::i18n::format`]. Labels come first: a label is what the
+/// element says for a value, and only a value with nothing to say for it
+/// is a value to format. A format the app has no formatter for, or text
+/// that is not what the format expects, writes the text unchanged.
+///
 /// Editing-protection gate: an entity is skipped while an edit is in flight on
 /// it, meaning a focused [`TextInput`] or an active [`ImeState`] preedit.
 /// Overwriting `TextContent` mid-edit would race the keystroke / IME path in
@@ -347,6 +353,7 @@ pub fn apply_text_bindings(
             &mut TextContent,
             Option<&mut TextInput>,
             Option<&BindTextLabels>,
+            Option<&TextFormat>,
             Option<&Focused>,
         ),
         Without<ImeState>,
@@ -370,7 +377,7 @@ pub fn apply_text_bindings(
     if store.dirty_peek().is_empty() && new_binds.is_empty() {
         return;
     }
-    for (bind, mut tc, input, labels, focused) in &mut q {
+    for (bind, mut tc, input, labels, format, focused) in &mut q {
         // The edit in flight the gate protects: a focused text buffer, whose
         // next keystroke would land on the text this write replaces.
         if focused.is_some() && input.is_some() {
@@ -386,9 +393,13 @@ pub fn apply_text_bindings(
         let value: Arc<str> = Arc::<str>::from(pv.clone());
         // What the element says for this value, when it says something
         // other than the value.
-        let value_str = labels
-            .and_then(|labels| labels.label_for(value.as_ref()))
-            .unwrap_or(value.as_ref());
+        let labelled = labels.and_then(|labels| labels.label_for(value.as_ref()));
+        // Nothing named this value, so it is the value itself that goes
+        // on screen, and a `format` is what renders it for the locale.
+        let formatted = format
+            .filter(|_| labelled.is_none())
+            .and_then(|f| crate::i18n::format(&f.0, value.as_ref()));
+        let value_str = formatted.as_deref().or(labelled).unwrap_or(value.as_ref());
         if tc.0 != value_str {
             tc.0 = value_str.to_string();
             // Cursor / selection_anchor are raw byte offsets into TextContent;

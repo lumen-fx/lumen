@@ -95,11 +95,15 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// the build cannot stand in for stays in the tree as the marker a runtime
 /// call fills, so a component that works a value out is usable from markup.
 ///
+/// `8`: the `format="<spec>"` attribute adds a field to
+/// [`crate::layout_ir::Attributes`], so an element's text can be rendered
+/// for the app's locale.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 7;
+pub const FORMAT_VERSION: u16 = 8;
 
 /// The navigable page set of a compiled multi-page app.
 ///
