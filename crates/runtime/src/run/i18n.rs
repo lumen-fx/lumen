@@ -1,5 +1,5 @@
-//! Translation wiring: locale resolution, catalogue loading, and the
-//! script-side translator hook.
+//! Locale wiring: locale resolution, catalogue loading, and the
+//! script-side translator and formatter hooks.
 //!
 //! An app's translations live in `<app_dir>/locale/<lang>.ftl`, one Fluent
 //! catalogue per locale, which `lumenc i18n extract` writes and translators
@@ -7,14 +7,22 @@
 //! chosen from `[app] locale`, else the locale the OS reports, else
 //! `en-US`; a key the active locale lacks falls through to `en-US`.
 //!
-//! Two readers share one registry through [`lumen_i18n::SharedI18n`]:
-//! markup (`translatable="key"`, resolved in `crate::spawn`) reads the
-//! resource, and scripts (`t("key")`) reach it through the process-wide
-//! [`lumen_core::i18n`] hook installed here. Both see a catalogue reload
-//! the moment it lands.
+//! Two readers share one registry: markup (`translatable="key"`, resolved
+//! in `crate::spawn`) reads [`lumen_core::i18n::AppI18n`] off the world,
+//! and scripts (`t("key")`) reach the same catalogue through the
+//! process-wide [`lumen_core::i18n`] hook installed here. Both see a
+//! catalogue reload the moment it lands.
+//!
+//! Locale-aware formatting is split the same way and over the same pair of
+//! seams: markup (`format="currency:EUR"`) reads the world resource and
+//! scripts (`format_currency(...)`) reach the app's ICU4X formatters
+//! through the formatting hook installed here. Reading the per-app
+//! resource for markup is what keeps a process hosting two Lumen apps from
+//! rendering one app's text in the other's locale.
 
 use super::*;
 
+use lumen_core::i18n::AppI18n;
 use lumen_i18n::{I18nPlugin, SharedI18n};
 
 /// Directory holding an app's `.ftl` catalogues.
@@ -35,9 +43,10 @@ fn catalogue_reader(world: &World) -> impl Fn(&Path) -> std::io::Result<Vec<u8>>
     }
 }
 
-/// Resolve the locale, install [`SharedI18n`] + `LocaleFormatter`, load
-/// every catalogue under `<dir>/locale`, and publish the translator every
-/// script host's `t()` builtin calls.
+/// Resolve the locale, install [`SharedI18n`] + [`AppI18n`], load every
+/// catalogue under `<dir>/locale`, and publish the translator every
+/// script host's `t()` builtin calls and the formatter its `format_*`
+/// builtins call.
 pub(crate) fn register_i18n(
     app: &mut App,
     dir: &Path,
@@ -55,8 +64,10 @@ pub(crate) fn register_i18n(
         .map_err(|e| RunError::I18n(e.to_string()))?;
     tracing::debug!(locale = %current, catalogues = loaded.len(), "i18n ready");
 
-    let for_scripts = shared.clone();
-    lumen_core::i18n::set_translator(move |key| for_scripts.try_t(key));
+    let for_scripts = app.world.resource::<AppI18n>().clone();
+    let formatting = for_scripts.clone();
+    lumen_core::i18n::set_translator(move |key| for_scripts.try_translate(key));
+    lumen_core::i18n::set_formatter(move |spec, value| formatting.format(spec, value));
     Ok(())
 }
 

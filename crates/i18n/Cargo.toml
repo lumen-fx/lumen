@@ -14,6 +14,9 @@ publish = false
 
 [dependencies]
 bevy_ecs.workspace = true
+# The opaque translation and formatting seam. `I18nPlugin` fills an app's
+# half of it; a host that never installs one links neither Fluent nor ICU.
+lumen-core = { workspace = true }
 tracing.workspace = true
 thiserror.workspace = true
 

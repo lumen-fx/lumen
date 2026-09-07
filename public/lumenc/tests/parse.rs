@@ -3324,6 +3324,29 @@ fn an_image_carries_its_own_alt() {
 /// so a document at the cap has to fit in the stack of an ordinary thread
 /// rather than dying in a SIGSEGV the cap exists to prevent.
 #[test]
+fn a_format_spec_is_carried_verbatim() {
+    // Which specs exist is `lumen-i18n`'s to say, so the parser keeps
+    // whatever was written and lets the runtime decide it means nothing.
+    let ir = parse_html(
+        r#"<root>
+            <label format="currency:EUR" text="1234.5"/>
+            <label format="wat" text="hello"/>
+           </root>"#,
+    )
+    .expect("parse");
+    assert_eq!(
+        ir.root.children[0].attrs.format.as_deref(),
+        Some("currency:EUR")
+    );
+    assert_eq!(ir.root.children[1].attrs.format.as_deref(), Some("wat"));
+}
+
+#[test]
+fn an_empty_format_spec_is_an_error() {
+    assert!(parse_html(r#"<root><label format="" text="1"/></root>"#).is_err());
+}
+
+#[test]
 fn markup_parses_at_the_nesting_cap() {
     // 31 wrappers puts the innermost label on level 32, the deepest the
     // parser accepts.

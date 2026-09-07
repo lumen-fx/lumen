@@ -75,7 +75,7 @@ Attributes come in a few families, and most of them apply to any tag:
 - **Text**: `font-size`, `font-weight`, `font-family`, `line-height`,
   `text-align`, `wrap`, `max-lines`.
 - **Behaviour**: `id`, `class`, `tab-index`, `disabled`, `draggable`,
-  `translatable`, `lang`, `dir`.
+  `translatable`, `format`, `lang`, `dir`.
 
 Some attributes only mean something on one tag: `each` on `<for>`, `href` on
 `<a>`, `group` on `<radio>`, `open` on `<dialog>`.

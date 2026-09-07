@@ -1123,11 +1123,19 @@ pub struct Attributes {
     /// authored `text` and then to the key itself. `lumenc i18n
     /// extract` collects these keys into `locale/<lang>.ftl`.
     pub translatable: Option<String>,
+    /// `format="<spec>"` - formats the element's text for the app's
+    /// locale. The spec is one of `number`, `currency:<code>`, `date`,
+    /// `time`, `datetime`, `relative`; the text it applies to is
+    /// whatever the element ended up with, whether that is the authored
+    /// `text`, a translated string, or the value a `bind-text` signal
+    /// holds. A spec the formatter does not know, or text it cannot
+    /// read as the spec's kind, leaves the text alone.
+    pub format: Option<String>,
     /// `lang="<bcp47>"` - BCP-47 language tag (W5.4). When set, the
     /// spawn layer installs a [`lumen_core::components::Lang`] component
-    /// consumed by text shaping (cosmic-text), AccessKit, and
-    /// locale-aware formatters. Inherited at runtime from the nearest
-    /// ancestor when absent.
+    /// consumed by text shaping (cosmic-text) and AccessKit. Inherited
+    /// at runtime from the nearest ancestor when absent. `format` reads
+    /// the app's locale, not this tag.
     pub lang: Option<String>,
     /// `bind-text="$self.<field>"` - per-entity text binding. The
     /// field name (without the `$self.` prefix) lands here; the

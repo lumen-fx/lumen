@@ -1270,8 +1270,9 @@ impl From<&str> for LayoutDirection {
 }
 
 /// BCP-47 language tag (e.g. `"en-US"`, `"ar-EG"`). Drives text
-/// shaping (`cosmic_text::Attrs::language`), AccessKit
-/// (`Node::set_language`), and locale-aware formatters.
+/// shaping (`cosmic_text::Attrs::language`) and AccessKit
+/// (`Node::set_language`). Locale-aware formatting reads the app's
+/// locale, not this tag.
 ///
 /// Authored via `lang="ar-EG"` on any element. Inherited from the
 /// nearest ancestor when absent.
@@ -1530,6 +1531,17 @@ impl BindTextLabels {
             .map(|(_, label)| label.as_str())
     }
 }
+
+/// The `format="<spec>"` an element was authored with, carried so a
+/// signal write can be rendered for the app's locale.
+///
+/// The spec is opaque here: core forwards it to
+/// [`crate::i18n::format`] along with the text, and what comes back is
+/// what the element says. Core never learns which specs exist, which is
+/// what keeps the locale capability out of it while a core-owned system
+/// still applies one.
+#[derive(Component, Clone, Debug, Default)]
+pub struct TextFormat(pub String);
 
 /// Two-way binding for `<toggle bind-checked="signal">`.
 /// - Signal -> [`Toggleable`] via [`crate::signals::apply_checked_bindings`].

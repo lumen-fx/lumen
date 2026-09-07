@@ -66,6 +66,12 @@ host "lumen" {
     fetch(string, string);
     string t(string);
     string tr(string);
+    string format_number(float);
+    string format_currency(float, string);
+    string format_date(string);
+    string format_time(string);
+    string format_datetime(string);
+    string format_relative(int);
     string local_id(string, string);
     string dump_tree();
     any parse_json(...);

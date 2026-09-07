@@ -120,8 +120,9 @@ fixed what panicked.
 
 A site holds one tree per language it answers in, and a request picks one. The
 trees are the app already translated: `translatable` text is resolved into the
-markup before a document is written from it, so a page arrives in its language
-with nothing running.
+markup before a document is written from it, and text carrying a `format` is
+written for the tree's locale as the document is, so a page arrives in its
+language with nothing running.
 
 `lumenc web` builds them from the `locale/*.ftl` catalogues beside your markup,
 one per `[web] locales` entry. An embedder builds one the same way and hands it
@@ -367,9 +368,10 @@ they are already markup in the artifact the renderer reads and every response
 carries them. An artifact compiled some other way still holds the markers, and
 those reach the document as empty elements for the browser to fill.
 
-A script's `t()` returns the key it was given. The translator is the desktop
-runtime's, and a render installs none; markup `translatable` is unaffected,
-because it is resolved into the tree before the document is written.
+A script's `t()` returns the key it was given, and its `format_*` calls return
+their argument. The translator and the formatters are the desktop runtime's,
+and a render installs neither; markup `translatable` and `format` are
+unaffected, because both are resolved as the document is written.
 
 The rest of the limits are the emitter's, and a rendered page has the same ones
 [a built page](web.md) has.
