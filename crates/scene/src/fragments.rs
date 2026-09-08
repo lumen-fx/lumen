@@ -13,8 +13,8 @@
 //! A value that changes while the app runs is a `bind-*` attribute inside
 //! the fragment body, which the spawn path seeds and the per-tick binding
 //! systems drive. [`FragmentInstance`] records what an instance was built
-//! with so a later change can rebind arguments too; nothing reads it back
-//! yet.
+//! with, which is what a build reads back to write a component's body into
+//! the document it emits.
 
 use bevy_ecs::component::Component;
 use bevy_ecs::resource::Resource;
@@ -66,8 +66,8 @@ impl FragmentLibrary {
 /// Marks the root of an instantiated fragment with the key it came from and
 /// the arguments it was built with.
 ///
-/// Recorded so per-instance arguments can become live later; the current
-/// runtime substitutes them once and never reads this back.
+/// Recorded so per-instance arguments can become live later, and read back
+/// by a build that writes what each instance rendered into its document.
 #[derive(Component, Debug, Clone)]
 pub struct FragmentInstance {
     /// Key of the fragment this subtree came from.

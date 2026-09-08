@@ -122,6 +122,17 @@ fn substitute_in_place(element: &mut Element, scope: &Scope<'_>) {
     if let Some(attrs) = substitute_attrs(&element.attrs, &element.interpolations, scope) {
         element.attrs = attrs;
     }
+    // A component's props are written the way its text is, so a use site
+    // inside a `<for>` body names the row's fields and is called with the
+    // row's values. Resolved here rather than at the call, because the call
+    // is handed strings and has no scope left to read them against.
+    if let Some(use_site) = &mut element.frag_use {
+        for (_, value) in &mut use_site.args {
+            if value.contains('{') {
+                *value = resolve(value, &element.interpolations, scope);
+            }
+        }
+    }
 }
 
 /// The attributes to build an element with, once the placeholders in its own
@@ -188,6 +199,20 @@ pub fn carries_placeholder(attrs: &Attributes) -> bool {
     .flatten()
     .chain(attrs.classes.iter())
     .any(|text| text.contains('{'))
+}
+
+/// Whether anything a substitution resolves on `element` carries a `{`: its
+/// own strings, and the arguments a use site passes.
+///
+/// A walk that skips an element with no placeholder in it asks this rather
+/// than [`carries_placeholder`], so a component element whose only
+/// placeholder is a prop is not skipped.
+pub fn element_carries_placeholder(element: &Element) -> bool {
+    carries_placeholder(&element.attrs)
+        || element
+            .frag_use
+            .as_ref()
+            .is_some_and(|use_site| use_site.args.iter().any(|(_, value)| value.contains('{')))
 }
 
 /// Replace every `{...}` token in `text` with what its scope holds.
@@ -324,7 +349,7 @@ mod tests {
     use lumen_core::property_store::PropertyStore;
 
     use super::*;
-    use crate::layout_ir::Attributes;
+    use crate::layout_ir::{Attributes, Element};
 
     fn args(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
@@ -355,6 +380,47 @@ mod tests {
             scope = scope.with_args(args);
         }
         resolve(body, slots, &scope)
+    }
+
+    /// A component written inside a `<for>` names a row field as a prop, and
+    /// the row walk resolves it the way it resolves the text beside it. The
+    /// call is handed strings, so a prop left with its braces would call the
+    /// same function with the same value for every row.
+    #[test]
+    fn a_use_site_argument_resolves_against_the_row() {
+        let store = PropertyStore::default();
+        let record = item(&[("title", "Alpha")]);
+        let mut element = Element {
+            tag: "Ticket".to_string(),
+            ..Element::default()
+        };
+        element.frag_use = Some(Box::new(crate::layout_ir::FragmentUse {
+            key: "Ticket".to_string(),
+            args: vec![("title".to_string(), "{title}".to_string())],
+            slot_children: false,
+        }));
+
+        let instance = substitute_element(&element, &Scope::new(&store).with_row(&record, 0));
+
+        let use_site = instance.frag_use.expect("the use site survives");
+        assert_eq!(use_site.args[0].1, "Alpha");
+    }
+
+    /// An element whose only placeholder is a prop is still worth copying:
+    /// the walk that skips an element with nothing to resolve asks this.
+    #[test]
+    fn an_element_carries_a_placeholder_through_its_arguments_alone() {
+        let mut element = Element {
+            tag: "Ticket".to_string(),
+            ..Element::default()
+        };
+        assert!(!element_carries_placeholder(&element));
+        element.frag_use = Some(Box::new(crate::layout_ir::FragmentUse {
+            key: "Ticket".to_string(),
+            args: vec![("title".to_string(), "{title}".to_string())],
+            slot_children: false,
+        }));
+        assert!(element_carries_placeholder(&element));
     }
 
     #[test]

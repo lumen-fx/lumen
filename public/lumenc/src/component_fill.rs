@@ -24,6 +24,12 @@
 //! fragment table, through the same instantiation a `<template>` goes through,
 //! rather than from a walk back out of the ECS that would have to reconstruct
 //! every attribute the spawner consumed.
+//!
+//! A component inside a `<for>` is not filled into the tree: the tree holds
+//! the row template, and what the component renders for one row is not what it
+//! renders for another. Those bodies come back from the same world as
+//! [`RowFills`], one per row, and the emitter writes each one into the row it
+//! belongs to.
 
 use std::sync::Arc;
 
@@ -33,8 +39,9 @@ use lumen_core::components::LumenTag;
 use lumen_html::contract::Seed;
 use lumen_ir::artifact::CompiledApp;
 use lumen_ir::layout_ir::{Element, FragmentUse};
-use lumen_prerender::{Budget, DenyDispatch, boot, settle};
+use lumen_prerender::{Budget, DenyDispatch, boot, root_entity, row_fills, settle};
 use lumen_runtime::fragments::FragmentInstance;
+use lumen_web::RowFills;
 
 /// How many times the tree is filled and re-inlined.
 ///
@@ -46,41 +53,56 @@ use lumen_runtime::fragments::FragmentInstance;
 const MAX_ROUNDS: u32 = 16;
 
 /// Replace every component marker in `compiled`'s tree with the body its call
-/// produces.
+/// produces, and hand back what the components inside its `<for>` rows built.
 ///
-/// The tree is left as it was where a marker cannot be resolved: a component
-/// the loaded program cannot be called by name (see the export check in
-/// `web_cli`), and a component inside a `<for>` row, whose body depends on the
-/// row it is rendered for. Both are reported.
-pub fn fill(compiled: &mut CompiledApp, page: &str, warnings: &mut Vec<String>) {
+/// The tree is left as it was where a marker cannot be resolved, which is a
+/// component the loaded program cannot be called by name; the export check in
+/// `web_cli` reports it, because it holds the export list.
+///
+/// A component inside a `<for>` row renders a body per row, and the tree holds
+/// the template rather than the rows, so those bodies come back separately for
+/// the emitter to write into the rows it writes. They are the last round's:
+/// the tree the last boot ran is the tree the pages are written from.
+///
+/// `seed` is the state the boot starts from, which is the state the pages are
+/// written with.
+pub fn fill(
+    compiled: &mut CompiledApp,
+    page: &str,
+    seed: &Seed,
+    warnings: &mut Vec<String>,
+) -> RowFills {
     // An app with no marker in it has nothing to run and nothing to wait for,
     // which is most apps; booting one to learn that is a cost with no answer
     // attached.
     if !holds_marker(&compiled.ir.root) {
-        return;
+        return RowFills::default();
     }
 
+    let mut fills = RowFills::default();
     for _ in 0..MAX_ROUNDS {
-        let filled = round(compiled, page, warnings);
+        let (filled, round_fills) = round(compiled, page, seed, warnings);
+        fills = round_fills;
         if !filled {
-            return;
+            return fills;
         }
     }
     warnings.push(format!(
         "components are nested deeper than {MAX_ROUNDS} levels; the ones left are emitted as the \
          empty box the browser fills"
     ));
+    fills
 }
 
 /// Boot the app, read what its markers became, and put those bodies in the
-/// tree. Answers whether anything was filled.
-fn round(compiled: &mut CompiledApp, page: &str, warnings: &mut Vec<String>) -> bool {
-    let mut booted = boot(
-        compiled,
-        page,
-        &Seed::new(),
-        Arc::new(DenyDispatch::default()),
-    );
+/// tree. Answers whether anything was filled, and what the rows built.
+fn round(
+    compiled: &mut CompiledApp,
+    page: &str,
+    seed: &Seed,
+    warnings: &mut Vec<String>,
+) -> (bool, RowFills) {
+    let mut booted = boot(compiled, page, seed, Arc::new(DenyDispatch::default()));
     settle(&mut booted.app, Budget::default());
 
     let root = match root_entity(&mut booted.app) {
@@ -91,32 +113,17 @@ fn round(compiled: &mut CompiledApp, page: &str, warnings: &mut Vec<String>) -> 
                  empty box the browser fills"
                     .to_string(),
             );
-            return false;
+            return (false, RowFills::default());
         }
     };
 
     let mut found = Found::default();
-    resolve(
-        &mut compiled.ir.root,
-        root,
-        &booted.app.world,
-        false,
-        &mut found,
-    );
+    resolve(&mut compiled.ir.root, root, &booted.app.world, &mut found);
+    let fills = row_fills(&mut booted.app);
     drop(booted);
 
-    // A component that built nothing is left in the tree as its marker, which
-    // is what the export check downstream reads: it holds the export list, so
-    // it can say whether the name is callable at all and what to do about it.
-    // Saying it here as well would say it twice.
-    for name in &found.in_a_row {
-        warnings.push(format!(
-            "`{name}` is written inside a `<for>`, and what a component renders for one row is \
-             not what it renders for another, so the browser fills it rather than the build"
-        ));
-    }
     if !found.filled {
-        return false;
+        return (false, fills);
     }
 
     // The keys are the table's own now, so the inliner treats each one the way
@@ -129,9 +136,9 @@ fn round(compiled: &mut CompiledApp, page: &str, warnings: &mut Vec<String>) -> 
         warnings.push(format!(
             "a component's body could not be put in the tree: {error}"
         ));
-        return false;
+        return (false, fills);
     }
-    true
+    (true, fills)
 }
 
 /// What one round ran into.
@@ -139,20 +146,14 @@ fn round(compiled: &mut CompiledApp, page: &str, warnings: &mut Vec<String>) -> 
 struct Found {
     /// At least one marker took a body, so another round is worth running.
     filled: bool,
-    /// Components written inside a `<for>`, by name, once each.
-    in_a_row: Vec<String>,
-}
-
-impl Found {
-    fn note(list: &mut Vec<String>, name: &str) {
-        if !list.iter().any(|seen| seen == name) {
-            list.push(name.to_string());
-        }
-    }
 }
 
 /// Walk the tree beside the world that was spawned from it, pointing each
 /// marker at the fragment its call built.
+///
+/// A `<for>` template is not its rows, so the walk stops at one: what a
+/// component renders for one row is not what it renders for another, and the
+/// bodies are read off the world by [`row_fills`] instead.
 ///
 /// The two walks stay in step because the world is this tree, spawned: a
 /// marker's replacement takes the marker's own place among its siblings, so it
@@ -163,15 +164,9 @@ fn resolve(
     element: &mut Element,
     entity: Entity,
     world: &bevy_ecs::world::World,
-    in_a_row: bool,
     found: &mut Found,
 ) {
-    if let Some(use_site) = &element.frag_use {
-        if in_a_row {
-            let name = use_site.key.clone();
-            Found::note(&mut found.in_a_row, &name);
-            return;
-        }
+    if element.frag_use.is_some() {
         // No instance means the marker is still standing in the world too,
         // which is what a call that built nothing leaves behind. It stays in
         // the tree, and the export check downstream reads it there.
@@ -192,17 +187,14 @@ fn resolve(
 
     // A `<for>` block's children are its row template, and the world's are the
     // rows built from it, so there is nothing to pair one to one.
-    let rows = element.tag == "for";
+    if element.tag == "for" {
+        return;
+    }
+
     let kids: Vec<Entity> = world
         .get::<Children>(entity)
         .map(|children| children.iter().copied().collect())
         .unwrap_or_default();
-    if rows {
-        for child in &mut element.children {
-            mark_row_components(child, found);
-        }
-        return;
-    }
 
     for (child, child_entity) in element.children.iter_mut().zip(kids) {
         // A tag that disagrees means the walks have parted: an `<if>` branch
@@ -214,34 +206,11 @@ fn resolve(
         if !matches && child.frag_use.is_none() {
             continue;
         }
-        resolve(child, child_entity, world, in_a_row || rows, found);
-    }
-}
-
-/// Report every component written inside a `<for>` row template.
-fn mark_row_components(element: &Element, found: &mut Found) {
-    if let Some(use_site) = &element.frag_use {
-        Found::note(&mut found.in_a_row, &use_site.key);
-    }
-    for child in &element.children {
-        mark_row_components(child, found);
+        resolve(child, child_entity, world, found);
     }
 }
 
 /// Whether anything under `element` stands in for a component.
 fn holds_marker(element: &Element) -> bool {
     element.frag_use.is_some() || element.children.iter().any(holds_marker)
-}
-
-/// The app's root element, which is where both walks start.
-fn root_entity(app: &mut lumen_core::app::App) -> Option<Entity> {
-    let mut query = app
-        .world
-        .query_filtered::<Entity, bevy_ecs::prelude::Without<bevy_ecs::hierarchy::ChildOf>>();
-    let roots: Vec<Entity> = query.iter(&app.world).collect();
-    roots.into_iter().find(|entity| {
-        app.world
-            .get::<LumenTag>(*entity)
-            .is_some_and(|tag| &*tag.0 == "root")
-    })
 }

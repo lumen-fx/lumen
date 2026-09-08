@@ -34,7 +34,7 @@ use lumen_runtime::run::locale_dir;
 use lumen_ssr::{FetchPolicy, RenderOptions, SsrSite};
 use lumen_web::urls::is_external;
 use lumen_web::{
-    AssetRef, CssMode, HostRewrite, LocaleSpec, PageSpec, SignalEnv, SiteSpec, State, WebSpec,
+    AssetRef, CssMode, HostRewrite, LocaleSpec, PageSpec, RowFills, SignalEnv, SiteSpec, WebSpec,
 };
 
 use crate::web_serve::{LOOPBACK, Server};
@@ -427,7 +427,14 @@ fn build(options: &Options) -> Result<Report, String> {
     // rewrite below reaches an `<image>` inside it, the link check sees its
     // links, and the artifact the browser loads carries it, so the runtime
     // adopts the body the page already shows instead of building it again.
-    crate::component_fill::fill(&mut compiled, &plan.entry_key, &mut warnings);
+    //
+    // The boot starts from the declared state, which is the state a page with
+    // no run behind it is written with, so what a component renders for a row
+    // is what that page shows. The seed is read again below, once the bodies
+    // are in the tree, because a body can declare a signal default of its own.
+    let declared = declared_seed(&seed_values(&cfg, &compiled.ir.root, prerender));
+    let seeded_fills =
+        crate::component_fill::fill(&mut compiled, &plan.entry_key, &declared, &mut warnings);
 
     // Assets travel with the site, so every `<image src>` is rewritten from
     // the path it has on this machine to the path it will have on the
@@ -482,7 +489,7 @@ fn build(options: &Options) -> Result<Report, String> {
     };
 
     let scripts = script_refs(&compiled, &mut warnings);
-    check_exports(&compiled, &mut warnings);
+    check_exports(&compiled, &seeded_fills, &mut warnings);
     let locales = locales(options, &cfg);
     // Read once and used twice: the build resolves `translatable` into every
     // tree it writes, and the same bytes travel with the site so the browser
@@ -639,13 +646,30 @@ fn build(options: &Options) -> Result<Report, String> {
         };
         // One tree per locale, shared by every page of it: which page a
         // document shows is a signal inside the tree, not a tree of its own.
-        let ir = Arc::new(translated_ir(
-            &compiled.ir,
-            &catalogues,
-            locale,
-            &mut warnings,
-        )?);
+        let catalogue = locale_catalogue(&catalogues, locale, &mut warnings)?;
+        // Resolving the text is the emitter's, because a server holding a tree
+        // per locale builds one the same way.
+        let ir = Arc::new(match &catalogue {
+            Some(i18n) => lumen_web::translate_ir(&compiled.ir, i18n),
+            None => compiled.ir.clone(),
+        });
         for key in &keys {
+            // A row's component body is markup the tree never held, so it is
+            // translated on its own; without that a locale tree reads in its
+            // language everywhere except inside its lists.
+            let mut fills = match prerender {
+                WebPrerender::Run => settled
+                    .get(key)
+                    .map(|run| run.fills.clone())
+                    .unwrap_or_default(),
+                WebPrerender::Seeds => seeded_fills.clone(),
+                WebPrerender::None => RowFills::default(),
+            };
+            if let Some(i18n) = &catalogue {
+                for body in fills.bodies_mut() {
+                    lumen_web::translate_element(body, i18n);
+                }
+            }
             spec.pages.push(page_spec(
                 key,
                 &ir,
@@ -653,6 +677,7 @@ fn build(options: &Options) -> Result<Report, String> {
                 &seed,
                 prerender,
                 settled.get(key),
+                fills,
             ));
         }
         let site = lumen_web::emit(&spec).map_err(|e| e.to_string())?;
@@ -819,7 +844,7 @@ fn run_pages(
     seed: &BTreeMap<String, WebSeedValue>,
     strict: bool,
     warnings: &mut Vec<String>,
-) -> BTreeMap<String, State> {
+) -> BTreeMap<String, Prerendered> {
     let declared = declared_seed(seed);
     let mut settled = BTreeMap::new();
     for key in keys {
@@ -834,7 +859,7 @@ fn run_pages(
                 ));
             }
         }
-        settled.insert(key.clone(), run.state);
+        settled.insert(key.clone(), run);
     }
     settled
 }
@@ -890,19 +915,21 @@ fn page_spec(
     cfg: &LumenToml,
     seed: &BTreeMap<String, WebSeedValue>,
     prerender: WebPrerender,
-    settled: Option<&State>,
+    settled: Option<&Prerendered>,
+    fills: RowFills,
 ) -> PageSpec {
     let page_cfg = cfg.web.pages.get(key);
     // A run started from the declared values and holds the page's route, so
     // what it settled into is the whole state this page is written with.
-    if let Some(state) = settled {
+    if let Some(run) = settled {
         return PageSpec {
             key: key.to_string(),
             ir: Arc::clone(ir),
             title: page_cfg.and_then(|page| page.title.clone()),
             description: page_cfg.and_then(|page| page.description.clone()),
-            signals: state.signals.clone(),
-            seed: state.seed.clone(),
+            signals: run.state.signals.clone(),
+            seed: run.state.seed.clone(),
+            fills,
         };
     }
     let mut signals = SignalEnv::new();
@@ -937,6 +964,7 @@ fn page_spec(
         description: page_cfg.and_then(|page| page.description.clone()),
         signals,
         seed: page_seed,
+        fills,
     }
 }
 
@@ -1001,20 +1029,22 @@ fn row_item(row: &BTreeMap<String, String>) -> ArrayItem {
         .collect()
 }
 
-/// The app's tree with every `translatable` element's text resolved for
-/// `locale`, which is what makes a page readable in that language with
-/// nothing running.
-fn translated_ir(
-    ir: &LayoutIR,
+/// The catalogue `locale`'s documents are written through, which is what makes
+/// a page readable in that language with nothing running: every `translatable`
+/// element's text is resolved through it, and so is a row's component body.
+///
+/// `None` for a locale that is not a language tag: the pages are still
+/// emitted, in the text the author wrote.
+fn locale_catalogue(
     catalogues: &[(String, String)],
     locale: &str,
     warnings: &mut Vec<String>,
-) -> Result<LayoutIR, String> {
+) -> Result<Option<SharedI18n>, String> {
     let lang = match locale.parse::<LanguageIdentifier>() {
         Ok(lang) => lang,
         Err(e) => {
             warnings.push(format!("locale `{locale}` is not a valid BCP-47 tag: {e}"));
-            return Ok(ir.clone());
+            return Ok(None);
         }
     };
     let fallback = FALLBACK_LOCALE
@@ -1029,9 +1059,7 @@ fn translated_ir(
         i18n.load_ftl(tag, source)
             .map_err(|e| format!("locale catalogues: {e}"))?;
     }
-    // Resolving the text is the emitter's, because a server holding a tree
-    // per locale builds one the same way.
-    Ok(lumen_web::translate_ir(ir, &SharedI18n::new(i18n)))
+    Ok(Some(SharedI18n::new(i18n)))
 }
 
 /// The app's Fluent catalogues, as a tag and its source, one entry per
@@ -1177,8 +1205,8 @@ fn script_refs(compiled: &CompiledApp, warnings: &mut Vec<String>) -> Vec<Script
 /// A component the build could not stand in for is the same failure with a
 /// worse symptom: the page carries the box the call was to fill, and an empty
 /// box is what a reader would not notice.
-fn check_exports(compiled: &CompiledApp, warnings: &mut Vec<String>) {
-    let components = components_called(compiled);
+fn check_exports(compiled: &CompiledApp, fills: &RowFills, warnings: &mut Vec<String>) {
+    let components = reportable(components_called(compiled), fills);
     for script in &compiled.scripts {
         let Some(read_back) = lumen_runtime::run::script_exports(script) else {
             continue;
@@ -1226,26 +1254,65 @@ fn check_exports(compiled: &CompiledApp, warnings: &mut Vec<String>) {
     }
 }
 
+/// The component names the export check speaks for.
+///
+/// A component inside a `<for>` renders a body per row, so its marker stays in
+/// the row template whether or not the call worked, and the marker alone says
+/// nothing about the name. What the run read off the rows does, per name: one
+/// that built a body for a row is working, and one that came back empty from
+/// every row it stands in is the one to report. A name no row was rendered for
+/// is left alone, because nothing was called to judge it by.
+fn reportable(called: ComponentsCalled, fills: &RowFills) -> BTreeSet<String> {
+    let mut components = called.outside;
+    components.extend(
+        fills
+            .unfilled_components()
+            .filter(|name| called.in_a_row.contains(*name))
+            .map(str::to_string),
+    );
+    components
+}
+
 /// Every component the build could not stand in for, which the runtime fills
 /// by calling the function of that name.
+struct ComponentsCalled {
+    /// Names written where one call renders one body, so a marker left
+    /// standing is a call the build could not make.
+    outside: BTreeSet<String>,
+    /// Names written inside a `<for>` row template, whose marker stays where
+    /// it is however well the call works.
+    in_a_row: BTreeSet<String>,
+}
+
+/// Split every component name the tree names by whether it is written inside
+/// a `<for>`.
 ///
 /// The fragment bodies are walked as well as the page tree: a body is a
 /// subtree like any other and can name a component of its own, which reaches
 /// the page the moment something instantiates it.
-fn components_called(compiled: &CompiledApp) -> BTreeSet<String> {
-    fn walk(el: &Element, out: &mut BTreeSet<String>) {
+fn components_called(compiled: &CompiledApp) -> ComponentsCalled {
+    fn walk(el: &Element, in_a_row: bool, out: &mut ComponentsCalled) {
         if let Some(use_site) = &el.frag_use {
-            out.insert(use_site.key.clone());
+            let names = if in_a_row {
+                &mut out.in_a_row
+            } else {
+                &mut out.outside
+            };
+            names.insert(use_site.key.clone());
         }
+        let rows = in_a_row || el.tag == "for";
         for child in &el.children {
-            walk(child, out);
+            walk(child, rows, out);
         }
     }
-    let mut out = BTreeSet::new();
-    walk(&compiled.ir.root, &mut out);
+    let mut out = ComponentsCalled {
+        outside: BTreeSet::new(),
+        in_a_row: BTreeSet::new(),
+    };
+    walk(&compiled.ir.root, false, &mut out);
     for (_, fragment) in compiled.fragments.iter() {
         for el in &fragment.body {
-            walk(el, &mut out);
+            walk(el, false, &mut out);
         }
     }
     out
@@ -1531,5 +1598,36 @@ mod tests {
     fn something_that_is_not_an_address_is_named_back() {
         let error = host_address(Some("my-laptop")).expect_err("that is not an address");
         assert!(error.contains("my-laptop"), "{error}");
+    }
+
+    fn named(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    /// Two components in one row template, one of which built nothing: the
+    /// working one is not accused because the broken one is reported.
+    #[test]
+    fn a_row_component_answers_for_itself_and_not_for_the_others() {
+        let called = ComponentsCalled {
+            outside: named(&["Shout"]),
+            in_a_row: named(&["Ticket", "Stamp"]),
+        };
+        let mut fills = RowFills::default();
+        fills.with_component("Ticket".to_string(), true);
+        fills.with_component("Stamp".to_string(), false);
+
+        assert_eq!(reportable(called, &fills), named(&["Shout", "Stamp"]));
+    }
+
+    /// A row nothing was rendered for says nothing about the names in its
+    /// template: no call was made to judge them by.
+    #[test]
+    fn a_row_that_never_rendered_accuses_nobody() {
+        let called = ComponentsCalled {
+            outside: BTreeSet::new(),
+            in_a_row: named(&["Ticket"]),
+        };
+
+        assert!(reportable(called, &RowFills::default()).is_empty());
     }
 }

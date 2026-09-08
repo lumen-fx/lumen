@@ -368,6 +368,12 @@ they are already markup in the artifact the renderer reads and every response
 carries them. An artifact compiled some other way still holds the markers, and
 those reach the document as empty elements for the browser to fill.
 
+A component written inside a `<for>` is rendered per row from the state that
+request settled into, so the rows and their bodies come from one run. Its text
+is the text the artifact's fragment table holds: a render installs no
+translator, so a body written into a locale tree is not translated the way the
+markup around it is.
+
 A script's `t()` returns the key it was given, and its `format_*` calls return
 their argument: a render installs neither a translator nor the formatters.
 Markup `translatable` and `format` are unaffected, because both are resolved

@@ -13,7 +13,7 @@
 use lumen_core::nav::PATH_SIGNAL;
 use lumen_core::property_store::PropertyStore;
 use lumen_core::signals::signal_is_truthy;
-use lumen_ir::interpolate::{Scope, carries_placeholder, substitute_element};
+use lumen_ir::interpolate::{Scope, element_carries_placeholder, substitute_element};
 use lumen_ir::layout_ir::{Attributes, BindKind, Element, LayoutIR};
 
 /// `<if mode="...">` policy. `Render` despawn/respawns the subtree on
@@ -287,7 +287,7 @@ fn with_globals_resolved(
 /// Whether anything in the subtree carries a placeholder, so a tree with none
 /// is spawned from the IR itself rather than from a copy of it.
 fn tree_carries_placeholder(el: &Element) -> bool {
-    carries_placeholder(&el.attrs) || el.children.iter().any(tree_carries_placeholder)
+    element_carries_placeholder(el) || el.children.iter().any(tree_carries_placeholder)
 }
 
 /// World-resource wrapper for the combined skin + user CSS so the

@@ -399,6 +399,94 @@ fn a_candela_app_ships_the_program_the_browser_runs() {
     check_documents(&out, "/");
 }
 
+/// A component written inside a `<for>` reaches the document once per row,
+/// each with the value the call worked out for that row.
+///
+/// The build runs the app, the reconciler builds a row per record, and what
+/// each call returned is written where the row's marker stands. Nothing is
+/// left as an empty box, and nothing is reported: the component works.
+#[test]
+fn a_component_inside_a_for_is_written_into_every_row() {
+    let scratch = scratch("row-components");
+    let out = scratch.join("site");
+    let said = web(
+        "fixtures/candela-components",
+        &out,
+        &["--render", "static", "--prerender", "run"],
+    );
+
+    let html = read(&out, "index.html");
+    assert!(html.contains("ticket Alpha!"), "{html}");
+    assert!(html.contains("ticket Beta!"), "{html}");
+    assert!(!html.contains("lm-fragment"), "no box is left: {html}");
+    assert!(
+        !said.contains("inside a `<for>`") && !said.contains("returned no markup"),
+        "{said}"
+    );
+    check_documents(&out, "/");
+}
+
+/// With no run behind it a page shows the rows `[web.seed]` declares, and the
+/// components inside them are written from the boot the build makes anyway.
+#[test]
+fn a_seeded_row_carries_its_component_body() {
+    let scratch = scratch("row-components-seeded");
+    let app = scratch.join("app");
+    std::fs::create_dir_all(app.join("src")).expect("create the app directory");
+    std::fs::write(
+        app.join("src").join("main.lmn"),
+        "<root>\n  <for each=\"rows\" key=\"id\">\n    <Ticket title=\"{title}\" />\n  \
+         </for>\n  <script src=\"main.cdl\" />\n</root>\n",
+    )
+    .expect("write the markup");
+    std::fs::write(
+        app.join("src").join("main.cdl"),
+        "import \"lumen.cdl\";\n\nfn Ticket(title: string) {\n    let shout = title + \
+         \"!\";\n    return lmn!(<label class=\"ticket\" text=\"ticket $shout\"/>);\n}\n\
+         \nfn main() {}\n",
+    )
+    .expect("write the script");
+    std::fs::write(
+        app.join("lumen.toml"),
+        "[app]\nid = \"com.lumen.tests.seed-row-components\"\n\n[script]\nengine = \
+         \"candela\"\n\n[mcp]\nport = 0\n\n[[web.seed.rows]]\nid = \"a\"\ntitle = \
+         \"Alpha\"\n\n[[web.seed.rows]]\nid = \"b\"\ntitle = \"Beta\"\n",
+    )
+    .expect("write the config");
+
+    let out = scratch.join("site");
+    let said = web(
+        app.to_str().expect("a scratch path is text"),
+        &out,
+        &["--render", "static", "--prerender", "seeds"],
+    );
+
+    let html = read(&out, "index.html");
+    // One body per declared row, each carrying what the call worked out for
+    // that row rather than the argument it was written with.
+    assert!(html.contains(r#"data-lm="0.0::0">ticket Alpha!"#), "{html}");
+    assert!(html.contains(r#"data-lm="0.0::1">ticket Beta!"#), "{html}");
+    assert!(!html.contains("lm-fragment"), "no box is left: {html}");
+    assert!(!said.contains("returned no markup"), "{said}");
+}
+
+/// No rows means no bodies and no boxes: the block is emitted as the anchor
+/// the runtime mounts its rows into.
+#[test]
+fn a_block_with_no_rows_emits_neither_body_nor_box() {
+    let scratch = scratch("row-components-none");
+    let out = scratch.join("site");
+    web(
+        "fixtures/candela-components",
+        &out,
+        &["--render", "static", "--prerender", "none"],
+    );
+
+    let html = read(&out, "index.html");
+    assert!(!html.contains("lm-fragment"), "{html}");
+    assert!(!html.contains("ticket "), "{html}");
+}
+
 #[test]
 fn a_function_the_program_cannot_be_called_by_is_named() {
     // candela exports a function only when every parameter it takes is

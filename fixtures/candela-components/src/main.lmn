@@ -8,5 +8,8 @@
     <Pick on="yes" />
     <Pick on="no" />
   </column>
+  <for each="rows" key="id">
+    <Ticket title="{title}" />
+  </for>
   <script src="main.cdl" />
 </root>

@@ -66,6 +66,14 @@ fn Pick(on: string) {
     return lmn!(<label class="arm" text="off"/>);
 }
 
+// Called once per row of a `<for>`, with the row's own field as its prop. The
+// block cannot stand in for the call, so what the build leaves in the row
+// template is a marker and the runtime fills one per row.
+fn Ticket(title: string) {
+    let shout = title + "!";
+    return lmn!(<label class="ticket" text="ticket $shout"/>);
+}
+
 // The other direction: a block instantiates a `<template>` the markup
 // declares. A template and a block are one entity, so either authoring form
 // reaches the other.

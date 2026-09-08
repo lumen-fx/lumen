@@ -35,7 +35,7 @@ use lumen_ir::interpolate::{Scope, substitute_attrs, substitute_element};
 use lumen_ir::layout_ir::{Attributes, Element, IfModeSpec};
 
 use crate::error::EmitError;
-use crate::spec::{CssMode, PageSpec, SignalEnv, SiteSpec};
+use crate::spec::{CssMode, PageSpec, RowFills, SignalEnv, SiteSpec};
 use crate::{bindings, urls};
 
 /// What the walk needs to know that is not the element itself.
@@ -49,6 +49,16 @@ struct Walk<'a> {
     /// left for this walk to resolve there. Resolving again would read a
     /// value that arrived from a row field as a placeholder of its own.
     in_row: bool,
+    /// What the components inside this page's `<for>` rows rendered, by node
+    /// path. Read only inside a row: outside one the tree already carries the
+    /// body, because the build inlined it there.
+    fills: &'a RowFills,
+    /// Whether the block being emitted lost its fills, because the state the
+    /// page is written with is not the state they came from.
+    fills_dropped: bool,
+    /// Row components already reported as unfilled, so a block of forty rows
+    /// says it once.
+    unfilled: BTreeSet<String>,
     css_mode: CssMode,
     /// Site base path, which is what the shared files hang off.
     base: String,
@@ -96,6 +106,9 @@ pub fn emit_tree(
         page: &page.key,
         signals: &page.signals,
         in_row: false,
+        fills: &page.fills,
+        fills_dropped: false,
+        unfilled: BTreeSet::new(),
         css_mode: spec.web.css_mode,
         tree: urls::join(&base, &spec.locale.prefix()),
         base,
@@ -119,11 +132,35 @@ fn emit_element(
     // A component whose body the build could stand in for is already the body
     // by the time the tree gets here. What is left carrying a use site is a
     // component that has to run, and the element is the marker the runtime
-    // replaces with what the call returns. It is written as the empty box it
-    // is: the node the call builds is not knowable here, and what the use site
-    // wrote inside the marker goes with the marker when the replacement lands,
-    // so writing that would put content in the page the app never has.
+    // replaces with what the call returns. Inside a `<for>` row the build read
+    // what that call produced and it goes in below; anywhere else the node is
+    // not knowable here, so the marker is written as the empty box it is. What
+    // the use site wrote inside it goes with the marker when the replacement
+    // lands, so writing that would put content in the page the app never has.
     let marker = element.frag_use.is_some();
+    let path_text = path.to_string();
+    // Inside a row the marker is not the last word: what the component
+    // rendered for this row was read off the app that ran it, and the body
+    // goes where the box would have. The walk continues into the body at the
+    // marker's own path, so the document numbers its nodes the way the
+    // runtime numbers the subtree it builds there.
+    if let Some(use_site) = &element.frag_use
+        && walk.in_row
+        && !walk.fills_dropped
+    {
+        let fills = walk.fills;
+        if let Some(body) = fills.body(&path_text) {
+            return emit_element(out, body, path, walk);
+        }
+        let name = use_site.key.clone();
+        if walk.unfilled.insert(name.clone()) {
+            walk.warnings.push(format!(
+                "page `{}`: `{name}` is written inside a `<for>` and the build read no body for \
+                 it, so the page carries an empty box the browser fills on load",
+                walk.page
+            ));
+        }
+    }
     let ir_tag = if marker {
         FRAGMENT_TAG
     } else {
@@ -133,7 +170,6 @@ fn emit_element(
         page: walk.page.to_string(),
         tag: element.tag.clone(),
     })?;
-    let path_text = path.to_string();
     if !walk.seen.insert(path_text.clone()) {
         return Err(EmitError::DuplicateNodePath {
             page: walk.page.to_string(),
@@ -299,6 +335,27 @@ fn emit_rows(
         return Ok(());
     }
 
+    // The bodies were read off an app holding one list; a page written from a
+    // different one would put a card built for a row it does not show. Only
+    // reachable under `prerender = "seeds"`, where the pages are written with
+    // the declared state and the app may have rewritten the list as it
+    // settled.
+    let mismatch = match walk.fills.block(&path.to_string()) {
+        Some((array, count)) => array != name.as_str() || count != rows.len(),
+        None => false,
+    };
+    if mismatch && !walk.fills_dropped {
+        walk.warnings.push(format!(
+            "page `{}`: `<for each=\"{name}\">` is written with {} rows and the build read the \
+             components of a different list, so its rows carry empty boxes the browser fills on \
+             load",
+            walk.page,
+            rows.len()
+        ));
+    }
+    let dropped = walk.fills_dropped;
+    walk.fills_dropped = dropped || mismatch;
+
     let missing: RefCell<BTreeSet<String>> = RefCell::new(BTreeSet::new());
     let report = |field: &str| {
         missing.borrow_mut().insert(field.to_string());
@@ -315,6 +372,7 @@ fn emit_rows(
         }
     }
     walk.in_row = outside;
+    walk.fills_dropped = dropped;
     for field in missing.into_inner() {
         walk.warnings.push(format!(
             "page `{}`: `<for each=\"{name}\">` reads row field `{field}`, which its records do \

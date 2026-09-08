@@ -99,8 +99,10 @@ fn settle(app: &mut App) {
 
 /// The tree the fixture builds, whichever way it was loaded.
 ///
-/// Everything a use site names is here, including the three the build could
-/// not stand in for: `settle` runs enough ticks for the script to fill them.
+/// Everything a use site names is here, including the ones the build could not
+/// stand in for: `settle` runs enough ticks for the script to fill them. The
+/// `<for>` block holds one of those per row, each called with the field its
+/// own record carries.
 const EXPECTED: &str = "\
 root
   column#stage
@@ -111,6 +113,9 @@ root
     label.shout = hey ann!
     label.arm = on
     label.arm = off
+  for
+    label.ticket = ticket Alpha!
+    label.ticket = ticket Beta!
   column#app
     label.home = home for bob
     column.rows
@@ -207,7 +212,12 @@ fn the_windowless_assembly_builds_the_same_tree() {
 fn filled() -> lumen_ir::artifact::CompiledApp {
     let mut compiled = lumenc::compile_app(&fixture()).expect("the fixture compiles");
     let mut warnings = Vec::new();
-    lumenc::component_fill::fill(&mut compiled, "main", &mut warnings);
+    lumenc::component_fill::fill(
+        &mut compiled,
+        "main",
+        &lumen_html::contract::Seed::new(),
+        &mut warnings,
+    );
     assert!(warnings.is_empty(), "{warnings:?}");
     compiled
 }
@@ -243,9 +253,17 @@ fn a_filled_tree_still_builds_what_the_runtime_builds() {
     assert_eq!(dump(&mut booted.app), EXPECTED);
 }
 
-/// Whether anything under `element` still stands in for a component.
+/// Whether anything under `element` still stands in for a component the build
+/// was meant to fill.
+///
+/// A `<for>` template is passed over: what a component renders for one row is
+/// not what it renders for another, so its marker stays where it is and the
+/// bodies travel beside the tree.
 #[cfg(feature = "web")]
 fn holds_marker(element: &lumen_ir::layout_ir::Element) -> bool {
+    if element.tag == "for" {
+        return false;
+    }
     element.frag_use.is_some() || element.children.iter().any(holds_marker)
 }
 
@@ -513,6 +531,32 @@ fn a_for_inside_a_block_resolves_rows_and_arguments() {
     let tree = dump(&mut app);
     assert!(tree.contains("label.row = Row: Alpha"), "{tree}");
     assert!(tree.contains("label.row = Row: Beta"), "{tree}");
+}
+
+/// A component written inside a `<for>` is called once per row, and the prop
+/// naming a row field carries that row's value. The rows are one entity each,
+/// so a prop that did not resolve would call the function with the braces and
+/// every row would read the same.
+#[test]
+fn a_row_component_is_called_with_its_own_row_field() {
+    let _serial = isolate();
+    let (mut app, _window) = build_headless_app(RunOptions::new(fixture())).expect("headless app");
+    settle(&mut app);
+
+    let tree = dump(&mut app);
+    let built: Vec<&str> = tree
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("label.ticket"))
+        .collect();
+    assert_eq!(
+        built,
+        [
+            "label.ticket = ticket Alpha!",
+            "label.ticket = ticket Beta!"
+        ],
+        "{tree}"
+    );
 }
 
 /// Markup writes a candela function as a tag, and the argument it passes

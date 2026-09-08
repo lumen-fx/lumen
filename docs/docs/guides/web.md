@@ -465,8 +465,12 @@ means anything without an absolute address.
 - A component that has to run must annotate its parameters, or the compiled
   program has no name to call it by, and it is emitted as an empty element. The
   build warns, naming the component.
-- A component written inside a `<for>` is filled by the browser, not the build:
-  what it renders depends on the row. The build names those too.
+- A component written inside a `<for>` is called once per row while the site is
+  built, and each body is written into the row it belongs to, wherever the rows
+  are known: a list `[web.seed]` declares, or one a `prerender = "run"` capture
+  read off the app. A virtualized block and `prerender = "none"` emit no rows,
+  so they carry no bodies either. The build names a row it could not read a
+  body for.
 - A `<for virtualized="true">` emits no rows. Which rows a virtualized list
   shows comes from how far its scroll container has been scrolled, which a
   build cannot know, so the runtime mounts them when the page opens. The

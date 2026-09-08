@@ -11,7 +11,7 @@ use crate::css;
 use crate::error::EmitError;
 use crate::html;
 use crate::seo;
-use crate::spec::{HostRewrite, OutputFile, PageSpec, SignalEnv, Site, SiteSpec};
+use crate::spec::{HostRewrite, OutputFile, PageSpec, RowFills, SignalEnv, Site, SiteSpec};
 use crate::urls;
 
 /// Emit the site: one document per page, the shell a deep path falls back
@@ -123,6 +123,7 @@ pub fn shell(spec: &SiteSpec, warnings: &mut Vec<String>) -> Result<String, Emit
         description: entry.description.clone(),
         signals: SignalEnv::new(),
         seed: Seed::new(),
+        fills: RowFills::default(),
     };
     document(&shell, spec, warnings)
 }
