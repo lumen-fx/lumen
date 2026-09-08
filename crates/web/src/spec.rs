@@ -1,6 +1,6 @@
 //! What a site is made of, and what comes back out of emitting one.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -218,6 +218,12 @@ pub struct WebSpec {
     pub wasm: String,
     /// JavaScript module that loads the runtime, relative to the site root.
     pub js: String,
+    /// Translation catalogue per locale: BCP-47 tag to the path of that
+    /// locale's `.ftl` file, relative to the site root. The build holds the
+    /// catalogue bytes and names the file, the same way it does for the
+    /// artifact and the runtime pair; the emitter only carries the name into
+    /// the manifest.
+    pub catalogues: BTreeMap<String, String>,
     /// How same-site links are followed.
     pub navigation: NavigationMode,
     /// Scripts the runtime loads at boot, in order.
@@ -260,6 +266,7 @@ impl Default for WebSpec {
             css_mode: CssMode::default(),
             wasm: DEFAULT_WASM_FILE.to_string(),
             js: DEFAULT_JS_FILE.to_string(),
+            catalogues: BTreeMap::new(),
             navigation: NavigationMode::default(),
             scripts: Vec::new(),
             host: HostRewrite::default(),

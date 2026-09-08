@@ -22,8 +22,9 @@
 //! init().then(boot);
 //! ```
 //!
-//! [`boot`] reads the document, fetches the manifest, the compiled app and
-//! its scripts, adopts the prerendered markup, and starts the frame loop.
+//! [`boot`] reads the document, fetches the manifest, the compiled app, its
+//! scripts and the catalogue for the document's locale, adopts the
+//! prerendered markup, and starts the frame loop.
 //! [`LumenWebApp`] is the surface underneath it, for a page that assembles
 //! those steps itself.
 

@@ -1,0 +1,17 @@
+<root>
+  <column id="page">
+    <!-- Resolved while the site is built: the document arrives translated. -->
+    <label id="greeting" translatable="greeting" text="Hello" />
+    <!-- Written by the script's `t()`, after the page has opened. -->
+    <label id="status" bind-text="status" text="" />
+    <!-- The rows exist only once the script has filled the list, so the
+         browser spawns them and resolves their key itself. -->
+    <for each="rows" key="id">
+      <row class="entry" gap="4">
+        <label class="entry-label" translatable="row-label" text="Row" />
+        <label class="entry-title" text="{row.title}" />
+      </row>
+    </for>
+  </column>
+  <script src="main.cdl" />
+</root>

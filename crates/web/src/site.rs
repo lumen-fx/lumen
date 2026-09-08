@@ -230,6 +230,7 @@ pub fn manifest(spec: &SiteSpec) -> Manifest {
         css: web.css.clone(),
         wasm: web.wasm.clone(),
         js: web.js.clone(),
+        catalogues: web.catalogues.clone(),
         locale: spec.locale.locale.clone(),
         dir: spec.locale.dir,
         locales: spec.locale.all(),
@@ -250,6 +251,7 @@ mod tests {
     use crate::spec::{LocaleSpec, WebSpec};
     use lumen_html::contract::NavigationMode;
     use lumen_ir::layout_ir::LayoutIR;
+    use std::collections::BTreeMap;
 
     fn spec() -> SiteSpec {
         SiteSpec {
@@ -284,6 +286,31 @@ mod tests {
         assert_eq!(manifest.entry, "index");
         assert_eq!(manifest.contract_version, LM_CONTRACT_VERSION);
         assert_eq!(manifest.navigation, NavigationMode::Hard);
+    }
+
+    /// The manifest is where the browser finds the catalogue for the locale
+    /// its document was emitted in, under the name the build gave the file.
+    #[test]
+    fn the_manifest_names_the_catalogue_of_every_locale() {
+        let mut with = spec();
+        // A site with no catalogues names none, rather than a file it never
+        // wrote.
+        assert!(manifest(&with).catalogues.is_empty());
+
+        with.web.catalogues = BTreeMap::from([
+            (
+                "en-US".to_string(),
+                "locale/en-US.0123456789abcdef.ftl".to_string(),
+            ),
+            (
+                "ar-EG".to_string(),
+                "locale/ar-EG.fedcba9876543210.ftl".to_string(),
+            ),
+        ]);
+        assert_eq!(
+            manifest(&with).catalogues.get("ar-EG").map(String::as_str),
+            Some("locale/ar-EG.fedcba9876543210.ftl")
+        );
     }
 
     #[test]

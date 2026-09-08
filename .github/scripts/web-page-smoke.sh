@@ -16,11 +16,14 @@
 #
 #   $1  directory holding lumen-web.wasm and lumen-web.js
 #   $2  the app to emit (default apps/widget-garden)
+#   $3  the document to open, site-relative (default /), for an app whose
+#       page under test is not the one at the site root
 
 set -euo pipefail
 
-lib_dir=$(realpath "${1:?usage: web-page-smoke.sh LIB_DIR [APP_DIR]}")
+lib_dir=$(realpath "${1:?usage: web-page-smoke.sh LIB_DIR [APP_DIR [PAGE]]}")
 app="${2:-apps/widget-garden}"
+page="${3:-/}"
 scriptless="apps/weather"
 chrome="${CHROME_BIN:-google-chrome}"
 port=8799
@@ -40,6 +43,7 @@ fail() {
 # warning counts, because the hydration mismatch report is a warning.
 open_page() {
   local target="$1"
+  local document="${2:-/}"
   out=$(mktemp -d)
   log=$(mktemp)
   dom=$(mktemp)
@@ -57,7 +61,7 @@ open_page() {
 
   "$chrome" --headless --disable-gpu --no-sandbox --virtual-time-budget=20000 \
     --enable-logging=stderr --log-level=0 --dump-dom \
-    "http://127.0.0.1:$port/" 2>"$log" >"$dom"
+    "http://127.0.0.1:$port$document" 2>"$log" >"$dom"
 
   kill "$server" 2>/dev/null || true
   wait "$server" 2>/dev/null || true
@@ -73,7 +77,7 @@ open_page() {
     fail "$target: the runtime had to build nodes the page should already have had"
 }
 
-open_page "$app"
+open_page "$app" "$page"
 
 # The runtime took the page over: this mark is the current tab's, and the
 # emitter and the runtime both write it, so it survives a reload either way.

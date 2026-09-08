@@ -15,7 +15,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::Element;
 
-use crate::assemble::{apply_seed, portable_app};
+use crate::assemble::{self, apply_seed, portable_app};
 use crate::load::{LoadError, PageContext};
 use crate::{LumenWebApp, hosts};
 
@@ -75,6 +75,13 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
     let (manifest, loaded) = page.load(&url).await?;
 
     let mut app = portable_app();
+    // Translations go in before anything reads a key: a script's `on_start`
+    // may call `t()`, and an element's text is resolved as it spawns. A
+    // catalogue that will not load is reported and the app starts anyway,
+    // reading in the language its source strings are written in.
+    if let Err(error) = assemble::install_i18n(&mut app.world, &page.locale, &loaded.catalogues) {
+        web_sys::console::error_1(&JsValue::from_str(&format!("lumen: {error}")));
+    }
     // The host goes in before the scene: `on_start` publishes the signals the
     // markup binds to, and the spawner seeds only what nothing has written.
     for script in &loaded.scripts {

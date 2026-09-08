@@ -49,6 +49,9 @@ const ASSET_DIR: &str = "assets";
 /// File the compiled candela program is written as.
 const BYTECODE_FILE: &str = "app.cdlb";
 
+/// The locale every other one falls back to, on the desktop and here.
+const FALLBACK_LOCALE: &str = "en-US";
+
 /// Port `--serve` listens on when none is named.
 const DEFAULT_PORT: u16 = 8787;
 
@@ -481,6 +484,10 @@ fn build(options: &Options) -> Result<Report, String> {
     let scripts = script_refs(&compiled, &mut warnings);
     check_exports(&compiled, &mut warnings);
     let locales = locales(options, &cfg);
+    // Read once and used twice: the build resolves `translatable` into every
+    // tree it writes, and the same bytes travel with the site so the browser
+    // reads what it builds after the page opens in the same language.
+    let catalogues = read_catalogues(dir, &locales)?;
     let css_mode = match cfg.web.css {
         WebCssMode::Sheet => CssMode::Sheet,
         WebCssMode::Computed => CssMode::Computed,
@@ -506,6 +513,23 @@ fn build(options: &Options) -> Result<Report, String> {
         Some(NamedFile::new(DEFAULT_ARTIFACT_FILE, bytes))
     } else {
         None
+    };
+    // A catalogue is only ever read by the browser runtime, so a site whose
+    // documents carry none ships without them: their text was resolved into
+    // the documents while they were written.
+    let catalogue_files: Vec<(String, NamedFile)> = if runtime.is_some() {
+        catalogues
+            .iter()
+            .map(|(tag, source)| {
+                let name = format!("locale/{tag}.ftl");
+                (
+                    tag.clone(),
+                    NamedFile::new(&name, source.clone().into_bytes()),
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
     };
     // The stylesheet is built twice, here to name it and again in the
     // emitter to write it. The two agree because both read the same tree
@@ -537,6 +561,10 @@ fn build(options: &Options) -> Result<Report, String> {
             Some(runtime) => runtime.js.path.clone(),
             None => DEFAULT_JS_FILE.to_string(),
         },
+        catalogues: catalogue_files
+            .iter()
+            .map(|(tag, file)| (tag.clone(), file.path.clone()))
+            .collect(),
         navigation: match cfg.web.navigation {
             WebNavigation::Soft => NavigationMode::Soft,
             WebNavigation::Hard => NavigationMode::Hard,
@@ -559,6 +587,9 @@ fn build(options: &Options) -> Result<Report, String> {
     std::fs::create_dir_all(&out).map_err(|e| format!("create {}: {e}", out.display()))?;
     if let Some(artifact) = &artifact {
         write_file(&out.join(&artifact.path), &artifact.bytes)?;
+    }
+    for (_, file) in &catalogue_files {
+        write_file(&out.join(&file.path), &file.bytes)?;
     }
     // The compiled program beside it is the browser's copy: a render runs the
     // one inside the artifact. It is one of the two largest files a site would
@@ -608,7 +639,12 @@ fn build(options: &Options) -> Result<Report, String> {
         };
         // One tree per locale, shared by every page of it: which page a
         // document shows is a signal inside the tree, not a tree of its own.
-        let ir = Arc::new(translated_ir(&compiled.ir, dir, locale, &mut warnings)?);
+        let ir = Arc::new(translated_ir(
+            &compiled.ir,
+            &catalogues,
+            locale,
+            &mut warnings,
+        )?);
         for key in &keys {
             spec.pages.push(page_spec(
                 key,
@@ -970,7 +1006,7 @@ fn row_item(row: &BTreeMap<String, String>) -> ArrayItem {
 /// nothing running.
 fn translated_ir(
     ir: &LayoutIR,
-    dir: &Path,
+    catalogues: &[(String, String)],
     locale: &str,
     warnings: &mut Vec<String>,
 ) -> Result<LayoutIR, String> {
@@ -981,17 +1017,46 @@ fn translated_ir(
             return Ok(ir.clone());
         }
     };
-    let fallback = "en-US"
+    let fallback = FALLBACK_LOCALE
         .parse::<LanguageIdentifier>()
         .map(|fallback| vec![fallback])
         .unwrap_or_default();
     let mut i18n = I18n::new(lang, fallback);
-    // A build reads the author's loose files; no asset chain exists yet.
-    i18n.load_dir(&locale_dir(dir), |p| std::fs::read(p))
-        .map_err(|e| format!("locale catalogues: {e}"))?;
+    for (tag, source) in catalogues {
+        let tag = tag
+            .parse::<LanguageIdentifier>()
+            .map_err(|e| format!("locale `{tag}` is not a valid BCP-47 tag: {e}"))?;
+        i18n.load_ftl(tag, source)
+            .map_err(|e| format!("locale catalogues: {e}"))?;
+    }
     // Resolving the text is the emitter's, because a server holding a tree
     // per locale builds one the same way.
     Ok(lumen_web::translate_ir(ir, &SharedI18n::new(i18n)))
+}
+
+/// The app's Fluent catalogues, as a tag and its source, one entry per
+/// locale that has a file.
+///
+/// Only the locales the site is emitted in are read, plus the one every
+/// other falls back to: a catalogue for a locale the site has no tree for
+/// has no reader on either side. A locale with no file loads nothing, which
+/// is what leaves its pages reading in the source language.
+fn read_catalogues(dir: &Path, locales: &[String]) -> Result<Vec<(String, String)>, String> {
+    let mut tags: Vec<&str> = locales.iter().map(String::as_str).collect();
+    if !tags.contains(&FALLBACK_LOCALE) {
+        tags.push(FALLBACK_LOCALE);
+    }
+    let mut out = Vec::new();
+    for tag in tags {
+        // A build reads the author's loose files; no asset chain exists yet.
+        let path = locale_dir(dir).join(format!("{tag}.ftl"));
+        match std::fs::read_to_string(&path) {
+            Ok(source) => out.push((tag.to_string(), source)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("read {}: {e}", path.display())),
+        }
+    }
+    Ok(out)
 }
 
 /// Move every asset the markup points at into the site, and rewrite the

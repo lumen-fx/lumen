@@ -7,7 +7,8 @@
 //! differ, so a platform adds its own backends to it rather than restating it.
 //!
 //! [`portable_app`] builds that app, [`hosts::install`] puts the host for an
-//! engine into it, and [`apply_seed`] applies the state a rendered document
+//! engine into it, [`install_i18n`] gives it the catalogues for the locale it
+//! is answering in, and [`apply_seed`] applies the state a rendered document
 //! was produced from.
 //!
 //! Nothing here is `!Send`, which is what makes the assembly usable from a
@@ -19,4 +20,4 @@
 pub mod assemble;
 pub mod hosts;
 
-pub use assemble::{apply_seed, portable_app};
+pub use assemble::{apply_seed, install_i18n, portable_app};

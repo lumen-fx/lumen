@@ -369,9 +369,9 @@ carries them. An artifact compiled some other way still holds the markers, and
 those reach the document as empty elements for the browser to fill.
 
 A script's `t()` returns the key it was given, and its `format_*` calls return
-their argument. The translator and the formatters are the desktop runtime's,
-and a render installs neither; markup `translatable` and `format` are
-unaffected, because both are resolved as the document is written.
+their argument: a render installs neither a translator nor the formatters.
+Markup `translatable` and `format` are unaffected, because both are resolved
+as the document is written.
 
 The rest of the limits are the emitter's, and a rendered page has the same ones
 [a built page](web.md) has.

@@ -48,16 +48,17 @@ reads.
 ## What lands in the output directory
 
 ```
-index.html             the entry page
-settings.html          one document per page
-404.html               the shell a path with no document falls back to
-lumen.web.json         what the browser runtime reads before anything else
-styles.<hash>.css      the app's stylesheet, plus the reset
-app.<hash>.lmna        the compiled app
-app.<hash>.cdlb        the compiled candela program, when the app has one
-lumen-web.<hash>.wasm  the runtime
-lumen-web.<hash>.js    the module that loads it
-assets/                every file the markup points at
+index.html               the entry page
+settings.html            one document per page
+404.html                 the shell a path with no document falls back to
+lumen.web.json           what the browser runtime reads before anything else
+styles.<hash>.css        the app's stylesheet, plus the reset
+app.<hash>.lmna          the compiled app
+app.<hash>.cdlb          the compiled candela program, when the app has one
+lumen-web.<hash>.wasm    the runtime
+lumen-web.<hash>.js      the module that loads it
+locale/<tag>.<hash>.ftl  the catalogue for each locale the site is emitted in
+assets/                  every file the markup points at
 ```
 
 `<hash>` is sixteen characters taken from the file itself, and it is there
@@ -84,9 +85,9 @@ it takes about as long as `lumenc build`.
 Under `render = "ssr"` that list holds everything except the documents. A page
 is produced when it is asked for, so writing one here would leave a second
 copy of it beside the one a visitor is sent. With `runtime = false` beside it,
-the candela program, `lumen.web.json` and the runtime pair go too: nothing
-loads them. The compiled app stays, because the server renders from it, and
-the build prints the name it wrote it under.
+the candela program, `lumen.web.json`, the catalogues and the runtime pair go
+too: nothing loads them. The compiled app stays, because the server renders
+from it, and the build prints the name it wrote it under.
 
 ## How a page reaches the browser
 
@@ -407,6 +408,11 @@ reads as `1.234,50` with a trailing euro sign in the German tree and
 writing direction follow the locale, and every document links to its
 counterparts with `hreflang`. What the whole site shares - the stylesheet, the
 compiled app, the runtime, the assets - is written once at the root.
+
+Each locale's catalogue travels with the site, and a document loads the one
+for its own tree. What the page builds after it opens reads in the language
+the document arrived in: the rows of a list a script fills, and whatever that
+script's `t()` returns. [Translation](i18n.md) is the whole workflow.
 
 Under `render = "ssr"` no documents are written for any locale. A render
 answers every one of them: the request's own locale, then a `/de-DE/` prefix on

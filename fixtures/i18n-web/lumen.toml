@@ -1,0 +1,13 @@
+# Proof fixture for translation in the browser. The site is emitted in two
+# locales; the German tree's document arrives translated, and everything the
+# runtime builds after it opens - the rows of the list and the status the
+# script writes - has to read in German too.
+[script]
+engine = "candela"
+
+[web]
+locales = ["en-US", "de-DE"]
+
+# No introspection server, so a headless CI run binds no port.
+[mcp]
+port = 0

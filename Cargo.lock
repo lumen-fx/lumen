@@ -3954,6 +3954,7 @@ dependencies = [
  "bevy_ecs",
  "lumen-core",
  "lumen-html",
+ "lumen-i18n",
  "lumen-input",
  "lumen-ir",
  "lumen-prerender",

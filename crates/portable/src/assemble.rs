@@ -16,7 +16,6 @@
 //! pushes that mark a key dirty, or the key's one-tick window closes
 //! unobserved and a bound label freezes at its spawn value.
 
-#[cfg(target_arch = "wasm32")]
 use std::sync::Arc;
 
 use bevy_ecs::prelude::*;
@@ -30,6 +29,7 @@ use lumen_core::signals::{
     push_textinput_to_signal, push_toggle_to_signal,
 };
 use lumen_html::contract::Seed;
+use lumen_i18n::{I18n, I18nError, Lang, LanguageIdentifier, SharedI18n};
 use lumen_primitives::{
     CheckboxPlugin, ControlsPlugin, PressPlugin, ProgressPlugin, RadioPlugin, TabsPlugin,
     ValidationPlugin,
@@ -215,6 +215,51 @@ fn install_bindings(app: &mut App) {
     );
 }
 
+/// The locale every other one falls back to. The desktop's fallback chain
+/// ends here too, and it is the locale an app's source strings are in.
+const FALLBACK_LOCALE: &str = "en-US";
+
+/// Install the app's translations for `locale`, from catalogues that were
+/// fetched rather than read off a disk.
+///
+/// `catalogues` pairs a BCP-47 tag with that locale's Fluent source. It is
+/// the same registry the desktop builds, reaching the same two readers: the
+/// world resource markup resolves a `translatable` key through as it spawns,
+/// and the process-wide hook every script host's `t()` calls. A page that
+/// arrived already translated still needs both, because a row the app builds
+/// after the page opens was never written into the document.
+///
+/// No formatter is installed: nothing in this assembly links one, so a
+/// `format` spec leaves its text as it stands.
+///
+/// # Errors
+///
+/// A tag is not BCP-47, or a catalogue is not Fluent. Nothing is installed
+/// then, and the app reads in the language its source strings are written in.
+pub fn install_i18n(
+    world: &mut World,
+    locale: &str,
+    catalogues: &[(String, String)],
+) -> Result<(), I18nError> {
+    let current: LanguageIdentifier = Lang::try_from(locale)?.into();
+    let fallback: LanguageIdentifier = Lang::try_from(FALLBACK_LOCALE)?.into();
+    let mut i18n = I18n::new(current, vec![fallback]);
+    for (tag, source) in catalogues {
+        let tag: LanguageIdentifier = Lang::try_from(tag.as_str())?.into();
+        i18n.load_ftl(tag, source)?;
+    }
+    let shared = SharedI18n::new(i18n);
+    let for_markup = shared.clone();
+    world.insert_resource(lumen_core::i18n::AppI18n::new(
+        Arc::new(move |key| for_markup.try_t(key)),
+        Arc::new(|_, _| None),
+    ));
+    let for_scripts = shared.clone();
+    lumen_core::i18n::set_translator(move |key| for_scripts.try_t(key));
+    world.insert_resource(shared);
+    Ok(())
+}
+
 /// Apply the state the page was rendered from, before the scene is spawned.
 ///
 /// Only signals nothing has written yet, so a script that published a signal
@@ -247,5 +292,56 @@ pub fn apply_seed(world: &mut World, seed: &Seed) {
                     .collect(),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The translator slot is process-global, so the cases that install one
+    /// run one at a time.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    const GERMAN: &str = "greeting = Hallo\n";
+
+    #[test]
+    fn an_installed_catalogue_answers_both_readers() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut world = World::new();
+        install_i18n(
+            &mut world,
+            "de-DE",
+            &[("de-DE".to_string(), GERMAN.to_string())],
+        )
+        .expect("a valid tag and a valid catalogue");
+
+        // Scripts, through the process-wide hook.
+        assert_eq!(lumen_core::i18n::translate("greeting"), "Hallo");
+        assert_eq!(lumen_core::i18n::translate("nothing-here"), "nothing-here");
+        // Markup, through the app's own resource.
+        let app = world
+            .get_resource::<lumen_core::i18n::AppI18n>()
+            .expect("the app's half of the seam");
+        assert_eq!(app.try_translate("greeting").as_deref(), Some("Hallo"));
+        assert_eq!(app.try_translate("nothing-here"), None);
+        // Nothing formats: no formatter is linked into this assembly.
+        assert_eq!(app.format("number", "1234.5"), None);
+        lumen_core::i18n::clear_translator();
+    }
+
+    #[test]
+    fn a_catalogue_that_will_not_parse_is_reported() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut world = World::new();
+        assert!(install_i18n(&mut world, "not a tag", &[]).is_err());
+        assert!(
+            install_i18n(
+                &mut world,
+                "de-DE",
+                &[("de-DE".to_string(), "= no key\n".to_string())],
+            )
+            .is_err()
+        );
     }
 }
