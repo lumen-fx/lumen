@@ -1,9 +1,10 @@
 //! Reading an app out of the page it was emitted into.
 //!
 //! Everything an app is travels as data beside the document: a manifest
-//! naming the files, the compiled artifact, one image per script, and the
-//! signal state the page was rendered from. This module fetches that set and
-//! hands back the parts; starting an app out of them is [`crate::boot`].
+//! naming the files, the compiled artifact, one image per script, the
+//! translation catalogue for the document's own locale, and the signal state
+//! the page was rendered from. This module fetches that set and hands back
+//! the parts; starting an app out of them is [`crate::boot`].
 //!
 //! Paths in the manifest are relative to the site root, which the document
 //! carries as `data-lm-base`, so a site published under a prefix resolves the
@@ -14,8 +15,8 @@ use std::fmt;
 
 use js_sys::Uint8Array;
 use lumen_html::contract::{
-    DATA_LM_BASE, DATA_LM_CONTRACT, DATA_LM_PAGE, DEFAULT_MANIFEST_FILE, LM_CONTRACT_VERSION,
-    Manifest, SEED_SCRIPT_ID, Seed,
+    DATA_LM_BASE, DATA_LM_CONTRACT, DATA_LM_LOCALE, DATA_LM_PAGE, DEFAULT_MANIFEST_FILE,
+    LM_CONTRACT_VERSION, Manifest, SEED_SCRIPT_ID, Seed,
 };
 use lumen_ir::artifact::{self, CompiledApp};
 use wasm_bindgen::JsCast;
@@ -31,7 +32,17 @@ pub struct PageContext {
     pub base: String,
     /// Page key this document was emitted for.
     pub page: String,
+    /// Locale this document was emitted for.
+    ///
+    /// The document's own, not the manifest's: a site writes one manifest,
+    /// shared by every locale tree, so the tag a page reads in is the one
+    /// beside it on the document element.
+    pub locale: String,
 }
+
+/// The locale every other one falls back to, which is the locale an app's
+/// source strings are written in.
+const FALLBACK_LOCALE: &str = "en-US";
 
 /// The app the page names, loaded and ready to start.
 pub struct LoadedApp {
@@ -41,6 +52,9 @@ pub struct LoadedApp {
     pub seed: Seed,
     /// One loaded script per manifest entry, in manifest order.
     pub scripts: Vec<LoadedScript>,
+    /// Fluent catalogue sources: the document's own locale first, then the
+    /// fallback locale when the site carries a catalogue for it.
+    pub catalogues: Vec<(String, String)>,
 }
 
 /// A script image and the engine that runs it.
@@ -149,6 +163,7 @@ impl PageContext {
         Ok(Self {
             base: attribute(DATA_LM_BASE)?,
             page: attribute(DATA_LM_PAGE)?,
+            locale: attribute(DATA_LM_LOCALE)?,
             document,
         })
     }
@@ -184,7 +199,8 @@ impl PageContext {
         Ok(seed)
     }
 
-    /// Fetch the manifest, the artifact and every script it names.
+    /// Fetch the manifest, the artifact, every script it names, and the
+    /// catalogue this document's locale reads through.
     ///
     /// # Errors
     ///
@@ -223,8 +239,30 @@ impl PageContext {
             artifact,
             seed: self.seed()?,
             scripts,
+            catalogues: self.catalogues(&manifest).await?,
         };
         Ok((manifest, loaded))
+    }
+
+    /// Fetch the catalogue for this document's locale, and the one the
+    /// fallback locale reads through when the site carries it.
+    ///
+    /// A locale the manifest names no catalogue for fetches nothing, which
+    /// leaves its keys resolving to the text the app was authored with.
+    async fn catalogues(&self, manifest: &Manifest) -> Result<Vec<(String, String)>, LoadError> {
+        let mut wanted = vec![self.locale.as_str()];
+        if self.locale != FALLBACK_LOCALE {
+            wanted.push(FALLBACK_LOCALE);
+        }
+        let mut catalogues = Vec::new();
+        for tag in wanted {
+            let Some(path) = manifest.catalogues.get(tag) else {
+                continue;
+            };
+            let source = fetch_text(&url(&self.base, path)).await?;
+            catalogues.push((tag.to_string(), source));
+        }
+        Ok(catalogues)
     }
 }
 

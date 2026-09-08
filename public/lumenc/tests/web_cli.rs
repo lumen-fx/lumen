@@ -495,6 +495,57 @@ fn a_locale_gets_a_tree_of_its_own_under_its_tag() {
     check_documents(&out, "/");
 }
 
+/// The catalogue a locale reads through travels with the site, because the
+/// browser resolves every key the build had nothing to write into a document:
+/// a row of a list a script fills, and whatever a script's own `t()` returns.
+#[test]
+fn every_locale_the_site_is_emitted_in_carries_its_catalogue() {
+    let scratch = scratch("catalogues");
+    let out = scratch.join("site");
+    web(
+        "fixtures/i18n-web",
+        &out,
+        &["--locale", "en-US", "--locale", "de-DE"],
+    );
+
+    let manifest = read(&out, "lumen.web.json");
+    for tag in ["en-US", "de-DE"] {
+        let path = hashed(&out, &format!("locale/{tag}.ftl"));
+        assert!(
+            manifest.contains(&format!("\"{tag}\": \"{path}\"")),
+            "{manifest}"
+        );
+    }
+    // The catalogue is the source the desktop reads, not a resolved table.
+    let german = read(&out, &hashed(&out, "locale/de-DE.ftl"));
+    assert!(german.contains("row-label = Zeile"), "{german}");
+}
+
+/// A static site resolved its text into its documents and loads no runtime,
+/// so nothing on it would ever read a catalogue.
+#[test]
+fn a_static_site_ships_no_catalogue() {
+    let scratch = scratch("catalogues-static");
+    let out = scratch.join("site");
+    web(
+        "fixtures/i18n-web",
+        &out,
+        &[
+            "--render", "static", "--locale", "en-US", "--locale", "de-DE",
+        ],
+    );
+
+    let files = files(&out);
+    assert!(
+        !files.iter().any(|path| path.starts_with("locale/")),
+        "{files:?}"
+    );
+    // The German document still reads in German: that was resolved as it was
+    // written.
+    let german = read(&out, "de-DE/index.html");
+    assert!(german.contains("Hallo"), "{german}");
+}
+
 #[test]
 fn two_builds_of_one_app_write_the_same_bytes() {
     let scratch = scratch("repeat");

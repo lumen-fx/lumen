@@ -23,7 +23,10 @@ use serde::{Deserialize, Serialize};
 /// `contract_version` field of the [`Manifest`], and the same field on a
 /// [`Seed`]. A runtime that reads a version it does not implement refuses
 /// the document rather than guessing.
-pub const LM_CONTRACT_VERSION: u32 = 1;
+///
+/// 2: the manifest names the translation catalogue of every locale the site
+/// was emitted in, which the browser runtime installs at boot.
+pub const LM_CONTRACT_VERSION: u32 = 2;
 
 /// Node identity: the [`NodePath`] of the IR node this element came from.
 pub const DATA_LM: &str = "data-lm";
@@ -389,12 +392,19 @@ pub struct Manifest {
     pub wasm: String,
     /// JavaScript module that loads the runtime, relative to the site root.
     pub js: String,
-    /// Locale this tree was emitted for.
+    /// Locale of the tree at the site root. A site writes one manifest,
+    /// shared by every tree, so the locale a document was emitted for is
+    /// the [`DATA_LM_LOCALE`] attribute it carries and not this.
     pub locale: String,
-    /// Base writing direction of this tree.
+    /// Base writing direction of the tree at the site root. See
+    /// [`Self::locale`] for why it is that tree's.
     pub dir: Dir,
-    /// Every locale the site was emitted in, this one included.
+    /// Every locale the site was emitted in, the root tree's included.
     pub locales: Vec<String>,
+    /// Translation catalogue per locale: BCP-47 tag to the path of that
+    /// locale's `.ftl` file, relative to the site root. Empty for a site
+    /// with no catalogues, and for a locale that has none.
+    pub catalogues: BTreeMap<String, String>,
     /// How same-site links are followed.
     pub navigation: NavigationMode,
     /// Page key to the document that page was emitted as.
@@ -416,6 +426,7 @@ impl Default for Manifest {
             locale: String::new(),
             dir: Dir::Ltr,
             locales: Vec::new(),
+            catalogues: BTreeMap::new(),
             navigation: NavigationMode::Soft,
             pages: BTreeMap::new(),
             scripts: Vec::new(),

@@ -118,6 +118,19 @@ mod tests {
         let other = tree("ar-EG", vec!["en-US".to_string()]);
         assert_eq!(build_id(&root), build_id(&other));
 
+        // The catalogues are one map for the whole site, so they leave the
+        // trees agreeing the way the files they name do.
+        let catalogues = std::collections::BTreeMap::from([(
+            "ar-EG".to_string(),
+            "locale/ar-EG.0123456789abcdef.ftl".to_string(),
+        )]);
+        let mut root_with = tree("en-US", vec!["ar-EG".to_string()]);
+        root_with.web.catalogues = catalogues.clone();
+        let mut other_with = tree("ar-EG", vec!["en-US".to_string()]);
+        other_with.web.catalogues = catalogues;
+        assert_eq!(build_id(&root_with), build_id(&other_with));
+        assert_ne!(build_id(&root), build_id(&root_with));
+
         // What the manifest names is what the marker follows.
         let mut changed = tree("en-US", vec!["ar-EG".to_string()]);
         changed.web.css = "styles.0123456789abcdef.css".to_string();

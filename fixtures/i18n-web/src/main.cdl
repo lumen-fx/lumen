@@ -1,0 +1,14 @@
+// Everything the build could not write into the document: the status line and
+// the rows of the list. Both read their text through the app's catalogue, so
+// they say what language the runtime is running in.
+import "lumen.cdl";
+
+fn on_ready() {
+    lumen::signal_set("status", lumen::t("status-loading"));
+    lumen::signal_array_set("rows", [
+        {"id": "a", "title": "Alpha"},
+        {"id": "b", "title": "Beta"}
+    ]);
+}
+
+fn main() {}
