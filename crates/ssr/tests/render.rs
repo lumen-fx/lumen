@@ -616,6 +616,71 @@ fn an_unresolved_component_still_runs_and_its_marker_holds_its_place() {
     );
 }
 
+/// The same component, written inside a `<for>` over `rows`, with the row's
+/// own field as its prop.
+fn app_with_a_row_component() -> CompiledApp {
+    let mut app = app_with_a_component();
+    let mut marker = element("Shout", Attributes::default(), Vec::new());
+    marker.frag_use = Some(Box::new(FragmentUse {
+        key: "Shout".to_string(),
+        args: vec![("who".to_string(), "{title}".to_string())],
+        slot_children: false,
+    }));
+    app.ir.root.children = vec![element(
+        "for",
+        Attributes {
+            each: Some("rows".to_string()),
+            ..Attributes::default()
+        },
+        vec![marker],
+    )];
+    app
+}
+
+/// A component inside a `<for>` is called once per row of the list the request
+/// settled into, and the document carries the body each call produced.
+///
+/// The rows and the bodies come from one app here by construction: the render
+/// reads them off the world it just wrote the page's state from, so a document
+/// showing three rows shows three bodies.
+#[test]
+fn a_row_component_is_rendered_per_row_into_the_document() {
+    let _turn = in_turn();
+    let mut seed = lumen_html::contract::Seed::new();
+    seed.arrays.insert(
+        "rows".to_string(),
+        ["Alpha", "Beta"]
+            .into_iter()
+            .map(|title| {
+                [("title".to_string(), title.to_string())]
+                    .into_iter()
+                    .collect()
+            })
+            .collect(),
+    );
+    let renderer = Renderer::start(
+        Arc::new(
+            SsrSite::new(app_with_a_row_component(), WebSpec::default())
+                .expect("the entry is a page")
+                .with_seed(seed),
+        ),
+        options(Arc::new(Silent)),
+    )
+    .expect("nothing else is running");
+
+    let response = renderer
+        .render(SsrRequest::get("/"))
+        .expect("the document is written");
+
+    assert!(response.body.contains("Alpha"), "{}", response.body);
+    assert!(response.body.contains("Beta"), "{}", response.body);
+    assert!(
+        !response.body.contains(r#"class="lm-fragment""#),
+        "no row is left as a box: {}",
+        response.body
+    );
+}
+
 /// A one-page app whose only text is `greeting`, so a document says which
 /// language it was rendered in without anything running.
 fn app_saying(greeting: &str) -> CompiledApp {

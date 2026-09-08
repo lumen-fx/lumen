@@ -362,9 +362,13 @@ tree, in every `render` and `prerender` combination. The browser adopts those
 elements the way it adopts the rest of the page rather than building them
 again.
 
-The one thing that does not reach the document is a component written inside a
-`<for>`: what it renders depends on the row it is rendered for, so the browser
-fills it per row. The build says which components those are.
+A component written inside a `<for>` reaches the document too. It is called
+once per row while the site is built, and each body is written into the row it
+belongs to, so a crawler reads every card of the list. What the artifact
+carries there is the row template, so the browser calls the component again as
+it builds each row; it adopts the body the document holds when the call comes
+out the same, and builds the subtree when the row or its arguments differ from
+the ones the site was built with.
 
 ### What a block may not do
 

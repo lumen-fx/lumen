@@ -22,6 +22,7 @@
 #![warn(missing_docs)]
 
 pub mod deny;
+pub mod fills;
 
 use std::fmt;
 use std::sync::Arc;
@@ -40,9 +41,10 @@ use lumen_portable::{apply_seed, hosts, portable_app};
 use lumen_scene::routing::install_routing;
 use lumen_scene::spawn::SpawnIntoWorld;
 use lumen_script::{FetchRegistry, HttpDispatch};
-use lumen_web::{State, state_of};
+use lumen_web::{RowFills, State, state_of};
 
 pub use deny::DenyDispatch;
+pub use fills::{root_entity, row_fills};
 
 /// Where a script an app carries is said to have come from, in a load error.
 /// A run has the compiled program and not the file it was written in.
@@ -102,6 +104,9 @@ pub struct Prerendered {
     /// Engines the app carries a program for that this build has no host for.
     /// Their part of the state is missing from [`Self::state`].
     pub unsupported_engines: Vec<String>,
+    /// What the components inside the page's `<for>` rows rendered. The tree
+    /// holds the row template, so this is the only place a row's body is.
+    pub fills: RowFills,
 }
 
 /// An app built for one run, before its first tick.
@@ -188,11 +193,15 @@ pub fn page(compiled: &CompiledApp, key: &str, seed: &Seed, budget: Budget) -> P
     let denied = DenyDispatch::default();
     let mut booted = boot(compiled, key, seed, Arc::new(denied.clone()));
     let (state, settled) = settle(&mut booted.app, budget);
+    // Off the world the run settled into, before it goes: a row's component
+    // body exists nowhere else.
+    let fills = row_fills(&mut booted.app);
     Prerendered {
         state,
         settled,
         denied: denied.take(),
         unsupported_engines: booted.unsupported_engines,
+        fills,
     }
 }
 

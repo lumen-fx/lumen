@@ -21,7 +21,7 @@ use lumen_html::contract::Seed;
 use lumen_ir::artifact::{CompiledApp, CompiledScript};
 use lumen_ir::fragment::{Fragment, FragmentKind, FragmentParam, FragmentTable};
 use lumen_ir::layout_ir::{Attributes, Element, FragmentUse, InterpolationSlot, LayoutIR};
-use lumen_prerender::{Budget, DenyDispatch, boot, settle};
+use lumen_prerender::{Budget, DenyDispatch, boot, row_fills, settle};
 
 /// The program the build script compiled: a component that has to run, and an
 /// `on_ready` that mounts a fragment by key.
@@ -71,34 +71,67 @@ fn fragments() -> FragmentTable {
     table
 }
 
-/// The tree the build emits: a stage holding the marker `Shout` left behind.
-fn tree() -> LayoutIR {
+/// The marker `Shout` leaves behind, calling the component with `who`.
+fn marker(who: &str) -> Element {
     let mut marker = Element {
         tag: "Shout".to_string(),
         ..Element::default()
     };
     marker.frag_use = Some(Box::new(FragmentUse {
         key: "Shout".to_string(),
-        args: vec![("who".to_string(), "ann".to_string())],
+        args: vec![("who".to_string(), who.to_string())],
         slot_children: false,
     }));
+    marker
+}
+
+/// The tree the build emits: a stage holding the marker `Shout` left behind,
+/// and a `<for>` whose row template holds one of its own.
+fn tree() -> LayoutIR {
     let stage = Element {
         tag: "column".to_string(),
         attrs: Attributes {
             id: Some("stage".to_string()),
             ..Attributes::default()
         },
-        children: vec![marker],
+        children: vec![marker("ann")],
+        ..Element::default()
+    };
+    let rows = Element {
+        tag: "for".to_string(),
+        attrs: Attributes {
+            each: Some("rows".to_string()),
+            ..Attributes::default()
+        },
+        children: vec![marker("{title}")],
         ..Element::default()
     };
     LayoutIR {
         root: Element {
             tag: "root".to_string(),
-            children: vec![stage],
+            children: vec![stage, rows],
             ..Element::default()
         },
         ..LayoutIR::default()
     }
+}
+
+/// A seed holding two rows, which is what a page written from `[web.seed]`
+/// starts from.
+fn seeded() -> Seed {
+    let mut seed = Seed::new();
+    seed.arrays.insert(
+        "rows".to_string(),
+        ["Alpha", "Beta"]
+            .into_iter()
+            .map(|title| {
+                [("title".to_string(), title.to_string())]
+                    .into_iter()
+                    .collect()
+            })
+            .collect(),
+    );
+    seed
 }
 
 /// The whole app, as a build reads it out of an artifact.
@@ -117,12 +150,19 @@ fn compiled() -> CompiledApp {
 
 /// Run the app until it settles, and hand back the app to read the tree off.
 fn run() -> App {
-    let mut booted = boot(
-        &compiled(),
-        "index",
-        &Seed::new(),
-        Arc::new(DenyDispatch::default()),
-    );
+    run_with(&seeded())
+}
+
+/// The same, from a seed of the caller's choosing.
+fn run_with(seed: &Seed) -> App {
+    run_tree(tree(), seed)
+}
+
+/// The same, from a tree of the caller's choosing.
+fn run_tree(ir: LayoutIR, seed: &Seed) -> App {
+    let mut compiled = compiled();
+    compiled.ir = ir;
+    let mut booted = boot(&compiled, "index", seed, Arc::new(DenyDispatch::default()));
     settle(&mut booted.app, Budget::default());
     booted.app
 }
@@ -184,8 +224,86 @@ fn a_run_builds_every_fragment_the_artifact_carries() {
 
     assert_eq!(
         dump(&mut app),
-        "root\n  column\n    label.shout = ann!\n  label.card = mounted\n"
+        "root\n  column\n    label.shout = ann!\n  for\n    label.shout = Alpha!\n    \
+         label.shout = Beta!\n  label.card = mounted\n"
     );
+}
+
+/// What a `<for>` row's component rendered, keyed by the node path of the
+/// element the document writes it at.
+///
+/// The tree carries the row template, so nothing in it says what the call
+/// produced for row one and what it produced for row two. This is where a
+/// build reads that, and the paths are the ones the emitter and the browser
+/// both number.
+#[test]
+fn a_row_component_body_is_read_off_the_world_per_row() {
+    let _turn = in_turn();
+    let mut app = run();
+
+    let fills = row_fills(&mut app);
+
+    assert_eq!(fills.block("0.1"), Some(("rows", 2)));
+    assert_eq!(
+        fills.body("0.1::0").and_then(|el| el.attrs.text.as_deref()),
+        Some("Alpha!")
+    );
+    assert_eq!(
+        fills.body("0.1::1").and_then(|el| el.attrs.text.as_deref()),
+        Some("Beta!")
+    );
+    // The marker outside the block is the compiler's to inline into the tree,
+    // so nothing here speaks for it.
+    assert!(fills.body("0.0.0").is_none());
+}
+
+/// A block with no rows fills nothing and still records itself, so a page
+/// written from a longer list is caught rather than written with bodies from
+/// a list it does not show.
+#[test]
+fn an_empty_list_records_the_block_and_no_bodies() {
+    let _turn = in_turn();
+    let mut app = run_with(&Seed::new());
+
+    let fills = row_fills(&mut app);
+
+    assert_eq!(fills.block("0.1"), Some(("rows", 0)));
+    assert!(fills.is_empty());
+}
+
+/// A row template naming two components, one of which the program does not
+/// declare.
+///
+/// Each name answers for itself: the one whose call built a body is working
+/// however the other went, and the one no row built anything for is the one
+/// the build reports. Nothing here is judged by the marker in the template,
+/// which stays where it is either way.
+#[test]
+fn a_row_names_the_component_no_row_built_a_body_for() {
+    let _turn = in_turn();
+    let mut ir = tree();
+    let mut absent = marker("{title}");
+    absent.tag = "Missing".to_string();
+    absent
+        .frag_use
+        .as_mut()
+        .expect("the marker carries a use site")
+        .key = "Missing".to_string();
+    ir.root.children[1].children.push(absent);
+    let mut app = run_tree(ir, &seeded());
+
+    let fills = row_fills(&mut app);
+
+    assert_eq!(
+        fills.unfilled_components().collect::<Vec<_>>(),
+        ["Missing"],
+        "{}",
+        dump(&mut app)
+    );
+    // The rows are laid end to end, so a two-element template puts the second
+    // row's first element four places along.
+    assert!(fills.body("0.1::0").is_some(), "{}", dump(&mut app));
+    assert!(fills.body("0.1::2").is_some(), "{}", dump(&mut app));
 }
 
 /// A component the build left a marker for is filled by calling the function,

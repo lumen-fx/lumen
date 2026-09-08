@@ -1256,3 +1256,107 @@ fn a_component_that_could_not_be_run_is_an_empty_box_in_the_page() {
     );
     assert!(!html.contains("placeholder"), "{html}");
 }
+
+/// A component element inside a `<for>` row template, which is the marker the
+/// runtime fills once per row.
+fn row_marker() -> Element {
+    let mut marker = element("Ticket", Attributes::default(), Vec::new());
+    marker.frag_use = Some(Box::new(FragmentUse {
+        key: "Ticket".into(),
+        args: vec![("title".into(), "{row.name}".into())],
+        slot_children: false,
+    }));
+    marker
+}
+
+/// A `<for>` row's component is written into the document as the body the
+/// call produced for that row, at the path the marker stands at.
+#[test]
+fn a_row_component_body_is_written_where_its_box_would_have_been() {
+    let mut spec = site(vec![list_page(vec![row_marker()])]);
+    spec.pages[0].signals = SignalEnv::new().with_array("items", items(&["one", "two"]));
+    spec.pages[0]
+        .fills
+        .with_block("0.0".into(), "items".into(), 2);
+    spec.pages[0]
+        .fills
+        .with_body("0.0::0".into(), element("label", labelled("one!"), vec![]));
+    spec.pages[0]
+        .fills
+        .with_body("0.0::1".into(), element("label", labelled("two!"), vec![]));
+
+    let site = emitted(&spec);
+    let html = site
+        .file("index.html")
+        .expect("the page emits")
+        .contents
+        .clone();
+
+    assert!(
+        html.contains(r#"<span class="lm-label" data-lm="0.0::0">one!</span>"#),
+        "{html}"
+    );
+    assert!(html.contains(r#"data-lm="0.0::1">two!<"#), "{html}");
+    assert!(!html.contains("lm-fragment"), "no box is left: {html}");
+    assert_eq!(site.warnings, Vec::<String>::new());
+    assert_well_formed(&html);
+}
+
+/// A row marker the build read no body for keeps its box and is reported
+/// once, because an empty element is what a reader would not notice.
+#[test]
+fn a_row_component_with_no_body_is_a_reported_box() {
+    let mut spec = site(vec![list_page(vec![row_marker()])]);
+    spec.pages[0].signals = SignalEnv::new().with_array("items", items(&["one", "two"]));
+
+    let site = emitted(&spec);
+    let html = site
+        .file("index.html")
+        .expect("the page emits")
+        .contents
+        .clone();
+
+    assert_eq!(
+        html.matches("lm-fragment").count(),
+        2,
+        "one box per row: {html}"
+    );
+    let said: Vec<&String> = site
+        .warnings
+        .iter()
+        .filter(|warning| warning.contains("Ticket"))
+        .collect();
+    assert_eq!(said.len(), 1, "said once per page: {:?}", site.warnings);
+}
+
+/// Bodies read off a list the page is not written from are dropped rather
+/// than written: a card built for a row the document does not show is a wrong
+/// page, and the box says nothing rather than something false.
+#[test]
+fn a_block_whose_rows_moved_loses_its_bodies() {
+    let mut spec = site(vec![list_page(vec![row_marker()])]);
+    spec.pages[0].signals = SignalEnv::new().with_array("items", items(&["one"]));
+    spec.pages[0]
+        .fills
+        .with_block("0.0".into(), "items".into(), 2);
+    spec.pages[0]
+        .fills
+        .with_body("0.0::0".into(), element("label", labelled("one!"), vec![]));
+
+    let site = emitted(&spec);
+    let html = site
+        .file("index.html")
+        .expect("the page emits")
+        .contents
+        .clone();
+
+    assert!(!html.contains("one!"), "{html}");
+    assert!(html.contains("lm-fragment"), "{html}");
+    assert!(
+        site.warnings
+            .iter()
+            .any(|warning| warning.contains("a different list")),
+        "{:?}",
+        site.warnings
+    );
+}

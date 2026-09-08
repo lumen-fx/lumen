@@ -15,11 +15,16 @@ use lumen_ir::layout_ir::{Element, LayoutIR};
 /// then to the key.
 pub fn translate_ir(ir: &LayoutIR, i18n: &SharedI18n) -> LayoutIR {
     let mut out = ir.clone();
-    translate(&mut out.root, i18n);
+    translate_element(&mut out.root, i18n);
     out
 }
 
-fn translate(element: &mut Element, i18n: &SharedI18n) {
+/// Resolve every `translatable` element's text in one subtree.
+///
+/// The tree a page is written from goes through [`translate_ir`]; a component
+/// body a build read off a `<for>` row arrives on its own and goes through
+/// this, so a row's card reads in the same language as the markup around it.
+pub fn translate_element(element: &mut Element, i18n: &SharedI18n) {
     if let Some(key) = element.attrs.translatable.clone() {
         element.attrs.text = Some(translated_or_authored(
             i18n.try_t(&key),
@@ -28,7 +33,7 @@ fn translate(element: &mut Element, i18n: &SharedI18n) {
         ));
     }
     for child in &mut element.children {
-        translate(child, i18n);
+        translate_element(child, i18n);
     }
 }
 

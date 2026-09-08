@@ -11,7 +11,7 @@ use lumen_html::contract::{
 };
 use lumen_i18n::LanguageIdentifier;
 use lumen_ir::interpolate::Globals;
-use lumen_ir::layout_ir::LayoutIR;
+use lumen_ir::layout_ir::{Element, LayoutIR};
 
 use crate::markup::MarkupSheet;
 
@@ -78,6 +78,84 @@ impl Globals for SignalEnv {
     }
 }
 
+/// What a `<for>` row's components rendered, read off the app that rendered
+/// them.
+///
+/// A component written inside a `<for>` is called once per row, and what it
+/// returns depends on the row, so no marker in the template stands for it.
+/// The app that ran the calls is gone by the time a document is written, so
+/// what it built travels here: a body per node path, and, per block, enough
+/// of the block to tell whether the page about to be written is the one the
+/// bodies came from.
+#[derive(Debug, Clone, Default)]
+pub struct RowFills {
+    /// Body written where the marker at this node path stands.
+    bodies: BTreeMap<String, Element>,
+    /// Array name and row count of the `<for>` block at this node path.
+    blocks: BTreeMap<String, (String, usize)>,
+    /// Every component a row template names, and whether any row's call
+    /// produced a body for it.
+    components: BTreeMap<String, bool>,
+}
+
+impl RowFills {
+    /// Record the body a marker at `path` was filled with.
+    pub fn with_body(&mut self, path: String, body: Element) {
+        self.bodies.insert(path, body);
+    }
+
+    /// Record the `<for>` block at `path`, iterating `array` over `rows`
+    /// rows.
+    pub fn with_block(&mut self, path: String, array: String, rows: usize) {
+        self.blocks.insert(path, (array, rows));
+    }
+
+    /// The body the marker at `path` was filled with.
+    pub fn body(&self, path: &str) -> Option<&Element> {
+        self.bodies.get(path)
+    }
+
+    /// The array name and row count of the `<for>` block at `path`.
+    pub fn block(&self, path: &str) -> Option<(&str, usize)> {
+        self.blocks
+            .get(path)
+            .map(|(array, rows)| (array.as_str(), *rows))
+    }
+
+    /// Record what the call at a row's marker for `name` produced.
+    ///
+    /// One name is recorded once per row it stands in, so a component that
+    /// built a body for any row of any block counts as working.
+    pub fn with_component(&mut self, name: String, filled: bool) {
+        let known = self.components.entry(name).or_insert(false);
+        *known |= filled;
+    }
+
+    /// Every component a row named that no row built a body for.
+    ///
+    /// The rows are where a component inside a `<for>` is judged: its marker
+    /// stays in the template whether or not the call worked, so the template
+    /// says nothing, and a name that came back empty from every row it stands
+    /// in is one the build reports.
+    pub fn unfilled_components(&self) -> impl Iterator<Item = &str> {
+        self.components
+            .iter()
+            .filter(|(_, filled)| !**filled)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// True when no component was filled inside any row.
+    pub fn is_empty(&self) -> bool {
+        self.bodies.is_empty()
+    }
+
+    /// Every recorded body, to resolve something the run left standing: a
+    /// build translates them into each locale it emits.
+    pub fn bodies_mut(&mut self) -> impl Iterator<Item = &mut Element> {
+        self.bodies.values_mut()
+    }
+}
+
 /// One page of the site.
 ///
 /// The markup is shared rather than owned. Every page of an app is emitted
@@ -99,6 +177,8 @@ pub struct PageSpec {
     /// State the browser runtime starts from, inlined into the document. It
     /// has to be the state the page was rendered with.
     pub seed: Seed,
+    /// What the components inside this page's `<for>` rows rendered.
+    pub fills: RowFills,
 }
 
 impl PageSpec {

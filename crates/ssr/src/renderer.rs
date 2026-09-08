@@ -289,6 +289,10 @@ fn render_one(
         .world
         .remove_resource::<RenderedDom>()
         .is_some_and(|dom| dom.0);
+    // What the components inside this render's `<for>` rows built, read off
+    // the world that built them. The rows and the bodies come from one app,
+    // so a document written from them shows a card for every row it shows.
+    let fills = lumen_prerender::row_fills(&mut app);
     // From here a reply belongs to nobody: the app that asked for it is
     // about to go, and the next request gets its own.
     flight.close();
@@ -324,6 +328,7 @@ fn render_one(
     let mut page = site.page(&key, spec);
     page.signals = state.signals;
     page.seed = state.seed;
+    page.fills = fills;
     let body = lumen_web::document(&page, spec, &mut warnings)?;
 
     let mut headers = vec![("Content-Type".to_string(), HTML.to_string())];
