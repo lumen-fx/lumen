@@ -214,7 +214,6 @@ mod tests {
     #[test]
     fn the_installed_host_answers_for_the_program_the_app_shipped() {
         let mut app = App::new();
-        app.extract_fns.clear();
         let host =
             install(&mut app, "candela", SMOKE, "smoke.cdlb").expect("this build carries candela");
 

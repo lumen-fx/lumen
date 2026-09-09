@@ -14,7 +14,7 @@ use lumen_core::app::App;
 use lumen_core::components::CaretBlink;
 use lumen_core::input::{FocusTracker, KeyPressed};
 use lumen_core::prelude::*;
-use lumen_core::render_world::AnimationsActive;
+use lumen_core::render_world::{AnimationsActive, install_extract_pipeline};
 use lumen_core::text_model::{TextBuffer, TextCursor};
 use lumen_input::InputPlugin;
 use lumen_text::TextEditPlugin;
@@ -25,6 +25,8 @@ const ADVANCE: f32 = 16.0 * 0.55;
 
 fn app() -> App {
     let mut app = App::new();
+    // The caret and placeholder checks read the extracted text runs.
+    install_extract_pipeline(&mut app);
     app.add_plugin(InputPlugin::default());
     app.add_plugin(TextEditPlugin);
     app

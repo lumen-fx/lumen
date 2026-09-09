@@ -95,8 +95,6 @@ impl LumenWebApp {
     #[wasm_bindgen(js_name = withUri)]
     pub fn with_uri(engine: &str, program: &[u8], uri: &str) -> Result<LumenWebApp, JsError> {
         let mut app = App::new();
-        // The page lays out and paints; nothing here extracts a scene.
-        app.extract_fns.clear();
         let host = hosts::install(&mut app, engine, program, uri)
             .map_err(|e| JsError::new(&e.to_string()))?;
         Ok(Self { app, host })

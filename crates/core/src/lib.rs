@@ -96,7 +96,7 @@ pub mod prelude {
         AnimationsActive, Brush, ExtractFn, ExtractSchedule, ExtractSet, ExtractedClipBox,
         ExtractedImage, ExtractedOutline, ExtractedRect, ExtractedScrollbar, ExtractedShadow,
         ExtractedText, FrameDamage, FrameDirty, Rect, Render, RenderStage, ScrollbarDrawRect,
-        SurfaceCapture, SurfaceFrame, Viewport,
+        SurfaceCapture, SurfaceFrame, Viewport, install_extract_pipeline,
     };
     #[allow(deprecated)]
     pub use crate::signals::Signals;

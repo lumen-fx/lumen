@@ -27,13 +27,11 @@ use crate::input::{
     ModifiersState, MouseWheel, PendingFileDrops, PointerLeft, PointerMoved, PointerPressed,
     PointerReleased, PointerState, ShowContextMenu, TextInputCommitted, TrayClicked,
 };
-use crate::node_ir::{PreviousScene, RetainedScene, transform_extracted_to_nodes};
+use crate::node_ir::{PreviousScene, RetainedScene};
 use crate::property_store::PropertyStore;
 use crate::render_world::{
     ExtractFn, ExtractSchedule, ExtractSet, FrameDamage, FrameDirty, HiddenExtracts, Render,
-    RenderStage, Viewport, clear_extracted, cull_hidden, cull_offscreen, extract_borders,
-    extract_clips, extract_rects, extract_scrollbars, extract_shadows, extract_text,
-    roll_up_frame_dirty, stash_hidden_entities,
+    RenderStage, Viewport, clear_extracted,
 };
 use crate::tick::TickStage;
 use crate::time::Instant;
@@ -204,8 +202,9 @@ pub struct App {
     /// Render world carrying per-frame extracted draw data and GPU resources.
     pub render_world: World,
     /// Extract fns invoked in registration order each tick, after the main schedule and before the render schedule.
-    /// [`App::new`] seeds the list with the built-in extractors and [`App::add_extract_fn`] appends to it. The list is
-    /// public so a plugin can also replace or reorder an entry; nothing in the workspace does that today.
+    /// Empty until a render backend installs the built-in chain with
+    /// [`crate::render_world::install_extract_pipeline`]; [`App::add_extract_fn`] appends to it. The list is public so
+    /// a plugin can also replace or reorder an entry; nothing in the workspace does that today.
     pub extract_fns: Vec<ExtractFn>,
     /// Worker-thread budget for the `bevy_ecs` multithreaded executor.
     ///
@@ -269,7 +268,11 @@ impl Default for App {
 }
 
 impl App {
-    /// Constructs a fresh app with both worlds, both schedules, the command queue, and the default extract fns.
+    /// Constructs a fresh app with both worlds, both schedules and the command queue.
+    ///
+    /// The extract list starts empty and the render schedule holds no systems: what turns the main world into a
+    /// paintable scene is installed by the render backend, through
+    /// [`crate::render_world::install_extract_pipeline`], so an app that is never painted never carries it.
     pub fn new() -> Self {
         let mut world = World::new();
 
@@ -395,17 +398,7 @@ impl App {
         let mut s = Self {
             world,
             render_world,
-            extract_fns: vec![
-                // Runs first so it primes the shared hierarchy memos and so
-                // `HiddenExtracts` is fresh for the `cull_hidden` guard.
-                stash_hidden_entities,
-                extract_shadows,
-                extract_rects,
-                extract_borders,
-                extract_text,
-                extract_clips,
-                extract_scrollbars,
-            ],
+            extract_fns: Vec::new(),
             desired_threads: default_thread_budget(),
             installed_plugins: HashMap::new(),
             installed_plugin_types: HashSet::new(),
@@ -420,8 +413,6 @@ impl App {
             TickStage::Input,
             crate::render_world::reset_animations_active,
         );
-        // Run [`roll_up_frame_dirty`] in `A11ySync` (the last main-world stage before extract) to fold render-relevant `Changed<T>` filters into [`FrameDirty`].
-        s.add_systems(TickStage::A11ySync, roll_up_frame_dirty);
         // Wave-D dirty-queue lifecycle. `clear_signal_dirty` keeps the legacy
         // `Signals::dirty` set tidy for embedders that still hold a `Res<Signals>`
         // reference; `clear_property_store_dirty` runs against the canonical
@@ -485,21 +476,6 @@ impl App {
         s.add_systems(
             TickStage::LayoutSync,
             crate::components::resolve_layout_direction,
-        );
-        // Register [`cull_offscreen`] in `RenderStage::Prepare` to drop extracted entities outside the viewport before render.
-        s.add_render_systems(RenderStage::Prepare, cull_offscreen);
-        // Suppress any extracted entity whose main entity is hidden by a
-        // `Visible(false)` on itself or an ancestor - the general guarantee
-        // that a hidden subtree paints nothing, behind the per-extractor
-        // `hidden_entities` filters.
-        s.add_render_systems(RenderStage::Prepare, cull_hidden);
-        // W2.1 - build the retained Node IR each frame from the flat Extracted* bag.
-        // Runs after `cull_offscreen` / `cull_hidden` so culled leaves never reach the tree.
-        s.add_render_systems(
-            RenderStage::Prepare,
-            transform_extracted_to_nodes
-                .after(cull_offscreen)
-                .after(cull_hidden),
         );
         s
     }

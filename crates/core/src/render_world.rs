@@ -14,6 +14,7 @@
 //!
 //! Each render-world entity represents one drawable. Adding a primitive consists of: one `Extracted*` component, one extract fn, and one render system.
 
+use crate::app::App;
 use crate::components::{
     CARET_WIDTH_PX, CaretBlink, CaretWidth, Color, EchoMode, Fill, FlexDirection, FlexJustify,
     ImeState, Opacity, PASSWORD_MASK_CHAR, PasswordCharacter, Style, TextAlign, TextBlockOrigin,
@@ -21,6 +22,8 @@ use crate::components::{
     Visuals, resolve_line_height, text_baseline_in_line, text_block_top,
 };
 use crate::input::{Focused, ScrollOffset};
+use crate::node_ir::transform_extracted_to_nodes;
+use crate::tick::TickStage;
 use bevy_ecs::prelude::*;
 use bevy_ecs::query::Or;
 use glam::Vec2;
@@ -32,6 +35,58 @@ use std::sync::{Arc, Mutex};
 ///
 /// Takes `&mut` on the main world to enable [`World::query`], which caches component-id resolution on first call.
 pub type ExtractFn = fn(&mut World, &mut World);
+
+/// Marks a render world whose extract pipeline is installed, so a second
+/// backend asking for it finds it already there.
+#[derive(Resource, Default, Debug)]
+pub struct ExtractPipeline;
+
+/// Install the pipeline that turns the main world into a paintable scene: the
+/// built-in extractors, the dirty roll-up that decides whether a tick extracts
+/// at all, and the `Prepare` systems that cull what was extracted and fold the
+/// rest into the retained node tree.
+///
+/// A render backend calls this when it installs itself. An app with no render
+/// backend, such as the browser runtime or a server render, never does, and so
+/// carries none of it: the page's own engine lays out and paints there.
+///
+/// The built-in chain goes ahead of whatever a plugin already appended with
+/// [`App::add_extract_fn`], so [`stash_hidden_entities`] still runs first and
+/// primes the hierarchy memos for the rest. Installing twice is a no-op, which
+/// is what lets an offscreen renderer sit beside a window in one app without
+/// doubling the chain.
+pub fn install_extract_pipeline(app: &mut App) {
+    if app.render_world.contains_resource::<ExtractPipeline>() {
+        return;
+    }
+    app.render_world.insert_resource(ExtractPipeline);
+    let chain: [ExtractFn; 7] = [
+        // Runs first so it primes the shared hierarchy memos and so
+        // `HiddenExtracts` is fresh for the `cull_hidden` guard.
+        stash_hidden_entities,
+        extract_shadows,
+        extract_rects,
+        extract_borders,
+        extract_text,
+        extract_clips,
+        extract_scrollbars,
+    ];
+    app.extract_fns.splice(0..0, chain);
+    // Fold render-relevant `Changed<T>` filters into `FrameDirty` in the last
+    // main-world stage before extract.
+    app.add_systems(TickStage::A11ySync, roll_up_frame_dirty);
+    // Drop extracted entities outside the viewport, then any whose main entity
+    // is hidden by a `Visible(false)` on itself or an ancestor, before the
+    // survivors are folded into the retained tree.
+    app.add_render_systems(RenderStage::Prepare, cull_offscreen);
+    app.add_render_systems(RenderStage::Prepare, cull_hidden);
+    app.add_render_systems(
+        RenderStage::Prepare,
+        transform_extracted_to_nodes
+            .after(cull_offscreen)
+            .after(cull_hidden),
+    );
+}
 
 /// Schedule label for the render schedule.
 #[derive(bevy_ecs::schedule::ScheduleLabel, Clone, Copy, Debug, Hash, PartialEq, Eq)]

@@ -247,6 +247,8 @@ impl Default for HeadlessRendererPlugin {
 
 impl Plugin for HeadlessRendererPlugin {
     fn build(self, app: &mut App) {
+        // The rects this rasterises come out of the extract step.
+        lumen_core::render_world::install_extract_pipeline(app);
         app.render_world
             .insert_non_send(HeadlessRenderer::new(self.width, self.height));
         app.add_render_systems(RenderStage::Render, headless_render_system);

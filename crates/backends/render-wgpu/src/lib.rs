@@ -1242,6 +1242,8 @@ impl WgpuRendererPlugin {
 
 impl Plugin for WgpuRendererPlugin {
     fn build(self, app: &mut App) {
+        // The walker below reads the retained tree; this is what builds it.
+        lumen_core::render_world::install_extract_pipeline(app);
         let renderer = match self.renderer {
             Some(r) => r,
             None => WgpuRenderer::new_offscreen(self.width, self.height)

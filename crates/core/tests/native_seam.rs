@@ -6,7 +6,7 @@
 //! frames, out of the tree when an ancestor hides it, and not into the tree at all on a clean tick.
 
 use lumen_core::prelude::*;
-use lumen_core::render_world::RenderEntityMap;
+use lumen_core::render_world::{RenderEntityMap, install_extract_pipeline};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -108,6 +108,7 @@ fn extract_sparklines(main: &mut World, render: &mut World) {
 
 fn app_with_one_sparkline() -> (App, Entity) {
     let mut app = App::new();
+    install_extract_pipeline(&mut app);
     app.add_plugin(SparklinePlugin);
     let entity = app
         .world
@@ -304,6 +305,7 @@ fn two_extensions_extracting_in_one_frame_do_not_evict_each_other() {
 #[test]
 fn a_leaf_inside_a_scroll_container_moves_with_the_content() {
     let mut app = App::new();
+    install_extract_pipeline(&mut app);
     app.add_plugin(SparklinePlugin);
     let scroller = app
         .world
@@ -343,6 +345,7 @@ fn a_leaf_inside_a_scroll_container_moves_with_the_content() {
 #[test]
 fn inherited_opacity_reaches_the_payload() {
     let mut app = App::new();
+    install_extract_pipeline(&mut app);
     app.add_plugin(SparklinePlugin);
     let parent = app.world.spawn(Opacity(0.5)).id();
     app.world.spawn((
@@ -376,6 +379,7 @@ fn inherited_opacity_reaches_the_payload() {
 #[test]
 fn registering_a_painter_mid_run_forces_the_next_frame() {
     let mut app = App::new();
+    install_extract_pipeline(&mut app);
     app.add_extract_fn(extract_sparklines);
     app.world.spawn((
         Transform {
@@ -411,6 +415,7 @@ fn registering_a_painter_mid_run_forces_the_next_frame() {
 #[test]
 fn hiding_an_ancestor_takes_the_leaf_out_of_the_tree() {
     let mut app = App::new();
+    install_extract_pipeline(&mut app);
     app.add_plugin(SparklinePlugin);
     let parent = app.world.spawn(Visible(true)).id();
     app.world.spawn((
@@ -447,6 +452,7 @@ fn hiding_an_ancestor_takes_the_leaf_out_of_the_tree() {
 #[test]
 fn a_leaf_entirely_off_screen_is_culled() {
     let mut app = App::new();
+    install_extract_pipeline(&mut app);
     app.add_plugin(SparklinePlugin);
     let viewport = app.render_world.resource::<Viewport>().size;
     app.world.spawn((
