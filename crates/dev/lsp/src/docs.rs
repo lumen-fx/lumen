@@ -244,7 +244,7 @@ Carries `Scroll` + `ScrollOffset` components at runtime."
             "**`<time-picker bind-value=\"signal\">`** - Text field for a 24-hour clock time. Expands to an `<input class=\"time-picker\">` whose built-in pattern checks the `HH:MM` shape (hour 00-23, minute 00-59). `bind-value` is required."
         }
         "tooltip" => {
-            "**`<tooltip text=\"...\" delay=\"500\">`** - Hover-delay popup. Wraps exactly one trigger element; the wrapper collapses at parse time, so CSS selectors apply to the trigger. `offset` sets the gap from the trigger."
+            "**`<tooltip text=\"...\" delay=\"500\">`** - Hover-delay popup. Wraps exactly one trigger element; the wrapper collapses at parse time, so CSS selectors apply to the trigger. `offset` sets the gap from the trigger, and `translatable` names the catalogue key the popup body reads from."
         }
         "menu" => {
             "**`<menu>`** - Inside `<menubar>`, a top-level OS menu titled by `label`, holding `<menuitem>` and `<separator>` children. Outside it, `<menu id=\"m\">` is an in-window popup panel toggled by the `__menu_open:m` signal, dismissed on an outside click."
@@ -289,9 +289,11 @@ pub fn attr_doc(attr: &str) -> Option<&'static str> {
         "inertia" => "**`inertia`** - `f32`. Scroll inertia factor (0 = no inertia).",
         "tab-index" => "**`tab-index`** - `i32`. Focus order (lower = earlier).",
         "translatable" => {
-            "**`translatable`** - catalogue key. The element's text is looked up in the \
-app's active locale; `lumenc i18n extract` collects the key into `locale/<lang>.ftl`. \
-Falls back to the authored `text`, then to the key itself."
+            "**`translatable`** - catalogue key. Every string the element shows is looked \
+up in the app's active locale: the text from the message, the `placeholder` from \
+`<key>.placeholder` and the `alt` from `<key>.alt`, each only when the markup authored \
+it. The text falls back to the authored `text`, then to the key itself. \
+`lumenc i18n extract` collects the keys into `locale/<lang>.ftl`."
         }
         "format" => {
             "**`format`** - `number` | `currency:<code>` | `date` | `time` | `datetime` | `relative`. Renders the element's text for the app's locale: a number, an amount in an ISO-4217 currency, a `YYYY-MM-DD[THH:MM[:SS]]` date, or seconds from now. A spec that is not one of these, or text the spec cannot read, leaves the text alone."

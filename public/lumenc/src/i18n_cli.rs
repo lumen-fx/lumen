@@ -11,8 +11,14 @@
 //!   `lumen::t("key")` - string literal as the first argument.
 //! - Rust macro: `t!(i18n, "key", ...)` / `tr!(i18n, "key", ...)` -
 //!   string literal as the second argument.
-//! - Markup attribute: `<text translatable="key">...</text>` or
-//!   `<label translatable="key">...</label>`.
+//! - Markup attribute: `translatable="key"`, on any element that shows a
+//!   string.
+//!
+//! A marked element's other strings hang off the same message as Fluent
+//! attributes, so a `placeholder` or an `alt` the markup authors is
+//! collected as `key.placeholder` / `key.alt` alongside the key itself.
+//! What the extractor writes is what resolves: a string the markup does not
+//! write gets no entry, because nothing would read one.
 //!
 //! The extractor is **idempotent**: existing entries in the target
 //! `.ftl` file are preserved verbatim (so translators can edit them
@@ -33,11 +39,13 @@
 //! string literal that follows. A key built at runtime rather than
 //! written as a literal is invisible to it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+
+use crate::translate::attribute_key;
 
 /// Usage block for `lumenc i18n --help` and `lumenc i18n extract --help`.
 const I18N_USAGE: &str = "lumenc i18n - translation catalogue tooling
@@ -181,7 +189,11 @@ pub fn scan_dir(dir: &Path, keys: &mut BTreeSet<String>) -> std::io::Result<()> 
 /// - `t!(i18n, "key", ...)` / `tr!(i18n, "key", ...)` - Rust macro;
 ///   first arg is the I18n resource binding (an expression),
 ///   second arg is the key literal.
-/// - `translatable="key"` - markup attribute.
+/// - `translatable="key"` - markup attribute. The enclosing tag decides
+///   which further keys come with it: a `placeholder` or an `alt` it
+///   authors is collected as `key.placeholder` / `key.alt`, and the bare
+///   key is collected for the element's own text unless one of those is
+///   the only string the element shows.
 ///
 /// The scanner is regex-free (no extra dep): it looks for the prefix
 /// substring, advances past whitespace, then either reads a string
@@ -219,12 +231,81 @@ pub fn extract_keys_into(src: &str, out: &mut BTreeSet<String>) {
     let attr = "translatable=";
     let mut idx = 0;
     while let Some(pos) = src[idx..].find(attr) {
-        let start = idx + pos + attr.len();
+        let at = idx + pos;
+        let start = at + attr.len();
         if let Some(key) = read_string_arg(&src[start..]) {
-            out.insert(key);
+            let tag = enclosing_tag(src, at).unwrap_or("");
+            let mut names_another = false;
+            for name in ["placeholder", "alt"] {
+                if tag_has_attribute(tag, name) {
+                    out.insert(attribute_key(&key, name));
+                    names_another = true;
+                }
+            }
+            // Same rule the resolver follows: the key stands in for the
+            // element's text unless the element's only translated string is
+            // one of the attributes above, in which case there is no text
+            // for a message value to become.
+            if !names_another || tag_has_attribute(tag, "text") {
+                out.insert(key);
+            }
         }
         idx = start;
     }
+}
+
+/// The markup of the tag whose attribute list holds byte `at`.
+///
+/// Back to the `<` that opens it and forward to the `>` that closes it,
+/// skipping quoted values so a `>` inside one does not end the tag early.
+/// The scan stays text-based, so it keeps working on a file that does not
+/// stand alone as a document.
+fn enclosing_tag(src: &str, at: usize) -> Option<&str> {
+    let open = src[..at].rfind('<')?;
+    let mut quote: Option<char> = None;
+    for (i, c) in src[open + 1..].char_indices() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            // The next tag opens before this one closed: not a tag.
+            None if c == '<' => return None,
+            None if c == '>' => return Some(&src[open..open + i + 2]),
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None => {}
+        }
+    }
+    None
+}
+
+/// Whether `tag` (one `<...>` slice) writes a `name="..."` attribute.
+///
+/// The walk skips quoted values, so a name written inside another
+/// attribute's text is not one, and the name has to start an attribute
+/// rather than end a longer one, so `alt` does not match `data-alt`.
+fn tag_has_attribute(tag: &str, name: &str) -> bool {
+    let mut quote: Option<char> = None;
+    let mut at_boundary = false;
+    for (i, c) in tag.char_indices() {
+        match quote {
+            Some(q) if c == q => {
+                quote = None;
+                at_boundary = false;
+            }
+            Some(_) => {}
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None if c.is_whitespace() => at_boundary = true,
+            None => {
+                if at_boundary
+                    && tag[i..].starts_with(name)
+                    && tag[i + name.len()..].starts_with('=')
+                {
+                    return true;
+                }
+                at_boundary = false;
+            }
+        }
+    }
+    false
 }
 
 /// Whether the name starting at byte `at` begins a call rather than
@@ -292,9 +373,41 @@ struct MergedFtl {
     added: usize,
 }
 
-/// Read existing `<target>` (if present), parse out its keys, and
-/// append every key in `discovered` that isn't already covered. The
-/// returned `contents` is the merged FTL text.
+/// One catalogue message as the scan found it.
+#[derive(Default)]
+struct Message {
+    /// The element shows text of its own, so the message wants a value.
+    value: bool,
+    /// The Fluent attributes the element's other strings resolve through.
+    attributes: BTreeSet<String>,
+}
+
+/// Group flat keys by the message they name, splitting each on the first
+/// dot the same way [`attribute_key`] joined it.
+fn group_by_message(discovered: &BTreeSet<String>) -> BTreeMap<String, Message> {
+    let mut messages: BTreeMap<String, Message> = BTreeMap::new();
+    for key in discovered {
+        match key.split_once('.') {
+            Some((name, attribute)) => {
+                messages
+                    .entry(name.to_string())
+                    .or_default()
+                    .attributes
+                    .insert(attribute.to_string());
+            }
+            None => messages.entry(key.clone()).or_default().value = true,
+        }
+    }
+    messages
+}
+
+/// Read existing `<target>` (if present), parse out its keys, and write in
+/// every key in `discovered` that isn't already covered. The returned
+/// `contents` is the merged FTL text.
+///
+/// A message the file lacks is appended whole. A message it already has
+/// gains only the attribute lines it is missing, so a translator's own
+/// wording is never rewritten.
 fn merge_into_ftl(target: &Path, discovered: &BTreeSet<String>) -> std::io::Result<MergedFtl> {
     let existing = match fs::read_to_string(target) {
         Ok(s) => s,
@@ -302,14 +415,30 @@ fn merge_into_ftl(target: &Path, discovered: &BTreeSet<String>) -> std::io::Resu
         Err(e) => return Err(e),
     };
     let existing_keys = parse_existing_keys(&existing);
-    let mut buf = existing.clone();
-    let mut added = 0;
-    let mut new_keys: Vec<&String> = discovered
-        .iter()
-        .filter(|k| !existing_keys.contains(*k))
-        .collect();
-    new_keys.sort();
-    if !new_keys.is_empty() {
+    let mut lines: Vec<String> = existing.lines().map(str::to_string).collect();
+    let mut edited = 0;
+    let mut fresh = String::new();
+    let mut appended = 0;
+    for (name, message) in group_by_message(discovered) {
+        if existing_keys.contains(&name) {
+            edited += fill_in_message(&mut lines, &name, &message, &existing_keys);
+        } else {
+            fresh.push_str(&render_message(&name, &message));
+            appended += usize::from(message.value) + message.attributes.len();
+        }
+    }
+    // Nothing landed in the existing text, so it is handed back byte for
+    // byte and a re-run over an unchanged app writes an identical file.
+    let mut buf = if edited > 0 {
+        let mut buf = lines.join("\n");
+        if !buf.is_empty() {
+            buf.push('\n');
+        }
+        buf
+    } else {
+        existing
+    };
+    if !fresh.is_empty() {
         if !buf.is_empty() && !buf.ends_with('\n') {
             buf.push('\n');
         }
@@ -322,37 +451,125 @@ fn merge_into_ftl(target: &Path, discovered: &BTreeSet<String>) -> std::io::Resu
                  # values below.\n\n",
             );
         }
-        for k in new_keys {
-            // Placeholder value matches the key itself so untranslated
-            // entries still render something sensible in the UI.
-            buf.push_str(&format!("# TODO: translate\n{k} = {k}\n\n"));
-            added += 1;
-        }
+        buf.push_str(&fresh);
     }
     Ok(MergedFtl {
         contents: buf,
-        added,
+        added: edited + appended,
     })
 }
 
-/// Tiny FTL key scanner - picks out `key = ...` lines from existing
-/// content. Strips comment lines and indented attribute lines.
+/// One whole message block, as it is appended to a catalogue.
+///
+/// Placeholder values match the key itself so untranslated entries still
+/// render something sensible in the UI. A message whose element shows no
+/// text of its own carries only its attributes, and gets no value.
+fn render_message(name: &str, message: &Message) -> String {
+    let mut out = String::from("# TODO: translate\n");
+    if message.value {
+        out.push_str(&format!("{name} = {name}\n"));
+    } else {
+        out.push_str(&format!("{name} =\n"));
+    }
+    for attribute in &message.attributes {
+        out.push_str(&format!(
+            "    .{attribute} = {}\n",
+            attribute_key(name, attribute)
+        ));
+    }
+    out.push('\n');
+    out
+}
+
+/// Write the parts of `message` that the block for `name` in `lines` lacks,
+/// returning how many lines that added.
+///
+/// New attributes go at the end of the block, which is where FTL wants them.
+/// The one existing line this rewrites is a value line that is exactly
+/// `name =`: the extractor wrote that itself for an element that showed no
+/// text, so filling it in once text appears touches nothing a translator
+/// typed.
+fn fill_in_message(
+    lines: &mut Vec<String>,
+    name: &str,
+    message: &Message,
+    existing_keys: &BTreeSet<String>,
+) -> usize {
+    let Some(start) = lines
+        .iter()
+        .position(|line| message_name(line) == Some(name))
+    else {
+        return 0;
+    };
+    // A blank line, a comment or the next message ends the block; anything
+    // else belongs to it, including the `}` closing a multi-line selector.
+    let mut end = start;
+    for (i, line) in lines.iter().enumerate().skip(start + 1) {
+        if line.trim().is_empty() || line.starts_with('#') || message_name(line).is_some() {
+            break;
+        }
+        end = i;
+    }
+    let new_lines: Vec<String> = message
+        .attributes
+        .iter()
+        .map(|attribute| (attribute, attribute_key(name, attribute)))
+        .filter(|(_, key)| !existing_keys.contains(key))
+        .map(|(attribute, key)| format!("    .{attribute} = {key}"))
+        .collect();
+    let mut added = new_lines.len();
+    lines.splice(end + 1..end + 1, new_lines);
+    if message.value && lines[start].trim_end().ends_with('=') {
+        lines[start] = format!("{name} = {name}");
+        added += 1;
+    }
+    added
+}
+
+/// Tiny FTL key scanner - picks out every key an existing catalogue already
+/// covers, message values and message attributes alike. An indented
+/// `.name = ...` belongs to the message above it, so it is recorded under
+/// the dotted key that resolves it.
 fn parse_existing_keys(ftl: &str) -> BTreeSet<String> {
     let mut keys = BTreeSet::new();
+    let mut message: Option<String> = None;
     for line in ftl.lines() {
         let trimmed = line.trim_start();
-        // Comments and continuation lines are skipped.
-        if trimmed.starts_with('#') || trimmed != line {
+        // A blank line ends the message block above it.
+        if trimmed.is_empty() {
+            message = None;
             continue;
         }
-        if let Some(eq) = line.find('=') {
-            let key = line[..eq].trim();
-            if is_valid_ftl_key(key) {
-                keys.insert(key.to_string());
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed != line {
+            if let Some(message) = &message
+                && let Some(rest) = trimmed.strip_prefix('.')
+                && let Some(eq) = rest.find('=')
+            {
+                let attribute = rest[..eq].trim();
+                if is_valid_ftl_key(attribute) {
+                    keys.insert(attribute_key(message, attribute));
+                }
             }
+            continue;
+        }
+        if let Some(key) = message_name(line) {
+            keys.insert(key.to_string());
+            message = Some(key.to_string());
         }
     }
     keys
+}
+
+/// The message a top-level `key = ...` line declares.
+fn message_name(line: &str) -> Option<&str> {
+    if line.starts_with('#') || line.trim_start() != line {
+        return None;
+    }
+    let key = line[..line.find('=')?].trim();
+    is_valid_ftl_key(key).then_some(key)
 }
 
 /// FTL keys are kebab-case ASCII identifiers per spec. Reject
@@ -439,6 +656,122 @@ mod tests {
         let mut keys = BTreeSet::new();
         extract_keys_into(src, &mut keys);
         assert!(keys.contains("app-title"));
+    }
+
+    #[test]
+    fn a_marked_element_collects_the_attributes_it_authors() {
+        let src = r#"
+            <input placeholder="Search" translatable="search"/>
+            <image src="logo.png" alt="The Lumen logo" translatable="logo"/>
+            <button text="Save" translatable="save"/>
+        "#;
+        let mut keys = BTreeSet::new();
+        extract_keys_into(src, &mut keys);
+        assert!(keys.contains("search.placeholder"));
+        assert!(keys.contains("logo.alt"));
+        assert!(keys.contains("save"));
+        // Neither element shows text of its own, so neither wants a value.
+        assert!(!keys.contains("search"));
+        assert!(!keys.contains("logo"));
+        // Nothing is translated into existence.
+        assert!(!keys.contains("save.placeholder"));
+        assert!(!keys.contains("save.alt"));
+    }
+
+    #[test]
+    fn an_element_with_both_a_placeholder_and_text_wants_both() {
+        let src = r#"<input text="Q" placeholder="Search" translatable="search"/>"#;
+        let mut keys = BTreeSet::new();
+        extract_keys_into(src, &mut keys);
+        assert!(keys.contains("search"));
+        assert!(keys.contains("search.placeholder"));
+    }
+
+    #[test]
+    fn an_attribute_name_inside_another_value_is_not_an_attribute() {
+        let src = r#"<label text="type alt=x here" data-alt="y" translatable="hint"/>"#;
+        let mut keys = BTreeSet::new();
+        extract_keys_into(src, &mut keys);
+        assert_eq!(keys, ["hint".to_string()].into_iter().collect());
+    }
+
+    #[test]
+    fn merge_writes_a_message_that_carries_only_attributes() {
+        let dir = tempdir();
+        let target = dir.join("en-US.ftl");
+        let mut keys = BTreeSet::new();
+        keys.insert("search.placeholder".to_string());
+        let merged = merge_into_ftl(&target, &keys).unwrap();
+        assert!(merged.contents.contains("search =\n"));
+        assert!(
+            merged
+                .contents
+                .contains("    .placeholder = search.placeholder\n")
+        );
+        assert_eq!(merged.added, 1);
+    }
+
+    #[test]
+    fn merge_adds_a_missing_attribute_to_a_message_the_file_has() {
+        let dir = tempdir();
+        let target = dir.join("de-DE.ftl");
+        fs::write(&target, "search = Suche\n\nsave = Speichern\n").unwrap();
+        let mut keys = BTreeSet::new();
+        keys.insert("search".to_string());
+        keys.insert("search.placeholder".to_string());
+        keys.insert("save".to_string());
+        let merged = merge_into_ftl(&target, &keys).unwrap();
+        assert_eq!(
+            merged.contents,
+            "search = Suche\n    .placeholder = search.placeholder\n\nsave = Speichern\n"
+        );
+        assert_eq!(merged.added, 1);
+    }
+
+    #[test]
+    fn merge_fills_in_a_value_line_it_left_empty_before() {
+        let dir = tempdir();
+        let target = dir.join("en-US.ftl");
+        fs::write(&target, "search =\n    .placeholder = Search\n").unwrap();
+        let mut keys = BTreeSet::new();
+        keys.insert("search".to_string());
+        keys.insert("search.placeholder".to_string());
+        let merged = merge_into_ftl(&target, &keys).unwrap();
+        assert_eq!(
+            merged.contents,
+            "search = search\n    .placeholder = Search\n"
+        );
+        assert_eq!(merged.added, 1);
+    }
+
+    #[test]
+    fn a_second_run_over_an_unchanged_app_writes_the_same_bytes() {
+        let dir = tempdir();
+        fs::write(
+            dir.join("main.lmn"),
+            "<root>\n             <input placeholder=\"Search\" translatable=\"search\"/>\n\
+             <image alt=\"A logo\" translatable=\"logo\"/>\n\
+             <button text=\"Save\" translatable=\"save\"/>\n\
+             </root>\n",
+        )
+        .unwrap();
+        let mut keys = BTreeSet::new();
+        scan_dir(&dir, &mut keys).unwrap();
+        let target = dir.join("en-US.ftl");
+        let first = merge_into_ftl(&target, &keys).unwrap();
+        fs::write(&target, &first.contents).unwrap();
+        let second = merge_into_ftl(&target, &keys).unwrap();
+        assert_eq!(second.contents, first.contents);
+        assert_eq!(second.added, 0);
+    }
+
+    #[test]
+    fn parse_existing_keys_records_message_attributes() {
+        let ftl = "search = Suche\n    .placeholder = Katalog durchsuchen\n\nsave = Speichern\n";
+        let keys = parse_existing_keys(ftl);
+        assert!(keys.contains("search"));
+        assert!(keys.contains("search.placeholder"));
+        assert!(keys.contains("save"));
     }
 
     #[test]

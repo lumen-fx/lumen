@@ -469,13 +469,20 @@ translation keys and writes `<app_dir>/locale/<tag>.ftl`. `--lang` defaults to
 
 Recognised call shapes: `t("key")` and `tr("key")` (including candela's
 `lumen::t("key")`), `t!(i18n, "key", ...)` and `tr!(i18n, "key", ...)`, and
-the `translatable="key"` markup attribute. Keys built at runtime are invisible
-to the scan.
+the `translatable="key"` markup attribute. A marked element also yields
+`key.placeholder` and `key.alt` when it writes those attributes, and yields
+the bare `key` for its own text. Keys built at runtime are invisible to the
+scan.
 
-The extractor is idempotent: existing entries are preserved verbatim and only
-new keys are appended, each with a placeholder value. `target`,
-`node_modules`, `.git`, and `locale` directories are skipped. The command
-prints the total and new key counts.
+A key containing a dot names a Fluent attribute: everything before the first
+dot is the message, everything after is the attribute, and the extractor
+writes it as an indented `.attr = ` line under that message. This holds for a
+key a script passes to `t()` as much as for one the markup derives.
+
+The extractor is idempotent: existing entries are preserved verbatim, a
+message the file lacks is appended whole, and a message it has gains only the
+attribute lines it is missing. `target`, `node_modules`, `.git`, and `locale`
+directories are skipped. The command prints the total and new key counts.
 
 `lumenc i18n` with no subcommand, or any subcommand other than `extract`,
 exits 2.

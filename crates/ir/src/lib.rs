@@ -16,6 +16,9 @@
 //! - [`fragment`] - [`Fragment`](fragment::Fragment), the named reusable
 //!   markup subtree, and the [`FragmentTable`](fragment::FragmentTable) an
 //!   app declares.
+//! - [`translate`] - the `translatable="key"` resolver, shared by the spawner
+//!   and the web emitter so an app run in a locale and a page built for it
+//!   show the same strings.
 //! - [`values`] - shared attribute/property value parsers.
 //! - [`css_vars`] - the `var(--name [, fallback])` resolver.
 //! - [`artifact`] - the AOT compiled-app container (`lumenc build` output).
@@ -32,6 +35,7 @@ pub mod css_vars;
 pub mod fragment;
 pub mod interpolate;
 pub mod layout_ir;
+pub mod translate;
 pub mod values;
 
 /// IR -> runtime-component `From` conversions (orphan-rule home for the

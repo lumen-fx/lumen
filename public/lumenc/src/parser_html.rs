@@ -1013,6 +1013,19 @@ fn build_composed_widget(
     // silent first-child pickup.
     if tag == "tooltip" {
         let text = node.attribute("text").unwrap_or("").to_string();
+        // The wrapper authors the popup body, so it carries the key for it.
+        // Empty is rejected here for the same reason the generic attribute
+        // rejects it: an empty key can never resolve.
+        let translatable = match node.attribute("translatable").map(str::trim) {
+            Some("") => {
+                return Err(ParseError::Xml(format!(
+                    "<tooltip> at byte {}: translatable attribute requires a \
+                     catalogue key (e.g. \"app-title\")",
+                    node.range().start
+                )));
+            }
+            other => other.map(str::to_string),
+        };
         let delay_ms = node.attribute("delay").and_then(|s| s.parse::<u32>().ok());
         let offset = node.attribute("offset").and_then(|s| s.parse::<f32>().ok());
         let mut child_nodes = node
@@ -1043,6 +1056,7 @@ fn build_composed_widget(
         )?;
         elem.attrs.tooltip = Some(crate::layout_ir::TooltipSpec {
             text,
+            translatable,
             delay_ms,
             offset,
         });
@@ -1675,6 +1689,11 @@ fn synthesize_widget_parts(
                 ..Default::default()
             };
             lbl.attrs.text = Some(label);
+            // The key that names a string moves with the string. Left on the
+            // root it would resolve against an element that no longer has any
+            // text, and the caption the user reads would never reach the
+            // catalogue.
+            lbl.attrs.translatable = attrs.translatable.take();
             lbl.attrs.classes = vec![label_class.to_string()];
             synthesized.push(lbl);
         }

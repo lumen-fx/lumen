@@ -556,6 +556,12 @@ impl Edges {
 pub struct TooltipSpec {
     /// Body text shown in the popup.
     pub text: String,
+    /// `translatable="<key>"` on the `<tooltip>` wrapper - the catalogue
+    /// key the popup body resolves through. The wrapper is the element
+    /// that authors the string, so it takes a plain key of its own rather
+    /// than an attribute on the trigger's; the trigger may not keep one,
+    /// since a `<checkbox>` moves its key onto the caption it synthesizes.
+    pub translatable: Option<String>,
     /// Hover dwell before the popup appears, in milliseconds. `None` =
     /// author didn't set `delay="..."` inline; the cascade fills it from
     /// the `--lumen-tooltip-delay` skin token when declared, and the
@@ -743,10 +749,11 @@ pub struct Attributes {
     /// once the bytes are ready.
     pub src: Option<String>,
     /// `alt="a cat asleep on a keyboard"` on `<image>` - what the image
-    /// shows, for a reader who is not looking at it. Screen readers announce
-    /// it and the web target writes it out as the `alt` attribute. An
-    /// `alt=""` an author wrote deliberately is kept as an empty string,
-    /// which is how a decorative image is marked.
+    /// shows, for a reader who is not looking at it. The web target writes
+    /// it out as the `alt` attribute; nothing on the desktop reads it yet.
+    /// An `alt=""` an author wrote deliberately is kept as an empty string,
+    /// which is how a decorative image is marked. A `translatable="<key>"`
+    /// on the same element resolves it through `<key>.alt`.
     pub alt: Option<String>,
     /// `href="settings"` on `<a>` - the target page path for file-based
     /// navigation. The spawner attaches an `Anchor` component so a click
@@ -1116,12 +1123,17 @@ pub struct Attributes {
     /// stable `Option<u8>` so the AOT artifact stays parser-independent.
     #[serde(with = "layout_direction_serde")]
     pub dir: Option<lumen_core::components::LayoutDirection>,
-    /// `translatable="<key>"` - marks the element's text for
-    /// translation. The spawn layer resolves the key against the
-    /// loaded catalogue and uses the result as the element's
-    /// [`lumen_core::components::TextContent`], falling back to the
-    /// authored `text` and then to the key itself. `lumenc i18n
-    /// extract` collects these keys into `locale/<lang>.ftl`.
+    /// `translatable="<key>"` - names the catalogue message every string
+    /// this element shows comes from. The text is the message value,
+    /// falling back to the authored `text` and then to the key itself;
+    /// [`Self::placeholder`] and [`Self::alt`] come from the Fluent
+    /// attributes `<key>.placeholder` and `<key>.alt`, and only when the
+    /// markup authored them. The key stops standing in for a missing text
+    /// once the element names one of those, so an `<input>` marked for its
+    /// placeholder does not spawn with the key as its value.
+    /// [`crate::translate::translate_attrs`] is the rule, shared by the
+    /// spawn layer and the web emitter; `lumenc i18n extract` collects the
+    /// keys into `locale/<lang>.ftl`.
     pub translatable: Option<String>,
     /// `format="<spec>"` - formats the element's text for the app's
     /// locale. The spec is one of `number`, `currency:<code>`, `date`,

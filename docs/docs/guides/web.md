@@ -400,8 +400,10 @@ locales = ["en-US", "de-DE"]
 
 The first locale is served from the site root and each of the others from a
 directory named after its tag, so the German settings page is
-`/de-DE/settings.html`. Text marked `translatable` is resolved while the site
-is built, so a page arrives already in its language, and text carrying a
+`/de-DE/settings.html`. The strings an element marked `translatable` shows -
+its text, its `placeholder`, its `alt`, and the body of a `<tooltip>` around
+it - are resolved while the site is built, so a page arrives already in its
+language, and text carrying a
 `format` is written for that locale at the same point, so one authored amount
 reads as `1.234,50` with a trailing euro sign in the German tree and
 `1,234.50` with a leading one in the English tree; `<html lang>` and the

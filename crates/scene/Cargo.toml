@@ -22,10 +22,6 @@ lumen-ir = { workspace = true }
 # Widget behaviour components the spawner attaches: toggles, sliders,
 # dropdowns, tab strips, popups.
 lumen-primitives = { workspace = true }
-# The rule a `translatable="..."` element follows when its key misses.
-# The catalogue and the formatters themselves come off the world, behind
-# core's opaque handles, so an app that installs none links none.
-lumen-i18n = { workspace = true }
 # `<image src>` attaches an asset request; the loader behind it is the
 # host's.
 lumen-assets = { workspace = true }

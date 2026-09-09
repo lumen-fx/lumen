@@ -2889,6 +2889,46 @@ fn tooltip_delay_and_offset_resolve_from_tokens() {
 }
 
 #[test]
+fn tooltip_carries_its_own_catalogue_key() {
+    let ir = parse_html(
+        r##"<root><tooltip text="tip" translatable="save-tip"><button text="b" /></tooltip></root>"##,
+    )
+    .expect("html");
+    let tip = ir.root.children[0].attrs.tooltip.as_ref().expect("spec");
+    assert_eq!(tip.translatable.as_deref(), Some("save-tip"));
+}
+
+#[test]
+fn an_empty_tooltip_key_is_a_parse_error() {
+    let err = parse_html(
+        r##"<root><tooltip text="tip" translatable=""><button text="b" /></tooltip></root>"##,
+    )
+    .expect_err("an empty key can never resolve");
+    assert!(
+        format!("{err}").contains("requires a catalogue key"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_checkbox_caption_takes_the_key_with_it() {
+    let ir =
+        parse_html(r##"<root><checkbox label="Remember me" translatable="remember" /></root>"##)
+            .expect("html");
+    let checkbox = &ir.root.children[0];
+    // The root keeps neither the caption nor the key that names it.
+    assert_eq!(checkbox.attrs.text, None);
+    assert_eq!(checkbox.attrs.translatable, None);
+    let caption = checkbox
+        .children
+        .iter()
+        .find(|child| child.attrs.text.is_some())
+        .expect("synthesized caption");
+    assert_eq!(caption.attrs.text.as_deref(), Some("Remember me"));
+    assert_eq!(caption.attrs.translatable.as_deref(), Some("remember"));
+}
+
+#[test]
 fn tooltip_inline_delay_beats_token() {
     let mut ir = parse_html(
         r##"<root><tooltip text="tip" delay="900"><button text="b" /></tooltip></root>"##,

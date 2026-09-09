@@ -15,6 +15,7 @@ use lumen_core::property_store::PropertyStore;
 use lumen_core::signals::signal_is_truthy;
 use lumen_ir::interpolate::{Scope, element_carries_placeholder, substitute_element};
 use lumen_ir::layout_ir::{Attributes, BindKind, Element, LayoutIR};
+use lumen_ir::translate::{TranslatedStrings, translate_attrs};
 
 /// `<if mode="...">` policy. `Render` despawn/respawns the subtree on
 /// each transition (default; cheap state-wise but loses focus / scroll
@@ -380,37 +381,35 @@ pub fn renumber_document_order(
     }
 }
 
-/// The text an element spawns with.
+/// The strings an element spawns with.
 ///
-/// Without `translatable="key"` this starts as the authored `text`. With
-/// it, the key is resolved against the app's loaded catalogue, and what
-/// happens on a miss is [`lumen_i18n::translated_or_authored`]'s rule.
+/// A `translatable="key"` element reads each of them off the catalogue
+/// message that key names, which is
+/// [`lumen_ir::translate::translate_attrs`]'s rule, shared with the web
+/// emitter so a page built for a locale reads like the app run in it.
+/// The spawner uses three of the four it returns; nothing on the desktop
+/// reads `alt`.
 ///
-/// A `format="<spec>"` renders whatever is left for the app's locale.
-/// Both come off [`lumen_core::i18n::AppI18n`], the app's own half of
-/// the seam, rather than the process-wide hooks core's bound-text path
-/// and the script hosts use: a process running two Lumen apps must not
-/// render one app's markup in the other's locale. Text the spec cannot
-/// read stands as it is, so a translated sentence under a `number`
-/// format is still the sentence.
-fn resolve_text(world: &World, el: &Element) -> Option<String> {
+/// A `format="<spec>"` then renders whatever text is left for the app's
+/// locale. Both the catalogue and the formatter come off
+/// [`lumen_core::i18n::AppI18n`], the app's own half of the seam, rather
+/// than the process-wide hooks core's bound-text path and the script
+/// hosts use: a process running two Lumen apps must not render one app's
+/// markup in the other's locale. Text the spec cannot read stands as it
+/// is, so a translated sentence under a `number` format is still the
+/// sentence.
+fn resolve_strings(world: &World, el: &Element) -> TranslatedStrings {
     let i18n = world.get_resource::<lumen_core::i18n::AppI18n>();
-    let text = match &el.attrs.translatable {
-        None => el.attrs.text.clone(),
-        Some(key) => {
-            let translated = i18n.and_then(|i18n| i18n.try_translate(key));
-            Some(lumen_i18n::translated_or_authored(
-                translated,
-                el.attrs.text.as_deref(),
-                key,
-            ))
-        }
+    let mut strings = translate_attrs(&el.attrs, &|key| {
+        i18n.and_then(|i18n| i18n.try_translate(key))
+    });
+    let (Some(text), Some(spec)) = (&strings.text, &el.attrs.format) else {
+        return strings;
     };
-    let (Some(text), Some(spec)) = (&text, &el.attrs.format) else {
-        return text;
-    };
-    i18n.and_then(|i18n| i18n.format(spec, text))
-        .or_else(|| Some(text.clone()))
+    if let Some(formatted) = i18n.and_then(|i18n| i18n.format(spec, text)) {
+        strings.text = Some(formatted);
+    }
+    strings
 }
 
 /// Alpha multiplier applied to a disabled entity when neither
@@ -484,9 +483,10 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
             store.set_global_str(&spec.name, v.as_str());
         }
     }
-    // Resolve the element's text before the world is borrowed by `spawn`:
+    // Resolve the element's strings before the world is borrowed by `spawn`:
     // a `translatable="key"` element reads the loaded catalogue.
-    let text = resolve_text(world, el);
+    let strings = resolve_strings(world, el);
+    let text = strings.text.clone();
     let mut style = Style::from(&el.attrs);
     apply_ua_style_defaults(&el.tag, &el.attrs, &mut style);
     // The content of a scroll container keeps its own size instead of
@@ -536,7 +536,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     if matches!(el.tag.as_str(), "input" | "textarea") {
         let default_multiline = el.tag == "textarea";
         entity.insert(TextInput {
-            placeholder: el.attrs.placeholder.clone().unwrap_or_default(),
+            placeholder: strings.placeholder.clone().unwrap_or_default(),
             cursor: 0,
             selection_anchor: None,
             multiline: el.attrs.multiline.unwrap_or(default_multiline),
@@ -805,7 +805,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
         // the single Rust-side fallback.
         let defaults = lumen_primitives::TooltipSource::default();
         entity.insert(lumen_primitives::TooltipSource {
-            text: spec.text.clone(),
+            text: strings.tooltip.clone().unwrap_or_default(),
             delay_ms: spec.delay_ms.unwrap_or(defaults.delay_ms),
             offset: spec.offset.unwrap_or(defaults.offset),
         });
@@ -945,7 +945,7 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     if let Some(z) = el.attrs.z_index {
         entity.insert(lumen_core::components::ZIndex(z));
     }
-    // The spec a `bind-text` write is rendered through: `resolve_text`
+    // The spec a `bind-text` write is rendered through: `resolve_strings`
     // formatted the text this element spawned with, and
     // `apply_text_bindings` formats every value the signal writes after.
     if let Some(spec) = &el.attrs.format {

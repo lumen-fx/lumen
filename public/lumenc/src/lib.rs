@@ -143,7 +143,7 @@ pub use lumen_runtime::{
 // historical names so every `lumenc::{artifact,layout_ir,values,css_vars}::...`
 // path (internal `crate::...` refs and external consumers alike) resolves
 // unchanged after the extraction.
-pub use lumen_ir::{artifact, css_vars, fragment, layout_ir, values};
+pub use lumen_ir::{artifact, css_vars, fragment, layout_ir, translate, values};
 
 pub use artifact::{ArtifactError, CompiledApp};
 #[cfg(feature = "dev-run")]
