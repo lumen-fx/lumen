@@ -190,7 +190,7 @@ with the toolchain, so there is nothing per-app to compile or trim.
 |-----|------|---------|--------|
 | `out_dir` | string | `dist/web` | Where the site is written, relative to the app directory unless absolute. |
 | `base_path` | string | `/` | URL prefix the site is served under. Every link and asset reference hangs off it. |
-| `url` | string | none | Absolute site URL. The canonical link, the social metadata and the sitemap need it; without it they are left out. |
+| `url` | string | none | Absolute site URL. The canonical link, the social metadata, the `hreflang` links and the sitemap need an address; without `url` or `canonical` they are left out. |
 | `description` | string | none | Description any page without one of its own carries. |
 | `og_image` | string | none | Image for social previews, relative to the site root or absolute. |
 | `canonical` | string | `url` | Absolute URL the pages declare as canonical, for a site published at more than one address. |
@@ -205,7 +205,7 @@ with the toolchain, so there is nothing per-app to compile or trim.
 | `hash_assets` | bool | `false` | Add a content hash to asset file names. Not applied yet. |
 | `debug_attrs` | bool | `false` | Write the extra `data-lm-*` attributes naming what an element came from. Not written yet. |
 | `menubar` | `"omit"`, `"nav"` | `omit` | What an app menu bar becomes in a document. |
-| `sitemap` | bool | on when `url` is set | Write `sitemap.xml`. |
+| `sitemap` | bool | on when the site has an address | Write `sitemap.xml`: every page in every locale, each entry carrying when its sources last changed and an `hreflang` link to the same page in the site's other languages. The URLs are built from `canonical`, else `url`; with neither, no file is written. |
 | `host` | `"static"`, `"netlify"`, `"vercel"`, `"apache"`, `"nginx"` | `static` | Where the site is deployed. A named host also gets the file that makes it serve a deep path with a 200 (`_redirects`, `vercel.json`, `.htaccess`, `nginx.conf`); `static` relies on the emitted `404.html`, which every host serves. Under `render = "ssr"` no rewrite file is written, because a render answers a deep path itself. |
 | `navigation` | `"soft"`, `"hard"` | `soft` | Whether a link to another page of the same site is swapped in place or loaded by the browser. |
 

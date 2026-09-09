@@ -51,6 +51,8 @@ reads.
 index.html               the entry page
 settings.html            one document per page
 404.html                 the shell a path with no document falls back to
+sitemap.xml              every page in every locale, for a crawler
+_redirects               the deep-path rewrite file, when `host` names one
 lumen.web.json           what the browser runtime reads before anything else
 styles.<hash>.css        the app's stylesheet, plus the reset
 app.<hash>.lmna          the compiled app
@@ -407,9 +409,10 @@ language, and text carrying a
 `format` is written for that locale at the same point, so one authored amount
 reads as `1.234,50` with a trailing euro sign in the German tree and
 `1,234.50` with a leading one in the English tree; `<html lang>` and the
-writing direction follow the locale, and every document links to its
-counterparts with `hreflang`. What the whole site shares - the stylesheet, the
-compiled app, the runtime, the assets - is written once at the root.
+writing direction follow the locale, and, once the site has an address, every
+document links to its counterparts with `hreflang`. What the whole site
+shares - the stylesheet, the compiled app, the runtime, the assets - is
+written once at the root.
 
 Each locale's catalogue travels with the site, and a document loads the one
 for its own tree. What the page builds after it opens reads in the language
@@ -441,8 +444,18 @@ title = "Settings"
 description = "Everything you can change"
 ```
 
-Without a `url` the canonical link and the sitemap are left out, since neither
-means anything without an absolute address.
+`sitemap.xml` lists every page of every locale, one entry each. An entry
+carries the page's own URL, when the sources behind it last changed, and a
+link to the same page in every other language the site is emitted in, which is
+what tells a crawler that a translated page is that page and not an unrelated
+one. The dates come off the files the page is built from rather than off the
+clock the build ran on, so a page that did not change keeps its date and a
+rebuild of an untouched app writes the same file.
+
+The URLs are built from the address the pages themselves call canonical:
+`canonical` when the site sets it, `url` otherwise. Without either, the
+canonical link, the `hreflang` links and the sitemap are all left out, since
+none of them means anything without an absolute address.
 
 ## Known limits
 

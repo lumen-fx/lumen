@@ -17,6 +17,43 @@ use crate::names;
 use crate::spec::{PageSpec, SiteSpec};
 use crate::urls;
 
+/// The address the site's absolute URLs are built from.
+///
+/// A site published at more than one address declares one of them as the
+/// canonical one; without that, it is the address it is served from.
+pub fn origin(spec: &SiteSpec) -> Option<&String> {
+    spec.web.canonical.as_ref().or(spec.web.url.as_ref())
+}
+
+/// Every locale's URL for `document`, as `(hreflang, url)` pairs.
+///
+/// Alternates need absolute URLs to be worth anything to a crawler, so a site
+/// with no address gets none, and neither does one emitted in a single
+/// locale, because a set of one says nothing. Every locale is listed, this
+/// one included, which is what tells a crawler the set is complete;
+/// `x-default` comes last and points at the locale served from the site root.
+pub fn alternates(spec: &SiteSpec, document: &str) -> Vec<(String, String)> {
+    let Some(url) = origin(spec) else {
+        return Vec::new();
+    };
+    if spec.locale.alternates.is_empty() {
+        return Vec::new();
+    }
+    let base = urls::normalize_base(&spec.web.base_path);
+    let href = |locale: &str| {
+        let path = format!("{}{document}", spec.locale.prefix_of(locale));
+        urls::absolute(url, &base, &path)
+    };
+    let mut out: Vec<(String, String)> = spec
+        .locale
+        .all()
+        .iter()
+        .map(|locale| (locale.clone(), href(locale)))
+        .collect();
+    out.push(("x-default".to_string(), href(&spec.locale.default_locale)));
+    out
+}
+
 /// Write everything above the page's own elements.
 pub fn open_document(out: &mut String, page: &PageSpec, spec: &SiteSpec) -> Result<(), EmitError> {
     let web = &spec.web;
@@ -27,10 +64,7 @@ pub fn open_document(out: &mut String, page: &PageSpec, spec: &SiteSpec) -> Resu
     // This tree's documents hang off the locale prefix; the site's shared
     // files do not.
     let tree = urls::join(&base, &spec.locale.prefix());
-    // A site published at more than one address declares one of them as the
-    // canonical one; without that, it is the address it is served from.
-    let origin = web.canonical.as_ref().or(web.url.as_ref());
-    let canonical = origin.map(|url| urls::absolute(url, &tree, &document));
+    let canonical = origin(spec).map(|url| urls::absolute(url, &tree, &document));
 
     out.push_str("<!doctype html>\n<html");
     attr(out, "lang", &spec.locale.locale);
@@ -77,25 +111,11 @@ pub fn open_document(out: &mut String, page: &PageSpec, spec: &SiteSpec) -> Resu
         meta_named(out, "twitter:description", description);
     }
 
-    // Alternates need absolute URLs to be worth anything to a crawler, so a
-    // site with no URL configured gets none. Every locale is listed,
-    // this one included, which is what tells a crawler the set is complete;
-    // `x-default` points at the locale served from the site root.
-    if let Some(url) = origin
-        && !spec.locale.alternates.is_empty()
-    {
-        let mut alternate = |hreflang: &str, locale: &str| {
-            let path = format!("{}{document}", spec.locale.prefix_of(locale));
-            let href = urls::absolute(url, &base, &path);
-            out.push_str("<link rel=\"alternate\"");
-            attr(out, "hreflang", hreflang);
-            attr(out, "href", &href);
-            out.push_str(">\n");
-        };
-        for locale in spec.locale.all() {
-            alternate(&locale, &locale);
-        }
-        alternate("x-default", &spec.locale.default_locale);
+    for (hreflang, href) in alternates(spec, &document) {
+        out.push_str("<link rel=\"alternate\"");
+        attr(out, "hreflang", &hreflang);
+        attr(out, "href", &href);
+        out.push_str(">\n");
     }
 
     out.push_str("<link rel=\"stylesheet\"");

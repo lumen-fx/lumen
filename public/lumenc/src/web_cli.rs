@@ -14,6 +14,7 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use lumen_core::nav::{PATH_SIGNAL, SEGMENT_SIGNAL, resolve_path};
 use lumen_core::signals::ArrayItem;
@@ -30,6 +31,7 @@ use lumen_runtime::app_layout::src_dir;
 use lumen_runtime::config::{
     LumenToml, WebCssMode, WebHost, WebNavigation, WebPrerender, WebRender, WebSeedValue,
 };
+use lumen_runtime::pages::PagePlan;
 use lumen_runtime::run::locale_dir;
 use lumen_ssr::{FetchPolicy, RenderOptions, SsrSite};
 use lumen_web::urls::is_external;
@@ -441,6 +443,11 @@ fn build(options: &Options) -> Result<Report, String> {
     // server, and the files are copied there.
     let assets = collect_assets(&mut compiled.ir.root, dir, &mut warnings);
 
+    // The sitemap says when each page last changed, and it has to say it the
+    // same way for the same sources, so the dates come off the files rather
+    // than off the clock this build ran on.
+    let stamps = page_stamps(dir, &plan, &assets);
+
     let keys: Vec<String> = plan.pages.iter().map(|page| page.key.clone()).collect();
     let keys = if keys.is_empty() {
         vec![plan.entry_key.clone()]
@@ -584,7 +591,7 @@ fn build(options: &Options) -> Result<Report, String> {
             WebHost::Nginx => HostRewrite::Nginx,
         },
         // A sitemap needs an absolute address to list, so one is written
-        // when the site has a URL unless the app says not to.
+        // when the site has one unless the app says not to.
         sitemap: cfg.web.sitemap.unwrap_or(true),
         runtime: runtime.is_some(),
         scripts,
@@ -670,15 +677,11 @@ fn build(options: &Options) -> Result<Report, String> {
                     lumen_web::translate_element(body, i18n);
                 }
             }
-            spec.pages.push(page_spec(
-                key,
-                &ir,
-                &cfg,
-                &seed,
-                prerender,
-                settled.get(key),
-                fills,
-            ));
+            let mut page = page_spec(key, &ir, &cfg, &seed, prerender, settled.get(key), fills);
+            // What a page shows is the app's answer; when it last changed is
+            // the sources', so it is put on here rather than rendered.
+            page.modified = stamps.get(key).copied();
+            spec.pages.push(page);
         }
         let site = lumen_web::emit(&spec).map_err(|e| e.to_string())?;
         for file in &site.files {
@@ -930,6 +933,7 @@ fn page_spec(
             signals: run.state.signals.clone(),
             seed: run.state.seed.clone(),
             fills,
+            modified: None,
         };
     }
     let mut signals = SignalEnv::new();
@@ -965,6 +969,7 @@ fn page_spec(
         signals,
         seed: page_seed,
         fills,
+        modified: None,
     }
 }
 
@@ -1085,6 +1090,67 @@ fn read_catalogues(dir: &Path, locales: &[String]) -> Result<Vec<(String, String
         }
     }
     Ok(out)
+}
+
+/// When each page last changed, keyed by page key.
+///
+/// A page is dated by its own `.lmn` and by everything the whole app is built
+/// from: `lumen.toml`, the shared markup, scripts, styles, assets and the
+/// translation catalogues. Other pages' `.lmn` files are left out, because
+/// counting them would give every page one identical date, which tells a
+/// crawler nothing. A page nothing readable stands behind gets no entry and
+/// is listed with no date.
+fn page_stamps(dir: &Path, plan: &PagePlan, assets: &[AssetRef]) -> BTreeMap<String, SystemTime> {
+    let pages: BTreeSet<PathBuf> = plan.pages.iter().map(|page| page.path.clone()).collect();
+    let mut shared: Option<SystemTime> = None;
+    let count = |path: &Path, into: &mut Option<SystemTime>| {
+        let Ok(at) = std::fs::metadata(path).and_then(|meta| meta.modified()) else {
+            return;
+        };
+        if into.is_none_or(|held| at > held) {
+            *into = Some(at);
+        }
+    };
+    count(&dir.join("lumen.toml"), &mut shared);
+    for path in walk(&src_dir(dir)) {
+        if !pages.contains(&path) {
+            count(&path, &mut shared);
+        }
+    }
+    for asset in assets {
+        count(&asset.source, &mut shared);
+    }
+    for path in walk(&locale_dir(dir)) {
+        count(&path, &mut shared);
+    }
+
+    let mut stamps = BTreeMap::new();
+    for page in &plan.pages {
+        let mut stamp = shared;
+        count(&page.path, &mut stamp);
+        if let Some(stamp) = stamp {
+            stamps.insert(page.key.clone(), stamp);
+        }
+    }
+    stamps
+}
+
+/// Every file under `dir`, however deep. A directory that cannot be read
+/// contributes nothing.
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(walk(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
 }
 
 /// Move every asset the markup points at into the site, and rewrite the
