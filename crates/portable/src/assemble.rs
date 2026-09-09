@@ -1,15 +1,20 @@
 //! Building the app, without the platform it runs on.
 //!
 //! This is the composition point for everything that is not a window, the
-//! counterpart of what `lumen-runtime` does for one. It installs the parts of
-//! Lumen that have no platform in them (widget behaviour, focus, the
-//! reconcilers, the two-way bindings) and leaves out layout, paint,
-//! accessibility, the font stack, and text editing.
+//! counterpart of what `lumen-runtime` does for one. It installs what the
+//! platform this app lands on does not already do (the reconcilers, the
+//! two-way bindings, key routing, and the widget behaviour a browser has no
+//! native control for) and leaves out layout, paint, accessibility, the font
+//! stack, and everything a browser drives itself.
 //!
-//! Text editing is the one that is easy to miss. In a browser, an `<input>`
-//! is edited by the browser, which owns the caret, the selection and the IME;
-//! Lumen's rope-backed editor would be a second one writing over the same
-//! text.
+//! That last part is most of the desktop's input layer. A browser hit-tests,
+//! moves focus, edits fields, owns the caret, the selection and the IME, and
+//! toggles, steps and drags its own form controls; Lumen's versions of those
+//! would be a second hand on the same control, and the DOM backend already
+//! writes what the browser did straight into the world. What stays is the
+//! routing a forwarded key needs, radio groups (the browser unchecks the
+//! sibling without saying so), tab strips and their panels, progress
+//! bindings and validation, none of which a page gets for free.
 //!
 //! The ordering edges below are the ones the desktop registers, and they are
 //! not decoration: every dirty-gated binding reader has to run after the
@@ -33,10 +38,7 @@ use lumen_core::signals::{
 use lumen_html::contract::{NodePath, NodeSeed, Seed};
 use lumen_html::paths::walk_nodes;
 use lumen_i18n::{I18n, I18nError, Lang, LanguageIdentifier, SharedI18n};
-use lumen_primitives::{
-    CheckboxPlugin, ControlsPlugin, PressPlugin, ProgressPlugin, RadioPlugin, TabsPlugin,
-    ValidationPlugin,
-};
+use lumen_primitives::{ProgressPlugin, RadioPlugin, TabsPlugin, ValidationPlugin};
 use lumen_scene::spawn;
 use lumen_scene::spawn::ForMarker;
 #[cfg(target_arch = "wasm32")]
@@ -84,17 +86,15 @@ pub fn portable_app() -> App {
 
     install_http(&mut app);
 
-    // No clipboard: it is the one non-send resource the input layer installs,
-    // and this app has to run wherever it is put.
-    app.add_plugin(lumen_input::InputPlugin { clipboard: false });
+    // Key routing only. The pointer, text-editing, IME and file-drop half of
+    // the input layer is a native window's, and the clipboard it would
+    // install is the one non-send resource this app cannot carry.
+    app.add_plugin(lumen_input::KeyDispatchPlugin);
     // The tree a script reads and the mutations it issues, which is how a
     // fragment reaches the world: `mount()` inserts a node the DOM applier
     // built, and the applier is where a fragment key becomes a subtree. The
     // desktop installs the same three systems.
     lumen_scene::dom::install_dom(&mut app);
-    app.add_plugin(PressPlugin::default());
-    app.add_plugin(ControlsPlugin);
-    app.add_plugin(CheckboxPlugin);
     app.add_plugin(RadioPlugin);
     app.add_plugin(TabsPlugin);
     app.add_plugin(ProgressPlugin);
