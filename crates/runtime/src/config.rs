@@ -567,7 +567,7 @@ pub fn infer_script_hosts(dir: &Path, cfg: &LumenToml) -> Vec<ScriptEngine> {
 /// [web]
 /// out_dir   = "dist/web"       # where the site is written
 /// base_path = "/"              # URL prefix the site is served under
-/// url = "https://example.com"  # absolute site URL; canonical + sitemap need it
+/// url = "https://example.com"  # an address; canonical link + sitemap need one
 /// description = "A Lumen app"  # used by any page without its own
 /// locales = ["en-US", "de-DE"] # one tree per locale
 /// host = "netlify"             # also write that host's deep-path rewrite file
@@ -590,8 +590,8 @@ pub struct WebCfg {
     /// link and asset reference in the documents hangs off it.
     pub base_path: Option<String>,
     /// Absolute site URL, such as `https://example.com`. The canonical link,
-    /// the social metadata and the sitemap need it; without it they are left
-    /// out.
+    /// the social metadata, the `hreflang` links and the sitemap need an
+    /// address; without this or [`Self::canonical`] they are left out.
     pub url: Option<String>,
     /// Description used by any page that does not set its own.
     pub description: Option<String>,
@@ -631,8 +631,10 @@ pub struct WebCfg {
     pub debug_attrs: Option<bool>,
     /// What an app menu bar becomes in a document.
     pub menubar: WebMenubar,
-    /// Write `sitemap.xml`. Needs [`Self::url`]. Defaults to on when a URL is
-    /// configured.
+    /// Write `sitemap.xml`: every page in every locale, each entry dated and
+    /// cross-linked to its other languages. Needs an address to build
+    /// absolute URLs from, [`Self::canonical`] else [`Self::url`], and is
+    /// written whenever the site has one.
     pub sitemap: Option<bool>,
     /// Host the site is deployed to, which decides the rewrite file that
     /// makes a deep path serve the app instead of the host's own 404.

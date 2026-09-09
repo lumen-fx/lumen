@@ -2,9 +2,10 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use lumen_html::contract::{DEFAULT_MANIFEST_FILE, LM_CONTRACT_VERSION, Manifest, Seed};
-use lumen_html::escape_text;
+use lumen_html::{escape_attr, escape_text};
 use lumen_ir::css::Stylesheet;
 
 use crate::css;
@@ -124,6 +125,7 @@ pub fn shell(spec: &SiteSpec, warnings: &mut Vec<String>) -> Result<String, Emit
         signals: SignalEnv::new(),
         seed: Seed::new(),
         fills: RowFills::default(),
+        modified: entry.modified,
     };
     document(&shell, spec, warnings)
 }
@@ -167,30 +169,90 @@ fn rewrite_file(spec: &SiteSpec) -> Option<(&'static str, String)> {
 }
 
 /// Every page of every locale, as absolute URLs, or `None` when the site has
-/// no URL to build them from.
+/// no address to build them from.
+///
+/// One entry per page per locale, which is what a crawler reads a translated
+/// page as: its own URL, when it last changed, and the same page in every
+/// other language it exists in. The URLs are built from the address the
+/// documents call canonical, so the file agrees with the pages it lists.
 fn sitemap(spec: &SiteSpec) -> Option<String> {
     if !spec.web.sitemap {
         return None;
     }
-    let url = spec.web.url.as_ref()?;
+    let url = seo::origin(spec)?;
     let base = urls::normalize_base(&spec.web.base_path);
-    let mut out = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
-    );
+    let mut body = String::new();
+    let mut cross_linked = false;
     for page in &spec.pages {
         let document = page.document(&spec.web.entry);
-        let locations = spec.locale.all().into_iter().map(|locale| {
+        let lastmod = page.modified.and_then(w3c_utc);
+        // Every locale of a page carries the whole set, this locale included,
+        // which is what the protocol asks for and what the head already says.
+        let alternates = seo::alternates(spec, &document);
+        cross_linked |= !alternates.is_empty();
+        for locale in spec.locale.all() {
             let path = format!("{}{document}", spec.locale.prefix_of(&locale));
-            urls::absolute(url, &base, &path)
-        });
-        for location in locations {
-            out.push_str("  <url><loc>");
-            out.push_str(&escape_text(&location));
-            out.push_str("</loc></url>\n");
+            body.push_str("  <url>\n    <loc>");
+            body.push_str(&escape_text(&urls::absolute(url, &base, &path)));
+            body.push_str("</loc>\n");
+            if let Some(lastmod) = &lastmod {
+                body.push_str("    <lastmod>");
+                body.push_str(lastmod);
+                body.push_str("</lastmod>\n");
+            }
+            for (hreflang, href) in &alternates {
+                body.push_str("    <xhtml:link rel=\"alternate\" hreflang=\"");
+                body.push_str(&escape_attr(hreflang));
+                body.push_str("\" href=\"");
+                body.push_str(&escape_attr(href));
+                body.push_str("\"/>\n");
+            }
+            body.push_str("  </url>\n");
         }
     }
-    out.push_str("</urlset>\n");
-    Some(out)
+    // A site emitted in one language links nothing, so it keeps the namespace
+    // it would never use out of its sitemap.
+    let xhtml = if cross_linked {
+        " xmlns:xhtml=\"http://www.w3.org/1999/xhtml\""
+    } else {
+        ""
+    };
+    Some(format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset \
+         xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"{xhtml}>\n{body}</urlset>\n"
+    ))
+}
+
+/// A moment as a W3C datetime in UTC, which is the form `<lastmod>` is read
+/// in. A time before the epoch has no such form and is left out.
+fn w3c_utc(time: SystemTime) -> Option<String> {
+    let seconds = time.duration_since(UNIX_EPOCH).ok()?.as_secs();
+    let days = (seconds / 86_400) as i64;
+    let rest = seconds % 86_400;
+    // Days since the epoch to a civil date, by era: the 400-year cycle is
+    // the shortest span the Gregorian rules repeat over, so one division
+    // pulls out everything the leap rules touch.
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    // March-based month, so the leap day falls at the end of the year.
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    Some(format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rest / 3_600,
+        (rest % 3_600) / 60,
+        rest % 60
+    ))
 }
 
 /// The whole HTML document for one page.
@@ -360,5 +422,19 @@ mod tests {
         let manifest = manifest(&spec);
         assert_eq!(manifest.dir, lumen_html::contract::Dir::Rtl);
         assert_eq!(manifest.locales, vec!["ar-EG", "en-US"]);
+    }
+
+    #[test]
+    fn a_moment_is_written_the_way_a_crawler_reads_it() {
+        let at = |seconds| w3c_utc(UNIX_EPOCH + std::time::Duration::from_secs(seconds));
+        assert_eq!(at(0).as_deref(), Some("1970-01-01T00:00:00Z"));
+        // The end of a leap day, which is where a date conversion goes wrong.
+        assert_eq!(at(1_709_251_199).as_deref(), Some("2024-02-29T23:59:59Z"));
+        assert_eq!(at(1_781_953_200).as_deref(), Some("2026-06-20T11:00:00Z"));
+        // A moment before the epoch has no such form.
+        assert_eq!(
+            w3c_utc(UNIX_EPOCH - std::time::Duration::from_secs(1)),
+            None
+        );
     }
 }

@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, UNIX_EPOCH};
 
 use lumen_html::contract::{
     DEFAULT_CSS_FILE, DEFAULT_MANIFEST_FILE, LM_CONTRACT_VERSION, Manifest, Seed, SeedValue,
@@ -75,6 +76,14 @@ fn site(pages: Vec<PageSpec>) -> SiteSpec {
 
 fn emitted(spec: &SiteSpec) -> Site {
     emit(spec).expect("emits")
+}
+
+fn sitemap(spec: &SiteSpec) -> String {
+    emitted(spec)
+        .file("sitemap.xml")
+        .expect("a sitemap")
+        .contents
+        .clone()
 }
 
 fn page_html(spec: &SiteSpec, name: &str) -> String {
@@ -1190,11 +1199,8 @@ fn a_site_with_a_url_lists_its_pages_for_a_crawler() {
     ]);
     spec.web.url = Some("https://example.com".into());
     spec.web.sitemap = true;
-    let sitemap = emitted(&spec)
-        .file("sitemap.xml")
-        .expect("a sitemap")
-        .contents
-        .clone();
+    spec.pages[1].modified = Some(UNIX_EPOCH + Duration::from_secs(1_781_953_200));
+    let sitemap = sitemap(&spec);
     assert!(
         sitemap.contains("<loc>https://example.com/index.html</loc>"),
         "{sitemap}"
@@ -1203,9 +1209,74 @@ fn a_site_with_a_url_lists_its_pages_for_a_crawler() {
         sitemap.contains("<loc>https://example.com/settings.html</loc>"),
         "{sitemap}"
     );
+    // A page that can be dated says when it changed; one that cannot is
+    // listed without a date rather than with a made-up one.
+    assert!(
+        sitemap.contains("<lastmod>2026-06-20T11:00:00Z</lastmod>"),
+        "{sitemap}"
+    );
+    assert_eq!(sitemap.matches("<lastmod>").count(), 1, "{sitemap}");
+    // One language cross-links to nothing, so the namespace stays out.
+    assert!(!sitemap.contains("xhtml"), "{sitemap}");
 
     spec.web.sitemap = false;
     assert!(emitted(&spec).file("sitemap.xml").is_none());
+}
+
+#[test]
+fn a_translated_page_is_listed_beside_its_other_languages() {
+    let mut spec = site(vec![
+        simple_page(),
+        PageSpec::new(
+            "settings",
+            ir(element("root", Attributes::default(), vec![])),
+        ),
+    ]);
+    spec.web.url = Some("https://example.com".into());
+    // A site published at two addresses lists the one its pages call
+    // canonical, or the sitemap argues with the documents it lists.
+    spec.web.canonical = Some("https://www.example.com".into());
+    spec.web.sitemap = true;
+    spec.locale.alternates = vec!["de-DE".into()];
+    let sitemap = sitemap(&spec);
+
+    assert_eq!(sitemap.matches("<url>").count(), 4, "{sitemap}");
+    assert!(
+        sitemap.contains(r#"<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">"#),
+        "{sitemap}"
+    );
+    for location in [
+        "https://www.example.com/index.html",
+        "https://www.example.com/de-DE/index.html",
+        "https://www.example.com/settings.html",
+        "https://www.example.com/de-DE/settings.html",
+    ] {
+        assert!(
+            sitemap.contains(&format!("<loc>{location}</loc>")),
+            "{sitemap}"
+        );
+    }
+    assert!(!sitemap.contains("https://example.com/"), "{sitemap}");
+
+    // Every entry for a page carries the whole set, itself included, which
+    // is what tells a crawler the languages belong together.
+    let links: Vec<&str> = sitemap
+        .match_indices("<xhtml:link")
+        .map(|(at, _)| {
+            let rest = &sitemap[at..];
+            &rest[..rest.find("/>").expect("a closed link") + 2]
+        })
+        .collect();
+    assert_eq!(links.len(), 12, "{sitemap}");
+    // The last two entries are the two languages of `settings`, and both
+    // carry the same three links.
+    let settings = [
+        r#"<xhtml:link rel="alternate" hreflang="en-US" href="https://www.example.com/settings.html"/>"#,
+        r#"<xhtml:link rel="alternate" hreflang="de-DE" href="https://www.example.com/de-DE/settings.html"/>"#,
+        r#"<xhtml:link rel="alternate" hreflang="x-default" href="https://www.example.com/settings.html"/>"#,
+    ];
+    assert_eq!(links[6..9], settings);
+    assert_eq!(links[9..12], settings);
 }
 
 #[test]

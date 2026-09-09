@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use lumen_core::signals::{ArrayItem, signal_is_truthy};
 use lumen_html::contract::{
@@ -179,6 +180,9 @@ pub struct PageSpec {
     pub seed: Seed,
     /// What the components inside this page's `<for>` rows rendered.
     pub fills: RowFills,
+    /// When the sources behind this page last changed, for `<lastmod>`. A
+    /// page whose sources cannot be dated is listed without one.
+    pub modified: Option<SystemTime>,
 }
 
 impl PageSpec {
@@ -327,7 +331,9 @@ pub struct WebSpec {
     /// written either way, because a render produces documents and nothing
     /// else.
     pub per_request: bool,
-    /// Write `sitemap.xml`. Needs [`Self::url`].
+    /// Write `sitemap.xml`, listing every page in every locale, each entry
+    /// dated and cross-linked to its other languages. Needs an address to
+    /// build absolute URLs from: [`Self::canonical`], else [`Self::url`].
     pub sitemap: bool,
 }
 

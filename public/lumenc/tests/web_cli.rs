@@ -652,6 +652,92 @@ fn two_builds_of_one_app_write_the_same_bytes() {
     }
 }
 
+/// The dates in the sitemap come off the sources, so they say something a
+/// crawler can use: a page that has not changed keeps its date across builds,
+/// and a page that has moves alone.
+#[test]
+fn the_sitemap_dates_each_page_from_the_sources_behind_it() {
+    let scratch = scratch("sitemap-dates");
+    let app = scratch.join("app");
+    std::fs::create_dir_all(app.join("src")).expect("create the app directory");
+    std::fs::write(
+        app.join("lumen.toml"),
+        "[app]\nentry = \"index.lmn\"\nid = \"lumen.test.sitemap\"\n\n[web]\nurl = \
+         \"https://example.com\"\n",
+    )
+    .expect("write lumen.toml");
+    std::fs::write(
+        app.join("src").join("index.lmn"),
+        "<root>\n  <label text=\"Home\" />\n</root>\n",
+    )
+    .expect("write the entry page");
+    std::fs::write(
+        app.join("src").join("settings.lmn"),
+        "<root>\n  <label text=\"Settings\" />\n</root>\n",
+    )
+    .expect("write the second page");
+
+    let stamp = |path: PathBuf, seconds: u64| {
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .expect("open the file")
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+            .expect("set the file's date");
+    };
+    let touch = |name: &str, seconds: u64| stamp(app.join("src").join(name), seconds);
+    // Every page is dated at least as late as what the whole app is built
+    // from, so `lumen.toml` has to be older than the pages for their own
+    // dates to show.
+    stamp(app.join("lumen.toml"), 1_600_000_000);
+    touch("index.lmn", 1_700_000_000);
+    touch("settings.lmn", 1_781_953_200);
+
+    let dates = |root: &Path| -> Vec<(String, String)> {
+        let sitemap = read(root, "sitemap.xml");
+        sitemap
+            .split("<url>")
+            .skip(1)
+            .map(|entry| {
+                let field = |tag: &str| {
+                    let open = format!("<{tag}>");
+                    let at = entry
+                        .find(&open)
+                        .unwrap_or_else(|| panic!("no `{tag}` in {entry}"));
+                    let rest = &entry[at + open.len()..];
+                    rest[..rest.find('<').expect("a closed field")].to_string()
+                };
+                (field("loc"), field("lastmod"))
+            })
+            .collect()
+    };
+
+    let first = scratch.join("first");
+    web(app.to_str().expect("a scratch path is text"), &first, &[]);
+    let before = dates(&first);
+    assert_eq!(
+        before,
+        vec![
+            (
+                "https://example.com/index.html".to_string(),
+                "2023-11-14T22:13:20Z".to_string()
+            ),
+            (
+                "https://example.com/settings.html".to_string(),
+                "2026-06-20T11:00:00Z".to_string()
+            ),
+        ]
+    );
+
+    // Editing one page moves that page's date and leaves the other alone.
+    touch("index.lmn", 1_790_000_000);
+    let second = scratch.join("second");
+    web(app.to_str().expect("a scratch path is text"), &second, &[]);
+    let after = dates(&second);
+    assert_eq!(after[0].1, "2026-09-21T14:13:20Z");
+    assert_eq!(after[1], before[1]);
+}
+
 /// A name is only worth anything if it is the name of the bytes under it: a
 /// stylesheet the build hashed and a stylesheet the emitter wrote have to be
 /// the same file.
