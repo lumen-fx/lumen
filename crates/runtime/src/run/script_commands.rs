@@ -1,20 +1,5 @@
 use super::*;
 
-/// Whether writing `new` over `current` changes the class list. Order
-/// matters: `set_class` assigns the whole list, so `"a b"` and `"b a"`
-/// are different writes.
-fn class_list_differs(
-    current: Option<&lumen_core::components::LumenClasses>,
-    new: &[String],
-) -> bool {
-    match current {
-        Some(c) => {
-            c.0.len() != new.len() || c.0.iter().zip(new).any(|(a, b)| a.as_ref() != b.as_str())
-        }
-        None => !new.is_empty(),
-    }
-}
-
 /// Apply the script commands that need something a window has: an asset
 /// path resolved against the app dir, an OS hotkey, a tray icon, a file
 /// dialog, the cascade's color scheme.
@@ -27,16 +12,11 @@ fn class_list_differs(
 pub(crate) fn apply_script_commands(
     mut events: MessageReader<ScriptCommandEvent>,
     mut commands: Commands,
-    ids: Query<(
-        Entity,
-        &LumenId,
-        Option<&lumen_core::components::LumenClasses>,
-    )>,
+    ids: Query<(Entity, &LumenId)>,
     mut style_manager: ResMut<lumen_core::components::StyleManager>,
     mut hotkeys: Option<NonSendMut<OsHotkeyRegistry>>,
     file_dialog: Res<FileDialogService>,
     mut tray: NonSendMut<OsTrayService>,
-    document_root: Option<Res<crate::run::restyle::DocumentRoot>>,
     // The file dialog runs on the app's executor when one is installed; the
     // resource is absent in a build with no async backend, and the dialog
     // then blocks the tick instead.
@@ -55,7 +35,7 @@ pub(crate) fn apply_script_commands(
         match &ev.0 {
             ScriptCommand::SetSrc { target_id, path } => {
                 let resolved = resolve_asset_src(path);
-                for (e, id, _) in &ids {
+                for (e, id) in &ids {
                     if id.0 == *target_id {
                         let mut ent = commands.entity(e);
                         // Strip stale results so the asset pipeline
@@ -78,51 +58,6 @@ pub(crate) fn apply_script_commands(
             ScriptCommand::UnregisterHotkey { name } => {
                 if let Some(reg) = hotkeys.as_mut() {
                     reg.unregister(name);
-                }
-            }
-            ScriptCommand::SetClasses { target_id, classes } => {
-                let new_classes: Vec<String> =
-                    classes.split_whitespace().map(|s| s.to_string()).collect();
-                if target_id == "<root>" {
-                    // The root has no `id` to look up, so it is read from
-                    // `DocumentRoot`, which the spawn pass records for every
-                    // run. This used to come off the hot-reload state, which
-                    // only exists while a file watcher is running, so
-                    // `set_root_class` silently did nothing in a compiled app
-                    // and in every headless run.
-                    if let Some(root) = document_root.as_ref() {
-                        commands
-                            .entity(root.0)
-                            .insert(lumen_core::components::LumenClasses::from(new_classes));
-                    }
-                } else {
-                    // A non-root element has no equivalent of the root-class
-                    // watcher (`reapply_styles_on_root_class_change`), so
-                    // rewriting its class list only restyles if this bumps
-                    // `StyleVersion` itself. Without the bump the cascade
-                    // re-resolver never re-walks the entity, the new class's
-                    // rules never land, and a `transition` on the swapped
-                    // property never runs - the `Node::set_class` path in
-                    // the DOM applier bumps, and this global form must match it.
-                    let mut changed = false;
-                    for (e, id, current) in &ids {
-                        if id.0 == *target_id {
-                            changed |= class_list_differs(current, &new_classes);
-                            commands
-                                .entity(e)
-                                .insert(lumen_core::components::LumenClasses::from(
-                                    new_classes.clone(),
-                                ));
-                        }
-                    }
-                    if changed {
-                        // Queued rather than taken as a `ResMut` param for the
-                        // same reason as above, and it lands with the class
-                        // write at the next sync point.
-                        commands.queue(|world: &mut World| {
-                            lumen_core::components::StyleVersion::bump(world);
-                        });
-                    }
                 }
             }
             ScriptCommand::SetColorScheme { name } => {
@@ -235,6 +170,7 @@ pub(crate) fn apply_script_commands(
             | ScriptCommand::SetAttr { .. }
             | ScriptCommand::RemoveAttr { .. }
             | ScriptCommand::SetNodeText { .. }
+            | ScriptCommand::SetClasses { .. }
             | ScriptCommand::ClassAdd { .. }
             | ScriptCommand::ClassRemove { .. }
             | ScriptCommand::ClassToggle { .. }

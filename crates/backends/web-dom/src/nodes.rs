@@ -21,8 +21,11 @@ use bevy_ecs::prelude::*;
 use lumen_core::components::{
     InlineStyle, LumenAttributes, LumenClasses, LumenId, LumenTag, TextContent,
 };
+use lumen_html::attrs::class_value;
 use lumen_html::contract::{DATA_LM, NodePath, PathStep};
-use lumen_html::tags::{html_tag_for, lm_class};
+use lumen_html::paths::walk_nodes;
+use lumen_html::style::style_value;
+use lumen_html::tags::html_tag_for;
 use lumen_scene::spawn::ForMarker;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, Element, Node};
@@ -159,15 +162,7 @@ pub fn bind_new_nodes(
         table.report.adopted += 1;
         bind(&mut table, root_entity, path, root.clone());
     }
-    bind_children(
-        &mut table,
-        root_entity,
-        &NodePath::root(),
-        &root,
-        &nodes,
-        &children,
-        &rows,
-    );
+    bind_tree(&mut table, root_entity, root, &nodes, &children, &rows);
     if table.hydrating {
         table.hydrating = false;
         // After the walk, not before: an element is only an orphan once the
@@ -236,66 +231,45 @@ fn is_orphan_row(table: &NodeTable, path: &str) -> bool {
     false
 }
 
-/// Bind every child of `entity`, then their children, depth first.
-fn bind_children(
+/// Bind every node under `root_entity`, depth first, along the walk both
+/// halves of the web target name nodes by.
+fn bind_tree(
     table: &mut NodeTable,
-    entity: Entity,
-    path: &NodePath,
-    element: &Element,
+    root_entity: Entity,
+    root: Element,
     nodes: &NodeQuery<'_, '_>,
     children: &Query<&Children>,
     rows: &Query<&ForMarker>,
 ) {
-    // A `<for>` block's children are its rows, and a row's path says so.
-    // Everything else counts children.
-    let is_for = rows.get(entity).is_ok();
-    let kids = children.get(entity).ok();
-    if is_for {
-        // Recorded even when the block has no children at all, which is a
-        // block whose list is empty and whose prerendered rows are all
-        // orphans.
-        let slots = kids.map_or(0, |kids| kids.len());
-        table.for_rows.insert(path.to_string(), slots as u32);
-    }
-    let Some(kids) = kids else {
-        return;
-    };
-    // Where a newly built element goes: after the last sibling that has one.
-    let mut previous: Option<Element> = None;
-    for (index, child) in kids.iter().enumerate() {
-        let index = index as u32;
-        let child_path = if is_for {
-            path.row(index)
-        } else {
-            path.child(index)
-        };
-        // An entity with no tag stands for no element, but it still counts:
-        // dropping it would renumber every sibling after it.
-        if nodes.get(child).is_err() {
-            continue;
-        }
-        let Some(child_element) = bind_one(
-            table,
-            child,
-            &child_path,
-            element,
-            previous.as_ref(),
-            nodes,
-            children,
-        ) else {
-            continue;
-        };
-        bind_children(
-            table,
-            child,
-            &child_path,
-            &child_element,
-            nodes,
-            children,
-            rows,
-        );
-        previous = Some(child_element);
-    }
+    let kids = |entity: Entity| -> &[Entity] { children.get(entity).map(|c| &**c).unwrap_or(&[]) };
+    walk_nodes(
+        root_entity,
+        root,
+        kids,
+        |entity| rows.get(entity).is_ok(),
+        // An entity with no tag stands for no element.
+        |entity| nodes.get(entity).is_ok(),
+        |visit| {
+            let element = bind_one(
+                table,
+                visit.entity,
+                visit.path,
+                visit.parent,
+                visit.previous,
+                nodes,
+                children,
+            )?;
+            if visit.is_for {
+                // Recorded even when the block has no children at all, which
+                // is a block whose list is empty and whose prerendered rows
+                // are all orphans.
+                table
+                    .for_rows
+                    .insert(visit.path.to_string(), visit.children as u32);
+            }
+            Some(element)
+        },
+    );
 }
 
 /// The element for one entity: the one already bound, the prerendered one
@@ -366,6 +340,7 @@ fn build(
     for (name, value) in html.fixed {
         let _ = element.set_attribute(name, value);
     }
+    let classes = classes.iter().flat_map(|c| c.0.iter()).map(|c| &**c);
     let _ = element.set_attribute("class", &class_value(&tag.0, classes));
     if let Some(id) = id {
         let _ = element.set_attribute("id", &id.0);
@@ -376,7 +351,7 @@ fn build(
         }
     }
     if let Some(style) = style {
-        let _ = element.set_attribute("style", &crate::project::style_value(style));
+        let _ = element.set_attribute("style", &style_value(&style.0));
     }
     // Text goes in before any child element, which is where the emitter puts
     // it and so where the projection expects to find it.
@@ -389,19 +364,6 @@ fn build(
     // to do here beyond leaving room for them.
     let _ = children;
     Some(element)
-}
-
-/// The `class` value for an entity: its tag class, then its own classes.
-pub(crate) fn class_value(tag: &str, classes: Option<&LumenClasses>) -> String {
-    let mut out = lm_class(tag);
-    for class in classes.iter().flat_map(|c| c.0.iter()) {
-        if class.is_empty() {
-            continue;
-        }
-        out.push(' ');
-        out.push_str(class);
-    }
-    out
 }
 
 /// Take out of the page every element whose entity is gone.

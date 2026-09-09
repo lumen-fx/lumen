@@ -1,0 +1,9 @@
+// Writes onto a node the markup declares rather than building one, which is
+// what a rendered document carries.
+import "lumen.cdl";
+
+fn main() {}
+
+fn on_start() {
+    lumen::set_root_class("theme-dark");
+}

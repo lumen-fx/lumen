@@ -263,6 +263,9 @@ pub fn apply_dom_commands(world: &mut World) {
                     style_dirty |= remove_attr(world, entity, &name);
                 }
             }
+            ScriptCommand::SetClasses { target_id, classes } => {
+                style_dirty |= set_classes(world, &target_id, &classes);
+            }
             ScriptCommand::ClassAdd { node, class } => {
                 if let Some(entity) = resolve(world, &reserved, node) {
                     class_edit(world, entity, &class, ClassOp::Add);
@@ -524,6 +527,62 @@ fn remove_attr(world: &mut World, entity: Entity, name: &str) -> bool {
             }
             false
         }
+    }
+}
+
+/// Assign the whole class list of every element `target_id` names
+/// (`set_class`), or of the page root when it names `<root>`
+/// (`set_root_class`). Returns whether any list changed.
+///
+/// The root has no `id` to look up, so it is read from
+/// [`DocumentRoot`](crate::spawn::DocumentRoot), which the spawn pass
+/// records for every run.
+///
+/// A non-root element has no equivalent of the desktop's root-class watcher
+/// (`reapply_styles_on_root_class_change`), so rewriting its class list only
+/// restyles if this bumps `StyleVersion`. Without the bump the cascade
+/// re-resolver never re-walks the entity, the new class's rules never land,
+/// and a `transition` on the swapped property never runs.
+fn set_classes(world: &mut World, target_id: &str, classes: &str) -> bool {
+    let new_classes: Vec<String> = classes.split_whitespace().map(str::to_string).collect();
+    if target_id == "<root>" {
+        let Some(root) = world
+            .get_resource::<crate::spawn::DocumentRoot>()
+            .map(|r| r.0)
+        else {
+            return false;
+        };
+        world
+            .entity_mut(root)
+            .insert(LumenClasses::from(new_classes));
+        // The root's own restyle is the watcher's, on the host that has one.
+        return false;
+    }
+    let mut query = world.query::<(Entity, &LumenId, Option<&LumenClasses>)>();
+    let targets: Vec<(Entity, bool)> = query
+        .iter(world)
+        .filter(|(_, id, _)| id.0 == target_id)
+        .map(|(entity, _, current)| (entity, class_list_differs(current, &new_classes)))
+        .collect();
+    let mut changed = false;
+    for (entity, differs) in targets {
+        changed |= differs;
+        world
+            .entity_mut(entity)
+            .insert(LumenClasses::from(new_classes.clone()));
+    }
+    changed
+}
+
+/// Whether writing `new` over `current` changes the class list. Order
+/// matters: `set_class` assigns the whole list, so `"a b"` and `"b a"`
+/// are different writes.
+fn class_list_differs(current: Option<&LumenClasses>, new: &[String]) -> bool {
+    match current {
+        Some(c) => {
+            c.0.len() != new.len() || c.0.iter().zip(new).any(|(a, b)| a.as_ref() != b.as_str())
+        }
+        None => !new.is_empty(),
     }
 }
 

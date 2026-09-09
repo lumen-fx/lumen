@@ -15,6 +15,7 @@ use lumen_ir::interpolate::Globals;
 use lumen_ir::layout_ir::{Element, LayoutIR};
 
 use crate::markup::MarkupSheet;
+use crate::snapshot::NodeState;
 
 /// The signal state a page is rendered with.
 ///
@@ -178,6 +179,10 @@ pub struct PageSpec {
     /// State the browser runtime starts from, inlined into the document. It
     /// has to be the state the page was rendered with.
     pub seed: Seed,
+    /// What the app wrote onto single nodes while it ran, by node path. The
+    /// emitter compares it against what the markup says and writes the
+    /// difference into both the document and the seed, so the two agree.
+    pub nodes: BTreeMap<String, NodeState>,
     /// What the components inside this page's `<for>` rows rendered.
     pub fills: RowFills,
     /// When the sources behind this page last changed, for `<lastmod>`. A

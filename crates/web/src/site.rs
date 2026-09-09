@@ -1,6 +1,6 @@
 //! Putting the files of a site together.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -124,6 +124,7 @@ pub fn shell(spec: &SiteSpec, warnings: &mut Vec<String>) -> Result<String, Emit
         description: entry.description.clone(),
         signals: SignalEnv::new(),
         seed: Seed::new(),
+        nodes: BTreeMap::new(),
         fills: RowFills::default(),
         modified: entry.modified,
     };
@@ -261,9 +262,15 @@ pub fn document(
     spec: &SiteSpec,
     warnings: &mut Vec<String>,
 ) -> Result<String, EmitError> {
+    // The body is written first, because writing it is what says whether the
+    // app put anything on a node, and the seed block above it has to carry
+    // that. One walk of the tree, and the head is written from what it found.
+    let (body, nodes) = html::emit_tree(page, spec, warnings)?;
+    let mut seed = page.seed.clone();
+    seed.nodes = nodes;
     let mut out = String::new();
-    seo::open_document(&mut out, page, spec)?;
-    out.push_str(&html::emit_tree(page, spec, warnings)?);
+    seo::open_document(&mut out, page, spec, &seed)?;
+    out.push_str(&body);
     seo::close_document(&mut out, spec);
     Ok(out)
 }

@@ -105,7 +105,7 @@ fn round(
     let mut booted = boot(compiled, page, seed, Arc::new(DenyDispatch::default()));
     settle(&mut booted.app, Budget::default());
 
-    let root = match root_entity(&mut booted.app) {
+    let root = match root_entity(&booted.app) {
         Some(root) => root,
         None => {
             warnings.push(

@@ -20,6 +20,9 @@ const SETTLES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/settles.cdlb"))
 /// A program that asks for data over the network.
 const FETCHES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fetches.cdlb"));
 
+/// A program that writes onto nodes rather than onto signals.
+const NODES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nodes.cdlb"));
+
 /// The external property bus belongs to the process, and a run empties it on
 /// the way in, so two runs at once would eat each other's writes. Tests take
 /// this in turn for the same reason a server renders one request at a time.
@@ -265,4 +268,37 @@ fn an_engine_this_build_cannot_run_is_named() {
     };
     let run = page(&compiled, "index", &Seed::new(), Budget::default());
     assert_eq!(run.unsupported_engines, vec!["elvish"]);
+}
+
+/// What a script writes onto a node is state too, and it is nowhere in the
+/// signal stores: `set_root_class`, `set_class` and an inline style set
+/// through a node handle land on entities. A run that read only the stores
+/// would write a page missing every one of them.
+#[test]
+fn what_the_app_writes_onto_a_node_is_read_out_of_the_scene() {
+    let _turn = in_turn();
+    let mut tile = Element {
+        tag: "label".to_string(),
+        ..Element::default()
+    };
+    tile.attrs.id = Some("tile".to_string());
+    let app = CompiledApp {
+        ir: LayoutIR {
+            root: Element {
+                tag: "root".to_string(),
+                children: vec![tile],
+                ..Element::default()
+            },
+            ..LayoutIR::default()
+        },
+        ..app_with(NODES)
+    };
+
+    let run = page(&app, "index", &Seed::new(), Budget::default());
+
+    assert_eq!(run.state.nodes["0"].classes, ["theme-dark"]);
+    let tile = &run.state.nodes["0.0"];
+    assert_eq!(tile.tag, "label");
+    assert_eq!(tile.classes, ["lit"]);
+    assert_eq!(tile.style, [("bg".to_string(), "#ff0000".to_string())]);
 }

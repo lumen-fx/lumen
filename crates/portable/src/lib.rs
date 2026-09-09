@@ -20,4 +20,4 @@
 pub mod assemble;
 pub mod hosts;
 
-pub use assemble::{apply_seed, install_i18n, portable_app};
+pub use assemble::{apply_node_seed, apply_seed, install_i18n, portable_app};

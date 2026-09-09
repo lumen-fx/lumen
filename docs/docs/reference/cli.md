@@ -240,8 +240,10 @@ machine built the site, and when the browser runtime cannot be found. It warns
 when `--allow-host` names a host and nothing here renders a page, and when
 `[web] host` names a rewrite file a rendered site has no use for. Under
 `--prerender run` it also warns when an app is still changing when its budget
-runs out, when it asks for an address the build will not fetch, and when the
-same page settles differently on a second run.
+runs out, when it asks for an address the build will not fetch, when the same
+page settles differently on a second run, and when the app changed the shape
+of the tree while it ran, which leaves what it wrote onto its nodes out of
+the document.
 
 Everything the site says about itself - its address, description, social
 image, host, locales - is `lumen.toml`'s `[web]` section. See

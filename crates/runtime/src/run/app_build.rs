@@ -320,7 +320,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     app.world.insert_resource(reloaders);
     use crate::spawn::SpawnIntoWorld;
     let root = ir.spawn_into(&mut app.world);
-    crate::run::restyle::install_document_root(&mut app.world, root);
+    crate::run::restyle::install_root_class_list(&mut app.world, root);
 
     // Pages: install the page registry, in-memory history, the reserved
     // `route.*` signal seeds, and the navigation systems (`apply_navigation`

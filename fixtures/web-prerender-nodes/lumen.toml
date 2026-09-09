@@ -1,0 +1,10 @@
+# Proof fixture for what a prerender run writes onto single nodes. The script
+# sets a root class and an element class in `on_start` and an inline style
+# through a node handle in `on_ready`; a page built with `--prerender run`
+# carries all three, and its seed says so.
+[script]
+engine = "candela"
+
+# No introspection server, so a `--headless` CI run binds no port.
+[mcp]
+port = 0
