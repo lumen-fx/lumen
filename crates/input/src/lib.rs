@@ -904,12 +904,45 @@ pub fn ancestor_scroll(
     total
 }
 
+/// The half of the input layer every platform needs: a key press reaches the
+/// focused element, Enter activates it, and Escape cancels the press it
+/// interrupted.
+///
+/// This is what a page installs. The browser already moves focus, edits
+/// fields and clicks buttons on its own, so a page forwards the keys the
+/// browser did nothing with and needs only the routing; [`InputPlugin`]
+/// installs this and adds the pointer, text-editing, IME and file-drop
+/// pipeline a native window drives itself.
+pub struct KeyDispatchPlugin;
+
+impl Plugin for KeyDispatchPlugin {
+    fn build(self, app: &mut App) {
+        // Escape press-cancel runs in the Input stage so its `Pressed`
+        // removals are flushed before this tick's Systems stage (the
+        // release in `dispatch_clicks` then finds nothing to click) and
+        // so downstream Input-stage Escape consumers (dialog close) can
+        // observe the consumed flag on the same keystroke.
+        app.world
+            .init_resource::<lumen_core::input::EscapePressCancel>();
+        app.add_systems(TickStage::Input, cancel_press_on_escape);
+        app.add_systems(TickStage::Systems, dispatch_focused_keys);
+        // Standard a11y / keyboard pattern: Enter or Space on a focused,
+        // non-TextInput entity synthesizes a primary ClickEvent so apps
+        // don't have to handle the key directly.
+        app.add_systems(
+            TickStage::Systems,
+            activate_focused_on_enter.after(dispatch_focused_keys),
+        );
+    }
+}
+
 /// Plugin: registers hit-test + dispatch systems in the Systems stage.
 ///
 /// Runs after CommandDrain (so any deferred component mutations from the
 /// previous tick have been applied) and before LayoutSync (so Transform is
 /// stable for the test - Transform changes propagate to ExtractedRect next
-/// tick anyway).
+/// tick anyway). Installs [`KeyDispatchPlugin`] first, so a window gets the
+/// key routing a page gets, plus everything a page leaves to the browser.
 pub struct InputPlugin {
     /// Install the OS clipboard, which copy and paste read and write through.
     ///
@@ -932,16 +965,9 @@ impl Plugin for InputPlugin {
         if let Some(cb) = self.clipboard.then(ClipboardResource::try_new).flatten() {
             app.world.insert_non_send(cb);
         }
+        app.add_plugin(KeyDispatchPlugin);
         app.add_systems(TickStage::Systems, hit_test);
         app.add_systems(TickStage::Systems, dispatch_clicks.after(hit_test));
-        // Escape press-cancel runs in the Input stage so its `Pressed`
-        // removals are flushed before this tick's Systems stage (the
-        // release in `dispatch_clicks` then finds nothing to click) and
-        // so downstream Input-stage Escape consumers (dialog close) can
-        // observe the consumed flag on the same keystroke.
-        app.world
-            .init_resource::<lumen_core::input::EscapePressCancel>();
-        app.add_systems(TickStage::Input, cancel_press_on_escape);
         // Frameless-window drag: pressing a `<title-bar drag>` region
         // requests a native window drag via the backend. Requires the
         // `WindowDragRequest` resource - install it here so apps that
@@ -964,24 +990,14 @@ impl Plugin for InputPlugin {
             TickStage::Systems,
             cycle_focus_on_tab
                 .in_set(lumen_core::text_events::TextEditSet::Producers)
-                .after(dispatch_clicks),
-        );
-        app.add_systems(
-            TickStage::Systems,
-            dispatch_focused_keys.after(cycle_focus_on_tab),
+                .after(dispatch_clicks)
+                .before(dispatch_focused_keys),
         );
         app.add_systems(
             TickStage::Systems,
             type_into_focused
                 .in_set(lumen_core::text_events::TextEditSet::Producers)
                 .after(dispatch_focused_keys),
-        );
-        // Standard a11y / keyboard pattern: Enter or Space on a focused,
-        // non-TextInput entity synthesizes a primary ClickEvent so apps
-        // don't have to handle the key directly.
-        app.add_systems(
-            TickStage::Systems,
-            activate_focused_on_enter.after(dispatch_focused_keys),
         );
         // IME routing: enable IME when a TextContent-bearing entity is
         // focused, route preedit / commit at it, update ImeRequest cursor

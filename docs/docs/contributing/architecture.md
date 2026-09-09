@@ -218,11 +218,14 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
 
 ### Assembly and tooling
 
-- **lumen-portable**: the app every platform starts from. It installs the parts
-  of Lumen that do not depend on where the app runs (widget behaviour, focus,
-  the reconcilers, the two-way bindings, the script command stream) and the
-  script host for the engine an app names, and leaves out layout, paint,
-  windowing and the OS surface. Nothing it installs is bound to one thread, so
+- **lumen-portable**: the app every platform starts from. It installs what the
+  platform it lands on does not already do (the reconcilers, the two-way
+  bindings, the script command stream, key routing, and the widget behaviour
+  a browser has no native control for: radio groups, tab strips and their
+  panels, progress bindings, validation) and the script host for the engine
+  an app names. It leaves out layout, paint, windowing, the OS surface, and
+  the pointer, text-editing and form-control half of the input layer, which
+  a browser drives itself and a window installs through `lumen-input`. Nothing it installs is bound to one thread, so
   the app it builds can be built, ticked and dropped anywhere; its `Tick`
   schedule keeps the single-threaded executor rather than the platform
   default to hold that guarantee, since it has no layout or render work for

@@ -20,8 +20,8 @@ lumen-scene = { workspace = true }
 # The Fluent registry, so an app assembled here translates the way the desktop
 # does rather than through a second lookup path.
 lumen-i18n = { workspace = true }
-# The widget behaviour and the focus layer, unchanged from the desktop: what a
-# tab strip does when it is clicked is not a per-platform question.
+# Key routing and the widget behaviour a browser has no native control for:
+# what a tab strip does when it is clicked is not a per-platform question.
 lumen-input = { workspace = true }
 lumen-primitives = { workspace = true }
 lumen-script = { workspace = true }
