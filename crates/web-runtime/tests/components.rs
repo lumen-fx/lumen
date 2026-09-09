@@ -145,8 +145,9 @@ fn page_of(ir: LayoutIR) -> DomElement {
         ..SiteSpec::default()
     };
     let mut warnings = Vec::new();
-    let html =
-        lumen_web::html::emit_tree(&spec.pages[0], &spec, &mut warnings).expect("the tree emits");
+    let html = lumen_web::html::emit_tree(&spec.pages[0], &spec, &mut warnings)
+        .expect("the tree emits")
+        .0;
 
     let document = web_sys::window().unwrap().document().unwrap();
     let host = document.create_element("div").unwrap();

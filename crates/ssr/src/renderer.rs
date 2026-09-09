@@ -328,6 +328,7 @@ fn render_one(
     let mut page = site.page(&key, spec);
     page.signals = state.signals;
     page.seed = state.seed;
+    page.nodes = state.nodes;
     page.fills = fills;
     let body = lumen_web::document(&page, spec, &mut warnings)?;
 
@@ -428,7 +429,7 @@ fn note_dom_commands(
     mut built: ResMut<RenderedDom>,
 ) {
     for event in events.read() {
-        if event.0.mutates_dom() {
+        if event.0.builds_nodes() {
             built.0 = true;
         }
     }

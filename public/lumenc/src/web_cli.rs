@@ -929,6 +929,7 @@ fn page_spec(
             description: page_cfg.and_then(|page| page.description.clone()),
             signals: run.state.signals.clone(),
             seed: run.state.seed.clone(),
+            nodes: run.state.nodes.clone(),
             fills,
         };
     }
@@ -964,6 +965,7 @@ fn page_spec(
         description: page_cfg.and_then(|page| page.description.clone()),
         signals,
         seed: page_seed,
+        nodes: BTreeMap::new(),
         fills,
     }
 }

@@ -41,15 +41,24 @@ pub fn is_disableable(html_name: &str) -> bool {
 /// The tag class comes first so a stylesheet can rely on it being there, and
 /// author classes keep their written order.
 pub fn class_list(ir_tag: &str, attrs: &Attributes) -> String {
-    let mut classes = lm_class(ir_tag);
-    for class in &attrs.classes {
+    class_value(ir_tag, attrs.classes.iter().map(String::as_str))
+}
+
+/// The same value, composed from a class list the caller already holds.
+///
+/// The emitter reads an element's classes off the IR and the browser runtime
+/// reads them off an entity, and a page only hydrates if the two write the
+/// same string.
+pub fn class_value<'a>(ir_tag: &str, classes: impl IntoIterator<Item = &'a str>) -> String {
+    let mut out = lm_class(ir_tag);
+    for class in classes {
         if class.is_empty() {
             continue;
         }
-        classes.push(' ');
-        classes.push_str(class);
+        out.push(' ');
+        out.push_str(class);
     }
-    classes
+    out
 }
 
 /// The HTML attributes an element carries, `class` first, in a fixed order.

@@ -29,5 +29,8 @@ lumen-primitives = { workspace = true }
 # Locale parsing, so a document's writing direction is decided the same way
 # the desktop runtime decides it.
 lumen-i18n = { workspace = true }
+# The settled scene a run's node state is read out of: the hierarchy a node
+# path is recovered from, and the marker that says a block's children are rows.
+lumen-scene = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true

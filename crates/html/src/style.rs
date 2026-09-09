@@ -18,6 +18,25 @@
 
 use lumen_ir::css::canonical_property_name;
 
+/// An element's inline style as the `style` attribute writes it.
+///
+/// The emitter and the browser runtime both write what an app put on a node,
+/// and a page whose two halves wrote it differently would hydrate with the
+/// runtime replacing an attribute that already said the same thing.
+pub fn style_value(properties: &[(String, String)]) -> String {
+    let mut out = String::new();
+    for (property, value) in properties {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(property);
+        out.push_str(": ");
+        out.push_str(value);
+        out.push(';');
+    }
+    out
+}
+
 /// One `name: value` pair as the emitted stylesheet writes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebDecl {

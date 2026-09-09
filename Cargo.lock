@@ -4219,6 +4219,7 @@ dependencies = [
  "lumen-i18n",
  "lumen-ir",
  "lumen-primitives",
+ "lumen-scene",
  "serde",
  "serde_json",
 ]
