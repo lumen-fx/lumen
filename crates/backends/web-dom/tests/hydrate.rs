@@ -105,7 +105,6 @@ fn prerender_with(ir: LayoutIR, signals: SignalEnv) -> Element {
 /// Spawn `ir` into an app bound to `root`, and run one tick.
 fn hydrate(ir: LayoutIR, root: Element) -> App {
     let mut app = App::new();
-    app.extract_fns.clear();
     let root_entity = ir.spawn_into(&mut app.world);
     app.add_plugin(WebDomPlugin { root, root_entity });
     app.tick();
@@ -550,7 +549,6 @@ fn a_bound_element_is_adopted_without_being_corrected() {
     let before = root.outer_html();
 
     let mut app = App::new();
-    app.extract_fns.clear();
     app.world.init_resource::<PropertyStore>();
     app.world
         .resource_mut::<PropertyStore>()
@@ -589,7 +587,6 @@ fn dialog_tree() -> LayoutIR {
 /// Spawn `ir` into an app that also reconciles its branches, and settle it.
 fn hydrate_reactive(ir: LayoutIR, root: Element) -> App {
     let mut app = App::new();
-    app.extract_fns.clear();
     app.world.init_resource::<PropertyStore>();
     let root_entity = ir.spawn_into(&mut app.world);
     app.add_plugin(WebDomPlugin { root, root_entity });
@@ -676,7 +673,6 @@ fn a_dialog_the_browser_dismisses_takes_its_signal_with_it() {
 /// parts, so what a forwarded key does here is what it does in a page.
 fn hydrate_interactive(ir: LayoutIR, root: Element) -> App {
     let mut app = App::new();
-    app.extract_fns.clear();
     app.world.init_resource::<PropertyStore>();
     let root_entity = ir.spawn_into(&mut app.world);
     app.add_plugin(WebDomPlugin { root, root_entity });
@@ -1114,7 +1110,6 @@ fn rows(names: &[&str]) -> Vec<ArrayItem> {
 /// settle it.
 fn hydrate_list(ir: LayoutIR, root: Element, names: &[&str]) -> App {
     let mut app = App::new();
-    app.extract_fns.clear();
     app.world.init_resource::<PropertyStore>();
     app.world.init_resource::<ArraySignals>();
     app.world

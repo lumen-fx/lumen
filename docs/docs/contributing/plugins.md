@@ -164,10 +164,13 @@ reads the render-world one.
 
 ## Render-world plugins
 
-A render backend inserts itself into `app.render_world` and registers a system
-in `RenderStage::Render`. The whole of the software rasterizer's plugin is a
-resource insert and one system registration; the GPU backend adds a fragment
-cache and an optional text shaper alongside.
+A render backend inserts itself into `app.render_world`, registers a system
+in `RenderStage::Render`, and calls `install_extract_pipeline` so the extract
+step that feeds it exists at all. The whole of the software rasterizer's
+plugin is that call, a resource insert and one system registration; the GPU
+backend adds a fragment cache and an optional text shaper alongside. The
+install is a no-op when another backend already made it, so a test that builds
+a bare `App` and reads the render world makes the same call itself.
 
 Getting data across is the extract step. An extract function is a plain
 function pointer, `fn(&mut World, &mut World)`, not a closure, so any state it

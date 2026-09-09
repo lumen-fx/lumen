@@ -367,6 +367,13 @@ text, clips, and scrollbars. Plugins append to the chain or replace entries
 outright, which is how a plugin that needs to alter drawable positions gets its
 change into every primitive at once.
 
+The chain, the dirty roll-up that gates it, and the `Prepare` systems below
+are installed by the render backend through `install_extract_pipeline`, not by
+`App::new`. The window backend, the offscreen GPU renderer and the software
+rasteriser each ask for it, and asking twice is a no-op. An app with no render
+backend never asks: the browser runtime and a server render tick the main
+world and stop, and their builds link none of the extract step.
+
 Iteration order has to be deterministic. Paint order is derived from document
 order, z-index, and entity identity, never from the order archetypes happen to
 iterate; without that, adding and removing hover and press markers reshuffles

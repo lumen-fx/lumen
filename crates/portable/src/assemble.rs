@@ -74,8 +74,6 @@ pub fn portable_app() -> App {
             schedule.set_executor(SingleThreadedExecutor::new());
         }
     }
-    // Whatever this app is put into lays out and paints it; no extract here.
-    app.extract_fns.clear();
     app.world.init_resource::<PropertyStore>();
     app.world.init_resource::<ArraySignals>();
     // The scene applier below reads the script command stream whether or not

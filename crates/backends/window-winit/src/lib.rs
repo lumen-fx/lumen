@@ -185,6 +185,9 @@ pub struct WinitPlugin;
 
 impl Plugin for WinitPlugin {
     fn build(self, app: &mut App) {
+        // A window presents frames, so it is what asks for the pipeline that
+        // produces them; an app that is never shown installs none of it.
+        lumen_core::render_world::install_extract_pipeline(app);
         app.add_message::<WindowFocused>();
         app.add_message::<WindowOccluded>();
         // NOTE: `CloseRequest` is deliberately not registered here.

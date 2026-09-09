@@ -115,6 +115,7 @@ fn same_tick_removal_still_observed() {
 #[test]
 fn bulk_childof_removal_lets_app_idle() {
     let mut app = App::new();
+    install_extract_pipeline(&mut app);
     const K: usize = 8;
 
     let parent = app.world.spawn(()).id();
