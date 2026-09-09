@@ -82,7 +82,7 @@ These apply to any element unless the entry says otherwise.
 | `tab-index` | integer | Keyboard focus order. `-1` removes the element from Tab order. |
 | `dir` | `ltr`, `rtl`, `auto` | Writing direction; inherited by descendants. |
 | `lang` | BCP-47 tag | Language for text shaping and accessibility; inherited. |
-| `translatable` | catalogue key | Resolves the element's text through the loaded translation catalogue. `lumenc i18n extract` collects these keys. |
+| `translatable` | catalogue key | Resolves every string the element shows through the loaded translation catalogue: the text from the message the key names, `placeholder` from `<key>.placeholder`, and `alt` from `<key>.alt`. An attribute the markup does not write is not translated. The text falls back to the authored `text`, then to the key itself, unless the element names one of the other strings. `lumenc i18n extract` collects these keys. |
 | `format` | `number`, `currency:<code>`, `date`, `time`, `datetime`, `relative` | Writes the element's text for the app's locale: a decimal number; a decimal amount in an ISO-4217 currency; a `YYYY-MM-DD` date, optionally with `THH:MM[:SS]`; or whole seconds from now, past negative. Applies to a `bind-text` value as well as an authored `text`. A spec that is not one of these, or text the spec cannot read, leaves the text alone. |
 
 ### Sizing
@@ -345,7 +345,7 @@ Loads and draws an image file.
 | Attribute | Value | Effect |
 | --- | --- | --- |
 | `src` | path | Image file to decode, relative to the app directory. Accepts `{...}` placeholders. |
-| `alt` | text | What the image shows, for a reader who is not looking at it. Write `alt=""` for an image that carries no meaning of its own, such as a divider. Carried into the compiled app; the desktop accessibility tree does not read it yet. |
+| `alt` | text | What the image shows, for a reader who is not looking at it. Write `alt=""` for an image that carries no meaning of its own, such as a divider. `translatable` on the same element resolves it through `<key>.alt`. Carried into the compiled app; the desktop accessibility tree does not read it yet. |
 | `fit` | `fill`, `cover`, `contain`, `none`, `scale-down` | How the image fills its box. |
 
 ### `<canvas>`
@@ -418,7 +418,7 @@ buffer, so a text child is ignored; use `text` for an initial value.
 
 | Attribute | Value | Effect |
 | --- | --- | --- |
-| `placeholder` | text | Shown while the field is empty. Accepts `{...}` placeholders. |
+| `placeholder` | text | Shown while the field is empty. Accepts `{...}` placeholders. `translatable` on the same element resolves it through `<key>.placeholder`. |
 | `multiline` | boolean | Accept newlines. Defaults to false. |
 | `pattern` | text | The value is valid only if it contains this literal substring. Not a regex. Values starting with `shape:` are reserved for the built-in checks `<date-picker>` and `<time-picker>` attach. |
 | `required` | boolean | The value is valid only if it is non-empty. |
@@ -720,6 +720,7 @@ to the trigger, not to `<tooltip>`.
 | Attribute | Value | Default |
 | --- | --- | --- |
 | `text` | text | empty |
+| `translatable` | catalogue key | none; the popup body is the key's message, falling back to `text` |
 | `delay` | integer milliseconds | `500`, or the `--lumen-tooltip-delay` custom property |
 | `offset` | number | `12`, or the `--lumen-tooltip-offset` custom property |
 

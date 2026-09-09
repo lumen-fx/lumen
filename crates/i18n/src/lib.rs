@@ -5,7 +5,10 @@
 //! - **Translation** (W5.7) - [`I18n`] wraps per-locale [`FluentBundle`]s
 //!   keyed by [`LanguageIdentifier`]. `load_ftl` parses `.ftl` source
 //!   strings; `t` / `t_with_lang` resolve keys with optional
-//!   [`FluentArgs`]. Falls through `fallback_chain` in order on a miss.
+//!   [`FluentArgs`]. A key of the form `message.attribute` resolves that
+//!   Fluent attribute rather than the message value, which is how one
+//!   markup key reaches an element's placeholder and its alternative
+//!   text. Falls through `fallback_chain` in order on a miss.
 //! - **Formatting** (W5.8) - [`LocaleFormatter`] wraps ICU4X's decimal,
 //!   date-time, currency and relative-time formatters for the active
 //!   locale. `format_number`, `format_date`, `format_time`,
@@ -244,8 +247,21 @@ impl I18n {
         args: &'a FluentArgs,
     ) -> Option<Cow<'a, str>> {
         let bundle = self.bundles.get(lang)?;
-        let msg = bundle.get_message(key)?;
-        let pattern = msg.value()?;
+        // A key names a message, optionally followed by `.attribute`. A
+        // Fluent identifier cannot contain a dot, so splitting on the first
+        // one can never shadow a message a catalogue declares. This
+        // is where the dotted spelling is defined: an element's `placeholder`
+        // reaches the catalogue as `<key>.placeholder`, and a script asking
+        // for `t("search.placeholder")` resolves the same string.
+        let (name, attribute) = match key.split_once('.') {
+            Some((name, attribute)) => (name, Some(attribute)),
+            None => (key, None),
+        };
+        let msg = bundle.get_message(name)?;
+        let pattern = match attribute {
+            Some(attribute) => msg.get_attribute(attribute)?.value(),
+            None => msg.value()?,
+        };
         let mut errors = Vec::new();
         let out = bundle
             .format_pattern(pattern, Some(args), &mut errors)
@@ -312,29 +328,8 @@ impl From<I18n> for SharedI18n {
     }
 }
 
-/// The text a `translatable="key"` element shows.
-///
-/// The catalogue's string wins; without one the authored text stands in; with
-/// neither, the key itself. That ordering is what keeps an app whose
-/// translations are missing showing its source strings, and keeps a
-/// `translatable` element with no text from rendering blank.
-///
-/// Both the desktop spawner and the web emitter resolve an element's text
-/// through this, so a page built for a locale reads the same as the app run
-/// in it.
-pub fn translated_or_authored(
-    translated: Option<String>,
-    authored: Option<&str>,
-    key: &str,
-) -> String {
-    translated
-        .or_else(|| authored.map(str::to_string))
-        .unwrap_or_else(|| key.to_string())
-}
-
-/// RTL languages list. Lifted straight from the i18n audit spec
-/// (`docs/audits/i18n.md` "Rewrite spec section 1") so the plugin agrees with
-/// whatever `LayoutDirection::DefaultLayoutDirection` ends up doing in
+/// RTL languages list, so the plugin agrees with whatever
+/// `LayoutDirection::DefaultLayoutDirection` ends up doing in
 /// `lumen-core`. Used only as a tiny helper for callers wanting to
 /// short-circuit "is the system in RTL" without reaching into ICU4X.
 pub fn is_rtl(lang: &LanguageIdentifier) -> bool {
@@ -489,6 +484,34 @@ mod tests {
         assert_eq!(i.t("greet", &args), "Hallo!");
         // Explicit en-US lookup ignores the de-DE current.
         assert_eq!(i.t_with_lang(&lang("en-US"), "greet", &args), "Hello!");
+    }
+
+    #[test]
+    fn a_dotted_key_resolves_a_message_attribute() {
+        let mut i = I18n::new(lang("de-DE"), vec![]);
+        i.load_ftl(
+            lang("de-DE"),
+            "search = Suche\n    .placeholder = Katalog durchsuchen\n",
+        )
+        .unwrap();
+        let args = FluentArgs::new();
+        assert_eq!(i.t("search", &args), "Suche");
+        assert_eq!(i.t("search.placeholder", &args), "Katalog durchsuchen");
+        // An attribute the message does not declare is a miss, not the
+        // message value.
+        assert_eq!(i.try_t("search.alt", &args), None);
+        assert_eq!(i.try_t("nothing.placeholder", &args), None);
+    }
+
+    #[test]
+    fn a_message_can_carry_attributes_without_a_value() {
+        let mut i = I18n::new(lang("de-DE"), vec![]);
+        i.load_ftl(lang("de-DE"), "logo =\n    .alt = Das Lumen-Logo\n")
+            .unwrap();
+        let args = FluentArgs::new();
+        assert_eq!(i.t("logo.alt", &args), "Das Lumen-Logo");
+        // The image has no text of its own to translate.
+        assert_eq!(i.try_t("logo", &args), None);
     }
 
     #[test]

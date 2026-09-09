@@ -463,6 +463,7 @@ mod tests {
         let mut a = attrs();
         a.tooltip = Some(lumen_ir::layout_ir::TooltipSpec {
             text: "Save the file".into(),
+            translatable: None,
             delay_ms: None,
             offset: None,
         });

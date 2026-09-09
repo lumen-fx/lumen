@@ -119,8 +119,9 @@ fixed what panicked.
 ## More than one language
 
 A site holds one tree per language it answers in, and a request picks one. The
-trees are the app already translated: `translatable` text is resolved into the
-markup before a document is written from it, and text carrying a `format` is
+trees are the app already translated: every string an element marked
+`translatable` shows is resolved into the markup before a document is written
+from it, and text carrying a `format` is
 written for the tree's locale as the document is, so a page arrives in its
 language with nothing running.
 

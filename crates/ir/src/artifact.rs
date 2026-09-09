@@ -99,11 +99,15 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// [`crate::layout_ir::Attributes`], so an element's text can be rendered
 /// for the app's locale.
 ///
+/// `9`: [`crate::layout_ir::TooltipSpec`] gains `translatable`, so a
+/// `<tooltip>` names its own catalogue key and a popup body reads in the
+/// app's language rather than the one it was written in.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 8;
+pub const FORMAT_VERSION: u16 = 9;
 
 /// The navigable page set of a compiled multi-page app.
 ///

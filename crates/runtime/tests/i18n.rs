@@ -10,7 +10,7 @@
 
 use lumen_core::components::TextContent;
 use lumen_ir::artifact::{self, CompiledApp};
-use lumen_ir::layout_ir::{Attributes, Element, LayoutIR};
+use lumen_ir::layout_ir::{Attributes, Element, LayoutIR, TooltipSpec};
 use lumen_runtime::{RunOptions, build_headless_app};
 use std::path::{Path, PathBuf};
 
@@ -131,6 +131,75 @@ fn untranslated_falls_back_to_authored_text_then_key() {
     let texts = texts(&mut app);
     assert!(texts.contains(&"Source text".to_string()), "{texts:?}");
     assert!(texts.contains(&"no-text-key".to_string()), "{texts:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// One key reaches every string an element shows, not only its text: the
+/// placeholder comes off the message's `.placeholder` attribute, and a
+/// `<tooltip>`'s own key names its popup body. Neither is in the
+/// introspection surface, so both are read off the spawned components.
+#[test]
+fn a_placeholder_and_a_tooltip_body_spawn_translated() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("strings");
+    std::fs::write(dir.join("lumen.toml"), "[app]\nlocale = \"de-DE\"\n").unwrap();
+    write_catalogue(
+        &dir,
+        "de-DE",
+        "search =\n    .placeholder = Katalog durchsuchen\nsave-tip = Datei speichern\n",
+    );
+
+    let root = Element {
+        tag: "root".to_string(),
+        attrs: Attributes::default(),
+        children: vec![
+            Element {
+                tag: "input".to_string(),
+                attrs: Attributes {
+                    placeholder: Some("Search catalogue".to_string()),
+                    translatable: Some("search".to_string()),
+                    ..Default::default()
+                },
+                children: Vec::new(),
+                ..Default::default()
+            },
+            Element {
+                tag: "button".to_string(),
+                attrs: Attributes {
+                    text: Some("Save".to_string()),
+                    tooltip: Some(TooltipSpec {
+                        text: "Save the file".to_string(),
+                        translatable: Some("save-tip".to_string()),
+                        delay_ms: None,
+                        offset: None,
+                    }),
+                    ..Default::default()
+                },
+                children: Vec::new(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let mut app = build(&dir, root);
+    let placeholders: Vec<String> = app
+        .world
+        .query::<&lumen_core::components::TextInput>()
+        .iter(&app.world)
+        .map(|input| input.placeholder.clone())
+        .collect();
+    assert_eq!(placeholders, vec!["Katalog durchsuchen".to_string()]);
+    let tooltips: Vec<String> = app
+        .world
+        .query::<&lumen_primitives::TooltipSource>()
+        .iter(&app.world)
+        .map(|source| source.text.clone())
+        .collect();
+    assert_eq!(tooltips, vec!["Datei speichern".to_string()]);
+    // The input names its placeholder, so the key is not written into the
+    // field as its value.
+    assert!(!texts(&mut app).contains(&"search".to_string()));
 
     let _ = std::fs::remove_dir_all(&dir);
 }
