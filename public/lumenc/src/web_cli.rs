@@ -23,7 +23,7 @@ use lumen_html::contract::{
     DEFAULT_ARTIFACT_FILE, DEFAULT_CSS_FILE, DEFAULT_JS_FILE, DEFAULT_WASM_FILE, NavigationMode,
     ScriptFormat, ScriptRef, Seed, SeedValue,
 };
-use lumen_i18n::{I18n, LanguageIdentifier, SharedI18n};
+use lumen_i18n::{I18n, I18nPlugin, LanguageIdentifier, SharedI18n};
 use lumen_ir::artifact::CompiledApp;
 use lumen_ir::layout_ir::{Element, LayoutIR, relativize_asset_paths};
 use lumen_prerender::{self as prerender, Budget, Prerendered, Settled};
@@ -50,9 +50,6 @@ const ASSET_DIR: &str = "assets";
 
 /// File the compiled candela program is written as.
 const BYTECODE_FILE: &str = "app.cdlb";
-
-/// The locale every other one falls back to, on the desktop and here.
-const FALLBACK_LOCALE: &str = "en-US";
 
 /// Port `--serve` listens on when none is named.
 const DEFAULT_PORT: u16 = 8787;
@@ -501,7 +498,8 @@ fn build(options: &Options) -> Result<Report, String> {
     // Read once and used twice: the build resolves `translatable` into every
     // tree it writes, and the same bytes travel with the site so the browser
     // reads what it builds after the page opens in the same language.
-    let catalogues = read_catalogues(dir, &locales)?;
+    let fallback = fallback_chain(&cfg);
+    let catalogues = read_catalogues(dir, &locales, &fallback)?;
     let css_mode = match cfg.web.css {
         WebCssMode::Sheet => CssMode::Sheet,
         WebCssMode::Computed => CssMode::Computed,
@@ -653,7 +651,7 @@ fn build(options: &Options) -> Result<Report, String> {
         };
         // One tree per locale, shared by every page of it: which page a
         // document shows is a signal inside the tree, not a tree of its own.
-        let catalogue = locale_catalogue(&catalogues, locale, &mut warnings)?;
+        let catalogue = locale_catalogue(&catalogues, locale, &fallback, &mut warnings)?;
         // Resolving the text is the emitter's, because a server holding a tree
         // per locale builds one the same way.
         let ir = Arc::new(match &catalogue {
@@ -1036,6 +1034,17 @@ fn row_item(row: &BTreeMap<String, String>) -> ArrayItem {
         .collect()
 }
 
+/// The locales a key missing from a page's own catalogue falls through to:
+/// what the app named in `[app] fallback_locale`, else what a run of the
+/// same app falls through to, so a written page and a desktop run resolve a
+/// miss the same way.
+fn fallback_chain(cfg: &LumenToml) -> Vec<LanguageIdentifier> {
+    match &cfg.app.fallback_locale {
+        Some(fallback) => vec![fallback.clone()],
+        None => I18nPlugin::default().fallback_chain,
+    }
+}
+
 /// The catalogue `locale`'s documents are written through, which is what makes
 /// a page readable in that language with nothing running: every `translatable`
 /// element's text is resolved through it, and so is a row's component body.
@@ -1045,6 +1054,7 @@ fn row_item(row: &BTreeMap<String, String>) -> ArrayItem {
 fn locale_catalogue(
     catalogues: &[(String, String)],
     locale: &str,
+    fallback: &[LanguageIdentifier],
     warnings: &mut Vec<String>,
 ) -> Result<Option<SharedI18n>, String> {
     let lang = match locale.parse::<LanguageIdentifier>() {
@@ -1054,10 +1064,13 @@ fn locale_catalogue(
             return Ok(None);
         }
     };
-    let fallback = FALLBACK_LOCALE
-        .parse::<LanguageIdentifier>()
-        .map(|fallback| vec![fallback])
-        .unwrap_or_default();
+    // A page is written through the chain a desktop run resolves through,
+    // down to dropping a fallback the page is already being written in.
+    let fallback: Vec<LanguageIdentifier> = fallback
+        .iter()
+        .filter(|other| **other != lang)
+        .cloned()
+        .collect();
     let mut i18n = I18n::new(lang, fallback);
     for (tag, source) in catalogues {
         let tag = tag
@@ -1072,21 +1085,28 @@ fn locale_catalogue(
 /// The app's Fluent catalogues, as a tag and its source, one entry per
 /// locale that has a file.
 ///
-/// Only the locales the site is emitted in are read, plus the one every
-/// other falls back to: a catalogue for a locale the site has no tree for
-/// has no reader on either side. A locale with no file loads nothing, which
-/// is what leaves its pages reading in the source language.
-fn read_catalogues(dir: &Path, locales: &[String]) -> Result<Vec<(String, String)>, String> {
-    let mut tags: Vec<&str> = locales.iter().map(String::as_str).collect();
-    if !tags.contains(&FALLBACK_LOCALE) {
-        tags.push(FALLBACK_LOCALE);
+/// Only the locales the site is emitted in are read, plus the one every other
+/// falls back to (`[app] fallback_locale`): a catalogue for a locale the site
+/// has no tree for has no reader on either side. A locale with no file loads
+/// nothing, which is what leaves its pages reading in the source language.
+fn read_catalogues(
+    dir: &Path,
+    locales: &[String],
+    fallback: &[LanguageIdentifier],
+) -> Result<Vec<(String, String)>, String> {
+    let mut tags: Vec<String> = locales.to_vec();
+    for lang in fallback {
+        let tag = lang.to_string();
+        if !tags.contains(&tag) {
+            tags.push(tag);
+        }
     }
     let mut out = Vec::new();
-    for tag in tags {
+    for tag in &tags {
         // A build reads the author's loose files; no asset chain exists yet.
         let path = locale_dir(dir).join(format!("{tag}.ftl"));
         match std::fs::read_to_string(&path) {
-            Ok(source) => out.push((tag.to_string(), source)),
+            Ok(source) => out.push((tag.clone(), source)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(format!("read {}: {e}", path.display())),
         }

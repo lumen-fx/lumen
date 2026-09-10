@@ -110,6 +110,44 @@ fn marked_markup_spawns_translated() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `[app] fallback_locale` names the language a miss falls through to. An
+/// app authored in German and running in French reads its German catalogue
+/// on a miss, and never the `en-US` one sitting beside it.
+#[test]
+fn a_named_fallback_locale_replaces_en_us() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("named-fallback");
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[app]\nlocale = \"fr-FR\"\nfallback_locale = \"de-DE\"\n",
+    )
+    .unwrap();
+    write_catalogue(&dir, "fr-FR", "greet = Bonjour !\n");
+    write_catalogue(&dir, "de-DE", "bye = Auf Wiedersehen!\n");
+    write_catalogue(&dir, "en-US", "only-english = Goodbye!\n");
+
+    let root = Element {
+        tag: "root".to_string(),
+        attrs: Attributes::default(),
+        children: vec![
+            label(Some("Guten Tag"), Some("greet")),
+            // Only the German catalogue carries this one.
+            label(Some("Auf Wiedersehen"), Some("bye")),
+            // Only the English one carries this one, and nothing consults it.
+            label(Some("Tschuess"), Some("only-english")),
+        ],
+        ..Default::default()
+    };
+    let mut app = build(&dir, root);
+    let texts = texts(&mut app);
+    assert!(texts.contains(&"Bonjour !".to_string()), "{texts:?}");
+    assert!(texts.contains(&"Auf Wiedersehen!".to_string()), "{texts:?}");
+    assert!(texts.contains(&"Tschuess".to_string()), "{texts:?}");
+    assert!(!texts.contains(&"Goodbye!".to_string()), "{texts:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Fallback order for a key no catalogue carries: the authored text wins,
 /// and an element with no text at all renders the key rather than nothing.
 #[test]

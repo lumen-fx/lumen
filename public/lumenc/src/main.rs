@@ -1019,13 +1019,14 @@ USAGE:
                           source scan), map to a cargo `--features` set, and
                           build `lumen` with only those subsystems. The
                           shared library / dev path stay full-featured.
-    lumenc i18n extract <app_dir> [--lang en-US]
+    lumenc i18n extract <app_dir> [--lang TAG]
                           Scan `.lmn`, `.rhai`, `.lua` and `.cdl` files
                           for `t(\"key\", ...)` / `tr(\"key\", ...)` /
                           `lumen::t(\"key\", ...)` /
                           `t!(i18n, \"key\", ...)` /
                           `translatable=\"key\"` and write / merge
-                          `<app_dir>/locale/<lang>.ftl`. Idempotent:
+                          `<app_dir>/locale/<lang>.ftl`, for the app's
+                          `[app] fallback_locale`, else en-US. Idempotent:
                           existing entries are preserved; new keys
                           are appended with placeholder values.
     lumenc completions bash|zsh|fish

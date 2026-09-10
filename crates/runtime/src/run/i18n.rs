@@ -5,7 +5,10 @@
 //! catalogue per locale, which `lumenc i18n extract` writes and translators
 //! edit. At startup every catalogue is loaded and the active locale is
 //! chosen from `[app] locale`, else the locale the OS reports, else
-//! `en-US`; a key the active locale lacks falls through to `en-US`.
+//! `en-US`. A key the active locale lacks falls through to the locale the
+//! app's source strings are written in, which is `[app] fallback_locale`,
+//! else `en-US`; naming the active locale there leaves the miss resolving
+//! to the text the author wrote.
 //!
 //! Two readers share one registry: markup (`translatable="key"`, resolved
 //! in `crate::spawn`) reads [`lumen_core::i18n::AppI18n`] off the world,
@@ -56,13 +59,23 @@ pub(crate) fn register_i18n(
     if let Some(locale) = &cfg.app.locale {
         plugin = plugin.with_locale(locale.clone());
     }
+    if let Some(fallback) = &cfg.app.fallback_locale {
+        plugin = plugin.with_fallback_locale(fallback.clone());
+    }
     let current = plugin.install(&mut app.world);
     let shared = app.world.resource::<SharedI18n>().clone();
+    let fallback = shared
+        .read()
+        .fallback_chain
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     let loaded = shared
         .write()
         .load_dir(&locale_dir(dir), catalogue_reader(&app.world))
         .map_err(|e| RunError::I18n(e.to_string()))?;
-    tracing::debug!(locale = %current, catalogues = loaded.len(), "i18n ready");
+    tracing::debug!(locale = %current, fallback = %fallback, catalogues = loaded.len(), "i18n ready");
 
     let for_scripts = app.world.resource::<AppI18n>().clone();
     let formatting = for_scripts.clone();

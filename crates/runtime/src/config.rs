@@ -8,6 +8,7 @@
 //! [app]
 //! entry = "main.lmn"          # default
 //! locale = "de-DE"            # default: the OS locale, else en-US
+//! fallback_locale = "de-DE"   # default: en-US; the language the source strings are in
 //! single_instance = true      # default: false; second launch forwards argv and exits
 //!
 //! [window]
@@ -131,6 +132,15 @@ pub struct AppCfg {
     /// valid BCP-47 is a `lumen.toml` error.
     #[serde(default, deserialize_with = "de_locale")]
     pub locale: Option<lumen_i18n::LanguageIdentifier>,
+    /// BCP-47 tag naming the locale a key missing from the active catalogue
+    /// falls through to before the element's own authored text. Defaults to
+    /// `en-US`. Set it to the language the app's source strings are written
+    /// in, so an app authored in German does not probe an `en-US` catalogue
+    /// it does not ship. Naming the active locale here leaves nothing to
+    /// fall through to, so a miss goes straight to the authored text. A tag
+    /// that is not valid BCP-47 is a `lumen.toml` error.
+    #[serde(default, deserialize_with = "de_fallback_locale")]
+    pub fallback_locale: Option<lumen_i18n::LanguageIdentifier>,
     /// When `true`, a second launch of this app forwards its command-line
     /// arguments to the already-running instance and exits instead of
     /// opening a second window; the primary sees them as
@@ -144,10 +154,13 @@ pub struct AppCfg {
     pub single_instance: bool,
 }
 
-/// Parse `[app] locale` into a validated language identifier, so a typo
-/// fails at config-load time naming the offending tag rather than silently
-/// leaving the app in its default locale.
-fn de_locale<'de, D>(deserializer: D) -> Result<Option<lumen_i18n::LanguageIdentifier>, D::Error>
+/// Parse one of `[app]`'s BCP-47 tags into a validated language identifier,
+/// so a typo fails at config-load time naming the offending key and tag
+/// rather than silently leaving the app in its default locale.
+fn parse_opt_locale<'de, D>(
+    deserializer: D,
+    field: &str,
+) -> Result<Option<lumen_i18n::LanguageIdentifier>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -157,8 +170,26 @@ where
     lumen_i18n::Lang::try_from(raw.trim())
         .map(|l| Some(l.into()))
         .map_err(|e| {
-            serde::de::Error::custom(format!("app: `locale` is not a valid BCP-47 tag: {e}"))
+            serde::de::Error::custom(format!("app: `{field}` is not a valid BCP-47 tag: {e}"))
         })
+}
+
+/// Parse `[app] locale`.
+fn de_locale<'de, D>(deserializer: D) -> Result<Option<lumen_i18n::LanguageIdentifier>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    parse_opt_locale(deserializer, "locale")
+}
+
+/// Parse `[app] fallback_locale`.
+fn de_fallback_locale<'de, D>(
+    deserializer: D,
+) -> Result<Option<lumen_i18n::LanguageIdentifier>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    parse_opt_locale(deserializer, "fallback_locale")
 }
 
 /// `[pages]` block - file-based multi-page navigation.
@@ -1435,6 +1466,20 @@ mod tests {
         // A typo names itself in the error.
         let err = toml::from_str::<LumenToml>("[app]\nlocale = \"not a tag\"\n").unwrap_err();
         assert!(err.to_string().contains("locale"), "{err}");
+    }
+
+    #[test]
+    fn app_fallback_locale_parses_and_names_itself_in_errors() {
+        // Absent -> en-US, resolved where the plugin is built.
+        let cfg: LumenToml = toml::from_str("[app]\nlocale = \"fr-FR\"\n").unwrap();
+        assert!(cfg.app.fallback_locale.is_none());
+        let cfg: LumenToml = toml::from_str("[app]\nfallback_locale = \"de-DE\"\n").unwrap();
+        let fallback = cfg.app.fallback_locale.expect("fallback_locale parsed");
+        assert_eq!(fallback.language.as_str(), "de");
+        // The error names the key the author mistyped, not the other one.
+        let err =
+            toml::from_str::<LumenToml>("[app]\nfallback_locale = \"not a tag\"\n").unwrap_err();
+        assert!(err.to_string().contains("fallback_locale"), "{err}");
     }
 
     #[test]

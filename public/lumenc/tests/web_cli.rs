@@ -609,6 +609,31 @@ fn every_locale_the_site_is_emitted_in_carries_its_catalogue() {
     assert!(german.contains("row-label = Zeile"), "{german}");
 }
 
+/// `[app] fallback_locale` names the language a key missing from the page's
+/// own catalogue is written in, and the build resolves through it exactly as
+/// a desktop run does. The `en-US` catalogue beside it is never read, so it
+/// does not travel with the site either.
+#[test]
+fn a_named_fallback_locale_writes_the_pages() {
+    let scratch = scratch("fallback-locale");
+    let out = scratch.join("site");
+    web("fixtures/i18n-fallback", &out, &[]);
+
+    let index = read(&out, "index.html");
+    assert!(index.contains("Bonjour !"), "{index}");
+    assert!(index.contains("Auf Wiedersehen!"), "{index}");
+    // Only en-US carries `thanks`, and nothing consults it.
+    assert!(index.contains("Danke"), "{index}");
+    assert!(!index.contains("Thank you!"), "{index}");
+    assert!(!index.contains("Goodbye!"), "{index}");
+
+    let files = files(&out);
+    assert!(
+        !files.iter().any(|path| path.contains("en-US.ftl")),
+        "{files:?}"
+    );
+}
+
 /// A static site resolved its text into its documents and loads no runtime,
 /// so nothing on it would ever read a catalogue.
 #[test]

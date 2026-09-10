@@ -1,0 +1,10 @@
+<root>
+  <column id="page">
+    <!-- The French catalogue carries this one. -->
+    <label id="greeting" translatable="greet" text="Guten Tag" />
+    <!-- Only the German catalogue carries this one. -->
+    <label id="farewell" translatable="bye" text="Auf Wiedersehen" />
+    <!-- Only the English one carries this one, so the authored text stands. -->
+    <label id="thanks" translatable="thanks" text="Danke" />
+  </column>
+</root>

@@ -32,7 +32,9 @@
 //! <app_dir>/locale/<base_lang>.ftl
 //! ```
 //!
-//! `<base_lang>` defaults to `en-US`; override with `--lang <tag>`.
+//! `<base_lang>` is the language the app's source strings are written in,
+//! which is `[app] fallback_locale` in the app's `lumen.toml`, else
+//! `en-US`; override it with `--lang <tag>`.
 //!
 //! The scanner works on text, not on a parsed AST: it finds the call
 //! prefix, checks it starts a name rather than ending one, and reads the
@@ -45,13 +47,18 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use lumen_runtime::config::LumenToml;
+
 use crate::translate::attribute_key;
+
+/// The catalogue `extract` writes when the app names no source language.
+const DEFAULT_LANG: &str = "en-US";
 
 /// Usage block for `lumenc i18n --help` and `lumenc i18n extract --help`.
 const I18N_USAGE: &str = "lumenc i18n - translation catalogue tooling
 
 USAGE:
-    lumenc i18n extract <app_dir> [--lang en-US]
+    lumenc i18n extract <app_dir> [--lang TAG]
 
 Scans the app's .lmn, .rhai, .lua and .cdl files for t(\"key\", ...) /
 tr(\"key\", ...) / lumen::t(\"key\", ...) / t!(i18n, \"key\", ...) /
@@ -60,7 +67,8 @@ Idempotent: existing entries are preserved, new keys are appended with
 placeholder values.
 
     --lang TAG        BCP-47 tag naming the catalogue to write
-                      (default en-US).";
+                      (default: the app's `[app] fallback_locale`,
+                      else en-US).";
 
 /// Entry point for `lumenc i18n ...`.
 pub fn cmd_i18n(mut args: impl Iterator<Item = String>) -> ExitCode {
@@ -83,7 +91,7 @@ pub fn cmd_i18n(mut args: impl Iterator<Item = String>) -> ExitCode {
 
 fn cmd_extract(args: impl Iterator<Item = String>) -> ExitCode {
     let mut dir: Option<String> = None;
-    let mut lang = String::from("en-US");
+    let mut lang: Option<String> = None;
     let mut args = args.peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -96,10 +104,10 @@ fn cmd_extract(args: impl Iterator<Item = String>) -> ExitCode {
                     eprintln!("lumenc i18n extract: --lang needs a BCP-47 tag");
                     return ExitCode::from(2);
                 };
-                lang = v;
+                lang = Some(v);
             }
             s if s.starts_with("--lang=") => {
-                lang = s["--lang=".len()..].to_string();
+                lang = Some(s["--lang=".len()..].to_string());
             }
             _ if dir.is_none() => dir = Some(a),
             other => {
@@ -117,6 +125,21 @@ fn cmd_extract(args: impl Iterator<Item = String>) -> ExitCode {
         eprintln!("lumenc i18n extract: {dir} is not a directory");
         return ExitCode::from(2);
     }
+
+    // The catalogue this writes is the app's source language, which is the
+    // language a key missing everywhere else falls through to. An app that
+    // declares one gets that catalogue from a bare `lumenc i18n extract`.
+    let lang = lang.unwrap_or_else(|| match LumenToml::load_or_default(&app) {
+        Ok(cfg) => cfg
+            .app
+            .fallback_locale
+            .map(|fallback| fallback.to_string())
+            .unwrap_or_else(|| DEFAULT_LANG.to_string()),
+        Err(e) => {
+            eprintln!("lumenc i18n extract: {e}; writing {DEFAULT_LANG}");
+            DEFAULT_LANG.to_string()
+        }
+    });
 
     let mut keys = BTreeSet::new();
     if let Err(e) = scan_dir(&app, &mut keys) {
