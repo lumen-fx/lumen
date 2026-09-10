@@ -164,7 +164,7 @@ impl RowFills {
 /// from one assembled tree, and which page a document shows is decided by a
 /// signal inside it, so a site with forty pages holds one tree and a server
 /// answering a request holds the same one the request before it did.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PageSpec {
     /// Page key, which is also its file name: `index` becomes `index.html`.
     pub key: String,
@@ -188,6 +188,27 @@ pub struct PageSpec {
     /// When the sources behind this page last changed, for `<lastmod>`. A
     /// page whose sources cannot be dated is listed without one.
     pub modified: Option<SystemTime>,
+    /// Whether a crawler is invited to index this page. A page emitted with
+    /// `false` carries `<meta name="robots" content="noindex">` and is left
+    /// out of the sitemap.
+    pub index: bool,
+}
+
+impl Default for PageSpec {
+    fn default() -> Self {
+        Self {
+            key: String::new(),
+            ir: Arc::default(),
+            title: None,
+            description: None,
+            signals: SignalEnv::new(),
+            seed: Seed::new(),
+            nodes: BTreeMap::new(),
+            fills: RowFills::default(),
+            modified: None,
+            index: true,
+        }
+    }
 }
 
 impl PageSpec {
@@ -340,6 +361,8 @@ pub struct WebSpec {
     /// dated and cross-linked to its other languages. Needs an address to
     /// build absolute URLs from: [`Self::canonical`], else [`Self::url`].
     pub sitemap: bool,
+    /// Write `robots.txt`. It names the sitemap when there is one.
+    pub robots: bool,
 }
 
 impl Default for WebSpec {
@@ -364,6 +387,7 @@ impl Default for WebSpec {
             runtime: true,
             per_request: false,
             sitemap: false,
+            robots: false,
         }
     }
 }

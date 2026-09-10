@@ -34,7 +34,7 @@ pub use error::EmitError;
 pub use i18n::{translate_element, translate_ir};
 pub use markup::{MarkupSheet, lift as lift_markup_styles};
 pub use names::{build_id, content_name, fnv1a64};
-pub use site::{NOT_FOUND_FILE, SITEMAP_FILE, document, emit, shell};
+pub use site::{NOT_FOUND_FILE, ROBOTS_FILE, SITEMAP_FILE, document, emit, shell};
 pub use snapshot::{NodeState, State, state_of};
 pub use spec::{
     AssetRef, CssMode, HostRewrite, LocaleSpec, OutputFile, PageSpec, RowFills, SignalEnv, Site,

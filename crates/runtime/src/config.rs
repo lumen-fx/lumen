@@ -616,6 +616,7 @@ pub fn infer_script_hosts(dir: &Path, cfg: &LumenToml) -> Vec<ScriptEngine> {
 ///
 /// [web.pages.settings]
 /// title = "Settings"
+/// index = false                # and keep it out of a search index
 /// ```
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -673,6 +674,9 @@ pub struct WebCfg {
     /// absolute URLs from, [`Self::canonical`] else [`Self::url`], and is
     /// written whenever the site has one.
     pub sitemap: Option<bool>,
+    /// Write `robots.txt`, naming the sitemap. Defaults to on when a sitemap
+    /// is written.
+    pub robots: Option<bool>,
     /// Host the site is deployed to, which decides the rewrite file that
     /// makes a deep path serve the app instead of the host's own 404.
     pub host: WebHost,
@@ -680,7 +684,8 @@ pub struct WebCfg {
     pub navigation: WebNavigation,
     /// `[web.seed]` - signal values every page is rendered with.
     pub seed: BTreeMap<String, WebSeedValue>,
-    /// `[web.pages.<key>]` - per-page title and description.
+    /// `[web.pages.<key>]` - what each page says about itself. A key naming
+    /// a page the app does not have is accepted and reaches nothing.
     pub pages: BTreeMap<String, WebPageCfg>,
 }
 
@@ -692,6 +697,8 @@ pub struct WebPageCfg {
     pub title: Option<String>,
     /// Description for this page. Falls back to `[web] description`.
     pub description: Option<String>,
+    /// Whether a crawler is invited to index this page. Defaults to true.
+    pub index: Option<bool>,
 }
 
 /// One `[web.seed]` value.

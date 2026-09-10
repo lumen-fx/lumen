@@ -82,8 +82,13 @@ pub fn emit(spec: &SiteSpec) -> Result<Site, EmitError> {
         if let Some((name, contents)) = rewrite_file(spec) {
             files.push(OutputFile::new(name, contents));
         }
-        if let Some(sitemap) = sitemap(spec) {
+        let sitemap = sitemap(spec);
+        let listed = sitemap.is_some();
+        if let Some(sitemap) = sitemap {
             files.push(OutputFile::new(SITEMAP_FILE, sitemap));
+        }
+        if let Some(robots) = robots(spec, listed) {
+            files.push(OutputFile::new(ROBOTS_FILE, robots));
         }
     }
 
@@ -99,6 +104,9 @@ pub const NOT_FOUND_FILE: &str = "404.html";
 
 /// The list of the site's pages, for a crawler.
 pub const SITEMAP_FILE: &str = "sitemap.xml";
+
+/// What a crawler is told before it reads anything else.
+pub const ROBOTS_FILE: &str = "robots.txt";
 
 /// The app shell: the entry page's markup with no page selected.
 ///
@@ -127,6 +135,7 @@ pub fn shell(spec: &SiteSpec, warnings: &mut Vec<String>) -> Result<String, Emit
         nodes: BTreeMap::new(),
         fills: RowFills::default(),
         modified: entry.modified,
+        index: entry.index,
     };
     document(&shell, spec, warnings)
 }
@@ -184,7 +193,7 @@ fn sitemap(spec: &SiteSpec) -> Option<String> {
     let base = urls::normalize_base(&spec.web.base_path);
     let mut body = String::new();
     let mut cross_linked = false;
-    for page in &spec.pages {
+    for page in spec.pages.iter().filter(|page| page.index) {
         let document = page.document(&spec.web.entry);
         let lastmod = page.modified.and_then(w3c_utc);
         // Every locale of a page carries the whole set, this locale included,
@@ -211,6 +220,11 @@ fn sitemap(spec: &SiteSpec) -> Option<String> {
             body.push_str("  </url>\n");
         }
     }
+    // A site nobody is invited to index has no list to write, and an empty
+    // `<urlset>` tells a crawler nothing.
+    if body.is_empty() {
+        return None;
+    }
     // A site emitted in one language links nothing, so it keeps the namespace
     // it would never use out of its sitemap.
     let xhtml = if cross_linked {
@@ -222,6 +236,28 @@ fn sitemap(spec: &SiteSpec) -> Option<String> {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset \
          xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"{xhtml}>\n{body}</urlset>\n"
     ))
+}
+
+/// What a crawler reads before it fetches anything, or `None` when the site
+/// does not write one.
+///
+/// The file allows everything and names the sitemap when one was written. A
+/// page kept out of an index is never listed here as `Disallow`: a crawler
+/// that is not allowed to fetch a page never reads the `noindex` inside it,
+/// so a page already in an index would stay there. The meta tag is what
+/// removes a page; this file is what points at the ones that are wanted.
+fn robots(spec: &SiteSpec, sitemap: bool) -> Option<String> {
+    if !spec.web.robots {
+        return None;
+    }
+    let mut out = "User-agent: *\nAllow: /\n".to_string();
+    if let Some(url) = seo::origin(spec).filter(|_| sitemap) {
+        let base = urls::normalize_base(&spec.web.base_path);
+        out.push_str("\nSitemap: ");
+        out.push_str(&urls::absolute(url, &base, SITEMAP_FILE));
+        out.push('\n');
+    }
+    Some(out)
 }
 
 /// A moment as a W3C datetime in UTC, which is the form `<lastmod>` is read
