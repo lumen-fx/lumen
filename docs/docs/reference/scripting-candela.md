@@ -47,8 +47,23 @@ fn main() {}
 
 The import is replaced with the declarations before compilation, so no
 `lumen.cdl` file is read from disk. Without the import (or a hand-written `host`
-block), the source still compiles, and calling a builtin fails at run time with
-`lumen is not a valid namespace`.
+block), the source still compiles, and calling a builtin fails at run time:
+
+```text
+lumen::signal_set: the `lumen` builtins are not declared here; add `import "lumen.cdl";`
+```
+
+A call to a name the namespace does not have reads differently. The import is in
+place; the function is not on the surface, and where the same name lives in a
+namespace the app can reach, the message names it:
+
+```text
+the `lumen` namespace has no `read_file` (called as `lumen::read_file`)
+the `lumen` namespace has no `data_dir` (called as `lumen::data_dir`); `files::data_dir` exists
+```
+
+Both surface on the first call that reaches the function, because candela
+compiles a function body the first time it is called rather than at load.
 
 Write the import in every `.cdl` file that uses the surface. An app's candela
 files join into one program and the declarations land once for the whole
