@@ -52,6 +52,7 @@ index.html               the entry page
 settings.html            one document per page
 404.html                 the shell a path with no document falls back to
 sitemap.xml              every page in every locale, for a crawler
+robots.txt               what a crawler is told, naming the sitemap
 _redirects               the deep-path rewrite file, when `host` names one
 lumen.web.json           what the browser runtime reads before anything else
 styles.<hash>.css        the app's stylesheet, plus the reset
@@ -398,6 +399,11 @@ or, in `lumen.toml`:
 base_path = "/docs"
 ```
 
+`robots.txt` is written at the top of the output directory whichever base
+path the site has, because a crawler reads it only at the domain root. A site
+served from a subdirectory has to put it there itself; the sitemap URL inside
+it is absolute either way.
+
 ## More than one language
 
 Name the locales and the site is emitted once per locale:
@@ -449,15 +455,25 @@ A page can say more about itself:
 [web.pages.settings]
 title = "Settings"
 description = "Everything you can change"
+index = false
 ```
 
-`sitemap.xml` lists every page of every locale, one entry each. An entry
-carries the page's own URL, when the sources behind it last changed, and a
-link to the same page in every other language the site is emitted in, which is
-what tells a crawler that a translated page is that page and not an unrelated
-one. The dates come off the files the page is built from rather than off the
-clock the build ran on, so a page that did not change keeps its date and a
-rebuild of an untouched app writes the same file.
+`index = false` keeps the page out of a search index: its document carries
+`<meta name="robots" content="noindex">` and the sitemap does not list it.
+Everything else it says about itself stays, so a link to it pasted into a
+chat still previews. `robots.txt` is not how a page is kept out of an index
+and never lists one: a crawler told not to fetch a page never reads the tag
+that would remove it, so a page already indexed stays there. The file names
+the sitemap and allows everything; `robots = false` stops it being written
+when you want to ship your own.
+
+`sitemap.xml` lists every page of every locale that asks to be indexed, one
+entry each. An entry carries the page's own URL, when the sources behind it
+last changed, and a link to the same page in every other language the site is
+emitted in, which is what tells a crawler that a translated page is that page
+and not an unrelated one. The dates come off the files the page is built from
+rather than off the clock the build ran on, so a page that did not change
+keeps its date and a rebuild of an untouched app writes the same file.
 
 The URLs are built from the address the pages themselves call canonical:
 `canonical` when the site sets it, `url` otherwise. Without either, the

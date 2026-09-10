@@ -1,10 +1,10 @@
 //! The document around a page: the head, and the boot script under it.
 //!
 //! What goes in the head is what a crawler, a social preview and a browser
-//! need before anything runs: a title, a description, the canonical URL,
-//! the stylesheet, and hints for the two files the runtime fetches. The
-//! only script in the document loads that runtime; everything the app knows
-//! travels as data.
+//! need before anything runs: a title, a description, whether the page is
+//! meant to be indexed, the canonical URL, the stylesheet, and hints for the
+//! two files the runtime fetches. The only script in the document loads that
+//! runtime; everything the app knows travels as data.
 
 use lumen_html::contract::{
     DATA_LM_BASE, DATA_LM_CONTRACT, DATA_LM_LOCALE, DATA_LM_PAGE, DEFAULT_MANIFEST_FILE,
@@ -90,6 +90,11 @@ pub fn open_document(
     out.push_str("</title>\n");
     if let Some(description) = description {
         meta_named(out, "description", description);
+    }
+    // A page nobody is invited to index keeps the rest of its metadata: a
+    // link to it pasted into a chat still previews.
+    if !page.index {
+        meta_named(out, "robots", "noindex");
     }
     if let Some(canonical) = &canonical {
         out.push_str("<link rel=\"canonical\"");

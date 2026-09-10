@@ -205,7 +205,8 @@ with the toolchain, so there is nothing per-app to compile or trim.
 | `hash_assets` | bool | `false` | Add a content hash to asset file names. Not applied yet. |
 | `debug_attrs` | bool | `false` | Write the extra `data-lm-*` attributes naming what an element came from. Not written yet. |
 | `menubar` | `"omit"`, `"nav"` | `omit` | What an app menu bar becomes in a document. |
-| `sitemap` | bool | on when the site has an address | Write `sitemap.xml`: every page in every locale, each entry carrying when its sources last changed and an `hreflang` link to the same page in the site's other languages. The URLs are built from `canonical`, else `url`; with neither, no file is written. |
+| `sitemap` | bool | on when the site has an address | Write `sitemap.xml`: every page that asks to be indexed, in every locale, each entry carrying when its sources last changed and an `hreflang` link to the same page in the site's other languages. The URLs are built from `canonical`, else `url`; with neither, no file is written. |
+| `robots` | bool | on when a sitemap is written | Write `robots.txt`: it allows every crawler everything and names the sitemap when one was written. It carries no `Disallow` for a page with `index = false`, because a crawler that does not fetch a page never reads the tag that keeps it out of an index. Set it to write the file with no sitemap to name, or unset it to ship your own. |
 | `host` | `"static"`, `"netlify"`, `"vercel"`, `"apache"`, `"nginx"` | `static` | Where the site is deployed. A named host also gets the file that makes it serve a deep path with a 200 (`_redirects`, `vercel.json`, `.htaccess`, `nginx.conf`); `static` relies on the emitted `404.html`, which every host serves. Under `render = "ssr"` no rewrite file is written, because a render answers a deep path itself. |
 | `navigation` | `"soft"`, `"hard"` | `soft` | Whether a link to another page of the same site is swapped in place or loaded by the browser. |
 
@@ -228,6 +229,7 @@ title = "write it down"
 [web.pages.settings]
 title = "Settings"
 description = "Everything you can change"
+index = false
 ```
 
 `[web.seed]` gives the signals the pages are rendered with, and the same
@@ -239,8 +241,10 @@ is emitted with those rows in it, and an element bound to a seeded signal with
 `bind-text`, `bind-checked`, `bind-value` or `bind-disabled` is emitted showing
 that value. A seeded signal beats the default the markup beside the binding
 would have set, and a script that publishes the signal itself beats both.
-`[web.pages.<key>]` sets one page's `title` and `description`; both fall back
-to the site's.
+`[web.pages.<key>]` sets one page's `title` and `description`, which fall back
+to the site's, and `index`, which defaults to true. A page with `index = false`
+carries `<meta name="robots" content="noindex">` and is left out of the
+sitemap; it keeps its canonical, Open Graph and `hreflang` metadata.
 
 See [the web guide](../guides/web.md).
 

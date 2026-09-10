@@ -550,6 +550,7 @@ fn build(options: &Options) -> Result<Report, String> {
     // through the same function.
     let sheet = lumen_web::styles_css(compiled.ir.combined_stylesheet.as_ref(), &markup, css_mode);
 
+    let sitemap_on = cfg.web.sitemap.unwrap_or(true);
     let web = WebSpec {
         base_path: base.clone(),
         url: cfg.web.url.clone(),
@@ -592,7 +593,13 @@ fn build(options: &Options) -> Result<Report, String> {
         },
         // A sitemap needs an absolute address to list, so one is written
         // when the site has one unless the app says not to.
-        sitemap: cfg.web.sitemap.unwrap_or(true),
+        sitemap: sitemap_on,
+        // The file's job is to name the sitemap, so it follows it; asking
+        // for it outright writes the allow-all file either way.
+        robots: cfg
+            .web
+            .robots
+            .unwrap_or(sitemap_on && cfg.web.url.is_some()),
         runtime: runtime.is_some(),
         scripts,
         ..WebSpec::default()
@@ -930,6 +937,7 @@ fn page_spec(
             ir: Arc::clone(ir),
             title: page_cfg.and_then(|page| page.title.clone()),
             description: page_cfg.and_then(|page| page.description.clone()),
+            index: page_cfg.and_then(|page| page.index).unwrap_or(true),
             signals: run.state.signals.clone(),
             seed: run.state.seed.clone(),
             nodes: run.state.nodes.clone(),
@@ -967,6 +975,7 @@ fn page_spec(
         ir: Arc::clone(ir),
         title: page_cfg.and_then(|page| page.title.clone()),
         description: page_cfg.and_then(|page| page.description.clone()),
+        index: page_cfg.and_then(|page| page.index).unwrap_or(true),
         signals,
         seed: page_seed,
         nodes: BTreeMap::new(),

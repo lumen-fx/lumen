@@ -1224,6 +1224,74 @@ fn a_site_with_a_url_lists_its_pages_for_a_crawler() {
 }
 
 #[test]
+fn a_page_kept_out_of_an_index_says_so_and_is_not_listed() {
+    let mut spec = site(vec![
+        simple_page(),
+        PageSpec {
+            index: false,
+            ..PageSpec::new(
+                "settings",
+                ir(element("root", Attributes::default(), vec![])),
+            )
+        },
+    ]);
+    spec.web.url = Some("https://example.com".into());
+    spec.web.sitemap = true;
+
+    let settings = page_html(&spec, "settings.html");
+    assert!(
+        settings.contains(r#"<meta name="robots" content="noindex">"#),
+        "{settings}"
+    );
+    // The rest of what the head says about the page is unchanged: a link to
+    // it still previews where someone pastes it.
+    assert!(
+        settings.contains(r#"<link rel="canonical" href="https://example.com/settings.html">"#),
+        "{settings}"
+    );
+    let index = page_html(&spec, "index.html");
+    assert!(!index.contains("name=\"robots\""), "{index}");
+
+    let sitemap = sitemap(&spec);
+    assert!(!sitemap.contains("settings.html"), "{sitemap}");
+    assert!(
+        sitemap.contains("<loc>https://example.com/index.html</loc>"),
+        "{sitemap}"
+    );
+
+    // With nothing left to list there is no list, and so nothing for
+    // `robots.txt` to point at either.
+    spec.pages[0].index = false;
+    spec.web.robots = true;
+    let site = emitted(&spec);
+    assert!(site.file("sitemap.xml").is_none());
+    let robots = &site.file("robots.txt").expect("a robots file").contents;
+    assert!(!robots.contains("Sitemap:"), "{robots}");
+}
+
+#[test]
+fn robots_txt_names_the_sitemap_it_was_written_beside() {
+    let mut spec = site(vec![simple_page()]);
+    spec.web.url = Some("https://example.com".into());
+    spec.web.base_path = "/docs/".into();
+    spec.web.sitemap = true;
+    spec.web.robots = true;
+
+    let robots = emitted(&spec)
+        .file("robots.txt")
+        .expect("a robots file")
+        .contents
+        .clone();
+    assert_eq!(
+        robots,
+        "User-agent: *\nAllow: /\n\nSitemap: https://example.com/docs/sitemap.xml\n"
+    );
+
+    spec.web.robots = false;
+    assert!(emitted(&spec).file("robots.txt").is_none());
+}
+
+#[test]
 fn a_translated_page_is_listed_beside_its_other_languages() {
     let mut spec = site(vec![
         simple_page(),
