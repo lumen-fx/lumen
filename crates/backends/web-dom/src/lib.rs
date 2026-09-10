@@ -24,6 +24,7 @@
 #![warn(missing_docs)]
 
 mod events;
+mod navigation;
 mod nodes;
 mod project;
 
@@ -32,6 +33,7 @@ use lumen_core::prelude::{App, Plugin, TickStage};
 use lumen_core::property_store::PropertyStore;
 use web_sys::Element;
 
+pub use navigation::Routes;
 pub use nodes::{HydrationReport, NodeTable};
 
 /// Install the browser backend on an app whose scene has already been
@@ -50,10 +52,27 @@ pub struct WebDomPlugin {
     pub root: Element,
     /// The entity the app's root node was spawned as.
     pub root_entity: Entity,
+    /// What the site's addresses look like, when `[web] navigation = "soft"`
+    /// asks the app to keep running across a link. `None` leaves the address
+    /// bar to the browser, which is what happens when every link loads the
+    /// next document anyway.
+    pub routes: Option<Routes>,
 }
 
 impl Plugin for WebDomPlugin {
     fn build(self, app: &mut App) {
+        // Soft navigation puts the page the app swapped to in the address
+        // bar, so a reload or a copied link lands on the page shown, and the
+        // browser's back and forward buttons step the site. Ordered ahead of
+        // the resolver: it reads the same request, and back and forward are
+        // the browser's to answer rather than the in-memory stack's.
+        if let Some(routes) = self.routes {
+            app.world.insert_resource(routes);
+            app.add_systems(
+                TickStage::Systems,
+                navigation::sync_history.before(lumen_scene::routing::apply_navigation),
+            );
+        }
         let table = NodeTable::adopting(self.root, self.root_entity);
         app.world.insert_non_send(table);
         // A dialog the browser dismisses writes the signal it hangs off, so
@@ -99,11 +118,13 @@ impl Plugin for WebDomPlugin {
 /// installed them and the world does not own them: they are handed to the
 /// browser, and they push onto a queue the app drains each tick.
 ///
-/// `soft_navigation` is `[web] navigation = "soft"`: whether a click on a
+/// `routes` is `[web] navigation = "soft"`: with `Some`, a click on a
 /// same-page `<a href>` this crate spawned is kept from reaching the
-/// browser's own navigation, so the in-app router swaps the page in place
-/// instead. Passed straight through to the click listener, which is the only
-/// place a browser event is still in hand to prevent.
+/// browser's own navigation so the in-app router swaps the page in place,
+/// and a `popstate` from the browser's back or forward button opens the page
+/// the new address names. The click half belongs here rather than in
+/// [`WebDomPlugin`] because only a listener has a browser event still in
+/// hand to prevent.
 ///
 /// The keys are the one set that listens on the document rather than on
 /// `root`: a key pressed while focus sits outside the app never passes the
@@ -112,6 +133,6 @@ impl Plugin for WebDomPlugin {
 /// # Errors
 ///
 /// The browser refused a listener.
-pub fn listen(root: &Element, soft_navigation: bool) -> Result<(), wasm_bindgen::JsValue> {
-    events::listen(root, soft_navigation)
+pub fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), wasm_bindgen::JsValue> {
+    events::listen(root, routes)
 }

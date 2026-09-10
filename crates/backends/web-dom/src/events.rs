@@ -38,9 +38,12 @@ use lumen_core::input::{
     ClickEvent, FocusTracker, Focused, Key, KeyPressed, KeyReleased, Modifiers, ModifiersState,
     NamedKey, PointerButton,
 };
+use lumen_core::nav;
 use lumen_core::property_store::PropertyStore;
 use lumen_html::contract::DATA_LM;
 use lumen_scene::spawn::IfMarker;
+
+use crate::navigation::Routes;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{
@@ -644,26 +647,20 @@ fn on_capture(
 
 /// Start listening on `root` for the events that drive an app.
 ///
-/// `soft_navigation` is `[web] navigation = "soft"` from the site's
-/// manifest: whether a click on a same-page `<a href>` this listener finds
-/// eligible (see [`should_soft_navigate`]) keeps the browser from loading
-/// the next document at all, leaving the in-app router (already installed
-/// whenever the site has more than one page) to swap it in place.
-pub(crate) fn listen(root: &Element, soft_navigation: bool) -> Result<(), JsValue> {
+/// `routes` is what `[web] navigation = "soft"` resolves to: `Some` when a
+/// click on a same-page `<a href>` this listener finds eligible (see
+/// [`should_soft_navigate`]) keeps the browser from loading the next
+/// document at all, leaving the in-app router to swap it in place. It is
+/// also what the `popstate` listener reads, because the address the visitor
+/// stepped to has to become the page the app opens.
+pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsValue> {
+    let soft_navigation = routes.is_some();
     let location = web_sys::window().map(|w| w.location());
     let origin = location
         .as_ref()
         .and_then(|l| l.origin().ok())
         .unwrap_or_default();
-    // Captured once: nothing in this build moves the document to a new
-    // address (soft navigation swaps the page in place, and hard navigation
-    // leaves the page entirely), so the address a `dragover` and a click both
-    // compare against never changes under this listener's watch.
-    let pathname = location
-        .as_ref()
-        .and_then(|l| l.pathname().ok())
-        .unwrap_or_default();
-    let search = location.and_then(|l| l.search().ok()).unwrap_or_default();
+    let click_location = location.clone();
     on(
         root,
         "click",
@@ -674,8 +671,14 @@ pub(crate) fn listen(root: &Element, soft_navigation: bool) -> Result<(), JsValu
                     .is_some_and(|m| m.ctrl_key() || m.shift_key() || m.meta_key() || m.alt_key());
                 let primary_button = mouse.is_none_or(|m| m.button() == 0);
                 let opens_elsewhere = !matches!(anchor.target().as_str(), "" | "_self");
-                let navigates_elsewhere =
-                    anchor.pathname() != pathname || anchor.search() != search;
+                // Read now rather than captured once: a soft navigation
+                // moves the document to the address of the page it swapped
+                // in, so a link back to the address this document was
+                // loaded as is the one that has to compare equal.
+                let navigates_elsewhere = click_location.as_ref().is_none_or(|l| {
+                    anchor.pathname() != l.pathname().unwrap_or_default()
+                        || anchor.search() != l.search().unwrap_or_default()
+                });
                 if should_soft_navigate(
                     soft_navigation,
                     LinkClick {
@@ -841,6 +844,26 @@ pub(crate) fn listen(root: &Element, soft_navigation: bool) -> Result<(), JsValu
                 }) as Box<dyn FnMut(Event)>),
             )?;
         }
+    }
+    // The other half of soft navigation: an entry the visitor stepped to
+    // with the browser's own back or forward button, or one a script asked
+    // for through `page_back()`. The browser has already moved the address
+    // by the time this fires, so all that is left is to open the page that
+    // address names.
+    if let Some(routes) = routes.cloned()
+        && let Some(window) = web_sys::window()
+    {
+        on(
+            &window,
+            "popstate",
+            Closure::wrap(Box::new(move |_: Event| {
+                let path = location
+                    .as_ref()
+                    .and_then(|l| l.pathname().ok())
+                    .unwrap_or_default();
+                nav::navigate(routes.path_at(&path));
+            }) as Box<dyn FnMut(Event)>),
+        )?;
     }
     Ok(())
 }

@@ -53,7 +53,9 @@ class. See [tags reference](../reference/tags.md).
 
 A click handler that calls `prevent_default()` on the event stops the
 navigation, which lets you confirm before leaving a page. See
-[scripting](scripting.md).
+[scripting](scripting.md). On the web it stops the navigation under
+`[web] navigation = "soft"`; under `navigation = "hard"` the browser has
+already started loading the next document by the time a handler runs.
 
 ## Navigate from a script
 
@@ -80,6 +82,11 @@ reader is spelled out because candela has no arity overloading:
 
 Back and forward walk an in-memory history of the pages visited in this run.
 Navigating to a new page after going back discards the entries ahead of it.
+
+On the web under `[web] navigation = "soft"` the history is the browser's own,
+so `page_back()` and the browser's back button are the same button, and every
+page a visitor reaches has an address they can reload or share. See
+[the web target](web.md).
 
 ## Paths with parameters
 

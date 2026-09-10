@@ -168,7 +168,11 @@ fn boot_ir(ir: LayoutIR, root: DomElement) -> App {
     hosts::install(&mut app, "candela", COMPONENTS, "components.cdlb")
         .expect("this build carries the candela host");
     let root_entity = compiled_from(ir).spawn_into(&mut app.world);
-    app.add_plugin(WebDomPlugin { root, root_entity });
+    app.add_plugin(WebDomPlugin {
+        root,
+        root_entity,
+        routes: None,
+    });
     app.tick();
     app
 }

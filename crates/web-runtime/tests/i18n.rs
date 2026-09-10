@@ -83,7 +83,11 @@ fn boot(ir: LayoutIR, root: DomElement, catalogues: &[(String, String)]) -> App 
         ..CompiledApp::default()
     };
     let root_entity = compiled.spawn_into(&mut app.world);
-    app.add_plugin(WebDomPlugin { root, root_entity });
+    app.add_plugin(WebDomPlugin {
+        root,
+        root_entity,
+        routes: None,
+    });
     app.tick();
     app
 }

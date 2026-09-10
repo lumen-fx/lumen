@@ -207,7 +207,7 @@ with the toolchain, so there is nothing per-app to compile or trim.
 | `menubar` | `"omit"`, `"nav"` | `omit` | What an app menu bar becomes in a document. |
 | `sitemap` | bool | on when the site has an address | Write `sitemap.xml`: every page in every locale, each entry carrying when its sources last changed and an `hreflang` link to the same page in the site's other languages. The URLs are built from `canonical`, else `url`; with neither, no file is written. |
 | `host` | `"static"`, `"netlify"`, `"vercel"`, `"apache"`, `"nginx"` | `static` | Where the site is deployed. A named host also gets the file that makes it serve a deep path with a 200 (`_redirects`, `vercel.json`, `.htaccess`, `nginx.conf`); `static` relies on the emitted `404.html`, which every host serves. Under `render = "ssr"` no rewrite file is written, because a render answers a deep path itself. |
-| `navigation` | `"soft"`, `"hard"` | `soft` | Whether a link to another page of the same site is swapped in place or loaded by the browser. |
+| `navigation` | `"soft"`, `"hard"` | `soft` | How a link to another page of the same site is followed. `soft` swaps the page in place with the app still running, puts that page's own URL in the address bar, and wires the browser's back and forward buttons to the site. `hard` lets the browser load each document, the same as an ordinary site. |
 
 ```toml
 [web]

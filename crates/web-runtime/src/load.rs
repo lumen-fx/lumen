@@ -18,6 +18,7 @@ use lumen_html::contract::{
     DATA_LM_BASE, DATA_LM_CONTRACT, DATA_LM_LOCALE, DATA_LM_PAGE, DEFAULT_MANIFEST_FILE,
     LM_CONTRACT_VERSION, Manifest, SEED_SCRIPT_ID, Seed,
 };
+use lumen_html::urls::join;
 use lumen_ir::artifact::{self, CompiledApp};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
@@ -130,11 +131,6 @@ fn js_reason(error: &JsValue) -> String {
         .unwrap_or_else(|| format!("{error:?}"))
 }
 
-/// Join a site-relative path onto the base path.
-fn url(base: &str, path: &str) -> String {
-    format!("{}{}", base, path.trim_start_matches('/'))
-}
-
 impl PageContext {
     /// Read what the document says about itself.
     ///
@@ -170,7 +166,7 @@ impl PageContext {
 
     /// The URL of the manifest for this site.
     pub fn manifest_url(&self) -> String {
-        url(&self.base, DEFAULT_MANIFEST_FILE)
+        join(&self.base, DEFAULT_MANIFEST_FILE)
     }
 
     /// The signal state this page was rendered from.
@@ -218,7 +214,7 @@ impl PageContext {
             });
         }
 
-        let artifact_url = url(&self.base, &manifest.artifact);
+        let artifact_url = join(&self.base, &manifest.artifact);
         let bytes = fetch_bytes(&artifact_url).await?;
         let artifact = artifact::read_bytes(&bytes).map_err(|e| LoadError::Parse {
             url: artifact_url,
@@ -227,7 +223,7 @@ impl PageContext {
 
         let mut scripts = Vec::with_capacity(manifest.scripts.len());
         for script in &manifest.scripts {
-            let uri = url(&self.base, &script.path);
+            let uri = join(&self.base, &script.path);
             scripts.push(LoadedScript {
                 engine: script.engine.clone(),
                 bytes: fetch_bytes(&uri).await?,
@@ -259,7 +255,7 @@ impl PageContext {
             let Some(path) = manifest.catalogues.get(tag) else {
                 continue;
             };
-            let source = fetch_text(&url(&self.base, path)).await?;
+            let source = fetch_text(&join(&self.base, path)).await?;
             catalogues.push((tag.to_string(), source));
         }
         Ok(catalogues)
