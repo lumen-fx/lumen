@@ -263,12 +263,6 @@ fn the_requests_static_packaging_cannot_answer_are_refused() {
         assert!(!out.exists(), "nothing was written: {stderr}");
     };
 
-    // A trimmed engine is a from-source build, which this path is not.
-    refusal(
-        "[capabilities]\nhttp-fetch = false\n",
-        &[],
-        "[capabilities]",
-    );
     // Only the modules the kit was built with can be linked in.
     refusal(
         "[dependencies]\nshape-tools = { path = \"modules/shape-tools\" }\n",
@@ -405,6 +399,7 @@ fn synthetic_manifest(args: Vec<LinkArg>) -> Manifest {
         },
         args,
         modules: Vec::new(),
+        capabilities: Vec::new(),
         artifact: Artifact {
             kind: ArtifactKind::Append,
         },
@@ -622,4 +617,130 @@ fn is_executable(path: &Path) -> bool {
         .mode()
         & 0o111
         != 0
+}
+
+/// The capabilities inside a static executable are the app's own: one the
+/// app's script uses is pulled in by its register symbol, one the app never
+/// mentions is left in its archive, and `[capabilities]` settles either way.
+/// A name the kit does not carry is refused before anything is linked.
+///
+/// The capability sits in an archive because that is what makes a link lazy
+/// about it: an object named outright is always linked, an archive member
+/// only when a symbol asks for it.
+#[cfg(unix)]
+#[test]
+fn a_capability_reaches_the_executable_when_the_app_uses_or_asks_for_it() {
+    if !cc_present() {
+        return;
+    }
+    let root = scratch("capabilities");
+    let kit = root.join("kit");
+    let stage = kit.join("stage");
+    std::fs::create_dir_all(&stage).expect("create the stage directory");
+
+    let symbol = "lumen_capability_register_os_tray";
+    let compile = |name: &str, body: &str| -> PathBuf {
+        let source = root.join(format!("{name}.c"));
+        std::fs::write(&source, body).expect("write the C file");
+        let object = stage.join(format!("{name}.o"));
+        let compiled = Command::new("cc")
+            .arg("-c")
+            .arg(&source)
+            .arg("-o")
+            .arg(&object)
+            .status()
+            .expect("run cc");
+        assert!(compiled.success(), "cc did not compile {name}");
+        object
+    };
+    compile("aa-launcher", "int main(void) { return 0; }\n");
+    let object = compile("bb-capability", &format!("void {symbol}(void) {{}}\n"));
+    let archive = stage.join("bb-libcapability.a");
+    let archived = Command::new("ar")
+        .arg("rcs")
+        .arg(&archive)
+        .arg(&object)
+        .status()
+        .expect("run ar");
+    assert!(archived.success(), "ar did not write the archive");
+    std::fs::remove_file(&object).expect("only the archive stays");
+
+    let mut manifest = synthetic_manifest(vec![
+        LinkArg::File {
+            path: "aa-launcher.o".to_string(),
+            module: None,
+        },
+        LinkArg::File {
+            path: "bb-libcapability.a".to_string(),
+            module: None,
+        },
+        LinkArg::Lit {
+            value: "-o".to_string(),
+        },
+        LinkArg::Out {
+            prefix: String::new(),
+        },
+    ]);
+    manifest.capabilities = vec![lumen_modules::link_kit::KitCapability {
+        name: "os-tray".to_string(),
+        register_symbol: symbol.to_string(),
+        select: lumen_modules::link_kit::KitSelect::OnUse(vec!["tray_icon".to_string()]),
+    }];
+    write_manifest(&kit, &manifest);
+
+    let app = root.join("demo");
+    std::fs::create_dir_all(&app).expect("create app dir");
+    let link = |config: &str, script: &str, name: &str| {
+        write_app(&app, config, script);
+        let out = root.join(name);
+        let result = package_with(&[
+            app.to_str().expect("utf-8 path"),
+            out.to_str().expect("utf-8 path"),
+            "--name",
+            name,
+            "--lib-dir",
+            kit.to_str().expect("utf-8 path"),
+        ])
+        .output()
+        .expect("run lumenc package");
+        let stdout = String::from_utf8_lossy(&result.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
+        let carries = std::fs::read(out.join(name))
+            .map(|image| image.windows(symbol.len()).any(|w| w == symbol.as_bytes()))
+            .unwrap_or(false);
+        (result.status.code(), stdout, stderr, carries)
+    };
+
+    let (code, stdout, stderr, carries) = link("", PLAIN, "plain");
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(
+        !carries,
+        "an app that never mentions the tray carries none of it: {stdout}"
+    );
+    assert!(!stdout.contains("compiled in"), "{stdout}");
+
+    let uses = "fn on_start() { tray_icon(\"app\", \"icon.png\", \"\"); }\n";
+    let (code, stdout, stderr, carries) = link("", uses, "uses");
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(
+        carries,
+        "the script's tray call pulls the capability in: {stdout}"
+    );
+    assert!(
+        stdout.contains("1 capability compiled in: os-tray"),
+        "{stdout}"
+    );
+
+    let (code, _, stderr, carries) = link("[capabilities]\nos-tray = false\n", uses, "refused");
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(!carries, "the table wins over the script");
+
+    let (code, stdout, stderr, carries) = link("[capabilities]\nos-tray = true\n", PLAIN, "asked");
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(carries, "the table wins over the scan: {stdout}");
+
+    let (code, _, stderr, _) = link("[capabilities]\nos-trey = true\n", PLAIN, "unknown");
+    assert_eq!(code, Some(1), "{stderr}");
+    assert!(stderr.contains("'os-trey'"), "{stderr}");
+    assert!(stderr.contains("os-tray"), "{stderr}");
 }

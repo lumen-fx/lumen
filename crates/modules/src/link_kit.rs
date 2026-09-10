@@ -29,12 +29,14 @@
 //! turns up; a kit whose [`Manifest::schema`] is not [`SCHEMA_VERSION`] is
 //! refused rather than guessed at.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{REGISTER_PREFIX, entry_symbol};
 
 /// The manifest version this build writes and accepts.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// One target's link kit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -58,6 +60,9 @@ pub struct Manifest {
     pub args: Vec<LinkArg>,
     /// Every runtime module the kit can link in.
     pub modules: Vec<KitModule>,
+    /// Every optional subsystem the kit can link in, and when an app gets
+    /// each one.
+    pub capabilities: Vec<KitCapability>,
     /// How the app's compiled artifact reaches the executable.
     pub artifact: Artifact,
 }
@@ -173,6 +178,87 @@ impl KitModule {
     }
 }
 
+/// One optional subsystem a kit can link in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KitCapability {
+    /// The name the app's `[capabilities]` table keys it by.
+    pub name: String,
+    /// The symbol that forces it onto the line: its registration entry, whose
+    /// object also holds the pre-main constructor, exactly as a module's does.
+    pub register_symbol: String,
+    /// When an app that does not name it gets it anyway.
+    pub select: KitSelect,
+}
+
+/// When a static package carries a capability the app did not name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KitSelect {
+    /// Every app.
+    Always,
+    /// An app whose sources mention any of these.
+    OnUse(Vec<String>),
+    /// No app; only a `[capabilities]` entry brings it in.
+    OnRequest,
+}
+
+impl From<&lumen_capability::Capability> for KitCapability {
+    fn from(capability: &lumen_capability::Capability) -> Self {
+        KitCapability {
+            name: capability.name.to_string(),
+            register_symbol: lumen_capability::register_symbol(capability.name),
+            select: match capability.select {
+                lumen_capability::Select::Always => KitSelect::Always,
+                lumen_capability::Select::OnUse(markers) => {
+                    KitSelect::OnUse(markers.iter().map(|m| m.to_string()).collect())
+                }
+                lumen_capability::Select::OnRequest => KitSelect::OnRequest,
+            },
+        }
+    }
+}
+
+/// The capabilities a static package of one app carries, out of the ones a
+/// kit offers.
+///
+/// `requested` is the app's `[capabilities]` table, and an entry there
+/// settles that capability outright. Every other one follows its own rule
+/// against `sources`, the app's markup, scripts, styles and config read into
+/// one haystack. A requested name the kit does not carry is an error naming
+/// what it does, so a misspelling is caught rather than ignored.
+pub fn select_capabilities<'a>(
+    kit: &'a [KitCapability],
+    sources: &str,
+    requested: &BTreeMap<String, bool>,
+) -> Result<Vec<&'a KitCapability>, String> {
+    if let Some(unknown) = requested
+        .keys()
+        .find(|name| !kit.iter().any(|c| &c.name == *name))
+    {
+        let offered: Vec<&str> = kit.iter().map(|c| c.name.as_str()).collect();
+        return Err(format!(
+            "[capabilities] names '{unknown}', and this link kit carries no capability by \
+             that name. It offers: {}.",
+            if offered.is_empty() {
+                "nothing".to_string()
+            } else {
+                offered.join(", ")
+            }
+        ));
+    }
+    Ok(kit
+        .iter()
+        .filter(|capability| match requested.get(&capability.name) {
+            Some(wanted) => *wanted,
+            None => match &capability.select {
+                KitSelect::Always => true,
+                KitSelect::OnUse(markers) => markers.iter().any(|m| sources.contains(m.as_str())),
+                KitSelect::OnRequest => false,
+            },
+        })
+        .collect())
+}
+
 /// How the app's compiled artifact reaches the executable a replay produces.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Artifact {
@@ -231,7 +317,86 @@ pub struct RecordEnv {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArtifactKind, KitModule, LinkArg, Record};
+    use std::collections::BTreeMap;
+
+    use super::{
+        ArtifactKind, KitCapability, KitModule, KitSelect, LinkArg, Record, select_capabilities,
+    };
+
+    fn capability(name: &str, select: KitSelect) -> KitCapability {
+        KitCapability {
+            name: name.to_string(),
+            register_symbol: lumen_capability::register_symbol(name),
+            select,
+        }
+    }
+
+    fn names(selected: &[&KitCapability]) -> Vec<String> {
+        selected.iter().map(|c| c.name.clone()).collect()
+    }
+
+    /// Each rule against the sources: always in, in when mentioned, in only
+    /// when asked.
+    #[test]
+    fn a_capability_follows_its_own_rule_when_the_app_does_not_name_it() {
+        let kit = vec![
+            capability("os-tray", KitSelect::OnUse(vec!["tray_icon".to_string()])),
+            capability(
+                "os-hotkey",
+                KitSelect::OnUse(vec!["register_hotkey".to_string()]),
+            ),
+            capability("mcp", KitSelect::OnRequest),
+            capability("core-ish", KitSelect::Always),
+        ];
+        let selected = select_capabilities(
+            &kit,
+            "fn on_start() { tray_icon(\"app\", \"icon.png\", \"\"); }",
+            &BTreeMap::new(),
+        )
+        .expect("nothing was requested");
+        assert_eq!(names(&selected), ["os-tray", "core-ish"]);
+    }
+
+    /// A `[capabilities]` entry wins over the rule, either way.
+    #[test]
+    fn a_requested_capability_is_settled_by_the_request() {
+        let kit = vec![
+            capability("os-tray", KitSelect::OnUse(vec!["tray_icon".to_string()])),
+            capability("mcp", KitSelect::OnRequest),
+        ];
+        let requested = BTreeMap::from([("os-tray".to_string(), false), ("mcp".to_string(), true)]);
+        let selected = select_capabilities(&kit, "tray_icon(", &requested).expect("both are known");
+        assert_eq!(names(&selected), ["mcp"]);
+    }
+
+    /// A name the kit does not carry is refused, naming what it does carry.
+    #[test]
+    fn a_requested_capability_the_kit_lacks_is_an_error_naming_the_offer() {
+        let kit = vec![capability("os-tray", KitSelect::Always)];
+        let requested = BTreeMap::from([("os-trey".to_string(), true)]);
+        let error = select_capabilities(&kit, "", &requested).expect_err("a misspelling");
+        assert!(error.contains("'os-trey'"), "{error}");
+        assert!(error.contains("os-tray"), "{error}");
+    }
+
+    /// The registry's entry becomes the kit's, rule included.
+    #[test]
+    fn a_registered_capability_becomes_a_kit_entry() {
+        fn nothing(_: &mut lumen_core::app::App, _: &lumen_capability::CapabilityEnv) {}
+        let entry = KitCapability::from(&lumen_capability::Capability {
+            name: "os-tray",
+            phase: lumen_capability::Phase::Platform,
+            install: nothing,
+            preflight: None,
+            select: lumen_capability::Select::OnUse(&["tray_icon"]),
+            crate_name: "lumen-os-tray-capability",
+        });
+        assert_eq!(entry.register_symbol, "lumen_capability_register_os_tray");
+        assert_eq!(
+            entry.select,
+            KitSelect::OnUse(vec!["tray_icon".to_string()])
+        );
+    }
 
     #[test]
     fn a_module_entry_spells_the_name_spaced_register_symbol() {

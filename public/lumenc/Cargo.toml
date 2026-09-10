@@ -120,6 +120,9 @@ lumenc-plugin = { workspace = true, features = ["host"] }
 # what `lumenc` needs from here is the `[dependencies]` schema and the link-kit
 # manifest, never the dlopen machinery, which belongs to a running app.
 lumen-modules = { workspace = true }
+# The registry `link-kit emit` lists a kit's capabilities from. Populated by
+# whatever runtime this binary links; a thin build registers nothing.
+lumen-capability = { workspace = true }
 
 # `tracing` stays unconditional: lumenc emits plain warn!/debug! diagnostics
 # through it. The subscriber / chrome / tracy backends live in `lumen-runtime`

@@ -12,5 +12,6 @@ use lumen_capability::{Phase, lumen_capability};
 lumen_capability!(
     "os-launcher",
     Phase::Platform,
-    lumen_os_launcher::capability::install
+    lumen_os_launcher::capability::install,
+    select = lumen_os_launcher::capability::SELECT
 );

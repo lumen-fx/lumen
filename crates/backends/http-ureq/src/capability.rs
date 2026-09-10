@@ -10,11 +10,15 @@
 
 use std::sync::Arc;
 
-use lumen_capability::CapabilityEnv;
+use lumen_capability::{CapabilityEnv, Select};
 use lumen_core::app::App;
 use lumen_script::FetchRegistry;
 
 use crate::UreqHttpClient;
+
+/// What a static package looks for in the app's sources before it
+/// carries this subsystem.
+pub const SELECT: Select = Select::OnUse(&["fetch(", "http("]);
 
 /// Install the subsystem. What the capability crate beside this one
 /// registers.

@@ -59,7 +59,9 @@ pub(crate) fn scan_app_sources(dir: &Path) -> String {
 }
 
 /// Bounded recursive read of the app's `.lmn` / `.rhai` / `.lua` / `.cdl` /
-/// `.css` source files into `hay` for marker scanning. Depth- and
+/// `.css` source files, and its `.toml` config, into `hay` for marker
+/// scanning. The config counts because a subsystem can be asked for by a
+/// key there as well as by a builtin. Depth- and
 /// file-count-capped so a huge asset tree can't turn detection into a slow
 /// directory crawl.
 fn scan_sources(dir: &Path, hay: &mut String, budget: &mut usize, depth: u8) {
@@ -79,7 +81,7 @@ fn scan_sources(dir: &Path, hay: &mut String, budget: &mut usize, depth: u8) {
             scan_sources(&p, hay, budget, depth + 1);
         } else if matches!(
             p.extension().and_then(|e| e.to_str()),
-            Some("lmn" | "rhai" | "lua" | "cdl" | "css")
+            Some("lmn" | "rhai" | "lua" | "cdl" | "css" | "toml")
         ) && let Ok(s) = std::fs::read_to_string(&p)
         {
             hay.push('\n');

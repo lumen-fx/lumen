@@ -24,6 +24,8 @@ lumen-core = { workspace = true }
 lumen-widget = { workspace = true }
 # The one copy of the library-name spellings every by-name probe shares.
 lumen-plugin-abi = { workspace = true }
+# The registry a link kit reads its capability list from at emit time.
+lumen-capability = { workspace = true }
 bevy_ecs = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }

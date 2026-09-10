@@ -18,7 +18,7 @@
 
 use std::time::Duration;
 
-use lumen_capability::CapabilityEnv;
+use lumen_capability::{CapabilityEnv, Select};
 use lumen_core::app::App;
 use serde::Deserialize;
 
@@ -37,6 +37,10 @@ struct McpSection {
 struct RuntimeSection {
     mcp: Option<bool>,
 }
+
+/// Carried by a static package only when the app asks for it by name:
+/// a development subsystem, not one the app's users reach.
+pub const SELECT: Select = Select::OnRequest;
 
 /// Install the subsystem. What the capability crate beside this one
 /// registers.

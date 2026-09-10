@@ -6,10 +6,14 @@
 //! work at all on macOS: `NSOpenPanel` only resolves while the main run loop
 //! is pumping, so a dialog run inline deadlocks there and reports a cancel.
 
-use lumen_capability::CapabilityEnv;
+use lumen_capability::{CapabilityEnv, Select};
 use lumen_core::app::App;
 
 use crate::AsyncTokioPlugin;
+
+/// What a static package looks for in the app's sources before it
+/// carries this subsystem.
+pub const SELECT: Select = Select::OnUse(lumen_script::FILE_DIALOG_BUILTINS);
 
 /// Install the subsystem. What the capability crate beside this one
 /// registers.

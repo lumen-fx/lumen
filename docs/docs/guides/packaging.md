@@ -110,7 +110,11 @@ lumenc package myapp --static
 This writes the same folder with one difference: the app is a single
 executable. The engine is inside it, and so is every runtime module the app
 declares, so there is no runtime library beside it and no `modules/`
-subfolder. The candela standard library still travels in `libs/`, because
+subfolder. The engine inside is the app's own: of the optional subsystems
+the kit offers (tray, notifications, dialogs, hotkeys, the HTTP client and
+the rest), the executable carries the ones the app's sources show it uses,
+and [`[capabilities]`](../reference/lumen-toml.md#capabilities) names any it
+should carry or leave out regardless. The candela standard library still travels in `libs/`, because
 scripts read it off disk as they compile whatever links the engine. Copy the
 executable, `libs/`, and the app's files, and that is the whole app.
 
@@ -125,16 +129,13 @@ Xcode Command Line Tools on macOS, and the Visual Studio Build Tools with the
 package for a platform also downloads that platform's link kit from the
 release channel and caches it, which takes a moment and happens once.
 
-Four things it will not do, each with an exit code of 2 and a message saying
+Three things it will not do, each with an exit code of 2 and a message saying
 so:
 
 - Package an app written against an SDK. Those bring their own executable from
   their own toolchain.
 - Package for a platform other than the one you are on. The link runs through
   the tools installed here.
-- Package an app declaring `[capabilities]`. The linked engine is the full
-  one; choosing which subsystems a runtime carries is what
-  [`bundle --static`](#trim-the-runtime) does, by compiling from source.
 - Link a `path` or `version` module. Only the modules that ship with the
   toolchain (`bundled = true`) are in the kit; package without `--static` and
   the library is staged beside the executable instead.

@@ -8,13 +8,17 @@
 
 use bevy_ecs::message::{MessageReader, Messages};
 use bevy_ecs::prelude::*;
-use lumen_capability::CapabilityEnv;
+use lumen_capability::{CapabilityEnv, Select};
 use lumen_core::app::App;
 use lumen_core::input::FilePicked;
 use lumen_core::tick::TickStage;
 use lumen_script::{ScriptCommand, ScriptCommandEvent, ScriptSet};
 
 use crate::{FileDialogKind, FileDialogRequest, FileDialogResultCommand, FileDialogService};
+
+/// What a static package looks for in the app's sources before it
+/// carries this subsystem.
+pub const SELECT: Select = Select::OnUse(lumen_script::FILE_DIALOG_BUILTINS);
 
 /// Install the subsystem. What the capability crate beside this one
 /// registers.

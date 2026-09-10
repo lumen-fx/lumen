@@ -12,5 +12,6 @@ use lumen_capability::{Phase, lumen_capability};
 lumen_capability!(
     "os-filedialog",
     Phase::Platform,
-    lumen_os_filedialog::capability::install
+    lumen_os_filedialog::capability::install,
+    select = lumen_os_filedialog::capability::SELECT
 );

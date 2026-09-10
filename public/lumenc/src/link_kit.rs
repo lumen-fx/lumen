@@ -32,12 +32,14 @@
 //! Mach-O section by the link itself on macOS, where a signature covers the
 //! whole file and nothing may follow it.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use lumen_modules::link_kit::{
-    ArtifactKind, Driver, DriverKind, LinkArg, Manifest, SCHEMA_VERSION,
+    ArtifactKind, Driver, DriverKind, KitCapability, LinkArg, Manifest, SCHEMA_VERSION,
+    select_capabilities,
 };
 use lumen_runtime::modules::DependenciesCfg;
 
@@ -62,18 +64,24 @@ pub(crate) fn link_app(
     target: Target,
     lib_dir: Option<&Path>,
     deps: &DependenciesCfg,
-) -> Result<Vec<String>, String> {
+    requested: &BTreeMap<String, bool>,
+    sources: &str,
+) -> Result<Linked, String> {
     let kit = locate(target, lib_dir)?;
     let manifest = read_manifest(&kit, target)?;
+    let capabilities = select_capabilities(&manifest.capabilities, sources, requested)?;
 
     // Written before the line is planned, because macOS puts it on the line.
     let scratch = exe.with_extension("lmna-staging");
     std::fs::write(&scratch, artifact).map_err(|e| format!("write {}: {e}", scratch.display()))?;
-    let planned = plan(&kit, &manifest, deps, exe, &scratch);
+    let planned = plan(&kit, &manifest, deps, &capabilities, exe, &scratch);
     let result = planned.and_then(|plan| {
         link(&plan)?;
         finish(&plan, artifact)?;
-        Ok(plan.modules)
+        Ok(Linked {
+            modules: plan.modules,
+            capabilities: plan.capabilities,
+        })
     });
     let _ = std::fs::remove_file(&scratch);
     result
@@ -183,6 +191,16 @@ pub(crate) struct Plan {
     exe: PathBuf,
     /// The modules linked in, in declaration order.
     modules: Vec<String>,
+    /// The capabilities linked in, in the kit's order.
+    capabilities: Vec<String>,
+}
+
+/// What a static link put into the executable, for the summary.
+pub(crate) struct Linked {
+    /// The declared modules, in declaration order.
+    pub modules: Vec<String>,
+    /// The capabilities selected for the app, in the kit's order.
+    pub capabilities: Vec<String>,
 }
 
 /// Turn the recorded line into the one that produces this app's executable.
@@ -193,6 +211,7 @@ pub(crate) fn plan(
     kit: &Path,
     manifest: &Manifest,
     deps: &DependenciesCfg,
+    capabilities: &[&KitCapability],
     exe: &Path,
     scratch: &Path,
 ) -> Result<Plan, String> {
@@ -206,14 +225,21 @@ pub(crate) fn plan(
         modules.push(module);
     }
 
-    let mut args = Vec::with_capacity(manifest.args.len() + modules.len() + 1);
+    let mut args = Vec::with_capacity(manifest.args.len() + modules.len() + capabilities.len() + 1);
     // Ahead of the archives: a forced symbol is what makes the linker read a
     // module's rlib at all, and GNU ld only looks for one in an archive it
-    // has not passed yet.
+    // has not passed yet. A capability is pulled the same way; the producer
+    // left rustc's `symbols.o` off the line, so nothing else names one.
     for module in &modules {
         args.push(OsString::from(force_include(
             &manifest.driver,
             &module.register_symbol,
+        )?));
+    }
+    for capability in capabilities {
+        args.push(OsString::from(force_include(
+            &manifest.driver,
+            &capability.register_symbol,
         )?));
     }
 
@@ -268,6 +294,7 @@ pub(crate) fn plan(
         artifact: manifest.artifact.kind,
         exe: exe.to_path_buf(),
         modules: modules.iter().map(|m| m.name.clone()).collect(),
+        capabilities: capabilities.iter().map(|c| c.name.clone()).collect(),
     })
 }
 
@@ -516,6 +543,7 @@ mod tests {
                 },
             ],
             modules: vec![KitModule::new("lumen-audio"), KitModule::new("lumen-fs")],
+            capabilities: Vec::new(),
             artifact: Artifact { kind: artifact },
         }
     }
@@ -559,6 +587,7 @@ mod tests {
             Path::new("/kit"),
             &manifest,
             &deps(&["lumen-fs"]),
+            &[],
             Path::new("/out/Demo"),
             Path::new("/out/Demo.lmna-staging"),
         )
@@ -586,6 +615,33 @@ mod tests {
         assert_eq!(plan.modules, vec!["lumen-fs".to_string()]);
     }
 
+    /// A capability the app is packaged with is forced onto the line the
+    /// way a module is, by its register symbol, ahead of the archives.
+    #[test]
+    fn a_selected_capability_forces_its_register_symbol() {
+        let manifest = manifest(unix(), ArtifactKind::Append);
+        let tray = KitCapability {
+            name: "os-tray".to_string(),
+            register_symbol: lumen_capability::register_symbol("os-tray"),
+            select: lumen_modules::link_kit::KitSelect::Always,
+        };
+        let selected = [&tray];
+        let plan = plan(
+            Path::new("/kit"),
+            &manifest,
+            &deps(&[]),
+            &selected,
+            Path::new("/out/Demo"),
+            Path::new("/out/scratch"),
+        )
+        .expect("the kit carries the capability");
+        assert_eq!(
+            args(&plan)[0],
+            "-Wl,-u,lumen_capability_register_os_tray".to_string()
+        );
+        assert_eq!(plan.capabilities, vec!["os-tray".to_string()]);
+    }
+
     /// An app declaring nothing links the launcher and the engine alone.
     #[test]
     fn declaring_no_module_forces_no_symbol() {
@@ -594,6 +650,7 @@ mod tests {
             Path::new("/kit"),
             &manifest,
             &deps(&[]),
+            &[],
             Path::new("/out/Demo"),
             Path::new("/out/scratch"),
         )
@@ -616,6 +673,7 @@ mod tests {
             Path::new("/kit"),
             &manifest,
             &deps(&["shape-tools"]),
+            &[],
             Path::new("/out/Demo"),
             Path::new("/out/scratch"),
         )
@@ -640,6 +698,7 @@ mod tests {
             Path::new("/kit"),
             &manifest,
             &deps(&["lumen-fs"]),
+            &[],
             Path::new("/out/Demo"),
             Path::new("/out/app.lmna"),
         )
@@ -673,6 +732,7 @@ mod tests {
             &kit,
             &manifest,
             &deps(&["lumen-audio"]),
+            &[],
             Path::new("C:/out/Demo.exe"),
             Path::new("C:/out/scratch"),
         )
@@ -768,6 +828,7 @@ mod tests {
             Path::new("/kit"),
             &manifest(driver, ArtifactKind::Append),
             &deps(&["lumen-fs"]),
+            &[],
             Path::new("/out/Demo"),
             Path::new("/out/scratch"),
         )
@@ -785,6 +846,7 @@ mod tests {
             Path::new("/kit"),
             &manifest,
             &deps(&["lumen-fs"]),
+            &[],
             Path::new("/out/Demo"),
             Path::new("/out/scratch"),
         )
@@ -835,6 +897,7 @@ mod tests {
             artifact: ArtifactKind::Append,
             exe: PathBuf::from("/out/Demo"),
             modules: Vec::new(),
+            capabilities: Vec::new(),
         }
     }
 
