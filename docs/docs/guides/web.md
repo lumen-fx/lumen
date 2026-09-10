@@ -357,6 +357,10 @@ is `/settings.html`. A link that goes deeper than a page, like
 wrote, because that is the URL a visitor should see and share. The app reads
 the leftover `/42` from `route.segment`, exactly as it does on the desktop.
 
+A soft-navigated link ends at the same URL, because the address the app puts
+in the bar is the one the anchor names. Nothing about sharing or reloading a
+link changes with `[web] navigation`.
+
 A static file server has no file at `/user/42`, so it serves `404.html`, which
 carries the app and resolves the path in the browser. That works on any file
 server without configuration. If your host can rewrite instead, name it and
@@ -552,11 +556,12 @@ none of them means anything without an absolute address.
   dialog itself.
 - `[web] navigation = "soft"` (the default) swaps a same-page link's target
   page in without a reload, keeping the app running; `navigation = "hard"`
-  lets every link load the next document, the same as an ordinary site. Soft
-  navigation does not update the address bar, so reloading or copying the
-  link while on a page reached that way returns to the page the document was
-  first loaded as, and the browser's own back and forward buttons are not
-  wired to it.
+  lets every link load the next document, the same as an ordinary site. Under
+  soft navigation the address becomes the target page's own URL, so reloading
+  or copying the link lands on the page being shown, and the browser's back
+  and forward buttons step the site. What stays behind is the head: the
+  `<title>` and the meta tags remain the ones the document that was loaded
+  was emitted with.
 - A `<input>` is edited by the browser, so Lumen's own caret, selection and
   IME handling are not in play; what an app sees is the value after each edit.
 - `:drag-over` on a `drop-target` lights up while a file is dragged in from

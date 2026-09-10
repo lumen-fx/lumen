@@ -10,7 +10,7 @@ use std::sync::Once;
 use lumen_core::request::RequestContext;
 use lumen_html::contract::{DATA_LM, Manifest, NavigationMode};
 use lumen_scene::spawn::SpawnIntoWorld;
-use lumen_web_dom::WebDomPlugin;
+use lumen_web_dom::{Routes, WebDomPlugin};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::Element;
@@ -97,9 +97,10 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
         // to seed correctly for the page this document is, and a script's
         // own `page()` call always swaps in place. What the setting decides
         // is narrower - only whether a click on a same-page `<a href>` is
-        // one of those swaps or a real document load - and `listen` below is
-        // where that is decided, because only there is a browser event still
-        // in hand to prevent.
+        // one of those swaps or a real document load, and whether the
+        // address bar follows the swap. `listen` below decides the first,
+        // because only there is a browser event still in hand to prevent,
+        // and `WebDomPlugin` the second.
         lumen_scene::routing::install_routing(&mut app, page.page.clone(), pages.keys.clone());
     }
     apply_seed(&mut app.world, &loaded.seed);
@@ -109,9 +110,13 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
     apply_node_seed(&mut app.world, root_entity, &loaded.seed);
 
     let root = page_root(&page)?;
-    lumen_web_dom::listen(&root, wants_soft_navigation(&manifest))
-        .map_err(|_| BootError::Listeners)?;
-    app.add_plugin(WebDomPlugin { root, root_entity });
+    let routes = routes(&manifest, loaded.artifact.pages.is_some());
+    lumen_web_dom::listen(&root, routes.as_ref()).map_err(|_| BootError::Listeners)?;
+    app.add_plugin(WebDomPlugin {
+        root,
+        root_entity,
+        routes,
+    });
 
     let app = LumenWebApp::from_parts(app, loaded.scripts.first().map(|s| s.engine.clone()));
     if let Some(error) = app.script_error() {
@@ -147,10 +152,17 @@ fn install_location() {
     });
 }
 
-/// Whether `[web] navigation` says a same-page `<a href>` click should be
-/// handled in-app rather than left to the browser.
-fn wants_soft_navigation(manifest: &Manifest) -> bool {
-    manifest.navigation == NavigationMode::Soft
+/// The site's addresses, when `[web] navigation` says a same-page
+/// `<a href>` click should be handled in-app rather than left to the
+/// browser.
+///
+/// `has_pages` is whether the artifact carries a page set, which is what
+/// decides whether the resolver was installed above. Without one there is
+/// nothing to swap to, and intercepting a click would leave a link that does
+/// nothing at all: the browser is stopped and no resolver answers.
+fn routes(manifest: &Manifest, has_pages: bool) -> Option<Routes> {
+    (manifest.navigation == NavigationMode::Soft && has_pages)
+        .then(|| Routes::from_manifest(manifest))
 }
 
 /// The element the app's root node is.
@@ -205,7 +217,7 @@ impl std::error::Error for BootError {}
 
 #[cfg(test)]
 mod tests {
-    use super::wants_soft_navigation;
+    use super::routes;
     use lumen_html::contract::{Manifest, NavigationMode};
 
     /// `navigation = "soft"` (the default) means the runtime intercepts a
@@ -219,7 +231,7 @@ mod tests {
             navigation: NavigationMode::Soft,
             ..Manifest::default()
         };
-        assert!(wants_soft_navigation(&manifest));
+        assert!(routes(&manifest, true).is_some());
     }
 
     #[test]
@@ -228,6 +240,20 @@ mod tests {
             navigation: NavigationMode::Hard,
             ..Manifest::default()
         };
-        assert!(!wants_soft_navigation(&manifest));
+        assert!(routes(&manifest, false).is_none());
+        assert!(routes(&manifest, true).is_none());
+    }
+
+    #[test]
+    fn a_site_of_one_page_does_not_either() {
+        let manifest = Manifest {
+            navigation: NavigationMode::Soft,
+            ..Manifest::default()
+        };
+        assert!(
+            routes(&manifest, false).is_none(),
+            "with no page set there is no resolver to swap a page in, so a \
+             prevented click would be a link that does nothing"
+        );
     }
 }

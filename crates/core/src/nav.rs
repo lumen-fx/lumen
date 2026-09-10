@@ -2,9 +2,10 @@
 //! reaches through.
 //!
 //! Navigation in Lumen is not a per-language script builtin: it is a command
-//! carried on the shared external-signal bus. A script host (Rhai now, candela
-//! later), the Rust SDK, a C-ABI plugin, and the future Python / C# SDKs all
-//! reach navigation by writing the reserved [`REQUEST_SIGNAL`] cell through
+//! carried on the shared external-signal bus. A script host (candela, and
+//! the Rhai and Lua escape hatches), the Rust SDK, a C-ABI plugin, and the
+//! future Python / C# SDKs all reach navigation by writing the reserved
+//! [`REQUEST_SIGNAL`] cell through
 //! [`request`] (which routes through
 //! [`crate::signals::push_external_signal`] -> [`crate::property_store::PropertyStore`]).
 //! The runtime's `apply_navigation` system is the single resolver: it reads
@@ -16,7 +17,7 @@
 //! This mirrors real-HTML navigation semantics (an `<a href>` click and a
 //! programmatic `history.pushState` both end at one URL that the view reacts
 //! to) and Next.js / SvelteKit file-based routing (a page == a file), while
-//! staying candela-neutral: nothing here is Rhai-specific.
+//! staying host-neutral: nothing here belongs to one scripting language.
 //!
 //! ## Wire format
 //!

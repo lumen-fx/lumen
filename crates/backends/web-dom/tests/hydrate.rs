@@ -30,8 +30,9 @@ use lumen_ir::layout_ir::{
 use lumen_scene::spawn;
 use lumen_scene::spawn::SpawnIntoWorld;
 use lumen_web::{PageSpec, SignalEnv, SiteSpec, WebSpec};
-use lumen_web_dom::{NodeTable, WebDomPlugin};
+use lumen_web_dom::{NodeTable, Routes, WebDomPlugin};
 use wasm_bindgen::JsCast;
+use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::Closure;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::Element;
@@ -82,16 +83,28 @@ fn prerender(ir: LayoutIR) -> Element {
 fn prerender_with(ir: LayoutIR, signals: SignalEnv) -> Element {
     let mut page = PageSpec::new("index", ir);
     page.signals = signals;
-    let spec = SiteSpec {
-        pages: vec![page],
-        web: WebSpec {
-            runtime: false,
-            ..WebSpec::default()
+    prerender_page(
+        &SiteSpec {
+            pages: vec![page],
+            web: WebSpec {
+                runtime: false,
+                ..WebSpec::default()
+            },
+            ..SiteSpec::default()
         },
-        ..SiteSpec::default()
-    };
+        0,
+    )
+}
+
+/// Emit page `index` of `spec` and put the result in the document.
+///
+/// A site of more than one page is emitted here rather than a page on its
+/// own because what a link is written as depends on the whole page set: only
+/// a site that has a `settings` page writes `/settings.html` into an
+/// `<a href="settings">`.
+fn prerender_page(spec: &SiteSpec, index: usize) -> Element {
     let mut warnings = Vec::new();
-    let html = lumen_web::html::emit_tree(&spec.pages[0], &spec, &mut warnings)
+    let html = lumen_web::html::emit_tree(&spec.pages[index], spec, &mut warnings)
         .expect("the tree emits")
         .0;
 
@@ -106,7 +119,11 @@ fn prerender_with(ir: LayoutIR, signals: SignalEnv) -> Element {
 fn hydrate(ir: LayoutIR, root: Element) -> App {
     let mut app = App::new();
     let root_entity = ir.spawn_into(&mut app.world);
-    app.add_plugin(WebDomPlugin { root, root_entity });
+    app.add_plugin(WebDomPlugin {
+        root,
+        root_entity,
+        routes: None,
+    });
     app.tick();
     app
 }
@@ -248,7 +265,7 @@ fn a_click_reaches_the_entity_the_element_stands_for() {
     app.add_systems(TickStage::Systems, record_clicks);
     app.world.init_resource::<Clicked>();
 
-    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
     let target: web_sys::HtmlElement = root
         .query_selector(&format!("[{DATA_LM}=\"0.1.1\"]"))
         .unwrap()
@@ -316,18 +333,109 @@ fn click_and_check_prevented(root: &Element, target: &Element, ctrl_key: bool) -
     observed.get()
 }
 
+/// The site the navigation tests are one document of: an entry page whose
+/// whole content is a link to `settings`, and the `settings` page it names.
+fn link_site() -> SiteSpec {
+    SiteSpec {
+        pages: vec![
+            PageSpec::new("index", link_tree()),
+            PageSpec::new("settings", LayoutIR::default()),
+        ],
+        web: WebSpec {
+            runtime: false,
+            ..WebSpec::default()
+        },
+        ..SiteSpec::default()
+    }
+}
+
+/// The addresses that site's pages have, read out of the manifest the real
+/// emitter writes for it. Taken from the emitter rather than written out
+/// here, because what makes an address right is that it is the one the
+/// anchor already names.
+fn site_routes(site: &SiteSpec) -> Routes {
+    Routes::from_manifest(&lumen_web::site::manifest(site))
+}
+
+/// The page keys the resolver answers against, which are the site's.
+fn site_keys(site: &SiteSpec) -> Vec<String> {
+    site.pages.iter().map(|page| page.key.clone()).collect()
+}
+
+/// An app on the entry page of `site`, assembled the way `boot` assembles
+/// one: the router, the listeners and the browser backend, with `soft`
+/// saying which way `[web] navigation` reads.
+fn hydrate_site(site: &SiteSpec, ir: LayoutIR, root: Element, soft: bool) -> App {
+    let mut app = App::new();
+    app.extract_fns.clear();
+    app.world.init_resource::<PropertyStore>();
+    lumen_scene::routing::install_routing(&mut app, "index".to_string(), site_keys(site));
+    app.add_systems(TickStage::Systems, spawn::reconcile_if_blocks);
+    let root_entity = ir.spawn_into(&mut app.world);
+    let routes = soft.then(|| site_routes(site));
+    lumen_web_dom::listen(&root, routes.as_ref()).expect("the page takes listeners");
+    app.add_plugin(WebDomPlugin {
+        root,
+        root_entity,
+        routes,
+    });
+    app.tick();
+    app
+}
+
+/// The address the suite's own page is at, put back on the way out.
+///
+/// A soft navigation moves the document, and the document here is the test
+/// runner's own page: left moved, everything the runner resolves against it
+/// afterwards resolves against an address nothing was served from.
+/// `replaceState` puts it back without adding an entry, for the same reason
+/// the click tests own a safety-net listener.
+struct AddressGuard(String);
+
+impl AddressGuard {
+    fn take() -> Self {
+        let location = web_sys::window().unwrap().location();
+        Self(format!(
+            "{}{}",
+            location.pathname().unwrap_or_default(),
+            location.search().unwrap_or_default()
+        ))
+    }
+}
+
+impl Drop for AddressGuard {
+    fn drop(&mut self) {
+        let history = web_sys::window().unwrap().history().unwrap();
+        history
+            .replace_state_with_url(&JsValue::NULL, "", Some(&self.0))
+            .expect("the suite's page goes back to the address it was served at");
+    }
+}
+
+/// The address the document is at now.
+fn address() -> String {
+    web_sys::window()
+        .unwrap()
+        .location()
+        .pathname()
+        .unwrap_or_default()
+}
+
+/// The one anchor `link_tree` puts in the page.
+fn link_in(root: &Element) -> Element {
+    root.query_selector("a")
+        .unwrap()
+        .expect("the emitter wrote the link")
+}
+
 #[wasm_bindgen_test]
 fn soft_navigation_keeps_the_browser_from_loading_the_next_document() {
-    let root = prerender(link_tree());
-    let _app = hydrate(link_tree(), root.clone());
-    lumen_web_dom::listen(&root, true).expect("the page takes listeners");
+    let site = link_site();
+    let root = prerender_page(&site, 0);
+    let _app = hydrate_site(&site, link_tree(), root.clone(), true);
 
-    let anchor = root
-        .query_selector("a")
-        .unwrap()
-        .expect("the emitter wrote the link");
     assert!(
-        click_and_check_prevented(&root, &anchor, false),
+        click_and_check_prevented(&root, &link_in(&root), false),
         "`navigation = \"soft\"` intercepts the click so the in-app router \
          swaps the page instead of the browser loading it"
     );
@@ -335,16 +443,12 @@ fn soft_navigation_keeps_the_browser_from_loading_the_next_document() {
 
 #[wasm_bindgen_test]
 fn hard_navigation_leaves_the_browser_s_own_click_alone() {
-    let root = prerender(link_tree());
-    let _app = hydrate(link_tree(), root.clone());
-    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+    let site = link_site();
+    let root = prerender_page(&site, 0);
+    let _app = hydrate_site(&site, link_tree(), root.clone(), false);
 
-    let anchor = root
-        .query_selector("a")
-        .unwrap()
-        .expect("the emitter wrote the link");
     assert!(
-        !click_and_check_prevented(&root, &anchor, false),
+        !click_and_check_prevented(&root, &link_in(&root), false),
         "`navigation = \"hard\"` never intercepts; the browser loads the \
          next document exactly as it does for an ordinary site"
     );
@@ -352,17 +456,140 @@ fn hard_navigation_leaves_the_browser_s_own_click_alone() {
 
 #[wasm_bindgen_test]
 fn a_modifier_click_still_reaches_the_browser_under_soft_navigation() {
-    let root = prerender(link_tree());
-    let _app = hydrate(link_tree(), root.clone());
-    lumen_web_dom::listen(&root, true).expect("the page takes listeners");
+    let site = link_site();
+    let root = prerender_page(&site, 0);
+    let _app = hydrate_site(&site, link_tree(), root.clone(), true);
 
-    let anchor = root
-        .query_selector("a")
-        .unwrap()
-        .expect("the emitter wrote the link");
     assert!(
-        !click_and_check_prevented(&root, &anchor, true),
+        !click_and_check_prevented(&root, &link_in(&root), true),
         "a visitor asking to open the link in a new tab still gets one"
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_soft_navigation_leaves_the_address_the_link_named() {
+    let _address = AddressGuard::take();
+    let site = link_site();
+    let root = prerender_page(&site, 0);
+    let mut app = hydrate_site(&site, link_tree(), root.clone(), true);
+
+    let anchor = link_in(&root);
+    let href = anchor
+        .dyn_ref::<web_sys::HtmlAnchorElement>()
+        .expect("an `<a href>` is what the emitter wrote")
+        .pathname();
+    click_and_check_prevented(&root, &anchor, false);
+    // The click reaches the world in this tick's input stage and becomes a
+    // nav request in the same tick's systems; the request crosses the
+    // external bus, so the tick after is the one that acts on it.
+    app.tick();
+    app.tick();
+
+    assert_eq!(
+        address(),
+        href,
+        "a swapped page ends at the address the anchor already named, so \
+         reloading or copying it lands on the page being shown"
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_hard_navigation_leaves_the_address_to_the_browser() {
+    let _address = AddressGuard::take();
+    let site = link_site();
+    let root = prerender_page(&site, 0);
+    let mut app = hydrate_site(&site, link_tree(), root.clone(), false);
+
+    let before = address();
+    click_and_check_prevented(&root, &link_in(&root), false);
+    app.tick();
+    app.tick();
+
+    assert_eq!(
+        address(),
+        before,
+        "under `navigation = \"hard\"` the browser loads the next document \
+         and owns the address; nothing here writes it"
+    );
+}
+
+/// One page gate: `<if signal="route.path" eq="<key>">` around a label,
+/// which is the shape a multi-page app is assembled in.
+fn page_gate(key: &str, text: &str) -> IrElement {
+    IrElement {
+        tag: "if".to_string(),
+        attrs: Attributes {
+            if_signal: Some(lumen_core::nav::PATH_SIGNAL.to_string()),
+            if_eq: Some(key.to_string()),
+            if_mode: IfModeSpec::Render,
+            ..Attributes::default()
+        },
+        children: vec![element("label", Some(text), Vec::new())],
+        ..IrElement::default()
+    }
+}
+
+/// The two pages of `link_site`, each behind its own gate.
+fn gated_tree() -> LayoutIR {
+    LayoutIR {
+        root: element(
+            "root",
+            None,
+            vec![
+                page_gate("index", "home"),
+                page_gate("settings", "settings"),
+            ],
+        ),
+        ..LayoutIR::default()
+    }
+}
+
+#[wasm_bindgen_test]
+fn the_browser_s_back_button_opens_the_page_its_address_names() {
+    let _address = AddressGuard::take();
+    let site = link_site();
+    let document = web_sys::window().unwrap().document().unwrap();
+    let root = document.create_element("div").unwrap();
+    document.body().unwrap().append_child(&root).unwrap();
+
+    let mut app = App::new();
+    app.extract_fns.clear();
+    app.world.init_resource::<PropertyStore>();
+    lumen_scene::routing::install_routing(&mut app, "settings".to_string(), site_keys(&site));
+    app.add_systems(TickStage::Systems, spawn::reconcile_if_blocks);
+    let root_entity = gated_tree().spawn_into(&mut app.world);
+    let routes = Some(site_routes(&site));
+    lumen_web_dom::listen(&root, routes.as_ref()).expect("the page takes listeners");
+    app.add_plugin(WebDomPlugin {
+        root: root.clone(),
+        root_entity,
+        routes,
+    });
+    app.tick();
+    assert_eq!(
+        root.text_content().as_deref(),
+        Some("settings"),
+        "the app opened on the page its document was emitted for"
+    );
+
+    // What the browser does for a back button: it moves the address, then
+    // says so with a `popstate`. The address is the entry page's own
+    // document, which is where a swap to `settings` came from.
+    let history = web_sys::window().unwrap().history().unwrap();
+    history
+        .push_state_with_url(&JsValue::NULL, "", Some("/index.html"))
+        .expect("the page takes a history entry");
+    web_sys::window()
+        .unwrap()
+        .dispatch_event(&web_sys::Event::new("popstate").unwrap())
+        .unwrap();
+    app.tick();
+
+    assert_eq!(
+        root.text_content().as_deref(),
+        Some("home"),
+        "stepping back opened the page the new address names, without the \
+         browser loading its document"
     );
 }
 
@@ -380,15 +607,10 @@ fn fragment_link_tree() -> LayoutIR {
 #[wasm_bindgen_test]
 fn a_same_document_fragment_link_reaches_the_browser_under_soft_navigation() {
     let root = prerender(fragment_link_tree());
-    let _app = hydrate(fragment_link_tree(), root.clone());
-    lumen_web_dom::listen(&root, true).expect("the page takes listeners");
+    let _app = hydrate_site(&link_site(), fragment_link_tree(), root.clone(), true);
 
-    let anchor = root
-        .query_selector("a")
-        .unwrap()
-        .expect("the emitter wrote the link");
     assert!(
-        !click_and_check_prevented(&root, &anchor, false),
+        !click_and_check_prevented(&root, &link_in(&root), false),
         "`href=\"#section\"` names this document, not another page; the \
          browser's own scroll-to-anchor has to run, which intercepting the \
          click would have replaced with a bounce to the entry page"
@@ -423,7 +645,7 @@ fn dispatch_drag(target: &Element, kind: &str) {
 fn a_drag_over_a_drop_target_marks_it_and_leaving_clears_it() {
     let root = prerender(drop_target_tree());
     let mut app = hydrate(drop_target_tree(), root.clone());
-    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
 
     let target = root.first_element_child().expect("the drop-target row");
 
@@ -446,7 +668,7 @@ fn a_drag_over_a_drop_target_marks_it_and_leaving_clears_it() {
 fn a_drag_over_a_drop_target_s_child_marks_the_target_not_the_child() {
     let root = prerender(drop_target_tree());
     let mut app = hydrate(drop_target_tree(), root.clone());
-    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
 
     let target = root.first_element_child().expect("the drop-target row");
     // `label` is a Lumen tag, not an HTML one - the emitter writes it as
@@ -491,7 +713,7 @@ fn a_slider_the_visitor_moves_moves_in_the_world_too() {
     };
     let root = prerender(ir.clone());
     let mut app = hydrate(ir, root.clone());
-    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
 
     let range: web_sys::HtmlInputElement = root
         .query_selector("input[type=range]")
@@ -557,6 +779,7 @@ fn a_bound_element_is_adopted_without_being_corrected() {
     app.add_plugin(WebDomPlugin {
         root: root.clone(),
         root_entity,
+        routes: None,
     });
     app.add_systems(TickStage::Systems, lumen_core::signals::apply_text_bindings);
     app.tick();
@@ -589,7 +812,11 @@ fn hydrate_reactive(ir: LayoutIR, root: Element) -> App {
     let mut app = App::new();
     app.world.init_resource::<PropertyStore>();
     let root_entity = ir.spawn_into(&mut app.world);
-    app.add_plugin(WebDomPlugin { root, root_entity });
+    app.add_plugin(WebDomPlugin {
+        root,
+        root_entity,
+        routes: None,
+    });
     app.add_systems(TickStage::Systems, spawn::reconcile_if_blocks);
     app.tick();
     app
@@ -637,7 +864,7 @@ fn a_dialog_opens_and_closes_as_the_browser_s_own() {
 fn a_dialog_the_browser_dismisses_takes_its_signal_with_it() {
     let root = prerender(dialog_tree());
     let mut app = hydrate_reactive(dialog_tree(), root.clone());
-    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
     let dialog: web_sys::HtmlDialogElement = root
         .query_selector("dialog")
         .unwrap()
@@ -675,7 +902,11 @@ fn hydrate_interactive(ir: LayoutIR, root: Element) -> App {
     let mut app = App::new();
     app.world.init_resource::<PropertyStore>();
     let root_entity = ir.spawn_into(&mut app.world);
-    app.add_plugin(WebDomPlugin { root, root_entity });
+    app.add_plugin(WebDomPlugin {
+        root,
+        root_entity,
+        routes: None,
+    });
     app.add_plugin(lumen_input::InputPlugin { clipboard: false });
     app.add_plugin(lumen_primitives::ControlsPlugin);
     app.add_plugin(lumen_primitives::TabsPlugin);
@@ -738,7 +969,7 @@ fn tab_strip_tree() -> LayoutIR {
 fn an_arrow_on_a_focused_tab_moves_the_strip_and_takes_the_page_s_focus_with_it() {
     let root = prerender(tab_strip_tree());
     let mut app = hydrate_interactive(tab_strip_tree(), root.clone());
-    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
     set_signal(&mut app, "active", "one");
 
     let buttons = root.query_selector_all("button").unwrap();
@@ -788,7 +1019,7 @@ fn dropdown_panel_tree() -> LayoutIR {
 fn escape_closes_an_open_panel() {
     let root = prerender(dropdown_panel_tree());
     let mut app = hydrate_interactive(dropdown_panel_tree(), root.clone());
-    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
     set_signal(&mut app, "__dropdown_open:menu", "true");
 
     dispatch_key(&root, "keydown", "Escape", false);
@@ -817,7 +1048,7 @@ fn entry_tree() -> LayoutIR {
 fn a_character_typed_into_a_field_is_the_browser_s_edit_and_not_a_second_one() {
     let root = prerender(entry_tree());
     let mut app = hydrate_interactive(entry_tree(), root.clone());
-    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
 
     let field: web_sys::HtmlInputElement = root
         .query_selector("input")
@@ -863,7 +1094,7 @@ fn enter_in_a_single_line_field_commits_it() {
         TickStage::Systems,
         record_commits.after(lumen_input::activate_focused_on_enter),
     );
-    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
 
     let field = root
         .query_selector("input")
@@ -896,7 +1127,7 @@ fn enter_on_a_button_clicks_it_once() {
         TickStage::Systems,
         count_clicks.after(lumen_input::activate_focused_on_enter),
     );
-    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
 
     let button: web_sys::HtmlElement = root
         .query_selector("button")
@@ -933,7 +1164,7 @@ fn an_arrow_on_a_range_steps_it_once() {
     };
     let root = prerender(ir.clone());
     let mut app = hydrate_interactive(ir, root.clone());
-    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
 
     let range: web_sys::HtmlInputElement = root
         .query_selector("input[type=range]")
@@ -970,7 +1201,7 @@ fn a_shortcut_reaches_the_app_from_inside_a_field_but_an_editing_chord_does_not(
     let mut app = hydrate_interactive(entry_tree(), root.clone());
     app.world.init_resource::<KeysSeen>();
     app.add_systems(TickStage::Systems, record_keys);
-    lumen_web_dom::listen(&root, false).expect("the page takes listeners");
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
 
     let field = root
         .query_selector("input")
@@ -1156,7 +1387,11 @@ fn hydrate_list(ir: LayoutIR, root: Element, names: &[&str]) -> App {
         .resource_mut::<ArraySignals>()
         .set("items", rows(names));
     let root_entity = ir.spawn_into(&mut app.world);
-    app.add_plugin(WebDomPlugin { root, root_entity });
+    app.add_plugin(WebDomPlugin {
+        root,
+        root_entity,
+        routes: None,
+    });
     app.add_systems(TickStage::Systems, spawn::reconcile_for_blocks);
     app.tick();
     app

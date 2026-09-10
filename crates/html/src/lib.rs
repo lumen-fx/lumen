@@ -4,8 +4,9 @@
 //! The other is the runtime that boots in the browser and takes that HTML
 //! over. They only agree if they agree exactly, so the things both must
 //! know live here and nowhere else: which HTML element an IR tag becomes,
-//! how a node is named, which `data-lm-*` attributes carry state, and the
-//! shape of the manifest and seed files the runtime loads.
+//! how a node is named, which `data-lm-*` attributes carry state, how an
+//! address hangs off the site's base path, and the shape of the manifest and
+//! seed files the runtime loads.
 //!
 //! Nothing here reads or writes files, and nothing here knows what a page
 //! is. It is a vocabulary, not a pipeline.
@@ -19,6 +20,7 @@ pub mod escape;
 pub mod paths;
 pub mod style;
 pub mod tags;
+pub mod urls;
 
 pub use attrs::{MarkupRules, class_list, class_value, html_attrs, is_disableable, markup_rules};
 pub use contract::{

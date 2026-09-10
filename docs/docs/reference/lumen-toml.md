@@ -223,7 +223,7 @@ with the toolchain, so there is nothing per-app to compile or trim.
 | `sitemap` | bool | on when the site has an address | Write `sitemap.xml`: every page that asks to be indexed, in every locale, each entry carrying when its sources last changed and an `hreflang` link to the same page in the site's other languages. The URLs are built from `canonical`, else `url`; with neither, no file is written. |
 | `robots` | bool | on when a sitemap is written | Write `robots.txt`: it allows every crawler everything and names the sitemap when one was written. It carries no `Disallow` for a page with `index = false`, because a crawler that does not fetch a page never reads the tag that keeps it out of an index. Set it to write the file with no sitemap to name, or unset it to ship your own. |
 | `host` | `"static"`, `"netlify"`, `"vercel"`, `"apache"`, `"nginx"` | `static` | Where the site is deployed. A named host also gets the file that makes it serve a deep path with a 200 (`_redirects`, `vercel.json`, `.htaccess`, `nginx.conf`); `static` relies on the emitted `404.html`, which every host serves. Under `render = "ssr"` no rewrite file is written, because a render answers a deep path itself. |
-| `navigation` | `"soft"`, `"hard"` | `soft` | Whether a link to another page of the same site is swapped in place or loaded by the browser. |
+| `navigation` | `"soft"`, `"hard"` | `soft` | How a link to another page of the same site is followed. `soft` swaps the page in place with the app still running, puts that page's own URL in the address bar, and wires the browser's back and forward buttons to the site. `hard` lets the browser load each document, the same as an ordinary site. |
 
 ```toml
 [web]

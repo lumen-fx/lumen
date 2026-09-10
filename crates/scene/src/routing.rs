@@ -161,8 +161,9 @@ pub fn apply_navigation(
 
 /// Declarative navigation: a click on a spawned `<a href>` navigates the
 /// active page. The anchor is a real element; on the web target it is a real
-/// DOM `<a href>` and this system's effect is the browser's own default
-/// anchor navigation.
+/// DOM `<a href>`, and under `[web] navigation = "soft"` the browser's own
+/// anchor navigation is prevented so that this system's swap is what the
+/// click ends at.
 pub fn navigate_on_anchor_click(
     mut clicks: bevy_ecs::message::MessageReader<lumen_core::input::ClickEvent>,
     anchors: Query<&Anchor>,
