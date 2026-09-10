@@ -2127,10 +2127,10 @@ fn scene_policy_defaults_to_the_reconciler_doing_the_work() {
     use lumen_core::components::{Length, Style};
     use lumenc::spawn::{ScenePolicy, Virtualization};
 
-    fn reconcile_once(policy: Option<ScenePolicy>) -> (Style, usize) {
+    fn reconcile_once(policy: Option<ScenePolicy>, count: usize) -> (Style, usize) {
         let mut world = World::new();
         let mut arrays = lumen_core::signals::ArraySignals::default();
-        let rows: Vec<lumen_core::signals::ArrayItem> = (0..3)
+        let rows: Vec<lumen_core::signals::ArrayItem> = (0..count)
             .map(|i| {
                 let mut m = lumen_core::signals::ArrayItem::default();
                 m.insert("label".to_string(), format!("row {i}"));
@@ -2175,25 +2175,44 @@ fn scene_policy_defaults_to_the_reconciler_doing_the_work() {
         (world.get::<Style>(for_block).cloned().unwrap(), rows)
     }
 
-    let unpoliced = reconcile_once(None);
+    let unpoliced = reconcile_once(None, 3);
     assert_eq!(
-        reconcile_once(Some(ScenePolicy::default())),
+        reconcile_once(Some(ScenePolicy::default()), 3),
         unpoliced,
         "the default policy must reconcile exactly as no policy does"
     );
     assert_eq!(unpoliced.0.height, Length::Px(60.0));
     assert_eq!(unpoliced.1, 3);
 
-    let host_managed = reconcile_once(Some(ScenePolicy {
-        virtualization: Virtualization::HostManaged,
-        ..ScenePolicy::default()
-    }));
+    let host_managed = reconcile_once(
+        Some(ScenePolicy {
+            virtualization: Virtualization::HostManaged,
+            ..ScenePolicy::default()
+        }),
+        3,
+    );
     assert_eq!(
         host_managed.0,
         Style::default(),
         "a host that windows its own lists gets no pinned for-block height"
     );
     assert_eq!(host_managed.1, 3);
+
+    // A list longer than the default band is where the two policies part:
+    // with no scroll ancestor the windowing math anchors at the top and
+    // mounts ceil(600 / 20) + 8 rows, and a host-managed one mounts the lot.
+    assert_eq!(reconcile_once(None, 50).1, 38);
+    assert_eq!(
+        reconcile_once(
+            Some(ScenePolicy {
+                virtualization: Virtualization::HostManaged,
+                ..ScenePolicy::default()
+            }),
+            50,
+        )
+        .1,
+        50
+    );
 }
 
 /// RC5 / spec section 8: a standalone `<menu>` desugars to a *vertical,

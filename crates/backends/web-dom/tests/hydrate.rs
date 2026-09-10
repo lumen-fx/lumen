@@ -1098,6 +1098,40 @@ fn list_tree(body: Vec<IrElement>) -> LayoutIR {
     }
 }
 
+/// A page whose only content is a virtualized `<for>` over `items`, the way
+/// an author writes a long list.
+fn virtual_list_tree(row_height: f32) -> LayoutIR {
+    let mut ir = list_tree(vec![row_label("{row.name}")]);
+    let block = &mut ir.root.children[0];
+    block.attrs.virtualized = true;
+    block.attrs.row_height = Some(row_height);
+    ir
+}
+
+/// Emit `ir` the way a page that loads the runtime is emitted, and put it in
+/// the document. The bounded row prefix a virtualized block is written with
+/// is only written for such a page, which is why this does not go through
+/// [`prerender_with`].
+fn prerender_live(ir: LayoutIR, signals: SignalEnv) -> Element {
+    let mut page = PageSpec::new("index", ir);
+    page.signals = signals;
+    let spec = SiteSpec {
+        pages: vec![page],
+        web: WebSpec::default(),
+        ..SiteSpec::default()
+    };
+    let mut warnings = Vec::new();
+    let html = lumen_web::html::emit_tree(&spec.pages[0], &spec, &mut warnings)
+        .expect("the tree emits")
+        .0;
+
+    let document = web_sys::window().unwrap().document().unwrap();
+    let host = document.create_element("div").unwrap();
+    host.set_inner_html(&html);
+    document.body().unwrap().append_child(&host).unwrap();
+    host.first_element_child().expect("the page root")
+}
+
 /// The rows of the `items` array, one `name` field each.
 fn rows(names: &[&str]) -> Vec<ArrayItem> {
     names
@@ -1112,6 +1146,12 @@ fn hydrate_list(ir: LayoutIR, root: Element, names: &[&str]) -> App {
     let mut app = App::new();
     app.world.init_resource::<PropertyStore>();
     app.world.init_resource::<ArraySignals>();
+    // The policy a page runs under: the browser scrolls the list and runs the
+    // stylesheet over its rows, so the reconciler does neither.
+    app.world.insert_resource(spawn::ScenePolicy {
+        virtualization: spawn::Virtualization::HostManaged,
+        row_style: spawn::RowStyle::HostStyled,
+    });
     app.world
         .resource_mut::<ArraySignals>()
         .set("items", rows(names));
@@ -1236,6 +1276,32 @@ fn a_two_element_row_body_adopts_both_elements_of_every_row() {
             .text_content()
             .as_deref(),
         Some("two")
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_virtualized_list_adopts_its_prefix_and_builds_the_rest() {
+    let names: Vec<String> = (0..40).map(|n| format!("row {n}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let signals = SignalEnv::new().with_array("items", rows(&refs));
+    let root = prerender_live(virtual_list_tree(56.0), signals);
+
+    let app = hydrate_list(virtual_list_tree(56.0), root.clone(), &refs);
+
+    assert_eq!(
+        report(&app),
+        (22, 20),
+        "the root, the block and the first screen of rows were in the page; the rest were built"
+    );
+    assert_eq!(
+        removed(&app),
+        0,
+        "and none of the prefix was taken back out"
+    );
+    assert_eq!(
+        row_texts(&root),
+        refs,
+        "so the whole list is in the page, in order, for the browser to scroll"
     );
 }
 

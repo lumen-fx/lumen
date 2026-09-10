@@ -87,6 +87,10 @@ struct Walk<'a> {
     /// The formatters for that locale, built the first time an element
     /// asks for them. A page that formats nothing loads no ICU data.
     formatter: &'a OnceCell<LocaleFormatter>,
+    /// Whether the documents this site writes load the browser runtime,
+    /// which decides whether a bounded emit is a prefix the runtime
+    /// completes or the whole of what a reader ever gets.
+    runtime: bool,
     /// Where the page could not be written the way the app meant it.
     warnings: &'a mut Vec<String>,
 }
@@ -134,6 +138,7 @@ pub fn emit_tree(
         diverged: false,
         locale: &spec.locale.locale,
         formatter: &formatter,
+        runtime: spec.web.runtime,
         warnings,
     };
     emit_element(&mut out, &page.ir.root, &NodePath::root(), &mut walk)?;
@@ -412,7 +417,7 @@ fn node_overrides(
 }
 
 /// Write one instance of a `<for>` block's row template per row of the array
-/// it iterates.
+/// it iterates, up to what [`row_limit`] leaves the runtime to build.
 ///
 /// A row element's identity is its FLAT position in the block's child list,
 /// not the row number: the reconciler spawns one entity per template element
@@ -442,18 +447,6 @@ fn emit_rows(
     if body.is_empty() {
         return Ok(());
     }
-    // Which rows a virtualized block mounts comes from the offset of the
-    // `<scroll>` it sits in, which a build machine cannot know. A guessed
-    // prefix would be markup the runtime takes straight back out.
-    if element.attrs.virtualized {
-        walk.warnings.push(format!(
-            "page `{}`: the virtualized `<for each=\"{name}\">` is emitted with no rows, \
-             because which rows are in view is not known until the page is scrolled",
-            walk.page
-        ));
-        return Ok(());
-    }
-
     // The bodies were read off an app holding one list; a page written from a
     // different one would put a card built for a row it does not show. Only
     // reachable under `prerender = "seeds"`, where the pages are written with
@@ -480,7 +473,8 @@ fn emit_rows(
         missing.borrow_mut().insert(field.to_string());
     };
     let outside = std::mem::replace(&mut walk.in_row, true);
-    for (index, item) in rows.iter().enumerate() {
+    let limit = row_limit(element, rows.len(), walk.runtime);
+    for (index, item) in rows.iter().take(limit).enumerate() {
         let scope = Scope::new(signals)
             .with_row(item, index)
             .reporting_to(&report);
@@ -500,6 +494,28 @@ fn emit_rows(
         ));
     }
     Ok(())
+}
+
+/// How tall a first screen is taken to be, in CSS pixels. Nominal, and
+/// bigger than most: a reader who never runs the script gets the top of a
+/// virtualized list whole, and the runtime builds the rest below it.
+const FOLD_PX: f32 = 1080.0;
+
+/// How many of a `<for>` block's rows the document carries.
+///
+/// Every row, except for a virtualized block on a page whose runtime mounts
+/// the whole list on load. There the document carries the rows a first
+/// screen shows and the runtime adopts them, which keeps a five-thousand-row
+/// grid from being written out as a megabyte of markup nobody reads. A page
+/// with no runtime is final, so it carries the list whole however long it is.
+fn row_limit(element: &Element, len: usize, runtime: bool) -> usize {
+    if !element.attrs.virtualized || !runtime {
+        return len;
+    }
+    // The row height the spawner reads, with the same default and the same
+    // guard against a zero or negative one.
+    let row_height = element.attrs.row_height.unwrap_or(32.0).max(1.0);
+    len.min((FOLD_PX / row_height).ceil().max(1.0) as usize)
 }
 
 /// What Lumen's cascade resolved for this element, as an inline style.

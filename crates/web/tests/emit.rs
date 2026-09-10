@@ -797,6 +797,26 @@ fn list_page(body: Vec<Element>) -> PageSpec {
     )
 }
 
+/// A page whose root holds a virtualized `<for>` over `items`, with one
+/// label per row.
+fn virtualized_page(row_height: Option<f32>) -> PageSpec {
+    let block = element(
+        "for",
+        Attributes {
+            each: Some("items".into()),
+            key: Some("id".into()),
+            virtualized: true,
+            row_height,
+            ..Attributes::default()
+        },
+        vec![row_label("{row.name}")],
+    );
+    PageSpec::new(
+        "index",
+        ir(element("root", Attributes::default(), vec![block])),
+    )
+}
+
 /// The `items` rows, one `name` field each.
 fn items(names: &[&str]) -> Vec<HashMap<String, String>> {
     names
@@ -860,22 +880,11 @@ fn a_row_value_is_escaped_like_any_other_text() {
 }
 
 #[test]
-fn a_virtualized_block_emits_no_rows_and_says_so() {
-    let block = element(
-        "for",
-        Attributes {
-            each: Some("items".into()),
-            virtualized: true,
-            ..Attributes::default()
-        },
-        vec![row_label("{row.name}")],
-    );
-    let page = PageSpec::new(
-        "index",
-        ir(element("root", Attributes::default(), vec![block])),
-    );
-    let mut spec = site(vec![page]);
-    spec.pages[0].signals = SignalEnv::new().with_array("items", items(&["one", "two"]));
+fn a_virtualized_block_emits_the_rows_a_first_screen_shows() {
+    let names: Vec<String> = (0..40).map(|n| format!("row {n}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut spec = site(vec![virtualized_page(Some(56.0))]);
+    spec.pages[0].signals = SignalEnv::new().with_array("items", items(&refs));
 
     let site = emitted(&spec);
     let html = site
@@ -884,17 +893,35 @@ fn a_virtualized_block_emits_no_rows_and_says_so() {
         .contents
         .clone();
 
+    // ceil(1080 / 56) rows, one slot each: the top of the list, whole.
+    let mut want = vec!["0".to_string(), "0.0".to_string()];
+    want.extend((0..20).map(|slot| format!("0.0::{slot}")));
     assert_eq!(
         node_paths(&html),
-        vec!["0", "0.0"],
-        "which rows are in view is not known until the page is scrolled"
+        want,
+        "the document carries a first screen and the runtime builds the rest"
     );
     assert!(
+        site.warnings.is_empty(),
+        "a list the runtime completes on load is not a hole in the page: {:?}",
         site.warnings
-            .iter()
-            .any(|warning| warning.contains("virtualized")),
-        "and the build says the list is empty on purpose: {:?}",
-        site.warnings
+    );
+}
+
+#[test]
+fn a_virtualized_block_with_no_runtime_to_finish_it_emits_every_row() {
+    let names: Vec<String> = (0..40).map(|n| format!("row {n}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut spec = site(vec![virtualized_page(Some(56.0))]);
+    spec.pages[0].signals = SignalEnv::new().with_array("items", items(&refs));
+    spec.web.runtime = false;
+
+    let html = page_html(&spec, "index.html");
+
+    assert_eq!(
+        node_paths(&html).len(),
+        42,
+        "nothing runs to add the rest, so a bound would delete them"
     );
 }
 
