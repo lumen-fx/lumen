@@ -233,9 +233,20 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   tick too. A renderer built on this crate, such as `lumen-ssr`, gets its
   parallelism from running many requests at once on separate threads, not
   from splitting one request's tick across threads.
-- **lumen-runtime**: the runtime core. The run loop, `RunOptions`, the default
+- **lumen-runtime**: the runtime core. The run loop, `RunOptions`, the core
   plugin stack, hot reload, page discovery, `lumen.toml` config, the skins,
-  and the loaders for both compiled artifacts and source. Links no parser.
+  and the loaders for both compiled artifacts and source. Links no parser,
+  and names none of the optional subsystems it installs: each of those is a
+  capability (see below) its own crate registers.
+- **lumen-capability**: the list an optional subsystem puts itself on before
+  `main`, and the environment it is installed with. The tray and notification
+  hosts, the file dialogs, global hotkeys, the launcher, sleep inhibit, the
+  lifecycle services, the HTTP client, the async executor, the introspection
+  server and the devtools overlay are all capabilities. The run loop reads
+  the list at three points of the build and installs what it finds; a
+  capability decides for itself whether an app uses it. Each one exports a
+  symbol the linker can select it by, which is what lets a link leave a
+  subsystem out with no compiler involved.
 - **lumenc**: the compiler front end and the CLI. Markup and CSS parsers, the
   include and import resolver, the formatter, the scaffolder, and the
   `check` / `run` / `build` / `bundle` / `package` subcommands.

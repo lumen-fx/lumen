@@ -54,6 +54,11 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LumenToml {
+    /// The whole file, parsed but untyped. What an optional subsystem reads
+    /// its own section from: the typed fields above are the runtime's, and a
+    /// subsystem the runtime does not name has no field here.
+    #[serde(skip)]
+    pub raw: toml::Table,
     /// `[app]` section.
     pub app: AppCfg,
     /// `[pages]` section - file-based multi-page navigation config.
@@ -461,10 +466,11 @@ impl BundleCapabilities {
         // Async: an app that opens dialogs must keep the capability, since
         // that is what they resolve on. Same marker scan the runtime startup
         // gate uses.
-        let async_rt = cfg
-            .capabilities
-            .async_rt
-            .unwrap_or_else(|| crate::run::subsystems::file_dialog_markers_present(&hay));
+        let async_rt = cfg.capabilities.async_rt.unwrap_or_else(|| {
+            lumen_script::FILE_DIALOG_BUILTINS
+                .iter()
+                .any(|marker| hay.contains(marker))
+        });
 
         // HTTP fetch: explicit, else infer from a `fetch(` builtin marker.
         let http_fetch = cfg
@@ -1101,7 +1107,12 @@ impl LumenToml {
     pub fn load_or_default(dir: &Path) -> Result<Self, ConfigError> {
         let path = dir.join("lumen.toml");
         match std::fs::read_to_string(&path) {
-            Ok(src) => toml::from_str::<Self>(&src).map_err(|e| ConfigError::Parse(path, e)),
+            Ok(src) => {
+                let mut cfg = toml::from_str::<Self>(&src)
+                    .map_err(|e| ConfigError::Parse(path.clone(), e))?;
+                cfg.raw = toml::from_str(&src).map_err(|e| ConfigError::Parse(path, e))?;
+                Ok(cfg)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(ConfigError::Read(path, e)),
         }

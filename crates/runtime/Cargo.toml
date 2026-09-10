@@ -37,32 +37,40 @@ lumen-modules = { workspace = true }
 # app's locale, loads `locale/*.ftl`, and publishes the translator that
 # `translatable="..."` markup and the scripts' `t()` builtin read.
 lumen-i18n = { workspace = true }
+# The list the optional subsystems below register themselves on, and the
+# environment they are installed with. The run loop reads the list; it names
+# none of them.
+lumen-capability = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 thiserror.workspace = true
 
-# Default plugin stack + OS surface crates the run loop wires.
+# The core stack the run loop wires, and the optional subsystems this
+# composition ships. An optional one is reached only through its own
+# constructor (see `lib.rs`), so a link that leaves it out drops it whole.
 lumen-input = { workspace = true }
 lumen-os-clipboard = { workspace = true }
 lumen-os-dnd = { workspace = true }
-lumen-os-filedialog = { workspace = true }
-lumen-os-tray = { workspace = true }
-lumen-os-notify = { workspace = true }
-lumen-os-hotkey = { workspace = true }
-lumen-os-launcher = { workspace = true }
-lumen-os-lifecycle = { workspace = true }
-lumen-os-power = { workspace = true }
-# Async spawn/timer bridge (tokio rt-multi-thread). Part B tree-shaking:
-# OPTIONAL behind the `async` feature. File dialogs resolve on this runtime,
-# so the run loop installs `AsyncTokioPlugin` for an app that opens them; a
-# trimmed bundle drops the crate and falls back to the blocking path.
-
-lumen-async-tokio = { workspace = true, optional = true }
+# The OS integration hosts, each through the crate that registers it as a
+# capability. Only that registration is named anywhere in this crate.
+lumen-os-filedialog-capability = { workspace = true }
+lumen-os-tray-capability = { workspace = true }
+lumen-os-notify-capability = { workspace = true }
+lumen-os-hotkey-capability = { workspace = true }
+lumen-os-launcher-capability = { workspace = true }
+lumen-os-lifecycle-capability = { workspace = true }
+lumen-os-power-capability = { workspace = true }
+# Async spawn/timer bridge (tokio rt-multi-thread). OPTIONAL behind the
+# `async` feature. File dialogs resolve on this runtime; a trimmed bundle
+# drops the crate and falls back to the blocking path.
+lumen-async-tokio-capability = { workspace = true, optional = true }
 # The HTTP client the scripts' `fetch()` / `http()` builtins run on. OPTIONAL
 # behind `http-fetch`; without it the builtins report that no client is
 # installed, and an embedder can install its own `lumen_script::HttpClient`.
-lumen-http-ureq = { workspace = true, optional = true }
+lumen-http-ureq-capability = { workspace = true, optional = true }
 lumen-layout-taffy = { workspace = true }
+# PNG decode and encode for the scripts' clipboard image round-trips.
+image.workspace = true
 
 
 # Script hosts. Every host is a Part B tree-shaking knob, OPTIONAL behind
@@ -85,12 +93,12 @@ lumen-render-wgpu = { workspace = true }
 # Accessibility. The window backend drives whatever bridge it is handed;
 # picking AccessKit is this crate's call, as the composition point.
 lumen-a11y-accesskit = { workspace = true }
-# MCP introspection server (tokio + serde_json + http). Part B: OPTIONAL
-# behind `mcp`. Dev-only; lumenc never infers it into a release bundle.
-lumen-mcp = { workspace = true, optional = true }
+# MCP introspection server (tokio + serde_json + http). OPTIONAL behind
+# `mcp`. Dev-only; lumenc never infers it into a release bundle.
+lumen-mcp-capability = { workspace = true, optional = true }
 # Dev-only in-window devtools overlay. Optional + gated behind the off-by-
 # default `devtools` feature.
-lumen-devtools = { workspace = true, optional = true }
+lumen-devtools-capability = { workspace = true, optional = true }
 
 # Hot-reload file watching (inotify / FSEvents / ReadDirectoryChangesW).
 notify.workspace = true
@@ -99,9 +107,6 @@ notify.workspace = true
 toml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-
-# Clipboard image decode (script `image` clipboard commands).
-image.workspace = true
 
 tracing.workspace = true
 # Dev-mode profiler stack (see [features]).
@@ -113,6 +118,9 @@ tracing-tracy = { version = "0.11", optional = true, features = [
 ] }
 
 [dev-dependencies]
+# The lifecycle services, read back by the tests that drive them through the
+# script builtins.
+lumen-os-lifecycle = { workspace = true }
 # The loader dispatch tests build the real fixture cdylibs: the portable
 # plugin (the kind a static host loads) and a compiler plugin (the wrong
 # kind, named as one in the banner).
@@ -147,16 +155,16 @@ default = [
     "host-candela",
 ]
 # MCP introspection server. Part B tree-shaking knob (dev-only capability).
-mcp = ["dep:lumen-mcp"]
+mcp = ["dep:lumen-mcp-capability"]
 # Async spawn/timer (tokio) bridge. Part B tree-shaking knob.
-async = ["dep:lumen-async-tokio"]
+async = ["dep:lumen-async-tokio-capability"]
 # Script hosts. Each one ADDS a language, so a bundle can carry exactly the
 # hosts its app uses. All three are on by default.
 host-rhai = ["dep:lumen-script-rhai", "dep:rhai"]
 host-lua = ["dep:lumen-script-lua", "dep:mlua"]
 host-candela = ["dep:lumen-script-candela"]
 # Dev-only in-window devtools overlay (F12). OFF by default.
-devtools = ["dep:lumen-devtools"]
+devtools = ["dep:lumen-devtools-capability"]
 # Runtime modules: load the prebuilt engine-linked dylibs an app declares in
 # `[dependencies]`. The schema is always parsed; this gates the dlopen loader.
 # A Part B tree-shaking knob like the rest, but the `[capabilities]` resolver
@@ -169,7 +177,7 @@ modules = ["lumen-modules/loader"]
 # resolves to `on_fetch_error(tag, "...built without the http-fetch
 # feature...")` - which is also the build an embedder starts from when it
 # installs its own `HttpClient`.
-http-fetch = ["dep:lumen-http-ureq"]
+http-fetch = ["dep:lumen-http-ureq-capability"]
 # Compile the from-source load path (dev source-load + hot reload). ON by
 # default. Unlike the old lumenc feature this carries NO parser dependency -
 # the parser is injected via `SourceParser` - it only gates the load-from-

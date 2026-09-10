@@ -331,19 +331,6 @@ pub fn run_app_headless_rendered(
     lumen_core::plugin_events::set_plugin_event_waker(waker.clone());
     app.world.insert_resource(waker);
 
-    // Snapshot cadence: headless ticks are on-demand, so per-tick MCP
-    // snapshots are effectively free and make `lumen.simulate`'s
-    // frame-advance wait deterministic (the windowed 1 Hz throttle would
-    // otherwise leave a woken tick invisible to the polling server
-    // thread for up to a second). Compiled out with the `mcp` feature
-    // (Part B tree-shaking): a trimmed bundle installs no MCP schedule.
-    #[cfg(feature = "mcp")]
-    for world in [&mut app.world, &mut app.render_world] {
-        if let Some(mut sched) = world.get_resource_mut::<lumen_mcp::McpSnapshotSchedule>() {
-            sched.interval = Duration::ZERO;
-        }
-    }
-
     // SIGINT / SIGTERM (Unix) or Ctrl+C / Ctrl+Break / console-close
     // (Windows) -> flag; the loop notices within one park slice.
     //

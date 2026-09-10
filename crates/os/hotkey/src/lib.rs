@@ -16,6 +16,12 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+// The optional-subsystem entry: how the run loop installs this crate. The
+// constructor that registers it lives in the `-capability` crate beside
+// this one, in an object of its own.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod capability;
+
 use bevy_ecs::prelude::*;
 use std::str::FromStr;
 

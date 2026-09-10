@@ -119,6 +119,9 @@ resolver = "2"
 # which hold crates rather than being one.
 members = [
     "crates/assets",
+    "crates/capabilities/*",
+    "crates/capability",
+    "crates/capability-macros",
     "crates/core",
     "crates/html",
     "crates/i18n",
@@ -229,6 +232,19 @@ lumen-mcp = { path = "crates/mcp" }
 # feature here, so dropping that feature drops the shared engine with it.
 lumen-module = { path = "public/lumen-module", default-features = false }
 lumen-module-macros = { path = "public/lumen-module-macros" }
+lumen-capability = { path = "crates/capability" }
+lumen-os-hotkey-capability = { path = "crates/capabilities/os-hotkey" }
+lumen-os-filedialog-capability = { path = "crates/capabilities/os-filedialog" }
+lumen-os-notify-capability = { path = "crates/capabilities/os-notify" }
+lumen-os-tray-capability = { path = "crates/capabilities/os-tray" }
+lumen-os-launcher-capability = { path = "crates/capabilities/os-launcher" }
+lumen-os-power-capability = { path = "crates/capabilities/os-power" }
+lumen-os-lifecycle-capability = { path = "crates/capabilities/os-lifecycle" }
+lumen-mcp-capability = { path = "crates/capabilities/mcp" }
+lumen-http-ureq-capability = { path = "crates/capabilities/http-fetch" }
+lumen-async-tokio-capability = { path = "crates/capabilities/async" }
+lumen-devtools-capability = { path = "crates/capabilities/devtools" }
+lumen-capability-macros = { path = "crates/capability-macros" }
 lumen-module-registry = { path = "crates/module-registry" }
 lumen-modules = { path = "crates/modules" }
 lumen-os-clipboard = { path = "crates/os/clipboard" }

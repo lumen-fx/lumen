@@ -1,91 +1,56 @@
-//! Per-subsystem register units for [`build_app`](super::app_build::build_app).
+//! The core stack [`build_app`](super::app_build::build_app) installs, and
+//! the environment it installs the optional subsystems with.
 //!
 //! Each `register_*` fn groups the `add_plugin` / `add_systems` /
-//! `insert_resource` wiring for one subsystem so `build_app` reads as a
-//! sequence of subsystem installs instead of a 700-line flat block. Two
-//! payoffs:
+//! `insert_resource` wiring for one part of the core (text, layout and
+//! input, the reactive bindings, the command bus, styling), so `build_app`
+//! reads as a sequence of installs. The core is never gated: every visual
+//! app needs all of it.
 //!
-//! 1. **Startup / RSS gating (today).** [`SubsystemUsage`] is computed once
-//!    from a single bounded source scan + `lumen.toml` + run-mode flags, and
-//!    the gated units (MCP, global hotkeys, file dialogs) are skipped when the
-//!    app provably does not use them - so a pure-UI app binds no MCP port and
-//!    grabs no X11 hotkey manager.
-//! 2. **Compile-time tree-shaking (future).** With the wiring already carved
-//!    per subsystem, dropping one from a build becomes a one-line `cfg` /
-//!    manifest gate on its `register_*` call - no untangling first.
+//! Everything optional (OS integration, the introspection server, the HTTP
+//! client, the devtools overlay) is a `lumen-capability` entry its own crate
+//! registers, installed by `build_app` at the phase it asked for and never
+//! named here. A subsystem that should stay idle for an app that does not
+//! use it decides that itself, from the [`CapabilityEnv`] built below.
 //!
-//! CONSERVATIVE GATING CONTRACT: a unit is skipped only when there is a
-//! *reliable* signal the subsystem is unused. When in doubt (AOT artifact
-//! whose source we cannot read, an embedder Rust hook we cannot scan, a read
-//! error), the unit stays registered - a false positive merely wastes a little
-//! idle work, whereas a false negative would silently drop a subsystem the app
-//! depends on. Units with no reliable "unused" signal are left default-on and
-//! carry a `TODO(tree-shake)` note naming the signal that would let them gate.
+//! CONSERVATIVE GATING CONTRACT: a subsystem skips itself only on a
+//! *reliable* signal that it is unused. When in doubt (an artifact whose
+//! source cannot be read, an embedder Rust hook the scan cannot see, a read
+//! error), it installs: a false positive wastes a little idle work, whereas
+//! a false negative would silently drop a subsystem the app depends on.
+//! The environment carries that doubt as opacity, under which every source
+//! query answers yes.
+
+use lumen_capability::CapabilityEnv;
 
 use super::*;
 
-/// Static per-subsystem usage signals, resolved once up front and used to
-/// gate the register units below.
+/// The environment the optional subsystems are installed with, for the app
+/// at `dir`: its config, the run mode, and a bounded read of its sources.
 ///
-/// Each field answers "should this subsystem be initialised for this app?".
-/// Detection is a bounded static scan of the app's `.lmn` / `.rhai` / `.lua` /
-/// `.cdl` / `.css` sources (plus any in-memory markup) for per-subsystem usage
-/// markers, with `lumen.toml` overrides taking precedence where they exist.
-/// Every signal errs toward ON (see the module contract).
-pub(crate) struct SubsystemUsage {
-    /// Install the global-hotkey OS manager (`OsHotkeyRegistry`) + the
-    /// per-tick `poll_hotkeys` drain. The manager opens an X11 connection on
-    /// Linux, so skipping it for a hotkey-free app is a real idle win.
-    pub(crate) hotkey: bool,
-    /// Install `AsyncTokioPlugin` so file dialogs resolve on the shared tokio
-    /// runtime instead of blocking the tick. The runtime spawns worker
-    /// threads, so a dialog-free app skips it.
-    pub(crate) file_dialog: bool,
-}
-
-impl SubsystemUsage {
-    /// Resolve every subsystem signal from one bounded source scan.
-    ///
-    /// `has_app_hooks` is `true` when the embedder supplied `RunOptions`
-    /// `app_hooks` (Rust SDK closures). Their code is not scannable here, so
-    /// it downgrades a gated subsystem's "unused" verdict to on - an
-    /// SDK app may drive that subsystem from Rust.
-    pub(crate) fn detect(opts: &RunOptions, dir: &Path, has_app_hooks: bool) -> Self {
-        // A precompiled artifact carries no readable source at this point.
-        let no_source = opts.artifact.is_some();
-
-        // Single bounded read of the app's source into one haystack, reused by
-        // every marker check below. Skipped for an artifact (nothing to read).
-        let mut hay = opts.markup.clone().unwrap_or_default();
-        if !no_source {
-            let mut budget: usize = 128;
-            scan_sources(dir, &mut hay, &mut budget, 0);
-        }
-
-        // Hotkey: previously always-on, now gated (a strict subset removal).
-        // Gate on the `register_hotkey` script builtin (also matches
-        // `unregister_hotkey`, which contains it, and the candela
-        // `lumen::register_hotkey` form). Conservative fallbacks force it ON:
-        // an artifact (opaque source) or any embedder hook (opaque Rust that
-        // may register a hotkey).
-        let hotkey = no_source || has_app_hooks || hay.contains("register_hotkey");
-
-        // File dialogs: gate on the dialog builtins, with the same
-        // conservative fallbacks as the hotkey gate above.
-        let file_dialog = no_source || has_app_hooks || file_dialog_markers_present(&hay);
-
-        Self {
-            hotkey,
-            file_dialog,
-        }
+/// A precompiled artifact carries no readable source at this point, so the
+/// environment is opaque for one. In-memory markup counts as source.
+pub(crate) fn capability_env(
+    opts: &RunOptions,
+    dir: &Path,
+    cfg: &crate::config::LumenToml,
+) -> CapabilityEnv {
+    let no_source = opts.artifact.is_some() || opts.artifact_bytes.is_some();
+    // Single bounded read of the app's source into one haystack, reused by
+    // every query a subsystem makes. Skipped for an artifact (nothing to read).
+    let mut hay = opts.markup.clone().unwrap_or_default();
+    if !no_source {
+        let mut budget: usize = 128;
+        scan_sources(dir, &mut hay, &mut budget, 0);
     }
+    CapabilityEnv::new(dir, cfg.raw.clone(), hay, no_source).headless(opts.bounded)
 }
 
 /// Bounded read of an app's `.lmn` / `.rhai` / `.lua` / `.cdl` / `.css` source
-/// tree into a single haystack. Shared by the runtime startup gate
-/// ([`SubsystemUsage::detect`]) and lumenc's compile-time bundle capability
-/// inference ([`crate::config::BundleCapabilities::resolve`]) so both apply the
-/// SAME conservative marker scan.
+/// tree into a single haystack. Shared by [`capability_env`] and lumenc's
+/// compile-time bundle capability inference
+/// ([`crate::config::BundleCapabilities::resolve`]) so both apply the same
+/// conservative marker scan.
 pub(crate) fn scan_app_sources(dir: &Path) -> String {
     let mut hay = String::new();
     let mut budget: usize = 128;
@@ -122,15 +87,6 @@ fn scan_sources(dir: &Path, hay: &mut String, budget: &mut usize, depth: u8) {
             *budget -= 1;
         }
     }
-}
-
-/// True when `hay` (concatenated markup + script source) calls one of the
-/// file-dialog builtins. `pick_file` is a prefix of `pick_files` and
-/// `pick_file_filtered`, so these three markers cover the whole family.
-pub(crate) fn file_dialog_markers_present(hay: &str) -> bool {
-    ["pick_file", "save_file", "pick_folder"]
-        .iter()
-        .any(|marker| hay.contains(marker))
 }
 
 // -------------------------------------------------------------------------
@@ -210,6 +166,17 @@ pub(crate) fn register_core(app: &mut App) {
     app.add_plugin(TransitionPlugin);
     app.add_plugin(ValidationPlugin);
     app.add_plugin(AssetsPlugin);
+    // The clipboard host. Part of the core rather than optional because the
+    // text fields above paste and copy through it. `NonSend` (`arboard` is
+    // `!Send` on Linux and Wayland) and long-lived on purpose: on X11 the
+    // process that wrote the selection has to stay alive to serve it, so a
+    // per-call handle would lose the text the moment the call returned. A
+    // backend that refuses (headless CI, no compositor) leaves the resource
+    // absent and the clipboard builtins no-op with a warning.
+    match ClipboardHost::try_new() {
+        Some(host) => app.world.insert_non_send(host),
+        None => eprintln!("lumenc: no clipboard backend; clipboard builtins are inert"),
+    }
 }
 
 /// Reactive bindings + reconcilers + dialog lifecycle + the in-app error
@@ -442,313 +409,13 @@ pub(crate) fn register_styles(
     );
 }
 
-// -------------------------------------------------------------------------
-// OS-integration subsystems.
-// -------------------------------------------------------------------------
-
-/// Global-hotkey OS manager + the per-tick drain. GATED on
-/// [`SubsystemUsage::hotkey`] (the `register_hotkey` script marker): the
-/// manager opens an X11 connection on Linux, so a hotkey-free app skips it
-/// entirely. `None` (init failure / displayless host) silently disables
-/// support; `register_hotkey` then no-ops with a warning.
-pub(crate) fn register_os_hotkey(app: &mut App) {
-    // S30 global hotkeys - install the manager as a non-send
-    // resource (some platforms own a main-thread channel) and poll
-    // the event receiver each tick.
-    if let Some(reg) = OsHotkeyRegistry::new() {
-        app.world.insert_non_send(reg);
-        // Both `HotkeyPressed` and `HotkeyReleased` are registered by
-        // `App::new`, beside every other input message, so `poll_hotkeys`
-        // can write either one without a local registration here.
-        app.add_systems(TickStage::Systems, lumen_os_hotkey::poll_hotkeys);
-    }
-}
-
-/// File-dialog host resource, plus the executor the dialogs resolve on.
-///
-/// The service itself is DEFAULT-ON: its constructor is a single `AtomicU64`
-/// (no thread, no device), so an idle app pays nothing and a false negative
-/// would silently swallow an embedder's `pick_file(...)`.
-///
-/// `AsyncTokioPlugin` is GATED on [`SubsystemUsage::file_dialog`] because it
-/// builds a multi-threaded tokio runtime. It has to be installed for dialogs
-/// to work at all on macOS: `NSOpenPanel` only resolves while the main run
-/// loop is pumping, so a dialog run inline deadlocks there and reports a
-/// cancel. Installing an executor here rather than leaving it to embedders
-/// is what makes `pick_file` reach the user on every platform. The dialog
-/// crate itself names no backend; it reads whichever `SpawnService` this
-/// installs.
-pub(crate) fn register_os_filedialog(app: &mut App, file_dialog_used: bool) {
-    app.world.insert_resource(FileDialogService::new());
-    // A resolved dialog comes back as a typed command from whichever thread
-    // ran it. Without a handler for that payload the command drain discards
-    // it and the script's `on_file_picked` never fires, so this registration
-    // is what closes the loop between `pick_file(...)` and the callback.
-    app.register_command::<FileDialogResultCommand, _>(|world, payload| {
-        world.write_message(FilePicked::from(*payload));
-    });
-    #[cfg(feature = "async")]
-    if file_dialog_used {
-        app.add_plugin(lumen_async_tokio::AsyncTokioPlugin);
-    }
-    #[cfg(not(feature = "async"))]
-    let _ = file_dialog_used;
-}
-
-/// Notification host resource + the per-tick action-button drain. DEFAULT-ON.
-///
-/// The `[app] id` from `lumen.toml` becomes the notification app id: Windows
-/// keys toasts off the AppUserModelID and macOS off the bundle id, so without
-/// it a notification is attributed to whatever binary happens to be running.
-///
-/// TODO(tree-shake): gate on the `notify` script builtin. Left default-on:
-/// `NotificationService::new()` opens no thread and no connection, so the
-/// idle cost is nil and a false negative would silently swallow an
-/// embedder's `notify(...)`.
-pub(crate) fn register_os_notify(app: &mut App, cfg: &crate::config::LumenToml) {
-    let service = match cfg.app.id.as_deref().filter(|s| !s.is_empty()) {
-        Some(id) => NotificationService::new().with_app_id(id),
-        None => NotificationService::new(),
-    };
-    app.world.insert_resource(service);
-    app.add_systems(
-        TickStage::Systems,
-        lumen_os_notify::poll_notification_actions,
-    );
-}
-
-/// System-tray host resource + the per-tick click drain. DEFAULT-ON.
-///
-/// TODO(tree-shake): gate on the `tray_icon` script builtin / a `<tray>`
-/// markup marker. Left default-on: the service is `Default` (registration is
-/// what actually creates the OS icon, lazily), and `poll_tray_events` is a
-/// cheap per-tick queue check.
-pub(crate) fn register_os_tray(app: &mut App) {
-    app.world.insert_non_send(OsTrayService::new());
-    // Every target has a `poll_tray_events`: `tray-icon` backs macOS and
-    // Windows, `ksni` backs Linux, and anything else gets an inert stub.
-    app.add_systems(TickStage::Systems, lumen_os_tray::poll_tray_events);
-}
-
-/// Clipboard, launcher, and sleep-inhibit hosts. DEFAULT-ON.
-///
-/// The clipboard handle is `NonSend` (`arboard` is `!Send` on Linux and
-/// Wayland) and long-lived on purpose: on X11 the process that wrote the
-/// selection has to stay alive to serve it, so a per-call handle would lose
-/// the text the moment the call returned. A backend that refuses (headless
-/// CI, no compositor) leaves the resource absent and the clipboard builtins
-/// no-op with a warning.
-///
-/// The launcher and the inhibit holder are both idle until called: the
-/// launcher is stateless, and the holder only talks to the platform once a
-/// script asks to keep the machine awake.
-pub(crate) fn register_os_misc(app: &mut App, cfg: &crate::config::LumenToml) {
-    match ClipboardHost::try_new() {
-        Some(host) => app.world.insert_non_send(host),
-        None => eprintln!("lumenc: no clipboard backend; clipboard builtins are inert"),
-    }
-    app.world.insert_resource(Launcher::new());
-    let app_name = cfg.app.id.clone().unwrap_or_else(|| "lumen".to_string());
-    app.world
-        .insert_non_send(InhibitHolder::new().with_app_name(app_name));
-}
-
-/// Recent-files, autostart, and single-instance hosts. DEFAULT-ON.
-///
-/// `LifecycleService`, `RecentFilesService`, and `AutostartService` are all
-/// cheap to construct - a couple of cloned `PathBuf`s, no thread, no
-/// connection - so, like the launcher and the inhibit holder above, they are
-/// left in unconditionally rather than gated on a script marker.
-///
-/// The app id comes off [`lumen_core::app_paths::app_id`], published by
-/// `build_app` before this runs, rather than off `cfg` directly: it is the
-/// same id `read_file` / `data_dir` resolve against, so the recent-files
-/// store lands in the identical `<data-dir>/lumen/<id>` directory a script's
-/// own `data_dir()` call would see.
-///
-/// Single-instance locking itself does not happen here: binding a socket is
-/// not cheap-and-side-effect-free the way these constructors are, and doing
-/// it for every headless / test run of `build_app` would make CI runs and
-/// SDK embedders fight each other over one socket. See [`super::run_app`]'s
-/// single-instance gate, which runs before `build_app` and, on the primary
-/// path, hands its already-bound `LifecycleService` in through an
-/// `app_hooks` closure so the poll system below drains the SAME inbox the
-/// gate's listener thread feeds - not a second, freshly constructed one
-/// whose inbox nothing writes to. A `single_instance`-free app (the common
-/// case) gets the default, never-bound `LifecycleService` this function
-/// inserts; the poll system is a no-op for it.
-pub(crate) fn register_os_lifecycle(app: &mut App) {
-    let id = lumen_os_lifecycle::AppId::from(lumen_core::app_paths::app_id());
-    let lifecycle = lumen_os_lifecycle::LifecycleService::new();
-    let recent = lumen_os_lifecycle::RecentFilesService::new(lifecycle.data_dir(&id));
-    // The autostart entry has to point somewhere; a `lumenc run` dev session
-    // launches through the `lumenc` binary itself, which is the best answer
-    // available without a packaged app's own launcher path.
-    let exe = std::env::current_exe().unwrap_or_default();
-    let autostart = lumen_os_lifecycle::AutostartService::new(id, exe);
-    app.world.insert_resource(lifecycle);
-    app.world.insert_resource(recent);
-    app.world.insert_resource(autostart);
-    app.add_systems(TickStage::Systems, lumen_os_lifecycle::poll_second_instance);
-}
-
-/// The HTTP client the scripts' `fetch()` / `http()` builtins run on.
-///
-/// Installed as the `FetchRegistry` the script plugin would otherwise create
-/// for itself, so it has to run before the host plugins are added. The plugin
-/// leaves an existing registry alone, which is also how an embedder swaps in
-/// its own `lumen_script::HttpClient` from an app hook or by inserting the
-/// resource first.
-///
-/// Costs nothing for an app that never fetches: no connection is opened until
-/// a request is queued, and each one runs on its own short-lived worker
-/// thread, so there is no gate on usage here.
-///
-/// COMPILE-TIME GATE (Part B tree-shaking): the shipped client lives behind the
-/// `http-fetch` cargo feature. Without it no registry is installed here and the
-/// builtins answer every request with the "built without `http-fetch`" error.
-#[cfg(feature = "http-fetch")]
-pub(crate) fn register_http_client(app: &mut App) {
-    app.world
-        .insert_resource(lumen_script::FetchRegistry::with_client(
-            std::sync::Arc::new(lumen_http_ureq::UreqHttpClient),
-        ));
-}
-
-/// Inert HTTP register unit for a build compiled WITHOUT `http-fetch`: the
-/// script plugin falls back to the disabled client, so `fetch()` reports the
-/// missing transport instead of silently doing nothing.
-#[cfg(not(feature = "http-fetch"))]
-pub(crate) fn register_http_client(_app: &mut App) {}
-
-/// MCP introspection server. GATED on the resolved run-mode + `[mcp]` config.
-///
-/// COMPILE-TIME GATE (Part B tree-shaking): behind the `mcp` cargo feature.
-/// MCP is a dev/introspection capability, so lumenc never infers it into a
-/// release `--bundle`; a trimmed build drops `lumen-mcp` and this is the inert
-/// no-op below (which still prints the "disabled" hint).
-#[cfg(feature = "mcp")]
-pub(crate) fn register_mcp(app: &mut App, bounded: bool, cfg: &crate::config::LumenToml) {
-    // Precedence:
-    //   1. `[mcp] port = 0`            -> hard-disabled.
-    //   2. `[runtime] mcp = false`     -> disabled; `= true` -> force-enabled
-    //                                     even in a headless/bounded run.
-    //   3. bounded (headless) run      -> disabled UNLESS `[mcp] simulate`,
-    //                                     because the server thread + per-tick
-    //                                     snapshot pipeline are pure overhead
-    //                                     for a `--ticks N` bench; automation
-    //                                     drivers that need input injection
-    //                                     set `simulate = true` and keep it.
-    //   4. otherwise (interactive)     -> enabled (the default agent workflow).
-    // The server thread is what the `SurfaceCapture` screenshot path lives on,
-    // so when it is gated off the rendered-headless loop simply finds no
-    // `SurfaceCapture`/`McpSnapshotSchedule` resource (both reads are
-    // `Option`-guarded there) and skips capture - a plain tick bench needs
-    // neither.
-    let simulate_enabled = cfg.mcp.simulate.unwrap_or(false);
-    // Off by default like `simulate`: `lumen_framework_status` shells out to
-    // `git`/`gh` when this is on, and the introspection port has no
-    // authentication, so a shipped app leaves subprocess execution off that
-    // surface unless a developer opts in.
-    let issues_enabled = cfg.mcp.issues.unwrap_or(false);
-    let mcp_enabled = match cfg.runtime.mcp {
-        Some(v) => v,
-        None => !(bounded && !simulate_enabled),
-    };
-    let mcp_port: Option<u16> = match (mcp_enabled, cfg.mcp.port) {
-        (false, _) | (_, Some(0)) => None,
-        (true, Some(p)) => {
-            app.add_plugin(
-                LumenMcpPlugin::with_port(p)
-                    .with_simulate_enabled(simulate_enabled)
-                    .with_issues_enabled(issues_enabled),
-            );
-            Some(p)
-        }
-        (true, None) => {
-            app.add_plugin(
-                LumenMcpPlugin::default()
-                    .with_simulate_enabled(simulate_enabled)
-                    .with_issues_enabled(issues_enabled),
-            );
-            Some(7878)
-        }
-    };
-    print_mcp_help_snippet(mcp_port, simulate_enabled, issues_enabled);
-
-    // Input-simulation automation (benchmarks, UI tests) drives the app
-    // through the MCP `lumen.simulate` queue and observes progress through
-    // the snapshot frame counter and scroll-corrected rects. The default
-    // 1 Hz `McpSnapshotSchedule` throttle makes that observation useless
-    // windowed: the frame counter advances ~once a second (so an external
-    // driver reconstructs ~1 fps frame intervals even while the window
-    // presents at vsync), and re-queried rects go stale between a
-    // scroll-into-view nudge and the follow-up read. The rendered headless
-    // path already zeroes this interval for exactly the same reason
-    // (`run_headless.rs`); mirror it here whenever simulation is enabled so
-    // the windowed automation path is measured on the same footing. Passive
-    // introspection (simulate disabled) keeps the 1 Hz throttle to avoid the
-    // per-frame snapshot sweep on a normal interactive app.
-    if mcp_port.is_some() && simulate_enabled {
-        for world in [&mut app.world, &mut app.render_world] {
-            if let Some(mut sched) = world.get_resource_mut::<lumen_mcp::McpSnapshotSchedule>() {
-                sched.interval = std::time::Duration::ZERO;
-            }
-        }
-    }
-}
-
-/// Inert MCP register unit for a build compiled WITHOUT the `mcp` feature:
-/// `lumen-mcp` is absent, so no introspection server is installed. Still prints
-/// the "disabled" hint so tooling sees a consistent line.
-#[cfg(not(feature = "mcp"))]
-pub(crate) fn register_mcp(_app: &mut App, _bounded: bool, _cfg: &crate::config::LumenToml) {
-    print_mcp_help_snippet(None, false, false);
-}
-
-/// Print a copy-pasteable MCP setup hint on stdout. Designed for one-shot
-/// scan by an AI agent: the port number on the first line, then a JSON
-/// fragment ready to drop into a Claude Code `.mcp.json`. Skipped when the
-/// MCP server is disabled (`[mcp] port = 0`).
-fn print_mcp_help_snippet(port: Option<u16>, simulate_enabled: bool, issues_enabled: bool) {
-    let Some(port) = port else {
-        // `port` is `None` for any of: `[mcp] port = 0`, `[runtime] mcp =
-        // false`, or a headless/bounded run (where the server is gated off
-        // unless simulation is enabled).
-        println!("lumenc: MCP server disabled");
-        return;
-    };
-    let sim = if simulate_enabled {
-        "ON"
-    } else {
-        "off - set [mcp] simulate = true in lumen.toml to enable input injection"
-    };
-    let issues = if issues_enabled {
-        "ON"
-    } else {
-        "off - set [mcp] issues = true in lumen.toml to let lumen_framework_status list open issues"
-    };
-    println!("lumenc: MCP server on 127.0.0.1:{port} (simulate: {sim})");
-    println!("        issue lookup: {issues}");
-    println!("        try: lumenc snapshot --port {port}");
-    println!("        Claude Code config snippet (drop into .mcp.json under \"mcpServers\"):");
-    println!("        \"lumen\": {{");
-    println!("          \"command\": \"lumen-mcp-server\",");
-    println!("          \"args\": [\"--host\", \"127.0.0.1\", \"--port\", \"{port}\"]");
-    println!("        }}");
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A bare UI app (no hotkey builtin, from-disk source, no hooks) resolves
-    /// the gated OS signals OFF - the no-hotkey / no-dialog skip paths. A
-    /// hotkey app flips its signal on.
-    #[test]
-    fn usage_detect_gates_bare_app_off() {
+    fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "lumen_subsys_usage_{}_{}",
+            "lumen_subsys_{tag}_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -756,45 +423,53 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
+    /// A bare UI app (no hotkey builtin, readable source) answers a use
+    /// query no, which is the skip path for a subsystem that gates on one;
+    /// an app that calls the builtin answers yes.
+    #[test]
+    fn a_source_scan_answers_a_use_query_from_the_markup() {
+        let dir = temp_dir("usage");
+        let cfg = crate::config::LumenToml::default();
         let bare = RunOptions::new(&dir)
             .with_markup("<root><button id=\"inc\">+</button></root>".to_string());
-        let usage = SubsystemUsage::detect(&bare, &dir, false);
-        assert!(!usage.hotkey, "bare UI app must skip hotkey manager");
-        assert!(
-            !usage.file_dialog,
-            "bare UI app must skip the dialog bridge"
-        );
+        let env = capability_env(&bare, &dir, &cfg);
+        assert!(!env.sources_mention(&["register_hotkey"]));
+        assert!(!env.sources_mention(lumen_script::FILE_DIALOG_BUILTINS));
 
         let hotkey_app = RunOptions::new(&dir).with_markup(
             "<root><script>fn f(){ register_hotkey(\"Ctrl+S\",\"save\"); }</script></root>"
                 .to_string(),
         );
-        let usage = SubsystemUsage::detect(&hotkey_app, &dir, false);
-        assert!(usage.hotkey, "hotkey app must init the manager");
+        let env = capability_env(&hotkey_app, &dir, &cfg);
+        assert!(env.sources_mention(&["register_hotkey"]));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Conservative fallback for the gated hotkey unit: an embedder-hook
-    /// app (opaque Rust that may register a hotkey) forces hotkey ON even with
-    /// no marker.
+    /// An artifact has no readable source, so the environment is opaque and
+    /// every use query answers yes: a subsystem the app might drive is
+    /// installed rather than dropped in silence.
     #[test]
-    fn app_hooks_force_hotkey_on() {
-        let dir = std::env::temp_dir().join(format!(
-            "lumen_subsys_hooks_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+    fn an_artifact_makes_every_use_query_answer_yes() {
+        let dir = temp_dir("artifact");
+        let cfg = crate::config::LumenToml::default();
+        let compiled = RunOptions::new(&dir).with_artifact_bytes(Vec::new());
+        let env = capability_env(&compiled, &dir, &cfg);
+        assert!(env.sources_mention(&["register_hotkey"]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
-        let hooked = RunOptions::new(&dir).with_markup("<root/>".to_string());
-        let usage = SubsystemUsage::detect(&hooked, &dir, true);
-        assert!(usage.hotkey, "app_hooks must force the hotkey manager ON");
-
+    /// The run mode reaches the environment: a bounded run is headless.
+    #[test]
+    fn a_bounded_run_is_headless() {
+        let dir = temp_dir("bounded");
+        let cfg = crate::config::LumenToml::default();
+        let mut opts = RunOptions::new(&dir).with_markup("<root/>".to_string());
+        opts.bounded = true;
+        assert!(capability_env(&opts, &dir, &cfg).headless);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

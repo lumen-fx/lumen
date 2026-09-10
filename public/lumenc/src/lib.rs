@@ -130,8 +130,6 @@ pub mod web_ssr;
 // their historical names so every `lumenc::{run,spawn,pages,config,...}::...`
 // path (internal `crate::...` refs and external consumers alike) keeps resolving
 // after the extraction.
-#[cfg(all(feature = "devtools", feature = "dev-run"))]
-pub use lumen_runtime::devtools_mount;
 #[cfg(feature = "dev-run")]
 pub use lumen_runtime::{
     app_kind, app_layout, config, pages, profile, run, run_headless, skins, spawn, window_state,

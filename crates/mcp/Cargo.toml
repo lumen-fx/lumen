@@ -12,6 +12,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# The optional-subsystem entry this crate registers itself through.
+lumen-capability = { workspace = true }
 lumen-core = { workspace = true }
 lumen-primitives = { workspace = true }
 lumen-assets = { workspace = true }

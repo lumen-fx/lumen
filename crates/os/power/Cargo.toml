@@ -13,6 +13,10 @@ categories = ["os", "gui"]
 publish = false
 
 [dependencies]
+# The optional-subsystem entry this crate registers itself through.
+lumen-capability = { workspace = true }
+# The command stream the scripts' builtins write, which the entry applies.
+lumen-script = { workspace = true }
 lumen-core = { workspace = true }
 bevy_ecs.workspace = true
 tracing.workspace = true

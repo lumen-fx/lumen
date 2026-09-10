@@ -3484,9 +3484,19 @@ version = "0.0.7"
 dependencies = [
  "bevy_ecs",
  "crossbeam-channel",
+ "lumen-capability",
  "lumen-core",
+ "lumen-script",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "lumen-async-tokio-capability"
+version = "0.0.7"
+dependencies = [
+ "lumen-async-tokio",
+ "lumen-capability",
 ]
 
 [[package]]
@@ -3523,6 +3533,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-capability"
+version = "0.0.7"
+dependencies = [
+ "lumen-capability-macros",
+ "lumen-core",
+ "serde",
+ "toml 1.1.4+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
+name = "lumen-capability-macros"
+version = "0.0.7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "lumen-core"
 version = "0.0.7"
 dependencies = [
@@ -3549,8 +3579,20 @@ version = "0.0.7"
 dependencies = [
  "bevy_ecs",
  "glam 0.33.3",
+ "lumen-capability",
  "lumen-core",
+ "lumen-ir",
  "lumen-mcp",
+ "lumen-scene",
+ "tracing",
+]
+
+[[package]]
+name = "lumen-devtools-capability"
+version = "0.0.7"
+dependencies = [
+ "lumen-capability",
+ "lumen-devtools",
 ]
 
 [[package]]
@@ -3608,8 +3650,18 @@ dependencies = [
 name = "lumen-http-ureq"
 version = "0.0.7"
 dependencies = [
+ "lumen-capability",
+ "lumen-core",
  "lumen-script",
  "ureq",
+]
+
+[[package]]
+name = "lumen-http-ureq-capability"
+version = "0.0.7"
+dependencies = [
+ "lumen-capability",
+ "lumen-http-ureq",
 ]
 
 [[package]]
@@ -3703,12 +3755,21 @@ dependencies = [
  "glam 0.33.3",
  "image",
  "lumen-assets",
+ "lumen-capability",
  "lumen-core",
  "lumen-primitives",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "lumen-mcp-capability"
+version = "0.0.7"
+dependencies = [
+ "lumen-capability",
+ "lumen-mcp",
 ]
 
 [[package]]
@@ -3815,11 +3876,21 @@ name = "lumen-os-filedialog"
 version = "0.0.7"
 dependencies = [
  "bevy_ecs",
+ "lumen-capability",
  "lumen-core",
  "lumen-os-mime",
+ "lumen-script",
  "pollster",
  "rfd",
  "tracing",
+]
+
+[[package]]
+name = "lumen-os-filedialog-capability"
+version = "0.0.7"
+dependencies = [
+ "lumen-capability",
+ "lumen-os-filedialog",
 ]
 
 [[package]]
@@ -3828,8 +3899,18 @@ version = "0.0.7"
 dependencies = [
  "bevy_ecs",
  "global-hotkey",
+ "lumen-capability",
  "lumen-core",
  "lumen-os-mime",
+ "lumen-script",
+]
+
+[[package]]
+name = "lumen-os-hotkey-capability"
+version = "0.0.7"
+dependencies = [
+ "lumen-capability",
+ "lumen-os-hotkey",
 ]
 
 [[package]]
@@ -3837,8 +3918,18 @@ name = "lumen-os-launcher"
 version = "0.0.7"
 dependencies = [
  "bevy_ecs",
+ "lumen-capability",
  "lumen-core",
+ "lumen-script",
  "opener",
+]
+
+[[package]]
+name = "lumen-os-launcher-capability"
+version = "0.0.7"
+dependencies = [
+ "lumen-capability",
+ "lumen-os-launcher",
 ]
 
 [[package]]
@@ -3847,12 +3938,22 @@ version = "0.0.7"
 dependencies = [
  "bevy_ecs",
  "libc",
+ "lumen-capability",
  "lumen-core",
+ "lumen-script",
  "serde",
  "serde_json",
  "tracing",
  "windows 0.62.2",
  "winreg",
+]
+
+[[package]]
+name = "lumen-os-lifecycle-capability"
+version = "0.0.7"
+dependencies = [
+ "lumen-capability",
+ "lumen-os-lifecycle",
 ]
 
 [[package]]
@@ -3878,10 +3979,20 @@ name = "lumen-os-notify"
 version = "0.0.7"
 dependencies = [
  "bevy_ecs",
+ "lumen-capability",
  "lumen-core",
  "lumen-os-mime",
+ "lumen-script",
  "notify-rust",
  "tracing",
+]
+
+[[package]]
+name = "lumen-os-notify-capability"
+version = "0.0.7"
+dependencies = [
+ "lumen-capability",
+ "lumen-os-notify",
 ]
 
 [[package]]
@@ -3890,10 +4001,20 @@ version = "0.0.7"
 dependencies = [
  "bevy_ecs",
  "core-foundation 0.10.1",
+ "lumen-capability",
  "lumen-core",
+ "lumen-script",
  "tracing",
  "windows 0.62.2",
  "zbus",
+]
+
+[[package]]
+name = "lumen-os-power-capability"
+version = "0.0.7"
+dependencies = [
+ "lumen-capability",
+ "lumen-os-power",
 ]
 
 [[package]]
@@ -3903,10 +4024,20 @@ dependencies = [
  "bevy_ecs",
  "image",
  "ksni",
+ "lumen-capability",
  "lumen-core",
  "lumen-os-mime",
+ "lumen-script",
  "tracing",
  "tray-icon",
+]
+
+[[package]]
+name = "lumen-os-tray-capability"
+version = "0.0.7"
+dependencies = [
+ "lumen-capability",
+ "lumen-os-tray",
 ]
 
 [[package]]
@@ -4047,26 +4178,28 @@ dependencies = [
  "image",
  "lumen-a11y-accesskit",
  "lumen-assets",
- "lumen-async-tokio",
+ "lumen-async-tokio-capability",
+ "lumen-capability",
  "lumen-core",
- "lumen-devtools",
- "lumen-http-ureq",
+ "lumen-devtools-capability",
+ "lumen-http-ureq-capability",
  "lumen-i18n",
  "lumen-input",
  "lumen-ir",
  "lumen-layout-taffy",
- "lumen-mcp",
+ "lumen-mcp-capability",
  "lumen-module-registry",
  "lumen-modules",
  "lumen-os-clipboard",
  "lumen-os-dnd",
- "lumen-os-filedialog",
- "lumen-os-hotkey",
- "lumen-os-launcher",
+ "lumen-os-filedialog-capability",
+ "lumen-os-hotkey-capability",
+ "lumen-os-launcher-capability",
  "lumen-os-lifecycle",
- "lumen-os-notify",
- "lumen-os-power",
- "lumen-os-tray",
+ "lumen-os-lifecycle-capability",
+ "lumen-os-notify-capability",
+ "lumen-os-power-capability",
+ "lumen-os-tray-capability",
  "lumen-plugin",
  "lumen-primitives",
  "lumen-render-wgpu",
