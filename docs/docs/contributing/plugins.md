@@ -445,7 +445,10 @@ other than the constructor: a generic instantiated there and reused by a
 crate compiled later. In an object of its own the constructor is reached by
 its register symbol and by nothing else.
 
-The phase says where in the build it runs: `Platform` after the core stack
+`select` says when a static package carries the capability: `Select::Always`,
+`Select::OnUse(&[...])` for an app whose sources mention one of the listed
+names, or `Select::OnRequest` for a development subsystem an app has to name
+in `[capabilities]`. The phase says where in the build it runs: `Platform` after the core stack
 and before the reactive bindings, `BeforeScripts` ahead of the script hosts
 (for something a host binds to at construction, such as the HTTP client),
 `AfterBuild` once the document is spawned and styled (an overlay). Within a

@@ -8,17 +8,24 @@
 
 use bevy_ecs::message::{MessageReader, Messages};
 use bevy_ecs::prelude::*;
-use lumen_capability::CapabilityEnv;
+use lumen_capability::{CapabilityEnv, Select};
 use lumen_core::app::App;
 use lumen_core::tick::TickStage;
 use lumen_script::{ScriptCommand, ScriptCommandEvent, ScriptSet};
 
 use crate::HotkeyRegistry;
 
+/// The builtin names that mean the app uses this subsystem.
+pub const MARKERS: &[&str] = &["register_hotkey"];
+
+/// What a static package looks for in the app's sources before it
+/// carries this subsystem.
+pub const SELECT: Select = Select::OnUse(MARKERS);
+
 /// Install the subsystem. What the capability crate beside this one
 /// registers.
 pub fn install(app: &mut App, env: &CapabilityEnv) {
-    if !env.sources_mention(&["register_hotkey"]) {
+    if !env.sources_mention(MARKERS) {
         return;
     }
     let Some(registry) = HotkeyRegistry::new() else {

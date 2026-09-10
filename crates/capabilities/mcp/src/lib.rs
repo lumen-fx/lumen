@@ -9,4 +9,9 @@
 
 use lumen_capability::{Phase, lumen_capability};
 
-lumen_capability!("mcp", Phase::Platform, lumen_mcp::capability::install);
+lumen_capability!(
+    "mcp",
+    Phase::Platform,
+    lumen_mcp::capability::install,
+    select = lumen_mcp::capability::SELECT
+);

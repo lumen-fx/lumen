@@ -343,10 +343,12 @@ Command Line Tools on macOS, the Visual Studio Build Tools and Windows SDK on
 Windows - and says which one is missing when the link cannot start. Exits 2
 for a request it cannot answer: an SDK app (those bring their own executable),
 a `--target` other than this machine's platform (the link runs through the
-tools installed here), a non-empty `[capabilities]` (the linked engine is the
-full one, and trimming is what `bundle --static` compiles from source), or a
-`path` or `version` module (only the toolchain's own `bundled` modules are in
-the kit). A module the kit does not carry exits 1 naming what it does carry.
+tools installed here), or a `path` or `version` module (only the toolchain's
+own `bundled` modules are in the kit). A module the kit does not carry exits 1
+naming what it does carry, and so does a `[capabilities]` key the kit does
+not carry. The executable holds the optional subsystems the app's sources
+show it uses plus whatever `[capabilities]` asks for, and none of the rest;
+the summary line names them.
 
 Declared `[dependencies]` stage into a `modules/` subfolder of the package,
 each under the file name the runtime probes for. `path` sources copy the

@@ -420,42 +420,46 @@ pub struct RuntimeCfg {
     pub threads: Option<usize>,
 }
 
-/// `[capabilities]` block: per-app compile-time subsystem trim toggles for
-/// the static `--bundle` build (Part B tree-shaking). Unlike `[runtime]` (which
-/// gates *initialization* in the always-full shared runtime), these select the
-/// cargo feature set lumenc compiles the per-app static seam with, so an unused
-/// subsystem's crate is dropped from the binary entirely.
+/// `[capabilities]` block: which optional subsystems a build of this app
+/// carries, keyed by capability name (`os-tray`, `http-fetch`, `mcp`, ...).
 ///
-/// Every field is `Option<bool>`: `None` lets lumenc infer the capability from a
-/// bounded source scan (err toward on, see [`BundleCapabilities::resolve`]);
-/// `Some(v)` forces it. Ignored by the shared dlopen'd library and the dev
-/// `lumenc run` path, which always ship every subsystem.
+/// Read by the two builds that trim: `lumenc bundle --static`, which compiles
+/// a runtime from source and maps the names it knows to cargo features, and
+/// `lumenc package --static`, which replays a link kit and forces the named
+/// capabilities into the executable. An entry settles its capability outright;
+/// a capability the table leaves out follows its own rule against the app's
+/// sources. The shared runtime and `lumenc run` carry everything and ignore
+/// the table. Script hosts come from the script files' extensions (or
+/// `[script] engine`), not from here.
 ///
 /// ```toml
 /// [capabilities]
 /// http-fetch = false
-/// mcp = false
-/// async = false
+/// os-tray = true
 /// ```
-///
-/// Which script hosts get compiled in follows from the app's script file
-/// extensions (or `[script] engine`), not from this block.
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct CapabilitiesCfg {
-    /// Force the MCP introspection server into/out of the bundle. `None` = OFF
-    /// (MCP is a dev/introspection capability, never inferred into a release
-    /// bundle).
-    pub mcp: Option<bool>,
-    /// Force the async (tokio) bridge into/out of the bundle. `None` = infer
-    /// from the file-dialog builtins, which resolve on that runtime.
-    #[serde(rename = "async")]
-    pub async_rt: Option<bool>,
-    /// Force the HTTP client behind the scripts' `fetch()` / `http()` builtins
-    /// (ureq + rustls + ring) into/out of the bundle. `None` = infer from a
-    /// `fetch(` marker.
-    #[serde(rename = "http-fetch")]
-    pub http_fetch: Option<bool>,
+#[serde(transparent)]
+pub struct CapabilitiesCfg(pub std::collections::BTreeMap<String, bool>);
+
+impl CapabilitiesCfg {
+    /// What the table says about the capability called `name`: `Some(true)`
+    /// to carry it, `Some(false)` to leave it out, `None` to let the build
+    /// decide from the app's sources.
+    pub fn get(&self, name: &str) -> Option<bool> {
+        self.0.get(name).copied()
+    }
+
+    /// Settle the capability called `name`.
+    pub fn set(&mut self, name: &str, on: bool) {
+        self.0.insert(name.to_string(), on);
+    }
+}
+
+/// The app's markup, scripts, styles and config read into one haystack, for
+/// a build that asks whether the app uses a subsystem. Bounded, so a large
+/// asset tree cannot turn the question into a slow directory crawl.
+pub fn app_sources(dir: &Path) -> String {
+    crate::run::subsystems::scan_app_sources(dir)
 }
 
 /// The resolved per-app capability set for a static `--bundle`, produced by
@@ -492,12 +496,12 @@ impl BundleCapabilities {
 
         // MCP: a dev/introspection capability, never inferred ON for a release
         // bundle; only an explicit toggle pulls it in.
-        let mcp = cfg.capabilities.mcp.unwrap_or(false);
+        let mcp = cfg.capabilities.get("mcp").unwrap_or(false);
 
         // Async: an app that opens dialogs must keep the capability, since
         // that is what they resolve on. Same marker scan the runtime startup
         // gate uses.
-        let async_rt = cfg.capabilities.async_rt.unwrap_or_else(|| {
+        let async_rt = cfg.capabilities.get("async").unwrap_or_else(|| {
             lumen_script::FILE_DIALOG_BUILTINS
                 .iter()
                 .any(|marker| hay.contains(marker))
@@ -506,7 +510,7 @@ impl BundleCapabilities {
         // HTTP fetch: explicit, else infer from a `fetch(` builtin marker.
         let http_fetch = cfg
             .capabilities
-            .http_fetch
+            .get("http-fetch")
             .unwrap_or_else(|| hay.contains("fetch("));
 
         // Modules: any declared `[dependencies]` entry keeps the loader in,
@@ -1304,7 +1308,7 @@ mod tests {
 
         // Explicit [capabilities] http-fetch = false overrides the marker.
         let mut cfg2 = LumenToml::default();
-        cfg2.capabilities.http_fetch = Some(false);
+        cfg2.capabilities.set("http-fetch", false);
         assert!(!BundleCapabilities::resolve(&dir, &cfg2).http_fetch);
 
         // A file-dialog builtin keeps the async runtime in the bundle: on
@@ -1316,7 +1320,7 @@ mod tests {
 
         // Explicit [capabilities] async = false still overrides the marker.
         let mut cfg_no_async = LumenToml::default();
-        cfg_no_async.capabilities.async_rt = Some(false);
+        cfg_no_async.capabilities.set("async", false);
         assert!(!BundleCapabilities::resolve(&dir, &cfg_no_async).async_rt);
         std::fs::remove_file(src.join("dialogs.rhai")).unwrap();
 
@@ -1381,9 +1385,9 @@ mod tests {
             async = true
         "#;
         let cfg: LumenToml = toml::from_str(src).unwrap();
-        assert_eq!(cfg.capabilities.http_fetch, Some(true));
-        assert_eq!(cfg.capabilities.mcp, Some(false));
-        assert_eq!(cfg.capabilities.async_rt, Some(true));
+        assert_eq!(cfg.capabilities.get("http-fetch"), Some(true));
+        assert_eq!(cfg.capabilities.get("mcp"), Some(false));
+        assert_eq!(cfg.capabilities.get("async"), Some(true));
     }
 
     #[test]

@@ -12,5 +12,6 @@ use lumen_capability::{Phase, lumen_capability};
 lumen_capability!(
     "async",
     Phase::Platform,
-    lumen_async_tokio::capability::install
+    lumen_async_tokio::capability::install,
+    select = lumen_async_tokio::capability::SELECT
 );

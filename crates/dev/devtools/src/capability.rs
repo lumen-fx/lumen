@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use bevy_ecs::hierarchy::Children;
 use bevy_ecs::prelude::{Entity, World};
-use lumen_capability::CapabilityEnv;
+use lumen_capability::{CapabilityEnv, Select};
 use lumen_core::app::App;
 use lumen_core::components::Color;
 use lumen_ir::css::{MediaContext, Stylesheet, apply_css_with_media};
@@ -21,6 +21,10 @@ use lumen_scene::source_parser::SourceParser;
 use lumen_scene::spawn::{Placeholders, spawn_subtree};
 
 use crate::{DevtoolsPlugin, OVERLAY_CSS, OVERLAY_LMN, OverlayPalette, env_open, mount_marks};
+
+/// Carried by a static package only when the app asks for it by name:
+/// a development subsystem, not one the app's users reach.
+pub const SELECT: Select = Select::OnRequest;
 
 /// Install the subsystem. What the capability crate beside this one
 /// registers.

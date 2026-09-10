@@ -532,6 +532,7 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             target,
             lib_dir.as_deref(),
             &cfg.dependencies,
+            &cfg.capabilities,
         ),
         AppKind::Markup => package(
             &src_path,
@@ -598,19 +599,6 @@ fn static_refusal(kind: AppKind, target: Target, cfg: &crate::LumenToml) -> Opti
             target.name
         ));
     }
-    let capabilities = &cfg.capabilities;
-    if capabilities.mcp.is_some()
-        || capabilities.async_rt.is_some()
-        || capabilities.http_fetch.is_some()
-    {
-        return Some(
-            "this app declares [capabilities], and --static links a prebuilt engine that \
-             carries every subsystem. Choosing which ones a runtime holds is a decision the \
-             engine is compiled with, so it belongs to a build from source - `lumenc bundle \
-             --static` is that build. Drop either the section or --static."
-                .to_string(),
-        );
-    }
     for dep in &cfg.dependencies.0 {
         let source = match &dep.source {
             ModuleSource::Bundled => continue,
@@ -636,6 +624,10 @@ fn static_refusal(kind: AppKind, target: Target, cfg: &crate::LumenToml) -> Opti
 /// folder shape does applies here. The script standard library still does -
 /// the compiler linked into the executable reads it off disk, and linking
 /// changes nothing about that.
+///
+/// The engine inside is the app's own: of the optional subsystems the kit
+/// offers, the executable carries the ones `[capabilities]` names and, for
+/// the rest, the ones the app's sources show it uses.
 fn package_static(
     src: &Path,
     out: &Path,
@@ -643,13 +635,24 @@ fn package_static(
     target: Target,
     lib_dir: Option<&Path>,
     deps: &DependenciesCfg,
+    capabilities: &crate::config::CapabilitiesCfg,
 ) -> Result<String, String> {
     let compiled = crate::compile_app(src).map_err(|e| e.to_string())?;
     let artifact = build_artifact(compiled, src)?;
 
     std::fs::create_dir_all(out).map_err(|e| format!("create {}: {e}", out.display()))?;
     let exe_path = out.join(target.exe_name(app_name));
-    let modules = crate::link_kit::link_app(&exe_path, &artifact, target, lib_dir, deps)?;
+    let sources = crate::config::app_sources(src);
+    let linked = crate::link_kit::link_app(
+        &exe_path,
+        &artifact,
+        target,
+        lib_dir,
+        deps,
+        &capabilities.0,
+        &sources,
+    )?;
+    let modules = linked.modules;
     // `--static` is this machine's own platform, so the installation's own
     // directories are the ones holding the library.
     stage_script_library(&search_dirs(lib_dir, true), out)?;
@@ -658,7 +661,7 @@ fn package_static(
     copy_generated_outputs(src, out)?;
 
     Ok(format!(
-        "linked {} for {} ({} app file{} beside it{})",
+        "linked {} for {} ({} app file{} beside it{}{})",
         exe_path.display(),
         target.name,
         copied,
@@ -669,6 +672,14 @@ fn package_static(
                 ", {n} module{} compiled in: {}",
                 if n == 1 { "" } else { "s" },
                 modules.join(", ")
+            ),
+        },
+        match linked.capabilities.len() {
+            0 => String::new(),
+            n => format!(
+                ", {n} capabilit{} compiled in: {}",
+                if n == 1 { "y" } else { "ies" },
+                linked.capabilities.join(", ")
             ),
         }
     ))

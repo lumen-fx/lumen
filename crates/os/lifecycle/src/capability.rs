@@ -13,7 +13,7 @@ use std::sync::Mutex;
 
 use bevy_ecs::message::{MessageReader, MessageWriter, Messages};
 use bevy_ecs::prelude::*;
-use lumen_capability::{CapabilityEnv, Preflight};
+use lumen_capability::{CapabilityEnv, Preflight, Select};
 use lumen_core::app::App;
 use lumen_core::tick::TickStage;
 use lumen_script::{ScriptCommand, ScriptCommandEvent, ScriptSet};
@@ -51,6 +51,10 @@ pub fn preflight(env: &CapabilityEnv) -> Preflight {
         }
     }
 }
+
+/// What a static package looks for in the app's sources before it
+/// carries this subsystem.
+pub const SELECT: Select = Select::OnUse(&["recent_file", "autostart", "single_instance"]);
 
 /// Install the subsystem. What the capability crate beside this one
 /// registers.

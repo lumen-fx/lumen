@@ -12,5 +12,6 @@ use lumen_capability::{Phase, lumen_capability};
 lumen_capability!(
     "os-notify",
     Phase::Platform,
-    lumen_os_notify::capability::install
+    lumen_os_notify::capability::install,
+    select = lumen_os_notify::capability::SELECT
 );

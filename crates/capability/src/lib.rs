@@ -89,6 +89,25 @@ pub enum Phase {
     AfterBuild,
 }
 
+/// When a link that picks its capabilities carries this one.
+///
+/// A plain build carries every capability in its graph; this is read by a
+/// link that replays a kit for one app (`lumenc package --static`), after
+/// the app's own `[capabilities]` table, which names a capability to keep
+/// or drop outright.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Select {
+    /// Every app.
+    Always,
+    /// An app whose sources mention any of these: a builtin's name, a config
+    /// key. The scan errs toward yes, the same way [`CapabilityEnv::sources_mention`]
+    /// does.
+    OnUse(&'static [&'static str]),
+    /// Only an app that asks for it by name. For a subsystem that exists for
+    /// development rather than for the app's users.
+    OnRequest,
+}
+
 /// What a preflight decides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preflight {
@@ -249,6 +268,12 @@ pub struct Capability {
     pub install: fn(&mut App, &CapabilityEnv),
     /// Run before the app is built, on an interactive launch only.
     pub preflight: Option<fn(&CapabilityEnv) -> Preflight>,
+    /// When a link that picks its capabilities carries this one.
+    pub select: Select,
+    /// The package that registers it, which is the object a link pulls by
+    /// the register symbol. A kit lists a capability only when it carries
+    /// that package.
+    pub crate_name: &'static str,
 }
 
 /// Every capability registered so far.
@@ -322,18 +347,24 @@ mod tests {
             phase: Phase::Platform,
             install: nothing,
             preflight: None,
+            select: Select::Always,
+            crate_name: "registry-test",
         });
         register(Capability {
             name: "order-test-a",
             phase: Phase::AfterBuild,
             install: nothing,
             preflight: None,
+            select: Select::Always,
+            crate_name: "registry-test",
         });
         register(Capability {
             name: "order-test-0",
             phase: Phase::Platform,
             install: nothing,
             preflight: None,
+            select: Select::Always,
+            crate_name: "registry-test",
         });
         let names: Vec<&str> = registered()
             .into_iter()
@@ -350,12 +381,16 @@ mod tests {
             phase: Phase::Platform,
             install: nothing,
             preflight: None,
+            select: Select::Always,
+            crate_name: "registry-test",
         });
         register(Capability {
             name: "registry-test-twice",
             phase: Phase::AfterBuild,
             install: nothing,
             preflight: None,
+            select: Select::Always,
+            crate_name: "registry-test",
         });
         let entries: Vec<Capability> = registered()
             .into_iter()

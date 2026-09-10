@@ -158,21 +158,35 @@ subsystem out of a build, use `[capabilities]`.
 
 ## [capabilities]
 
-Compile-time subsystem selection for `lumenc bundle --static`, which builds a
-runtime carrying only the listed subsystems. The shared runtime and
-`lumenc run` always ship everything, and ignore this section.
-`lumenc package --static` links a prebuilt full engine rather than compiling
-one, so it refuses an app that declares this section instead of ignoring it.
+Which optional subsystems a build of this app carries, one key per
+capability name. Two builds read it: `lumenc package --static`, which links
+the app from a prebuilt kit and takes only the capabilities the app needs,
+and `lumenc bundle --static`, which compiles a runtime from source. The
+shared runtime and `lumenc run` always carry everything, and ignore this
+section.
 
-| Key | Type | Default | Effect |
-|-----|------|---------|--------|
-| `http-fetch` | bool | inferred from a `fetch(` call in the app | Compiles the HTTP client behind the scripts' `fetch()` and `http()` builtins in. Without it both calls report the missing client. |
-| `mcp` | bool | `false` | Compiles the introspection server in. Never inferred. |
-| `async` | bool | inferred from a file-dialog call in the app | Compiles the async bridge in. File dialogs resolve on it, and on macOS they do not open without it. |
+An entry settles its capability outright. A capability the section leaves
+out follows its own rule: most are carried when the app's sources (markup,
+scripts, styles, this file) mention the builtins they answer, and the
+development ones only when asked for here. A key naming a capability the
+kit does not carry stops the package and lists what it does.
 
-Inference is conservative: a capability is left out only on a reliable
-unused signal, and anything ambiguous keeps it in. An explicit value always
-wins.
+| Key | Carried by default when | Effect |
+|-----|-------------------------|--------|
+| `http-fetch` | the app calls `fetch(` or `http(` | The HTTP client behind the scripts' `fetch()` and `http()` builtins. Without it both calls report the missing client. |
+| `async` | the app calls a file-dialog builtin | The async bridge file dialogs resolve on; on macOS they do not open without it. |
+| `os-filedialog` | the app calls a file-dialog builtin | The file dialogs. |
+| `os-hotkey` | the app calls `register_hotkey` | Global hotkeys. |
+| `os-notify` | the app calls `notify` | Notifications. |
+| `os-tray` | the app calls `tray_icon` | The tray icon. |
+| `os-launcher` | the app calls `open_url`, `open_path` or `reveal_path` | The URL and file launcher. |
+| `os-power` | the app calls `keep_awake` | Sleep inhibit. |
+| `os-lifecycle` | the app uses recent files, autostart or `single_instance` | Recent files, autostart, single-instance launch. |
+| `mcp` | never; `mcp = true` asks for it | The introspection server. |
+| `devtools` | never; `devtools = true` asks for it | The in-window devtools overlay. |
+
+`bundle --static` maps the names it knows (`http-fetch`, `async`, `mcp`) to
+the features it compiles with and ignores the rest.
 
 The script host is selected by `[script] engine` or inferred from the app's
 script files, not here.

@@ -12,5 +12,6 @@ use lumen_capability::{Phase, lumen_capability};
 lumen_capability!(
     "os-tray",
     Phase::Platform,
-    lumen_os_tray::capability::install
+    lumen_os_tray::capability::install,
+    select = lumen_os_tray::capability::SELECT
 );
