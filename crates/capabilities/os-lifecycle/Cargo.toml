@@ -1,0 +1,20 @@
+# The link's handle on the `os-lifecycle` capability: nothing but the constructor
+# that registers it, in an object of its own. A link that names the register
+# symbol carries the subsystem; one that leaves it out carries none of it.
+# The subsystem itself is `lumen-os-lifecycle`, which nothing else has to reference.
+[package]
+name = "lumen-os-lifecycle-capability"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Registers the os-lifecycle capability of the Lumen runtime for a link to select."
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[dependencies]
+lumen-capability = { workspace = true }
+lumen-os-lifecycle = { workspace = true }

@@ -37,6 +37,11 @@
 //! Compiled in behind lumenc's `devtools` cargo feature (a lumenc default;
 //! absent from a `--no-default-features` build and from every shipped app).
 
+// The optional-subsystem entry: how the run loop mounts the overlay. The
+// constructor that registers it lives in the `-capability` crate beside
+// this one, in an object of its own.
+pub mod capability;
+
 use std::collections::HashSet;
 
 use bevy_ecs::hierarchy::ChildOf;

@@ -302,10 +302,12 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
                 .before(lumen_core::signals::apply_value_bindings)
                 .before(crate::spawn::reconcile_for_blocks),
         );
-        // The commands that need what a window has: an asset path resolved
-        // against the app dir, a hotkey, a tray icon, a file dialog, the
-        // cascade's color scheme. It writes no signal, so it carries the
-        // producer edges above and none of the dirty-window ones.
+        // The commands whose effect is on the app's own state: an asset
+        // path resolved against the app dir, the cascade's color scheme. It
+        // writes no signal, so it carries the producer edges above and none
+        // of the dirty-window ones. The commands an optional subsystem
+        // answers (a hotkey, a tray icon, a dialog, a notification) are read
+        // by that subsystem's own applier, installed with it.
         app.add_systems(
             TickStage::Systems,
             apply_script_commands
@@ -314,17 +316,6 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
                 .after(ScriptSet::DomInput)
                 .after(ScriptSet::Frame)
                 .after(ScriptSet::Fill),
-        );
-        // Third applier, for the OS-host commands (notifications, clipboard,
-        // launcher, sleep inhibit); its doc has why they are not arms of
-        // `apply_script_commands`.
-        app.add_systems(
-            TickStage::Systems,
-            apply_os_script_commands
-                .after(ScriptSet::Tick)
-                .after(ScriptSet::Dispatch)
-                .after(ScriptSet::DomInput)
-                .after(ScriptSet::Frame),
         );
     }
 }

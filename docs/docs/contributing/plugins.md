@@ -407,6 +407,59 @@ Rust.
   scan is fine only when a false negative is impossible; when in doubt, install
   it and let it idle.
 
+## Optional subsystems
+
+A subsystem the runtime can do without is a capability. Its crate exposes an
+install entry, a crate beside it holding nothing else registers that entry
+with `lumen_capability!`, and the run loop installs whatever capabilities the
+binary carries without naming any of them.
+
+```rust
+// In the subsystem's crate, `pub mod capability`:
+use lumen_capability::CapabilityEnv;
+use lumen_core::app::App;
+
+pub fn install(app: &mut App, env: &CapabilityEnv) {
+    // Skip the manager for an app that provably never asks for one. The
+    // query answers yes whenever the sources cannot be read in full.
+    if !env.sources_mention(&["register_hotkey"]) {
+        return;
+    }
+    app.world.insert_non_send(HotkeyManager::new());
+    app.add_systems(TickStage::Systems, poll_hotkeys);
+}
+
+// The whole of the `lumen-os-hotkey-capability` crate:
+use lumen_capability::{Phase, lumen_capability};
+
+lumen_capability!("os-hotkey", Phase::Platform, lumen_os_hotkey::capability::install);
+```
+
+The registration is a crate of its own because a crate is one object to the
+linker. The constructor the macro emits is a root nothing can strip once its
+object is linked, and the subsystem's own object gets linked for reasons
+other than the constructor: a generic instantiated there and reused by a
+crate compiled later. In an object of its own the constructor is reached by
+its register symbol and by nothing else.
+
+The phase says where in the build it runs: `Platform` after the core stack
+and before the reactive bindings, `BeforeScripts` ahead of the script hosts
+(for something a host binds to at construction, such as the HTTP client),
+`AfterBuild` once the document is spawned and styled (an overlay). Within a
+phase, capabilities install in name order. The environment carries the app
+directory and id, the run mode, the whole `lumen.toml` for the capability to
+read its own section from with `section`, and a bounded view of the sources
+for `sources_mention`. A capability that has to act before the app is built
+adds `preflight = <fn>`; a single-instance app's second launch exits from
+there.
+
+A capability answers its own script commands: it reads the command stream
+through a cursor of its own and applies the variants it owns, so nothing in
+the runtime has to know it exists. The register symbol the macro exports is
+what a link selects the capability by; a plain `cargo build` links every
+capability in the graph, and the same mechanism the runtime modules use lets
+a replayed link leave one out.
+
 ## Custom tags
 
 A plugin that adds a markup tag registers it with the widget registry, which

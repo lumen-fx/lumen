@@ -1,0 +1,23 @@
+# Where an optional runtime subsystem announces itself, and the only thing
+# the run loop and the subsystems it may or may not carry share. It names no
+# subsystem: every entry arrives from the subsystem's own constructor at
+# startup, and the run loop installs whatever the list holds.
+[package]
+name = "lumen-capability"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The registry an optional Lumen runtime subsystem registers itself into before main, and the environment it is installed with."
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[dependencies]
+lumen-core = { workspace = true }
+lumen-capability-macros = { workspace = true }
+serde.workspace = true
+toml.workspace = true
+tracing.workspace = true

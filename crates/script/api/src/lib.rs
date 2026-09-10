@@ -748,6 +748,11 @@ impl ScriptCommand {
     }
 }
 
+/// The builtins that open a file dialog, as the prefixes a source scan looks
+/// for: `pick_file` also covers `pick_files` and `pick_file_filtered`. What
+/// installs a dialog executor, and what compiles one in, both key off these.
+pub const FILE_DIALOG_BUILTINS: &[&str] = &["pick_file", "save_file", "pick_folder"];
+
 /// File dialog flavour for [`ScriptCommand::OpenFileDialog`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FileDialogKind {

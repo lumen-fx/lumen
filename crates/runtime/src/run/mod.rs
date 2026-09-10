@@ -19,25 +19,12 @@ use bevy_ecs::component::Mutable;
 use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
 use lumen_assets::AssetsPlugin;
-use lumen_core::input::FilePicked;
+use lumen_capability::Preflight;
 use lumen_core::prelude::*;
 use lumen_core::window::{DEFAULT_CLEAR, WindowOptions};
 use lumen_input::InputPlugin;
 use lumen_layout_taffy::TaffyLayoutPlugin;
-#[cfg(feature = "mcp")]
-use lumen_mcp::LumenMcpPlugin;
 use lumen_os_clipboard::ClipboardHost;
-use lumen_os_filedialog::{
-    FileDialogKind, FileDialogRequest, FileDialogResultCommand, FileDialogService,
-};
-use lumen_os_hotkey::HotkeyRegistry as OsHotkeyRegistry;
-use lumen_os_launcher::Launcher;
-use lumen_os_lifecycle::{AutostartService, RecentFilesService};
-use lumen_os_notify::NotificationService;
-use lumen_os_power::InhibitHolder;
-use lumen_os_tray::{
-    TrayConfig as OsTrayConfig, TrayMenu as OsTrayMenu, TrayService as OsTrayService,
-};
 use lumen_primitives::{
     CheckboxPlugin, ControlsPlugin, DragPlugin, HoverTintPlugin, PressPlugin, ProgressPlugin,
     RadioPlugin, ScrollPlugin, TabsPlugin, TooltipPlugin, TransitionPlugin, ValidationPlugin,
@@ -471,58 +458,19 @@ pub enum RunError {
     NoScriptHostAvailable,
 }
 
-/// `[app] single_instance = true` gate: bind the single-instance lock
-/// before `build_app` does any other work, so a secondary launch forwards
-/// its argv and returns without parsing markup, spawning a hot-reload
-/// watcher, or building the plugin stack.
-///
-/// Returns `true` when this launch was the secondary (the caller should
-/// stop, having done nothing else). On the primary path, or when the flag
-/// is off, returns `false` and - for the primary path only - pushes an
-/// `app_hooks` closure onto `opts` that hands the bound `LifecycleService`
-/// (the one whose listener thread is already running) to the `App` being
-/// built, so [`subsystems::register_os_lifecycle`]'s per-tick poll drains
-/// the SAME inbox the listener feeds instead of a second, never-bound one.
-///
-/// Reads `lumen.toml` on its own rather than waiting for `build_app`'s
-/// load: a secondary launch must exit before paying for any of that. A
-/// config read failure here is not reported - `build_app` reads the same
-/// file moments later (on the primary path) or not at all (a secondary
-/// already returned), and surfaces the same [`RunError::Config`] either way.
-///
-/// Windowed runs only; `run_app_headless` never calls this, so CI and the
-/// Rust SDK's non-interactive embedding never contend over one socket.
-fn apply_single_instance_gate(dir: &Path, opts: &mut RunOptions) -> bool {
-    let cfg = crate::config::LumenToml::load_or_default(dir).unwrap_or_default();
-    if !cfg.app.single_instance {
-        return false;
-    }
-    let app_id = cfg
-        .app
-        .id
-        .clone()
-        .unwrap_or_else(|| app_build::derive_app_id(dir));
-    let lifecycle = lumen_os_lifecycle::LifecycleService::new();
-    let id = lumen_os_lifecycle::AppId::from(app_id);
-    let argv: Vec<String> = std::env::args().skip(1).collect();
-    match lifecycle.ensure_single_instance(&id, &argv) {
-        lumen_os_lifecycle::SingleInstance::Secondary { .. } => true,
-        lumen_os_lifecycle::SingleInstance::Primary => {
-            opts.app_hooks.push(Box::new(move |app: &mut App| {
-                app.world.insert_resource(lifecycle);
-            }));
-            false
-        }
-    }
-}
-
 /// Read `<dir>/src/main.lmn` + optional `<dir>/src/main.css`, build a default
 /// `App`, spawn the parsed tree, and enter winit's event loop.
-pub fn run_app(mut opts: RunOptions) -> Result<(), RunError> {
+pub fn run_app(opts: RunOptions) -> Result<(), RunError> {
     let (dir, assets) = (opts.dir.clone(), opts.assets.clone());
-    if apply_single_instance_gate(&dir, &mut opts) {
-        // A secondary launch forwarded its argv to the already-running
-        // primary; there is nothing left for this process to do.
+    // An interactive launch runs the capabilities' preflights before any
+    // other work: a second instance of a single-instance app forwards its
+    // argv to the first from there and has nothing left to do. Headless runs
+    // and embeddings never come this way, so they never contend over what a
+    // preflight binds. A config that fails to read is reported by
+    // `build_app` moments later, on the same path.
+    let cfg = crate::config::LumenToml::load_or_default(&dir).unwrap_or_default();
+    let env = capability_env(&opts, &dir, &cfg);
+    if lumen_capability::preflight(&env) == Preflight::Exit {
         return Ok(());
     }
     let (mut app, window) = build_app(opts)?;
@@ -612,41 +560,44 @@ mod tests {
         dir
     }
 
+    /// The preflight `run_app` runs, as it runs it: the config read the same
+    /// tolerant way, the environment built from it.
+    fn preflight_for(dir: &Path) -> Preflight {
+        let opts = RunOptions::new(dir);
+        let cfg = crate::config::LumenToml::load_or_default(dir).unwrap_or_default();
+        lumen_capability::preflight(&capability_env(&opts, dir, &cfg))
+    }
+
     #[test]
-    fn the_gate_does_nothing_when_single_instance_is_off() {
+    fn the_preflight_continues_when_single_instance_is_off() {
         let dir = app_dir("off", "[app]\n");
-        let mut opts = RunOptions::new(&dir);
-        let secondary = apply_single_instance_gate(&dir, &mut opts);
-        assert!(!secondary, "no flag means the launch always continues");
-        assert!(
-            opts.app_hooks.is_empty(),
-            "nothing to hand a bound LifecycleService to when the lock was never taken"
+        assert_eq!(
+            preflight_for(&dir),
+            Preflight::Continue,
+            "no flag means the launch always continues"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_bad_config_reads_as_off_rather_than_panicking() {
-        // `apply_single_instance_gate` reads its own copy of `lumen.toml`
-        // ahead of `build_app`'s load, on purpose (a secondary must exit
-        // before paying for anything else); a parse failure here must not
-        // be where that shows up first - `build_app` surfaces the real
-        // `RunError::Config` moments later on the primary path.
+        // `run_app` reads its own copy of `lumen.toml` ahead of `build_app`'s
+        // load, on purpose (a secondary must exit before paying for anything
+        // else); a parse failure here must not be where that shows up first.
+        // `build_app` surfaces the real `RunError::Config` moments later on
+        // the primary path.
         let dir = app_dir("bad-config", "not valid toml at all {{{");
-        let mut opts = RunOptions::new(&dir);
-        let secondary = apply_single_instance_gate(&dir, &mut opts);
-        assert!(!secondary);
-        assert!(opts.app_hooks.is_empty());
+        assert_eq!(preflight_for(&dir), Preflight::Continue);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The config-driven half of single-instance: a first launch becomes
-    /// primary and hands its bound `LifecycleService` off through an
-    /// `app_hooks` closure, and a second launch for the SAME `[app] id` is
+    /// primary and continues, and a second launch for the SAME `[app] id` is
     /// told to stop. The OS-level socket mechanics this rides on
     /// (permissions, the platform directory, the primary/secondary bind
     /// dance itself) are `lumen-os-lifecycle`'s own tests; this is only
-    /// about the gate wiring `[app] single_instance` to that crate.
+    /// about `[app] single_instance` reaching that crate's preflight through
+    /// the capability list the runtime links.
     #[cfg(unix)]
     #[test]
     fn a_second_launch_for_the_same_app_is_told_to_stop() {
@@ -656,24 +607,17 @@ mod tests {
             &format!("[app]\nid = \"{id}\"\nsingle_instance = true\n"),
         );
 
-        let mut primary_opts = RunOptions::new(&dir);
-        let primary_is_secondary = apply_single_instance_gate(&dir, &mut primary_opts);
-        assert!(!primary_is_secondary, "the first launch is the primary");
         assert_eq!(
-            primary_opts.app_hooks.len(),
-            1,
-            "the primary hands its bound LifecycleService to build_app through a hook"
+            preflight_for(&dir),
+            Preflight::Continue,
+            "the first launch is the primary"
         );
-
-        let mut second_opts = RunOptions::new(&dir);
-        let second_is_secondary = apply_single_instance_gate(&dir, &mut second_opts);
-        if !second_is_secondary {
-            // `apply_single_instance_gate` always reports "primary" for the
-            // fail-closed path too (see its own doc comment), so this
-            // environment resolved no private per-user directory to lock
-            // under - `lumen-os-lifecycle`'s own tests cover that branch
-            // directly. Print and stop rather than fail: this is the same
-            // house pattern used for a display / GPU a sandbox lacks.
+        if preflight_for(&dir) == Preflight::Continue {
+            // The lifecycle preflight reports "primary" for the fail-closed
+            // path too, so this environment resolved no private per-user
+            // directory to lock under; `lumen-os-lifecycle`'s own tests
+            // cover that branch directly. Print and stop rather than fail:
+            // the same house pattern as a display a sandbox lacks.
             eprintln!(
                 "skip: this environment offered no private per-user directory to bind the \
                  single-instance socket under; nothing to assert about a second launch"
@@ -681,10 +625,6 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
             return;
         }
-        assert!(
-            second_opts.app_hooks.is_empty(),
-            "a secondary never bound anything to hand off"
-        );
 
         // Best-effort cleanup of the socket the primary bound - matches
         // `lumen-os-lifecycle`'s own tests, which face the same platform-

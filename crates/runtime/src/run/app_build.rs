@@ -3,6 +3,7 @@ use crate::app_layout::AppLayout;
 use lumen_core::window::{Menu, MenuEntry, MenuModel, WindowGeometry};
 use lumen_ir::layout_ir::MenuEntrySpec;
 
+use lumen_capability::Phase;
 use lumen_script::ScriptFnAppExt;
 
 /// Construct the fully-configured [`App`] and the [`WindowSetup`] the
@@ -33,7 +34,11 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // Where this app lives and what it is called, published before anything
     // that resolves a path runs: every path a script names is resolved
     // against these, and a script's `on_start` fires on the first tick.
-    let app_id = cfg.app.id.clone().unwrap_or_else(|| derive_app_id(&dir));
+    let app_id = cfg
+        .app
+        .id
+        .clone()
+        .unwrap_or_else(|| lumen_capability::derive_app_id(&dir));
     lumen_core::app_paths::set_app(dir.clone(), app_id.clone());
     // Where this app's code is. In-memory markup has no source tree to check,
     // so it takes the paths without one.
@@ -66,15 +71,18 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         .take()
         .unwrap_or_else(|| std::sync::Arc::new(crate::compiler_plugins::NoCompilerPlugins));
 
-    // Subsystem gating (measured startup quick-wins): resolve, from one bounded
-    // source scan + run-mode flags, which optional subsystems
-    // this app actually uses so `build_app` can skip initialising the ones it
-    // does not (the X11 global-hotkey manager; the dialog tokio bridge).
-    // See [`SubsystemUsage`] for the conservative, err-toward-ON contract. The
-    // image / SVG decode worker pool needs no gate - `lumen-assets` spawns it
-    // lazily on the first decode - and the HTTP surface likewise starts a
-    // thread only per outbound request, so neither costs an idle app.
-    let usage = SubsystemUsage::detect(&opts, &dir, !app_hooks.is_empty());
+    // What the optional subsystems are installed with: the app's location,
+    // identity and config, the run mode, and a bounded view of its sources
+    // for the ones that gate on use (see `capability_env`). The embedder's
+    // hooks are Rust the scan cannot read, so with any present every
+    // use query answers yes.
+    let mut env = capability_env(&opts, &dir, &cfg);
+    if !app_hooks.is_empty() {
+        env = env.opaque();
+    }
+    if let Some(parser) = parser.clone() {
+        env.provide(parser);
+    }
 
     let mut app = App::new();
     // `[runtime] threads` overrides the `min(cores, 4)` default budget
@@ -82,31 +90,16 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     if let Some(n) = cfg.runtime.threads.filter(|n| *n > 0) {
         app.desired_threads = n;
     }
-    // -- Subsystem register units (see `run/subsystems.rs`) -----------------
-    // `build_app` installs the default stack as a sequence of per-subsystem
-    // `register_*` calls. The core visual stack is unconditional; the gated
-    // units (hotkey / MCP) are skipped when `usage` / run-mode proves
-    // them unused. The OS host-resource units (filedialog / notify / tray /
-    // clipboard / launcher / power) are cheap constructors left default-on
-    // (see their `TODO(tree-shake)` notes).
+    // The core stack (see `run/subsystems.rs`), then the optional
+    // subsystems this binary carries, at the phase each asked for. The core
+    // is unconditional; an optional subsystem decides for itself whether an
+    // app uses it. `build_app` names none of them.
     // Text shaping first: the layout engine measures through the shaper
     // installed here, and the renderer gets the sibling returned here.
     let render_shaper = register_text(&mut app);
     register_core(&mut app);
-    // Global hotkeys - GATED on `usage.hotkey` (the `register_hotkey` marker);
-    // skipping it avoids opening the X11 hotkey manager for a hotkey-free app.
-    if usage.hotkey {
-        register_os_hotkey(&mut app);
-    }
-    // File dialogs - the service is default-on, its tokio runtime GATED on
-    // `usage.file_dialog`.
-    register_os_filedialog(&mut app, usage.file_dialog);
-    register_os_notify(&mut app, &cfg);
-    register_os_tray(&mut app);
-    register_os_misc(&mut app, &cfg);
-    register_os_lifecycle(&mut app);
-    // MCP introspection server - GATED on run-mode + `[mcp]` config.
-    register_mcp(&mut app, opts.bounded, &cfg);
+    // Host services: OS integration, the introspection server.
+    lumen_capability::install_phase(&mut app, &env, Phase::Platform);
     // Reactive bindings, reconcilers, dialog lifecycle, error overlay - the
     // always-on reactive core.
     register_reactive(&mut app);
@@ -118,12 +111,13 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // Command-bus drain, the FFI typed-read mirror, and the
     // `set_color_scheme` `Command::Typed` handler. Always-on reactive plumbing.
     register_commands(&mut app);
-    // The HTTP client for `fetch()` / `http()`. Must precede the host plugins:
-    // the first one to build installs a `FetchRegistry` if none exists yet.
-    // Ahead of the module phase, which is where it has always been: a module
-    // that installs a client of its own replaces this one, and moving the
-    // modules would have silently reversed that.
-    register_http_client(&mut app);
+    // What a script host binds to at construction, the HTTP client behind
+    // `fetch()` for one: the first host to build installs a `FetchRegistry`
+    // if none exists yet, so a client has to be in place before it. Ahead of
+    // the module phase, which is where it has always been: a module that
+    // installs a client of its own replaces this one, and moving the modules
+    // would have silently reversed that.
+    lumen_capability::install_phase(&mut app, &env, Phase::BeforeScripts);
     // The registration order is the shadowing order: a plugin's functions
     // first, then the embedder's. Every host drains this one registry as it
     // loads and seals it afterwards, so a registration that arrives too late
@@ -152,7 +146,7 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
                 .app
                 .id
                 .clone()
-                .unwrap_or_else(|| derive_app_id(&opts.dir)),
+                .unwrap_or_else(|| lumen_capability::derive_app_id(&opts.dir)),
             // `bounded` is the run-mode bit that says "no interactive
             // window session", which is what a plugin needs to know.
             headless: opts.bounded,
@@ -546,14 +540,9 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         },
         text_shaper: Some(render_shaper),
     };
-    // Dev-only in-window devtools overlay (F12). Gated behind the off-by-
-    // default `devtools` feature; absent from release / bundle builds. The
-    // overlay markup is parsed through the injected front-end, so it mounts
-    // only when a parser was supplied (every dev / from-source run).
-    #[cfg(feature = "devtools")]
-    if let Some(parser) = parser.as_deref() {
-        crate::devtools_mount::install(&mut app, parser);
-    }
+    // What mounts into the built document: the devtools overlay, when the
+    // binary carries it and the run has a front end to parse it with.
+    lumen_capability::install_phase(&mut app, &env, Phase::AfterBuild);
 
     // Embedder hooks run last so they can order their systems against
     // everything the default stack registered above (script dispatch,
@@ -612,25 +601,4 @@ pub(crate) fn remap_trimmed_hosts(grouped: GroupedScripts) -> Result<GroupedScri
         }
     }
     Ok(kept)
-}
-
-/// Lowercase + dash-only fallback `app-id` when `lumen.toml [app] id`
-/// is unset. Mirrors the convention used by other crates that need
-/// per-app state dirs.
-pub(crate) fn derive_app_id(dir: &std::path::Path) -> String {
-    dir.file_name()
-        .and_then(|n| n.to_str())
-        .map(|s| {
-            s.chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() {
-                        c.to_ascii_lowercase()
-                    } else {
-                        '-'
-                    }
-                })
-                .collect::<String>()
-        })
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "lumen-app".to_string())
 }

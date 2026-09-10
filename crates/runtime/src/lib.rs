@@ -28,13 +28,33 @@ pub use lumen_modules as modules;
 pub mod app_layout;
 /// Per-app `lumen.toml` configuration model.
 pub mod config;
-#[cfg(feature = "devtools")]
-pub mod devtools_mount;
 /// The app's compiled fragments and what an instance of one carries.
 pub use lumen_scene::fragments;
 /// `[[hooks]]` runner - executes an app's declared `prebuild` / `prerun`
 /// build/setup commands. See [`config::HookCfg`] for the schema.
 pub mod hooks;
+
+// The optional subsystems this composition ships, each through the crate
+// that registers it before `main`; the run loop installs whatever that list
+// holds. Naming a crate here is what puts it on the link line, and nothing
+// else in the runtime refers to any of them, so a link that does not ask for
+// one (`lumenc package --static` replaying a link kit, one day the shared
+// engine too) carries none of it.
+#[cfg(feature = "async")]
+use lumen_async_tokio_capability as _;
+#[cfg(feature = "devtools")]
+use lumen_devtools_capability as _;
+#[cfg(feature = "http-fetch")]
+use lumen_http_ureq_capability as _;
+#[cfg(feature = "mcp")]
+use lumen_mcp_capability as _;
+use lumen_os_filedialog_capability as _;
+use lumen_os_hotkey_capability as _;
+use lumen_os_launcher_capability as _;
+use lumen_os_lifecycle_capability as _;
+use lumen_os_notify_capability as _;
+use lumen_os_power_capability as _;
+use lumen_os_tray_capability as _;
 /// File-based pages - multi-`.lmn` discovery, `<if>`-reconciler page mount,
 /// and the navigation resolver reachable from every embedding surface.
 pub mod pages;
