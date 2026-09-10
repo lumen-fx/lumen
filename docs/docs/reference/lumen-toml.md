@@ -34,6 +34,7 @@ engine = "candela"
 | `id` | string | the app directory name | Stable identifier for per-app state directories, including the one a script's `files::data_dir()` writes to, and the app id notifications are attributed to. |
 | `kind` | `"markup"`, `"rust"`, `"cpp"`, `"python"` | auto-detected | Pins the build and run route instead of letting the directory contents decide. |
 | `locale` | BCP-47 tag | the OS locale, else `en-US` | The locale the app starts in. Selects which `locale/<tag>.ftl` catalogue `translatable` markup and the scripts' `t()` builtin resolve against; every catalogue in the directory is loaded regardless. It also picks the number, date, and currency formatter behind the `format` attribute and the scripts' `format_*` builtins. A tag that is not valid BCP-47 is a parse error. |
+| `fallback_locale` | BCP-47 tag | `en-US` | The language the app's source strings are written in. A key missing from the active locale's catalogue is looked up here before the element falls back to its own authored text. Set it to the active locale to leave nothing to fall through to. It is also the catalogue `lumenc i18n extract` writes by default. A tag that is not valid BCP-47 is a parse error. |
 | `single_instance` | bool | `false` | A second launch forwards its command-line arguments to the already-running window (`on_second_instance(args)`) and exits instead of opening a second one. Windowed runs only; a `--headless` run never locks. See [OS integration](../guides/os-integration.md#single-instance-launches). |
 
 Auto-detection for `kind` looks for a `Cargo.toml` depending on `lumen`
@@ -195,7 +196,7 @@ with the toolchain, so there is nothing per-app to compile or trim.
 | `og_image` | string | none | Image for social previews, relative to the site root or absolute. |
 | `canonical` | string | `url` | Absolute URL the pages declare as canonical, for a site published at more than one address. |
 | `locales` | array of BCP-47 tags | the app's locale | Emit the site in each locale. `render = "static"` and `render = "csr"` write one document tree per locale; `render = "ssr"` writes none and a render answers in the locale the request asks for. |
-| `default_locale` | BCP-47 tag | `[app] locale`, else `en-US` | The locale served from the site root; the others sit under `/<tag>/`. |
+| `default_locale` | BCP-47 tag | `[app] locale`, else `en-US` | Which of the emitted locales is served from the site root; the others sit under `/<tag>/`. This picks a tree, not a fallback: what a missing key resolves to is [`[app] fallback_locale`](#app). |
 | `skin` | string | `[skin] name`, else `default` | Skin the site is styled with. `auto` is not read here: it means the machine's own OS, and a site is served to every OS. |
 | `css` | `"sheet"`, `"computed"` | `sheet` | `sheet` emits the stylesheet the app was written with. `computed` writes the values Lumen's cascade resolved onto each element instead, which answers what Lumen resolved but loses states, media queries and anything created later. |
 | `widgets` | `"semantic"`, `"verbatim"` | `semantic` | Which shape a widget the parser built out of smaller elements is emitted as. Today both emit the parts. |

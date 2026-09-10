@@ -1,0 +1,10 @@
+# Proof fixture for an app whose source strings are German and which runs in
+# French. A key its French catalogue lacks reads in German, and the en-US
+# catalogue sitting beside it is never consulted.
+[app]
+locale = "fr-FR"
+fallback_locale = "de-DE"
+
+# No introspection server, so a headless CI run binds no port.
+[mcp]
+port = 0

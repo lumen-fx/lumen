@@ -8,7 +8,8 @@
 //!   [`FluentArgs`]. A key of the form `message.attribute` resolves that
 //!   Fluent attribute rather than the message value, which is how one
 //!   markup key reaches an element's placeholder and its alternative
-//!   text. Falls through `fallback_chain` in order on a miss.
+//!   text. Falls through `fallback_chain` in order on a miss, which
+//!   ends with the locale the app's source strings are written in.
 //! - **Formatting** (W5.8) - [`LocaleFormatter`] wraps ICU4X's decimal,
 //!   date-time, currency and relative-time formatters for the active
 //!   locale. `format_number`, `format_date`, `format_time`,
@@ -123,7 +124,8 @@ pub struct I18n {
     /// Active locale used by [`I18n::t`].
     pub current: LanguageIdentifier,
     /// Fallback search order applied when `current` does not resolve a key.
-    /// Walked after `current`; usually ends with the source locale (e.g. `en-US`).
+    /// Walked after `current`; ends with the locale the app was authored in,
+    /// which an app names with `[app] fallback_locale` in `lumen.toml`.
     pub fallback_chain: Vec<LanguageIdentifier>,
 }
 
@@ -342,7 +344,8 @@ pub fn is_rtl(lang: &LanguageIdentifier) -> bool {
 /// ECS plugin. Seeds `I18n` + [`LocaleFormatter`] from the system
 /// locale (via [`sys_locale::get_locale`]) and pushes them as
 /// resources. `fallback_chain` is consulted when the current locale
-/// lacks a key.
+/// lacks a key, and drops any entry equal to the resolved active locale
+/// so a miss never probes one bundle twice.
 ///
 /// This crate does not depend on `lumen-core`'s `App` / `Plugin`
 /// trait, to avoid pulling the whole render/runtime stack into
@@ -351,8 +354,9 @@ pub fn is_rtl(lang: &LanguageIdentifier) -> bool {
 /// is what the runner does.
 pub struct I18nPlugin {
     /// Locales to walk through (in order) when the active locale
-    /// lacks a key. Usually ends with the locale the app was authored
-    /// in (`en-US`).
+    /// lacks a key. Ends with the locale the app was authored in, which
+    /// defaults to `en-US` and which an app renames with
+    /// `[app] fallback_locale` in `lumen.toml`.
     pub fallback_chain: Vec<LanguageIdentifier>,
     /// Active locale. `None` detects it from the OS via `sys-locale`,
     /// falling back to `en-US`.
@@ -377,6 +381,17 @@ impl I18nPlugin {
         self
     }
 
+    /// Builder: name the locale a key missing from the active catalogue
+    /// falls through to. An app declaring `[app] fallback_locale` in
+    /// `lumen.toml` takes this path.
+    ///
+    /// This replaces the chain rather than extending it, so the value the
+    /// config can express is the value the plugin holds.
+    pub fn with_fallback_locale(mut self, locale: LanguageIdentifier) -> Self {
+        self.fallback_chain = vec![locale];
+        self
+    }
+
     /// Install [`SharedI18n`] + [`lumen_core::i18n::AppI18n`] onto
     /// `world` for the resolved locale ([`Self::locale`], else the OS
     /// locale, else `en-US`). Returns that locale so callers can log it
@@ -386,11 +401,15 @@ impl I18nPlugin {
     /// and behind the opaque handle the spawner reads. The formatters go
     /// in once, behind the other handle, since a locale switch builds a
     /// new [`LocaleFormatter`] rather than editing one in place.
-    pub fn install(self, world: &mut bevy_ecs::world::World) -> LanguageIdentifier {
+    pub fn install(mut self, world: &mut bevy_ecs::world::World) -> LanguageIdentifier {
         let current = self
             .locale
             .or_else(detect_system_locale)
             .unwrap_or_else(|| "en-US".parse().expect("en-US is valid"));
+        // An app running in the locale it was authored in has the same
+        // bundle at both ends of the chain, so a miss would probe it twice
+        // for the answer it already gave.
+        self.fallback_chain.retain(|lang| *lang != current);
         let shared = SharedI18n::new(I18n::new(current.clone(), self.fallback_chain));
         let fmt = Arc::new(LocaleFormatter::new(current.clone()));
         let catalogue = shared.clone();
@@ -619,6 +638,28 @@ mod tests {
             app.format("number", "1234.5").as_deref(),
             Some("1\u{202f}234,5")
         );
+    }
+
+    #[test]
+    fn plugin_installs_the_fallback_locale_the_app_named() {
+        let mut world = bevy_ecs::world::World::new();
+        I18nPlugin::default()
+            .with_locale(lang("fr-FR"))
+            .with_fallback_locale(lang("de-DE"))
+            .install(&mut world);
+        let shared = world.resource::<SharedI18n>().clone();
+        assert_eq!(shared.read().fallback_chain, vec![lang("de-DE")]);
+    }
+
+    #[test]
+    fn a_fallback_equal_to_the_active_locale_leaves_no_chain() {
+        let mut world = bevy_ecs::world::World::new();
+        I18nPlugin::default()
+            .with_locale(lang("de-DE"))
+            .with_fallback_locale(lang("de-DE"))
+            .install(&mut world);
+        let shared = world.resource::<SharedI18n>().clone();
+        assert!(shared.read().fallback_chain.is_empty());
     }
 
     #[test]

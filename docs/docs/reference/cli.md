@@ -467,7 +467,8 @@ lumenc i18n extract <app_dir> [--lang <tag>]
 
 Scans `.lmn`, `.rhai`, `.lua`, and `.cdl` files under `<app_dir>` for
 translation keys and writes `<app_dir>/locale/<tag>.ftl`. `--lang` defaults to
-`en-US` and also accepts `--lang=<tag>`.
+the app's `[app] fallback_locale`, else `en-US`, and also accepts
+`--lang=<tag>`.
 
 Recognised call shapes: `t("key")` and `tr("key")` (including candela's
 `lumen::t("key")`), `t!(i18n, "key", ...)` and `tr!(i18n, "key", ...)`, and
