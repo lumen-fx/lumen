@@ -12,5 +12,6 @@ use lumen_capability::{Phase, lumen_capability};
 lumen_capability!(
     "http-fetch",
     Phase::BeforeScripts,
-    lumen_http_ureq::capability::install
+    lumen_http_ureq::capability::install,
+    select = lumen_http_ureq::capability::SELECT
 );

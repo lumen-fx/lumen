@@ -12,5 +12,6 @@ use lumen_capability::{Phase, lumen_capability};
 lumen_capability!(
     "os-power",
     Phase::Platform,
-    lumen_os_power::capability::install
+    lumen_os_power::capability::install,
+    select = lumen_os_power::capability::SELECT
 );

@@ -12,5 +12,6 @@ use lumen_capability::{Phase, lumen_capability};
 lumen_capability!(
     "os-hotkey",
     Phase::Platform,
-    lumen_os_hotkey::capability::install
+    lumen_os_hotkey::capability::install,
+    select = lumen_os_hotkey::capability::SELECT
 );

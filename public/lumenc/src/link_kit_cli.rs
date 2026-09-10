@@ -34,8 +34,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use lumen_modules::link_kit::{
-    Artifact, ArtifactKind, Driver, DriverKind, KitModule, LinkArg, Manifest, Record,
-    SCHEMA_VERSION,
+    Artifact, ArtifactKind, Driver, DriverKind, KitCapability, KitModule, LinkArg, Manifest,
+    Record, SCHEMA_VERSION,
 };
 
 use crate::package_cli::Target;
@@ -252,6 +252,9 @@ struct Kit {
     /// Search directories copied into the kit, kit-relative path -> source.
     libdirs: BTreeMap<String, PathBuf>,
     modules: Vec<KitModule>,
+    /// The optional subsystems the staged files carry, with the rule a
+    /// static package selects each by.
+    capabilities: Vec<KitCapability>,
 }
 
 /// Turn the recorded arguments into manifest entries.
@@ -279,6 +282,7 @@ fn classify(record: &Record, options: &Options) -> Result<Kit, String> {
             .map(String::as_str)
             .map(KitModule::new)
             .collect(),
+        capabilities: Vec::new(),
     };
 
     let mut i = 0;
@@ -428,6 +432,7 @@ fn classify(record: &Record, options: &Options) -> Result<Kit, String> {
         ));
     }
 
+    kit.capabilities = carried_capabilities(&kit.staged)?;
     Ok(kit)
 }
 
@@ -506,15 +511,74 @@ const LLD_NAMES: [&str; 3] = ["ld.lld", "ld64.lld", "ld.lld.exe"];
 /// two builds of it could meet on one line - which a module crate, built once
 /// per target, does not get. Both spellings are the same library.
 fn owning_module(staged: &str, modules: &BTreeMap<String, String>) -> Option<String> {
-    let stem = staged
+    let stem = rlib_stem(staged)?;
+    modules
+        .iter()
+        .find(|(_, lib)| is_library(stem, lib))
+        .map(|(name, _)| name.clone())
+}
+
+/// The library name inside a staged rlib's file name, without the staging
+/// prefix, the `lib`, and the extension; `None` for anything but an rlib.
+fn rlib_stem(staged: &str) -> Option<&str> {
+    staged
         .split_once('-')
         .map(|(_, rest)| rest)?
         .strip_prefix("lib")?
-        .strip_suffix(".rlib")?;
-    modules
+        .strip_suffix(".rlib")
+}
+
+/// Whether an rlib stem is the library `lib`, with or without rustc's
+/// metadata hash appended.
+fn is_library(stem: &str, lib: &str) -> bool {
+    stem == lib || stem.starts_with(&format!("{lib}-"))
+}
+
+/// The capabilities the staged files carry, each with the rule a static
+/// package selects it by.
+///
+/// The list comes from the registry this `lumenc` links, since the
+/// capabilities announce themselves before `main` and nothing else spells
+/// their rules; the staged files say which of them the kit holds. A `lumenc`
+/// built without the runtime registers none, and a kit that carries
+/// capability crates it cannot describe is refused rather than written with
+/// an empty list, which would package every app with no subsystem at all.
+fn carried_capabilities(staged: &[String]) -> Result<Vec<KitCapability>, String> {
+    let registered = lumen_capability::registered();
+    let carried: Vec<KitCapability> = registered
         .iter()
-        .find(|(_, lib)| stem == lib.as_str() || stem.starts_with(&format!("{lib}-")))
-        .map(|(name, _)| name.clone())
+        .filter(|capability| {
+            let lib = capability.crate_name.replace('-', "_");
+            staged
+                .iter()
+                .filter_map(|file| rlib_stem(file))
+                .any(|stem| is_library(stem, &lib))
+        })
+        .map(KitCapability::from)
+        .collect();
+    let unlisted: Vec<&str> = staged
+        .iter()
+        .filter_map(|file| rlib_stem(file))
+        .filter(|stem| {
+            stem.split('-')
+                .next()
+                .is_some_and(|lib| lib.ends_with("_capability"))
+        })
+        .filter(|stem| {
+            !registered
+                .iter()
+                .any(|c| is_library(stem, &c.crate_name.replace('-', "_")))
+        })
+        .collect();
+    if !unlisted.is_empty() {
+        return Err(format!(
+            "the link carries capability crates this lumenc does not register ({}), so it \
+             cannot say when an app gets them. Emit the kit with a lumenc that links the \
+             runtime the kit was built from.",
+            unlisted.join(", ")
+        ));
+    }
+    Ok(carried)
 }
 
 /// Copy everything the kit carries, then write the manifest.
@@ -569,6 +633,7 @@ fn write_kit(kit: &Kit, options: &Options) -> Result<(), String> {
         driver,
         args: kit.args.clone(),
         modules: kit.modules.clone(),
+        capabilities: kit.capabilities.clone(),
         artifact: Artifact {
             kind: artifact_kind(options.target),
         },

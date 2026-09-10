@@ -13,5 +13,6 @@ lumen_capability!(
     "os-lifecycle",
     Phase::Platform,
     lumen_os_lifecycle::capability::install,
-    preflight = lumen_os_lifecycle::capability::preflight
+    preflight = lumen_os_lifecycle::capability::preflight,
+    select = lumen_os_lifecycle::capability::SELECT
 );

@@ -6,7 +6,9 @@
 //!
 //! - `lumen_capability_register_<n>`, an `extern "C"` function that puts the
 //!   capability on the registry, where `<n>` is the declared name with every
-//!   character a symbol cannot carry replaced by `_`.
+//!   character a symbol cannot carry replaced by `_`. The entry records the
+//!   package the macro expanded in, so a kit can tell which of its files
+//!   carries the capability.
 //! - A `#[used]` pointer to that function in the platform's pre-main
 //!   constructor section (`.init_array`, `__DATA,__mod_init_func`,
 //!   `.CRT$XCU`), so a binary the capability is linked into registers it
@@ -26,13 +28,14 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Expr, LitStr, Token, parse_macro_input};
 
-/// `lumen_capability!("<name>", <phase>, <install>)` or
-/// `lumen_capability!("<name>", <phase>, <install>, preflight = <fn>)`.
+/// `lumen_capability!("<name>", <phase>, <install>)`, with any of
+/// `preflight = <fn>` and `select = <Select>` after the install entry.
 struct CapabilityEntry {
     name: LitStr,
     phase: Expr,
     install: Expr,
     preflight: Option<Expr>,
+    select: Option<Expr>,
 }
 
 impl Parse for CapabilityEntry {
@@ -49,28 +52,39 @@ impl Parse for CapabilityEntry {
         input.parse::<Token![,]>()?;
         let install: Expr = input.parse()?;
         let mut preflight = None;
-        if input.peek(Token![,]) {
+        let mut select = None;
+        while input.peek(Token![,]) {
             input.parse::<Token![,]>()?;
-            if !input.is_empty() {
-                let key: Ident = input.parse()?;
-                if key != "preflight" {
+            if input.is_empty() {
+                break;
+            }
+            let key: Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+            let slot = match key.to_string().as_str() {
+                "preflight" => &mut preflight,
+                "select" => &mut select,
+                _ => {
                     return Err(syn::Error::new(
                         key.span(),
-                        "the only option after the install entry is `preflight = <fn>`",
+                        "the options after the install entry are `preflight = <fn>` and \
+                         `select = <Select>`",
                     ));
                 }
-                input.parse::<Token![=]>()?;
-                preflight = Some(input.parse()?);
-                if input.peek(Token![,]) {
-                    input.parse::<Token![,]>()?;
-                }
+            };
+            if slot.is_some() {
+                return Err(syn::Error::new(
+                    key.span(),
+                    format!("`{key}` is given twice"),
+                ));
             }
+            *slot = Some(input.parse()?);
         }
         Ok(CapabilityEntry {
             name,
             phase,
             install,
             preflight,
+            select,
         })
     }
 }
@@ -86,6 +100,7 @@ pub fn lumen_capability(input: TokenStream) -> TokenStream {
         phase,
         install,
         preflight,
+        select,
     } = parse_macro_input!(input as CapabilityEntry);
 
     let declared = name.value();
@@ -101,6 +116,10 @@ pub fn lumen_capability(input: TokenStream) -> TokenStream {
         Some(f) => quote! { ::core::option::Option::Some(#f) },
         None => quote! { ::core::option::Option::None },
     };
+    let select = match select {
+        Some(s) => quote! { #s },
+        None => quote! { ::lumen_capability::Select::Always },
+    };
 
     quote! {
         const _: () = {
@@ -111,6 +130,10 @@ pub fn lumen_capability(input: TokenStream) -> TokenStream {
                     phase: #phase,
                     install: #install,
                     preflight: #preflight,
+                    select: #select,
+                    // The package this expands in, which is the object the
+                    // register symbol pulls.
+                    crate_name: env!("CARGO_PKG_NAME"),
                 });
             }
 

@@ -12,5 +12,6 @@ use lumen_capability::{Phase, lumen_capability};
 lumen_capability!(
     "devtools",
     Phase::AfterBuild,
-    lumen_devtools::capability::install
+    lumen_devtools::capability::install,
+    select = lumen_devtools::capability::SELECT
 );
