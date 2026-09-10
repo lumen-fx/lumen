@@ -19,6 +19,7 @@ use lumen_script::{
 };
 
 use crate::declare;
+use crate::diagnose;
 use crate::host_fns::{Registries, register_lumen_host_fns, register_script_fn};
 use crate::library_dir::LibraryDir;
 use crate::lmn;
@@ -60,9 +61,11 @@ unsafe impl Sync for CandelaVm {}
 pub struct CandelaHost {
     vm: CandelaVm,
     registries: Registries,
-    /// Source of the currently-loaded program, kept so `Diagnostic` byte
-    /// spans can be resolved to `(line, col)` for compile errors.
-    source: String,
+    /// The currently-loaded program as candela was handed it, with the uri it
+    /// was compiled under, kept so a `Diagnostic` raised once the program is
+    /// running can be resolved back against the text its byte span indexes.
+    prepared: prelude::PreparedSource,
+    uri: String,
     /// The [`ScriptFn`]s an embedder registered, kept so `compile_check` can
     /// replay them into the scratch engine it builds and the namespace
     /// declarations can be synthesized from their signatures.
@@ -93,7 +96,8 @@ impl CandelaHost {
                 program: None,
             },
             registries,
-            source: String::new(),
+            prepared: prelude::PreparedSource::default(),
+            uri: String::new(),
             script_fns: ScriptFnStore::default(),
             wrappers: Vec::new(),
             library_dir: None,
@@ -193,6 +197,7 @@ impl CandelaHost {
         uri: &str,
     ) -> ScriptError {
         let at = prepared.locate(d.span.start);
+        let message = diagnose::explain(prepared, uri, d).unwrap_or_else(|| d.message.clone());
         match at.wrapper {
             // A wrapper is the plugin's source, not the app's, so the plugin
             // is what the message has to name.
@@ -200,13 +205,13 @@ impl CandelaHost {
                 uri: format!("{uri} (plugin namespace `{ns}`)"),
                 line: at.line,
                 col: at.col,
-                message: d.message.clone(),
+                message,
             },
             None => ScriptError::Compile {
                 uri: uri.to_owned(),
                 line: at.line,
                 col: at.col,
-                message: d.message.clone(),
+                message,
             },
         }
     }
@@ -262,6 +267,16 @@ impl CandelaHost {
             })
             .map_err(|d| self.compile_error(&prepared, &d, uri))?
             .map_err(ScriptError::Runtime)
+    }
+
+    /// What a diagnostic raised by the running program should say.
+    ///
+    /// candela compiles a function body on the first call that reaches it, so
+    /// a resolution failure in a never-called handler surfaces here rather than
+    /// at load. The message is candela's own unless the host can name the
+    /// symbol that failed to resolve.
+    fn runtime_message(&self, d: &candela::Diagnostic) -> String {
+        diagnose::explain(&self.prepared, &self.uri, d).unwrap_or_else(|| d.message.clone())
     }
 
     /// One call into the loaded program, with a panic out of the VM contained.
@@ -401,7 +416,8 @@ impl ScriptHost for CandelaHost {
             .engine
             .compile(&prepared.text, uri)
             .map_err(|d| self.compile_error(&prepared, &d, uri))?;
-        self.source = source.to_owned();
+        self.prepared = prepared;
+        self.uri = uri.to_owned();
         self.vm.program = Some(program);
         Ok(())
     }
@@ -422,7 +438,8 @@ impl ScriptHost for CandelaHost {
         let _library_dir = self.library_dir();
         match self.vm.engine.compile(&prepared.text, uri) {
             Ok(program) => {
-                self.source = source.to_owned();
+                self.prepared = prepared;
+                self.uri = uri.to_owned();
                 self.vm.program = Some(program);
                 // Merge the snapshot back under the new registrations. candela
                 // has no top level beyond `main`, and apps bind from
@@ -453,7 +470,8 @@ impl ScriptHost for CandelaHost {
 
     fn reset(&mut self) {
         self.vm.program = None;
-        self.source.clear();
+        self.prepared = prelude::PreparedSource::default();
+        self.uri.clear();
         self.registries.reset();
     }
 
@@ -470,7 +488,7 @@ impl ScriptHost for CandelaHost {
                 // miss as `found: false`. candela reports it as an
                 // `unknown_function` compile diagnostic naming the callee.
                 Err(d) if d.code == "unknown_function" && d.message.contains(fn_name) => {}
-                Err(d) => runtime_err = Some(ScriptError::Runtime(d.message)),
+                Err(d) => runtime_err = Some(ScriptError::Runtime(self.runtime_message(&d))),
             }
         }
 
@@ -497,7 +515,7 @@ impl ScriptHost for CandelaHost {
         self.vm_call(closure, &kargs)
             .ok_or_else(|| ScriptError::Runtime("no candela program loaded".to_owned()))?
             .map(|v| candela_value_to_script(&v))
-            .map_err(|d| ScriptError::Runtime(d.message))
+            .map_err(|d| ScriptError::Runtime(self.runtime_message(&d)))
     }
 
     fn dispatch_event_handler(&mut self, token: u64) -> Result<bool, ScriptError> {
@@ -512,7 +530,7 @@ impl ScriptHost for CandelaHost {
             None => Ok(false),
             Some(Ok(_)) => Ok(true),
             Some(Err(d)) if d.code == "unknown_function" && d.message.contains(&name) => Ok(false),
-            Some(Err(d)) => Err(ScriptError::Runtime(d.message)),
+            Some(Err(d)) => Err(ScriptError::Runtime(self.runtime_message(&d))),
         }
     }
 

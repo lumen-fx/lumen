@@ -112,13 +112,15 @@
 //! which [`resolve_prelude`] splices into the equivalent `host "lumen" { ... }`
 //! block before compilation (see the [`prelude`] module). Without the import
 //! (or a hand-written block) the builtins stay opt-in: candela resolves host fns
-//! lazily, so the source loads, but *calling* one is a runtime error
-//! (`"lumen is not a valid namespace"`).
+//! lazily, so the source loads, but *calling* one is a runtime error that names
+//! the call and the import that would declare it.
 
 #![warn(missing_docs)]
 
 pub mod builtins;
 mod declare;
+#[cfg(feature = "compiler")]
+mod diagnose;
 #[cfg(feature = "compiler")]
 mod engine_host;
 mod host_fns;

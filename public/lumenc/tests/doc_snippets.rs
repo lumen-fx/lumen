@@ -8,12 +8,14 @@
 //! blocks are excerpts, though, and an excerpt cannot compile on its own, so
 //! the check needs a rule for which blocks are whole programs.
 //!
-//! **A candela block is a whole script when it carries the prelude import
-//! line `import "lumen.cdl";`.** That import is the first line of every
-//! script the repo ships and the line that puts the Lumen surface in scope,
-//! so a block with it is offering itself as something to copy. Leave it out
-//! and the block is an excerpt: it is skipped, and the surrounding prose
-//! explains where the lines go.
+//! **A candela block is a whole script when its fence names candela and it
+//! carries the prelude import line `import "lumen.cdl";`.** That import is
+//! the first line of every script the repo ships and the line that puts the
+//! Lumen surface in scope, so a block with it is offering itself as something
+//! to copy. Leave it out and the block is an excerpt: it is skipped, and the
+//! surrounding prose explains where the lines go. A block fenced as output
+//! rather than as code is a message a reader will see, not a program, even
+//! when it quotes the import line back at them.
 //!
 //! **A markup block is a whole document when it opens `<root` and its last
 //! line closes it.** A `<root dir="rtl">` shown on its own to name an
@@ -32,6 +34,10 @@ use std::process::Command;
 /// The line that puts the Lumen host surface in scope. A candela block
 /// carrying it is a whole script.
 const PRELUDE_IMPORT: &str = r#"import "lumen.cdl";"#;
+
+/// The fence languages candela is written under. The pages reach for `rust`
+/// because the language has no highlighter of its own yet.
+const CANDELA_FENCES: &[&str] = &["candela", "rust"];
 
 /// Markup a whole document opens with.
 const DOCUMENT_OPEN: &str = "<root";
@@ -52,6 +58,8 @@ fn workspace_root() -> PathBuf {
 struct Block {
     /// `docs/docs/guides/styling.md:122`, the line the fence opens on.
     origin: String,
+    /// What the opening fence names the block, `rust` or `text` or nothing.
+    lang: String,
     body: String,
 }
 
@@ -92,6 +100,7 @@ fn doc_blocks() -> Vec<Block> {
             }
             blocks.push(Block {
                 origin: format!("{page}:{}", open + 1),
+                lang: lines[open][3..].trim().to_owned(),
                 body: lines[open + 1..i].join("\n"),
             });
             i += 1;
@@ -252,7 +261,7 @@ fn every_whole_candela_snippet_compiles() {
     let mut checked = 0;
     let mut failures = Vec::new();
     for block in doc_blocks() {
-        if !block.body.contains(PRELUDE_IMPORT) {
+        if !CANDELA_FENCES.contains(&block.lang.as_str()) || !block.body.contains(PRELUDE_IMPORT) {
             continue;
         }
         checked += 1;

@@ -3,7 +3,9 @@
 //! block. Proven headless through `CandelaHost` load + dispatch (no window), the
 //! same path `run_app_headless` drives via `ScriptPlugin`.
 
-use lumen_script::{ScriptCommand, ScriptError, ScriptHost, ScriptValue};
+use lumen_script::{
+    ScriptCommand, ScriptError, ScriptFn, ScriptHost, ScriptNs, ScriptTy, ScriptValue,
+};
 use lumen_script_candela::{BUILTINS, CandelaHost, PRELUDE_SOURCE};
 
 /// The prelude import alone grants the full builtin surface: an app declaring
@@ -63,8 +65,10 @@ fn main() {}
 
 /// Without the import (and without a host block) the builtins stay opt-in:
 /// candela resolves host fns lazily, so the source loads, but *calling*
-/// `lumen::signal_set` errors ("lumen is not a valid namespace") and emits no
-/// command - the builtin surface is unreachable until explicitly imported.
+/// `lumen::signal_set` errors and emits no command - the builtin surface is
+/// unreachable until explicitly imported. The error names the call and the
+/// import that would declare it, so an author is pointed at the one line they
+/// are missing.
 #[test]
 fn without_import_builtins_stay_opt_in() {
     let mut host = CandelaHost::new();
@@ -77,9 +81,110 @@ fn without_import_builtins_stay_opt_in() {
     let err = host
         .call("on_start", &[])
         .expect_err("an unimported builtin call must error at runtime");
+    let ScriptError::Runtime(message) = &err else {
+        panic!("expected a runtime namespace error, got {err:?}");
+    };
     assert!(
-        matches!(err, ScriptError::Runtime(_)),
-        "expected a runtime namespace error, got {err:?}"
+        message.contains("lumen::signal_set"),
+        "the message names the call: {message}"
+    );
+    assert!(
+        message.contains("import \"lumen.cdl\";"),
+        "the message names the import that declares it: {message}"
+    );
+}
+
+/// A call to a name the `lumen` namespace no longer has reports the *name*,
+/// not the namespace. `read_file` moved out of the builtin surface into the fs
+/// module, and candela answers a path it cannot walk by calling the namespace
+/// invalid, which sends an author to an import line that is fine.
+#[test]
+fn a_retired_builtin_reports_the_function_not_the_namespace() {
+    let mut host = CandelaHost::new();
+    let src = r#"
+import "lumen.cdl";
+fn on_ready() { let s = lumen::read_file("x"); }
+fn main() {}
+"#;
+    host.load(src, "retired.cdl")
+        .expect("candela compiles a body on first call, so the load succeeds");
+
+    let err = host
+        .call("on_ready", &[])
+        .expect_err("a name the namespace does not have must error");
+    let ScriptError::Runtime(message) = &err else {
+        panic!("expected a runtime error, got {err:?}");
+    };
+    assert!(
+        message.contains("read_file"),
+        "the message names the function that is missing: {message}"
+    );
+    assert!(
+        !message.contains("is not a valid namespace"),
+        "the namespace is declared and the message must not say otherwise: {message}"
+    );
+}
+
+/// When the name moved to another namespace the app can reach, the message
+/// says where it went: `lumen::data_dir` points at `files::data_dir` as soon as
+/// a module registers it.
+#[test]
+fn a_moved_builtin_points_at_the_namespace_that_has_it() {
+    let mut host = CandelaHost::new();
+    host.register_script_fn(
+        &ScriptFn::new("data_dir")
+            .ret(ScriptTy::Str)
+            .ns(ScriptNs::Named("files".to_owned()))
+            .build(|_| Ok(ScriptValue::Str("/tmp".to_owned()))),
+    )
+    .expect("a module namespace is declarable");
+    let src = r#"
+import "lumen.cdl";
+fn on_ready() { let d = lumen::data_dir(); }
+fn main() {}
+"#;
+    host.load(src, "moved.cdl")
+        .expect("the call compiles lazily");
+
+    let err = host
+        .call("on_ready", &[])
+        .expect_err("data_dir is not in the lumen namespace");
+    let ScriptError::Runtime(message) = &err else {
+        panic!("expected a runtime error, got {err:?}");
+    };
+    assert!(
+        message.contains("`files::data_dir` exists"),
+        "the message points at the namespace that has it: {message}"
+    );
+}
+
+/// A namespace nothing declared reads as one: the message says so and lists
+/// what the program does declare, so a typo in the namespace half of a path is
+/// as readable as one in the name half.
+#[test]
+fn an_undeclared_namespace_is_named_alongside_the_declared_ones() {
+    let mut host = CandelaHost::new();
+    let src = r#"
+import "lumen.cdl";
+fn on_ready() { let v = storage::get("k"); }
+fn main() {}
+"#;
+    host.load(src, "undeclared.cdl")
+        .expect("the call compiles lazily");
+
+    let err = host
+        .call("on_ready", &[])
+        .expect_err("no storage namespace exists");
+    let ScriptError::Runtime(message) = &err else {
+        panic!("expected a runtime error, got {err:?}");
+    };
+    assert!(
+        message.contains("no `storage` namespace is declared here"),
+        "the message says the namespace is the missing half: {message}"
+    );
+    assert!(
+        message.contains("`lumen`"),
+        "the message lists the namespaces that are declared: {message}"
     );
 }
 
