@@ -4,8 +4,8 @@
 //! counterpart of what `lumen-runtime` does for one. It installs what the
 //! platform this app lands on does not already do (the reconcilers, the
 //! two-way bindings, key routing, and the widget behaviour a browser has no
-//! native control for) and leaves out layout, paint, accessibility, the font
-//! stack, and everything a browser drives itself.
+//! native control for) and leaves out layout, paint, long-list windowing,
+//! accessibility, the font stack, and everything a browser drives itself.
 //!
 //! That last part is most of the desktop's input layer. A browser hit-tests,
 //! moves focus, edits fields, owns the caret, the selection and the IME, and
@@ -126,7 +126,15 @@ fn install_http(app: &mut App) {
 
 /// The systems that keep the spawned tree in step with the app's state.
 fn install_reconcilers(app: &mut App) {
-    app.world.init_resource::<spawn::ScenePolicy>();
+    // The browser windows and styles a long list for itself: it scrolls the
+    // `<scroll>` element and runs the same stylesheet over every row. The
+    // reconciler's own windowing has nothing to read here anyway, since the
+    // assembly installs no layout, so a virtualized block mounts whole and
+    // its rows reach the DOM unresolved.
+    app.world.insert_resource(spawn::ScenePolicy {
+        virtualization: spawn::Virtualization::HostManaged,
+        row_style: spawn::RowStyle::HostStyled,
+    });
     app.add_systems(
         TickStage::Systems,
         (spawn::reconcile_for_blocks, spawn::reconcile_if_blocks),

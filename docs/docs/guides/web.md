@@ -490,13 +490,13 @@ none of them means anything without an absolute address.
 - A component written inside a `<for>` is called once per row while the site is
   built, and each body is written into the row it belongs to, wherever the rows
   are known: a list `[web.seed]` declares, or one a `prerender = "run"` capture
-  read off the app. A virtualized block and `prerender = "none"` emit no rows,
-  so they carry no bodies either. The build names a row it could not read a
-  body for.
-- A `<for virtualized="true">` emits no rows. Which rows a virtualized list
-  shows comes from how far its scroll container has been scrolled, which a
-  build cannot know, so the runtime mounts them when the page opens. The
-  build warns when it emits one.
+  read off the app. `prerender = "none"` emits no rows, so those carry no
+  bodies either. The build names a row it could not read a body for.
+- A `<for virtualized="true">` is written with the rows a first screen shows,
+  not the whole list. On the web the attribute changes nothing else: the
+  runtime mounts every row when the page opens and the browser scrolls them,
+  the way it scrolls any other list. A site built with `render = "static"`
+  carries every row, since nothing runs to add the rest.
 - A list whose rows only exist once a script has run is emitted empty under
   `prerender = "seeds"`. `[web.seed]` puts rows in the document without
   anything running, and `prerender = "run"` gets them from the app itself.

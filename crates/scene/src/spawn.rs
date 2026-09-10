@@ -130,7 +130,10 @@ pub struct ForMarker {
     /// currently materialized as children, so the reconciler can detect
     /// no-op frames without re-walking the body template.
     pub cached_keys: Vec<String>,
-    /// `<for virtualized="true">` opt-in. When set, the reconciler spawns only rows in the visible scroll window plus a small buffer; each row is absolute-positioned via inline `inset` from `row_height * row_index`.
+    /// `<for virtualized="true">` opt-in. When set, and when the scene policy
+    /// leaves the windowing to the reconciler, it spawns only rows in the
+    /// visible scroll window plus a small buffer; each row is
+    /// absolute-positioned via inline `inset` from `row_height * row_index`.
     pub virtualized: bool,
     /// Per-row pixel height used by the virtualization windowing math.
     /// Required when `virtualized = true`. Default 32 px when authors
