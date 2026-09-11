@@ -330,10 +330,12 @@ impl From<I18n> for SharedI18n {
     }
 }
 
-/// RTL languages list, so the plugin agrees with whatever
-/// `LayoutDirection::DefaultLayoutDirection` ends up doing in
-/// `lumen-core`. Used only as a tiny helper for callers wanting to
-/// short-circuit "is the system in RTL" without reaching into ICU4X.
+/// The set of right-to-left languages, in one place so every target
+/// agrees on it. The web emitter (`LocaleSpec::new`) reads it to write
+/// `<html dir>`, and the desktop runtime reads it to seed
+/// `lumen_core::components::DefaultLayoutDirection`, which is what keeps
+/// a tree rendered in the browser and the same tree rendered on the
+/// desktop pointing the same way.
 pub fn is_rtl(lang: &LanguageIdentifier) -> bool {
     matches!(
         lang.language.as_str(),

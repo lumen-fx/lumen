@@ -467,8 +467,9 @@ impl App {
                 .after(crate::signals::style_manager_to_signal),
         );
         // W5.4 - install the [`DefaultLayoutDirection`] resource (Ltr
-        // by default; the i18n plugin overrides it from the detected
-        // system locale) and register [`resolve_layout_direction`] in
+        // by default; the translation registration in `lumen-runtime`
+        // overwrites it from the resolved locale) and register
+        // [`resolve_layout_direction`] in
         // `LayoutSync` so every entity has a fresh [`ResolvedDirection`]
         // before the layout backend reads it.
         s.world

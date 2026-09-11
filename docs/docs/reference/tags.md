@@ -80,7 +80,7 @@ These apply to any element unless the entry says otherwise.
 | `class` | space-separated names | Names for CSS `.class` matching. |
 | `style` | typography role | Sets `font-size` from a role name when `font-size` is not authored. Roles: `display-xl`, `display-lg`, `display-md`, `display-sm`, `headline-lg`, `headline-md`, `headline-sm`, `title-lg`, `title-md`, `title-sm`, `body-lg`, `body-md`, `body-sm`, `label-lg`, `label-md`, `label-sm`, `caption`, `overline`. |
 | `tab-index` | integer | Keyboard focus order. `-1` removes the element from Tab order. |
-| `dir` | `ltr`, `rtl`, `auto` | Writing direction; inherited by descendants. |
+| `dir` | `ltr`, `rtl`, `auto` | Writing direction; inherited by descendants. Defaults to the app locale's direction. |
 | `lang` | BCP-47 tag | Language for text shaping and accessibility; inherited. |
 | `translatable` | catalogue key | Resolves every string the element shows through the loaded translation catalogue: the text from the message the key names, `placeholder` from `<key>.placeholder`, and `alt` from `<key>.alt`. An attribute the markup does not write is not translated. The text falls back to the authored `text`, then to the key itself, unless the element names one of the other strings. `lumenc i18n extract` collects these keys. |
 | `format` | `number`, `currency:<code>`, `date`, `time`, `datetime`, `relative` | Writes the element's text for the app's locale: a decimal number; a decimal amount in an ISO-4217 currency; a `YYYY-MM-DD` date, optionally with `THH:MM[:SS]`; or whole seconds from now, past negative. Applies to a `bind-text` value as well as an authored `text`. A spec that is not one of these, or text the spec cannot read, leaves the text alone. |
