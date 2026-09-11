@@ -347,7 +347,8 @@ floor to zero, since the element clips its own content.
 ### Logical properties
 
 Each takes a px number and resolves against the element's writing
-direction (`dir` in markup).
+direction, which comes from `dir` in the markup or, with none authored,
+from the app's locale.
 
 - `padding-inline-start`, `padding-inline-end`, `padding-block-start`, `padding-block-end`
 - `margin-inline-start`, `margin-inline-end`, `margin-block-start`, `margin-block-end`

@@ -3,12 +3,15 @@
 //! names, markup marked `translatable="key"` spawns with the translated
 //! string, markup marked `format="<spec>"` spawns rendered for the locale,
 //! and the translator and formatter every script host's builtins call
-//! resolve the same catalogue and the same locale.
+//! resolve the same catalogue and the same locale. The locale also sets
+//! the app's base writing direction, which a `dir` attribute overrides.
 //!
 //! Runs window-free through `build_headless_app`, the same path
 //! `run_app_headless` takes.
 
-use lumen_core::components::TextContent;
+use lumen_core::components::{
+    DefaultLayoutDirection, LayoutDirection, LumenId, ResolvedDirection, TextContent,
+};
 use lumen_ir::artifact::{self, CompiledApp};
 use lumen_ir::layout_ir::{Attributes, Element, LayoutIR, TooltipSpec};
 use lumen_runtime::{RunOptions, build_headless_app};
@@ -417,6 +420,84 @@ fn a_bad_catalogue_filename_fails_the_load() {
         Ok(_) => panic!("an unparseable locale filename must fail the load"),
     };
     assert!(err.to_string().contains("i18n"), "{err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The `ResolvedDirection` stamped on the element carrying `id`.
+fn direction_of(app: &mut lumen_core::app::App, id: &str) -> LayoutDirection {
+    app.tick();
+    app.world
+        .query::<(&LumenId, &ResolvedDirection)>()
+        .iter(&app.world)
+        .find(|(name, _)| name.0 == id)
+        .map(|(_, resolved)| resolved.direction())
+        .unwrap_or_else(|| panic!("no element with id {id}"))
+}
+
+/// A root element carrying `id`, with the given `dir` attribute.
+fn root_with_dir(dir: Option<LayoutDirection>) -> Element {
+    Element {
+        tag: "root".to_string(),
+        attrs: Attributes {
+            id: Some("root".to_string()),
+            dir,
+            ..Default::default()
+        },
+        children: Vec::new(),
+        ..Default::default()
+    }
+}
+
+/// An app whose locale is right-to-left is mirrored with nothing in its
+/// markup saying so, which is what the web target does from the tag.
+#[test]
+fn an_rtl_locale_mirrors_a_root_with_no_dir() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("rtl-locale");
+    std::fs::write(dir.join("lumen.toml"), "[app]\nlocale = \"ar-EG\"\n").unwrap();
+
+    let mut app = build(&dir, root_with_dir(None));
+    assert_eq!(
+        app.world.resource::<DefaultLayoutDirection>().0,
+        LayoutDirection::Rtl
+    );
+    assert_eq!(direction_of(&mut app, "root"), LayoutDirection::Rtl);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A left-to-right locale leaves the tree pointing the way it always did.
+#[test]
+fn an_ltr_locale_leaves_the_root_ltr() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("ltr-locale");
+    std::fs::write(dir.join("lumen.toml"), "[app]\nlocale = \"de-DE\"\n").unwrap();
+
+    let mut app = build(&dir, root_with_dir(None));
+    assert_eq!(
+        app.world.resource::<DefaultLayoutDirection>().0,
+        LayoutDirection::Ltr
+    );
+    assert_eq!(direction_of(&mut app, "root"), LayoutDirection::Ltr);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The locale sets the default, so an authored `dir` still wins: the
+/// resource stays right-to-left while the tree under the attribute does not.
+#[test]
+fn authored_dir_still_beats_the_locale() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("authored-dir");
+    std::fs::write(dir.join("lumen.toml"), "[app]\nlocale = \"ar-EG\"\n").unwrap();
+
+    let mut app = build(&dir, root_with_dir(Some(LayoutDirection::Ltr)));
+    assert_eq!(
+        app.world.resource::<DefaultLayoutDirection>().0,
+        LayoutDirection::Rtl
+    );
+    assert_eq!(direction_of(&mut app, "root"), LayoutDirection::Ltr);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

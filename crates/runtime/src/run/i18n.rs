@@ -1,5 +1,5 @@
-//! Locale wiring: locale resolution, catalogue loading, and the
-//! script-side translator and formatter hooks.
+//! Locale wiring: locale resolution, catalogue loading, the app's base
+//! writing direction, and the script-side translator and formatter hooks.
 //!
 //! An app's translations live in `<app_dir>/locale/<lang>.ftl`, one Fluent
 //! catalogue per locale, which `lumenc i18n extract` writes and translators
@@ -22,6 +22,12 @@
 //! through the formatting hook installed here. Reading the per-app
 //! resource for markup is what keeps a process hosting two Lumen apps from
 //! rendering one app's text in the other's locale.
+//!
+//! The resolved locale also sets the app's base writing direction, through
+//! [`lumen_core::components::DefaultLayoutDirection`]: an app running in
+//! Arabic or Hebrew is mirrored with nothing in its markup saying so, which
+//! is what the web target already does from the `<html>` tag. A `dir`
+//! attribute overrides it for the element it is on and everything under it.
 
 use super::*;
 
@@ -46,10 +52,10 @@ fn catalogue_reader(world: &World) -> impl Fn(&Path) -> std::io::Result<Vec<u8>>
     }
 }
 
-/// Resolve the locale, install [`SharedI18n`] + [`AppI18n`], load every
-/// catalogue under `<dir>/locale`, and publish the translator every
-/// script host's `t()` builtin calls and the formatter its `format_*`
-/// builtins call.
+/// Resolve the locale, install [`SharedI18n`] + [`AppI18n`], set the base
+/// writing direction from the locale, load every catalogue under
+/// `<dir>/locale`, and publish the translator every script host's `t()`
+/// builtin calls and the formatter its `format_*` builtins call.
 pub(crate) fn register_i18n(
     app: &mut App,
     dir: &Path,
@@ -63,6 +69,16 @@ pub(crate) fn register_i18n(
         plugin = plugin.with_fallback_locale(fallback.clone());
     }
     let current = plugin.install(&mut app.world);
+    // The locale carries the base writing direction, the same way the web
+    // target reads it off the tag: an app running in Arabic is mirrored
+    // without the author asking. A `dir` in the markup still wins, on the
+    // root and on any subtree, through the existing cascade.
+    let direction = if lumen_i18n::is_rtl(&current) {
+        LayoutDirection::Rtl
+    } else {
+        LayoutDirection::Ltr
+    };
+    app.world.insert_resource(DefaultLayoutDirection(direction));
     let shared = app.world.resource::<SharedI18n>().clone();
     let fallback = shared
         .read()

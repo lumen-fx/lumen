@@ -1323,8 +1323,10 @@ impl ResolvedDirection {
 /// Default writing direction for the application root. The
 /// [`resolve_layout_direction`] system uses this when the root entity
 /// has no explicit [`LayoutDirection`]. It defaults to
-/// [`LayoutDirection::Ltr`] and nothing sets it from the locale today,
-/// so a right-to-left app still needs `dir="rtl"` in its markup.
+/// [`LayoutDirection::Ltr`], and the runtime sets it from the app's
+/// active locale at startup, so an app running in a right-to-left locale
+/// is mirrored without markup. A `dir` attribute overrides it for the
+/// element it is on and everything under it.
 #[derive(bevy_ecs::resource::Resource, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DefaultLayoutDirection(pub LayoutDirection);
 
