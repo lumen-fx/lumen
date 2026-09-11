@@ -12,7 +12,8 @@
 //!
 //! Opt-in is preserved: a source without the import gets no builtins. candela
 //! resolves host fns lazily, so such a source still loads; calling
-//! `lumen::signal_set(...)` unprepared fails at runtime.
+//! `lumen::signal_set(...)` unprepared fails at run time, naming the call and
+//! the import that would declare it.
 
 use std::borrow::Cow;
 
@@ -58,6 +59,15 @@ pub struct PreparedSource {
     /// Where each plugin wrapper landed, so an error inside one names the
     /// plugin instead of a line the author never wrote.
     pub wrappers: Vec<WrapperSpan>,
+    /// Whether the builtin surface reached the text: the prelude was spliced
+    /// in, or the author wrote the `host "lumen" { .. }` block by hand.
+    ///
+    /// The host opens a block of its own for functions an embedder registered
+    /// under the same namespace, so the text carries a `lumen` block either
+    /// way and a search of it cannot tell the two apart. A failed `lumen::`
+    /// call needs to: without the surface the answer is the import line, with
+    /// it the answer is the name.
+    pub declares_builtins: bool,
 }
 
 /// The lines one plugin's wrapper source occupies in a [`PreparedSource`].
@@ -86,8 +96,10 @@ impl PreparedSource {
     /// A source with nothing put in front of it.
     #[must_use]
     pub fn plain(text: impl Into<String>) -> Self {
+        let text = text.into();
         Self {
-            text: text.into(),
+            declares_builtins: declares_namespace(&text, crate::host_fns::HOST_NAMESPACE),
+            text,
             line_offset: 0,
             wrappers: Vec::new(),
         }
@@ -178,6 +190,9 @@ pub fn prepare(
     prelude_extras: &[String],
 ) -> PreparedSource {
     let mut resolved = resolve_prelude(source);
+    // Read before the extras block is synthesized: after it, every text
+    // carries a `lumen` block whether or not the surface is in.
+    let declares_builtins = declares_namespace(&resolved, crate::host_fns::HOST_NAMESPACE);
     let mut extra_lumen_block: Option<String> = None;
     if !prelude_extras.is_empty() {
         let opener = format!("host \"{}\" {{", crate::host_fns::HOST_NAMESPACE);
@@ -248,13 +263,40 @@ pub fn prepare(
         text: format!("{prefix}{resolved}"),
         line_offset: line,
         wrappers: spans,
+        declares_builtins,
     }
 }
 
 /// Whether `source` already opens a `host "<ns>"` block of its own.
-fn declares_namespace(source: &str, ns: &str) -> bool {
+///
+/// A `//` comment is not code, so a namespace named in one does not count. The
+/// smoke fixture describes the block it does not write, and a plain search of
+/// the text reads that sentence as the declaration.
+pub(crate) fn declares_namespace(source: &str, ns: &str) -> bool {
     let needle = format!("host \"{ns}\"");
-    source.contains(&needle)
+    source.lines().any(|line| code_of(line).contains(&needle))
+}
+
+/// The part of `line` ahead of its `//` comment.
+fn code_of(line: &str) -> &str {
+    match line.split_once("//") {
+        Some((code, _)) => code,
+        None => line,
+    }
+}
+
+/// `source` with every `//` comment dropped and its line structure kept.
+///
+/// Anything that reads a declaration back out of a source goes through this,
+/// so a `host "<ns>" { .. }` written in prose reads the same to
+/// [`declares_namespace`] and to the scan that lists what a namespace has.
+pub(crate) fn code_only(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    for line in source.lines() {
+        out.push_str(code_of(line));
+        out.push('\n');
+    }
+    out
 }
 
 /// Collapse the human-readable prelude into a single physical line: strip `//`
