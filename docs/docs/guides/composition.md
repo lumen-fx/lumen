@@ -350,7 +350,9 @@ A component the build stands in for is never called, so its parameters need no
 annotation. Annotating them all is the simpler rule, and it is what keeps a
 component usable after an edit turns it into one that has to run.
 
-`lumenc web` names the ones that would come out empty.
+`lumenc web` names the ones that would come out empty, and prints the
+component's own parameter list annotated, to write in place of what is there.
+Pass `--strict` and the same warning ends the build instead.
 
 ### A component on the web
 

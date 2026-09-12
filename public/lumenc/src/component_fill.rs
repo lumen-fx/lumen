@@ -31,6 +31,7 @@
 //! [`RowFills`], one per row, and the emitter writes each one into the row it
 //! belongs to.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use bevy_ecs::entity::Entity;
@@ -53,11 +54,14 @@ use lumen_web::RowFills;
 const MAX_ROUNDS: u32 = 16;
 
 /// Replace every component marker in `compiled`'s tree with the body its call
-/// produces, and hand back what the components inside its `<for>` rows built.
+/// produces, and hand back what the components inside its `<for>` rows built
+/// along with the names this pass left standing on purpose.
 ///
 /// The tree is left as it was where a marker cannot be resolved, which is a
 /// component the loaded program cannot be called by name; the export check in
-/// `web_cli` reports it, because it holds the export list.
+/// `web_cli` reports it, because it holds the export list. The names that come
+/// back are the ones it must not report: a marker this pass never called, so
+/// nothing about it says the call came back empty.
 ///
 /// A component inside a `<for>` row renders a body per row, and the tree holds
 /// the template rather than the rows, so those bodies come back separately for
@@ -71,27 +75,64 @@ pub fn fill(
     page: &str,
     seed: &Seed,
     warnings: &mut Vec<String>,
-) -> RowFills {
+) -> (RowFills, BTreeSet<String>) {
     // An app with no marker in it has nothing to run and nothing to wait for,
     // which is most apps; booting one to learn that is a cost with no answer
     // attached.
     if !holds_marker(&compiled.ir.root) {
-        return RowFills::default();
+        return (RowFills::default(), BTreeSet::new());
     }
 
     let mut fills = RowFills::default();
+    let mut exhausted = true;
     for _ in 0..MAX_ROUNDS {
         let (filled, round_fills) = round(compiled, page, seed, warnings);
         fills = round_fills;
         if !filled {
-            return fills;
+            exhausted = false;
+            break;
         }
     }
-    warnings.push(format!(
-        "components are nested deeper than {MAX_ROUNDS} levels; the ones left are emitted as the \
-         empty box the browser fills"
-    ));
-    fills
+
+    let mut left_standing = BTreeSet::new();
+    if exhausted {
+        warnings.push(format!(
+            "components are nested deeper than {MAX_ROUNDS} levels; the ones left are emitted as \
+             the empty box the browser fills"
+        ));
+        // The depth is why they are still markers, and it is reported once
+        // above. Nothing called them, so the export check has nothing to add.
+        markers(&compiled.ir.root, &mut left_standing);
+    } else {
+        markers_in_rows(&compiled.ir.root, false, &mut left_standing);
+    }
+    (fills, left_standing)
+}
+
+/// Collect the name of every marker still standing under `element`.
+fn markers(element: &Element, out: &mut BTreeSet<String>) {
+    if let Some(use_site) = &element.frag_use {
+        out.insert(use_site.key.clone());
+    }
+    for child in &element.children {
+        markers(child, out);
+    }
+}
+
+/// Collect the name of every marker under `element` that stands inside a
+/// `<for>` row template.
+///
+/// Those are the ones this pass leaves for the browser by design: a row's body
+/// is read off the run and written into the row, and the template keeps the
+/// marker however well the call worked.
+fn markers_in_rows(element: &Element, in_a_row: bool, out: &mut BTreeSet<String>) {
+    if in_a_row && let Some(use_site) = &element.frag_use {
+        out.insert(use_site.key.clone());
+    }
+    let rows = in_a_row || element.tag == "for";
+    for child in &element.children {
+        markers_in_rows(child, rows, out);
+    }
 }
 
 /// Boot the app, read what its markers became, and put those bodies in the

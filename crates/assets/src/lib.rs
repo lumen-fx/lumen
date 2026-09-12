@@ -80,13 +80,18 @@ macro_rules! insert_cached_asset {
 /// then attaches a clone to every surviving waiter, clearing its `Enqueued`
 /// tag. The Image and Svg arms differ only in the cache insert method and the
 /// payload binding.
+///
+/// The writes are `try_`, because a waiter was registered when the decode was
+/// enqueued and the entity can be gone by the time the result arrives - a
+/// script handler rebuilding a list despawns the rows it re-spawns. The
+/// decode still belongs in the cache; only the entity write is dropped.
 macro_rules! dispatch_decoded {
     ($server:ident, $commands:ident, $path:expr, $insert:ident, $payload:ident, $surviving:ident) => {{
         $server.$insert($path, $payload.clone());
         for w in $surviving {
             let mut ec = $commands.entity(w.entity);
-            ec.remove::<Enqueued>();
-            ec.insert($payload.clone());
+            ec.try_remove::<Enqueued>();
+            ec.try_insert($payload.clone());
         }
     }};
 }
@@ -346,7 +351,7 @@ pub struct AssetServer {
     result_rx: Receiver<DecodeResult>,
     /// Worker thread join handles (one per pool worker). Drained by [`Self::shutdown`].
     ///
-    /// Empty until the first decode is actually enqueued: the pool is
+    /// Empty until the first decode is enqueued: the pool is
     /// spawned lazily by [`Self::ensure_workers`] so an app that never
     /// loads an image or SVG (the common case for a plain counter / form
     /// UI) pays zero decode threads. See [`Self::worker_count`].
@@ -662,7 +667,7 @@ impl AssetServer {
 
     /// Spawn the decode worker pool if it has not been spawned yet.
     /// Called from the enqueue path so the threads exist only once an app
-    /// actually requests a decode. Idempotent and cheap after the first
+    /// requests a decode. Idempotent and cheap after the first
     /// call (empty-check short-circuit). A no-op after [`Self::shutdown`]
     /// (the channel templates are gone).
     fn ensure_workers(&mut self) {
@@ -1161,18 +1166,21 @@ pub fn spawn_pending_decodes(
     mut commands: Commands,
 ) {
     for (entity, source) in &pending {
+        // `try_insert` throughout: the query answers for the world as this
+        // system runs, and a later system in the same stage can despawn one
+        // of these entities before the write lands.
         match server.lookup_or_enqueue(entity, source.0.clone()) {
             CacheLookup::HitImage(img) => {
-                commands.entity(entity).insert(img);
+                commands.entity(entity).try_insert(img);
             }
             CacheLookup::HitSvg(svg) => {
-                commands.entity(entity).insert(svg);
+                commands.entity(entity).try_insert(svg);
             }
             CacheLookup::HitFailed(failed) => {
-                commands.entity(entity).insert(failed);
+                commands.entity(entity).try_insert(failed);
             }
             CacheLookup::InFlight | CacheLookup::Enqueued => {
-                commands.entity(entity).insert(Enqueued);
+                commands.entity(entity).try_insert(Enqueued);
             }
         }
     }
@@ -1225,8 +1233,8 @@ pub fn drain_completed_decodes(mut server: ResMut<AssetServer>, mut commands: Co
                 server.insert_failure(result.path, failure);
                 for w in surviving {
                     let mut ec = commands.entity(w.entity);
-                    ec.remove::<Enqueued>();
-                    ec.insert(ImageLoadFailed {
+                    ec.try_remove::<Enqueued>();
+                    ec.try_insert(ImageLoadFailed {
                         kind: clone_kind(&kind_copy),
                         detail: detail.clone(),
                     });
@@ -1380,6 +1388,54 @@ mod tests {
                 .unwrap()
                 .last_changed(),
             tick
+        );
+    }
+
+    /// A waiter registered at enqueue time can be despawned before its
+    /// decode lands - a script handler rebuilding a `<for>` list does
+    /// exactly that. The drain must drop the write instead of panicking on
+    /// a dead entity, and a live waiter for the same path still gets its
+    /// verdict.
+    #[test]
+    fn a_decode_for_a_despawned_waiter_is_dropped() {
+        use bevy_ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let path = PathBuf::from("/tmp/lumen-drain-despawned.png");
+        let gone = world.spawn(ImageSource(path.clone())).id();
+        let alive = world.spawn(ImageSource(path.clone())).id();
+        world.despawn(gone);
+
+        let mut server = AssetServer::default();
+        server.pending.insert(
+            path.clone(),
+            vec![
+                PendingWaiter {
+                    entity: gone,
+                    request_id: 0,
+                },
+                PendingWaiter {
+                    entity: alive,
+                    request_id: 0,
+                },
+            ],
+        );
+        server
+            .result_tx
+            .as_ref()
+            .expect("result channel")
+            .send(DecodeResult {
+                path,
+                request_id: 0,
+                outcome: Err(LoadErrorKind::NotFound),
+            })
+            .expect("queue the decode result");
+        world.insert_resource(server);
+
+        world.run_system_once(drain_completed_decodes).unwrap();
+
+        assert!(
+            world.get::<ImageLoadFailed>(alive).is_some(),
+            "the live waiter still gets the verdict"
         );
     }
 

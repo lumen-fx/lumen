@@ -95,9 +95,6 @@ pub struct RowFills {
     bodies: BTreeMap<String, Element>,
     /// Array name and row count of the `<for>` block at this node path.
     blocks: BTreeMap<String, (String, usize)>,
-    /// Every component a row template names, and whether any row's call
-    /// produced a body for it.
-    components: BTreeMap<String, bool>,
 }
 
 impl RowFills {
@@ -122,28 +119,6 @@ impl RowFills {
         self.blocks
             .get(path)
             .map(|(array, rows)| (array.as_str(), *rows))
-    }
-
-    /// Record what the call at a row's marker for `name` produced.
-    ///
-    /// One name is recorded once per row it stands in, so a component that
-    /// built a body for any row of any block counts as working.
-    pub fn with_component(&mut self, name: String, filled: bool) {
-        let known = self.components.entry(name).or_insert(false);
-        *known |= filled;
-    }
-
-    /// Every component a row named that no row built a body for.
-    ///
-    /// The rows are where a component inside a `<for>` is judged: its marker
-    /// stays in the template whether or not the call worked, so the template
-    /// says nothing, and a name that came back empty from every row it stands
-    /// in is one the build reports.
-    pub fn unfilled_components(&self) -> impl Iterator<Item = &str> {
-        self.components
-            .iter()
-            .filter(|(_, filled)| !**filled)
-            .map(|(name, _)| name.as_str())
     }
 
     /// True when no component was filled inside any row.

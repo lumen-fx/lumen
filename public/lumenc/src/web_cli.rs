@@ -432,7 +432,7 @@ fn build(options: &Options) -> Result<Report, String> {
     // is what that page shows. The seed is read again below, once the bodies
     // are in the tree, because a body can declare a signal default of its own.
     let declared = declared_seed(&seed_values(&cfg, &compiled.ir.root, prerender));
-    let seeded_fills =
+    let (seeded_fills, browser_filled) =
         crate::component_fill::fill(&mut compiled, &plan.entry_key, &declared, &mut warnings);
 
     // Assets travel with the site, so every `<image src>` is rewritten from
@@ -493,7 +493,7 @@ fn build(options: &Options) -> Result<Report, String> {
     };
 
     let scripts = script_refs(&compiled, &mut warnings);
-    check_exports(&compiled, &seeded_fills, &mut warnings);
+    check_exports(&compiled, &browser_filled, &mut warnings);
     let locales = locales(options, &cfg);
     // Read once and used twice: the build resolves `translatable` into every
     // tree it writes, and the same bytes travel with the site so the browser
@@ -1301,9 +1301,16 @@ fn script_refs(compiled: &CompiledApp, warnings: &mut Vec<String>) -> Vec<Script
 ///
 /// A component the build could not stand in for is the same failure with a
 /// worse symptom: the page carries the box the call was to fill, and an empty
-/// box is what a reader would not notice.
-fn check_exports(compiled: &CompiledApp, fills: &RowFills, warnings: &mut Vec<String>) {
-    let components = reportable(components_called(compiled), fills);
+/// box is what a reader would not notice. `browser_filled` names the markers
+/// the fill pass left standing on purpose, which are the ones nothing called
+/// and so the ones this must not speak for.
+fn check_exports(
+    compiled: &CompiledApp,
+    browser_filled: &BTreeSet<String>,
+    warnings: &mut Vec<String>,
+) {
+    let mut exported: BTreeSet<String> = BTreeSet::new();
+    let mut read_any = false;
     for script in &compiled.scripts {
         let Some(read_back) = lumen_runtime::run::script_exports(script) else {
             continue;
@@ -1321,104 +1328,98 @@ fn check_exports(compiled: &CompiledApp, fills: &RowFills, warnings: &mut Vec<St
                 continue;
             }
         };
-        let declared = defined_functions(&script.source);
-        for name in called_by_name(&script.source) {
+        for (name, params) in called_by_name(&script.source) {
             if !exports.contains(&name) {
                 warnings.push(format!(
                     "`{name}` is called by name and the compiled program does not export it, so \
-                     nothing happens when it is called; annotate every parameter it takes, as in \
-                     `fn {name}(id: any)`"
+                     nothing happens when it is called{}",
+                    annotation_advice(&name, &params)
                 ));
             }
         }
-        // Every name still here is one the build ran and could not fill, so
-        // each gets the reason it could not be. A component the build did fill
-        // is its body by now and names nothing.
-        for name in components.iter().filter(|name| declared.contains(*name)) {
-            if exports.contains(name) {
-                warnings.push(format!(
-                    "`{name}` returned no markup when the build called it, so the page carries an \
-                     empty box where its body belongs; a component returns one `lmn!` block"
-                ));
-            } else {
-                warnings.push(format!(
-                    "the markup writes `<{name}/>`, and the compiled program does not export \
-                     `{name}`, so the page carries an empty box where its body belongs; annotate \
-                     every parameter it takes, as in `fn {name}(id: any)`"
-                ));
-            }
+        exported.extend(exports);
+        read_any = true;
+    }
+
+    // A component belongs to the app, not to whichever script the loop above
+    // was on, so it is judged once against everything the app exports. With no
+    // export list read there is nothing to judge it against.
+    if !read_any {
+        return;
+    }
+    // Every name still here is one the build ran and could not fill, so each
+    // gets the reason it could not be. A component the build did fill is its
+    // body by now and names nothing, and one the build left standing on
+    // purpose was never called to judge.
+    for name in components_called(compiled).difference(browser_filled) {
+        if exported.contains(name) {
+            warnings.push(format!(
+                "`{name}` returned no markup when the build called it, so the page carries an \
+                 empty box where its body belongs; a component returns one `lmn!` block"
+            ));
+        } else {
+            let params = compiled
+                .fragments
+                .component(name)
+                .map(|component| component.params.clone())
+                .unwrap_or_default();
+            warnings.push(format!(
+                "the markup writes `<{name}/>`, and the compiled program does not export \
+                 `{name}`, so the page carries an empty box where its body belongs{}",
+                annotation_advice(name, &params)
+            ));
         }
     }
 }
 
-/// The component names the export check speaks for.
+/// The half of a warning that says how to make the program export `name`,
+/// written out of the parameters the function declares.
 ///
-/// A component inside a `<for>` renders a body per row, so its marker stays in
-/// the row template whether or not the call worked, and the marker alone says
-/// nothing about the name. What the run read off the rows does, per name: one
-/// that built a body for a row is working, and one that came back empty from
-/// every row it stands in is the one to report. A name no row was rendered for
-/// is left alone, because nothing was called to judge it by.
-fn reportable(called: ComponentsCalled, fills: &RowFills) -> BTreeSet<String> {
-    let mut components = called.outside;
-    components.extend(
-        fills
-            .unfilled_components()
-            .filter(|name| called.in_a_row.contains(*name))
-            .map(str::to_string),
-    );
-    components
+/// candela exports a function only when every parameter it takes is
+/// annotated, so the advice is the function's own parameter list with an
+/// annotation on each one, which is text an author can paste. A function that
+/// takes nothing is exported as written, so a missing name there is not an
+/// annotation problem and the sentence ends where it is.
+fn annotation_advice(name: &str, params: &[String]) -> String {
+    if params.is_empty() {
+        return String::new();
+    }
+    let signature: Vec<String> = params.iter().map(|param| format!("{param}: any")).collect();
+    format!(
+        "; annotate every parameter it takes, as in `fn {name}({})`",
+        signature.join(", ")
+    )
 }
 
-/// Every component the build could not stand in for, which the runtime fills
-/// by calling the function of that name.
-struct ComponentsCalled {
-    /// Names written where one call renders one body, so a marker left
-    /// standing is a call the build could not make.
-    outside: BTreeSet<String>,
-    /// Names written inside a `<for>` row template, whose marker stays where
-    /// it is however well the call works.
-    in_a_row: BTreeSet<String>,
-}
-
-/// Split every component name the tree names by whether it is written inside
-/// a `<for>`.
+/// Every component name the tree names, which the runtime fills by calling the
+/// function of that name.
 ///
 /// The fragment bodies are walked as well as the page tree: a body is a
 /// subtree like any other and can name a component of its own, which reaches
 /// the page the moment something instantiates it.
-fn components_called(compiled: &CompiledApp) -> ComponentsCalled {
-    fn walk(el: &Element, in_a_row: bool, out: &mut ComponentsCalled) {
+fn components_called(compiled: &CompiledApp) -> BTreeSet<String> {
+    fn walk(el: &Element, out: &mut BTreeSet<String>) {
         if let Some(use_site) = &el.frag_use {
-            let names = if in_a_row {
-                &mut out.in_a_row
-            } else {
-                &mut out.outside
-            };
-            names.insert(use_site.key.clone());
+            out.insert(use_site.key.clone());
         }
-        let rows = in_a_row || el.tag == "for";
         for child in &el.children {
-            walk(child, rows, out);
+            walk(child, out);
         }
     }
-    let mut out = ComponentsCalled {
-        outside: BTreeSet::new(),
-        in_a_row: BTreeSet::new(),
-    };
-    walk(&compiled.ir.root, false, &mut out);
+    let mut out = BTreeSet::new();
+    walk(&compiled.ir.root, &mut out);
     for (_, fragment) in compiled.fragments.iter() {
         for el in &fragment.body {
-            walk(el, false, &mut out);
+            walk(el, &mut out);
         }
     }
     out
 }
 
-/// Every function `source` defines that something calls by name: a handler
-/// bound by name, a derivation body, or one of the `on_` names Lumen calls
-/// when the thing they stand for happens.
-fn called_by_name(source: &str) -> BTreeSet<String> {
+/// Every function `source` defines that something calls by name, with the
+/// parameters it takes: a handler bound by name, a derivation body, or one of
+/// the `on_` names Lumen calls when the thing they stand for happens.
+fn called_by_name(source: &str) -> BTreeMap<String, Vec<String>> {
     let quoted: BTreeSet<&str> = source
         .split('"')
         .skip(1)
@@ -1427,26 +1428,40 @@ fn called_by_name(source: &str) -> BTreeSet<String> {
         .collect();
     defined_functions(source)
         .into_iter()
-        .filter(|name| name.starts_with("on_") || quoted.contains(name.as_str()))
+        .filter(|(name, _)| name.starts_with("on_") || quoted.contains(name.as_str()))
         .collect()
 }
 
-/// The names of the functions `source` declares.
-fn defined_functions(source: &str) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
+/// The functions `source` declares, each with the names of its parameters.
+fn defined_functions(source: &str) -> BTreeMap<String, Vec<String>> {
+    let mut functions = BTreeMap::new();
     for line in source.lines() {
         let Some(rest) = line.trim_start().strip_prefix("fn ") else {
             continue;
         };
-        let Some((name, _)) = rest.split_once('(') else {
+        let Some((name, rest)) = rest.split_once('(') else {
             continue;
         };
         let name = name.trim();
         if is_identifier(name) {
-            names.insert(name.to_string());
+            functions.insert(name.to_string(), parameter_names(rest));
         }
     }
-    names
+    functions
+}
+
+/// The parameter names in a `fn` line, read off the text after its opening
+/// parenthesis. An annotation a parameter already carries is left off, so a
+/// list that is already annotated comes back the way it went in.
+fn parameter_names(rest: &str) -> Vec<String> {
+    rest.split(')')
+        .next()
+        .unwrap_or_default()
+        .split(',')
+        .map(|param| param.split(':').next().unwrap_or_default().trim())
+        .filter(|name| is_identifier(name))
+        .map(str::to_string)
+        .collect()
 }
 
 /// True for a name a script could declare a function under.
@@ -1697,34 +1712,34 @@ mod tests {
         assert!(error.contains("my-laptop"), "{error}");
     }
 
-    fn named(names: &[&str]) -> BTreeSet<String> {
-        names.iter().map(|name| name.to_string()).collect()
+    /// The fix a warning prints is the function's own parameter list, not a
+    /// stand-in: pasting it is the whole remedy.
+    #[test]
+    fn the_suggested_signature_names_the_parameters_the_function_takes() {
+        let params = vec!["name".to_string(), "count".to_string()];
+        assert_eq!(
+            annotation_advice("Greet", &params),
+            "; annotate every parameter it takes, as in `fn Greet(name: any, count: any)`"
+        );
     }
 
-    /// Two components in one row template, one of which built nothing: the
-    /// working one is not accused because the broken one is reported.
+    /// candela exports a function that takes nothing, so a missing name there
+    /// is not an annotation problem and the sentence stops.
     #[test]
-    fn a_row_component_answers_for_itself_and_not_for_the_others() {
-        let called = ComponentsCalled {
-            outside: named(&["Shout"]),
-            in_a_row: named(&["Ticket", "Stamp"]),
-        };
-        let mut fills = RowFills::default();
-        fills.with_component("Ticket".to_string(), true);
-        fills.with_component("Stamp".to_string(), false);
-
-        assert_eq!(reportable(called, &fills), named(&["Shout", "Stamp"]));
+    fn a_function_that_takes_nothing_is_told_to_annotate_nothing() {
+        assert!(annotation_advice("on_start", &[]).is_empty());
     }
 
-    /// A row nothing was rendered for says nothing about the names in its
-    /// template: no call was made to judge them by.
     #[test]
-    fn a_row_that_never_rendered_accuses_nobody() {
-        let called = ComponentsCalled {
-            outside: BTreeSet::new(),
-            in_a_row: named(&["Ticket"]),
-        };
+    fn a_parameter_list_is_read_with_and_without_its_annotations() {
+        let functions = defined_functions("fn Greet(name, count) {}\nfn Row(label: any) {}\n");
+        assert_eq!(functions["Greet"], vec!["name", "count"]);
+        assert_eq!(functions["Row"], vec!["label"]);
+    }
 
-        assert!(reportable(called, &RowFills::default()).is_empty());
+    #[test]
+    fn a_function_that_takes_nothing_has_an_empty_parameter_list() {
+        let functions = defined_functions("fn main() {}\n");
+        assert!(functions["main"].is_empty());
     }
 }
