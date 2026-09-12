@@ -12,9 +12,9 @@
 //! reaches `user` with `/7` left on the `route.segment` signal for the page
 //! to read.
 //!
-//! [`RouteHistory`] is the back/forward stack a desktop app keeps in memory.
-//! A browser has one of its own; the navigation surface is the same either
-//! way, and only the history behind it changes.
+//! [`RouteHistory`] is the back/forward stack an app keeps in memory. A
+//! desktop window steps through it; a browser hands back and forward to its
+//! own history instead, and a `popstate` comes back here as a navigation.
 
 use bevy_ecs::prelude::*;
 use lumen_core::nav::{self, NavOp};
@@ -43,8 +43,20 @@ pub struct Location {
     pub segment: String,
 }
 
-/// In-memory back/forward history (desktop). The web target replaces this
-/// with the real History API; the navigation surface is identical.
+impl Location {
+    /// The location of a page opened at its own address, with nothing left
+    /// over: what a desktop app opens on, and what a build renders.
+    pub fn page(key: impl Into<String>) -> Self {
+        Self {
+            path: key.into(),
+            segment: String::new(),
+        }
+    }
+}
+
+/// In-memory back/forward history. A desktop window steps through this; in a
+/// browser the browser's own history is what answers back and forward, and
+/// this records where the app has been without being stepped.
 #[derive(Clone, Debug, Resource)]
 pub struct RouteHistory {
     /// Visited locations, oldest first.
@@ -66,27 +78,32 @@ impl RouteHistory {
 /// artifact end up calling; they differ only in where the page set came from,
 /// a directory listing in one case and [`lumen_ir::artifact::CompiledPages`]
 /// in the other.
-pub fn install_routing(app: &mut lumen_core::app::App, entry: String, keys: Vec<String>) {
+///
+/// `entry` and `keys` are the site: its home page and every page it holds,
+/// which is what a later navigation resolves against. `at` is where this app
+/// opens, which is a question about the address it was asked for: a window
+/// opens on the entry with nothing left over, and a document served for
+/// `/user/42` opens on `user` with `/42` in hand.
+pub fn install_routing(
+    app: &mut lumen_core::app::App,
+    entry: String,
+    keys: Vec<String>,
+    at: Location,
+) {
     use lumen_core::tick::TickStage;
 
-    // Seed the reserved signals so the entry page's `<if>` gate mounts on the
-    // first reconcile pass.
+    // Seed the reserved signals so the opening page's `<if>` gate mounts on
+    // the first reconcile pass.
     {
         let mut store = app.world.resource_mut::<PropertyStore>();
-        store.set_global_str(nav::PATH_SIGNAL, entry.as_str());
-        store.set_global_str(nav::SEGMENT_SIGNAL, "");
+        store.set_global_str(nav::PATH_SIGNAL, at.path.as_str());
+        store.set_global_str(nav::SEGMENT_SIGNAL, at.segment.as_str());
     }
-    nav::set_current(&entry);
+    nav::set_current(&at.path);
 
-    app.world.insert_resource(PageRegistry {
-        entry: entry.clone(),
-        keys,
-    });
+    app.world.insert_resource(PageRegistry { entry, keys });
     app.world.insert_resource(RouteHistory {
-        stack: vec![Location {
-            path: entry,
-            segment: String::new(),
-        }],
+        stack: vec![at],
         cursor: 0,
     });
 

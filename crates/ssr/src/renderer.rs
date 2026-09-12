@@ -7,11 +7,9 @@ use std::thread::JoinHandle;
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::{IntoScheduleConfigs, ResMut, Resource};
 use crossbeam_channel::{Sender, unbounded};
-use lumen_core::nav::SEGMENT_SIGNAL;
 use lumen_core::prelude::TickStage;
-use lumen_core::property_store::PropertyStore;
 use lumen_core::request;
-use lumen_prerender::{Booted, Budget, Settled};
+use lumen_prerender::{Booted, Budget, Location, Settled};
 use lumen_script::ScriptSet;
 use lumen_script::http::{HttpDispatch, ThreadDispatch};
 use lumen_script::runtime::ScriptCommandEvent;
@@ -240,7 +238,15 @@ fn render_one(
     let Booted {
         mut app,
         unsupported_engines,
-    } = lumen_prerender::boot(site.compiled(), &key, site.seed(), dispatch);
+    } = lumen_prerender::boot(
+        site.compiled(),
+        &Location {
+            path: key.clone(),
+            segment,
+        },
+        site.seed(),
+        dispatch,
+    );
     for engine in unsupported_engines {
         warnings.push(format!(
             "the app carries a `{engine}` program, which this renderer has no host for; what it \
@@ -261,13 +267,6 @@ fn render_one(
         }
     }
 
-    // The request cells went in with the app, ahead of its scripts. What is
-    // left is the part of the address the page set answers for: the tail of a
-    // path whose page is `/user`, which the router works out and the page
-    // reads.
-    app.world
-        .resource_mut::<PropertyStore>()
-        .set_global_str(SEGMENT_SIGNAL, segment.as_str());
     app.world.init_resource::<ResponseState>();
     app.world.init_resource::<RenderedDom>();
     app.add_systems(

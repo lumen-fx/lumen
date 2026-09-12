@@ -15,8 +15,8 @@ use std::fmt;
 
 use js_sys::Uint8Array;
 use lumen_html::contract::{
-    DATA_LM_BASE, DATA_LM_CONTRACT, DATA_LM_LOCALE, DATA_LM_PAGE, DEFAULT_MANIFEST_FILE,
-    LM_CONTRACT_VERSION, Manifest, SEED_SCRIPT_ID, Seed,
+    DATA_LM_BASE, DATA_LM_CONTRACT, DATA_LM_LOCALE, DEFAULT_MANIFEST_FILE, LM_CONTRACT_VERSION,
+    Manifest, SEED_SCRIPT_ID, Seed,
 };
 use lumen_html::urls::join;
 use lumen_ir::artifact::{self, CompiledApp};
@@ -31,8 +31,6 @@ pub struct PageContext {
     pub document: Document,
     /// Site root every path in the manifest hangs off, with a trailing slash.
     pub base: String,
-    /// Page key this document was emitted for.
-    pub page: String,
     /// Locale this document was emitted for.
     ///
     /// The document's own, not the manifest's: a site writes one manifest,
@@ -158,7 +156,6 @@ impl PageContext {
         }
         Ok(Self {
             base: attribute(DATA_LM_BASE)?,
-            page: attribute(DATA_LM_PAGE)?,
             locale: attribute(DATA_LM_LOCALE)?,
             document,
         })

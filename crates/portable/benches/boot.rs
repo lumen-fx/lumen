@@ -26,7 +26,7 @@ use lumen_core::prelude::App;
 use lumen_ir::artifact::{self, CompiledApp};
 use lumen_portable::{hosts, portable_app};
 use lumen_prerender::{Budget, Settled, settle, state};
-use lumen_scene::routing::install_routing;
+use lumen_scene::routing::{Location, install_routing};
 use lumen_scene::spawn::SpawnIntoWorld;
 
 /// Sample count when the command line names none.
@@ -120,7 +120,12 @@ fn boot(compiled: &CompiledApp, report: &mut Report) -> App {
 
     let start = Instant::now();
     if let Some(pages) = &compiled.pages {
-        install_routing(&mut app, pages.entry.clone(), pages.keys.clone());
+        install_routing(
+            &mut app,
+            pages.entry.clone(),
+            pages.keys.clone(),
+            Location::page(&pages.entry),
+        );
     }
     report.routing.push(start.elapsed());
 

@@ -197,7 +197,7 @@ fn the_windowless_assembly_builds_the_same_tree() {
     let compiled = lumenc::compile_app(&fixture()).expect("the fixture compiles");
     let mut booted = lumen_prerender::boot(
         &compiled,
-        "main",
+        &lumen_prerender::Location::page("main"),
         &lumen_html::contract::Seed::new(),
         Arc::new(lumen_prerender::DenyDispatch::default()),
     );
@@ -244,7 +244,7 @@ fn a_filled_tree_still_builds_what_the_runtime_builds() {
 
     let mut booted = lumen_prerender::boot(
         &compiled,
-        "main",
+        &lumen_prerender::Location::page("main"),
         &lumen_html::contract::Seed::new(),
         Arc::new(lumen_prerender::DenyDispatch::default()),
     );

@@ -45,6 +45,9 @@ use lumen_web::{RowFills, State, state_of};
 
 pub use deny::DenyDispatch;
 pub use fills::{root_entity, row_fills};
+/// Where a render is for: the page, and the part of the path it answers for.
+/// Re-exported because it is what [`boot`] is asked in terms of.
+pub use lumen_scene::routing::Location;
 
 /// Where a script an app carries is said to have come from, in a load error.
 /// A run has the compiled program and not the file it was written in.
@@ -121,7 +124,12 @@ pub struct Booted {
     pub unsupported_engines: Vec<String>,
 }
 
-/// Build `compiled` as the page `key`, ready to tick.
+/// Build `compiled` for the address `at`, ready to tick.
+///
+/// `at` is the location this render is for: the page it opens on and the part
+/// of the path that page answers for. A build renders each page at its own
+/// address, which is [`Location::page`]; a server renders whatever the
+/// request resolved to.
 ///
 /// `seed` is the state the app starts from, the values an author declared;
 /// what the app writes over them wins, the same way it does in a browser.
@@ -132,7 +140,7 @@ pub struct Booted {
 /// empties them on the way in so it starts from its own state alone.
 pub fn boot(
     compiled: &CompiledApp,
-    key: &str,
+    at: &Location,
     seed: &Seed,
     dispatch: Arc<dyn HttpDispatch>,
 ) -> Booted {
@@ -171,12 +179,17 @@ pub fn boot(
         }
     }
 
+    let entry = compiled
+        .pages
+        .as_ref()
+        .map(|pages| pages.entry.clone())
+        .unwrap_or_else(|| at.path.clone());
     let keys = compiled
         .pages
         .as_ref()
         .map(|pages| pages.keys.clone())
-        .unwrap_or_else(|| vec![key.to_string()]);
-    install_routing(&mut app, key.to_string(), keys);
+        .unwrap_or_else(|| vec![at.path.clone()]);
+    install_routing(&mut app, entry, keys, at.clone());
 
     apply_seed(&mut app.world, seed);
     let root = compiled.spawn_into(&mut app.world);
@@ -192,9 +205,17 @@ pub fn boot(
 
 /// Run `compiled` as the page `key` and read the state it settles into, with
 /// the network answered by the run itself.
+///
+/// A build serves each page at its own address, so the page is rendered with
+/// nothing left over on `route.segment`.
 pub fn page(compiled: &CompiledApp, key: &str, seed: &Seed, budget: Budget) -> Prerendered {
     let denied = DenyDispatch::default();
-    let mut booted = boot(compiled, key, seed, Arc::new(denied.clone()));
+    let mut booted = boot(
+        compiled,
+        &Location::page(key),
+        seed,
+        Arc::new(denied.clone()),
+    );
     let (state, settled) = settle(&mut booted.app, budget);
     // Off the world the run settled into, before it goes: a row's component
     // body exists nowhere else.

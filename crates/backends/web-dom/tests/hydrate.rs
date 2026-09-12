@@ -27,6 +27,7 @@ use lumen_html::contract::{DATA_LM, DATA_LM_DRAG_OVER, DATA_LM_HIDDEN};
 use lumen_ir::layout_ir::{
     Attributes, BindKind, BindSpec, Element as IrElement, IfModeSpec, InterpolationSlot, LayoutIR,
 };
+use lumen_scene::routing::Location;
 use lumen_scene::spawn;
 use lumen_scene::spawn::SpawnIntoWorld;
 use lumen_web::{PageSpec, SignalEnv, SiteSpec, WebSpec};
@@ -369,7 +370,12 @@ fn hydrate_site(site: &SiteSpec, ir: LayoutIR, root: Element, soft: bool) -> App
     let mut app = App::new();
     app.extract_fns.clear();
     app.world.init_resource::<PropertyStore>();
-    lumen_scene::routing::install_routing(&mut app, "index".to_string(), site_keys(site));
+    lumen_scene::routing::install_routing(
+        &mut app,
+        "index".to_string(),
+        site_keys(site),
+        Location::page("index"),
+    );
     app.add_systems(TickStage::Systems, spawn::reconcile_if_blocks);
     let root_entity = ir.spawn_into(&mut app.world);
     let routes = soft.then(|| site_routes(site));
@@ -555,7 +561,12 @@ fn the_browser_s_back_button_opens_the_page_its_address_names() {
     let mut app = App::new();
     app.extract_fns.clear();
     app.world.init_resource::<PropertyStore>();
-    lumen_scene::routing::install_routing(&mut app, "settings".to_string(), site_keys(&site));
+    lumen_scene::routing::install_routing(
+        &mut app,
+        "index".to_string(),
+        site_keys(&site),
+        Location::page("settings"),
+    );
     app.add_systems(TickStage::Systems, spawn::reconcile_if_blocks);
     let root_entity = gated_tree().spawn_into(&mut app.world);
     let routes = Some(site_routes(&site));
