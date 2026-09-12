@@ -529,6 +529,93 @@ fn a_function_the_program_cannot_be_called_by_is_named() {
     assert!(stderr.contains("does not export it"), "{stderr}");
 }
 
+/// Write one app whose only component is `fn Greet` as `source` declares it,
+/// and hand back the directory it sits in.
+fn component_app(scratch: &Path, markup: &str, source: &str) -> PathBuf {
+    let app = scratch.join("app");
+    std::fs::create_dir_all(app.join("src")).expect("create the app directory");
+    std::fs::write(
+        app.join("lumen.toml"),
+        "[app]\nentry = \"main.lmn\"\nid = \"lumen.test.component\"\n\n[script]\nengine = \
+         \"candela\"\n",
+    )
+    .expect("write lumen.toml");
+    std::fs::write(app.join("src").join("main.lmn"), markup).expect("write the markup");
+    std::fs::write(app.join("src").join("main.cdl"), source).expect("write the script");
+    app
+}
+
+/// Build `app` and hand back its exit status and what it printed.
+fn build_app(app: &Path, scratch: &Path, extra: &[&str]) -> (bool, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_lumenc"))
+        .arg("web")
+        .arg(app)
+        .arg("--out")
+        .arg(scratch.join("site"))
+        .arg("--lib-dir")
+        .arg(runtime_dir(scratch))
+        .args(extra)
+        .output()
+        .expect("running lumenc web");
+    (
+        output.status.success(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+    )
+}
+
+/// The fix the build prints is the component's own parameter list, so an
+/// author can paste it. A made-up list would send someone writing `fn
+/// Greet(id: any)` over a function that never took an `id`.
+#[test]
+fn an_unexported_component_is_named_with_the_signature_to_write() {
+    let scratch = scratch("component-signature");
+    let app = component_app(
+        &scratch,
+        "<root>\n  <Greet name=\"world\" />\n  <script src=\"main.cdl\" />\n</root>\n",
+        "import \"lumen.cdl\";\n\nfn Greet(name, count) {\n    let who = str(name) + \
+         str(count);\n    return lmn!(<label text=\"{who}\" />);\n}\n\nfn main() {}\n",
+    );
+
+    let (ok, stderr) = build_app(&app, &scratch, &[]);
+    assert!(ok, "{stderr}");
+    assert!(stderr.contains("does not export `Greet`"), "{stderr}");
+    assert!(
+        stderr.contains("`fn Greet(name: any, count: any)`"),
+        "{stderr}"
+    );
+
+    // The same gap is a failed build for anyone who asks for one.
+    let (ok, stderr) = build_app(&app, &scratch, &["--strict"]);
+    assert!(!ok, "--strict has a warning to fail on: {stderr}");
+    assert!(stderr.contains("--strict"), "{stderr}");
+}
+
+/// A component inside a `<for>` is left standing on purpose: the tree holds
+/// the row template and each row's body is written into the row. It gets the
+/// one warning that says so, and not a second one accusing the build of
+/// calling it.
+#[test]
+fn a_component_inside_a_for_is_reported_once() {
+    let scratch = scratch("component-row");
+    let app = component_app(
+        &scratch,
+        "<root>\n  <for each=\"rows\" key=\"id\">\n    <Row label=\"{row.label}\" />\n  \
+         </for>\n  <script src=\"main.cdl\" />\n</root>\n",
+        "import \"lumen.cdl\";\n\nfn Row(label) {\n    let t = str(label);\n    return \
+         lmn!(<label text=\"{t}\" />);\n}\n\nfn on_start() {\n    \
+         lumen::signal_array_set(\"rows\", [{\"id\": \"a\", \"label\": \"Alpha\"}]);\n}\
+         \n\nfn main() {}\n",
+    );
+
+    // The rows only exist once the app has run, and the row is where the
+    // build reads what the component built.
+    let (ok, stderr) = build_app(&app, &scratch, &["--prerender", "run"]);
+    assert!(ok, "{stderr}");
+    let mentions = stderr.matches("`Row`").count();
+    assert_eq!(mentions, 1, "{stderr}");
+    assert!(stderr.contains("is written inside a `<for>`"), "{stderr}");
+}
+
 #[test]
 fn a_base_path_roots_every_reference() {
     let scratch = scratch("base");

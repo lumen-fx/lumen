@@ -124,12 +124,6 @@ pub fn row_fills(app: &mut App) -> RowFills {
                 fills.with_body(visit.path.to_string(), built);
                 body = true;
             }
-            // A marker in the template is a call the run made for this row,
-            // and what stands here says how it went: the body it returned, or
-            // the marker itself where it returned nothing.
-            if let Some(use_site) = template.and_then(|el| el.frag_use.as_ref()) {
-                fills.with_component(use_site.key.clone(), body);
-            }
             let rows = world.get::<ForMarker>(visit.entity).map(|marker| {
                 // The count is the list's, not the child list's: a block whose
                 // template is two elements holds two children per row.

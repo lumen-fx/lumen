@@ -511,7 +511,8 @@ none of them means anything without an absolute address.
   [Composition](composition.md#a-component-on-the-web).
 - A component that has to run must annotate its parameters, or the compiled
   program has no name to call it by, and it is emitted as an empty element. The
-  build warns, naming the component.
+  build warns, naming the component and the annotated signature to write in its
+  place; `--strict` makes that warning a failed build.
 - A component written inside a `<for>` is called once per row while the site is
   built, and each body is written into the row it belongs to, wherever the rows
   are known: a list `[web.seed]` declares, or one a `prerender = "run"` capture

@@ -279,12 +279,11 @@ fn an_empty_list_records_the_block_and_no_bodies() {
 /// A row template naming two components, one of which the program does not
 /// declare.
 ///
-/// Each name answers for itself: the one whose call built a body is working
-/// however the other went, and the one no row built anything for is the one
-/// the build reports. Nothing here is judged by the marker in the template,
-/// which stays where it is either way.
+/// Each row position answers for itself: the call that built a body is
+/// recorded at its own node path however the other went, and the one that
+/// built nothing leaves its path empty, which is where the emitter reports it.
 #[test]
-fn a_row_names_the_component_no_row_built_a_body_for() {
+fn a_row_records_a_body_only_where_the_call_built_one() {
     let _turn = in_turn();
     let mut ir = tree();
     let mut absent = marker("{title}");
@@ -299,16 +298,12 @@ fn a_row_names_the_component_no_row_built_a_body_for() {
 
     let fills = row_fills(&mut app);
 
-    assert_eq!(
-        fills.unfilled_components().collect::<Vec<_>>(),
-        ["Missing"],
-        "{}",
-        dump(&mut app)
-    );
     // The rows are laid end to end, so a two-element template puts the second
-    // row's first element four places along.
+    // row's first element two places along.
     assert!(fills.body("0.1::0").is_some(), "{}", dump(&mut app));
     assert!(fills.body("0.1::2").is_some(), "{}", dump(&mut app));
+    assert!(fills.body("0.1::1").is_none(), "{}", dump(&mut app));
+    assert!(fills.body("0.1::3").is_none(), "{}", dump(&mut app));
 }
 
 /// A component the build left a marker for is filled by calling the function,
