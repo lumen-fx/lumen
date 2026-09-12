@@ -327,7 +327,12 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     // one. An app loaded from source uses the plan discovered from its files.
     match (&compiled_pages, &page_plan) {
         (Some(pages), _) => {
-            crate::pages::install_routing(&mut app, pages.entry.clone(), pages.keys.clone());
+            crate::pages::install_routing(
+                &mut app,
+                pages.entry.clone(),
+                pages.keys.clone(),
+                crate::pages::Location::page(&pages.entry),
+            );
         }
         (None, Some(plan)) if plan.multipage => crate::pages::install(&mut app, plan),
         _ => {}

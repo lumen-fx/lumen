@@ -21,7 +21,7 @@ use lumen_html::contract::Seed;
 use lumen_ir::artifact::{CompiledApp, CompiledScript};
 use lumen_ir::fragment::{Fragment, FragmentKind, FragmentParam, FragmentTable};
 use lumen_ir::layout_ir::{Attributes, Element, FragmentUse, InterpolationSlot, LayoutIR};
-use lumen_prerender::{Budget, DenyDispatch, boot, row_fills, settle};
+use lumen_prerender::{Budget, DenyDispatch, Location, boot, row_fills, settle};
 
 /// The program the build script compiled: a component that has to run, and an
 /// `on_ready` that mounts a fragment by key.
@@ -162,7 +162,12 @@ fn run_with(seed: &Seed) -> App {
 fn run_tree(ir: LayoutIR, seed: &Seed) -> App {
     let mut compiled = compiled();
     compiled.ir = ir;
-    let mut booted = boot(&compiled, "index", seed, Arc::new(DenyDispatch::default()));
+    let mut booted = boot(
+        &compiled,
+        &Location::page("index"),
+        seed,
+        Arc::new(DenyDispatch::default()),
+    );
     settle(&mut booted.app, Budget::default());
     booted.app
 }
@@ -331,7 +336,7 @@ fn a_key_the_table_lost_builds_nothing_and_the_run_goes_on() {
         compiled.fragments = FragmentTable::new();
         let mut booted = boot(
             &compiled,
-            "index",
+            &Location::page("index"),
             &Seed::new(),
             Arc::new(DenyDispatch::default()),
         );

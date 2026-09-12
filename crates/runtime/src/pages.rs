@@ -371,7 +371,12 @@ pub fn collect_fragments(
 /// because a from-source run reloads pages from the files it names. A compiled
 /// app has no files to reload and installs through [`install_routing`].
 pub fn install(app: &mut lumen_core::app::App, plan: &PagePlan) {
-    install_routing(app, plan.entry_key.clone(), plan.keys());
+    install_routing(
+        app,
+        plan.entry_key.clone(),
+        plan.keys(),
+        Location::page(&plan.entry_key),
+    );
     app.world.insert_resource(plan.clone());
 }
 

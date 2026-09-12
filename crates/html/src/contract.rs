@@ -417,6 +417,50 @@ pub struct Manifest {
     pub scripts: Vec<ScriptRef>,
 }
 
+impl Manifest {
+    /// Every page key of this site.
+    pub fn page_keys(&self) -> Vec<String> {
+        self.pages.keys().cloned().collect()
+    }
+
+    /// The page an address opens, and the part of the path that page answers
+    /// for.
+    ///
+    /// A document is served at its own address, so most of the time this is a
+    /// lookup: `/settings.html` is the `settings` page with nothing left over.
+    /// A deep path has no file of its own and is served the shell, and then
+    /// this is the resolution the desktop does for a navigation: `/user/42`
+    /// opens `user` with `/42` on it, and an address no page answers for opens
+    /// the entry with the whole path on it.
+    pub fn page_at(&self, path: &str) -> (String, String) {
+        // The site's own prefix comes off first: everything below is written
+        // relative to the root, and a site hung off `/docs/` says so once.
+        let rest = match path.strip_prefix(&self.base_path) {
+            Some(rest) => rest,
+            None => path.trim_start_matches('/'),
+        };
+        // Then the locale prefix, when the address names a tree the site holds
+        // under one. The tree at the root is served without a prefix, so its
+        // own tag is not one, and `/de-DE-notes.html` stays the page it names.
+        let (tag, tail) = rest.split_once('/').unwrap_or((rest, ""));
+        let rest = if tag != self.locale && self.locales.iter().any(|held| held == tag) {
+            tail
+        } else {
+            rest
+        };
+        if rest.is_empty() {
+            return (self.entry.clone(), String::new());
+        }
+        // The emitter wrote which document each page was emitted as, so the
+        // address of a page that has a file is read back off that map rather
+        // than by naming documents a second way here.
+        if let Some((key, _)) = self.pages.iter().find(|(_, document)| *document == rest) {
+            return (key.clone(), String::new());
+        }
+        lumen_core::nav::resolve_path(rest, &self.page_keys(), &self.entry)
+    }
+}
+
 impl Default for Manifest {
     fn default() -> Self {
         Self {
@@ -590,6 +634,115 @@ impl Seed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A three-page site emitted in two locales, the second under a prefix.
+    fn manifest() -> Manifest {
+        Manifest {
+            entry: "index".to_string(),
+            locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            pages: [
+                ("index", "index.html"),
+                ("settings", "settings.html"),
+                ("user", "user.html"),
+            ]
+            .into_iter()
+            .map(|(key, document)| (key.to_string(), document.to_string()))
+            .collect(),
+            ..Manifest::default()
+        }
+    }
+
+    #[test]
+    fn page_at_reads_the_root_address_as_the_entry_page() {
+        let manifest = manifest();
+        assert_eq!(manifest.page_at("/"), ("index".to_string(), String::new()));
+        assert_eq!(
+            manifest.page_at("/index.html"),
+            ("index".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn page_at_reads_a_document_address_as_the_page_it_holds() {
+        assert_eq!(
+            manifest().page_at("/settings.html"),
+            ("settings".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn page_at_keeps_what_is_left_of_a_deep_address() {
+        assert_eq!(
+            manifest().page_at("/user/42"),
+            ("user".to_string(), "/42".to_string())
+        );
+    }
+
+    #[test]
+    fn page_at_falls_back_to_the_entry_for_an_unknown_address() {
+        assert_eq!(
+            manifest().page_at("/nope/deeper"),
+            ("index".to_string(), "/nope/deeper".to_string())
+        );
+    }
+
+    #[test]
+    fn page_at_takes_the_sites_own_prefix_off_first() {
+        let manifest = Manifest {
+            base_path: "/docs/".to_string(),
+            ..manifest()
+        };
+        assert_eq!(
+            manifest.page_at("/docs/"),
+            ("index".to_string(), String::new())
+        );
+        assert_eq!(
+            manifest.page_at("/docs/user/42"),
+            ("user".to_string(), "/42".to_string())
+        );
+    }
+
+    #[test]
+    fn page_at_takes_a_locale_prefix_off_too() {
+        let manifest = manifest();
+        assert_eq!(
+            manifest.page_at("/de/user/42"),
+            ("user".to_string(), "/42".to_string())
+        );
+        assert_eq!(
+            manifest.page_at("/de/"),
+            ("index".to_string(), String::new())
+        );
+        assert_eq!(
+            manifest.page_at("/de"),
+            ("index".to_string(), String::new())
+        );
+        // The tree at the root is served without a prefix, so its own tag is
+        // an address like any other.
+        assert_eq!(
+            manifest.page_at("/en/user/42"),
+            ("index".to_string(), "/en/user/42".to_string())
+        );
+    }
+
+    #[test]
+    fn page_at_still_reads_a_page_named_like_a_locale() {
+        let mut manifest = manifest();
+        manifest
+            .pages
+            .insert("de".to_string(), "de.html".to_string());
+        assert_eq!(
+            manifest.page_at("/de.html"),
+            ("de".to_string(), String::new())
+        );
+        // The prefix still wins where it is one: the site holds a `de` tree,
+        // and `/de/user/42` is that tree's `user` page.
+        assert_eq!(
+            manifest.page_at("/de/user/42"),
+            ("user".to_string(), "/42".to_string())
+        );
+    }
 
     #[test]
     fn path_builds_from_the_root_down() {

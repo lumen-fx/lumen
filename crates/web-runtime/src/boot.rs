@@ -9,6 +9,7 @@ use std::sync::Once;
 
 use lumen_core::request::RequestContext;
 use lumen_html::contract::{DATA_LM, Manifest, NavigationMode};
+use lumen_scene::routing::Location;
 use lumen_scene::spawn::SpawnIntoWorld;
 use lumen_web_dom::{Routes, WebDomPlugin};
 use wasm_bindgen::JsCast;
@@ -88,21 +89,29 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
         hosts::install(&mut app, &script.engine, &script.bytes, &script.uri)
             .map_err(|e| BootError::Engine(e.to_string()))?;
     }
-    if let Some(pages) = &loaded.artifact.pages {
-        // The document is one page of the site, and which one is what it
-        // says it is: a visitor who asked for `/settings` was served that
-        // document, so the app opens on it rather than on the entry.
-        //
-        // Installed whichever way `[web] navigation` reads: `route.path` has
-        // to seed correctly for the page this document is, and a script's
-        // own `page()` call always swaps in place. What the setting decides
-        // is narrower - only whether a click on a same-page `<a href>` is
-        // one of those swaps or a real document load, and whether the
-        // address bar follows the swap. `listen` below decides the first,
-        // because only there is a browser event still in hand to prevent,
-        // and `WebDomPlugin` the second.
-        lumen_scene::routing::install_routing(&mut app, page.page.clone(), pages.keys.clone());
-    }
+    // A document is served at its own address until a deep path is served
+    // through the shell, so which page the app opens on is a question about
+    // the address, not about the document. The manifest holds the map from
+    // one to the other.
+    //
+    // Installed whichever way `[web] navigation` reads: `route.path` has to
+    // seed correctly for the page this address names, and a script's own
+    // `page()` call always swaps in place. What the setting decides is
+    // narrower - only whether a click on a same-page `<a href>` is one of
+    // those swaps or a real document load, and whether the address bar
+    // follows the swap. `listen` below decides the first, because only there
+    // is a browser event still in hand to prevent, and `WebDomPlugin` the
+    // second.
+    let address = lumen_core::request::current()
+        .map(|request| request.path)
+        .unwrap_or_default();
+    let (path, segment) = manifest.page_at(&address);
+    lumen_scene::routing::install_routing(
+        &mut app,
+        manifest.entry.clone(),
+        manifest.page_keys(),
+        Location { path, segment },
+    );
     apply_seed(&mut app.world, &loaded.seed);
     let root_entity = loaded.artifact.spawn_into(&mut app.world);
     // What the page says the app wrote onto its nodes. Applied after the
@@ -156,10 +165,10 @@ fn install_location() {
 /// `<a href>` click should be handled in-app rather than left to the
 /// browser.
 ///
-/// `has_pages` is whether the artifact carries a page set, which is what
-/// decides whether the resolver was installed above. Without one there is
-/// nothing to swap to, and intercepting a click would leave a link that does
-/// nothing at all: the browser is stopped and no resolver answers.
+/// `has_pages` is whether the artifact carries the other pages' trees, which
+/// is what a swap mounts from. Without them there is nothing in this document
+/// to swap to, and intercepting a click would leave a link that does nothing
+/// at all: the browser is stopped and the page it named never arrives.
 fn routes(manifest: &Manifest, has_pages: bool) -> Option<Routes> {
     (manifest.navigation == NavigationMode::Soft && has_pages)
         .then(|| Routes::from_manifest(manifest))

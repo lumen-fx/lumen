@@ -378,6 +378,11 @@ does, so what you see locally is what an unconfigured host does. Under
 and a 200, which is what a server does; no `404.html` and no rewrite file is
 written, because neither has anything to stand in for.
 
+Reading the address and opening the page it names is the runtime's work, so a
+site that carries no runtime cannot do it: under `render = "static"`, or with
+`runtime = false`, `/user/42` stays the shell it was served. A site that wants
+deep paths to work wants `csr` or `ssr`.
+
 An address that names no page at all, like `/nowhere`, is a 404 either way. A
 static host sends `404.html`, and a render sends the same shell with the same
 status, so a site answers such an address the same way whichever half answers
