@@ -9,6 +9,7 @@ use lumen_html::contract::{
 };
 use lumen_ir::layout_ir::{
     Attributes, BindKind, BindSpec, Element, FragmentUse, IfModeSpec, InterpolationSlot, LayoutIR,
+    WidgetPart,
 };
 use lumen_web::{
     EmitError, HostRewrite, LocaleSpec, MarkupSheet, NodeState, PageSpec, SignalEnv, Site,
@@ -318,6 +319,101 @@ fn a_void_element_has_no_end_tag() {
     assert!(html.contains(r#"<img class="lm-image" src="/logo.png" alt="Lumen" data-lm="0.0">"#));
     assert!(!html.contains("</img>"));
     assert!(!html.contains("</input>"));
+    assert_well_formed(&html);
+}
+
+/// The tree the parser's `<checkbox>` / `<radio>` desugar produces: the tag
+/// keeps the widget's own attributes and gains an indicator child and a
+/// caption child.
+fn widget_with_caption(tag: &str, part: WidgetPart, attrs: Attributes, caption: &str) -> Element {
+    let indicator = Element {
+        tag: "tile".to_string(),
+        attrs: Attributes {
+            part: Some(part),
+            classes: vec![part.class().to_string()],
+            ..Attributes::default()
+        },
+        ..Element::default()
+    };
+    let label = Element {
+        tag: "label".to_string(),
+        attrs: Attributes {
+            text: Some(caption.to_string()),
+            classes: vec![format!("{tag}-label")],
+            ..Attributes::default()
+        },
+        ..Element::default()
+    };
+    element(tag, attrs, vec![indicator, label])
+}
+
+#[test]
+fn a_checkbox_is_a_row_around_the_browsers_control() {
+    let page = PageSpec::new(
+        "index",
+        ir(element(
+            "root",
+            Attributes::default(),
+            vec![widget_with_caption(
+                "checkbox",
+                WidgetPart::CheckboxBox,
+                Attributes {
+                    checked: Some(true),
+                    ..Attributes::default()
+                },
+                "Enable telemetry",
+            )],
+        )),
+    );
+    let html = page_html(&site(vec![page]), "index.html");
+    // The row carries the path and the class; the control carries the part
+    // and the state, and comes before the caption.
+    assert!(html.contains(concat!(
+        r#"<label class="lm-checkbox" data-lm="0.0">"#,
+        r#"<input type="checkbox" class="checkbox-box" data-lm-part="" checked="" "#,
+        r#"data-lm-checked="">"#,
+    )));
+    // The caption is an element of its own, at the index the indicator did
+    // not take.
+    assert!(html.contains(
+        r#"<span class="lm-label checkbox-label" data-lm="0.0.1">Enable telemetry</span>"#
+    ));
+    // The indicator is the control and nothing else.
+    assert!(!html.contains("lm-tile checkbox-box"));
+    assert_eq!(html.matches(r#"class="checkbox-box""#).count(), 1);
+    assert_well_formed(&html);
+}
+
+#[test]
+fn a_radio_puts_its_group_and_value_on_the_control() {
+    let page = PageSpec::new(
+        "index",
+        ir(element(
+            "root",
+            Attributes::default(),
+            vec![widget_with_caption(
+                "radio",
+                WidgetPart::RadioDot,
+                Attributes {
+                    radio_group: Some("ship".into()),
+                    radio_value: Some("falcon".into()),
+                    tab_index: Some(-1),
+                    disabled: true,
+                    ..Attributes::default()
+                },
+                "Falcon",
+            )],
+        )),
+    );
+    let html = page_html(&site(vec![page]), "index.html");
+    assert!(html.contains(concat!(
+        r#"<input type="radio" class="radio-dot" data-lm-part="" disabled="" tabindex="-1" "#,
+        r#"name="ship" value="falcon">"#,
+    )));
+    // A disabled widget dims the whole row, which is what the mark on the
+    // element is for; the control is what the browser disables.
+    assert!(html.contains(r#"<label class="lm-radio" data-lm-disabled="" data-lm="0.0">"#));
+    assert!(html.contains(r#"data-lm="0.0.1">Falcon</span>"#));
     assert_well_formed(&html);
 }
 

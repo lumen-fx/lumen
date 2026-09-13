@@ -11,6 +11,13 @@
 //! bound yet and leaves the rest alone, so an `<if>` branch that turns on an
 //! hour later adopts the markup that was prerendered for it.
 //!
+//! Two entities of the scene stand for no element here. One is an entity
+//! with no tag at all; the other is the indicator a `<checkbox>` or a
+//! `<radio>` was desugared into, which the browser draws as the control
+//! inside the element rather than as a child of it. Both still take their
+//! index, so the caption beside the indicator is numbered the way the
+//! emitter numbered it.
+//!
 //! What the first walk does take out of the page is a `<for>` row the app
 //! does not have. A list has a length, so a row past it belongs to no one and
 //! would sit in the page for as long as it is open.
@@ -22,10 +29,10 @@ use lumen_core::components::{
     InlineStyle, LumenAttributes, LumenClasses, LumenId, LumenTag, TextContent,
 };
 use lumen_html::attrs::class_value;
-use lumen_html::contract::{DATA_LM, NodePath, PathStep};
+use lumen_html::contract::{DATA_LM, DATA_LM_PART, NodePath, PathStep};
 use lumen_html::paths::walk_nodes;
 use lumen_html::style::style_value;
-use lumen_html::tags::html_tag_for;
+use lumen_html::tags::{drawn_by_control, html_tag_for, part_from_class};
 use lumen_scene::spawn::ForMarker;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, Element, Node};
@@ -58,6 +65,10 @@ pub struct NodeTable {
     root: Element,
     root_entity: Entity,
     by_entity: HashMap<Entity, Element>,
+    /// The native control an element is drawn by, for the entities whose
+    /// tag has one. State a browser reads off the control itself is written
+    /// here rather than onto the element around it.
+    controls: HashMap<Entity, Element>,
     /// Which entity a node path belongs to, for resolving the element a DOM
     /// event landed on back to the entity that stands for it.
     by_path: HashMap<String, Entity>,
@@ -102,6 +113,7 @@ impl NodeTable {
             root,
             root_entity,
             by_entity: HashMap::new(),
+            controls: HashMap::new(),
             by_path: HashMap::new(),
             unclaimed,
             for_rows: HashMap::new(),
@@ -113,6 +125,12 @@ impl NodeTable {
     /// The element `entity` is, if it has been bound.
     pub fn element(&self, entity: Entity) -> Option<&Element> {
         self.by_entity.get(&entity)
+    }
+
+    /// The native control `entity`'s element is drawn by, for a
+    /// `<checkbox>` or a `<radio>`, and nothing for every other tag.
+    pub fn control(&self, entity: Entity) -> Option<&Element> {
+        self.controls.get(&entity)
     }
 
     /// The entity the element at `path` stands for.
@@ -247,8 +265,7 @@ fn bind_tree(
         root,
         kids,
         |entity| rows.get(entity).is_ok(),
-        // An entity with no tag stands for no element.
-        |entity| nodes.get(entity).is_ok(),
+        |entity| stands_for_element(entity, nodes),
         |visit| {
             let element = bind_one(
                 table,
@@ -270,6 +287,21 @@ fn bind_tree(
             Some(element)
         },
     );
+}
+
+/// True when an entity is one the document has an element of its own for.
+///
+/// An entity with no tag is not, and neither is the indicator a checkbox or
+/// a radio was desugared into: the browser draws that one as the control
+/// inside the element, which carries no path.
+fn stands_for_element(entity: Entity, nodes: &NodeQuery<'_, '_>) -> bool {
+    let Ok((_, _, classes, ..)) = nodes.get(entity) else {
+        return false;
+    };
+    !classes
+        .iter()
+        .flat_map(|c| c.0.iter())
+        .any(|class| part_from_class(class).is_some_and(drawn_by_control))
 }
 
 /// The element for one entity: the one already bound, the prerendered one
@@ -306,10 +338,11 @@ fn bind_one(
     let element = build(table, entity, &text, nodes, children)?;
     // An element goes after the last sibling that has one, or ahead of every
     // sibling element. Ahead of, not first: an element's own text is the node
-    // before its children, and it stays there.
+    // before its children, and it stays there. The control the parent is
+    // drawn by is not a child at all, so a first child goes after it.
     let anchor: Option<Node> = match previous {
         Some(previous) => previous.next_sibling(),
-        None => parent.first_element_child().map(Node::from),
+        None => first_child_slot(parent).map(Node::from),
     };
     if parent.insert_before(&element, anchor.as_ref()).is_err() {
         return None;
@@ -319,8 +352,30 @@ fn bind_one(
     Some(element)
 }
 
-/// Record the binding both ways.
+/// The native control an element is drawn by: its first child, when that is
+/// the marked one rather than a node of the tree.
+///
+/// Both halves write a control first and mark it, so there is nothing to
+/// look up: an element whose first child is unmarked has none at all.
+pub(crate) fn control_of(element: &Element) -> Option<Element> {
+    let first = element.first_element_child()?;
+    first.has_attribute(DATA_LM_PART).then_some(first)
+}
+
+/// The element a first child is inserted ahead of: the parent's first
+/// element child, or the one after the control the parent is drawn by.
+fn first_child_slot(parent: &Element) -> Option<Element> {
+    match control_of(parent) {
+        Some(control) => control.next_element_sibling(),
+        None => parent.first_element_child(),
+    }
+}
+
+/// Record the binding both ways, and the control the element is drawn by.
 fn bind(table: &mut NodeTable, entity: Entity, path: String, element: Element) {
+    if let Some(control) = control_of(&element) {
+        table.controls.insert(entity, control);
+    }
     table.by_path.insert(path, entity);
     table.by_entity.insert(entity, element);
 }
@@ -353,6 +408,17 @@ fn build(
     if let Some(style) = style {
         let _ = element.set_attribute("style", &style_value(&style.0));
     }
+    // The control the browser draws the element with, ahead of everything
+    // else inside it, which is where the emitter writes it. What it shows is
+    // the projection systems' from here.
+    if let Some(control) = html.control
+        && let Ok(node) = table.document.create_element(control.name)
+    {
+        for (name, value) in control.attributes() {
+            let _ = node.set_attribute(name, value);
+        }
+        let _ = element.append_child(&node);
+    }
     // Text goes in before any child element, which is where the emitter puts
     // it and so where the projection expects to find it.
     if let Some(text) = text.filter(|t| !t.0.is_empty() && !html.void) {
@@ -375,6 +441,7 @@ pub fn release_dead_nodes(
     mut removed: RemovedComponents<LumenTag>,
 ) {
     for entity in removed.read() {
+        table.controls.remove(&entity);
         let Some(element) = table.by_entity.remove(&entity) else {
             continue;
         };
@@ -382,5 +449,68 @@ pub fn release_dead_nodes(
             table.by_path.remove(&path);
         }
         element.remove();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy_ecs::system::RunSystemOnce;
+
+    use super::{Entity, LumenClasses, LumenTag, NodeQuery, World, stands_for_element};
+
+    /// Spawn a node the way the scene spawner does: a tag, and the classes
+    /// the parser put on it.
+    fn node(world: &mut World, tag: &str, classes: &[&str]) -> Entity {
+        world
+            .spawn((
+                LumenTag(tag.into()),
+                LumenClasses(classes.iter().map(|c| (*c).into()).collect()),
+            ))
+            .id()
+    }
+
+    /// Ask the binding walk's own predicate about `entity`, through the
+    /// query the walk runs with.
+    fn stands_for(world: &mut World, entity: Entity) -> bool {
+        world
+            .run_system_once(move |nodes: NodeQuery| stands_for_element(entity, &nodes))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_tagged_node_stands_for_an_element() {
+        let mut world = World::new();
+        let tile = node(&mut world, "tile", &["card"]);
+        assert!(stands_for(&mut world, tile));
+    }
+
+    #[test]
+    fn an_entity_with_no_tag_stands_for_nothing() {
+        let mut world = World::new();
+        let bare = world.spawn_empty().id();
+        assert!(!stands_for(&mut world, bare));
+    }
+
+    /// The indicator the parser synthesized is the control the browser
+    /// draws inside the checkbox, so the document has no element of its own
+    /// for it. The caption beside it does stand for one.
+    #[test]
+    fn an_indicator_drawn_as_a_control_stands_for_nothing() {
+        let mut world = World::new();
+        let box_tile = node(&mut world, "tile", &["lm-tile", "checkbox-box"]);
+        let dot = node(&mut world, "tile", &["lm-tile", "radio-dot"]);
+        let caption = node(&mut world, "label", &["lm-label", "checkbox-label"]);
+        assert!(!stands_for(&mut world, box_tile));
+        assert!(!stands_for(&mut world, dot));
+        assert!(stands_for(&mut world, caption));
+    }
+
+    /// A `<progress>` keeps its fill as an element: the track takes
+    /// children, so nothing about it is drawn by a control.
+    #[test]
+    fn a_progress_fill_stands_for_an_element() {
+        let mut world = World::new();
+        let fill = node(&mut world, "tile", &["lm-tile", "progress-fill"]);
+        assert!(stands_for(&mut world, fill));
     }
 }

@@ -229,6 +229,8 @@ slider:disabled { bg: var(--lumen-disabled-bg); }
  *     .checkbox-label (tag=label)
  * `:checked { bg }` routes to the box fill swap (runtime
  * sync_checkbox_visuals); the resting box look lives on `.checkbox-box`.
+ * On the web the box is the browser's own control under that same class,
+ * so these rules reach both targets.
  */
 checkbox          { disabled-opacity: var(--lumen-disabled-opacity); }
 checkbox:checked  { bg: var(--lumen-accent); }
@@ -241,7 +243,8 @@ checkbox:focus    { outline: 2 var(--lumen-accent); }
  *   radio (row, carries RadioButton)
  *     .radio-dot   (tag=tile - round indicator)
  *     .radio-label (tag=label)
- * `:selected { bg }` routes to the dot fill swap (sync_radio_visuals).
+ * `:selected { bg }` routes to the dot fill swap (sync_radio_visuals); the
+ * web draws the dot as the browser's own control under the same class.
  */
 radio             { disabled-opacity: var(--lumen-disabled-opacity); }
 radio:selected    { bg: var(--lumen-accent); }
