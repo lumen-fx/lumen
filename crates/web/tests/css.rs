@@ -6,7 +6,8 @@ use lumen_ir::css::{
 };
 use lumen_ir::layout_ir::{Attributes, Element, LayoutIR};
 use lumen_web::{
-    CssMode, LocaleSpec, MarkupSheet, PageSpec, SiteSpec, WebSpec, emit, rules_css, styles_css,
+    CssMode, LocaleSpec, MarkupSheet, PageSpec, SiteSpec, WebSpec, emit, rewrite_css_urls,
+    rules_css, styles_css,
 };
 
 fn rule(selectors: &str, decls: &[(&str, &str)]) -> Rule {
@@ -479,15 +480,19 @@ fn a_carried_keyframe_block_is_written_out_beside_the_rule_that_names_it() {
         emitted.contains("@keyframes spin { from { transform: rotate(0deg); }"),
         "the block is written as authored:\n{emitted}"
     );
-    // Outside every layer: the block is written after the sheet layer
-    // closes, so layer order has nothing to say about which keyframes win.
+    // Outside every layer: the block stands between the statement that
+    // names the layers and the first one that opens, so layer order has
+    // nothing to say about which keyframes win.
     let block = emitted
         .find("@keyframes spin")
         .expect("the block is emitted");
-    let sheet_layer = emitted
-        .find("@layer lumen.sheet {")
-        .expect("the sheet layer is emitted");
-    assert!(block > sheet_layer, "{emitted}");
+    let statement = emitted
+        .find("@layer lumen.reset, lumen.sheet;")
+        .expect("the layer statement is written");
+    let first_layer = emitted
+        .find("@layer lumen.reset {")
+        .expect("the reset layer is emitted");
+    assert!(block > statement && block < first_layer, "{emitted}");
 }
 
 #[test]
@@ -510,6 +515,50 @@ fn a_keyframe_block_written_inside_a_media_query_is_emitted_inside_one() {
     );
 }
 
+fn font_face(body: &str) -> AtRule {
+    AtRule {
+        name: "font-face".to_string(),
+        prelude: String::new(),
+        body: body.to_string(),
+        media: None,
+    }
+}
+
+#[test]
+fn a_carried_font_face_block_is_written_out_with_the_file_it_names() {
+    let mut sheet = sheet(vec![rule("#greeting", &[("font-family", "\"Demo\"")])]);
+    sheet.at_rules = vec![font_face(
+        " font-family: \"Demo\"; src: url(\"assets/fonts/demo.0badc0de.woff2\"); ",
+    )];
+    let emitted = styles_css(Some(&sheet), &MarkupSheet::default(), CssMode::Sheet);
+    assert!(
+        emitted.contains(
+            "@font-face { font-family: \"Demo\"; src: url(\"assets/fonts/demo.0badc0de.woff2\"); }"
+        ),
+        "the block is written as authored, with no prelude:\n{emitted}"
+    );
+    assert_eq!(
+        emitted.matches("@font-face").count(),
+        1,
+        "the block is written once:\n{emitted}"
+    );
+}
+
+#[test]
+fn computed_mode_writes_the_font_a_resolved_family_needs() {
+    let mut sheet = sheet(vec![rule("#greeting", &[("font-family", "\"Demo\"")])]);
+    sheet.at_rules = vec![font_face(
+        " font-family: \"Demo\"; src: url(\"demo.woff2\"); ",
+    )];
+    let emitted = styles_css(Some(&sheet), &MarkupSheet::default(), CssMode::Computed);
+    // The elements carry the family the cascade resolved, and this block is
+    // the only thing saying where that family's file is.
+    assert!(
+        emitted.contains("@font-face { font-family: \"Demo\"; src: url(\"demo.woff2\"); }"),
+        "{emitted}"
+    );
+}
+
 #[test]
 fn computed_mode_writes_no_keyframes() {
     let mut sheet = sheet(vec![rule(".spinner", &[("animation", "spin 2s linear")])]);
@@ -518,5 +567,38 @@ fn computed_mode_writes_no_keyframes() {
     assert!(
         !emitted.contains("@keyframes"),
         "nothing names a keyframe block in computed mode:\n{emitted}"
+    );
+}
+
+#[test]
+fn a_rewritten_url_names_the_file_the_build_placed() {
+    let css = "src: url(\"fonts/demo.woff2\") format(\"woff2\"), url(fonts/demo.ttf);";
+    let rewritten = rewrite_css_urls(css, |url| Some(format!("assets/{url}")));
+    assert_eq!(
+        rewritten,
+        "src: url(\"assets/fonts/demo.woff2\") format(\"woff2\"), url(\"assets/fonts/demo.ttf\");",
+        "a quoted and an unquoted reference both come back double-quoted"
+    );
+}
+
+#[test]
+fn a_url_nothing_places_is_left_as_authored() {
+    let css = "src: local(\"Demo\"), url('https://fonts.example/demo.woff2') format(\"woff2\"),                url(data:font/woff2;base64,AAAA);";
+    let rewritten = rewrite_css_urls(css, |url| {
+        (!url.starts_with("https:") && !url.starts_with("data:")).then(|| format!("assets/{url}"))
+    });
+    assert_eq!(
+        rewritten, css,
+        "an installed font and a URL off the site stay put"
+    );
+}
+
+#[test]
+fn a_longer_name_ending_in_the_same_letters_is_not_the_function() {
+    let css = "src: burl(x.png); background: url(y.png);";
+    let rewritten = rewrite_css_urls(css, |url| Some(format!("assets/{url}")));
+    assert_eq!(
+        rewritten,
+        "src: burl(x.png); background: url(\"assets/y.png\");"
     );
 }

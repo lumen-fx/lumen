@@ -61,7 +61,7 @@ app.<hash>.cdlb          the compiled candela program, when the app has one
 lumen-web.<hash>.wasm    the runtime
 lumen-web.<hash>.js      the module that loads it
 locale/<tag>.<hash>.ftl  the catalogue for each locale the site is emitted in
-assets/                  every file the markup points at
+assets/                  every file the markup or the stylesheet points at
 ```
 
 `<hash>` is sixteen characters taken from the file itself, and it is there
@@ -134,6 +134,24 @@ A `@keyframes` block the app wrote is written out too, outside every layer,
 with the `@media` query it was written inside if it had one. Its body goes
 through as authored: a keyframe declares `background` and `transform`, the
 browser's names, not Lumen's.
+
+A site ships its own font the same way. Write the `@font-face` in
+`src/main.css` and name the file relative to the app directory:
+
+```css
+@font-face {
+  font-family: "Demo";
+  src: url("fonts/demo.woff2") format("woff2");
+}
+```
+
+The build copies `fonts/demo.woff2` under `assets/`, under a name carrying
+the file's hash, and writes the block into `styles.css` pointing at the copy.
+A file the app does not have fails the build, naming it. A `src` naming
+another site, a `data:` URL or a `local()` font is left as written, so a font
+served from somewhere else keeps working and nothing is fetched at build
+time. A desktop run of the same app ignores the rule and draws with the fonts
+the system has.
 
 Nothing is written `!important`, which leaves that free for you. An important
 declaration cannot be overridden by `:hover`, a media query or a keyframe, so
@@ -502,7 +520,6 @@ none of them means anything without an absolute address.
 
 ## Known limits
 
-- `@font-face` is not emitted. A font has to be one the visitor's system has.
 - An author's `!important` rule wins over a style written on the element,
   where on the desktop the element wins. Normal declarations rank the way
   Lumen ranks them; this is the one case where the two differ.

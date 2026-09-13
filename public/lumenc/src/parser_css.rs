@@ -7,6 +7,7 @@
 //! stylesheet  := (at_rule | rule)*
 //! at_rule     := "@media" media_query "{" (at_rule | rule)* "}"
 //!              | "@keyframes" prelude "{" <verbatim> "}"
+//!              | "@font-face" "{" <verbatim> "}"
 //! rule        := selector_list "{" declaration* "}"
 //! selector_list := compound (combinator compound)* ("," compound (combinator compound)*)*
 //! combinator  := " " | ">" | "+" | "~"
@@ -129,11 +130,12 @@ fn parse_rule_list(
 }
 
 /// Consume one at-rule the cascade does not implement (`@keyframes`,
-/// `@font-face`, `@import`, ...).
+/// `@font-face`, `@supports`, ...).
 ///
 /// A name in [`CARRIED_AT_RULES`] comes back as an [`AtRule`] holding its
 /// prelude and its brace-balanced body verbatim, for a consumer that does
-/// implement it - today the web emitter, which writes the block back out.
+/// implement it - today the web emitter, which writes the block back out,
+/// and copies the files a `@font-face` names into the site beside it.
 /// Anything else is dropped with a warning: a block at-rule loses its whole
 /// body, a statement at-rule ends at its `;`. Either way the stylesheet
 /// keeps parsing, because one unsupported rule must not take down the rest
@@ -1789,7 +1791,8 @@ mod bughunt_tests {
                 from { transform: rotate(0deg); }
                 to { transform: rotate(360deg); }
             }
-            @font-face { font-family: "X"; src: url(x.ttf); }
+            @font-face { font-family: "X"; src: url("x.woff2"); }
+            @supports (display: grid) { .c { color: #123456; } }
             @charset "utf-8";
             .b { color: #000000; }
             "#,
@@ -1801,14 +1804,22 @@ mod bughunt_tests {
             .map(|r| format!("{:?}", r.selectors))
             .collect();
         assert_eq!(css.rules.len(), 2, "got rules: {selectors:?}");
-        // `@keyframes` is carried whole; `@font-face` and the statement
-        // at-rule are not carried at all.
+        // `@keyframes` and `@font-face` are carried whole; `@supports` and
+        // the statement at-rule are not carried at all, and a rule written
+        // inside the skipped block goes with it.
         let names: Vec<&str> = css.at_rules.iter().map(|a| a.name.as_str()).collect();
-        assert_eq!(names, ["keyframes"]);
+        assert_eq!(names, ["keyframes", "font-face"]);
         let spin = &css.at_rules[0];
         assert_eq!(spin.prelude, "spin");
         assert!(spin.body.contains("rotate(360deg)"), "body: {}", spin.body);
         assert!(spin.media.is_none());
+        let face = &css.at_rules[1];
+        assert_eq!(face.prelude, "");
+        assert!(
+            face.body.contains(r#"src: url("x.woff2")"#),
+            "body: {}",
+            face.body
+        );
     }
 
     #[test]
