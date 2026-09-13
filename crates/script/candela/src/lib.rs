@@ -124,6 +124,10 @@ mod diagnose;
 #[cfg(feature = "compiler")]
 mod engine_host;
 mod host_fns;
+// The build script's install step. The library compiles it only to test it;
+// cargo runs a build script but never tests one.
+#[cfg(test)]
+mod install;
 mod library_dir;
 pub mod lmn;
 pub mod prelude;
