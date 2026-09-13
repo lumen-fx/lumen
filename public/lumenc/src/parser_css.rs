@@ -5,7 +5,8 @@
 //!
 //! ```text
 //! stylesheet  := (at_rule | rule)*
-//! at_rule     := "@media" media_query "{" rule* "}"
+//! at_rule     := "@media" media_query "{" (at_rule | rule)* "}"
+//!              | "@keyframes" prelude "{" <verbatim> "}"
 //! rule        := selector_list "{" declaration* "}"
 //! selector_list := compound (combinator compound)* ("," compound (combinator compound)*)*
 //! combinator  := " " | ">" | "+" | "~"
@@ -64,15 +65,24 @@ pub fn parse_css(src: &str) -> Result<Stylesheet, ParseError> {
     let cleaned = strip_comments(src);
     let mut input = cleaned.as_str();
     let mut rules = Vec::new();
+    let mut at_rules = Vec::new();
     let mut next_order = 0usize;
-    parse_rule_list(&mut input, None, &mut rules, &mut next_order, 0)?;
-    Ok(Stylesheet { rules })
+    parse_rule_list(
+        &mut input,
+        None,
+        &mut rules,
+        &mut at_rules,
+        &mut next_order,
+        0,
+    )?;
+    Ok(Stylesheet { rules, at_rules })
 }
 
 fn parse_rule_list(
     input: &mut &str,
     media: Option<&MediaQuery>,
     out: &mut Vec<Rule>,
+    at_out: &mut Vec<AtRule>,
     next_order: &mut usize,
     depth: u32,
 ) -> Result<(), ParseError> {
@@ -101,11 +111,14 @@ fn parse_rule_list(
             let body = &after[..close];
             *input = &after[close + 1..];
             let mut body_str = body;
-            parse_rule_list(&mut body_str, Some(&mq), out, next_order, depth + 1)?;
+            parse_rule_list(&mut body_str, Some(&mq), out, at_out, next_order, depth + 1)?;
             continue;
         }
         if input.starts_with('@') {
-            skip_at_rule(input)?;
+            if let Some(mut at_rule) = take_at_rule(input)? {
+                at_rule.media = media.cloned();
+                at_out.push(at_rule);
+            }
             continue;
         }
         let rule = parse_rule(input, media, *next_order)?;
@@ -115,34 +128,52 @@ fn parse_rule_list(
     Ok(())
 }
 
-/// Consume one at-rule that the cascade does not implement (`@keyframes`,
-/// `@font-face`, `@import`, ...) and warn. A block at-rule loses its whole
-/// brace-balanced body; a statement at-rule ends at its `;`. Skipping keeps
-/// CSS error recovery: one unsupported rule must not take down the rest of
-/// the stylesheet.
-fn skip_at_rule(input: &mut &str) -> Result<(), ParseError> {
-    let name: String = input[1..]
+/// Consume one at-rule the cascade does not implement (`@keyframes`,
+/// `@font-face`, `@import`, ...).
+///
+/// A name in [`CARRIED_AT_RULES`] comes back as an [`AtRule`] holding its
+/// prelude and its brace-balanced body verbatim, for a consumer that does
+/// implement it - today the web emitter, which writes the block back out.
+/// Anything else is dropped with a warning: a block at-rule loses its whole
+/// body, a statement at-rule ends at its `;`. Either way the stylesheet
+/// keeps parsing, because one unsupported rule must not take down the rest
+/// of it.
+fn take_at_rule(input: &mut &str) -> Result<Option<AtRule>, ParseError> {
+    let name = input[1..]
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
-        .collect();
+        .collect::<String>()
+        .to_ascii_lowercase();
     let brace = input.find('{');
     let semi = input.find(';');
+    let mut carried = None;
     match (brace, semi) {
         (Some(b), s) if s.is_none_or(|s| b < s) => {
+            let prelude = input[1 + name.len()..b].trim().to_string();
             let after = &input[b + 1..];
             let close = find_matching_brace(after)
                 .ok_or_else(|| ParseError::Xml(format!("css: @{name} missing '}}'")))?;
+            if CARRIED_AT_RULES.contains(&name.as_str()) {
+                carried = Some(AtRule {
+                    name: name.clone(),
+                    prelude,
+                    body: after[..close].to_string(),
+                    media: None,
+                });
+            }
             *input = &after[close + 1..];
         }
         (_, Some(s)) => *input = &input[s + 1..],
         // No terminator left in the file: the at-rule runs to the end.
         _ => *input = "",
     }
-    tracing::warn!(
-        target: "lumenc::css",
-        "@{name} is not supported - block skipped"
-    );
-    Ok(())
+    if carried.is_none() {
+        tracing::warn!(
+            target: "lumenc::css",
+            "@{name} is not supported - block skipped"
+        );
+    }
+    Ok(carried)
 }
 
 fn find_matching_brace(s: &str) -> Option<usize> {
@@ -1750,7 +1781,7 @@ mod bughunt_tests {
     }
 
     #[test]
-    fn unsupported_at_rules_are_skipped() {
+    fn an_at_rule_is_carried_or_skipped_and_never_fatal() {
         let css = parse_css(
             r#"
             .a { color: #ffffff; }
@@ -1763,13 +1794,47 @@ mod bughunt_tests {
             .b { color: #000000; }
             "#,
         )
-        .expect("an unsupported at-rule must not fail the stylesheet");
+        .expect("an at-rule the cascade does not implement must not fail the stylesheet");
         let selectors: Vec<String> = css
             .rules
             .iter()
             .map(|r| format!("{:?}", r.selectors))
             .collect();
         assert_eq!(css.rules.len(), 2, "got rules: {selectors:?}");
+        // `@keyframes` is carried whole; `@font-face` and the statement
+        // at-rule are not carried at all.
+        let names: Vec<&str> = css.at_rules.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["keyframes"]);
+        let spin = &css.at_rules[0];
+        assert_eq!(spin.prelude, "spin");
+        assert!(spin.body.contains("rotate(360deg)"), "body: {}", spin.body);
+        assert!(spin.media.is_none());
+    }
+
+    #[test]
+    fn a_carried_at_rule_records_the_media_block_it_sits_in() {
+        let css = parse_css(
+            r#"
+            @media (prefers-reduced-motion: no-preference) {
+                @keyframes pulse { 50% { opacity: 0.3; } }
+                .a { color: #ffffff; }
+            }
+            "#,
+        )
+        .expect("parse");
+        assert_eq!(css.rules.len(), 1);
+        assert_eq!(css.at_rules.len(), 1);
+        let pulse = &css.at_rules[0];
+        assert_eq!(pulse.name, "keyframes");
+        assert_eq!(pulse.prelude, "pulse");
+        let media = pulse
+            .media
+            .as_ref()
+            .expect("the @media wrapper is recorded");
+        assert_eq!(
+            media_query_to_css(media),
+            "(prefers-reduced-motion: no-preference)"
+        );
     }
 
     #[test]

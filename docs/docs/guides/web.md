@@ -124,6 +124,11 @@ and a rule at the end of the file, and an unlayered rule beats a layered one
 whatever the selectors weigh. That is what keeps `bg="#101014"` on a `<tile>`
 ahead of a `.card` rule, the way it is ahead on the desktop.
 
+A `@keyframes` block the app wrote is written out too, outside every layer,
+with the `@media` query it was written inside if it had one. Its body goes
+through as authored: a keyframe declares `background` and `transform`, the
+browser's names, not Lumen's.
+
 Nothing is written `!important`, which leaves that free for you. An important
 declaration cannot be overridden by `:hover`, a media query or a keyframe, so
 a page whose styling was written that way could not be animated at all. It is
@@ -491,9 +496,7 @@ none of them means anything without an absolute address.
 
 ## Known limits
 
-- `@font-face` and `@keyframes` are not emitted. A font has to be one the
-  visitor's system has, and an animation written as a keyframe rule does not
-  reach the site.
+- `@font-face` is not emitted. A font has to be one the visitor's system has.
 - An author's `!important` rule wins over a style written on the element,
   where on the desktop the element wins. Normal declarations rank the way
   Lumen ranks them; this is the one case where the two differ.

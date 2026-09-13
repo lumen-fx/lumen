@@ -254,10 +254,15 @@ fn compile_dir(
     // source-order bump keeps Palette ordered before UA within that shared
     // origin tier.
     let mut combined_rules = Vec::new();
+    // At-rules the cascade does not implement ride along in the same
+    // order, so a sheet that gains a `@keyframes` does not lose it on the
+    // way into the combined stylesheet.
+    let mut combined_at_rules = Vec::new();
     for mut rule in palette_sheet.rules {
         rule.origin = lumen_ir::css::Origin::UserAgent;
         combined_rules.push(rule);
     }
+    combined_at_rules.extend(palette_sheet.at_rules);
     let palette_rule_count = combined_rules.len();
     {
         let sheet = crate::parse_css(UA_CSS).map_err(|e| CompileError::ParseCss(e.to_string()))?;
@@ -266,6 +271,7 @@ fn compile_dir(
             rule.source_order += palette_rule_count;
             combined_rules.push(rule);
         }
+        combined_at_rules.extend(sheet.at_rules);
     }
     let ua_rule_count = combined_rules.len();
     if let Some(css_src) = &css {
@@ -274,9 +280,11 @@ fn compile_dir(
             rule.source_order += ua_rule_count;
             combined_rules.push(rule);
         }
+        combined_at_rules.extend(sheet.at_rules);
     }
     let combined = lumen_ir::css::Stylesheet {
         rules: combined_rules,
+        at_rules: combined_at_rules,
     };
     // `combined` always carries at least the UA rules, so this is never
     // actually empty; the guard is defensive parity with `load_ir`.

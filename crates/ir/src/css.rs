@@ -65,12 +65,34 @@ pub fn palette_root_css() -> String {
     out
 }
 
+/// An at-rule the cascade does not implement, kept as authored for a
+/// consumer that does. The desktop cascade reads none of these; the web
+/// target writes them back out.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct AtRule {
+    /// Lowercased, without the `@`: `keyframes`.
+    pub name: String,
+    /// Everything between the name and the `{`, trimmed: `spin`.
+    pub prelude: String,
+    /// Everything between the braces, verbatim.
+    pub body: String,
+    /// The `@media` block this was written inside, if any.
+    pub media: Option<MediaQuery>,
+}
+
+/// At-rule names a [`Stylesheet`] carries verbatim instead of dropping.
+/// Every other at-rule warns and is skipped.
+pub const CARRIED_AT_RULES: &[&str] = &["keyframes"];
+
 /// A parsed stylesheet.
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Stylesheet {
     /// Rules in source order. Each rule may live inside a `@media`
     /// block (recorded via [`Rule::media`]).
     pub rules: Vec<Rule>,
+    /// At-rules the cascade does not implement, in source order. See
+    /// [`CARRIED_AT_RULES`] for which ones are kept.
+    pub at_rules: Vec<AtRule>,
 }
 
 impl Stylesheet {
@@ -3351,6 +3373,15 @@ pub const STYLE_PROPERTIES: &[&str] = &[
     "transition-delay",
     "transition-duration",
     "transition-timing-function",
+    "animation",
+    "animation-name",
+    "animation-duration",
+    "animation-timing-function",
+    "animation-delay",
+    "animation-iteration-count",
+    "animation-direction",
+    "animation-fill-mode",
+    "animation-play-state",
     "scrollbar-color",
     "scrollbar-width",
     "scrollbar-thickness",
@@ -4117,6 +4148,20 @@ fn apply_declaration(
             }
             attrs.transition_timing = Some(out);
         }
+        // Keyframe animations run on the web target, where the browser
+        // plays the `@keyframes` block the stylesheet carries alongside
+        // these declarations. The desktop cascade has no keyframe engine,
+        // so it accepts the family and stores nothing; `transition` is the
+        // property that animates a desktop app.
+        "animation"
+        | "animation-name"
+        | "animation-duration"
+        | "animation-timing-function"
+        | "animation-delay"
+        | "animation-iteration-count"
+        | "animation-direction"
+        | "animation-fill-mode"
+        | "animation-play-state" => {}
         // CSS Scrollbars Styling Level 1 - overlay-bar styling for
         // `<scroll>` containers. `scrollbar-color: auto` clears back to
         // the runtime default.
@@ -4890,6 +4935,31 @@ mod transition_tests {
     }
 
     #[test]
+    fn the_animation_family_is_recognized_and_stores_nothing() {
+        // The web target plays a keyframe animation; the desktop cascade
+        // has no keyframe engine, so it takes the declaration without
+        // calling it unknown and without setting anything.
+        let mut attrs = Attributes::default();
+        for name in [
+            "animation",
+            "animation-name",
+            "animation-duration",
+            "animation-timing-function",
+            "animation-delay",
+            "animation-iteration-count",
+            "animation-direction",
+            "animation-fill-mode",
+            "animation-play-state",
+        ] {
+            assert!(
+                apply_declaration("ctx", name, "spin 2s linear infinite", &mut attrs).unwrap(),
+                "`{name}` must be a property the cascade recognizes"
+            );
+        }
+        assert!(attrs.transitions.is_empty());
+    }
+
+    #[test]
     fn cubic_bezier_with_spaces_survives_the_term_scan() {
         let out = parse_transition(
             "ctx",
@@ -4977,6 +5047,7 @@ mod cascade_origin_tests {
 
         let css = Stylesheet {
             rules: vec![ua, author],
+            ..Default::default()
         };
         // A hovered <textarea class="editor"> element.
         let me = ElementRef {
@@ -5028,6 +5099,7 @@ mod cascade_origin_tests {
         );
         let css = Stylesheet {
             rules: vec![low, high],
+            ..Default::default()
         };
         let me = ElementRef {
             tag: "textarea".to_string(),
@@ -5417,6 +5489,7 @@ mod skin_token_property_tests {
                 media: None,
                 selector: LegacySelectorShim::default(),
             }],
+            ..Default::default()
         };
         apply_css(&mut ir, &css).unwrap();
         assert_eq!(
@@ -5554,6 +5627,7 @@ mod root_vars_tests {
     fn root_vars_collects_custom_properties() {
         let sheet = Stylesheet {
             rules: vec![root_rule(&[("--lumen-window-bg", "#101012")], 0)],
+            ..Default::default()
         };
         let vars = sheet.root_vars();
         assert_eq!(
@@ -5572,6 +5646,7 @@ mod root_vars_tests {
                 root_rule(&[("--lumen-window-bg", "#111111")], 0), // UA / skin
                 root_rule(&[("--lumen-window-bg", "#222222")], 1), // author override
             ],
+            ..Default::default()
         };
         assert_eq!(
             sheet.resolve_root_var("lumen-window-bg").as_deref(),
@@ -5589,6 +5664,7 @@ mod root_vars_tests {
                 ],
                 0,
             )],
+            ..Default::default()
         };
         assert_eq!(
             sheet.resolve_root_var("lumen-window-bg").as_deref(),
@@ -5600,6 +5676,7 @@ mod root_vars_tests {
     fn resolve_root_var_none_when_undefined() {
         let sheet = Stylesheet {
             rules: vec![root_rule(&[("--lumen-accent", "#33c7ce")], 0)],
+            ..Default::default()
         };
         assert_eq!(sheet.resolve_root_var("lumen-window-bg"), None);
     }
@@ -5618,7 +5695,10 @@ mod root_vars_tests {
             .1
             .classes
             .push("dark".to_string());
-        let sheet = Stylesheet { rules: vec![rule] };
+        let sheet = Stylesheet {
+            rules: vec![rule],
+            ..Default::default()
+        };
         assert_eq!(sheet.resolve_root_var("lumen-window-bg"), None);
     }
 
@@ -5639,6 +5719,7 @@ mod root_vars_tests {
         });
         let sheet = Stylesheet {
             rules: vec![base, dark],
+            ..Default::default()
         };
         assert_eq!(
             sheet.resolve_root_var("lumen-window-bg").as_deref(),

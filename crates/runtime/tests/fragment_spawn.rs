@@ -123,7 +123,10 @@ impl Harness {
         };
         let ir = LayoutIR {
             root: el("root", Attributes::default(), vec![list]),
-            combined_stylesheet: (!rules.is_empty()).then_some(Stylesheet { rules }),
+            combined_stylesheet: (!rules.is_empty()).then_some(Stylesheet {
+                rules,
+                ..Default::default()
+            }),
             ..Default::default()
         };
         let bytes = artifact::serialize(&CompiledApp {

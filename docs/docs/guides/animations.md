@@ -8,6 +8,9 @@ button { transition: bg 130ms ease; }
 .panel  { transition: opacity 150ms ease-out; }
 ```
 
+A `@keyframes` animation runs on the web target and does nothing on the
+desktop; the section below says what it is for.
+
 ## Writing a transition
 
 Each entry is a property, a duration, and an optional easing:
@@ -53,9 +56,6 @@ A `transition` shorthand on the same element replaces the longhands entirely.
 A transition starts on the tick its value changes. Delays are not supported:
 `transition-delay`, and a second duration in a `transition` entry, are warned
 about and ignored.
-
-There is no `@keyframes`. Such a block is skipped with a warning and the rest
-of the stylesheet applies.
 
 ## Starting one
 
@@ -123,6 +123,27 @@ already is does nothing.
 
 Transitions do not advance while the window is unfocused or hidden; values
 settle immediately instead.
+
+## Keyframes, on the web
+
+A `@keyframes` block and the `animation` property that names it are for the
+web target: `lumenc web` writes both into the site's stylesheet and the
+browser runs the animation. On the desktop they do nothing, silently, and a
+transition is the answer there.
+
+```css
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.spinner { animation: spin 2s linear infinite; }
+```
+
+A keyframe body is written in browser CSS, not in Lumen's shortened names:
+declare `background` and `transform`, not `bg`. Put the block inside
+`@media (prefers-reduced-motion: no-preference)` and the query is emitted
+around it, so a visitor who asked for less motion gets none.
 
 ## Built-in motion
 
