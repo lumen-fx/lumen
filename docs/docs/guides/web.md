@@ -590,7 +590,9 @@ none of them means anything without an absolute address.
   or copying the link lands on the page being shown, and the browser's back
   and forward buttons step the site. What stays behind is the head: the
   `<title>` and the meta tags remain the ones the document that was loaded
-  was emitted with.
+  was emitted with. Under hard navigation a link loads the next document, but
+  a navigation that does not come from one (a script calling `page()`) still
+  swaps in place, and the address stays on the document that was loaded.
 - A `<input>` is edited by the browser, so Lumen's own caret, selection and
   IME handling are not in play; what an app sees is the value after each edit.
 - A `<radio>` group is not in the tab order. Every member carries the
