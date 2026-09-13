@@ -85,8 +85,10 @@ Navigating to a new page after going back discards the entries ahead of it.
 
 On the web under `[web] navigation = "soft"` the history is the browser's own,
 so `page_back()` and the browser's back button are the same button, and every
-page a visitor reaches has an address they can reload or share. See
-[the web target](web.md).
+page a visitor reaches has an address they can reload or share. Under
+`navigation = "hard"` the swap still happens but the address does not follow
+it, so a page a script navigated to is not one a visitor can reload or share.
+See [the web target](web.md).
 
 ## Paths with parameters
 
