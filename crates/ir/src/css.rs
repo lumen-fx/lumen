@@ -70,9 +70,10 @@ pub fn palette_root_css() -> String {
 /// target writes them back out.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct AtRule {
-    /// Lowercased, without the `@`: `keyframes`.
+    /// Lowercased, without the `@`: `keyframes`, `font-face`.
     pub name: String,
-    /// Everything between the name and the `{`, trimmed: `spin`.
+    /// Everything between the name and the `{`, trimmed: `spin`. Empty for
+    /// an at-rule that takes no prelude, such as `@font-face`.
     pub prelude: String,
     /// Everything between the braces, verbatim.
     pub body: String,
@@ -82,7 +83,11 @@ pub struct AtRule {
 
 /// At-rule names a [`Stylesheet`] carries verbatim instead of dropping.
 /// Every other at-rule warns and is skipped.
-pub const CARRIED_AT_RULES: &[&str] = &["keyframes"];
+///
+/// A carried body is written in browser CSS and read by nothing here, so a
+/// name belongs on this list only when Lumen reads no property inside it
+/// differently from the way a browser does.
+pub const CARRIED_AT_RULES: &[&str] = &["keyframes", "font-face"];
 
 /// A parsed stylesheet.
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]

@@ -435,10 +435,10 @@ fn build(options: &Options) -> Result<Report, String> {
     let (seeded_fills, browser_filled) =
         crate::component_fill::fill(&mut compiled, &plan.entry_key, &declared, &mut warnings);
 
-    // Assets travel with the site, so every `<image src>` is rewritten from
-    // the path it has on this machine to the path it will have on the
-    // server, and the files are copied there.
-    let assets = collect_assets(&mut compiled.ir.root, dir, &mut warnings);
+    // Assets travel with the site, so every `<image src>` and every `url()`
+    // in a carried at-rule is rewritten from the path it has on this machine
+    // to the path it will have on the server, and the files are copied there.
+    let assets = collect_assets(&mut compiled.ir, dir, &mut warnings);
 
     // The sitemap says when each page last changed, and it has to say it the
     // same way for the same sources, so the dates come off the files rather
@@ -1184,15 +1184,31 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// Move every asset the markup points at into the site, and rewrite the
-/// markup to point at where it lands.
-fn collect_assets(root: &mut Element, dir: &Path, warnings: &mut Vec<String>) -> Vec<AssetRef> {
+/// Move every asset the app points at into the site, and rewrite what points
+/// at it to the path it lands on.
+///
+/// The markup points at one with an `<image src>`, and the stylesheet points
+/// at one with a `url()` inside an at-rule it carried, such as the font file
+/// a `@font-face` names. Both are resolved against the app directory and
+/// both share the same set of placed files, so an image and a font naming
+/// one file ship one copy.
+fn collect_assets(ir: &mut LayoutIR, dir: &Path, warnings: &mut Vec<String>) -> Vec<AssetRef> {
     let mut outside: Vec<String> = Vec::new();
-    relativize_asset_paths(root, dir, &mut outside);
+    relativize_asset_paths(&mut ir.root, dir, &mut outside);
     let mut assets: Vec<AssetRef> = Vec::new();
     let mut placed: BTreeMap<PathBuf, String> = BTreeMap::new();
     let mut taken: BTreeSet<String> = BTreeSet::new();
-    rewrite_assets(root, dir, &mut assets, &mut placed, &mut taken);
+    rewrite_assets(&mut ir.root, dir, &mut assets, &mut placed, &mut taken);
+    if let Some(sheet) = ir.combined_stylesheet.as_mut() {
+        for at_rule in &mut sheet.at_rules {
+            at_rule.body = lumen_web::rewrite_css_urls(&at_rule.body, |url| {
+                if is_external(url) {
+                    return None;
+                }
+                Some(place_asset(url, dir, &mut assets, &mut placed, &mut taken))
+            });
+        }
+    }
     for path in outside {
         warnings.push(format!(
             "`{path}` is outside the app directory; it is copied to the top of {ASSET_DIR}/"
@@ -1212,28 +1228,40 @@ fn rewrite_assets(
         && let Some(src) = element.attrs.src.clone()
         && !is_external(&src)
     {
-        let source = if Path::new(&src).is_absolute() {
-            PathBuf::from(&src)
-        } else {
-            dir.join(&src)
-        };
-        let path = placed.get(&source).cloned().unwrap_or_else(|| {
-            let bytes = std::fs::read(&source).ok();
-            let path = site_path(&src, bytes.as_deref());
-            // A name carries the hash of what is in the file, so two sources
-            // that reach the same name hold the same bytes: one file under
-            // one name, copied once, pointed at by both.
-            if taken.insert(path.clone()) {
-                assets.push(AssetRef::new(source.clone(), path.clone()));
-            }
-            placed.insert(source.clone(), path.clone());
-            path
-        });
-        element.attrs.src = Some(path);
+        element.attrs.src = Some(place_asset(&src, dir, assets, placed, taken));
     }
     for child in &mut element.children {
         rewrite_assets(child, dir, assets, placed, taken);
     }
+}
+
+/// The path inside the site one file the app names lands on, recording it
+/// for the copy that follows.
+fn place_asset(
+    src: &str,
+    dir: &Path,
+    assets: &mut Vec<AssetRef>,
+    placed: &mut BTreeMap<PathBuf, String>,
+    taken: &mut BTreeSet<String>,
+) -> String {
+    let source = if Path::new(src).is_absolute() {
+        PathBuf::from(src)
+    } else {
+        dir.join(src)
+    };
+    if let Some(path) = placed.get(&source) {
+        return path.clone();
+    }
+    let bytes = std::fs::read(&source).ok();
+    let path = site_path(src, bytes.as_deref());
+    // A name carries the hash of what is in the file, so two sources that
+    // reach the same name hold the same bytes: one file under one name,
+    // copied once, pointed at by both.
+    if taken.insert(path.clone()) {
+        assets.push(AssetRef::new(source.clone(), path.clone()));
+    }
+    placed.insert(source, path.clone());
+    path
 }
 
 /// Where one asset lands inside the site. A file from inside the app keeps

@@ -35,11 +35,13 @@ importing file wins.
 `@media` blocks nest up to 32 levels, as do `:is()`, `:where()`, and
 `:not()` arguments.
 
-`@import` and `@media` are the at-rules Lumen implements. `@keyframes` is
-kept as authored and handed to the web target, which writes it back out;
-the desktop ignores it. Any other at-rule, `@font-face` included, is
-skipped with a warning along with its whole block, and the rest of the
-stylesheet applies.
+`@import` and `@media` are the at-rules Lumen implements. `@keyframes` and
+`@font-face` are kept as authored and handed to the web target, which writes
+them back out; the desktop ignores both. A `url()` inside a kept block names
+a file relative to the app directory, the same place an `<image src>` names
+one from, and a web build copies that file into the site and points the block
+at the copy. Any other at-rule is skipped with a warning along with its whole
+block, and the rest of the stylesheet applies.
 
 Pseudo-elements (`::before` and friends) are a parse error, not a warning.
 

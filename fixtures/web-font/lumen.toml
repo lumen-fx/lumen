@@ -1,0 +1,8 @@
+# Proof fixture for a site that ships its own font. The stylesheet declares
+# `@font-face` and names a file beside the app; a web build writes the block
+# into `styles.css` and copies the file under `assets/`. A desktop run reads
+# the same app and ignores the rule.
+
+# No introspection server, so a `--headless` CI run binds no port.
+[mcp]
+port = 0

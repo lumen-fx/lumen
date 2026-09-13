@@ -1,0 +1,10 @@
+@font-face {
+  font-family: "Demo";
+  src: url("fonts/demo.woff2") format("woff2");
+  font-display: swap;
+}
+
+#greeting {
+  font-family: "Demo";
+  color: #e7ebf3;
+}

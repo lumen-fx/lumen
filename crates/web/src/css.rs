@@ -12,6 +12,11 @@
 //!
 //! What each property becomes is [`lumen_html::style`]'s to say. This
 //! module decides where the result goes.
+//!
+//! A sheet also carries text the cascade never read: the at-rules Lumen
+//! does not implement and a browser does. Those are written back out as
+//! authored, and the files one of them names travel with the site, so the
+//! `url()` rewriting the build needs lives here too.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -43,11 +48,16 @@ const LAYER_ORDER: &str = "@layer lumen.reset, lumen.sheet;\n";
 
 /// The whole `styles.css` for a site.
 ///
-/// In [`CssMode::Computed`] the file is the reset alone: the elements
-/// carry what the cascade resolved as inline styles instead, and a second
-/// copy of the rules would only argue with them.
+/// In [`CssMode::Computed`] the file is the reset and the at-rules a
+/// resolved style still needs beside it, such as the `@font-face` naming
+/// the family an element carries. The rules themselves are left out: the
+/// elements carry what the cascade resolved as inline styles instead, and a
+/// second copy of the rules would only argue with them.
 pub fn styles_css(sheet: Option<&Stylesheet>, markup: &MarkupSheet, mode: CssMode) -> String {
     let mut out = String::from(LAYER_ORDER);
+    if let Some(sheet) = sheet {
+        out.push_str(&at_rules_css(sheet, mode));
+    }
     layer(&mut out, "lumen.reset", RESET_CSS);
     if mode == CssMode::Computed {
         return out;
@@ -60,31 +70,41 @@ pub fn styles_css(sheet: Option<&Stylesheet>, markup: &MarkupSheet, mode: CssMod
         }
         authored.push_str(&rules_css(sheet));
         layer(&mut out, "lumen.sheet", &authored);
-        out.push_str(&at_rules_css(sheet));
     }
     out.push_str(&markup_css(markup));
     out
 }
 
-/// At-rule names the web target writes out. A name a stylesheet carries
-/// and this list does not is left out of the file rather than written
-/// blind.
-const EMITTED_AT_RULES: &[&str] = &["keyframes"];
+/// At-rule names the web target writes out, each with whether a file
+/// carrying the resolved cascade instead of the rules ([`CssMode::Computed`])
+/// still needs it. A name a stylesheet carries and this list does not is
+/// left out of the file rather than written blind.
+///
+/// A font is needed in either mode: an element carries the family name the
+/// cascade resolved, and the `@font-face` block beside it is the only thing
+/// that says where that family's file is. A keyframe block is not: what
+/// starts an animation is a rule, and the computed file has no rules.
+const EMITTED_AT_RULES: &[(&str, bool)] = &[("keyframes", false), ("font-face", true)];
 
 /// The at-rules the sheet carried, back in the form they were authored in.
 ///
 /// A carried block is browser CSS, not Lumen's dialect: the emitter writes
 /// the body through untouched, so a keyframe declares `background` and
-/// `transform` rather than `bg`.
+/// `transform` rather than `bg`, and a `@font-face` names its file the way
+/// the build left it.
 ///
 /// They land at top level, outside every layer. Layer order is what decides
-/// which of two same-named keyframe blocks wins, and an app has one source
-/// of them, so a layer would add a rule with nothing to settle.
-fn at_rules_css(sheet: &Stylesheet) -> String {
+/// which of two same-named blocks wins, and an app has one source of them,
+/// so a layer would add a rule with nothing to settle.
+fn at_rules_css(sheet: &Stylesheet, mode: CssMode) -> String {
     let mut out = String::new();
     let mut open: Option<String> = None;
     for at_rule in &sheet.at_rules {
-        if !EMITTED_AT_RULES.contains(&at_rule.name.as_str()) {
+        let emitted = EMITTED_AT_RULES
+            .iter()
+            .find(|(name, _)| *name == at_rule.name)
+            .is_some_and(|(_, computed)| mode == CssMode::Sheet || *computed);
+        if !emitted {
             continue;
         }
         // Neighbours under the same query share one wrapper, the way
@@ -115,6 +135,83 @@ fn at_rules_css(sheet: &Stylesheet) -> String {
         out.push_str("}\n");
     }
     out
+}
+
+/// Rewrite every `url()` in `css`, leaving one `resolve` answers `None` for
+/// as authored.
+///
+/// A replacement is written double-quoted whatever form the author used:
+/// one form is always valid, and a name a build chose is not one anybody
+/// has to quote by hand. A `local()` source names a font installed on the
+/// reader's machine rather than a file, so nothing here touches it.
+pub fn rewrite_css_urls(css: &str, mut resolve: impl FnMut(&str) -> Option<String>) -> String {
+    // Lowercasing ASCII leaves every byte offset where it was, so a match
+    // found here indexes the text the author wrote.
+    let lower = css.to_ascii_lowercase();
+    let mut out = String::new();
+    let mut at = 0usize;
+    while let Some(found) = lower[at..].find("url(") {
+        let start = at + found;
+        let open = start + "url(".len();
+        let Some(close) = closing_paren(&css[open..]).map(|i| open + i) else {
+            break;
+        };
+        // A longer name ending in the same four characters, such as a
+        // custom `burl(`, is not the function this rewrites.
+        if css[..start]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            out.push_str(&css[at..=close]);
+            at = close + 1;
+            continue;
+        }
+        let inner = css[open..close].trim();
+        let named = inner
+            .strip_prefix('"')
+            .and_then(|rest| rest.strip_suffix('"'))
+            .or_else(|| {
+                inner
+                    .strip_prefix('\'')
+                    .and_then(|rest| rest.strip_suffix('\''))
+            })
+            .unwrap_or(inner);
+        out.push_str(&css[at..start]);
+        match resolve(named) {
+            Some(target) => {
+                out.push_str("url(\"");
+                out.push_str(&target);
+                out.push_str("\")");
+            }
+            None => out.push_str(&css[start..=close]),
+        }
+        at = close + 1;
+    }
+    out.push_str(&css[at..]);
+    out
+}
+
+/// The byte index of the `)` closing an already-opened `(`, ignoring one
+/// written inside a string.
+fn closing_paren(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut quote: Option<u8> = None;
+    for (i, &c) in bytes.iter().enumerate() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                b'"' | b'\'' => quote = Some(c),
+                b')' => return Some(i),
+                _ => {}
+            },
+        }
+    }
+    None
 }
 
 /// Wrap `body` in `@layer <name>`.
