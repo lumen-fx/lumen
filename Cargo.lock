@@ -950,8 +950,8 @@ dependencies = [
 
 [[package]]
 name = "candela-lang"
-version = "0.0.6"
-source = "git+https://github.com/lumen-fx/candela?branch=main#2f5a85152368280ea73c43b8eeb4bcc86b23a47d"
+version = "0.0.7"
+source = "git+https://github.com/lumen-fx/candela?branch=main#c9a4359d58e500517bf144d13eef3e8ced57ecc2"
 dependencies = [
  "ariadne",
  "candela-vm",
@@ -969,8 +969,8 @@ dependencies = [
 
 [[package]]
 name = "candela-vm"
-version = "0.0.6"
-source = "git+https://github.com/lumen-fx/candela?branch=main#2f5a85152368280ea73c43b8eeb4bcc86b23a47d"
+version = "0.0.7"
+source = "git+https://github.com/lumen-fx/candela?branch=main#c9a4359d58e500517bf144d13eef3e8ced57ecc2"
 dependencies = [
  "ariadne",
  "getrandom 0.3.4",
