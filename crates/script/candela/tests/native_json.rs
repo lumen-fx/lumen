@@ -1,22 +1,9 @@
-//! candela's native JSON parser is reachable from a `.cdl` script run through
-//! [`CandelaHost`], so the host does not expose its own `parse_json` builtin.
-//!
-//! The dep bump brings candela's language-level `json_parse` (backed by the
-//! `std::json` module / VM intrinsic). It returns a value typed `any`, read back
-//! with the `as_map` / `as_list` / `as_str` / ... downcasts and `map.get(key)`.
-//! Because a host function cannot return an `any`-typed value across the
-//! embedding boundary (the host-fn return type must be a concrete `HostType`), a
-//! host-side `parse_json` could not carry a nested heterogeneous structure
-//! anyway; the native parser is the right path, and it works on runtime strings
-//! (e.g. a fetch body), not just compile-time literals.
-//!
-//! Coverage note: on the pinned candela dep, `json_parse` on a runtime body
-//! reaches flat objects, homogeneous nested objects, scalar arrays, and
-//! top-level arrays. Retrieving a value that is a HETEROGENEOUS collection (a
-//! nested object with mixed value types, or an array of objects) via
-//! `map.get(key)` still raises `unknown_map_key` at runtime, because candela
-//! maps are homogeneously typed. That is a candela-side limitation, flagged for
-//! upstream; the demo apps that read such shapes are blocked on it.
+//! JSON through the candela host: candela's own `json_parse` is a language
+//! builtin reachable from any `.cdl` script, and the host adds
+//! `lumen::parse_json`, which marshals a parsed document into the same pools.
+//! Both return a value typed `any`, read back with the `as_map` / `as_list` /
+//! `as_str` / ... downcasts and `map.get(key)`, and both work on runtime
+//! strings such as a fetch body, not only compile-time literals.
 
 use lumen_script::{ScriptHost, ScriptValue};
 use lumen_script_candela::CandelaHost;
@@ -40,4 +27,39 @@ fn main() {}
     let body = ScriptValue::Str(r#"{"geo":{"city":"Paris"}}"#.to_owned());
     let outcome = host.call("city_name", &[body]).expect("call ok");
     assert_eq!(outcome.ret, Some(ScriptValue::Str("Paris".to_owned())));
+}
+
+/// A parsed document's arrays hang off its root map, so they are reachable
+/// only through a map in a register. The VM's array collector has to follow
+/// that map, or the first collection after the parse frees the arrays while
+/// the script still holds the map, and a later allocation takes the slot
+/// (#307: a launcher read a manifest's 107 libraries as none). The document
+/// is large enough to arm the collector and the loop allocates until it
+/// fires; the assertion is on the length, since the handle's tag never broke.
+#[test]
+fn parsed_array_survives_a_collection_while_its_map_is_live() {
+    let mut host = CandelaHost::new();
+    let src = r#"
+import "lumen.cdl";
+fn libs_len(body) {
+    let root = as_map(lumen::parse_json(body));
+    let s = "a,b,c";
+    let i = 0;
+    while i < 50 {
+        let parts = s.split(",");
+        i = i + 1;
+    }
+    return as_list(root.get("libraries")).len();
+}
+fn main() {}
+"#;
+    host.load(src, "json.cdl").expect("script compiles");
+
+    let libraries = (0..300)
+        .map(|i| format!("[{i}]"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let body = ScriptValue::Str(format!(r#"{{"libraries": [{libraries}], "other": "x"}}"#));
+    let outcome = host.call("libs_len", &[body]).expect("call ok");
+    assert_eq!(outcome.ret, Some(ScriptValue::I64(300)));
 }
