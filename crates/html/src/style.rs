@@ -251,6 +251,26 @@ const PLAIN: &[(&str, &str, Value)] = &[
         "transition-timing-function",
         Value::AsIs,
     ),
+    // Animations. The values name a `@keyframes` block and the timing it
+    // runs on, and the sheet carries that block through as authored, so
+    // every one of these goes out under its own name untouched.
+    ("animation", "animation", Value::AsIs),
+    ("animation-name", "animation-name", Value::AsIs),
+    ("animation-duration", "animation-duration", Value::AsIs),
+    (
+        "animation-timing-function",
+        "animation-timing-function",
+        Value::AsIs,
+    ),
+    ("animation-delay", "animation-delay", Value::AsIs),
+    (
+        "animation-iteration-count",
+        "animation-iteration-count",
+        Value::AsIs,
+    ),
+    ("animation-direction", "animation-direction", Value::AsIs),
+    ("animation-fill-mode", "animation-fill-mode", Value::AsIs),
+    ("animation-play-state", "animation-play-state", Value::AsIs),
 ];
 
 /// Knobs with no CSS property behind them. Each becomes `--lm-` plus its
@@ -784,6 +804,39 @@ mod tests {
             "transition-timing-function: ease-out",
         ),
         ("transition-delay", "100ms", "drop"),
+        (
+            "animation",
+            "spin 2s linear infinite",
+            "animation: spin 2s linear infinite",
+        ),
+        ("animation-name", "spin", "animation-name: spin"),
+        ("animation-duration", "2s", "animation-duration: 2s"),
+        (
+            "animation-timing-function",
+            "linear",
+            "animation-timing-function: linear",
+        ),
+        ("animation-delay", "100ms", "animation-delay: 100ms"),
+        (
+            "animation-iteration-count",
+            "3",
+            "animation-iteration-count: 3",
+        ),
+        (
+            "animation-direction",
+            "alternate",
+            "animation-direction: alternate",
+        ),
+        (
+            "animation-fill-mode",
+            "forwards",
+            "animation-fill-mode: forwards",
+        ),
+        (
+            "animation-play-state",
+            "paused",
+            "animation-play-state: paused",
+        ),
         ("tab-index", "0", "drop"),
         ("draggable", "true", "drop"),
         ("layout-boundary", "true", "drop"),

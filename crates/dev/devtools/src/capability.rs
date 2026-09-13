@@ -180,6 +180,7 @@ mod tests {
     fn missing_token_falls_back_to_the_default_palette() {
         let sheet = Stylesheet {
             rules: vec![root_rule(&[("--dt-tab-text", "#010203")])],
+            ..Default::default()
         };
         let palette = resolve_overlay_palette(&sheet);
         assert_eq!(
@@ -195,6 +196,7 @@ mod tests {
     fn defined_token_wins_over_the_default_palette() {
         let sheet = Stylesheet {
             rules: vec![root_rule(&[("--dt-tag-color", "#010203")])],
+            ..Default::default()
         };
         let palette = resolve_overlay_palette(&sheet);
         assert_eq!(
@@ -210,6 +212,7 @@ mod tests {
     fn unparseable_token_falls_back_to_the_default_palette() {
         let sheet = Stylesheet {
             rules: vec![root_rule(&[("--dt-tag-color", "not-a-color")])],
+            ..Default::default()
         };
         let palette = resolve_overlay_palette(&sheet);
         assert_eq!(palette.tag_color, OverlayPalette::default().tag_color);

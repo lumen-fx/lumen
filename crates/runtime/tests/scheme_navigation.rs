@@ -128,6 +128,7 @@ impl Harness {
                     rule(".cell", &[("bg", "#ff0000")], 0, None),
                     rule(".cell", &[("bg", "#00ff00")], 1, Some(light)),
                 ],
+                ..Default::default()
             }),
             ..Default::default()
         };

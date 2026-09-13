@@ -88,7 +88,10 @@ impl Harness {
                 vec![el("tile", Some("box"), &["cold"], vec![])],
             ),
             script_source: script.to_string(),
-            combined_stylesheet: (!rules.is_empty()).then_some(Stylesheet { rules }),
+            combined_stylesheet: (!rules.is_empty()).then_some(Stylesheet {
+                rules,
+                ..Default::default()
+            }),
             ..Default::default()
         };
         // Cascade once up front, the way `lumenc build` does: an artifact

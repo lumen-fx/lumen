@@ -103,11 +103,15 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// `<tooltip>` names its own catalogue key and a popup body reads in the
 /// app's language rather than the one it was written in.
 ///
+/// `10`: [`crate::css::Stylesheet`] gains `at_rules`, the at-rules the
+/// cascade does not implement, so a `@keyframes` block an app wrote reaches
+/// the web target instead of being dropped at parse time.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 9;
+pub const FORMAT_VERSION: u16 = 10;
 
 /// The navigable page set of a compiled multi-page app.
 ///

@@ -101,7 +101,10 @@ impl Harness {
                 ],
             ),
             script_source: SCRIPT.to_string(),
-            combined_stylesheet: Some(Stylesheet { rules }),
+            combined_stylesheet: Some(Stylesheet {
+                rules,
+                ..Default::default()
+            }),
             ..Default::default()
         };
         if let Some(sheet) = ir.combined_stylesheet.clone() {

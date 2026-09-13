@@ -85,7 +85,10 @@ impl Harness {
                     ],
                 )],
             ),
-            combined_stylesheet: Some(Stylesheet { rules }),
+            combined_stylesheet: Some(Stylesheet {
+                rules,
+                ..Default::default()
+            }),
             ..Default::default()
         };
         // Cascade once up front, the way `lumenc build` does.

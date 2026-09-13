@@ -79,6 +79,7 @@ fn introspection_read_side_headless() {
             rule(".row", &[("color", "#00ff00"), ("font-size", "18")], 0),
             rule("#save", &[("font-weight", "700")], 1),
         ],
+        ..Default::default()
     };
     let ir = LayoutIR {
         root,

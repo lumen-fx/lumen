@@ -60,8 +60,60 @@ pub fn styles_css(sheet: Option<&Stylesheet>, markup: &MarkupSheet, mode: CssMod
         }
         authored.push_str(&rules_css(sheet));
         layer(&mut out, "lumen.sheet", &authored);
+        out.push_str(&at_rules_css(sheet));
     }
     out.push_str(&markup_css(markup));
+    out
+}
+
+/// At-rule names the web target writes out. A name a stylesheet carries
+/// and this list does not is left out of the file rather than written
+/// blind.
+const EMITTED_AT_RULES: &[&str] = &["keyframes"];
+
+/// The at-rules the sheet carried, back in the form they were authored in.
+///
+/// A carried block is browser CSS, not Lumen's dialect: the emitter writes
+/// the body through untouched, so a keyframe declares `background` and
+/// `transform` rather than `bg`.
+///
+/// They land at top level, outside every layer. Layer order is what decides
+/// which of two same-named keyframe blocks wins, and an app has one source
+/// of them, so a layer would add a rule with nothing to settle.
+fn at_rules_css(sheet: &Stylesheet) -> String {
+    let mut out = String::new();
+    let mut open: Option<String> = None;
+    for at_rule in &sheet.at_rules {
+        if !EMITTED_AT_RULES.contains(&at_rule.name.as_str()) {
+            continue;
+        }
+        // Neighbours under the same query share one wrapper, the way
+        // `rules_css` groups its blocks.
+        let media = at_rule.media.as_ref().map(media_query_to_css);
+        if media != open {
+            if open.is_some() {
+                out.push_str("}\n");
+            }
+            if let Some(query) = &media {
+                out.push_str("@media ");
+                out.push_str(query);
+                out.push_str(" {\n");
+            }
+            open = media;
+        }
+        out.push('@');
+        out.push_str(&at_rule.name);
+        if !at_rule.prelude.is_empty() {
+            out.push(' ');
+            out.push_str(&at_rule.prelude);
+        }
+        out.push_str(" {");
+        out.push_str(&at_rule.body);
+        out.push_str("}\n");
+    }
+    if open.is_some() {
+        out.push_str("}\n");
+    }
     out
 }
 

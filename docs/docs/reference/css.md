@@ -35,9 +35,11 @@ importing file wins.
 `@media` blocks nest up to 32 levels, as do `:is()`, `:where()`, and
 `:not()` arguments.
 
-`@import` and `@media` are the at-rules Lumen implements. Any other one,
-`@keyframes` and `@font-face` included, is skipped with a warning along
-with its whole block, and the rest of the stylesheet applies.
+`@import` and `@media` are the at-rules Lumen implements. `@keyframes` is
+kept as authored and handed to the web target, which writes it back out;
+the desktop ignores it. Any other at-rule, `@font-face` included, is
+skipped with a warning along with its whole block, and the rest of the
+stylesheet applies.
 
 Pseudo-elements (`::before` and friends) are a parse error, not a warning.
 
@@ -529,6 +531,41 @@ and ignored for the same reason.
 The `transition` shorthand resets the longhands. Otherwise
 `transition-property` defines the list and the duration and easing lists
 cycle over it; a duration list without a property list produces nothing.
+
+### Animations
+
+```css
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.spinner {
+  animation: spin 2s linear infinite;
+}
+```
+
+| Property | Values | Default |
+| --- | --- | --- |
+| `animation` | the CSS shorthand, comma separated | none |
+| `animation-name` | comma-separated `@keyframes` names | none |
+| `animation-duration` | comma-separated durations | none |
+| `animation-timing-function` | comma-separated easings | none |
+| `animation-delay` | comma-separated durations | none |
+| `animation-iteration-count` | comma-separated counts or `infinite` | none |
+| `animation-direction` | comma-separated directions | none |
+| `animation-fill-mode` | comma-separated fill modes | none |
+| `animation-play-state` | `running` or `paused` | none |
+
+These reach the web target and do nothing on the desktop, which has no
+keyframe engine; `transition` is what animates a desktop app. Values are
+written out as authored, so the browser reads the standard CSS meaning of
+each one.
+
+A `@keyframes` block is browser CSS, not Lumen's dialect: its body is
+carried through untouched, so a keyframe declares `background`,
+`transform` and `opacity` rather than `bg`. A block written inside
+`@media` is emitted inside the same query.
 
 ### Scrollbars
 

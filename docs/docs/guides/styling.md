@@ -202,10 +202,11 @@ the one the app started in.
 - **Pseudo-elements.** `::before` and `::after` are a parse error. Add an
   element instead; it is cheaper to reason about and a script can reach it.
 - **Attribute selectors.** Select on a class.
-- **Keyframe animations.** An `@keyframes` block is skipped with a warning, as
-  is any other at-rule beyond `@import` and `@media`. Lumen animates through
-  CSS transitions, started by a state change or by a script flipping a class;
-  see [Animations](animations.md).
+- **Keyframe animations on the desktop.** A `@keyframes` block reaches the web
+  target and does nothing here; any other at-rule beyond `@import` and
+  `@media` is skipped with a warning. A desktop app animates through CSS
+  transitions, started by a state change or by a script flipping a class; see
+  [Animations](animations.md).
 - **Inline `!important`.** Importance is authorable in a stylesheet, not in a
   markup attribute, because an attribute already outranks the stylesheet.
 

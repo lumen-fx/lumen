@@ -1644,6 +1644,7 @@ fn authored_sheet() -> lumen_ir::css::Stylesheet {
             media: None,
             selector: Default::default(),
         }],
+        ..Default::default()
     }
 }
 

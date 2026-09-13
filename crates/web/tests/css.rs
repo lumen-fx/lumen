@@ -1,8 +1,8 @@
 //! Emitting a stylesheet the browser reads the way Lumen read it.
 
 use lumen_ir::css::{
-    ColorSchemePreference, Declaration, LegacySelectorShim, MediaFeature, MediaQuery, Origin, Rule,
-    Stylesheet, parse_selector_list,
+    AtRule, ColorSchemePreference, Declaration, LegacySelectorShim, MediaFeature, MediaQuery,
+    MotionPreference, Origin, Rule, Stylesheet, parse_selector_list,
 };
 use lumen_ir::layout_ir::{Attributes, Element, LayoutIR};
 use lumen_web::{
@@ -38,7 +38,10 @@ fn sheet(rules: Vec<Rule>) -> Stylesheet {
             rule
         })
         .collect();
-    Stylesheet { rules }
+    Stylesheet {
+        rules,
+        ..Default::default()
+    }
 }
 
 fn dark() -> MediaQuery {
@@ -107,6 +110,7 @@ fn the_rule_lumen_would_pick_is_written_last() {
 
     let emitted = rules_css(&Stylesheet {
         rules: vec![author, skin],
+        ..Default::default()
     });
     let first = emitted.find("#111111").expect("the skin rule is emitted");
     let second = emitted.find("#ffffff").expect("the author rule is emitted");
@@ -151,6 +155,7 @@ fn rules_under_one_query_share_one_media_block() {
 
     let emitted = rules_css(&Stylesheet {
         rules: vec![first, second, plain],
+        ..Default::default()
     });
     assert_eq!(
         emitted,
@@ -179,6 +184,7 @@ fn a_query_never_swallows_a_rule_that_comes_after_it() {
 
     let emitted = rules_css(&Stylesheet {
         rules: vec![early, middle, late],
+        ..Default::default()
     });
     assert_eq!(emitted.matches("@media").count(), 2, "{emitted}");
     let plain = emitted.find("#ffffff").expect("emitted");
@@ -192,7 +198,10 @@ fn important_survives_the_rewrite() {
     for decl in &mut card.declarations {
         decl.important = true;
     }
-    let emitted = rules_css(&Stylesheet { rules: vec![card] });
+    let emitted = rules_css(&Stylesheet {
+        rules: vec![card],
+        ..Default::default()
+    });
     assert_eq!(emitted.matches("!important").count(), 2, "{emitted}");
     assert!(
         emitted.contains("background: #ffffff !important;"),
@@ -333,6 +342,7 @@ fn the_palette_is_written_once_and_only_when_it_is_missing() {
                 .map(|(name, value)| (name.as_str(), value.as_str()))
                 .collect::<Vec<_>>(),
         )],
+        ..Default::default()
     };
     let emitted = styles_css(Some(&carried), &MarkupSheet::default(), CssMode::Sheet);
     assert!(
@@ -429,5 +439,84 @@ fn computed_mode_puts_the_resolved_values_on_the_elements() {
         page.contents.contains("style=\"background:#000000\""),
         "{}",
         page.contents
+    );
+}
+
+fn keyframes(prelude: &str, body: &str, media: Option<MediaQuery>) -> AtRule {
+    AtRule {
+        name: "keyframes".to_string(),
+        prelude: prelude.to_string(),
+        body: body.to_string(),
+        media,
+    }
+}
+
+fn no_motion_preference() -> MediaQuery {
+    MediaQuery {
+        features: vec![MediaFeature::PrefersReducedMotion(
+            MotionPreference::NoPreference,
+        )],
+    }
+}
+
+#[test]
+fn a_carried_keyframe_block_is_written_out_beside_the_rule_that_names_it() {
+    let mut sheet = sheet(vec![rule(
+        ".spinner",
+        &[("animation", "spin 2s linear infinite")],
+    )]);
+    sheet.at_rules = vec![keyframes(
+        "spin",
+        " from { transform: rotate(0deg); } to { transform: rotate(360deg); } ",
+        None,
+    )];
+    let emitted = styles_css(Some(&sheet), &MarkupSheet::default(), CssMode::Sheet);
+    assert!(
+        emitted.contains("animation: spin 2s linear infinite"),
+        "the rule that starts the animation is written:\n{emitted}"
+    );
+    assert!(
+        emitted.contains("@keyframes spin { from { transform: rotate(0deg); }"),
+        "the block is written as authored:\n{emitted}"
+    );
+    // Outside every layer: the block is written after the sheet layer
+    // closes, so layer order has nothing to say about which keyframes win.
+    let block = emitted
+        .find("@keyframes spin")
+        .expect("the block is emitted");
+    let sheet_layer = emitted
+        .find("@layer lumen.sheet {")
+        .expect("the sheet layer is emitted");
+    assert!(block > sheet_layer, "{emitted}");
+}
+
+#[test]
+fn a_keyframe_block_written_inside_a_media_query_is_emitted_inside_one() {
+    let mut sheet = sheet(vec![rule(".spinner", &[("bg", "#33c7ce")])]);
+    sheet.at_rules = vec![
+        keyframes("spin", " to { opacity: 1; } ", Some(no_motion_preference())),
+        keyframes(
+            "pulse",
+            " 50% { opacity: 0.3; } ",
+            Some(no_motion_preference()),
+        ),
+    ];
+    let emitted = styles_css(Some(&sheet), &MarkupSheet::default(), CssMode::Sheet);
+    assert!(
+        emitted.contains(
+            "@media (prefers-reduced-motion: no-preference) {\n@keyframes spin { to { opacity: 1; } }\n@keyframes pulse { 50% { opacity: 0.3; } }\n}\n"
+        ),
+        "neighbours under one query share its wrapper:\n{emitted}"
+    );
+}
+
+#[test]
+fn computed_mode_writes_no_keyframes() {
+    let mut sheet = sheet(vec![rule(".spinner", &[("animation", "spin 2s linear")])]);
+    sheet.at_rules = vec![keyframes("spin", " to { opacity: 1; } ", None)];
+    let emitted = styles_css(Some(&sheet), &MarkupSheet::default(), CssMode::Computed);
+    assert!(
+        !emitted.contains("@keyframes"),
+        "nothing names a keyframe block in computed mode:\n{emitted}"
     );
 }

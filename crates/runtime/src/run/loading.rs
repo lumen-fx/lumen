@@ -427,10 +427,15 @@ pub(crate) fn load_ir(
     // this combined sheet to runtime-substituted `<for>` template
     // elements.)
     let mut combined_rules = Vec::new();
+    // At-rules the cascade does not implement ride along in the same
+    // order, so a skin that gains a `@keyframes` does not lose it on the
+    // way into the combined stylesheet.
+    let mut combined_at_rules = Vec::new();
     for mut rule in palette_sheet.rules {
         rule.origin = lumen_ir::css::Origin::UserAgent;
         combined_rules.push(rule);
     }
+    combined_at_rules.extend(palette_sheet.at_rules);
     let palette_rule_count = combined_rules.len();
     {
         let sheet = parser
@@ -441,6 +446,7 @@ pub(crate) fn load_ir(
             rule.source_order += palette_rule_count;
             combined_rules.push(rule);
         }
+        combined_at_rules.extend(sheet.at_rules);
     }
     let ua_rule_count = combined_rules.len();
     if let Some(name) = ir.skin.clone() {
@@ -459,6 +465,7 @@ pub(crate) fn load_ir(
             rule.source_order += ua_rule_count;
             combined_rules.push(rule);
         }
+        combined_at_rules.extend(sheet.at_rules);
     }
     let skin_rule_count = combined_rules.len();
     if let Some(css_src) = &css {
@@ -470,9 +477,11 @@ pub(crate) fn load_ir(
             rule.source_order += skin_rule_count;
             combined_rules.push(rule);
         }
+        combined_at_rules.extend(sheet.at_rules);
     }
     let combined = lumen_ir::css::Stylesheet {
         rules: combined_rules,
+        at_rules: combined_at_rules,
     };
     if !combined.rules.is_empty() {
         let warnings = lumen_ir::css::apply_css_with_media(&mut ir, &combined, media)
