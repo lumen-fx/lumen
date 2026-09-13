@@ -18,6 +18,14 @@
 //! links there, one in `deps/`, where cargo puts test binaries. A missing
 //! library is not fatal anywhere, so a problem here reports on stderr and
 //! leaves the build standing.
+//!
+//! The tree is assembled in this script's own output directory and installed
+//! from there one file at a time, each written under a temporary name and
+//! renamed into place. Some crates use this one as a build dependency as well
+//! as a normal one, so a single cargo run executes this script twice, at the
+//! same time, for the same profile directory; two C compilers writing the
+//! same object and library paths at once is a failed compile on Windows, and
+//! a rename is the one write that cannot half-happen.
 
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -53,10 +61,20 @@ fn main() {
     };
     println!("cargo::rerun-if-changed={}", source.display());
 
-    for dest in destinations() {
-        for message in stage(&source, &dest) {
+    let Some(out_dir) = env::var_os("OUT_DIR").map(PathBuf::from) else {
+        warn("cargo named no output directory, so the candela standard library was not staged");
+        return;
+    };
+    let built = out_dir.join("libs");
+    for message in stage(&source, &built, &out_dir.join("native")) {
+        warn(&format!(
+            "{message}. That part of the candela standard library was not built, so what a program imports from it will not resolve."
+        ));
+    }
+    for dest in destinations(&out_dir) {
+        if let Err(message) = install_tree(&built, &dest) {
             warn(&format!(
-                "{message}. That part of the candela standard library is not at {}, so what a program imports from it will not resolve.",
+                "{message}. The candela standard library is incomplete at {}, so what a program imports from it may not resolve.",
                 dest.display()
             ));
         }
@@ -123,10 +141,7 @@ fn resolved_graph(flags: &[&str]) -> Result<serde_json::Value, String> {
 
 /// Where a copy of the library belongs: beside the binaries cargo links, and
 /// beside the test binaries it puts one directory further down.
-fn destinations() -> Vec<PathBuf> {
-    let Some(out_dir) = env::var_os("OUT_DIR").map(PathBuf::from) else {
-        return Vec::new();
-    };
+fn destinations(out_dir: &Path) -> Vec<PathBuf> {
     // OUT_DIR is `<target>/<profile>/build/<package>-<hash>/out`.
     let Some(profile) = out_dir.ancestors().nth(3) else {
         return Vec::new();
@@ -134,16 +149,64 @@ fn destinations() -> Vec<PathBuf> {
     vec![profile.join("libs"), profile.join("deps").join("libs")]
 }
 
+/// Put every file under `from` at the same place under `to`.
+///
+/// Each file is copied under a temporary name beside its destination and
+/// renamed over it, so another run of this script installing the same tree at
+/// the same moment never finds a file half-written, and a reader never does
+/// either.
+fn install_tree(from: &Path, to: &Path) -> Result<(), String> {
+    fs::create_dir_all(to).map_err(|e| format!("cannot create {}: {e}", to.display()))?;
+    let entries = fs::read_dir(from).map_err(|e| format!("cannot read {}: {e}", from.display()))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let target = to.join(entry.file_name());
+        if path.is_dir() {
+            install_tree(&path, &target)?;
+        } else {
+            install_file(&path, &target)?;
+        }
+    }
+    Ok(())
+}
+
+fn install_file(from: &Path, to: &Path) -> Result<(), String> {
+    let Some(name) = to.file_name() else {
+        return Err(format!("{} names no file", to.display()));
+    };
+    let mut staging = OsString::from(".");
+    staging.push(name);
+    staging.push(format!(".{}.tmp", std::process::id()));
+    let staging = to.with_file_name(staging);
+    fs::copy(from, &staging).map_err(|e| {
+        format!(
+            "cannot copy {} to {}: {e}",
+            from.display(),
+            staging.display()
+        )
+    })?;
+    fs::rename(&staging, to).map_err(|e| {
+        let _ = fs::remove_file(&staging);
+        format!(
+            "cannot move {} into place at {}: {e}",
+            staging.display(),
+            to.display()
+        )
+    })
+}
+
 /// Copy the text modules and build the C-backed ones into `dest`, reporting
 /// every part that did not make it rather than stopping at the first: a module
 /// that fails to build costs a program the functions it declares, and no more.
-fn stage(source: &Path, dest: &Path) -> Vec<String> {
+/// The C compiler works in `scratch`, so its object files and import
+/// libraries stay out of the tree.
+fn stage(source: &Path, dest: &Path, scratch: &Path) -> Vec<String> {
     let mut problems = Vec::new();
     if let Err(message) = copy_modules(&source.join("std"), &dest.join("std")) {
         problems.push(message);
     }
     for (module, sources) in NATIVE_MODULES {
-        if let Err(message) = build_native(source, dest, module, sources) {
+        if let Err(message) = build_native(source, dest, scratch, module, sources) {
             problems.push(message);
         }
     }
@@ -188,12 +251,19 @@ fn copy_file(from: &Path, to: &Path) -> Result<(), String> {
 ///
 /// The path in that block is relative to the module, so the built library goes
 /// where the source tree keeps it: `std_src/<module>/<module>.<ext>`.
-fn build_native(source: &Path, dest: &Path, module: &str, sources: &[&str]) -> Result<(), String> {
+fn build_native(
+    source: &Path,
+    dest: &Path,
+    scratch: &Path,
+    module: &str,
+    sources: &[&str],
+) -> Result<(), String> {
     let src_dir = source.join("std_src").join(module);
-    let out_dir = dest.join("std_src").join(module);
+    let out_dir = scratch.join(module);
     fs::create_dir_all(&out_dir)
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
-    let library = out_dir.join(format!("{module}.{}", library_extension()));
+    let file_name = format!("{module}.{}", library_extension());
+    let library = out_dir.join(&file_name);
 
     // Optimized whatever profile Lumen is being built in, which is how candela
     // builds these for its own releases. The modules carry inline definitions
@@ -234,7 +304,7 @@ fn build_native(source: &Path, dest: &Path, module: &str, sources: &[&str]) -> R
             "the C compiler rejected the candela {module} module ({status})"
         ));
     }
-    Ok(())
+    copy_file(&library, &dest.join("std_src").join(module).join(file_name))
 }
 
 /// One `cl` flag that carries a path, joined the way the compiler wants it:
