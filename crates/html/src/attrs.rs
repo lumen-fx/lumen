@@ -67,12 +67,17 @@ pub fn class_value<'a>(ir_tag: &str, classes: impl IntoIterator<Item = &'a str>)
 /// attribute whose HTML form is boolean (`disabled`, `checked`) comes back
 /// with an empty value, which is how HTML writes a set boolean attribute.
 ///
-/// Attributes the mapping itself implies, such as the `type` on a checkbox,
+/// Attributes the mapping itself implies, such as the `role` on a switch,
 /// are not repeated here; they live on [`HtmlTag::fixed`](crate::HtmlTag).
+///
+/// A tag the browser draws with a control of its own splits its attributes
+/// in two: the state the control reads is [`control_attrs`], and what is
+/// left here is what the element around it wears.
 pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String)> {
     let html = html_tag_for(ir_tag);
     let name = html.map(|t| t.name).unwrap_or("div");
     let fixed = html.map(|t| t.fixed).unwrap_or(&[]);
+    let has_control = html.is_some_and(|t| t.control.is_some());
     let input_type = fixed
         .iter()
         .find(|(k, _)| *k == "type")
@@ -106,7 +111,9 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
     if let Some(tooltip) = &attrs.tooltip {
         out.push(("title", tooltip.text.clone()));
     }
-    if let Some(index) = attrs.tab_index {
+    // The control is the tab stop where there is one; a tab index on the
+    // element around it would make one checkbox two of them.
+    if let Some(index) = attrs.tab_index.filter(|_| !has_control) {
         out.push(("tabindex", index.to_string()));
     }
     if attrs.disabled {
@@ -137,14 +144,7 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
             out.push(("pattern", pattern.clone()));
         }
     }
-    if input_type == "radio" {
-        if let Some(group) = &attrs.radio_group {
-            out.push(("name", group.clone()));
-        }
-        if let Some(value) = &attrs.radio_value {
-            out.push(("value", value.clone()));
-        }
-    } else if (name == "input" || name == "progress")
+    if (name == "input" || name == "progress")
         && let Some(value) = attrs.value
     {
         out.push(("value", number(value)));
@@ -165,12 +165,10 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
         // `<progress>` has a maximum but no minimum; it always starts at 0.
         out.push(("max", number(max)));
     }
-    if let Some(checked) = attrs.checked {
+    if let Some(checked) = attrs.checked.filter(|_| !has_control) {
         // `role="switch"` is only meaningful with the state beside it.
         if fixed.contains(&("role", "switch")) {
             out.push(("aria-checked", checked.to_string()));
-        } else if checked && matches!(input_type, "checkbox" | "radio") {
-            out.push(("checked", String::new()));
         }
         if checked {
             out.push((DATA_LM_CHECKED, String::new()));
@@ -189,6 +187,55 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
     }
     if let Some(lang) = &attrs.lang {
         out.push(("lang", lang.clone()));
+    }
+    out
+}
+
+/// The HTML attributes the native control an element is drawn by carries,
+/// in a fixed order, and nothing for a tag with no control.
+///
+/// This is the state the browser reads off the control itself: whether it
+/// is checked, whether it is disabled, where it sits in the tab order, and
+/// which group a radio belongs to. The element around it keeps its
+/// identity, its classes and the mark a stylesheet dims a whole disabled
+/// row by.
+pub fn control_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String)> {
+    let Some(control) = html_tag_for(ir_tag).and_then(|tag| tag.control) else {
+        return Vec::new();
+    };
+    let input_type = control
+        .fixed
+        .iter()
+        .find(|(k, _)| *k == "type")
+        .map(|(_, v)| *v)
+        .unwrap_or("");
+    let mut out: Vec<(&'static str, String)> = Vec::new();
+    if attrs.disabled {
+        out.push(("disabled", String::new()));
+    }
+    if let Some(index) = attrs.tab_index {
+        out.push(("tabindex", index.to_string()));
+    }
+    // A radio's group is the `name` its members share, which is what makes
+    // the browser let only one of them be on at a time, and its value is
+    // what the group's signal holds while it is the one on.
+    if input_type == "radio" {
+        if let Some(group) = &attrs.radio_group {
+            out.push(("name", group.clone()));
+        }
+        if let Some(value) = &attrs.radio_value {
+            out.push(("value", value.clone()));
+        }
+    }
+    if attrs.checked == Some(true) {
+        out.push(("checked", String::new()));
+        out.push((DATA_LM_CHECKED, String::new()));
+    }
+    if attrs.required {
+        out.push(("required", String::new()));
+    }
+    if attrs.autofocus {
+        out.push(("autofocus", String::new()));
     }
     out
 }
@@ -404,10 +451,15 @@ mod tests {
     fn a_checkbox_is_checked_and_a_switch_is_aria_checked() {
         let mut a = attrs();
         a.checked = Some(true);
+        // A checkbox's state is the control's, and the row around it says
+        // nothing about it.
         let checkbox = html_attrs("checkbox", &a);
-        assert_eq!(find(&checkbox, "checked"), Some(""));
-        assert_eq!(find(&checkbox, "aria-checked"), None);
-        assert_eq!(find(&checkbox, DATA_LM_CHECKED), Some(""));
+        assert_eq!(find(&checkbox, "checked"), None);
+        assert_eq!(find(&checkbox, DATA_LM_CHECKED), None);
+        let control = control_attrs("checkbox", &a);
+        assert_eq!(find(&control, "checked"), Some(""));
+        assert_eq!(find(&control, "aria-checked"), None);
+        assert_eq!(find(&control, DATA_LM_CHECKED), Some(""));
 
         let switch = html_attrs("switch", &a);
         assert_eq!(find(&switch, "aria-checked"), Some("true"));
@@ -438,9 +490,37 @@ mod tests {
         let mut a = attrs();
         a.radio_group = Some("size".into());
         a.radio_value = Some("large".into());
-        let pairs = html_attrs("radio", &a);
+        let pairs = control_attrs("radio", &a);
         assert_eq!(find(&pairs, "name"), Some("size"));
         assert_eq!(find(&pairs, "value"), Some("large"));
+    }
+
+    #[test]
+    fn a_control_takes_the_state_and_the_element_keeps_the_rest() {
+        let mut a = attrs();
+        a.disabled = true;
+        a.tab_index = Some(-1);
+        a.id = Some("ship".into());
+        a.required = true;
+        a.autofocus = true;
+        let element = html_attrs("radio", &a);
+        // A disabled row dims on both targets, and the control is what the
+        // browser takes out of the tab order.
+        assert_eq!(find(&element, DATA_LM_DISABLED), Some(""));
+        assert_eq!(find(&element, "disabled"), None);
+        assert_eq!(find(&element, "tabindex"), None);
+        assert_eq!(find(&element, "id"), Some("ship"));
+
+        let control = control_attrs("radio", &a);
+        assert_eq!(find(&control, "disabled"), Some(""));
+        assert_eq!(find(&control, "tabindex"), Some("-1"));
+        assert_eq!(find(&control, "id"), None);
+        // The browser reads these off the control it validates and focuses.
+        assert_eq!(find(&control, "required"), Some(""));
+        assert_eq!(find(&control, "autofocus"), Some(""));
+
+        // A tag with no control has nothing to split.
+        assert!(control_attrs("tile", &a).is_empty());
     }
 
     #[test]

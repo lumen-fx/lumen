@@ -1650,25 +1650,31 @@ fn synthesize_widget_parts(
                 attrs.signal_seed = Some((group.clone(), value.clone()));
             }
         }
+        // The row the box and the caption sit on. Recorded as a declaration
+        // as well as a value, because a target that ranks a rule above an
+        // element's own styling reads the record rather than the field, and
+        // the two surfaces have to space the caption the same way. Written
+        // here rather than in `ua.css` for the reason the `.dropdown-button`
+        // rule there gives: a skin does not get to move the caption onto the
+        // box.
         if attrs.align.is_none() {
             attrs.align = Some(FlexAlign::Center);
+            attrs
+                .markup_styles
+                .push(("align".to_string(), "center".to_string()));
         }
         if attrs.gap.is_none() {
             attrs.gap = Some(8.0);
+            attrs
+                .markup_styles
+                .push(("gap".to_string(), "8".to_string()));
         }
-        let (part, box_class, label_class) = if tag == "checkbox" {
-            (
-                crate::layout_ir::WidgetPart::CheckboxBox,
-                "checkbox-box",
-                "checkbox-label",
-            )
+        let (part, label_class) = if tag == "checkbox" {
+            (crate::layout_ir::WidgetPart::CheckboxBox, "checkbox-label")
         } else {
-            (
-                crate::layout_ir::WidgetPart::RadioDot,
-                "radio-dot",
-                "radio-label",
-            )
+            (crate::layout_ir::WidgetPart::RadioDot, "radio-label")
         };
+        let box_class = part.class();
         let mut indicator = Element {
             tag: "tile".to_string(),
             attrs: Attributes {
@@ -1729,7 +1735,11 @@ fn synthesize_widget_parts(
             children: Vec::new(),
             ..Default::default()
         };
-        fill.attrs.classes = vec!["progress-fill".to_string()];
+        fill.attrs.classes = vec![
+            crate::layout_ir::WidgetPart::ProgressFill
+                .class()
+                .to_string(),
+        ];
         children.insert(0, fill);
     }
 

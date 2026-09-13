@@ -109,11 +109,17 @@ the page, and rows it has and the page does not are built. Neither is
 something to configure; it is what keeps a stale document from showing a row
 that is gone.
 
-Input comes from the browser and behaviour stays Lumen's. A click on a tab, a
-toggle or a checkbox reaches the same widget code a desktop app runs, and what
-it changes reaches the page as an attribute the stylesheet already matches.
-Typing in a bound `<input>` writes its signal, and so does moving a bound
-`<slider>`, so a `bind-text` label next to either follows along.
+Input comes from the browser and behaviour stays Lumen's. A click on a tab or a
+radio reaches the same widget code a desktop app runs, and what it changes
+reaches the page as an attribute the stylesheet already matches. Typing in a
+bound `<input>` writes its signal, and so does moving a bound `<slider>`, so a
+`bind-text` label next to either follows along.
+
+A `<checkbox>` and a `<radio>` are a `<label>` around the browser's own control
+and the caption beside it, which is the row they are on the desktop. The
+control is what reports whether it is on, what a press anywhere on the row
+lands on, and what a screen reader reads the caption as the name of; the same
+`.checkbox-box` and `.radio-dot` rules style it on both targets.
 
 ## How the styling reaches the page
 
@@ -536,9 +542,6 @@ none of them means anything without an absolute address.
 - A script written in Rhai or Lua does not run in the browser. candela does.
   An app written in one of them is still emitted and still reads: the pages
   show the state they were built with, and nothing runs.
-- A `<checkbox>` or a `<radio>` written with a `label` shows its box without
-  the caption. The caption is a second element on the desktop and an HTML
-  checkbox takes no children.
 - A script that creates an element during a build run renumbers the nodes
   after it, and then what the run wrote onto any node is left out of the
   document rather than written onto the wrong one; the build warns when it
@@ -570,6 +573,9 @@ none of them means anything without an absolute address.
   was emitted with.
 - A `<input>` is edited by the browser, so Lumen's own caret, selection and
   IME handling are not in play; what an app sees is the value after each edit.
+- A `<radio>` group is not in the tab order. Every member carries the
+  `tab-index="-1"` the desktop promotes one of at runtime, and nothing
+  promotes it here, so the group is reachable with a pointer only.
 - `:drag-over` on a `drop-target` lights up while a file is dragged in from
   the desktop, and clears on a drop, matching the desktop. `on_file_dropped`
   and the in-app `drag-payload` / `on_drop` pair, which read what was

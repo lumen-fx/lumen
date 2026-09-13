@@ -19,14 +19,20 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use bevy_ecs::prelude::*;
-use lumen_core::components::{LumenClasses, SliderValue, TextContent, Visible};
+use lumen_core::components::{
+    LumenClasses, Selected, SliderValue, TextContent, Toggleable, Visible,
+};
 use lumen_core::prelude::{App, TickStage};
 use lumen_core::property_store::PropertyStore;
 use lumen_core::signals::{ArrayItem, ArraySignals};
-use lumen_html::contract::{DATA_LM, DATA_LM_DRAG_OVER, DATA_LM_HIDDEN};
+use lumen_html::contract::{
+    DATA_LM, DATA_LM_CHECKED, DATA_LM_DRAG_OVER, DATA_LM_HIDDEN, DATA_LM_PART, DATA_LM_SELECTED,
+};
 use lumen_ir::layout_ir::{
     Attributes, BindKind, BindSpec, Element as IrElement, IfModeSpec, InterpolationSlot, LayoutIR,
+    WidgetPart,
 };
+use lumen_primitives::RadioButton;
 use lumen_scene::routing::Location;
 use lumen_scene::spawn;
 use lumen_scene::spawn::SpawnIntoWorld;
@@ -1650,4 +1656,240 @@ fn background_of(element: &Element) -> String {
         .expect("the element is in the document")
         .get_property_value("background-color")
         .unwrap()
+}
+
+/// The tree the parser's `<checkbox>` / `<radio>` desugar produces: the tag
+/// keeps the widget's own attributes and gains an indicator child and a
+/// caption child.
+fn widget(tag: &str, part: WidgetPart, attrs: Attributes, caption: &str) -> IrElement {
+    let mut indicator = element("tile", None, Vec::new());
+    indicator.attrs.part = Some(part);
+    indicator.attrs.classes = vec![part.class().to_string()];
+    let mut label = element("label", Some(caption), Vec::new());
+    label.attrs.classes = vec![format!("{tag}-label")];
+    IrElement {
+        tag: tag.to_string(),
+        attrs,
+        children: vec![indicator, label],
+        ..IrElement::default()
+    }
+}
+
+/// A page holding one checkbox and one radio, each with a caption.
+fn control_tree() -> LayoutIR {
+    let radio = Attributes {
+        radio_group: Some("ship".to_string()),
+        radio_value: Some("air".to_string()),
+        ..Attributes::default()
+    };
+    LayoutIR {
+        root: element(
+            "root",
+            None,
+            vec![
+                widget(
+                    "checkbox",
+                    WidgetPart::CheckboxBox,
+                    Attributes::default(),
+                    "Enable telemetry",
+                ),
+                widget("radio", WidgetPart::RadioDot, radio, "Air"),
+            ],
+        ),
+        ..LayoutIR::default()
+    }
+}
+
+/// Whether the tree's one checkbox is on.
+fn checkbox_state(app: &mut App) -> bool {
+    app.world
+        .query::<&Toggleable>()
+        .iter(&app.world)
+        .map(|toggle| toggle.checked)
+        .next()
+        .expect("the tree has a checkbox")
+}
+
+/// The tree's one checkbox entity.
+fn checkbox_entity(app: &mut App) -> Entity {
+    app.world
+        .query::<(Entity, &Toggleable)>()
+        .iter(&app.world)
+        .map(|(entity, _)| entity)
+        .next()
+        .expect("the tree has a checkbox")
+}
+
+#[wasm_bindgen_test]
+fn a_page_of_controls_is_adopted_without_being_touched() {
+    let root = prerender(control_tree());
+    let before = root.outer_html();
+
+    let app = hydrate(control_tree(), root.clone());
+
+    // Five nodes: the root, each widget and each caption. The indicator is
+    // the control the browser draws, and stands for no element of its own.
+    assert_eq!(
+        report(&app),
+        (5, 0),
+        "a page holding controls loads with nothing left to build"
+    );
+    assert_eq!(root.outer_html(), before);
+    let caption = root
+        .query_selector(&format!("[{DATA_LM}=\"0.0.1\"]"))
+        .unwrap()
+        .expect("the caption keeps the path the indicator did not take");
+    assert_eq!(caption.text_content().as_deref(), Some("Enable telemetry"));
+}
+
+/// The same checkbox, behind a branch that starts off.
+fn gated_control_tree() -> LayoutIR {
+    let gate = IrElement {
+        tag: "if".to_string(),
+        attrs: Attributes {
+            if_signal: Some("shown".to_string()),
+            if_mode: IfModeSpec::Render,
+            ..Attributes::default()
+        },
+        children: vec![widget(
+            "checkbox",
+            WidgetPart::CheckboxBox,
+            Attributes::default(),
+            "Enable telemetry",
+        )],
+        ..IrElement::default()
+    };
+    LayoutIR {
+        root: element("root", None, vec![gate]),
+        ..LayoutIR::default()
+    }
+}
+
+#[wasm_bindgen_test]
+fn a_control_built_at_runtime_has_its_caption_after_the_box() {
+    let root = prerender(gated_control_tree());
+    let mut app = hydrate_reactive(gated_control_tree(), root.clone());
+
+    set_signal(&mut app, "shown", "1");
+
+    let checkbox = root
+        .query_selector(".lm-checkbox")
+        .unwrap()
+        .expect("the branch turning on mounted a checkbox");
+    let control = checkbox.first_element_child().expect("the control first");
+    assert!(control.has_attribute(DATA_LM_PART));
+    assert_eq!(
+        control.get_attribute("class").as_deref(),
+        Some("checkbox-box")
+    );
+    let caption = control
+        .next_element_sibling()
+        .expect("the caption after it, not ahead of the box");
+    assert_eq!(caption.text_content().as_deref(), Some("Enable telemetry"));
+}
+
+#[wasm_bindgen_test]
+fn one_press_on_a_checkbox_is_one_click_wherever_it_lands() {
+    let root = prerender(control_tree());
+    let mut app = hydrate(control_tree(), root.clone());
+    app.add_message::<lumen_core::input::ClickEvent>();
+    app.add_systems(TickStage::Systems, count_clicks);
+    app.world.init_resource::<ClickCount>();
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
+
+    let checkbox = root
+        .query_selector(".lm-checkbox")
+        .unwrap()
+        .expect("the checkbox");
+    let caption: web_sys::HtmlElement = checkbox
+        .last_element_child()
+        .expect("the caption")
+        .unchecked_into();
+    // A `<label>` forwards a press on its caption to the control it wraps,
+    // so the same press arrives at the element twice and only one of the
+    // two is the widget's.
+    caption.click();
+    app.tick();
+    assert_eq!(app.world.resource::<ClickCount>().0, 1);
+    assert!(checkbox_state(&mut app), "the press turned it on");
+
+    let control: web_sys::HtmlInputElement = checkbox
+        .first_element_child()
+        .expect("the control")
+        .unchecked_into();
+    control.click();
+    app.tick();
+    assert_eq!(app.world.resource::<ClickCount>().0, 2);
+    assert!(!checkbox_state(&mut app), "and the next one turned it off");
+
+    // Pressing a control focuses it. The page every test here runs in is
+    // one document, so the element goes rather than leaving the next test's
+    // `focus()` to fire a `focusout` at listeners this one installed.
+    root.remove();
+}
+
+#[wasm_bindgen_test]
+fn a_state_the_world_writes_reaches_the_control() {
+    let root = prerender(control_tree());
+    let mut app = hydrate(control_tree(), root.clone());
+    let entity = checkbox_entity(&mut app);
+
+    app.world
+        .entity_mut(entity)
+        .insert(Toggleable { checked: true });
+    app.tick();
+
+    let row = root
+        .query_selector(".lm-checkbox")
+        .unwrap()
+        .expect("the checkbox");
+    let control: web_sys::HtmlInputElement = row
+        .query_selector(".checkbox-box")
+        .unwrap()
+        .expect("the control")
+        .unchecked_into();
+    assert!(
+        control.checked(),
+        "a signal flipped from the world shows on the control the visitor sees"
+    );
+    assert!(control.has_attribute(DATA_LM_CHECKED));
+    assert!(
+        !row.has_attribute(DATA_LM_CHECKED),
+        "and not on the row, which is not what a stylesheet reads it from"
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_radio_the_world_selects_checks_its_control() {
+    let root = prerender(control_tree());
+    let mut app = hydrate(control_tree(), root.clone());
+    let entity = app
+        .world
+        .query::<(Entity, &RadioButton)>()
+        .iter(&app.world)
+        .map(|(entity, _)| entity)
+        .next()
+        .expect("the tree has a radio");
+
+    app.world.entity_mut(entity).insert(Selected);
+    app.tick();
+
+    let row = root
+        .query_selector(".lm-radio")
+        .unwrap()
+        .expect("the radio");
+    let control: web_sys::HtmlInputElement = row
+        .query_selector(".radio-dot")
+        .unwrap()
+        .expect("the control")
+        .unchecked_into();
+    assert!(
+        control.checked(),
+        "a selection made in the world shows on the dot the visitor sees"
+    );
+    assert!(control.has_attribute(DATA_LM_SELECTED));
+    assert!(
+        !row.has_attribute(DATA_LM_SELECTED),
+        "and not on the row, which is not what a stylesheet reads it from"
+    );
 }

@@ -13,6 +13,7 @@ use std::sync::Arc;
 use lumen_core::components::Color;
 use lumen_core::property_store::PropertyValue;
 use lumen_ir::css::WebNames;
+use lumen_ir::layout_ir::WidgetPart;
 use serde::{Deserialize, Serialize};
 
 /// Version of the emitter/runtime contract: node paths, `data-lm-*`
@@ -30,7 +31,12 @@ use serde::{Deserialize, Serialize};
 /// 3: a seed carries what the app wrote onto single nodes, so the runtime
 /// restores it before the first tick instead of writing the IR's own values
 /// over it.
-pub const LM_CONTRACT_VERSION: u32 = 3;
+///
+/// 4: a `<checkbox>` and a `<radio>` are the row they are on the desktop,
+/// with the control the browser draws them by written inside and marked
+/// [`DATA_LM_PART`]. A runtime that does not know the mark would build an
+/// element for the indicator the mark stands for.
+pub const LM_CONTRACT_VERSION: u32 = 4;
 
 /// Node identity: the [`NodePath`] of the IR node this element came from.
 pub const DATA_LM: &str = "data-lm";
@@ -41,6 +47,17 @@ pub const DATA_LM_KEY: &str = "data-lm-key";
 /// Marks an element the emitter added for presentation only. It stands for
 /// no IR node, and a walk that binds entities to elements skips it.
 pub const DATA_LM_AUX: &str = "data-lm-aux";
+
+/// Marks the native control an element is drawn by: the `<input>` inside a
+/// `<checkbox>`, the one inside a `<radio>`. It stands for no IR node, so a
+/// walk that binds entities to elements passes over it, and it is what the
+/// runtime finds a control by without carrying its own list of which tags
+/// have one.
+pub const DATA_LM_PART: &str = "data-lm-part";
+
+/// Selector for an element the browser draws a control for: one that stands
+/// for a node and holds a marked control inside it.
+pub const DRAWN_BY_CONTROL: &str = "[data-lm]:has(> [data-lm-part])";
 
 /// Marks the single element that stands for a whole authored widget, so the
 /// runtime drives it through a widget adapter instead of walking the parts
@@ -126,6 +143,8 @@ pub fn web_names() -> WebNames<'static> {
         checked: DATA_LM_CHECKED,
         disabled: DATA_LM_DISABLED,
         drag_over: DATA_LM_DRAG_OVER,
+        checkbox_part: WidgetPart::CheckboxBox.class(),
+        radio_part: WidgetPart::RadioDot.class(),
     }
 }
 
@@ -879,7 +898,17 @@ mod tests {
         assert_eq!(names.checked, DATA_LM_CHECKED);
         assert_eq!(names.disabled, DATA_LM_DISABLED);
         assert_eq!(names.drag_over, DATA_LM_DRAG_OVER);
+        assert_eq!(names.checkbox_part, "checkbox-box");
+        assert_eq!(names.radio_part, "radio-dot");
         assert_eq!(crate::tags::lm_class("row"), "lm-row");
+    }
+
+    /// The selector is written out rather than built from the two names, so
+    /// this is what keeps it naming them.
+    #[test]
+    fn the_selector_for_a_drawn_element_names_the_path_and_the_mark() {
+        assert!(DRAWN_BY_CONTROL.contains(&format!("[{DATA_LM}]")));
+        assert!(DRAWN_BY_CONTROL.contains(&format!("> [{DATA_LM_PART}]")));
     }
 
     #[test]
