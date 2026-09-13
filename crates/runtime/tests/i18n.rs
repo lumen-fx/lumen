@@ -113,6 +113,39 @@ fn marked_markup_spawns_translated() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A selector is the placeable markup reaches with no arguments of its
+/// own, and the arm it picks spawns wrapped in the Unicode isolation
+/// marks, so a substituted value cannot reorder the sentence holding it.
+#[test]
+fn a_selected_arm_spawns_bidi_isolated() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("bidi-isolation");
+    std::fs::write(dir.join("lumen.toml"), "[app]\nlocale = \"ar\"\n").unwrap();
+    write_catalogue(
+        &dir,
+        "ar",
+        "inbox = \u{644}\u{62f}\u{64a}\u{643} { $count ->\n\
+         \u{20}   [one] \u{631}\u{633}\u{627}\u{644}\u{629}\n\
+         \u{20}  *[other] \u{631}\u{633}\u{627}\u{626}\u{644}\n\
+         }\n",
+    );
+
+    let root = Element {
+        tag: "root".to_string(),
+        attrs: Attributes::default(),
+        children: vec![label(Some("You have messages"), Some("inbox"))],
+        ..Default::default()
+    };
+    let mut app = build(&dir, root);
+    let texts = texts(&mut app);
+    let expected =
+        "\u{644}\u{62f}\u{64a}\u{643} \u{2068}\u{631}\u{633}\u{627}\u{626}\u{644}\u{2069}"
+            .to_string();
+    assert!(texts.contains(&expected), "{texts:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `[app] fallback_locale` names the language a miss falls through to. An
 /// app authored in German and running in French reads its German catalogue
 /// on a miss, and never the `en-US` one sitting beside it.
