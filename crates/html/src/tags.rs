@@ -5,10 +5,21 @@
 //! when it creates a node that was never in the page (a new `<for>` row, a
 //! branch that just became true). Neither may carry its own table.
 //!
+//! A tag may also declare a control: the native element the browser draws
+//! it with, written inside the element and standing for no IR node of its
+//! own. A `<checkbox>` is a row with an indicator and a caption in it on the
+//! desktop, so it is a `<label>` around an `<input type=checkbox>` and the
+//! caption here, and the indicator the parser synthesized is the control
+//! rather than an element of its own.
+//!
 //! Layout is CSS's job, not the element's. A `<row>` and a `<column>` are
 //! both a `div`; what makes them lay out differently is the `lm-row` and
 //! `lm-column` class the stylesheet targets. That is also why every element
 //! gets its class whether or not any rule matches it today.
+
+use lumen_ir::layout_ir::WidgetPart;
+
+use crate::contract::DATA_LM_PART;
 
 /// An HTML element an IR tag maps to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,10 +27,47 @@ pub struct HtmlTag {
     /// Element name, as written in the document.
     pub name: &'static str,
     /// Attributes the mapping itself implies, such as the `type` that makes
-    /// an `input` a checkbox. They are written before author attributes.
+    /// a `button` a switch. They are written before author attributes.
     pub fixed: &'static [(&'static str, &'static str)],
     /// True when the element takes no children and no end tag.
     pub void: bool,
+    /// The native control the browser draws this tag's indicator with, for
+    /// a tag that has one.
+    pub control: Option<Control>,
+}
+
+/// The native element a tag is drawn by, written as the first child of the
+/// element and carrying no node path.
+///
+/// It stands for the part the parser synthesized, so it carries that part's
+/// class and the widget state a browser reads for itself. The element around
+/// it keeps the tag class, the node path and the author's children.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Control {
+    /// Element name, as written in the document.
+    pub name: &'static str,
+    /// Attributes the control itself implies, such as the `type` that makes
+    /// an `input` a checkbox.
+    pub fixed: &'static [(&'static str, &'static str)],
+    /// The class of the [`WidgetPart`] it stands for, so the skin rule
+    /// written for that part reaches it.
+    pub class: &'static str,
+}
+
+impl Control {
+    /// The attributes a control carries whatever the author wrote on the
+    /// element around it: what makes it the control it is, the class of the
+    /// part it stands for, and the mark that says it stands for no node.
+    ///
+    /// The emitter writes these and the runtime sets them on a control it
+    /// builds, so both reach a control from one list. What the author wrote
+    /// is [`control_attrs`](crate::attrs::control_attrs).
+    pub fn attributes(self) -> impl Iterator<Item = (&'static str, &'static str)> {
+        self.fixed
+            .iter()
+            .copied()
+            .chain([("class", self.class), (DATA_LM_PART, "")])
+    }
 }
 
 impl HtmlTag {
@@ -28,8 +76,32 @@ impl HtmlTag {
             name,
             fixed: &[],
             void: false,
+            control: None,
         }
     }
+}
+
+/// The part a synthesized child's class names, or `None` for a class that
+/// names none.
+#[must_use]
+pub fn part_from_class(class: &str) -> Option<WidgetPart> {
+    [
+        WidgetPart::CheckboxBox,
+        WidgetPart::RadioDot,
+        WidgetPart::ProgressFill,
+    ]
+    .into_iter()
+    .find(|part| part.class() == class)
+}
+
+/// True when the browser draws `part` as a control, which is what makes the
+/// element the parser synthesized for it stand for nothing here.
+///
+/// A `<progress>` fill is the other kind: the track takes children, so the
+/// fill is written inside it as an element of its own.
+#[must_use]
+pub const fn drawn_by_control(part: WidgetPart) -> bool {
+    matches!(part, WidgetPart::CheckboxBox | WidgetPart::RadioDot)
 }
 
 /// HTML elements that take no children and no end tag.
@@ -112,17 +184,20 @@ pub fn html_tag_for(ir_tag: &str) -> Option<HtmlTag> {
             name: "img",
             fixed: &[],
             void: true,
+            control: None,
         },
         // `type="button"` because a Lumen button never submits anything.
         "button" => HtmlTag {
             name: "button",
             fixed: &[("type", "button")],
             void: false,
+            control: None,
         },
         "input" => HtmlTag {
             name: "input",
             fixed: &[],
             void: true,
+            control: None,
         },
         "textarea" => HtmlTag::plain("textarea"),
         "progress" => HtmlTag::plain("progress"),
@@ -133,21 +208,38 @@ pub fn html_tag_for(ir_tag: &str) -> Option<HtmlTag> {
             name: "button",
             fixed: &[("type", "button"), ("role", "switch")],
             void: false,
+            control: None,
         },
+        // A checkbox and a radio are a row on the desktop: an indicator and
+        // a caption beside it. The row is the element, the browser's own
+        // control is the indicator, and wrapping them in a `<label>` is what
+        // makes a click on the caption reach the control and what gives the
+        // control its name.
         "checkbox" => HtmlTag {
-            name: "input",
-            fixed: &[("type", "checkbox")],
-            void: true,
+            name: "label",
+            fixed: &[],
+            void: false,
+            control: Some(Control {
+                name: "input",
+                fixed: &[("type", "checkbox")],
+                class: WidgetPart::CheckboxBox.class(),
+            }),
         },
         "radio" => HtmlTag {
-            name: "input",
-            fixed: &[("type", "radio")],
-            void: true,
+            name: "label",
+            fixed: &[],
+            void: false,
+            control: Some(Control {
+                name: "input",
+                fixed: &[("type", "radio")],
+                class: WidgetPart::RadioDot.class(),
+            }),
         },
         "slider" => HtmlTag {
             name: "input",
             fixed: &[("type", "range")],
             void: true,
+            control: None,
         },
         // A dropdown is the box its parts sit in, not a `select`: the
         // parser expands it into a header button over a floating panel,
@@ -170,6 +262,21 @@ mod tests {
             let mapped = html_tag_for(tag).unwrap_or_else(|| panic!("no mapping for `{tag}`"));
             assert!(!mapped.name.is_empty());
             assert_eq!(mapped.void, is_void(mapped.name));
+            let Some(control) = mapped.control else {
+                continue;
+            };
+            // A control is written inside the element, so the element takes
+            // children, and it stands for a part no element of its own is
+            // built for.
+            assert!(!mapped.void, "`{tag}` has a control and is void");
+            let part = part_from_class(control.class)
+                .unwrap_or_else(|| panic!("`{tag}`'s control names no part"));
+            assert!(drawn_by_control(part), "`{tag}`'s part is not a control");
+            // A runtime finds a control by its mark and a skin reaches it by
+            // its part class, so both are written wherever a control is.
+            let written: Vec<_> = control.attributes().collect();
+            assert!(written.contains(&("class", control.class)));
+            assert!(written.contains(&(DATA_LM_PART, "")));
         }
     }
 
@@ -185,9 +292,28 @@ mod tests {
     #[test]
     fn controls_map_onto_the_matching_html_control() {
         let checkbox = html_tag_for("checkbox").expect("mapped");
-        assert_eq!(checkbox.name, "input");
-        assert_eq!(checkbox.fixed, &[("type", "checkbox")]);
-        assert!(checkbox.void);
+        assert_eq!(checkbox.name, "label");
+        assert!(!checkbox.void);
+        let control = checkbox.control.expect("a checkbox is drawn by a control");
+        assert_eq!(control.name, "input");
+        assert_eq!(control.fixed, &[("type", "checkbox")]);
+        assert_eq!(control.class, "checkbox-box");
+
+        let radio = html_tag_for("radio").expect("mapped");
+        assert_eq!(radio.name, "label");
+        let control = radio.control.expect("a radio is drawn by a control");
+        assert_eq!(control.fixed, &[("type", "radio")]);
+        assert_eq!(control.class, "radio-dot");
+
+        let written: Vec<_> = control.attributes().collect();
+        assert_eq!(
+            written,
+            vec![
+                ("type", "radio"),
+                ("class", "radio-dot"),
+                (DATA_LM_PART, "")
+            ]
+        );
 
         let slider = html_tag_for("slider").expect("mapped");
         assert_eq!(slider.fixed, &[("type", "range")]);

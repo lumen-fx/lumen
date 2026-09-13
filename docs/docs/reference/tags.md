@@ -472,7 +472,9 @@ step="30"` tops out at 90.
 
 A row containing an indicator box and a caption. Focusable by default.
 The parser synthesizes the two parts, so CSS can reach them as
-`.checkbox-box` and `.checkbox-label`.
+`.checkbox-box` and `.checkbox-label`. On the web the indicator is the
+browser's own control and carries the same class, so one rule styles
+both targets.
 
 | Attribute | Value | Effect |
 | --- | --- | --- |
@@ -485,7 +487,8 @@ Defaults to `align="center"` and `gap="8"` when you do not set them.
 ### `<radio>`
 
 One member of an exclusive group. The group's selected value lives in a
-signal. Synthesized parts are `.radio-dot` and `.radio-label`.
+signal. Synthesized parts are `.radio-dot` and `.radio-label`; on the web
+the dot is the browser's own control under the same class.
 
 | Attribute | Value | Effect |
 | --- | --- | --- |
@@ -494,9 +497,10 @@ signal. Synthesized parts are `.radio-dot` and `.radio-label`.
 | `label` | text | The caption. |
 | `checked` | `true`, `yes` | Seeds the group signal with this member's value. |
 
-Radios start at `tab-index="-1"`; exactly one member of each group is
-promoted at runtime, so Tab enters and leaves the group as a unit and
-arrow keys move within it.
+Radios start at `tab-index="-1"`; on the desktop exactly one member of
+each group is promoted at runtime, so Tab enters and leaves the group as
+a unit and arrow keys move within it. Nothing promotes a member on the
+web, where the group is reachable with a pointer only.
 
 ### `<progress>`
 

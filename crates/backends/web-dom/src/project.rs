@@ -7,7 +7,13 @@
 //! correct, because a write the browser cannot distinguish from what is
 //! there still costs a style invalidation.
 //!
-//! What is NOT here is anything the browser's own CSS engine owns. Colors,
+//! An element the browser draws with a control of its own is two elements
+//! here: a `<checkbox>` is the row, and the `<input>` inside it is the
+//! indicator. State a browser reads for itself goes on the control, which is
+//! where a stylesheet looks for it too; what describes the whole widget,
+//! such as the mark a disabled row dims by, stays on the element.
+//!
+//! What is not here is anything the browser's own CSS engine owns. Colors,
 //! sizes, spacing and hover states reach the page as a stylesheet; the world
 //! keeps computing them for the desktop and nothing reads them here.
 
@@ -26,7 +32,7 @@ use lumen_html::style::style_value;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, HtmlDialogElement, HtmlElement, HtmlInputElement, HtmlTextAreaElement};
 
-use crate::nodes::NodeTable;
+use crate::nodes::{NodeTable, control_of};
 
 /// Set an attribute, or take it off, unless the element already says that.
 fn set_attribute(element: &Element, name: &str, value: Option<&str>) {
@@ -52,6 +58,9 @@ fn set_flag(element: &Element, name: &str, on: bool) {
 /// An element's own text is the text node before its children, which is
 /// where the emitter wrote it. A form control is the exception: its text is
 /// its value, and it has no children to hold one.
+///
+/// An element drawn with a control writes the control first, so its text is
+/// the node after it rather than the first one.
 fn set_text(element: &Element, text: &str) {
     if let Some(input) = element.dyn_ref::<HtmlInputElement>() {
         if input.value() != text {
@@ -65,7 +74,11 @@ fn set_text(element: &Element, text: &str) {
         }
         return;
     }
-    match element.first_child() {
+    let first = match control_of(element) {
+        Some(control) => control.next_sibling(),
+        None => element.first_child(),
+    };
+    match first {
         // A text node already there is the one to update.
         Some(node) if node.node_type() == web_sys::Node::TEXT_NODE => {
             if node.text_content().as_deref() != Some(text) {
@@ -209,9 +222,11 @@ pub fn project_control_state(
         let Some(element) = table.element(entity) else {
             return;
         };
-        set_flag(element, DATA_LM_SELECTED, on);
-        if matches!(element.get_attribute("type").as_deref(), Some("radio")) {
-            set_flag(element, DATA_LM_CHECKED, on);
+        let marked = table.control(entity).unwrap_or(element);
+        set_flag(marked, DATA_LM_SELECTED, on);
+        if matches!(marked.get_attribute("type").as_deref(), Some("radio")) {
+            set_flag(marked, DATA_LM_CHECKED, on);
+            set_checked(marked, on);
         }
     };
     for entity in &selected {
@@ -229,8 +244,9 @@ pub fn project_control_state(
             return;
         };
         set_flag(element, DATA_LM_DISABLED, on);
-        if is_disableable(&element.tag_name().to_ascii_lowercase()) {
-            set_flag(element, "disabled", on);
+        let control = table.control(entity).unwrap_or(element);
+        if is_disableable(&control.tag_name().to_ascii_lowercase()) {
+            set_flag(control, "disabled", on);
         }
     };
     for entity in &disabled {
@@ -240,6 +256,15 @@ pub fn project_control_state(
         disable(entity, false);
     }
     for (entity, toggle) in &toggled {
+        // A checkbox's state is the control's. It has to be written even
+        // when the visitor is the one who set it, because a binding or a
+        // script can flip the signal instead, and `:checked` is what the
+        // stylesheet reads either way.
+        if let Some(control) = table.control(entity) {
+            set_flag(control, DATA_LM_CHECKED, toggle.checked);
+            set_checked(control, toggle.checked);
+            continue;
+        }
         flag(entity, DATA_LM_CHECKED, toggle.checked);
         if let Some(element) = table.element(entity)
             && element.has_attribute("role")
@@ -277,6 +302,19 @@ pub fn project_control_state(
     }
 }
 
+/// Check a control, or uncheck it, unless it already says that.
+///
+/// The property rather than the attribute: a browser stops reading the
+/// attribute the moment the visitor touches the control, and it is the
+/// property `:checked` matches.
+fn set_checked(control: &Element, on: bool) {
+    if let Some(input) = control.dyn_ref::<HtmlInputElement>()
+        && input.checked() != on
+    {
+        input.set_checked(on);
+    }
+}
+
 /// Follow a focus move Lumen made itself back into the page.
 ///
 /// A tab strip's arrows, a dropdown's arrows and a radio group all move
@@ -295,6 +333,9 @@ pub fn project_focus(table: NonSend<NodeTable>, focused: Query<Entity, Added<Foc
         let Some(element) = table.element(entity) else {
             continue;
         };
+        // The control is the tab stop where there is one, so it is what
+        // takes focus; the row around it is not focusable at all.
+        let element = table.control(entity).unwrap_or(element);
         let already_active = element
             .owner_document()
             .and_then(|document| document.active_element())

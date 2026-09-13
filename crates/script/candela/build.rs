@@ -18,6 +18,15 @@
 //! links there, one in `deps/`, where cargo puts test binaries. A missing
 //! library is not fatal anywhere, so a problem here reports on stderr and
 //! leaves the build standing.
+//!
+//! One build of the workspace resolves this crate into several units, and
+//! cargo runs their build scripts at the same time. They all stage the same
+//! files, so everything written here is written somewhere only this script
+//! reaches and moved into place afterwards: the C modules are compiled into
+//! this build's own output directory, and every file arrives at its
+//! destination under a temporary name and is renamed. Two compilers sharing
+//! an output directory is what leaves a module out of the tree, and a
+//! half-copied file is what a binary beside it would read.
 
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -53,8 +62,26 @@ fn main() {
     };
     println!("cargo::rerun-if-changed={}", source.display());
 
-    for dest in destinations() {
-        for message in stage(&source, &dest) {
+    let Some(out_dir) = env::var_os("OUT_DIR").map(PathBuf::from) else {
+        warn(
+            "cargo named no output directory, so the candela standard library was not staged. `import \"std/...\"` and the array methods will not resolve.",
+        );
+        return;
+    };
+
+    // The C modules are compiled once, here, and copied from here into each
+    // destination.
+    let built = out_dir.join("libs");
+    for (module, sources) in NATIVE_MODULES {
+        if let Err(message) = build_native(&source, &built, module, sources) {
+            warn(&format!(
+                "{message}. That module is not in the candela standard library, so what a program imports from it will not resolve."
+            ));
+        }
+    }
+
+    for dest in destinations(&out_dir) {
+        for message in stage(&source, &built, &dest) {
             warn(&format!(
                 "{message}. That part of the candela standard library is not at {}, so what a program imports from it will not resolve.",
                 dest.display()
@@ -123,10 +150,7 @@ fn resolved_graph(flags: &[&str]) -> Result<serde_json::Value, String> {
 
 /// Where a copy of the library belongs: beside the binaries cargo links, and
 /// beside the test binaries it puts one directory further down.
-fn destinations() -> Vec<PathBuf> {
-    let Some(out_dir) = env::var_os("OUT_DIR").map(PathBuf::from) else {
-        return Vec::new();
-    };
+fn destinations(out_dir: &Path) -> Vec<PathBuf> {
     // OUT_DIR is `<target>/<profile>/build/<package>-<hash>/out`.
     let Some(profile) = out_dir.ancestors().nth(3) else {
         return Vec::new();
@@ -134,16 +158,24 @@ fn destinations() -> Vec<PathBuf> {
     vec![profile.join("libs"), profile.join("deps").join("libs")]
 }
 
-/// Copy the text modules and build the C-backed ones into `dest`, reporting
-/// every part that did not make it rather than stopping at the first: a module
-/// that fails to build costs a program the functions it declares, and no more.
-fn stage(source: &Path, dest: &Path) -> Vec<String> {
+/// Copy the text modules and the libraries built from `built` into `dest`,
+/// reporting every part that did not make it rather than stopping at the
+/// first: a module that does not arrive costs a program the functions it
+/// declares, and no more.
+fn stage(source: &Path, built: &Path, dest: &Path) -> Vec<String> {
     let mut problems = Vec::new();
     if let Err(message) = copy_modules(&source.join("std"), &dest.join("std")) {
         problems.push(message);
     }
-    for (module, sources) in NATIVE_MODULES {
-        if let Err(message) = build_native(source, dest, module, sources) {
+    for (module, _) in NATIVE_MODULES {
+        let library = PathBuf::from("std_src")
+            .join(module)
+            .join(format!("{module}.{}", library_extension()));
+        if !built.join(&library).is_file() {
+            // Already reported where it was compiled.
+            continue;
+        }
+        if let Err(message) = copy_file(&built.join(&library), &dest.join(&library)) {
             problems.push(message);
         }
     }
@@ -174,23 +206,48 @@ fn copy_modules(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Copy `from` to `to` through a name only this build writes.
+///
+/// Another build script staging the same tree is writing the same destination
+/// at the same time, and the copy a binary reads has to be a whole file
+/// whoever wrote it. The temporary name carries this process's id, and the
+/// rename onto the destination is what anything else can see.
 fn copy_file(from: &Path, to: &Path) -> Result<(), String> {
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
-    fs::copy(from, to)
-        .map(|_| ())
-        .map_err(|e| format!("cannot copy {} to {}: {e}", from.display(), to.display()))
+    let Some(name) = to.file_name() else {
+        return Err(format!("{} names no file", to.display()));
+    };
+    let mut staging = OsString::from(".");
+    staging.push(name);
+    staging.push(format!(".{}", std::process::id()));
+    let staging = to.with_file_name(staging);
+    fs::copy(from, &staging).map_err(|e| {
+        format!(
+            "cannot copy {} to {}: {e}",
+            from.display(),
+            staging.display()
+        )
+    })?;
+    fs::rename(&staging, to).map_err(|e| {
+        let _ = fs::remove_file(&staging);
+        format!("cannot put {} at {}: {e}", from.display(), to.display())
+    })
 }
 
-/// Build one C-backed module into the shared library its `dylib` block names.
+/// Build one C-backed module into the shared library its `dylib` block names,
+/// under `into`.
 ///
-/// The path in that block is relative to the module, so the built library goes
-/// where the source tree keeps it: `std_src/<module>/<module>.<ext>`.
-fn build_native(source: &Path, dest: &Path, module: &str, sources: &[&str]) -> Result<(), String> {
+/// The path in that block is relative to the module, so the built library
+/// keeps the place the source tree gives it: `std_src/<module>/<module>.<ext>`.
+/// The compiler's own output - object files, and whatever else it leaves
+/// beside them - lands in the same directory, which is why that directory
+/// belongs to this build alone.
+fn build_native(source: &Path, into: &Path, module: &str, sources: &[&str]) -> Result<(), String> {
     let src_dir = source.join("std_src").join(module);
-    let out_dir = dest.join("std_src").join(module);
+    let out_dir = into.join("std_src").join(module);
     fs::create_dir_all(&out_dir)
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
     let library = out_dir.join(format!("{module}.{}", library_extension()));

@@ -2367,6 +2367,11 @@ pub struct WebNames<'a> {
     pub disabled: &'a str,
     /// Attribute mirroring `:drag-over`.
     pub drag_over: &'a str,
+    /// Class of the indicator a `<checkbox>` is drawn with, which is the
+    /// element its checked state lands on.
+    pub checkbox_part: &'a str,
+    /// Class of the indicator a `<radio>` is drawn with.
+    pub radio_part: &'a str,
 }
 
 /// Which spelling of a selector [`write_selector`] writes.
@@ -2399,6 +2404,12 @@ pub fn selector_to_css(sel: &SelectorBuf) -> String {
 /// `:is(<the real one>, <the mirror>)`, because a real checkbox is checked
 /// in the browser's own eyes and a `<toggle>` is not.
 ///
+/// A `<checkbox>` and a `<radio>` are two elements here, a row around the
+/// control the browser draws, so a selector for one of them says which of
+/// the two it means: the checked state moves to the control, the way it
+/// routes into the indicator's fill on the desktop, and focus is read
+/// through the row, because the browser focuses the control inside it.
+///
 /// Everything else, structural pseudo-classes and selector-list arguments
 /// included, is the same text [`selector_to_css`] writes.
 pub fn selector_to_web(sel: &SelectorBuf, names: &WebNames<'_>) -> String {
@@ -2421,6 +2432,14 @@ fn write_selector(out: &mut String, sel: &SelectorBuf, spelling: &Spelling<'_>) 
 }
 
 fn write_compound(out: &mut String, c: &CompoundSelector, spelling: &Spelling<'_>) {
+    // The class of the indicator this compound's tag is drawn with, for the
+    // two tags that have one. It is the element the state sits on, and the
+    // rest of the compound still describes the row around it.
+    let part = match (spelling, c.tag.as_deref()) {
+        (Spelling::Web(names), Some("checkbox")) => Some(names.checkbox_part),
+        (Spelling::Web(names), Some("radio")) => Some(names.radio_part),
+        _ => None,
+    };
     if let Some(tag) = &c.tag {
         match spelling {
             Spelling::Lumen => out.push_str(tag),
@@ -2442,8 +2461,25 @@ fn write_compound(out: &mut String, c: &CompoundSelector, spelling: &Spelling<'_
         out.push('.');
         out.push_str(class);
     }
-    for p in &c.pseudo_classes {
-        write_pseudo(out, p, spelling);
+    let (on_control, on_element): (Vec<&PseudoClass>, Vec<&PseudoClass>) = c
+        .pseudo_classes
+        .iter()
+        .partition(|p| part.is_some() && matches!(p, PseudoClass::Checked | PseudoClass::Selected));
+    for p in on_element {
+        match p {
+            // The browser focuses the control, so a rule the desktop draws
+            // on the row is read from the row through what is inside it.
+            PseudoClass::Focus if part.is_some() => out.push_str(":focus-within"),
+            PseudoClass::FocusVisible if part.is_some() => out.push_str(":has(:focus-visible)"),
+            _ => write_pseudo(out, p, spelling),
+        }
+    }
+    if let Some(part) = part.filter(|_| !on_control.is_empty()) {
+        out.push_str(" > .");
+        out.push_str(part);
+        for p in on_control {
+            write_pseudo(out, p, spelling);
+        }
     }
 }
 
@@ -5837,6 +5873,8 @@ mod selector_text_tests {
         checked: "data-lm-checked",
         disabled: "data-lm-disabled",
         drag_over: "data-lm-drag-over",
+        checkbox_part: "checkbox-box",
+        radio_part: "radio-dot",
     };
 
     fn one(src: &str) -> SelectorBuf {
@@ -5911,6 +5949,63 @@ mod selector_text_tests {
         // `<toggle>` is a button, and only the mirror says so.
         assert_eq!(web(".t:checked"), ".t:is(:checked, [data-lm-checked])");
         assert_eq!(web(".t:disabled"), ".t:is(:disabled, [data-lm-disabled])");
+    }
+
+    #[test]
+    fn a_checkbox_state_follows_the_element_it_is_on() {
+        // The fill is the indicator's on the desktop, so it is the
+        // control's here; the row is what the browser focuses through.
+        assert_eq!(
+            web("checkbox:checked"),
+            ":where(.lm-checkbox) > .checkbox-box:is(:checked, [data-lm-checked])"
+        );
+        assert_eq!(
+            web("radio:selected"),
+            ":where(.lm-radio) > .radio-dot[data-lm-selected]"
+        );
+        assert_eq!(web("checkbox:focus"), ":where(.lm-checkbox):focus-within");
+        assert_eq!(
+            web("radio:focus-visible"),
+            ":where(.lm-radio):has(:focus-visible)"
+        );
+        // What is left describes the row, and everything a rule says about
+        // the row stays on it.
+        assert_eq!(web("checkbox:hover"), ":where(.lm-checkbox):hover");
+        assert_eq!(
+            web("checkbox:disabled"),
+            ":where(.lm-checkbox):is(:disabled, [data-lm-disabled])"
+        );
+        assert_eq!(
+            web("checkbox.dense:hover:checked"),
+            ":where(.lm-checkbox).dense:hover > .checkbox-box:is(:checked, [data-lm-checked])"
+        );
+        // A state written without one of those tags is untouched.
+        assert_eq!(web(".t:checked"), ".t:is(:checked, [data-lm-checked])");
+    }
+
+    #[test]
+    fn a_redirected_state_keeps_the_rest_of_the_selector() {
+        // The subject moves to the control, so what stands to the left of
+        // it still has to reach the row.
+        assert_eq!(
+            web("column > checkbox:checked"),
+            ":where(.lm-column) > :where(.lm-checkbox) > .checkbox-box:is(:checked, [data-lm-checked])"
+        );
+        assert_eq!(
+            web(".panel radio:checked"),
+            ".panel :where(.lm-radio) > .radio-dot:is(:checked, [data-lm-checked])"
+        );
+        // A row state written after the one that moves stays on the row,
+        // whatever order the author wrote them in.
+        assert_eq!(
+            web("radio:selected:disabled"),
+            ":where(.lm-radio):is(:disabled, [data-lm-disabled]) > .radio-dot[data-lm-selected]"
+        );
+        // Both states the indicator carries land on it together.
+        assert_eq!(
+            web("checkbox:checked:selected"),
+            ":where(.lm-checkbox) > .checkbox-box:is(:checked, [data-lm-checked])[data-lm-selected]"
+        );
     }
 
     #[test]
