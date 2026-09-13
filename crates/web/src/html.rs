@@ -25,11 +25,12 @@
 use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 
+use lumen_html::attrs::control_attrs;
 use lumen_html::contract::{
     DATA_LM, DATA_LM_HIDDEN, DATA_LM_SELECTED, DIALOG_OPEN, NodePath, NodeSeed,
 };
 use lumen_html::style::{Emission, rewrite_property, style_value};
-use lumen_html::{escape_attr, escape_text, html_attrs, html_tag_for};
+use lumen_html::{Control, drawn_by_control, escape_attr, escape_text, html_attrs, html_tag_for};
 use lumen_i18n::{LanguageIdentifier, LocaleFormatter};
 use lumen_ir::css::computed_style_map;
 use lumen_ir::fragment::FRAGMENT_TAG;
@@ -310,6 +311,12 @@ fn emit_element(
     if tag.void {
         return Ok(());
     }
+    // The control the browser draws this element with comes first, ahead of
+    // the element's own text, which is where the caption sits beside the
+    // indicator on the desktop.
+    if let Some(control) = tag.control {
+        emit_control(out, control, ir_tag, attrs);
+    }
     if let Some(text) = &attrs.text
         && !text.is_empty()
         && !marker
@@ -318,6 +325,16 @@ fn emit_element(
     }
     if children_are_content {
         for (index, child) in element.children.iter().enumerate() {
+            // The indicator the parser synthesized is the control written
+            // above, so it stands for no element of its own here. Its index
+            // is still its own: dropping it would renumber the caption.
+            if child
+                .attrs
+                .part
+                .is_some_and(|part| drawn_by_control(part) && tag.control.is_some())
+            {
+                continue;
+            }
             emit_element(out, child, &path.child(index as u32), walk)?;
         }
     } else if ir_tag == "for" {
@@ -327,6 +344,24 @@ fn emit_element(
     out.push_str(tag.name);
     out.push('>');
     Ok(())
+}
+
+/// Write the native control an element is drawn by: the `<input>` a
+/// `<checkbox>` shows its state in, and the one a `<radio>` does.
+///
+/// It carries the class of the part it stands for, so the skin rule written
+/// for that part reaches it, and the control mark rather than a node path,
+/// because the entity the indicator was spawned for has no element here.
+fn emit_control(out: &mut String, control: Control, ir_tag: &str, attrs: &Attributes) {
+    out.push('<');
+    out.push_str(control.name);
+    for (name, value) in control.attributes() {
+        write_attr(out, name, value);
+    }
+    for (name, value) in control_attrs(ir_tag, attrs) {
+        write_attr(out, name, &value);
+    }
+    out.push('>');
 }
 
 /// What one node wears that its markup does not say.

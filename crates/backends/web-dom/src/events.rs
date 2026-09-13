@@ -40,7 +40,7 @@ use lumen_core::input::{
 };
 use lumen_core::nav;
 use lumen_core::property_store::PropertyStore;
-use lumen_html::contract::DATA_LM;
+use lumen_html::contract::{DATA_LM, DATA_LM_PART, DRAWN_BY_CONTROL};
 use lumen_scene::spawn::IfMarker;
 
 use crate::navigation::Routes;
@@ -151,6 +151,22 @@ fn path_of(event: &Event) -> Option<String> {
         .flatten()
         .unwrap_or(target);
     element.get_attribute(DATA_LM)
+}
+
+/// True when a click inside an element the browser draws a control for is
+/// not the control's own click.
+///
+/// A `<label>` forwards a press anywhere inside it to the control it wraps,
+/// so one press on a checkbox arrives twice: once where it landed and once
+/// on the control. The control's is the one kept, which is the press the
+/// desktop reports too, and dropping the other is what makes one press one
+/// [`ClickEvent`] whether it landed on the box, the caption or the padding
+/// between them.
+fn is_forwarded_click(event: &Event) -> bool {
+    let Some(target) = event.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
+        return false;
+    };
+    !target.has_attribute(DATA_LM_PART) && target.closest(DRAWN_BY_CONTROL).ok().flatten().is_some()
 }
 
 /// The `<a href>` a click landed on or inside, whether or not it is one
@@ -697,6 +713,9 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
             let Some(path) = path_of(&event) else {
                 return;
             };
+            if is_forwarded_click(&event) {
+                return;
+            }
             queue(PendingEvent::Click {
                 path,
                 position: mouse.map_or((0.0, 0.0), |m| {

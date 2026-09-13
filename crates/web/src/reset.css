@@ -147,12 +147,12 @@
 /* --- Widget parts ---------------------------------------------------
  *
  * A control is one element in a page and two or three on the desktop: a
- * `<toggle>` is a track with a knob inside it, a `<checkbox>` is a row
- * with an indicator and a caption. Some of those parts are entities the
- * runtime spawns and no markup carries, and the rest cannot live inside
- * the HTML control the tag maps to, which takes no children. Either way
- * there is nothing here for the emitter to write, so the browser draws
- * the part instead.
+ * `<toggle>` is a track with a knob inside it. Those parts are entities
+ * the runtime spawns and no markup carries, so there is nothing here for
+ * the emitter to write and the browser draws the part instead. A
+ * `<checkbox>` and a `<radio>` are the other shape: the indicator is the
+ * browser's own control, written inside the element and carrying the same
+ * class the desktop's tile does, so a skin rule reaches both.
  *
  * Each is drawn from the value the desktop draws it from: `knob-color`,
  * `knob-inset` and `thumb-size` arrive as `--lm-` custom properties, and
@@ -249,31 +249,19 @@
   background: var(--lumen-accent, #33a8b3);
 }
 
-/* A checkbox and a radio are their own indicator here: the tile the
-   desktop puts the mark in is a child, and an `<input>` takes none. The
-   caption beside it has nowhere to go at all, so a checkbox written with
-   a `label` shows the box without the words. */
-:where(.lm-checkbox, .lm-radio) {
+/* The indicator, which is the browser's own control. A native checkbox
+   comes with a look of its own that no CSS reaches into, so it is turned
+   off and the box is drawn here from the same values the desktop draws
+   it from. Its size is ua.css's `.checkbox-box` rule, which reaches this
+   element; the tap-target floor on the tag stays on the row. */
+:where(.checkbox-box, .radio-dot) {
   appearance: none;
   flex: none;
   margin: 0;
   background: #545454;
 }
 
-/* The tap-target floor ua.css puts on a `<checkbox>` is the height of the
-   row it is on the desktop, where the indicator is a child of that row.
-   Here the element is the indicator itself, so the floor has to be
-   overruled rather than grown into, which takes weight the rest of this
-   file does not carry. An app rule for the same size still outranks it. */
-.lm-checkbox,
-.lm-radio {
-  width: 18px;
-  min-width: 18px;
-  height: 18px;
-  min-height: 18px;
-}
-
-:where(.lm-checkbox) {
+:where(.checkbox-box) {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -283,27 +271,27 @@
   color: var(--lm-knob-color, #ffffff);
 }
 
-:where(.lm-radio) {
+:where(.radio-dot) {
   border-radius: 50%;
 }
 
 /* The state fill a skinless app still needs; a skin's `:checked { bg }`
    outweighs it. */
-:where(.lm-checkbox:is(:checked, [data-lm-checked])),
-:where(.lm-radio:is(:checked, [data-lm-checked], [data-lm-selected])) {
+:where(.checkbox-box:is(:checked, [data-lm-checked])),
+:where(.radio-dot:is(:checked, [data-lm-checked], [data-lm-selected])) {
   background: #33a8b3;
 }
 
 /* The mark itself, which the desktop draws as text in the box. */
-:where(.lm-checkbox)::after {
+:where(.checkbox-box)::after {
   content: "";
 }
 
-:where(.lm-checkbox:is(:checked, [data-lm-checked]))::after {
+:where(.checkbox-box:is(:checked, [data-lm-checked]))::after {
   content: "\2713";
 }
 
-:where(.lm-checkbox:indeterminate)::after {
+:where(.checkbox-box:indeterminate)::after {
   content: "\2013";
 }
 

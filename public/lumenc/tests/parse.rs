@@ -2778,6 +2778,45 @@ fn checkbox_desugars_to_box_and_label() {
 }
 
 #[test]
+fn a_checkbox_row_records_the_centring_and_the_gap_it_defaults_to() {
+    let ir = parse_html(r##"<root><checkbox label="Enable" /></root>"##).expect("html");
+    let cb = &ir.root.children[0];
+    assert_eq!(cb.attrs.align, Some(lumenc::layout_ir::FlexAlign::Center));
+    assert_eq!(cb.attrs.gap, Some(8.0));
+    // A target that ranks a rule above an element's own styling replays the
+    // record, so a row that only sets the fields spaces the caption one way
+    // on the desktop and another in a browser.
+    assert!(
+        cb.attrs
+            .markup_styles
+            .contains(&("align".to_string(), "center".to_string())),
+        "{:?}",
+        cb.attrs.markup_styles
+    );
+    assert!(
+        cb.attrs
+            .markup_styles
+            .contains(&("gap".to_string(), "8".to_string())),
+        "{:?}",
+        cb.attrs.markup_styles
+    );
+}
+
+#[test]
+fn an_authored_gap_on_a_checkbox_is_recorded_once() {
+    let ir = parse_html(r##"<root><checkbox label="Enable" gap="2" /></root>"##).expect("html");
+    let cb = &ir.root.children[0];
+    assert_eq!(cb.attrs.gap, Some(2.0));
+    let gaps: Vec<_> = cb
+        .attrs
+        .markup_styles
+        .iter()
+        .filter(|(property, _)| property == "gap")
+        .collect();
+    assert_eq!(gaps, vec![&("gap".to_string(), "2".to_string())]);
+}
+
+#[test]
 fn checkbox_indeterminate_flag_parses() {
     let ir =
         parse_html(r##"<root><checkbox label="X" indeterminate="true" /></root>"##).expect("html");

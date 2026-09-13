@@ -1562,6 +1562,21 @@ pub enum WidgetPart {
     ProgressFill,
 }
 
+impl WidgetPart {
+    /// The class the part carries, which is what a skin styles it by.
+    ///
+    /// The desugar writes it onto the synthesized child and the web target
+    /// writes it onto the element the browser draws for the same part, so
+    /// one skin rule reaches both.
+    pub const fn class(self) -> &'static str {
+        match self {
+            Self::CheckboxBox => "checkbox-box",
+            Self::RadioDot => "radio-dot",
+            Self::ProgressFill => "progress-fill",
+        }
+    }
+}
+
 /// A widget tag that the parser replaces with plain boxes - see
 /// [`Attributes::widget`].
 ///
