@@ -33,6 +33,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "src/install.rs"]
+mod install;
+
+use install::install_tree;
+
 /// The standard library modules that bind a C source file, with the sources
 /// each one is built from. The rest of `std` is candela text and is copied.
 const NATIVE_MODULES: [(&str, &[&str]); 3] = [
@@ -147,52 +152,6 @@ fn destinations(out_dir: &Path) -> Vec<PathBuf> {
         return Vec::new();
     };
     vec![profile.join("libs"), profile.join("deps").join("libs")]
-}
-
-/// Put every file under `from` at the same place under `to`.
-///
-/// Each file is copied under a temporary name beside its destination and
-/// renamed over it, so another run of this script installing the same tree at
-/// the same moment never finds a file half-written, and a reader never does
-/// either.
-fn install_tree(from: &Path, to: &Path) -> Result<(), String> {
-    fs::create_dir_all(to).map_err(|e| format!("cannot create {}: {e}", to.display()))?;
-    let entries = fs::read_dir(from).map_err(|e| format!("cannot read {}: {e}", from.display()))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let target = to.join(entry.file_name());
-        if path.is_dir() {
-            install_tree(&path, &target)?;
-        } else {
-            install_file(&path, &target)?;
-        }
-    }
-    Ok(())
-}
-
-fn install_file(from: &Path, to: &Path) -> Result<(), String> {
-    let Some(name) = to.file_name() else {
-        return Err(format!("{} names no file", to.display()));
-    };
-    let mut staging = OsString::from(".");
-    staging.push(name);
-    staging.push(format!(".{}.tmp", std::process::id()));
-    let staging = to.with_file_name(staging);
-    fs::copy(from, &staging).map_err(|e| {
-        format!(
-            "cannot copy {} to {}: {e}",
-            from.display(),
-            staging.display()
-        )
-    })?;
-    fs::rename(&staging, to).map_err(|e| {
-        let _ = fs::remove_file(&staging);
-        format!(
-            "cannot move {} into place at {}: {e}",
-            staging.display(),
-            to.display()
-        )
-    })
 }
 
 /// Copy the text modules and build the C-backed ones into `dest`, reporting
