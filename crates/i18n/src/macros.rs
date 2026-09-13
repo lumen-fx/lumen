@@ -70,7 +70,7 @@ mod tests {
         let mut i = I18n::new(lang("en-US"), vec![]);
         i.load_ftl(lang("en-US"), "greet = Hi { $name }!").unwrap();
         let out: String = t!(i, "greet", name = "World");
-        assert_eq!(out, "Hi World!");
+        assert_eq!(out, "Hi \u{2068}World\u{2069}!");
     }
 
     #[test]
@@ -79,6 +79,6 @@ mod tests {
         i.load_ftl(lang("en-US"), "greet = { $greeting }, { $name }!")
             .unwrap();
         let out: String = t!(i, "greet", greeting = "Hello", name = "World");
-        assert_eq!(out, "Hello, World!");
+        assert_eq!(out, "\u{2068}Hello\u{2069}, \u{2068}World\u{2069}!");
     }
 }

@@ -1,8 +1,8 @@
-//! Translation + locale-aware formatters (W5.7 + W5.8).
+//! Translation + locale-aware formatters.
 //!
 //! Two halves:
 //!
-//! - **Translation** (W5.7) - [`I18n`] wraps per-locale [`FluentBundle`]s
+//! - **Translation** - [`I18n`] wraps per-locale [`FluentBundle`]s
 //!   keyed by [`LanguageIdentifier`]. `load_ftl` parses `.ftl` source
 //!   strings; `t` / `t_with_lang` resolve keys with optional
 //!   [`FluentArgs`]. A key of the form `message.attribute` resolves that
@@ -10,7 +10,7 @@
 //!   markup key reaches an element's placeholder and its alternative
 //!   text. Falls through `fallback_chain` in order on a miss, which
 //!   ends with the locale the app's source strings are written in.
-//! - **Formatting** (W5.8) - [`LocaleFormatter`] wraps ICU4X's decimal,
+//! - **Formatting** - [`LocaleFormatter`] wraps ICU4X's decimal,
 //!   date-time, currency and relative-time formatters for the active
 //!   locale. `format_number`, `format_date`, `format_time`,
 //!   `format_datetime`, `format_currency` and `format_relative` return
@@ -114,8 +114,8 @@ impl std::str::FromStr for Lang {
 /// keys against `current`; falls through `fallback_chain` in order;
 /// returns the key string itself when no bundle has it.
 ///
-/// `FluentBundle` defaults are concurrent (`FluentBundle::new` returns
-/// the non-Sync variant). We use the default concurrent variant so the
+/// Bundles are built with `FluentBundle::new_concurrent` rather than
+/// `FluentBundle::new`, which returns the non-`Sync` variant, so the
 /// resource can be read from parallel bevy_ecs systems.
 #[derive(Resource)]
 pub struct I18n {
@@ -142,6 +142,15 @@ impl I18n {
     /// Parse + register `ftl_source` for `lang`. Idempotent: a second
     /// load for the same `lang` replaces the bundle (so hot-reload of a
     /// `.ftl` file just calls this again with the new bytes).
+    ///
+    /// A value a placeable substitutes - an argument, the arm a selector
+    /// picks - is wrapped in Unicode isolation marks (U+2068 and U+2069),
+    /// so it cannot reorder the text around it when the two run in
+    /// opposite directions. A term or message reference is inlined
+    /// without them, since it is catalogue text in the catalogue's own
+    /// language. Every target builds its bundles through this function,
+    /// so a catalogue resolves to the same bytes on the desktop, in a
+    /// browser and on a server.
     pub fn load_ftl(
         &mut self,
         lang: LanguageIdentifier,
@@ -150,10 +159,6 @@ impl I18n {
         let res = FluentResource::try_new(ftl_source.to_string())
             .map_err(|(_, errs)| I18nError::Parse(format!("{errs:?}")))?;
         let mut bundle = FluentBundle::new_concurrent(vec![lang.clone()]);
-        // Disable Unicode isolation chars in test/CI output so round-trip
-        // assertions stay readable. Authors can flip this if they want
-        // them back for actual rendering.
-        bundle.set_use_isolating(false);
         bundle
             .add_resource(res)
             .map_err(|errs| I18nError::AddResource(format!("{errs:?}")))?;
@@ -493,7 +498,35 @@ mod tests {
             .unwrap();
         let mut args = FluentArgs::new();
         args.set("name", FluentValue::from("World"));
-        assert_eq!(i.t("greet", &args), "Hello World!");
+        assert_eq!(i.t("greet", &args), "Hello \u{2068}World\u{2069}!");
+    }
+
+    /// A substituted value carries the Unicode isolation marks; a message
+    /// with no placeable comes back exactly as it was written, and a term
+    /// reference is inlined without marks.
+    #[test]
+    fn placeables_are_bidi_isolated() {
+        let mut i = I18n::new(lang("ar"), vec![]);
+        i.load_ftl(
+            lang("ar"),
+            "-brand = Lumen\n\
+             greet = \u{645}\u{631}\u{62d}\u{628}\u{627} { $name }\n\
+             plain = \u{645}\u{631}\u{62d}\u{628}\u{627}\n\
+             branded = \u{645}\u{631}\u{62d}\u{628}\u{627} { -brand }\n",
+        )
+        .unwrap();
+        let mut args = FluentArgs::new();
+        args.set("name", FluentValue::from("Alice"));
+        assert_eq!(
+            i.t("greet", &args),
+            "\u{645}\u{631}\u{62d}\u{628}\u{627} \u{2068}Alice\u{2069}"
+        );
+        let empty = FluentArgs::new();
+        assert_eq!(i.t("plain", &empty), "\u{645}\u{631}\u{62d}\u{628}\u{627}");
+        assert_eq!(
+            i.t("branded", &empty),
+            "\u{645}\u{631}\u{62d}\u{628}\u{627} Lumen"
+        );
     }
 
     #[test]

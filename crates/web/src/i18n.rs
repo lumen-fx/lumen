@@ -156,4 +156,27 @@ mod tests {
         // The tree it was resolved from is left as it was.
         assert_eq!(ir.root.children[0].attrs.text.as_deref(), Some("Hello"));
     }
+
+    /// The arm a selector picks is emitted wrapped in the Unicode isolation
+    /// marks, the same string the desktop spawns from the same catalogue. A
+    /// page prerendered here and the tree it hydrates into have to agree
+    /// byte for byte.
+    #[test]
+    fn a_selected_arm_is_emitted_bidi_isolated() {
+        let mut root = Element {
+            tag: "root".to_string(),
+            children: vec![label("inbox", "You have messages")],
+            ..Element::default()
+        };
+        translate_element(
+            &mut root,
+            &german(
+                "inbox = Du hast { $count ->\n    [one] Nachricht\n   *[other] Nachrichten\n}\n",
+            ),
+        );
+        assert_eq!(
+            root.children[0].attrs.text.as_deref(),
+            Some("Du hast \u{2068}Nachrichten\u{2069}")
+        );
+    }
 }
