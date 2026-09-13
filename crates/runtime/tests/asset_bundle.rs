@@ -20,6 +20,20 @@ const RED_DOT_PNG: &[u8] = &[
     0x44, 0xae, 0x42, 0x60, 0x82,
 ];
 
+/// An app publishes process-global registries and builds host resources the
+/// platform binds once per process. libtest runs this file's tests on
+/// parallel threads, so without this lock two apps exist at once; on macOS
+/// the host-side constructors trap rather than misbehave, which kills the
+/// whole binary with no test output. One app at a time, as the other
+/// headless suites do.
+static ONE_APP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn one_app() -> std::sync::MutexGuard<'static, ()> {
+    ONE_APP
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn scratch_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("lumen_lpak_{name}_{}_{}", std::process::id(), {
         static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -85,6 +99,7 @@ fn tick_until_decoded(app: &mut lumen_core::app::App) -> Option<bevy_ecs::entity
 /// finds its image. Without the archive registered this run fails to decode.
 #[test]
 fn assets_resolve_from_a_bundle_when_the_file_is_gone() {
+    let _one_app = one_app();
     let dir = scratch_dir("hit");
     std::fs::create_dir_all(dir.join("icons")).unwrap();
     std::fs::write(dir.join("icons/dot.png"), RED_DOT_PNG).unwrap();
@@ -117,6 +132,7 @@ fn assets_resolve_from_a_bundle_when_the_file_is_gone() {
 /// the test above is proving the archive and not a stale cache.
 #[test]
 fn assets_do_not_resolve_without_the_bundle() {
+    let _one_app = one_app();
     let dir = scratch_dir("miss");
     std::fs::create_dir_all(dir.join("icons")).unwrap();
     let bytes = image_app(&dir);
@@ -138,6 +154,7 @@ fn assets_do_not_resolve_without_the_bundle() {
 /// falling back to the app directory.
 #[test]
 fn an_unreadable_bundle_fails_the_run() {
+    let _one_app = one_app();
     let dir = scratch_dir("bad");
     let lpak = dir.join("broken.lpak");
     std::fs::write(&lpak, b"not an archive").unwrap();
