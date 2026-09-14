@@ -255,6 +255,15 @@ A release with no `sha256sums.txt` cannot be installed by the script at all.
 That is what `--version` pointing at a release from before this file existed
 runs into, and the error says so.
 
+One thing the installer puts on the machine comes from another repository:
+`lpm`, the package-registry client, published by `lumen-fx/registry` as
+`lpm_<version>_<os>_<arch>.tar.gz` with `checksums.txt` beside it. It is
+read the same way, through that repository's own `releases/latest` redirect,
+and verified the same way. It goes to `~/.local/bin/lpm` rather than under
+the prefix, so it is not in the receipt and `--uninstall` leaves it, and it
+is not a Lumen release asset: a Lumen release publishes nothing for it and
+the release checks below do not cover it. `--no-lpm` skips it.
+
 Asset naming is the contract `install.sh` relies on to find a build. It
 computes `<target>` from `uname -s` and `uname -m` and looks for
 `lumen-<target>.tar.gz` verbatim among the release assets; nothing else
