@@ -246,6 +246,9 @@ copy_image("shots/graph.png");        // put a PNG on the clipboard
 save_clipboard_image("shots/in.png"); // write the clipboard image to disk
 ```
 
+Both paths are relative to the app directory. Neither call reports back; a
+failure logs to stderr.
+
 ## Opening links and files
 
 Hand something to the platform's default handler:

@@ -688,10 +688,10 @@ keyed by `tag`. A cancelled dialog still fires once, with an empty path.
 | `lumen::notify_ex(id: string, title: string, body: string, options: string, actions: string)` | Show an OS notification. `options` is pipe-separated `key:value` entries, where `icon` takes a themed name or path and `urgency` takes `"low"`, `"normal"`, or `"critical"`. `actions` is pipe-separated `id:Label` buttons; a press fires `on_notification_action(id, action_id)`. An empty string in either position means the defaults. |
 | `lumen::clipboard_write(text: string)` | Put `text` on the system clipboard. |
 | `lumen::clipboard_read(tag: string)` | Request the clipboard text; fires `on_clipboard(tag, text)` on the next tick. |
-| `lumen::copy_image(path: string)` | Copy the image at `path` to the system clipboard. |
-| `lumen::save_clipboard_image(path: string)` | Write the clipboard image to `path` as PNG. |
-| `lumen::tray_icon(id: string, icon_path: string, tooltip: string)` | Register or replace a tray icon; clicks fire `on_tray(id)`. An empty tooltip disables it. |
-| `lumen::tray_icon_menu(id: string, icon_path: string, tooltip: string, menu: string, template: bool)` | Register a tray icon with a context menu, given as pipe-separated `id:Label` entries where `-` is a separator; a pick fires `on_menu(id)`. `template` is the macOS monochrome-icon flag, ignored elsewhere. |
+| `lumen::copy_image(path: string)` | Copy the image at `path` to the system clipboard. Relative paths resolve against the app directory. |
+| `lumen::save_clipboard_image(path: string)` | Write the clipboard image to `path` as PNG. Relative paths resolve against the app directory. |
+| `lumen::tray_icon(id: string, icon_path: string, tooltip: string)` | Register or replace a tray icon; clicks fire `on_tray(id)`. An empty tooltip disables it. A relative `icon_path` resolves against the app directory. |
+| `lumen::tray_icon_menu(id: string, icon_path: string, tooltip: string, menu: string, template: bool)` | Register a tray icon with a context menu, given as pipe-separated `id:Label` entries where `-` is a separator; a pick fires `on_menu(id)`. `template` is the macOS monochrome-icon flag, ignored elsewhere. A relative `icon_path` resolves against the app directory. |
 | `lumen::unregister_tray(id: string)` | Remove a tray icon. |
 | `lumen::register_hotkey(name: string, accelerator: string)` | Register a global hotkey (`"CommandOrControl+S"`, `"Alt+Space"`, `"F11"`); fires `on_hotkey(name)`. |
 | `lumen::unregister_hotkey(name: string)` | Remove a global hotkey. |
