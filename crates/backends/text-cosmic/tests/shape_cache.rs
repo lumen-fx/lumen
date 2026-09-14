@@ -1,20 +1,22 @@
 //! Regression tests for `lumen-text-cosmic`'s shape-result LRU cache.
 //!
-//! These used to be criterion benchmarks. `cargo bench` is never run in
-//! CI (only `--all-targets` builds them), so none of this was ever
-//! exercised; the timings they reported measured nothing. Converted to
-//! `#[test]` functions that assert the invariants those timings
-//! implicitly depended on: a repeat shape is a genuine cache hit, a
-//! novel shape is a genuine miss, and an input that belongs in the
-//! cache key actually changes the output. One test also asserts a hit
-//! is dramatically cheaper than a miss - a cache key that stops
-//! discriminating turns every hit into a silent reshape, results stay
-//! correct, and the only symptom is that things get slower, so timing
-//! is the only signal that catches it.
+//! These assert the cache's invariants directly: a repeat shape is a
+//! cache hit that runs no shaping work, a novel shape is a miss, and an
+//! input that belongs in the cache key changes the output. They are
+//! `#[test]` functions rather than criterion benchmarks (which they once
+//! were) because `cargo bench` is never run in CI, so nothing here would
+//! ever have been exercised.
+//!
+//! The failure mode they exist for is a cache key that stops
+//! discriminating: every "hit" becomes a silent reshape, results stay
+//! correct, and the only symptom is that things get slower.
+//! `CosmicShaper::shape_misses` turns that into a counter, so the tests
+//! assert on shaping work done instead of on wall-clock time.
+//! `warm_versus_cold_shape_timing` still reports the timings, on demand.
 
 use lumen_text::{GlyphPosition, ShapeOptions, ShapedRun, TextShaper, WrapMode};
 use lumen_text_cosmic::CosmicShaper;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 const LABEL: &str = "Lumen - fast UI";
 // A realistic wrapped paragraph: the common expensive shape (multi-line
@@ -154,10 +156,10 @@ fn wrapped_paragraph_is_genuinely_multi_line_unlike_the_label() {
 
 #[test]
 fn font_system_new_yields_a_shaper_that_can_shape() {
-    // `CosmicShaper::new()` does the full system-font-directory scan
-    // (the single largest Lumen cold-start phase). Without a timing
-    // harness the only invariant worth protecting directly is that the
-    // scan actually leaves the shaper usable afterwards.
+    // `CosmicShaper::new()` loads the font database, through the
+    // persistent font-metadata cache when that cache is warm. The
+    // invariant worth protecting directly is that the load leaves the
+    // shaper usable afterwards.
     let mut shaper = CosmicShaper::new();
     assert!(
         shaper.shape(LABEL, 16.0, ShapeOptions::default()).is_some(),
@@ -165,26 +167,76 @@ fn font_system_new_yields_a_shaper_that_can_shape() {
     );
 }
 
-/// A cache key that stops discriminating (e.g. a field dropped from the
-/// key struct) turns every "hit" into a silent reshape: the result is
-/// still correct, so nothing above catches it, and the only symptom is
-/// that things get slower. That failure mode needs a timing signal -
-/// but a ratio against a cold miss taken in the same run, not an
-/// absolute duration, so the assertion doesn't care how fast the
-/// machine is.
+/// A repeat of an already-shaped input must not reach the cosmic-text
+/// pipeline at all. This is the assertion that catches a cache key
+/// which stopped discriminating: the shaped output would still be
+/// correct, so every other test here passes, and the only trace is the
+/// reshape counted on each call.
 ///
-/// Stability: warms the cache up front so the timed samples don't pay
-/// one-time setup cost, then compares the minimum of many samples on
-/// each side. Scheduler noise on a loaded runner only ever adds time to
-/// a sample, so the minimum is the one statistic it cannot inflate: the
-/// fastest warm hit is a true LRU lookup plus an `Arc` clone, the
-/// fastest cold miss still resolves fonts and lays text out. A degraded
-/// cache (reshaping on every "hit") puts the two within a whisker of
-/// each other, so a 3x gap separates the failure cleanly while leaving
-/// room for a busy virtualised runner, where the observed gap has
-/// dipped below 10x.
+/// Asserts on the delta, never on an absolute miss count, so a future
+/// internal shape during construction does not break it.
 #[test]
-fn warm_hit_is_several_times_faster_than_a_cold_miss() {
+fn a_warm_hit_runs_no_shaping_work() {
+    let mut shaper = CosmicShaper::new();
+    let opts = wrapped_opts();
+    let _ = shaper.shape(LABEL, 16.0, opts.clone());
+    let after_first = shaper.shape_misses();
+
+    for _ in 0..64 {
+        let _ = shaper.shape(LABEL, 16.0, opts.clone());
+    }
+
+    assert_eq!(
+        shaper.shape_misses(),
+        after_first,
+        "64 repeats of an already-shaped input must all be cache hits; a \
+         rising miss count means the key stopped discriminating and every \
+         call is reshaping from scratch"
+    );
+}
+
+/// The other direction, which is what proves the miss counter tracks
+/// real work rather than sitting stuck: novel inputs each shape once,
+/// and only once.
+#[test]
+fn each_novel_input_shapes_exactly_once() {
+    // Far under `SHAPE_CACHE_CAP` (512 entries), so no eviction turns a
+    // hit on the second pass back into a miss.
+    const NOVEL: u64 = 32;
+
+    let mut shaper = CosmicShaper::new();
+    let opts = wrapped_opts();
+    let before = shaper.shape_misses();
+    for n in 0..NOVEL {
+        let _ = shaper.shape(&format!("cold miss corpus item {n}"), 16.0, opts.clone());
+    }
+    assert_eq!(
+        shaper.shape_misses(),
+        before + NOVEL,
+        "each distinct input must miss the cache exactly once"
+    );
+
+    let after_novel = shaper.shape_misses();
+    for n in 0..NOVEL {
+        let _ = shaper.shape(&format!("cold miss corpus item {n}"), 16.0, opts.clone());
+    }
+    assert_eq!(
+        shaper.shape_misses(),
+        after_novel,
+        "a second pass over the same corpus must be all hits"
+    );
+}
+
+/// Manual timing harness: `cargo test -p lumen-text-cosmic --release
+/// --test shape_cache -- --ignored --nocapture`. Prints the minimum and
+/// median of 200 warm hits against 200 cold misses.
+///
+/// It asserts nothing. The ratio is a measurement of the machine as much
+/// as of the cache, and the invariant it used to stand in for is now
+/// `a_warm_hit_runs_no_shaping_work`.
+#[test]
+#[ignore = "manual timing harness"]
+fn warm_versus_cold_shape_timing() {
     let mut shaper = CosmicShaper::new();
     let opts = wrapped_opts();
     let _ = shaper.shape(LABEL, 16.0, opts.clone());
@@ -215,20 +267,13 @@ fn warm_hit_is_several_times_faster_than_a_cold_miss() {
         cold.push(start.elapsed());
     }
 
-    let warm_min = warm.iter().min().copied().unwrap();
-    let cold_min = cold.iter().min().copied().unwrap();
-
-    assert!(
-        warm_min.saturating_mul(3) <= cold_min,
-        "the fastest warm cache hit ({warm_min:?}) should be at least 3x \
-         faster than the fastest cold miss ({cold_min:?}); if this fails \
-         the shape cache key may have stopped discriminating and every \
-         call is reshaping from scratch"
-    );
-    // Generous backstop far above the doc's <1us warm-hit target: this
-    // only fires on a catastrophic regression, never on a loaded runner.
-    assert!(
-        warm_min < Duration::from_millis(5),
-        "the fastest warm cache hit took {warm_min:?}, expected well under 1ms"
+    warm.sort_unstable();
+    cold.sort_unstable();
+    println!(
+        "warm hit: min {:?}, median {:?}\ncold miss: min {:?}, median {:?}",
+        warm[0],
+        warm[SAMPLES / 2],
+        cold[0],
+        cold[SAMPLES / 2]
     );
 }

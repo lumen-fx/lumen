@@ -29,7 +29,7 @@ pub mod snapshot;
 pub mod spec;
 pub mod urls;
 
-pub use css::{RESET_CSS, rules_css, styles_css, token_warnings};
+pub use css::{RESET_CSS, rewrite_css_urls, rules_css, styles_css, token_warnings};
 pub use error::EmitError;
 pub use i18n::{translate_element, translate_ir};
 pub use markup::{MarkupSheet, lift as lift_markup_styles};

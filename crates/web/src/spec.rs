@@ -473,7 +473,7 @@ pub struct SiteSpec {
     pub web: WebSpec,
     /// The locale this tree is for.
     pub locale: LocaleSpec,
-    /// Files the pages refer to.
+    /// Files the pages or the stylesheet refer to.
     pub assets: Vec<AssetRef>,
     /// The rules lifted off the elements that were styled on themselves,
     /// which the pages reach by class.

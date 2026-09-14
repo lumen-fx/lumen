@@ -380,6 +380,41 @@ fn an_app_s_assets_travel_with_the_site() {
     check_documents(&out, "/");
 }
 
+/// A site ships the font its stylesheet declares.
+///
+/// The `@font-face` block reaches `styles.css`, the file it names is copied
+/// under `assets/` beside every other asset, and the block points at the
+/// copy rather than at where the file sits on the machine that built it.
+#[test]
+fn a_site_ships_the_font_its_stylesheet_declares() {
+    let scratch = scratch("font");
+    let out = scratch.join("site");
+    web(
+        "fixtures/web-font",
+        &out,
+        &["--render", "static", "--no-runtime"],
+    );
+
+    let styles = read(&out, &hashed(&out, "styles.css"));
+    let block = styles
+        .split_once("@font-face")
+        .map(|(_, rest)| rest)
+        .unwrap_or_else(|| panic!("no @font-face in the stylesheet:\n{styles}"));
+    assert!(block.contains(r#"font-family: "Demo""#), "{styles}");
+
+    let font = hashed(&out, "assets/fonts/demo.woff2");
+    assert!(
+        block.contains(&format!("url(\"{font}\")")),
+        "the block names the file the build placed, not the one the app wrote:\n{styles}"
+    );
+    assert_eq!(
+        std::fs::read(out.join(&font)).expect("the font is copied into the site"),
+        std::fs::read(repo().join("fixtures/web-font/fonts/demo.woff2")).expect("the source font"),
+        "the copy is the file the app ships"
+    );
+    check_documents(&out, "/");
+}
+
 #[test]
 fn a_candela_app_ships_the_program_the_browser_runs() {
     let scratch = scratch("candela");
