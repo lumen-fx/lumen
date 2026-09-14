@@ -30,7 +30,7 @@
 //! [dependencies]                   # runtime modules + portable plugins, sorted-name order
 //! lumen-audio = { bundled = true }
 //! shape-tools = { path = "modules/shape-tools", config = { units = "mm" } }
-//! weather-feed = "1.2"             # portable plugin from the plugin cache, pinned in lumen.lock
+//! weather-feed = "1.2"             # registry package, fetched by lpm and pinned in lumen.lock
 //!
 //! [[hooks]]                        # project build/setup commands; see `crate::hooks`
 //! when    = "prebuild"             # "prebuild" | "prerun"

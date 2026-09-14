@@ -22,9 +22,8 @@ default = []
 # init, and bind what it registered onto an app. Only the runtime enables
 # this; plugin authors never do.
 #
-# `lumen-plugin-abi/resolve` is deliberately absent: the runtime loader takes
-# paths that are already resolved, so the plugin cache, semver, and sha2 stay
-# out of its dependency graph.
+# The loader takes paths that are already resolved, so nothing about the
+# registry reaches its dependency graph.
 host = ["dep:libloading", "lumen-plugin-abi/dlopen"]
 # Test-only helper that builds the fixture plugin cdylib once per tree.
 testing = ["dep:serde_json"]

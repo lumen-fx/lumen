@@ -16,7 +16,12 @@ fn cfg(name: &str, path: &Path, config: &str) -> PluginCfg {
 
 fn load(app_dir: &Path, config: &str) -> PluginSet {
     let lib = testing::fixture_cdylib();
-    PluginSet::load(app_dir, &[cfg("lumenc-plugin-fixture", &lib, config)]).unwrap()
+    PluginSet::load(
+        app_dir,
+        &[cfg("lumenc-plugin-fixture", &lib, config)],
+        &Default::default(),
+    )
+    .unwrap()
 }
 
 fn temp_dir(tag: &str) -> PathBuf {
@@ -145,7 +150,8 @@ fn bad_emit_path_is_refused() {
 fn name_mismatch_is_refused_at_load() {
     let dir = temp_dir("name");
     let lib = testing::fixture_cdylib();
-    let err = PluginSet::load(&dir, &[cfg("wrong-name", &lib, "")]).unwrap_err();
+    let err =
+        PluginSet::load(&dir, &[cfg("wrong-name", &lib, "")], &Default::default()).unwrap_err();
     assert!(matches!(err, PluginError::NameMismatch { .. }), "{err}");
 }
 
@@ -155,7 +161,7 @@ fn missing_file_reports_probed_paths() {
     let doc: toml::Table =
         toml::from_str("[[plugins]]\nname = \"ghost\"\npath = \"plugins/ghost\"\n").unwrap();
     let cfgs = PluginCfg::from_document(&doc).unwrap();
-    let err = PluginSet::load(&dir, &cfgs).unwrap_err();
+    let err = PluginSet::load(&dir, &cfgs, &Default::default()).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("libghost.so"), "{msg}");
     assert!(msg.contains("libghost.dylib"), "{msg}");
@@ -173,6 +179,7 @@ fn declaration_order_composes() {
             cfg("lumenc-plugin-fixture", &lib, "order = \"b\""),
             cfg("lumenc-plugin-fixture", &lib, "order = \"c\""),
         ],
+        &Default::default(),
     )
     .unwrap();
     let entry = dir.join("main.lmn");
@@ -197,6 +204,7 @@ fn duplicate_names_keep_both_entries_emit_outputs() {
             cfg("lumenc-plugin-fixture", &lib, "emit_path = \"one.txt\""),
             cfg("lumenc-plugin-fixture", &lib, "emit_path = \"two.txt\""),
         ],
+        &Default::default(),
     )
     .unwrap();
     set.finish(&LayoutIR::default(), &dir.join("main.lmn"))

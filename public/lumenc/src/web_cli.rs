@@ -60,7 +60,7 @@ USAGE:
     lumenc web <app_dir> [--out DIR] [--base PATH] [--locale TAG]...
                          [--render static|csr|ssr] [--prerender seeds|run|none]
                          [--runtime|--no-runtime]
-                         [--no-hooks] [--lib-dir DIR] [--strict]
+                         [--no-hooks] [--lib-dir DIR] [--strict] [--offline]
                          [--serve] [--port N] [--host ADDR]
                          [--allow-host NAME]...
 
@@ -98,6 +98,8 @@ a page loads them.
     --lib-dir DIR     Directory holding lumen-web.wasm and lumen-web.js,
                       instead of the ones shipped with lumenc.
     --strict          Fail the build on any warning it prints.
+    --offline         Resolve the app's registry packages from what is
+                      already downloaded, and never reach the network.
     --serve           Serve the site after emitting it, and print the URL.
                       Under --render ssr every page comes from a render.
     --port N          Port to serve on (default: 8787; 0 picks a free one).
@@ -350,12 +352,19 @@ fn build(options: &Options) -> Result<Report, String> {
         ));
     }
     // Runtime modules are native shared libraries the engine dlopens, and a
-    // browser has no dynamic loader to hand one to.
-    if let Some(dep) = cfg.dependencies.0.first() {
+    // browser has no dynamic loader to hand one to. A candela package is
+    // script source, so it compiles into the app like the app's own scripts
+    // and travels wherever the app does, the web included.
+    let resolved = crate::registry_packages(dir)?;
+    let native = cfg.dependencies.0.iter().find(|dep| {
+        !matches!(dep.source, lumen_modules::ModuleSource::Version(_))
+            || resolved.modules.contains_key(&dep.name)
+    });
+    if let Some(dep) = native {
         return Err(format!(
-            "this app declares [dependencies] ('{}'), and runtime modules do not exist on the \
-             web: a module is a native library the engine loads, which a browser cannot do. \
-             Drop the declaration or ship the app as a desktop package.",
+            "this app declares '{}' under [dependencies], and it is a native library: the \
+             engine loads one by opening it, which a browser cannot do. Drop the declaration \
+             or ship the app as a desktop package.",
             dep.name
         ));
     }

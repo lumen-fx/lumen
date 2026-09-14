@@ -167,8 +167,22 @@ impl std::error::Error for Unresolved {}
 
 /// The newest published release, asked for now.
 pub(crate) fn fetch_latest() -> Result<String, Unresolved> {
-    let headers = head_request().ok_or(Unresolved::Unreachable)?;
+    let headers = head_request(&latest_url()).ok_or(Unresolved::Unreachable)?;
     version_from_headers(&headers)
+}
+
+/// The newest tag another repository has published, read the way this one's
+/// is: the last path segment of the `releases/latest` redirect. `lpm` is
+/// published from the registry's own repository, and a download of it starts
+/// here.
+///
+/// `None` covers an unreachable page and a repository with no releases
+/// together, because the caller says the same thing either way: the tag could
+/// not be read.
+pub fn latest_tag(repo: &str) -> Option<String> {
+    let headers = head_request(&format!("https://github.com/{repo}/releases/latest"))?;
+    let tag = parse_location_tag(&headers)?;
+    parse_version(tag.strip_prefix('v').unwrap_or(&tag)).map(|_| tag)
 }
 
 /// The published version a redirect points at.
@@ -183,13 +197,12 @@ fn version_from_headers(headers: &str) -> Result<String, Unresolved> {
         .ok_or(Unresolved::NoReleases)
 }
 
-/// HEAD the releases URL and hand back whatever the tool printed. curl writes
-/// headers to stdout, wget to stderr, so both streams are returned joined.
-/// A missing curl (spawn error, not a failed request) falls back to wget.
-fn head_request() -> Option<String> {
-    let url = latest_url();
+/// HEAD `url` and hand back whatever the tool printed. curl writes headers to
+/// stdout, wget to stderr, so both streams are returned joined. A missing curl
+/// (spawn error, not a failed request) falls back to wget.
+fn head_request(url: &str) -> Option<String> {
     let curl = Command::new("curl")
-        .args(["-fsSI", "--max-time", "4", &url])
+        .args(["-fsSI", "--max-time", "4", url])
         .output();
     let out = match curl {
         Ok(out) => out,
@@ -202,7 +215,7 @@ fn head_request() -> Option<String> {
                 "--tries=1",
                 "-O",
                 "-",
-                &url,
+                url,
             ])
             .output()
             .ok()?,

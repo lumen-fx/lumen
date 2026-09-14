@@ -15,7 +15,12 @@ fn a_panicking_constructor_fails_the_compile_not_the_process() {
         lib.display()
     ))
     .unwrap();
-    let set = PluginSet::load(&dir, &PluginCfg::from_document(&doc).unwrap()).unwrap();
+    let set = PluginSet::load(
+        &dir,
+        &PluginCfg::from_document(&doc).unwrap(),
+        &Default::default(),
+    )
+    .unwrap();
 
     unsafe { std::env::set_var("LUMEN_FIXTURE_CTOR_PANIC", "1") };
     let entry = dir.join("main.lmn");

@@ -39,6 +39,11 @@ pub mod compile;
 /// in the page a crawler reads. Needs what `web_cli` needs.
 #[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "web"))]
 pub mod component_fill;
+/// `lumenc add` / `remove` / `fetch` / `update` - the app's registry
+/// dependencies from the command line. Gated with the registry client it
+/// drives and the `lumen.toml` reader it edits.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
+pub mod deps_cli;
 /// Markup formatter - requires `roxmltree`, gated with the parser stack.
 #[cfg(feature = "runtime-parse")]
 pub mod formatter;
@@ -79,6 +84,13 @@ pub mod lmn;
 #[cfg(feature = "dlopen-run")]
 #[allow(unsafe_code)]
 pub mod loader;
+/// `lpm`, the registry client. A `version` source in `[dependencies]` or
+/// `[[plugins]]` names a registry package, and this is what asks `lpm` to
+/// resolve, download, and lock it. Gated with the shape that compiles an app
+/// from source and can fetch: a compiler that only loads a prebuilt artifact
+/// resolves nothing.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
+pub mod lpm;
 /// MCP CLI handlers - read `lumen.toml` config (`dev-run`) and defer the
 /// `--signals` lint to [`lint_signals_cli`] (`runtime-parse`).
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
@@ -193,72 +205,87 @@ fn with_default_parser(opts: RunOptions) -> RunOptions {
 }
 
 /// Inject the compiler-side resolutions into `opts`, beside the parser
-/// above: the app's `[[plugins]]` chain (when the caller hasn't supplied
-/// one), and the resolved library path of every `version`-source entry of
-/// `[dependencies]`.
+/// above: everything the app names in the registry, and the app's
+/// `[[plugins]]` chain (when the caller hasn't supplied one).
 ///
-/// A malformed plugin declaration or a failing plugin load aborts the run
-/// here, before any window exists. The precompiled-artifact paths skip the
-/// chain - the artifact already carries the transformed tree - but not the
-/// module resolutions: a compiled app still loads its runtime modules. A
-/// module version that fails to resolve does not abort; the failure rides
-/// into the runtime's loader, whose policy is a startup banner and an app
-/// that keeps running without the module.
-#[cfg(feature = "dev-run")]
+/// A malformed plugin declaration, a failing plugin load, or a registry
+/// requirement that does not resolve aborts the run here, before any window
+/// exists. The precompiled-artifact paths skip the chain - the artifact
+/// already carries the transformed tree - but not the resolutions: a compiled
+/// app still loads its runtime modules.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub fn with_default_compiler_plugins(mut opts: RunOptions) -> Result<RunOptions, RunError> {
-    opts.resolved_modules = resolve_version_modules(&opts.dir);
+    let resolved = registry_packages(&opts.dir).map_err(RunError::Plugin)?;
+    opts.resolved_modules = lumen_runtime::modules::ResolvedModules(
+        resolved
+            .modules
+            .iter()
+            .map(|(name, file)| (name.clone(), Ok(file.clone())))
+            .collect(),
+    );
     if opts.compiler_plugins.is_none() && opts.artifact.is_none() && opts.artifact_bytes.is_none() {
-        let chain =
-            plugin_host::compiler_plugins_for(&opts.dir, false).map_err(RunError::Plugin)?;
+        let chain = plugin_host::compiler_plugins_for(&opts.dir, false, &resolved.compiler_plugins)
+            .map_err(RunError::Plugin)?;
         opts = opts.with_compiler_plugins(chain);
     }
     Ok(opts)
 }
 
-/// Resolve every `version` source of the app's `[dependencies]` through the
-/// plugin cache and `lumen.lock` (both shared with `[[plugins]]`; the cache
-/// entries are kind-agnostic) and record each outcome. The runtime's loader
-/// consults the map before its own on-disk probe and never resolves a
-/// version itself.
-#[cfg(feature = "dev-run")]
-fn resolve_version_modules(dir: &std::path::Path) -> lumen_runtime::modules::ResolvedModules {
-    use lumen_runtime::modules::{ModuleSource, ResolvedModules};
+/// A parser-free compiler compiles nothing: it runs a prebuilt artifact, so
+/// there is no plugin chain to build and no registry requirement to read out
+/// of a `lumen.toml` it does not parse. A `version` module reaches the
+/// runtime's loader unresolved, which banners and keeps the app running.
+#[cfg(all(not(feature = "runtime-parse"), feature = "dev-run"))]
+pub fn with_default_compiler_plugins(opts: RunOptions) -> Result<RunOptions, RunError> {
+    Ok(opts)
+}
 
-    let mut resolved = ResolvedModules::default();
-    let Ok(cfg) = LumenToml::load_or_default(dir) else {
-        // A malformed lumen.toml fails the run in build_app with the real
-        // parse error; adding a resolution failure here would bury it.
-        return resolved;
-    };
-    let versions: Vec<(String, String)> = cfg
-        .dependencies
-        .0
-        .iter()
-        .filter_map(|dep| match &dep.source {
-            ModuleSource::Version(req) => Some((dep.name.clone(), req.clone())),
-            _ => None,
-        })
-        .collect();
-    if versions.is_empty() {
-        return resolved;
-    }
-    let mut lock = match lumenc_plugin::resolve::LockFile::read(dir) {
-        Ok(lock) => lock,
-        Err(e) => {
-            for (name, _) in versions {
-                resolved.0.insert(name, Err(e.clone()));
+/// Every `version` source the app in `dir` declares, with the table that
+/// declared it. `[dependencies]` entries become runtime packages and
+/// `[[plugins]]` entries compiler plugins; the registry says which platform
+/// each one is for, and the table says what the app wants it for.
+///
+/// A `lumen.toml` that does not parse yields no requirements: the run fails
+/// in `build_app` with the real parse error, and a resolution failure here
+/// would bury it.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
+pub fn registry_requirements(dir: &std::path::Path) -> Result<Vec<lpm::Requirement>, String> {
+    use lumen_runtime::modules::ModuleSource;
+
+    let mut reqs = Vec::new();
+    if let Ok(cfg) = LumenToml::load_or_default(dir) {
+        for dep in &cfg.dependencies.0 {
+            if let ModuleSource::Version(req) = &dep.source {
+                reqs.push(lpm::Requirement {
+                    name: dep.name.clone(),
+                    req: req.clone(),
+                    table: lpm::Table::Dependencies,
+                });
             }
-            return resolved;
         }
-    };
-    for (name, req) in versions {
-        let outcome = lumenc_plugin::resolve::resolve_version_source(&name, &req, &mut lock);
-        resolved.0.insert(name, outcome);
     }
-    if let Err(e) = lock.store() {
-        eprintln!("lumenc: {e}");
+    for cfg in plugin_host::read_plugin_cfgs(dir)? {
+        if let lumenc_plugin::PluginSource::Version(req) = &cfg.source {
+            reqs.push(lpm::Requirement {
+                name: cfg.name.clone(),
+                req: req.clone(),
+                table: lpm::Table::Plugins,
+            });
+        }
     }
-    resolved
+    Ok(reqs)
+}
+
+/// Resolve everything the app in `dir` names in the registry, for this
+/// machine's platform. `lumenc package --target` asks for another one.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
+pub fn registry_packages(dir: &std::path::Path) -> Result<lpm::Resolved, String> {
+    lpm::resolve(
+        dir,
+        lpm::host_target(),
+        &registry_requirements(dir)?,
+        lpm::Mode::of_invocation(),
+    )
 }
 
 /// Run a markup app, injecting the compiler's default parser. See
@@ -325,15 +352,9 @@ pub fn is_help_flag(arg: &str) -> bool {
 /// default parser. See [`lumen_runtime::check_app`].
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub fn check_app(dir: &std::path::Path) -> Result<CheckReport, RunError> {
-    // Advisory, like the parse-time findings: a `version` module that does
-    // not resolve here would be a startup banner at run time, so surface it
-    // now without failing the check (the app runs without the module).
-    for (name, outcome) in &resolve_version_modules(dir).0 {
-        if let Err(reason) = outcome {
-            eprintln!("warning: dependency '{name}' does not resolve: {reason}");
-        }
-    }
-    let plugins = plugin_host::compiler_plugins_for(dir, true).map_err(RunError::Plugin)?;
+    let resolved = registry_packages(dir).map_err(RunError::Plugin)?;
+    let plugins = plugin_host::compiler_plugins_for(dir, true, &resolved.compiler_plugins)
+        .map_err(RunError::Plugin)?;
     lumen_runtime::check_app(dir, &source_parser::LumencParser, &*plugins)
 }
 
@@ -341,8 +362,7 @@ pub fn check_app(dir: &std::path::Path) -> Result<CheckReport, RunError> {
 /// default parser. See [`lumen_runtime::compile_app`].
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub fn compile_app(dir: &std::path::Path) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
-    let plugins = plugin_host::compiler_plugins_for(dir, false).map_err(RunError::Plugin)?;
-    lumen_runtime::compile_app(dir, &source_parser::LumencParser, &*plugins)
+    compile_app_with_skin(dir, None)
 }
 
 /// AOT-compile an app from source with the skin named outright, which is what
@@ -352,6 +372,8 @@ pub fn compile_app_with_skin(
     dir: &std::path::Path,
     skin: Option<&str>,
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
-    let plugins = plugin_host::compiler_plugins_for(dir, false).map_err(RunError::Plugin)?;
+    let resolved = registry_packages(dir).map_err(RunError::Plugin)?;
+    let plugins = plugin_host::compiler_plugins_for(dir, false, &resolved.compiler_plugins)
+        .map_err(RunError::Plugin)?;
     lumen_runtime::compile_app_with_skin(dir, &source_parser::LumencParser, &*plugins, skin)
 }

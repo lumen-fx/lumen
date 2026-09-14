@@ -30,13 +30,11 @@ pub use host::{PluginError, PluginSet, SourceKind};
 /// version pin lives here either way).
 pub use lumen_ir;
 pub use lumen_ir::layout_ir::LayoutIR;
-// The wire codec, the `[[plugins]]` schema, and the plugin cache are shared
-// with the runtime plugin system; they live in `lumen-plugin-abi` and are
-// re-exported here so a plugin crate names only this one.
+// The wire codec and the `[[plugins]]` schema are shared with the runtime
+// plugin system; they live in `lumen-plugin-abi` and are re-exported here so
+// a plugin crate names only this one.
 pub use lumen_plugin_abi::codec;
 pub use lumen_plugin_abi::config::{PluginCfg, PluginSource, resolve_plugin_path};
-#[cfg(feature = "host")]
-pub use lumen_plugin_abi::resolve;
 
 /// What a compiler plugin can do. Every hook has a default no-op body;
 /// implement the ones the plugin needs.
