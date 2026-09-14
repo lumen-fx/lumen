@@ -46,6 +46,11 @@ pub mod formatter;
 /// use sites it resolves.
 #[cfg(feature = "runtime-parse")]
 pub mod fragments;
+/// `lumenc i18n extract` - scan an app's sources for translatable keys and
+/// write its catalogue. Gated with `dev-run`: the source language it defaults
+/// to is `[app] fallback_locale`, which it reads through the runtime's
+/// `lumen.toml`, and a thin build has no runtime to read it with.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub mod i18n_cli;
 /// `lumenc package --static` - link one executable out of the per-target link
 /// kit a release publishes, with the app's declared runtime modules compiled
