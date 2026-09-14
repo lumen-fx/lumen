@@ -195,10 +195,9 @@ pub struct RunOptions {
     pub compiler_plugins: Option<std::sync::Arc<dyn crate::compiler_plugins::CompilerPlugins>>,
     /// Injected `version`-source module resolutions, mirroring
     /// [`Self::compiler_plugins`]: the runtime never resolves a `version`
-    /// entry of `[dependencies]` itself (no semver, no cache in its graph);
-    /// `lumenc` resolves each one through the shared plugin cache and
-    /// `lumen.lock` and hands the outcome in here for the module loader to
-    /// consult before its own on-disk probe.
+    /// entry of `[dependencies]` itself (no semver, no registry in its
+    /// graph); `lumenc` asks `lpm` to resolve each one and hands the outcome
+    /// in here for the module loader to consult before its own on-disk probe.
     pub resolved_modules: crate::modules::ResolvedModules,
 }
 

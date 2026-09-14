@@ -18,14 +18,10 @@ path = "src/lib.rs"
 
 [features]
 default = []
-# The loader side: dlopen a plugin cdylib, verify its descriptor, drive its
-# hooks, resolve `version` sources against the plugin cache, and keep
-# lumen.lock. Only lumenc enables this; plugin authors never do.
-host = [
-    "dep:libloading",
-    "lumen-plugin-abi/dlopen",
-    "lumen-plugin-abi/resolve",
-]
+# The loader side: dlopen a plugin cdylib, verify its descriptor, and drive
+# its hooks. Only lumenc enables this; plugin authors never do. The loader
+# takes paths that are already resolved, so nothing here reaches the registry.
+host = ["dep:libloading", "lumen-plugin-abi/dlopen"]
 # Test-only helper that builds the fixture plugin cdylib once per tree.
 testing = ["dep:serde_json"]
 

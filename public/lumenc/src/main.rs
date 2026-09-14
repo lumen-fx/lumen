@@ -19,15 +19,43 @@ fn main() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
+    let rest = take_offline(cmd, rest.to_vec());
     // Look for a newer release on a background thread while the command runs,
     // and say so afterwards. Most invocations skip it outright; see
     // `update_check::start`.
-    let update = update_check::start(cmd, rest);
-    let code = dispatch(cmd, rest.to_vec());
+    let update = update_check::start(cmd, &rest);
+    let code = dispatch(cmd, rest.clone());
     if let Some(update) = update {
         update.finish();
     }
     code
+}
+
+/// The commands that resolve the app's registry dependencies, and so take
+/// `--offline`. Every one of them resolves several calls below its own
+/// argument parsing, so the flag is read here, once, and remembered.
+/// Everywhere else `--offline` stays what it was: an unknown argument.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
+const RESOLVING_COMMANDS: &[&str] = &["run", "check", "build", "package", "web", "fetch"];
+
+/// Read `--offline` out of `args` for the commands that take it.
+#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
+fn take_offline(cmd: &str, mut args: Vec<String>) -> Vec<String> {
+    if !RESOLVING_COMMANDS.contains(&cmd) {
+        return args;
+    }
+    if let Some(at) = args.iter().position(|a| a == "--offline") {
+        args.remove(at);
+        lumenc::lpm::set_offline(true);
+    }
+    args
+}
+
+/// A build with no registry client resolves nothing, so nothing here has an
+/// offline mode to enter.
+#[cfg(not(all(feature = "runtime-parse", feature = "dev-run")))]
+fn take_offline(_cmd: &str, args: Vec<String>) -> Vec<String> {
+    args
 }
 
 fn dispatch(cmd: &str, args: Vec<String>) -> ExitCode {
@@ -41,6 +69,16 @@ fn dispatch(cmd: &str, args: Vec<String>) -> ExitCode {
         "check" => cmd_check(args),
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
         "build" => lumenc::build_cli::cmd_build(args),
+        // Registry dependencies: two that edit `lumen.toml` and two that
+        // drive `lpm`. Gated with the client they use.
+        #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
+        "add" => lumenc::deps_cli::cmd_add(args),
+        #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
+        "remove" => lumenc::deps_cli::cmd_remove(args),
+        #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
+        "fetch" => lumenc::deps_cli::cmd_fetch(args),
+        #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
+        "update" => lumenc::deps_cli::cmd_update(args),
         "new" => cmd_new(args),
         #[cfg(feature = "runtime-parse")]
         "fmt" => cmd_fmt(args),
@@ -113,7 +151,7 @@ USAGE:
     lumenc run <dir> [--profile chrome|tracy|stderr]
                      [--headless [--size WxH] [--dpr N] [--ticks N]]
                      [--artifact <file>] [--assets <file.lpak>]
-                     [--no-hooks]
+                     [--no-hooks] [--offline]
 
     --profile MODE    Write a trace (chrome), connect to tracy, or dump
                       per-system spans to stderr. Needs a lumenc built
@@ -131,7 +169,9 @@ USAGE:
                       parsing source.
     --assets FILE     Read the app's assets from a .lpak archive instead of
                       the loose files in <dir>.
-    --no-hooks        Skip the app's prebuild and prerun [[hooks]].";
+    --no-hooks        Skip the app's prebuild and prerun [[hooks]].
+    --offline         Resolve the app's registry packages from what is
+                      already downloaded, and never reach the network.";
 
 /// `lumenc run` on the static path (`dev-run`): parse in-process and drive the
 /// statically-linked runtime, with full state-preserving hot-reload.
@@ -694,13 +734,16 @@ fn cmd_check(mut args: impl Iterator<Item = String>) -> ExitCode {
     const CHECK_USAGE: &str = "lumenc check - parse an app without opening a window
 
 USAGE:
-    lumenc check <dir>
+    lumenc check <dir> [--offline]
 
 Parses <dir>/src/main.lmn (+ optional src/main.css), applies the cascade, and
 compiles the app's scripts with the same engine settings `run` uses. Runs
 no [[hooks]] and opens no window; declared [[plugins]] do run, with their
-emit outputs discarded (a `version` source may still update lumen.lock).
-Exits non-zero on the first failure.";
+emit outputs discarded. The app's registry packages resolve first, which may
+write lumen.lock. Exits non-zero on the first failure.
+
+    --offline         Resolve the app's registry packages from what is
+                      already downloaded, and never reach the network.";
     let Some(dir) = args.next() else {
         eprintln!("lumenc check: missing <dir>\n\n{USAGE}");
         return ExitCode::from(2);
@@ -881,6 +924,29 @@ USAGE:
                           inputs); --no-hooks skips both. `check` never
                           runs hooks.
     lumenc check <dir>    Parse without spawning a window (CI gate)
+    lumenc add <name>[@<req>] [<dir>] [--plugin] [--config k=v]...
+                          Declare a registry package in lumen.toml and
+                          resolve it. --plugin declares a compiler plugin
+                          under [[plugins]] instead of a runtime dependency
+                          under [dependencies]; --config sets a key in the
+                          package's own config table. With no <req>, the
+                          newest published version is written.
+    lumenc remove <name> [<dir>]
+                          Drop a declared package from lumen.toml and
+                          re-resolve what is left.
+    lumenc fetch [<dir>] [--locked] [--target T] [--offline]
+                          Resolve every `version` source the app declares and
+                          download what they resolve to, writing lumen.lock.
+                          Every compile path does this on its own; run it
+                          alone when the download should be its own step.
+                          --locked fails rather than changing the lock;
+                          --target resolves for another platform, which is
+                          what `package --target` needs.
+    lumenc update [<name>...] [--dir <dir>]
+                          Re-resolve the app's registry packages against what
+                          the registry publishes now and rewrite lumen.lock.
+                          With no names every declared package moves as far
+                          as its requirement allows.
     lumenc new <name> [template]
                           Scaffold a fresh app directory from the
                           template gallery: blank | hello | counter |

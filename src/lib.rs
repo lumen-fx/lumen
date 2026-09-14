@@ -600,14 +600,18 @@ pub unsafe extern "C" fn lumen_app_new(dir: *const c_char) -> *mut LumenApp {
                 "lumen_app_new: app directory {s:?} contains neither lumen.toml nor src/main.lmn"
             ));
         }
-        // The `[[plugins]]` chain resolves as eagerly as the directory
-        // above and fails the same way: a bad declaration is a bad app
-        // directory, and surfacing it here beats surfacing it after a
-        // window opened.
+        // The app's registry packages and the `[[plugins]]` chain over them
+        // resolve as eagerly as the directory above and fail the same way: a
+        // bad declaration is a bad app directory, and surfacing it here beats
+        // surfacing it after a window opened.
         #[cfg(feature = "embed-parser")]
-        let compiler_plugins = Some(
-            lumenc::plugin_host::compiler_plugins_for(&path, false).map_err(|e| e.to_string())?,
-        );
+        let compiler_plugins = {
+            let resolved = lumenc::registry_packages(&path).map_err(|e| e.to_string())?;
+            Some(
+                lumenc::plugin_host::compiler_plugins_for(&path, false, &resolved.compiler_plugins)
+                    .map_err(|e| e.to_string())?,
+            )
+        };
         #[cfg(not(feature = "embed-parser"))]
         let compiler_plugins = None;
         Ok(Box::into_raw(Box::new(LumenApp {

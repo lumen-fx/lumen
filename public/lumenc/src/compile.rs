@@ -85,8 +85,21 @@ pub enum CompileError {
 pub fn compile_dir_to_lmna(dir: &Path) -> Result<Vec<u8>, CompileError> {
     // The same `[[plugins]]` chain the fat compile paths run; this path
     // reads the declarations itself because it links no `lumen-runtime`.
+    //
+    // A `version` source is refused here rather than resolved: the thin
+    // launcher carries no registry client, so there is nothing to ask.
     let cfgs = crate::plugin_host::read_plugin_cfgs(dir).map_err(CompileError::Plugin)?;
-    let plugins = lumenc_plugin::PluginSet::load(dir, &cfgs)
+    if let Some(cfg) = cfgs
+        .iter()
+        .find(|c| matches!(c.source, lumenc_plugin::PluginSource::Version(_)))
+    {
+        return Err(CompileError::Plugin(format!(
+            "plugin '{}' comes from the registry, and the thin (dlopen) launcher carries no \
+             registry client; rebuild lumenc with --features dev-run, or use a `path` source",
+            cfg.name
+        )));
+    }
+    let plugins = lumenc_plugin::PluginSet::load(dir, &cfgs, &std::collections::BTreeMap::new())
         .map_err(|e| CompileError::Plugin(e.to_string()))?;
     compile_dir_to_lmna_with(dir, &plugins)
 }
