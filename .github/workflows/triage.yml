@@ -1,0 +1,71 @@
+name: triage
+
+# Keep a pull request moving while no maintainer is watching. Every step is a
+# function of what the API reports about the pull request; nothing here checks
+# out or runs its code, which is what makes pull_request_target safe to use.
+#
+# - On open and on every push: label by touched paths and title, set the S-
+#   label from the state of the checks, and publish a "triage" check run whose
+#   summary tells the author what is still missing (CLA, red legs, docs).
+# - When ci, tools, or coverage finishes: redo the S- label and the summary,
+#   so S-Needs-Review appears the moment everything is green and the CLA is
+#   signed, and S-Waiting-On-Author the moment a leg goes red.
+#
+# The label scheme and what each S- label means are in CONTRIBUTING.md.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+  workflow_run:
+    workflows: [ci, tools, coverage]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  checks: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  # Which pull requests this event is about. A pull_request_target event names
+  # one; a workflow_run event names a commit, which may head several.
+  numbers:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.find.outputs.list }}
+    steps:
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ -n "$PR" ]; then
+            list="[$PR]"
+          else
+            list=$(gh api "repos/${{ github.repository }}/commits/$SHA/pulls" \
+              --jq '[.[] | select(.state == "open") | .number]')
+          fi
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+          echo "pull requests: $list"
+
+  triage:
+    needs: numbers
+    if: needs.numbers.outputs.list != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        pr: ${{ fromJSON(needs.numbers.outputs.list) }}
+    steps:
+      # The script comes from the default branch, never from the pull request.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts/triage.sh
+          sparse-checkout-cone-mode: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/triage.sh ${{ matrix.pr }}
