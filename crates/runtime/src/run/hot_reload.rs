@@ -1,13 +1,12 @@
 use super::*;
 
-// Read by always-compiled runtime systems (`apply_script_commands` for
-// asset-dir + root-entity access, `reapply_styles_on_root_class_change`),
-// so the struct stays compiled unconditionally; only its *insertion* (the
-// hot-reload watcher) is gated behind `runtime-parse`. In a parser-free
-// build the resource is simply never inserted and those systems see `None`.
+// The hot-reload poll below is the only reader, and only a `runtime-parse`
+// build inserts the resource (`build_app`). The struct stays compiled
+// unconditionally so nothing else needs gating; in a parser-free build it is
+// simply never inserted.
 #[derive(Resource)]
-// Only `dir` / `root` are read in a parser-free build; the watch-path fields
-// exist for the (gated) hot-reload poll.
+// Nothing reads the fields in a parser-free build: the poll that does is
+// gated.
 #[cfg_attr(not(feature = "runtime-parse"), allow(dead_code))]
 pub(crate) struct HotReloadState {
     pub(crate) dir: PathBuf,
