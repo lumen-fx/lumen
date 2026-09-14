@@ -348,6 +348,11 @@ Loads and draws an image file.
 | `alt` | text | What the image shows, for a reader who is not looking at it. Write `alt=""` for an image that carries no meaning of its own, such as a divider. `translatable` on the same element resolves it through `<key>.alt`. Carried into the compiled app; the desktop accessibility tree does not read it yet. |
 | `fit` | `fill`, `cover`, `contain`, `none`, `scale-down` | How the image fills its box. |
 
+On the web an `<image>` is emitted as an `<img>` carrying the size of the
+file the build copied, `decoding="async"`, and `loading="lazy"` on every
+image after the first one on the page. See
+[the web target](../guides/web.md#what-the-browser-does-itself).
+
 ### `<canvas>`
 
 A surface a script draws on: paths, rectangles, arcs, text, and pixel
