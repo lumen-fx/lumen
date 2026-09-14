@@ -83,6 +83,9 @@ fn dispatch(cmd: &str, args: Vec<String>) -> ExitCode {
         // completions: it reads a link record no ordinary checkout has.
         #[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "package"))]
         "link-kit" => lumenc::link_kit_cli::cmd_link_kit(args),
+        // Extraction reads the app's declared source language out of
+        // lumen.toml, so it needs the runtime the config type lives in.
+        #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
         "i18n" => lumenc::i18n_cli::cmd_i18n(args),
         // Ungated: the completion scripts are static text, so every build
         // shape can print them.
