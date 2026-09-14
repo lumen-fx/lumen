@@ -199,6 +199,11 @@ pub struct RunOptions {
     /// graph); `lumenc` asks `lpm` to resolve each one and hands the outcome
     /// in here for the module loader to consult before its own on-disk probe.
     pub resolved_modules: crate::modules::ResolvedModules,
+    /// Script libraries the app depends on, as the name a script imports
+    /// under and the directory holding its sources. Filled in the same way
+    /// [`Self::resolved_modules`] is: the runtime resolves nothing, and
+    /// `lumenc` hands in what the registry answered.
+    pub import_roots: Vec<(String, std::path::PathBuf)>,
 }
 
 impl RunOptions {
@@ -233,6 +238,7 @@ impl RunOptions {
             parser: None,
             compiler_plugins: None,
             resolved_modules: crate::modules::ResolvedModules::default(),
+            import_roots: Vec::new(),
         }
     }
 

@@ -223,6 +223,7 @@ pub fn with_default_compiler_plugins(mut opts: RunOptions) -> Result<RunOptions,
             .map(|(name, file)| (name.clone(), Ok(file.clone())))
             .collect(),
     );
+    opts.import_roots = resolved.candela_roots.clone();
     if opts.compiler_plugins.is_none() && opts.artifact.is_none() && opts.artifact_bytes.is_none() {
         let chain = plugin_host::compiler_plugins_for(&opts.dir, false, &resolved.compiler_plugins)
             .map_err(RunError::Plugin)?;
@@ -354,7 +355,12 @@ pub fn check_app(dir: &std::path::Path) -> Result<CheckReport, RunError> {
     let resolved = registry_packages(dir).map_err(RunError::Plugin)?;
     let plugins = plugin_host::compiler_plugins_for(dir, true, &resolved.compiler_plugins)
         .map_err(RunError::Plugin)?;
-    lumen_runtime::check_app(dir, &source_parser::LumencParser, &*plugins)
+    lumen_runtime::check_app(
+        dir,
+        &source_parser::LumencParser,
+        &*plugins,
+        &resolved.candela_roots,
+    )
 }
 
 /// AOT-compile an app from source (`lumenc build`), using the compiler's
@@ -374,5 +380,11 @@ pub fn compile_app_with_skin(
     let resolved = registry_packages(dir).map_err(RunError::Plugin)?;
     let plugins = plugin_host::compiler_plugins_for(dir, false, &resolved.compiler_plugins)
         .map_err(RunError::Plugin)?;
-    lumen_runtime::compile_app_with_skin(dir, &source_parser::LumencParser, &*plugins, skin)
+    lumen_runtime::compile_app_with_skin(
+        dir,
+        &source_parser::LumencParser,
+        &*plugins,
+        skin,
+        &resolved.candela_roots,
+    )
 }
