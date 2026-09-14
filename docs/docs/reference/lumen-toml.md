@@ -277,6 +277,8 @@ from the symbols the file exports, never declared:
 - A [portable plugin](../contributing/plugins.md#portable-plugins)
   (`lumen_plugin_v1`): a C-ABI library offering script functions, language
   preludes, and events.
+- A candela script library: `.cdl` sources the app's own scripts import. It
+  is not a library the engine opens; it compiles into the app.
 
 One table entry per library; the key is its name.
 
@@ -311,7 +313,7 @@ Each entry declares exactly one source:
 | Key | Type | Effect |
 |-----|------|--------|
 | `bundled` | `true` | The library ships with the toolchain; the runtime looks beside the running engine (the executable's directory, then `LUMEN_LIB_DIR`, then a `modules/` directory beside either). |
-| `version` | string | A version requirement. `lumenc run` and `lumenc package` resolve it through the shared plugin cache (`~/.lumen/plugins`) and pin the answer in `lumen.lock`, exactly as `[[plugins]]` versions resolve; the runtime never fetches or resolves one itself, it only loads what was resolved or already staged in a `modules/` directory, and fails with a banner otherwise. A bare string value (`name = "1.2"`) is shorthand for this key. |
+| `version` | string | A requirement on a [registry package](#registry-packages), in cargo semantics (`"1.2"` means `^1.2`). Every compile path resolves it and downloads what it resolves to; the runtime never fetches or resolves one itself, it only loads what was resolved or already staged in a `modules/` directory, and fails with a banner otherwise. A bare string value (`name = "1.2"`) is shorthand for this key. |
 | `path` | string | A built library, relative to the app directory unless absolute. Without an extension the platform spellings are probed (`lib<m>.so`, `lib<m>.dylib`, `<m>.dll` - the Windows spelling matters for portable plugins, the kind that loads there - plus the underscored variants cargo produces for a hyphenated name). |
 | `config` | table | Handed to the library verbatim at install. |
 
@@ -347,13 +349,50 @@ in nor can open is skipped with a single stderr line rather than the banner,
 because that is a property of how the binary was put together; the line
 points at `lumenc package --static`, which compiles the declared modules in.
 `lumenc bundle --static` says the same thing at build time, naming the
-declared modules. `lumenc web` refuses an app that declares this table (a
-browser cannot load native libraries).
+declared modules. `lumenc web` refuses an app that declares a native library
+here, because a browser cannot load one; a candela package is script source,
+so it travels to the web like the app's own scripts.
 
 A declared library is native code loaded into the app's process, the same
 trust model as [`[[hooks]]`](#hooks). A `permissions` key is reserved and
 rejected; capability declarations are not supported yet. `git`, `rev`, and
 `registry` sources are reserved and rejected the same way.
+
+## Registry packages
+
+A `version` source in `[dependencies]` or [`[[plugins]]`](#plugins) names a
+package published to the registry at `reg.lumenfx.dev`. `lpm` is the client
+that resolves those requirements and downloads what they resolve to; every
+compile path runs it before it compiles, so nothing has to be fetched by
+hand. See the [CLI reference](cli.md#add) for `add`, `remove`, `fetch`, and
+`update`.
+
+A package declares the platform it is for, and the table that named it says
+what the app wants it for:
+
+| Platform | Table | What it is |
+|----------|-------|------------|
+| `lumen` | `[dependencies]` | A runtime module or a portable plugin, told apart at load by the symbols it exports. |
+| `lumen` | `[[plugins]]` | A compiler plugin, opened while the app compiles. |
+| `candela` | `[dependencies]` | A script library. Its `.cdl` sources become an import root under the declared name, so `import "shapes";` in the app's script reads the package. |
+
+A package for any other platform is an error naming both the package and the
+platform.
+
+Windows is the one gap: an engine-locked runtime module from the registry
+does not load there, because there is no shared engine for one to load into.
+Portable plugins, compiler plugins, and candela packages work everywhere.
+
+### lumen.lock
+
+`lpm` writes `lumen.lock` beside `lumen.toml`, recording the exact version
+every requirement resolved to. It is format version 2, and `lumenc` never
+reads or writes it: the file belongs to `lpm`.
+
+Commit it. A build from a fresh clone then resolves to the versions the lock
+names rather than to whatever is newest, which is what makes two machines
+build the same app. `lumenc update` is how a pin moves; editing the lock by
+hand is not.
 
 ## [[hooks]]
 
@@ -410,7 +449,7 @@ for what a plugin can do.
 | Key | Type | Required | Effect |
 |-----|------|----------|--------|
 | `name` | string | yes | Plugin name; the loaded library must report the same one. |
-| `version` | string | one source | Version requirement (cargo semantics: `"1.2"` means `^1.2`), resolved against the plugin cache and pinned in `lumen.lock`. |
+| `version` | string | one source | A requirement on a [registry package](#registry-packages), in cargo semantics (`"1.2"` means `^1.2`). Fetched before the compile and pinned in `lumen.lock`. |
 | `path` | string | one source | A built cdylib, relative to the app directory (absolute paths work too). Without an extension the platform spellings are probed (`lib<p>.so`, `lib<p>.dylib`, `<p>.dll`, plus the underscored variants cargo produces for a hyphenated name). |
 | `config` | table | no | Handed to the plugin verbatim; a key the plugin does not read produces no diagnostic. |
 
@@ -430,13 +469,10 @@ are not supported yet and error saying so, and a `permissions` key is
 rejected the same way: a plugin is native code running in the compiler's
 process, the same trust model as a build script.
 
-A `version` source resolves to a prebuilt, per-platform cdylib in the plugin
-cache (`~/.lumen/plugins`, `%LOCALAPPDATA%\Programs\Lumen\plugins` on
-Windows, `LUMEN_PLUGIN_CACHE` overrides). The resolved version and its
-per-platform sha256 are pinned in `lumen.lock` beside `lumen.toml`; commit
-that file, and every later build reuses the pinned version and refuses a
-cached library whose bytes changed. `lumenc` does not fetch plugins yet; a
-version absent from the cache is an error that says so.
+A `version` source resolves to a prebuilt, per-platform cdylib the registry
+publishes, downloaded before the compile that needs it and pinned in
+[`lumen.lock`](#lumenlock). `lumenc add markdown --plugin` writes the entry
+and resolves it in one step.
 
 Unlike `[[hooks]]`, plugins also run under `lumenc check`, so the tree being
 validated is the tree a build produces; emit outputs are discarded there,

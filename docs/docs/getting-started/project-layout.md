@@ -8,6 +8,7 @@ it and it is used.
 ```
 my-app/
   lumen.toml
+  lumen.lock
   README.md
   src/
     main.lmn
@@ -49,6 +50,10 @@ is yours to arrange.
   which script engine to use, build hooks, and everything else static about the
   app. Every key is listed in the
   [lumen.toml reference](../reference/lumen-toml.md).
+- `lumen.lock` - the exact version every package the app depends on resolved
+  to. It appears the first time you declare one, and it is written for you;
+  commit it, so a build from a fresh clone gets the same versions. See
+  [registry packages](../reference/lumen-toml.md#registry-packages).
 - `README.md` - written by the scaffolder to explain what a template
   demonstrates. Delete it whenever you like; nothing reads it.
 - Images, fonts, and audio you reference by relative path from the markup or a

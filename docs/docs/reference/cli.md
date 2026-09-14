@@ -32,6 +32,7 @@ for example `lumenc run --help`. A bare `help` is not a subcommand flag, so
 lumenc run <dir> [--profile chrome|tracy|stderr]
                  [--headless [--size WxH] [--dpr N] [--ticks N]]
                  [--artifact <file>] [--assets <file.lpak>] [--no-hooks]
+                 [--offline]
 ```
 
 Runs the app in `<dir>`. The directory must contain `src/main.lmn` unless
@@ -47,6 +48,7 @@ Runs the app in `<dir>`. The directory must contain `src/main.lmn` unless
 | `--artifact` | path | none | Loads a precompiled `.lmna` artifact instead of parsing source. Disables hot reload. |
 | `--assets` | path to a `.lpak` | none | Reads images, icons, and sounds from a `lumenc bundle` archive, keyed by the path relative to `<dir>`. A path the archive does not carry falls back to disk; fonts always come from disk. An unreadable archive exits 1. |
 | `--no-hooks` | - | off | Skips the `prebuild` and `prerun` hooks. |
+| `--offline` | - | off | Resolves the app's registry packages from what is already downloaded and never reaches the network. A package that has not been downloaded exits 1. |
 
 Both `--flag value` and `--flag=value` are accepted for `--profile`,
 `--size`, `--dpr`, `--ticks`, `--artifact`, and `--assets`.
@@ -57,10 +59,10 @@ error.
 `run` executes the app's `[[hooks]]` entries: every `prebuild` hook, then
 every `prerun` hook. See [lumen.toml](lumen-toml.md#hooks).
 
-`run` resolves the app's `[dependencies]` before the app builds: a `version`
-source resolves through the plugin cache and pins itself in `lumen.lock`
-(see [lumen.toml](lumen-toml.md#dependencies)). A module that fails to
-resolve or load is a startup banner, and the app runs without it. An
+`run` resolves the app's [registry packages](lumen-toml.md#registry-packages)
+before the app builds, and a requirement that does not resolve fails the run.
+A module that resolves and then fails to load is a startup banner, and the
+app runs without it. An
 installed `lumenc` on Linux or macOS loads modules directly; one built from
 source without the `dynamic-engine` cargo feature skips engine-locked
 modules with a single stderr line (its capabilities are compiled in) and
@@ -81,16 +83,15 @@ on Windows) exit 0 through the graceful-close path.
 ## check
 
 ```
-lumenc check <dir>
+lumenc check <dir> [--offline]
 ```
 
 Parses and validates the app without opening a window and without running
 hooks. Declared compiler plugins do run, in check-only mode: the tree being
-validated is the tree a build produces, and emit outputs are discarded (a
-`version` source may still update `lumen.lock`). The app's `[dependencies]`
-resolve too; a `version` module that does not resolve prints an advisory
-`warning:` line, since at run time it would be a startup banner and the app
-would run without the module.
+validated is the tree a build produces, and emit outputs are discarded. The
+app's [registry packages](lumen-toml.md#registry-packages) resolve first,
+which may write `lumen.lock`; a requirement that does not resolve exits 1.
+`--offline` resolves from what is already downloaded.
 Prints `<dir>: ok (N elements, script: yes|none)` and exits 0, or
 prints the parse error and exits 1. A missing `<dir>` exits 2.
 
@@ -111,7 +112,7 @@ a fix is machine-applicable. Kinds: `unknown-attribute`, `boolean-attribute`,
 ## build
 
 ```
-lumenc build <app_dir> <out.lmna> [--no-hooks]
+lumenc build <app_dir> <out.lmna> [--no-hooks] [--offline]
 ```
 
 Compiles the app ahead of time into a `.lmna` artifact: parses the entry
@@ -138,13 +139,77 @@ native build tool runs instead.
 Run the result with `lumenc run <dir> --artifact <out.lmna>`. See
 [Packaging](../guides/packaging.md).
 
+## add
+
+```
+lumenc add <name>[@<req>] [<dir>] [--plugin] [--config <k>=<v>]...
+```
+
+Declares a [registry package](lumen-toml.md#registry-packages) in
+`<dir>/lumen.toml` and resolves it, so the app is ready to run. `<dir>`
+defaults to the current directory. Comments, spacing, and key order in the
+file are preserved.
+
+| Flag | Value | Default | Effect |
+|------|-------|---------|--------|
+| `--plugin` | - | off | Declares a compiler plugin under `[[plugins]]` instead of a runtime dependency under `[dependencies]`. |
+| `--config` | `<key>=<value>` | none | A key in the package's own `config` table. The value is read as TOML, so `7` and `true` keep their types and anything else is a string. Repeatable. |
+
+With no `<req>`, the newest version the registry publishes is resolved and
+written as the requirement. Adding a name the app already declares re-pins it
+rather than declaring it twice; declaring one name in both tables exits 2.
+
+```sh
+lumenc add shape-tools
+lumenc add markdown@1.2 --plugin --config flavor=gfm
+```
+
+## remove
+
+```
+lumenc remove <name> [<dir>]
+```
+
+Deletes the package's `[dependencies]` entry or its `[[plugins]]` entry and
+re-resolves what is left. A name neither table declares exits 1.
+
+## fetch
+
+```
+lumenc fetch [<dir>] [--locked] [--target <target>] [--offline]
+```
+
+Resolves every `version` source the app declares and downloads what they
+resolve to, writing `lumen.lock`. Every compile path does this on its own;
+run it alone when the download should be its own step, as in a CI job that
+caches it.
+
+| Flag | Value | Default | Effect |
+|------|-------|---------|--------|
+| `--locked` | - | off | Fails rather than changing `lumen.lock`. A lock that would move exits 1 and names `lumenc update`. |
+| `--target` | a platform name | this machine's | Resolves for another platform, which is what `lumenc package --target` needs. An unknown name exits 2. |
+| `--offline` | - | off | Uses what is already downloaded and never reaches the network. |
+
+An app that declares no registry package says so and exits 0.
+
+## update
+
+```
+lumenc update [<name>...] [--dir <dir>]
+```
+
+Re-resolves the app's registry packages against what the registry publishes
+now and rewrites `lumen.lock`. With no names every declared package moves as
+far as its requirement allows; with names, only those do. A name the app does
+not declare exits 2.
+
 ## web
 
 ```
 lumenc web <app_dir> [--out <dir>] [--base <path>] [--locale <tag>]...
                      [--render static|csr|ssr] [--prerender seeds|run|none]
                      [--runtime|--no-runtime]
-                     [--no-hooks] [--lib-dir <dir>] [--strict]
+                     [--no-hooks] [--lib-dir <dir>] [--strict] [--offline]
                      [--serve] [--port <n>] [--host <addr>]
                      [--allow-host <name>]...
 ```
@@ -255,15 +320,17 @@ A missing `<app_dir>`, an unknown flag, or a mode neither `--render` nor
 fails the build: a page is written with the state a run settled into here, or
 with the state the app settles into for the request, and not both. So does a
 runtime setting that contradicts the `--render` mode. Only a markup app can be
-emitted as a site, and not one declaring
-[`[dependencies]`](lumen-toml.md#dependencies): a declared dependency is a
-native library, which a browser cannot load.
+emitted as a site, and not one whose
+[`[dependencies]`](lumen-toml.md#dependencies) name a native library, which a
+browser cannot load. A candela package is script source and compiles into the
+app, so an app that depends on one emits as a site like any other.
 
 ## package
 
 ```
 lumenc package <app_dir> [<out_dir>] [--name <name>] [--target <target>]
                          [--lib-dir <dir>] [--static] [--zip] [--no-hooks]
+                         [--offline]
 ```
 
 Assembles a folder that runs on a machine with no Lumen installation: the app
@@ -353,17 +420,19 @@ the summary line names them.
 Declared `[dependencies]` stage into a `modules/` subfolder of the package,
 each under the file name the runtime probes for. `path` sources copy the
 declared library, `bundled` sources copy the toolchain's, and `version`
-sources resolve through the plugin cache and `lumen.lock` exactly as
-`lumenc run` resolves them; a module that cannot be found or resolved exits
-1. On a `--target` for another platform, `bundled` modules come from the
+sources come from the registry; a module that cannot be found or resolved
+exits 1. A candela package stages nothing: its scripts compiled into the
+app's executable along with the app's own.
+
+A `--target` for another platform resolves for that platform, so a `version`
+module ships the target's build. `bundled` modules come from the
 `lumen-modules-<target>` archive published with the same release the
 toolchain files come from, fetched, verified, and cached the same way; a
 release that ships no modules archive, or one whose archive does not carry a
-declared module, exits 1 naming it. `path` and `version` sources cannot
-cross-package - a local library is built for one platform, and version
-resolution has no registry yet - and exit 2. A Windows target with a non-empty
-`[dependencies]` exits 2: nothing loads a module beside a Windows executable,
-and `--static` is what compiles one in there.
+declared module, exits 1 naming it. A `path` source cannot cross-package - a
+local library is built for one platform - and exits 2. A Windows target with
+a non-empty `[dependencies]` exits 2: nothing loads a module beside a Windows
+executable, and `--static` is what compiles one in there.
 
 The launcher stub and the runtime library are looked up in this order:
 `--lib-dir`, then, for this machine's own platform, the directory holding the
@@ -750,3 +819,6 @@ from and the one the update check compares against.
 | `LUMEN_LIB_DIR` | Directory searched for the shared Lumen library and the launcher stub, after the directory holding `lumenc`. |
 | `LUMEN_LINK_KIT_DIR` | Link kit `package --static` replays, instead of the one published for the target. |
 | `LUMEN_GH_REPO` | Repository, as `owner/name`, whose releases toolchain downloads and the update check read. Defaults to `lumen-fx/lumen`. |
+| `LPM_BIN` | The `lpm` executable to resolve registry packages with. Searched first, ahead of `PATH` and the shared install path. |
+| `LPM_GH_REPO` | Repository, as `owner/name`, `lpm` is downloaded from. Defaults to `lumen-fx/registry`. |
+| `LPM_ASSET_BASE` | Directory URL holding the `lpm` archives and their `checksums.txt`, instead of the newest release. For a mirror. |
