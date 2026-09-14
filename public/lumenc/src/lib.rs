@@ -245,23 +245,22 @@ pub fn with_default_compiler_plugins(opts: RunOptions) -> Result<RunOptions, Run
 /// `[[plugins]]` entries compiler plugins; the registry says which platform
 /// each one is for, and the table says what the app wants it for.
 ///
-/// A `lumen.toml` that does not parse yields no requirements: the run fails
-/// in `build_app` with the real parse error, and a resolution failure here
-/// would bury it.
+/// A `lumen.toml` that does not parse is the error, here as everywhere: the
+/// requirements cannot be read out of a file nobody can read, and `lumenc
+/// fetch` has no later step to report it from.
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub fn registry_requirements(dir: &std::path::Path) -> Result<Vec<lpm::Requirement>, String> {
     use lumen_runtime::modules::ModuleSource;
 
+    let cfg = LumenToml::load_or_default(dir).map_err(|e| format!("lumen.toml: {e}"))?;
     let mut reqs = Vec::new();
-    if let Ok(cfg) = LumenToml::load_or_default(dir) {
-        for dep in &cfg.dependencies.0 {
-            if let ModuleSource::Version(req) = &dep.source {
-                reqs.push(lpm::Requirement {
-                    name: dep.name.clone(),
-                    req: req.clone(),
-                    table: lpm::Table::Dependencies,
-                });
-            }
+    for dep in &cfg.dependencies.0 {
+        if let ModuleSource::Version(req) = &dep.source {
+            reqs.push(lpm::Requirement {
+                name: dep.name.clone(),
+                req: req.clone(),
+                table: lpm::Table::Dependencies,
+            });
         }
     }
     for cfg in plugin_host::read_plugin_cfgs(dir)? {
