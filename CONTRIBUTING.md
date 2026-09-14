@@ -81,6 +81,26 @@ Cargo manifests and lockfile, the toolchain pin, `tools/release/`, or
 what a release publishes. Expect a slower read on them, and say in the pull
 request why the change is needed rather than only what it does.
 
+## After you open a pull request
+
+A workflow reads every pull request as it changes and keeps two things
+current without a maintainer at the keyboard:
+
+- A `triage` check on the Checks tab. Its summary lists the CLA state, each
+  required check with a link, the labels, and the one next step: sign the
+  CLA, fix a red leg, add the docs page, or wait for review. It never blocks
+  a merge; it is there so you can see what is missing before anyone reads
+  the diff.
+- The `S-` label, which is the pull request's state: `S-Needs-Triage` when
+  it opens, `S-Waiting-On-Author` while a required check is red, and
+  `S-Needs-Review` once every check is green, the CLA is signed, and the
+  pull request is not a draft. Area (`A-`) and class (`C-`) labels are set
+  from the touched paths and the title prefix when none are present.
+
+On a first pull request from a new account, GitHub holds the checks until a
+maintainer starts them; the summary says so. Nothing in this workflow reads
+or runs the code in the pull request.
+
 ## Invariants you must not break
 
 1. `lumen-core` may not import any impl crate.
