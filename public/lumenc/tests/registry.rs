@@ -398,6 +398,71 @@ fn add_declares_a_compiler_plugin_with_its_config() {
     assert!(after.contains("strict = true"), "{after}");
 }
 
+/// A `candela` package becomes an import root: the app's script imports it by
+/// the name it was declared under, and the compile reads the package's own
+/// `.cdl` sources.
+#[test]
+fn a_candela_package_is_an_import_root() {
+    let dir = app("candela-root", "[dependencies]\nshapes = \"1\"\n");
+    std::fs::write(
+        dir.join("src").join("main.lmn"),
+        "<root><label>hi</label><script src=\"main.cdl\"/></root>\n",
+    )
+    .expect("markup");
+    std::fs::write(
+        dir.join("src").join("main.cdl"),
+        "import \"shapes\";\n\nfn main() {\n    let n = area(3, 4);\n}\n",
+    )
+    .expect("script");
+
+    // The package the registry resolved, carrying the module the script
+    // imports under the package's own name.
+    let package = dir.join("pkg").join("shapes");
+    std::fs::create_dir_all(&package).expect("package root");
+    std::fs::write(
+        package.join("shapes.cdl"),
+        "fn area(w: int, h: int) -> int {\n    return w * h;\n}\n",
+    )
+    .expect("package source");
+
+    let stub = Stub::answering(
+        &dir,
+        &format!(
+            "{{\"name\":\"shapes\",\"version\":\"1.0.0\",\"platform\":\"candela\",\
+             \"target\":\"any\",\"dir\":{},\"files\":[\"shapes.cdl\"]}}",
+            serde_json::to_string(&package.display().to_string()).expect("a path encodes"),
+        ),
+    );
+    let out = lumenc(&stub, &["check", &dir.display().to_string()]);
+    assert!(out.status.success(), "{}", stderr_of(&out));
+
+    // The ahead-of-time build reads the same root, which is what makes a
+    // packaged app carry the package: the bytecode in the artifact is
+    // compiled with the import resolved, so nothing has to travel beside it.
+    let artifact = dir.join("app.lmna");
+    let out = lumenc(
+        &stub,
+        &[
+            "build",
+            &dir.display().to_string(),
+            &artifact.display().to_string(),
+        ],
+    );
+    assert!(out.status.success(), "{}", stderr_of(&out));
+    assert!(artifact.is_file(), "the artifact was written");
+
+    // Without the root the same import has nowhere to read from, which is
+    // what makes the passes above statements about the root rather than about
+    // candela ignoring the import.
+    let bare = Stub::answering(&dir, "");
+    let out = lumenc(&bare, &["check", &dir.display().to_string()]);
+    assert!(
+        !out.status.success(),
+        "the import resolved without the package: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
 /// `lumenc update` names the packages it was given and nothing else.
 #[test]
 fn update_asks_for_the_named_packages() {

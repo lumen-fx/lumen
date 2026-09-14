@@ -62,6 +62,9 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     };
     let css_path = layout.css_path;
     let lib_dir = layout.lib_dir;
+    // The script libraries the app depends on, resolved by lumenc before the
+    // build; the runtime resolves nothing itself.
+    let import_roots = std::mem::take(&mut opts.import_roots);
     let asset_roots = cfg.resolved_asset_roots(&dir);
     let skin_override = cfg.skin.name.clone();
     // The injected compiler-plugin chain (loaded by lumenc, like the parser),
@@ -290,7 +293,8 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
                 app.add_plugin(
                     ScriptCandelaPlugin::new(combined)
                         .with_uri(html_path.display().to_string())
-                        .with_library_dir(lib_dir.clone()),
+                        .with_library_dir(lib_dir.clone())
+                        .with_import_roots(import_roots.clone()),
                 );
                 register_script_host_systems::<CandelaHost>(&mut app, multi_host);
                 reloaders.push(engine, reload_script::<CandelaHost>);

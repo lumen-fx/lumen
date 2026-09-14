@@ -75,6 +75,10 @@ pub struct CandelaHost {
     wrappers: Vec<(String, String)>,
     /// Where a `dylib "..."` import looks for its library: the app's `lib/`.
     library_dir: Option<PathBuf>,
+    /// Script libraries the app depends on, as the name a script imports
+    /// under and the directory the `.cdl` files sit in. A registry package on
+    /// the `candela` platform arrives here.
+    import_roots: Vec<(String, PathBuf)>,
 }
 
 impl Default for CandelaHost {
@@ -89,7 +93,7 @@ impl CandelaHost {
     #[must_use]
     pub fn new() -> Self {
         let registries = Registries::default();
-        let engine = build_engine(&registries);
+        let engine = build_engine(&registries, &[]);
         Self {
             vm: CandelaVm {
                 engine,
@@ -101,6 +105,7 @@ impl CandelaHost {
             script_fns: ScriptFnStore::default(),
             wrappers: Vec::new(),
             library_dir: None,
+            import_roots: Vec::new(),
         }
     }
 
@@ -113,9 +118,30 @@ impl CandelaHost {
         self.library_dir = Some(dir.into());
     }
 
-    /// Name the library directory for the span of a compile.
+    /// Let a script `import` from `dir` under `name`, which is what a script
+    /// library the app depends on becomes.
+    ///
+    /// Roots are declared before the engine compiles anything, so this
+    /// rebuilds the engine with the root in place. Registration a host did
+    /// itself is replayed; an embedder's own `engine_mut` additions are not,
+    /// so name every root before reaching for that.
+    pub fn add_import_root(&mut self, name: impl Into<String>, dir: impl Into<PathBuf>) {
+        self.import_roots.push((name.into(), dir.into()));
+        self.vm.engine = build_engine(&self.registries, &self.import_roots);
+    }
+
+    /// Name the library directories for the span of a compile.
     fn library_dir(&self) -> LibraryDir {
-        LibraryDir::set(self.library_dir.as_deref())
+        LibraryDir::set(self.library_dir.iter().cloned().collect())
+    }
+
+    /// Where imports read from, for the paths that have no engine to ask.
+    fn resolver(&self) -> candela::ImportResolver {
+        let mut resolver = candela::ImportResolver::new();
+        for (name, dir) in &self.import_roots {
+            resolver.add_root(name, dir.clone());
+        }
+        resolver
     }
 
     /// Mutable access to the inner candela [`Engine`](candela::Engine) so an
@@ -257,13 +283,20 @@ impl CandelaHost {
             lmn_expander(Arc::new(Mutex::new(lmn::FnIndex::scan(&prepared.text)))),
         );
         let _library_dir = self.library_dir();
+        // The ahead-of-time build has no engine behind it either, so the
+        // import roots the engine carries are spelled out for it: an artifact
+        // is built from the same sources a run from source compiles, and the
+        // packages it imports have to resolve the same way.
+        let resolver = self.resolver();
         // candela reports a compile error by unwinding into the diagnostic
         // sink `collect_diagnostic` installs. Without the sink the same error
         // ends the process, which a build tool must not do to the shell it
         // was run from.
         macros
             .scope(|| {
-                candela::collect_diagnostic(|| candela::build_bytecode(prepared.text.clone(), uri))
+                candela::collect_diagnostic(|| {
+                    candela::build_bytecode(prepared.text.clone(), uri, &resolver)
+                })
             })
             .map_err(|d| self.compile_error(&prepared, &d, uri))?
             .map_err(ScriptError::Runtime)
@@ -364,8 +397,13 @@ fn check_declarable(f: &ScriptFn) -> Result<(), ScriptError> {
         })
 }
 
-fn build_engine(r: &Registries) -> candela::Engine {
+/// A fresh engine with the Lumen builtins, the `lmn!` macro, and one import
+/// root per script library the app depends on.
+fn build_engine(r: &Registries, import_roots: &[(String, PathBuf)]) -> candela::Engine {
     let mut engine = candela::Engine::new();
+    for (name, dir) in import_roots {
+        engine = engine.with_import_root(name, dir);
+    }
     register_lumen_host_fns(&mut engine, r);
     engine.register_macro(lmn::MACRO_NAME, lmn_expander(r.fn_index.clone()));
     engine
@@ -388,7 +426,10 @@ impl ScriptHost for CandelaHost {
         // engine would leak that run's commands into the real sink. A scratch
         // engine keeps the check side-effect free, matching the trait contract.
         let scratch = Registries::default();
-        let mut engine = build_engine(&scratch);
+        // The scratch engine carries the same import roots as the live one:
+        // what the check accepts has to be what the app compiles, and an app
+        // that imports a script library is exactly what would differ.
+        let mut engine = build_engine(&scratch, &self.import_roots);
         // Replay the embedder's registrations. candela binds every `host` block
         // while it compiles, so a source that declares `host "native" { .. }`
         // does not check against an engine carrying only Lumen's own builtins:
@@ -664,6 +705,9 @@ pub struct ScriptCandelaPlugin {
     pub uri: Option<String>,
     /// Where a `dylib "..."` import looks for its library: the app's `lib/`.
     pub library_dir: Option<PathBuf>,
+    /// Script libraries the app depends on, as the name a script imports
+    /// under and the directory holding its `.cdl` files.
+    pub import_roots: Vec<(String, PathBuf)>,
     /// Extension callbacks invoked on the inner `candela::Engine` after Lumen's
     /// built-in `host "lumen" { ... }` registrations but before the script is
     /// compiled. Use this to register app-specific host functions (`page()`,
@@ -679,8 +723,17 @@ impl ScriptCandelaPlugin {
             source: source.into(),
             uri: None,
             library_dir: None,
+            import_roots: Vec::new(),
             extensions: Vec::new(),
         }
+    }
+
+    /// Let the app's scripts `import` the script libraries in `roots`, each
+    /// under the name it was declared by.
+    #[must_use]
+    pub fn with_import_roots(mut self, roots: Vec<(String, PathBuf)>) -> Self {
+        self.import_roots = roots;
+        self
     }
 
     /// Set the source URI (typically the entry file path). Reported in compile
@@ -717,6 +770,11 @@ impl Plugin for ScriptCandelaPlugin {
         let mut host = CandelaHost::new();
         if let Some(dir) = self.library_dir {
             host.set_library_dir(dir);
+        }
+        // Roots first: each one rebuilds the engine, which would drop an
+        // extension registered before it.
+        for (name, dir) in self.import_roots {
+            host.add_import_root(name, dir);
         }
         for ext in self.extensions {
             ext(host.engine_mut());

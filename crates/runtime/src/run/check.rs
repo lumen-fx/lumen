@@ -26,8 +26,9 @@ pub fn compile_app(
     dir: &Path,
     parser: &dyn SourceParser,
     plugins: &dyn crate::compiler_plugins::CompilerPlugins,
+    import_roots: &[(String, PathBuf)],
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
-    compile_app_with_skin(dir, parser, plugins, None)
+    compile_app_with_skin(dir, parser, plugins, None, import_roots)
 }
 
 /// [`compile_app`] with the skin named outright instead of read from
@@ -43,6 +44,7 @@ pub fn compile_app_with_skin(
     parser: &dyn SourceParser,
     plugins: &dyn crate::compiler_plugins::CompilerPlugins,
     skin: Option<&str>,
+    import_roots: &[(String, PathBuf)],
 ) -> Result<lumen_ir::artifact::CompiledApp, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
     register_declared_tags(&cfg);
@@ -85,7 +87,7 @@ pub fn compile_app_with_skin(
             // An engine with an ahead-of-time form compiles here, so the
             // artifact carries the program a compiler-free runtime can run.
             // The others have none, and are run from the source beside it.
-            bytecode: compiled_bytecode(engine, &source, &uri, &layout.lib_dir)?,
+            bytecode: compiled_bytecode(engine, &source, &uri, &layout.lib_dir, import_roots)?,
             source,
         });
     }
@@ -123,18 +125,22 @@ fn compiled_bytecode(
     source: &str,
     uri: &str,
     lib_dir: &Path,
+    import_roots: &[(String, PathBuf)],
 ) -> Result<Option<Vec<u8>>, RunError> {
     #[cfg(feature = "host-candela")]
     if engine == crate::config::ScriptEngine::Candela {
         let mut host = CandelaHost::new();
         host.set_library_dir(lib_dir);
+        for (name, dir) in import_roots {
+            host.add_import_root(name.clone(), dir.clone());
+        }
         return host
             .compile_bytecode(source, uri)
             .map(Some)
             .map_err(|e| RunError::Script(e.to_string()));
     }
     #[cfg(not(feature = "host-candela"))]
-    let _ = (engine, source, uri, lib_dir);
+    let _ = (engine, source, uri, lib_dir, import_roots);
     Ok(None)
 }
 
@@ -180,6 +186,7 @@ pub fn check_app(
     dir: &Path,
     parser: &dyn SourceParser,
     plugins: &dyn crate::compiler_plugins::CompilerPlugins,
+    import_roots: &[(String, PathBuf)],
 ) -> Result<CheckReport, RunError> {
     let cfg = crate::config::LumenToml::load_or_default(dir).map_err(RunError::Config)?;
     register_declared_tags(&cfg);
@@ -226,8 +233,12 @@ pub fn check_app(
         match engine {
             #[cfg(feature = "host-candela")]
             crate::config::ScriptEngine::Candela => {
-                CandelaHost::new()
-                    .compile_check(&source, &uri)
+                let mut host = CandelaHost::new();
+                host.set_library_dir(layout.lib_dir.clone());
+                for (name, root) in import_roots {
+                    host.add_import_root(name.clone(), root.clone());
+                }
+                host.compile_check(&source, &uri)
                     .map_err(|e| RunError::Script(e.to_string()))?;
             }
             #[cfg(feature = "host-lua")]

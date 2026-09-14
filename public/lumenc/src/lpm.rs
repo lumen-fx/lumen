@@ -37,8 +37,9 @@ use serde::Deserialize;
 const DEFAULT_REGISTRY_REPO: &str = "lumen-fx/registry";
 
 /// The oldest `lpm` that speaks the protocol this module drives. A copy on
-/// this machine older than this is replaced with the newest release.
-pub const MIN_VERSION: &str = "0.1.0";
+/// this machine older than this is replaced with the newest release. 0.1.0
+/// had no `install`, so it cannot answer for anything here.
+pub const MIN_VERSION: &str = "0.2.0";
 
 /// What to run when `lpm` is needed and cannot be installed.
 pub const INSTALL_HINT: &str = "curl -fsSL https://reg.lumenfx.dev/install.sh | sh";
@@ -482,7 +483,12 @@ fn older_than_min(version: &str) -> bool {
 /// publisher did not vouch for.
 fn download(to: &Path) -> Result<(), String> {
     let (base, version) = match asset_base_override() {
-        Some(base) => (base, None),
+        // An override names a directory of archives rather than a release, so
+        // the version in the file name comes from the archives themselves.
+        Some(base) => {
+            let version = probe_version(&base)?;
+            (base, version)
+        }
         None => {
             let repo = registry_repo();
             let tag = crate::release::latest_tag(&repo)
@@ -490,17 +496,21 @@ fn download(to: &Path) -> Result<(), String> {
             let version = tag.strip_prefix('v').unwrap_or(&tag).to_string();
             (
                 format!("https://github.com/{repo}/releases/download/{tag}"),
-                Some(version),
+                version,
             )
         }
     };
-    let version = match version {
-        Some(version) => version,
-        // An override names a directory of archives rather than a release, so
-        // the version in the file name comes from the archives themselves.
-        None => probe_version(&base)?,
-    };
-    let archive = archive_name(&version);
+    install_from(&base, &version, to)
+}
+
+/// Fetch `lpm <version>` from `base`, check it against the checksums
+/// published beside it, and leave the executable at `to`.
+///
+/// Split from the choice of release above so the download and the
+/// verification are the same code whether the archives came from a release or
+/// from a mirror.
+fn install_from(base: &str, version: &str, to: &Path) -> Result<(), String> {
+    let archive = archive_name(version);
     let dir = to
         .parent()
         .ok_or_else(|| format!("{} has no directory to install into", to.display()))?;
@@ -511,7 +521,7 @@ fn download(to: &Path) -> Result<(), String> {
     }];
     crate::package_cli::fetch_verified_archive(
         &crate::package_cli::Publisher {
-            base,
+            base: base.to_string(),
             sums: CHECKSUMS.to_string(),
             name: format!("lpm {version}"),
             hint: "Install lpm by hand instead.".to_string(),
@@ -734,5 +744,130 @@ mod tests {
         .expect("no requirements, no lpm");
         assert!(resolved.modules.is_empty());
         assert!(resolved.candela_roots.is_empty());
+    }
+
+    /// The install path end to end, against a server on this machine: the
+    /// archive is downloaded, checked against the checksums published beside
+    /// it, unpacked, and left runnable. An archive whose bytes do not match
+    /// what the publisher vouched for installs nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_published_lpm_installs_and_a_tampered_one_does_not() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("lumenc-lpm-install-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+
+        let version = "1.2.3";
+        let archive = archive_name(version);
+        let tarball = tar_gz_of("lpm", b"#!/bin/sh\necho lpm\n");
+
+        let base = serve(vec![
+            (
+                format!("/{CHECKSUMS}"),
+                format!("{}  {archive}\n", sha256_hex(&tarball)).into_bytes(),
+            ),
+            (format!("/{archive}"), tarball.clone()),
+        ]);
+        let into = dir.join("bin").join("lpm");
+        install_from(&base, version, &into).expect("the published archive installs");
+        assert!(
+            into.is_file(),
+            "the executable landed at {}",
+            into.display()
+        );
+        let mode = std::fs::metadata(&into).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0o111, "the copy is runnable: {mode:o}");
+
+        // The same archive, published under a checksum that does not cover it.
+        let base = serve(vec![
+            (
+                format!("/{CHECKSUMS}"),
+                format!("{}  {archive}\n", "0".repeat(64)).into_bytes(),
+            ),
+            (format!("/{archive}"), tarball),
+        ]);
+        let into = dir.join("tampered").join("lpm");
+        let err = install_from(&base, version, &into).expect_err("the checksum does not match");
+        assert!(err.contains("does not match the checksum"), "{err}");
+        assert!(!into.exists(), "nothing was installed");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The version an overriding asset directory publishes is read off the
+    /// archive names in its checksum list, because a directory of archives
+    /// carries no release tag to take it from.
+    #[cfg(unix)]
+    #[test]
+    fn a_mirror_gives_up_its_version() {
+        let base = serve(vec![(
+            format!("/{CHECKSUMS}"),
+            b"aaaa  lpm_2.5.1_linux_amd64.tar.gz\nbbbb  lpm_2.5.1_darwin_arm64.tar.gz\n".to_vec(),
+        )]);
+        assert_eq!(probe_version(&base).as_deref(), Ok("2.5.1"));
+    }
+
+    /// Serve `files` on a loopback port, one request each, and hand back the
+    /// base URL they sit under.
+    #[cfg(unix)]
+    fn serve(files: Vec<(String, Vec<u8>)>) -> String {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a free port");
+        let base = format!("http://{}", listener.local_addr().expect("the bound port"));
+        std::thread::spawn(move || {
+            for _ in 0..files.len() {
+                let Ok((mut socket, _)) = listener.accept() else {
+                    return;
+                };
+                let mut head = [0u8; 1024];
+                let read = socket.read(&mut head).unwrap_or(0);
+                let request = String::from_utf8_lossy(&head[..read]).into_owned();
+                let path = request.split_whitespace().nth(1).unwrap_or_default();
+                let body = files.iter().find(|(name, _)| name == path);
+                let head = match &body {
+                    Some((_, bytes)) => format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        bytes.len()
+                    ),
+                    None => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\
+                             Connection: close\r\n\r\n"
+                        .to_string(),
+                };
+                let _ = socket.write_all(head.as_bytes());
+                if let Some((_, bytes)) = body {
+                    let _ = socket.write_all(bytes);
+                }
+                let _ = socket.flush();
+            }
+        });
+        base
+    }
+
+    /// A one-member `.tar.gz`, shaped the way a release publishes one.
+    #[cfg(unix)]
+    fn tar_gz_of(name: &str, body: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        let mut builder = tar::Builder::new(Vec::new());
+        builder
+            .append_data(&mut header, name, body)
+            .expect("append");
+        let tar = builder.into_inner().expect("finish the tar");
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&tar).expect("compress");
+        encoder.finish().expect("finish the gzip")
+    }
+
+    #[cfg(unix)]
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(bytes))
     }
 }
