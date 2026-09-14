@@ -506,6 +506,10 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             return ExitCode::FAILURE;
         }
     };
+    let declared = Declared {
+        cfg: &cfg.dependencies,
+        resolved: &resolved,
+    };
 
     let app_name = name.unwrap_or_else(|| {
         src_path
@@ -549,8 +553,7 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             &app_name,
             target,
             lib_dir.as_deref(),
-            &cfg.dependencies,
-            &resolved,
+            &declared,
         ),
         _ => package_sdk(
             &src_path,
@@ -559,8 +562,7 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             target,
             lib_dir.as_deref(),
             kind,
-            &cfg.dependencies,
-            &resolved,
+            &declared,
         ),
     };
     let summary = match assembled {
@@ -740,8 +742,7 @@ fn package_sdk(
     target: Target,
     lib_dir: Option<&Path>,
     kind: AppKind,
-    deps: &DependenciesCfg,
-    resolved: &crate::lpm::Resolved,
+    declared: &Declared<'_>,
 ) -> Result<String, String> {
     let built = match kind {
         AppKind::Rust => build_rust_app(src, target)?,
@@ -763,13 +764,13 @@ fn package_sdk(
         let toolchain = locate_toolchain(target, lib_dir)?;
         copy_c_engine(out, target, &toolchain)?;
         (
-            1 + copy_dynamic_runtime(out, target, &toolchain, deps)?,
+            1 + copy_dynamic_runtime(out, target, &toolchain, declared.cfg)?,
             vec![toolchain.dir],
         )
     };
     stage_script_library(&library_dirs, out)?;
 
-    let modules = stage_modules(src, out, target, lib_dir, deps, resolved)?;
+    let modules = stage_modules(src, out, target, lib_dir, declared)?;
 
     // The freezer's own scratch directories sit under the output so they never
     // touch the app; the package itself has no use for them.
@@ -1002,6 +1003,14 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// What the app declares to load at run time, and what the registry resolved
+/// of it. The two travel together everywhere: a declaration gives the name
+/// and the load order, and the resolution gives the file.
+struct Declared<'a> {
+    cfg: &'a DependenciesCfg,
+    resolved: &'a crate::lpm::Resolved,
+}
+
 /// Stage the app's declared runtime modules into `<out>/modules/`, each
 /// under the platform file name the loader probes a `modules/` directory
 /// for. Returns how many were staged.
@@ -1027,9 +1036,12 @@ fn stage_modules(
     out: &Path,
     target: Target,
     lib_dir: Option<&Path>,
-    deps: &DependenciesCfg,
-    resolved: &crate::lpm::Resolved,
+    declared: &Declared<'_>,
 ) -> Result<usize, String> {
+    let Declared {
+        cfg: deps,
+        resolved,
+    } = declared;
     if deps.0.is_empty() {
         return Ok(0);
     }
@@ -1535,8 +1547,7 @@ fn package(
     app_name: &str,
     target: Target,
     lib_dir: Option<&Path>,
-    deps: &DependenciesCfg,
-    resolved: &crate::lpm::Resolved,
+    declared: &Declared<'_>,
 ) -> Result<String, String> {
     let compiled = crate::compile_app(src).map_err(|e| e.to_string())?;
     let artifact = build_artifact(compiled, src)?;
@@ -1565,9 +1576,9 @@ fn package(
     }
 
     copy_c_engine(out, target, &toolchain)?;
-    copy_dynamic_runtime(out, target, &toolchain, deps)?;
+    copy_dynamic_runtime(out, target, &toolchain, declared.cfg)?;
     stage_script_library(std::slice::from_ref(&toolchain.dir), out)?;
-    let modules = stage_modules(src, out, target, lib_dir, deps, resolved)?;
+    let modules = stage_modules(src, out, target, lib_dir, declared)?;
 
     let copied = copy_app_files(src, out, CopyRules::markup())?;
     // Compiler-plugin outputs live under the dot-prefixed `.lumen/generated`

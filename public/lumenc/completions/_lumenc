@@ -18,6 +18,10 @@ _lumenc_commands() {
         'run:Run an app'
         'check:Parse an app without opening a window'
         'build:Ahead-of-time compile an app to a .lmna artifact'
+        'add:Declare a registry package in lumen.toml'
+        'remove:Drop a declared package from lumen.toml'
+        'fetch:Download the registry packages an app declares'
+        'update:Move a pinned package forward'
         'new:Scaffold an app directory from a template'
         'fmt:Reformat a .lmn markup file'
         'snapshot:Text dump of the running app'
@@ -68,18 +72,51 @@ _lumenc() {
                         '--artifact[Run a precompiled artifact]:file:_files -g "*.lmna"' \
                         '--assets[Read assets from a .lpak archive]:file:_files -g "*.lpak"' \
                         '--no-hooks[Skip the prebuild and prerun hooks]' \
+                        '--offline[Resolve registry packages without the network]' \
                         '--help[Show help]' \
                         '1:app directory:_directories'
                     ;;
                 check)
-                    _arguments '--help[Show help]' '1:app directory:_directories'
+                    _arguments \
+                        '--offline[Resolve registry packages without the network]' \
+                        '--help[Show help]' \
+                        '1:app directory:_directories'
                     ;;
                 build)
                     _arguments \
                         '--no-hooks[Skip the prebuild hooks]' \
+                        '--offline[Resolve registry packages without the network]' \
                         '--help[Show help]' \
                         '1:app directory:_directories' \
                         '2:artifact:_files -g "*.lmna"'
+                    ;;
+                add)
+                    _arguments \
+                        '--plugin[Declare a compiler plugin instead of a dependency]' \
+                        '*--config[A key in the package config table, as k=v]:setting:' \
+                        '--help[Show help]' \
+                        '1:package:' \
+                        '2:app directory:_directories'
+                    ;;
+                remove)
+                    _arguments \
+                        '--help[Show help]' \
+                        '1:package:' \
+                        '2:app directory:_directories'
+                    ;;
+                fetch)
+                    _arguments \
+                        '--locked[Fail rather than change lumen.lock]' \
+                        '--target[Resolve for another platform]:target:(linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64 windows-x86_64 windows-aarch64)' \
+                        '--offline[Resolve registry packages without the network]' \
+                        '--help[Show help]' \
+                        '1:app directory:_directories'
+                    ;;
+                update)
+                    _arguments \
+                        '--dir[The app directory]:directory:_directories' \
+                        '--help[Show help]' \
+                        '*:package:'
                     ;;
                 new)
                     _arguments \
@@ -190,6 +227,7 @@ _lumenc() {
                         '--no-hooks[Skip the prebuild hooks]' \
                         '--lib-dir[Directory holding the browser runtime]:directory:_directories' \
                         '--strict[Fail the build on any warning]' \
+                        '--offline[Resolve registry packages without the network]' \
                         '--serve[Serve the site and print the URL]' \
                         '--port[Port to serve on]:port:' \
                         '--host[Address to listen on]:address:' \
@@ -208,9 +246,10 @@ _lumenc() {
                 package)
                     _arguments \
                         '--name[Package name]:name:' \
-                        '--target[Platform to package for]:target:(linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64 windows-x86_64)' \
+                        '--target[Platform to package for]:target:(linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64 windows-x86_64 windows-aarch64)' \
                         '--lib-dir[Directory holding the platform files]:directory:_directories' \
                         '--no-hooks[Skip the prebuild hooks]' \
+                        '--offline[Resolve registry packages without the network]' \
                         '--help[Show help]' \
                         '1:app directory:_directories' \
                         '2:output directory:_directories'

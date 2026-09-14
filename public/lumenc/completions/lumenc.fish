@@ -16,6 +16,10 @@ complete -c lumenc -f
 complete -c lumenc -n __fish_use_subcommand -a run -d 'Run an app'
 complete -c lumenc -n __fish_use_subcommand -a check -d 'Parse an app without opening a window'
 complete -c lumenc -n __fish_use_subcommand -a build -d 'Ahead-of-time compile an app to a .lmna artifact'
+complete -c lumenc -n __fish_use_subcommand -a add -d 'Declare a registry package in lumen.toml'
+complete -c lumenc -n __fish_use_subcommand -a remove -d 'Drop a declared package from lumen.toml'
+complete -c lumenc -n __fish_use_subcommand -a fetch -d 'Download the registry packages an app declares'
+complete -c lumenc -n __fish_use_subcommand -a update -d 'Move a pinned package forward'
 complete -c lumenc -n __fish_use_subcommand -a new -d 'Scaffold an app directory from a template'
 complete -c lumenc -n __fish_use_subcommand -a fmt -d 'Reformat a .lmn markup file'
 complete -c lumenc -n __fish_use_subcommand -a snapshot -d 'Text dump of the running app'
@@ -50,15 +54,29 @@ complete -c lumenc -n '__fish_seen_subcommand_from run' -l ticks -x -d 'Run exac
 complete -c lumenc -n '__fish_seen_subcommand_from run' -l artifact -rF -d 'Run a precompiled artifact'
 complete -c lumenc -n '__fish_seen_subcommand_from run' -l assets -rF -d 'Read assets from a .lpak archive'
 complete -c lumenc -n '__fish_seen_subcommand_from run' -l no-hooks -d 'Skip the prebuild and prerun hooks'
+complete -c lumenc -n '__fish_seen_subcommand_from run' -l offline -d 'Resolve registry packages without the network'
 
 # --- check --------------------------------------------------------------------
 
 complete -c lumenc -n '__fish_seen_subcommand_from check' -a '(__fish_complete_directories)'
+complete -c lumenc -n '__fish_seen_subcommand_from check' -l offline -d 'Resolve registry packages without the network'
 
 # --- build --------------------------------------------------------------------
 
 complete -c lumenc -n '__fish_seen_subcommand_from build' -a '(__fish_complete_directories)'
 complete -c lumenc -n '__fish_seen_subcommand_from build' -l no-hooks -d 'Skip the prebuild hooks'
+complete -c lumenc -n '__fish_seen_subcommand_from build' -l offline -d 'Resolve registry packages without the network'
+
+# --- registry dependencies ----------------------------------------------------
+
+complete -c lumenc -n '__fish_seen_subcommand_from add' -l plugin -d 'Declare a compiler plugin instead of a dependency'
+complete -c lumenc -n '__fish_seen_subcommand_from add' -l config -x -d 'A key in the package config table, as k=v'
+complete -c lumenc -n '__fish_seen_subcommand_from remove' -a '(__fish_complete_directories)'
+complete -c lumenc -n '__fish_seen_subcommand_from fetch' -a '(__fish_complete_directories)'
+complete -c lumenc -n '__fish_seen_subcommand_from fetch' -l locked -d 'Fail rather than change lumen.lock'
+complete -c lumenc -n '__fish_seen_subcommand_from fetch' -l target -x -a 'linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64 windows-x86_64 windows-aarch64' -d 'Resolve for another platform'
+complete -c lumenc -n '__fish_seen_subcommand_from fetch' -l offline -d 'Resolve registry packages without the network'
+complete -c lumenc -n '__fish_seen_subcommand_from update' -l dir -xa '(__fish_complete_directories)' -d 'The app directory'
 
 # --- new ----------------------------------------------------------------------
 
@@ -125,6 +143,7 @@ complete -c lumenc -n '__fish_seen_subcommand_from web' -l prerender -x -a 'seed
 complete -c lumenc -n '__fish_seen_subcommand_from web' -l no-hooks -d 'Skip the prebuild hooks'
 complete -c lumenc -n '__fish_seen_subcommand_from web' -l lib-dir -xa '(__fish_complete_directories)' -d 'Directory holding the browser runtime'
 complete -c lumenc -n '__fish_seen_subcommand_from web' -l strict -d 'Fail the build on any warning'
+complete -c lumenc -n '__fish_seen_subcommand_from web' -l offline -d 'Resolve registry packages without the network'
 complete -c lumenc -n '__fish_seen_subcommand_from web' -l serve -d 'Serve the site and print the URL'
 complete -c lumenc -n '__fish_seen_subcommand_from web' -l port -x -d 'Port to serve on'
 complete -c lumenc -n '__fish_seen_subcommand_from web' -l host -x -d 'Address to listen on'
@@ -140,9 +159,10 @@ complete -c lumenc -n '__fish_seen_subcommand_from bundle' -l no-hooks -d 'Skip 
 
 complete -c lumenc -n '__fish_seen_subcommand_from package' -a '(__fish_complete_directories)'
 complete -c lumenc -n '__fish_seen_subcommand_from package' -l name -x -d 'Package name'
-complete -c lumenc -n '__fish_seen_subcommand_from package' -l target -x -a 'linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64 windows-x86_64' -d 'Platform to package for'
+complete -c lumenc -n '__fish_seen_subcommand_from package' -l target -x -a 'linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64 windows-x86_64 windows-aarch64' -d 'Platform to package for'
 complete -c lumenc -n '__fish_seen_subcommand_from package' -l lib-dir -xa '(__fish_complete_directories)' -d 'Directory holding the platform files'
 complete -c lumenc -n '__fish_seen_subcommand_from package' -l no-hooks -d 'Skip the prebuild hooks'
+complete -c lumenc -n '__fish_seen_subcommand_from package' -l offline -d 'Resolve registry packages without the network'
 
 # --- i18n ---------------------------------------------------------------------
 
