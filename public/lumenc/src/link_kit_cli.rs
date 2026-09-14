@@ -534,6 +534,11 @@ fn is_library(stem: &str, lib: &str) -> bool {
     stem == lib || stem.starts_with(&format!("{lib}-"))
 }
 
+/// The registry every capability registers into, staged like any other
+/// crate. Its name ends the way a capability crate's does, and it is the
+/// one such crate that is not a capability.
+const REGISTRY_CRATE: &str = "lumen_capability";
+
 /// The capabilities the staged files carry, each with the rule a static
 /// package selects it by.
 ///
@@ -562,7 +567,7 @@ fn carried_capabilities(staged: &[String]) -> Result<Vec<KitCapability>, String>
         .filter(|stem| {
             stem.split('-')
                 .next()
-                .is_some_and(|lib| lib.ends_with("_capability"))
+                .is_some_and(|lib| lib.ends_with("_capability") && lib != REGISTRY_CRATE)
         })
         .filter(|stem| {
             !registered
@@ -706,8 +711,27 @@ mod tests {
         SCHEMA_VERSION,
     };
 
-    use super::{Kit, Options, classify, emit, pick};
+    use super::{Kit, Options, carried_capabilities, classify, emit, pick};
     use crate::package_cli::Target;
+
+    #[test]
+    fn the_registry_crate_is_not_an_unregistered_capability() {
+        let staged = vec!["aabbccdd-liblumen_capability-9b464df53da5d677.rlib".to_string()];
+        assert_eq!(
+            carried_capabilities(&staged).map(|c| c.len()),
+            Ok(0),
+            "the registry itself carries no capability"
+        );
+    }
+
+    #[test]
+    fn a_capability_crate_this_lumenc_does_not_register_is_refused() {
+        let staged = vec!["aabbccdd-liblumen_bogus_capability-0123456789abcdef.rlib".to_string()];
+        let err =
+            carried_capabilities(&staged).expect_err("nothing registers lumen-bogus-capability");
+        assert!(err.contains("lumen_bogus_capability"), "{err}");
+        assert!(err.contains("does not register"), "{err}");
+    }
 
     /// A scratch directory that removes itself when the test ends.
     struct Scratch(PathBuf);
