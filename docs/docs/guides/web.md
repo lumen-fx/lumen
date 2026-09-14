@@ -182,6 +182,14 @@ bordered card with its own fill and an inch of padding; a Lumen dialog is the
 whole window with the app's surface centred inside it, and that is what the
 page shows.
 
+An image is emitted with the size of the file the build copied, so the page
+holds its place in the layout before a byte of the image has arrived and the
+text below it does not jump when it lands. The size is the file's own; a
+stylesheet sizing the image still wins. An image the build did not copy, one
+behind an external URL or with a `src` built from a `{...}` placeholder,
+carries no size, because there was no file to read it out of. Every image
+after the first one on the page is fetched when the reader scrolls near it.
+
 A script runs the same way. Its `on_start` publishes the signals the markup
 binds to, a handler bound with `on("click", ...)` runs when that element is
 clicked, and a `derive()` recomputes when one of its dependencies changes.

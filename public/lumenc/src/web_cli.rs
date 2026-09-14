@@ -37,6 +37,7 @@ use lumen_ssr::{FetchPolicy, RenderOptions, SsrSite};
 use lumen_web::urls::is_external;
 use lumen_web::{
     AssetRef, CssMode, HostRewrite, LocaleSpec, PageSpec, RowFills, SignalEnv, SiteSpec, WebSpec,
+    intrinsic_size,
 };
 
 use crate::web_serve::{LOOPBACK, Server};
@@ -1256,9 +1257,18 @@ fn place_asset(
     let path = site_path(src, bytes.as_deref());
     // A name carries the hash of what is in the file, so two sources that
     // reach the same name hold the same bytes: one file under one name,
-    // copied once, pointed at by both.
+    // copied once, pointed at by both. The same read answers how big an image
+    // is, which is what the page says so that it holds the image's place
+    // before the bytes arrive.
     if taken.insert(path.clone()) {
-        assets.push(AssetRef::new(source.clone(), path.clone()));
+        let asset = AssetRef::new(source.clone(), path.clone());
+        let size = bytes
+            .as_deref()
+            .and_then(|bytes| intrinsic_size(bytes, src));
+        assets.push(match size {
+            Some(size) => asset.with_size(size),
+            None => asset,
+        });
     }
     placed.insert(source, path.clone());
     path

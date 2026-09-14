@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
+use lumen_html::PixelSize;
 use lumen_html::contract::{
     DEFAULT_CSS_FILE, DEFAULT_MANIFEST_FILE, LM_CONTRACT_VERSION, Manifest, Seed, SeedValue,
 };
@@ -12,8 +13,8 @@ use lumen_ir::layout_ir::{
     WidgetPart,
 };
 use lumen_web::{
-    EmitError, HostRewrite, LocaleSpec, MarkupSheet, NodeState, PageSpec, SignalEnv, Site,
-    SiteSpec, WebSpec, emit,
+    AssetRef, EmitError, HostRewrite, LocaleSpec, MarkupSheet, NodeState, PageSpec, SignalEnv,
+    Site, SiteSpec, WebSpec, emit,
 };
 
 fn element(tag: &str, attrs: Attributes, children: Vec<Element>) -> Element {
@@ -316,10 +317,130 @@ fn a_void_element_has_no_end_tag() {
         )),
     );
     let html = page_html(&site(vec![page]), "index.html");
-    assert!(html.contains(r#"<img class="lm-image" src="/logo.png" alt="Lumen" data-lm="0.0">"#));
+    assert!(html.contains(
+        r#"<img class="lm-image" src="/logo.png" alt="Lumen" decoding="async" data-lm="0.0">"#
+    ));
     assert!(!html.contains("</img>"));
     assert!(!html.contains("</input>"));
     assert_well_formed(&html);
+}
+
+/// An image the build copied is emitted with the size of the file it copied,
+/// so the page holds its place before the bytes arrive. One the build never
+/// opened has no size to state.
+#[test]
+fn an_image_the_build_read_reserves_its_own_box() {
+    let known = element(
+        "image",
+        Attributes {
+            src: Some("assets/logo.aa11.png".into()),
+            ..Attributes::default()
+        },
+        Vec::new(),
+    );
+    let external = element(
+        "image",
+        Attributes {
+            src: Some("https://example.com/hero.png".into()),
+            ..Attributes::default()
+        },
+        Vec::new(),
+    );
+    let page = PageSpec::new(
+        "index",
+        ir(element(
+            "root",
+            Attributes::default(),
+            vec![known, external],
+        )),
+    );
+    let mut spec = site(vec![page]);
+    spec.assets = vec![
+        AssetRef::new("logo.png", "assets/logo.aa11.png").with_size(PixelSize {
+            width: 64,
+            height: 48,
+        }),
+    ];
+
+    let html = page_html(&spec, "index.html");
+    assert!(html.contains(r#"src="/assets/logo.aa11.png" width="64" height="48""#));
+    let external = html
+        .split("<img")
+        .find(|part| part.contains("example.com"))
+        .expect("the external image is in the document");
+    assert!(!external.contains("width="));
+    assert!(!external.contains("height="));
+}
+
+/// The browser fetches the first image on the page with the document and
+/// waits for the reader to scroll near every other one.
+#[test]
+fn only_the_first_image_is_fetched_up_front() {
+    let image = |name: &str| {
+        element(
+            "image",
+            Attributes {
+                src: Some(name.into()),
+                ..Attributes::default()
+            },
+            Vec::new(),
+        )
+    };
+    let page = PageSpec::new(
+        "index",
+        ir(element(
+            "root",
+            Attributes::default(),
+            vec![image("one.png"), image("two.png"), image("three.png")],
+        )),
+    );
+
+    let html = page_html(&site(vec![page]), "index.html");
+    let images: Vec<&str> = html.split("<img").skip(1).collect();
+    assert_eq!(images.len(), 3);
+    assert!(!images[0].contains("loading="));
+    assert!(images[1].contains(r#"loading="lazy""#));
+    assert!(images[2].contains(r#"loading="lazy""#));
+}
+
+/// An image inside a branch the reader cannot see is not the image to fetch
+/// first, so it leaves that to the one that is showing.
+#[test]
+fn a_hidden_image_does_not_take_the_eager_slot() {
+    let image = |name: &str| {
+        element(
+            "image",
+            Attributes {
+                src: Some(name.into()),
+                ..Attributes::default()
+            },
+            Vec::new(),
+        )
+    };
+    let branch = element(
+        "if",
+        Attributes {
+            if_signal: Some("ready".into()),
+            if_mode: IfModeSpec::Hide,
+            ..Attributes::default()
+        },
+        vec![image("hidden.png")],
+    );
+    let page = PageSpec::new(
+        "index",
+        ir(element(
+            "root",
+            Attributes::default(),
+            vec![branch, image("shown.png")],
+        )),
+    );
+
+    let html = page_html(&site(vec![page]), "index.html");
+    let images: Vec<&str> = html.split("<img").skip(1).collect();
+    assert!(images[0].contains("hidden.png"));
+    assert!(images[0].contains(r#"loading="lazy""#));
+    assert!(images[1].contains("shown.png"));
+    assert!(!images[1].contains("loading="));
 }
 
 /// The tree the parser's `<checkbox>` / `<radio>` desugar produces: the tag

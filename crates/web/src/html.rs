@@ -23,14 +23,16 @@
 //! says the formatted string, and nothing re-formats it there.
 
 use std::cell::{OnceCell, RefCell};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use lumen_html::attrs::control_attrs;
+use lumen_html::attrs::{ImageBox, control_attrs, image_attrs};
 use lumen_html::contract::{
     DATA_LM, DATA_LM_HIDDEN, DATA_LM_SELECTED, DIALOG_OPEN, NodePath, NodeSeed,
 };
 use lumen_html::style::{Emission, rewrite_property, style_value};
-use lumen_html::{Control, drawn_by_control, escape_attr, escape_text, html_attrs, html_tag_for};
+use lumen_html::{
+    Control, PixelSize, drawn_by_control, escape_attr, escape_text, html_attrs, html_tag_for,
+};
 use lumen_i18n::{LanguageIdentifier, LocaleFormatter};
 use lumen_ir::css::computed_style_map;
 use lumen_ir::fragment::FRAGMENT_TAG;
@@ -88,6 +90,16 @@ struct Walk<'a> {
     /// The formatters for that locale, built the first time an element
     /// asks for them. A page that formats nothing loads no ICU data.
     formatter: &'a OnceCell<LocaleFormatter>,
+    /// The size of each image the build copied, by the site-relative path it
+    /// copied it to, which is what an element's `src` holds by the time the
+    /// tree reaches here.
+    sizes: HashMap<&'a str, PixelSize>,
+    /// How many hidden elements the walk is inside. An image the reader
+    /// cannot see is not the image to fetch first.
+    hidden: u32,
+    /// Whether the page has already named the image the browser fetches with
+    /// the document.
+    eager_used: bool,
     /// Whether the documents this site writes load the browser runtime,
     /// which decides whether a bounded emit is a prefix the runtime
     /// completes or the whole of what a reader ever gets.
@@ -139,6 +151,13 @@ pub fn emit_tree(
         diverged: false,
         locale: &spec.locale.locale,
         formatter: &formatter,
+        sizes: spec
+            .assets
+            .iter()
+            .filter_map(|asset| Some((asset.path.as_str(), asset.size?)))
+            .collect(),
+        hidden: 0,
+        eager_used: false,
         runtime: spec.web.runtime,
         warnings,
     };
@@ -273,6 +292,9 @@ fn emit_element(
             _ => write_attr(out, name, &value),
         }
     }
+    if tag.name == "img" {
+        write_attr_set(out, &image_attrs(&image_box(attrs, walk)), &written.extra);
+    }
     for (name, value) in &written.extra {
         write_attr(out, name, value);
     }
@@ -324,6 +346,11 @@ fn emit_element(
         out.push_str(&escape_text(text));
     }
     if children_are_content {
+        // An image the reader cannot see yet is not the one to fetch with the
+        // document, so a hidden branch and a closed dialog do not spend the
+        // page's one eager image on what is inside them.
+        let out_of_sight = hidden || (ir_tag == "dialog" && !open);
+        walk.hidden += u32::from(out_of_sight);
         for (index, child) in element.children.iter().enumerate() {
             // The indicator the parser synthesized is the control written
             // above, so it stands for no element of its own here. Its index
@@ -337,6 +364,7 @@ fn emit_element(
             }
             emit_element(out, child, &path.child(index as u32), walk)?;
         }
+        walk.hidden -= u32::from(out_of_sight);
     } else if ir_tag == "for" {
         emit_rows(out, element, path, walk)?;
     }
@@ -344,6 +372,43 @@ fn emit_element(
     out.push_str(tag.name);
     out.push('>');
     Ok(())
+}
+
+/// What this `<img>` carries beyond its source.
+///
+/// The size is the one the build read out of the file it copied, looked up
+/// by the path it copied it to, which is what the element's `src` holds by
+/// now. A `src` naming anything the build did not copy, an external URL or a
+/// placeholder nothing filled in, matches no asset and carries no size.
+///
+/// The first image in the document that is not inside something hidden is
+/// the one the browser fetches straight away, and every image after it waits
+/// until the reader scrolls near it. Document order is what an emitter that
+/// runs no layout has to go on, and it is the same answer on every machine.
+fn image_box(attrs: &Attributes, walk: &mut Walk<'_>) -> ImageBox {
+    let size = attrs
+        .src
+        .as_deref()
+        .and_then(|src| walk.sizes.get(src).copied());
+    let eager = walk.hidden == 0 && !walk.eager_used;
+    walk.eager_used |= eager;
+    ImageBox { size, eager }
+}
+
+/// Write each attribute the emitter derived that the app has not already set
+/// by name. What a script wrote at build time is the value the document
+/// carries, rather than a second copy of the attribute the browser reads
+/// after it.
+fn write_attr_set(
+    out: &mut String,
+    attrs: &[(&'static str, String)],
+    extra: &BTreeMap<String, String>,
+) {
+    for (name, value) in attrs {
+        if !extra.contains_key(*name) {
+            write_attr(out, name, value);
+        }
+    }
 }
 
 /// Write the native control an element is drawn by: the `<input>` a

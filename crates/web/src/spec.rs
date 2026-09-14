@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use lumen_core::signals::{ArrayItem, signal_is_truthy};
+use lumen_html::PixelSize;
 use lumen_html::contract::{
     DEFAULT_ARTIFACT_FILE, DEFAULT_CSS_FILE, DEFAULT_JS_FILE, DEFAULT_WASM_FILE, Dir,
     NavigationMode, ScriptRef, Seed,
@@ -445,13 +446,16 @@ impl Default for LocaleSpec {
     }
 }
 
-/// A file the site refers to and the caller has to copy in.
+/// A file the site refers to: where it is now, where it goes, and what the
+/// build read out of it that a page has to say.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssetRef {
     /// Where the file is now.
     pub source: PathBuf,
     /// Where it goes, relative to the site root, with forward slashes.
     pub path: String,
+    /// The image's own size, for a file whose header said it.
+    pub size: Option<PixelSize>,
 }
 
 impl AssetRef {
@@ -460,7 +464,15 @@ impl AssetRef {
         Self {
             source: source.into(),
             path: path.into(),
+            size: None,
         }
+    }
+
+    /// The same asset, carrying the size its header declares.
+    #[must_use]
+    pub fn with_size(mut self, size: PixelSize) -> Self {
+        self.size = Some(size);
+        self
     }
 }
 

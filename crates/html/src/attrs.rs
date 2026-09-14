@@ -191,6 +191,52 @@ pub fn html_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, String
     out
 }
 
+/// The size of an image in its own pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PixelSize {
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+}
+
+/// What an `<img>` carries beyond its source: the box a browser reserves for
+/// it before the bytes arrive, and when it goes and gets them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ImageBox {
+    /// The image's own size, where the build could read it. An image the
+    /// build never opened, such as one behind an external URL, has none.
+    pub size: Option<PixelSize>,
+    /// Whether the browser fetches this image with the document rather than
+    /// when it is scrolled near.
+    pub eager: bool,
+}
+
+/// The HTML attributes an `<img>` carries beyond `src` and `alt`, in a fixed
+/// order.
+///
+/// A `width` and a `height` are the file's own size, which is what lets a
+/// browser hold the image's place in the layout before a byte of it has
+/// arrived. They are the intrinsic size, not a display size: a stylesheet
+/// sizing the image still wins, and the pair is what the aspect ratio comes
+/// from.
+///
+/// Nothing here writes `loading="eager"`. Eager is what a browser does
+/// already, and an attribute stating the default is noise in every document.
+#[must_use]
+pub fn image_attrs(image: &ImageBox) -> Vec<(&'static str, String)> {
+    let mut out: Vec<(&'static str, String)> = Vec::new();
+    if let Some(size) = image.size {
+        out.push(("width", size.width.to_string()));
+        out.push(("height", size.height.to_string()));
+    }
+    out.push(("decoding", "async".to_string()));
+    if !image.eager {
+        out.push(("loading", "lazy".to_string()));
+    }
+    out
+}
+
 /// The HTML attributes the native control an element is drawn by carries,
 /// in a fixed order, and nothing for a tag with no control.
 ///
@@ -347,6 +393,51 @@ mod tests {
         let mut a = attrs();
         a.href = Some("settings".into());
         assert_eq!(find(&html_attrs("tile", &a), "href"), None);
+    }
+
+    #[test]
+    fn an_image_carries_the_box_its_file_asks_for() {
+        let pairs = image_attrs(&ImageBox {
+            size: Some(PixelSize {
+                width: 64,
+                height: 48,
+            }),
+            eager: false,
+        });
+        assert_eq!(find(&pairs, "width"), Some("64"));
+        assert_eq!(find(&pairs, "height"), Some("48"));
+    }
+
+    #[test]
+    fn an_image_of_unknown_size_reserves_nothing() {
+        let pairs = image_attrs(&ImageBox::default());
+        assert_eq!(find(&pairs, "width"), None);
+        assert_eq!(find(&pairs, "height"), None);
+        assert_eq!(find(&pairs, "decoding"), Some("async"));
+    }
+
+    #[test]
+    fn only_an_image_that_waits_says_so() {
+        let lazy = image_attrs(&ImageBox::default());
+        assert_eq!(find(&lazy, "loading"), Some("lazy"));
+        let eager = image_attrs(&ImageBox {
+            size: None,
+            eager: true,
+        });
+        assert_eq!(find(&eager, "loading"), None);
+    }
+
+    #[test]
+    fn the_box_comes_before_how_the_image_is_fetched() {
+        let pairs = image_attrs(&ImageBox {
+            size: Some(PixelSize {
+                width: 8,
+                height: 8,
+            }),
+            eager: false,
+        });
+        let names: Vec<&str> = pairs.iter().map(|(name, _)| *name).collect();
+        assert_eq!(names, ["width", "height", "decoding", "loading"]);
     }
 
     #[test]
