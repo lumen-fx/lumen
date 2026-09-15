@@ -72,8 +72,9 @@ web-sys = { workspace = true, features = [
 # copy would agree with itself while the two halves drifted apart.
 lumen-web = { workspace = true }
 # The pipeline a page runs a key through, which is the desktop's own: what a
-# forwarded key does is this crate's question only because these two answer
-# it, so the key tests put them in rather than restating what they would do.
+# forwarded key does is this crate's question only because this crate and
+# lumen-primitives above answer it, so the key tests put it in rather than
+# restating what it would do.
 lumen-input = { workspace = true }
 wasm-bindgen-test.workspace = true
 # A test raises an event the way the browser raises it, which takes a
