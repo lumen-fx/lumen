@@ -1114,9 +1114,11 @@ host declares the namespace from what the module registered.
 
 Every argument is required, which is what keeps the call typed; there is no
 shorter form that omits the checksum. `checksum` is `sha256:` followed by 64
-hex digits, or a bare 64-digit hex string, or an empty string to check nothing;
-neither the prefix nor the digits are case sensitive. Any other spelling fails
-the call.
+hex digits, `sha1:` followed by 40, a bare hex string of either length, or an
+empty string to check nothing; neither the prefix nor the digits are case
+sensitive. Any other spelling fails the call. sha1 is accepted because it is
+what most package and artifact registries publish, and the digest here checks
+a file against a corrupt transfer rather than standing in for a signature.
 
 The call answers as soon as the transfer starts, and the transfer reports
 through three handlers keyed by the tag it was given:

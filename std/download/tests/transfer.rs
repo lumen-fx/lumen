@@ -31,6 +31,12 @@ fn digest(bytes: &[u8]) -> String {
     transfer::hex(Sha256::digest(bytes).as_slice())
 }
 
+/// The sha1 of `bytes`, spelled the way a checksum is written.
+fn digest_sha1(bytes: &[u8]) -> String {
+    use sha1::{Digest, Sha1};
+    transfer::hex(Sha1::digest(bytes).as_slice())
+}
+
 /// Every `.part-` file left in `dir`.
 fn temps(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
@@ -59,8 +65,8 @@ fn fetch(url: &str, dest: &Path, checksum: &Checksum, limits: &Limits) -> Downlo
     (outcome, seen)
 }
 
-/// A checksum reads the same written three ways, and every other spelling is
-/// refused rather than guessed at.
+/// Each digest reads the same written three ways, prefixed, bare, or in any
+/// case, and every other spelling is refused rather than guessed at.
 #[test]
 fn a_checksum_is_read_in_the_spellings_the_module_accepts() {
     let hex = digest(BODY);
@@ -82,11 +88,35 @@ fn a_checksum_is_read_in_the_spellings_the_module_accepts() {
         "an empty checksum asks for no check"
     );
 
+    let sha1 = digest_sha1(BODY);
+    let expected_sha1 = transfer::parse_checksum(&sha1).expect("a bare 40-digit digest is sha1");
+    assert_ne!(
+        expected_sha1, expected,
+        "a sha1 and a sha256 of the same bytes are different checksums"
+    );
+    assert_eq!(
+        transfer::parse_checksum(&format!("sha1:{sha1}")).expect("prefixed"),
+        expected_sha1,
+        "the prefixed spelling names the same digest"
+    );
+    assert_eq!(
+        transfer::parse_checksum(&format!("SHA1:{}", sha1.to_uppercase())).expect("uppercase"),
+        expected_sha1,
+        "neither the prefix nor the digits are case sensitive"
+    );
+
     for bad in [
         "sha512:0000",
         "md5:d41d8cd98f00b204e9800998ecf8427e",
         &hex[..63],
         &format!("{hex}0"),
+        // A sha1 too short, too long, under the wrong prefix, and a sha256
+        // under the sha1 prefix: a length that does not match the algorithm
+        // named is a mistyped digest, not a digest of another kind.
+        &sha1[..39],
+        &format!("{sha1}0"),
+        &format!("sha256:{sha1}"),
+        &format!("sha1:{hex}"),
         "not a checksum at all",
     ] {
         let err = transfer::parse_checksum(bad).expect_err("refused");
@@ -177,6 +207,40 @@ fn a_checksum_mismatch_writes_nothing() {
         "the actual digest: {err}"
     );
     assert!(!dest.exists(), "the destination was never written");
+    assert!(temps(&dir).is_empty(), "the temp file was removed");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same, asked for as a sha1: the digest a launcher's registry publishes
+/// is verified in the same pass, and reported in its own spelling.
+#[test]
+fn a_sha1_download_verifies_and_a_sha1_mismatch_writes_nothing() {
+    let server = TestServer::start();
+    let dir = scratch("sha1");
+
+    let expected = format!("sha1:{}", digest_sha1(BODY));
+    let checksum = transfer::parse_checksum(&expected).expect("parsed");
+
+    let good = dir.join("verified.bin");
+    let (outcome, _) = fetch(&server.url("/fixed"), &good, &checksum, &Limits::default());
+    outcome.expect("the transfer completed");
+    assert_eq!(std::fs::read(&good).expect("the file"), BODY);
+
+    let bad = dir.join("refused.bin");
+    let (outcome, _) = fetch(&server.url("/mismatch"), &bad, &checksum, &Limits::default());
+
+    let err = outcome.expect_err("a body that hashes to something else is refused");
+    assert!(err.contains("checksum mismatch"), "{err}");
+    assert!(
+        err.contains(&expected),
+        "the expected digest, named as a sha1: {err}"
+    );
+    assert!(
+        err.contains(&format!("sha1:{}", digest_sha1(OTHER_BODY))),
+        "the actual digest, named as a sha1: {err}"
+    );
+    assert!(!bad.exists(), "the destination was never written");
     assert!(temps(&dir).is_empty(), "the temp file was removed");
 
     let _ = std::fs::remove_dir_all(&dir);
