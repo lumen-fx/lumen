@@ -17,7 +17,7 @@ fn ty_name(ty: &ScriptTy) -> String {
         ScriptTy::Bool => "bool".to_string(),
         ScriptTy::Str => "string".to_string(),
         ScriptTy::Unit => "null".to_string(),
-        ScriptTy::Any => "any".to_string(),
+        ScriptTy::Any | ScriptTy::Dynamic => "any".to_string(),
         ScriptTy::Array(inner) => format!("{}[]", ty_name(inner)),
         ScriptTy::Map(value) => format!("{{string: {}}}", ty_name(value)),
     }

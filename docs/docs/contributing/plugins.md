@@ -624,6 +624,11 @@ variadic signature, an untyped parameter, or an optional trailing argument has
 no such spelling, and is declared `any name(...)`, which candela accepts at any
 shape and leaves to the body.
 
+A function whose result has no shape narrower than that, a parsed document for
+instance, declares `.ret(ScriptTy::Dynamic)`. Every host binds and declares it
+the same way it binds `ScriptTy::Any`; what it adds is that the open return was
+the intent, rather than a `ret` the author never called.
+
 ### Shipping candela sugar
 
 A plugin can ship candela source of its own, compiled ahead of the app's
