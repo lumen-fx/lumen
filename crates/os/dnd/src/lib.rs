@@ -2,8 +2,7 @@
 //!
 //! Reuses the [`MimePayload`] type from [`lumen-os-mime`] so a single
 //! payload travels across both the clipboard and the DnD pipeline -
-//! mirrors `QMimeData` / `GdkContentProvider` (per os-integration audit
-//! section 104-110, section 469).
+//! mirrors `QMimeData` / `GdkContentProvider`.
 //!
 //! In-app drag from a [`DragSource`] entity to a `lumen-core::DropTarget`
 //! is now wired end to end: [`begin_in_app_drag`] opens an [`ActiveDrag`]
@@ -139,12 +138,23 @@ impl DropAccept {
         self
     }
 
-    /// True when this accept-set permits the supplied payload.
-    pub fn accepts(&self, payload: &MimePayload) -> bool {
+    /// True when this accept-set permits a drag advertising `kinds`.
+    ///
+    /// A hovering drag exposes the kinds it carries before it exposes the
+    /// payload itself (HTML5 `DataTransfer.types` during `dragenter`), which
+    /// is what lets a target answer "would this drop be taken" while the
+    /// pointer is still moving. [`DropAccept::accepts`] is the same question
+    /// asked of a payload that has arrived.
+    pub fn accepts_kinds<'a>(&self, kinds: impl IntoIterator<Item = &'a MimeKind>) -> bool {
         if self.kinds.is_empty() {
             return true;
         }
-        self.kinds.iter().any(|k| payload.has(k))
+        kinds.into_iter().any(|k| self.kinds.contains(k))
+    }
+
+    /// True when this accept-set permits the supplied payload.
+    pub fn accepts(&self, payload: &MimePayload) -> bool {
+        self.accepts_kinds(payload.kinds.iter().map(|(k, _)| k))
     }
 }
 
@@ -209,9 +219,10 @@ impl DropEffect {
 /// `DropAccept` keep the old "accept anything" behaviour, so
 /// `apps/drop-target` keeps working.
 ///
-/// This is the only DnD system the crate ships in W6.2 - the in-app
-/// drag-gesture pipeline is wired by `lumen-primitives::drag` (already
-/// present) and tagged for hookup in a follow-up.
+/// This is the inbound half, the drag the platform hands the window. The
+/// in-app half - a drag that starts on a [`DragSource`] in the same app -
+/// runs through [`begin_in_app_drag`], [`track_drop_hover`] and
+/// [`finish_in_app_drag`], which [`DndPlugin`] registers alongside this one.
 pub fn translate_file_drops_to_payload(
     mut file_drops: MessageReader<FileDropped>,
     accept: Query<&DropAccept>,
@@ -500,6 +511,22 @@ mod tests {
         let text_payload: MimePayload = "hello".into();
         assert!(a.accepts(&path_payload));
         assert!(!a.accepts(&text_payload));
+    }
+
+    /// A hovering drag names what it carries before it hands the data over,
+    /// which is the question a `:drag-over` marker is the answer to.
+    #[test]
+    fn drop_accept_filters_a_hovering_drag_by_the_kinds_it_advertises() {
+        let a = DropAccept::only([MimeKind::TextUriList]);
+        let both = [&MimeKind::TextPlain, &MimeKind::TextUriList];
+        assert!(a.accepts_kinds([&MimeKind::TextUriList]));
+        assert!(a.accepts_kinds(both));
+        assert!(!a.accepts_kinds([&MimeKind::TextPlain]));
+        assert!(!a.accepts_kinds([]), "a drag naming nothing is not a match");
+        assert!(
+            DropAccept::any().accepts_kinds([]),
+            "a target filtering nothing takes it anyway"
+        );
     }
 
     #[test]

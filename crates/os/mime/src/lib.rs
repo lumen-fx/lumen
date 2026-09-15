@@ -4,8 +4,6 @@
 //! Mirrors Qt's `QMimeData` / `QAction` and GTK 4's `GdkContentProvider`
 //! / `GAction`. Pure-data - no OS or ECS dependency lives here so every
 //! `lumen-os-*` crate can pull it without dragging in the others.
-//!
-//! See `docs/audits/os-integration.md` "Shared abstractions" (section 469-470).
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
