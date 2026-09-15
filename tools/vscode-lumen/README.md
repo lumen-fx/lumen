@@ -105,8 +105,13 @@ npm run package      # -> lumen-ui-<version>.vsix
 ```
 
 Install with Extensions -> ... -> Install from VSIX, or
-`code --install-extension lumen-ui-<version>.vsix`. The extension is not
-published to the Marketplace.
+`code --install-extension lumen-ui-<version>.vsix`.
+
+Releases publish the extension to the VS Code Marketplace and to Open VSX. It
+carries its own version, independent of the Lumen toolchain release it ships
+alongside, so a change here bumps `version` in `package.json`; without that the
+next release publishes nothing new, because the registries already hold the
+version in the manifest.
 
 To sideload during development, symlink this folder into your extensions
 directory:
