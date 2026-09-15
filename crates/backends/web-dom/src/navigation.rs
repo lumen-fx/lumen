@@ -24,7 +24,7 @@ use bevy_ecs::prelude::*;
 use lumen_core::nav::{self, NavOp};
 use lumen_core::property_store::PropertyStore;
 use lumen_html::contract::Manifest;
-use lumen_html::urls::{join, normalize_base};
+use lumen_html::urls::{is_external, join, normalize_base};
 use wasm_bindgen::JsValue;
 
 /// What the addresses of this site look like, as the manifest describes
@@ -56,15 +56,20 @@ impl Routes {
         }
     }
 
-    /// The address a navigation to `path` leaves in the bar.
+    /// The address a navigation to `path` leaves in the bar, and the one an
+    /// `<a href>` this backend mounts points at.
     ///
     /// This is the rule the emitter applied to the same link at build time
     /// (`lumen_web::urls::page_href`), which is what makes the address after
     /// a swap the one the anchor already named: a path a page answers for
     /// whole becomes that page's document (`/settings.html`), and a deeper
     /// path stays as the visitor asked for it (`/user/42`), because that is
-    /// the URL the page's own `route.segment` is read from.
+    /// the URL the page's own `route.segment` is read from. A reference off
+    /// the site is somebody else's address and is left as written.
     pub fn address_of(&self, path: &str) -> String {
+        if is_external(path) {
+            return path.to_string();
+        }
         let (key, segment) = nav::resolve_path(path, &self.keys, &self.entry);
         if segment.is_empty() {
             let document = self
@@ -106,6 +111,15 @@ impl Routes {
     /// `/index.html` names.
     pub fn is_at(&self, url_path: &str, path: &str) -> bool {
         self.address_of(&self.path_at(url_path)) == self.address_of(path)
+    }
+}
+
+impl Default for Routes {
+    /// The addresses of a page that belongs to no emitted site: one page at
+    /// the root, with no document names to answer with. What a document
+    /// assembled by hand, rather than by a build, runs as.
+    fn default() -> Self {
+        Self::from_manifest(&Manifest::default())
     }
 }
 
@@ -394,8 +408,9 @@ mod tests {
 
     /// Everything an author writes into an `href` on a site of that shape: a
     /// page, a page under a leading slash, the entry page, the site root, a
-    /// path deeper than a page, and one no page answers for.
-    const HREFS: [&str; 9] = [
+    /// path deeper than a page, one no page answers for, and the references
+    /// that name somewhere other than this site at all.
+    const HREFS: [&str; 13] = [
         "settings",
         "/settings",
         "user",
@@ -405,6 +420,10 @@ mod tests {
         "",
         "/",
         "nowhere",
+        "https://example.com/x",
+        "//cdn.example.com/x.png",
+        "mailto:hi@example.com",
+        "#section",
     ];
 
     #[test]

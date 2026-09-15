@@ -1,38 +1,15 @@
 //! Building the URLs a document points at.
 //!
-//! What a reference is rooted at is the site's base path, and the rule for
-//! that is [`lumen_html::urls`], because the browser runtime builds the same
-//! addresses. What is here is the part only the emitter asks: which of a
-//! page, a deeper path and somewhere off the site a written `href` is.
+//! What a reference is rooted at is the site's base path, and whether it
+//! names this site at all; both rules are [`lumen_html::urls`], because the
+//! browser runtime builds the same addresses. What is here is the part only
+//! the emitter asks: which of a page and a deeper path a written `href` is.
 
-pub use lumen_html::urls::{join, normalize_base};
+pub use lumen_html::urls::{is_external, join, normalize_base};
 
 /// A site-relative path as a full URL under `url`.
 pub fn absolute(url: &str, base: &str, path: &str) -> String {
     format!("{}{}", url.trim_end_matches('/'), join(base, path))
-}
-
-/// True when a reference names somewhere other than this site: another
-/// origin, another scheme, or a place inside the current document.
-///
-/// Such a reference is written into the document as the author wrote it.
-pub fn is_external(href: &str) -> bool {
-    let href = href.trim();
-    if href.starts_with("//") || href.starts_with('#') {
-        return true;
-    }
-    // A scheme is a name, then a colon, before any slash: `mailto:`,
-    // `https:`, `tel:`. A path segment holding a colon is not one.
-    match href.split_once(':') {
-        Some((scheme, _)) => {
-            !scheme.is_empty()
-                && !scheme.contains('/')
-                && scheme
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-        }
-        None => false,
-    }
 }
 
 /// The URL a `<a href>` is written into the document as.
