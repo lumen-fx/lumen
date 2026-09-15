@@ -434,24 +434,24 @@ pub(crate) fn register_script_fn<S: HostFnSink>(
     }
 }
 
-/// The candela signature `f` binds under, or `None` when it has to bind
-/// variadically.
+/// The candela argument types `f` binds under, or `None` when its parameters
+/// or its arity leave nothing to declare.
 ///
 /// candela names one concrete type per position and every position is
 /// required, so a variadic signature, an [`ScriptTy::Any`] or
 /// [`ScriptTy::Dynamic`] anywhere in it, or an optional trailing argument
 /// leaves nothing to declare.
-fn typed_signature(f: &ScriptFn) -> Option<(Vec<HostType>, HostType)> {
+fn typed_params(f: &ScriptFn) -> Option<Vec<HostType>> {
     if f.sig.variadic || f.sig.min_arity != f.sig.params.len() {
         return None;
     }
-    let args = f
-        .sig
-        .params
-        .iter()
-        .map(|p| host_type(&p.ty))
-        .collect::<Option<Vec<HostType>>>()?;
-    Some((args, host_type(&f.sig.ret)?))
+    f.sig.params.iter().map(|p| host_type(&p.ty)).collect()
+}
+
+/// The candela signature `f` binds under, or `None` when it has to bind
+/// variadically: its parameters leave nothing to declare, or its return does.
+fn typed_signature(f: &ScriptFn) -> Option<(Vec<HostType>, HostType)> {
+    Some((typed_params(f)?, host_type(&f.sig.ret)?))
 }
 
 /// The candela host type a declared [`ScriptTy`] crosses the boundary as, or
@@ -1344,12 +1344,18 @@ mod tests {
     /// JSON value and a markdown block list are dynamically shaped, so
     /// `parse_json` and `parse_markdown` bind variadically on purpose and are
     /// declared `any name(...);` (see [`crate::declare::declaration`]), the
-    /// same as `http` and `signal_array_get`.
+    /// same as `http` and `signal_array_get`. The exception is exactly that
+    /// wide: an entry may bind variadically only when the one thing it cannot
+    /// name is a declared-dynamic return, so its parameters still have to.
     #[test]
     fn every_shared_builtin_binds_typed() {
         let untyped: Vec<String> = builtin_script_fns()
             .into_iter()
-            .filter(|f| f.visible_to("candela") && !binds_typed(f) && f.sig.ret != T::Dynamic)
+            .filter(|f| {
+                f.visible_to("candela")
+                    && !binds_typed(f)
+                    && !(f.sig.ret == T::Dynamic && typed_params(f).is_some())
+            })
             .map(|f| f.name)
             .collect();
         assert!(

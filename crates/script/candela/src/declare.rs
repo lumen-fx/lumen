@@ -188,13 +188,21 @@ mod tests {
         assert_eq!(declaration(&f), "int[] node_query(string);");
     }
 
+    /// Both open spellings of a return reach the same declaration: a result
+    /// declared to have no fixed shape, and one nobody declared at all.
     #[test]
     fn a_shape_candela_cannot_name_is_variadic() {
         let f = probe("parse_json")
             .param("text", T::Str)
-            .ret(T::Any)
+            .ret(T::Dynamic)
             .build(|_| Ok(ScriptValue::Unit));
         assert_eq!(declaration(&f), "any parse_json(...);");
+
+        let f = probe("undeclared")
+            .param("text", T::Str)
+            .ret(T::Any)
+            .build(|_| Ok(ScriptValue::Unit));
+        assert_eq!(declaration(&f), "any undeclared(...);");
 
         let f = probe("log").variadic().build(|_| Ok(ScriptValue::Unit));
         assert_eq!(declaration(&f), "any log(...);");
