@@ -291,7 +291,8 @@ shape-tools = { path = "modules/shape-tools", config = { units = "mm" } }
 ```
 
 The first-party modules ship with the toolchain, so `bundled = true` is all
-they need:
+they need; see [runtime modules](../getting-started/install.md#runtime-modules)
+for getting them onto a machine:
 
 | Module | What it adds | Config |
 |--------|--------------|--------|
