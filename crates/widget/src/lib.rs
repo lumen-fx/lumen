@@ -249,9 +249,15 @@ pub trait Widget: Sized + Send + Sync + 'static {
 mod tests {
     use super::*;
 
-    // The tag set is process-global, and two of these read its size before
-    // and after registering, so they run one at a time.
-    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // The tag set is process-global and every test in the binary shares it,
+    // so a test counts the tag it registered rather than the size of the
+    // whole set, which anything running beside it can change.
+    fn times_registered(tag: &str) -> usize {
+        registered_widget_tags()
+            .into_iter()
+            .filter(|t| *t == tag)
+            .count()
+    }
 
     #[test]
     fn attributes_round_trip() {
@@ -274,23 +280,20 @@ mod tests {
 
     #[test]
     fn an_owned_tag_registers_once_and_is_accepted() {
-        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         assert!(!is_widget_tag_registered("owned-test-tag"));
         register_widget_tag_owned(&String::from("owned-test-tag"));
         assert!(is_widget_tag_registered("owned-test-tag"));
-        // The second call must not leak a second copy: the set is keyed by
-        // the string's contents, so its size is what proves that.
-        let before = registered_widget_tags().len();
+        // The second call must not add a second copy: the set is keyed by
+        // the string's contents, so one entry for this tag is what proves
+        // that.
         register_widget_tag_owned("owned-test-tag");
-        assert_eq!(registered_widget_tags().len(), before);
+        assert_eq!(times_registered("owned-test-tag"), 1);
     }
 
     #[test]
     fn two_threads_registering_one_tag_leak_one_string() {
-        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         // The set is checked before the lock is taken, so two callers can
         // both find the tag absent. Only one of them may put it in.
-        let before = registered_widget_tags().len();
         let threads: Vec<_> = (0..8)
             .map(|_| std::thread::spawn(|| register_widget_tag_owned("owned-race-tag")))
             .collect();
@@ -298,11 +301,7 @@ mod tests {
             t.join().expect("the registration does not panic");
         }
         assert!(is_widget_tag_registered("owned-race-tag"));
-        assert_eq!(
-            registered_widget_tags().len(),
-            before + 1,
-            "eight callers, one tag"
-        );
+        assert_eq!(times_registered("owned-race-tag"), 1, "eight callers, one tag");
     }
 
     #[test]
