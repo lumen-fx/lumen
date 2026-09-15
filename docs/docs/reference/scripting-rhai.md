@@ -554,6 +554,8 @@ none. The three writers queue an answer that only a server render applies.
 | --- | --- | --- |
 | `t(key)` | `string` | The active locale's string for `key`, or `key` itself when untranslated. |
 | `tr(key)` | `string` | Alias for `t`. |
+| `set_locale(tag)` | `()` | Switch the app to the BCP-47 locale `tag`. Marked text, placeholders, tooltip bodies, `format` output and the base writing direction follow on the same tick. A locale with no catalogue falls back to the authored text; a tag that is not BCP-47 is logged and ignored. |
+| `locale()` | `string` | The BCP-47 tag of the locale the app is running in, including the one it started in when no script has switched it. |
 
 See [Translation and formatting](../guides/i18n.md) for the catalogue format.
 

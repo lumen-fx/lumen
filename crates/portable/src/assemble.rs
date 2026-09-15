@@ -37,7 +37,7 @@ use lumen_core::signals::{
 };
 use lumen_html::contract::{NodePath, NodeSeed, Seed};
 use lumen_html::paths::walk_nodes;
-use lumen_i18n::{I18n, I18nError, Lang, LanguageIdentifier, SharedI18n};
+use lumen_i18n::{I18n, I18nError, Lang, LanguageIdentifier, SharedI18n, switch_locale};
 use lumen_primitives::{ProgressPlugin, RadioPlugin, TabsPlugin, ValidationPlugin};
 use lumen_scene::spawn;
 use lumen_scene::spawn::ForMarker;
@@ -186,6 +186,10 @@ fn install_bindings(app: &mut App) {
             .before(apply_value_bindings)
             .before(spawn::reconcile_for_blocks),
     );
+    // A `set_locale` applied above rebuilds what the tree says on the same
+    // tick, so a language menu in a page takes one click, like one on the
+    // desktop.
+    lumen_scene::i18n::install_retranslate(app);
     app.add_systems(
         TickStage::Systems,
         (
@@ -240,7 +244,14 @@ const FALLBACK_LOCALE: &str = "en-US";
 /// after the page opens was never written into the document.
 ///
 /// No formatter is installed: nothing in this assembly links one, so a
-/// `format` spec leaves its text as it stands.
+/// `format` spec leaves its text as it stands, before a locale switch and
+/// after it.
+///
+/// A script's `set_locale` works here, and switches to any locale whose
+/// catalogue arrived with the page. A page carries the locale it was built
+/// for and the one everything falls back to, so a third locale resolves to
+/// nothing and every message shows the text the author wrote - the same
+/// rule as a desktop app naming a locale with no catalogue file.
 ///
 /// # Errors
 ///
@@ -253,6 +264,9 @@ pub fn install_i18n(
 ) -> Result<(), I18nError> {
     let current: LanguageIdentifier = Lang::try_from(locale)?.into();
     let fallback: LanguageIdentifier = Lang::try_from(FALLBACK_LOCALE)?.into();
+    // The parsed spelling, which is what a switch answers with, so
+    // `locale()` reads the same string either way.
+    let starting = current.to_string();
     let mut i18n = I18n::new(current, vec![fallback]);
     for (tag, source) in catalogues {
         let tag: LanguageIdentifier = Lang::try_from(tag.as_str())?.into();
@@ -260,12 +274,15 @@ pub fn install_i18n(
     }
     let shared = SharedI18n::new(i18n);
     let for_markup = shared.clone();
+    let for_switching = shared.clone();
     world.insert_resource(lumen_core::i18n::AppI18n::new(
         Arc::new(move |key| for_markup.try_t(key)),
         Arc::new(|_, _| None),
+        Arc::new(move |tag| switch_locale(&for_switching, None, tag)),
     ));
     let for_scripts = shared.clone();
     lumen_core::i18n::set_translator(move |key| for_scripts.try_t(key));
+    lumen_core::i18n::set_active_locale(&starting);
     world.insert_resource(shared);
     Ok(())
 }

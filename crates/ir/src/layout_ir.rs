@@ -1131,7 +1131,7 @@ pub struct Attributes {
     /// markup authored them. The key stops standing in for a missing text
     /// once the element names one of those, so an `<input>` marked for its
     /// placeholder does not spawn with the key as its value.
-    /// [`crate::translate::translate_attrs`] is the rule, shared by the
+    /// [`crate::translate::translate`] is the rule, shared by the
     /// spawn layer and the web emitter; `lumenc i18n extract` collects the
     /// keys into `locale/<lang>.ftl`.
     pub translatable: Option<String>,

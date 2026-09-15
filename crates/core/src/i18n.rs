@@ -21,10 +21,14 @@
 //! itself, which is exactly what an untranslated string should render as -
 //! and an app with no formatter leaves every value as it stands.
 //!
+//! An app's locale is not fixed for the life of the process: [`AppI18n`]
+//! carries the switch, and [`active_locale`] answers which locale is
+//! running for a script that has no world to read the resource from.
+//!
 //! One of each is live at a time, so a host process running two Lumen apps
 //! shares the second app's catalogue and locale with the first. Markup
 //! avoids this by reading [`AppI18n`] off the world instead, which is the
-//! same pair of handles scoped to one app.
+//! same set of handles scoped to one app.
 //!
 //! Both shapes are opaque the whole way through, so a host links only
 //! what it installs. A page whose text was already written for its locale
@@ -116,28 +120,78 @@ pub fn format(spec: &str, value: &str) -> Option<String> {
     f(spec, value)
 }
 
-/// One app's own translator and formatter, held in its world.
+/// The locale the app is running in, as a plain BCP-47 string.
+///
+/// Read by a script's `locale()` builtin, which runs inside a script
+/// engine with no world to reach the per-app handle through. It carries
+/// the same "one live at a time" caveat as the translator hook, and for
+/// the same reason.
+static ACTIVE_LOCALE: RwLock<String> = RwLock::new(String::new());
+
+/// Publish the locale the app is running in. The runtime calls this once
+/// the locale is resolved, and again every time it changes.
+pub fn set_active_locale(tag: &str) {
+    let mut slot = ACTIVE_LOCALE.write().unwrap_or_else(|e| e.into_inner());
+    slot.clear();
+    slot.push_str(tag);
+}
+
+/// The locale the app is running in, or an empty string when nothing has
+/// published one.
+pub fn active_locale() -> String {
+    ACTIVE_LOCALE
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+/// What changed when an app switched locale: the locale it is now in, and
+/// the writing direction that locale reads in.
+///
+/// Both are things core already owns. The tag is an opaque string, and the
+/// direction is the cascade's own [`crate::components::LayoutDirection`],
+/// so core learns nothing about BCP-47 or Fluent by carrying this back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocaleChange {
+    /// The locale now active.
+    pub locale: String,
+    /// The base writing direction that locale reads in.
+    pub direction: crate::components::LayoutDirection,
+}
+
+/// Switches one app to another locale, answering with what changed, or
+/// `None` when the tag is not a locale at all and nothing moved.
+///
+/// Naming a locale the app has no catalogue for is not a failure: every
+/// message falls back, which is the rule startup already follows.
+pub type LocaleSetter = Arc<dyn Fn(&str) -> Option<LocaleChange> + Send + Sync>;
+
+/// One app's own translator, formatter and locale switch, held in its
+/// world.
 ///
 /// The hooks above are process-wide, which is what a script host needs
 /// and all it can reach. Markup is spawned from a world, so it reads
 /// this instead: a process hosting two Lumen apps renders each app's
-/// text in its own locale.
+/// text in its own locale, and switching one app's locale leaves the
+/// other where it was.
 ///
 /// The handles are the same opaque ones. Core forwards a key, or a spec
-/// and a value, and returns what came back; the locale side of the seam
-/// is what the runtime installs here.
+/// and a value, or a locale tag, and returns what came back; the locale
+/// side of the seam is what the runtime installs here.
 #[derive(Resource, Clone)]
 pub struct AppI18n {
     translator: Translator,
     formatter: Formatter,
+    set_locale: LocaleSetter,
 }
 
 impl AppI18n {
-    /// Pair a translator with a formatter for one app.
-    pub fn new(translator: Translator, formatter: Formatter) -> Self {
+    /// Pair a translator, a formatter and a locale switch for one app.
+    pub fn new(translator: Translator, formatter: Formatter, set_locale: LocaleSetter) -> Self {
         Self {
             translator,
             formatter,
+            set_locale,
         }
     }
 
@@ -151,6 +205,16 @@ impl AppI18n {
     /// expects. A caller shows `value` unchanged then.
     pub fn format(&self, spec: &str, value: &str) -> Option<String> {
         (self.formatter)(spec, value)
+    }
+
+    /// Switch this app to `tag`, answering with the locale it is now in
+    /// and the writing direction to read it in. `None` means `tag` is
+    /// not a locale tag and nothing changed.
+    ///
+    /// Reach this through a `ResMut<AppI18n>` borrow: the systems that
+    /// rebuild an app's text wake on the resource being marked changed.
+    pub fn set_locale(&self, tag: &str) -> Option<LocaleChange> {
+        (self.set_locale)(tag)
     }
 }
 
@@ -212,11 +276,41 @@ mod tests {
         let app = AppI18n::new(
             Arc::new(|key| (key == "greet").then(|| "Hallo".to_string())),
             Arc::new(|spec, value| (spec == "number").then(|| format!("<{value}>"))),
+            Arc::new(|_| None),
         );
         assert_eq!(app.try_translate("greet").as_deref(), Some("Hallo"));
         assert_eq!(app.try_translate("nope"), None);
         assert_eq!(app.format("number", "1234.5").as_deref(), Some("<1234.5>"));
         assert_eq!(app.format("wat", "1234.5"), None);
+    }
+
+    #[test]
+    fn the_locale_switch_answers_with_what_changed() {
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let app = AppI18n::new(
+            Arc::new(|_| None),
+            Arc::new(|_, _| None),
+            Arc::new(|tag| {
+                (tag == "ar-EG").then(|| LocaleChange {
+                    locale: tag.to_string(),
+                    direction: crate::components::LayoutDirection::Rtl,
+                })
+            }),
+        );
+        let change = app.set_locale("ar-EG").expect("a locale the switch takes");
+        assert_eq!(change.locale, "ar-EG");
+        assert_eq!(change.direction, crate::components::LayoutDirection::Rtl);
+        assert_eq!(app.set_locale("not a tag"), None);
+    }
+
+    #[test]
+    fn the_active_locale_starts_empty_and_holds_what_was_published() {
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        set_active_locale("");
+        assert_eq!(active_locale(), "");
+        set_active_locale("de-DE");
+        assert_eq!(active_locale(), "de-DE");
+        set_active_locale("");
     }
 
     #[test]

@@ -843,6 +843,8 @@ plain text.
 | --- | --- | --- |
 | `lumen::t(key: string)` | `string` | The active locale's string for `key`, or `key` itself when untranslated. |
 | `lumen::tr(key: string)` | `string` | Alias for `t`. |
+| `lumen::set_locale(tag: string)` | `null` | Switch the app to the BCP-47 locale `tag`. Marked text, placeholders, tooltip bodies, `format` output and the base writing direction follow on the same tick. A locale with no catalogue falls back to the authored text; a tag that is not BCP-47 is logged and ignored. |
+| `lumen::locale()` | `string` | The BCP-47 tag of the locale the app is running in, including the one it started in when no script has switched it. |
 
 See [Translation and formatting](../guides/i18n.md) for the catalogue format.
 

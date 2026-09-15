@@ -1,6 +1,7 @@
 use super::*;
 
 use lumen_scene::dom::build_dom_index;
+use lumen_scene::i18n::install_retranslate;
 use lumen_scene::script_commands::apply_scene_script_commands;
 
 /// Install the host-neutral half of the script wiring: the DOM snapshot
@@ -317,6 +318,10 @@ pub(crate) fn register_script_common(app: &mut App, has_script: bool) {
                 .after(ScriptSet::Frame)
                 .after(ScriptSet::Fill),
         );
+        // `set_locale` is applied above; this rebuilds what the tree says in
+        // the locale it switched to, on the same tick, so a language menu
+        // takes one click.
+        install_retranslate(app);
     }
 }
 

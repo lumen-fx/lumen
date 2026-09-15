@@ -695,6 +695,19 @@ pub enum ScriptCommand {
     /// stops being ticked for it, so an animation costs frames only while it
     /// is running.
     RequestFrame,
+    /// Switch the app to another locale. The catalogue, the locale-aware
+    /// formatters and the base writing direction all move together, and
+    /// every element the markup marked is rebuilt from the new catalogue on
+    /// the tick the switch lands.
+    ///
+    /// A locale the app has no catalogue for is not an error: every message
+    /// falls back to the text the author wrote, which is what naming such a
+    /// locale in `lumen.toml` already does. A `tag` that is not BCP-47 is
+    /// logged and ignored.
+    SetLocale {
+        /// BCP-47 tag, such as `"de-DE"`.
+        tag: String,
+    },
 }
 
 impl ScriptCommand {

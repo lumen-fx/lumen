@@ -1545,6 +1545,31 @@ impl BindTextLabels {
 #[derive(Component, Clone, Debug, Default)]
 pub struct TextFormat(pub String);
 
+/// The strings an element was authored with and the catalogue key that
+/// names them, carried so the element can be rebuilt in another locale
+/// without re-reading the markup.
+///
+/// Every field is an opaque string here, exactly like [`TextFormat`]:
+/// core keeps what the author wrote, and the rule that turns a key into
+/// a message lives on the other side of the seam. An element with no key
+/// and no `format` carries none of this.
+#[derive(Component, Clone, Debug, Default)]
+pub struct AuthoredStrings {
+    /// The `translatable="key"` catalogue key, when the element names one.
+    pub key: Option<String>,
+    /// The element's authored text.
+    pub text: Option<String>,
+    /// A text entry's authored prompt.
+    pub placeholder: Option<String>,
+    /// An image's authored alternative text.
+    pub alt: Option<String>,
+    /// The authored body of the wrapping tooltip.
+    pub tooltip: Option<String>,
+    /// The tooltip's own catalogue key, which is separate from the
+    /// element's: a tooltip is its own element with its own text.
+    pub tooltip_key: Option<String>,
+}
+
 /// Two-way binding for `<toggle bind-checked="signal">`.
 /// - Signal -> [`Toggleable`] via [`crate::signals::apply_checked_bindings`].
 /// - [`Toggleable`] -> signal via [`crate::signals::push_toggle_to_signal`] on user flip.

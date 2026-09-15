@@ -15,7 +15,8 @@
 
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::*;
-use lumen_core::components::{LumenId, TextContent, TextInput};
+use lumen_core::components::{DefaultLayoutDirection, LumenId, TextContent, TextInput};
+use lumen_core::i18n::{AppI18n, set_active_locale};
 use lumen_core::property_store::{PropertyStore, push_external_property};
 use lumen_core::signals::ArraySignals;
 use lumen_core::warn_line;
@@ -26,6 +27,11 @@ use lumen_script::runtime::ScriptCommandEvent;
 ///
 /// Commands this does not answer for are left for the applier that holds
 /// what they need; each command has exactly one applier.
+///
+/// The locale switch is here rather than beside the desktop's own applier
+/// because every host has one: a page and a server render read their text
+/// out of the same catalogue the desktop does.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_scene_script_commands(
     mut events: MessageReader<ScriptCommandEvent>,
     ids: Query<(Entity, &LumenId)>,
@@ -33,6 +39,8 @@ pub fn apply_scene_script_commands(
     mut inputs: Query<&mut TextInput>,
     mut store: ResMut<PropertyStore>,
     mut array_signals: ResMut<ArraySignals>,
+    mut i18n: Option<ResMut<AppI18n>>,
+    mut direction: Option<ResMut<DefaultLayoutDirection>>,
 ) {
     for event in events.read() {
         match &event.0 {
@@ -64,6 +72,32 @@ pub fn apply_scene_script_commands(
                 // wants the immediate cross-thread path calls
                 // `push_external_property` itself.
                 push_external_property(key.clone(), value.clone());
+            }
+            ScriptCommand::SetLocale { tag } => {
+                let Some(i18n) = i18n.as_mut() else {
+                    continue;
+                };
+                let Some(change) = i18n.set_locale(tag) else {
+                    tracing::warn!("set_locale: {tag:?} is not a BCP-47 locale tag");
+                    continue;
+                };
+                // Raise the changed flag by hand. The switch goes through a
+                // shared handle, so it takes `&self` and the borrow alone
+                // does not raise it, and that flag is what wakes the rebuild
+                // of the tree and the refresh of every bound value.
+                i18n.set_changed();
+                // What a script's `locale()` reads back. It cannot reach the
+                // resource: a value builtin runs with no world.
+                set_active_locale(&change.locale);
+                // An app running in Arabic is mirrored with nothing in its
+                // markup saying so, and switching back to English unmirrors
+                // it. `resolve_layout_direction` is gated on this resource
+                // changing, so the write re-stamps the live tree.
+                if let Some(direction) = direction.as_mut()
+                    && direction.0 != change.direction
+                {
+                    direction.0 = change.direction;
+                }
             }
             _ => {}
         }

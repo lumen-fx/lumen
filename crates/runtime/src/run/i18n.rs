@@ -3,9 +3,11 @@
 //!
 //! An app's translations live in `<app_dir>/locale/<lang>.ftl`, one Fluent
 //! catalogue per locale, which `lumenc i18n extract` writes and translators
-//! edit. At startup every catalogue is loaded and the active locale is
-//! chosen from `[app] locale`, else the locale the OS reports, else
-//! `en-US`. A key the active locale lacks falls through to the locale the
+//! edit. At startup every catalogue is loaded and the locale the app
+//! starts in comes from `[app] locale`, else the locale the OS reports,
+//! else `en-US`. A script changes it later with `set_locale`, and every
+//! catalogue is already in memory, so the switch needs no file read. A key
+//! the active locale lacks falls through to the locale the
 //! app's source strings are written in, which is `[app] fallback_locale`,
 //! else `en-US`; naming the active locale there leaves the miss resolving
 //! to the text the author wrote.
@@ -28,6 +30,8 @@
 //! Arabic or Hebrew is mirrored with nothing in its markup saying so, which
 //! is what the web target already does from the `<html>` tag. A `dir`
 //! attribute overrides it for the element it is on and everything under it.
+//! Switching locale moves the direction with the catalogue, so picking
+//! Arabic from a language menu mirrors the tree that is already on screen.
 
 use super::*;
 
@@ -52,10 +56,11 @@ fn catalogue_reader(world: &World) -> impl Fn(&Path) -> std::io::Result<Vec<u8>>
     }
 }
 
-/// Resolve the locale, install [`SharedI18n`] + [`AppI18n`], set the base
-/// writing direction from the locale, load every catalogue under
-/// `<dir>/locale`, and publish the translator every script host's `t()`
-/// builtin calls and the formatter its `format_*` builtins call.
+/// Resolve the locale the app starts in, install [`SharedI18n`] +
+/// [`AppI18n`], set the base writing direction from the locale, load every
+/// catalogue under `<dir>/locale`, and publish the translator every script
+/// host's `t()` builtin calls, the formatter its `format_*` builtins call,
+/// and the tag its `locale()` builtin reads.
 pub(crate) fn register_i18n(
     app: &mut App,
     dir: &Path,
@@ -97,6 +102,10 @@ pub(crate) fn register_i18n(
     let formatting = for_scripts.clone();
     lumen_core::i18n::set_translator(move |key| for_scripts.try_translate(key));
     lumen_core::i18n::set_formatter(move |spec, value| formatting.format(spec, value));
+    // What a script's `locale()` answers before anything switches. The
+    // starting locale can come from the OS, so no script knows it otherwise,
+    // and a language menu needs it to mark the entry it is already on.
+    lumen_core::i18n::set_active_locale(&current.to_string());
     Ok(())
 }
 

@@ -693,6 +693,20 @@
             doc: "Alias for `t(key)`.",
         ),
         (
+            name: "set_locale",
+            hosts: [Rhai, Lua, Candela],
+            params: [("tag", "string")],
+            ret: "()",
+            doc: "Switch the app to a BCP-47 locale (`\"de-DE\"`); marked text, placeholders, tooltips, `format` output and the writing direction follow.",
+        ),
+        (
+            name: "locale",
+            hosts: [Rhai, Lua, Candela],
+            params: [],
+            ret: "string",
+            doc: "The BCP-47 tag of the locale the app is running in.",
+        ),
+        (
             name: "format_number",
             hosts: [Rhai, Lua, Candela],
             params: [("n", "float")],
