@@ -27,6 +27,7 @@
 //! both kinds.
 
 use std::ffi::CStr;
+use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -396,6 +397,11 @@ fn install_engine_module(
     }
 
     let config_toml = config_toml(dep)?;
+    // Load-forever from here: see [`LoadedModules`] for why unloading is
+    // never sound. Taken before the install runs, so a module that
+    // registered part way and then reported a failure keeps its code mapped
+    // under the schedules and the drop glue it left behind.
+    let lib = ManuallyDrop::new(lib);
     // SAFETY: exact build-id equality just proved the module and the running
     // engine are one build, which is the contract that makes the Rust-ABI
     // signature (`&mut App`, `&str`) sound to call.
@@ -411,8 +417,6 @@ fn install_engine_module(
     let status = guarded_install(|| unsafe { install(app, &config_toml) });
     read_install_status(status)?;
 
-    // Load-forever: see [`LoadedModules`] for why unloading is never sound.
-    std::mem::forget(lib);
     Ok(LoadedModule {
         name: dep.name.clone(),
         path,

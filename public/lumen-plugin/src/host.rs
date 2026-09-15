@@ -8,6 +8,7 @@
 //! not.
 
 use std::ffi::c_void;
+use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -134,13 +135,16 @@ struct Loaded {
     path: PathBuf,
     fns: Vec<FnDecl>,
     preludes: Vec<ScriptPrelude>,
-    /// Kept open for the process lifetime; `desc` points into it.
-    _lib: Library,
+    /// The library, mapped for the rest of the process and never unloaded:
+    /// `desc` points into it, the host table handed to the module is leaked
+    /// on the same terms, and a thread the module started in its init can
+    /// still be running code there long after the set is gone.
+    _lib: ManuallyDrop<Library>,
     desc: *const Desc,
 }
 
-// `desc` points at a static inside the library, which stays open as long as
-// `_lib` lives in the same struct; `Desc` itself is Sync.
+// `desc` points at a static inside the library, which stays mapped for the
+// rest of the process; `Desc` itself is Sync.
 unsafe impl Send for Loaded {}
 unsafe impl Sync for Loaded {}
 
@@ -292,6 +296,10 @@ fn load_one(
         return Err(FailureReason::AlreadyLoaded(prior.name.clone()));
     }
     let lib = dlopen::open_library(&module.path).map_err(FailureReason::Open)?;
+    // From here the mapping is the process's, whether or not the rest of
+    // this load works out: an init that started a thread and then reported
+    // failure left that thread running in here. See [`Loaded`].
+    let lib = ManuallyDrop::new(lib);
     let desc = match unsafe { dlopen::entry_descriptor(&lib, abi::ENTRY) } {
         Some(desc) => desc,
         // A compiler plugin is a cdylib too, and pointing the runtime at one
@@ -754,7 +762,7 @@ mod tests {
             path: PathBuf::from("/harness"),
             fns: vec![decl("f")],
             preludes: Vec::new(),
-            _lib: Library::from(libloading::os::unix::Library::this()),
+            _lib: ManuallyDrop::new(Library::from(libloading::os::unix::Library::this())),
             desc,
         }
     }
