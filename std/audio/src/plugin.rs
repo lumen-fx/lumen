@@ -422,7 +422,7 @@ mod tests {
 
         let state = app
             .world
-            .get_non_send_resource::<AudioState>()
+            .get_non_send::<AudioState>()
             .expect("the module installs its state");
         assert!(
             !state.backend.has_ticker(),
