@@ -6,8 +6,9 @@
 //! so the builtin list, the load, the export call and the signal mirror are
 //! held to one contract from one place.
 
+use lumen_core::input::{ClickEvent, PointerButton};
 use lumen_core::node::{DomIndex, DomRecord, NodeHandle, publish_dom_index};
-use lumen_core::prelude::App;
+use lumen_core::prelude::{App, TickStage};
 use lumen_core::property_store::PropertyStore;
 use lumen_script::event;
 use lumen_script::{
@@ -16,7 +17,13 @@ use lumen_script::{
 };
 use lumen_script_candela::{CandelaHost, CandelaVmHost, ScriptCandelaVmPlugin};
 
+use bevy_ecs::entity::Entity;
 use bevy_ecs::world::World;
+
+/// The event-binding registry is process-global, so the tests that bind
+/// through it run one at a time: one test's `clear_all_bindings` would
+/// otherwise drop a binding another is about to dispatch through.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Reaches for the whole builtin surface through the prelude, so the load only
 /// succeeds if every declaration binds.
@@ -117,6 +124,33 @@ fn boom() {
 }
 
 fn bind() {
+    let b = lumen::node_get_by_id("btn");
+    lumen::event_on(b, "click", "boom_event");
+}
+
+fn boom_event(ev: int) {
+    lumen::explode();
+}
+
+fn quiet() {
+    lumen::signal_set("after", "yes");
+}
+
+fn main() {}
+"##;
+
+/// Arms a click handler that panics the VM, and nothing else: what a shipped
+/// app whose handler trips an internal assertion looks like from the
+/// runtime's side.
+const EXPLODES_ON_CLICK: &str = r##"
+host "lumen" {
+    explode(...);
+    signal_set(string, string);
+    int node_get_by_id(string);
+    int event_on(int, string, string);
+}
+
+fn on_start() {
     let b = lumen::node_get_by_id("btn");
     lumen::event_on(b, "click", "boom_event");
 }
@@ -575,6 +609,7 @@ fn a_native_fn_registered_after_the_load_is_refused_by_name() {
 
 #[test]
 fn a_bound_event_reaches_its_handler_until_the_binding_is_dropped() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     event::clear_all_bindings();
     let btn = publish_button();
 
@@ -684,6 +719,7 @@ fn a_vm_panic_in_a_closure_call_is_contained() {
 /// reaches: the runtime dispatches a bound token straight into the host.
 #[test]
 fn a_vm_panic_in_an_event_handler_is_contained() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     event::clear_all_bindings();
     publish_button();
     let mut host = exploding_host();
@@ -716,6 +752,7 @@ fn a_vm_panic_in_an_event_handler_is_contained() {
 /// during the app's own start-up, and the app outlives it and keeps ticking.
 #[test]
 fn an_app_outlives_a_panic_out_of_its_image() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     event::clear_all_bindings();
     let image = CandelaHost::new()
         .compile_bytecode(EXPLODES, "explodes.cdl")
@@ -744,6 +781,74 @@ fn an_app_outlives_a_panic_out_of_its_image() {
             .expect("the host still answers")
             .found,
         "the image went with the panic, so every later call is a miss"
+    );
+    event::clear_all_bindings();
+}
+
+/// The path that ends the process today: a click on a bound element, carried
+/// by the runtime's own dispatcher straight into the host. The tick the fault
+/// happens on returns, the next tick runs, and a write after the fault lands.
+#[test]
+fn a_click_whose_handler_panics_the_vm_leaves_the_app_ticking() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    event::clear_all_bindings();
+    let btn = publish_button();
+    let image = CandelaHost::new()
+        .compile_bytecode(EXPLODES_ON_CLICK, "explodes-on-click.cdl")
+        .expect("the fixture compiles");
+    let mut app = App::new();
+    app.add_script_fn(exploding_script_fn());
+    app.add_plugin(ScriptCandelaVmPlugin::new(image).with_uri("explodes-on-click.cdlb"));
+    app.add_systems(
+        TickStage::Systems,
+        lumen_script::dispatch_pointer_and_key_events::<CandelaVmHost>,
+    );
+    assert!(
+        app.world.get_resource::<ScriptLoadFailure>().is_none(),
+        "the image loaded and on_start armed the handler"
+    );
+    // The binding `on_start` asked for, registered the way the DOM applier
+    // registers it when the command lands.
+    let mut host = app.world.resource_mut::<CandelaVmHost>();
+    let (token, node) = host
+        .drain_commands()
+        .into_iter()
+        .find_map(|c| match c {
+            ScriptCommand::BindEvent { token, node, .. } => Some((token, node)),
+            _ => None,
+        })
+        .expect("event_on emits BindEvent");
+    assert_eq!(node, btn, "bound against the button's real handle");
+    event::register_host_binding(token, node, "click".to_owned(), false);
+
+    // The click, as the input pipeline reports one.
+    app.world.write_message(ClickEvent {
+        entity: Entity::try_from_bits(btn).expect("a packed handle"),
+        position: Default::default(),
+        button: PointerButton::Primary,
+    });
+    app.tick();
+    app.tick();
+
+    app.world
+        .resource_mut::<PropertyStore>()
+        .set_global_str("after", "yes");
+    app.tick();
+    assert_eq!(
+        app.world
+            .resource::<PropertyStore>()
+            .get_global_str("after")
+            .as_deref(),
+        Some("yes"),
+        "the app outlived the fault and a later write landed"
+    );
+    assert!(
+        !app.world
+            .resource_mut::<CandelaVmHost>()
+            .call("quiet", &[])
+            .expect("the host still answers")
+            .found,
+        "the image went with the panic"
     );
     event::clear_all_bindings();
 }
