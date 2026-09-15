@@ -1993,6 +1993,38 @@ fn a_state_the_world_writes_reaches_the_control() {
     );
 }
 
+/// The same control, authored tri-state, so the marker arrives with the
+/// spawn rather than from a later write.
+fn tri_state_tree() -> LayoutIR {
+    let mut tree = control_tree();
+    tree.root.children[0].attrs.indeterminate = true;
+    tree
+}
+
+/// The hydrate case: the document was emitted for a `<checkbox
+/// indeterminate="true">`, and since no attribute can carry the dash, the
+/// adopted control shows it only once the runtime sets the property.
+#[wasm_bindgen_test]
+fn a_hydrated_tri_state_checkbox_gets_its_dash_from_the_runtime() {
+    let root = prerender(tri_state_tree());
+    let control: web_sys::HtmlInputElement = root
+        .query_selector(".checkbox-box")
+        .unwrap()
+        .expect("the control")
+        .unchecked_into();
+    assert!(
+        !control.indeterminate(),
+        "the document alone cannot ask for the dash"
+    );
+
+    let _app = hydrate(tri_state_tree(), root.clone());
+
+    assert!(
+        control.indeterminate(),
+        "the first tick projects the marker the spawner put on the entity"
+    );
+}
+
 #[wasm_bindgen_test]
 fn a_tri_state_checkbox_marks_its_own_control() {
     let root = prerender(control_tree());
