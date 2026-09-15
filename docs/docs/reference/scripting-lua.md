@@ -720,8 +720,10 @@ module's `read_bytes_cap` setting, in bytes, between 1 KiB and 256 MiB:
 lumen-fs = { bundled = true, config = { read_bytes_cap = 33554432 } }
 ```
 
-Windows builds have no runtime modules yet, so this surface is unavailable
-there.
+On Windows nothing loads a module beside the executable, so this surface
+exists only in a
+[`lumenc package --static`](../guides/packaging.md#one-self-contained-executable)
+build, which compiles the declared modules in.
 
 ## Archives
 
@@ -790,8 +792,10 @@ Selecting part of an archive, stripping leading path components, per-entry
 progress, listing an archive without unpacking it, and writing an archive are
 not part of this surface.
 
-Windows builds have no runtime modules yet, so this surface is unavailable
-there.
+On Windows nothing loads a module beside the executable, so this surface
+exists only in a
+[`lumenc package --static`](../guides/packaging.md#one-self-contained-executable)
+build, which compiles the declared modules in.
 
 ## Downloads
 
@@ -880,8 +884,10 @@ refused rather than replacing the transfer under way, because both would report
 under the same key. A call with no tag has nowhere to report, so it answers
 false and prints one `lumen-download:` line on stderr.
 
-Windows builds have no runtime modules yet, so this surface is unavailable
-there.
+On Windows nothing loads a module beside the executable, so this surface
+exists only in a
+[`lumenc package --static`](../guides/packaging.md#one-self-contained-executable)
+build, which compiles the declared modules in.
 
 ## Processes
 
@@ -934,8 +940,10 @@ script, and no per-child environment or working directory. A child is not
 ended when the app exits: a program still running outlives the app that
 started it.
 
-Windows builds have no runtime modules yet, so this surface is unavailable
-there.
+On Windows nothing loads a module beside the executable, so this surface
+exists only in a
+[`lumenc package --static`](../guides/packaging.md#one-self-contained-executable)
+build, which compiles the declared modules in.
 
 ## Embedder commands
 
