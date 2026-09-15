@@ -15,6 +15,7 @@
 
 use bevy_ecs::message::MessageReader;
 use bevy_ecs::prelude::*;
+use bevy_ecs::system::SystemParam;
 use lumen_core::components::{DefaultLayoutDirection, LumenId, TextContent, TextInput};
 use lumen_core::i18n::{AppI18n, set_active_locale};
 use lumen_core::property_store::{PropertyStore, push_external_property};
@@ -22,6 +23,18 @@ use lumen_core::signals::ArraySignals;
 use lumen_core::warn_line;
 use lumen_script::ScriptCommand;
 use lumen_script::runtime::ScriptCommandEvent;
+
+/// What a locale switch writes: the app's own i18n handle, and the base
+/// writing direction the new locale reads in.
+///
+/// Both are optional because not every world carries them. A bare world, or
+/// a host that installed no i18n, leaves a `set_locale` with nothing to
+/// switch, and it is dropped.
+#[derive(SystemParam)]
+pub struct LocaleSwitch<'w> {
+    i18n: Option<ResMut<'w, AppI18n>>,
+    direction: Option<ResMut<'w, DefaultLayoutDirection>>,
+}
 
 /// Apply the commands whose whole effect is on the scene.
 ///
@@ -31,7 +44,6 @@ use lumen_script::runtime::ScriptCommandEvent;
 /// The locale switch is here rather than beside the desktop's own applier
 /// because every host has one: a page and a server render read their text
 /// out of the same catalogue the desktop does.
-#[allow(clippy::too_many_arguments)]
 pub fn apply_scene_script_commands(
     mut events: MessageReader<ScriptCommandEvent>,
     ids: Query<(Entity, &LumenId)>,
@@ -39,8 +51,7 @@ pub fn apply_scene_script_commands(
     mut inputs: Query<&mut TextInput>,
     mut store: ResMut<PropertyStore>,
     mut array_signals: ResMut<ArraySignals>,
-    mut i18n: Option<ResMut<AppI18n>>,
-    mut direction: Option<ResMut<DefaultLayoutDirection>>,
+    mut locale: LocaleSwitch,
 ) {
     for event in events.read() {
         match &event.0 {
@@ -74,7 +85,7 @@ pub fn apply_scene_script_commands(
                 push_external_property(key.clone(), value.clone());
             }
             ScriptCommand::SetLocale { tag } => {
-                let Some(i18n) = i18n.as_mut() else {
+                let Some(i18n) = locale.i18n.as_mut() else {
                     continue;
                 };
                 let Some(change) = i18n.set_locale(tag) else {
@@ -93,7 +104,7 @@ pub fn apply_scene_script_commands(
                 // markup saying so, and switching back to English unmirrors
                 // it. `resolve_layout_direction` is gated on this resource
                 // changing, so the write re-stamps the live tree.
-                if let Some(direction) = direction.as_mut()
+                if let Some(direction) = locale.direction.as_mut()
                     && direction.0 != change.direction
                 {
                     direction.0 = change.direction;
