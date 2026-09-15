@@ -81,8 +81,11 @@ wasm-bindgen-test.workspace = true
 # out of the module a page loads.
 web-sys = { workspace = true, features = [
     "CssStyleDeclaration",
+    "DataTransferItem",
+    "DataTransferItemList",
     "DragEventInit",
     "EventInit",
+    "File",
     "KeyboardEventInit",
     "MouseEventInit",
 ] }

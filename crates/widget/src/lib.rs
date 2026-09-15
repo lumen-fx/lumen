@@ -301,7 +301,11 @@ mod tests {
             t.join().expect("the registration does not panic");
         }
         assert!(is_widget_tag_registered("owned-race-tag"));
-        assert_eq!(times_registered("owned-race-tag"), 1, "eight callers, one tag");
+        assert_eq!(
+            times_registered("owned-race-tag"),
+            1,
+            "eight callers, one tag"
+        );
     }
 
     #[test]

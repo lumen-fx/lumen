@@ -260,7 +260,10 @@ fn kind_of_dom_type(dom_type: &str) -> MimeKind {
 /// one to a drag, so that is a synthetic event, and a drag advertising
 /// nothing matches only a target that filters nothing.
 fn drag_kinds(event: &Event) -> Vec<MimeKind> {
-    let Some(transfer) = event.dyn_ref::<DragEvent>().and_then(DragEvent::data_transfer) else {
+    let Some(transfer) = event
+        .dyn_ref::<DragEvent>()
+        .and_then(DragEvent::data_transfer)
+    else {
         return Vec::new();
     };
     transfer
