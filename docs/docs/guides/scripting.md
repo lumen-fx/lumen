@@ -256,8 +256,8 @@ download::to_file("https://example.com/pack.zip", "cache/pack.zip", "pack", "");
 The call returns as soon as the transfer is running, and reports under the tag
 it was given: `on_download_progress(tag, received, total)` while it runs, then
 `on_download_done(tag, path)` or `on_download_error(tag, message)`. Give the
-fourth argument a `sha256:` digest and the file is verified before it is put in
-place; give it an empty string to take whatever arrives. Either way the
+fourth argument a `sha256:` or `sha1:` digest and the file is verified before it
+is put in place; give it an empty string to take whatever arrives. Either way the
 destination is written by a rename at the end, so a transfer that fails leaves
 no half file where the real one goes.
 
