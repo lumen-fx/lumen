@@ -3,6 +3,7 @@
 //! lumen-runtime are the consumers, never plugin authors.
 
 use std::collections::BTreeMap;
+use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 
 use libloading::Library;
@@ -89,13 +90,15 @@ struct Loaded {
     name: String,
     /// The plugin's own `config` table, re-serialized for [`Ctx`].
     config_toml: String,
-    /// Kept open for the process lifetime; `desc` points into it.
-    _lib: Library,
+    /// The library, mapped for the rest of the process and never unloaded:
+    /// `desc` points into it, and a plugin that started a thread in a hook
+    /// can still be running code there after the set is gone.
+    _lib: ManuallyDrop<Library>,
     desc: *const Desc,
 }
 
-// `desc` points at a static inside the library, which stays open as long as
-// `_lib` lives in the same struct; `Desc` itself is Sync.
+// `desc` points at a static inside the library, which stays mapped for the
+// rest of the process; `Desc` itself is Sync.
 unsafe impl Send for Loaded {}
 unsafe impl Sync for Loaded {}
 
@@ -152,6 +155,9 @@ impl PluginSet {
                 path: path.clone(),
                 message,
             })?;
+            // From here the mapping is the process's, whether or not the
+            // rest of this load works out. See [`Loaded`].
+            let lib = ManuallyDrop::new(lib);
             let desc = unsafe { dlopen::entry_descriptor(&lib, abi::ENTRY) }.ok_or_else(|| {
                 PluginError::MissingEntry {
                     name: cfg.name.clone(),
@@ -763,7 +769,7 @@ mod tests {
 
     #[cfg(unix)]
     fn set_with(desc: &'static Desc, app_dir: &Path) -> PluginSet {
-        let lib = Library::from(libloading::os::unix::Library::this());
+        let lib = ManuallyDrop::new(Library::from(libloading::os::unix::Library::this()));
         PluginSet {
             plugins: vec![Loaded {
                 name: "harness".to_string(),
