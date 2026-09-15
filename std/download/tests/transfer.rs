@@ -228,7 +228,12 @@ fn a_sha1_download_verifies_and_a_sha1_mismatch_writes_nothing() {
     assert_eq!(std::fs::read(&good).expect("the file"), BODY);
 
     let bad = dir.join("refused.bin");
-    let (outcome, _) = fetch(&server.url("/mismatch"), &bad, &checksum, &Limits::default());
+    let (outcome, _) = fetch(
+        &server.url("/mismatch"),
+        &bad,
+        &checksum,
+        &Limits::default(),
+    );
 
     let err = outcome.expect_err("a body that hashes to something else is refused");
     assert!(err.contains("checksum mismatch"), "{err}");
