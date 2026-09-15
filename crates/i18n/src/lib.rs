@@ -348,11 +348,13 @@ pub fn is_rtl(lang: &LanguageIdentifier) -> bool {
     )
 }
 
-/// ECS plugin. Seeds `I18n` + [`LocaleFormatter`] from the system
-/// locale (via [`sys_locale::get_locale`]) and pushes them as
-/// resources. `fallback_chain` is consulted when the current locale
-/// lacks a key, and drops any entry equal to the resolved active locale
-/// so a miss never probes one bundle twice.
+/// ECS plugin. Seeds `I18n` + [`LocaleFormatter`] for the system locale
+/// (via [`sys_locale::get_locale`]) unless the app pins one. The
+/// catalogue goes into the world as a resource; the formatters go in
+/// behind core's opaque handle, not as a resource of their own.
+/// `fallback_chain` is consulted when the current locale lacks a key,
+/// and drops any entry equal to the resolved active locale so a miss
+/// never probes one bundle twice.
 ///
 /// This crate does not depend on `lumen-core`'s `App` / `Plugin`
 /// trait, to avoid pulling the whole render/runtime stack into
@@ -406,8 +408,10 @@ impl I18nPlugin {
     ///
     /// The catalogue goes in twice: as the registry a reload writes to,
     /// and behind the opaque handle the spawner reads. The formatters go
-    /// in once, behind the other handle, since a locale switch builds a
-    /// new [`LocaleFormatter`] rather than editing one in place.
+    /// in once, behind that handle alone. One install builds one
+    /// [`LocaleFormatter`], which holds the locale and builds each ICU
+    /// formatter the first time something formats with it, so an app
+    /// that formats nothing loads no ICU data.
     pub fn install(mut self, world: &mut bevy_ecs::world::World) -> LanguageIdentifier {
         let current = self
             .locale
