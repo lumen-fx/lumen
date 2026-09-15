@@ -14,9 +14,11 @@
 //! Runs window-free through `build_headless_app`, the same path
 //! `run_app_headless` takes.
 
+use bevy_ecs::prelude::Entity;
 use lumen_core::components::{
     DefaultLayoutDirection, LayoutDirection, LumenId, ResolvedDirection, TextContent,
 };
+use lumen_core::input::{FocusTracker, Focused};
 use lumen_ir::artifact::{self, CompiledApp};
 use lumen_ir::layout_ir::{Attributes, Element, LayoutIR, TooltipSpec};
 use lumen_runtime::{RunOptions, build_headless_app};
@@ -567,12 +569,23 @@ fn build_with_script(dir: &Path, root: Element, script: &str) -> lumen_core::app
     app
 }
 
+/// Every entry's placeholder, skipping the entries that have none.
 fn placeholders(app: &mut lumen_core::app::App) -> Vec<String> {
     app.world
         .query::<&lumen_core::components::TextInput>()
         .iter(&app.world)
         .map(|input| input.placeholder.clone())
+        .filter(|placeholder| !placeholder.is_empty())
         .collect()
+}
+
+fn entity_with_id(app: &mut lumen_core::app::App, id: &str) -> Entity {
+    app.world
+        .query::<(Entity, &LumenId)>()
+        .iter(&app.world)
+        .find(|(_, lumen_id)| lumen_id.0 == id)
+        .map(|(entity, _)| entity)
+        .expect("the tree carries the id")
 }
 
 fn tooltips(app: &mut lumen_core::app::App) -> Vec<String> {
@@ -584,8 +597,8 @@ fn tooltips(app: &mut lumen_core::app::App) -> Vec<String> {
 }
 
 /// A tree carrying one of each thing a locale writes: a marked label, a
-/// marked entry that names only its placeholder, a marked tooltip, and a
-/// formatted amount.
+/// marked entry that names only its placeholder, a marked tooltip, a
+/// formatted amount, and a marked entry someone is typing into.
 fn switchable_tree() -> Element {
     Element {
         tag: "root".to_string(),
@@ -595,6 +608,17 @@ fn switchable_tree() -> Element {
         },
         children: vec![
             label(Some("Good morning"), Some("greet")),
+            Element {
+                tag: "input".to_string(),
+                attrs: Attributes {
+                    id: Some("draft".to_string()),
+                    text: Some("Good morning".to_string()),
+                    translatable: Some("greet".to_string()),
+                    ..Default::default()
+                },
+                children: Vec::new(),
+                ..Default::default()
+            },
             Element {
                 tag: "input".to_string(),
                 attrs: Attributes {
@@ -659,6 +683,11 @@ fn a_script_switches_the_locale_while_the_app_runs() {
         .find(|t| t.contains("234"))
         .expect("the formatted amount")
         .clone();
+    // Someone is typing into the marked entry: an edit in flight, which the
+    // switch must not write over.
+    let draft = entity_with_id(&mut app, "draft");
+    app.world.entity_mut(draft).insert(Focused);
+    app.world.insert_resource(FocusTracker(Some(draft)));
 
     for _ in 0..3 {
         app.tick();
@@ -668,6 +697,11 @@ fn a_script_switches_the_locale_while_the_app_runs() {
     assert!(
         switched.contains(&"Guten Morgen".to_string()),
         "{switched:?}"
+    );
+    assert_eq!(
+        app.world.get::<TextContent>(draft).map(|t| t.0.as_str()),
+        Some("Good morning"),
+        "the entry being edited keeps what was typed into it"
     );
     assert_eq!(
         placeholders(&mut app),
