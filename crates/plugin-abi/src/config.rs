@@ -5,7 +5,7 @@
 //! ```toml
 //! [[plugins]]
 //! name = "markdown"                 # must match what the cdylib reports
-//! version = "1.2"                   # registry source, resolved via the cache
+//! version = "1.2"                   # registry source, fetched by lpm
 //! config = { flavor = "gfm" }       # optional, handed to the plugin verbatim
 //!
 //! [[plugins]]
@@ -13,12 +13,13 @@
 //! path = "plugins/local-dev"        # local cdylib, relative to the app dir
 //! ```
 //!
-//! Exactly one source per entry: `version` (resolved against the plugin
-//! cache and pinned in `lumen.lock`, see the `resolve` module) or `path` (a
-//! built cdylib for local development, never locked). `git` and `registry`
-//! are reserved for the package registry and rejected with an error naming
-//! the reason, so the future shape is not precluded and a present-day typo
-//! does not read as an unknown field.
+//! Exactly one source per entry: `version` (a package in the registry, which
+//! `lpm` resolves and downloads for `lumenc`) or `path` (a built cdylib for
+//! local development, never locked). Nothing here resolves a version; the
+//! schema says what was declared and the caller is handed the file. `git`,
+//! `rev`, and `registry` are rejected with an error naming the reason, so the
+//! future shape is not precluded and a present-day typo does not read as an
+//! unknown field.
 
 use std::path::{Path, PathBuf};
 
@@ -31,9 +32,9 @@ pub enum PluginSource {
     /// absolute. Without an extension, the platform spellings are probed
     /// (`lib<p>.so`, `lib<p>.dylib`, `<p>.dll`).
     Path(String),
-    /// A version requirement (cargo semantics: `"1.2"` means `^1.2`),
-    /// resolved against the per-user plugin cache and pinned in
-    /// `lumen.lock`.
+    /// A version requirement (cargo semantics: `"1.2"` means `^1.2`) on a
+    /// registry package. `lpm` resolves it, downloads what it resolves to,
+    /// and pins it in `lumen.lock`.
     Version(String),
 }
 
@@ -81,7 +82,7 @@ impl<'de> Deserialize<'de> for PluginCfg {
         ];
         if let Some((key, _)) = reserved.iter().find(|(_, v)| v.is_some()) {
             return Err(serde::de::Error::custom(format!(
-                "plugin '{}': `{key}` sources are not supported yet; use `version` (registry cache) or `path` (a built cdylib)",
+                "plugin '{}': `{key}` sources are not supported yet; use `version` (a registry package) or `path` (a built cdylib)",
                 raw.name
             )));
         }
@@ -103,7 +104,7 @@ impl<'de> Deserialize<'de> for PluginCfg {
             }
             (None, None) => {
                 return Err(serde::de::Error::custom(format!(
-                    "plugin '{}': a source is required - `version` (registry cache) or `path` (a built cdylib)",
+                    "plugin '{}': a source is required - `version` (a registry package) or `path` (a built cdylib)",
                     raw.name
                 )));
             }

@@ -132,6 +132,9 @@ serde_json.workspace = true
 
 # Per-app config (lumen.toml) codec, kept for the CLI helpers.
 toml.workspace = true
+# `lumenc add` / `lumenc remove` rewrite the author's own lumen.toml, so the
+# edit has to keep their comments, spacing, and key order.
+toml_edit.workspace = true
 serde.workspace = true
 
 # `lumenc screenshot` (mcp_cli, itself `dev-run`-gated) decodes the base64-PNG
@@ -235,7 +238,11 @@ bundle = ["dep:lumen-assets"]
 # tests keep MCP, the async bridge, and all three script hosts.
 # Per-app trimming is exclusive to `lumenc bundle --static` (which builds
 # `lumen` with its own trimmed feature set), never the dev path.
+# `package` rides along: running or building an app resolves whatever it names
+# in the registry, and resolving means downloading, which is where the fetch
+# and the archive readers live.
 dev-run = [
+    "package",
     "dep:lumen-runtime",
     "dep:rhai",
     "lumen-runtime/mcp",

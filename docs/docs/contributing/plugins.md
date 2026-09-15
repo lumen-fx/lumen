@@ -1120,3 +1120,56 @@ editor tooling (the LSP, `lumenc lint --signals`, and `lumenc lint
 do not appear in `lumenc lint --signals` output, and a parse error in
 rewritten markup carries positions into the rewritten text, flagged with
 "in the markup as rewritten by compiler plugins".
+
+## Publishing
+
+All three kinds ship the same way: through the registry at `reg.lumenfx.dev`,
+where an app reaches them by name and version.
+
+```sh
+lpm publish shape-tools --platform lumen --description "Shapes and units"
+```
+
+`lpm publish` claims the name once. Releasing a version of it is what a
+release workflow does, and Lumen ships the workflow to call:
+
+```yaml
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    uses: lumen-fx/lumen/.github/workflows/build-module.yml@v0.0.7
+    with:
+      package: shape-tools
+      kind: module
+      lumen-version: 0.0.7
+    secrets:
+      lpm-token: ${{ secrets.LPM_TOKEN }}
+```
+
+It builds the package for every target it ships on, runs each build in a
+headless app to prove the loader opens it, publishes a GitHub release
+carrying the archives, and records the version in the registry.
+
+`kind` selects the link shape and the platforms. `module` builds with
+`-C prefer-dynamic` and an explicit `--target`, the flags a runtime module
+needs, and ships on the four Unix targets. `plugin` and `compiler-plugin`
+build a plain cdylib and ship on the five desktop targets. `crate` names the
+cargo package when it differs from the registry name, `manifest-path` points
+at a `Cargo.toml` that is not at the repository root, `targets` narrows the
+list, and `deps` records the packages this one depends on, one `name@req`
+per line.
+
+An archive holds the library at its root, under the file name the by-name
+probe looks for (`libshape_tools.so`, `libshape_tools.dylib`,
+`shape_tools.dll`). That is what `lpm` unpacks and what the loader opens.
+
+A release also records what it requires of the engine. A runtime module is
+version-locked to the exact build it links, so it requires
+`lumen@=<version>`; a portable plugin and a compiler plugin speak a C ABI
+that survives a patch release, so they require `lumen@>=<version>`. An app
+whose toolchain does not satisfy the requirement is told so while it
+resolves, rather than by a banner at startup.

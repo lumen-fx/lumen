@@ -11,7 +11,7 @@
 
 # Every subcommand lumenc dispatches. Kept in step with `lumenc --help` by
 # public/lumenc/tests/completions.rs.
-_lumenc_commands="run check build new fmt snapshot find element-at click type key scroll lint diff screenshot web bundle package i18n completions"
+_lumenc_commands="run check build add remove fetch update new fmt snapshot find element-at click type key scroll lint diff screenshot web bundle package i18n completions"
 
 _lumenc() {
     local cur prev cmd i word
@@ -55,18 +55,19 @@ _lumenc() {
             mapfile -t COMPREPLY < <(compgen -W "seeds run none" -- "$cur")
             return
             ;;
-        "package --target")
-            mapfile -t COMPREPLY < <(compgen -W "linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64 windows-x86_64" -- "$cur")
+        "package --target" | "fetch --target")
+            mapfile -t COMPREPLY < <(compgen -W "linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64 windows-x86_64 windows-aarch64" -- "$cur")
             return
             ;;
         "run --artifact" | "run --assets" | "screenshot --bounds")
             mapfile -t COMPREPLY < <(compgen -f -- "$cur")
             return
             ;;
-        *" --app" | "package --lib-dir" | "web --out" | "web --lib-dir")
+        *" --app" | "package --lib-dir" | "web --out" | "web --lib-dir" | "update --dir")
             mapfile -t COMPREPLY < <(compgen -d -- "$cur")
             return
             ;;
+        "add --config" | \
         "run --size" | "run --dpr" | "run --ticks" | "i18n --lang" | "package --name" | \
         "web --base" | "web --locale" | "web --port" | "web --host" | "web --allow-host" | \
         "find --text" | "find --role" | "find --id" | "find --limit" | \
@@ -78,9 +79,13 @@ _lumenc() {
 
     local flags=""
     case "$cmd" in
-        run) flags="--profile --headless --size --dpr --ticks --artifact --assets --no-hooks" ;;
-        check) flags="" ;;
-        build) flags="--no-hooks" ;;
+        run) flags="--profile --headless --size --dpr --ticks --artifact --assets --no-hooks --offline" ;;
+        check) flags="--offline" ;;
+        build) flags="--no-hooks --offline" ;;
+        add) flags="--plugin --config" ;;
+        remove) flags="" ;;
+        fetch) flags="--locked --target --offline" ;;
+        update) flags="--dir" ;;
         new) flags="--list -l" ;;
         fmt) flags="--check" ;;
         snapshot) flags="--text --json --max-lines --cursor --include-invisible --no-omit-invisible --port --app" ;;
@@ -93,9 +98,9 @@ _lumenc() {
         lint) flags="--css-cascade --signals --strict --json --port --app" ;;
         diff) flags="--json --port --app" ;;
         screenshot) flags="--highlight --lint --bounds --port --app" ;;
-        web) flags="--out --base --locale --render --runtime --no-runtime --prerender --no-hooks --lib-dir --strict --serve --port --host --allow-host" ;;
+        web) flags="--out --base --locale --render --runtime --no-runtime --prerender --no-hooks --lib-dir --strict --serve --port --host --allow-host --offline" ;;
         bundle) flags="--static --no-hooks" ;;
-        package) flags="--name --target --lib-dir --no-hooks" ;;
+        package) flags="--name --target --lib-dir --no-hooks --offline" ;;
         i18n) flags="--lang" ;;
         completions) flags="" ;;
     esac
@@ -118,8 +123,15 @@ _lumenc() {
     local count=$((${#positionals[@]} - 1))
 
     case "$cmd" in
-        run | check | lint | web)
+        run | check | lint | web | fetch)
             mapfile -t COMPREPLY < <(compgen -d -- "$cur")
+            ;;
+        add | remove)
+            # <name> is a registry package, so only the app directory after
+            # it completes.
+            if [ "$count" -ge 1 ]; then
+                mapfile -t COMPREPLY < <(compgen -d -- "$cur")
+            fi
             ;;
         build | bundle | package)
             # <app_dir> first, then an output path.

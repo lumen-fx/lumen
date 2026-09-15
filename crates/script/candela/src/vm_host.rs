@@ -181,7 +181,7 @@ impl ScriptHost for CandelaVmHost {
         let registry = self.vm.registry.take().ok_or_else(|| {
             ScriptError::Runtime(format!("{uri}: this candela artifact host already loaded"))
         })?;
-        let _library_dir = LibraryDir::set(self.library_dir.as_deref());
+        let _library_dir = LibraryDir::set(self.library_dir.iter().cloned().collect());
         let mut program = load_program(&self.image, &registry).map_err(|e| {
             // Put the registry back so a retry after a swapped image can bind.
             ScriptError::Compile {

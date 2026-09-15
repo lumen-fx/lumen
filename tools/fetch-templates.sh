@@ -2,18 +2,27 @@
 # Downloads the `lumenc new` templates.
 #
 # Each template is a repository of its own under lumen-fx, and each publishes
-# its tree as template.tar.gz on its latest release. Lumen keeps no copy: a
-# release downloads them with this script and packages them beside the
-# toolchain, and a checkout downloads them with this script so `lumenc new`,
-# and the tests that scaffold, find them the same way an installed lumenc does
-# (public/lumenc/src/scaffold.rs).
+# its tree as template.tar.gz on a release named for the Lumen release it is
+# for: v0.0.6 holds the template that Lumen 0.0.6 scaffolds. Lumen keeps no
+# copy: a release downloads them with this script and packages them beside
+# the toolchain, and a checkout downloads them with this script so `lumenc
+# new`, and the tests that scaffold, find them the same way an installed
+# lumenc does (public/lumenc/src/scaffold.rs).
 #
 #   tools/fetch-templates.sh [directory]
 #
 # The default directory is `templates` at the root of cargo's target
 # directory, which is where lumenc looks in a checkout. Every run replaces
-# what it finds, so the tree always matches what the template repositories
-# publish now.
+# what it finds.
+#
+# Which release is downloaded follows the rule every version lookup in Lumen
+# follows: ask the releases page, never build an address from a version
+# number in the tree. LUMEN_TEMPLATE_TAG names the release to fetch from each
+# repository; the release build sets it to the Lumen tag being cut, and a tag
+# with no template release behind it stops the build here rather than
+# shipping the wrong tree. Unset, the newest published release is used, which
+# is what a checkout and the nightly want: `main` carries a version nothing
+# has been tagged for yet.
 #
 # LUMEN_TEMPLATE_OWNER points the download at another GitHub owner, for
 # testing a template change from a fork.
@@ -21,6 +30,7 @@
 set -eu
 
 OWNER="${LUMEN_TEMPLATE_OWNER:-lumen-fx}"
+TAG="${LUMEN_TEMPLATE_TAG:-}"
 DEST="${1:-${CARGO_TARGET_DIR:-target}/templates}"
 
 # The gallery, which is also scaffold::TEMPLATES in gallery order. The two
@@ -33,7 +43,11 @@ trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 
 mkdir -p "$DEST"
 for name in "$@"; do
-  url="https://github.com/$OWNER/$name/releases/latest/download/template.tar.gz"
+  if [ -n "$TAG" ]; then
+    url="https://github.com/$OWNER/$name/releases/download/$TAG/template.tar.gz"
+  else
+    url="https://github.com/$OWNER/$name/releases/latest/download/template.tar.gz"
+  fi
   printf 'fetching %s\n' "$url"
   # A dropped connection on any one of these fails the whole job, and a CI run
   # downloads all eight on each of three operating systems, so a transient

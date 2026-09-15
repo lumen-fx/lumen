@@ -454,10 +454,10 @@ keyed by `tag`. A cancelled dialog still fires once, with an empty path.
 | `notify_ex(id, title, body, options, actions)` | Show an OS notification. `options` is pipe-separated `key:value` entries, where `icon` takes a themed name or path and `urgency` takes `"low"`, `"normal"`, or `"critical"`. `actions` is pipe-separated `id:Label` buttons; a press fires `on_notification_action(id, action_id)`. An empty string in either position means the defaults. |
 | `clipboard_write(text)` | Put `text` on the system clipboard. |
 | `clipboard_read(tag)` | Request the clipboard text; fires `on_clipboard(tag, text)` on the next tick. |
-| `copy_image(path)` | Copy the image at `path` to the system clipboard. |
-| `save_clipboard_image(path)` | Write the clipboard image to `path` as PNG. |
-| `tray_icon(id, icon_path, tooltip)` | Register or replace a tray icon; clicks fire `on_tray(id)`. An empty tooltip disables it. |
-| `tray_icon_menu(id, icon_path, tooltip, menu, template)` | Register a tray icon with a context menu, given as pipe-separated `id:Label` entries where `-` is a separator; a pick fires `on_menu(id)`. `template` is the macOS monochrome-icon flag, ignored elsewhere. |
+| `copy_image(path)` | Copy the image at `path` to the system clipboard. Relative paths resolve against the app directory. |
+| `save_clipboard_image(path)` | Write the clipboard image to `path` as PNG. Relative paths resolve against the app directory. |
+| `tray_icon(id, icon_path, tooltip)` | Register or replace a tray icon; clicks fire `on_tray(id)`. An empty tooltip disables it. A relative `icon_path` resolves against the app directory. |
+| `tray_icon_menu(id, icon_path, tooltip, menu, template)` | Register a tray icon with a context menu, given as pipe-separated `id:Label` entries where `-` is a separator; a pick fires `on_menu(id)`. `template` is the macOS monochrome-icon flag, ignored elsewhere. A relative `icon_path` resolves against the app directory. |
 | `unregister_tray(id)` | Remove a tray icon. |
 | `register_hotkey(name, accelerator)` | Register a global hotkey (`"CommandOrControl+S"`, `"Alt+Space"`, `"F11"`); fires `on_hotkey(name)`. |
 | `unregister_hotkey(name)` | Remove a global hotkey. |

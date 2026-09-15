@@ -27,10 +27,11 @@ Linux and macOS the shared engine and the Rust standard library it was built
 against travel beside it, and any [runtime
 modules](../reference/lumen-toml.md#dependencies) the app declares are
 staged into a `modules/` subfolder: `path` and `bundled` modules are copied
-from where the declaration points, and a `version` module resolves through
-the same cache and `lumen.lock` as `lumenc run`, so the shipped folder
-carries the exact library the lock pins. All of it belongs to the app; keep
-the folder together when you move it.
+from where the declaration points, and a `version` module comes from the
+registry, so the shipped folder carries the exact library `lumen.lock` pins.
+A candela package needs no staging: its scripts compiled into the executable
+with the app's own. All of it belongs to the app; keep the folder together
+when you move it.
 
 A Windows package stays one library plus the executable. Runtime modules do
 not load beside it, because there is no shared engine there for one to load
@@ -94,12 +95,13 @@ A macOS package built from another platform ships the compiled app as a file
 beside the executable rather than inside it, since linking it in needs a macOS
 linker. It runs the same way.
 
-An app declaring `[dependencies]` cross-packages when its modules are
-`bundled`: the target's module archive is downloaded from the same release
-as the toolchain files, verified, and cached beside them. A `path` module
-cannot cross-package - a local library is built for one platform - and
-neither can a `version` one until the module registry exists; package those
-on a machine of the target platform instead.
+An app declaring `[dependencies]` cross-packages. A `bundled` module comes
+from the target's module archive, downloaded from the same release as the
+toolchain files, verified, and cached beside them; a `version` module comes
+from the registry, resolved for the platform being packaged rather than for
+yours, so the folder carries that platform's build. A `path` module cannot
+cross-package - a local library is built for one platform - so package that
+one on a machine of the target platform instead.
 
 ### One self-contained executable
 

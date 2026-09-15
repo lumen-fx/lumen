@@ -3,6 +3,8 @@
 //! `compile::compile_dir_to_lmna` (the thin launcher path), against the
 //! built fixture cdylib.
 
+mod common;
+
 use std::path::PathBuf;
 
 use lumen_ir::layout_ir::Element;
@@ -166,28 +168,23 @@ fn a_panicking_hook_fails_the_compile_not_the_process() {
     assert!(err.contains("fixture panic in lint"), "{err}");
 }
 
+/// A `version` source opens the library the registry resolved it to, through
+/// the whole compile rather than through the loader alone.
 #[test]
-fn a_version_source_resolves_through_cache_and_lock() {
-    // Install the fixture into a private cache as version 1.0.0, point
-    // LUMEN_PLUGIN_CACHE at it, and declare a version source.
+fn a_version_source_opens_what_the_registry_resolved() {
     let base = std::env::temp_dir().join(format!(
         "lumenc-compiler-plugins-{}-versioned",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&base);
-    let cache = base.join("cache");
-    let ver_dir = cache.join("lumenc-plugin-fixture").join("1.0.0");
-    std::fs::create_dir_all(&ver_dir).unwrap();
+
+    // The registry package: a directory holding the fixture cdylib under the
+    // name the by-name probe looks for.
+    let package = base.join("pkg");
+    std::fs::create_dir_all(&package).unwrap();
     let lib = fixture_cdylib();
-    // The cache spelling the resolver probes: `lib<name>.<ext>` on unix,
-    // `<name>.dll` on Windows.
-    let spelled = match lib.extension().and_then(|e| e.to_str()) {
-        Some("dll") => "lumenc-plugin-fixture.dll".to_string(),
-        Some(ext) => format!("liblumenc-plugin-fixture.{ext}"),
-        None => panic!("fixture cdylib has no extension"),
-    };
-    let cached = ver_dir.join(spelled);
-    std::fs::copy(&lib, &cached).unwrap();
+    let spelled = &lumen_modules::library_spellings("lumenc-plugin-fixture")[0];
+    std::fs::copy(&lib, package.join(spelled)).unwrap();
 
     let dir = base.join("app");
     std::fs::create_dir_all(dir.join("src")).unwrap();
@@ -202,17 +199,28 @@ fn a_version_source_resolves_through_cache_and_lock() {
     )
     .unwrap();
 
+    let answer = common::stub_answer(
+        &base.join("lpm.json"),
+        &common::lumen_package(
+            "lumenc-plugin-fixture",
+            "1.0.0",
+            lumenc::lpm::host_target(),
+            &package,
+            spelled,
+        ),
+    );
+
     // `set_var` is process-global; this is the only test in the binary that
     // touches it, which is what keeps the unsafe sound.
-    unsafe { std::env::set_var("LUMEN_PLUGIN_CACHE", &cache) };
+    unsafe { std::env::set_var("LPM_BIN", common::lpm_stub()) };
+    unsafe { std::env::set_var("LPM_STUB_JSON", &answer) };
     let compiled = lumenc::compile_app(&dir).unwrap();
-    unsafe { std::env::remove_var("LUMEN_PLUGIN_CACHE") };
+    unsafe { std::env::remove_var("LPM_BIN") };
+    unsafe { std::env::remove_var("LPM_STUB_JSON") };
 
     let mut all = Vec::new();
     texts(&compiled.ir.root, &mut all);
     assert!(all.iter().any(|t| t == "markup-transformed"), "{all:?}");
-    let lock = std::fs::read_to_string(dir.join("lumen.lock")).unwrap();
-    assert!(lock.contains("version = \"1.0.0\""), "{lock}");
 }
 
 #[test]

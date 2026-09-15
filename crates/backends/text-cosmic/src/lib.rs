@@ -172,6 +172,12 @@ pub struct CosmicShaper {
     /// the family cosmic-text's own fallback chain settles on. `None`
     /// records a family nothing resolved for.
     family_name_cache: std::collections::HashMap<FamilyChoice, Option<Arc<str>>>,
+    /// Monotonic count of [`CosmicShaper::shape`] calls that missed the
+    /// result cache and ran the cosmic-text pipeline. The deterministic
+    /// signal that the cache key still discriminates: a key that stopped
+    /// doing so leaves results correct and only shows up here, as a
+    /// reshape on every repeat.
+    shape_misses: u64,
 }
 
 /// Resolved CSS `font-family` list: either one of the CSS generic
@@ -248,6 +254,7 @@ impl CosmicShaper {
             family_cache: std::collections::HashMap::new(),
             weight_cache: std::collections::HashMap::new(),
             family_name_cache: std::collections::HashMap::new(),
+            shape_misses: 0,
         }
     }
 
@@ -267,6 +274,15 @@ impl CosmicShaper {
         let locale = other.font_system.locale().to_string();
         let db = other.font_system.db().clone();
         Self::from_font_system(FontSystem::new_with_locale_and_db(locale, db))
+    }
+
+    /// Number of [`CosmicShaper::shape`] calls that missed the result
+    /// cache and ran the cosmic-text shaping pipeline, counted since
+    /// construction. A repeat of an already-shaped input leaves it
+    /// unchanged; a cache key that stopped discriminating shows up as a
+    /// reshape on every call.
+    pub fn shape_misses(&self) -> u64 {
+        self.shape_misses
     }
 
     /// Resolve a raw CSS `font-family` list to a concrete
@@ -565,6 +581,11 @@ impl TextShaper for CosmicShaper {
         if let Some(cached) = self.cache.get(&probe as &dyn ShapeKeyLike) {
             return Some((**cached).clone());
         }
+
+        // Counted at the top of the miss path, not beside the insert
+        // below: a shape that bails out before it caches anything still
+        // ran the pipeline, and that is the work being counted.
+        self.shape_misses += 1;
 
         let metrics = Metrics::new(size_px, opts.resolved_line_height(size_px));
         if metrics != self.last_metrics {

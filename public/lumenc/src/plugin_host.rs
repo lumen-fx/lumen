@@ -49,10 +49,10 @@ impl CompilerPlugins for InstalledCompilerPlugins {
 }
 
 /// Build the plugin chain an app directory declares. Reads `[[plugins]]`
-/// straight from `lumen.toml`, resolves each source (probing `path`s,
-/// resolving `version`s through the cache and `lumen.lock`), dlopens the
-/// libraries, and verifies each handshake. An app with no declarations gets
-/// the empty chain.
+/// straight from `lumen.toml`, probes each `path` source, takes each
+/// `version` source from `resolved` (which `lpm` filled in before this ran),
+/// dlopens the libraries, and verifies each handshake. An app with no
+/// declarations gets the empty chain.
 ///
 /// `check_only` marks the chain for `lumenc check`: hooks still run, emit
 /// outputs are discarded.
@@ -60,12 +60,13 @@ impl CompilerPlugins for InstalledCompilerPlugins {
 pub fn compiler_plugins_for(
     dir: &Path,
     check_only: bool,
+    resolved: &std::collections::BTreeMap<String, std::path::PathBuf>,
 ) -> Result<Arc<dyn CompilerPlugins>, String> {
     let cfgs = read_plugin_cfgs(dir)?;
     if cfgs.is_empty() {
         return Ok(Arc::new(NoCompilerPlugins));
     }
-    let set = PluginSet::load(dir, &cfgs)
+    let set = PluginSet::load(dir, &cfgs, resolved)
         .map_err(|e| e.to_string())?
         .check_only(check_only);
     Ok(Arc::new(InstalledCompilerPlugins(set)))

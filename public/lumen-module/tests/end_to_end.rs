@@ -196,11 +196,41 @@ fn write_app(f: &Fixtures, case: &str, dependencies: &str) -> PathBuf {
     dir
 }
 
-/// Run the host over an app dir and return (stdout, stderr). `envs` are
-/// extra environment overrides (the plugin-cache root, mostly); every run
-/// pins `LUMEN_PLUGIN_CACHE` into the scratch tree so no test can touch the
-/// developer's real cache.
+/// Run the host over an app dir and return (stdout, stderr). `envs` are extra
+/// environment overrides. Every run pins `LPM_BIN` at a path that does not
+/// exist, so a test that declares no registry package can never reach an
+/// installed `lpm` on the developer's machine.
 fn run_host(f: &Fixtures, app_dir: &Path, ticks: u32, envs: &[(&str, &str)]) -> (String, String) {
+    let (out, stdout, stderr) = spawn_host(f, app_dir, ticks, envs);
+    assert!(
+        out.status.success(),
+        "host exited non-zero.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stdout.contains("HOST done"), "{stdout}");
+    (stdout, stderr)
+}
+
+/// [`run_host`] for a run that is meant to fail before the app starts.
+fn run_host_failing(
+    f: &Fixtures,
+    app_dir: &Path,
+    ticks: u32,
+    envs: &[(&str, &str)],
+) -> (String, String) {
+    let (out, stdout, stderr) = spawn_host(f, app_dir, ticks, envs);
+    assert!(
+        !out.status.success(),
+        "the host started anyway.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    (stdout, stderr)
+}
+
+fn spawn_host(
+    f: &Fixtures,
+    app_dir: &Path,
+    ticks: u32,
+    envs: &[(&str, &str)],
+) -> (std::process::Output, String, String) {
     let joined = std::env::join_paths(&f.lib_dirs).expect("lib dirs join");
     let mut command = Command::new(&f.host);
     command
@@ -209,19 +239,54 @@ fn run_host(f: &Fixtures, app_dir: &Path, ticks: u32, envs: &[(&str, &str)]) -> 
         .env("LD_LIBRARY_PATH", &joined)
         .env("DYLD_LIBRARY_PATH", &joined)
         .env("DYLD_FALLBACK_LIBRARY_PATH", &joined)
-        .env("LUMEN_PLUGIN_CACHE", f.scratch.join("no-such-cache"));
+        .env("LPM_BIN", f.scratch.join("no-such-lpm"));
     for (key, value) in envs {
         command.env(key, value);
     }
     let out = command.output().expect("host runs");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(
-        out.status.success(),
-        "host exited non-zero.\nstdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    assert!(stdout.contains("HOST done"), "{stdout}");
-    (stdout, stderr)
+    (out, stdout, stderr)
+}
+
+/// Build the `lpm` stand-in once per test binary. One copy of its source
+/// lives beside the `lumenc` tests; both suites drive the same program.
+fn lpm_stub(f: &Fixtures) -> &'static Path {
+    static STUB: OnceLock<PathBuf> = OnceLock::new();
+    STUB.get_or_init(|| {
+        let out = f.scratch.join("lpm");
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("the crate sits under public/")
+            .join("lumenc")
+            .join("tests")
+            .join("fixtures")
+            .join("lpm-stub.rs");
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let built = Command::new(rustc)
+            .args(["--edition", "2021", "-o"])
+            .arg(&out)
+            .arg(&source)
+            .output()
+            .expect("rustc runs");
+        assert!(
+            built.status.success(),
+            "the lpm stand-in did not build:\n{}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        out
+    })
+}
+
+/// Write the resolution the stand-in prints, and hand back the file.
+fn stub_answer(f: &Fixtures, case: &str, packages: &str) -> PathBuf {
+    let path = f.scratch.join(format!("{case}-lpm.json"));
+    std::fs::write(
+        &path,
+        format!("{{\"schema\":1,\"lock\":\"/dev/null\",\"packages\":[{packages}]}}"),
+    )
+    .expect("stub answer");
+    path
 }
 
 /// Compile a tiny dependency-free stub cdylib from source text.
@@ -465,55 +530,72 @@ fn a_mismatched_build_id_banners_both_strings() {
 }
 
 #[test]
-fn a_version_source_resolves_through_the_shared_cache() {
+fn a_version_source_loads_what_the_registry_resolved() {
     let f = fixtures();
-    // Install the fixture module into a scratch plugin cache the way the
-    // registry client would: <cache>/<name>/<version>/<platform library>.
-    let cache = f.scratch.join("cache-hit");
-    let version_dir = cache.join("fixture").join("1.4.0");
-    let _ = std::fs::remove_dir_all(&cache);
-    std::fs::create_dir_all(&version_dir).expect("cache dir");
+    // The registry package the stand-in reports: a directory holding the
+    // module library under the name the by-name probe looks for.
+    let package = f.scratch.join("pkg-fixture");
+    let _ = std::fs::remove_dir_all(&package);
+    std::fs::create_dir_all(&package).expect("package root");
     let spelling = format!(
         "{}fixture{}",
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX
     );
-    std::fs::copy(&f.module, version_dir.join(&spelling)).expect("install into the cache");
+    std::fs::copy(&f.module, package.join(&spelling)).expect("stage the package");
 
     let dir = write_app(
         f,
         "version-hit",
         "fixture = { version = \"1.4\", config = { units = \"cm\" } }\n",
     );
+    let answer = stub_answer(
+        f,
+        "version-hit",
+        &format!(
+            "{{\"name\":\"fixture\",\"version\":\"1.4.0\",\"platform\":\"lumen\",\
+             \"target\":\"any\",\"dir\":\"{}\",\"files\":[\"{spelling}\"]}}",
+            package.display()
+        ),
+    );
     let (stdout, stderr) = run_host(
         f,
         &dir,
         3,
-        &[("LUMEN_PLUGIN_CACHE", &cache.display().to_string())],
+        &[
+            ("LPM_BIN", &lpm_stub(f).display().to_string()),
+            ("LPM_STUB_JSON", &answer.display().to_string()),
+        ],
     );
 
-    // lumenc's injection resolved the version and the loader installed the
-    // resolved copy - the whole `lumenc run` path, headless.
+    // lumenc's injection took the resolved path and the loader installed the
+    // library it named - the whole `lumenc run` path, headless.
     assert!(
         stdout.contains("module-install units=cm"),
         "{stdout}\n{stderr}"
     );
     assert!(stdout.contains("HOST loaded name=fixture"), "{stdout}");
     assert!(stdout.contains("module-tick n=3"), "{stdout}");
-    // The resolution pinned itself: lumen.lock appeared beside lumen.toml.
-    let lock = std::fs::read_to_string(dir.join("lumen.lock")).expect("lock written");
-    assert!(lock.contains("version = \"1.4.0\""), "{lock}");
 }
 
 #[test]
-fn an_unresolvable_version_banners_the_resolvers_reason() {
+fn a_version_the_registry_cannot_answer_fails_the_run() {
     let f = fixtures();
     let dir = write_app(f, "version", "md = \"1.2\"\n");
-    // The harness pins LUMEN_PLUGIN_CACHE at a directory that does not
-    // exist, so resolution fails and the loader banners the resolver's own
-    // reason instead of loading anything.
-    let (stdout, stderr) = run_host(f, &dir, 1, &[]);
-    assert!(stderr.contains("MODULE LOAD FAILED: md"), "{stderr}");
-    assert!(stderr.contains("no cached version matches"), "{stderr}");
-    assert!(stdout.contains("HOST failed name=md"), "{stdout}");
+    // The stand-in fails the way the client does, and a registry that cannot
+    // answer is fatal rather than a banner: an app that silently started
+    // without a declared module is worse than one that did not start.
+    let (stdout, stderr) = run_host_failing(
+        f,
+        &dir,
+        1,
+        &[
+            ("LPM_BIN", &lpm_stub(f).display().to_string()),
+            ("LPM_STUB_FAIL", "no version of md satisfies ^1.2"),
+        ],
+    );
+    assert!(
+        stderr.contains("no version of md satisfies ^1.2"),
+        "{stderr}\n{stdout}"
+    );
 }

@@ -63,6 +63,14 @@
 #                             this script leaves it alone.
 #   sha256sums.txt            checksums covering every asset above.
 #
+# One thing this script installs comes from elsewhere: lpm, the client of the
+# package registry, published from lumen-fx/registry as
+# lpm_<version>_<os>_<arch>.tar.gz with checksums.txt beside it. It goes to
+# ~/.local/bin/lpm rather than under the prefix, because one copy serves every
+# toolchain on the machine and lumenc looks for it there. It is not in the
+# receipt and --uninstall leaves it; --no-lpm skips it, and lumenc installs it
+# itself the first time an app names a registry package.
+#
 # tools/release/release-checklist.md documents producing the asset under this
 # scheme. The archive holds the tree to install: bin/ for lumenc, with the
 # liblumen shared library and the lumen-launcher app stub right next to it in
@@ -88,10 +96,18 @@ GH_REPO="${LUMEN_GH_REPO:-lumen-fx/lumen}"
 GH_URL="https://github.com/$GH_REPO"
 PREFIX="${LUMEN_PREFIX:-$HOME/.lumen}"
 
+# lpm is published from the registry's own repository and installed to one
+# shared path rather than under the prefix, because one copy serves every
+# toolchain on the machine and lumenc looks for it there.
+LPM_REPO="${LPM_GH_REPO:-lumen-fx/registry}"
+LPM_URL="https://github.com/$LPM_REPO"
+LPM_DIR="$HOME/.local/bin"
+
 PIN_VERSION=""
 NO_CONFIRM=0
 MODIFY_PATH=1
 INSTALL_MODULES=1
+INSTALL_LPM=1
 FORCE=0
 UNINSTALL=0
 
@@ -105,7 +121,8 @@ Lumen toolchain installer.
 Usage:
   install.sh [options]
 
-Installs lumenc, the liblumen runtime library, and shell completions.
+Installs lumenc, the liblumen runtime library, shell completions, and lpm,
+the client of the package registry.
 
 Options:
   --prefix DIR         Install root. Default: ~/.lumen
@@ -119,6 +136,8 @@ Options:
                        library apps name with `bundled = true`); install the
                        toolchain alone. --uninstall still removes previously
                        installed modules through the receipt.
+  --no-lpm             Skip lpm, the registry client. An app that names a
+                       registry package then installs it on first use.
   --force              Reinstall even if already at the target version.
   --uninstall          Remove every file this installer put under the prefix.
   -h, --help           Show this help.
@@ -127,6 +146,8 @@ Environment:
   LUMEN_GH_REPO    GitHub repo to install from, as owner/name.
                    Default: lumen-fx/lumen
   LUMEN_PREFIX     Same as --prefix.
+  LPM_GH_REPO      GitHub repo lpm comes from, as owner/name.
+                   Default: lumen-fx/registry
 EOF
 }
 
@@ -149,6 +170,7 @@ while [ "$#" -gt 0 ]; do
     --no-confirm) NO_CONFIRM=1; shift ;;
     --no-modify-path) MODIFY_PATH=0; shift ;;
     --no-modules) INSTALL_MODULES=0; shift ;;
+    --no-lpm) INSTALL_LPM=0; shift ;;
     --force) FORCE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -605,6 +627,68 @@ fi
 
 prune_dirs
 
+# --- lpm ---------------------------------------------------------------------
+#
+# The client of the package registry, which resolves the `version` sources an
+# app declares. It is published from its own repository and installed to one
+# shared path, `~/.local/bin/lpm`, rather than under the prefix: one copy
+# serves every toolchain on the machine, and lumenc looks for it there. For
+# the same reason it is not in the receipt, and --uninstall leaves it alone.
+#
+# Skipping it costs nothing. lumenc installs it itself the first time an app
+# names a registry package.
+
+if [ "$INSTALL_LPM" -eq 1 ]; then
+  lpm_tag="$(final_url "$LPM_URL/releases/latest" || true)"
+  lpm_tag="${lpm_tag##*/}"
+  case "$lpm_tag" in
+    ''|latest|releases) lpm_tag="" ;;
+  esac
+  if [ -z "$lpm_tag" ]; then
+    say ""
+    say "Could not resolve the latest release of $LPM_REPO, so lpm was not"
+    say "installed. lumenc installs it the first time an app needs it."
+  else
+    lpm_version="${lpm_tag#v}"
+    case "$ARCH" in
+      aarch64|arm64) lpm_arch="arm64" ;;
+      *) lpm_arch="amd64" ;;
+    esac
+    case "$OS" in
+      macos) lpm_os="darwin" ;;
+      *) lpm_os="linux" ;;
+    esac
+    lpm_asset="lpm_${lpm_version}_${lpm_os}_${lpm_arch}.tar.gz"
+    lpm_base="$LPM_URL/releases/download/$lpm_tag"
+    if ! fetch_quiet "$lpm_base/checksums.txt" "$TMP/lpm-sums.txt"; then
+      fail "download failed: $lpm_base/checksums.txt"
+    fi
+    lpm_sha="$(awk -v want="$lpm_asset" '
+      { name = $2; sub(/^\*/, "", name); if (name == want) { print $1; exit } }
+    ' "$TMP/lpm-sums.txt")"
+    [ -n "$lpm_sha" ] || fail "release $lpm_tag of $LPM_REPO publishes no $lpm_asset"
+    say ""
+    say "Downloading lpm $lpm_version"
+    if ! fetch_shown "$lpm_base/$lpm_asset" "$TMP/dl/lpm.tar.gz"; then
+      fail "download failed: $lpm_base/$lpm_asset"
+    fi
+    got="$(sha256_of "$TMP/dl/lpm.tar.gz")"
+    if [ "$got" != "$lpm_sha" ]; then
+      fail "checksum mismatch for $lpm_asset
+  expected $lpm_sha
+  got      $got
+Nothing was installed. The download was corrupted, or the asset does not match the checksum published with release $lpm_tag."
+    fi
+    mkdir -p "$TMP/lpm" "$LPM_DIR"
+    tar -xzf "$TMP/dl/lpm.tar.gz" -C "$TMP/lpm" || fail "could not unpack $lpm_asset"
+    lpm_bin="$(find "$TMP/lpm" -type f -name lpm -print | head -n 1)"
+    [ -n "$lpm_bin" ] || fail "$lpm_asset carries no lpm executable"
+    rm -f "$LPM_DIR/lpm"
+    cp -p "$lpm_bin" "$LPM_DIR/lpm"
+    chmod 755 "$LPM_DIR/lpm"
+  fi
+fi
+
 # --- PATH --------------------------------------------------------------------
 
 # The rc line keeps $PATH unexpanded on purpose: it is written to the file
@@ -702,6 +786,17 @@ esac
 say ""
 say "Installed under $PREFIX:"
 say "  lumen $(receipt_version)"
+if [ -f "$LPM_DIR/lpm" ]; then
+  say ""
+  say "lpm, the registry client, is at $LPM_DIR/lpm."
+  case ":$PATH:" in
+    *":$LPM_DIR:"*) ;;
+    *)
+      say "$LPM_DIR is not on your PATH. lumenc finds lpm there either way;"
+      say "add the directory to run lpm yourself."
+      ;;
+  esac
+fi
 if [ -n "$PIN_VERSION" ]; then
   say ""
   say "Pinned to $RELEASE. lumenc will not offer newer releases; re-run this"

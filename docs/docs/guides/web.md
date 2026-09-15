@@ -182,6 +182,14 @@ bordered card with its own fill and an inch of padding; a Lumen dialog is the
 whole window with the app's surface centred inside it, and that is what the
 page shows.
 
+An image is emitted with the size of the file the build copied, so the page
+holds its place in the layout before a byte of the image has arrived and the
+text below it does not jump when it lands. The size is the file's own; a
+stylesheet sizing the image still wins. An image the build did not copy, one
+behind an external URL or with a `src` built from a `{...}` placeholder,
+carries no size, because there was no file to read it out of. Every image
+after the first one on the page is fetched when the reader scrolls near it.
+
 A script runs the same way. Its `on_start` publishes the signals the markup
 binds to, a handler bound with `on("click", ...)` runs when that element is
 clicked, and a `derive()` recomputes when one of its dependencies changes.
@@ -590,7 +598,9 @@ none of them means anything without an absolute address.
   or copying the link lands on the page being shown, and the browser's back
   and forward buttons step the site. What stays behind is the head: the
   `<title>` and the meta tags remain the ones the document that was loaded
-  was emitted with.
+  was emitted with. Under hard navigation a link loads the next document, but
+  a navigation that does not come from one (a script calling `page()`) still
+  swaps in place, and the address stays on the document that was loaded.
 - A `<input>` is edited by the browser, so Lumen's own caret, selection and
   IME handling are not in play; what an app sees is the value after each edit.
 - A `<radio>` group is not in the tab order. Every member carries the

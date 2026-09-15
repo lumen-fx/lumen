@@ -4,15 +4,13 @@
 //! `QDesktopServices::openUrl(QUrl)` and GTK 4's `gtk_show_uri` /
 //! `g_app_info_launch_default_for_uri`.
 //!
-//! New surface per W6.5 - the audit (section 369-391) flagged this surface
-//! as missing entirely. Scripts can now open URLs in the default
-//! browser, files in the default viewer, or directories in the file
-//! manager.
+//! Scripts open URLs in the default browser, files in the default viewer,
+//! or directories in the file manager.
 //!
 //! The implementation is intentionally thin: every platform's "open
 //! this thing" call boils down to `xdg-open` / `start` / `open` and
-//! `opener` ships exactly that. A future revision adds the XDG
-//! `OpenURI` portal for Flatpak / Snap.
+//! `opener` ships exactly that. The XDG `OpenURI` portal is not used, so a
+//! sandboxed app falls back to whatever helper the sandbox exposes.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

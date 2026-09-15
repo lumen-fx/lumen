@@ -22,7 +22,7 @@ pub fn cmd_build(args: impl Iterator<Item = String>) -> ExitCode {
     const BUILD_USAGE: &str = "lumenc build - ahead-of-time compile an app
 
 USAGE:
-    lumenc build <app_dir> <out.lmna> [--no-hooks]
+    lumenc build <app_dir> <out.lmna> [--no-hooks] [--offline]
 
 Parses src/main.lmn + src/main.css once, runs the cascade, and bakes the
 scripts
@@ -31,7 +31,9 @@ into a precompiled artifact. Run it with
 loads only this. An SDK app is rerouted to its own toolchain, and the
 <out.lmna> argument does not apply.
 
-    --no-hooks        Skip the app's prebuild [[hooks]].";
+    --no-hooks        Skip the app's prebuild [[hooks]].
+    --offline         Resolve the app's registry packages from what is
+                      already downloaded, and never reach the network.";
     let mut no_hooks = false;
     let mut positional: Vec<String> = Vec::new();
     for a in args {

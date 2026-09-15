@@ -107,13 +107,13 @@ pub fn entry_symbol(prefix: &str, name: &str) -> String {
 /// `version`-source resolutions handed to the loader by the compiler, keyed
 /// by module name.
 ///
-/// The runtime never resolves a version itself - no semver, no cache, no
-/// lock in its graph. `lumenc` resolves each `version` requirement through
-/// the shared plugin cache and `lumen.lock` before the app builds, and hands
-/// the outcome in here: `Ok` is the library file to open, `Err` is the
-/// reason resolution failed, which the loader banners in place of its own
-/// probe. A module absent from the map falls back to the loader's on-disk
-/// probe (the `modules/` directories a build step stages into).
+/// The runtime never resolves a version itself - no semver, no registry, no
+/// lock in its graph. `lumenc` asks `lpm` to resolve each `version`
+/// requirement before the app builds, and hands the outcome in here: `Ok` is
+/// the library file to open, `Err` is the reason resolution failed, which the
+/// loader banners in place of its own probe. A module absent from the map
+/// falls back to the loader's on-disk probe (the `modules/` directories a
+/// build step stages into).
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedModules(pub BTreeMap<String, Result<PathBuf, String>>);
 
@@ -272,8 +272,9 @@ pub struct DepCfg {
 pub enum ModuleSource {
     /// Ships with the toolchain, beside the running engine.
     Bundled,
-    /// A version requirement, resolved by lumenc; the runtime never resolves
-    /// or fetches one, it only loads a module already on disk.
+    /// A version requirement on a registry package, resolved by `lpm` before
+    /// the app builds; the runtime never resolves or fetches one, it only
+    /// loads a module already on disk.
     Version(String),
     /// A built library on disk, relative to the app directory unless
     /// absolute. Without an extension, the platform spellings are probed
