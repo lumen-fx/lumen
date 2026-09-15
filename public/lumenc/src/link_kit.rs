@@ -11,8 +11,10 @@
 //!
 //! The three steps are [`locate`] (find or fetch the kit for a target),
 //! [`plan`] (turn the manifest plus the app's `[dependencies]` into a command),
-//! and [`link`] (run it). What a replay changes about the recorded line is
-//! only this:
+//! and [`link`] (run it). The line reaches the linker through a response
+//! file, as it did when rustc ran it: every object and archive the engine is
+//! built from is on it, which is more than a Windows command line holds. What
+//! a replay changes about the recorded line is only this:
 //!
 //! - The output path becomes the app's executable.
 //! - Every argument naming a file the kit carries is re-rooted into the kit.
@@ -180,8 +182,13 @@ fn read_manifest(kit: &Path, target: Target) -> Result<Manifest, String> {
 pub(crate) struct Plan {
     /// The program the replay runs.
     program: PathBuf,
-    /// Its arguments, in order.
+    /// What goes on the command line itself: the flavor that selects one of
+    /// the linkers inside LLD, which it reads before it opens any file.
+    lead: Vec<OsString>,
+    /// The line, in order. It reaches the program through a response file.
     args: Vec<OsString>,
+    /// How that file spells an argument, which is the program's own rule.
+    tokens: Tokens,
     /// Which of the two the program is, for a failure that reads differently
     /// depending on whose tools are missing.
     kind: DriverKind,
@@ -286,10 +293,11 @@ pub(crate) fn plan(
     }
 
     let (program, lead) = program(kit, &manifest.driver)?;
-    args.splice(0..0, lead);
     Ok(Plan {
         program,
+        lead,
         args,
+        tokens: Tokens::of(&manifest.driver),
         kind: manifest.driver.kind,
         artifact: manifest.artifact.kind,
         exe: exe.to_path_buf(),
@@ -382,15 +390,96 @@ fn joined(prefix: &str, value: &Path) -> OsString {
 }
 
 /// Run the replay.
+///
+/// The line goes through a response file beside the executable, removed once
+/// the linker has run. Passing it as arguments works everywhere but Windows,
+/// where a command line is capped well under what the engine's link takes,
+/// and one way of running the linker is enough.
 pub(crate) fn link(plan: &Plan) -> Result<(), String> {
+    let response = plan.exe.with_extension("link-line");
+    std::fs::write(&response, plan.tokens.file(&plan.args)?)
+        .map_err(|e| format!("write {}: {e}", response.display()))?;
     let output = Command::new(&plan.program)
-        .args(&plan.args)
-        .output()
-        .map_err(|e| cannot_run(plan, &e.to_string()))?;
+        .args(&plan.lead)
+        .arg(joined("@", &response))
+        .output();
+    let _ = std::fs::remove_file(&response);
+    let output = output.map_err(|e| cannot_run(plan, &e.to_string()))?;
     if !output.status.success() {
         return Err(link_failed(plan, &String::from_utf8_lossy(&output.stderr)));
     }
     Ok(())
+}
+
+/// How a response file spells one argument, which is decided by the program
+/// that reads it rather than by the machine writing it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tokens {
+    /// The C compiler drivers and the ELF and Mach-O linkers: a backslash
+    /// escapes the character after it, inside quotes or out.
+    Gnu,
+    /// The COFF linker reads a line the way Windows programs do: a backslash
+    /// is itself unless a run of them ends at a quote.
+    Windows,
+}
+
+impl Tokens {
+    fn of(driver: &Driver) -> Self {
+        match (driver.kind, driver.flavor.as_str()) {
+            (DriverKind::Lld, "link") => Self::Windows,
+            _ => Self::Gnu,
+        }
+    }
+
+    /// The file's contents: one quoted argument per line.
+    fn file(self, args: &[OsString]) -> Result<String, String> {
+        let mut file = String::new();
+        for arg in args {
+            let arg = arg.to_str().ok_or_else(|| {
+                format!(
+                    "the link line holds {:?}, which is not text a response file can carry",
+                    arg
+                )
+            })?;
+            self.token(arg, &mut file);
+            file.push('\n');
+        }
+        Ok(file)
+    }
+
+    fn token(self, arg: &str, out: &mut String) {
+        out.push('"');
+        match self {
+            Self::Gnu => {
+                for c in arg.chars() {
+                    if matches!(c, '\\' | '"') {
+                        out.push('\\');
+                    }
+                    out.push(c);
+                }
+            }
+            Self::Windows => {
+                let mut backslashes = 0;
+                for c in arg.chars() {
+                    match c {
+                        '\\' => backslashes += 1,
+                        '"' => {
+                            out.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+                            out.push('"');
+                            backslashes = 0;
+                        }
+                        c => {
+                            out.extend(std::iter::repeat_n('\\', backslashes));
+                            out.push(c);
+                            backslashes = 0;
+                        }
+                    }
+                }
+                out.extend(std::iter::repeat_n('\\', backslashes * 2));
+            }
+        }
+        out.push('"');
+    }
 }
 
 /// What a driver that could not be started means. It is the one failure whose
@@ -739,13 +828,53 @@ mod tests {
         .expect("the app declares a module the kit carries");
 
         assert_eq!(plan.program, bin.join("rust-lld.exe"));
+        assert_eq!(plan.lead, ["-flavor", "link"]);
+        assert_eq!(plan.tokens, Tokens::Windows);
         let args = args(&plan);
-        assert_eq!(args[0], "-flavor");
-        assert_eq!(args[1], "link");
-        assert_eq!(args[2], "/INCLUDE:lumen_module_register_lumen_audio");
+        assert_eq!(args[0], "/INCLUDE:lumen_module_register_lumen_audio");
         assert!(args.iter().any(|a| a == "-lasound"), "{args:?}");
 
         let _ = std::fs::remove_dir_all(&kit);
+    }
+
+    /// Each linker reads the response file by its own rule, and the file is
+    /// written by that rule rather than by the one this machine uses.
+    #[test]
+    fn the_response_file_spells_an_argument_the_way_its_reader_does() {
+        let mut gnu = String::new();
+        Tokens::Gnu.token(r#"C:\a "q" b"#, &mut gnu);
+        assert_eq!(gnu, r#""C:\\a \"q\" b""#);
+
+        // A backslash is itself, except in a run that ends at a quote, where
+        // the run doubles so the quote survives as a character or a close.
+        let mut windows = String::new();
+        Tokens::Windows.token(r#"C:\dir\"#, &mut windows);
+        assert_eq!(windows, r#""C:\dir\\""#);
+        let mut windows = String::new();
+        Tokens::Windows.token(r#"a\"b\\"c"#, &mut windows);
+        assert_eq!(windows, r#""a\\\"b\\\\\"c""#);
+        let mut windows = String::new();
+        Tokens::Windows.token(r#"/OUT:C:\out\Demo App.exe"#, &mut windows);
+        assert_eq!(windows, r#""/OUT:C:\out\Demo App.exe""#);
+
+        let file = Tokens::Gnu
+            .file(&[OsString::from("-o"), OsString::from("/out/Demo App")])
+            .expect("text");
+        assert_eq!(file, "\"-o\"\n\"/out/Demo App\"\n");
+    }
+
+    /// The flavor decides the rule: LLD in its COFF flavor reads a Windows
+    /// line, and every other driver reads a GNU one.
+    #[test]
+    fn the_coff_flavor_reads_windows_tokens_and_the_rest_read_gnu() {
+        let lld = |flavor: &str| Driver {
+            kind: DriverKind::Lld,
+            flavor: flavor.to_string(),
+            path: Some("bin/rust-lld".to_string()),
+        };
+        assert_eq!(Tokens::of(&lld("link")), Tokens::Windows);
+        assert_eq!(Tokens::of(&lld("gnu")), Tokens::Gnu);
+        assert_eq!(Tokens::of(&unix()), Tokens::Gnu);
     }
 
     /// A kit from another release is refused rather than replayed: its line
@@ -889,13 +1018,17 @@ mod tests {
         assert!(error.contains("gnu"), "{error}");
     }
 
-    fn a_plan(program: PathBuf, args: Vec<OsString>, kind: DriverKind) -> Plan {
+    /// A plan whose whole command is `lead`, so a stand-in driver reads it
+    /// off the command line and is free to ignore the response file.
+    fn a_plan(program: PathBuf, lead: Vec<OsString>, kind: DriverKind) -> Plan {
         Plan {
             program,
-            args,
+            lead,
+            args: Vec::new(),
+            tokens: Tokens::Gnu,
             kind,
             artifact: ArtifactKind::Append,
-            exe: PathBuf::from("/out/Demo"),
+            exe: std::env::temp_dir().join(format!("lumen-link-Demo-{}", std::process::id())),
             modules: Vec::new(),
             capabilities: Vec::new(),
         }
@@ -921,7 +1054,8 @@ mod tests {
             PathBuf::from("cmd"),
             vec![
                 OsString::from("/c"),
-                OsString::from(format!("echo {message} 1>&2 & exit 1")),
+                // The response file lands after the script; `rem` eats it.
+                OsString::from(format!("echo {message} 1>&2 & exit 1 & rem")),
             ],
         )
     }
@@ -959,7 +1093,7 @@ mod tests {
         let (program, args) = failing_driver("undefined reference to main");
         let error = link(&a_plan(program, args, DriverKind::Cc)).expect_err("the driver failed");
         assert!(error.contains("linking"), "{error}");
-        assert!(error.contains("Demo"), "{error}");
+        assert!(error.contains("lumen-link-Demo"), "{error}");
         assert!(error.contains("undefined reference to main"), "{error}");
     }
 }

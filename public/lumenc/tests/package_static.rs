@@ -508,6 +508,10 @@ fn a_kit_links_the_app_into_the_executable_it_names() {
         !out.join("Replayed.lmna-staging").exists(),
         "the artifact the link was handed is not left behind"
     );
+    assert!(
+        !out.join("Replayed.link-line").exists(),
+        "the line the linker was handed is not left behind"
+    );
     assert!(is_executable(&exe), "the executable is one");
 }
 
