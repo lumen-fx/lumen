@@ -224,8 +224,8 @@ fn script_fns(shared: &Shared, max_concurrent: usize) -> Vec<ScriptFn> {
             .ns(ScriptNs::Named(NAMESPACE.to_string()))
             .doc(
                 "Download `url` to `path`, reporting under `tag`. `checksum` is \
-                 `sha256:<64 hex digits>`, or empty for no check. True when the transfer \
-                 started.",
+                 `sha256:<64 hex digits>` or `sha1:<40 hex digits>`, or empty for no check. \
+                 True when the transfer started.",
             )
             .param("url", T::Str)
             .param("path", T::Str)
