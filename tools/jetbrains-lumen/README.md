@@ -62,7 +62,6 @@ beside the markup, so stylesheets elsewhere keep the IDE's own CSS support.
 - The plugin does not ship `lumen-lsp`. Build it from this repository.
 - There are no `lumenc` run/check/build actions and no live preview; the VS
   Code extension has those and this one does not yet.
-- The plugin is not on the JetBrains Marketplace. Install the zip from disk.
 - Enabling or disabling it takes an IDE restart, because it registers the
   TextMate bundle at startup.
 
@@ -71,6 +70,12 @@ beside the markup, so stylesheets elsewhere keep the IDE's own CSS support.
 Requires JDK 21. `./gradlew buildPlugin` produces the zip,
 `./gradlew verifyPlugin` runs the JetBrains Plugin Verifier, and
 `./gradlew runIde` starts a sandbox IDE with the plugin loaded.
+
+Releases publish the plugin to the JetBrains Marketplace. It carries its own
+version, independent of the Lumen toolchain release it ships alongside, so a
+change here bumps `pluginVersion` in `gradle.properties`; without that the next
+release publishes nothing new, because the marketplace already holds the
+version in the properties file.
 
 The grammars are copied from `tools/vscode-lumen` during the build, so a
 grammar fix reaches both editors.
