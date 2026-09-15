@@ -11,8 +11,8 @@ use lumen_core::prelude::App;
 use lumen_core::property_store::PropertyStore;
 use lumen_script::event;
 use lumen_script::{
-    ScriptCommand, ScriptError, ScriptFn, ScriptHost, ScriptLoadFailure, ScriptNs, ScriptTy,
-    ScriptValue,
+    ScriptCommand, ScriptError, ScriptFn, ScriptFnAppExt, ScriptHost, ScriptLoadFailure, ScriptNs,
+    ScriptTy, ScriptValue,
 };
 use lumen_script_candela::{CandelaHost, CandelaVmHost, ScriptCandelaVmPlugin};
 
@@ -95,6 +95,42 @@ fn shout() {
 
 fn main() {}
 "#;
+
+/// Calls a host function the test registers, so what that call does to the VM
+/// is the test's to choose. Three ways in: a plain call, a derivation body,
+/// and a DOM event handler.
+const EXPLODES: &str = r##"
+host "lumen" {
+    explode(...);
+    signal_set(string, string);
+    int node_get_by_id(string);
+    int event_on(int, string, string);
+}
+
+fn on_start() {
+    lumen::signal_set("before", "yes");
+    lumen::explode();
+}
+
+fn boom() {
+    lumen::explode();
+}
+
+fn bind() {
+    let b = lumen::node_get_by_id("btn");
+    lumen::event_on(b, "click", "boom_event");
+}
+
+fn boom_event(ev: int) {
+    lumen::explode();
+}
+
+fn quiet() {
+    lumen::signal_set("after", "yes");
+}
+
+fn main() {}
+"##;
 
 /// Binds a DOM event by token, the path `dispatch_event_handler` serves.
 const EVENTS: &str = r##"
@@ -570,6 +606,144 @@ fn a_bound_event_reaches_its_handler_until_the_binding_is_dropped() {
             .dispatch_event_handler(token)
             .expect("an unbound token is not an error"),
         "a dropped binding delivers nothing"
+    );
+    event::clear_all_bindings();
+}
+
+/// A builtin that fails the way an internal VM assertion does.
+///
+/// `register_script_fn` puts this Rust closure behind `lumen::explode`
+/// untouched, so the panic unwinds out of `RuntimeProgram::call` at exactly
+/// the boundary a corrupted VM's assertion would.
+fn exploding_script_fn() -> ScriptFn {
+    ScriptFn::new("explode")
+        .ns(ScriptNs::Builtin)
+        .variadic()
+        .build(|_| panic!("an internal VM assertion fired"))
+}
+
+/// A loaded artifact host whose `explode` builtin panics.
+fn exploding_host() -> CandelaVmHost {
+    let mut host = host_for(EXPLODES, "explodes.cdl");
+    host.register_script_fn(&exploding_script_fn())
+        .expect("registering before the load is allowed");
+    host.load("", "explodes.cdlb").expect("the image loads");
+    host
+}
+
+/// A panic out of the VM stays inside the host, on the plain call path.
+///
+/// candela reports a script's own problems as errors, so a panic means the
+/// interpreter itself gave up and its state cannot be trusted. The call comes
+/// back as a script error, the image goes with it, and later probes miss
+/// instead of the process ending. `CandelaHost` is held to the same contract
+/// by `host.rs`.
+#[test]
+fn a_vm_panic_in_a_call_is_contained_and_disables_the_image() {
+    let mut host = exploding_host();
+
+    let Err(ScriptError::Runtime(message)) = host.call("boom", &[]) else {
+        panic!("a panic out of the VM must come back as an error, not end the process");
+    };
+    assert!(
+        message.contains("candela VM panicked"),
+        "the error says what happened: {message}"
+    );
+    assert!(
+        message.contains("boom"),
+        "the error names the call it came out of: {message}"
+    );
+
+    let after = host
+        .call("quiet", &[])
+        .expect("a later probe answers rather than dying");
+    assert!(!after.found, "nothing is callable once the image is gone");
+    assert!(
+        host.exports().is_empty(),
+        "and nothing is advertised as callable either"
+    );
+}
+
+/// The same containment on the derivation-body path.
+#[test]
+fn a_vm_panic_in_a_closure_call_is_contained() {
+    let mut host = exploding_host();
+
+    let Err(ScriptError::Runtime(message)) = host.call_closure(&"boom".to_owned(), &[]) else {
+        panic!("a derivation body that panics must come back as an error");
+    };
+    assert!(message.contains("candela VM panicked"), "{message}");
+
+    assert!(
+        host.call_closure(&"boom".to_owned(), &[]).is_err(),
+        "a body cannot run without a program either"
+    );
+}
+
+/// The same containment on the DOM-event path, which is the one a click
+/// reaches: the runtime dispatches a bound token straight into the host.
+#[test]
+fn a_vm_panic_in_an_event_handler_is_contained() {
+    event::clear_all_bindings();
+    publish_button();
+    let mut host = exploding_host();
+
+    let outcome = host.call("bind", &[]).expect("bind runs");
+    let token = outcome
+        .commands
+        .iter()
+        .find_map(|c| match c {
+            ScriptCommand::BindEvent { token, .. } => Some(*token),
+            _ => None,
+        })
+        .expect("event_on emits BindEvent");
+
+    let Err(ScriptError::Runtime(message)) = host.dispatch_event_handler(token) else {
+        panic!("a handler that panics must come back as an error, not end the process");
+    };
+    assert!(message.contains("candela VM panicked"), "{message}");
+
+    assert!(
+        !host
+            .dispatch_event_handler(token)
+            .expect("a later dispatch answers rather than dying"),
+        "the handler is gone with the image it lived in"
+    );
+    event::clear_all_bindings();
+}
+
+/// The whole thing under a real app: the fault happens where a user meets it,
+/// during the app's own start-up, and the app outlives it and keeps ticking.
+#[test]
+fn an_app_outlives_a_panic_out_of_its_image() {
+    event::clear_all_bindings();
+    let image = CandelaHost::new()
+        .compile_bytecode(EXPLODES, "explodes.cdl")
+        .expect("the fixture compiles");
+    let mut app = App::new();
+    app.add_script_fn(exploding_script_fn());
+    app.add_plugin(ScriptCandelaVmPlugin::new(image).with_uri("explodes.cdlb"));
+
+    assert!(
+        app.world.get_resource::<ScriptLoadFailure>().is_none(),
+        "the image itself loaded; what failed was the call into it"
+    );
+    assert_eq!(
+        app.world.resource::<CandelaVmHost>().mirror_get("before"),
+        Some(ScriptValue::Str("yes".to_owned())),
+        "what on_start wrote before the fault still landed"
+    );
+
+    app.tick();
+    app.tick();
+
+    let mut host = app.world.resource_mut::<CandelaVmHost>();
+    assert!(
+        !host
+            .call("quiet", &[])
+            .expect("the host still answers")
+            .found,
+        "the image went with the panic, so every later call is a miss"
     );
     event::clear_all_bindings();
 }

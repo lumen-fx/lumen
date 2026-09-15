@@ -25,6 +25,7 @@ use crate::library_dir::LibraryDir;
 use crate::lmn;
 use crate::prelude;
 use crate::value::{candela_value_to_script, script_value_to_candela};
+use crate::vm_panic;
 
 /// candela's [`Engine`](candela::Engine) and the compiled [`Program`](candela::Program)
 /// bundled behind a hand-checked `Send`/`Sync` boundary.
@@ -312,16 +313,9 @@ impl CandelaHost {
         diagnose::explain(&self.prepared, &self.uri, d).unwrap_or_else(|| d.message.clone())
     }
 
-    /// One call into the loaded program, with a panic out of the VM contained.
-    ///
-    /// candela reports script problems as `Err` diagnostics; a panic instead
-    /// means an assertion inside the VM itself fired, and the interpreter
-    /// state can no longer be trusted. One known way in: a diagnostic thrown
-    /// mid-execution (a call into a host function no module registered, say)
-    /// can leave values behind on the VM stack, and the next call then dies
-    /// on an internal type assertion. The app must survive its script, so the
-    /// program is dropped - every later probe misses silently, the shape a
-    /// failed load already has - and the one returned diagnostic says why.
+    /// One call into the loaded program, with a panic out of the VM contained
+    /// and the program dropped after it. [`crate::vm_panic`] says why a panic
+    /// costs the program; the artifact host contains its calls the same way.
     ///
     /// Returns `None` when no program is loaded.
     fn vm_call(
@@ -336,20 +330,10 @@ impl CandelaHost {
             Ok(outcome) => Some(outcome),
             Err(payload) => {
                 self.vm.program = None;
-                let detail = payload
-                    .downcast_ref::<&str>()
-                    .map(|s| s.to_string())
-                    .or_else(|| payload.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "non-string panic payload".to_owned());
-                Some(Err(candela::Diagnostic {
-                    filename: String::new(),
-                    span: 0..0,
-                    message: format!(
-                        "the candela VM panicked calling `{fn_name}` ({detail}); its state \
-                         cannot be trusted after the panic, so the script is disabled"
-                    ),
-                    code: "vm_panic".to_owned(),
-                }))
+                Some(Err(vm_panic::vm_panic_diagnostic(
+                    fn_name,
+                    payload.as_ref(),
+                )))
             }
         }
     }

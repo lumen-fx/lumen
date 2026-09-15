@@ -112,9 +112,13 @@ your server does not have.
 `render` blocks until the document is written, and it is safe to call from any
 thread: calls queue.
 
-A render that panics takes the renderer with it, and the requests after it are
-answered with what happened and a 500. Start the server again once you have
-fixed what panicked.
+A script failure stays inside the render it happened in. A handler that raises,
+and the script engine itself giving up mid-call, both end that one call, are
+reported, and leave the renderer serving; the document goes out with whatever
+the script had written by then. A panic from the app's own Rust is the other
+case: it takes the renderer with it, and the requests after it are answered
+with what happened and a 500. Start the server again once you have fixed what
+panicked.
 
 ## More than one language
 

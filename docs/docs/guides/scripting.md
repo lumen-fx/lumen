@@ -386,6 +386,11 @@ language catches anything else: `try`/`catch` in Rhai, `pcall` in Lua, and
 `catch "host_fn_error"` in candela. An uncaught failure ends that one call and is
 reported like any other script error; the app keeps running.
 
+The script engine itself can give up the same way, on a desktop or a server
+run: the call it was in ends and is reported, and the app or the render server
+keeps running, with the script stopped for the rest of that run rather than the
+process taken down with it.
+
 What is available is up to the app's Rust, so look in its source, not here.
 [FFI and SDKs](../reference/ffi.md) covers exposing one, and
 [Writing plugins](../contributing/plugins.md) covers doing it from a plugin.
