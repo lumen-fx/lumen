@@ -1,0 +1,50 @@
+name: build-module self-test
+
+# Exercises .github/workflows/build-module.yml against a fixture crate already
+# in this tree, with publishing off. A package author's own workflow is one
+# `uses:` line, so a break here is a break in every one of them.
+#
+# The fixture is the portable-plugin fixture the runtime's own tests load
+# (public/lumen-plugin/fixture): it is a plain cdylib, so it covers the build
+# shape, the smoke run, and the archive layout without a dynamically linked
+# engine. The module shape differs only in two build flags; what it needs that
+# this cannot give it is a released engine to link, which is the release
+# workflow's job.
+#
+# Only the Linux targets run. The matrix in build-module.yml is the one
+# build-toolchain.yml uses, and exercising all five on every pull request
+# would spend an hour to learn what one leg already says.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/build-module.yml
+      - .github/workflows/module-build-test.yml
+      - public/lumen-plugin/**
+  pull_request:
+    paths:
+      - .github/workflows/build-module.yml
+      - .github/workflows/module-build-test.yml
+      - public/lumen-plugin/**
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Checks the tree out and reads the release list. Nothing here writes.
+permissions:
+  contents: read
+
+jobs:
+  plugin:
+    name: portable plugin
+    uses: ./.github/workflows/build-module.yml
+    with:
+      package: lumen-plugin-fixture
+      crate: lumen-plugin-fixture
+      kind: plugin
+      lumen-version: "0.0.7"
+      targets: linux-x86_64
+      publish: false

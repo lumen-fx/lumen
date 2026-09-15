@@ -351,6 +351,7 @@ pub fn cmd_package(args: impl Iterator<Item = String>) -> ExitCode {
 USAGE:
     lumenc package <app_dir> [<out_dir>] [--name N] [--target T]
                    [--lib-dir <dir>] [--static] [--zip] [--no-hooks]
+                   [--offline]
 
 Assembles the app executable, the Lumen runtime library, and the app's
 files into a folder that runs on a machine with no Lumen installation. A
@@ -372,7 +373,9 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
                       machine's platform, and a C toolchain.
     --zip             Also write <out_dir>.zip, the whole folder in one
                       file to hand to someone.
-    --no-hooks        Skip the app's prebuild [[hooks]].";
+    --no-hooks        Skip the app's prebuild [[hooks]].
+    --offline         Resolve the app's registry packages from what is
+                      already downloaded, and never reach the network.";
     let mut no_hooks = false;
     let mut want_static = false;
     let mut want_zip = false;
@@ -452,11 +455,12 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
     // carries them, whoever builds it: no shared engine exists there, so the
     // runtime has nothing to load one into, and the only Windows shape that
     // answers a declared name is the one that compiled the module in. A
-    // package for another Unix platform can only ship that platform's builds:
-    // a `bundled` module comes out of the release's modules archive, but a
-    // `path` or `version` source names a library that only exists as this
-    // machine's build, and a folder that silently shipped without its modules
-    // is worse than stopping.
+    // package for another Unix platform ships that platform's builds: a
+    // `bundled` module comes out of the release's modules archive and a
+    // `version` one out of the registry, both built for the target, but a
+    // `path` source names a library that only exists as this machine's build,
+    // and a folder that silently shipped without its modules is worse than
+    // stopping.
     if !cfg.dependencies.0.is_empty() && !want_static {
         if target.os == Os::Windows {
             eprintln!(
@@ -469,34 +473,43 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             return ExitCode::from(2);
         } else if target != Target::host() {
             for dep in &cfg.dependencies.0 {
-                let refusal = match &dep.source {
-                    ModuleSource::Bundled => continue,
-                    ModuleSource::Path(_) => format!(
-                        "dependency '{}' comes from a path, and a local library is built \
-                         for one platform: the file it names is a {} build, not a {} one. \
-                         Package on a {} machine with its own build, or use a bundled \
-                         module.",
-                        dep.name,
-                        Target::host().name,
-                        target.name,
-                        target.name
-                    ),
-                    ModuleSource::Version(_) => format!(
-                        "dependency '{}' names a version, and a version resolves through \
-                         this machine's module cache, which holds {} builds, not {} ones. \
-                         Cross-packaging a version source needs the module registry, \
-                         which does not exist yet; package on a {} machine instead.",
-                        dep.name,
-                        Target::host().name,
-                        target.name,
-                        target.name
-                    ),
+                let ModuleSource::Path(_) = &dep.source else {
+                    continue;
                 };
-                eprintln!("lumenc package: {refusal}");
+                eprintln!(
+                    "lumenc package: dependency '{}' comes from a path, and a local library \
+                     is built for one platform: the file it names is a {} build, not a {} \
+                     one. Package on a {} machine with its own build, or name a registry \
+                     version.",
+                    dep.name,
+                    Target::host().name,
+                    target.name,
+                    target.name
+                );
                 return ExitCode::from(2);
             }
         }
     }
+
+    // Everything the app names in the registry, resolved for the platform
+    // being packaged rather than for this one, so a cross-target folder
+    // carries that target's builds.
+    let resolved = match crate::lpm::resolve(
+        &src_path,
+        target.name,
+        &crate::registry_requirements(&src_path).unwrap_or_default(),
+        crate::lpm::Mode::of_invocation(),
+    ) {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            eprintln!("lumenc package: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let declared = Declared {
+        cfg: &cfg.dependencies,
+        resolved: &resolved,
+    };
 
     let app_name = name.unwrap_or_else(|| {
         src_path
@@ -540,7 +553,7 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             &app_name,
             target,
             lib_dir.as_deref(),
-            &cfg.dependencies,
+            &declared,
         ),
         _ => package_sdk(
             &src_path,
@@ -549,7 +562,7 @@ produced. <out_dir> defaults to <app_dir>/dist/<name>.
             target,
             lib_dir.as_deref(),
             kind,
-            &cfg.dependencies,
+            &declared,
         ),
     };
     let summary = match assembled {
@@ -729,7 +742,7 @@ fn package_sdk(
     target: Target,
     lib_dir: Option<&Path>,
     kind: AppKind,
-    deps: &DependenciesCfg,
+    declared: &Declared<'_>,
 ) -> Result<String, String> {
     let built = match kind {
         AppKind::Rust => build_rust_app(src, target)?,
@@ -751,13 +764,13 @@ fn package_sdk(
         let toolchain = locate_toolchain(target, lib_dir)?;
         copy_c_engine(out, target, &toolchain)?;
         (
-            1 + copy_dynamic_runtime(out, target, &toolchain, deps)?,
+            1 + copy_dynamic_runtime(out, target, &toolchain, declared.cfg)?,
             vec![toolchain.dir],
         )
     };
     stage_script_library(&library_dirs, out)?;
 
-    let modules = stage_modules(src, out, target, lib_dir, deps)?;
+    let modules = stage_modules(src, out, target, lib_dir, declared)?;
 
     // The freezer's own scratch directories sit under the output so they never
     // touch the app; the package itself has no use for them.
@@ -990,6 +1003,14 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// What the app declares to load at run time, and what the registry resolved
+/// of it. The two travel together everywhere: a declaration gives the name
+/// and the load order, and the resolution gives the file.
+struct Declared<'a> {
+    cfg: &'a DependenciesCfg,
+    resolved: &'a crate::lpm::Resolved,
+}
+
 /// Stage the app's declared runtime modules into `<out>/modules/`, each
 /// under the platform file name the loader probes a `modules/` directory
 /// for. Returns how many were staged.
@@ -998,30 +1019,33 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
 /// probes the declared path first and `modules/` after it, so a declaration
 /// naming a path that exists only on the build machine (an absolute path, a
 /// build tree the packager leaves behind) still resolves in the shipped
-/// folder. `version` sources resolve through the same cache and `lumen.lock`
-/// as `lumenc run`; a version that cannot be resolved fails the package,
-/// because a shipped folder is complete or it is wrong.
+/// folder. A `version` source was resolved by `lpm` for the target being
+/// packaged, so the library staged here is that target's build; a version
+/// that cannot be resolved fails the package, because a shipped folder is
+/// complete or it is wrong.
 ///
 /// A Windows target never arrives here with anything declared: nothing loads
 /// a module beside a Windows executable, so that combination is refused
 /// before any of this runs.
 ///
-/// For a target other than this machine's, only `bundled` sources reach
-/// here - the other kinds were refused up front - and the library comes from
-/// the release's modules archive for that target, fetched and cached the way
-/// the target's toolchain files are.
+/// For a target other than this machine's, a `bundled` library comes from the
+/// release's modules archive for that target, fetched and cached the way the
+/// target's toolchain files are, and a `path` source is refused up front.
 fn stage_modules(
     src: &Path,
     out: &Path,
     target: Target,
     lib_dir: Option<&Path>,
-    deps: &DependenciesCfg,
+    declared: &Declared<'_>,
 ) -> Result<usize, String> {
+    let Declared {
+        cfg: deps,
+        resolved,
+    } = declared;
     if deps.0.is_empty() {
         return Ok(0);
     }
     let modules_dir = out.join("modules");
-    let mut lock = None;
     let mut cross_modules = None;
     let mut staged = 0usize;
     for dep in &deps.0 {
@@ -1049,13 +1073,19 @@ fn stage_modules(
                         )
                     })?
             }
-            ModuleSource::Version(req) => {
-                let lock = match &mut lock {
-                    Some(lock) => lock,
-                    None => lock.insert(lumenc_plugin::resolve::LockFile::read(src)?),
-                };
-                lumenc_plugin::resolve::resolve_version_source(&dep.name, req, lock)?
-            }
+            ModuleSource::Version(req) => match resolved.modules.get(&dep.name) {
+                Some(file) => file.clone(),
+                // A candela package declares no library to stage: its scripts
+                // compiled into the app's artifact.
+                None if resolved.candela_roots.iter().any(|(n, _)| *n == dep.name) => continue,
+                None => {
+                    return Err(format!(
+                        "dependency '{}': version \"{req}\" was not resolved for {}",
+                        dep.name,
+                        target.name()
+                    ));
+                }
+            },
         };
         std::fs::create_dir_all(&modules_dir)
             .map_err(|e| format!("create {}: {e}", modules_dir.display()))?;
@@ -1063,9 +1093,6 @@ fn stage_modules(
         std::fs::copy(&file, &dest)
             .map_err(|e| format!("copy {} -> {}: {e}", file.display(), dest.display()))?;
         staged += 1;
-    }
-    if let Some(lock) = lock {
-        lock.store()?;
     }
     Ok(staged)
 }
@@ -1520,7 +1547,7 @@ fn package(
     app_name: &str,
     target: Target,
     lib_dir: Option<&Path>,
-    deps: &DependenciesCfg,
+    declared: &Declared<'_>,
 ) -> Result<String, String> {
     let compiled = crate::compile_app(src).map_err(|e| e.to_string())?;
     let artifact = build_artifact(compiled, src)?;
@@ -1549,9 +1576,9 @@ fn package(
     }
 
     copy_c_engine(out, target, &toolchain)?;
-    copy_dynamic_runtime(out, target, &toolchain, deps)?;
+    copy_dynamic_runtime(out, target, &toolchain, declared.cfg)?;
     stage_script_library(std::slice::from_ref(&toolchain.dir), out)?;
-    let modules = stage_modules(src, out, target, lib_dir, deps)?;
+    let modules = stage_modules(src, out, target, lib_dir, declared)?;
 
     let copied = copy_app_files(src, out, CopyRules::markup())?;
     // Compiler-plugin outputs live under the dot-prefixed `.lumen/generated`
@@ -2155,17 +2182,60 @@ pub(crate) fn fetch_release_files(
     dest: &Path,
     hint: &str,
 ) -> Result<(), String> {
-    let base = release::asset_base(version);
+    fetch_verified_archive(
+        &Publisher {
+            base: release::asset_base(version),
+            sums: SHA256SUMS.to_string(),
+            name: format!("the v{version} release"),
+            hint: format!(
+                "Either there is no such release, or it is older than checksum publishing. \
+                 {hint}"
+            ),
+        },
+        archive,
+        want,
+        dest,
+    )
+}
 
-    println!("lumenc: fetching {archive} from {base}");
+/// The checksum file a Lumen release publishes beside its archives.
+pub(crate) const SHA256SUMS: &str = "sha256sums.txt";
 
-    let sums = fetch_checksums(version, &base)?;
+/// Where a verified download comes from, and what a message about it says.
+///
+/// Two publishers answer for downloads: the Lumen release channel, and the
+/// registry's own releases, which is where `lpm` comes from. Both publish an
+/// archive with a checksum file beside it, under different names, so one
+/// fetch serves both and this carries what differs.
+pub(crate) struct Publisher {
+    /// Directory URL the archive and the checksum file both sit in.
+    pub(crate) base: String,
+    /// File name of the checksum list, in `sha256sum`'s own format.
+    pub(crate) sums: String,
+    /// What a message calls the publisher, for example `the v0.0.7 release`.
+    pub(crate) name: String,
+    /// How a message closes when the publisher does not carry what was asked
+    /// for; it says how to supply the file by hand instead.
+    pub(crate) hint: String,
+}
 
-    let archive_url = format!("{base}/{archive}");
+/// Download `archive` from `from`, verify it against the checksums published
+/// beside it, and write out the members `want` names into `dest`.
+pub(crate) fn fetch_verified_archive(
+    from: &Publisher,
+    archive: &str,
+    want: &Members<'_>,
+    dest: &Path,
+) -> Result<(), String> {
+    println!("lumenc: fetching {archive} from {}", from.base);
+
+    let sums = fetch_checksums(from)?;
+
+    let archive_url = format!("{}/{archive}", from.base);
     let bytes =
         http_get(&archive_url).map_err(|e| format!("cannot download {archive_url}: {e}"))?;
 
-    install_release_files(version, archive, &sums, &bytes, want, dest, hint)
+    install_release_files(from, archive, &sums, &bytes, want, dest)
 }
 
 /// What a release archive is read for: which of its members are taken, and
@@ -2213,14 +2283,14 @@ pub(crate) enum Unpack {
     Tree,
 }
 
-/// Download and read the `sha256sums.txt` published with release `version`.
-fn fetch_checksums(version: &str, base: &str) -> Result<String, String> {
-    let sums_url = format!("{base}/sha256sums.txt");
+/// Download and read the checksum list a publisher puts beside its archives.
+fn fetch_checksums(from: &Publisher) -> Result<String, String> {
+    let sums_url = format!("{}/{}", from.base, from.sums);
     let sums = http_get(&sums_url).map_err(|e| match e {
         // Every release publishes checksums, so a status here says the release
         // itself is not what it was taken to be rather than that one file is
         // missing.
-        HttpError::Status(status) => no_checksums(version, status),
+        HttpError::Status(status) => no_checksums(from, status),
         HttpError::Transport(message) => format!("cannot download {sums_url}: {message}"),
     })?;
     String::from_utf8(sums)
@@ -2246,20 +2316,25 @@ fn fetch_modules_archive(
     deps: &DependenciesCfg,
 ) -> Result<(), String> {
     let archive = target.modules_archive_name();
-    let base = release::asset_base(version);
+    let from = Publisher {
+        base: release::asset_base(version),
+        sums: SHA256SUMS.to_string(),
+        name: format!("the v{version} release"),
+        hint: "Pass --lib-dir at a directory holding the module libraries instead.".to_string(),
+    };
 
-    println!("lumenc: fetching {archive} from {base}");
+    println!("lumenc: fetching {archive} from {}", from.base);
 
-    let sums = fetch_checksums(version, &base)?;
+    let sums = fetch_checksums(&from)?;
 
-    let archive_url = format!("{base}/{archive}");
+    let archive_url = format!("{}/{archive}", from.base);
     let bytes = http_get(&archive_url).map_err(|e| match e {
         HttpError::Status(_) => no_modules_archive(version, target, deps),
         HttpError::Transport(message) => format!("cannot download {archive_url}: {message}"),
     })?;
 
     install_release_files(
-        version,
+        &from,
         &archive,
         &sums,
         &bytes,
@@ -2270,7 +2345,6 @@ fn fetch_modules_archive(
             layout: Unpack::Flat,
         },
         dest,
-        "Pass --lib-dir at a directory holding the module libraries instead.",
     )
 }
 
@@ -2322,12 +2396,12 @@ fn name_matches(pattern: &str, name: &str) -> bool {
     }
 }
 
-/// What a release that answers for no `sha256sums.txt` means.
-fn no_checksums(version: &str, status: u16) -> String {
+/// What a publisher that answers for no checksum list means.
+fn no_checksums(from: &Publisher, status: u16) -> String {
     format!(
-        "the v{version} release publishes no sha256sums.txt (the request answered {status}), \
-         so nothing from it can be verified. Either there is no such release, or it is older \
-         than checksum publishing. Pass --lib-dir to use files you already have."
+        "{} publishes no {} (the request answered {status}), so nothing from it can be \
+         verified. {}",
+        from.name, from.sums, from.hint
     )
 }
 
@@ -2337,18 +2411,17 @@ fn no_checksums(version: &str, status: u16) -> String {
 /// Split from the download so the verification and the unpacking are the same
 /// code whether the bytes arrived over the network or from a test.
 fn install_release_files(
-    version: &str,
+    from: &Publisher,
     archive: &str,
     sums: &str,
     bytes: &[u8],
     want: &Members<'_>,
     dest: &Path,
-    hint: &str,
 ) -> Result<(), String> {
     let published = checksum_for(sums, archive).ok_or_else(|| {
         format!(
-            "the v{version} release publishes no checksum for {archive}, so it cannot be \
-             verified. {hint}"
+            "{} publishes no checksum for {archive}, so it cannot be verified. {}",
+            from.name, from.hint
         )
     })?;
     if sha256(bytes) != published {
@@ -2374,18 +2447,19 @@ fn install_release_files(
     }
     for name in want.wanted {
         if !found.contains(name) {
-            return Err(format!("{archive} carries no {name}. {hint}"));
+            return Err(format!("{archive} carries no {name}. {}", from.hint));
         }
     }
     Ok(())
 }
 
-/// The checksum published for `archive`, from `sha256sums.txt`, whose lines
-/// are a hash, two spaces, and a file name.
+/// The checksum published for `archive`, from a `sha256sum`-format list whose
+/// lines are a hash, two spaces, and a file name. A leading `*` marks binary
+/// mode and is not part of the name.
 fn checksum_for(sums: &str, archive: &str) -> Option<String> {
     sums.lines().find_map(|line| {
         let (hash, name) = line.split_once("  ")?;
-        (name.trim() == archive).then(|| hash.trim().to_lowercase())
+        (name.trim().trim_start_matches('*') == archive).then(|| hash.trim().to_lowercase())
     })
 }
 
@@ -2399,7 +2473,7 @@ fn sha256(bytes: &[u8]) -> String {
 /// Why a download did not arrive. The two cases read differently: a status
 /// says the release does not carry the file, and everything else says the
 /// request never got an answer.
-enum HttpError {
+pub(crate) enum HttpError {
     Status(u16),
     Transport(String),
 }
@@ -2414,7 +2488,7 @@ impl std::fmt::Display for HttpError {
 }
 
 /// Fetch a URL whole, following redirects.
-fn http_get(url: &str) -> Result<Vec<u8>, HttpError> {
+pub(crate) fn http_get(url: &str) -> Result<Vec<u8>, HttpError> {
     use std::io::Read;
     let mut response = ureq::get(url).call().map_err(|e| match e {
         ureq::Error::StatusCode(status) => HttpError::Status(status),
@@ -2647,7 +2721,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("lumen-modarchive-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         install_release_files(
-            "0.0.9",
+            &release("0.0.9"),
             &archive,
             &sums_line(&archive, &bytes),
             &bytes,
@@ -2658,7 +2732,6 @@ mod tests {
                 layout: Unpack::Flat,
             },
             &tmp,
-            "HINT",
         )
         .expect("the checksum matches, so every member installs");
 
@@ -2811,6 +2884,19 @@ mod tests {
             .expect("close the archive")
     }
 
+    /// A Lumen release to install from, named and hinted the way
+    /// [`fetch_release_files`] names one, so a message reads here as it would
+    /// after a download over the network. The hint is the word the assertions
+    /// look for.
+    fn release(version: &str) -> Publisher {
+        Publisher {
+            base: release::asset_base(version),
+            sums: SHA256SUMS.to_string(),
+            name: format!("the v{version} release"),
+            hint: "HINT".to_string(),
+        }
+    }
+
     /// The `sha256sums.txt` a release publishes beside its archives.
     fn sums_line(archive: &str, bytes: &[u8]) -> String {
         format!("{}  {archive}\n", sha256(bytes))
@@ -2924,7 +3010,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(&tmp);
             let wanted = ["lumen-launcher".to_string(), "liblumen.so".to_string()];
             install_release_files(
-                "0.0.9",
+                &release("0.0.9"),
                 archive,
                 &sums_line(archive, &bytes),
                 &bytes,
@@ -2935,7 +3021,6 @@ mod tests {
                     layout: Unpack::Flat,
                 },
                 &tmp,
-                "HINT",
             )
             .expect("the checksum matches, so the members install");
 
@@ -3005,7 +3090,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         let wanted = ["lumen-launcher".to_string(), "liblumen.so".to_string()];
         install_release_files(
-            "0.0.5",
+            &release("0.0.5"),
             archive,
             &sums_line(archive, &bytes),
             &bytes,
@@ -3016,7 +3101,6 @@ mod tests {
                 layout: Unpack::Flat,
             },
             &tmp,
-            "HINT",
         )
         .expect("the two files the archive does carry install");
 
@@ -3176,13 +3260,12 @@ mod tests {
         let sums = sums_line(WEB_ARCHIVE, &bytes);
 
         install_release_files(
-            "0.0.9",
+            &release("0.0.9"),
             WEB_ARCHIVE,
             &sums,
             &bytes,
             &Members::flat(&wanted),
             &tmp,
-            "HINT",
         )
         .expect("the checksum matches, so both files install");
         assert_eq!(
@@ -3193,13 +3276,12 @@ mod tests {
         // Bytes that do not match what the release published.
         let tampered = tar_gz(&[(WEB_WASM, b"not-what-was-published"), (WEB_JS, b"js")]);
         let error = install_release_files(
-            "0.0.9",
+            &release("0.0.9"),
             WEB_ARCHIVE,
             &sums,
             &tampered,
             &Members::flat(&wanted),
             &tmp,
-            "HINT",
         )
         .expect_err("the checksum does not match");
         assert!(error.contains("does not match the checksum"), "{error}");
@@ -3207,13 +3289,12 @@ mod tests {
 
         // A release that publishes checksums, but none for this archive.
         let error = install_release_files(
-            "0.0.9",
+            &release("0.0.9"),
             WEB_ARCHIVE,
             "abc123  something-else.tar.gz\n",
             &bytes,
             &Members::flat(&wanted),
             &tmp,
-            "HINT",
         )
         .expect_err("no checksum line for this archive");
         assert!(error.contains("v0.0.9"), "{error}");
@@ -3223,13 +3304,12 @@ mod tests {
         // An archive from a release that predates one of the files.
         let older = tar_gz(&[(WEB_WASM, b"wasm-bytes")]);
         let error = install_release_files(
-            "0.0.9",
+            &release("0.0.9"),
             WEB_ARCHIVE,
             &sums_line(WEB_ARCHIVE, &older),
             &older,
             &Members::flat(&wanted),
             &tmp,
-            "HINT",
         )
         .expect_err("the archive is missing a wanted file");
         assert!(error.contains(WEB_JS), "{error}");
@@ -3257,13 +3337,12 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("lumen-zip-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         install_release_files(
-            "0.0.9",
+            &release("0.0.9"),
             &archive,
             &sums_line(&archive, &bytes),
             &bytes,
             &Members::flat(&wanted),
             &tmp,
-            "HINT",
         )
         .expect("the checksum matches, so the members install");
 
@@ -3303,10 +3382,11 @@ mod tests {
     /// its own.
     #[test]
     fn a_release_that_publishes_nothing_reads_as_a_missing_release() {
-        let message = no_checksums("0.0.2", 404);
+        let message = no_checksums(&release("0.0.2"), 404);
         assert!(message.contains("v0.0.2"), "{message}");
-        assert!(message.contains("no such release"), "{message}");
-        assert!(message.contains("--lib-dir"), "{message}");
+        assert!(message.contains("sha256sums.txt"), "{message}");
+        assert!(message.contains("404"), "{message}");
+        assert!(message.ends_with("HINT"), "{message}");
         assert_eq!(
             HttpError::Status(404).to_string(),
             "the server answered 404"

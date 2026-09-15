@@ -73,15 +73,19 @@ archive ships the same tree next to `lumenc`, a source install copies it beside
 the installed binary, and `lumenc package` copies it into the folder it writes.
 
 The apps `lumenc new` scaffolds are maintained outside this repository, one per
-template under [lumen-fx](https://github.com/lumen-fx), and a release ships a
-copy of every one beside the toolchain. Download them for a local run with:
+template under [lumen-fx](https://github.com/lumen-fx). Each template repository
+publishes its tree on a release named for the Lumen release it is for, and a
+Lumen release ships the copy tagged with its own version beside the toolchain.
+Download them for a local run with:
 
 ```sh
 tools/fetch-templates.sh
 ```
 
 They land at the root of cargo's target directory, where `lumenc` finds them
-the way an installed copy finds the ones next to it. Until they are there,
+the way an installed copy finds the ones next to it. A checkout takes the newest
+template release, since `main` carries a version no release has been tagged for
+yet; set `LUMEN_TEMPLATE_TAG` to fetch a particular one. Until they are there,
 `lumenc new` says so and every test that scaffolds an app skips itself with a
 printed reason; CI fetches them before it tests.
 

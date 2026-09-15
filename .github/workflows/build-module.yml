@@ -1,0 +1,391 @@
+name: build-module
+
+# Builds a Lumen package for every target it ships on, smoke-tests each build
+# in a headless app that declares it, and publishes the result to the registry.
+#
+# A package author calls this from their own repository:
+#
+#     jobs:
+#       release:
+#         uses: lumen-fx/lumen/.github/workflows/build-module.yml@v0.0.7
+#         with:
+#           package: shape-tools
+#           kind: module
+#           lumen-version: 0.0.7
+#         secrets:
+#           lpm-token: ${{ secrets.LPM_TOKEN }}
+#
+# What differs by kind is the link shape and the platforms. A runtime module
+# links the engine dynamically, so it is built with `-C prefer-dynamic` and an
+# explicit `--target` (which keeps the flag off build scripts and proc macros)
+# and ships on the four Unix targets: nothing opens one beside a Windows
+# executable. A portable plugin and a compiler plugin are plain cdylibs that
+# speak a C ABI, so they build unadorned and ship on all five desktop targets.
+#
+# The smoke step is what makes a green run mean something. Each build is
+# declared by `path` in a generated app and run headless; the loader banners a
+# module it cannot open, so the run fails on the banner rather than passing
+# with the module silently absent.
+#
+# Publishing only happens on a tag. A pull request builds and smoke-tests and
+# stops, which is what the self-test in module-build-test.yml exercises.
+
+on:
+  workflow_call:
+    inputs:
+      package:
+        description: The registry package name, which is also what an app declares.
+        required: true
+        type: string
+      crate:
+        description: The cargo package to build. Defaults to the registry name.
+        required: false
+        type: string
+        default: ""
+      kind:
+        description: module | plugin | compiler-plugin
+        required: true
+        type: string
+      lumen-version:
+        description: The Lumen release this package is built against, without the leading v.
+        required: true
+        type: string
+      manifest-path:
+        description: Path to the Cargo.toml to build.
+        required: false
+        type: string
+        default: Cargo.toml
+      targets:
+        description: >-
+          Newline-separated target list. Defaults to the five desktop targets
+          for plugins and the four Unix targets for modules.
+        required: false
+        type: string
+        default: ""
+      deps:
+        description: Newline-separated name@requirement list the release records.
+        required: false
+        type: string
+        default: ""
+      publish:
+        description: Publish to the registry. Off for a pull request.
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      lpm-token:
+        description: Registry token. Required when publishing.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      crate: ${{ steps.plan.outputs.crate }}
+    steps:
+      - name: Work out what to build and where
+        id: plan
+        shell: bash
+        env:
+          KIND: ${{ inputs.kind }}
+          TARGETS: ${{ inputs.targets }}
+          PACKAGE: ${{ inputs.package }}
+          CRATE: ${{ inputs.crate }}
+        run: |
+          set -euo pipefail
+          case "$KIND" in
+            module|plugin|compiler-plugin) ;;
+            *) echo "kind must be module, plugin, or compiler-plugin (got '$KIND')" >&2; exit 1 ;;
+          esac
+
+          # The runner each target builds on is the one build-toolchain.yml
+          # uses for it, so a package is built on the machine its Lumen
+          # release was built on.
+          runner_for() {
+            case "$1" in
+              linux-x86_64) echo ubuntu-latest ;;
+              linux-aarch64) echo ubuntu-24.04-arm ;;
+              macos-x86_64) echo macos-26-intel ;;
+              macos-aarch64) echo macos-latest ;;
+              windows-x86_64) echo windows-latest ;;
+              windows-aarch64) echo windows-11-arm ;;
+              *) echo "" ;;
+            esac
+          }
+          triple_for() {
+            case "$1" in
+              linux-x86_64) echo x86_64-unknown-linux-gnu ;;
+              linux-aarch64) echo aarch64-unknown-linux-gnu ;;
+              macos-x86_64) echo x86_64-apple-darwin ;;
+              macos-aarch64) echo aarch64-apple-darwin ;;
+              windows-x86_64) echo x86_64-pc-windows-msvc ;;
+              windows-aarch64) echo aarch64-pc-windows-msvc ;;
+              *) echo "" ;;
+            esac
+          }
+
+          if [ -n "$TARGETS" ]; then
+            targets="$TARGETS"
+          elif [ "$KIND" = module ]; then
+            targets=$'linux-x86_64\nlinux-aarch64\nmacos-x86_64\nmacos-aarch64'
+          else
+            targets=$'linux-x86_64\nlinux-aarch64\nmacos-x86_64\nmacos-aarch64\nwindows-x86_64'
+          fi
+
+          entries=""
+          while IFS= read -r target; do
+            target="$(echo "$target" | tr -d '[:space:]')"
+            [ -n "$target" ] || continue
+            runner="$(runner_for "$target")"
+            triple="$(triple_for "$target")"
+            if [ -z "$runner" ]; then
+              echo "no runner for target '$target'" >&2
+              exit 1
+            fi
+            if [ "$KIND" = module ] && [ "${target#windows}" != "$target" ]; then
+              echo "a runtime module does not ship on $target: nothing opens one beside a Windows executable" >&2
+              exit 1
+            fi
+            entries="$entries{\"target\":\"$target\",\"os\":\"$runner\",\"triple\":\"$triple\"},"
+          done <<< "$targets"
+          [ -n "$entries" ] || { echo "no targets to build" >&2; exit 1; }
+          echo "matrix={\"include\":[${entries%,}]}" >> "$GITHUB_OUTPUT"
+
+          crate="$CRATE"
+          [ -n "$crate" ] || crate="$PACKAGE"
+          echo "crate=$crate" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: plan
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      # The rust toolchain the Lumen release pins. A module links the engine
+      # that release built, and Rust's layout is not stable across compiler
+      # versions, so building one with another compiler produces a library
+      # the loader refuses.
+      - name: Install the rust toolchain the release pins
+        shell: bash
+        env:
+          LUMEN_VERSION: ${{ inputs.lumen-version }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          url="https://raw.githubusercontent.com/lumen-fx/lumen/v$LUMEN_VERSION/rust-toolchain.toml"
+          curl -fsSL "$url" -o rust-toolchain-lumen.toml
+          channel="$(awk -F'"' '/^channel/ { print $2; exit }' rust-toolchain-lumen.toml)"
+          [ -n "$channel" ] || { echo "$url names no channel" >&2; exit 1; }
+          echo "Lumen v$LUMEN_VERSION pins rust $channel"
+          rustup toolchain install "$channel" --profile minimal --component rustfmt
+          rustup target add "$TRIPLE" --toolchain "$channel"
+          rustup override set "$channel"
+
+      - uses: lumen-fx/lumen/tools/setup-lumen@v0.0.7
+        with:
+          version: ${{ inputs.lumen-version }}
+
+      - name: Build the library
+        shell: bash
+        env:
+          CRATE: ${{ needs.plan.outputs.crate }}
+          KIND: ${{ inputs.kind }}
+          MANIFEST: ${{ inputs.manifest-path }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          # A module links the engine dynamically; the explicit --target is
+          # what keeps prefer-dynamic off build scripts and proc macros.
+          if [ "$KIND" = module ]; then
+            RUSTFLAGS="${RUSTFLAGS:-} -C prefer-dynamic" \
+              cargo build --release --manifest-path "$MANIFEST" -p "$CRATE" --target "$TRIPLE"
+          else
+            cargo build --release --manifest-path "$MANIFEST" -p "$CRATE" --target "$TRIPLE"
+          fi
+
+      - name: Find what was built
+        id: built
+        shell: bash
+        env:
+          CRATE: ${{ needs.plan.outputs.crate }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          stem="$(echo "$CRATE" | tr '-' '_')"
+          dir="target/$TRIPLE/release"
+          for name in "lib$stem.so" "lib$stem.dylib" "$stem.dll"; do
+            if [ -f "$dir/$name" ]; then
+              echo "file=$dir/$name" >> "$GITHUB_OUTPUT"
+              echo "name=$name" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "no cdylib in $dir; is crate-type = [\"cdylib\"] set?" >&2
+          ls -la "$dir" >&2 || true
+          exit 1
+
+      # A build that produced a file the loader cannot open is a build that
+      # failed, so the file is declared in a generated app and that app is run.
+      - name: Smoke-test the build in a headless app
+        shell: bash
+        env:
+          PACKAGE: ${{ inputs.package }}
+          KIND: ${{ inputs.kind }}
+          BUILT: ${{ steps.built.outputs.file }}
+        run: |
+          set -euo pipefail
+          rm -rf .smoke
+          mkdir -p .smoke/src
+          printf '<root><label>smoke</label></root>\n' > .smoke/src/main.lmn
+          abs="$(cd "$(dirname "$BUILT")" && pwd)/$(basename "$BUILT")"
+          if [ "$KIND" = compiler-plugin ]; then
+            {
+              printf '[[plugins]]\n'
+              printf 'name = "%s"\n' "$PACKAGE"
+              printf 'path = "%s"\n' "$abs"
+            } > .smoke/lumen.toml
+          else
+            {
+              printf '[dependencies]\n'
+              printf '"%s" = { path = "%s" }\n' "$PACKAGE" "$abs"
+            } > .smoke/lumen.toml
+          fi
+          lumenc run .smoke --headless --ticks 2 >smoke.out 2>smoke.err || {
+            echo "the app did not run:" >&2
+            cat smoke.out smoke.err >&2
+            exit 1
+          }
+          cat smoke.out smoke.err
+          # The loader banners a library it cannot open and keeps going, so a
+          # clean exit alone does not say the package loaded.
+          if grep -qE 'MODULE LOAD FAILED|PLUGIN LOAD FAILED' smoke.err; then
+            echo "the package did not load" >&2
+            exit 1
+          fi
+
+      - name: Pack the archive
+        shell: bash
+        env:
+          PACKAGE: ${{ inputs.package }}
+          BUILT: ${{ steps.built.outputs.file }}
+          NAME: ${{ steps.built.outputs.name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          # The library sits at the archive root, which is where lpm unpacks
+          # it and where the by-name probe looks.
+          mkdir -p .pack
+          cp "$BUILT" ".pack/$NAME"
+          tar -czf "$PACKAGE-$TARGET.tar.gz" -C .pack "$NAME"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.package }}-${{ matrix.target }}
+          path: ${{ inputs.package }}-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: release
+    needs: [plan, build]
+    if: inputs.publish && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish a release carrying every archive
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          shopt -s nullglob
+          files=(*.tar.gz)
+          [ "${#files[@]}" -gt 0 ] || { echo "nothing was built" >&2; exit 1; }
+          sha256sum "${files[@]}" > sha256sums.txt
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" sha256sums.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$PACKAGE $GITHUB_REF_NAME" \
+            --generate-notes
+
+      - name: Install lpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$(curl -fsSLo /dev/null -w '%{url_effective}' \
+            https://github.com/lumen-fx/registry/releases/latest)"
+          tag="${tag##*/}"
+          version="${tag#v}"
+          asset="lpm_${version}_linux_amd64.tar.gz"
+          base="https://github.com/lumen-fx/registry/releases/download/$tag"
+          curl -fsSL "$base/checksums.txt" -o checksums.txt
+          curl -fsSL "$base/$asset" -o "$asset"
+          want="$(awk -v a="$asset" '{ n = $2; sub(/^\*/, "", n); if (n == a) { print $1; exit } }' checksums.txt)"
+          [ -n "$want" ] || { echo "release $tag publishes no $asset" >&2; exit 1; }
+          echo "$want  $asset" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf "$asset" -C "$HOME/.local/bin" lpm
+          chmod 755 "$HOME/.local/bin/lpm"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Record the release in the registry
+        shell: bash
+        env:
+          LPM_TOKEN: ${{ secrets.lpm-token }}
+          PACKAGE: ${{ inputs.package }}
+          KIND: ${{ inputs.kind }}
+          LUMEN_VERSION: ${{ inputs.lumen-version }}
+          DEPS: ${{ inputs.deps }}
+        run: |
+          set -euo pipefail
+          [ -n "${LPM_TOKEN:-}" ] || { echo "publishing needs the lpm-token secret" >&2; exit 1; }
+          version="${GITHUB_REF_NAME#v}"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+
+          args=()
+          for file in artifacts/*.tar.gz; do
+            name="$(basename "$file")"
+            target="${name#"$PACKAGE"-}"
+            target="${target%.tar.gz}"
+            args+=(--artifact "$target=$base/$name")
+          done
+          while IFS= read -r dep; do
+            dep="$(echo "$dep" | tr -d '[:space:]')"
+            [ -n "$dep" ] || continue
+            args+=(--dep "$dep")
+          done <<< "$DEPS"
+
+          # A runtime module is version-locked to the engine build it links,
+          # so it requires that exact release. A plugin speaks a C ABI and
+          # keeps working across patch releases.
+          if [ "$KIND" = module ]; then
+            args+=(--requires "lumen@=$LUMEN_VERSION")
+          else
+            args+=(--requires "lumen@>=$LUMEN_VERSION")
+          fi
+
+          lpm release "$PACKAGE" "$version" "${args[@]}"

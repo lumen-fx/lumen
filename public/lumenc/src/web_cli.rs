@@ -37,6 +37,7 @@ use lumen_ssr::{FetchPolicy, RenderOptions, SsrSite};
 use lumen_web::urls::is_external;
 use lumen_web::{
     AssetRef, CssMode, HostRewrite, LocaleSpec, PageSpec, RowFills, SignalEnv, SiteSpec, WebSpec,
+    intrinsic_size,
 };
 
 use crate::web_serve::{LOOPBACK, Server};
@@ -60,7 +61,7 @@ USAGE:
     lumenc web <app_dir> [--out DIR] [--base PATH] [--locale TAG]...
                          [--render static|csr|ssr] [--prerender seeds|run|none]
                          [--runtime|--no-runtime]
-                         [--no-hooks] [--lib-dir DIR] [--strict]
+                         [--no-hooks] [--lib-dir DIR] [--strict] [--offline]
                          [--serve] [--port N] [--host ADDR]
                          [--allow-host NAME]...
 
@@ -98,6 +99,8 @@ a page loads them.
     --lib-dir DIR     Directory holding lumen-web.wasm and lumen-web.js,
                       instead of the ones shipped with lumenc.
     --strict          Fail the build on any warning it prints.
+    --offline         Resolve the app's registry packages from what is
+                      already downloaded, and never reach the network.
     --serve           Serve the site after emitting it, and print the URL.
                       Under --render ssr every page comes from a render.
     --port N          Port to serve on (default: 8787; 0 picks a free one).
@@ -350,12 +353,19 @@ fn build(options: &Options) -> Result<Report, String> {
         ));
     }
     // Runtime modules are native shared libraries the engine dlopens, and a
-    // browser has no dynamic loader to hand one to.
-    if let Some(dep) = cfg.dependencies.0.first() {
+    // browser has no dynamic loader to hand one to. A candela package is
+    // script source, so it compiles into the app like the app's own scripts
+    // and travels wherever the app does, the web included.
+    let resolved = crate::registry_packages(dir)?;
+    let native = cfg.dependencies.0.iter().find(|dep| {
+        !matches!(dep.source, lumen_modules::ModuleSource::Version(_))
+            || resolved.modules.contains_key(&dep.name)
+    });
+    if let Some(dep) = native {
         return Err(format!(
-            "this app declares [dependencies] ('{}'), and runtime modules do not exist on the \
-             web: a module is a native library the engine loads, which a browser cannot do. \
-             Drop the declaration or ship the app as a desktop package.",
+            "this app declares '{}' under [dependencies], and it is a native library: the \
+             engine loads one by opening it, which a browser cannot do. Drop the declaration \
+             or ship the app as a desktop package.",
             dep.name
         ));
     }
@@ -1256,9 +1266,18 @@ fn place_asset(
     let path = site_path(src, bytes.as_deref());
     // A name carries the hash of what is in the file, so two sources that
     // reach the same name hold the same bytes: one file under one name,
-    // copied once, pointed at by both.
+    // copied once, pointed at by both. The same read answers how big an image
+    // is, which is what the page says so that it holds the image's place
+    // before the bytes arrive.
     if taken.insert(path.clone()) {
-        assets.push(AssetRef::new(source.clone(), path.clone()));
+        let asset = AssetRef::new(source.clone(), path.clone());
+        let size = bytes
+            .as_deref()
+            .and_then(|bytes| intrinsic_size(bytes, src));
+        assets.push(match size {
+            Some(size) => asset.with_size(size),
+            None => asset,
+        });
     }
     placed.insert(source, path.clone());
     path

@@ -9,6 +9,8 @@
 
 #![cfg(all(not(windows), feature = "package"))]
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -82,15 +84,40 @@ fn engine_name() -> &'static str {
     }
 }
 
-fn run_package(app: &Path, out: &Path, lib_dir: &Path, extra: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_lumenc"))
+fn package_command(app: &Path, out: &Path, lib_dir: &Path, extra: &[&str]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lumenc"));
+    command
         .arg("package")
         .arg(app)
         .arg(out)
         .arg("--lib-dir")
         .arg(lib_dir)
         .arg("--no-hooks")
-        .args(extra)
+        .args(extra);
+    command
+}
+
+fn run_package(app: &Path, out: &Path, lib_dir: &Path, extra: &[&str]) -> std::process::Output {
+    package_command(app, out, lib_dir, extra)
+        // Nothing on this path declares a registry package, and pinning the
+        // client at a path that does not exist is what proves it: a test that
+        // grew one would fail rather than reach the developer's own `lpm`.
+        .env("LPM_BIN", out.join("no-such-lpm"))
+        .output()
+        .expect("lumenc runs")
+}
+
+/// [`run_package`] with the registry answering from `answer`.
+fn run_package_with_registry(
+    app: &Path,
+    out: &Path,
+    lib_dir: &Path,
+    extra: &[&str],
+    answer: &Path,
+) -> std::process::Output {
+    package_command(app, out, lib_dir, extra)
+        .env("LPM_BIN", common::lpm_stub())
+        .env("LPM_STUB_JSON", answer)
         .output()
         .expect("lumenc runs")
 }
@@ -219,26 +246,40 @@ fn a_path_module_refuses_a_cross_target_package() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("dependency 'demo-mod'"), "{stderr}");
     assert!(stderr.contains("built for one platform"), "{stderr}");
-    assert!(stderr.contains("bundled"), "{stderr}");
+    assert!(stderr.contains("registry version"), "{stderr}");
 
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// A cross-target package with a `version` module is refused until the
-/// registry exists, and the message says so.
+/// A `version` module cross-packages. The registry resolves for the platform
+/// being packaged, not for this one, so what stages into `modules/` is that
+/// platform's build.
 #[test]
-fn a_version_module_refuses_a_cross_target_package() {
+fn a_version_module_cross_packages_from_the_registry() {
+    let cross = cross();
     let root = scratch("cross-version");
     let app = write_app(&root, "demo-mod = \"1.0\"\n");
-    let toolchain = write_toolchain(&root, true);
+    let toolchain = write_cross_toolchain(&root, &cross);
     let out = root.join("dist");
 
-    let output = run_package(&app, &out, &toolchain, &["--target", cross().target]);
-    assert!(!output.status.success());
+    // The package the registry resolved for the target, holding that
+    // platform's library under the name the loader probes for.
+    let package = root.join("pkg");
+    let file = format!("libdemo-mod.{}", cross.ext);
+    write(&package, &file, "the target's build");
+    let answer = common::stub_answer(
+        &root.join("lpm.json"),
+        &common::lumen_package("demo-mod", "1.0.4", cross.target, &package, &file),
+    );
+
+    let output =
+        run_package_with_registry(&app, &out, &toolchain, &["--target", cross.target], &answer);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("dependency 'demo-mod'"), "{stderr}");
-    assert!(stderr.contains("registry"), "{stderr}");
-    assert!(stderr.contains("does not exist yet"), "{stderr}");
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(out.join("modules").join(&file)).expect("the module staged"),
+        "the target's build"
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }

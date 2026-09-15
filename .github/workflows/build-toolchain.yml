@@ -295,10 +295,16 @@ jobs:
       # The `lumenc new` templates. Each is maintained in a repository of its
       # own under lumen-fx and published there as an archive of its tree;
       # Lumen keeps no copy of any of them, so the copy the toolchain ships is
-      # downloaded here and packaged below. `shell: bash` because the Windows
-      # leg defaults to PowerShell; curl and tar are on every runner image.
+      # downloaded here and packaged below. A release fetches the template
+      # release named for the tag it is cutting, so the templates a toolchain
+      # carries are the ones tagged for it; the nightly, which builds `main`
+      # and has no tag, takes the newest published one. `shell: bash` because
+      # the Windows leg defaults to PowerShell; curl and tar are on every
+      # runner image.
       - name: Fetch the app templates
         shell: bash
+        env:
+          LUMEN_TEMPLATE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: tools/fetch-templates.sh target/templates
 
       - name: Package (Unix)

@@ -55,7 +55,8 @@ pub struct WebDomPlugin {
     /// What the site's addresses look like, when `[web] navigation = "soft"`
     /// asks the app to keep running across a link. `None` leaves the address
     /// bar to the browser, which is what happens when every link loads the
-    /// next document anyway.
+    /// next document anyway. An in-app navigation still swaps the page in
+    /// place either way.
     pub routes: Option<Routes>,
 }
 

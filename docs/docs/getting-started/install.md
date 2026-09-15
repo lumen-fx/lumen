@@ -44,6 +44,7 @@ See [shell completions](../reference/cli.md#completions).
 | `--no-confirm` | Accept the defaults without prompting. |
 | `--no-modify-path` | Never write to a shell startup file. |
 | `--no-modules` | Skip the bundled runtime modules and install the toolchain alone. |
+| `--no-lpm` | Skip `lpm`, the package-registry client. |
 | `--force` | Reinstall even when already at the target version. |
 | `--uninstall` | Remove every file the installer wrote. |
 | `-h`, `--help` | Show the installer's own help. |
@@ -56,6 +57,16 @@ To pass options through the pipe, hand them to `sh`:
 curl -fsSL https://lumenfx.dev/install.sh | sh -s -- --prefix ~/tools/lumen
 ```
 
+### The package registry client
+
+`lpm` resolves the packages an app declares and downloads them. It goes to
+`~/.local/bin/lpm`, outside the prefix, because one copy serves every
+toolchain on the machine and `lumenc` looks for it there. You do not have to
+put that directory on your `PATH`; add it if you want to run `lpm` yourself.
+
+`--no-lpm` skips it, and `lumenc` installs it the first time an app names a
+registry package.
+
 ### Uninstall
 
 ```sh
@@ -64,7 +75,7 @@ curl -fsSL https://lumenfx.dev/install.sh | sh -s -- --uninstall
 
 The installer records every path it writes, so an uninstall removes exactly
 those files and nothing else. A `PATH` line added to a shell startup file stays
-behind; delete it by hand.
+behind; delete it by hand, and so does `lpm`, which sits outside the prefix.
 
 ## Windows
 

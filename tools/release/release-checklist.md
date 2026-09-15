@@ -81,26 +81,34 @@ checklist.
 1. Make sure `main` is green in the `ci` workflow.
 2. Check that `version` in the workspace `Cargo.toml` is the version you are
    about to tag. It usually is already, because the previous release set it
-   (step 7). If it is not, run `tools/release/bump-version.py <version>`,
+   (step 8). If it is not, run `tools/release/bump-version.py <version>`,
    commit, push, and wait for green. The tag has to match this value: the
    release workflow compares them first and publishes nothing if they differ,
    because the MSI's version, the install receipt, and `lumenc --version` all
    read from these two places.
-3. Tag and push:
+3. Check that every template repository under `lumen-fx` (`blank`, `hello`,
+   `counter`, `form`, `todo`, `dashboard`, `settings`, `hotkeys`) has a
+   release tagged `vX.Y.Z`. A template release is named for the Lumen release
+   it is for, and the build fetches that tag; a repository without it fails
+   the build before anything is published. Tag any that lack it (a pushed
+   tag publishes the release, and a tag re-pushed before Lumen `vX.Y.Z` is
+   out republishes it) and wait for their `release` workflows.
+4. Tag and push:
 
    ```sh
    git tag vX.Y.Z
    git push origin vX.Y.Z
    ```
 
-4. The `release` workflow then, automatically, for each target:
+5. The `release` workflow then, automatically, for each target:
    - checks out at the tag and builds `lumenc`, `liblumen`, and the launcher
      stub in release mode (`cargo build --release` with `-p lumenc`,
      `-p lumen`, and `-p lumen-launcher`; the workspace
      `[profile.release]` already strips symbols, so there is no separate
      strip step);
    - downloads the `lumenc new` templates with `tools/fetch-templates.sh`, one
-     per template from the repository it is maintained in under `lumen-fx`;
+     per template from the repository it is maintained in under `lumen-fx`,
+     each from the release tagged `vX.Y.Z` there;
    - packages `bin/lumenc` (`lumenc.exe` on Windows), the liblumen shared
      library, and `bin/lumen-launcher` into one archive, all in the *same*
      `bin/` directory, along with the two trees `lumenc` reads from beside
@@ -141,7 +149,7 @@ checklist.
    Re-running the workflow after a fix is safe, because `gh release upload
    --clobber` replaces same-named assets rather than erroring on them.
 
-5. The same run then goes on to the four channels a release feeds, each in the
+6. The same run then goes on to the four channels a release feeds, each in the
    workflow that owns it and each checked out at the tag: `publish.yml` for the
    language registries, `publish-packages.yml` for the OS package managers,
    `publish-extensions.yml` for the editor marketplaces, and `site-rebuild.yml`
@@ -158,15 +166,17 @@ checklist.
    every one skips the parts it has no credential for. Each of those files
    lists the credentials it wants at the top.
 
-6. Work through [Verify](#verify) against the published release.
+7. Work through [Verify](#verify) against the published release.
 
-7. Check that `main` moved on. The release's last job commits
+8. Check that `main` moved on. The release's last job commits
    `chore: set the workspace version to X.Y.Z+1` straight to `main`, so the tag
    push is the whole release and there is nothing left to merge.
 
    From there `main` carries a version with no release behind it, which is the
    point: `main` builds identify themselves as the version they will become,
-   and step 2 of the next release has nothing left to do.
+   and step 2 of the next release has nothing left to do. The template
+   repositories can be tagged for that version at any point in the cycle;
+   `main` builds do not need it, since they fetch the newest template release.
 
    That is safe because nothing turns a version number into a download
    address. Every version-keyed lookup asks the releases page what exists:
@@ -254,6 +264,15 @@ release means attaching the assets to the GitHub release for the tag, which
 A release with no `sha256sums.txt` cannot be installed by the script at all.
 That is what `--version` pointing at a release from before this file existed
 runs into, and the error says so.
+
+One thing the installer puts on the machine comes from another repository:
+`lpm`, the package-registry client, published by `lumen-fx/registry` as
+`lpm_<version>_<os>_<arch>.tar.gz` with `checksums.txt` beside it. It is
+read the same way, through that repository's own `releases/latest` redirect,
+and verified the same way. It goes to `~/.local/bin/lpm` rather than under
+the prefix, so it is not in the receipt and `--uninstall` leaves it, and it
+is not a Lumen release asset: a Lumen release publishes nothing for it and
+the release checks below do not cover it. `--no-lpm` skips it.
 
 Asset naming is the contract `install.sh` relies on to find a build. It
 computes `<target>` from `uname -s` and `uname -m` and looks for

@@ -23,7 +23,8 @@ pub mod tags;
 pub mod urls;
 
 pub use attrs::{
-    MarkupRules, class_list, class_value, control_attrs, html_attrs, is_disableable, markup_rules,
+    ImageBox, MarkupRules, PixelSize, class_list, class_value, control_attrs, html_attrs,
+    image_attrs, is_disableable, markup_rules,
 };
 pub use contract::{
     DATA_LM, DATA_LM_AUX, DATA_LM_BASE, DATA_LM_CHECKED, DATA_LM_CONTRACT, DATA_LM_DISABLED,

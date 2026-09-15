@@ -2,13 +2,13 @@
 //! their hooks. Compiled only under the `host` feature; lumenc and
 //! lumen-runtime are the consumers, never plugin authors.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use libloading::Library;
 use lumen_plugin_abi::dlopen::{self, CallError, HookOut, PrefixError};
 
 use crate::abi::{self, Desc};
-use crate::resolve::LockFile;
 use crate::{Ctx, Finding, LayoutIR, Output, PluginCfg, PluginSource, codec};
 
 /// Which source text a transform call carries.
@@ -117,17 +117,15 @@ pub struct PluginSet {
 
 impl PluginSet {
     /// Load every declared plugin, in order, verifying each descriptor.
-    /// `version` sources resolve through the plugin cache and pin into
-    /// `lumen.lock` (written back here when it changed).
-    pub fn load(app_dir: &Path, cfgs: &[PluginCfg]) -> Result<Self, PluginError> {
-        let mut lock = if cfgs
-            .iter()
-            .any(|c| matches!(c.source, PluginSource::Version(_)))
-        {
-            Some(LockFile::read(app_dir).map_err(PluginError::Resolve)?)
-        } else {
-            None
-        };
+    ///
+    /// A `path` source is probed here, beside the app. A `version` source was
+    /// resolved before this ran, by `lpm`, and arrives in `resolved` keyed by
+    /// plugin name; this never resolves, downloads, or reads a lock.
+    pub fn load(
+        app_dir: &Path,
+        cfgs: &[PluginCfg],
+        resolved: &BTreeMap<String, PathBuf>,
+    ) -> Result<Self, PluginError> {
         let mut plugins = Vec::with_capacity(cfgs.len());
         for cfg in cfgs {
             let path = match &cfg.source {
@@ -139,13 +137,15 @@ impl PluginSet {
                         }
                     })?
                 }
-                PluginSource::Version(req) => crate::resolve::resolve_version_source(
-                    &cfg.name,
-                    req,
-                    lock.as_mut()
-                        .expect("lock read when a version source exists"),
-                )
-                .map_err(PluginError::Resolve)?,
+                PluginSource::Version(req) => {
+                    resolved.get(&cfg.name).cloned().ok_or_else(|| {
+                        PluginError::Resolve(format!(
+                            "plugin '{}': version \"{req}\" was not resolved; run `lumenc fetch` \
+                             to resolve the app's registry dependencies",
+                            cfg.name
+                        ))
+                    })?
+                }
             };
             let lib = dlopen::open_library(&path).map_err(|message| PluginError::Open {
                 name: cfg.name.clone(),
@@ -170,9 +170,6 @@ impl PluginSet {
                 _lib: lib,
                 desc,
             });
-        }
-        if let Some(lock) = &lock {
-            lock.store().map_err(PluginError::Resolve)?;
         }
         Ok(PluginSet {
             plugins,
@@ -713,9 +710,13 @@ mod tests {
             fake.display()
         ))
         .unwrap();
-        let err = PluginSet::load(&dir, &crate::PluginCfg::from_document(&doc).unwrap())
-            .unwrap_err()
-            .to_string();
+        let err = PluginSet::load(
+            &dir,
+            &crate::PluginCfg::from_document(&doc).unwrap(),
+            &BTreeMap::new(),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("failed to open"), "{err}");
         // The libloading Display alone is "dlopen failed"; the chain carries
         // the loader's reason, which is the actionable part.
@@ -743,9 +744,13 @@ mod tests {
         let dir = test_dir("no-entry");
         let doc: toml::Table =
             toml::from_str(&format!("[[plugins]]\nname = \"libc\"\npath = '{libc}'\n")).unwrap();
-        let err = PluginSet::load(&dir, &crate::PluginCfg::from_document(&doc).unwrap())
-            .unwrap_err()
-            .to_string();
+        let err = PluginSet::load(
+            &dir,
+            &crate::PluginCfg::from_document(&doc).unwrap(),
+            &BTreeMap::new(),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("exports no lumenc_plugin_v1 entry"), "{err}");
     }
 

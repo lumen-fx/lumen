@@ -489,37 +489,47 @@ mod tests {
         assert!(report.open_issues.is_none());
     }
 
-    /// `git` is already a hard dependency of `origin_repo_slug`, so it is
-    /// guaranteed present wherever this suite runs, needs no network, and
-    /// exits fast either way - which makes it a reliable stand-in for `gh`
-    /// on both sides of `fetch_open_issues`'s success/failure split: `git
-    /// --version` exits 0 for the "fast success" case, and `git`
-    /// interpreting `gh`'s fixed arguments as an unknown subcommand exits
-    /// non-zero for the "process ran but failed" case. Neither needs a
-    /// mock, since both are real, deterministic exits of a real process.
+    /// This test binary stands in for `gh` on both sides of
+    /// `fetch_open_issues`'s success/failure split: the harness answers
+    /// `--help` with exit 0 for the "fast success" case, and rejects
+    /// `gh`'s fixed `--repo` flag as an unknown option with a non-zero
+    /// exit for the "process ran but failed" case. Neither needs a mock,
+    /// since both are real, deterministic exits of a real process, and
+    /// neither needs a network.
+    ///
+    /// `git` played this part before, and a cold Windows runner could take
+    /// longer than the timeout just to start it: an unknown git subcommand
+    /// walks every PATH entry looking for `git-*` candidates before it
+    /// gives up. The executable already running is the one child that
+    /// costs no lookup at all.
     #[tokio::test]
     async fn a_fast_process_returns_ok_before_the_timeout() {
-        let mut command = tokio::process::Command::new("git");
-        command.arg("--version");
-        let (pid, result) = spawn_with_timeout(command, Duration::from_secs(5), "git").await;
+        let mut command = tokio::process::Command::new(self_exe());
+        command.arg("--help");
+        let (pid, result) = spawn_with_timeout(command, Duration::from_secs(5), "self").await;
         assert!(pid.is_some(), "a spawned process must report a pid");
-        let output = result.expect("git --version should succeed quickly");
+        let output = result.expect("the harness's --help should succeed quickly");
         assert!(output.status.success());
     }
 
     #[tokio::test]
     async fn a_nonzero_exit_is_reported_with_the_binary_name() {
         let cfg = GhConfig {
-            bin: OsString::from("git"),
+            bin: self_exe().into_os_string(),
             timeout: Duration::from_secs(5),
         };
         // `fetch_open_issues` always appends the fixed `gh issue list ...`
-        // arguments regardless of `cfg.bin`; git rejects `issue` as an
-        // unknown subcommand immediately, no network involved.
+        // arguments regardless of `cfg.bin`; the harness rejects `--repo`
+        // as an unknown option immediately, no network involved.
         let err = fetch_open_issues("lumen-fx/lumen", &cfg)
             .await
-            .expect_err("git does not understand gh's arguments");
+            .expect_err("the test harness does not understand gh's arguments");
         assert!(err.contains("exited with"), "{err}");
+    }
+
+    /// The executable these tests run in.
+    fn self_exe() -> std::path::PathBuf {
+        std::env::current_exe().expect("the test binary knows its own path")
     }
 
     /// A process that never answers (standing in for `gh` stuck on an
