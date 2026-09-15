@@ -269,7 +269,10 @@ it against. The full surface is in the scripting reference for each host
 [Lua](../reference/scripting-lua.md#downloads)); Lua spells the call
 `download.to_file(..)`.
 
-Windows builds have no runtime modules yet, so this is unavailable there.
+On Windows nothing loads a module beside the executable, so this surface
+exists only in a
+[`lumenc package --static`](packaging.md#one-self-contained-executable)
+build, which compiles the declared modules in.
 
 ## Saving data
 
@@ -308,8 +311,10 @@ reference for each host ([candela](../reference/scripting-candela.md#filesystem)
 [Lua](../reference/scripting-lua.md#filesystem)); Lua spells the calls
 `files.read(..)`.
 
-Windows builds have no runtime modules yet, so this surface is unavailable
-there.
+On Windows nothing loads a module beside the executable, so this surface
+exists only in a
+[`lumenc package --static`](packaging.md#one-self-contained-executable)
+build, which compiles the declared modules in.
 
 ## Unpacking archives
 
@@ -353,8 +358,10 @@ for each host ([candela](../reference/scripting-candela.md#archives),
 [Lua](../reference/scripting-lua.md#archives)); Lua spells the call
 `archive.extract(..)`.
 
-Windows builds have no runtime modules yet, so this surface is unavailable
-there.
+On Windows nothing loads a module beside the executable, so this surface
+exists only in a
+[`lumenc package --static`](packaging.md#one-self-contained-executable)
+build, which compiles the declared modules in.
 
 ## Functions the app's Rust adds
 
