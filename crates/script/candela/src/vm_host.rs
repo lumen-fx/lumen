@@ -31,6 +31,7 @@ use lumen_script::{
 use crate::host_fns::{Registries, register_lumen_host_fns, register_script_fn};
 use crate::library_dir::LibraryDir;
 use crate::value::{candela_value_to_script, script_value_to_candela};
+use crate::vm_panic;
 
 /// The registry awaiting a load, and the program once loaded, behind a
 /// hand-checked `Send`/`Sync` boundary.
@@ -153,6 +154,35 @@ impl CandelaVmHost {
     pub fn exports(&self) -> Vec<String> {
         self.exported_names.clone()
     }
+
+    /// One call into the loaded image, with a panic out of the VM contained
+    /// and the image dropped after it. [`crate::vm_panic`] says why a panic
+    /// costs the program; the compiler host contains its calls the same way.
+    ///
+    /// A render server runs this host, one program per render on a worker
+    /// thread, so an uncontained panic there is not one dead call but every
+    /// later request answered with the same failure.
+    ///
+    /// The export cache goes with the program: [`Self::exports`] answers what
+    /// a caller may still call, and after the drop that is nothing.
+    ///
+    /// Returns `None` when no image is loaded.
+    fn vm_call(&mut self, fn_name: &str, args: &[Value]) -> Option<Result<Value, CallError>> {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let program = self.vm.program.as_mut()?;
+        match catch_unwind(AssertUnwindSafe(|| program.call(fn_name, args))) {
+            Ok(outcome) => Some(outcome),
+            Err(payload) => {
+                self.vm.program = None;
+                self.exported_names.clear();
+                Some(Err(CallError::Runtime(vm_panic::vm_panic_diagnostic(
+                    fn_name,
+                    payload.as_ref(),
+                ))))
+            }
+        }
+    }
 }
 
 impl ScriptHost for CandelaVmHost {
@@ -229,8 +259,8 @@ impl ScriptHost for CandelaVmHost {
         let mut runtime_err: Option<ScriptError> = None;
         let mut ret: Option<ScriptValue> = None;
 
-        if let Some(program) = self.vm.program.as_mut() {
-            match program.call(fn_name, &kargs) {
+        if let Some(outcome) = self.vm_call(fn_name, &kargs) {
+            match outcome {
                 Ok(value) => ret = Some(candela_value_to_script(&value)),
                 // The runtime probes optional handlers (`on_start`,
                 // `on_click`, ...) on every host and treats a miss as
@@ -259,13 +289,8 @@ impl ScriptHost for CandelaVmHost {
         args: &[ScriptValue],
     ) -> Result<ScriptValue, ScriptError> {
         let kargs: Vec<Value> = args.iter().map(script_value_to_candela).collect();
-        let program = self
-            .vm
-            .program
-            .as_mut()
-            .ok_or_else(|| ScriptError::Runtime("no candela artifact loaded".to_owned()))?;
-        program
-            .call(closure, &kargs)
+        self.vm_call(closure, &kargs)
+            .ok_or_else(|| ScriptError::Runtime("no candela artifact loaded".to_owned()))?
             .map(|v| candela_value_to_script(&v))
             .map_err(|e| ScriptError::Runtime(e.to_string()))
     }
@@ -274,13 +299,12 @@ impl ScriptHost for CandelaVmHost {
         let Some(name) = self.registries.event_handler(token) else {
             return Ok(false);
         };
-        let Some(program) = self.vm.program.as_mut() else {
-            return Ok(false);
-        };
-        match program.call(&name, &[Value::Int(token as i64)]) {
-            Ok(_) => Ok(true),
-            Err(CallError::UnknownFunction(_)) => Ok(false),
-            Err(e) => Err(ScriptError::Runtime(e.to_string())),
+        let arg = [Value::Int(token as i64)];
+        match self.vm_call(&name, &arg) {
+            None => Ok(false),
+            Some(Ok(_)) => Ok(true),
+            Some(Err(CallError::UnknownFunction(_))) => Ok(false),
+            Some(Err(e)) => Err(ScriptError::Runtime(e.to_string())),
         }
     }
 

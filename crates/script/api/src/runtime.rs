@@ -821,8 +821,8 @@ pub fn apply_derivations<H: ScriptHost + Resource<Mutability = Mutable>>(
             // corrupted interpreter state, say) must not unwind through the
             // tick and take the process with it. Every host's `call` /
             // `call_closure` is expected to turn its own panics into a
-            // `ScriptError` before returning (`CandelaHost::vm_call` does
-            // this); this is the backstop for a panic that escapes anyway -
+            // `ScriptError` before returning, which the candela hosts do;
+            // this is the backstop for a panic that escapes anyway -
             // one containment point, feeding the same failed-derivation
             // path below rather than a second reporting mechanism. Neither
             // `store` nor the property-store dirty set is touched before
@@ -876,7 +876,10 @@ pub fn apply_derivations<H: ScriptHost + Resource<Mutability = Mutable>>(
 /// for a literal message, `String` for a formatted one. Any other payload (a
 /// `panic_any` caller reaching in with something else) reports as unknown
 /// rather than failing to build a message.
-fn panic_payload_text(payload: &(dyn std::any::Any + Send)) -> String {
+///
+/// Public so a host writing its own containment reports a panic the same way
+/// this backstop does.
+pub fn panic_payload_text(payload: &(dyn std::any::Any + Send)) -> String {
     payload
         .downcast_ref::<&str>()
         .map(|s| s.to_string())

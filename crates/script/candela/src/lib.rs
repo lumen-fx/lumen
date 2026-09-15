@@ -133,6 +133,7 @@ pub mod lmn;
 pub mod prelude;
 mod value;
 mod vm_host;
+mod vm_panic;
 
 pub use builtins::{BUILTINS, BuiltinFn, BuiltinParam};
 pub use host_fns::{HOST_NAMESPACE, HostFnSink, NATIVE_NAMESPACE};
