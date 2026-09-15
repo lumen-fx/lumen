@@ -918,6 +918,11 @@ it. That trade defines it:
   the shapes that refuse runtime modules.
 - **The same failure policy.** A load failure banners and the app boots
   without the plugin; the outcome lands in the same `LoadedModules` resource.
+- **Loaded once, never unloaded.** The library stays mapped for the life of
+  the process. The app's scripts hold bodies that call into it and the
+  plugin's own threads keep running its code, so there is no point at which
+  unmapping it would be safe. Shutdown tells the plugin the app is going
+  down; it closes nothing.
 
 ### Authoring a portable plugin
 
