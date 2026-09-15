@@ -37,6 +37,23 @@ pub fn install_retranslate(app: &mut App) {
     );
 }
 
+/// Every element that kept its authored strings, with each thing a locale
+/// writes on it: its text, its entry's placeholder and caret, its tooltip's
+/// body, and whether an edit is in flight.
+type Retranslated<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static AuthoredStrings,
+        Option<&'static TextFormat>,
+        Option<&'static mut TextContent>,
+        Option<&'static mut TextInput>,
+        Option<&'static mut TooltipSource>,
+        Option<&'static Focused>,
+    ),
+    Without<BindText>,
+>;
+
 /// Resolve every element that kept its authored strings against the locale
 /// in force, and write back what changed.
 ///
@@ -49,21 +66,7 @@ pub fn install_retranslate(app: &mut App) {
 /// it on the same tick. A focused text entry has an edit in flight, and
 /// overwriting the buffer under the caret would lose the keystroke; its
 /// placeholder still moves, since nothing is typing into that.
-#[allow(clippy::type_complexity)]
-pub fn retranslate_on_locale_change(
-    i18n: Option<Res<AppI18n>>,
-    mut q: Query<
-        (
-            &AuthoredStrings,
-            Option<&TextFormat>,
-            Option<&mut TextContent>,
-            Option<&mut TextInput>,
-            Option<&mut TooltipSource>,
-            Option<&Focused>,
-        ),
-        Without<BindText>,
-    >,
-) {
+pub fn retranslate_on_locale_change(i18n: Option<Res<AppI18n>>, mut q: Retranslated<'_, '_>) {
     let Some(i18n) = i18n else {
         return;
     };
