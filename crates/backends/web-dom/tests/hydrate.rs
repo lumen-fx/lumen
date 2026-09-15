@@ -722,6 +722,27 @@ fn dispatch_drag_with_types(target: &Element, kind: &str, types: &[&str]) {
     target.dispatch_event(&event).unwrap();
 }
 
+/// Dispatch a bubbling drag event of `kind` at `target`, carrying a real
+/// `DataTransfer` that holds a file.
+///
+/// A file drag is the one kind a test cannot describe by naming a type:
+/// `setData` lowercases the format it is handed, so the literal `Files`
+/// entry the spec puts in `types` appears only when the transfer really
+/// carries a file. Putting one in is what makes this the event a browser
+/// raises when something is dragged in from the desktop.
+fn dispatch_file_drag(target: &Element, kind: &str) {
+    let transfer = web_sys::DataTransfer::new().unwrap();
+    let bits = js_sys::Array::of1(&JsValue::from_str("the file's bytes"));
+    let file = web_sys::File::new_with_str_sequence(&bits, "dropped.txt").unwrap();
+    transfer.items().add_with_file(&file).unwrap();
+    let init = web_sys::DragEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    init.set_data_transfer(Some(&transfer));
+    let event = web_sys::DragEvent::new_with_event_init_dict(kind, &init).unwrap();
+    target.dispatch_event(&event).unwrap();
+}
+
 #[wasm_bindgen_test]
 fn a_drag_a_target_does_not_accept_leaves_it_dark() {
     let root = prerender(uri_list_drop_target_tree());
@@ -750,7 +771,7 @@ fn a_drag_a_target_accepts_lights_it_up() {
     // `Files` is how a browser names a file drag; the desktop delivers the
     // same drag as a `text/uri-list` payload, so this is the type the filter
     // has to match.
-    dispatch_drag_with_types(&target, "dragenter", &["Files"]);
+    dispatch_file_drag(&target, "dragenter");
     app.tick();
     assert!(
         target.has_attribute(DATA_LM_DRAG_OVER),
@@ -758,7 +779,7 @@ fn a_drag_a_target_accepts_lights_it_up() {
          target asked for"
     );
 
-    dispatch_drag_with_types(&target, "dragleave", &["Files"]);
+    dispatch_file_drag(&target, "dragleave");
     app.tick();
     assert!(
         !target.has_attribute(DATA_LM_DRAG_OVER),
