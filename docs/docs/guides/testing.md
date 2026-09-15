@@ -15,6 +15,11 @@ reload works, and screenshots come out pixel-identical to the windowed path.
 The only thing missing is the window: no compositor is touched, so this is
 safe on a build machine and safe to run while you are working.
 
+Hardware nobody is there to use is left alone too: an app that declares the
+audio module still gets the `audio_*` functions, the playback state, and the
+position signals, but no output device is opened, so a headless run never
+takes the machine's audio endpoint from whatever else is using it.
+
 Ticks happen on demand. The app ticks when something asks it to (an
 animation, a pending change, an incoming command) and parks otherwise, so an
 idle headless app costs nothing.

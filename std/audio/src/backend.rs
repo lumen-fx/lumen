@@ -130,8 +130,9 @@ impl RodioAudio {
     /// position, and duration behave; there is never any sound, and the event
     /// loop is never woken for position updates.
     ///
-    /// Tests use it to stay off the machine's audio endpoint while still
-    /// exercising the real decoder; a deviceless embedder can install
+    /// This is the shape an app with no interactive session takes: a headless
+    /// run reaches no audio endpoint while still exercising the real decoder.
+    /// A deviceless embedder that assembles its own app can install
     /// [`crate::AudioPlugin::inert`] for the same effect.
     pub fn disabled() -> Self {
         Self {
@@ -140,6 +141,16 @@ impl RodioAudio {
             bytes: None,
             ticker: None,
         }
+    }
+
+    /// Whether the position ticker thread is running: true for a live backend
+    /// on any machine, false for the [`Self::disabled`] shape.
+    ///
+    /// This is what tells the two apart on a box with no audio device, where
+    /// `output` is `None` either way.
+    #[cfg(test)]
+    pub(crate) fn has_ticker(&self) -> bool {
+        self.ticker.is_some()
     }
 
     /// Rebuild the player's decoded source from the retained encoded bytes,

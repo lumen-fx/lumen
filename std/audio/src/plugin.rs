@@ -116,6 +116,9 @@ pub struct AudioPlugin {
 impl AudioPlugin {
     /// The shipping shape: open the default output device (degrading to
     /// silent when there is none) and run the position ticker.
+    ///
+    /// What the caller asks for, not what it gets: an app with no interactive
+    /// session takes the deviceless shape anyway. See [`Plugin::build`].
     #[must_use]
     pub fn new() -> Self {
         Self { open_device: true }
@@ -123,8 +126,11 @@ impl AudioPlugin {
 
     /// The deviceless shape: no output device is opened and no ticker thread
     /// runs. The whole surface still works - state, position, duration, the
-    /// signals, the end event - there is just never any sound. For tests and
-    /// deviceless embedders.
+    /// signals, the end event - there is just never any sound.
+    ///
+    /// For a deviceless embedder that assembles its own [`App`] and declares
+    /// no run mode. An app the runtime builds gets this from its run mode
+    /// instead, with no call to make.
     #[must_use]
     pub fn inert() -> Self {
         Self { open_device: false }
@@ -139,7 +145,12 @@ impl Default for AudioPlugin {
 
 impl Plugin for AudioPlugin {
     fn build(self, app: &mut App) {
-        let backend = if self.open_device {
+        // A run with no interactive session gets the deviceless shape: a
+        // headless run, an automation driver, a build that instantiates the
+        // module only to read what it registers. The whole surface still
+        // works, there is just no sound, and no build grabs the machine's
+        // output device as a side effect.
+        let backend = if self.open_device && !app.is_headless() {
             RodioAudio::new()
         } else {
             RodioAudio::disabled()
@@ -367,5 +378,55 @@ fn spawn_loader(
                 eprintln!("lumen-audio: could not spawn the loader thread: {e}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lumen_module::lumen_core::app::{App, RunMode};
+    use lumen_module::lumen_script::ScriptFnRegistry;
+
+    use super::{AudioPlugin, AudioState};
+
+    /// The point of the module: a run with no interactive session installs
+    /// the whole script surface and reaches no audio endpoint.
+    ///
+    /// There is deliberately no mirror test for the interactive branch; it
+    /// would open the machine's device on every `cargo test`.
+    #[test]
+    fn a_headless_build_registers_the_functions_and_opens_no_device() {
+        let mut app = App::new();
+        app.world.insert_resource(RunMode { headless: true });
+        app.add_plugin(AudioPlugin::new());
+
+        let registered: Vec<String> = app
+            .world
+            .resource::<ScriptFnRegistry>()
+            .fns()
+            .iter()
+            .map(|f| f.name.clone())
+            .collect();
+        for name in [
+            "audio_play",
+            "audio_pause",
+            "audio_resume",
+            "audio_stop",
+            "audio_seek",
+            "audio_volume",
+        ] {
+            assert!(
+                registered.iter().any(|r| r.as_str() == name),
+                "{name} was not registered: {registered:?}"
+            );
+        }
+
+        let state = app
+            .world
+            .get_non_send_resource::<AudioState>()
+            .expect("the module installs its state");
+        assert!(
+            !state.backend.has_ticker(),
+            "a headless build took the live backend, so it opened an output device"
+        );
     }
 }
