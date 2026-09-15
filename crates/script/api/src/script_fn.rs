@@ -28,12 +28,14 @@ use crate::{ScriptCommand, ScriptValue};
 /// A host binds a typed parameter to its own type where it can (Rhai resolves a
 /// call by argument type) and checks the argument where it cannot (Lua binds
 /// variadically and raises on a mismatch). [`ScriptTy::Any`] accepts whatever
-/// the script passes.
+/// the script passes, and [`ScriptTy::Dynamic`] says the same of a return that
+/// was meant to be open rather than left undeclared.
 ///
 /// Variants are append-only; see [`SCRIPT_WIRE_VERSION`](crate::SCRIPT_WIRE_VERSION).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScriptTy {
-    /// Any value; no check.
+    /// Any value; no check. This is what a signature carries where nothing was
+    /// declared, so an untyped return is read as a forgotten declaration.
     Any,
     /// No value (`()` in Rhai, `nil` in Lua, `null` in candela).
     Unit,
@@ -49,12 +51,17 @@ pub enum ScriptTy {
     Array(Box<ScriptTy>),
     /// String-keyed map whose values carry the inner type.
     Map(Box<ScriptTy>),
+    /// Any value, declared on purpose: the result has no shape narrower than
+    /// this one, as with a parsed JSON document. Every host treats it exactly
+    /// as [`Any`](ScriptTy::Any); the difference is that the author said so,
+    /// which is what tells a deliberate open return from a missing one.
+    Dynamic,
 }
 
 impl ScriptTy {
-    /// Whether `value` satisfies this type. [`ScriptTy::Any`] accepts anything;
-    /// an [`Array`](ScriptTy::Array) or [`Map`](ScriptTy::Map) also checks its
-    /// elements.
+    /// Whether `value` satisfies this type. [`ScriptTy::Any`] and
+    /// [`ScriptTy::Dynamic`] accept anything; an [`Array`](ScriptTy::Array) or
+    /// [`Map`](ScriptTy::Map) also checks its elements.
     ///
     /// An integer satisfies a declared float: every scripting language Lumen
     /// hosts spells `1` and `1.0` as the same literal kind, so `seek(30)`
@@ -62,7 +69,7 @@ impl ScriptTy {
     /// an integer is declared would silently drop its fraction.
     pub fn accepts(&self, value: &ScriptValue) -> bool {
         match (self, value) {
-            (Self::Any, _) => true,
+            (Self::Any | Self::Dynamic, _) => true,
             (Self::Unit, ScriptValue::Unit) => true,
             (Self::Bool, ScriptValue::Bool(_)) => true,
             (Self::Int, ScriptValue::I64(_)) => true,
@@ -81,7 +88,7 @@ impl ScriptTy {
     /// The name a host puts in a type-mismatch message.
     pub fn name(&self) -> &'static str {
         match self {
-            Self::Any => "any",
+            Self::Any | Self::Dynamic => "any",
             Self::Unit => "unit",
             Self::Bool => "bool",
             Self::Int => "int",
@@ -153,9 +160,11 @@ impl ScriptSig {
     /// that binds variadically passes whatever the script sent straight
     /// through; that is what `lumen_app_expose` and the SDK's `native_fn`
     /// describe, and a call with the wrong count reaches the body rather than
-    /// failing to resolve.
+    /// failing to resolve. [`Dynamic`](ScriptTy::Dynamic) says as little.
     pub fn is_typed(&self) -> bool {
-        self.params.iter().any(|p| p.ty != ScriptTy::Any)
+        self.params
+            .iter()
+            .any(|p| !matches!(p.ty, ScriptTy::Any | ScriptTy::Dynamic))
     }
 
     /// Check `args` against the declared parameters. Returns the message a host
@@ -704,7 +713,9 @@ impl ScriptFnBuilder {
         self
     }
 
-    /// Set the return type. Defaults to [`ScriptTy::Any`].
+    /// Set the return type. Defaults to [`ScriptTy::Any`], which reads as a
+    /// return nobody declared; a function whose result really is open declares
+    /// [`ScriptTy::Dynamic`].
     #[must_use]
     pub fn ret(mut self, ty: ScriptTy) -> Self {
         self.sig.ret = ty;
