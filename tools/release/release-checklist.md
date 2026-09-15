@@ -166,6 +166,18 @@ checklist.
    every one skips the parts it has no credential for. Each of those files
    lists the credentials it wants at the top.
 
+   `publish.yml` and `publish-extensions.yml` both ask their registry what it
+   already holds and upload only what is missing, so re-running either one is
+   safe. A leg that already uploaded says so and does nothing; a leg that did
+   not uploads on the re-run.
+
+   The editor clients are numbered as the tools they are, on their own
+   schedule, not on the toolchain's. An extension therefore ships only when its
+   own version moves, so a change to one bumps
+   `tools/vscode-lumen/package.json` or `tools/jetbrains-lumen/gradle.properties`
+   in the same commit. A release carrying an unchanged extension publishes
+   nothing and says which registry already holds that version.
+
 7. Work through [Verify](#verify) against the published release.
 
 8. Check that `main` moved on. The release's last job commits

@@ -6,6 +6,12 @@ name: publish-extensions
 # so the workflow is safe before the accounts exist. The first JetBrains
 # upload is manual by marketplace rule; this takes over from the second.
 #
+# The run is re-runnable: each registry is asked what it already holds before
+# anything is uploaded, and a version that is already published is nothing to
+# do. That is the usual outcome rather than the exception, because the editor
+# clients are numbered on their own schedule and most releases carry the same
+# extension version as the one before.
+#
 # release.yml calls this once the release is published, off the tag it was cut
 # from. Waiting on `release: published` instead would never fire: release.yml
 # creates the release with the built-in token, and GitHub raises no workflow
@@ -17,11 +23,10 @@ name: publish-extensions
 # automatic caller is release.yml, which fires on `v*` tags while the nightly
 # publishes onto a tag named `nightly`.
 #
-# Each job holds its own lock. A marketplace rejects a version it already has
-# rather than skipping it, so two overlapping runs fail the second one. The
-# lock is per job rather than per workflow because a called workflow's jobs
-# join the caller's run, leaving a workflow-level group no run of its own to
-# gate.
+# Each job holds its own lock. Two overlapping runs would both read "not
+# published" and both upload the same version. The lock is per job rather than
+# per workflow because a called workflow's jobs join the caller's run, leaving
+# a workflow-level group no run of its own to gate.
 
 on:
   workflow_call:
@@ -54,17 +59,89 @@ jobs:
 
       - run: npm install --no-audit --no-fund
 
+      # Packaging runs on every ref, whether or not an upload follows. It is
+      # the only thing that proves the extension still builds.
       - run: npx @vscode/vsce package
 
-      - name: publish to the marketplace
+      # Secrets cannot be read in a step-level `if`, so both registries are
+      # asked here and the publish steps read the answers back. The probes run
+      # before the token gates rather than behind them, so a run with no
+      # credentials still prints what each registry holds.
+      - name: decide what to publish
+        id: plan
         run: |
-          if [ -z "$VSCE_PAT" ]; then echo "VSCE_PAT absent; skipping"; exit 0; fi
-          npx @vscode/vsce publish --packagePath ./*.vsix -p "$VSCE_PAT"
+          set -u
+          publisher="$(node -p "require('./package.json').publisher")"
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          id="$publisher.$name"
+
+          # A version has its own URL on Open VSX, so one request answers it.
+          code="$(curl -sS -o /dev/null -w '%{http_code}' \
+            "https://open-vsx.org/api/$publisher/$name/$version")"
+          case "$code" in
+            200) on_ovsx=true ;;
+            404) on_ovsx=false ;;
+            *)
+              echo "publish-extensions.yml: open vsx answered $code for $id $version" >&2
+              exit 1
+              ;;
+          esac
+
+          # The gallery has no per-version endpoint, so this asks for the
+          # extension and looks for the version in what comes back. An
+          # extension nobody has published yet gives an empty list, which
+          # reads as "not published" and is right for a first upload.
+          body="$(curl -sS -X POST \
+            https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json;api-version=3.0-preview.1' \
+            -w '\n%{http_code}' \
+            -d "{\"filters\":[{\"criteria\":[{\"filterType\":7,\"value\":\"$id\"}]}],\"flags\":1}")"
+          code="${body##*$'\n'}"
+          if [ "$code" != "200" ]; then
+            echo "publish-extensions.yml: the marketplace answered $code for $id" >&2
+            exit 1
+          fi
+          on_marketplace=false
+          if printf '%s\n' "${body%$'\n'*}" \
+            | jq -r '.results[]?.extensions[]?.versions[]?.version' \
+            | grep -qxF "$version"; then
+            on_marketplace=true
+          fi
+
+          echo "open vsx holds $id $version: $on_ovsx"
+          echo "the marketplace holds $id $version: $on_marketplace"
+
+          marketplace=true
+          ovsx=true
+          if [ -z "$VSCE_PAT" ]; then
+            marketplace=false
+            echo "::notice::VSCE_PAT is not set"
+          fi
+          if [ -z "$OVSX_PAT" ]; then
+            ovsx=false
+            echo "::notice::OVSX_TOKEN is not set"
+          fi
+          if [ "$on_marketplace" = "true" ]; then
+            marketplace=false
+            echo "::notice::$id $version is already on the marketplace, nothing to do"
+          fi
+          if [ "$on_ovsx" = "true" ]; then
+            ovsx=false
+            echo "::notice::$id $version is already on open vsx, nothing to do"
+          fi
+
+          echo "marketplace=$marketplace" >> "$GITHUB_OUTPUT"
+          echo "ovsx=$ovsx" >> "$GITHUB_OUTPUT"
+
+      - name: publish to the marketplace
+        if: steps.plan.outputs.marketplace == 'true'
+        run: npx @vscode/vsce publish --packagePath ./*.vsix -p "$VSCE_PAT"
 
       - name: publish to open vsx
-        run: |
-          if [ -z "$OVSX_PAT" ]; then echo "OVSX_TOKEN absent; skipping"; exit 0; fi
-          npx ovsx publish ./*.vsix -p "$OVSX_PAT"
+        if: steps.plan.outputs.ovsx == 'true'
+        run: npx ovsx publish ./*.vsix -p "$OVSX_PAT"
 
   jetbrains:
     runs-on: ubuntu-latest
@@ -88,7 +165,47 @@ jobs:
           java-version: "21"
           cache: gradle
 
-      - name: publish to the jetbrains marketplace
+      # As in the vscode job: the marketplace is asked what it holds, and the
+      # publish step below reads the answer back. The id comes from
+      # `plugin.xml` because that is what the marketplace keys the plugin by;
+      # `pluginGroup` carries the same string today for no reason that binds.
+      - name: decide what to publish
+        id: plan
         run: |
-          if [ -z "$PUBLISH_TOKEN" ]; then echo "JETBRAINS_PUBLISH_TOKEN absent; skipping"; exit 0; fi
-          ./gradlew --no-daemon publishPlugin
+          set -u
+          id="$(sed -n 's:.*<id>\(.*\)</id>.*:\1:p' src/main/resources/META-INF/plugin.xml | head -1)"
+          version="$(sed -n 's/^pluginVersion[[:space:]]*=[[:space:]]*//p' gradle.properties)"
+
+          # A plugin nobody has published yet answers `<plugin-repository/>`,
+          # so the version list is empty and the upload is owed. The first
+          # upload is manual by marketplace rule either way.
+          body="$(curl -sS -w '\n%{http_code}' \
+            "https://plugins.jetbrains.com/plugins/list?pluginId=$id")"
+          code="${body##*$'\n'}"
+          if [ "$code" != "200" ]; then
+            echo "publish-extensions.yml: the jetbrains marketplace answered $code for $id" >&2
+            exit 1
+          fi
+          published=false
+          if printf '%s\n' "${body%$'\n'*}" \
+            | sed -n 's:.*<version>\([^<]*\)</version>.*:\1:p' \
+            | grep -qxF "$version"; then
+            published=true
+          fi
+          echo "the jetbrains marketplace holds $id $version: $published"
+
+          jetbrains=true
+          if [ -z "$PUBLISH_TOKEN" ]; then
+            jetbrains=false
+            echo "::notice::JETBRAINS_PUBLISH_TOKEN is not set"
+          fi
+          if [ "$published" = "true" ]; then
+            jetbrains=false
+            echo "::notice::$id $version is already on the jetbrains marketplace, nothing to do"
+          fi
+
+          echo "jetbrains=$jetbrains" >> "$GITHUB_OUTPUT"
+
+      - name: publish to the jetbrains marketplace
+        if: steps.plan.outputs.jetbrains == 'true'
+        run: ./gradlew --no-daemon publishPlugin
