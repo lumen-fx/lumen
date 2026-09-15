@@ -500,6 +500,9 @@ fn navigation_fns() -> Vec<ScriptFn> {
             .ns(ScriptNs::Builtin)
             .param("path", T::Str)
             .min_arity(0)
+            // The current path when read, nothing when navigating: a result
+            // whose shape depends on how the call was written.
+            .ret(T::Dynamic)
             .doc("Navigate to a page, or read the current one when called with no argument.")
             .hosts(HostSet::RHAI | HostSet::LUA)
             .build(move |cx| Ok(read_or_navigate(cx))),
@@ -819,21 +822,18 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    /// Every entry is a builtin with a doc line and declared parameters: what
-    /// the hosts, the editor tooling, and the candela declaration generator
-    /// all read.
-    ///
-    /// The return type is only pinned for the entries candela sees, because
-    /// candela is the language that has to name it in a declaration. Rhai and
-    /// Lua resolve `page()` and `page(path)` through one entry whose result
-    /// depends on which one the script called.
+    /// Every entry is a builtin with a doc line, declared parameters and a
+    /// declared return: what the hosts, the editor tooling, and the candela
+    /// declaration generator all read.
     ///
     /// The builder's `ret` defaults to `Any` when a builtin never calls it, so
     /// a return left at `Any` is a forgotten declaration, which is what this
-    /// asserts against. A result that has no shape narrower than `any`, as
-    /// `parse_json` and `parse_markdown` do, declares `Dynamic` and says so in
-    /// the signature itself; candela then names it the way it already names a
-    /// variadic binding, `any name(...);`.
+    /// asserts against, for every entry and not only the ones candela has to
+    /// name. A result that has no shape narrower than `any` declares
+    /// `Dynamic` and says so in the signature itself: a parsed document, or
+    /// the Rhai and Lua `page` entry, whose result depends on whether the
+    /// script read the path or navigated. candela names such a return the way
+    /// it already names a variadic binding, `any name(...);`.
     #[test]
     fn every_entry_is_a_documented_builtin() {
         for f in builtin_script_fns() {
@@ -841,17 +841,20 @@ mod tests {
             assert!(!f.sig.doc.is_empty(), "{} has no doc line", f.name);
             assert!(!f.sig.variadic, "{} must declare its parameters", f.name);
             for p in &f.sig.params {
-                assert_ne!(
-                    p.ty,
-                    T::Any,
+                assert!(
+                    !p.ty.is_dynamic(),
                     "{}: parameter `{}` is untyped",
                     f.name,
                     p.name
                 );
             }
-            if f.visible_to("candela") {
-                assert_ne!(f.sig.ret, T::Any, "{}: return type is undeclared", f.name);
-            }
+            assert_ne!(
+                f.sig.ret,
+                T::Any,
+                "{}: return type is undeclared; call .ret(..), or .ret(T::Dynamic) when \
+                 the result has no fixed shape",
+                f.name
+            );
         }
     }
 

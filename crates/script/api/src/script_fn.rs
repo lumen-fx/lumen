@@ -59,8 +59,16 @@ pub enum ScriptTy {
 }
 
 impl ScriptTy {
-    /// Whether `value` satisfies this type. [`ScriptTy::Any`] and
-    /// [`ScriptTy::Dynamic`] accept anything; an [`Array`](ScriptTy::Array) or
+    /// Whether this type names no shape a host can bind: [`Any`](ScriptTy::Any)
+    /// because nothing was declared, [`Dynamic`](ScriptTy::Dynamic) because
+    /// what was declared has no fixed shape. Every host treats the two alike;
+    /// the builtin table's own check is what tells them apart.
+    pub fn is_dynamic(&self) -> bool {
+        matches!(self, Self::Any | Self::Dynamic)
+    }
+
+    /// Whether `value` satisfies this type. A [dynamic](Self::is_dynamic) type
+    /// accepts anything; an [`Array`](ScriptTy::Array) or
     /// [`Map`](ScriptTy::Map) also checks its elements.
     ///
     /// An integer satisfies a declared float: every scripting language Lumen
@@ -68,8 +76,10 @@ impl ScriptTy {
     /// is the call an author writes. The reverse does not hold; a float where
     /// an integer is declared would silently drop its fraction.
     pub fn accepts(&self, value: &ScriptValue) -> bool {
+        if self.is_dynamic() {
+            return true;
+        }
         match (self, value) {
-            (Self::Any | Self::Dynamic, _) => true,
             (Self::Unit, ScriptValue::Unit) => true,
             (Self::Bool, ScriptValue::Bool(_)) => true,
             (Self::Int, ScriptValue::I64(_)) => true,
@@ -162,9 +172,7 @@ impl ScriptSig {
     /// describe, and a call with the wrong count reaches the body rather than
     /// failing to resolve. [`Dynamic`](ScriptTy::Dynamic) says as little.
     pub fn is_typed(&self) -> bool {
-        self.params
-            .iter()
-            .any(|p| !matches!(p.ty, ScriptTy::Any | ScriptTy::Dynamic))
+        self.params.iter().any(|p| !p.ty.is_dynamic())
     }
 
     /// Check `args` against the declared parameters. Returns the message a host
