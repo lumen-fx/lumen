@@ -9,9 +9,12 @@
 # its symbols from the declared one, so the source is where the answer is.
 #
 # Every step that has to enumerate the modules reads this instead of listing
-# them: the release workflow packaging `lumen-modules-<target>.tar.gz` and the
-# one naming the modules a link kit carries. Adding a crate under std/ is then
-# the whole of adding a first-party module.
+# them: the release workflow building them beside the engine, the one packaging
+# `lumen-modules-<target>.tar.gz`, and the one naming the modules a link kit
+# carries. A crate added under std/ then reaches every release step untouched.
+# The static launcher (crates/launcher) still names each module by hand, in its
+# manifest and its link anchors, and the link-kit step refuses the build when
+# that list is missing one.
 #
 # Needs jq, which every GitHub runner image has. On the Windows runner the
 # shell is git bash and the tools in the pipeline below are native Windows

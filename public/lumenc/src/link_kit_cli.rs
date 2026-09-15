@@ -812,8 +812,11 @@ mod tests {
         options
     }
 
-    /// The declared name and library name of every module under `std/`, the
-    /// pairs `.github/scripts/first-party-modules.sh` hands the release step.
+    /// Module names in the shape `.github/scripts/first-party-modules.sh`
+    /// hands the release step, declared name to library name. A fixture
+    /// paired with `msvc_line()`, not an enumeration of `std/`: it pins the
+    /// shape of an MSVC line, and five names prove that as well as the
+    /// tree's count would.
     fn first_party() -> BTreeMap<String, String> {
         ["archive", "audio", "download", "fs", "process"]
             .into_iter()
