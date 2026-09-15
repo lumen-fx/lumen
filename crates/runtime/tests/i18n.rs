@@ -6,6 +6,11 @@
 //! resolve the same catalogue and the same locale. The locale also sets
 //! the app's base writing direction, which a `dir` attribute overrides.
 //!
+//! The locale is not fixed for the life of the run: a script's
+//! `set_locale` moves the catalogue, the formatters and the direction
+//! together, and the tree already on screen is written again in the
+//! locale it moved to.
+//!
 //! Runs window-free through `build_headless_app`, the same path
 //! `run_app_headless` takes.
 
@@ -531,6 +536,212 @@ fn authored_dir_still_beats_the_locale() {
         LayoutDirection::Rtl
     );
     assert_eq!(direction_of(&mut app, "root"), LayoutDirection::Ltr);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Build an app that ships a script, so the command applier and the locale
+/// rebuild are registered. The engine is pinned because the baked sources
+/// below are Rhai and the default is candela; port 0 keeps parallel test
+/// binaries off a shared socket.
+fn build_with_script(dir: &Path, root: Element, script: &str) -> lumen_core::app::App {
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[app]\nlocale = \"en-US\"\nfallback_locale = \"en-US\"\n\n\
+         [mcp]\nport = 0\n\n[script]\nengine = \"rhai\"\n",
+    )
+    .unwrap();
+    let ir = LayoutIR {
+        root,
+        script_source: script.to_string(),
+        ..Default::default()
+    };
+    let bytes = artifact::serialize(&CompiledApp {
+        ir,
+        script_source: script.to_string(),
+        ..Default::default()
+    })
+    .expect("serialize artifact");
+    let opts = RunOptions::new(dir).with_artifact_bytes(bytes);
+    let (app, _) = build_headless_app(opts).expect("app builds headless");
+    app
+}
+
+fn placeholders(app: &mut lumen_core::app::App) -> Vec<String> {
+    app.world
+        .query::<&lumen_core::components::TextInput>()
+        .iter(&app.world)
+        .map(|input| input.placeholder.clone())
+        .collect()
+}
+
+fn tooltips(app: &mut lumen_core::app::App) -> Vec<String> {
+    app.world
+        .query::<&lumen_primitives::TooltipSource>()
+        .iter(&app.world)
+        .map(|source| source.text.clone())
+        .collect()
+}
+
+/// A tree carrying one of each thing a locale writes: a marked label, a
+/// marked entry that names only its placeholder, a marked tooltip, and a
+/// formatted amount.
+fn switchable_tree() -> Element {
+    Element {
+        tag: "root".to_string(),
+        attrs: Attributes {
+            id: Some("root".to_string()),
+            ..Default::default()
+        },
+        children: vec![
+            label(Some("Good morning"), Some("greet")),
+            Element {
+                tag: "input".to_string(),
+                attrs: Attributes {
+                    placeholder: Some("Search the catalogue".to_string()),
+                    translatable: Some("search".to_string()),
+                    ..Default::default()
+                },
+                children: Vec::new(),
+                ..Default::default()
+            },
+            Element {
+                tag: "button".to_string(),
+                attrs: Attributes {
+                    text: Some("Save".to_string()),
+                    tooltip: Some(TooltipSpec {
+                        text: "Save the file".to_string(),
+                        translatable: Some("save-tip".to_string()),
+                        delay_ms: None,
+                        offset: None,
+                    }),
+                    ..Default::default()
+                },
+                children: Vec::new(),
+                ..Default::default()
+            },
+            formatted_label("1234.5", "currency:EUR"),
+        ],
+        ..Default::default()
+    }
+}
+
+/// A script switches the locale of a running app, and everything the old
+/// locale wrote is written again: the marked label, the entry's
+/// placeholder, the tooltip's body, and the formatted amount.
+#[test]
+fn a_script_switches_the_locale_while_the_app_runs() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("switch");
+    write_catalogue(
+        &dir,
+        "en-US",
+        "greet = Good morning\nsearch =\n    .placeholder = Search the catalogue\n\
+         save-tip = Save the file\n",
+    );
+    write_catalogue(
+        &dir,
+        "de-DE",
+        "greet = Guten Morgen\nsearch =\n    .placeholder = Katalog durchsuchen\n\
+         save-tip = Datei speichern\n",
+    );
+
+    let mut app = build_with_script(
+        &dir,
+        switchable_tree(),
+        "fn on_start() { set_locale(\"de-DE\"); }",
+    );
+    // What the app spawned in, before the script ran.
+    let spawned = texts(&mut app);
+    assert!(spawned.contains(&"Good morning".to_string()), "{spawned:?}");
+    let english_price = spawned
+        .iter()
+        .find(|t| t.contains("234"))
+        .expect("the formatted amount")
+        .clone();
+
+    for _ in 0..3 {
+        app.tick();
+    }
+
+    let switched = texts(&mut app);
+    assert!(
+        switched.contains(&"Guten Morgen".to_string()),
+        "{switched:?}"
+    );
+    assert_eq!(
+        placeholders(&mut app),
+        vec!["Katalog durchsuchen".to_string()]
+    );
+    assert_eq!(tooltips(&mut app), vec!["Datei speichern".to_string()]);
+    // The formatter moved with the catalogue: the two locales group and
+    // point their decimals differently, and place the symbol differently.
+    let german_price = switched
+        .iter()
+        .find(|t| t.contains("234"))
+        .expect("the formatted amount");
+    assert_ne!(*german_price, english_price, "{switched:?}");
+    // And the getter answers the locale the app is in now.
+    assert_eq!(lumen_core::i18n::active_locale(), "de-DE");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Switching to a right-to-left locale mirrors the tree already on screen,
+/// with nothing in the markup saying so.
+#[test]
+fn a_switch_to_an_rtl_locale_mirrors_the_running_tree() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("switch-rtl");
+    write_catalogue(&dir, "en-US", "greet = Good morning\n");
+    write_catalogue(&dir, "ar-EG", "greet = Sabah el-kheir\n");
+
+    let mut app = build_with_script(
+        &dir,
+        root_with_dir(None),
+        "fn on_start() { set_locale(\"ar-EG\"); }",
+    );
+    assert_eq!(
+        app.world.resource::<DefaultLayoutDirection>().0,
+        LayoutDirection::Ltr
+    );
+
+    for _ in 0..3 {
+        app.tick();
+    }
+
+    assert_eq!(
+        app.world.resource::<DefaultLayoutDirection>().0,
+        LayoutDirection::Rtl
+    );
+    assert_eq!(direction_of(&mut app, "root"), LayoutDirection::Rtl);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A tag that is not a locale is logged and changes nothing.
+#[test]
+fn a_tag_that_is_not_a_locale_leaves_the_app_where_it_was() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = app_dir("switch-bad-tag");
+    write_catalogue(&dir, "en-US", "greet = Good morning\n");
+
+    let mut app = build_with_script(
+        &dir,
+        Element {
+            tag: "root".to_string(),
+            attrs: Attributes::default(),
+            children: vec![label(Some("Good morning"), Some("greet"))],
+            ..Default::default()
+        },
+        "fn on_start() { set_locale(\"not a tag at all\"); }",
+    );
+    for _ in 0..3 {
+        app.tick();
+    }
+    let after = texts(&mut app);
+    assert!(after.contains(&"Good morning".to_string()), "{after:?}");
+    assert_eq!(lumen_core::i18n::active_locale(), "en-US");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

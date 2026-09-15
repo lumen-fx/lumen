@@ -665,6 +665,25 @@ fn misc_fns() -> Vec<ScriptFn> {
             T::Str,
             |cx| ScriptValue::Str(lumen_core::i18n::translate(&cx.str_arg(0))),
         ),
+        // Changing the locale is a write, so it queues a command the
+        // runtime applies against the app's own half of the seam; reading
+        // it back is not, and answers from the process-wide value. A
+        // language menu needs both: the entry to mark is whichever locale
+        // the app started in, which may be the one the OS reports and which
+        // no script chose.
+        emit(
+            "set_locale",
+            "Switch the app to that BCP-47 locale, such as de-DE.",
+            &[("tag", T::Str)],
+            |cx| ScriptCommand::SetLocale { tag: cx.str_arg(0) },
+        ),
+        value(
+            "locale",
+            "The BCP-47 tag of the locale the app is running in.",
+            &[],
+            T::Str,
+            |_| ScriptValue::Str(lumen_core::i18n::active_locale()),
+        ),
         // The app's locale formatters sit behind the process-wide
         // formatting hook, so no host links ICU itself. One builtin per
         // kind rather than one `format(spec, value)`: a builtin parameter

@@ -18,13 +18,19 @@
 //!   them from one spec string, which is what markup's `format`
 //!   attribute and the scripts' `format_*` builtins carry.
 //!
-//! ECS integration: [`I18nPlugin`] installs [`SharedI18n`] (a shared
-//! handle to the registry, for a catalogue reload and for the build-time
-//! tools that translate an IR tree) and [`lumen_core::i18n::AppI18n`]
-//! (the app's half of core's opaque seam, which is how markup reaches
-//! both halves as it spawns), for the locale the caller pins or the one
-//! `sys-locale` reports. The [`t!`] macro takes any `I18n` binding,
-//! including a [`SharedI18n::read`] guard.
+//! ECS integration: [`I18nPlugin`] installs [`SharedI18n`] and
+//! [`SharedFormatter`] (shared handles to the registry and the
+//! formatters, for a catalogue reload, for a locale switch, and for the
+//! build-time tools that translate an IR tree) and
+//! [`lumen_core::i18n::AppI18n`] (the app's half of core's opaque seam,
+//! which is how markup reaches all of it as it spawns), for the locale
+//! the caller pins or the one `sys-locale` reports. The [`t!`] macro
+//! takes any `I18n` binding, including a [`SharedI18n::read`] guard.
+//!
+//! An app's locale is not fixed for the life of the process:
+//! [`switch_locale`] moves the catalogue, the formatters and the writing
+//! direction together, and every reader holding a shared handle sees the
+//! move at once.
 //!
 //! Conversions follow the project's `From`/`Into` convention - no
 //! bespoke `parse_lang` or `convert_locale_to_langid` helpers.
@@ -166,7 +172,16 @@ impl I18n {
         Ok(())
     }
 
-    /// Switch the active locale. Call before the next [`Self::t`].
+    /// Switch the active locale every later lookup resolves against.
+    ///
+    /// This moves the catalogue and nothing else. An app's locale is more
+    /// than its catalogue: the number and date formatters and the base
+    /// writing direction read it too, and [`switch_locale`] is the call
+    /// that moves all three together.
+    ///
+    /// A locale with no bundle loaded is allowed. Every message falls
+    /// through the chain then, which ends at the locale the app's source
+    /// strings are written in.
     pub fn set_current(&mut self, lang: LanguageIdentifier) {
         self.current = lang;
     }
@@ -228,10 +243,17 @@ impl I18n {
     /// echoing the key. Callers with their own fallback (markup that
     /// carries authored text alongside its `translatable` key) need to
     /// tell "translated to the key" from "no entry".
+    ///
+    /// A chain entry equal to the active locale is skipped, so a miss never
+    /// probes one bundle twice for the answer it already gave. The skip is
+    /// here rather than in the chain itself because the active locale
+    /// changes while the app runs: pruning the chain would throw away the
+    /// entry the locale switched away from needs on the way back.
     pub fn try_t<'a>(&'a self, key: &'a str, args: &'a FluentArgs) -> Option<Cow<'a, str>> {
         self.lookup(&self.current, key, args).or_else(|| {
             self.fallback_chain
                 .iter()
+                .filter(|l| **l != self.current)
                 .find_map(|l| self.lookup(l, key, args))
         })
     }
@@ -335,6 +357,75 @@ impl From<I18n> for SharedI18n {
     }
 }
 
+/// Shared handle to the app's [`LocaleFormatter`], installed as a resource
+/// by [`I18nPlugin::install`].
+///
+/// A formatter is built for one locale rather than edited in place, so a
+/// locale switch puts a new one behind this handle. Everything already
+/// holding the handle - the markup path's `format` attribute and the
+/// scripts' `format_*` builtins - formats for the new locale from the next
+/// call on, which is what [`SharedI18n`] already does for the catalogue.
+#[derive(Resource, Clone)]
+pub struct SharedFormatter(Arc<RwLock<Arc<LocaleFormatter>>>);
+
+impl SharedFormatter {
+    /// Wrap `formatter` in a shareable handle.
+    pub fn new(formatter: LocaleFormatter) -> Self {
+        Self(Arc::new(RwLock::new(Arc::new(formatter))))
+    }
+
+    /// The formatter in force now. A poisoned lock is recovered rather
+    /// than propagated, for the reason [`SharedI18n::read`] gives.
+    pub fn get(&self) -> Arc<LocaleFormatter> {
+        self.0.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Build the formatters for `lang` and put them in force.
+    pub fn set(&self, lang: &LanguageIdentifier) {
+        let built = Arc::new(LocaleFormatter::new(lang.clone()));
+        *self.0.write().unwrap_or_else(|e| e.into_inner()) = built;
+    }
+}
+
+impl From<LocaleFormatter> for SharedFormatter {
+    fn from(formatter: LocaleFormatter) -> Self {
+        Self::new(formatter)
+    }
+}
+
+/// Move an app to `tag`: its catalogue, its formatters and the writing
+/// direction its text reads in, together.
+///
+/// `formatter` is optional because not every assembly links one. A browser
+/// page that installs a catalogue and no formatters passes `None`, and a
+/// `format` spec there leaves its text as it stands, before the switch and
+/// after it.
+///
+/// Answers with the locale now in force and the direction to read it in, or
+/// `None` when `tag` is not a BCP-47 tag, in which case nothing moved. A
+/// tag that parses but names a locale with no catalogue loaded succeeds:
+/// every message falls back to the text the author wrote, which is the rule
+/// startup already follows for the same case.
+pub fn switch_locale(
+    catalogue: &SharedI18n,
+    formatter: Option<&SharedFormatter>,
+    tag: &str,
+) -> Option<lumen_core::i18n::LocaleChange> {
+    let lang: LanguageIdentifier = Lang::try_from(tag).ok()?.into();
+    catalogue.write().set_current(lang.clone());
+    if let Some(formatter) = formatter {
+        formatter.set(&lang);
+    }
+    Some(lumen_core::i18n::LocaleChange {
+        locale: lang.to_string(),
+        direction: if is_rtl(&lang) {
+            lumen_core::components::LayoutDirection::Rtl
+        } else {
+            lumen_core::components::LayoutDirection::Ltr
+        },
+    })
+}
+
 /// The set of right-to-left languages, in one place so every target
 /// agrees on it. The web emitter (`LocaleSpec::new`) reads it to write
 /// `<html dir>`, and the desktop runtime reads it to seed
@@ -349,12 +440,11 @@ pub fn is_rtl(lang: &LanguageIdentifier) -> bool {
 }
 
 /// ECS plugin. Seeds `I18n` + [`LocaleFormatter`] for the system locale
-/// (via [`sys_locale::get_locale`]) unless the app pins one. The
-/// catalogue goes into the world as a resource; the formatters go in
-/// behind core's opaque handle, not as a resource of their own.
-/// `fallback_chain` is consulted when the current locale lacks a key,
-/// and drops any entry equal to the resolved active locale so a miss
-/// never probes one bundle twice.
+/// (via [`sys_locale::get_locale`]) unless the app pins one. Both go into
+/// the world as resources and behind core's opaque handle.
+/// `fallback_chain` is consulted when the current locale lacks a key; an
+/// entry equal to whichever locale is active is skipped at lookup, so a
+/// miss never probes one bundle twice.
 ///
 /// This crate does not depend on `lumen-core`'s `App` / `Plugin`
 /// trait, to avoid pulling the whole render/runtime stack into
@@ -401,33 +491,36 @@ impl I18nPlugin {
         self
     }
 
-    /// Install [`SharedI18n`] + [`lumen_core::i18n::AppI18n`] onto
-    /// `world` for the resolved locale ([`Self::locale`], else the OS
-    /// locale, else `en-US`). Returns that locale so callers can log it
-    /// and load the matching catalogues.
+    /// Install [`SharedI18n`], [`SharedFormatter`] and
+    /// [`lumen_core::i18n::AppI18n`] onto `world` for the locale the app
+    /// starts in ([`Self::locale`], else the OS locale, else `en-US`).
+    /// Returns that locale so callers can log it and load the matching
+    /// catalogues.
     ///
-    /// The catalogue goes in twice: as the registry a reload writes to,
-    /// and behind the opaque handle the spawner reads. The formatters go
-    /// in once, behind that handle alone. One install builds one
-    /// [`LocaleFormatter`], which holds the locale and builds each ICU
-    /// formatter the first time something formats with it, so an app
-    /// that formats nothing loads no ICU data.
-    pub fn install(mut self, world: &mut bevy_ecs::world::World) -> LanguageIdentifier {
+    /// The catalogue and the formatters each go in twice: as the handle a
+    /// reload or a locale switch writes to, and behind the opaque handles
+    /// the spawner reads. Both are shared, so a switch through
+    /// [`switch_locale`] reaches every reader at once. One install builds
+    /// one [`LocaleFormatter`], which holds the locale and builds each ICU
+    /// formatter the first time something formats with it, so an app that
+    /// formats nothing loads no ICU data.
+    pub fn install(self, world: &mut bevy_ecs::world::World) -> LanguageIdentifier {
         let current = self
             .locale
             .or_else(detect_system_locale)
             .unwrap_or_else(|| "en-US".parse().expect("en-US is valid"));
-        // An app running in the locale it was authored in has the same
-        // bundle at both ends of the chain, so a miss would probe it twice
-        // for the answer it already gave.
-        self.fallback_chain.retain(|lang| *lang != current);
         let shared = SharedI18n::new(I18n::new(current.clone(), self.fallback_chain));
-        let fmt = Arc::new(LocaleFormatter::new(current.clone()));
+        let formatter = SharedFormatter::new(LocaleFormatter::new(current.clone()));
         let catalogue = shared.clone();
+        let formatting = formatter.clone();
+        let switch_catalogue = shared.clone();
+        let switch_formatter = formatter.clone();
         world.insert_resource(lumen_core::i18n::AppI18n::new(
             Arc::new(move |key| catalogue.try_t(key)),
-            Arc::new(move |spec, value| format_spec(&fmt, spec, value)),
+            Arc::new(move |spec, value| format_spec(&formatting.get(), spec, value)),
+            Arc::new(move |tag| switch_locale(&switch_catalogue, Some(&switch_formatter), tag)),
         ));
+        world.insert_resource(formatter);
         world.insert_resource(shared);
         current
     }
@@ -690,15 +783,102 @@ mod tests {
         assert_eq!(shared.read().fallback_chain, vec![lang("de-DE")]);
     }
 
+    /// The chain keeps every locale it was given, including the one the app
+    /// starts in. Pruning it at install would be right for that locale only;
+    /// after a switch the entry the app came from is the one a miss needs.
+    /// The duplicate probe is avoided at lookup instead.
     #[test]
-    fn a_fallback_equal_to_the_active_locale_leaves_no_chain() {
+    fn a_fallback_equal_to_the_active_locale_stays_in_the_chain() {
         let mut world = bevy_ecs::world::World::new();
         I18nPlugin::default()
             .with_locale(lang("de-DE"))
             .with_fallback_locale(lang("de-DE"))
             .install(&mut world);
         let shared = world.resource::<SharedI18n>().clone();
-        assert!(shared.read().fallback_chain.is_empty());
+        assert_eq!(shared.read().fallback_chain, vec![lang("de-DE")]);
+    }
+
+    #[test]
+    fn a_switch_moves_the_catalogue_the_formatter_and_the_direction() {
+        let mut world = bevy_ecs::world::World::new();
+        I18nPlugin::default()
+            .with_locale(lang("en-US"))
+            .install(&mut world);
+        let shared = world.resource::<SharedI18n>().clone();
+        shared
+            .write()
+            .load_ftl(lang("en-US"), "greet = Good morning")
+            .unwrap();
+        shared
+            .write()
+            .load_ftl(lang("de-DE"), "greet = Guten Morgen")
+            .unwrap();
+        let app = world.resource::<lumen_core::i18n::AppI18n>().clone();
+        assert_eq!(app.try_translate("greet").as_deref(), Some("Good morning"));
+        let english_number = app.format("number", "1234.5");
+
+        let change = app.set_locale("de-DE").expect("de-DE is a locale tag");
+        assert_eq!(change.locale, "de-DE");
+        assert_eq!(
+            change.direction,
+            lumen_core::components::LayoutDirection::Ltr
+        );
+        assert_eq!(app.try_translate("greet").as_deref(), Some("Guten Morgen"));
+        // The formatter moved with the catalogue: the two locales group and
+        // point their decimals differently, so one number reads two ways.
+        assert_ne!(app.format("number", "1234.5"), english_number);
+
+        // And back: the locale the app started in still resolves, which is
+        // what the chain would have lost had it been pruned at install.
+        let change = app.set_locale("en-US").expect("en-US is a locale tag");
+        assert_eq!(change.locale, "en-US");
+        assert_eq!(app.try_translate("greet").as_deref(), Some("Good morning"));
+    }
+
+    #[test]
+    fn a_right_to_left_locale_reports_its_direction() {
+        let mut world = bevy_ecs::world::World::new();
+        I18nPlugin::default()
+            .with_locale(lang("en-US"))
+            .install(&mut world);
+        let app = world.resource::<lumen_core::i18n::AppI18n>().clone();
+        let change = app.set_locale("ar-EG").expect("ar-EG is a locale tag");
+        assert_eq!(
+            change.direction,
+            lumen_core::components::LayoutDirection::Rtl
+        );
+    }
+
+    #[test]
+    fn a_tag_that_is_not_a_locale_changes_nothing() {
+        let mut world = bevy_ecs::world::World::new();
+        I18nPlugin::default()
+            .with_locale(lang("en-US"))
+            .install(&mut world);
+        let shared = world.resource::<SharedI18n>().clone();
+        let app = world.resource::<lumen_core::i18n::AppI18n>().clone();
+        assert_eq!(app.set_locale("not a tag at all"), None);
+        assert_eq!(shared.read().current, lang("en-US"));
+    }
+
+    /// Naming a locale with no catalogue is legal, at startup and at a
+    /// switch alike: every message falls through to the locale the app's
+    /// source strings are written in.
+    #[test]
+    fn switching_to_a_locale_with_no_catalogue_falls_back() {
+        let mut world = bevy_ecs::world::World::new();
+        I18nPlugin::default()
+            .with_locale(lang("en-US"))
+            .with_fallback_locale(lang("en-US"))
+            .install(&mut world);
+        let shared = world.resource::<SharedI18n>().clone();
+        shared
+            .write()
+            .load_ftl(lang("en-US"), "greet = Good morning")
+            .unwrap();
+        let app = world.resource::<lumen_core::i18n::AppI18n>().clone();
+        app.set_locale("ja-JP").expect("ja-JP is a locale tag");
+        assert_eq!(app.try_translate("greet").as_deref(), Some("Good morning"));
     }
 
     #[test]

@@ -10,12 +10,13 @@
 //! * Every spawned entity carries [`DirtyLayout`] so taffy runs on first tick.
 //! * Children link to parents via [`ChildOf`].
 
+use lumen_core::components::AuthoredStrings;
 use lumen_core::nav::PATH_SIGNAL;
 use lumen_core::property_store::PropertyStore;
 use lumen_core::signals::signal_is_truthy;
 use lumen_ir::interpolate::{Scope, element_carries_placeholder, substitute_element};
 use lumen_ir::layout_ir::{Attributes, BindKind, Element, LayoutIR};
-use lumen_ir::translate::{TranslatedStrings, translate_attrs};
+use lumen_ir::translate::{TranslatedStrings, translate};
 
 /// `<if mode="...">` policy. `Render` despawn/respawns the subtree on
 /// each transition (default; cheap state-wise but loses focus / scroll
@@ -405,29 +406,35 @@ pub fn renumber_document_order(
     }
 }
 
-/// The strings an element spawns with.
+/// The strings an element shows in the app's locale.
 ///
 /// A `translatable="key"` element reads each of them off the catalogue
-/// message that key names, which is
-/// [`lumen_ir::translate::translate_attrs`]'s rule, shared with the web
-/// emitter so a page built for a locale reads like the app run in it.
-/// The spawner uses three of the four it returns; nothing on the desktop
-/// reads `alt`.
+/// message that key names, which is [`lumen_ir::translate::translate`]'s
+/// rule, shared with the web emitter so a page built for a locale reads
+/// like the app run in it. The spawner uses three of the four it returns;
+/// nothing on the desktop reads `alt`.
 ///
 /// A `format="<spec>"` then renders whatever text is left for the app's
 /// locale. Both the catalogue and the formatter come off
 /// [`lumen_core::i18n::AppI18n`], the app's own half of the seam, rather
-/// than the process-wide hooks core's bound-text path and the script
-/// hosts use: a process running two Lumen apps must not render one app's
-/// markup in the other's locale. Text the spec cannot read stands as it
-/// is, so a translated sentence under a `number` format is still the
-/// sentence.
-fn resolve_strings(world: &World, el: &Element) -> TranslatedStrings {
-    let i18n = world.get_resource::<lumen_core::i18n::AppI18n>();
-    let mut strings = translate_attrs(&el.attrs, &|key| {
+/// than the process-wide hooks the script hosts use: a process running two
+/// Lumen apps must not render one app's markup in the other's locale. Text
+/// the spec cannot read stands as it is, so a translated sentence under a
+/// `number` format is still the sentence.
+///
+/// The spawner calls this once per element, and
+/// [`crate::i18n::retranslate_on_locale_change`] calls it again for every
+/// element that kept its [`AuthoredStrings`] when the app changes locale.
+/// One rule, asked twice.
+pub fn resolve_strings(
+    i18n: Option<&lumen_core::i18n::AppI18n>,
+    authored: &AuthoredStrings,
+    format: Option<&str>,
+) -> TranslatedStrings {
+    let mut strings = translate(authored, &|key| {
         i18n.and_then(|i18n| i18n.try_translate(key))
     });
-    let (Some(text), Some(spec)) = (&strings.text, &el.attrs.format) else {
+    let (Some(text), Some(spec)) = (&strings.text, format) else {
         return strings;
     };
     if let Some(formatted) = i18n.and_then(|i18n| i18n.format(spec, text)) {
@@ -509,7 +516,12 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     }
     // Resolve the element's strings before the world is borrowed by `spawn`:
     // a `translatable="key"` element reads the loaded catalogue.
-    let strings = resolve_strings(world, el);
+    let authored = AuthoredStrings::from(&el.attrs);
+    let strings = resolve_strings(
+        world.get_resource::<lumen_core::i18n::AppI18n>(),
+        &authored,
+        el.attrs.format.as_deref(),
+    );
     let text = strings.text.clone();
     let mut style = Style::from(&el.attrs);
     apply_ua_style_defaults(&el.tag, &el.attrs, &mut style);
@@ -974,6 +986,18 @@ fn spawn_element(world: &mut World, el: &Element, parent: Option<Entity>) -> Ent
     // `apply_text_bindings` formats every value the signal writes after.
     if let Some(spec) = &el.attrs.format {
         entity.insert(lumen_core::components::TextFormat(spec.clone()));
+    }
+    // What the markup wrote, kept so the element can be resolved again when
+    // the app changes locale: `TextContent` by then holds the message the
+    // old catalogue gave, or a number written the old locale's way, and
+    // neither can be turned back into what the author typed.
+    //
+    // A `format` element is kept for the same reason a translated one is: a
+    // formatted amount is locale output too, and `1.234,50` no longer says
+    // what `1234.5` said. An element with no key and no format carries
+    // nothing extra.
+    if authored.key.is_some() || authored.tooltip_key.is_some() || el.attrs.format.is_some() {
+        entity.insert(authored);
     }
     if let Some(spec) = &el.attrs.bind {
         match spec.kind {

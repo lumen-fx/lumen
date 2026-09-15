@@ -21,6 +21,7 @@
 pub mod compiler_plugins;
 pub mod dom;
 pub mod fragments;
+pub mod i18n;
 pub mod routing;
 pub mod script_commands;
 pub mod source_parser;

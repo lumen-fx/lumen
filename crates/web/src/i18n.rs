@@ -5,14 +5,15 @@
 //! the document afterwards. A build does this once per locale; a server
 //! embedding the emitter does it once per locale it holds a tree for.
 
+use lumen_core::components::AuthoredStrings;
 use lumen_i18n::SharedI18n;
 use lumen_ir::layout_ir::{Element, LayoutIR};
-use lumen_ir::translate::translate_attrs;
+use lumen_ir::translate::translate;
 
 /// `ir` with every `translatable` element's strings resolved through `i18n`.
 ///
 /// This is the same no-argument lookup markup gets at run time, following the
-/// same rule the spawner does ([`lumen_ir::translate::translate_attrs`]), so a
+/// same rule the spawner does ([`lumen_ir::translate::translate`]), so a
 /// page built for a locale reads like the app run in it.
 pub fn translate_ir(ir: &LayoutIR, i18n: &SharedI18n) -> LayoutIR {
     let mut out = ir.clone();
@@ -30,7 +31,8 @@ pub fn translate_ir(ir: &LayoutIR, i18n: &SharedI18n) -> LayoutIR {
 /// translated `placeholder`, `title` and `alt` reach the document: the
 /// emitter reads all three off the attributes it is handed.
 pub fn translate_element(element: &mut Element, i18n: &SharedI18n) {
-    let strings = translate_attrs(&element.attrs, &|key| i18n.try_t(key));
+    let authored = AuthoredStrings::from(&element.attrs);
+    let strings = translate(&authored, &|key| i18n.try_t(key));
     element.attrs.text = strings.text;
     element.attrs.placeholder = strings.placeholder;
     element.attrs.alt = strings.alt;

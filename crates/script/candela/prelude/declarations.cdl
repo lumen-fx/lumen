@@ -66,6 +66,8 @@ host "lumen" {
     fetch(string, string);
     string t(string);
     string tr(string);
+    set_locale(string);
+    string locale();
     string format_number(float);
     string format_currency(float, string);
     string format_date(string);

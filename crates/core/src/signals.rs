@@ -328,10 +328,18 @@ pub fn clear_signal_dirty(signals: Option<ResMut<Signals>>) {
 /// value. A value it does not name is written as it stands.
 ///
 /// A [`TextFormat`] renders what is left for the app's locale, through
-/// [`crate::i18n::format`]. Labels come first: a label is what the
-/// element says for a value, and only a value with nothing to say for it
-/// is a value to format. A format the app has no formatter for, or text
-/// that is not what the format expects, writes the text unchanged.
+/// the app's own [`crate::i18n::AppI18n`] when the world holds one and
+/// the process-wide [`crate::i18n::format`] hook otherwise. The per-app
+/// handle is what keeps a process running two Lumen apps from writing one
+/// app's numbers in the other's locale, the same reason the spawner reads
+/// it. Labels come first: a label is what the element says for a value,
+/// and only a value with nothing to say for it is a value to format. A
+/// format the app has no formatter for, or text that is not what the
+/// format expects, writes the text unchanged.
+///
+/// An app that changes locale while it runs re-renders every bound value
+/// too: a `<label format="number" bind-text="count"/>` would otherwise
+/// keep the old locale's grouping until the next write to `count`.
 ///
 /// Editing-protection gate: an entity is skipped while an edit is in flight on
 /// it, meaning a focused [`TextInput`] or an active [`ImeState`] preedit.
@@ -359,6 +367,7 @@ pub fn apply_text_bindings(
         Without<ImeState>,
     >,
     new_binds: Query<(), Added<BindText>>,
+    i18n: Option<Res<crate::i18n::AppI18n>>,
 ) {
     // Idle-tick fast path: no signal changed this tick, so no bound
     // `TextContent` can need refreshing. A `set()` that changes a cell
@@ -374,7 +383,13 @@ pub fn apply_text_bindings(
     // stay blank until the next unrelated signal write. `Added<BindText>`
     // catches exactly those just-mounted rows; the full-loop re-scan below
     // is idempotent (equal writes are skipped) so re-running it is safe.
-    if store.dirty_peek().is_empty() && new_binds.is_empty() {
+    //
+    // The third reason to run is the app's locale changing: every formatted
+    // value on screen was written for the locale before it. The resource is
+    // marked changed by the applier that switches it, and the rescan below
+    // is idempotent either way.
+    let locale_changed = i18n.as_ref().is_some_and(|i18n| i18n.is_changed());
+    if store.dirty_peek().is_empty() && new_binds.is_empty() && !locale_changed {
         return;
     }
     for (bind, mut tc, input, labels, format, focused) in &mut q {
@@ -398,7 +413,12 @@ pub fn apply_text_bindings(
         // on screen, and a `format` is what renders it for the locale.
         let formatted = format
             .filter(|_| labelled.is_none())
-            .and_then(|f| crate::i18n::format(&f.0, value.as_ref()));
+            .and_then(|f| match i18n.as_ref() {
+                Some(i18n) => i18n.format(&f.0, value.as_ref()),
+                // No app resource: a bare world, or a host that installed
+                // only the process-wide hook.
+                None => crate::i18n::format(&f.0, value.as_ref()),
+            });
         let value_str = formatted.as_deref().or(labelled).unwrap_or(value.as_ref());
         if tc.0 != value_str {
             tc.0 = value_str.to_string();
