@@ -22,6 +22,10 @@ lumen-html = { workspace = true }
 # The scene this backend projects: the spawner that built it and the markers
 # the reconcilers maintain.
 lumen-scene = { workspace = true }
+# The markers a widget carries that have no attribute a document could hold:
+# a checkbox's tri-state one is set on the control as a property or not at
+# all.
+lumen-primitives = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 # Not target-gated. The crate is a browser backend and only a browser runs it,
@@ -64,7 +68,6 @@ lumen-web = { workspace = true }
 # forwarded key does is this crate's question only because these two answer
 # it, so the key tests put them in rather than restating what they would do.
 lumen-input = { workspace = true }
-lumen-primitives = { workspace = true }
 wasm-bindgen-test.workspace = true
 # A test raises an event the way the browser raises it, which takes a
 # dictionary nothing in the crate itself constructs. Naming it here keeps it

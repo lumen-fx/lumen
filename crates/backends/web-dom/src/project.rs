@@ -29,6 +29,7 @@ use lumen_html::contract::{
 };
 use lumen_html::is_disableable;
 use lumen_html::style::style_value;
+use lumen_primitives::Indeterminate;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, HtmlDialogElement, HtmlElement, HtmlInputElement, HtmlTextAreaElement};
 
@@ -209,6 +210,8 @@ pub fn project_control_state(
     values: Query<(Entity, &SliderValue), Changed<SliderValue>>,
     drag_over: Query<Entity, Added<DropHovered>>,
     mut drag_left: RemovedComponents<DropHovered>,
+    indeterminate: Query<Entity, Added<Indeterminate>>,
+    mut determinate: RemovedComponents<Indeterminate>,
 ) {
     let flag = |entity: Entity, name: &str, on: bool| {
         if let Some(element) = table.element(entity) {
@@ -272,6 +275,22 @@ pub fn project_control_state(
             set_attribute(element, "aria-checked", Some(&toggle.checked.to_string()));
         }
     }
+    // The dash a tri-state checkbox shows. The desktop draws it itself; here
+    // it is the native control's own mark, and the only way to ask for it is
+    // the property, because `indeterminate` is not an attribute and no
+    // document can arrive carrying one.
+    let mark = |entity: Entity, on: bool| {
+        let Some(element) = table.element(entity) else {
+            return;
+        };
+        set_indeterminate(table.control(entity).unwrap_or(element), on);
+    };
+    for entity in &indeterminate {
+        mark(entity, true);
+    }
+    for entity in determinate.read() {
+        mark(entity, false);
+    }
     // Mirror of the desktop's `DropHovered` marker (`lumen-os-dnd`'s
     // pointer-gesture pipeline there, this crate's native `dragenter` /
     // `dragleave` / `drop` listeners here), so a `:drag-over` rule matches
@@ -312,6 +331,18 @@ fn set_checked(control: &Element, on: bool) {
         && input.checked() != on
     {
         input.set_checked(on);
+    }
+}
+
+/// Mark a control indeterminate, or clear it, unless it already says that.
+///
+/// The property is all there is: a browser has no `indeterminate` attribute
+/// to read one from, and `:indeterminate` matches the property alone.
+fn set_indeterminate(control: &Element, on: bool) {
+    if let Some(input) = control.dyn_ref::<HtmlInputElement>()
+        && input.indeterminate() != on
+    {
+        input.set_indeterminate(on);
     }
 }
 
