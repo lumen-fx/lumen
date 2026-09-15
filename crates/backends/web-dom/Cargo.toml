@@ -26,6 +26,11 @@ lumen-scene = { workspace = true }
 # a checkbox's tri-state one is set on the control as a property or not at
 # all.
 lumen-primitives = { workspace = true }
+# The drop-accept filter the spawner already put on every `drop-target` it
+# built. Reading it here is what makes `accept="..."` mean the same thing in a
+# browser as it does on the desktop; the crate is already in the wasm graph
+# through `lumen-scene`, so naming it pulls no new code.
+lumen-os-dnd = { workspace = true }
 bevy_ecs.workspace = true
 glam.workspace = true
 # Not target-gated. The crate is a browser backend and only a browser runs it,
@@ -37,8 +42,10 @@ js-sys.workspace = true
 # generated into the module, so this list is a size lever. Add one only when
 # something calls it.
 web-sys = { workspace = true, features = [
+    "DataTransfer",
     "Document",
     "DomTokenList",
+    "DragEvent",
     "Element",
     "Event",
     "EventTarget",
@@ -74,6 +81,7 @@ wasm-bindgen-test.workspace = true
 # out of the module a page loads.
 web-sys = { workspace = true, features = [
     "CssStyleDeclaration",
+    "DragEventInit",
     "EventInit",
     "KeyboardEventInit",
     "MouseEventInit",

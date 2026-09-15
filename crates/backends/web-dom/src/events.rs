@@ -41,13 +41,15 @@ use lumen_core::input::{
 use lumen_core::nav;
 use lumen_core::property_store::PropertyStore;
 use lumen_html::contract::{DATA_LM, DATA_LM_PART, DRAWN_BY_CONTROL};
+use lumen_os_dnd::DropAccept;
+use lumen_os_dnd::mime::MimeKind;
 use lumen_scene::spawn::IfMarker;
 
 use crate::navigation::Routes;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::{
-    Element, Event, EventTarget, HtmlAnchorElement, HtmlElement, HtmlInputElement,
+    DragEvent, Element, Event, EventTarget, HtmlAnchorElement, HtmlElement, HtmlInputElement,
     HtmlTextAreaElement, KeyboardEvent, MouseEvent,
 };
 
@@ -87,16 +89,22 @@ enum PendingEvent {
     DragEnter {
         /// Node path of the element the event landed on.
         path: String,
+        /// Kinds the drag advertises, read off its `DataTransfer`.
+        kinds: Vec<MimeKind>,
     },
     /// A drag left the node at this path (or a descendant of it).
     DragLeave {
         /// Node path of the element the event landed on.
         path: String,
+        /// Kinds the drag advertises, read off its `DataTransfer`.
+        kinds: Vec<MimeKind>,
     },
     /// Something was dropped on the node at this path (or a descendant).
     Drop {
         /// Node path of the element the event landed on.
         path: String,
+        /// Kinds the drag advertises, read off its `DataTransfer`.
+        kinds: Vec<MimeKind>,
     },
     /// A drag left the document entirely, so every drop target's hover
     /// marker clears regardless of which one it landed on last.
@@ -227,21 +235,66 @@ fn should_soft_navigate(soft: bool, link: LinkClick) -> bool {
         && !link.is_download
 }
 
+/// The Lumen kind a `DataTransfer.types` entry names.
+///
+/// A browser does not name a file drag by its MIME type: the spec puts the
+/// literal string `Files` in the list when any dragged item is a file, one
+/// entry however many files there are. A platform file drop reaches the
+/// desktop as a `text/uri-list` payload
+/// (`lumen_os_dnd::translate_file_drops_to_payload`), so that is what `Files`
+/// is here, and `accept="text/uri-list"` filters a file dragged in from the
+/// desktop the same way on both.
+fn kind_of_dom_type(dom_type: &str) -> MimeKind {
+    match dom_type {
+        "Files" => MimeKind::TextUriList,
+        other => MimeKind::from(other),
+    }
+}
+
+/// The kinds a drag event advertises.
+///
+/// `DataTransfer.types` is readable throughout a drag; it is the item *data*
+/// that stays protected until the drop, which is what lets a target answer
+/// whether it would take a drop while the pointer is still moving. An event
+/// carrying no `DataTransfer` advertises nothing: a browser always attaches
+/// one to a drag, so that is a synthetic event, and a drag advertising
+/// nothing matches only a target that filters nothing.
+fn drag_kinds(event: &Event) -> Vec<MimeKind> {
+    let Some(transfer) = event.dyn_ref::<DragEvent>().and_then(DragEvent::data_transfer) else {
+        return Vec::new();
+    };
+    transfer
+        .types()
+        .iter()
+        .filter_map(|t| t.as_string())
+        .map(|t| kind_of_dom_type(&t))
+        .collect()
+}
+
 /// Walk up from `start` to the nearest entity - itself or an ancestor - that
-/// carries [`DropTarget`].
+/// carries [`DropTarget`] and would accept a drag advertising `kinds`.
 ///
 /// A `dragenter` or `dragleave` lands on whatever the pointer is directly
 /// over, which is as often a drop target's label or icon as the target
 /// itself; the stylesheet's `:drag-over` rule is written against the target,
 /// so that is the entity the marker belongs on.
-fn nearest_drop_target(
+///
+/// A target whose `accept="..."` rules the drag out is stepped over rather
+/// than stopped at, so an accepting ancestor still lights up - the same rule
+/// `lumen_os_dnd::track_drop_hover` follows on the desktop. A target with no
+/// [`DropAccept`] at all is one a script created rather than the spawner, and
+/// takes the desktop's accept-anything branch.
+fn nearest_accepting_drop_target(
     start: Entity,
-    targets: &Query<(), With<DropTarget>>,
+    kinds: &[MimeKind],
+    targets: &Query<Option<&DropAccept>, With<DropTarget>>,
     parents: &Query<&ChildOf>,
 ) -> Option<Entity> {
     let mut cur = start;
     loop {
-        if targets.contains(cur) {
+        if let Ok(accept) = targets.get(cur)
+            && accept.is_none_or(|a| a.accepts_kinds(kinds))
+        {
             return Some(cur);
         }
         cur = parents.get(cur).ok()?.parent();
@@ -305,20 +358,29 @@ mod drag_hover_tests {
     use bevy_ecs::system::RunSystemOnce;
 
     use super::{
-        ChildOf, DropTarget, Entity, HoverDepth, Query, With, World, clear_drop_target,
-        clear_every_drop_target, enter_drop_target, leave_drop_target, nearest_drop_target,
+        ChildOf, DropAccept, DropTarget, Entity, HoverDepth, MimeKind, Query, With, World,
+        clear_drop_target, clear_every_drop_target, enter_drop_target, kind_of_dom_type,
+        leave_drop_target, nearest_accepting_drop_target,
     };
 
     /// Resolve `start` against a freshly built `World`, the same way
-    /// [`drain_dom_events`] would with real queries.
-    fn walk(world: &mut World, start: Entity) -> Option<Entity> {
+    /// [`drain_dom_events`] would with real queries, for a drag advertising
+    /// `kinds`.
+    fn walk_carrying(world: &mut World, start: Entity, kinds: Vec<MimeKind>) -> Option<Entity> {
         world
             .run_system_once(
-                move |targets: Query<(), With<DropTarget>>, parents: Query<&ChildOf>| {
-                    nearest_drop_target(start, &targets, &parents)
+                move |targets: Query<Option<&DropAccept>, With<DropTarget>>,
+                      parents: Query<&ChildOf>| {
+                    nearest_accepting_drop_target(start, &kinds, &targets, &parents)
                 },
             )
             .unwrap()
+    }
+
+    /// The common case: a drag carrying plain text, which every unfiltered
+    /// target takes.
+    fn walk(world: &mut World, start: Entity) -> Option<Entity> {
+        walk_carrying(world, start, vec![MimeKind::TextPlain])
     }
 
     #[test]
@@ -343,6 +405,89 @@ mod drag_hover_tests {
         let parent = world.spawn_empty().id();
         let child = world.spawn(ChildOf(parent)).id();
         assert_eq!(walk(&mut world, child), None);
+    }
+
+    /// A browser names a file drag `Files`, and a file dragged onto the
+    /// desktop arrives as a `text/uri-list` payload, so the one has to read
+    /// as the other or `accept="text/uri-list"` would mean two things.
+    #[test]
+    fn a_file_drag_reads_as_the_uri_list_the_desktop_delivers() {
+        assert_eq!(kind_of_dom_type("Files"), MimeKind::TextUriList);
+    }
+
+    #[test]
+    fn every_other_dom_type_is_the_mime_type_it_names() {
+        assert_eq!(kind_of_dom_type("text/plain"), MimeKind::TextPlain);
+        assert_eq!(kind_of_dom_type("text/uri-list"), MimeKind::TextUriList);
+        assert_eq!(
+            kind_of_dom_type("application/x-myapp"),
+            MimeKind::from("application/x-myapp")
+        );
+    }
+
+    #[test]
+    fn a_target_accepting_the_drags_kind_resolves() {
+        let mut world = World::new();
+        let target = world
+            .spawn((DropTarget, DropAccept::only([MimeKind::TextUriList])))
+            .id();
+        let got = walk_carrying(&mut world, target, vec![MimeKind::TextUriList]);
+        assert_eq!(got, Some(target));
+    }
+
+    /// The divergence this filter closes: on the desktop a rejecting target
+    /// does not even shadow an accepting ancestor, and the walk keeps going.
+    #[test]
+    fn a_rejecting_target_is_stepped_over_for_an_accepting_ancestor() {
+        let mut world = World::new();
+        let outer = world.spawn(DropTarget).id();
+        let inner = world
+            .spawn((
+                DropTarget,
+                DropAccept::only([MimeKind::TextUriList]),
+                ChildOf(outer),
+            ))
+            .id();
+        let got = walk_carrying(&mut world, inner, vec![MimeKind::TextPlain]);
+        assert_eq!(got, Some(outer));
+    }
+
+    #[test]
+    fn a_rejecting_target_with_no_accepting_ancestor_resolves_to_nothing() {
+        let mut world = World::new();
+        let target = world
+            .spawn((DropTarget, DropAccept::only([MimeKind::TextUriList])))
+            .id();
+        let got = walk_carrying(&mut world, target, vec![MimeKind::TextPlain]);
+        assert_eq!(got, None);
+    }
+
+    /// A target a script created never went through the spawner, so it
+    /// carries no filter at all and takes the desktop's accept-anything
+    /// branch.
+    #[test]
+    fn a_target_with_no_filter_takes_whatever_the_drag_carries() {
+        let mut world = World::new();
+        let target = world.spawn(DropTarget).id();
+        let custom = MimeKind::from("application/x-myapp");
+        let got = walk_carrying(&mut world, target, vec![custom]);
+        assert_eq!(got, Some(target));
+    }
+
+    /// A drag advertising nothing is a synthetic event: a browser always
+    /// attaches a `DataTransfer` to a real one. It matches only a target
+    /// that filters nothing, rather than being read as "accept".
+    #[test]
+    fn a_drag_advertising_nothing_matches_only_an_unfiltered_target() {
+        let mut world = World::new();
+        let filtered = world
+            .spawn((DropTarget, DropAccept::only([MimeKind::TextPlain])))
+            .id();
+        let got = walk_carrying(&mut world, filtered, Vec::new());
+        assert_eq!(got, None);
+        let unfiltered = world.spawn(DropTarget).id();
+        let got = walk_carrying(&mut world, unfiltered, Vec::new());
+        assert_eq!(got, Some(unfiltered));
     }
 
     /// A lone `Entity` id, for tests that only care about depth-counting and
@@ -741,7 +886,10 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
         "dragenter",
         Closure::wrap(Box::new(move |event: Event| {
             if let Some(path) = path_of(&event) {
-                queue(PendingEvent::DragEnter { path });
+                queue(PendingEvent::DragEnter {
+                    path,
+                    kinds: drag_kinds(&event),
+                });
             }
         }) as Box<dyn FnMut(Event)>),
     )?;
@@ -764,7 +912,10 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
             if left_the_document {
                 queue(PendingEvent::DragCancelled);
             } else if let Some(path) = path_of(&event) {
-                queue(PendingEvent::DragLeave { path });
+                queue(PendingEvent::DragLeave {
+                    path,
+                    kinds: drag_kinds(&event),
+                });
             }
         }) as Box<dyn FnMut(Event)>),
     )?;
@@ -778,7 +929,10 @@ pub(crate) fn listen(root: &Element, routes: Option<&Routes>) -> Result<(), JsVa
             // for.
             event.prevent_default();
             if let Some(path) = path_of(&event) {
-                queue(PendingEvent::Drop { path });
+                queue(PendingEvent::Drop {
+                    path,
+                    kinds: drag_kinds(&event),
+                });
             }
         }) as Box<dyn FnMut(Event)>),
     )?;
@@ -901,7 +1055,7 @@ pub fn drain_dom_events(
     mut toggles: Query<&mut Toggleable>,
     mut sliders: Query<&mut SliderValue>,
     focus: Option<ResMut<FocusTracker>>,
-    drop_targets: Query<(), With<DropTarget>>,
+    drop_targets: Query<Option<&DropAccept>, With<DropTarget>>,
     parents: Query<&ChildOf>,
     mut hover_depth: Local<HoverDepth>,
 ) {
@@ -1001,21 +1155,30 @@ pub fn drain_dom_events(
             // entity (which needs `table`, the one thing here a native test
             // cannot construct) and turning their answer into a `Commands`
             // write.
-            PendingEvent::DragEnter { path } => {
+            //
+            // All three drag arms resolve through the same filtered walk, on
+            // each event's own kinds. They have to agree: a leave resolved
+            // unfiltered while its enter resolved filtered would leave a
+            // marker lit with nothing left to clear it.
+            PendingEvent::DragEnter { path, kinds } => {
                 let Some(entity) = table.entity_at(&path) else {
                     continue;
                 };
-                if let Some(target) = nearest_drop_target(entity, &drop_targets, &parents)
+                let resolved =
+                    nearest_accepting_drop_target(entity, &kinds, &drop_targets, &parents);
+                if let Some(target) = resolved
                     && enter_drop_target(&mut hover_depth, target)
                 {
                     commands.entity(target).insert(DropHovered);
                 }
             }
-            PendingEvent::DragLeave { path } => {
+            PendingEvent::DragLeave { path, kinds } => {
                 let Some(entity) = table.entity_at(&path) else {
                     continue;
                 };
-                if let Some(target) = nearest_drop_target(entity, &drop_targets, &parents)
+                let resolved =
+                    nearest_accepting_drop_target(entity, &kinds, &drop_targets, &parents);
+                if let Some(target) = resolved
                     && leave_drop_target(&mut hover_depth, target)
                 {
                     commands.entity(target).remove::<DropHovered>();
@@ -1023,11 +1186,13 @@ pub fn drain_dom_events(
             }
             // A drop ends the gesture outright, so the marker clears however
             // many unmatched enters this target still has on the books.
-            PendingEvent::Drop { path } => {
+            PendingEvent::Drop { path, kinds } => {
                 let Some(entity) = table.entity_at(&path) else {
                     continue;
                 };
-                if let Some(target) = nearest_drop_target(entity, &drop_targets, &parents) {
+                if let Some(target) =
+                    nearest_accepting_drop_target(entity, &kinds, &drop_targets, &parents)
+                {
                     clear_drop_target(&mut hover_depth, target);
                     commands.entity(target).remove::<DropHovered>();
                 }

@@ -683,6 +683,14 @@ fn drop_target_tree() -> LayoutIR {
     }
 }
 
+/// The same container, filtered: it takes a file dragged in from the desktop
+/// and nothing else.
+fn uri_list_drop_target_tree() -> LayoutIR {
+    let mut tree = drop_target_tree();
+    tree.root.children[0].attrs.drop_accept = Some("text/uri-list".to_string());
+    tree
+}
+
 /// Dispatch a bubbling drag event of `kind` at `target`.
 fn dispatch_drag(target: &Element, kind: &str) {
     let init = web_sys::EventInit::new();
@@ -690,6 +698,72 @@ fn dispatch_drag(target: &Element, kind: &str) {
     init.set_cancelable(true);
     let event = web_sys::Event::new_with_event_init_dict(kind, &init).unwrap();
     target.dispatch_event(&event).unwrap();
+}
+
+/// Dispatch a bubbling drag event of `kind` at `target`, carrying a real
+/// `DataTransfer` advertising `types`.
+///
+/// The types are what a target's `accept="..."` is matched against, and a
+/// browser is the only thing that can produce the event carrying them, which
+/// is why this half of the filter is tested here rather than on the host.
+fn dispatch_drag_with_types(target: &Element, kind: &str, types: &[&str]) {
+    let transfer = web_sys::DataTransfer::new().unwrap();
+    for advertised in types {
+        // The value is the item data, which a hovering drag keeps protected
+        // anyway; what reaches the page during the drag is the type list this
+        // call puts the entry in.
+        transfer.set_data(advertised, "").unwrap();
+    }
+    let init = web_sys::DragEventInit::new();
+    init.set_bubbles(true);
+    init.set_cancelable(true);
+    init.set_data_transfer(Some(&transfer));
+    let event = web_sys::DragEvent::new_with_event_init_dict(kind, &init).unwrap();
+    target.dispatch_event(&event).unwrap();
+}
+
+#[wasm_bindgen_test]
+fn a_drag_a_target_does_not_accept_leaves_it_dark() {
+    let root = prerender(uri_list_drop_target_tree());
+    let mut app = hydrate(uri_list_drop_target_tree(), root.clone());
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
+
+    let target = root.first_element_child().expect("the drop-target row");
+
+    dispatch_drag_with_types(&target, "dragenter", &["text/plain"]);
+    app.tick();
+    assert!(
+        !target.has_attribute(DATA_LM_DRAG_OVER),
+        "`accept=\"text/uri-list\"` rules out a drag carrying only plain \
+         text, the same way it does on the desktop"
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_drag_a_target_accepts_lights_it_up() {
+    let root = prerender(uri_list_drop_target_tree());
+    let mut app = hydrate(uri_list_drop_target_tree(), root.clone());
+    lumen_web_dom::listen(&root, None).expect("the page takes listeners");
+
+    let target = root.first_element_child().expect("the drop-target row");
+
+    // `Files` is how a browser names a file drag; the desktop delivers the
+    // same drag as a `text/uri-list` payload, so this is the type the filter
+    // has to match.
+    dispatch_drag_with_types(&target, "dragenter", &["Files"]);
+    app.tick();
+    assert!(
+        target.has_attribute(DATA_LM_DRAG_OVER),
+        "a file dragged in from the desktop is the `text/uri-list` this \
+         target asked for"
+    );
+
+    dispatch_drag_with_types(&target, "dragleave", &["Files"]);
+    app.tick();
+    assert!(
+        !target.has_attribute(DATA_LM_DRAG_OVER),
+        "the drag leaving clears it"
+    );
 }
 
 #[wasm_bindgen_test]

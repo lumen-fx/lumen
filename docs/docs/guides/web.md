@@ -612,15 +612,16 @@ none of them means anything without an absolute address.
   `tab-index="-1"` the desktop promotes one of at runtime, and nothing
   promotes it here, so the group is reachable with a pointer only.
 - `:drag-over` on a `drop-target` lights up while a file is dragged in from
-  the desktop, and clears on a drop, matching the desktop. `on_file_dropped`
-  and the in-app `drag-payload` / `on_drop` pair, which read what was
-  dropped, are desktop only: `draggable="true"` has no effect in a browser,
-  so an element cannot start a drag there in the first place.
-- On the desktop, `accept="..."` keeps `:drag-over` off a `drop-target` a
-  drag's payload does not match. The web target does not read `accept` at
-  all: `:drag-over` lights up for any drag over the element, matched payload
-  or not. What the drop itself does with a payload is not wired up on the
-  web target regardless, per the point above.
+  the desktop, and clears on a drop, matching the desktop. `accept="..."`
+  filters it the same way on both: a drag the target does not take leaves it
+  dark, and the marker goes to the nearest ancestor that does take it. A file
+  dragged in from the desktop offers `text/uri-list` and nothing else, so a
+  target written `accept="text/plain"` stays dark for one. The browser still
+  shows its own drop cursor over a target that stays dark.
+- `on_file_dropped` and the in-app `drag-payload` / `on_drop` pair, which
+  read what was dropped, are desktop only: `draggable="true"` has no effect
+  in a browser, so an element cannot start a drag there in the first place,
+  and a drop on the web target delivers nothing.
 
 ## Reference
 
