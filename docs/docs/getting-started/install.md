@@ -2,7 +2,8 @@
 
 Installing Lumen gives you `lumenc`, the command you use to create, run, and
 package apps, the Lumen runtime library it loads, the launcher a packaged app
-is built from, the candela standard library scripts import, and the app
+is built from, the [runtime modules](#runtime-modules) an app can declare, the
+candela standard library scripts import, and the app
 [templates](templates.md) `lumenc new` writes. You do not need a Rust toolchain
 to build apps, or to package one for someone else.
 
@@ -34,6 +35,28 @@ lumenc --version
 The install also carries a shell completion script for bash, zsh, and fish
 under `~/.lumen/share`, and prints the one line your shell needs to load it.
 See [shell completions](../reference/cli.md#completions).
+
+### Runtime modules
+
+Some capabilities ship as separate libraries the runtime loads at startup:
+`lumen-archive`, `lumen-audio`, `lumen-canvas`, `lumen-download`, `lumen-fs`,
+and `lumen-process`. An app that names one under
+[`[dependencies]`](../reference/lumen-toml.md#dependencies) needs them on the
+machine; without them it starts with a banner per missing module and every
+call into that module's namespace fails.
+
+The installer downloads them with the toolchain, from the
+`lumen-modules-<platform>.tar.gz` asset published with the same release, and
+unpacks them into `~/.lumen/bin` beside the runtime library. `--no-modules`
+skips them; if you installed that way and later declare a module, run the
+installer again without the flag:
+
+```sh
+curl -fsSL https://lumenfx.dev/install.sh | sh -s -- --force
+```
+
+Windows publishes no modules archive; there these capabilities are compiled
+into the binaries the installer puts in place.
 
 ### Installer options
 
@@ -113,6 +136,9 @@ to take a while: it is compiling the engine.
 A source install does not carry the app templates, because cargo keeps only the
 binary it installed. `lumenc new` wants a release install, or a clone of the
 [template repository](templates.md) you were going to scaffold from.
+
+It does not build the runtime modules either, so an app that declares
+[`[dependencies]`](../reference/lumen-toml.md#dependencies) runs without them.
 
 Set `LUMEN_SKIP_ENGINE_BUILD=1` to install only the compiler, if you are
 building the rest yourself. `lumenc run`, `build`, and `check` work without the
