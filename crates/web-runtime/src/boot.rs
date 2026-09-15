@@ -227,7 +227,7 @@ impl std::error::Error for BootError {}
 
 #[cfg(test)]
 mod tests {
-    use super::routes;
+    use super::soft_navigation;
     use lumen_html::contract::{Manifest, NavigationMode};
 
     /// `navigation = "soft"` (the default) means the runtime intercepts a
@@ -241,7 +241,7 @@ mod tests {
             navigation: NavigationMode::Soft,
             ..Manifest::default()
         };
-        assert!(routes(&manifest, true).is_some());
+        assert!(soft_navigation(&manifest, true));
     }
 
     #[test]
@@ -250,8 +250,8 @@ mod tests {
             navigation: NavigationMode::Hard,
             ..Manifest::default()
         };
-        assert!(routes(&manifest, false).is_none());
-        assert!(routes(&manifest, true).is_none());
+        assert!(!soft_navigation(&manifest, false));
+        assert!(!soft_navigation(&manifest, true));
     }
 
     #[test]
@@ -261,7 +261,7 @@ mod tests {
             ..Manifest::default()
         };
         assert!(
-            routes(&manifest, false).is_none(),
+            !soft_navigation(&manifest, false),
             "with no page set there is no resolver to swap a page in, so a \
              prevented click would be a link that does nothing"
         );
