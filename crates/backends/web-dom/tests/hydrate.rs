@@ -32,7 +32,7 @@ use lumen_ir::layout_ir::{
     Attributes, BindKind, BindSpec, Element as IrElement, IfModeSpec, InterpolationSlot, LayoutIR,
     WidgetPart,
 };
-use lumen_primitives::RadioButton;
+use lumen_primitives::{Indeterminate, RadioButton};
 use lumen_scene::routing::Location;
 use lumen_scene::spawn;
 use lumen_scene::spawn::SpawnIntoWorld;
@@ -1857,6 +1857,37 @@ fn a_state_the_world_writes_reaches_the_control() {
     assert!(
         !row.has_attribute(DATA_LM_CHECKED),
         "and not on the row, which is not what a stylesheet reads it from"
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_tri_state_checkbox_marks_its_own_control() {
+    let root = prerender(control_tree());
+    let mut app = hydrate(control_tree(), root.clone());
+    let entity = checkbox_entity(&mut app);
+
+    app.world.entity_mut(entity).insert(Indeterminate);
+    app.tick();
+
+    let row = root
+        .query_selector(".lm-checkbox")
+        .unwrap()
+        .expect("the checkbox");
+    let control: web_sys::HtmlInputElement = row
+        .query_selector(".checkbox-box")
+        .unwrap()
+        .expect("the control")
+        .unchecked_into();
+    assert!(
+        control.indeterminate(),
+        "the dash is the control's own mark, and the property is the only way to ask for it"
+    );
+
+    app.world.entity_mut(entity).remove::<Indeterminate>();
+    app.tick();
+    assert!(
+        !control.indeterminate(),
+        "and the first toggle, which drops the marker, takes the dash with it"
     );
 }
 
