@@ -47,7 +47,8 @@
 #                             targets, installed into the same bin/ beside
 #                             the engine unless --no-modules is given.
 #                             Optional per release; absent for Windows,
-#                             which compiles the capabilities in.
+#                             where only `lumenc package --static` carries
+#                             the capabilities, compiled into the executable.
 #   lumen-linkkit-<target>.tar.gz
 #                             the link kit for the same target, published on
 #                             every platform. This script never fetches it:
