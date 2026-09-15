@@ -603,6 +603,11 @@ none of them means anything without an absolute address.
   swaps in place, and the address stays on the document that was loaded.
 - A `<input>` is edited by the browser, so Lumen's own caret, selection and
   IME handling are not in play; what an app sees is the value after each edit.
+- A `<checkbox indeterminate="true">` shows its dash once the runtime is
+  running. The mark belongs to the browser's own control, which takes it from
+  a property rather than from anything the markup can carry, so a page built
+  with `render = "static"`, or one whose runtime never arrives, shows the box
+  unchecked.
 - A `<radio>` group is not in the tab order. Every member carries the
   `tab-index="-1"` the desktop promotes one of at runtime, and nothing
   promotes it here, so the group is reachable with a pointer only.
