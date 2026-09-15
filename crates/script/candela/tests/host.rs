@@ -262,6 +262,31 @@ fn compile_check_is_side_effect_free() {
     );
 }
 
+#[test]
+fn compile_check_validates_handler_bodies() {
+    let host = CandelaHost::new();
+    let valid = format!(
+        "{HOST_BLOCK}\nfn on_click(id) {{ lumen::signal_set(\"last\", id); }}\nfn main() {{}}\n"
+    );
+    host.compile_check(&valid, "handler.cdl")
+        .expect("valid handler body checks");
+
+    let invalid = format!(
+        "{HOST_BLOCK}\nfn on_click() {{\n    let n = 1;\n    n.uppercase();\n}}\nfn main() {{}}\n"
+    );
+    let error = host
+        .compile_check(&invalid, "handler.cdl")
+        .expect_err("invalid handler body must be rejected");
+    match error {
+        ScriptError::Compile { uri, line, col, .. } => {
+            assert_eq!(uri, "handler.cdl");
+            assert_eq!(line, 16);
+            assert!(col > 0);
+        }
+        other => panic!("expected a compile error, got {other:?}"),
+    }
+}
+
 /// Parity guard: synthesize a `host \"lumen\" { ... }` block from every entry in
 /// [`BUILTINS`] and compile it. candela validates each declared host fn against
 /// its registered closure (arity, types, and fixed-versus-variadic), so a clean

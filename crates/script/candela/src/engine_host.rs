@@ -409,6 +409,105 @@ fn build_engine(r: &Registries, import_roots: &[(String, PathBuf)]) -> candela::
     engine
 }
 
+/// Return a representative value for a declared Candela parameter.
+///
+/// Candela specializes function bodies on the types at a call site. Untyped
+/// parameters are used by Lumen callbacks, whose runtime convention is a
+/// string argument, so a string is the useful representative for those.
+fn check_arg_value(ty: Option<&candela::compiler::type_system::TypeExpr>) -> Value {
+    let Some(candela::compiler::type_system::TypeExpr::Identifier(name, _)) = ty else {
+        return Value::String(String::new());
+    };
+    match name.as_str() {
+        "int" => Value::Int(0),
+        "float" => Value::Float(0.0),
+        "bool" => Value::Bool(false),
+        "null" => Value::Null,
+        _ => Value::String(String::new()),
+    }
+}
+
+/// Force Candela to specialize every host-relevant top-level script function once.
+///
+/// `Engine::compile` deliberately leaves function bodies lazy. The program is
+/// a scratch program, so calling the functions cannot affect the live host;
+/// only compiler diagnostics are returned to the caller. Runtime diagnostics
+/// are ignored because checking must not reject code merely because its body
+/// needs state that is established at runtime.
+fn check_function_bodies(
+    mut program: candela::Program,
+    prepared: &prelude::PreparedSource,
+    uri: &str,
+    host: &CandelaHost,
+    scratch: &Registries,
+) -> Result<(), ScriptError> {
+    let source = candela::compiler::compiler_data::Source {
+        filename: uri.into(),
+        contents: prepared.text.clone(),
+    };
+    let mut macros = candela::macros::MacroEnv::new();
+    macros.register(
+        lmn::MACRO_NAME,
+        lmn_expander(Arc::new(Mutex::new(lmn::FnIndex::scan(&source.contents)))),
+    );
+    let parsed = macros.scope(|| candela::parser::parse(&source.contents, &source));
+
+    let registered_handlers = scratch
+        .handlers
+        .read()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect::<HashSet<_>>();
+    let registered_event_handlers = scratch
+        .event_handlers
+        .read()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect::<HashSet<_>>();
+
+    for expr in parsed.code {
+        let candela::compiler::expr::Expr::FunctionDecl(name, args, _, name_span, ..) = expr else {
+            continue;
+        };
+        // Plugin wrappers and the embedded prelude are compiler input, not
+        // user handlers. Their bodies may intentionally remain generic until
+        // the app calls them with a concrete value.
+        let (line, _) = prelude::line_col(&prepared.text, name_span.start as usize);
+        if line <= prepared.line_offset
+            || prepared
+                .wrappers
+                .iter()
+                .any(|wrapper| line >= wrapper.first_line && line <= wrapper.last_line)
+        {
+            continue;
+        }
+        let is_host_relevant = name.starts_with("on_")
+            || registered_handlers.contains(name.as_str())
+            || registered_event_handlers.contains(name.as_str());
+        if name == "main" || !is_host_relevant {
+            continue;
+        }
+        let values = args
+            .iter()
+            .map(|(_, ty)| check_arg_value(ty.as_ref()))
+            .collect::<Vec<_>>();
+        if let Err(diagnostic) = program.call(&name, &values) {
+            // `Program::call` uses the same Diagnostic type for lazy compile
+            // failures and runtime failures. Compiler diagnostics have source
+            // spans; runtime diagnostics do not reliably point into the
+            // script body, so only those with a non-empty span are checking
+            // failures. The existing top-level compile already handles all
+            // parse and declaration errors.
+            if !diagnostic.span.is_empty() {
+                return Err(host.compile_error(prepared, &diagnostic, uri));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl ScriptHost for CandelaHost {
     // `lmn!` is candela's macro, so a component marker in the tree names a
     // function in this program and no other host should answer for it.
@@ -442,10 +541,10 @@ impl ScriptHost for CandelaHost {
         let prepared = self.prepare(source);
         *scratch.fn_index.lock().unwrap() = lmn::FnIndex::scan(&prepared.text);
         let _library_dir = self.library_dir();
-        engine
+        let program = engine
             .compile(&prepared.text, uri)
-            .map(|_| ())
-            .map_err(|d| self.compile_error(&prepared, &d, uri))
+            .map_err(|d| self.compile_error(&prepared, &d, uri))?;
+        check_function_bodies(program, &prepared, uri, self, &scratch)
     }
 
     fn load(&mut self, source: &str, uri: &str) -> Result<(), ScriptError> {
