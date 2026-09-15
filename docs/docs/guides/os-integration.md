@@ -451,7 +451,9 @@ passed to `audio_play`; that is where you advance a playlist. A per-track
 handler registered with `on("audio_end", path, "fn_name")` wins over it.
 
 WAV and Ogg Vorbis decode. On a machine with no working audio device the calls
-succeed and the position keeps advancing, with nothing audible.
+succeed and the position keeps advancing, with nothing audible. A headless run
+opens no output device at all and behaves the same way: the transport, the
+position, and `on_audio_end` all work, and nothing is audible.
 
 ## Running a program
 

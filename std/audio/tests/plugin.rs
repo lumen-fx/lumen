@@ -75,9 +75,12 @@ fn build_app_with_assets(
         opts = opts.with_assets(lpak);
     }
     if with_plugin {
-        // The deviceless shape: everything but sound, and no device probe on
-        // the test machine.
-        opts = opts.with_plugin(AudioPlugin::inert());
+        // The shipping plugin, not the deviceless one: these apps are bounded
+        // (below), so the module suppresses the device itself and the whole
+        // suite runs the shape a headless app actually gets. A regression that
+        // reopens the device shows up as a probe on the test machine instead
+        // of passing silently.
+        opts = opts.with_plugin(AudioPlugin::new());
     }
     opts.bounded = true;
     let (app, _window) = build_headless_app(opts).expect("build headless app");

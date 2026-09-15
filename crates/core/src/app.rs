@@ -79,6 +79,22 @@ impl std::fmt::Debug for EventLoopWaker {
     }
 }
 
+/// How this app is being run. `headless` is true when there is no interactive
+/// session: `lumenc run --headless`, an automation driver, a test, a
+/// build-time instantiation that only wants what the plugins register. A
+/// plugin whose work only makes sense for a person at a window - a thread
+/// that wakes the loop, a device, a daemon - installs its idle shape instead.
+///
+/// Inserted before the first plugin is installed. An embedder that builds its
+/// own [`App`] may never insert it, so absence reads as an ordinary
+/// interactive run. Read it through [`App::is_headless`], so every plugin
+/// spells the absence rule the same way.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct RunMode {
+    /// No interactive session.
+    pub headless: bool,
+}
+
 /// Process-start reference instant for startup instrumentation.
 ///
 /// Set once by the binary entry point ([`lumenc`'s `main`]) as early as
@@ -516,6 +532,15 @@ impl App {
             }),
         );
         self
+    }
+
+    /// Whether this app runs with no interactive session. See [`RunMode`];
+    /// a world that declares no mode reads as interactive.
+    #[must_use]
+    pub fn is_headless(&self) -> bool {
+        self.world
+            .get_resource::<RunMode>()
+            .is_some_and(|mode| mode.headless)
     }
 
     /// Returns `true` when a plugin of type `P` has been installed via [`Self::add_plugin`].

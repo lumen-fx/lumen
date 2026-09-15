@@ -29,7 +29,9 @@
 //!
 //! Playback is rodio over a cpal output device, decoding wav and ogg. A
 //! machine with no output device (CI, SSH) degrades to the silent transport:
-//! state, seeking, position, and duration all still work.
+//! state, seeking, position, and duration all still work. A run with no
+//! interactive session opens no device in the first place and gets the same
+//! silent transport.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -47,10 +49,11 @@ pub use ticker::{PositionTicker, TICK_INTERVAL};
 pub use transport::{AudioSnapshot, PlaybackState, Resume, Transport};
 
 // The module entry: the loader constructs the shipping plugin, whether it
-// opened this crate's library or found it linked in. The deviceless shape is
-// not reachable from module config on purpose - an app that declares the
-// module wants sound, and a machine without a device already degrades to
-// silent.
+// opened this crate's library or found it linked in. The constructor always
+// asks for a device, and the app is what withholds one: a run with no
+// interactive session installs the deviceless shape. Module config cannot ask
+// for it, on purpose - an app that declares the module wants sound, and a
+// machine without a device already degrades to silent.
 lumen_module::lumen_module!("lumen-audio", |_config: lumen_module::ModuleConfig| {
     AudioPlugin::new()
 });

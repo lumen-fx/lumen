@@ -162,6 +162,22 @@ through whatever is installed, so the swap covers sizing as well as drawing.
 surface, write both copies; layout reads the main-world one and the renderer
 reads the render-world one.
 
+`RunMode` says whether this run has an interactive session, and is in the
+world before the first plugin is installed. Read it with `app.is_headless()`
+from `build` when your plugin would otherwise hold something that only makes
+sense for a person at a window: an output device, a daemon, a thread whose job
+is waking the event loop.
+
+```rust
+fn build(self, app: &mut App) {
+    let device = if app.is_headless() { None } else { open_device() };
+}
+```
+
+An embedder that assembles its own `App` may never insert the resource, so
+absence reads as an interactive run; that is the safe default for whatever is
+being suppressed.
+
 ## Render-world plugins
 
 A render backend inserts itself into `app.render_world`, registers a system
@@ -870,7 +886,9 @@ through the generic seams: the `audio_*` functions register through
 state, the position lands in shared signals through the `PropertyStore`, and
 end-of-track goes out as a plugin event the script's `on_audio_end(path)`
 handler receives. A script-function body has no world access, so the
-functions hand commands to the systems over a queue the module owns.
+functions hand commands to the systems over a queue the module owns. It takes
+an output device only for an interactive run, so a headless app gets the whole
+surface and no hardware.
 First-party modules under `std/` build in the release's own cargo
 invocation, which is what keeps their build ids equal to the engine they
 ship beside. A crate added there is also in the link kit that release

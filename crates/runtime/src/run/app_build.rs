@@ -88,6 +88,13 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
     }
 
     let mut app = App::new();
+    // The run mode, before anything is installed: a plugin that only makes
+    // sense for a person at a window reads this from `Plugin::build`. Same bit
+    // the capability and portable-plugin environments carry, from the same
+    // source.
+    app.world.insert_resource(lumen_core::app::RunMode {
+        headless: opts.bounded,
+    });
     // `[runtime] threads` overrides the `min(cores, 4)` default budget
     // (the `LUMEN_THREADS` env var still wins over this at first tick).
     if let Some(n) = cfg.runtime.threads.filter(|n| *n > 0) {
@@ -150,8 +157,9 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
                 .id
                 .clone()
                 .unwrap_or_else(|| lumen_capability::derive_app_id(&opts.dir)),
-            // `bounded` is the run-mode bit that says "no interactive
-            // window session", which is what a plugin needs to know.
+            // The same bit the `RunMode` resource above carries, for the
+            // portable arm, which reads this environment rather than the
+            // world.
             headless: opts.bounded,
             hot_reload: opts.hot_reload && !opts.bounded,
         };
