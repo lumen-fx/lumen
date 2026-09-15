@@ -265,15 +265,23 @@ jobs:
           # The bundled runtime modules (std/) build in the same invocation:
           # one feature graph, so each module records the exact build id of
           # the engine shipping beside it. They ship in their own archive
-          # (see the modules packaging step below).
+          # (see the modules packaging step below). Which crates those are
+          # comes out of the tree, from the same script the packaging and
+          # link-kit steps read, so a crate added under std/ is built, shipped
+          # and linkable without a line being added here. Read and checked
+          # before the build for the reason the later steps do it: a list that
+          # failed to produce would otherwise pass as a build with no modules
+          # in it.
+          modules="$(.github/scripts/first-party-modules.sh)"
+          test -n "$modules"
+          packages=()
+          while IFS=$'\t' read -r _name package _lib; do
+            packages+=(-p "$package")
+          done <<<"$modules"
+          echo "bundled modules: ${packages[*]}"
           cargo build --release --target "$triple" \
             -p lumen \
-            -p lumen-archive \
-            -p lumen-audio \
-            -p lumen-canvas \
-            -p lumen-download \
-            -p lumen-fs \
-            -p lumen-process \
+            "${packages[@]}" \
             -p lumenc \
             --config 'profile.release.lto="off"' \
             --config 'profile.release.opt-level=3' \
