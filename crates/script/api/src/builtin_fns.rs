@@ -746,9 +746,9 @@ fn misc_fns() -> Vec<ScriptFn> {
 
 /// `parse_json` and `parse_markdown`: text parsed into a dynamically-shaped
 /// value, the one case where the shared table declares a return type it
-/// cannot pin down further than [`T::Any`]. Every host reads the result with
-/// its own downcasts (`as_map` / `as_list` / ... on candela; ordinary
-/// indexing on Rhai and Lua), so the walk itself is written once in
+/// cannot pin down further, which it spells [`T::Dynamic`]. Every host reads
+/// the result with its own downcasts (`as_map` / `as_list` / ... on candela;
+/// ordinary indexing on Rhai and Lua), so the walk itself is written once in
 /// [`crate::text_parse`] rather than once per host.
 ///
 /// Each entry is missing when its Cargo feature (`json`, `markdown`) is off,
@@ -768,7 +768,7 @@ fn parse_json_fn() -> Option<ScriptFn> {
         "parse_json",
         "Parse a JSON string into a map, array, or scalar. Null on a parse error.",
         &[("json", T::Str)],
-        T::Any,
+        T::Dynamic,
         |cx| crate::text_parse::parse_json(&cx.str_arg(0)),
     ))
 }
@@ -785,7 +785,7 @@ fn parse_markdown_fn() -> Option<ScriptFn> {
         "parse_markdown",
         "Parse markdown into a list of block records: id, kind, level, text, lang.",
         &[("src", T::Str)],
-        T::Any,
+        T::Dynamic,
         |cx| crate::text_parse::parse_markdown(&cx.str_arg(0)),
     ))
 }
@@ -809,17 +809,14 @@ mod tests {
     /// Lua resolve `page()` and `page(path)` through one entry whose result
     /// depends on which one the script called.
     ///
-    /// The builder's `ret` defaults to `Any` when a builtin never calls it,
-    /// so an untyped return is normally a forgotten declaration, which is
-    /// what this asserts against. `parse_json` and `parse_markdown` are the
-    /// deliberate exception: their result has no shape narrower than `any`
-    /// (a JSON value or a markdown block list), and candela already has a
-    /// checked way to name that (a variadic binding, declared `any
-    /// name(...);`), so listing them here is a conscious choice rather than
-    /// a hole in the check.
+    /// The builder's `ret` defaults to `Any` when a builtin never calls it, so
+    /// a return left at `Any` is a forgotten declaration, which is what this
+    /// asserts against. A result that has no shape narrower than `any`, as
+    /// `parse_json` and `parse_markdown` do, declares `Dynamic` and says so in
+    /// the signature itself; candela then names it the way it already names a
+    /// variadic binding, `any name(...);`.
     #[test]
     fn every_entry_is_a_documented_builtin() {
-        const DYNAMIC_RETURN: &[&str] = &["parse_json", "parse_markdown"];
         for f in builtin_script_fns() {
             assert_eq!(f.ns, ScriptNs::Builtin, "{}", f.name);
             assert!(!f.sig.doc.is_empty(), "{} has no doc line", f.name);
@@ -833,8 +830,8 @@ mod tests {
                     p.name
                 );
             }
-            if f.visible_to("candela") && !DYNAMIC_RETURN.contains(&f.name.as_str()) {
-                assert_ne!(f.sig.ret, T::Any, "{}: return type is untyped", f.name);
+            if f.visible_to("candela") {
+                assert_ne!(f.sig.ret, T::Any, "{}: return type is undeclared", f.name);
             }
         }
     }

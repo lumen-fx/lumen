@@ -228,7 +228,8 @@ impl PluginFnBuilder {
         self
     }
 
-    /// Set the return type. Defaults to [`ScriptTy::Any`].
+    /// Set the return type. Defaults to [`ScriptTy::Any`]; a function whose
+    /// result really is open declares [`ScriptTy::Dynamic`].
     #[must_use]
     pub fn ret(mut self, ty: ScriptTy) -> Self {
         self.sig.ret = ty;

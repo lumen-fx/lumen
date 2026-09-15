@@ -2648,12 +2648,12 @@ impl ScriptHost for RhaiHost {
 
 /// The Rhai type a declared [`ScriptTy`] resolves a call by.
 ///
-/// [`ScriptTy::Any`] takes a `Dynamic` slot, which matches whatever the script
-/// passes; every other type narrows the slot, so a call passing something else
-/// does not resolve.
+/// [`ScriptTy::Any`] and [`ScriptTy::Dynamic`] take a `Dynamic` slot, which
+/// matches whatever the script passes; every other type narrows the slot, so a
+/// call passing something else does not resolve.
 fn rhai_arg_type(ty: &ScriptTy) -> TypeId {
     match ty {
-        ScriptTy::Any => TypeId::of::<Dynamic>(),
+        ScriptTy::Any | ScriptTy::Dynamic => TypeId::of::<Dynamic>(),
         ScriptTy::Unit => TypeId::of::<()>(),
         ScriptTy::Bool => TypeId::of::<bool>(),
         ScriptTy::Int => TypeId::of::<rhai::INT>(),

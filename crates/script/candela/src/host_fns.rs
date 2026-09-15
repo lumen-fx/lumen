@@ -438,8 +438,9 @@ pub(crate) fn register_script_fn<S: HostFnSink>(
 /// variadically.
 ///
 /// candela names one concrete type per position and every position is
-/// required, so a variadic signature, an [`ScriptTy::Any`] anywhere in it, or
-/// an optional trailing argument leaves nothing to declare.
+/// required, so a variadic signature, an [`ScriptTy::Any`] or
+/// [`ScriptTy::Dynamic`] anywhere in it, or an optional trailing argument
+/// leaves nothing to declare.
 fn typed_signature(f: &ScriptFn) -> Option<(Vec<HostType>, HostType)> {
     if f.sig.variadic || f.sig.min_arity != f.sig.params.len() {
         return None;
@@ -454,7 +455,7 @@ fn typed_signature(f: &ScriptFn) -> Option<(Vec<HostType>, HostType)> {
 }
 
 /// The candela host type a declared [`ScriptTy`] crosses the boundary as, or
-/// `None` for [`ScriptTy::Any`], which candela has no fixed spelling for.
+/// `None` for the open types, which candela has no fixed spelling for.
 fn host_type(ty: &ScriptTy) -> Option<HostType> {
     Some(match ty {
         ScriptTy::Int => HostType::Int,
@@ -464,7 +465,7 @@ fn host_type(ty: &ScriptTy) -> Option<HostType> {
         ScriptTy::Unit => HostType::Unit,
         ScriptTy::Array(inner) => HostType::Array(Box::new(host_type(inner)?)),
         ScriptTy::Map(value) => HostType::Map(Box::new(host_type(value)?)),
-        ScriptTy::Any => return None,
+        ScriptTy::Any | ScriptTy::Dynamic => return None,
     })
 }
 
@@ -492,7 +493,7 @@ fn as_declared(ty: &ScriptTy, value: &ScriptValue) -> Value {
                 .map(|(k, v)| (k, as_declared(inner, &v)))
                 .collect(),
         ),
-        ScriptTy::Any => script_value_to_candela(value),
+        ScriptTy::Any | ScriptTy::Dynamic => script_value_to_candela(value),
     }
 }
 
@@ -1338,21 +1339,17 @@ mod tests {
     /// a whole class of mistakes to run time. A table entry that stops being
     /// nameable fails here rather than quietly widening the prelude.
     ///
-    /// `parse_json` and `parse_markdown` are the deliberate exception: a JSON
-    /// value and a markdown block list are genuinely dynamically shaped, so
-    /// they bind variadically on purpose and are declared `any name(...);`
-    /// (see [`crate::declare::declaration`]), the same as `http` and
-    /// `signal_array_get`.
+    /// A builtin that declares [`ScriptTy::Dynamic`] is the deliberate
+    /// exception, and the signature carries that rather than a list here: a
+    /// JSON value and a markdown block list are dynamically shaped, so
+    /// `parse_json` and `parse_markdown` bind variadically on purpose and are
+    /// declared `any name(...);` (see [`crate::declare::declaration`]), the
+    /// same as `http` and `signal_array_get`.
     #[test]
     fn every_shared_builtin_binds_typed() {
-        const DYNAMIC_RETURN: &[&str] = &["parse_json", "parse_markdown"];
         let untyped: Vec<String> = builtin_script_fns()
             .into_iter()
-            .filter(|f| {
-                f.visible_to("candela")
-                    && !binds_typed(f)
-                    && !DYNAMIC_RETURN.contains(&f.name.as_str())
-            })
+            .filter(|f| f.visible_to("candela") && !binds_typed(f) && f.sig.ret != T::Dynamic)
             .map(|f| f.name)
             .collect();
         assert!(
