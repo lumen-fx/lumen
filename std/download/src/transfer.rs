@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use ureq::Agent;
 
@@ -26,17 +27,92 @@ use ureq::Agent;
 /// another figure.
 const CHUNK: usize = 64 * 1024;
 
+/// The digests this module computes, named in every refusal so the line an
+/// author reads says what to write instead.
+const FORMS: &str = "write `sha256:<64 hex digits>` or `sha1:<40 hex digits>`";
+
 /// What a transfer reports when it could not do what was asked: the line an
 /// author reads, without the `lumen-download: ` prefix.
 pub type Failure = String;
 
 /// The digest a finished file has to match, if any.
+///
+/// Both digests check that a transfer arrived intact; neither says who
+/// produced the file. sha1 is accepted because it is what the registries an
+/// app downloads from publish, package indexes and artifact repositories
+/// alike, and a file matching the digest they published is a file that did
+/// not arrive corrupt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Checksum {
     /// Take whatever arrives.
     None,
     /// The file has to hash to these 32 bytes.
     Sha256([u8; 32]),
+    /// The file has to hash to these 20 bytes.
+    Sha1([u8; 20]),
+}
+
+impl Checksum {
+    /// A hasher over the body, for whichever digest was asked for. `None`
+    /// when nothing is being checked, so an unchecked transfer hashes nothing.
+    fn hasher(&self) -> Option<Hasher> {
+        match self {
+            Checksum::None => None,
+            Checksum::Sha256(_) => Some(Hasher::Sha256(Sha256::new())),
+            Checksum::Sha1(_) => Some(Hasher::Sha1(Sha1::new())),
+        }
+    }
+
+    /// Compare a finished hasher against what the call asked for. The message
+    /// names the algorithm, so a mismatch reads the way the argument was
+    /// written.
+    fn verify(&self, hasher: Hasher) -> Result<(), Failure> {
+        let (algo, expected) = match self {
+            Checksum::None => return Ok(()),
+            Checksum::Sha256(expected) => ("sha256", expected.as_slice()),
+            Checksum::Sha1(expected) => ("sha1", expected.as_slice()),
+        };
+        let actual = hasher.finish();
+        if actual == expected {
+            return Ok(());
+        }
+        Err(format!(
+            "checksum mismatch; expected {algo}:{}, got {algo}:{}",
+            hex(expected),
+            hex(&actual)
+        ))
+    }
+}
+
+/// The running digest, so the read loop has one hashing path whichever
+/// algorithm the checksum named.
+enum Hasher {
+    Sha256(Sha256),
+    Sha1(Sha1),
+}
+
+impl Hasher {
+    /// Fold one chunk of the body in.
+    fn update(&mut self, bytes: &[u8]) {
+        match self {
+            Hasher::Sha256(h) => h.update(bytes),
+            Hasher::Sha1(h) => h.update(bytes),
+        }
+    }
+
+    /// The digest of everything folded in.
+    fn finish(self) -> Vec<u8> {
+        match self {
+            Hasher::Sha256(h) => h.finalize().to_vec(),
+            Hasher::Sha1(h) => h.finalize().to_vec(),
+        }
+    }
+}
+
+/// Which digest a checksum named, before its digits have been read.
+enum Algorithm {
+    Sha256,
+    Sha1,
 }
 
 /// The bounds a transfer runs under, from the module's `config` table.
@@ -62,39 +138,71 @@ pub struct Transferred {
 
 /// Read a checksum as a script spelled it.
 ///
-/// Three spellings are accepted: the empty string (no checking),
-/// `sha256:<64 hex digits>`, and a bare 64-digit hex string, which is read as
-/// sha256 because that is the only digest this module computes. The prefix and
-/// the digits are matched without regard to case. Anything else is refused
-/// rather than guessed at, so a truncated or mistyped digest fails the call
-/// instead of silently checking nothing.
+/// The spellings accepted are the empty string (no checking),
+/// `sha256:<64 hex digits>`, `sha1:<40 hex digits>`, and a bare hex string,
+/// whose length names the digest: 64 digits is a sha256 and 40 is a sha1. The
+/// prefix and the digits are matched without regard to case. Anything else is
+/// refused rather than guessed at, so a truncated or mistyped digest fails the
+/// call instead of silently checking nothing.
 pub fn parse_checksum(spec: &str) -> Result<Checksum, Failure> {
     let spec = spec.trim();
     if spec.is_empty() {
         return Ok(Checksum::None);
     }
-    let digits = match spec.split_once(':') {
-        Some((algo, rest)) if algo.eq_ignore_ascii_case("sha256") => rest.trim(),
-        Some((algo, _)) => {
-            return Err(format!(
-                "unsupported checksum format: `{algo}` is not an algorithm this module computes; \
-                 write `sha256:<64 hex digits>`"
-            ));
+    let (algorithm, digits) = match spec.split_once(':') {
+        Some((algo, rest)) => {
+            let rest = rest.trim();
+            if algo.eq_ignore_ascii_case("sha256") {
+                (Algorithm::Sha256, rest)
+            } else if algo.eq_ignore_ascii_case("sha1") {
+                (Algorithm::Sha1, rest)
+            } else {
+                return Err(format!(
+                    "unsupported checksum format: `{algo}` is not an algorithm this module \
+                     computes; {FORMS}"
+                ));
+            }
         }
-        None => spec,
+        // A digest written without its algorithm names one by its length.
+        None => match spec.len() {
+            64 => (Algorithm::Sha256, spec),
+            40 => (Algorithm::Sha1, spec),
+            _ => {
+                return Err(format!(
+                    "unsupported checksum format: `{spec}` is neither 64 nor 40 hex digits; \
+                     {FORMS}"
+                ));
+            }
+        },
     };
-    if digits.len() != 64 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+    match algorithm {
+        Algorithm::Sha256 => {
+            let mut bytes = [0u8; 32];
+            read_digits(spec, digits, &mut bytes)?;
+            Ok(Checksum::Sha256(bytes))
+        }
+        Algorithm::Sha1 => {
+            let mut bytes = [0u8; 20];
+            read_digits(spec, digits, &mut bytes)?;
+            Ok(Checksum::Sha1(bytes))
+        }
+    }
+}
+
+/// Fill `bytes` from a hex string, whose length the buffer fixes. `spec` is
+/// the checksum as it was written, for the refusal to quote back.
+fn read_digits(spec: &str, digits: &str, bytes: &mut [u8]) -> Result<(), Failure> {
+    let wanted = bytes.len() * 2;
+    if digits.len() != wanted || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(format!(
-            "unsupported checksum format: `{spec}` is not 64 hex digits; write \
-             `sha256:<64 hex digits>`"
+            "unsupported checksum format: `{spec}` is not {wanted} hex digits; {FORMS}"
         ));
     }
-    let mut bytes = [0u8; 32];
     for (i, byte) in bytes.iter_mut().enumerate() {
         *byte = u8::from_str_radix(&digits[i * 2..i * 2 + 2], 16)
             .map_err(|_| format!("unsupported checksum format: `{spec}` is not hexadecimal"))?;
     }
-    Ok(Checksum::Sha256(bytes))
+    Ok(())
 }
 
 /// The lowercase hex spelling of a digest, as a checksum is written.
@@ -202,7 +310,7 @@ fn stream(
     let file = File::create(temp).map_err(|e| format!("{}: {e}", temp.display()))?;
     let mut writer = BufWriter::new(file);
     let mut reader = reply.body_mut().as_reader();
-    let mut hasher = Sha256::new();
+    let mut hasher = checksum.hasher();
     let mut buf = vec![0u8; CHUNK];
     let mut received: u64 = 0;
 
@@ -222,7 +330,9 @@ fn stream(
                  config to accept it"
             ));
         }
-        hasher.update(&buf[..n]);
+        if let Some(hasher) = hasher.as_mut() {
+            hasher.update(&buf[..n]);
+        }
         writer
             .write_all(&buf[..n])
             .map_err(|e| format!("{}: {e}", temp.display()))?;
@@ -232,15 +342,8 @@ fn stream(
     // Checked before the file is put on disk for good: a body that hashes to
     // something else is going to be thrown away, and there is no reason to pay
     // for its durability first.
-    if let Checksum::Sha256(expected) = checksum {
-        let actual = hasher.finalize();
-        if actual.as_slice() != expected.as_slice() {
-            return Err(format!(
-                "{url}: checksum mismatch; expected sha256:{}, got sha256:{}",
-                hex(expected.as_slice()),
-                hex(actual.as_slice())
-            ));
-        }
+    if let Some(hasher) = hasher {
+        checksum.verify(hasher).map_err(|e| format!("{url}: {e}"))?;
     }
 
     // On disk before the rename, so a machine that loses power mid-transfer

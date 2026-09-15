@@ -468,6 +468,11 @@ ureq = { version = "3", features = ["json"] }
 # out of the archive. Unix releases ship .tar.gz, Windows ships .zip, so both
 # readers are needed on every host that can cross-package.
 sha2 = "0.10"
+
+# The second digest the `lumen-download` module verifies a transfer against:
+# package indexes and artifact repositories publish sha1 far more often than
+# sha256.
+sha1 = "0.10"
 tar = "0.4"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 zip = { version = "6", default-features = false, features = ["deflate"] }
