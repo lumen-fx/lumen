@@ -38,25 +38,26 @@ See [shell completions](../reference/cli.md#completions).
 
 ### Runtime modules
 
-Some capabilities ship as separate libraries the runtime loads at startup:
-`lumen-archive`, `lumen-audio`, `lumen-canvas`, `lumen-download`, `lumen-fs`,
-and `lumen-process`. An app that names one under
-[`[dependencies]`](../reference/lumen-toml.md#dependencies) needs them on the
-machine; without them it starts with a banner per missing module and every
-call into that module's namespace fails.
+Some capabilities live outside the engine, in libraries the runtime loads at
+startup: files, audio, canvas, downloads, processes, archives. An app asks for
+one by name under [`[dependencies]`](../reference/lumen-toml.md#dependencies)
+in `lumen.toml`, which lists the modules and their config keys;
+[scripting](../guides/scripting.md) covers the calls each one adds.
 
-The installer downloads them with the toolchain, from the
-`lumen-modules-<platform>.tar.gz` asset published with the same release, and
-unpacks them into `~/.lumen/bin` beside the runtime library. `--no-modules`
-skips them; if you installed that way and later declare a module, run the
-installer again without the flag:
+The installer downloads them with the toolchain, from the module archive
+published with the same release, and unpacks them into the same tree, so the
+libraries sit in `~/.lumen/bin` beside the engine, which is where the runtime
+looks for them. `--no-modules` installs the toolchain without them.
+
+An app whose modules are missing prints one line per module,
+`lumen-runtime: MODULE LOAD FAILED: <name>`, with the paths it probed under
+it, then keeps running with every call into that module's namespace failing.
+To put the modules in place, run the installer again with `--force`; a plain
+rerun at the same version stops at "Already up to date" and changes nothing:
 
 ```sh
 curl -fsSL https://lumenfx.dev/install.sh | sh -s -- --force
 ```
-
-Windows publishes no modules archive; there these capabilities are compiled
-into the binaries the installer puts in place.
 
 ### Installer options
 
@@ -118,6 +119,12 @@ Each release also publishes `lumen-windows-x86_64.zip` and
 portable copy never checks for updates; you replace it by unpacking a newer
 zip.
 
+A Windows install carries no runtime modules, so an app that declares
+[`[dependencies]`](../reference/lumen-toml.md#dependencies) starts without
+them and says so in one line on stderr.
+[`lumenc package --static`](../guides/packaging.md#one-self-contained-executable)
+compiles them into the executable instead.
+
 ## Platforms with no build
 
 Releases cover Linux, macOS, and Windows, each on x86_64 and aarch64. On
@@ -137,8 +144,9 @@ A source install does not carry the app templates, because cargo keeps only the
 binary it installed. `lumenc new` wants a release install, or a clone of the
 [template repository](templates.md) you were going to scaffold from.
 
-It does not build the runtime modules either, so an app that declares
-[`[dependencies]`](../reference/lumen-toml.md#dependencies) runs without them.
+It does not build the [runtime modules](#runtime-modules) either, so the
+capabilities behind [`[dependencies]`](../reference/lumen-toml.md#dependencies)
+need a release install.
 
 Set `LUMEN_SKIP_ENGINE_BUILD=1` to install only the compiler, if you are
 building the rest yourself. `lumenc run`, `build`, and `check` work without the
