@@ -36,6 +36,7 @@ use lumen_primitives::{Indeterminate, RadioButton};
 use lumen_scene::routing::Location;
 use lumen_scene::spawn;
 use lumen_scene::spawn::SpawnIntoWorld;
+use lumen_web::urls::page_href;
 use lumen_web::{PageSpec, SignalEnv, SiteSpec, WebSpec};
 use lumen_web_dom::{NodeTable, Routes, WebDomPlugin};
 use wasm_bindgen::JsCast;
@@ -129,7 +130,8 @@ fn hydrate(ir: LayoutIR, root: Element) -> App {
     app.add_plugin(WebDomPlugin {
         root,
         root_entity,
-        routes: None,
+        routes: Routes::default(),
+        soft_navigation: false,
     });
     app.tick();
     app
@@ -384,12 +386,13 @@ fn hydrate_site(site: &SiteSpec, ir: LayoutIR, root: Element, soft: bool) -> App
     );
     app.add_systems(TickStage::Systems, spawn::reconcile_if_blocks);
     let root_entity = ir.spawn_into(&mut app.world);
-    let routes = soft.then(|| site_routes(site));
-    lumen_web_dom::listen(&root, routes.as_ref()).expect("the page takes listeners");
+    let routes = site_routes(site);
+    lumen_web_dom::listen(&root, soft.then_some(&routes)).expect("the page takes listeners");
     app.add_plugin(WebDomPlugin {
         root,
         root_entity,
         routes,
+        soft_navigation: soft,
     });
     app.tick();
     app
@@ -437,7 +440,37 @@ fn address() -> String {
 fn link_in(root: &Element) -> Element {
     root.query_selector("a")
         .unwrap()
-        .expect("the emitter wrote the link")
+        .expect("the page carries the link")
+}
+
+#[wasm_bindgen_test]
+fn a_link_the_runtime_mounts_points_where_the_build_would_have_pointed_it() {
+    let site = link_site();
+    let document = web_sys::window().unwrap().document().unwrap();
+    let root = document.create_element("div").unwrap();
+    document.body().unwrap().append_child(&root).unwrap();
+
+    // Nothing prerendered this document, so every node is built from its
+    // entity: the path a `<for>` row, an `<if mode="render">` branch and a
+    // whole page swapped in after a navigation all take.
+    let _app = hydrate_site(&site, link_tree(), root.clone(), false);
+
+    let manifest = lumen_web::site::manifest(&site);
+    assert_eq!(
+        link_in(&root).get_attribute("href").as_deref(),
+        Some(
+            page_href(
+                "settings",
+                &manifest.base_path,
+                &site_keys(&site),
+                &manifest.entry,
+            )
+            .as_str()
+        ),
+        "a link the runtime mounts is the link the build writes for the same \
+         page; without the address it is an element a browser cannot follow, \
+         open in a tab, copy, or put in the tab order"
+    );
 }
 
 #[wasm_bindgen_test]
@@ -575,12 +608,13 @@ fn the_browser_s_back_button_opens_the_page_its_address_names() {
     );
     app.add_systems(TickStage::Systems, spawn::reconcile_if_blocks);
     let root_entity = gated_tree().spawn_into(&mut app.world);
-    let routes = Some(site_routes(&site));
-    lumen_web_dom::listen(&root, routes.as_ref()).expect("the page takes listeners");
+    let routes = site_routes(&site);
+    lumen_web_dom::listen(&root, Some(&routes)).expect("the page takes listeners");
     app.add_plugin(WebDomPlugin {
         root: root.clone(),
         root_entity,
         routes,
+        soft_navigation: true,
     });
     app.tick();
     assert_eq!(
@@ -796,7 +830,8 @@ fn a_bound_element_is_adopted_without_being_corrected() {
     app.add_plugin(WebDomPlugin {
         root: root.clone(),
         root_entity,
-        routes: None,
+        routes: Routes::default(),
+        soft_navigation: false,
     });
     app.add_systems(TickStage::Systems, lumen_core::signals::apply_text_bindings);
     app.tick();
@@ -832,7 +867,8 @@ fn hydrate_reactive(ir: LayoutIR, root: Element) -> App {
     app.add_plugin(WebDomPlugin {
         root,
         root_entity,
-        routes: None,
+        routes: Routes::default(),
+        soft_navigation: false,
     });
     app.add_systems(TickStage::Systems, spawn::reconcile_if_blocks);
     app.tick();
@@ -922,7 +958,8 @@ fn hydrate_interactive(ir: LayoutIR, root: Element) -> App {
     app.add_plugin(WebDomPlugin {
         root,
         root_entity,
-        routes: None,
+        routes: Routes::default(),
+        soft_navigation: false,
     });
     app.add_plugin(lumen_input::InputPlugin { clipboard: false });
     app.add_plugin(lumen_primitives::ControlsPlugin);
@@ -1407,7 +1444,8 @@ fn hydrate_list(ir: LayoutIR, root: Element, names: &[&str]) -> App {
     app.add_plugin(WebDomPlugin {
         root,
         root_entity,
-        routes: None,
+        routes: Routes::default(),
+        soft_navigation: false,
     });
     app.add_systems(TickStage::Systems, spawn::reconcile_for_blocks);
     app.tick();

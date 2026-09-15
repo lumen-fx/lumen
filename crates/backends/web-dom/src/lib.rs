@@ -52,12 +52,17 @@ pub struct WebDomPlugin {
     pub root: Element,
     /// The entity the app's root node was spawned as.
     pub root_entity: Entity,
-    /// What the site's addresses look like, when `[web] navigation = "soft"`
-    /// asks the app to keep running across a link. `None` leaves the address
-    /// bar to the browser, which is what happens when every link loads the
-    /// next document anyway. An in-app navigation still swaps the page in
-    /// place either way.
-    pub routes: Option<Routes>,
+    /// What the site's addresses look like. Every `<a href>` the backend
+    /// mounts is written with the address from here, so a link the emitter
+    /// never wrote points where the emitter would have pointed it.
+    pub routes: Routes,
+    /// `[web] navigation = "soft"`: the app keeps running across a link, so
+    /// the page it swaps to goes in the address bar and the browser's own
+    /// back and forward buttons step the site. Off leaves the address bar to
+    /// the browser, which is what a site whose every link loads the next
+    /// document needs. An in-app navigation still swaps the page in place
+    /// either way.
+    pub soft_navigation: bool,
 }
 
 impl Plugin for WebDomPlugin {
@@ -67,8 +72,8 @@ impl Plugin for WebDomPlugin {
         // browser's back and forward buttons step the site. Ordered ahead of
         // the resolver: it reads the same request, and back and forward are
         // the browser's to answer rather than the in-memory stack's.
-        if let Some(routes) = self.routes {
-            app.world.insert_resource(routes);
+        app.world.insert_resource(self.routes);
+        if self.soft_navigation {
             app.add_systems(
                 TickStage::Systems,
                 navigation::sync_history.before(lumen_scene::routing::apply_navigation),

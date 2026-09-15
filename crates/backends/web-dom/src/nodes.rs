@@ -33,9 +33,12 @@ use lumen_html::contract::{DATA_LM, DATA_LM_PART, NodePath, PathStep};
 use lumen_html::paths::walk_nodes;
 use lumen_html::style::style_value;
 use lumen_html::tags::{drawn_by_control, html_tag_for, part_from_class};
+use lumen_scene::routing::Anchor;
 use lumen_scene::spawn::ForMarker;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, Element, Node};
+
+use crate::navigation::Routes;
 
 /// How much of the page the runtime took over rather than rebuilt.
 ///
@@ -155,6 +158,7 @@ type NodeQuery<'w, 's> = Query<
         Option<&'static TextContent>,
         Option<&'static LumenAttributes>,
         Option<&'static InlineStyle>,
+        Option<&'static Anchor>,
     ),
 >;
 
@@ -162,6 +166,7 @@ type NodeQuery<'w, 's> = Query<
 /// for it, or a new one.
 pub fn bind_new_nodes(
     mut table: NonSendMut<NodeTable>,
+    routes: Res<Routes>,
     nodes: NodeQuery<'_, '_>,
     children: Query<&Children>,
     rows: Query<&ForMarker>,
@@ -180,7 +185,15 @@ pub fn bind_new_nodes(
         table.report.adopted += 1;
         bind(&mut table, root_entity, path, root.clone());
     }
-    bind_tree(&mut table, root_entity, root, &nodes, &children, &rows);
+    bind_tree(
+        &mut table,
+        root_entity,
+        root,
+        &routes,
+        &nodes,
+        &children,
+        &rows,
+    );
     if table.hydrating {
         table.hydrating = false;
         // After the walk, not before: an element is only an orphan once the
@@ -255,6 +268,7 @@ fn bind_tree(
     table: &mut NodeTable,
     root_entity: Entity,
     root: Element,
+    routes: &Routes,
     nodes: &NodeQuery<'_, '_>,
     children: &Query<&Children>,
     rows: &Query<&ForMarker>,
@@ -273,8 +287,8 @@ fn bind_tree(
                 visit.path,
                 visit.parent,
                 visit.previous,
+                routes,
                 nodes,
-                children,
             )?;
             if visit.is_for {
                 // Recorded even when the block has no children at all, which
@@ -313,8 +327,8 @@ fn bind_one(
     path: &NodePath,
     parent: &Element,
     previous: Option<&Element>,
+    routes: &Routes,
     nodes: &NodeQuery<'_, '_>,
-    children: &Query<&Children>,
 ) -> Option<Element> {
     if let Some(element) = table.by_entity.get(&entity) {
         return Some(element.clone());
@@ -335,7 +349,7 @@ fn bind_one(
             "lumen: no prerendered element for node {text}; building it instead"
         )));
     }
-    let element = build(table, entity, &text, nodes, children)?;
+    let element = build(table, entity, &text, routes, nodes)?;
     // An element goes after the last sibling that has one, or ahead of every
     // sibling element. Ahead of, not first: an element's own text is the node
     // before its children, and it stays there. The control the parent is
@@ -386,10 +400,10 @@ fn build(
     table: &NodeTable,
     entity: Entity,
     path: &str,
+    routes: &Routes,
     nodes: &NodeQuery<'_, '_>,
-    children: &Query<&Children>,
 ) -> Option<Element> {
-    let (tag, id, classes, text, attributes, style) = nodes.get(entity).ok()?;
+    let (tag, id, classes, text, attributes, style, anchor) = nodes.get(entity).ok()?;
     let html = html_tag_for(&tag.0)?;
     let element = table.document.create_element(html.name).ok()?;
     for (name, value) in html.fixed {
@@ -399,6 +413,15 @@ fn build(
     let _ = element.set_attribute("class", &class_value(&tag.0, classes));
     if let Some(id) = id {
         let _ = element.set_attribute("id", &id.0);
+    }
+    // Where an anchor points is the one thing a link is, and the entity
+    // carries it as a page rather than as an address. Without it the browser
+    // has no link at all: no pointer, nothing to open in a tab or copy,
+    // nothing for Enter to activate, and nothing in the tab order. The
+    // address is the emitter's own, so a link this mounts and one the build
+    // wrote for the same page are the same link.
+    if let Some(anchor) = anchor {
+        let _ = element.set_attribute("href", &routes.address_of(&anchor.0));
     }
     if let Some(attributes) = attributes {
         for (name, value) in &attributes.0 {
@@ -428,7 +451,6 @@ fn build(
     let _ = element.set_attribute(DATA_LM, path);
     // Children of their own get bound by the walk that called this; nothing
     // to do here beyond leaving room for them.
-    let _ = children;
     Some(element)
 }
 

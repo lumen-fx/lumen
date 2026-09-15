@@ -119,12 +119,15 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
     apply_node_seed(&mut app.world, root_entity, &loaded.seed);
 
     let root = page_root(&page)?;
-    let routes = routes(&manifest, loaded.artifact.pages.is_some());
-    lumen_web_dom::listen(&root, routes.as_ref()).map_err(|_| BootError::Listeners)?;
+    let routes = Routes::from_manifest(&manifest);
+    let soft_navigation = soft_navigation(&manifest, loaded.artifact.pages.is_some());
+    lumen_web_dom::listen(&root, soft_navigation.then_some(&routes))
+        .map_err(|_| BootError::Listeners)?;
     app.add_plugin(WebDomPlugin {
         root,
         root_entity,
         routes,
+        soft_navigation,
     });
 
     let app = LumenWebApp::from_parts(app, loaded.scripts.first().map(|s| s.engine.clone()));
@@ -161,17 +164,15 @@ fn install_location() {
     });
 }
 
-/// The site's addresses, when `[web] navigation` says a same-page
-/// `<a href>` click should be handled in-app rather than left to the
-/// browser.
+/// Whether `[web] navigation` says a same-page `<a href>` click should be
+/// handled in-app rather than left to the browser.
 ///
 /// `has_pages` is whether the artifact carries the other pages' trees, which
 /// is what a swap mounts from. Without them there is nothing in this document
 /// to swap to, and intercepting a click would leave a link that does nothing
 /// at all: the browser is stopped and the page it named never arrives.
-fn routes(manifest: &Manifest, has_pages: bool) -> Option<Routes> {
-    (manifest.navigation == NavigationMode::Soft && has_pages)
-        .then(|| Routes::from_manifest(manifest))
+fn soft_navigation(manifest: &Manifest, has_pages: bool) -> bool {
+    manifest.navigation == NavigationMode::Soft && has_pages
 }
 
 /// The element the app's root node is.
