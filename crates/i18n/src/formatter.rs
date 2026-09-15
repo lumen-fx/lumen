@@ -1,6 +1,7 @@
-//! Locale-aware number / date / time / datetime formatting (W5.8).
+//! Locale-aware number / date / time / datetime formatting.
 //!
-//! Thin wrappers around ICU4X 2.x:
+//! Thin wrappers around ICU4X 2.x, each built the first time something
+//! formats with it:
 //!
 //! - Numbers - [`icu_decimal::DecimalFormatter`] (the `ryu` feature is
 //!   on, so floats convert via `RoundTrip`).
@@ -9,23 +10,23 @@
 //!   calendar is implicit; non-Gregorian calendars (e.g. `ja-u-ca-japanese`)
 //!   come along automatically when the locale tag asks for them.
 //! - Currency - CLDR-driven via [`icu::experimental::dimension::currency::formatter::CurrencyFormatter`]
-//!   (round-7 upgrade: gated behind the `icu` umbrella's `unstable`
-//!   feature; previously a hand-rolled ISO-4217-code suffix). A
+//!   (behind the `icu` umbrella's `unstable` feature). A
 //!   `CurrencyFormatter` is bound to one ISO-4217 code, so
 //!   [`LocaleFormatter`] builds them on demand and keeps them in a
 //!   per-locale cache.
-//! - Relative time - CLDR-driven via [`icu::experimental::relativetime::RelativeTimeFormatter`]
-//!   (round-7 upgrade: previously a hand-rolled English/German stub).
+//! - Relative time - CLDR-driven via [`icu::experimental::relativetime::RelativeTimeFormatter`],
+//!   one formatter per unit.
 //!
 //! [`format_spec`] is the one place a spec string becomes formatted text.
 //! Markup's `format` attribute carries the spec verbatim and the scripts'
 //! `format_*` builtins build one, so both front doors end at the same
 //! dispatch and every spec has one meaning.
 
+use std::array;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::str::FromStr;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use fixed_decimal::FloatPrecision;
 use icu::calendar::Date;
@@ -165,55 +166,80 @@ fn bad_field(field: &str, input: &str) -> FormatterError {
     FormatterError::Date(format!("bad {field} in {input}"))
 }
 
+/// The units [`LocaleFormatter::format_relative`] picks between, in
+/// CLDR threshold order. Each one indexes its own cell in the
+/// formatter's relative-time cache.
+#[derive(Clone, Copy, Debug)]
+enum RelUnit {
+    Second,
+    Minute,
+    Hour,
+    Day,
+    Month,
+    Year,
+}
+
+impl RelUnit {
+    /// How many cells the relative-time cache holds, one per variant.
+    const COUNT: usize = 6;
+
+    /// Which cell this unit's formatter lives in.
+    fn slot(self) -> usize {
+        self as usize
+    }
+}
+
+/// ICU4X's spelling of en-US, the locale a formatter falls back to when
+/// the compiled-in CLDR data does not cover the one that was asked for.
+fn en_us() -> Locale {
+    "en-US".parse().expect("en-US is valid")
+}
+
 /// Holds ICU4X formatters for one locale. [`crate::I18nPlugin`] builds
 /// one at startup and installs it behind the opaque handle
 /// [`lumen_core::i18n::AppI18n`] carries.
 ///
-/// All formatters share `lang`; switching locales means
-/// re-constructing them (cheap - each `try_new` is a hash lookup
-/// against the baked-in CLDR data plus a few small allocations).
+/// Construction holds the locale and nothing else. Each formatter is
+/// built the first time something formats with it and then kept, so an
+/// app that formats only numbers never pays for the date-time or
+/// relative-time data, and an app that formats nothing pays for none of
+/// it.
 pub struct LocaleFormatter {
-    /// Active locale.
+    /// Active locale, as it was asked for.
     pub lang: LanguageIdentifier,
+    /// ICU4X's spelling of `lang`, kept so each formatter can be built
+    /// the first time something asks for it.
+    loc: Locale,
     /// Decimal formatter.
-    pub decimal: DecimalFormatter,
+    decimal: OnceLock<DecimalFormatter>,
     /// Date-only formatter (medium length).
-    pub date: DateTimeFormatter<fieldsets::YMD>,
+    date: OnceLock<DateTimeFormatter<fieldsets::YMD>>,
     /// Time-only formatter (medium length).
-    pub time: DateTimeFormatter<fieldsets::T>,
+    time: OnceLock<DateTimeFormatter<fieldsets::T>>,
     /// Date + time formatter (medium length).
-    pub datetime: DateTimeFormatter<fieldsets::YMDT>,
+    datetime: OnceLock<DateTimeFormatter<fieldsets::YMDT>>,
+    /// Per-unit relative-time formatters: ICU4X 2.x `icu_experimental`
+    /// exposes per-unit constructors rather than a single multi-unit
+    /// formatter. The unit set is closed and known here, so this cache is
+    /// an array of cells and takes no lock, which is why it does not look
+    /// like the currency cache below.
+    relative: [OnceLock<RelativeTimeFormatter>; RelUnit::COUNT],
     /// Currency preferences for `lang`, kept so per-code formatters can
     /// be built after construction.
     currency_prefs: CurrencyFormatterPreferences,
     /// Currency formatters keyed by ISO-4217 code. ICU4X binds the code
-    /// at construction, so one formatter cannot serve every currency;
-    /// the cache keeps construction to once per (locale, code) rather
-    /// than once per [`LocaleFormatter::format_currency`] call.
+    /// at construction, so one formatter cannot serve every currency, and
+    /// the set of codes markup can name is open, so this cache needs a
+    /// map and a lock where the relative-time one above does not. It
+    /// keeps construction to once per (locale, code) rather than once per
+    /// [`LocaleFormatter::format_currency`] call.
     currency: Mutex<HashMap<CurrencyType, CurrencyFormatter<DecimalFormatter>>>,
-    /// Per-unit relative-time formatters (round-7: real ICU4X
-    /// CLDR-driven, not the hand-rolled en/de stub). One formatter per
-    /// unit because ICU4X 2.x `icu_experimental` exposes per-unit
-    /// constructors rather than a single multi-unit formatter.
-    pub relative_second: RelativeTimeFormatter,
-    /// Long-form relative minute formatter.
-    pub relative_minute: RelativeTimeFormatter,
-    /// Long-form relative hour formatter.
-    pub relative_hour: RelativeTimeFormatter,
-    /// Long-form relative day formatter.
-    pub relative_day: RelativeTimeFormatter,
-    /// Long-form relative month formatter.
-    pub relative_month: RelativeTimeFormatter,
-    /// Long-form relative year formatter.
-    pub relative_year: RelativeTimeFormatter,
 }
 
 impl LocaleFormatter {
-    /// Build formatters for `lang`. Panics on a malformed locale - use
-    /// [`Self::try_new`] for the fallible variant. Falls back to
-    /// en-US-equivalent formatters on data-load failure (which only
-    /// happens for exotic calendars that the compiled-in CLDR data
-    /// dropped).
+    /// Formatters for `lang`, each built when something first formats
+    /// with it. Falls back to en-US when ICU4X will not parse the tag;
+    /// use [`Self::try_new`] to see that failure instead.
     pub fn new(lang: LanguageIdentifier) -> Self {
         Self::try_new(lang.clone()).unwrap_or_else(|e| {
             tracing::warn!(?e, %lang, "LocaleFormatter::try_new failed, falling back to en-US");
@@ -223,7 +249,10 @@ impl LocaleFormatter {
     }
 
     /// Fallible constructor. Returns [`FormatterError::Load`] when ICU4X
-    /// can't produce a formatter for `lang`.
+    /// will not parse `lang`, which is the only failure left here now
+    /// that each formatter loads its data on first use. A locale ICU
+    /// parses but has no data for falls back to en-US one formatter at a
+    /// time, at the call that needs it.
     pub fn try_new(lang: LanguageIdentifier) -> Result<Self, FormatterError> {
         // `unic_langid::LanguageIdentifier` (Fluent's tag type) and
         // `icu::locale::Locale` (ICU4X's tag type) are not the same
@@ -235,62 +264,125 @@ impl LocaleFormatter {
             .to_string()
             .parse()
             .map_err(|e| FormatterError::Load(format!("locale parse: {e}")))?;
-        let decimal =
-            DecimalFormatter::try_new(loc.clone().into(), DecimalFormatterOptions::default())
-                .map_err(|e| FormatterError::Load(format!("decimal: {e}")))?;
-        let date = DateTimeFormatter::try_new(loc.clone().into(), fieldsets::YMD::medium())
-            .map_err(|e| FormatterError::Load(format!("date: {e}")))?;
-        let time = DateTimeFormatter::try_new(loc.clone().into(), fieldsets::T::medium())
-            .map_err(|e| FormatterError::Load(format!("time: {e}")))?;
-        let datetime = DateTimeFormatter::try_new(loc.clone().into(), fieldsets::YMDT::medium())
-            .map_err(|e| FormatterError::Load(format!("datetime: {e}")))?;
         // Currency formatters are built per ISO-4217 code on first use;
         // all we need up front is the locale's preferences.
         let currency_prefs = CurrencyFormatterPreferences::from(loc.clone());
-        // Per-unit relative-time formatters - CLDR-driven (round-7).
-        // ICU4X 2.x `icu_experimental` exposes per-unit constructors
-        // rather than a single multi-unit one; we instantiate Long
-        // form for each.
-        // Non-exhaustive since icu_experimental 0.5: build from Default,
-        // then set the fields we care about.
-        let mut rt_opts = RelativeTimeFormatterOptions::default();
-        rt_opts.numeric = Numeric::Always;
-        let relative_second =
-            RelativeTimeFormatter::try_new_long_second(loc.clone().into(), rt_opts)
-                .map_err(|e| FormatterError::Load(format!("relative second: {e}")))?;
-        let relative_minute =
-            RelativeTimeFormatter::try_new_long_minute(loc.clone().into(), rt_opts)
-                .map_err(|e| FormatterError::Load(format!("relative minute: {e}")))?;
-        let relative_hour = RelativeTimeFormatter::try_new_long_hour(loc.clone().into(), rt_opts)
-            .map_err(|e| FormatterError::Load(format!("relative hour: {e}")))?;
-        let relative_day = RelativeTimeFormatter::try_new_long_day(loc.clone().into(), rt_opts)
-            .map_err(|e| FormatterError::Load(format!("relative day: {e}")))?;
-        let relative_month = RelativeTimeFormatter::try_new_long_month(loc.clone().into(), rt_opts)
-            .map_err(|e| FormatterError::Load(format!("relative month: {e}")))?;
-        let relative_year = RelativeTimeFormatter::try_new_long_year(loc.into(), rt_opts)
-            .map_err(|e| FormatterError::Load(format!("relative year: {e}")))?;
         Ok(Self {
             lang,
-            decimal,
-            date,
-            time,
-            datetime,
+            loc,
+            decimal: OnceLock::new(),
+            date: OnceLock::new(),
+            time: OnceLock::new(),
+            datetime: OnceLock::new(),
+            relative: array::from_fn(|_| OnceLock::new()),
             currency_prefs,
             currency: Mutex::new(HashMap::new()),
-            relative_second,
-            relative_minute,
-            relative_hour,
-            relative_day,
-            relative_month,
-            relative_year,
         })
+    }
+
+    /// The decimal formatter, built on the first call.
+    fn decimal(&self) -> &DecimalFormatter {
+        self.decimal.get_or_init(|| {
+            Self::build_decimal(&self.loc).unwrap_or_else(|e| {
+                tracing::warn!(?e, lang = %self.lang, "decimal data missing, using en-US");
+                Self::build_decimal(&en_us()).expect("en-US always loads")
+            })
+        })
+    }
+
+    /// The date-only formatter, built on the first call.
+    fn date(&self) -> &DateTimeFormatter<fieldsets::YMD> {
+        self.date.get_or_init(|| {
+            Self::build_date(&self.loc).unwrap_or_else(|e| {
+                tracing::warn!(?e, lang = %self.lang, "date data missing, using en-US");
+                Self::build_date(&en_us()).expect("en-US always loads")
+            })
+        })
+    }
+
+    /// The time-only formatter, built on the first call.
+    fn time(&self) -> &DateTimeFormatter<fieldsets::T> {
+        self.time.get_or_init(|| {
+            Self::build_time(&self.loc).unwrap_or_else(|e| {
+                tracing::warn!(?e, lang = %self.lang, "time data missing, using en-US");
+                Self::build_time(&en_us()).expect("en-US always loads")
+            })
+        })
+    }
+
+    /// The date + time formatter, built on the first call.
+    fn datetime(&self) -> &DateTimeFormatter<fieldsets::YMDT> {
+        self.datetime.get_or_init(|| {
+            Self::build_datetime(&self.loc).unwrap_or_else(|e| {
+                tracing::warn!(?e, lang = %self.lang, "datetime data missing, using en-US");
+                Self::build_datetime(&en_us()).expect("en-US always loads")
+            })
+        })
+    }
+
+    /// `unit`'s relative-time formatter, built on the first call for that
+    /// unit. An app that only ever formats hours loads the hour data and
+    /// nothing else.
+    fn relative(&self, unit: RelUnit) -> &RelativeTimeFormatter {
+        self.relative[unit.slot()].get_or_init(|| {
+            Self::build_relative(&self.loc, unit).unwrap_or_else(|e| {
+                tracing::warn!(
+                    ?e,
+                    ?unit,
+                    lang = %self.lang,
+                    "relative-time data missing, using en-US"
+                );
+                Self::build_relative(&en_us(), unit).expect("en-US always loads")
+            })
+        })
+    }
+
+    fn build_decimal(loc: &Locale) -> Result<DecimalFormatter, FormatterError> {
+        DecimalFormatter::try_new(loc.clone().into(), DecimalFormatterOptions::default())
+            .map_err(|e| FormatterError::Load(format!("decimal: {e}")))
+    }
+
+    fn build_date(loc: &Locale) -> Result<DateTimeFormatter<fieldsets::YMD>, FormatterError> {
+        DateTimeFormatter::try_new(loc.clone().into(), fieldsets::YMD::medium())
+            .map_err(|e| FormatterError::Load(format!("date: {e}")))
+    }
+
+    fn build_time(loc: &Locale) -> Result<DateTimeFormatter<fieldsets::T>, FormatterError> {
+        DateTimeFormatter::try_new(loc.clone().into(), fieldsets::T::medium())
+            .map_err(|e| FormatterError::Load(format!("time: {e}")))
+    }
+
+    fn build_datetime(loc: &Locale) -> Result<DateTimeFormatter<fieldsets::YMDT>, FormatterError> {
+        DateTimeFormatter::try_new(loc.clone().into(), fieldsets::YMDT::medium())
+            .map_err(|e| FormatterError::Load(format!("datetime: {e}")))
+    }
+
+    fn build_relative(
+        loc: &Locale,
+        unit: RelUnit,
+    ) -> Result<RelativeTimeFormatter, FormatterError> {
+        // `RelativeTimeFormatterOptions` is non-exhaustive since
+        // icu_experimental 0.5: build from Default, then set the field we
+        // care about.
+        let mut opts = RelativeTimeFormatterOptions::default();
+        opts.numeric = Numeric::Always;
+        let prefs = loc.clone().into();
+        let built = match unit {
+            RelUnit::Second => RelativeTimeFormatter::try_new_long_second(prefs, opts),
+            RelUnit::Minute => RelativeTimeFormatter::try_new_long_minute(prefs, opts),
+            RelUnit::Hour => RelativeTimeFormatter::try_new_long_hour(prefs, opts),
+            RelUnit::Day => RelativeTimeFormatter::try_new_long_day(prefs, opts),
+            RelUnit::Month => RelativeTimeFormatter::try_new_long_month(prefs, opts),
+            RelUnit::Year => RelativeTimeFormatter::try_new_long_year(prefs, opts),
+        };
+        built.map_err(|e| FormatterError::Load(format!("relative {unit:?}: {e}")))
     }
 
     /// Format `n` per locale rules. en-US: `12,345.67`; de-DE:
     /// `12.345,67`; fr-FR: `12 345,67` (with a NBSP grouping).
     pub fn format_number(&self, n: f64) -> String {
         match Decimal::try_from_f64(n, FloatPrecision::RoundTrip) {
-            Ok(d) => self.decimal.format(&d).to_string(),
+            Ok(d) => self.decimal().format(&d).to_string(),
             Err(e) => {
                 tracing::warn!(?e, n, "Decimal::try_from_f64 failed");
                 n.to_string()
@@ -301,7 +393,7 @@ impl LocaleFormatter {
     /// Format a pre-built [`Decimal`] (use when caller already has
     /// fixed-precision input and wants to avoid the float round-trip).
     pub fn format_decimal(&self, d: &Decimal) -> String {
-        self.decimal.format(d).to_string()
+        self.decimal().format(d).to_string()
     }
 
     /// Format `amount` as a CLDR-driven currency string. `currency` is
@@ -350,7 +442,7 @@ impl LocaleFormatter {
     pub fn format_date(&self, when: YmdHms) -> Result<String, FormatterError> {
         let d = Date::try_new_iso(when.year, when.month, when.day)
             .map_err(|e| FormatterError::Date(format!("{e:?}")))?;
-        Ok(self.date.format(&d).to_string())
+        Ok(self.date().format(&d).to_string())
     }
 
     /// Format the time part of `when`. Medium length (e.g. `3:45:00 PM` /
@@ -361,7 +453,7 @@ impl LocaleFormatter {
         let t = IcuTime::try_new(when.hour, when.minute, when.second, 0)
             .map_err(|e| FormatterError::Date(format!("time: {e:?}")))?;
         let dt = IcuDateTime { date: d, time: t };
-        Ok(self.time.format(&dt).to_string())
+        Ok(self.time().format(&dt).to_string())
     }
 
     /// Format full date + time. Medium length on both halves.
@@ -371,7 +463,7 @@ impl LocaleFormatter {
         let t = IcuTime::try_new(when.hour, when.minute, when.second, 0)
             .map_err(|e| FormatterError::Date(format!("time: {e:?}")))?;
         let dt = IcuDateTime { date: d, time: t };
-        Ok(self.datetime.format(&dt).to_string())
+        Ok(self.datetime().format(&dt).to_string())
     }
 
     /// Format `secs_from_now` as a CLDR-driven relative-time string.
@@ -383,25 +475,21 @@ impl LocaleFormatter {
     /// seconds; 45 min -> minutes; 24 h -> hours; 30 d -> days; 12 mo ->
     /// months; else years). The matching per-unit formatter handles
     /// localization. Past is negative, future is positive.
-    ///
-    /// Round-7 upgrade: replaces the hand-rolled en/de stub with
-    /// `icu_experimental`'s `RelativeTimeFormatter` (per-unit, long
-    /// form). All 700+ CLDR locales now work, not just en + de.
     pub fn format_relative(&self, secs_from_now: i64) -> String {
         let abs_secs = secs_from_now.unsigned_abs();
-        let (count, formatter) = match abs_secs {
-            0..=44 => (secs_from_now, &self.relative_second),
-            45..=2_699 => (secs_from_now / 60, &self.relative_minute),
-            2_700..=86_399 => (secs_from_now / 3_600, &self.relative_hour),
-            86_400..=2_591_999 => (secs_from_now / 86_400, &self.relative_day),
-            2_592_000..=31_535_999 => (secs_from_now / 2_592_000, &self.relative_month),
-            _ => (secs_from_now / 31_536_000, &self.relative_year),
+        let (count, unit) = match abs_secs {
+            0..=44 => (secs_from_now, RelUnit::Second),
+            45..=2_699 => (secs_from_now / 60, RelUnit::Minute),
+            2_700..=86_399 => (secs_from_now / 3_600, RelUnit::Hour),
+            86_400..=2_591_999 => (secs_from_now / 86_400, RelUnit::Day),
+            2_592_000..=31_535_999 => (secs_from_now / 2_592_000, RelUnit::Month),
+            _ => (secs_from_now / 31_536_000, RelUnit::Year),
         };
         let d = match Decimal::try_from_f64(count as f64, FloatPrecision::Integer) {
             Ok(d) => d,
             Err(_) => return secs_from_now.to_string(),
         };
-        formatter.format(d).to_string()
+        self.relative(unit).format(d).to_string()
     }
 }
 
@@ -441,6 +529,9 @@ pub fn format_spec(fmt: &LocaleFormatter, spec: &str, value: &str) -> Option<Str
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::thread;
+
     use super::*;
 
     fn lang(s: &str) -> LanguageIdentifier {
@@ -480,8 +571,8 @@ mod tests {
 
     #[test]
     fn currency_uses_locale_symbol_position() {
-        // Round-7: CLDR-driven now. en-US prepends the symbol with no
-        // gap; de-DE appends with a NBSP. Both contain the digits.
+        // en-US prepends the symbol with no gap; de-DE appends with a
+        // NBSP. Both contain the digits.
         let en = LocaleFormatter::new(lang("en-US"));
         let de = LocaleFormatter::new(lang("de-DE"));
         let en_s = en.format_currency(1234.5, "EUR");
@@ -532,10 +623,66 @@ mod tests {
     }
 
     #[test]
+    fn relative_cache_keeps_units_apart() {
+        // One cell per unit, so a cell wired to the wrong unit is the bug
+        // to catch: every unit keeps answering in its own words, and
+        // answers the same way the second time.
+        let f = LocaleFormatter::new(lang("en-US"));
+        let cases = [
+            (-10_i64, "second"),
+            (-120, "minute"),
+            (-3600 * 2, "hour"),
+            (-86_400 * 3, "day"),
+            (-2_592_000 * 2, "month"),
+            (-31_536_000 * 3, "year"),
+        ];
+        for (secs, unit) in cases {
+            let first = f.format_relative(secs);
+            assert!(
+                first.contains(unit),
+                "{secs} seconds should read in {unit}s: {first}"
+            );
+            assert_eq!(f.format_relative(secs), first, "second read of {unit}");
+        }
+    }
+
+    #[test]
+    fn formatters_are_shared_across_threads() {
+        // The cells fill on first use, so several threads can race for
+        // one. `OnceLock` picks a single winner; this asserts every
+        // accessor reads that winner and formats the same afterwards.
+        let f = Arc::new(LocaleFormatter::new(lang("de-DE")));
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let f = Arc::clone(&f);
+                thread::spawn(move || match i % 4 {
+                    0 => f.format_number(12_345.67),
+                    1 => f
+                        .format_date(YmdHms::date(2024, 6, 15))
+                        .expect("June 15 formats"),
+                    2 => f.format_currency(1234.5, "EUR"),
+                    _ => f.format_relative(-3600 * 2),
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().expect("no formatting thread panics");
+        }
+        let number = f.format_number(12_345.67);
+        assert!(number.contains("12.345"), "de-DE dot grouping: {number}");
+        let date = f.format_date(YmdHms::date(2024, 6, 15)).unwrap();
+        assert!(date.starts_with("15"), "de-DE day first: {date}");
+        let money = f.format_currency(1234.5, "EUR");
+        assert!(money.contains('\u{20ac}'), "de-DE euro present: {money}");
+        let ago = f.format_relative(-3600 * 2);
+        assert!(ago.contains("Stunde"), "de-DE 2 hours past: {ago}");
+    }
+
+    #[test]
     fn relative_time_english_cldr() {
-        // Round-7: CLDR-driven now. Exact wording matches Unicode CLDR
-        // (`"2 hours ago"`, `"in 2 hours"`, ...). Pluralization handled
-        // by ICU per the locale's plural rules.
+        // Exact wording matches Unicode CLDR (`"2 hours ago"`,
+        // `"in 2 hours"`, ...). Pluralization is handled by ICU per the
+        // locale's plural rules.
         let f = LocaleFormatter::new(lang("en-US"));
         assert_eq!(f.format_relative(-3600 * 2), "2 hours ago");
         assert_eq!(f.format_relative(3600 * 2), "in 2 hours");
