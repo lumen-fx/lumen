@@ -1192,9 +1192,6 @@ false and prints one `lumen-download:` line on stderr.
 Windows builds have no runtime modules yet, so this surface is unavailable
 there.
 
-Windows builds have no runtime modules yet, so this surface is unavailable
-there.
-
 ## Processes
 
 These functions come from the `lumen-process` runtime module and exist only
@@ -1248,15 +1245,6 @@ There is no way to write to a child's input, no way to end a child from a
 script, and no per-child environment or working directory. A child is not
 ended when the app exits: a program still running outlives the app that
 started it.
-
-Windows builds have no runtime modules yet, so this surface is unavailable
-there.
-
-Windows builds have no runtime modules yet, so this surface is unavailable
-there.
-
-Windows builds have no runtime modules yet, so this surface is unavailable
-there.
 
 Windows builds have no runtime modules yet, so this surface is unavailable
 there.
