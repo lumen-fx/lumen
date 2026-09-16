@@ -110,6 +110,25 @@ impl Signal<any> {
     fn set(self, value: string) { return lumen::signal_set(self.name, value); }
 }
 
+// Nothing constructs this record. It names every handle type in a declaration,
+// which is what keeps the handle working from more than one function: candela
+// caches an instantiation of a generic type for the whole program, but the
+// methods it lowers for that instantiation go into the block being compiled and
+// are dropped when the block ends. A type first named inside a function body -
+// or inside a loop body - therefore has methods until that body is compiled and
+// none afterwards, and the next function to name it fails with `No method get on
+// type Signal<int>`. A type named in a declaration is instantiated before any
+// body is compiled, where the methods stay. Drop this record once candela lowers
+// an instantiation's methods where the instantiation itself lives.
+struct SignalTypes {
+    int_cell: Signal<int>,
+    float_cell: Signal<float>,
+    bool_cell: Signal<bool>,
+    string_cell: Signal<string>,
+    color_cell: Signal<Color>,
+    any_cell: Signal<any>,
+}
+
 // --- Array signals ------------------------------------------------------------
 //
 // `signal_array("rows")` returns a handle to the named reactive array that

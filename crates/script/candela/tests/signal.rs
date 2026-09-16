@@ -149,6 +149,42 @@ fn main() {}
     );
 }
 
+/// A handle type keeps its methods after the body that first named it is
+/// compiled, so a write in one function and a read in another reach the same
+/// pair. candela lowers an instantiation's methods into the block being
+/// compiled while caching the instantiation for the whole program, so the
+/// prelude names every handle type in a declaration to have them lowered
+/// before any body is; without that this test fails with `No method get on
+/// type Signal<bool>`.
+#[test]
+fn a_handle_type_outlives_the_body_that_first_named_it() {
+    let mut host = CandelaHost::new();
+    let src = r#"
+import "lumen.cdl";
+
+fn set_cell(name, v) { signal<bool>(name).set(v); }
+fn is_on(name) { return signal<bool>(name).get(); }
+
+fn seed() {
+    let d = 0;
+    while d < 2 {
+        set_cell("d" + str(d), true);
+        d += 1;
+    }
+}
+fn read() { return is_on("d0"); }
+fn main() {}
+"#;
+    host.load(src, "cross_body.cdl").expect("compiles");
+
+    host.call("seed", &[]).expect("the loop body writes");
+    assert_eq!(
+        host.call("read", &[]).unwrap().ret,
+        Some(ScriptValue::Bool(true)),
+        "the read is a separate compile and has to find the same `get`"
+    );
+}
+
 /// The cell lives in the same mirror the host side writes through, so a value
 /// set from `ScriptContext` is visible to the handle and the other way round.
 #[test]
