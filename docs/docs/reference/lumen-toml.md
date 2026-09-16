@@ -56,8 +56,8 @@ Multi-page navigation. See [Pages](../guides/pages.md).
 | Key | Type | Default | Effect |
 |-----|------|---------|--------|
 | `entry` | string | see below | Home page key: a filename stem with no `.lmn`. Ignored when no page has that key. |
-| `enabled` | bool | on when `src/` holds more than one `.lmn` file, or `include` names more than one page | Forces multi-page mode on or off. |
-| `include` | array of strings | directory discovery | Explicit ordered page-file list. When set, only these files are pages. Paths are relative to `src/` and may point into a subdirectory. |
+| `enabled` | bool | on when `src/` holds more than one `.lmn` file, or `include` names more than one page that exists | Forces multi-page mode on or off. |
+| `include` | array of strings | directory discovery | Explicit ordered page-file list. When set, only these files are pages. Paths are relative to `src/` and may point into a subdirectory. An entry whose file does not exist is skipped with a warning. |
 
 Without `include`, every `.lmn` file in `src/` is a page except `layout.lmn`,
 which contributes its `<template>` declarations to every page instead of
@@ -66,9 +66,17 @@ one needs an `include` entry naming it, plus `enabled = true` when `src/`
 itself holds fewer than two `.lmn` files. A page's key is its filename stem
 either way: `pages/settings.lmn` is `settings`.
 
+An `include` entry naming a file that is not there yet is skipped: `lumenc`
+prints a warning naming the path, the page is not navigable, and it does not
+count toward the multi-page default. So the block can list the pages an app
+will have before they are written. When every entry is missing there is no
+page set left to run, and the app fails to load naming the file the list asked
+for.
+
 The entry key resolves in this order: `[pages] entry` when it names an
 existing page, then `index`, then the `[app] entry` stem, then `main`, then
-the first page alphabetically.
+the first page alphabetically. A skipped entry is not an existing page, so an
+`entry` naming one falls through to the next candidate.
 
 ## [skin]
 

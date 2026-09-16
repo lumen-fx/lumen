@@ -4,7 +4,8 @@
 //! ## The model (Next.js / SvelteKit file-based routing, real-HTML `<a>`)
 //!
 //! Every `.lmn` file in the app's `src/` directory is a page, keyed by its
-//! filename stem. The home page is `index.lmn` (falling back to the `[app] entry`
+//! filename stem, except `layout.lmn`, which is the shared layout rather than
+//! a page. The home page is `index.lmn` (falling back to the `[app] entry`
 //! stem, then `main.lmn` for single-file compat). All pages load up front,
 //! and the fragments declared in ANY of the app's files are merged into one
 //! table every page parses against, so a shared `layout.lmn` template (with
@@ -27,18 +28,18 @@
 //! with `/7` exposed on the reserved `route.segment` signal for the page's
 //! own code to parse.
 //!
-//! ## Deferred seams
+//! ## Host seams
 //!
-//! - **Web transpile:** [`RouteHistory`] is an in-memory back/forward stack.
-//!   The web target binds the same navigation surface to the real
+//! - **Web transpile:** [`RouteHistory`] is the desktop back/forward stack.
+//!   The web target binds the same navigation surface to the browser's own
 //!   `history.pushState` / `popstate` API and `<a href>` to a real DOM anchor
-//!   + URL. The reserved-signal surface is unchanged; only the history
-//!   backend swaps.
-//! - **AOT packaging:** `lumenc build` bakes ONE `LayoutIR`; the assembled
+//!   + URL, in `lumen-web-dom`'s `navigation` module. The reserved-signal
+//!   surface is unchanged; only the history backend swaps.
+//! - **AOT packaging:** `lumenc build` bakes ONE `LayoutIR`, and the assembled
 //!   multi-page IR (this module's output) already is one `LayoutIR`, so the
-//!   AOT path folds in by running [`assemble`] at build time and serialising
-//!   the combined IR. Page keys travel on the IR; a `PageRegistry` is rebuilt
-//!   from the discovered set at load. (Not wired here - noted as a follow-up.)
+//!   AOT path runs [`assemble`] at build time and serialises the combined IR.
+//!   The page keys travel on the artifact as `CompiledPages`, and a
+//!   [`PageRegistry`] is rebuilt from them at load.
 
 use bevy_ecs::prelude::*;
 use lumen_core::nav;
@@ -130,13 +131,30 @@ pub fn discover(src_dir: &Path, cfg: &LumenToml) -> PagePlan {
     //    `<if>` gate or a navigable key. An explicit `[pages] include` lists
     //    the navigable set verbatim; otherwise every non-layout `.lmn` is a
     //    page.
+    //    An include entry naming a file that is not there yet is skipped so
+    //    the block can be written ahead of the pages it declares - but only
+    //    while a named page survives. When every entry is missing the app has
+    //    no pages at all, so the unfiltered list stands and the load fails
+    //    naming a file the author wrote rather than the `main.lmn` fallback.
     let mut files: Vec<PageFile> = if let Some(list) = &cfg.pages.include {
-        list.iter()
+        let (present, missing): (Vec<PageFile>, Vec<PageFile>) = list
+            .iter()
             .map(|name| PageFile {
                 key: stem(name),
                 path: src_dir.join(name),
             })
-            .collect()
+            .partition(|f| f.path.is_file());
+        if present.is_empty() {
+            missing
+        } else {
+            for f in &missing {
+                eprintln!(
+                    "lumenc: [pages] include: no file at {}; skipping it (that page is not navigable)",
+                    f.path.display()
+                );
+            }
+            present
+        }
     } else {
         all_lmn
             .iter()
@@ -189,13 +207,15 @@ pub fn discover(src_dir: &Path, cfg: &LumenToml) -> PagePlan {
 
     // The multi-page pipeline runs whenever more than one page participates.
     // `files` already reflects an explicit `[pages] include`, so an include
-    // naming more than one page (even ones living in a subfolder the
-    // directory scan never sees) flips the default on its own; a single-entry
-    // include does not. A directory scan finding more than one `.lmn` file
-    // also flips it: a lone `index.lmn` beside a shared `layout.lmn` counts,
-    // so the page still picks up the shared fragments; a single-file app does
-    // not and takes the untouched legacy path. An explicit `[pages] enabled`
-    // always wins over either count.
+    // naming more than one page that exists (even ones living in a subfolder
+    // the directory scan never sees) flips the default on its own; a
+    // single-entry include does not, and neither does an entry whose file is
+    // not written yet - that page is not navigable, so it does not count.
+    // A directory scan finding more than one `.lmn` file also flips it: a
+    // lone `index.lmn` beside a shared `layout.lmn` counts, so the page still
+    // picks up the shared fragments; a single-file app does not and takes the
+    // untouched legacy path. An explicit `[pages] enabled` always wins over
+    // either count.
     let multipage = cfg
         .pages
         .enabled
@@ -401,6 +421,14 @@ mod tests {
         dir
     }
 
+    /// Write a page under `dir`, creating the subfolder an `include` entry
+    /// names along the way.
+    fn write_page(dir: &Path, name: &str) {
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "<root></root>").unwrap();
+    }
+
     #[test]
     fn include_naming_several_subfolder_pages_enables_multipage() {
         // The app dir itself holds only `index.lmn` (the directory scan sees
@@ -408,6 +436,8 @@ mod tests {
         // scan never looks into. That still states multi-page intent, so the
         // default must flip on.
         let dir = temp_app_dir("include_many");
+        write_page(&dir, "pages/settings.lmn");
+        write_page(&dir, "pages/about.lmn");
         let mut cfg = LumenToml::default();
         cfg.pages.include = Some(vec![
             "index.lmn".into(),
@@ -427,6 +457,7 @@ mod tests {
         // subfolder) states no more intent than the plain single-file case,
         // so the default must stay off.
         let dir = temp_app_dir("include_one");
+        write_page(&dir, "pages/settings.lmn");
         let mut cfg = LumenToml::default();
         cfg.pages.include = Some(vec!["pages/settings.lmn".into()]);
 
@@ -444,6 +475,7 @@ mod tests {
         // `[pages] enabled = false` is an explicit override and must win even
         // when `include` alone would flip the default on.
         let dir = temp_app_dir("include_disabled");
+        write_page(&dir, "pages/settings.lmn");
         let mut cfg = LumenToml::default();
         cfg.pages.enabled = Some(false);
         cfg.pages.include = Some(vec!["index.lmn".into(), "pages/settings.lmn".into()]);
@@ -453,6 +485,62 @@ mod tests {
             !plan.multipage,
             "explicit enabled = false must override the include-derived default"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn include_entry_without_a_file_is_skipped() {
+        // A `[pages]` block written ahead of the pages it names: only
+        // `index.lmn` exists so far. The unwritten page is not navigable,
+        // so it leaves the page set and does not count toward the
+        // multi-page default.
+        let dir = temp_app_dir("include_missing");
+        let mut cfg = LumenToml::default();
+        cfg.pages.include = Some(vec!["index.lmn".into(), "pages/settings.lmn".into()]);
+
+        let plan = discover(&dir, &cfg);
+        let keys: Vec<&str> = plan.pages.iter().map(|p| p.key.as_str()).collect();
+        assert_eq!(keys, ["index"], "the unwritten page must be skipped");
+        assert!(
+            !plan.multipage,
+            "a one-page app until the other page is written"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enabled_true_keeps_multipage_while_a_page_is_unwritten() {
+        // `enabled = true` is how the author says "keep multi-page while I
+        // write the rest", so the skip must not turn it back off.
+        let dir = temp_app_dir("include_missing_enabled");
+        let mut cfg = LumenToml::default();
+        cfg.pages.enabled = Some(true);
+        cfg.pages.include = Some(vec!["index.lmn".into(), "pages/settings.lmn".into()]);
+
+        let plan = discover(&dir, &cfg);
+        let keys: Vec<&str> = plan.pages.iter().map(|p| p.key.as_str()).collect();
+        assert_eq!(keys, ["index"], "the unwritten page must be skipped");
+        assert!(plan.multipage, "explicit enabled = true must still win");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_include_of_only_missing_files_is_left_alone() {
+        // Nothing the include names exists, so there is no page set to
+        // salvage. The list stands unfiltered and the loader still fails
+        // naming a file the author wrote.
+        let dir = temp_app_dir("include_all_missing");
+        std::fs::remove_file(dir.join("index.lmn")).unwrap();
+        let mut cfg = LumenToml::default();
+        cfg.pages.include = Some(vec!["index.lmn".into(), "pages/settings.lmn".into()]);
+
+        let plan = discover(&dir, &cfg);
+        let keys: Vec<&str> = plan.pages.iter().map(|p| p.key.as_str()).collect();
+        assert_eq!(keys, ["index", "settings"], "nothing is skipped");
+        assert_eq!(plan.entry_file, dir.join("index.lmn"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
