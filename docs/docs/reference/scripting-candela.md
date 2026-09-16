@@ -71,7 +71,8 @@ program, so a repeated import costs nothing.
 
 The prelude also declares the `window`, `document`, and `history` namespaces and
 defines the `Node`, `Event`, `Signal<T>`, and `ArraySignal` method wrappers
-described below, plus the `Color` record a color signal reads back as.
+described below, plus the `Color` record a color signal reads back as and the
+`SignalTypes` record described with the signal handle.
 
 Types in signatures are candela types: `int`, `float`, `bool`, `string`, arrays
 (`int[]`), and maps (`{string: float}`). A builtin with no return type returns
@@ -297,6 +298,15 @@ call, and a bare `signal("clicks")` leaves it unbound: that call reports
 `Unknown type T` when it runs, and `lumenc check` does not catch it because a
 candela body compiles on its first call. `signal<any>(name)` is the form for a
 cell whose type is not fixed.
+
+The prelude also declares a `SignalTypes` record that names each handle type
+and that nothing constructs. candela caches an instantiation of a generic type
+for the whole program but lowers its methods into the block being compiled, so
+a handle type first named inside a function body loses its `get` and `set` when
+that body is done and the next function to name it fails with `No method get on
+type Signal<int>`. Naming the types in a declaration has them lowered before
+any body is compiled, which is what keeps one handle type working across
+handlers.
 
 ### Array signals
 
