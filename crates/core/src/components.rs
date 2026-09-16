@@ -136,7 +136,7 @@ pub struct Style {
     pub grid_column: (i16, i16),
     /// Positioning mode. `Relative` (default) participates in flex flow;
     /// `Absolute` lifts the entity out of the flow and offsets it by
-    /// [`Self::inset`] against the nearest positioned ancestor.
+    /// [`Self::inset`] against its parent's padding box.
     pub position: Position,
     /// Distance from each edge when [`Self::position`] is `Absolute`.
     pub inset: Edges,
@@ -368,8 +368,8 @@ pub enum Position {
     /// In-flow positioning (default).
     #[default]
     Relative,
-    /// Out-of-flow; offset by `inset` against the nearest positioned
-    /// ancestor (or the viewport if none).
+    /// Out-of-flow; offset by `inset` against its parent's padding
+    /// box.
     Absolute,
 }
 

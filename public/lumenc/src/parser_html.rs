@@ -69,7 +69,7 @@ pub const KNOWN_TAGS: &[&str] = &[
     "textarea",
     "image",
     // `<overlay>` floats out of normal flow. Defaults: position=absolute
-    // and inset=0 0 0 0 so it covers its nearest positioned ancestor
+    // and inset=0 0 0 0 so it covers its parent's padding box
     // (typically the root). Use it for modal backdrops, dropdowns,
     // tooltips - anything that should paint above its siblings.
     "overlay",

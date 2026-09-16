@@ -348,6 +348,41 @@ Two properties change it:
 `overflow: hidden` and `overflow: scroll` also drop the automatic
 floor to zero, since the element clips its own content.
 
+#### Positioning
+
+Every element is a containing block. `position: absolute` takes an
+element out of the flow and resolves its `inset` against its parent's
+padding box, whichever element that parent happens to be; there is no
+`position: static` and no search up the tree for a positioned ancestor.
+So the wrapper you want an element pinned inside is the element you
+write it under, and no `position: relative` is needed on that wrapper.
+
+An out-of-flow child contributes nothing to its parent's content size.
+A parent that is content-sized on an axis and has only absolutely
+positioned children therefore measures zero on that axis, and a child
+with `inset: 0` fills that zero. Nothing appears:
+
+```css
+.stage { overflow: hidden; }  /* height comes from content: none */
+```
+
+```html
+<column class="stage">
+  <overlay>...</overlay>
+</column>
+```
+
+Size the parent to fix it: give it a `height` (or `width` on the
+horizontal axis), `grow: 1` so it takes the free space on its own line,
+or an `inset` of its own if it is absolutely positioned too. One in-flow
+child works as well, since the parent then measures that child. With
+`overflow: hidden` on the parent, as above, the collapsed subtree is
+clipped away entirely rather than spilling into view, so the symptom is
+a blank window.
+
+`lumenc lint` reports this shape as `collapsed_containing_block` and
+names the child it found.
+
 ### Logical properties
 
 Each takes a px number and resolves against the element's writing
