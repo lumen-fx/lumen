@@ -1220,6 +1220,10 @@ impl From<&Style> for StyleView {
                 lumen_core::components::FlexDirection::RowReverse => "row-reverse",
                 lumen_core::components::FlexDirection::ColumnReverse => "column-reverse",
             },
+            position: match s.position {
+                lumen_core::components::Position::Relative => "relative",
+                lumen_core::components::Position::Absolute => "absolute",
+            },
             padding: [
                 s.padding.left,
                 s.padding.right,

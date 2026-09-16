@@ -1953,6 +1953,89 @@ mod tests {
         assert_eq!(size(&world, app_root).x, 1000.0, "undock restores width");
     }
 
+    /// An out-of-flow child never contributes to its parent's content
+    /// size, so a parent that is content-sized on an axis and has only
+    /// absolutely positioned children measures zero on that axis and
+    /// its `inset: 0` child fills nothing. This is the ruling, not an
+    /// accident: `inset` always resolves against the direct parent's
+    /// padding box, and the fix for a collapsed box is to size the
+    /// parent. One in-flow sibling is enough to give both a height.
+    #[test]
+    fn absolute_child_alone_does_not_size_an_auto_height_parent() {
+        use lumen_core::components::*;
+
+        let mut world = bevy_ecs::world::World::new();
+        world.insert_non_send(LayoutResource::new());
+        world.insert_non_send(ShaperService::default());
+        world.insert_resource(TextMeasureMemo::default());
+        world.insert_resource(Viewport {
+            size: glam::Vec2::new(1000.0, 600.0),
+            ..Viewport::default()
+        });
+
+        let root = world
+            .spawn((
+                Style {
+                    flex_direction: LumenFlexDir::Column,
+                    width: Length::Percent(100.0),
+                    height: Length::Percent(100.0),
+                    ..Style::default()
+                },
+                DirtyLayout,
+            ))
+            .id();
+        // `<column class="stage">`: content-sized on the block axis and
+        // clipping, which is what hides the collapse from the author.
+        let stage = world
+            .spawn(Style {
+                flex_direction: LumenFlexDir::Column,
+                height: Length::Auto,
+                overflow_y: Overflow::Hidden,
+                ..Style::default()
+            })
+            .id();
+        // `<overlay>`: position absolute with all four insets at 0.
+        let overlay = world
+            .spawn(Style {
+                position: Position::Absolute,
+                inset: Edges::default(),
+                ..Style::default()
+            })
+            .id();
+        world.entity_mut(root).add_children(&[stage]);
+        world.entity_mut(stage).add_children(&[overlay]);
+
+        let mut schedule = bevy_ecs::schedule::Schedule::default();
+        schedule.add_systems(sync_viewport);
+        schedule.add_systems(resolve_layout_direction.before(sync_layout));
+        schedule.add_systems(sync_layout.after(sync_viewport));
+        schedule.run(&mut world);
+
+        let size =
+            |world: &bevy_ecs::world::World, e| world.get::<Transform>(e).map(|t| t.size).unwrap();
+        assert_eq!(size(&world, stage).y, 0.0, "auto parent, no in-flow child");
+        assert_eq!(size(&world, overlay).y, 0.0, "inset 0 of a zero-high box");
+
+        // One 30px in-flow sibling sizes the parent, and the absolute
+        // child fills the box it now has.
+        let filler = world
+            .spawn(Style {
+                height: Length::Px(30.0),
+                ..Style::default()
+            })
+            .id();
+        world.entity_mut(stage).add_children(&[filler]);
+        world.entity_mut(root).insert(DirtyLayout);
+        schedule.run(&mut world);
+
+        assert_eq!(
+            size(&world, stage).y,
+            30.0,
+            "in-flow child sizes the parent"
+        );
+        assert_eq!(size(&world, overlay).y, 30.0, "absolute child fills it");
+    }
+
     /// W5.9: end-to-end check. A 300-px-wide grid with two `1fr 2fr`
     /// columns should split into 100 + 200 (1/3 + 2/3). Builds a
     /// minimal world, runs `sync_layout`, asserts the resulting

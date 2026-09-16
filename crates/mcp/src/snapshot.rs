@@ -299,6 +299,9 @@ pub struct StyleView {
     pub height_value: f32,
     /// `"row" | "column"`.
     pub flex_direction: &'static str,
+    /// `"relative" | "absolute"`. Absolute children are out of flow, so
+    /// they never contribute to their parent's content size.
+    pub position: &'static str,
     /// Padding edges (left, right, top, bottom).
     pub padding: [f32; 4],
     /// Margin edges.

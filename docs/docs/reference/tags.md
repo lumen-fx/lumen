@@ -316,8 +316,14 @@ squeezed to fit. Write `shrink: 1` on a child to opt back in.
 ### `<overlay>`
 
 Floats out of normal flow: `position: absolute` with all four insets at
-`0`, so it covers its nearest positioned ancestor. Lays out as a column.
-Use it for backdrops, dropdowns, and floating panels.
+`0`, so it covers its parent's box. It is not reparented; it stays where
+it is written, which is what a dropdown anchored to its trigger wants.
+Lays out as a column. Use it for backdrops, dropdowns, and floating
+panels.
+
+An `<overlay>` under a parent that is content-sized and has no in-flow
+children covers nothing, because that parent measures zero. See
+[Positioning](css.md#positioning).
 
 ## Text and media
 
@@ -710,8 +716,11 @@ dismisses on an outside click.
 
 ### `<dialog>`
 
-A modal overlay: absolutely positioned over the viewport, centered, with
-its children as content. Focus is trapped inside it while it is open.
+A modal overlay: absolutely positioned over its parent's box, centered,
+with its children as content. Focus is trapped inside it while it is
+open. Write it as a direct child of `<root>`, which is what makes it
+cover the window; under a content-sized parent it covers nothing (see
+[Positioning](css.md#positioning)).
 
 | Attribute | Value | Effect |
 | --- | --- | --- |
