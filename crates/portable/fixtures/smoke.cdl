@@ -18,7 +18,8 @@ fn compute_shout(greeting: string) -> string {
 // Exported: every parameter is annotated - here, none - so the runtime can
 // call it by name.
 fn bump() -> int {
-    let next = lumen::signal_get_int("count") + 1;
-    lumen::signal_set_int("count", next);
+    let count = signal<int>("count");
+    let next = count.get() + 1;
+    count.set(next);
     return next;
 }

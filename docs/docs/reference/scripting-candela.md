@@ -70,8 +70,8 @@ files join into one program and the declarations land once for the whole
 program, so a repeated import costs nothing.
 
 The prelude also declares the `window`, `document`, and `history` namespaces and
-defines the `Node`, `Event`, `Signal`, and `ArraySignal` method wrappers
-described below.
+defines the `Node`, `Event`, `Signal<T>`, and `ArraySignal` method wrappers
+described below, plus the `Color` record a color signal reads back as.
 
 Types in signatures are candela types: `int`, `float`, `bool`, `string`, arrays
 (`int[]`), and maps (`{string: float}`). A builtin with no return type returns
@@ -112,7 +112,7 @@ rows.push(row);
 lumen::signal_array_push("rows", {"id": "b"});   // literal straight to a builtin
 
 let n = lumen::signal_array_len("rows");         // not nested in the next call
-lumen::signal_set_int("row_count", n);
+signal<int>("row_count").set(n);
 ```
 
 ## The candela standard library
@@ -249,34 +249,54 @@ friends.
 | `lumen::signal_get_color(name: string)` | `{string: int}` | Read a color as an `{ r, g, b, a }` map of 0-255 channels. Empty when the signal holds no color. |
 | `lumen::signals_all()` | `{string: string}` | The whole signal set as a name-to-value map. |
 
+The four typed setters are the marshalling layer the signal handle below calls;
+reach for the handle instead, which carries the type once instead of in every
+call name.
+
 A getter converts across the scalar types: an integer cell read through
 `signal_get_float` yields the same number as a float, and a string cell parses.
 
 A color signal is a typed cell, not a string: CSS reads it as a color, so
-`signal_set_color("accent", "#ff8800")` recolors everything bound to `accent`.
+writing `"#ff8800"` to `accent` recolors everything bound to `accent`.
 
-`signal(name)` wraps the name so the same calls read as methods:
+### The signal handle
+
+`signal<T>(name)` is the spelling to reach for. The type argument says what the
+cell holds, and that is what makes one `get` / `set` pair enough: `get` returns
+that type and `set` takes it.
 
 ```rust
 import "lumen.cdl";
 
 fn on_start() {
-    let clicks = signal("clicks");
-    clicks.set_int(0);
+    signal<int>("clicks").set(0);
 }
 
 fn bump(ev) {
-    let clicks = signal("clicks");
-    clicks.set_int(clicks.get_int() + 1);
+    let clicks = signal<int>("clicks");
+    clicks.set(clicks.get() + 1);
 }
 
 fn main() {}
 ```
 
-Methods: `get`, `set`, `get_int`, `set_int`, `get_float`, `set_float`,
-`get_bool`, `set_bool`, `get_color`, `set_color`. The handle holds only the
-name and calls the builtins above, so it reaches the same cells they do. There
-is no default value: seed a cell by writing it once.
+| Handle | `get` returns | `set` takes |
+| --- | --- | --- |
+| `signal<int>(name)` | `int` | `int` |
+| `signal<float>(name)` | `float` | `float` |
+| `signal<bool>(name)` | `bool` | `bool` |
+| `signal<string>(name)` | `string` | `string` |
+| `signal<Color>(name)` | `Color`, the `{ r, g, b, a }` record of 0-255 channels. A cell holding no color reads as transparent black. | the hex form: `#rgb`, `#rgba`, `#rrggbb`, or `#rrggbbaa` |
+| `signal<any>(name)` | `any` | `string` |
+
+The handle holds only the name and calls the builtins above, so it reaches the
+same cells they do. There is no default value: seed a cell by writing it once.
+
+Write the type argument. candela binds a generic call's type parameter from the
+call, and a bare `signal("clicks")` leaves it unbound: that call reports
+`Unknown type T` when it runs, and `lumenc check` does not catch it because a
+candela body compiles on its first call. `signal<any>(name)` is the form for a
+cell whose type is not fixed.
 
 ### Array signals
 
@@ -338,8 +358,8 @@ whenever any signal in `deps` changes. `f` receives the dependency values in
 recompute body is referenced by function name.
 
 Declare each parameter as the type the cell holds, or as `any`. A cell written
-through `signal_set_int` arrives as an `int`, `signal_set_float` as a `float`,
-`signal_set_bool` as a `bool`, and `signal_set` as a `string`; the conversions
+through `signal<int>` arrives as an `int`, `signal<float>` as a `float`,
+`signal<bool>` as a `bool`, and `signal<string>` as a `string`; the conversions
 a getter performs do not apply here, so `fn f(n: float)` on an `int` cell is a
 type error. `any` takes whatever the cell holds and is the safe choice when a
 signal's type is not fixed:
@@ -387,7 +407,8 @@ fn on_ready() {
 }
 
 fn on_frame(dt: float) {
-    lumen::signal_set_float("angle", lumen::signal_get_float("angle") + dt * 2.0);
+    let angle = signal<float>("angle");
+    angle.set(angle.get() + dt * 2.0);
     lumen::request_frame();
 }
 ```
@@ -614,9 +635,10 @@ handle against `0`; `valid()` tests it against the current snapshot.
 dropped: `set`, `push`, `get`, `all`, `len`, `remove`, `clear`. Construct one
 with `signal_array(name)`.
 
-`Signal` methods mirror the `signal_*` builtins the same way: `get`, `set`,
-`get_int`, `set_int`, `get_float`, `set_float`, `get_bool`, `set_bool`,
-`get_color`, `set_color`. Construct one with `signal(name)`.
+`Signal<T>` has one pair, `get` and `set`, and the type argument picks which
+builtin each reaches. Construct one with `signal<int>(name)` and its siblings;
+the table under [Signals](#signals) lists what each type argument reads and
+writes.
 
 `Event` methods: `target`, `current_target`, `event_type`, `key`, `value`,
 `button`, `x`, `y`, `client_x`, `client_y`, `delta_x`, `delta_y`, `shift`,
@@ -1064,7 +1086,7 @@ fn on_start() {
 }
 
 fn on_archive_done(tag: string, dest: string, count: int) {
-    lumen::signal_set_int("files", count);
+    signal<int>("files").set(count);
 }
 
 fn on_archive_error(tag: string, message: string) {
@@ -1151,7 +1173,7 @@ fn on_start() {
 
 fn on_download_progress(tag: string, received: int, total: int) {
     if total > 0 {
-        lumen::signal_set_int("pack_progress", received * 100 / total);
+        signal<int>("pack_progress").set(received * 100 / total);
     }
 }
 

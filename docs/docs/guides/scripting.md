@@ -15,17 +15,20 @@ the one most scaffolds are written in. One import gives you the whole surface:
 import "lumen.cdl";
 
 fn on_ready() {
-    lumen::signal_set_int("clicks", 0);
+    signal<int>("clicks").set(0);
     get_by_id("bump").on("click", "on_bump");
 }
 
 fn on_bump(ev) {
-    let n = lumen::signal_get_int("clicks");
-    lumen::signal_set_int("clicks", n + 1);
+    let clicks = signal<int>("clicks");
+    clicks.set(clicks.get() + 1);
 }
 
 fn main() {}
 ```
+
+`signal<int>("clicks")` is a handle on one named cell, and the type argument
+says what the cell holds, so `get` hands back an `int` and `set` takes one.
 
 Beyond `lumen::`, the prelude adds `window::`, `document::`, and `history::`,
 plus `Node` and `Event` wrappers so tree work reads as method chains. `main()`
@@ -338,8 +341,8 @@ fn on_start() {
     archive::extract("themes.zip", "themes", "themes");
 }
 
-fn on_archive_done(tag, dest, count) { signal("status", "").set("unpacked " + count); }
-fn on_archive_error(tag, message)    { signal("status", "").set(message); }
+fn on_archive_done(tag, dest, count) { signal<string>("status").set("unpacked " + str(count)); }
+fn on_archive_error(tag, message)    { signal<string>("status").set(message); }
 ```
 
 Both paths resolve against the app directory, the same as everywhere else.

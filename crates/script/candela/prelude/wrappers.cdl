@@ -35,37 +35,79 @@ struct Event { handle: int }
 
 // --- Scalar signals -----------------------------------------------------------
 //
-// `signal("count")` returns a handle to the named reactive cell that `bind-text`
-// and its siblings read. The struct holds only the signal name; every method
-// calls the matching name-keyed builtin above, so the handle and the free
-// functions drive the same store.
+// `signal<int>("count")` returns a handle to the named reactive cell that
+// `bind-text` and its siblings read. The type argument says what the cell
+// holds: it picks the `impl` block below, so `get` returns that type and `set`
+// accepts it. The struct holds only the signal name; every method calls the
+// matching name-keyed builtin above, so the handle and the free functions drive
+// the same store.
 //
-//     let count = signal("count");
-//     count.set_int(count.get_int() + 1);
+//     let count = signal<int>("count");
+//     count.set(count.get() + 1);
 //
-// `get` / `set` carry the string form. The typed pairs read and write the same
-// cell as an int, float, bool, or color, converting across the scalar types the
-// way the underlying builtins do. There is no default argument: seed a cell by
-// writing it once, as `signal_array` does.
+// One `get` / `set` pair covers every type. `Signal<int>`, `Signal<float>`,
+// `Signal<bool>` and `Signal<string>` read and write the cell as that type,
+// converting across the scalar types the way the underlying builtins do.
+// `Signal<Color>` writes a hex string and reads the channels back as a `Color`.
+// `Signal<any>` is the dynamic slot: it reads as `any` and writes through the
+// string sink. Write it out - a call with no type argument leaves `T` unbound
+// and reports `Unknown type T` when it runs. There is no default value: seed a
+// cell by writing it once, as `signal_array` does.
 
-struct Signal { name: string }
+struct Signal<T> { name: string }
 
-/// Wraps the named reactive cell as a `Signal`.
-fn signal(name: string) {
-    return Signal { name: name };
+/// The 0-255 RGBA channels of a color cell, the value
+/// `signal<Color>(name).get()` hands back.
+struct Color { r: int, g: int, b: int, a: int }
+
+/// Wraps the named reactive cell as a `Signal` of the type argument's type.
+fn signal<T>(name: string) {
+    return Signal<T>{ name: name };
 }
 
-impl Signal {
-    fn get(self) { return lumen::signal_get(self.name); }
-    fn set(self, value) { return lumen::signal_set(self.name, value); }
-    fn get_int(self) { return lumen::signal_get_int(self.name); }
-    fn set_int(self, value) { return lumen::signal_set_int(self.name, value); }
-    fn get_float(self) { return lumen::signal_get_float(self.name); }
-    fn set_float(self, value) { return lumen::signal_set_float(self.name, value); }
-    fn get_bool(self) { return lumen::signal_get_bool(self.name); }
-    fn set_bool(self, value) { return lumen::signal_set_bool(self.name, value); }
-    fn get_color(self) { return lumen::signal_get_color(self.name); }
-    fn set_color(self, hex) { return lumen::signal_set_color(self.name, hex); }
+impl Signal<int> {
+    fn get(self) -> int { return lumen::signal_get_int(self.name); }
+    fn set(self, value: int) { return lumen::signal_set_int(self.name, value); }
+}
+
+impl Signal<float> {
+    fn get(self) -> float { return lumen::signal_get_float(self.name); }
+    fn set(self, value: float) { return lumen::signal_set_float(self.name, value); }
+}
+
+impl Signal<bool> {
+    fn get(self) -> bool { return lumen::signal_get_bool(self.name); }
+    fn set(self, value: bool) { return lumen::signal_set_bool(self.name, value); }
+}
+
+impl Signal<string> {
+    fn get(self) -> string { return lumen::signal_get(self.name); }
+    fn set(self, value: string) { return lumen::signal_set(self.name, value); }
+}
+
+// A color cell is typed, not a string: `set` takes the `#rgb` / `#rgba` /
+// `#rrggbb` / `#rrggbbaa` hex form and `get` hands the channels back. A cell
+// that holds no color reads as transparent black, the way the numeric getters
+// read a miss as zero.
+impl Signal<Color> {
+    fn get(self) -> Color {
+        let channels = lumen::signal_get_color(self.name);
+        if channels.len() == 0 {
+            return Color { r: 0, g: 0, b: 0, a: 0 };
+        }
+        return Color {
+            r: channels.get("r"),
+            g: channels.get("g"),
+            b: channels.get("b"),
+            a: channels.get("a"),
+        };
+    }
+    fn set(self, hex: string) { return lumen::signal_set_color(self.name, hex); }
+}
+
+impl Signal<any> {
+    fn get(self) -> any { return lumen::signal_get(self.name); }
+    fn set(self, value: string) { return lumen::signal_set(self.name, value); }
 }
 
 // --- Array signals ------------------------------------------------------------
@@ -86,7 +128,9 @@ impl Signal {
 //     let back = as_map(rows.get(0));
 //
 // Indices are zero-based. `get` and `all` return `any`; read them with the
-// `as_map` / `as_list` downcasts.
+// `as_map` / `as_list` downcasts. `ArraySignal` takes no type argument: a
+// record is a map whose fields each carry their own type, so there is no one
+// type for a reader to hand back.
 
 struct ArraySignal { name: string }
 
