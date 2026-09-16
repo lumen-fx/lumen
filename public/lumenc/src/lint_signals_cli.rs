@@ -7,9 +7,10 @@
 //!
 //! - **Untyped write** - `signal_set("count", "5")` reaches the
 //!   string-typed sink and bypasses the typed PropertyStore variant.
-//!   Migration prompt: prefer `signal_set_int("count", 5)` or the
-//!   chained `signals.count.set(5)` form whenever the value fits a
-//!   PropertyValue scalar. Skipped when the schema declares the
+//!   Migration prompt: prefer the signal handle, which carries the
+//!   type - `signal<int>("count").set(5)` in candela, chained
+//!   `signals.count.set(5)` in rhai and lua - whenever the value fits
+//!   a PropertyValue scalar. Skipped when the schema declares the
 //!   signal as `string`: there is no `signal_set_string` to migrate
 //!   to, so `signal_set` is already the typed sink.
 //! - **Bare interpolation ambiguity** - `<text>{count}</text>` reads
@@ -26,8 +27,10 @@
 //!
 //! The scanner is **substring-based**: it does not parse the script
 //! AST and only recognizes top-level call sites of the form
-//! `signal_set("name", ...)` (and the four typed variants), with or
-//! without a host prefix such as candela's `lumen::`. Limits:
+//! `signal_set("name", ...)` (and the four typed variants), the
+//! handle forms `signal<int>("name").set(...)` and
+//! `signals.name.set(...)`, with or without a host prefix such as
+//! candela's `lumen::`. Limits:
 //!
 //! - Comments containing literal `signal_set("...")` are still flagged
 //!   (false positives in commented-out code).
@@ -43,7 +46,7 @@
 //!
 //! The lint is intentionally pessimistic on legacy code: the goal is
 //! to drive the migration off untyped `signal_set` toward the typed
-//! / chained variants, so warnings on existing apps are expected.
+//! handle, so warnings on existing apps are expected.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -538,6 +541,149 @@ fn is_template_field(name: &str, lmn_src: &str) -> bool {
     !binds.iter().any(|b| lmn_src.contains(b.as_str()))
 }
 
+/// The spelling this script's host writes a typed signal in.
+///
+/// candela carries the type on the handle (`signal<int>("count")`); rhai and
+/// lua have no type arguments, so their handle is the chained
+/// `signals.count` form. The suggestion names the one the author can paste.
+fn typed_write_hint(path: &Path, name: &str, inferred: Option<&InferredType>) -> String {
+    let candela = path.extension().is_some_and(|e| e == "cdl");
+    let ty = match inferred {
+        Some(InferredType::Int) => Some("int"),
+        Some(InferredType::Float) => Some("float"),
+        Some(InferredType::Bool) => Some("bool"),
+        Some(InferredType::Color) => Some("Color"),
+        Some(InferredType::Str) => Some("string"),
+        _ => None,
+    };
+    match (candela, ty) {
+        (true, Some(ty)) => format!("use `signal<{ty}>(\"{name}\").set(...)`"),
+        (true, None) => format!(
+            "use the typed handle `signal<int>(\"{name}\").set(...)` (or `float` / `bool` / `Color`) when the value fits a scalar"
+        ),
+        (false, Some(_)) => format!("use chained `signals.{name}.set(...)`"),
+        (false, None) => {
+            format!("use chained `signals.{name}.set(...)` when the value fits a scalar")
+        }
+    }
+}
+
+/// The candela type argument a `signal<T>("name")` handle carries, as a
+/// schema type. `any` and `string` both reach the string sink, which the
+/// schema calls `Str`; an unknown argument is not classified.
+fn handle_type_arg(arg: &str) -> Option<SignalType> {
+    match arg {
+        "int" => Some(SignalType::I64),
+        "float" => Some(SignalType::F64),
+        "bool" => Some(SignalType::Bool),
+        "string" => Some(SignalType::Str),
+        "Color" => Some(SignalType::Color),
+        _ => None,
+    }
+}
+
+/// One `signal<T>("name")` handle found in a script, and how the script uses
+/// it.
+struct TypedHandle {
+    /// The signal the handle names.
+    name: String,
+    /// The type argument it carries, as written.
+    arg: String,
+    line: usize,
+    col: usize,
+    /// A `set(...)` reaches this handle.
+    writes: bool,
+    /// A `get(...)` reaches this handle.
+    reads: bool,
+}
+
+/// Every `signal<T>("name")` handle in `src`.
+///
+/// A handle is used either straight away (`signal<int>("n").set(0)`) or
+/// through a `let`, which is the form a read-modify-write takes:
+///
+/// ```candela
+/// let clicks = signal<int>("clicks");
+/// clicks.set(clicks.get() + 1);
+/// ```
+///
+/// so a bound handle is credited with whichever of `.set(` / `.get(` the
+/// binding's name reaches anywhere in the script. The scanner does not track
+/// scopes, so two functions binding the same variable name share their uses.
+fn typed_handles(src: &str) -> Vec<TypedHandle> {
+    let mut out = Vec::new();
+    let prefix = "signal<";
+    let mut idx = 0;
+    while let Some(pos) = src[idx..].find(prefix) {
+        let abs = idx + pos;
+        let Some((arg, name, after_close)) = read_typed_handle(src, abs) else {
+            idx = abs + prefix.len();
+            continue;
+        };
+        idx = after_close;
+        let tail = src[after_close..].trim_start();
+        let mut writes = tail.starts_with(".set(");
+        let mut reads = tail.starts_with(".get(");
+        if !writes && !reads {
+            if let Some(binding) = let_binding_before(src, abs) {
+                writes = src.contains(&format!("{binding}.set("));
+                reads = src.contains(&format!("{binding}.get("));
+            }
+        }
+        let (line, col) = line_col_of(src, abs);
+        out.push(TypedHandle {
+            name,
+            arg,
+            line,
+            col,
+            writes,
+            reads,
+        });
+    }
+    out
+}
+
+/// The variable a handle at `at` is bound to, for the `let x = signal<..>(..)`
+/// form. `None` when the handle is not the value of a `let`.
+fn let_binding_before(src: &str, at: usize) -> Option<String> {
+    let head = src[..at].trim_end().strip_suffix('=')?.trim_end();
+    let ident_start = head
+        .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .map_or(0, |i| i + 1);
+    let ident = &head[ident_start..];
+    if ident.is_empty() {
+        return None;
+    }
+    let before = head[..ident_start].trim_end();
+    let kw = before.strip_suffix("let")?;
+    if kw.ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(ident.to_string())
+}
+
+/// Split a `signal<T>("name")` handle at `at` (the offset of `signal<`) into
+/// its type argument, the signal name, and the offset just past the closing
+/// `)`, so the caller can see which method the handle is used with.
+fn read_typed_handle(src: &str, at: usize) -> Option<(String, String, usize)> {
+    let after_angle = at + "signal<".len();
+    let rest = src.get(after_angle..)?;
+    let close = rest.find('>')?;
+    let arg = rest[..close].trim();
+    if arg.is_empty() || !arg.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let after_arg = &rest[close + 1..];
+    let open = after_arg.len() - after_arg.trim_start().len();
+    if !after_arg[open..].starts_with('(') {
+        return None;
+    }
+    let args_at = after_angle + close + 1 + open + 1;
+    let name = read_quoted(src.get(args_at..)?)?;
+    let close_paren = find_close_paren(src.get(args_at..)?)?;
+    Some((arg.to_string(), name, args_at + close_paren + 1))
+}
+
 /// Scan `.rhai` source for signal writes. Returns the list and pushes
 /// `UntypedWrite` / `SchemaMismatch` findings as it goes.
 fn scan_script(
@@ -591,23 +737,7 @@ fn scan_script(
             // string-declared signal.
             let declared_str = matches!(schema.fields.get(&name), Some(SignalType::Str));
             if typed.is_none() && !declared_str {
-                let suggestion = match inferred {
-                    Some(InferredType::Int) => format!(
-                        "use `signal_set_int(\"{name}\", ...)` or chained `signals.{name}.set(...)`"
-                    ),
-                    Some(InferredType::Float) => format!(
-                        "use `signal_set_float(\"{name}\", ...)` or chained `signals.{name}.set(...)`"
-                    ),
-                    Some(InferredType::Bool) => format!(
-                        "use `signal_set_bool(\"{name}\", ...)` or chained `signals.{name}.set(...)`"
-                    ),
-                    Some(InferredType::Color) => format!(
-                        "use `signal_set_color(\"{name}\", ...)` for the typed PropertyValue::Color path"
-                    ),
-                    _ => format!(
-                        "prefer a typed variant (`signal_set_int` / `_float` / `_bool` / `_color`) or chained `signals.{name}.set(...)` when the value fits a scalar"
-                    ),
-                };
+                let suggestion = typed_write_hint(path, &name, inferred.as_ref());
                 out.push(Finding {
                     file: path.to_path_buf(),
                     line,
@@ -690,6 +820,45 @@ fn scan_script(
             }
             idx = after + end;
         }
+    }
+    // The candela handle `signal<int>("name").set(...)`: the type argument
+    // is the declared write type, so a schema mismatch is caught on it the
+    // same way it is on `signal_set_int(...)`.
+    for handle in typed_handles(src) {
+        if !handle.writes {
+            continue;
+        }
+        let TypedHandle {
+            name, line, col, ..
+        } = handle;
+        let written = handle_type_arg(&handle.arg);
+        if let (Some(declared), Some(actual)) = (schema.fields.get(&name), written.as_ref()) {
+            if !types_compatible(declared, actual) {
+                out.push(Finding {
+                    file: path.to_path_buf(),
+                    line,
+                    col,
+                    signal: name.clone(),
+                    kind: FindingKind::SchemaMismatch,
+                    severity: Severity::Error,
+                    message: format!(
+                        "signal `{name}` declared as `{}` in lumen.toml but written as `{}`",
+                        type_name(declared),
+                        type_name(actual)
+                    ),
+                    suggestion: format!(
+                        "either change the [signals] declaration to `{name} = \"{}\"` or fix the write to match the declared type",
+                        type_name(actual)
+                    ),
+                });
+            }
+        }
+        writes.push(ScriptWrite {
+            name,
+            line,
+            col,
+            typed: written,
+        });
     }
     // And the `signal("name", default).set(...)` / `signal("name",
     // default).get()` builder - common in widget-garden /
@@ -777,6 +946,12 @@ fn scan_script_reads(src: &str) -> BTreeSet<String> {
                 reads.insert(name);
             }
             idx = after;
+        }
+    }
+    // The candela handle `signal<int>("name").get()`.
+    for handle in typed_handles(src) {
+        if handle.reads {
+            reads.insert(handle.name);
         }
     }
     // Chained `signals.<name>.get(...)`.
@@ -1168,7 +1343,132 @@ mod tests {
             "expected one untyped-write, got {findings:?}"
         );
         assert_eq!(untyped[0].signal, "count");
-        assert!(untyped[0].suggestion.contains("signal_set_int"));
+        assert!(
+            untyped[0].suggestion.contains("signals.count.set"),
+            "a rhai script is pointed at the chained handle: {}",
+            untyped[0].suggestion
+        );
+    }
+
+    /// A candela script is pointed at the handle that carries the type, not
+    /// at a setter that spells it.
+    #[test]
+    fn untyped_write_in_candela_suggests_the_typed_handle() {
+        let schema = SignalsCfg::default();
+        let lmn = r#"<root><label bind-text="count" /></root>"#;
+        let cdl = r#"
+            fn on_start() {
+                lumen::signal_set("count", 5);
+            }
+        "#;
+        let findings = analyze(
+            &schema,
+            lmn,
+            &PathBuf::from("main.lmn"),
+            cdl,
+            &PathBuf::from("main.cdl"),
+        );
+        let untyped: Vec<_> = findings
+            .iter()
+            .filter(|f| f.kind == FindingKind::UntypedWrite)
+            .collect();
+        assert_eq!(
+            untyped.len(),
+            1,
+            "expected one untyped-write, got {findings:?}"
+        );
+        assert!(
+            untyped[0]
+                .suggestion
+                .contains("signal<int>(\"count\").set(...)"),
+            "got {}",
+            untyped[0].suggestion
+        );
+    }
+
+    /// The candela handle is a typed write: it neither warns as untyped nor
+    /// reads as an untracked signal.
+    #[test]
+    fn typed_handle_write_clean() {
+        let schema = schema_with(&[("count", SignalType::I64)]);
+        let lmn = r#"<root><label bind-text="count" /></root>"#;
+        let cdl = r#"
+            fn on_start() {
+                signal<int>("count").set(0);
+            }
+            fn bump(ev) {
+                let clicks = signal<int>("count");
+                clicks.set(clicks.get() + 1);
+            }
+        "#;
+        let findings = analyze(
+            &schema,
+            lmn,
+            &PathBuf::from("main.lmn"),
+            cdl,
+            &PathBuf::from("main.cdl"),
+        );
+        assert!(
+            findings.is_empty(),
+            "expected no findings on a typed handle write, got {findings:?}"
+        );
+    }
+
+    /// A handle bound to a `let` is the read-modify-write form, so its read
+    /// counts: the signal is not an orphan write.
+    #[test]
+    fn a_bound_handle_counts_as_a_read() {
+        let schema = SignalsCfg::default();
+        let lmn = r#"<root><button id="bump">Bump</button></root>"#;
+        let cdl = r#"
+            fn on_bump(ev) {
+                let clicks = signal<int>("clicks");
+                clicks.set(clicks.get() + 1);
+            }
+        "#;
+        let findings = analyze(
+            &schema,
+            lmn,
+            &PathBuf::from("main.lmn"),
+            cdl,
+            &PathBuf::from("main.cdl"),
+        );
+        assert!(
+            !findings.iter().any(|f| f.kind == FindingKind::OrphanWrite),
+            "a handle read through its binding is not an orphan write, got {findings:?}"
+        );
+    }
+
+    /// The type argument is what the schema is checked against, so a
+    /// `signal<string>` write to an `i64` cell is the same error a
+    /// `signal_set("count", "hello")` write is.
+    #[test]
+    fn typed_handle_schema_mismatch_flagged() {
+        let schema = schema_with(&[("count", SignalType::I64)]);
+        let lmn = r#"<root><label bind-text="count" /></root>"#;
+        let cdl = r#"
+            fn on_start() {
+                signal<string>("count").set("hello");
+            }
+        "#;
+        let findings = analyze(
+            &schema,
+            lmn,
+            &PathBuf::from("main.lmn"),
+            cdl,
+            &PathBuf::from("main.cdl"),
+        );
+        let mismatches: Vec<_> = findings
+            .iter()
+            .filter(|f| f.kind == FindingKind::SchemaMismatch)
+            .collect();
+        assert_eq!(
+            mismatches.len(),
+            1,
+            "expected one schema-mismatch, got {findings:?}"
+        );
+        assert_eq!(mismatches[0].signal, "count");
+        assert_eq!(mismatches[0].severity, Severity::Error);
     }
 
     #[test]
