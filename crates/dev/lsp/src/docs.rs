@@ -198,7 +198,7 @@ Carries `Scroll` + `ScrollOffset` components at runtime."
             "**`<if signal=\"name\" mode=\"render|hide\">`** - Conditional subtree gated on a truthy signal."
         }
         "overlay" => {
-            "**`<overlay>`** - Absolute-positioned layer mounted at the top of the tree. Inherits `inset`."
+            "**`<overlay>`** - Absolute-positioned layer covering its parent box. Inherits `inset`."
         }
         "dialog" => {
             "**`<dialog open=\"signal\">`** - Modal overlay. Sugar for `<overlay>` + `<if signal=... mode=\"hide\">`. Centers children; preserves descendant state across show/hide."

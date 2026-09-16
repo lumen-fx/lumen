@@ -4,10 +4,12 @@
 //! a read-lock acquired by the caller) and returns a `serde_json::Value` to
 //! be embedded in the JSON-RPC response.
 
+use std::collections::HashSet;
+
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::snapshot::{EntityInspect, Snapshot};
+use crate::snapshot::{EntityInspect, Snapshot, V2};
 
 /// Dispatch result. `Ok(value)` becomes the JSON-RPC `result`; `Err(s)` is
 /// reported as a JSON-RPC error with code `-32601` (method not found) or
@@ -229,7 +231,7 @@ fn method_snapshot_text(snap: &Snapshot, p: &SnapshotTextParams) -> Value {
 /// hierarchy yet.
 fn order_entities(snap: &Snapshot) -> Vec<(&EntityInspect, usize)> {
     let mut out: Vec<(&EntityInspect, usize)> = Vec::with_capacity(snap.inspect.len());
-    let mut emitted: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut emitted: HashSet<u64> = HashSet::new();
 
     let mut roots: Vec<&EntityInspect> = snap
         .inspect
@@ -243,7 +245,7 @@ fn order_entities(snap: &Snapshot) -> Vec<(&EntityInspect, usize)> {
         inv: &'a EntityInspect,
         depth: usize,
         out: &mut Vec<(&'a EntityInspect, usize)>,
-        emitted: &mut std::collections::HashSet<u64>,
+        emitted: &mut HashSet<u64>,
     ) {
         if !emitted.insert(inv.id) {
             return;
@@ -448,7 +450,7 @@ fn method_snapshot_tree(snap: &Snapshot, p: &SnapshotTreeParams) -> Value {
     let omit_invisible = p.omit_invisible.unwrap_or(false);
 
     let mut budget = max_nodes;
-    let mut emitted: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut emitted: HashSet<u64> = HashSet::new();
     let mut truncated = false;
 
     fn build_node(
@@ -456,7 +458,7 @@ fn method_snapshot_tree(snap: &Snapshot, p: &SnapshotTreeParams) -> Value {
         inv: &EntityInspect,
         omit_invisible: bool,
         budget: &mut usize,
-        emitted: &mut std::collections::HashSet<u64>,
+        emitted: &mut HashSet<u64>,
         truncated: &mut bool,
     ) -> Option<Value> {
         if !emitted.insert(inv.id) {
@@ -827,8 +829,13 @@ fn method_element_at(snap: &Snapshot, p: &ElementAtParams) -> Value {
 pub(crate) fn method_lint(snap: &Snapshot) -> Value {
     let mut findings: Vec<Value> = Vec::new();
 
+    // Runs first: the entities it claims get the exact mechanism
+    // instead of `zero_size_visible`'s generic parent-flex guess.
+    let collapsed = check_collapsed_containing_block(snap, &mut findings);
     for inv in snap.inspect.values() {
-        check_zero_size(inv, &mut findings);
+        if !collapsed.contains(&inv.id) {
+            check_zero_size(inv, &mut findings);
+        }
         check_text_without_style(inv, &mut findings);
         check_focusable_without_label(inv, &mut findings);
         check_gradient_underdefined(inv, &mut findings);
@@ -945,6 +952,85 @@ fn check_gradient_underdefined(inv: &EntityInspect, out: &mut Vec<Value>) {
             "warning",
             "gradient has fewer than 2 stops - will render as solid fill",
         ));
+    }
+}
+
+/// An out-of-flow child never contributes to its parent's content size,
+/// so a parent that is content-sized on an axis and has only absolutely
+/// positioned children measures zero there and every `inset` inside it
+/// resolves against nothing. `<overlay>` and `<dialog>` hit this with no
+/// CSS at all, since both are `position: absolute` with all four insets
+/// at `0` by tag default. Returns the entities it claimed, so
+/// [`check_zero_size`] leaves them alone.
+fn check_collapsed_containing_block(snap: &Snapshot, out: &mut Vec<Value>) -> HashSet<u64> {
+    let mut claimed = HashSet::new();
+    for inv in snap.inspect.values() {
+        let Some(parent_t) = inv.transform else {
+            continue;
+        };
+        if inv.children.is_empty() {
+            continue;
+        }
+        // An in-flow child that measures zero is the cause of its own
+        // parent's zero, not this mechanism; `zero_size_visible` owns
+        // that case.
+        let all_out_of_flow = inv.children.iter().all(|cid| {
+            snap.inspect
+                .get(cid)
+                .and_then(|c| c.style.as_ref())
+                .map(|s| s.position == "absolute")
+                .unwrap_or(false)
+        });
+        if !all_out_of_flow {
+            continue;
+        }
+        for axis in [Axis::X, Axis::Y] {
+            if axis.of(parent_t.size) != 0.0 {
+                continue;
+            }
+            for cid in &inv.children {
+                let Some(child) = snap.inspect.get(cid) else {
+                    continue;
+                };
+                let Some(child_t) = child.transform else {
+                    continue;
+                };
+                if axis.of(child_t.size) != 0.0 {
+                    continue;
+                }
+                // An empty spacer collapsing is not worth a warning.
+                let carries_content = !child.children.is_empty()
+                    || child.visuals.is_some()
+                    || child.text_content.is_some()
+                    || child.image_source.is_some();
+                if !carries_content || !claimed.insert(*cid) {
+                    continue;
+                }
+                out.push(finding(
+                    Some(*cid),
+                    "collapsed_containing_block",
+                    "warning",
+                    "absolutely positioned child of a parent that is content-sized on this axis and has no in-flow children, so the parent is 0 and the child fills nothing - give the parent a size (height/width, grow, or inset on its own parent), or make one child in-flow",
+                ));
+            }
+        }
+    }
+    claimed
+}
+
+/// Axis selector for the per-axis checks.
+#[derive(Clone, Copy)]
+enum Axis {
+    X,
+    Y,
+}
+
+impl Axis {
+    fn of(self, v: V2) -> f32 {
+        match self {
+            Axis::X => v.x,
+            Axis::Y => v.y,
+        }
     }
 }
 
@@ -1099,7 +1185,7 @@ fn method_recent_messages(snap: &Snapshot, kind: &str, max: usize) -> Option<Val
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::snapshot::{Snapshot, TransformView, V2};
+    use crate::snapshot::{Snapshot, StyleView, TransformView, V2};
 
     type TestEntry = (u64, f32, f32, f32, f32, Option<&'static str>, bool);
 
@@ -1519,6 +1605,91 @@ mod tests {
             findings
                 .iter()
                 .any(|f| f["category"] == json!("zero_size_visible"))
+        );
+    }
+
+    /// Builds the collapsed shape: `parent` is content-sized and
+    /// measures zero on the block axis, its only child is absolute and
+    /// carries a visible grandchild.
+    fn make_collapsed_snap() -> Snapshot {
+        let mut snap = make_snap_with_entities(&[
+            (1, 0.0, 0.0, 800.0, 0.0, None, false),
+            (2, 0.0, 0.0, 800.0, 0.0, None, false),
+            (3, 0.0, 0.0, 80.0, 0.0, None, false),
+        ]);
+        snap.inspect.get_mut(&1).unwrap().children = vec![2];
+        snap.inspect.get_mut(&2).unwrap().parent = Some(1);
+        snap.inspect.get_mut(&2).unwrap().children = vec![3];
+        snap.inspect.get_mut(&2).unwrap().style = Some(StyleView {
+            position: "absolute",
+            ..Default::default()
+        });
+        snap.inspect.get_mut(&3).unwrap().parent = Some(2);
+        snap
+    }
+
+    #[test]
+    fn lint_flags_collapsed_containing_block() {
+        let out = method_lint(&make_collapsed_snap());
+        let findings = out["findings"].as_array().unwrap();
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|f| f["category"] == json!("collapsed_containing_block"))
+                .count(),
+            1,
+            "one finding for the absolute child, not one per axis"
+        );
+        assert!(findings.iter().any(
+            |f| f["category"] == json!("collapsed_containing_block") && f["entity"] == json!(2)
+        ));
+    }
+
+    /// With an in-flow sibling present the parent's zero is that
+    /// sibling's doing, so the rule stays quiet and the generic
+    /// zero-size check keeps the case.
+    #[test]
+    fn lint_skips_collapsed_containing_block_with_an_in_flow_child() {
+        let mut snap = make_collapsed_snap();
+        let mut filler = EntityInspect {
+            id: 4,
+            ..Default::default()
+        };
+        filler.transform = Some(TransformView {
+            absolute: V2 { x: 0.0, y: 0.0 },
+            size: V2 { x: 800.0, y: 0.0 },
+        });
+        filler.parent = Some(1);
+        filler.style = Some(StyleView {
+            position: "relative",
+            ..Default::default()
+        });
+        snap.inspect.insert(4, filler);
+        snap.inspect.get_mut(&1).unwrap().children = vec![2, 4];
+        let out = method_lint(&snap);
+        let findings = out["findings"].as_array().unwrap();
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f["category"] == json!("collapsed_containing_block"))
+        );
+    }
+
+    /// A claimed entity gets the mechanism once, not the mechanism plus
+    /// the generic `zero_size_visible` guess.
+    #[test]
+    fn lint_suppresses_zero_size_for_a_claimed_entity() {
+        let mut snap = make_collapsed_snap();
+        snap.inspect.get_mut(&2).unwrap().image_source = Some("x.png".into());
+        let out = method_lint(&snap);
+        let findings = out["findings"].as_array().unwrap();
+        assert!(findings.iter().any(
+            |f| f["category"] == json!("collapsed_containing_block") && f["entity"] == json!(2)
+        ));
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f["category"] == json!("zero_size_visible") && f["entity"] == json!(2))
         );
     }
 
