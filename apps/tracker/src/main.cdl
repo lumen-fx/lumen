@@ -18,12 +18,12 @@ fn cell_name(h, d) {
 
 fn set_cell(h, d, v) {
     let name = cell_name(h, d);
-    lumen::signal_set_bool(name, v);
+    signal<bool>(name).set(v);
 }
 
 fn is_on(h, d) {
     let name = cell_name(h, d);
-    return lumen::signal_get_bool(name);
+    return signal<bool>(name).get();
 }
 
 fn habit_checks(h) {
@@ -72,7 +72,7 @@ fn recompute_stats() {
     lumen::signal_set("stat_streak", best_str);
     lumen::signal_set("stat_pct", pct_str);
 
-    let gf = lumen::signal_get_float("goal");
+    let gf = signal<float>("goal").get();
     let goal = int(gf);
     let goal_str = str(goal);
     lumen::signal_set("goal_num", goal_str);
@@ -111,7 +111,7 @@ fn calc_goal_label(n: any) { return str(n) + " / 28"; }
 
 fn on_start() {
     lumen::signal_set("settings_open", "");
-    lumen::signal_set_int("goal", 20);
+    signal<int>("goal").set(20);
     lumen::signal_set("goal_num", "20");
 
     lumen::derive("total_label", ["stat_total"], "calc_total_label");
@@ -147,7 +147,7 @@ fn on_toggle(id: any, checked: any) {
 fn on_slider(id: string, value: float) {
     if id == "goal" {
         let goal = int(value);
-        lumen::signal_set_int("goal", goal);
+        signal<int>("goal").set(goal);
         recompute_stats();
     }
 }

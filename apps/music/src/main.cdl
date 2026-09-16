@@ -171,15 +171,15 @@ fn play_track(id) {
     let t = list[idx];
     highlight_now(t.id);
     set_meta(t);
-    let started = lumen::signal_get_bool("started");
-    if started == false {
+    let started = signal<bool>("started");
+    if started.get() == false {
         // First playback: apply the slider's default (70%) before any sound.
         // The audio_* functions exist only when the lumen-audio module
         // loaded, so no boot path may touch one; the first play is the
         // earliest moment audio is known to be there to configure.
         lumen::audio_volume(0.7);
     }
-    lumen::signal_set_bool("started", true);
+    started.set(true);
     lumen::audio_play(file);
 }
 
@@ -218,14 +218,14 @@ fn calc_glyph(playing: any) {
 fn on_start() {
     lumen::signal_set("playlist_name", "tones");
     lumen::signal_set("now_playlist", "Featured");
-    lumen::signal_set_bool("started", false);
+    signal<bool>("started").set(false);
 
     // Host-written transport signals; seed each with its real type so the
     // per-tick string writes parse back into the type the derives expect.
-    lumen::signal_set_float("audio_position", 0.0);
-    lumen::signal_set_float("audio_duration", 0.0);
+    signal<float>("audio_position").set(0.0);
+    signal<float>("audio_duration").set(0.0);
     lumen::signal_set("audio_playing", "false");
-    lumen::signal_set_int("volume", 70);
+    signal<int>("volume").set(70);
 
     lumen::derive("position", ["audio_position", "audio_duration"], "calc_position");
     lumen::derive("elapsed", ["audio_position"], "calc_elapsed");
@@ -258,8 +258,8 @@ fn toggle_play(id: any) {
     if playing == "true" {
         lumen::audio_pause();
     } else {
-        let started = lumen::signal_get_bool("started");
-        if started {
+        let started = signal<bool>("started");
+        if started.get() {
             lumen::audio_resume();
         } else {
             let now_id = lumen::signal_get("now_id");
@@ -281,7 +281,7 @@ fn on_audio_end(path: string) { step_track(1); }
 // Manual seek + volume drags land here with the slider value as a float.
 fn on_slider(id: string, value: float) {
     if id == "seek" {
-        let dur = lumen::signal_get_float("audio_duration");
+        let dur = signal<float>("audio_duration").get();
         let target = (value / 100.0) * dur;
         lumen::audio_seek(target);
     } else if id == "volume" {

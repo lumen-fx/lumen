@@ -9,7 +9,7 @@ import "lumen.cdl";
 // list.
 fn publish_count() {
     let n = lumen::signal_array_len("rows");
-    lumen::signal_set_int("row_count", n);
+    signal<int>("row_count").set(n);
 }
 
 fn on_start() {

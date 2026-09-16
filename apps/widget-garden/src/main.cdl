@@ -88,10 +88,10 @@ fn calc_toggle_status(v: any) {
 fn on_start() {
     // Scalar state, seeded with real types so per-tick binding writes parse
     // back into the type each derive expects.
-    lumen::signal_set_int("clicks", 0);
-    lumen::signal_set_int("volume", 42);
+    signal<int>("clicks").set(0);
+    signal<int>("volume").set(42);
     lumen::signal_set("who", "");
-    lumen::signal_set_bool("dark", true);
+    signal<bool>("dark").set(true);
     lumen::signal_set("dialog_open", "");
     lumen::signal_set("weight", "medium");
     lumen::signal_set("fruit", "grape");
@@ -99,14 +99,14 @@ fn on_start() {
     lumen::signal_set("email", "");
     lumen::signal_set("meet_date", "2026-05-20");
     lumen::signal_set("meet_time", "14:30");
-    lumen::signal_set_bool("telemetry", false);
+    signal<bool>("telemetry").set(false);
     lumen::signal_set("dialog_verdict", "no verdict yet");
 
     // Counters kept in signals because each handler is a separate program call.
-    lumen::signal_set_int("accept_count", 0);
-    lumen::signal_set_int("reject_count", 0);
-    lumen::signal_set_int("hotkey_count", 0);
-    lumen::signal_set_int("todo_next", 7);
+    signal<int>("accept_count").set(0);
+    signal<int>("reject_count").set(0);
+    signal<int>("hotkey_count").set(0);
+    signal<int>("todo_next").set(7);
 
     lumen::signal_set("theme_status", "OS theme follows .theme-{light,dark} class on <root>");
     lumen::signal_set("hotkey_status", "Ctrl+Shift+L bound (anywhere)");
@@ -154,13 +154,12 @@ fn on_ready() {
 // --- Handlers ---
 
 fn handle_bump(id: any) {
-    let n = lumen::signal_get_int("clicks");
-    let m = n + 1;
-    lumen::signal_set_int("clicks", m);
+    let clicks = signal<int>("clicks");
+    clicks.set(clicks.get() + 1);
 }
 
 fn handle_reset(id: any) {
-    lumen::signal_set_int("clicks", 0);
+    signal<int>("clicks").set(0);
 }
 
 fn handle_danger(id: any) {
@@ -172,13 +171,13 @@ fn handle_notify(id: any) {
 }
 
 fn handle_theme_toggle(id: any) {
-    let now = lumen::signal_get_bool("dark");
-    if now {
-        lumen::signal_set_bool("dark", false);
+    let dark = signal<bool>("dark");
+    if dark.get() {
+        dark.set(false);
         lumen::set_root_class("app theme-light");
         lumen::signal_set("theme_status", "override -> light");
     } else {
-        lumen::signal_set_bool("dark", true);
+        dark.set(true);
         lumen::set_root_class("app theme-dark");
         lumen::signal_set("theme_status", "override -> dark");
     }
@@ -187,12 +186,12 @@ fn handle_theme_toggle(id: any) {
 fn handle_add_todo(id: any) {
     let container = get_by_id("todos-list");
     if !container.exists() { return; }
-    let n = lumen::signal_get_int("todo_next");
+    let next = signal<int>("todo_next");
+    let n = next.get();
     let idx = str(n);
     let label = "Row " + str(n);
     add_todo_row(container, idx, label, "new");
-    let m = n + 1;
-    lumen::signal_set_int("todo_next", m);
+    next.set(n + 1);
     update_todo_count();
 }
 
@@ -205,19 +204,19 @@ fn handle_dialog_close(id: any) {
 }
 
 fn handle_dialog_accepted(id: any) {
-    let n = lumen::signal_get_int("accept_count");
-    let m = n + 1;
-    lumen::signal_set_int("accept_count", m);
-    let r = lumen::signal_get_int("reject_count");
+    let accepted = signal<int>("accept_count");
+    let m = accepted.get() + 1;
+    accepted.set(m);
+    let r = signal<int>("reject_count").get();
     let msg = "accepted x" + str(m) + ", rejected x" + str(r);
     lumen::signal_set("dialog_verdict", msg);
 }
 
 fn handle_dialog_rejected(id: any) {
-    let n = lumen::signal_get_int("reject_count");
-    let m = n + 1;
-    lumen::signal_set_int("reject_count", m);
-    let a = lumen::signal_get_int("accept_count");
+    let rejected = signal<int>("reject_count");
+    let m = rejected.get() + 1;
+    rejected.set(m);
+    let a = signal<int>("accept_count").get();
     let msg = "accepted x" + str(a) + ", rejected x" + str(m);
     lumen::signal_set("dialog_verdict", msg);
 }
@@ -247,11 +246,11 @@ fn handle_menu_action(id: string) {
 fn handle_hotkey_save(name: string) {
     let fired = "Hotkey fired (" + name + ")";
     lumen::notify("Lumen", fired);
-    let c = lumen::signal_get_int("hotkey_count");
-    let np = c + 1;
+    let count = signal<int>("hotkey_count");
+    let np = count.get() + 1;
     let status = "Ctrl+Shift+L pressed " + str(np) + "x";
     lumen::signal_set("hotkey_status", status);
-    lumen::signal_set_int("hotkey_count", np);
+    count.set(np);
 }
 
 fn main() {}

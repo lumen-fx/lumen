@@ -86,10 +86,13 @@
 //! |---|---|
 //! | `signals.a.b.set(v)` chaining | Rhai's property-chain fallback has no candela analogue; write the path out (`lumen::signal_set("a.b", v)`). |
 //!
-//! `signal(name)` is a prelude struct rather than a host fn: candela has no
-//! user-defined value object type to hand back, so `Signal` holds only the
-//! signal *name* and its methods call the name-keyed `signal_get_*` /
-//! `signal_set_*` builtins. `ArraySignal` works the same way.
+//! `signal<T>(name)` is a prelude struct rather than a host fn: candela has no
+//! user-defined value object type to hand back, so `Signal<T>` holds only the
+//! signal *name* and the `impl Signal<int>` .. `impl Signal<any>` blocks give
+//! one `get` / `set` pair per type over the name-keyed `signal_get_*` /
+//! `signal_set_*` builtins. `ArraySignal` works the same way, without a type
+//! argument: a record's field types are not fixed, so its readers hand back
+//! `any`.
 //!
 //! Because candela reaches builtins through a typed `host "lumen" { ... }` block
 //! (rather than Rhai's bare globals), a Lumen candela script opts into the

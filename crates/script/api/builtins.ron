@@ -166,7 +166,7 @@
             overrides: [
                 (
                     host: Candela,
-                    doc: Some("Write a typed i64 signal."),
+                    doc: Some("Deprecated: prefer `signal<int>(\"name\").set(v)`. Write a typed i64 signal."),
                 ),
             ],
         ),
@@ -196,7 +196,7 @@
             overrides: [
                 (
                     host: Candela,
-                    doc: Some("Write a typed f64 signal."),
+                    doc: Some("Deprecated: prefer `signal<float>(\"name\").set(v)`. Write a typed f64 signal."),
                 ),
             ],
         ),
@@ -226,7 +226,7 @@
             overrides: [
                 (
                     host: Candela,
-                    doc: Some("Write a typed bool signal."),
+                    doc: Some("Deprecated: prefer `signal<bool>(\"name\").set(v)`. Write a typed bool signal."),
                 ),
             ],
         ),
@@ -256,7 +256,7 @@
             overrides: [
                 (
                     host: Candela,
-                    doc: Some("Write a `#rrggbb` / `#rrggbbaa` color signal; unparseable input is ignored."),
+                    doc: Some("Deprecated: prefer `signal<Color>(\"name\").set(hex)`. Write a `#rrggbb` / `#rrggbbaa` color signal; unparseable input is ignored."),
                 ),
             ],
         ),

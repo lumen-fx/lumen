@@ -103,7 +103,7 @@ import "lumen.cdl";
 // on_ready runs on the first tick, once the tree is mounted, so the elements
 // are there to look up. on_start runs before that, when nothing is queryable.
 fn on_ready() {
-    lumen::signal_set_int("clicks", 0);
+    signal<int>("clicks").set(0);
 
     get_by_id("bump").on("click", "on_bump");
     get_by_id("reset").on("click", "on_reset");
@@ -112,12 +112,12 @@ fn on_ready() {
 // A handler is called with the event id. Wrap it with `event(ev)` to read the
 // event itself: `event(ev).target()`, `.shift()`, `.prevent_default()`.
 fn on_bump(ev: int) {
-    let n = lumen::signal_get_int("clicks");
-    lumen::signal_set_int("clicks", n + 1);
+    let clicks = signal<int>("clicks");
+    clicks.set(clicks.get() + 1);
 }
 
 fn on_reset(ev: int) {
-    lumen::signal_set_int("clicks", 0);
+    signal<int>("clicks").set(0);
 }
 
 fn main() {}
@@ -137,6 +137,8 @@ It does two things:
 
 - Creates the `clicks` signal with the value `0`. A signal is a named value the
   UI can follow; the label's `bind-text="clicks"` is what makes the connection.
+  `signal<int>("clicks")` is a handle on that cell, and the type argument is
+  what lets `get()` hand back a number you can add to.
 - Binds a click handler to each button. `get_by_id("bump")` returns a handle to
   the element with `id="bump"`, and `.on("click", "on_bump")` routes clicks on
   that element to `on_bump`. Each button gets its own function instead of a

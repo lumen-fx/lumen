@@ -1,10 +1,11 @@
 //! Scalar signals on the candela host: the named reactive cells `bind-text`
 //! and its siblings read, driven from a script through the name-keyed
-//! `signal_get_*` / `signal_set_*` builtins and the prelude's `Signal` method
-//! sugar.
+//! `signal_get_*` / `signal_set_*` builtins and the prelude's `Signal<T>`
+//! method sugar.
 //!
-//! The sugar is prelude-only: `Signal` holds the signal name and each method
-//! calls the matching builtin, the same shape `ArraySignal` uses.
+//! The sugar is prelude-only: `Signal<T>` holds the signal name, the type
+//! argument picks the `impl` block, and each `get` / `set` calls the builtin
+//! for that type.
 
 use lumen_script::{ScriptCommand, ScriptHost, ScriptValue};
 use lumen_script_candela::CandelaHost;
@@ -17,8 +18,8 @@ fn last_write(cmds: &[ScriptCommand], name: &str) -> Option<String> {
     })
 }
 
-/// `signal(name).set(v)` writes the same cell `lumen::signal_set(name, v)`
-/// does, and `get` reads it back.
+/// `signal<string>(name).set(v)` writes the same cell
+/// `lumen::signal_set(name, v)` does, and `get` reads it back.
 #[test]
 fn the_signal_handle_drives_the_same_store() {
     let mut host = CandelaHost::new();
@@ -26,11 +27,11 @@ fn the_signal_handle_drives_the_same_store() {
 import "lumen.cdl";
 
 fn write_it() {
-    let greeting = signal("greeting");
+    let greeting = signal<string>("greeting");
     greeting.set("hi");
 }
 fn read_it() {
-    let greeting = signal("greeting");
+    let greeting = signal<string>("greeting");
     return greeting.get();
 }
 fn read_free() { return lumen::signal_get("greeting"); }
@@ -51,8 +52,8 @@ fn main() {}
     );
 }
 
-/// The typed pairs read and write the same cell, converting across the scalar
-/// types the way the underlying builtins do.
+/// The type argument picks what the one `get` / `set` pair reads and writes,
+/// converting across the scalar types the way the underlying builtins do.
 #[test]
 fn typed_pairs_round_trip() {
     let mut host = CandelaHost::new();
@@ -60,21 +61,21 @@ fn typed_pairs_round_trip() {
 import "lumen.cdl";
 
 fn seed() {
-    let count = signal("count");
-    count.set_int(41);
-    let ratio = signal("ratio");
-    ratio.set_float(0.5);
-    let done = signal("done");
-    done.set_bool(true);
+    let count = signal<int>("count");
+    count.set(41);
+    let ratio = signal<float>("ratio");
+    ratio.set(0.5);
+    let done = signal<bool>("done");
+    done.set(true);
 }
 fn bump() {
-    let count = signal("count");
-    count.set_int(count.get_int() + 1);
+    let count = signal<int>("count");
+    count.set(count.get() + 1);
 }
-fn count() { let c = signal("count"); return c.get_int(); }
-fn ratio() { let r = signal("ratio"); return r.get_float(); }
-fn done() { let d = signal("done"); return d.get_bool(); }
-fn count_as_float() { let c = signal("count"); return c.get_float(); }
+fn count() { let c = signal<int>("count"); return c.get(); }
+fn ratio() { let r = signal<float>("ratio"); return r.get(); }
+fn done() { let d = signal<bool>("done"); return d.get(); }
+fn count_as_float() { let c = signal<float>("count"); return c.get(); }
 fn main() {}
 "#;
     host.load(src, "typed.cdl").expect("compiles");
@@ -101,8 +102,8 @@ fn main() {}
     );
 }
 
-/// A color cell is typed, not a string: `set_color` takes the hex form and
-/// `get_color` hands back the 0-255 channel map.
+/// A color cell is typed, not a string: `signal<Color>` takes the hex form on
+/// `set` and hands back the 0-255 channels on `get`.
 #[test]
 fn color_pair_reads_channels_back() {
     let mut host = CandelaHost::new();
@@ -110,13 +111,21 @@ fn color_pair_reads_channels_back() {
 import "lumen.cdl";
 
 fn paint() {
-    let accent = signal("accent");
-    accent.set_color("#ff8800");
+    let accent = signal<Color>("accent");
+    accent.set("#ff8800");
 }
 fn red() {
-    let accent = signal("accent");
-    let c = accent.get_color();
-    return c.get("r");
+    let accent = signal<Color>("accent");
+    return accent.get().r;
+}
+fn unset_alpha() {
+    let nothing = signal<Color>("nothing");
+    return nothing.get().a;
+}
+fn label() {
+    let dynamic = signal<any>("greeting");
+    dynamic.set("hi");
+    return dynamic.get();
 }
 fn main() {}
 "##;
@@ -126,6 +135,17 @@ fn main() {}
     assert_eq!(
         host.call("red", &[]).unwrap().ret,
         Some(ScriptValue::I64(255))
+    );
+    // A cell holding no color reads as transparent black rather than raising
+    // on the missing channel.
+    assert_eq!(
+        host.call("unset_alpha", &[]).unwrap().ret,
+        Some(ScriptValue::I64(0))
+    );
+    // The dynamic slot reads as `any` off the same string sink.
+    assert_eq!(
+        host.call("label", &[]).unwrap().ret,
+        Some(ScriptValue::Str("hi".to_owned()))
     );
 }
 
@@ -138,7 +158,7 @@ fn the_mirror_is_shared_with_the_host_side_context() {
     let mut host = CandelaHost::new();
     let src = r#"
 import "lumen.cdl";
-fn count() { let c = signal("count"); return c.get_int(); }
+fn count() { let c = signal<int>("count"); return c.get(); }
 fn main() {}
 "#;
     host.load(src, "shared.cdl").expect("compiles");

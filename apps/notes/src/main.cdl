@@ -186,9 +186,9 @@ fn on_text_input(id: string, text: string) {
 }
 
 fn new_note(clicked_id: any) {
-    let n = lumen::signal_get_int("next_id");
-    let next = n + 1;
-    lumen::signal_set_int("next_id", next);
+    let next_id = signal<int>("next_id");
+    let n = next_id.get();
+    next_id.set(n + 1);
     let new_id = "n" + str(n);
     let joined = lumen::signal_get("note_ids");
     let updated = joined + "|" + new_id;
@@ -223,7 +223,7 @@ fn on_click(id: string) {
 fn on_start() {
     lumen::signal_set("theme", "dark");
     lumen::signal_set("theme_label", "Dark mode");
-    lumen::signal_set_int("next_id", 4);
+    signal<int>("next_id").set(4);
     lumen::signal_set("body", "");
     lumen::signal_set("current", "");
     lumen::signal_set("note_ids", "n1|n2|n3");
