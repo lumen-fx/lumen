@@ -180,6 +180,31 @@ fn unknown_attribute_prints_a_warning_on_check() {
     );
 }
 
+/// A `[pages] include` may be written ahead of the pages it names: the entry
+/// that has no file yet is skipped, and the app checks on the pages that
+/// exist instead of failing on the one the author has not written.
+#[test]
+fn include_naming_an_unwritten_page_checks_clean() {
+    let dir = std::env::temp_dir().join(format!("lumenc-pages-unwritten-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).expect("create app dir");
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[pages]\ninclude = [\"index.lmn\", \"settings.lmn\"]\n",
+    )
+    .expect("write lumen.toml");
+    std::fs::write(
+        dir.join("src").join("index.lmn"),
+        "<root><label text=\"home\"/></root>\n",
+    )
+    .expect("write index.lmn");
+
+    let report = lumenc::check_app(&dir).expect("an unwritten include entry does not fail check");
+    assert!(report.element_count > 0, "the home page still compiles");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// Walk `el` and its descendants, collecting every `id`.
 fn ids(el: &lumenc::Element, out: &mut Vec<String>) {
     if let Some(id) = &el.attrs.id {

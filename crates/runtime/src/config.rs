@@ -223,14 +223,18 @@ pub struct PagesCfg {
     /// Force multi-page mode on (`true`) or off (`false`) and win over the
     /// auto default either way. When absent, multi-page activates
     /// automatically when more than one `.lmn` file sits in the app
-    /// directory, or when `include` names more than one page, including
-    /// pages living in a subfolder the directory scan never sees. So
-    /// single-page apps (`main.lmn` / a lone `index.lmn`, or a single-entry
-    /// `include`) keep the exact legacy single-file load path.
+    /// directory, or when `include` names more than one page that exists,
+    /// including pages living in a subfolder the directory scan never sees.
+    /// So single-page apps (`main.lmn` / a lone `index.lmn`, or a
+    /// single-entry `include`) keep the exact legacy single-file load path.
     pub enabled: Option<bool>,
     /// Explicit ordered page-file list (relative filenames, may name a
     /// subfolder). When set, this overrides directory auto-discovery: only
-    /// these files are pages.
+    /// these files are pages. An entry naming a file that is not there is
+    /// skipped with a warning and does not count toward the multi-page
+    /// default, so the block can be written ahead of the pages it names;
+    /// when every entry is missing the app still fails to load, naming a
+    /// file the list asked for.
     pub include: Option<Vec<String>>,
 }
 

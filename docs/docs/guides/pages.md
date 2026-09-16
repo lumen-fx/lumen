@@ -202,6 +202,13 @@ file down there is a page only when `include` names it, and `layout.lmn` is
 picked up from `src/` only. An `include` naming more than one page switches
 multi-page mode on by itself; `enabled = false` still turns it off.
 
+You can write the whole list before the pages exist. An entry with no file
+behind it yet is skipped with a warning naming the path, and the app runs on
+the pages that are there; write the file and it joins the set on the next
+load. A page that is not there does not count toward the multi-page default
+either, so set `enabled = true` to keep multi-page mode on while the rest are
+still to come.
+
 ## During development
 
 `lumenc run` watches every page file. Editing any page, or the shared

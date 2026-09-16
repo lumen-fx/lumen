@@ -109,6 +109,10 @@ a fix is machine-applicable. Kinds: `unknown-attribute`, `boolean-attribute`,
 `bare-interpolation`. They are advisory and never change the exit code; run
 [`lumenc lint --signals`](#lint) for the stream a build can gate on.
 
+Those commands also warn on stderr when a
+[`[pages] include`](lumen-toml.md#pages) entry names a file that is not there:
+the page is skipped and the exit code is unchanged.
+
 ## build
 
 ```
