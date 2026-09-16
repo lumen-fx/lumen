@@ -89,23 +89,26 @@ Read an `any` result with candela's `as_map`, `as_list`, `as_str`, `as_int`,
 `as_float`, and `as_bool` downcasts, and test it with `is_map`, `is_list`,
 `is_null`, and their siblings.
 
+A downcast collection keeps its entries typed `any`, which is what a parsed
+document needs: `as_map` and `as_list` hand back a collection that takes an
+`insert` or a `push` of any type, in any order, with no wrapper function in
+between. The same goes the other way, so an entry read back out is an `any` and
+needs its own downcast before you use it.
+
 ### Writing arguments
 
-Three candela rules shape how you write a call. Each has the same remedy: bind
+Two candela rules shape how you write a call. Each has the same remedy: bind
 the value to a variable first.
 
 - A map literal holds one value type. `{"id": "a", "n": 1}` is rejected; write
   `{"id": "a", "n": "1"}`, or build the value from `parse_json`.
-- A collection literal passed directly to a script-level function, including an
-  `impl` method, aborts the compiler. A literal passed straight to a `lumen::`
-  builtin is fine.
 - A builtin call nested inside another builtin's argument list mislays its
   arguments.
 
 ```rust
 let rows = signal_array("rows");
 let row = {"id": "a", "title": "First"};
-rows.push(row);                                  // literal through a variable
+rows.push(row);
 lumen::signal_array_push("rows", {"id": "b"});   // literal straight to a builtin
 
 let n = lumen::signal_array_len("rows");         // not nested in the next call

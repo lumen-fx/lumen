@@ -63,3 +63,62 @@ fn main() {}
     let outcome = host.call("libs_len", &[body]).expect("call ok");
     assert_eq!(outcome.ret, Some(ScriptValue::I64(300)));
 }
+
+/// A downcast collection's entries are `any`, so it takes entries of any type
+/// in any order and needs no wrapper function to hold them. A parsed document
+/// mixes types, so an `as_map` that handed back an entry-less map would let the
+/// first `insert` pin the key and value types and reject the next one
+/// (candela `4668cc5`, "keep a downcast collection's entries dynamic"). If this
+/// fails, the candela pin is what moved.
+#[test]
+fn downcast_map_takes_inserts_of_mixed_types() {
+    let mut host = CandelaHost::new();
+    let src = r#"
+import "lumen.cdl";
+fn grow_map(body) {
+    let root = as_map(lumen::parse_json(body));
+    root.insert("added", 1);
+    root.insert("note", "two");
+    return root.len();
+}
+fn grow_list(body) {
+    let l = as_list(lumen::parse_json(body));
+    l.push(2);
+    l.push("three");
+    return l.len();
+}
+fn main() {}
+"#;
+    host.load(src, "json.cdl").expect("script compiles");
+
+    // Two inserts of different value types: one alone passes either way.
+    let body = ScriptValue::Str(r#"{"n": 7, "s": "x"}"#.to_owned());
+    let outcome = host.call("grow_map", &[body]).expect("call ok");
+    assert_eq!(outcome.ret, Some(ScriptValue::I64(4)));
+
+    let body = ScriptValue::Str("[1]".to_owned());
+    let outcome = host.call("grow_list", &[body]).expect("call ok");
+    assert_eq!(outcome.ret, Some(ScriptValue::I64(3)));
+}
+
+/// The boundary the rule above must not erode: an empty `{}` literal has no
+/// entry types either, but it takes them from its first insert and keeps them,
+/// so a second insert of another value type is a compile error. The assertion
+/// is on the failure alone; the wording belongs to candela's diagnostics.
+#[test]
+fn empty_map_literal_still_pins_its_entry_types() {
+    let mut host = CandelaHost::new();
+    let src = r#"
+fn grow(n) {
+    let m = {};
+    m.insert("a", 1);
+    m.insert("b", "two");
+    return m.len();
+}
+fn main() {}
+"#;
+    host.load(src, "json.cdl").expect("script compiles");
+
+    let outcome = host.call("grow", &[ScriptValue::I64(0)]);
+    assert!(outcome.is_err());
+}
