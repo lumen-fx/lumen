@@ -142,6 +142,20 @@ serde.workspace = true
 base64.workspace = true
 image.workspace = true
 
+# The first-party runtime modules, compiled into the dev binary so a
+# `lumenc run` of an app that declares one gets it. Without defaults, so none
+# of them anchors the engine dylib; each registers itself before `main` and
+# the loader answers the declaration from the registry. The release shape
+# (`dynamic-engine`) opens them from disk instead and leaves these unlinked -
+# see the anchors in `src/main.rs`. `tests/bundled_modules.rs` keeps the
+# list in step with `std/`.
+lumen-archive = { workspace = true, optional = true }
+lumen-audio = { workspace = true, optional = true }
+lumen-canvas = { workspace = true, optional = true }
+lumen-download = { workspace = true, optional = true }
+lumen-fs = { workspace = true, optional = true }
+lumen-process = { workspace = true, optional = true }
+
 # The engine as a shared library, for the `dynamic-engine` release shape (see
 # [features]). Only off Windows - no linkable engine exists there. This table
 # sits last in the dependency section on purpose: a `[target...]` header
@@ -241,6 +255,9 @@ bundle = ["dep:lumen-assets"]
 # `package` rides along: running or building an app resolves whatever it names
 # in the registry, and resolving means downloading, which is where the fetch
 # and the archive readers live.
+# The first-party runtime modules are compiled in for the same reason: an app
+# that declares one in `[dependencies]` runs here with it, rather than
+# starting without the script functions it registers.
 dev-run = [
     "package",
     "dep:lumen-runtime",
@@ -251,6 +268,12 @@ dev-run = [
     "lumen-runtime/host-rhai",
     "lumen-runtime/host-lua",
     "lumen-runtime/host-candela",
+    "dep:lumen-archive",
+    "dep:lumen-audio",
+    "dep:lumen-canvas",
+    "dep:lumen-download",
+    "dep:lumen-fs",
+    "dep:lumen-process",
 ]
 # Link the engine as the shared `liblumen_engine` library instead of compiling
 # it into this binary. The release shape on Linux and macOS: built together

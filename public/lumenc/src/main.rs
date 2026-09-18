@@ -8,6 +8,26 @@ use std::process::ExitCode;
 
 use lumenc::update_check;
 
+// Link-line anchors for the first-party runtime modules. A cargo dependency
+// nobody names puts nothing on the link line, and these crates exist for what
+// their constructors do before `main`: each leaves its module on the registry
+// the loader reads, so an app declaring one in `[dependencies]` starts with
+// it. Off in the `dynamic-engine` shape, where the loader opens the same
+// modules from disk against the shared engine and a compiled-in copy would
+// answer first.
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_archive as _;
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_audio as _;
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_canvas as _;
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_download as _;
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_fs as _;
+#[cfg(all(feature = "dev-run", not(feature = "dynamic-engine")))]
+use lumen_process as _;
+
 fn main() -> ExitCode {
     // Earliest reachable instant, used only when `LUMEN_BOOT_TRACE` is set:
     // the windowed backend times exec->first-frame from here for the startup
