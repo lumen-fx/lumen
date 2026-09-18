@@ -28,8 +28,9 @@
 //! The scanner is **substring-based**: it does not parse the script
 //! AST and only recognizes top-level call sites of the form
 //! `signal_set("name", ...)` (and the four typed variants), the
-//! handle forms `signal<int>("name").set(...)` and
-//! `signals.name.set(...)`, with or without a host prefix such as
+//! handle forms `signal<int>("name").set(...)`, the bare
+//! `signal("name").set(...)` whose unpinned type parameter is `any`,
+//! and `signals.name.set(...)`, with or without a host prefix such as
 //! candela's `lumen::`. Limits:
 //!
 //! - Comments containing literal `signal_set("...")` are still flagged
@@ -597,7 +598,8 @@ struct TypedHandle {
     reads: bool,
 }
 
-/// Every `signal<T>("name")` handle in `src`.
+/// Every `signal<T>("name")` handle in `src`, plus the bare `signal("name")`
+/// form, whose unpinned type parameter is `any`.
 ///
 /// A handle is used either straight away (`signal<int>("n").set(0)`) or
 /// through a `let`, which is the form a read-modify-write takes:
@@ -611,13 +613,13 @@ struct TypedHandle {
 /// binding's name reaches anywhere in the script. The scanner does not track
 /// scopes, so two functions binding the same variable name share their uses.
 fn typed_handles(src: &str) -> Vec<TypedHandle> {
+    const CTOR: &str = "signal";
     let mut out = Vec::new();
-    let prefix = "signal<";
     let mut idx = 0;
-    while let Some(pos) = src[idx..].find(prefix) {
+    while let Some(pos) = src[idx..].find(CTOR) {
         let abs = idx + pos;
-        let Some((arg, name, after_close)) = read_typed_handle(src, abs) else {
-            idx = abs + prefix.len();
+        let Some((arg, name, after_close)) = read_handle(src, abs) else {
+            idx = abs + CTOR.len();
             continue;
         };
         idx = after_close;
@@ -662,11 +664,38 @@ fn let_binding_before(src: &str, at: usize) -> Option<String> {
     Some(ident.to_string())
 }
 
-/// Split a `signal<T>("name")` handle at `at` (the offset of `signal<`) into
-/// its type argument, the signal name, and the offset just past the closing
-/// `)`, so the caller can see which method the handle is used with.
-fn read_typed_handle(src: &str, at: usize) -> Option<(String, String, usize)> {
-    let after_angle = at + "signal<".len();
+/// Split a handle constructor at `at` (the offset of `signal`) into its type
+/// argument, the signal name, and the offset just past the closing `)`, so the
+/// caller can see which method the handle is used with.
+///
+/// Both spellings land here: `signal<int>("n")` carries its type argument, and
+/// the bare `signal("n")` pins nothing, which candela reads as `any`. A call
+/// with a second argument is the rhai / lua `signal(name, default)` builder and
+/// is not a candela handle, so it is left to the scanner that owns it.
+fn read_handle(src: &str, at: usize) -> Option<(String, String, usize)> {
+    // `my_signal(...)` and `signal_array(...)` merely contain the word.
+    if src[..at]
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return None;
+    }
+    let after_name = at + "signal".len();
+    if src.get(after_name..)?.starts_with('(') {
+        let args_at = after_name + 1;
+        let name = read_quoted(src.get(args_at..)?)?;
+        let close_paren = find_close_paren(src.get(args_at..)?)?;
+        // One argument and one only: anything past the name is another form.
+        if read_string_then_comma(src.get(args_at..)?).is_some() {
+            return None;
+        }
+        return Some(("any".to_owned(), name, args_at + close_paren + 1));
+    }
+    if !src.get(after_name..)?.starts_with('<') {
+        return None;
+    }
+    let after_angle = after_name + 1;
     let rest = src.get(after_angle..)?;
     let close = rest.find('>')?;
     let arg = rest[..close].trim();
@@ -1411,6 +1440,33 @@ mod tests {
         assert!(
             findings.is_empty(),
             "expected no findings on a typed handle write, got {findings:?}"
+        );
+    }
+
+    /// A handle with no type argument is the `any` one, so it is a write like
+    /// any other handle and the markup that binds it is not an untracked
+    /// signal.
+    #[test]
+    fn a_handle_with_no_type_argument_is_a_write() {
+        let schema = SignalsCfg::default();
+        let lmn = r#"<root><label bind-text="count" /></root>"#;
+        let cdl = r#"
+            fn on_start() {
+                signal("count").set("0");
+            }
+        "#;
+        let findings = analyze(
+            &schema,
+            lmn,
+            &PathBuf::from("main.lmn"),
+            cdl,
+            &PathBuf::from("main.cdl"),
+        );
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.kind == FindingKind::UntrackedSignal),
+            "the bare handle is the write the binding wanted, got {findings:?}"
         );
     }
 
