@@ -73,8 +73,7 @@ program, so a repeated import costs nothing.
 
 The prelude also declares the `window`, `document`, and `history` namespaces and
 defines the `Node`, `Event`, `Signal<T>`, and `ArraySignal` method wrappers
-described below, plus the `Color` record a color signal reads back as and the
-`SignalTypes` record described with the signal handle.
+described below, plus the `Color` record a color signal reads back as.
 
 Types in signatures are candela types: `int`, `float`, `bool`, `string`, arrays
 (`int[]`), and maps (`{string: float}`). A builtin with no return type returns
@@ -295,20 +294,11 @@ fn main() {}
 The handle holds only the name and calls the builtins above, so it reaches the
 same cells they do. There is no default value: seed a cell by writing it once.
 
-Write the type argument. candela binds a generic call's type parameter from the
-call, and a bare `signal("clicks")` leaves it unbound: that call reports
-`Unknown type T` when it runs, and `lumenc check` does not catch it because a
-candela body compiles on its first call. `signal<any>(name)` is the form for a
-cell whose type is not fixed.
-
-The prelude also declares a `SignalTypes` record that names each handle type
-and that nothing constructs. candela caches an instantiation of a generic type
-for the whole program but lowers its methods into the block being compiled, so
-a handle type first named inside a function body loses its `get` and `set` when
-that body is done and the next function to name it fails with `No method get on
-type Signal<int>`. Naming the types in a declaration has them lowered before
-any body is compiled, which is what keeps one handle type working across
-handlers.
+Write the type argument wherever the cell's type is known: it is what makes
+`get` hand back that type and `set` take it. A bare `signal("clicks")` pins
+nothing, and a type parameter nothing pins is `any`, so it is the same handle
+as `signal<any>("clicks")`: reads come back as `any` and writes go through the
+string sink. That is the form for a cell whose type is not fixed.
 
 ### Array signals
 
