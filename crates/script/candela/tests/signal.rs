@@ -151,10 +151,11 @@ fn main() {}
 
 /// A handle type keeps its methods after the body that first named it is
 /// compiled, so a write in one function and a read in another reach the same
-/// pair. candela lowers an instantiation's methods into the block being
-/// compiled while caching the instantiation for the whole program, so the
-/// prelude names every handle type in a declaration to have them lowered
-/// before any body is; without that this test fails with `No method get on
+/// pair.
+///
+/// Both handlers take a parameter with no type on it, so neither is compiled
+/// at load and each is specialized by its own call: that is the order that
+/// used to lose the methods, with the second call failing on `No method get on
 /// type Signal<bool>`.
 #[test]
 fn a_handle_type_outlives_the_body_that_first_named_it() {
@@ -165,21 +166,22 @@ import "lumen.cdl";
 fn set_cell(name, v) { signal<bool>(name).set(v); }
 fn is_on(name) { return signal<bool>(name).get(); }
 
-fn seed() {
+fn seed(tag) {
     let d = 0;
     while d < 2 {
-        set_cell("d" + str(d), true);
+        set_cell(tag + str(d), true);
         d += 1;
     }
 }
-fn read() { return is_on("d0"); }
+fn read(tag) { return is_on(tag + "0"); }
 fn main() {}
 "#;
     host.load(src, "cross_body.cdl").expect("compiles");
 
-    host.call("seed", &[]).expect("the loop body writes");
+    let tag = || ScriptValue::Str("d".to_owned());
+    host.call("seed", &[tag()]).expect("the loop body writes");
     assert_eq!(
-        host.call("read", &[]).unwrap().ret,
+        host.call("read", &[tag()]).unwrap().ret,
         Some(ScriptValue::Bool(true)),
         "the read is a separate compile and has to find the same `get`"
     );
