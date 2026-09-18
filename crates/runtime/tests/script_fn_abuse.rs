@@ -8,9 +8,9 @@
 //! difference is pinned per host rather than smoothed over: Rhai resolves a
 //! call by argument type and fails to find the function, Lua checks the
 //! arguments in its adapter and raises, candela checks the call against the
-//! declaration the host synthesized and refuses the whole handler. After every
-//! case the app still ticks and a well-formed call still reaches the property
-//! store.
+//! declaration the host synthesized and refuses the whole program before a
+//! handler ever runs. After every case the app still ticks, and where a
+//! handler does run a well-formed call still reaches the property store.
 
 use std::sync::{Arc, Mutex};
 
@@ -300,13 +300,12 @@ end
 }
 
 /// candela checks the call against the declaration the host synthesized from
-/// the signature, and refuses the whole handler: neither the bad call nor the
-/// statement after it runs.
+/// the signature, and refuses the whole program: no handler runs at all.
 ///
-/// The check happens when the handler is called rather than when the program
-/// loads, so there is no [`ScriptLoadFailure`] and the diagnostic reaches
-/// stderr as an `on_start failed` warning; nothing in the app holds it. What
-/// the app can still do is what `on_ready` proves.
+/// A handler candela can type from its own declaration is compiled when the
+/// program loads, so the bad call is a load failure the app holds in
+/// [`ScriptLoadFailure`] and shows as its script banner. The app itself still
+/// comes up and ticks; what it comes up without is the script.
 #[test]
 fn candela_refuses_a_call_that_passes_too_few_arguments() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -326,13 +325,12 @@ fn main() {}
 "#,
     );
 
-    assert_eq!(
-        out.calls,
-        ["control"],
-        "on_start ran no statement at all, and the next handler still fired"
+    assert!(out.calls.is_empty(), "no handler ran: {:?}", out.calls);
+    let failure = out.load_failure.expect("the program did not compile");
+    assert!(
+        failure.contains("mark"),
+        "the failure names the call the declaration does not describe: {failure}"
     );
-    assert_eq!(out.control.as_deref(), Some("ok"));
-    assert_eq!(out.load_failure, None, "the program itself compiled");
 }
 
 // -- b) more arguments than the signature declares ---------------------------
@@ -381,7 +379,7 @@ end
 }
 
 /// The synthesized declaration fixes the argument count, so the extra one
-/// costs the handler the same way a missing one does.
+/// costs the program the same way a missing one does.
 #[test]
 fn candela_refuses_a_call_that_passes_too_many_arguments() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -401,9 +399,9 @@ fn main() {}
 "#,
     );
 
-    assert_eq!(out.calls, ["control"]);
-    assert_eq!(out.control.as_deref(), Some("ok"));
-    assert_eq!(out.load_failure, None);
+    assert!(out.calls.is_empty(), "no handler ran: {:?}", out.calls);
+    let failure = out.load_failure.expect("the program did not compile");
+    assert!(failure.contains("mark"), "{failure}");
 }
 
 // -- c) the wrong argument types ---------------------------------------------
@@ -456,7 +454,7 @@ end
 }
 
 /// The declaration carries the parameter types too, so a swapped pair is
-/// refused with the same reach as a wrong count: the whole handler.
+/// refused with the same reach as a wrong count: the whole program.
 #[test]
 fn candela_refuses_a_call_whose_argument_has_the_wrong_type() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -476,9 +474,9 @@ fn main() {}
 "#,
     );
 
-    assert_eq!(out.calls, ["control"]);
-    assert_eq!(out.control.as_deref(), Some("ok"));
-    assert_eq!(out.load_failure, None);
+    assert!(out.calls.is_empty(), "no handler ran: {:?}", out.calls);
+    let failure = out.load_failure.expect("the program did not compile");
+    assert!(failure.contains("mark"), "{failure}");
 }
 
 // -- d) variadic calls, including past the bound -----------------------------

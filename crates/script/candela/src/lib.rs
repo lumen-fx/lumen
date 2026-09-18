@@ -46,11 +46,10 @@
 //!
 //! Two host-neutral extension points work through the newer embedding API:
 //!
-//! - `derive(name, deps, f)`: the dep list marshals as a `string[]`, and -
-//!   since candela has no first-class closure value - the recompute body is
-//!   passed by the script function's *name* (a plain string), which
-//!   `ScriptHost::call_closure` re-invokes. This matches how candela already
-//!   references functions (by symbol).
+//! - `derive(name, deps, f)`: the dep list marshals as a `string[]`, and - since
+//!   a function is not one of the values that cross a host boundary - the
+//!   recompute body is passed by the script function's *name* (a plain string),
+//!   which `ScriptHost::call_closure` re-invokes.
 //! - `register_script_fn`: the host-neutral
 //!   [`ScriptFn`](lumen_script::ScriptFn) an app, a plugin, the C ABI or the
 //!   Rust SDK describes. A signature candela can name binds typed, so the call
@@ -86,8 +85,8 @@
 //! |---|---|
 //! | `signals.a.b.set(v)` chaining | Rhai's property-chain fallback has no candela analogue; write the path out (`lumen::signal_set("a.b", v)`). |
 //!
-//! `signal<T>(name)` is a prelude struct rather than a host fn: candela has no
-//! user-defined value object type to hand back, so `Signal<T>` holds only the
+//! `signal<T>(name)` is a prelude struct rather than a host fn: a host value
+//! has no struct variant to hand back, so `Signal<T>` holds only the
 //! signal *name* and the `impl Signal<int>` .. `impl Signal<any>` blocks give
 //! one `get` / `set` pair per type over the name-keyed `signal_get_*` /
 //! `signal_set_*` builtins. `ArraySignal` works the same way, without a type
@@ -114,9 +113,10 @@
 //! Or opt into the *whole* surface with one line, `import "lumen.cdl";`,
 //! which [`resolve_prelude`] splices into the equivalent `host "lumen" { ... }`
 //! block before compilation (see the [`prelude`] module). Without the import
-//! (or a hand-written block) the builtins stay opt-in: candela resolves host fns
-//! lazily, so the source loads, but *calling* one is a runtime error that names
-//! the call and the import that would declare it.
+//! (or a hand-written block) the builtins stay opt-in: reaching one is an error
+//! that names the call and the import that would declare it, raised at load
+//! where candela can type the function from its own declaration and at the
+//! first call otherwise.
 
 #![warn(missing_docs)]
 
@@ -133,6 +133,8 @@ mod host_fns;
 mod install;
 mod library_dir;
 pub mod lmn;
+#[cfg(feature = "compiler")]
+mod package_entry;
 pub mod prelude;
 mod value;
 mod vm_host;

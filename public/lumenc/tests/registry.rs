@@ -400,7 +400,7 @@ fn add_declares_a_compiler_plugin_with_its_config() {
 
 /// A `candela` package becomes an import root: the app's script imports it by
 /// the name it was declared under, and the compile reads the package's own
-/// `.cdl` sources.
+/// `.cdl` sources, entered through the file its `candela.toml` names.
 #[test]
 fn a_candela_package_is_an_import_root() {
     let dir = app("candela-root", "[dependencies]\nshapes = \"1\"\n");
@@ -416,9 +416,15 @@ fn a_candela_package_is_an_import_root() {
     .expect("script");
 
     // The package the registry resolved, carrying the module the script
-    // imports under the package's own name.
+    // imports under the package's own name. A package is entered through the
+    // file its manifest names, so the manifest travels with the sources.
     let package = dir.join("pkg").join("shapes");
     std::fs::create_dir_all(&package).expect("package root");
+    std::fs::write(
+        package.join("candela.toml"),
+        "[package]\nname = \"shapes\"\nversion = \"1.0.0\"\nentry = \"shapes.cdl\"\n",
+    )
+    .expect("package manifest");
     std::fs::write(
         package.join("shapes.cdl"),
         "fn area(w: int, h: int) -> int {\n    return w * h;\n}\n",
@@ -429,7 +435,7 @@ fn a_candela_package_is_an_import_root() {
         &dir,
         &format!(
             "{{\"name\":\"shapes\",\"version\":\"1.0.0\",\"platform\":\"candela\",\
-             \"target\":\"any\",\"dir\":{},\"files\":[\"shapes.cdl\"]}}",
+             \"target\":\"any\",\"dir\":{},\"files\":[\"candela.toml\",\"shapes.cdl\"]}}",
             serde_json::to_string(&package.display().to_string()).expect("a path encodes"),
         ),
     );

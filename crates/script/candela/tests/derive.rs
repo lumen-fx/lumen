@@ -1,6 +1,6 @@
-//! `derive(name, deps, f)` on the candela host. candela has no first-class closure
-//! value, so the recompute body is referenced by the script function's NAME (a
-//! string) and the dep list is a `string[]`. Proves the derivation is
+//! `derive(name, deps, f)` on the candela host. A function does not marshal
+//! across a host boundary, so the recompute body is referenced by the script
+//! function's NAME (a string) and the dep list is a `string[]`. Proves the derivation is
 //! registered (pending-initial + dep-matched) and that a recompute reads the
 //! current dep values and reacts when a dep signal changes - the contract
 //! `apply_derivations` drives.

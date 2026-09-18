@@ -62,8 +62,10 @@ the `lumen` namespace has no `read_file` (called as `lumen::read_file`)
 the `lumen` namespace has no `data_dir` (called as `lumen::data_dir`); `files::data_dir` exists
 ```
 
-Both surface on the first call that reaches the function, because candela
-compiles a function body the first time it is called rather than at load.
+Both surface at load for any function candela can type from that function's
+own declaration, which is every handler whose parameters are annotated and
+every function that takes none. A handler with a bare parameter is compiled by
+the first call that reaches it, and reports there instead.
 
 Write the import in every `.cdl` file that uses the surface. An app's candela
 files join into one program and the declarations land once for the whole
@@ -364,8 +366,9 @@ lumen::derive(name: string, deps: string[], f: string)
 
 Registers a computed signal `name`, recomputed by the script function named `f`
 whenever any signal in `deps` changes. `f` receives the dependency values in
-`deps` order and returns the new value. candela has no closure value, so the
-recompute body is referenced by function name.
+`deps` order and returns the new value. A host function takes only the values
+that marshal across the boundary, and a candela function is not one of them, so
+the recompute body is referenced by name rather than passed.
 
 Declare each parameter as the type the cell holds, or as `any`. A cell written
 through `signal<int>` arrives as an `int`, `signal<float>` as a `float`,

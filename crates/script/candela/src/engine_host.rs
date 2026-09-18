@@ -140,7 +140,8 @@ impl CandelaHost {
     fn resolver(&self) -> candela::ImportResolver {
         let mut resolver = candela::ImportResolver::new();
         for (name, dir) in &self.import_roots {
-            resolver.add_root(name, dir.clone());
+            let entry = crate::package_entry::of(dir);
+            resolver.add_root(name, dir.clone(), entry);
         }
         resolver
     }
@@ -305,10 +306,11 @@ impl CandelaHost {
 
     /// What a diagnostic raised by the running program should say.
     ///
-    /// candela compiles a function body on the first call that reaches it, so
-    /// a resolution failure in a never-called handler surfaces here rather than
-    /// at load. The message is candela's own unless the host can name the
-    /// symbol that failed to resolve.
+    /// candela compiles a function it cannot type from that function's own
+    /// declaration on the first call that reaches it, so a resolution failure
+    /// in a handler with a bare parameter surfaces here rather than at load.
+    /// The message is candela's own unless the host can name the symbol that
+    /// failed to resolve.
     fn runtime_message(&self, d: &candela::Diagnostic) -> String {
         diagnose::explain(&self.prepared, &self.uri, d).unwrap_or_else(|| d.message.clone())
     }

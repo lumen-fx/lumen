@@ -20,7 +20,7 @@ default = ["compiler"]
 # `CandelaVmHost`, which runs a precompiled `.cdlb` on `candela-vm` alone. That
 # is what a shipped app and the browser target want, and it is the difference
 # between linking a compiler and not.
-compiler = ["dep:candela"]
+compiler = ["dep:candela", "dep:toml"]
 
 [dependencies]
 # `json` and `markdown` pull in the shared `parse_json` / `parse_markdown`
@@ -38,12 +38,16 @@ bevy_ecs.workspace = true
 # name on crates.io is an unrelated 2020 crate); its library keeps the
 # `candela` import name. The git source drives a development build, and the
 # version resolves to the release in a published one.
-candela = { package = "candela-lang", git = "https://github.com/lumen-fx/candela", rev = "acf4a053503e08884be01765d0a9371b352f97f9", version = "0.0.7", optional = true }
+candela = { package = "candela-lang", git = "https://github.com/lumen-fx/candela", rev = "f20d646fa7fdaeb48ad74c82aa4438c490fce76e", version = "0.1.1", optional = true }
 # The runtime half of the same toolchain: the executor, the value marshalling,
 # and the `.cdlb` load/call API. Always present - the builtin surface and the
 # artifact host are written against it, and `candela` re-exports it, so the two
 # hosts share one implementation of both.
-candela-vm = { git = "https://github.com/lumen-fx/candela", rev = "acf4a053503e08884be01765d0a9371b352f97f9", version = "0.0.7" }
+candela-vm = { git = "https://github.com/lumen-fx/candela", rev = "f20d646fa7fdaeb48ad74c82aa4438c490fce76e", version = "0.1.1" }
+# Reads the `entry` key out of a dependency package's `candela.toml`. The
+# ahead-of-time build assembles its own import resolver, with no engine to read
+# the manifest for it, and a package is entered through the file that key names.
+toml = { workspace = true, optional = true }
 
 [build-dependencies]
 # Reads the resolved dependency graph, the only place a dependency's own source

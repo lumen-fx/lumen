@@ -390,12 +390,18 @@ fn every_registered_lumen_fn_is_tabled() {
 
 /// A panic out of the VM stays inside the host.
 ///
-/// A diagnostic thrown mid-execution (here: a call into a `lumen::` function
-/// nothing declared) can leave values behind on the VM stack, and the next
-/// call into the program then dies on an internal type assertion instead of
-/// returning an error. That panic used to cross the host boundary and kill
-/// the process - a music app whose audio module could not load died this way
-/// on its second lifecycle hook. The host must hand back errors, never abort.
+/// A diagnostic raised while a handler is being specialized (here: a call into
+/// a `lumen::` function nothing declared) can leave values behind on the VM
+/// stack, and the next call into the program then dies on an internal type
+/// assertion instead of returning an error. That panic used to cross the host
+/// boundary and kill the process - a music app whose audio module could not
+/// load died this way on its second lifecycle hook. The host must hand back
+/// errors, never abort.
+///
+/// Both hooks take a parameter with no type on it, which is what keeps them
+/// out of the load-time pass: candela compiles the body of every function it
+/// can type from that function's own declaration, and the undeclared call
+/// would otherwise fail the load rather than the call.
 #[test]
 fn a_vm_panic_is_contained_and_disables_the_program() {
     let mut host = CandelaHost::new();
@@ -410,14 +416,14 @@ fn tracks() {
     l.push(mk("c", "d"));
     return l;
 }
-fn set_meta(t: any) { lumen::signal_set("now_title", t.title); }
-fn on_start() {
+fn set_meta(t: Track) { lumen::signal_set("now_title", t.title); }
+fn started(tag) {
     lumen::signal_set("x", "1");
     let list = tracks();
     set_meta(list[0]);
     lumen::no_such_builtin(0.7);
 }
-fn on_ready() {
+fn ready(tag) {
     let list = tracks();
     let i = 0;
     while i < list.len() {
@@ -431,13 +437,13 @@ fn main() {}
 
     // The first hook fails on the undeclared call; candela reports it as an
     // ordinary diagnostic.
-    let started = host.call("on_start", &[]);
+    let started = host.call("started", &[ScriptValue::Str("go".to_owned())]);
     assert!(started.is_err(), "the undeclared call errors: {started:?}");
 
     // The next hook must come back as a value, never abort the process. On
     // the current candela pin the corrupted VM panics and the host reports
     // it; a candela with the corruption fixed returns Ok, and both are fine.
-    match host.call("on_ready", &[]) {
+    match host.call("ready", &[ScriptValue::Str("go".to_owned())]) {
         Ok(_) => {}
         Err(ScriptError::Runtime(msg)) => {
             assert!(msg.contains("candela VM panicked"), "{msg}");

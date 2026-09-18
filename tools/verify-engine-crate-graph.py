@@ -65,11 +65,9 @@ committed `Cargo.lock`, the pin of record for what a release ships, and
 trusts it rather than silently re-resolving against whatever the registry
 has today. `public/lumen-dylib` carries no committed `Cargo.lock` of its
 own: a tracked second lockfile duplicating the root one needs hand-updating
-every time the root's dependency set moves, and with `candela-lang`/
-`candela-vm` tracked by branch rather than by commit (see below) it can go
-stale without anyone touching this repository at all; a committed copy
-lost that race against `main` more than once in the same week this check
-was added, so it is not tracked at all now.
+every time the root's dependency set moves, and it went stale more than
+once in the same week this check was added, so it is not tracked at all
+now.
 
 The engine side is not locked, but it is not resolved from nothing either.
 `generate_engine_lock()` seeds `public/lumen-dylib/Cargo.lock` with a copy
@@ -97,14 +95,12 @@ so a leftover file from a previous local run can never bias this one;
 nothing this script does leaves a file behind for git to notice, and root's
 own `Cargo.lock` is read, never written.
 
-`lumen-script-candela` depends on `candela-lang` and `candela-vm` from the
-`candela` repository's `main` branch rather than a fixed commit, so a
-`candela` push can move what the engine side resolves at any time,
-independent of anything landing in this repository. Because that side
-always resolves fresh, a `candela` bump shows up here as an ordinary
-version or feature difference between the two sides, reported the same way
-as any other drift this script catches, not as a special case or a
-resolver error to work around.
+`lumen-script-candela` depends on `candela-lang` and `candela-vm` at one
+pinned `candela` commit, named in `crates/script/candela/Cargo.toml`, so a
+push to that repository moves neither side until the pin does. Both sides
+read the same pin, and moving it is an ordinary edit here: the new `rev`
+and `version` on both dependency lines, then `cargo update -p candela-lang
+-p candela-vm`.
 
 For every package name common to both sides, this compares the resolved
 version set and, for versions in common, the resolved feature set (`default`

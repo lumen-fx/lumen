@@ -397,13 +397,12 @@ design, which is also why a stray `public/lumen-dylib/Cargo.lock` should
 never be committed (`.gitignore` covers it).
 
 `lumen-script-candela` depends on `candela-lang` and `candela-vm` as git
-dependencies tracking the `candela` repository's `main` branch, not a fixed
-commit, so a `candela` push can move what the engine side resolves at any
-time, independent of anything landing in this repository. Because that side
-always resolves fresh, a `candela` bump shows up as an ordinary version or
-feature difference in the check's output, the same as any other drift it
-catches; a red `engine graph` leg right after a `candela` bump is expected,
-and the fix is the same as for any other reported package.
+dependencies pinned to one `candela` commit in
+`crates/script/candela/Cargo.toml`, so a push to that repository changes
+nothing here until the pin moves. Both sides of the check resolve that same
+pin, which is what keeps them agreeing. Moving to a new `candela` release is
+one edit: set the `rev` and the `version` on both dependency lines, then run
+`cargo update -p candela-lang -p candela-vm` so the lockfile follows.
 
 The suite also runs every app the repository ships. Each directory under
 `apps/` and `fixtures/`, and each app `lumenc new` scaffolds, is run headless

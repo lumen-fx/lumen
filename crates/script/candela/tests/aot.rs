@@ -159,27 +159,27 @@ fn a_program_that_does_not_compile_reports_where() {
 /// A build has no plugin in it, so a namespace only a plugin would declare has
 /// to be spelled by the source.
 ///
-/// The build does not object: a call into an undeclared namespace compiles, and
-/// the function it sits in is left out of the image. What the author gets is
-/// an app that starts and a call that is not there, so the block is the thing
-/// to check when a plugin function goes missing from an artifact.
+/// candela compiles the body of every function it can type from that
+/// function's own declaration, so a call into a namespace nothing declared
+/// stops the build and names the namespace, rather than leaving the function
+/// silently out of the image.
 #[test]
-fn a_call_into_an_undeclared_namespace_does_not_reach_the_image() {
+fn a_call_into_an_undeclared_namespace_stops_the_build() {
     const UNDECLARED: &str = r#"
 fn go() { return gpio::level(21); }
 
 fn main() {}
 "#;
-    let bytes = CandelaHost::new()
+    let error = CandelaHost::new()
         .compile_bytecode(UNDECLARED, "undeclared.cdl")
-        .expect("the build does not object");
-    let mut hosts = HostRegistry::new();
-    hosts.register_host_fn("gpio", "level", |pin: i64| -> i64 { pin * 2 });
-
-    let program = load_program(&bytes, &hosts).expect("the image loads");
+        .expect_err("the build objects to the undeclared namespace");
+    let ScriptError::Compile { uri, message, .. } = &error else {
+        panic!("a build tool gets the position, not just a message: {error:?}");
+    };
+    assert_eq!(uri, "undeclared.cdl");
     assert!(
-        !program.exports().any(|name| name == "go"),
-        "the function holding the undeclared call is not in the image"
+        message.contains("gpio"),
+        "the message names the namespace nothing declared: {message}"
     );
 }
 
