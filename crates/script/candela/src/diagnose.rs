@@ -1,11 +1,11 @@
-//! Naming the symbol a candela `unknown_namespace` diagnostic failed on.
+//! Naming the symbol a candela namespace diagnostic failed on.
 //!
-//! candela resolves a namespaced path by walking its compile-time namespace
-//! tree, and a `host "<ns>" { .. }` block is not a node in that tree: it binds
-//! a dynamic-library entry instead. A call to a name a declared namespace does
-//! not have therefore falls through to the tree walk, which reports the
-//! namespace as invalid. That points an author at the import line when the
-//! import is fine and the function is what moved.
+//! candela reports two shapes for a namespaced path that does not resolve: the
+//! namespace itself is unknown, or the namespace is known and the name in it is
+//! not. Either way the answer an author needs is which half is missing and
+//! where the name they wrote now lives, and candela cannot know the second
+//! part: a builtin that moved out of the surface now sits in a namespace a
+//! module declares.
 //!
 //! The diagnostic carries the byte span of the path text, so the host reads
 //! `lumen::read_file` back out of the source the compiler saw and says which
@@ -16,8 +16,11 @@ use candela_vm::Diagnostic;
 use crate::host_fns::HOST_NAMESPACE;
 use crate::prelude::{PRELUDE_MODULE, PreparedSource, code_only, declares_namespace};
 
-/// The code candela stamps on a namespace path that does not resolve.
+/// The code candela stamps on a path whose namespace does not resolve.
 const UNKNOWN_NAMESPACE: &str = "unknown_namespace";
+
+/// The code it stamps when the namespace resolves and the name in it does not.
+const UNKNOWN_FUNCTION: &str = "unknown_function_in_namespace";
 
 /// A message naming the symbol `d` failed to resolve, or `None` when candela's
 /// own message is the one to report.
@@ -27,7 +30,7 @@ const UNKNOWN_NAMESPACE: &str = "unknown_namespace";
 /// host never assembled (an author's own `import "other.cdl";`), so its span
 /// indexes text that is not here and the message is left alone.
 pub(crate) fn explain(prepared: &PreparedSource, uri: &str, d: &Diagnostic) -> Option<String> {
-    if d.code != UNKNOWN_NAMESPACE || d.filename != uri {
+    if (d.code != UNKNOWN_NAMESPACE && d.code != UNKNOWN_FUNCTION) || d.filename != uri {
         return None;
     }
     let path = prepared.text.get(d.span.start..d.span.end)?.trim();
@@ -36,11 +39,15 @@ pub(crate) fn explain(prepared: &PreparedSource, uri: &str, d: &Diagnostic) -> O
     // The builtin namespace is asked of the prepared source rather than
     // searched for: the host declares a block under it for an embedder's own
     // registrations, so its presence does not mean the surface is in.
-    let declared = if ns == HOST_NAMESPACE {
-        prepared.declares_builtins
-    } else {
-        declares_namespace(&prepared.text, ns)
-    };
+    // `unknown_function_in_namespace` is candela saying it resolved the
+    // namespace, so the block is there whatever the scan below would make of
+    // it.
+    let declared = d.code == UNKNOWN_FUNCTION
+        || if ns == HOST_NAMESPACE {
+            prepared.declares_builtins
+        } else {
+            declares_namespace(&prepared.text, ns)
+        };
 
     // Every scan below reads the block a namespace opens, so it reads the
     // code without its comments: an app that describes a block it does not

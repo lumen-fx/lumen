@@ -498,7 +498,8 @@ fn a_derivation_is_registered_pending_and_recomputes_from_its_deps() {
     assert_eq!(matching[0].0, "shout");
     assert_eq!(matching[0].1, vec!["greeting".to_owned()]);
 
-    // candela has no closure value, so the recompute body is a function name.
+    // A function does not marshal across the boundary, so the recompute body
+    // is a function name.
     let value = host
         .call_closure(&matching[0].2, &[ScriptValue::Str("hi".to_owned())])
         .expect("the recompute body runs");

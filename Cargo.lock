@@ -950,8 +950,8 @@ dependencies = [
 
 [[package]]
 name = "candela-lang"
-version = "0.0.7"
-source = "git+https://github.com/lumen-fx/candela?rev=acf4a053503e08884be01765d0a9371b352f97f9#acf4a053503e08884be01765d0a9371b352f97f9"
+version = "0.1.1"
+source = "git+https://github.com/lumen-fx/candela?rev=f20d646fa7fdaeb48ad74c82aa4438c490fce76e#f20d646fa7fdaeb48ad74c82aa4438c490fce76e"
 dependencies = [
  "ariadne",
  "candela-vm",
@@ -970,11 +970,12 @@ dependencies = [
 
 [[package]]
 name = "candela-vm"
-version = "0.0.7"
-source = "git+https://github.com/lumen-fx/candela?rev=acf4a053503e08884be01765d0a9371b352f97f9#acf4a053503e08884be01765d0a9371b352f97f9"
+version = "0.1.1"
+source = "git+https://github.com/lumen-fx/candela?rev=f20d646fa7fdaeb48ad74c82aa4438c490fce76e#f20d646fa7fdaeb48ad74c82aa4438c490fce76e"
 dependencies = [
  "ariadne",
  "getrandom 0.3.4",
+ "indexmap",
  "lexical-core",
  "libffi",
  "libloading 0.9.0",
@@ -2905,9 +2906,9 @@ checksum = "65b27460c2c92b037f3f94c538ed9a3342f3fdf923606781629ccb35f82d042a"
 
 [[package]]
 name = "indexmap"
-version = "2.14.0"
+version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
+checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.1",
@@ -4275,6 +4276,7 @@ dependencies = [
  "lumen-core",
  "lumen-script",
  "serde_json",
+ "toml 1.1.4+spec-1.1.0",
 ]
 
 [[package]]

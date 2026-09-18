@@ -10,10 +10,11 @@
 //! that compiles Lumen candela goes through it, so a program built to a `.cdlb`
 //! declares exactly what a program compiled in process does.
 //!
-//! Opt-in is preserved: a source without the import gets no builtins. candela
-//! resolves host fns lazily, so such a source still loads; calling
-//! `lumen::signal_set(...)` unprepared fails at run time, naming the call and
-//! the import that would declare it.
+//! Opt-in is preserved: a source without the import gets no builtins, and
+//! `lumen::signal_set(...)` unprepared fails naming the call and the import
+//! that would declare it. Where it fails follows how candela compiles: at load
+//! for a function it can type from that function's own declaration, and at the
+//! first call for one with a bare parameter.
 
 use std::borrow::Cow;
 

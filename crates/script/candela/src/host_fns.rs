@@ -198,17 +198,18 @@ pub(crate) struct Registries {
     /// Per-id handler registry: `(event, id) -> fn_name`, written by `on(...)`.
     pub(crate) handlers: Arc<RwLock<HashMap<(String, String), String>>>,
     /// Derivation registry: `name -> (dep signal names, recompute fn name)`,
-    /// written by `derive(...)`. candela has no first-class closure value, so the
-    /// recompute body is referenced by the script function's name - exactly
-    /// what a host's `Closure` associated type models.
+    /// written by `derive(...)`. A function is not one of the values that
+    /// marshal across a host boundary, so the recompute body is referenced by
+    /// the script function's name - exactly what a host's `Closure` associated
+    /// type models.
     pub(crate) derivations: DerivationMap,
     /// Names of derivations registered but never successfully evaluated; they
     /// all run on the next derivation pass regardless of dirt.
     pub(crate) pending: Arc<Mutex<HashSet<String>>>,
     /// Event handler registry: `token -> handler fn name`, written by
-    /// `event_on(...)`. candela has no closure value, so the handler is
-    /// referenced by name; the dispatcher looks the name up by token and calls
-    /// it.
+    /// `event_on(...)`. A function does not marshal across the boundary, so
+    /// the handler is referenced by name; the dispatcher looks the name up by
+    /// token and calls it.
     pub(crate) event_handlers: Arc<RwLock<HashMap<u64, String>>>,
     /// What the source being compiled declares, for the `lmn!` expander.
     /// Written before each compile, read while candela parses.
@@ -684,11 +685,11 @@ pub(crate) fn register_lumen_host_fns<S: HostFnSink>(engine: &mut S, r: &Registr
     );
 
     // -- derived signals ---------------------------------------------
-    // `derive(name, deps, f)`: candela has no first-class closure value, so
-    // the recompute body is passed by the script function's NAME (a plain
-    // string) - the candela-idiomatic way to reference a function, and what
-    // `apply_derivations` re-invokes via `call_closure`. The dep list is a
-    // `string[]`, which marshals across the boundary natively.
+    // `derive(name, deps, f)`: a host function takes only the values that
+    // marshal across the boundary, and a candela function is not one of them,
+    // so the recompute body is passed by the script function's NAME (a plain
+    // string) - what `apply_derivations` re-invokes via `call_closure`. The dep
+    // list is a `string[]`, which marshals across the boundary natively.
     let d = r.derivations.clone();
     let p = r.pending.clone();
     let m = r.mirror.clone();

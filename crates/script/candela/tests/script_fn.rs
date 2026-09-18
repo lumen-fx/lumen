@@ -355,7 +355,7 @@ fn main() {}
     // that declares nothing gets the same verdict either way.
     host.add_prelude(
         "native",
-        "fn answer_twice() { return native::answer() * 2; }\n",
+        "fn answer_twice() { return as_int(native::answer()) * 2; }\n",
     );
     host.compile_check(
         "fn ask() { return answer_twice(); }\nfn main() {}\n",
@@ -541,13 +541,11 @@ fn an_unusual_typed_shape_is_declared_and_checked() {
     ] {
         let mut host = CandelaHost::new();
         host.register_script_fn(&label()).expect("register");
-        host.load(
-            &format!("fn go() {{ return {call}; }}\nfn main() {{}}\n"),
-            "app.cdl",
-        )
-        .expect("load");
         let err = host
-            .call("go", &[])
+            .load(
+                &format!("fn go() {{ return {call}; }}\nfn main() {{}}\n"),
+                "app.cdl",
+            )
             .expect_err("the declaration does not describe this call")
             .to_string();
         assert!(

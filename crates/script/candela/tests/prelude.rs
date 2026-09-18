@@ -64,25 +64,20 @@ fn main() {}
 }
 
 /// Without the import (and without a host block) the builtins stay opt-in:
-/// candela resolves host fns lazily, so the source loads, but *calling*
-/// `lumen::signal_set` errors and emits no command - the builtin surface is
-/// unreachable until explicitly imported. The error names the call and the
-/// import that would declare it, so an author is pointed at the one line they
-/// are missing.
+/// `lumen::signal_set` is unreachable until it is explicitly imported, and the
+/// program does not load. The error names the call and the import that would
+/// declare it, so an author is pointed at the one line they are missing.
 #[test]
 fn without_import_builtins_stay_opt_in() {
     let mut host = CandelaHost::new();
-    host.load(
-        "fn on_start() { lumen::signal_set(\"g\", \"v\"); }\nfn main() {}\n",
-        "no_prelude.cdl",
-    )
-    .expect("candela resolves host fns lazily, so load itself succeeds");
-
     let err = host
-        .call("on_start", &[])
-        .expect_err("an unimported builtin call must error at runtime");
-    let ScriptError::Runtime(message) = &err else {
-        panic!("expected a runtime namespace error, got {err:?}");
+        .load(
+            "fn on_start() { lumen::signal_set(\"g\", \"v\"); }\nfn main() {}\n",
+            "no_prelude.cdl",
+        )
+        .expect_err("an unimported builtin call must fail the load");
+    let ScriptError::Compile { message, .. } = &err else {
+        panic!("expected a compile namespace error, got {err:?}");
     };
     assert!(
         message.contains("lumen::signal_set"),
@@ -106,14 +101,11 @@ import "lumen.cdl";
 fn on_ready() { let s = lumen::read_file("x"); }
 fn main() {}
 "#;
-    host.load(src, "retired.cdl")
-        .expect("candela compiles a body on first call, so the load succeeds");
-
     let err = host
-        .call("on_ready", &[])
+        .load(src, "retired.cdl")
         .expect_err("a name the namespace does not have must error");
-    let ScriptError::Runtime(message) = &err else {
-        panic!("expected a runtime error, got {err:?}");
+    let ScriptError::Compile { message, .. } = &err else {
+        panic!("expected a compile error, got {err:?}");
     };
     assert!(
         message.contains("read_file"),
@@ -143,14 +135,11 @@ import "lumen.cdl";
 fn on_ready() { let d = lumen::data_dir(); }
 fn main() {}
 "#;
-    host.load(src, "moved.cdl")
-        .expect("the call compiles lazily");
-
     let err = host
-        .call("on_ready", &[])
+        .load(src, "moved.cdl")
         .expect_err("data_dir is not in the lumen namespace");
-    let ScriptError::Runtime(message) = &err else {
-        panic!("expected a runtime error, got {err:?}");
+    let ScriptError::Compile { message, .. } = &err else {
+        panic!("expected a compile error, got {err:?}");
     };
     assert!(
         message.contains("`files::data_dir` exists"),
@@ -169,14 +158,11 @@ import "lumen.cdl";
 fn on_ready() { let v = storage::get("k"); }
 fn main() {}
 "#;
-    host.load(src, "undeclared.cdl")
-        .expect("the call compiles lazily");
-
     let err = host
-        .call("on_ready", &[])
+        .load(src, "undeclared.cdl")
         .expect_err("no storage namespace exists");
-    let ScriptError::Runtime(message) = &err else {
-        panic!("expected a runtime error, got {err:?}");
+    let ScriptError::Compile { message, .. } = &err else {
+        panic!("expected a compile error, got {err:?}");
     };
     assert!(
         message.contains("no `storage` namespace is declared here"),

@@ -44,6 +44,21 @@ pub(crate) fn candela_value_to_script(v: &Value) -> ScriptValue {
                 .map(|(k, val)| (k.clone(), candela_value_to_script(val)))
                 .collect(),
         ),
+        // An enum travels out of a script only (candela refuses one as a call
+        // argument), and the host value has no variant of its own, so it
+        // arrives externally tagged, the shape a JSON reader already expects: a
+        // variant with no payload is its own name, and one with a payload is a
+        // single-entry map from the name to the payload in declaration order.
+        Value::Enum { variant, payload } => {
+            if payload.is_empty() {
+                ScriptValue::Str(variant.clone())
+            } else {
+                ScriptValue::Map(HashMap::from([(
+                    variant.clone(),
+                    ScriptValue::Array(payload.iter().map(candela_value_to_script).collect()),
+                )]))
+            }
+        }
     }
 }
 
@@ -58,4 +73,39 @@ pub(crate) fn array_to_rows(items: &[ScriptValue]) -> Vec<HashMap<String, String
             other => HashMap::from([("value".to_owned(), other.stringify())]),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_variant_with_no_payload_is_its_own_name() {
+        let value = Value::Enum {
+            variant: "None".to_owned(),
+            payload: Vec::new(),
+        };
+        assert_eq!(
+            candela_value_to_script(&value),
+            ScriptValue::Str("None".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_variant_with_a_payload_is_tagged_by_its_name() {
+        let value = Value::Enum {
+            variant: "Some".to_owned(),
+            payload: vec![Value::Int(7), Value::String("x".to_owned())],
+        };
+        let ScriptValue::Map(fields) = candela_value_to_script(&value) else {
+            panic!("a variant carrying a payload reads as a map");
+        };
+        assert_eq!(
+            fields.get("Some"),
+            Some(&ScriptValue::Array(vec![
+                ScriptValue::I64(7),
+                ScriptValue::Str("x".to_owned()),
+            ]))
+        );
+    }
 }

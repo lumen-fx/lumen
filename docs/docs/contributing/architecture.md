@@ -558,8 +558,10 @@ The trait covers lifecycle (compile check, load, replace, reset), invocation
 signal mirror, the handler and derivation registries, dynamic-DOM event
 dispatch, and metadata. Its associated closure type is what each engine calls a
 callable: a function pointer in Rhai, a function value in Lua, and a function
-*name* in candela, which has no first-class closure value and inlines
-higher-order calls by symbol at compile time.
+*name* in candela. candela has function values of its own, but the values that
+cross a host-function boundary are the marshalled ones (null, the scalars,
+arrays, maps, and enums), and a function is not among them, so a candela script
+names the callable and the host looks it up.
 
 One host runs per language the app ships. Each script file picks its engine
 from its own extension, and the files of one language concatenate into a single
