@@ -288,8 +288,13 @@ A handful of crates carry flags you will meet while working on the tree.
 
 **`lumenc`** builds in two shapes. The default shape statically links
 `lumen-runtime` (feature `dev-run`) so `run`, `build`, `check`, and the
-integration tests drive an app in process. The thin shape drops that and loads
-the shared `liblumen` over the C ABI instead:
+integration tests drive an app in process. It also compiles the runtime
+modules under `std/` in, which is what lets `lumenc run` start an app that
+declares one in `[dependencies]`: a static binary cannot open a module beside
+it, so the module has to be part of the binary. `dynamic-engine` turns the
+anchors off, because that shape shares one engine with the modules it opens.
+The thin shape drops the runtime and loads the shared `liblumen` over the C
+ABI instead:
 
 ```sh
 cargo build -p lumenc --no-default-features --features "runtime-parse,dlopen-run"

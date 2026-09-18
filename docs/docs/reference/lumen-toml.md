@@ -357,6 +357,8 @@ case is quieter: a runtime module a statically linked build neither compiled
 in nor can open is skipped with a single stderr line rather than the banner,
 because that is a property of how the binary was put together; the line
 points at `lumenc package --static`, which compiles the declared modules in.
+The modules Lumen ships are not in that case: `lumenc run` carries them, so
+an app declaring one runs with it during development on every platform.
 `lumenc bundle --static` says the same thing at build time, naming the
 declared modules. `lumenc web` refuses an app that declares a native library
 here, because a browser cannot load one; a candela package is script source,

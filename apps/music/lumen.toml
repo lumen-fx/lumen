@@ -6,8 +6,9 @@ id    = "com.lumen.examples.music"
 engine = "candela"
 
 # Audio is a runtime module: declaring it is what makes the audio_* script
-# functions exist at all. A statically built runtime compiles the module's
-# plugin in instead and banners that this entry cannot load there.
+# functions exist at all. A shipped Lumen opens it beside the engine; a build
+# that compiled it in answers the same declaration from the registry, which is
+# what `lumenc package --static` and the dev `lumenc` both do.
 [dependencies]
 lumen-audio = { bundled = true }
 
