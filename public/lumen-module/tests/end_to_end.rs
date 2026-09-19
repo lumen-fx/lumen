@@ -6,7 +6,7 @@
 //!
 //! A normal `cargo test` binary links the engine statically and must never
 //! load modules itself - that refusal is asserted in
-//! `crates/runtime/tests/modules_static.rs`. Everything here therefore runs
+//! `core/runtime/tests/modules_static.rs`. Everything here therefore runs
 //! through the subprocess.
 //!
 //! Builds go to a dedicated `target/module-fixture` subdirectory (the nested-

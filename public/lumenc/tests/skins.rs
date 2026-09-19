@@ -11,10 +11,10 @@
 //! zero warnings applying each embedded skin).
 
 use lumenc::layout_ir::{BorderStyleSpec, Element, LayoutIR, Rgba};
-use lumenc::parse_html;
-use lumenc::parser_css::{
+use lumenc::parse::css::{
     ColorSchemePreference, MediaContext, apply_css, apply_css_with_media, parse_css,
 };
+use lumenc::parse_html;
 use lumenc::spawn::SpawnIntoWorld;
 
 fn tile(cls: &str) -> LayoutIR {

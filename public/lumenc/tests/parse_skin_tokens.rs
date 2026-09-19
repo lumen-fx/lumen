@@ -4,12 +4,12 @@
 #![cfg(feature = "dev-run")]
 
 //! Inline-markup-attribute coverage for the skin-tokens CSS property batch
-//! (widget geometry, caret/text, scrollbar). `public/lumenc/src/parser_html.rs`
+//! (widget geometry, caret/text, scrollbar). `public/lumenc/src/parse/html.rs`
 //! keeps a keyword table separate from the stylesheet cascade
-//! (`lumen_ir::css::apply_declaration`, unit-tested in `crates/ir/src/css.rs`
+//! (`lumen_ir::css::apply_declaration`, unit-tested in `core/ir/src/css.rs`
 //! itself); a property landing in only one of the two tables works in a
 //! stylesheet and silently does nothing as an inline attribute. Each test
-//! here has a stylesheet-declaration counterpart in `crates/ir/src/css.rs`'s
+//! here has a stylesheet-declaration counterpart in `core/ir/src/css.rs`'s
 //! `skin_token_property_tests` module.
 
 use lumenc::layout_ir::LineHeightSpec;

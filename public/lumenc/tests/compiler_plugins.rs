@@ -204,7 +204,7 @@ fn a_version_source_opens_what_the_registry_resolved() {
         &common::lumen_package(
             "lumenc-plugin-fixture",
             "1.0.0",
-            lumenc::lpm::host_target(),
+            lumenc::package::lpm::host_target(),
             &package,
             spelled,
         ),

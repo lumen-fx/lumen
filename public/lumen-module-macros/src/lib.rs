@@ -17,7 +17,7 @@
 //!   `engine-dylib` feature and only off Windows, the two conditions under
 //!   which a module can be opened rather than linked.
 //!
-//! The names are the loader's contract, not the author's: `crates/modules`
+//! The names are the loader's contract, not the author's: `core/modules`
 //! builds the same strings from the name the app declares in `lumen.toml`,
 //! which is why the macro takes the name rather than reading the package's.
 //! The two spellings must agree, and a module declared under a name it was
@@ -139,7 +139,7 @@ pub fn lumen_module(input: TokenStream) -> TokenStream {
 }
 
 /// The declared name as a symbol suffix. Kept in step with the loader's own
-/// spelling in `crates/modules/src/lib.rs`, which builds the same names
+/// spelling in `core/modules/src/lib.rs`, which builds the same names
 /// from the `lumen.toml` key.
 fn symbol_suffix(name: &str) -> String {
     name.chars()

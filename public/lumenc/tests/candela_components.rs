@@ -212,7 +212,7 @@ fn the_windowless_assembly_builds_the_same_tree() {
 fn filled() -> lumen_ir::artifact::CompiledApp {
     let mut compiled = lumenc::compile_app(&fixture()).expect("the fixture compiles");
     let mut warnings = Vec::new();
-    lumenc::component_fill::fill(
+    lumenc::web::component_fill::fill(
         &mut compiled,
         "main",
         &lumen_html::contract::Seed::new(),

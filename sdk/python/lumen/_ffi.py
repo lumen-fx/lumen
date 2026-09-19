@@ -608,7 +608,7 @@ def _candidate_paths() -> list[Path]:
             candidates.append(cwd / "target" / profile / name)
 
     # Walk up from this file looking for the workspace root (marked by
-    # a top-level Cargo.toml with a [workspace] table listing "crates/*").
+    # a top-level Cargo.toml with a [workspace] table listing "core/script/*").
     # Bounded depth so a misplaced copy of the SDK can't walk all the way
     # to `/`.
     here = Path(__file__).resolve()
@@ -619,7 +619,7 @@ def _candidate_paths() -> list[Path]:
                 text = cargo_toml.read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 continue
-            if "[workspace]" in text and "crates/*" in text:
+            if "[workspace]" in text and "core/script/*" in text:
                 for profile in ("debug", "release"):
                     for name in names:
                         candidates.append(ancestor / "target" / profile / name)

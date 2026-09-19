@@ -1,4 +1,4 @@
-// Names `lumenc::parser_html::KNOWN_TAGS` and `lumenc::parse_css`, both of
+// Names `lumenc::parse::html::KNOWN_TAGS` and `lumenc::parse_css`, both of
 // which a parser-free (`--no-default-features`) build drops.
 #![cfg(feature = "runtime-parse")]
 
@@ -7,7 +7,7 @@
 //!
 //! The emitter cannot see either of these. One is the set of per-tag
 //! defaults the markup parser bakes into `Attributes` instead of writing
-//! as CSS, which crates/web/src/reset.css copies. The other is the skins
+//! as CSS, which web/src/reset.css copies. The other is the skins
 //! this crate parses, which are the largest body of Lumen CSS there is and
 //! the first thing a missing property rewrite would show up in.
 
@@ -19,8 +19,8 @@ use lumen_html::html_tag_for;
 use lumen_html::style::{Emission, UNKNOWN_PROPERTY, WebDecl, rewrite_property};
 use lumen_ir::css::STYLE_PROPERTIES;
 use lumen_web::{RESET_CSS, rules_css};
+use lumenc::parse::html::KNOWN_TAGS;
 use lumenc::parse_css;
-use lumenc::parser_html::KNOWN_TAGS;
 
 /// Tags with nothing to reset. A `<tile>` and a `<div>` are plain boxes
 /// with no default of their own, and an `<if>` takes the same direction
@@ -29,7 +29,7 @@ const NO_DEFAULTS: &[&str] = &["tile", "div", "if"];
 
 fn skins() -> Vec<(String, String)> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../crates/runtime/src/skins")
+        .join("../../core/runtime/src/skins")
         .canonicalize()
         .expect("the skins directory is where it was");
     let mut found: Vec<(String, String)> = fs::read_dir(&dir)

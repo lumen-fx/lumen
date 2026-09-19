@@ -4,11 +4,11 @@
 //! attaches the scroll components, `<root>` fills the viewport, and so on. Attributes cover sizing, spacing, paint,
 //! typography, scrolling, interaction, and binding.
 //!
-//! The accepted tags live in `KNOWN_TAGS` in [`parser_html`], with the per-tag attribute handling beside it; the
-//! reader-facing lists are the "Tags and attributes" and "CSS" reference pages in `docs/docs/reference/`.
+//! The accepted tags live in `KNOWN_TAGS` in [`parse::html`], with the per-tag attribute handling beside it; the
+//! reader-facing lists are the "Tags and attributes" and "CSS" reference pages in `docs/src/reference/`.
 
-// `deny` (not `forbid`) so the single audited dlopen shim in `loader`, the
-// link-not-embed launcher's only unsafe, can opt in via `#[allow]`. Every
+// `deny` (not `forbid`) so the single audited dlopen shim in `link::loader`,
+// the link-not-embed launcher's only unsafe, can opt in via `#[allow]`. Every
 // other module stays unsafe-free and trips the deny.
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
@@ -20,124 +20,33 @@
 #[cfg(all(feature = "dynamic-engine", not(windows)))]
 use lumen_engine as _;
 
-/// `lumenc build` - parse an app once and emit an AOT [`artifact`].
-/// Requires the source parser (`runtime-parse`) AND the runtime (`dev-run`):
-/// it drives `compile_app` + `app_kind`, both of which live in `lumen-runtime`.
-#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-pub mod build_cli;
-/// `lumenc bundle` - pack an app dir into a `.lpak` archive. Uses lumen-assets
-/// (which pulls vello), so it is gated behind the default-on `bundle` feature.
-#[cfg(feature = "bundle")]
-pub mod bundle_cli;
+/// CLI subcommand handlers: `build`, `bundle`, `add`/`remove`/`fetch`/`update`,
+/// `i18n`, the MCP inspection commands, the static signal lint, and the
+/// `lumenc new` scaffolder.
+pub mod cli;
 /// In-process source -> LMNA compile for the link-not-embed launcher. Uses only
 /// the parser front-end + CSS cascade + artifact codec (no `lumen-runtime`), so
 /// a `dlopen-run` launcher compiles source without static-linking the runtime.
 /// Gated with the parser stack.
 #[cfg(feature = "runtime-parse")]
 pub mod compile;
-/// Filling a component that has to run while the site is built, so its body is
-/// in the page a crawler reads. Needs what `web_cli` needs.
-#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "web"))]
-pub mod component_fill;
-/// `lumenc add` / `remove` / `fetch` / `update` - the app's registry
-/// dependencies from the command line. Gated with the registry client it
-/// drives and the `lumen.toml` reader it edits.
-#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-pub mod deps_cli;
-/// Markup formatter - requires `roxmltree`, gated with the parser stack.
-#[cfg(feature = "runtime-parse")]
-pub mod formatter;
-/// Fragment instantiation, gated with the parser stack that produces the
-/// use sites it resolves.
-#[cfg(feature = "runtime-parse")]
-pub mod fragments;
-/// `lumenc i18n extract` - scan an app's sources for translatable keys and
-/// write its catalogue. Gated with `dev-run`: the source language it defaults
-/// to is `[app] fallback_locale`, which it reads through the runtime's
-/// `lumen.toml`, and a thin build has no runtime to read it with.
-#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-pub mod i18n_cli;
-/// `lumenc package --static` - link one executable out of the per-target link
-/// kit a release publishes, with the app's declared runtime modules compiled
-/// in. Gated with `package_cli`, whose folder assembly it is one arm of.
-#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "package"))]
-pub mod link_kit;
-/// `lumenc link-kit emit` - write the per-target link kit a release ships,
-/// out of a recorded link and the files that link read. A release step rather
-/// than a command anyone runs by hand, so it is absent from `lumenc --help`.
-/// Gated with `package_cli`, whose target table names the release assets.
-#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "package"))]
-pub mod link_kit_cli;
-/// Static signal lint - walks the source parser (`runtime-parse`) and reads
-/// `lumen.toml` config (`lumen-runtime`, `dev-run`).
-#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-pub mod lint_signals_cli;
-/// Ahead-of-time extraction of `lmn!` markup blocks from candela scripts, so
-/// a shipped app carries the fragments they name and parses no markup at run
-/// time. Gated with the parser stack it compiles bodies through.
-#[cfg(feature = "runtime-parse")]
-pub mod lmn;
-/// dlopen loader for the link-not-embed launcher: discover + open the shared
-/// liblumen, verify its ABI, and drive a prebuilt LMNA app across the C-ABI.
-/// The crate's only `unsafe`: dynamic symbol resolution and FFI calls, audited
-/// against the C-ABI contract in the root `lumen` crate.
-#[cfg(feature = "dlopen-run")]
-#[allow(unsafe_code)]
-pub mod loader;
-/// `lpm`, the registry client. A `version` source in `[dependencies]` or
-/// `[[plugins]]` names a registry package, and this is what asks `lpm` to
-/// resolve, download, and lock it. Gated with the shape that compiles an app
-/// from source and can fetch: a compiler that only loads a prebuilt artifact
-/// resolves nothing.
-#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-pub mod lpm;
-/// MCP CLI handlers - read `lumen.toml` config (`dev-run`) and defer the
-/// `--signals` lint to [`lint_signals_cli`] (`runtime-parse`).
-#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-pub mod mcp_cli;
-/// `lumenc package` - assemble a shippable app folder from the launcher stub,
-/// the app's compiled artifact, the shared runtime library, and the app's own
-/// files. Gated with the compile path it uses (`runtime-parse` + `dev-run`)
-/// and with `package`, which carries the release-channel fetch `--target`
-/// needs.
-#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "package"))]
-pub mod package_cli;
-pub mod parser_css;
-/// Markup (`.lmn`) parser - the `roxmltree`-backed front-end, dropped from
-/// parser-free runtime builds via the `runtime-parse` feature.
-#[cfg(feature = "runtime-parse")]
-pub mod parser_html;
+/// Linking a per-target link kit into one executable (`lumenc package
+/// --static`), writing the link kit a release ships, and the dlopen loader
+/// the link-not-embed launcher drives across the C-ABI.
+pub mod link;
+/// Assembling a shippable app (`lumenc package`), the registry client
+/// (`lpm`) that resolves what it names, and the release channel both draw
+/// their files from.
+pub mod package;
+/// The markup + CSS front end: parse `.lmn` / `.css` from source, resolve
+/// `<include>` / `@import`, fill fragments, and format markup back to text.
+pub mod parse;
 /// The compiler side of the injected compiler-plugin boundary: builds an
 /// app's `[[plugins]]` chain over the `lumenc-plugin` loader.
 pub mod plugin_host;
-/// Which published release this toolchain draws its files from. Every download
-/// location and cache directory is keyed by the answer.
-pub mod release;
-/// `<include>` / `@import` resolution - parser-side only.
-#[cfg(feature = "runtime-parse")]
-pub mod resolve;
-pub mod scaffold;
-/// The compiler's implementation of the runtime's injected parser boundary.
-/// Needs the source parser (`runtime-parse`) AND the runtime's `SourceParser`
-/// trait (`dev-run`).
-#[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-pub mod source_parser;
-/// The daily "a newer release exists" notice an installed toolchain prints.
-pub mod update_check;
-/// `lumenc web` - emit an app as a static site. Compiles the app the way
-/// `build` does, so it needs the same parser (`runtime-parse`) and runtime
-/// (`dev-run`), plus the emitter behind the default-on `web` feature.
-#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "web"))]
-pub mod web_cli;
-/// The loopback HTTP server behind `lumenc web --serve`. A browser needs a
-/// real origin and real content types to load a site; this is that, for one
-/// directory on one machine.
-#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "web"))]
-pub mod web_serve;
-/// `lumenc web --render ssr --serve` - the server's pages come from a render
-/// of the app for the request that asked, through [`lumen_ssr`].
-#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "web"))]
-pub mod web_ssr;
+/// `lumenc web` - emit an app as a static site, serve it locally, and render
+/// it per-request over SSR.
+pub mod web;
 
 // The runtime core - the winit/ECS run loop, `RunOptions`/`RunError`,
 // `build_app`, hot reload, the default plugin stack, file-based pages,
@@ -170,23 +79,23 @@ pub use layout_ir::{
 pub use lumen_runtime::{
     AppHook, CheckReport, HeadlessOptions, RunError, RunOptions, SourceParser, WindowSetup,
 };
-pub use parser_css::{CssWarning, Stylesheet, apply_css, parse_css};
+pub use parse::css::{CssWarning, Stylesheet, apply_css, parse_css};
 #[cfg(feature = "runtime-parse")]
-pub use parser_html::{
+pub use parse::html::{
     ParsedMarkup, collect_fragments, collect_script_refs, parse_html, parse_html_with_loader,
     parse_markup,
 };
 #[cfg(feature = "runtime-parse")]
-pub use resolve::{FileLoader, FsLoader};
+pub use parse::resolve::{FileLoader, FsLoader};
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-pub use source_parser::LumencParser;
+pub use parse::source_parser::LumencParser;
 
 /// The compiler's default markup/CSS front-end, boxed for injection into
 /// [`RunOptions::parser`]. The SDKs and the C-ABI hand this to the runtime so a
 /// from-source run can re-parse (`lumen-runtime` links no parser itself).
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
 pub fn default_parser() -> Box<dyn SourceParser> {
-    Box::new(source_parser::LumencParser)
+    Box::new(parse::source_parser::LumencParser)
 }
 
 /// Inject the compiler's default [`SourceParser`] into `opts` when the caller
@@ -250,26 +159,28 @@ pub fn with_default_compiler_plugins(opts: RunOptions) -> Result<RunOptions, Run
 /// requirements cannot be read out of a file nobody can read, and `lumenc
 /// fetch` has no later step to report it from.
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-pub fn registry_requirements(dir: &std::path::Path) -> Result<Vec<lpm::Requirement>, String> {
+pub fn registry_requirements(
+    dir: &std::path::Path,
+) -> Result<Vec<package::lpm::Requirement>, String> {
     use lumen_runtime::modules::ModuleSource;
 
     let cfg = LumenToml::load_or_default(dir).map_err(|e| format!("lumen.toml: {e}"))?;
     let mut reqs = Vec::new();
     for dep in &cfg.dependencies.0 {
         if let ModuleSource::Version(req) = &dep.source {
-            reqs.push(lpm::Requirement {
+            reqs.push(package::lpm::Requirement {
                 name: dep.name.clone(),
                 req: req.clone(),
-                table: lpm::Table::Dependencies,
+                table: package::lpm::Table::Dependencies,
             });
         }
     }
     for cfg in plugin_host::read_plugin_cfgs(dir)? {
         if let lumenc_plugin::PluginSource::Version(req) = &cfg.source {
-            reqs.push(lpm::Requirement {
+            reqs.push(package::lpm::Requirement {
                 name: cfg.name.clone(),
                 req: req.clone(),
-                table: lpm::Table::Plugins,
+                table: package::lpm::Table::Plugins,
             });
         }
     }
@@ -279,12 +190,12 @@ pub fn registry_requirements(dir: &std::path::Path) -> Result<Vec<lpm::Requireme
 /// Resolve everything the app in `dir` names in the registry, for this
 /// machine's platform. `lumenc package --target` asks for another one.
 #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-pub fn registry_packages(dir: &std::path::Path) -> Result<lpm::Resolved, String> {
-    lpm::resolve(
+pub fn registry_packages(dir: &std::path::Path) -> Result<package::lpm::Resolved, String> {
+    package::lpm::resolve(
         dir,
-        lpm::host_target(),
+        package::lpm::host_target(),
         &registry_requirements(dir)?,
-        lpm::Mode::of_invocation(),
+        package::lpm::Mode::of_invocation(),
     )
 }
 
@@ -357,7 +268,7 @@ pub fn check_app(dir: &std::path::Path) -> Result<CheckReport, RunError> {
         .map_err(RunError::Plugin)?;
     lumen_runtime::check_app(
         dir,
-        &source_parser::LumencParser,
+        &parse::source_parser::LumencParser,
         &*plugins,
         &resolved.candela_roots,
     )
@@ -382,7 +293,7 @@ pub fn compile_app_with_skin(
         .map_err(RunError::Plugin)?;
     lumen_runtime::compile_app_with_skin(
         dir,
-        &source_parser::LumencParser,
+        &parse::source_parser::LumencParser,
         &*plugins,
         skin,
         &resolved.candela_roots,

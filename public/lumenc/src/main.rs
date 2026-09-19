@@ -1,12 +1,12 @@
 //! `lumenc` Lumen AOT compiler and runner CLI.
 //!
-//! Subcommands dispatch into either `lumenc` lib functions or `lumenc::mcp_cli` handlers.
+//! Subcommands dispatch into either `lumenc` lib functions or `lumenc::cli::mcp` handlers.
 //! `--help` prints [`USAGE`]; `--version` prints the `CARGO_PKG_VERSION`.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use lumenc::update_check;
+use lumenc::package::update_check;
 
 // Link-line anchors for the first-party runtime modules. A cargo dependency
 // nobody names puts nothing on the link line, and these crates exist for what
@@ -66,7 +66,7 @@ fn take_offline(cmd: &str, mut args: Vec<String>) -> Vec<String> {
     }
     if let Some(at) = args.iter().position(|a| a == "--offline") {
         args.remove(at);
-        lumenc::lpm::set_offline(true);
+        lumenc::package::lpm::set_offline(true);
     }
     args
 }
@@ -88,63 +88,63 @@ fn dispatch(cmd: &str, args: Vec<String>) -> ExitCode {
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
         "check" => cmd_check(args),
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-        "build" => lumenc::build_cli::cmd_build(args),
+        "build" => lumenc::cli::build::cmd_build(args),
         // Registry dependencies: two that edit `lumen.toml` and two that
         // drive `lpm`. Gated with the client they use.
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-        "add" => lumenc::deps_cli::cmd_add(args),
+        "add" => lumenc::cli::deps::cmd_add(args),
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-        "remove" => lumenc::deps_cli::cmd_remove(args),
+        "remove" => lumenc::cli::deps::cmd_remove(args),
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-        "fetch" => lumenc::deps_cli::cmd_fetch(args),
+        "fetch" => lumenc::cli::deps::cmd_fetch(args),
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-        "update" => lumenc::deps_cli::cmd_update(args),
+        "update" => lumenc::cli::deps::cmd_update(args),
         "new" => cmd_new(args),
         #[cfg(feature = "runtime-parse")]
         "fmt" => cmd_fmt(args),
         // The MCP-driven inspection / automation subcommands read `lumen.toml`
         // and defer to the runtime, so they are gated with `dev-run`.
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-        "snapshot" => lumenc::mcp_cli::cmd_snapshot(args),
+        "snapshot" => lumenc::cli::mcp::cmd_snapshot(args),
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-        "find" => lumenc::mcp_cli::cmd_find(args),
+        "find" => lumenc::cli::mcp::cmd_find(args),
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-        "element-at" => lumenc::mcp_cli::cmd_element_at(args),
+        "element-at" => lumenc::cli::mcp::cmd_element_at(args),
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-        "click" => lumenc::mcp_cli::cmd_click(args),
+        "click" => lumenc::cli::mcp::cmd_click(args),
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-        "type" => lumenc::mcp_cli::cmd_type(args),
+        "type" => lumenc::cli::mcp::cmd_type(args),
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-        "key" => lumenc::mcp_cli::cmd_key(args),
+        "key" => lumenc::cli::mcp::cmd_key(args),
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-        "scroll" => lumenc::mcp_cli::cmd_scroll(args),
+        "scroll" => lumenc::cli::mcp::cmd_scroll(args),
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-        "lint" => lumenc::mcp_cli::cmd_lint(args),
+        "lint" => lumenc::cli::mcp::cmd_lint(args),
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-        "diff" => lumenc::mcp_cli::cmd_diff(args),
+        "diff" => lumenc::cli::mcp::cmd_diff(args),
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-        "screenshot" => lumenc::mcp_cli::cmd_screenshot(args),
+        "screenshot" => lumenc::cli::mcp::cmd_screenshot(args),
         // `web` compiles the app in-process the way `build` does, then emits
         // it as a site, so it carries the same parser + runtime gates plus
         // its own.
         #[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "web"))]
-        "web" => lumenc::web_cli::cmd_web(args),
+        "web" => lumenc::web::cli::cmd_web(args),
         #[cfg(feature = "bundle")]
-        "bundle" => lumenc::bundle_cli::cmd_bundle(args),
+        "bundle" => lumenc::cli::bundle::cmd_bundle(args),
         // `package` compiles the app in-process, so it needs the same parser +
         // runtime `build` does, plus the release-channel fetch behind its own
         // feature.
         #[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "package"))]
-        "package" => lumenc::package_cli::cmd_package(args),
+        "package" => lumenc::package::cli::cmd_package(args),
         // A step of the release workflow, run on the machine that just built
         // the toolchain. Deliberately absent from USAGE and from the shell
         // completions: it reads a link record no ordinary checkout has.
         #[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "package"))]
-        "link-kit" => lumenc::link_kit_cli::cmd_link_kit(args),
+        "link-kit" => lumenc::link::kit_cli::cmd_link_kit(args),
         // Extraction reads the app's declared source language out of
         // lumen.toml, so it needs the runtime the config type lives in.
         #[cfg(all(feature = "runtime-parse", feature = "dev-run"))]
-        "i18n" => lumenc::i18n_cli::cmd_i18n(args),
+        "i18n" => lumenc::cli::i18n::cmd_i18n(args),
         // Ungated: the completion scripts are static text, so every build
         // shape can print them.
         "completions" => cmd_completions(args),
@@ -535,7 +535,7 @@ for those.";
     } else {
         None
     };
-    match lumenc::loader::run_via_dlopen(&bytes, &dir_path, headless_ticks) {
+    match lumenc::link::loader::run_via_dlopen(&bytes, &dir_path, headless_ticks) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("lumenc run: {e}");
@@ -723,7 +723,7 @@ USAGE:
     };
     let p = PathBuf::from(&path);
     if check_only {
-        match lumenc::formatter::check_file(&p) {
+        match lumenc::parse::formatter::check_file(&p) {
             Ok(true) => ExitCode::SUCCESS,
             Ok(false) => {
                 eprintln!("lumenc fmt: {path} is not formatted");
@@ -735,7 +735,7 @@ USAGE:
             }
         }
     } else {
-        match lumenc::formatter::format_file(&p) {
+        match lumenc::parse::formatter::format_file(&p) {
             Ok(true) => {
                 println!("lumenc fmt: rewrote {path}");
                 ExitCode::SUCCESS
@@ -790,7 +790,7 @@ write lumen.lock. Exits non-zero on the first failure.
 
 /// Handles `lumenc new <name> [template]` and `lumenc new --list`.
 /// Scaffolds a directory `<name>` from one of the gallery templates the
-/// toolchain ships (see [`lumenc::scaffold`]); with no template argument it
+/// toolchain ships (see [`lumenc::cli::scaffold`]); with no template argument it
 /// scaffolds `blank`. `--list` reads the gallery alone, so it answers on a
 /// machine whose template files are missing.
 fn cmd_new(args: impl Iterator<Item = String>) -> ExitCode {
@@ -818,12 +818,12 @@ template demonstrates.
     }
     if name == "--list" || name == "-l" {
         println!("Available templates:\n");
-        let width = lumenc::scaffold::TEMPLATES
+        let width = lumenc::cli::scaffold::TEMPLATES
             .iter()
             .map(|t| t.name.len())
             .max()
             .unwrap_or(0);
-        for t in lumenc::scaffold::TEMPLATES {
+        for t in lumenc::cli::scaffold::TEMPLATES {
             println!("    {:width$}  {}", t.name, t.description, width = width);
         }
         println!("\nScaffold one with: lumenc new <name> [template]");
@@ -835,17 +835,17 @@ template demonstrates.
         eprintln!("lumenc new: {name} already exists; refusing to overwrite");
         return ExitCode::FAILURE;
     }
-    if lumenc::scaffold::find(&template).is_none() {
+    if lumenc::cli::scaffold::find(&template).is_none() {
         eprintln!(
             "lumenc new: unknown template '{template}' (available: {})",
-            lumenc::scaffold::template_names(),
+            lumenc::cli::scaffold::template_names(),
         );
         return ExitCode::from(2);
     }
     // The files come off disk, from the copy of the gallery the toolchain
     // ships. Nothing is created until they have been found, so a toolchain
     // without them leaves no half-written directory behind.
-    if let Err(e) = lumenc::scaffold::write_template(&template, &dir) {
+    if let Err(e) = lumenc::cli::scaffold::write_template(&template, &dir) {
         eprintln!("lumenc new: {e}");
         return ExitCode::FAILURE;
     }

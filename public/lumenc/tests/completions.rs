@@ -15,7 +15,7 @@
 use std::collections::BTreeSet;
 use std::process::Command;
 
-use lumenc::scaffold::TEMPLATES;
+use lumenc::cli::scaffold::TEMPLATES;
 
 const BASH: &str = include_str!("../completions/lumenc.bash");
 const ZSH: &str = include_str!("../completions/_lumenc");

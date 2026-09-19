@@ -16,7 +16,7 @@
 //! so a line captured after the fact names files that no longer exist. The
 //! only moment they can be copied is while the link is running.
 //!
-//! `crates/modules/src/link_kit.rs` documents the record's fields and holds
+//! `core/modules/src/link_kit.rs` documents the record's fields and holds
 //! the reader; `lumenc link-kit emit` turns a record plus a stage directory
 //! into a shippable kit.
 

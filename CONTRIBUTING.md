@@ -26,7 +26,7 @@ green on its own; comment `recheck` if it does not.
 The toolchain is pinned in `rust-toolchain.toml`; rustup picks it up on its
 own. On Linux, install the system libraries the workspace links against with
 `.github/scripts/linux-deps.sh`. See
-[docs/docs/contributing/building-lumen.md](docs/docs/contributing/building-lumen.md)
+[docs/src/contributing/building-lumen.md](docs/src/contributing/building-lumen.md)
 for the full setup.
 
 ## Gates
@@ -62,7 +62,7 @@ A fifth gate, also Linux-only, checks that the engine dylib
 python3 tools/verify-engine-crate-graph.py
 ```
 
-See [Gates](docs/docs/contributing/building-lumen.md#gates) for what a
+See [Gates](docs/src/contributing/building-lumen.md#gates) for what a
 failure here means and how to fix it.
 
 Tests that need a GPU or a display probe for one and skip themselves with a
@@ -119,7 +119,7 @@ a template's markup, CSS, script, or README goes to that repository, and
 reaches users with the next release.
 
 What lives here is the gallery: which templates `lumenc new` offers, in which
-order, and the one-line description of each (`public/lumenc/src/scaffold.rs`).
+order, and the one-line description of each (`public/lumenc/src/cli/scaffold.rs`).
 Adding a template means a new repository upstream and an entry here.
 
 Run `tools/fetch-templates.sh` to download the templates for a local test run.

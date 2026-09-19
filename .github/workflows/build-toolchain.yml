@@ -15,16 +15,16 @@ name: build-toolchain
 #   - install.sh requires a top-level bin/ directory in the archive (its
 #     unpack step fails otherwise) and looks up the asset by the exact name
 #     lumen-<target>.tar.gz / lumen-<target>.msi.
-#   - public/lumenc/src/loader.rs dlopens liblumen from next to its own executable
+#   - public/lumenc/src/link/loader.rs dlopens liblumen from next to its own executable
 #     (or an LUMEN_LIB_DIR override, or the platform loader's default
 #     search path) - never from a sibling lib/ directory. So the shared
 #     library goes in bin/, next to lumenc, or a normal `~/.lumen` install
 #     would put a lumenc on PATH that cannot find its own runtime.
-#   - public/lumenc/src/package_cli.rs looks for the launcher stub in the same place
+#   - public/lumenc/src/package/package.rs looks for the launcher stub in the same place
 #     it looks for liblumen, so `lumenc package` on an installed toolchain
 #     finds it without being told where it is. An archive without the stub
 #     leaves that command with nothing to build an app executable from.
-#   - public/lumenc/src/scaffold.rs reads the `lumenc new` templates from a
+#   - public/lumenc/src/cli/scaffold.rs reads the `lumenc new` templates from a
 #     templates/ directory beside the executable. The templates are not in
 #     this repository at all: each is its own repository under lumen-fx, and
 #     tools/fetch-templates.sh downloads the copy that ships here.
@@ -49,7 +49,7 @@ name: build-toolchain
 # holding the browser runtime `lumenc web` copies beside the pages it emits.
 # WebAssembly is the same everywhere, so it is built once and downloaded by
 # every `lumenc` that emits a site, into a cache keyed on the version rather
-# than on a target. public/lumenc/src/package_cli.rs looks for it under that
+# than on a target. public/lumenc/src/package/package.rs looks for it under that
 # exact name, so a publish without it leaves `lumenc web` with nothing to give
 # a page to load.
 #
@@ -364,7 +364,7 @@ jobs:
           cp -R "target/$triple/release/libs" dist/bin/libs
           # The app templates, beside lumenc for the same reason: `lumenc new`
           # reads them from next to its own executable
-          # (public/lumenc/src/scaffold.rs), so an archive without them ships a
+          # (public/lumenc/src/cli/scaffold.rs), so an archive without them ships a
           # compiler that can scaffold nothing.
           cp -R target/templates dist/bin/templates
           # macOS records the path a dylib was written to, in the dylib and in
@@ -686,7 +686,7 @@ jobs:
   #
   # The two files sit at the root of the archive. Nothing unpacks this one into
   # an install prefix: `lumenc` picks the members it wants out by name and
-  # ignores their directories (public/lumenc/src/package_cli.rs), so a flat
+  # ignores their directories (public/lumenc/src/package/package.rs), so a flat
   # archive is also what someone unpacking it by hand for `--lib-dir` ends up
   # wanting.
   web:

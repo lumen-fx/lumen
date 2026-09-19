@@ -9,6 +9,9 @@
 
 [project]
 
+# The site source lives in docs/src; zensical defaults this to "docs".
+docs_dir = "src"
+
 site_name = "Lumen Docs"
 site_description = "Documentation for Lumen, a markup-first UI framework for native desktop apps."
 site_author = "Lumen FX"
@@ -16,7 +19,7 @@ site_url = "https://docs.lumenfx.dev"
 
 repo_url = "https://github.com/lumen-fx/lumen"
 repo_name = "lumen-fx/lumen"
-edit_uri = "edit/main/docs/docs/"
+edit_uri = "edit/main/docs/src/"
 
 copyright = """
 Copyright &copy; 2026 Lumen FX &middot; Lumen is MPL-2.0 licensed

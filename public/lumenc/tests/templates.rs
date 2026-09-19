@@ -14,7 +14,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use lumenc::scaffold::{self, TEMPLATES};
+use lumenc::cli::scaffold::{self, TEMPLATES};
 
 /// The payload directory, or nothing when it has not been downloaded.
 fn payload() -> Option<PathBuf> {

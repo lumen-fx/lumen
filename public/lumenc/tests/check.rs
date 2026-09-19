@@ -62,7 +62,7 @@ fn candela_app_checks_clean() {
 /// (`tools/fetch-templates.sh`), so a checkout that has not run the script has
 /// nothing for these cases to read. CI fetches before it tests.
 fn templates_present() -> bool {
-    match lumenc::scaffold::payload_dir() {
+    match lumenc::cli::scaffold::payload_dir() {
         Ok(_) => true,
         Err(why) => {
             eprintln!("skipping: {why}");
@@ -81,14 +81,14 @@ fn every_template_checks_clean() {
     if !templates_present() {
         return;
     }
-    for template in lumenc::scaffold::TEMPLATES {
+    for template in lumenc::cli::scaffold::TEMPLATES {
         let dir = std::env::temp_dir().join(format!(
             "lumenc_template_check_{}_{}",
             template.name,
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        lumenc::scaffold::write_template(template.name, &dir)
+        lumenc::cli::scaffold::write_template(template.name, &dir)
             .unwrap_or_else(|e| panic!("scaffolding `{}`: {e}", template.name));
 
         let report = lumenc::check_app(&dir)
@@ -124,8 +124,8 @@ fn every_candela_template_builds_an_image_the_vm_accepts() {
     if !templates_present() {
         return;
     }
-    for template in lumenc::scaffold::TEMPLATES {
-        let script = lumenc::scaffold::template_dir(template.name)
+    for template in lumenc::cli::scaffold::TEMPLATES {
+        let script = lumenc::cli::scaffold::template_dir(template.name)
             .unwrap_or_else(|e| panic!("reading `{}`: {e}", template.name))
             .join("src")
             .join("main.cdl");

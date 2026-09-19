@@ -27,9 +27,9 @@ feature activation from `cargo metadata` reflects the whole workspace's
 default members unified together, not one build's package selection.
 Passing `--features` at the workspace root silently pulls in unrelated
 members; verified by hand while writing this script (`cargo metadata
---manifest-path crates/lumenc/Cargo.toml --features dynamic-engine` showed
+--manifest-path public/lumenc/Cargo.toml --features dynamic-engine` showed
 `lumenc`'s own `dlopen-run` feature active, though nothing in lumenc's tree
-requests it, because `crates/launcher` depends on `lumenc` with that
+requests it, because `core/launcher` depends on `lumenc` with that
 feature and metadata unions every member's request together). `cargo tree
 -p <pkg>` resolves features the same way `cargo build -p <pkg>` would,
 scoped to exactly the packages named, so that is the tool this script
@@ -96,7 +96,7 @@ nothing this script does leaves a file behind for git to notice, and root's
 own `Cargo.lock` is read, never written.
 
 `lumen-script-candela` depends on `candela-lang` and `candela-vm` at one
-pinned `candela` commit, named in `crates/script/candela/Cargo.toml`, so a
+pinned `candela` commit, named in `core/script/candela/Cargo.toml`, so a
 push to that repository moves neither side until the pin does. Both sides
 read the same pin, and moving it is an ordinary edit here: the new `rev`
 and `version` on both dependency lines, then `cargo update -p candela-lang
@@ -375,8 +375,8 @@ def compare(
                 f"root's own (see the module docstring), so this means "
                 f"lumen-dylib's own manifest tree genuinely cannot use the "
                 f"version root pins, not that either lockfile is merely stale. "
-                f"Check whether a Cargo.toml in crates/ or {ENGINE_MANIFEST} now "
-                f"requires a range the other side cannot satisfy, and reconcile "
+                f"Check whether a workspace member's Cargo.toml or {ENGINE_MANIFEST} "
+                f"now requires a range the other side cannot satisfy, and reconcile "
                 f"the requirement, not just the pin."
             )
             continue

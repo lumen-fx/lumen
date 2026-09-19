@@ -191,7 +191,7 @@ fn every_fixture_app_runs_clean() {
 /// nothing to scaffold and this says so. CI fetches before it tests.
 #[test]
 fn every_template_runs_clean() {
-    if let Err(why) = lumenc::scaffold::payload_dir() {
+    if let Err(why) = lumenc::cli::scaffold::payload_dir() {
         eprintln!("skipping: {why}");
         return;
     }
@@ -200,7 +200,7 @@ fn every_template_runs_clean() {
     std::fs::create_dir_all(&workdir).expect("create the scaffold workdir");
 
     let mut failures = Vec::new();
-    for template in lumenc::scaffold::TEMPLATES {
+    for template in lumenc::cli::scaffold::TEMPLATES {
         let out = Command::new(env!("CARGO_BIN_EXE_lumenc"))
             .current_dir(&workdir)
             .args(["new", template.name, template.name])

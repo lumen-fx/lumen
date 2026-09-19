@@ -1,8 +1,10 @@
 # The engine crate lives at the workspace root: `src/` builds `liblumen`, the
 # shared library every app executable, launcher stub, and SDK loads. Internal
-# crates sit under `crates/`, grouped by the role it plays; the author-facing
-# crates external code depends on (the compiler, the plugin and module SDKs,
-# the engine carrier) sit under `public/`; first-party runtime modules under
+# crates sit under `core/` (the engine's own subsystems, including `core/script/*`),
+# `web/` (the browser and SSR targets), `backends/`, `os/`, `dev/`, and
+# `capabilities/`, each grouped by the role it plays; the author-facing crates
+# external code depends on (the compiler, the plugin and module SDKs, the
+# engine carrier) sit under `public/`; first-party runtime modules under
 # `std/`; app SDKs under `sdk/`.
 [package]
 name = "lumen"
@@ -114,39 +116,44 @@ dynamic-engine = ["dep:lumen-dylib"]
 
 [workspace]
 resolver = "2"
-# The grouped directories glob cleanly. The flat spine is listed crate by
-# crate, because a `crates/*` glob would also match the group directories,
-# which hold crates rather than being one.
+# The grouped directories glob cleanly. `core` and `web` are each a package in
+# their own right, so their subdirectories are listed crate by crate rather
+# than through a `core/*` / `web/*` glob: that glob would also try to match
+# `core/script` (a bare directory of crates, not a crate itself) and each
+# package's own `src`/`tests` directories. `core/script/*` globs cleanly one
+# level deeper, same as the other grouped directories.
 members = [
-    "crates/assets",
-    "crates/capabilities/*",
-    "crates/capability",
-    "crates/capability-macros",
-    "crates/core",
-    "crates/html",
-    "crates/i18n",
-    "crates/input",
-    "crates/ir",
-    "crates/launcher",
-    "crates/mcp",
-    "crates/module-registry",
-    "crates/modules",
-    "crates/plugin-abi",
-    "crates/portable",
-    "crates/prerender",
-    "crates/primitives",
-    "crates/runtime",
-    "crates/scene",
-    "crates/ssr",
-    "crates/text",
-    "crates/web",
-    "crates/web-runtime",
-    "crates/widget",
-    "crates/widget-macros",
-    "crates/backends/*",
-    "crates/dev/*",
-    "crates/os/*",
-    "crates/script/*",
+    "capabilities/*",
+    "core",
+    "core/assets",
+    "core/capability",
+    "core/capability-macros",
+    "core/i18n",
+    "core/input",
+    "core/ir",
+    "core/launcher",
+    "core/mcp",
+    "core/module-registry",
+    "core/modules",
+    "core/plugin-abi",
+    "core/primitives",
+    "core/runtime",
+    "core/scene",
+    "core/script/*",
+    "core/text",
+    "core/widget",
+    "core/widget-macros",
+    "web",
+    "web/dom",
+    "web/html",
+    "web/http",
+    "web/portable",
+    "web/prerender",
+    "web/runtime",
+    "web/ssr",
+    "backends/*",
+    "dev/*",
+    "os/*",
     "std/*",
     "sdk/rust",
     "public/lumen-module",
@@ -204,96 +211,96 @@ categories = ["gui"]
 # reverse works, so a member that does want the defaults says
 # `default-features = true` and gets them.
 lumen = { path = "." }
-lumen-a11y-accesskit = { path = "crates/backends/a11y-accesskit" }
+lumen-a11y-accesskit = { path = "backends/a11y-accesskit" }
 # The first-party runtime modules. Defaults off here, and on in each module's
 # own manifest: built on its own a module is the shipping shared library and
 # takes the engine dylib with it, while a binary that links one in must not.
 lumen-archive = { path = "std/archive", default-features = false }
-lumen-assets = { path = "crates/assets" }
-lumen-async-tokio = { path = "crates/backends/async-tokio" }
+lumen-assets = { path = "core/assets" }
+lumen-async-tokio = { path = "backends/async-tokio" }
 lumen-audio = { path = "std/audio", default-features = false }
 lumen-canvas = { path = "std/canvas", default-features = false }
-lumen-core = { path = "crates/core" }
-lumen-devtools = { path = "crates/dev/devtools" }
+lumen-core = { path = "core" }
+lumen-devtools = { path = "dev/devtools" }
 lumen-download = { path = "std/download", default-features = false }
 # The engine in the form a Rust app links instead of compiling in. Excluded from
 # the workspace, so it is the one internal crate that cannot inherit this table;
 # see public/lumen-dylib/Cargo.toml for why it sits outside.
 lumen-dylib = { path = "public/lumen-dylib" }
 lumen-fs = { path = "std/fs", default-features = false }
-lumen-html = { path = "crates/html" }
-lumen-http-ureq = { path = "crates/backends/http-ureq" }
-lumen-i18n = { path = "crates/i18n" }
-lumen-input = { path = "crates/input" }
-lumen-ir = { path = "crates/ir" }
-lumen-layout-taffy = { path = "crates/backends/layout-taffy" }
-lumen-mcp = { path = "crates/mcp" }
+lumen-html = { path = "web/html" }
+lumen-http-ureq = { path = "backends/http-ureq" }
+lumen-i18n = { path = "core/i18n" }
+lumen-input = { path = "core/input" }
+lumen-ir = { path = "core/ir" }
+lumen-layout-taffy = { path = "backends/layout-taffy" }
+lumen-mcp = { path = "core/mcp" }
 # The module SDK. Defaults off: a module crate forwards its own `engine-dylib`
 # feature here, so dropping that feature drops the shared engine with it.
 lumen-module = { path = "public/lumen-module", default-features = false }
 lumen-module-macros = { path = "public/lumen-module-macros" }
-lumen-capability = { path = "crates/capability" }
-lumen-os-hotkey-capability = { path = "crates/capabilities/os-hotkey" }
-lumen-os-filedialog-capability = { path = "crates/capabilities/os-filedialog" }
-lumen-os-notify-capability = { path = "crates/capabilities/os-notify" }
-lumen-os-tray-capability = { path = "crates/capabilities/os-tray" }
-lumen-os-launcher-capability = { path = "crates/capabilities/os-launcher" }
-lumen-os-power-capability = { path = "crates/capabilities/os-power" }
-lumen-os-lifecycle-capability = { path = "crates/capabilities/os-lifecycle" }
-lumen-mcp-capability = { path = "crates/capabilities/mcp" }
-lumen-http-ureq-capability = { path = "crates/capabilities/http-fetch" }
-lumen-async-tokio-capability = { path = "crates/capabilities/async" }
-lumen-devtools-capability = { path = "crates/capabilities/devtools" }
-lumen-capability-macros = { path = "crates/capability-macros" }
-lumen-module-registry = { path = "crates/module-registry" }
-lumen-modules = { path = "crates/modules" }
-lumen-os-clipboard = { path = "crates/os/clipboard" }
-lumen-os-dnd = { path = "crates/os/dnd" }
-lumen-os-filedialog = { path = "crates/os/filedialog" }
-lumen-os-hotkey = { path = "crates/os/hotkey" }
-lumen-os-launcher = { path = "crates/os/launcher" }
-lumen-os-lifecycle = { path = "crates/os/lifecycle" }
-lumen-os-menu = { path = "crates/os/menu" }
-lumen-os-mime = { path = "crates/os/mime" }
-lumen-os-notify = { path = "crates/os/notify" }
-lumen-os-power = { path = "crates/os/power" }
-lumen-os-tray = { path = "crates/os/tray" }
+lumen-capability = { path = "core/capability" }
+lumen-os-hotkey-capability = { path = "capabilities/os-hotkey" }
+lumen-os-filedialog-capability = { path = "capabilities/os-filedialog" }
+lumen-os-notify-capability = { path = "capabilities/os-notify" }
+lumen-os-tray-capability = { path = "capabilities/os-tray" }
+lumen-os-launcher-capability = { path = "capabilities/os-launcher" }
+lumen-os-power-capability = { path = "capabilities/os-power" }
+lumen-os-lifecycle-capability = { path = "capabilities/os-lifecycle" }
+lumen-mcp-capability = { path = "capabilities/mcp" }
+lumen-http-ureq-capability = { path = "capabilities/http-fetch" }
+lumen-async-tokio-capability = { path = "capabilities/async" }
+lumen-devtools-capability = { path = "capabilities/devtools" }
+lumen-capability-macros = { path = "core/capability-macros" }
+lumen-module-registry = { path = "core/module-registry" }
+lumen-modules = { path = "core/modules" }
+lumen-os-clipboard = { path = "os/clipboard" }
+lumen-os-dnd = { path = "os/dnd" }
+lumen-os-filedialog = { path = "os/filedialog" }
+lumen-os-hotkey = { path = "os/hotkey" }
+lumen-os-launcher = { path = "os/launcher" }
+lumen-os-lifecycle = { path = "os/lifecycle" }
+lumen-os-menu = { path = "os/menu" }
+lumen-os-mime = { path = "os/mime" }
+lumen-os-notify = { path = "os/notify" }
+lumen-os-power = { path = "os/power" }
+lumen-os-tray = { path = "os/tray" }
 # Runtime-plugin SDK and loader. Defaults off: plugin authors take the trait
 # and macro only; the runtime asks for the `host` loader feature.
 lumen-plugin = { path = "public/lumen-plugin", default-features = false }
 # The plugin plumbing both plugin systems sit on. Defaults off: the loader
 # halves ask for `dlopen` and `resolve`, a plugin author's crate takes neither.
-lumen-plugin-abi = { path = "crates/plugin-abi", default-features = false }
+lumen-plugin-abi = { path = "core/plugin-abi", default-features = false }
 # `host-candela` is the default on both, and the browser build takes them
 # without it: a page runs precompiled bytecode and has no use for the compiler.
-lumen-portable = { path = "crates/portable", default-features = false }
-lumen-prerender = { path = "crates/prerender", default-features = false }
-lumen-primitives = { path = "crates/primitives" }
+lumen-portable = { path = "web/portable", default-features = false }
+lumen-prerender = { path = "web/prerender", default-features = false }
+lumen-primitives = { path = "core/primitives" }
 lumen-process = { path = "std/process", default-features = false }
-lumen-render-headless = { path = "crates/backends/render-headless" }
-lumen-render-wgpu = { path = "crates/backends/render-wgpu" }
+lumen-render-headless = { path = "backends/render-headless" }
+lumen-render-wgpu = { path = "backends/render-wgpu" }
 # Every subsystem is a default feature, and every consumer picks its own set:
 # the shared library takes them all, a `--bundle` takes the app's capabilities.
-lumen-runtime = { path = "crates/runtime", default-features = false }
-lumen-scene = { path = "crates/scene" }
+lumen-runtime = { path = "core/runtime", default-features = false }
+lumen-scene = { path = "core/scene" }
 # These three carry no features of their own, so the flag only records that a
 # host is taken bare: giving one a default later will not switch it on
 # everywhere by surprise. `lumen-script-candela` below is the exception.
-lumen-script = { path = "crates/script/api", default-features = false }
+lumen-script = { path = "core/script/api", default-features = false }
 # Default `compiler` builds candela source at run time. A build script wants it;
 # a shipped runtime executes precompiled `.cdlb` and does not.
-lumen-script-candela = { path = "crates/script/candela", default-features = false }
-lumen-script-lua = { path = "crates/script/lua", default-features = false }
-lumen-script-rhai = { path = "crates/script/rhai", default-features = false }
-lumen-ssr = { path = "crates/ssr" }
-lumen-text = { path = "crates/text" }
-lumen-text-cosmic = { path = "crates/backends/text-cosmic" }
-lumen-web = { path = "crates/web" }
-lumen-web-dom = { path = "crates/backends/web-dom" }
-lumen-web-http = { path = "crates/backends/web-http" }
-lumen-widget = { path = "crates/widget" }
-lumen-widget-macros = { path = "crates/widget-macros" }
-lumen-window-winit = { path = "crates/backends/window-winit" }
+lumen-script-candela = { path = "core/script/candela", default-features = false }
+lumen-script-lua = { path = "core/script/lua", default-features = false }
+lumen-script-rhai = { path = "core/script/rhai", default-features = false }
+lumen-ssr = { path = "web/ssr" }
+lumen-text = { path = "core/text" }
+lumen-text-cosmic = { path = "backends/text-cosmic" }
+lumen-web = { path = "web" }
+lumen-web-dom = { path = "web/dom" }
+lumen-web-http = { path = "web/http" }
+lumen-widget = { path = "core/widget" }
+lumen-widget-macros = { path = "core/widget-macros" }
+lumen-window-winit = { path = "backends/window-winit" }
 # A default lumenc links the whole runtime. The launcher stub and the LSP each
 # take one feature of it instead, so defaults are off here and the engine, which
 # wants the parser, asks for them back.
@@ -423,7 +430,7 @@ ctrlc = "3"
 # Serialization (used by lumen-mcp + lumen-mcp-server)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Reads the script builtin metadata (`crates/script/api/builtins.ron`) in that
+# Reads the script builtin metadata (`core/script/api/builtins.ron`) in that
 # crate's build script, which generates the per-host tables. Build-time only:
 # no shipped binary links it, and nothing parses RON at run time.
 ron = "0.11"
