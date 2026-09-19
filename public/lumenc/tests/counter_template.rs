@@ -39,7 +39,7 @@ fn scaffolded_counter(case: &str) -> Option<std::path::PathBuf> {
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);
-    if let Err(why) = lumenc::scaffold::write_template("counter", &dir) {
+    if let Err(why) = lumenc::cli::scaffold::write_template("counter", &dir) {
         eprintln!("skipping: {why}");
         return None;
     }

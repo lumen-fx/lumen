@@ -43,20 +43,43 @@ has_label() { grep -qx -- "$1" <<<"$labels"; }
 # maintainer picks the area by hand.
 area_for() {
   case "$1" in
-    crates/script/*|std/*) echo A-Scripting ;;
-    crates/text/*) echo A-Text ;;
-    crates/input/*) echo A-Input ;;
-    crates/ir/*|crates/html/*) echo A-Markup ;;
-    crates/widget/*|crates/widget-macros/*|crates/primitives/*) echo A-Widgets ;;
-    crates/i18n/*) echo A-I18n ;;
-    crates/assets/*) echo A-Assets ;;
-    crates/core/*) echo A-Core ;;
-    crates/runtime/*|crates/launcher/*|src/*) echo A-Runtime ;;
-    crates/dev/lsp/*) echo A-LSP ;;
-    crates/dev/mcp-server/*|crates/mcp/*) echo A-MCP ;;
-    crates/dev/devtools/*) echo A-Devtools ;;
-    crates/web/*|crates/web-runtime/*|crates/ssr/*|crates/prerender/*) echo O-Web ;;
-    sdk/*|public/lumen-dylib/*|crates/plugin-abi/*) echo A-FFI ;;
+    core/script/*|std/*) echo A-Scripting ;;
+    core/text/*) echo A-Text ;;
+    core/input/*) echo A-Input ;;
+    core/ir/*|web/html/*) echo A-Markup ;;
+    core/widget/*|core/widget-macros/*|core/primitives/*) echo A-Widgets ;;
+    core/i18n/*) echo A-I18n ;;
+    core/assets/*) echo A-Assets ;;
+    core/runtime/*|core/launcher/*|src/*) echo A-Runtime ;;
+    core/mcp/*|dev/mcp-server/*|capabilities/mcp/*) echo A-MCP ;;
+    core/plugin-abi/*|sdk/*|public/lumen-dylib/*) echo A-FFI ;;
+    core/*) echo A-Core ;;
+    dev/lsp/*) echo A-LSP ;;
+    dev/devtools/*|capabilities/devtools/*) echo A-Devtools ;;
+    web/*) echo O-Web ;;
+    os/clipboard/*) echo A-Clipboard ;;
+    # os/mime exists to serve both drag-and-drop (payload type negotiation)
+    # and clipboard (paste format negotiation); grouped with drag-and-drop
+    # rather than split, since dnd is the more direct consumer.
+    os/dnd/*|os/mime/*) echo A-Drag-And-Drop ;;
+    os/menu/*) echo A-Menus ;;
+    os/tray/*|capabilities/os-tray/*) echo A-Tray ;;
+    os/filedialog/*|capabilities/os-filedialog/*) echo A-Dialogs ;;
+    os/notify/*|capabilities/os-notify/*) echo A-Notifications ;;
+    os/hotkey/*|capabilities/os-hotkey/*) echo A-Hotkeys ;;
+    os/launcher/*|capabilities/os-launcher/*) echo A-Launcher ;;
+    os/power/*|capabilities/os-power/*) echo A-Power ;;
+    os/lifecycle/*|capabilities/os-lifecycle/*) echo A-Lifecycle ;;
+    backends/render-wgpu/*|backends/render-headless/*) echo A-Rendering ;;
+    backends/window-winit/*) echo A-Windowing ;;
+    backends/layout-taffy/*) echo A-Layout ;;
+    backends/text-cosmic/*) echo A-Text ;;
+    backends/a11y-accesskit/*) echo A-Accessibility ;;
+    backends/async-tokio/*|capabilities/async/*) echo A-Async ;;
+    # No networking label exists in the repo's A- set, and the HTTP client is
+    # a runtime capability either way, so A-Runtime is the least-bad existing
+    # fit for both the native backend and its capability shim. Deliberate.
+    backends/http-ureq/*|capabilities/http-fetch/*) echo A-Runtime ;;
     public/lumenc/*|public/lumenc-plugin/*) echo A-CLI ;;
     tools/release/*|tools/setup-lumen/*|.github/*) echo A-Packaging ;;
     tools/vscode-lumen/*|tools/jetbrains-lumen/*|tools/zed-lumen/*|tools/tree-sitter-lumen/*) echo A-Editor-Plugin ;;
@@ -115,7 +138,7 @@ cla=$(state_of cla)
 
 # Docs ride with the change: code touched and no doc touched is the one
 # thing a reviewer sends back most.
-code_touched=$(grep -cE '^(crates|public|std|sdk|src|tools)/' <<<"$files" || true)
+code_touched=$(grep -cE '^(core|backends|os|dev|capabilities|web|public|std|sdk|src|tools)/' <<<"$files" || true)
 docs_touched=$(grep -cE '^docs/|\.md$' <<<"$files" || true)
 
 # S- transition, only between the labels this script owns.

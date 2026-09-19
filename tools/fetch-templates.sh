@@ -7,7 +7,7 @@
 # copy: a release downloads them with this script and packages them beside
 # the toolchain, and a checkout downloads them with this script so `lumenc
 # new`, and the tests that scaffold, find them the same way an installed
-# lumenc does (public/lumenc/src/scaffold.rs).
+# lumenc does (public/lumenc/src/cli/scaffold.rs).
 #
 #   tools/fetch-templates.sh [directory]
 #

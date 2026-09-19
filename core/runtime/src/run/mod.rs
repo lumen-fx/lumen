@@ -1,0 +1,694 @@
+//! Launches a pure-markup Lumen app via `lumenc run <dir>`.
+//!
+//! Expects:
+//!
+//! ```text
+//! <dir>/
+//!   lumen.toml   # optional: app config
+//!   src/
+//!     main.lmn   # required: markup (with optional inline <script>)
+//!     main.css   # optional: stylesheet
+//! ```
+//!
+//! - Wires the default plugin stack: taffy layout, winit window, cosmic text, input, hover/press/drag/scroll primitives, optional Rhai script host, optional MCP server.
+//! - Runs winit's event loop and returns when the window closes or a fatal error occurs.
+//! - Hot reload: a `notify` file watcher (inotify / FSEvents / ReadDirectoryChangesW) covers `src/main.lmn`, `src/main.css`, and every included / imported source; an fs event wakes the loop for one tick and the `hot_reload` system re-checks mtimes. On change it despawns the spawned root, re-parses, re-applies CSS, re-spawns, and reloads the Rhai script against a fresh `Scope`. Parse errors keep the previous tree intact and log to stderr. `LUMEN_HOT_RELOAD_POLL=1` (or watcher init failure) falls back to the legacy 300 ms mtime poll.
+//! - Script commands: `SetText` updates the matching `LumenId`'s [`TextContent`]; other variants (`Print`, `AddClicks`, `SetString`) no-op here.
+
+use bevy_ecs::component::Mutable;
+use bevy_ecs::message::{MessageReader, MessageWriter};
+use bevy_ecs::prelude::*;
+use lumen_assets::AssetsPlugin;
+use lumen_capability::Preflight;
+use lumen_core::prelude::*;
+use lumen_core::window::{DEFAULT_CLEAR, WindowOptions};
+use lumen_input::InputPlugin;
+use lumen_layout_taffy::TaffyLayoutPlugin;
+use lumen_os_clipboard::ClipboardHost;
+use lumen_primitives::{
+    CheckboxPlugin, ControlsPlugin, DragPlugin, HoverTintPlugin, PressPlugin, ProgressPlugin,
+    RadioPlugin, ScrollPlugin, TabsPlugin, TooltipPlugin, TransitionPlugin, ValidationPlugin,
+};
+use lumen_script::ScriptCommand;
+use lumen_script::ScriptHost;
+#[cfg(feature = "host-candela")]
+use lumen_script_candela::{CandelaHost, ScriptCandelaPlugin};
+#[cfg(feature = "host-lua")]
+use lumen_script_lua::{LuaHost, ScriptLuaPlugin};
+#[cfg(feature = "host-rhai")]
+use lumen_script_rhai::{RhaiHost, ScriptRhaiPlugin};
+// The host-generic script systems live in `lumen-script` and are
+// re-exported by both host crates. Importing them from the runtime crate
+// means a single generic `::<H>` path resolves for whichever `ScriptHost`
+// the `[script] engine` key selects (Rhai or Lua).
+// `ScriptSet` is how the host-neutral half orders against them: with several
+// hosts installed, an edge naming one host's system leaves the others outside
+// the one-tick dirty window.
+use lumen_render_wgpu::WgpuSurfaceRenderer;
+use lumen_script::{ScriptCommandEvent, ScriptFn, ScriptSet, fire_on_ready, reload_script};
+use lumen_text::{ShaperService, TextShaper};
+use lumen_text_cosmic::CosmicShaper;
+use lumen_window_winit::{A11yBridgeFactory, run};
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+// `Duration` / `Instant` are only used by the (gated) hot-reload poll throttle.
+#[cfg(feature = "runtime-parse")]
+use std::time::{Duration, Instant};
+
+use crate::source_parser::SourceParser;
+use lumen_ir::layout_ir::{Attributes, Element};
+
+/// A single `rhai::Engine` extension callback; factored into an alias to
+/// keep clippy's `type_complexity` lint quiet.
+#[cfg(feature = "host-rhai")]
+type RhaiExtension = Box<dyn FnOnce(&mut rhai::Engine) + Send + 'static>;
+
+/// An embedder callback invoked on the fully-built [`App`] right before
+/// the window event loop starts. Every default plugin and system is
+/// already registered at that point, so a hook can insert resources and
+/// add systems ordered against the default stack's public systems (for
+/// example `.before(lumen_core::signals::apply_text_bindings)`).
+///
+/// This is the native-Rust counterpart of [`RunOptions::rhai_extensions`]:
+/// the Rust SDK (`sdk/rust`, crate `lumen`) uses it to wire Rust-closure
+/// event handlers and whole `bevy_ecs` systems into the tick without lumenc
+/// knowing about them.
+///
+/// Not `Send`: hooks are drained and invoked in [`build_app`] on the calling
+/// thread (see the loop near the end of that fn), never moved across threads.
+/// The bound is intentionally omitted so the SDK can defer `IntoScheduleConfigs`
+/// values - `system.chain()` / `system.run_if(..)` box into `!Send`
+/// `ScheduleConfigs`, which a `Send` hook could not capture.
+pub type AppHook = Box<dyn FnOnce(&mut App) + 'static>;
+
+/// One deferred [`Plugin`](lumen_core::app::Plugin) installation, held until
+/// [`build_app`] reaches the phase that runs it. `Send` so an embedder can
+/// build the options on one thread and run them on another; the plugin itself
+/// is moved into the closure.
+pub type PluginInstaller = Box<dyn FnOnce(&mut App) + Send>;
+
+/// The window-facing half of a built app: the resolved
+/// [`WindowOptions`] plus the render-side text shaper the build picked
+/// for it. Returned alongside the [`App`] by [`build_app`] and
+/// [`build_headless_app`].
+///
+/// The options are pure data that `lumen-core` owns, so any launch path
+/// and any window backend can name them. The shaper is a live backend
+/// object whose trait lives in `lumen-text`, which is why it sits beside
+/// the options instead of inside them; whichever launch path runs installs
+/// it into the render world as a [`ShaperService`] for the renderer to
+/// read.
+pub struct WindowSetup {
+    /// Size, title, clear color, chrome, and native menu bar.
+    pub options: WindowOptions,
+    /// Shaper used for render-side text. `None` skips text entirely.
+    pub text_shaper: Option<Box<dyn TextShaper>>,
+}
+
+/// Options for `lumenc run`.
+pub struct RunOptions {
+    /// Path to the app directory (must contain `src/main.lmn`).
+    pub dir: PathBuf,
+    /// Window title. Defaults to the directory name.
+    pub title: Option<String>,
+    /// Window size in logical pixels.
+    pub size: (u32, u32),
+    /// Background color when no CSS sets one.
+    pub clear: Color,
+    /// Watch source files and reload on change. On by default.
+    pub hot_reload: bool,
+    /// Native Rhai extensions installed before script compile. Each
+    /// closure receives the inner `rhai::Engine` and can `register_fn`
+    /// app-specific builtins backed by Rust crates / FFI. Lumen ships
+    /// only UI primitives; OS-level integrations live in the embedding
+    /// binary (see `apps/sysmon` for a worked example using
+    /// `sysinfo`).
+    ///
+    /// Rhai-typed, so these bind to the Rhai host only. Use
+    /// [`Self::native_fns`] for a function every host can call.
+    #[cfg(feature = "host-rhai")]
+    pub rhai_extensions: Vec<RhaiExtension>,
+    /// Plugins installed on the [`App`] before the script hosts load. See
+    /// [`Self::with_plugin`].
+    pub plugins: Vec<PluginInstaller>,
+    /// Native functions exposed to the app's script in host-neutral terms.
+    /// Each one is registered into every host the app runs, marshalling
+    /// arguments and results through `lumen_script::ScriptValue`. This is what
+    /// the C-ABI's `lumen_app_expose` builds.
+    ///
+    /// candela resolves host calls through a declared block, so a candela
+    /// script reaches these as `native::<name>(...)` after declaring
+    /// `host "native" { any <name>(...); }`; Rhai and Lua see plain globals.
+    pub native_fns: Vec<ScriptFn>,
+    /// In-memory markup source. When `Some`, the runtime parses this
+    /// string instead of reading `<dir>/src/main.lmn` from disk, and hot
+    /// reload is disabled (there is no file to watch). Set by the Rust
+    /// SDK's `include_str!`-based embedding path; `dir` is still used
+    /// to resolve relative asset paths and `lumen.toml`.
+    pub markup: Option<String>,
+    /// In-memory stylesheet source. When `Some`, used instead of
+    /// `<dir>/src/main.css`. Independent of [`Self::markup`]; `None` falls
+    /// back to the on-disk lookup.
+    pub css: Option<String>,
+    /// Callbacks invoked on the fully-built [`App`] just before the
+    /// event loop starts. See [`AppHook`].
+    pub app_hooks: Vec<AppHook>,
+    /// Load a precompiled AOT artifact (`lumenc build`) instead of parsing
+    /// `<dir>/src/main.lmn` + `src/main.css` from source. When `Some`, the parser is
+    /// bypassed entirely (and hot reload is disabled); `dir` is still used to
+    /// resolve `lumen.toml`. Required for a runtime built without the
+    /// `runtime-parse` feature.
+    pub artifact: Option<PathBuf>,
+    /// Load a precompiled AOT artifact from in-memory bytes instead of a file
+    /// path. The link-not-embed launcher path: the compiler produces LMNA
+    /// bytes in-process and hands them across the C-ABI
+    /// (`lumen_app_new_from_lmna`) so the runtime never touches the parser or a
+    /// source file. When `Some`, it wins over [`Self::artifact`] and
+    /// [`Self::parser`]; `dir` is still used to resolve relative asset paths.
+    pub artifact_bytes: Option<Vec<u8>>,
+    /// True for a headless / bounded automation run (`--headless`, and the
+    /// FFI/test `run_app_headless` contract). Suppresses the long-lived
+    /// interactive daemons that only make sense for a windowed session: the
+    /// MCP introspection server (unless `[mcp] simulate = true`, which
+    /// automation drivers set) and the hot-reload file watcher. Off by
+    /// default so an ordinary `lumenc run` keeps both. See [`build_app`].
+    pub bounded: bool,
+    /// Serve the app's assets from a `.lpak` archive (`lumenc bundle`)
+    /// instead of the loose files under [`Self::dir`]. A path the markup
+    /// resolves under `dir` is looked up in the archive first and read
+    /// from disk only when the archive has no such entry, so an app can
+    /// ship one file next to its binary. `None` reads everything from
+    /// disk. Applied by [`run_app`] and [`build_headless_app`].
+    pub assets: Option<PathBuf>,
+    /// Injected markup/CSS front-end used for dev source-load and hot-reload
+    /// re-parse. `lumen-runtime` links no parser itself (it stays in the
+    /// compiler); the CLI / SDK / FFI dev paths populate this with a
+    /// [`SourceParser`] impl (`lumenc`'s `LumencParser`). `None` is valid for
+    /// the precompiled-artifact path ([`Self::artifact`]) and for a runtime
+    /// that only ever loads AOT artifacts; a from-source run with no parser
+    /// fails with [`RunError::ParserDisabled`].
+    pub parser: Option<Box<dyn SourceParser>>,
+    /// Injected compiler-plugin chain, mirroring [`Self::parser`]: the
+    /// runtime links no plugin loader; `lumenc` builds the chain from the
+    /// app's `[[plugins]]` declarations and hands it in here. `None` runs
+    /// the empty chain.
+    pub compiler_plugins: Option<std::sync::Arc<dyn crate::compiler_plugins::CompilerPlugins>>,
+    /// Injected `version`-source module resolutions, mirroring
+    /// [`Self::compiler_plugins`]: the runtime never resolves a `version`
+    /// entry of `[dependencies]` itself (no semver, no registry in its
+    /// graph); `lumenc` asks `lpm` to resolve each one and hands the outcome
+    /// in here for the module loader to consult before its own on-disk probe.
+    pub resolved_modules: crate::modules::ResolvedModules,
+    /// Script libraries the app depends on, as the name a script imports
+    /// under and the directory holding its sources. Filled in the same way
+    /// [`Self::resolved_modules`] is: the runtime resolves nothing, and
+    /// `lumenc` hands in what the registry answered.
+    pub import_roots: Vec<(String, std::path::PathBuf)>,
+}
+
+impl RunOptions {
+    /// Built-in default window size - kept as a constant so the runtime
+    /// can detect that the caller didn't override it and let
+    /// `lumen.toml`'s `[window] size` win instead.
+    pub const DEFAULT_SIZE: (u32, u32) = (960, 720);
+
+    /// Construct with sensible defaults.
+    pub fn new(dir: impl Into<PathBuf>) -> Self {
+        Self {
+            dir: dir.into(),
+            title: None,
+            size: Self::DEFAULT_SIZE,
+            // Single source of truth for the fallback: see
+            // `lumen_core::window::DEFAULT_CLEAR`. `build_app` overrides this
+            // with the resolved `--lumen-window-bg` custom property when the
+            // app or its active skin defines one.
+            clear: DEFAULT_CLEAR,
+            hot_reload: true,
+            #[cfg(feature = "host-rhai")]
+            rhai_extensions: Vec::new(),
+            plugins: Vec::new(),
+            native_fns: Vec::new(),
+            markup: None,
+            css: None,
+            app_hooks: Vec::new(),
+            artifact: None,
+            artifact_bytes: None,
+            bounded: false,
+            assets: None,
+            parser: None,
+            compiler_plugins: None,
+            resolved_modules: crate::modules::ResolvedModules::default(),
+            import_roots: Vec::new(),
+        }
+    }
+
+    /// Builder: inject the markup/CSS front-end used for dev source-load and
+    /// hot-reload re-parse. See [`Self::parser`].
+    pub fn with_parser(mut self, parser: Box<dyn SourceParser>) -> Self {
+        self.parser = Some(parser);
+        self
+    }
+
+    /// Builder: inject the compiler-plugin chain run by the dev source-load
+    /// and hot-reload paths. See [`Self::compiler_plugins`].
+    pub fn with_compiler_plugins(
+        mut self,
+        plugins: std::sync::Arc<dyn crate::compiler_plugins::CompilerPlugins>,
+    ) -> Self {
+        self.compiler_plugins = Some(plugins);
+        self
+    }
+
+    /// Builder: load a precompiled AOT [`lumen_ir::artifact`] instead of parsing
+    /// source. See [`Self::artifact`].
+    pub fn with_artifact(mut self, path: impl Into<PathBuf>) -> Self {
+        self.artifact = Some(path.into());
+        self
+    }
+
+    /// Builder: load a precompiled AOT [`lumen_ir::artifact`] from in-memory
+    /// bytes instead of a file path. See [`Self::artifact_bytes`].
+    pub fn with_artifact_bytes(mut self, bytes: impl Into<Vec<u8>>) -> Self {
+        self.artifact_bytes = Some(bytes.into());
+        self
+    }
+
+    /// Builder: install a callback that registers native Rhai
+    /// builtins from the embedding binary. See [`RunOptions`].
+    #[cfg(feature = "host-rhai")]
+    pub fn with_rhai_extension<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(&mut rhai::Engine) + Send + 'static,
+    {
+        self.rhai_extensions.push(Box::new(f));
+        self
+    }
+
+    /// Builder: install a [`Plugin`](lumen_core::app::Plugin) on the app
+    /// before the script hosts load.
+    ///
+    /// This is the phase a plugin that registers script functions
+    /// ([`ScriptFnAppExt::add_script_fn`](lumen_script::ScriptFnAppExt::add_script_fn))
+    /// belongs in: candela binds its host declarations when the program
+    /// compiles or the artifact loads, so a function registered later has
+    /// nothing to bind to. Contrast [`Self::with_app_hook`], which runs on the
+    /// fully-built app and is where systems ordered against the default stack
+    /// belong.
+    ///
+    /// Plugins install in the order they are added, after the runtime's own
+    /// built-in script functions and before [`Self::native_fns`]; a name
+    /// registered later shadows an earlier one.
+    pub fn with_plugin<P: lumen_core::app::Plugin + Send + 'static>(mut self, plugin: P) -> Self {
+        self.plugins.push(Box::new(move |app: &mut App| {
+            app.add_plugin(plugin);
+        }));
+        self
+    }
+
+    /// Builder: expose a native function to the app's script in host-neutral
+    /// terms. See [`Self::native_fns`].
+    pub fn with_native_fn(mut self, f: ScriptFn) -> Self {
+        self.native_fns.push(f);
+        self
+    }
+
+    /// Builder: parse this in-memory markup string instead of reading
+    /// `<dir>/src/main.lmn` from disk. Disables hot reload. See
+    /// [`Self::markup`].
+    pub fn with_markup(mut self, src: impl Into<String>) -> Self {
+        self.markup = Some(src.into());
+        self
+    }
+
+    /// Builder: apply this in-memory stylesheet instead of reading
+    /// `<dir>/src/main.css` from disk. See [`Self::css`].
+    pub fn with_css(mut self, src: impl Into<String>) -> Self {
+        self.css = Some(src.into());
+        self
+    }
+
+    /// Builder: install a callback invoked on the fully-built [`App`]
+    /// right before the event loop starts. See [`AppHook`].
+    pub fn with_app_hook<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(&mut App) + 'static,
+    {
+        self.app_hooks.push(Box::new(f));
+        self
+    }
+
+    /// Builder: serve assets from a `.lpak` archive. See [`Self::assets`].
+    pub fn with_assets(mut self, lpak: impl Into<PathBuf>) -> Self {
+        self.assets = Some(lpak.into());
+        self
+    }
+}
+
+/// Open the `.lpak` named by [`RunOptions::assets`] and hand it to the
+/// app's [`AssetServer`](lumen_assets::AssetServer), keyed on the app
+/// directory the archive was packed from.
+///
+/// Split from [`build_app`] so every entry point that hands an [`App`] to
+/// a caller installs the archive the same way. A missing or malformed
+/// archive fails the run rather than silently falling back to disk: the
+/// path was named explicitly, so reading different bytes than asked for
+/// is worse than stopping.
+fn install_assets(app: &mut App, lpak: Option<&Path>, dir: &Path) -> Result<(), RunError> {
+    let Some(lpak) = lpak else {
+        return Ok(());
+    };
+    let bundle = lumen_assets::LumenBundle::open(lpak)
+        .map_err(|e| RunError::Assets(lpak.to_path_buf(), e.to_string()))?;
+    let Some(mut server) = app.world.get_resource_mut::<lumen_assets::AssetServer>() else {
+        return Ok(());
+    };
+    server.set_bundle_root(dir);
+    server.register_bundle(bundle);
+    Ok(())
+}
+
+/// Convenience entry point for embedding apps. Wraps [`run_app`] with
+/// a single closure that registers native Rhai functions on top of
+/// Lumen's defaults - the minimal-boilerplate path for shipping a
+/// custom Lumen app that links one extra Rust crate (sysinfo, hyper,
+/// rusqlite, anything).
+///
+/// Note: the bare `lumen_runtime::run_with` links no markup parser - a
+/// from-source run needs one injected via [`RunOptions::with_parser`]. The
+/// compiler (`lumenc::run_with`) and the SDKs wire the default parser for you.
+///
+/// ```no_run
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     lumen_runtime::run_with(env!("CARGO_MANIFEST_DIR"), |engine| {
+///         engine.register_fn("now_ms", || 42_i64);
+///     })?;
+///     Ok(())
+/// }
+/// ```
+#[cfg(feature = "host-rhai")]
+pub fn run_with<F>(dir: impl Into<PathBuf>, extend: F) -> Result<(), RunError>
+where
+    F: FnOnce(&mut rhai::Engine) + Send + 'static,
+{
+    run_app(RunOptions::new(dir).with_rhai_extension(extend))
+}
+
+/// Errors raised while preparing the app.
+#[derive(Debug, thiserror::Error)]
+pub enum RunError {
+    /// Required input file missing or unreadable.
+    #[error("read {0}: {1}")]
+    Read(PathBuf, std::io::Error),
+    /// Markup failed to parse.
+    #[error("parse main.lmn: {0}")]
+    ParseHtml(String),
+    /// CSS failed to parse.
+    #[error("parse main.css: {0}")]
+    ParseCss(String),
+    /// CSS application failed.
+    #[error("apply CSS: {0}")]
+    ApplyCss(String),
+    /// A compiler plugin failed to load or one of its hooks failed. The
+    /// message names the plugin.
+    #[error("{0}")]
+    Plugin(String),
+    /// winit returned an error.
+    #[error("window: {0}")]
+    Window(String),
+    /// Headless mode failed to initialise (offscreen GPU context or
+    /// signal-handler install). Raised only by
+    /// [`crate::run_headless::run_app_headless_rendered`].
+    #[error("headless: {0}")]
+    Headless(String),
+    /// The app's script failed to compile. Raised by [`check_app`],
+    /// which compiles the combined `<script>` source with the exact
+    /// engine settings `lumenc run` loads with - a script that would
+    /// die at load fails the check instead of false-passing.
+    #[error("script: {0}")]
+    Script(String),
+    /// `lumen.toml` is invalid (parse / read error).
+    #[error("lumen.toml: {0}")]
+    Config(#[from] crate::config::ConfigError),
+    /// The app's code is at its root rather than under `src/`; carries the
+    /// migration hint. See [`crate::app_layout::FlatLayout`].
+    #[error("{0}")]
+    Layout(#[from] crate::app_layout::FlatLayout),
+    /// A `locale/*.ftl` catalogue could not be read or parsed, or its
+    /// filename is not a BCP-47 tag.
+    #[error("i18n: {0}")]
+    I18n(String),
+    /// A precompiled AOT artifact failed to read / decode.
+    #[error("artifact: {0}")]
+    Artifact(String),
+    /// The runtime was built without the `runtime-parse` feature (parser
+    /// removed) and asked to run an app from source rather than from a
+    /// precompiled artifact. Pass `--artifact <file>` (built via
+    /// `lumenc build`) or rebuild with `--features runtime-parse`.
+    #[error(
+        "this runtime was built without the markup parser (runtime-parse); \
+         run from a precompiled artifact (lumenc build) or rebuild with \
+         --features runtime-parse"
+    )]
+    ParserDisabled,
+    /// The `.lpak` archive named by [`RunOptions::assets`] could not be read.
+    #[error("read asset bundle {0}: {1}")]
+    Assets(PathBuf, String),
+    /// The app ships a script but this build compiled no script host at all
+    /// (`--no-default-features` with none of `host-rhai` / `host-lua` /
+    /// `host-candela`). Rebuild with the host the app's language needs.
+    #[error(
+        "this runtime was built with no script host; rebuild with one of \
+         --features host-rhai / host-lua / host-candela"
+    )]
+    NoScriptHostAvailable,
+}
+
+/// Read `<dir>/src/main.lmn` + optional `<dir>/src/main.css`, build a default
+/// `App`, spawn the parsed tree, and enter winit's event loop.
+pub fn run_app(opts: RunOptions) -> Result<(), RunError> {
+    let (dir, assets) = (opts.dir.clone(), opts.assets.clone());
+    // An interactive launch runs the capabilities' preflights before any
+    // other work: a second instance of a single-instance app forwards its
+    // argv to the first from there and has nothing left to do. Headless runs
+    // and embeddings never come this way, so they never contend over what a
+    // preflight binds. A config that fails to read is reported by
+    // `build_app` moments later, on the same path.
+    let cfg = crate::config::LumenToml::load_or_default(&dir).unwrap_or_default();
+    let env = capability_env(&opts, &dir, &cfg);
+    if lumen_capability::preflight(&env) == Preflight::Exit {
+        return Ok(());
+    }
+    let (mut app, window) = build_app(opts)?;
+    install_assets(&mut app, assets.as_deref(), &dir)?;
+    // The render-side shaper is a render-world service, so the renderer -
+    // this one or a replacement - finds it in one place. Without one, text
+    // is skipped.
+    if let Some(shaper) = window.text_shaper {
+        app.render_world
+            .insert_non_send(ShaperService::from(shaper));
+    }
+    // Backend selection happens here, at the composition point: the window
+    // backend drives both of these through their traits and names neither.
+    let renderer = Box::new(WgpuSurfaceRenderer::new());
+    let a11y: A11yBridgeFactory = Box::new(lumen_a11y_accesskit::winit_bridge);
+    run(app, window.options, renderer, Some(a11y)).map_err(|e| RunError::Window(e.to_string()))
+}
+
+/// Build the full app WITHOUT opening a window, then drive `ticks`
+/// main-schedule ticks and return. Headless / CI entry point: same
+/// plugin stack, scripts, and reactive bindings as [`run_app`], but no
+/// windowing, input, or GPU rendering - just [`App::tick`] in a loop.
+///
+/// `ticks == 0` builds-and-drops (validates the app loads). The window
+/// setup (title, size, text shaper) built alongside the app is
+/// discarded; headless ticks run the main schedule + extract + an empty
+/// render schedule (no GPU renderer plugin is installed off the winit
+/// path), which is sufficient to exercise signal round-trips, script
+/// execution, and `<for>` / `<if>` reconciliation.
+pub fn run_app_headless(mut opts: RunOptions, ticks: u32) -> Result<(), RunError> {
+    // Headless / FFI contract: no interactive session, so gate off the MCP
+    // server + hot-reload watcher (see [`RunOptions::bounded`]).
+    opts.bounded = true;
+    let (mut app, _window) = build_headless_app(opts)?;
+    for _ in 0..ticks {
+        app.tick();
+    }
+    Ok(())
+}
+
+/// Shared headless plumbing: [`build_app`] plus the window-free half of
+/// the winit backend. The windowed path installs `WinitPlugin` inside
+/// `run()`; its `build` is window-free (backend messages,
+/// `RedrawScheduler`, the `A11yPlugin` resources + `sync_a11y_tree`
+/// system, and the XDG color-scheme command handler) - only the event
+/// loop and GPU init in `run()` need a display. Installing it here gives
+/// every headless schedule the same resource/system set so a11y-sync and
+/// any system that reads a WinitPlugin-provided resource don't fail
+/// validation. Used by [`run_app_headless`] (no renderer; FFI/test
+/// contract), [`crate::run_headless::run_app_headless_rendered`] (full
+/// offscreen-GPU mode), and the golden-image screenshot suite
+/// (`public/lumenc/tests/golden.rs`), which installs an offscreen
+/// `WgpuRendererPlugin` on top and reads the framebuffer back.
+pub fn build_headless_app(opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
+    let (dir, assets) = (opts.dir.clone(), opts.assets.clone());
+    let (mut app, window) = build_app(opts)?;
+    install_assets(&mut app, assets.as_deref(), &dir)?;
+    app.add_plugin(lumen_window_winit::WinitPlugin);
+    Ok((app, window))
+}
+
+/// Publish the markup tags this app's `[dependencies]` table declares, so the
+/// parser accepts them.
+///
+/// Called from every path that reads a config and then parses markup: the run
+/// build, `lumenc check`, and the AOT compile. It is deliberately independent
+/// of whether the modules are loadable here - `lumenc check` on a machine with
+/// no module beside it still has to accept the app's markup, because the
+/// declaration is the app's claim about itself.
+pub(crate) fn register_declared_tags(cfg: &crate::config::LumenToml) {
+    lumen_modules::register_declared_tags(&cfg.dependencies);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A temp app dir carrying the given `lumen.toml` body.
+    fn app_dir(tag: &str, toml: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "lumen-single-instance-gate-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp app dir");
+        std::fs::write(dir.join("lumen.toml"), toml).expect("write lumen.toml");
+        dir
+    }
+
+    /// The preflight `run_app` runs, as it runs it: the config read the same
+    /// tolerant way, the environment built from it.
+    fn preflight_for(dir: &Path) -> Preflight {
+        let opts = RunOptions::new(dir);
+        let cfg = crate::config::LumenToml::load_or_default(dir).unwrap_or_default();
+        lumen_capability::preflight(&capability_env(&opts, dir, &cfg))
+    }
+
+    #[test]
+    fn the_preflight_continues_when_single_instance_is_off() {
+        let dir = app_dir("off", "[app]\n");
+        assert_eq!(
+            preflight_for(&dir),
+            Preflight::Continue,
+            "no flag means the launch always continues"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bad_config_reads_as_off_rather_than_panicking() {
+        // `run_app` reads its own copy of `lumen.toml` ahead of `build_app`'s
+        // load, on purpose (a secondary must exit before paying for anything
+        // else); a parse failure here must not be where that shows up first.
+        // `build_app` surfaces the real `RunError::Config` moments later on
+        // the primary path.
+        let dir = app_dir("bad-config", "not valid toml at all {{{");
+        assert_eq!(preflight_for(&dir), Preflight::Continue);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The config-driven half of single-instance: a first launch becomes
+    /// primary and continues, and a second launch for the SAME `[app] id` is
+    /// told to stop. The OS-level socket mechanics this rides on
+    /// (permissions, the platform directory, the primary/secondary bind
+    /// dance itself) are `lumen-os-lifecycle`'s own tests; this is only
+    /// about `[app] single_instance` reaching that crate's preflight through
+    /// the capability list the runtime links.
+    #[cfg(unix)]
+    #[test]
+    fn a_second_launch_for_the_same_app_is_told_to_stop() {
+        let id = format!("lumen-single-instance-gate-test-{}", std::process::id());
+        let dir = app_dir(
+            "dance",
+            &format!("[app]\nid = \"{id}\"\nsingle_instance = true\n"),
+        );
+
+        assert_eq!(
+            preflight_for(&dir),
+            Preflight::Continue,
+            "the first launch is the primary"
+        );
+        if preflight_for(&dir) == Preflight::Continue {
+            // The lifecycle preflight reports "primary" for the fail-closed
+            // path too, so this environment resolved no private per-user
+            // directory to lock under; `lumen-os-lifecycle`'s own tests
+            // cover that branch directly. Print and stop rather than fail:
+            // the same house pattern as a display a sandbox lacks.
+            eprintln!(
+                "skip: this environment offered no private per-user directory to bind the \
+                 single-instance socket under; nothing to assert about a second launch"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+
+        // Best-effort cleanup of the socket the primary bound - matches
+        // `lumen-os-lifecycle`'s own tests, which face the same platform-
+        // specific location.
+        if let Some(rt) = std::env::var_os("XDG_RUNTIME_DIR") {
+            let _ = std::fs::remove_file(PathBuf::from(rt).join(format!("{id}.sock")));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+// -- Submodules (mechanical carve of the former monolithic run.rs) ----------
+// Each submodule opens with `use super::*;`, inheriting this module's import
+// block and (via the private glob re-exports below) every sibling's items, so
+// intra-`run` references resolve unchanged.
+mod app_build;
+mod caret_scroll;
+mod check;
+mod hot_reload;
+mod i18n;
+mod introspection;
+mod loading;
+mod restyle;
+mod script_commands;
+mod script_systems;
+// `pub(crate)` so `crate::config`'s bundle capability inference can reuse the
+// shared source scan + marker helpers (Part B tree-shaking).
+pub(crate) mod subsystems;
+
+// Private glob re-exports: make every submodule item visible inside `run`
+// (and, transitively, to each submodule's `use super::*`). Behaviourally this
+// reconstructs the flat namespace the single-file module had.
+use caret_scroll::*;
+use check::*;
+use hot_reload::*;
+use i18n::*;
+use loading::*;
+use restyle::*;
+use script_commands::*;
+use script_systems::*;
+use subsystems::*;
+
+// Public re-exports: preserve every `crate::run::<name>` path that external
+// code (lib.rs re-exports, run_headless.rs, cli/build.rs, integration tests)
+// depended on when these items lived directly in run.rs.
+// `build_app` is public so the full-pipeline integration tests (which live in
+// `lumenc`, where the injected parser is the same crate instance) can build an
+// app window-free without the extra `WinitPlugin` that `build_headless_app`
+// layers on.
+pub use app_build::build_app;
+pub use check::CheckReport;
+// The app's catalogue directory, so a build that resolves translations
+// ahead of time reads them from where the runtime would.
+#[cfg(feature = "runtime-parse")]
+pub use check::{check_app, compile_app, compile_app_with_skin, script_exports};
+#[cfg(feature = "runtime-parse")]
+pub(crate) use hot_reload::HotReloadDriver;
+pub use i18n::locale_dir;
+pub use restyle::{
+    ColorSchemeIntent, ErrorBanner, ErrorBannerMarker, dismiss_error_banner_on_escape,
+    reconcile_error_banner,
+};

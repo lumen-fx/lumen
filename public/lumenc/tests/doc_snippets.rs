@@ -56,7 +56,7 @@ fn workspace_root() -> PathBuf {
 
 /// One fenced block, with where to point when it fails.
 struct Block {
-    /// `docs/docs/guides/styling.md:122`, the line the fence opens on.
+    /// `docs/src/guides/styling.md:122`, the line the fence opens on.
     origin: String,
     /// What the opening fence names the block, `rust` or `text` or nothing.
     lang: String,
@@ -69,12 +69,12 @@ fn doc_blocks() -> Vec<Block> {
     let listing = Command::new("git")
         .arg("-C")
         .arg(&root)
-        .args(["ls-files", "--full-name", "docs/docs"])
+        .args(["ls-files", "--full-name", "docs/src"])
         .output()
         .unwrap_or_else(|e| panic!("ask git which docs are tracked: {e}"));
     assert!(
         listing.status.success(),
-        "git ls-files docs/docs failed: {}",
+        "git ls-files docs/src failed: {}",
         String::from_utf8_lossy(&listing.stderr)
     );
 

@@ -44,7 +44,7 @@ lumen-ir = { workspace = true }
 # `run` / `build` / `check` / `mcp` dev paths and injects its own parser
 # front-end via `LumencParser` (SourceParser).
 lumen-runtime = { workspace = true, optional = true }
-# `.lpak` archive packer for `lumenc bundle` (bundle_cli). OPTIONAL behind the
+# `.lpak` archive packer for `lumenc bundle` (cli::bundle). OPTIONAL behind the
 # default-on `bundle` feature: lumen-assets carries a hard `vello` dependency
 # for its runtime GPU-upload path, so a thin compiler library
 # (`--no-default-features`, as `lumen-lsp` links) drops it - and vello/wgpu with
@@ -54,7 +54,7 @@ bevy_ecs.workspace = true
 glam.workspace = true
 # Markup (`.lmn`) XML parser. Optional + gated behind the default-on
 # `runtime-parse` feature: a runtime that only loads a precompiled AOT
-# artifact (`lumenc build`) drops roxmltree and the whole `parser_html`
+# artifact (`lumenc build`) drops roxmltree and the whole `parse::html`
 # stack entirely. See [features] below.
 roxmltree = { version = "0.21", optional = true }
 thiserror.workspace = true
@@ -62,7 +62,7 @@ cssparser.workspace = true
 # Compact binary codec for the AOT artifact. Always compiled: both the
 # `build` (serialize) and the parser-free runtime (deserialize) paths use it.
 bincode.workspace = true
-# Widget tag registry - parser_html consults
+# Widget tag registry - parse::html consults
 # `lumen_widget::is_widget_tag_registered` to accept `#[derive(Widget)]`
 # custom tags after the built-in KNOWN_TAGS miss.
 lumen-widget = { workspace = true }
@@ -137,7 +137,7 @@ toml.workspace = true
 toml_edit.workspace = true
 serde.workspace = true
 
-# `lumenc screenshot` (mcp_cli, itself `dev-run`-gated) decodes the base64-PNG
+# `lumenc screenshot` (cli::mcp, itself `dev-run`-gated) decodes the base64-PNG
 # returned by the MCP `lumen.screenshot` RPC and writes the raw bytes to disk.
 base64.workspace = true
 image.workspace = true
@@ -311,7 +311,7 @@ profiling-tracy = ["profiling", "lumen-runtime?/profiling-tracy"]
 # `lint`, and `build` - parses `.lmn` / `.css` from source. Turn it OFF
 # (`--no-default-features`) to build a parser-free compiler library that only
 # consumes a precompiled AOT artifact (`lumenc build`). This gates lumenc's own
-# `parser_html` / `formatter` / `resolve` / `source_parser` stack (dropping
+# `parse::html` / `parse::formatter` / `parse::resolve` / `parse::source_parser` stack (dropping
 # `roxmltree`) AND, when the runtime is present, the runtime's from-source load
 # path (weak forward - a no-op in a thin build). Mirrors Qt's `qmlcachegen`
 # and Slint's compile-.slint-to-Rust model.

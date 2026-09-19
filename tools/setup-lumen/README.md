@@ -62,7 +62,7 @@ no use for either, and the check stays off in CI regardless.
   install and the action stops with that message.
 - `lumenc run` loads the runtime library, which links GTK, ALSA, X11, and
   Wayland on Linux. Install those in the job before a headless run; see
-  [Build Lumen from source](../../docs/docs/contributing/building-lumen.md) for
+  [Build Lumen from source](../../docs/src/contributing/building-lumen.md) for
   the list. `lumenc check`, `new`, and `fmt` need none of them.
 - Releases published before `sha256sums.txt` existed cannot be installed. There
   is nothing to verify them against, and the action stops rather than skipping
@@ -70,6 +70,6 @@ no use for either, and the check stays off in CI regardless.
 
 ## More
 
-- [Install Lumen](../../docs/docs/getting-started/install.md), including the
+- [Install Lumen](../../docs/src/getting-started/install.md), including the
   installer for a workstation and the continuous-integration notes.
-- [Every `lumenc` subcommand and flag](../../docs/docs/reference/cli.md).
+- [Every `lumenc` subcommand and flag](../../docs/src/reference/cli.md).

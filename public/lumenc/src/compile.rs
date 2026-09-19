@@ -3,7 +3,7 @@
 //! [`compile_dir_to_lmna`] turns an app directory (`src/main.lmn` + optional
 //! `src/main.css` + inline / external `<script>`) into precompiled
 //! [`lumen_ir::artifact`] bytes using only the compiler front-end
-//! (`parser_html` / `parser_css` / `resolve`), the shared CSS cascade
+//! (`parse::html` / `parse::css` / `parse::resolve`), the shared CSS cascade
 //! (`lumen_ir::css`), and the artifact codec, with no dependency on
 //! `lumen-runtime`. That is what lets the `dlopen-run` launcher compile source
 //! without static-linking the fat runtime: it produces the bytes here and hands
@@ -38,7 +38,7 @@ use lumen_ir::layout_ir::Element;
 /// includes the identical bytes directly instead of sharing the constant.
 /// There is exactly one `ua.css` file on disk, with two `include_str!`
 /// sites reading it.
-const UA_CSS: &str = include_str!("../../../crates/runtime/src/skins/ua.css");
+const UA_CSS: &str = include_str!("../../../core/runtime/src/skins/ua.css");
 
 /// Errors raised while compiling a source directory to LMNA bytes.
 #[derive(Debug, thiserror::Error)]
@@ -167,10 +167,10 @@ fn compile_dir(
         Some(src) => {
             let mut imports: Vec<PathBuf> = Vec::new();
             Some(
-                crate::resolve::resolve_css_imports(
+                crate::parse::resolve::resolve_css_imports(
                     src,
                     &css_path,
-                    &crate::resolve::FsLoader,
+                    &crate::parse::resolve::FsLoader,
                     &mut imports,
                 )
                 .map_err(|e| CompileError::ParseCss(e.to_string()))?,
@@ -205,10 +205,10 @@ fn compile_dir(
     // var() substitution over the fully-spliced markup (parity with the runtime
     // load order so included fragments get var() too).
     let mut include_paths: Vec<PathBuf> = Vec::new();
-    let spliced = crate::resolve::resolve_includes(
+    let spliced = crate::parse::resolve::resolve_includes(
         &html,
         &html_path,
-        Some(&crate::resolve::FsLoader),
+        Some(&crate::parse::resolve::FsLoader),
         &mut include_paths,
     )
     .map_err(|e| CompileError::ParseHtml(attribute(e.to_string())))?;
@@ -333,7 +333,8 @@ fn compile_dir(
     let scripts = grouped_script_sources(&ir, &src_dir)?;
     // Expand the use sites the fragment bodies hold against each other, so
     // every body the artifact carries is the whole subtree it stands for.
-    crate::fragments::link(&mut fragments).map_err(|e| CompileError::ParseHtml(e.to_string()))?;
+    crate::parse::fragments::link(&mut fragments)
+        .map_err(|e| CompileError::ParseHtml(e.to_string()))?;
     ir.script_source = String::new();
     ir.external_scripts.clear();
 
@@ -364,7 +365,7 @@ fn script_fragments(
     let mut table = lumen_ir::fragment::FragmentTable::new();
     let mut fold = |source: &str, uri: &str| -> Result<(), CompileError> {
         let declared =
-            crate::lmn::script_fragments(source, uri).map_err(CompileError::ParseHtml)?;
+            crate::parse::lmn::script_fragments(source, uri).map_err(CompileError::ParseHtml)?;
         table
             .merge(declared)
             .map_err(|e| CompileError::ParseHtml(e.to_string()))

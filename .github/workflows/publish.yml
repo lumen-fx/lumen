@@ -39,7 +39,7 @@ name: publish
 #                           identity, the upload step moves into release.yml
 #                           and the registration names release.yml instead.
 #   candela-lang            published to crates.io from lumen-fx/candela, and
-#                           `crates/script/candela/Cargo.toml` pointing at it
+#                           `core/script/candela/Cargo.toml` pointing at it
 #                           with `package = "candela-lang"` and a `version`.
 #                           crates.io takes no crate with a git dependency, so
 #                           until that exists the crates.io job reports it and

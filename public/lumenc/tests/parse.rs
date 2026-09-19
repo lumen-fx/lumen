@@ -110,7 +110,7 @@ fn no_module_can_claim_a_tag_the_language_owns() {
     // consulted and are just as much the language's.
     const STRUCTURAL: &[&str] = &["menubar", "script", "slot", "template"];
 
-    for tag in lumenc::parser_html::KNOWN_TAGS {
+    for tag in lumenc::parse::html::KNOWN_TAGS {
         assert!(
             lumen_modules::RESERVED_TAGS.contains(tag),
             "built-in tag '{tag}' is missing from lumen_modules::RESERVED_TAGS, so a module \
@@ -119,7 +119,7 @@ fn no_module_can_claim_a_tag_the_language_owns() {
     }
     for tag in lumen_modules::RESERVED_TAGS {
         assert!(
-            lumenc::parser_html::KNOWN_TAGS.contains(tag) || STRUCTURAL.contains(tag),
+            lumenc::parse::html::KNOWN_TAGS.contains(tag) || STRUCTURAL.contains(tag),
             "'{tag}' is refused to modules but is not a tag the language has; drop it from \
              lumen_modules::RESERVED_TAGS"
         );
@@ -1650,7 +1650,7 @@ fn find_by_class<'a>(
 /// tabs / tooltip / scroll in addition to the original button / input /
 /// toggle / slider / tile set. This is the zero-`CssWarning` regression
 /// gate: every property + selector the skin writes must be in the
-/// supported subset (docs/docs/reference/css.md), or this test fails.
+/// supported subset (docs/src/reference/css.md), or this test fails.
 #[test]
 fn default_skin_applies_to_all_widgets_with_zero_warnings() {
     let src = r##"<root>
@@ -1782,11 +1782,11 @@ fn default_skin_applies_to_all_widgets_with_zero_warnings() {
     // `@media (prefers-color-scheme: dark)` token-override block too -
     // it must resolve just as cleanly as the light/default pass.
     let mut ir_dark = parse_html(src).expect("html parses");
-    let dark_ctx = lumenc::parser_css::MediaContext {
-        color_scheme: Some(lumenc::parser_css::ColorSchemePreference::Dark),
+    let dark_ctx = lumenc::parse::css::MediaContext {
+        color_scheme: Some(lumenc::parse::css::ColorSchemePreference::Dark),
         ..Default::default()
     };
-    let warnings_dark = lumenc::parser_css::apply_css_with_media(&mut ir_dark, &css, &dark_ctx)
+    let warnings_dark = lumenc::parse::css::apply_css_with_media(&mut ir_dark, &css, &dark_ctx)
         .expect("skin applies under dark MediaContext");
     assert!(
         warnings_dark.is_empty(),

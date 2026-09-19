@@ -70,7 +70,7 @@ crate-type = ["lib", "dylib"]
 # `lumenc` binary (dev-run + devtools) and `liblumen` (the default shared
 # library) enable, so the one engine those builds share is the same engine a
 # standalone build of this crate produces.
-lumen-runtime = { path = "../../crates/runtime", default-features = false, features = [
+lumen-runtime = { path = "../../core/runtime", default-features = false, features = [
     "runtime-parse",
     "http-fetch",
     "mcp",
@@ -82,10 +82,10 @@ lumen-runtime = { path = "../../crates/runtime", default-features = false, featu
     "devtools",
 ] }
 # The rest of the SDK surface, re-exported through `sdk` below.
-lumen-core = { path = "../../crates/core" }
-lumen-script = { path = "../../crates/script/api", default-features = false }
-lumen-widget = { path = "../../crates/widget" }
-lumen-widget-macros = { path = "../../crates/widget-macros" }
+lumen-core = { path = "../../core" }
+lumen-script = { path = "../../core/script/api", default-features = false }
+lumen-widget = { path = "../../core/widget" }
+lumen-widget-macros = { path = "../../core/widget-macros" }
 # Same spec as the workspace pin; spelled out because this manifest cannot
 # inherit it. `std` is required for the multi-threaded executor; see the
 # workspace Cargo.toml's bevy_ecs comment.
@@ -97,4 +97,4 @@ rhai = { version = "1.24", features = ["sync"] }
 # Not re-exported: named to pin its `compiler` default into the engine build,
 # because the `lumenc` binary enables it and a module built against an engine
 # without it would resolve nothing. See the feature-pinning note above.
-lumen-script-candela = { path = "../../crates/script/candela", default-features = true }
+lumen-script-candela = { path = "../../core/script/candela", default-features = true }

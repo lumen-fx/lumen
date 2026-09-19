@@ -26,7 +26,7 @@ disagrees with the compiler.
   help, and cross-file id lookups against the sibling markup.
 - **Lumen CSS** - stylesheet parse errors and apply-time property warnings.
 
-See [`crates/dev/lsp/README.md`](../../crates/dev/lsp/README.md) for the full
+See [`dev/lsp/README.md`](../../dev/lsp/README.md) for the full
 server surface and its known gaps.
 
 ### Syntax highlighting

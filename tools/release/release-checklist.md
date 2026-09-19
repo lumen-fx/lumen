@@ -36,7 +36,7 @@ put an app's declared modules inside one executable on a machine with no Rust
 toolchain, so unlike the modules archive it is published on every platform.
 `install.sh` never fetches it; `lumenc` downloads it when that command needs
 it, the way it downloads the browser runtime.
-`docs/docs/contributing/building-lumen.md` says what the kit holds and why it
+`docs/src/contributing/building-lumen.md` says what the kit holds and why it
 is the size it is.
 
 The `.msi` is the Windows install channel and the `.zip` is the portable
@@ -113,7 +113,7 @@ checklist.
      library, and `bin/lumen-launcher` into one archive, all in the *same*
      `bin/` directory, along with the two trees `lumenc` reads from beside
      itself: the candela standard library in `bin/libs` and the templates in
-     `bin/templates`. See the note on `public/lumenc/src/loader.rs` below;
+     `bin/templates`. See the note on `public/lumenc/src/link/loader.rs` below;
    - on macOS, rewrites the install name of every shared library it packaged,
      and every reference to one, to `@rpath/<file name>`, then re-signs what
      it touched. `ld64` writes the path a library was built at into the
@@ -244,7 +244,7 @@ checklist.
 ## Why liblumen goes in bin/, not lib/
 
 `lumenc` does not link `lumen` at compile time; it `dlopen`s the shared
-`liblumen` library at run time (see `public/lumenc/src/loader.rs`). Its search
+`liblumen` library at run time (see `public/lumenc/src/link/loader.rs`). Its search
 order is: next to its own executable, then an `LUMEN_LIB_DIR` override,
 then the platform loader's default search path. It does not look in a
 sibling `lib/` directory. A prebuilt install that put `lumenc` in `bin/`
@@ -299,8 +299,8 @@ were uploaded to.
 
 `lumen-web.tar.gz` is named the same way and is not a target. The installer
 skips it, and `lumenc` fetches it by that exact name
-(`public/lumenc/src/package_cli.rs`) from the release
-`public/lumenc/src/release.rs` resolves, verifying it against the same
+(`public/lumenc/src/package/cli.rs`) from the release
+`public/lumenc/src/package/release.rs` resolves, verifying it against the same
 `sha256sums.txt`.
 
 `lumenc` follows the same split when it offers an update. On Unix it re-runs

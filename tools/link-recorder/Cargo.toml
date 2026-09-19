@@ -20,7 +20,7 @@ name = "link-recorder"
 path = "src/main.rs"
 
 [dependencies]
-# The record is JSON Lines; `crates/modules/src/link_kit.rs` holds the typed
+# The record is JSON Lines; `core/modules/src/link_kit.rs` holds the typed
 # reader. Deliberately not a dependency here: this binary sits on the critical
 # path of every link in a build, so it stays as small and as fast to build as
 # a shim can be.

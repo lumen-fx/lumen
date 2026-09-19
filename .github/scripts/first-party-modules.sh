@@ -12,7 +12,7 @@
 # them: the release workflow building them beside the engine, the one packaging
 # `lumen-modules-<target>.tar.gz`, and the one naming the modules a link kit
 # carries. A crate added under std/ then reaches every release step untouched.
-# The static launcher (crates/launcher) still names each module by hand, in its
+# The static launcher (core/launcher) still names each module by hand, in its
 # manifest and its link anchors, and the link-kit step refuses the build when
 # that list is missing one.
 #

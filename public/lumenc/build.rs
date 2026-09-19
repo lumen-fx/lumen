@@ -32,7 +32,7 @@
 use std::path::{Path, PathBuf};
 
 /// Directory the script standard library sits in, beside the binaries that
-/// read it. Matches `SCRIPT_LIBRARY_DIR` in `src/package_cli.rs`, the release
+/// read it. Matches `SCRIPT_LIBRARY_DIR` in `src/package/cli.rs`, the release
 /// archives, and the Windows installer.
 const SCRIPT_LIBRARY_DIR: &str = "libs";
 

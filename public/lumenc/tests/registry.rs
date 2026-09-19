@@ -100,7 +100,13 @@ fn lumen_package(dir: &Path, name: &str, version: &str) -> String {
     std::fs::create_dir_all(&root).expect("package root");
     let file = &lumen_modules::library_spellings(name)[0];
     std::fs::write(root.join(file), b"stand-in library bytes").expect("library");
-    common::lumen_package(name, version, lumenc::lpm::host_target(), &root, file)
+    common::lumen_package(
+        name,
+        version,
+        lumenc::package::lpm::host_target(),
+        &root,
+        file,
+    )
 }
 
 /// An app that names nothing in the registry never looks for `lpm`, so a
@@ -174,7 +180,7 @@ fn every_requirement_crosses_on_the_command_line() {
         "a path source is not a registry requirement: {argv:?}"
     );
     assert!(
-        argv.contains(&lumenc::lpm::host_target().to_string()),
+        argv.contains(&lumenc::package::lpm::host_target().to_string()),
         "{argv:?}"
     );
     assert!(
@@ -323,7 +329,7 @@ fn a_package_without_a_library_names_what_it_holds() {
         &format!(
             "{{\"name\":\"shape-tools\",\"version\":\"1.0.0\",\"platform\":\"lumen\",\
              \"target\":\"{}\",\"dir\":{},\"files\":[\"README.md\"]}}",
-            lumenc::lpm::host_target(),
+            lumenc::package::lpm::host_target(),
             serde_json::to_string(&empty.display().to_string()).expect("a path encodes"),
         ),
     );
