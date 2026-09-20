@@ -186,7 +186,11 @@ jobs:
         run: |
           set -euo pipefail
           url="https://raw.githubusercontent.com/lumen-fx/lumen/v$LUMEN_VERSION/rust-toolchain.toml"
-          curl -fsSL "$url" -o rust-toolchain-lumen.toml
+          # Retried, so a dropped connection costs a few seconds rather than
+          # the build. A file the tag does not carry still fails, a few
+          # seconds later.
+          curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+            "$url" -o rust-toolchain-lumen.toml
           channel="$(awk -F'"' '/^channel/ { print $2; exit }' rust-toolchain-lumen.toml)"
           [ -n "$channel" ] || { echo "$url names no channel" >&2; exit 1; }
           echo "Lumen v$LUMEN_VERSION pins rust $channel"
@@ -336,14 +340,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="$(curl -fsSLo /dev/null -w '%{url_effective}' \
+          # Three transfers a reset connection would otherwise turn into a
+          # failed release, so each one is retried. An asset the release never
+          # published still fails, a few seconds later.
+          tag="$(curl -fsSLo /dev/null --retry 3 --retry-all-errors --retry-delay 2 \
+            -w '%{url_effective}' \
             https://github.com/lumen-fx/registry/releases/latest)"
           tag="${tag##*/}"
           version="${tag#v}"
           asset="lpm_${version}_linux_amd64.tar.gz"
           base="https://github.com/lumen-fx/registry/releases/download/$tag"
-          curl -fsSL "$base/checksums.txt" -o checksums.txt
-          curl -fsSL "$base/$asset" -o "$asset"
+          curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+            "$base/checksums.txt" -o checksums.txt
+          curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+            "$base/$asset" -o "$asset"
           want="$(awk -v a="$asset" '{ n = $2; sub(/^\*/, "", n); if (n == a) { print $1; exit } }' checksums.txt)"
           [ -n "$want" ] || { echo "release $tag publishes no $asset" >&2; exit 1; }
           echo "$want  $asset" | sha256sum -c -

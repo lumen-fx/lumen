@@ -46,7 +46,14 @@ else
   trap 'rm -rf "$tools"' EXIT
   url="https://github.com/WebAssembly/binaryen/releases/download/$binaryen_version/binaryen-$binaryen_version-$slug.tar.gz"
   echo "fetching wasm-opt from $url"
-  curl -fsSL "$url" | tar xz -C "$tools"
+  # To a file rather than straight into tar: a retry restarts the transfer,
+  # which would append a second copy of the archive to whatever tar had
+  # already read. Retried, because a dropped connection here is worth a few
+  # more seconds rather than the whole job; a release that publishes no such
+  # archive still fails.
+  curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+    "$url" -o "$tools/binaryen.tar.gz"
+  tar xzf "$tools/binaryen.tar.gz" -C "$tools"
   wasm_opt="$tools/binaryen-$binaryen_version/bin/wasm-opt"
 fi
 
