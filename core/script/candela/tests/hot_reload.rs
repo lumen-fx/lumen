@@ -72,6 +72,35 @@ fn replace_with_compile_error_preserves_old_handlers() {
     );
 }
 
+/// #191 on the reload path: a reload compiles through the same checked path
+/// the first load and `lumenc check` use, so an edit that breaks a handler
+/// body is refused as the file is saved rather than on the next click, and
+/// the program that was already running keeps running.
+#[test]
+fn replace_with_a_broken_handler_body_preserves_old_handlers() {
+    let _serial = serialise();
+    let mut host = CandelaHost::new();
+    host.load(&main_registered("save_v1", 1), "app.cdl")
+        .expect("initial load");
+
+    let err = host
+        .replace(
+            "import \"lumen.cdl\";\nfn main() { lumen::on(\"click\", \"save\", \"save_v2\"); }\n\
+             fn save_v2(id: any) { let n = 1; n.uppercase(); }\n",
+            "app.cdl",
+        )
+        .expect_err("a handler body that cannot compile must fail the reload");
+    assert!(
+        err.to_string().contains("uppercase"),
+        "the reload error names the failing call: {err}"
+    );
+    assert_eq!(
+        host.handler_for("click", "save"),
+        Some("save_v1".to_owned()),
+        "the handler that was running survives the refused reload",
+    );
+}
+
 #[test]
 fn replace_with_runtime_error_preserves_old_handlers() {
     let _serial = serialise();

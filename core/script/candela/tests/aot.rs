@@ -346,3 +346,36 @@ fn main() {}
         "the failure names the missing function: {message}"
     );
 }
+
+/// #191, the build side: a shipped image is compiled from the same checked
+/// path `compile_check` uses, so a handler body that fails the check fails the
+/// build too. Without this a broken handler would pass the build and reach a
+/// user as a click that kills the program.
+#[test]
+fn a_body_error_in_a_handler_nothing_calls_fails_the_build() {
+    const BROKEN: &str = r#"
+import "lumen.cdl";
+
+fn handle_bump(id: any) {
+    let n = 1;
+    n.uppercase();
+}
+
+fn main() {
+    lumen::on("click", "bump", "handle_bump");
+}
+"#;
+    let err = CandelaHost::new()
+        .compile_bytecode(BROKEN, "handler.cdl")
+        .expect_err("the image is not built from a handler that cannot compile");
+    match err {
+        ScriptError::Compile { uri, message, .. } => {
+            assert_eq!(uri, "handler.cdl");
+            assert!(
+                message.contains("uppercase"),
+                "the message names the failing call: {message}"
+            );
+        }
+        other => panic!("expected a compile error, got {other:?}"),
+    }
+}

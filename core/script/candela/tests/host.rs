@@ -262,6 +262,92 @@ fn compile_check_is_side_effect_free() {
     );
 }
 
+/// The body of a handler, as an author writes it: the two lines from #191,
+/// which call a string method on an int.
+const BROKEN_BODY: &str = "    let n = 1;\n    n.uppercase();";
+
+/// A whole program whose only handler carries `body`, registered from `main`
+/// so nothing in the script itself ever calls it.
+fn handler_program(signature: &str, body: &str) -> String {
+    format!(
+        "{HOST_BLOCK}\nfn {signature} {{\n{body}\n}}\n\nfn main() {{\n    \
+         lumen::on(\"click\", \"bump\", \"handle_bump\");\n}}\n"
+    )
+}
+
+/// The 1-based line `BROKEN_BODY`'s failing call sits on in `src`.
+fn line_of_uppercase(src: &str) -> u32 {
+    src.lines()
+        .position(|l| l.contains("n.uppercase()"))
+        .map(|i| i as u32 + 1)
+        .expect("the program carries the failing call")
+}
+
+/// #191: only the runtime calls a handler, so the body of one used to reach
+/// the compiler for the first time on the click that ran it, and `check`
+/// passed a program that died on its first event.
+///
+/// candela compiles an entry point for every function in the app's own source
+/// that annotates all of its parameters, at those declared types, so a handler
+/// nothing in the script calls is type-checked with everything else and the
+/// check refuses it here.
+#[test]
+fn compile_check_rejects_a_body_error_in_a_handler_nothing_calls() {
+    let host = CandelaHost::new();
+    let src = handler_program("handle_bump(id: any)", BROKEN_BODY);
+    let err = host
+        .compile_check(&src, "handler.cdl")
+        .expect_err("a handler body that cannot compile fails the check");
+    match err {
+        ScriptError::Compile {
+            uri, line, message, ..
+        } => {
+            assert_eq!(uri, "handler.cdl");
+            assert_eq!(
+                line,
+                line_of_uppercase(&src),
+                "the error points at the author's own line"
+            );
+            assert!(
+                message.contains("uppercase"),
+                "the message names the failing call: {message}"
+            );
+        }
+        other => panic!("expected a compile error, got {other:?}"),
+    }
+
+    // The shape is fine; it is the body that is wrong. The same handler with a
+    // working body still checks clean.
+    CandelaHost::new()
+        .compile_check(
+            &handler_program("handle_bump(id: any)", "    lumen::add_clicks(1);"),
+            "handler.cdl",
+        )
+        .expect("a handler whose body compiles is accepted");
+}
+
+/// Where the check stops: a function with a bare parameter has no declared
+/// type to compile its body against, so candela specialises it at the call
+/// that reaches it. For a handler that call comes from the runtime, so the
+/// diagnostic arrives on the first event instead of at check time. Annotating
+/// the parameter, `any` included, moves it back to the check.
+#[test]
+fn a_bare_parameter_handler_reports_its_body_error_on_the_first_call() {
+    let mut host = CandelaHost::new();
+    let src = handler_program("handle_bump(id)", BROKEN_BODY);
+    host.compile_check(&src, "handler.cdl")
+        .expect("a bare parameter leaves the body for the call that reaches it");
+    host.load(&src, "handler.cdl").expect("and it loads");
+
+    let err = host
+        .call("handle_bump", &[ScriptValue::Str("bump".into())])
+        .expect_err("the call that reaches the body is where it fails");
+    assert!(
+        err.to_string().contains("uppercase"),
+        "the deferred diagnostic names the failing call: {err}"
+    );
+}
+
 /// Parity guard: synthesize a `host \"lumen\" { ... }` block from every entry in
 /// [`BUILTINS`] and compile it. candela validates each declared host fn against
 /// its registered closure (arity, types, and fixed-versus-variadic), so a clean

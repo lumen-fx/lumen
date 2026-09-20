@@ -56,6 +56,73 @@ fn candela_app_checks_clean() {
     assert!(report.has_script, "candela-smoke has a <script> block");
 }
 
+/// The body of a handler, as an author writes it: the two lines from #191,
+/// which call a string method on an int.
+const BROKEN_BODY: &str = "    let n = 1;\n    n.uppercase();";
+
+/// The candela source of a one-button app whose click handler carries `body`.
+fn handler_source(body: &str) -> String {
+    format!(
+        "import \"lumen.cdl\";\n\nfn on_start() {{\n    \
+         lumen::on(\"click\", \"bump\", \"handle_bump\");\n}}\n\n\
+         fn handle_bump(id: any) {{\n{body}\n}}\n\nfn main() {{}}\n"
+    )
+}
+
+/// The 1-based line `BROKEN_BODY`'s failing call sits on in `src`.
+fn line_of_uppercase(src: &str) -> u32 {
+    src.lines()
+        .position(|l| l.contains("n.uppercase()"))
+        .map(|i| i as u32 + 1)
+        .expect("the program carries the failing call")
+}
+
+/// Write a one-button candela app whose click handler carries `body`.
+fn write_handler_app(dir: &std::path::Path, body: &str) {
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir.join("src")).expect("create app dir");
+    // No introspection server, so a check in CI binds no port.
+    std::fs::write(dir.join("lumen.toml"), "[mcp]\nport = 0\n").expect("write lumen.toml");
+    std::fs::write(
+        dir.join("src").join("main.lmn"),
+        "<root><button id=\"bump\" text=\"bump\"/><script src=\"main.cdl\"/></root>\n",
+    )
+    .expect("write main.lmn");
+    std::fs::write(dir.join("src").join("main.cdl"), handler_source(body)).expect("write main.cdl");
+}
+
+/// #191: nothing in the script calls a handler, so its body used to reach the
+/// compiler for the first time on the click that ran it; `check` accepted the
+/// app and the click killed the script. The script compile `check` runs covers
+/// every function in the app's own source that annotates its parameters, so the
+/// app fails here instead, naming the call the author got wrong.
+#[test]
+fn a_broken_handler_body_fails_the_check() {
+    let dir = std::env::temp_dir().join(format!("lumenc-broken-handler-{}", std::process::id()));
+    write_handler_app(&dir, BROKEN_BODY);
+    let broken = lumenc::check_app(&dir).err();
+
+    // The same app with a handler that compiles is accepted, so what fails is
+    // the body and not the shape of a function only the runtime calls.
+    write_handler_app(&dir, "    lumen::signal_set(\"greeting\", \"clicked\");");
+    let clean = lumenc::check_app(&dir);
+    std::fs::remove_dir_all(&dir).ok();
+
+    let message = broken
+        .expect("a handler that cannot compile fails the check")
+        .to_string();
+    clean.expect("a handler whose body compiles checks clean");
+    assert!(
+        message.contains("uppercase"),
+        "the error names the failing call: {message}"
+    );
+    let line = line_of_uppercase(&handler_source(BROKEN_BODY));
+    assert!(
+        message.contains(&format!(":{line}:")),
+        "the error points at the author's own line ({line}): {message}"
+    );
+}
+
 /// Whether the templates the toolchain ships are on this machine.
 ///
 /// They are downloaded rather than kept in the repository
