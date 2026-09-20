@@ -206,10 +206,46 @@ else
   HASHER=none
 fi
 
+# curl's own --retry covers a timeout, a 429 and a 5xx, and has since 7.12. It
+# leaves a reset connection alone: that exits 56 on the first attempt, so one
+# passing fault ends the install, and the message the caller prints then blames
+# a release that is in fact there. The option that closes the gap is
+# --retry-all-errors, which arrived in curl 7.71, and this script runs on
+# whatever curl the machine has, including the 7.68 of Ubuntu 20.04 and the
+# 7.61 of RHEL 8, where an unknown option exits 2 and takes the install down
+# with it. So the loop below covers that half.
+#
+# It retries whatever curl gave up on, except exit 22: with -f that is a status
+# curl already decided was worth no retry, which makes it an answer rather than
+# a fault, so a missing asset still fails at once and the pinned-version probe
+# below still costs no waiting. stdout is held back until an attempt answers,
+# so a --write-out value comes out once rather than once per try; every caller
+# sends the download itself to a file with -o, which keeps that buffer small.
+#
+# The wget branch needs none of this and is left alone: wget retries a reset by
+# itself, --tries defaults to 20, and with -O it rewrites the file from the
+# start on each try rather than appending to the part it already has.
+curl_retry() {
+  # curl_retry CURL-ARG... -> stdout of the attempt that answered
+  curl_try=1
+  while true; do
+    if curl_out="$(curl --retry 3 --retry-delay 2 "$@")"; then
+      printf '%s' "$curl_out"
+      return 0
+    else
+      curl_rc=$?
+    fi
+    [ "$curl_rc" -ne 22 ] || return "$curl_rc"
+    [ "$curl_try" -lt 3 ] || return "$curl_rc"
+    curl_try=$((curl_try + 1))
+    sleep 2
+  done
+}
+
 fetch_quiet() {
   # fetch_quiet URL DEST
   case "$DOWNLOADER" in
-    curl) curl -fsSL -o "$2" "$1" ;;
+    curl) curl_retry -fsSL -o "$2" "$1" ;;
     wget) wget -q -O "$2" "$1" ;;
     *) fail "need curl or wget" ;;
   esac
@@ -218,7 +254,7 @@ fetch_quiet() {
 fetch_shown() {
   # fetch_shown URL DEST
   case "$DOWNLOADER" in
-    curl) curl -fSL --progress-bar -o "$2" "$1" ;;
+    curl) curl_retry -fSL --progress-bar -o "$2" "$1" ;;
     wget) wget -O "$2" "$1" ;;
     *) fail "need curl or wget" ;;
   esac
@@ -235,7 +271,7 @@ sha256_of() {
 final_url() {
   # final_url URL -> the URL a GET of URL ends at, after redirects.
   case "$DOWNLOADER" in
-    curl) curl -fsSL -o /dev/null -w '%{url_effective}' "$1" ;;
+    curl) curl_retry -fsSL -o /dev/null -w '%{url_effective}' "$1" ;;
     wget)
       # --spider makes it a HEAD; --server-response writes every response
       # header to stderr, so the last Location is the end of the chain.

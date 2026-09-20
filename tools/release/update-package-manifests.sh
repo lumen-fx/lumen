@@ -55,7 +55,10 @@ if [ -z "$SUMS" ]; then
   SUMS="$(mktemp)"
   CLEANUP="$SUMS"
   trap 'rm -f "$CLEANUP"' EXIT
-  if ! curl -fsSL -o "$SUMS" "$RELEASES/v$VERSION/sha256sums.txt"; then
+  # Retried, so a dropped connection does not read as a release that
+  # published no checksums. One that really published none still fails.
+  if ! curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+       -o "$SUMS" "$RELEASES/v$VERSION/sha256sums.txt"; then
     echo "update-package-manifests.sh: v$VERSION publishes no sha256sums.txt" >&2
     exit 1
   fi

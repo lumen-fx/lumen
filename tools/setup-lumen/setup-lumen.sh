@@ -143,20 +143,60 @@ unpack() {
   esac
 }
 
+# --- download -----------------------------------------------------------------
+
+# curl's own --retry covers a timeout, a 429 and a 5xx, and has since 7.12. It
+# leaves a reset connection alone: that exits 56 on the first attempt, and a
+# caller reading the exit status sees a fault it cannot tell from a real
+# answer. The option that closes that gap is --retry-all-errors, which arrived
+# in curl 7.71, and this action is published for anyone to run, on runners and
+# in plain shells whose curl is older than that, where an unknown option exits
+# 2 and takes the install down with it. So the loop below does that half.
+#
+# It retries whatever curl gave up on, except exit 22: with -f that is a status
+# curl already decided was worth no retry, which makes it an answer rather than
+# a fault. stdout is held back until an attempt succeeds, so a --write-out
+# value comes out once rather than once per try; every caller writes its
+# download to a file with -o, which is what keeps that buffer small.
+curl_retry() {
+  # curl_retry CURL-ARG... -> stdout of the attempt that answered
+  local attempt=1 out rc
+  while true; do
+    if out="$(curl --retry 3 --retry-delay 2 "$@")"; then
+      printf '%s' "$out"
+      return 0
+    else
+      rc=$?
+    fi
+    [ "$rc" -ne 22 ] || return "$rc"
+    [ "$attempt" -lt 3 ] || return "$rc"
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+}
+
 # --- release lookup -----------------------------------------------------------
 
 # A release this script can install is one that published sha256sums.txt.
 # Asking for that file is therefore both the existence check for a tag and the
 # first half of the download, so the two never disagree.
+#
+# This asks a question rather than fetching something. A 404 is the answer "no
+# release under that name" and the caller goes on to try the other spelling of
+# the version, so curl_retry spends no attempts on it. A reset is not an
+# answer, and reporting one as a missing release is how a passing fault turns
+# into "no installable release".
 has_release() {
-  curl -fsSLI -o /dev/null "$(asset_url "$1" sha256sums.txt)" 2> /dev/null
+  # has_release TAG
+  curl_retry -fsSLI -o /dev/null "$(asset_url "$1" sha256sums.txt)" 2> /dev/null
 }
 
 resolve_tag() {
   # resolve_tag VERSION -> the git tag to install from
   local spec="$1" url tag
   if [ "$spec" = latest ]; then
-    url="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$GH_URL/releases/latest")" ||
+    url="$(curl_retry -fsSLI -o /dev/null -w '%{url_effective}' \
+      "$GH_URL/releases/latest")" ||
       fail "could not reach $GH_URL/releases/latest"
     tag="${url##*/}"
     case "$tag" in
@@ -236,7 +276,7 @@ cmd_install() {
 
   printf 'setup-lumen: release %s, target %s\n' "$tag" "$target"
 
-  curl -fsSL -o "$tmp/sha256sums.txt" "$sums_url" ||
+  curl_retry -fsSL -o "$tmp/sha256sums.txt" "$sums_url" ||
     fail "could not download $sums_url"
 
   # sha256sum's own output: "<hex>  <name>", with a "*" before the name when
@@ -259,7 +299,7 @@ cmd_install() {
   fi
 
   printf 'setup-lumen: downloading %s\n' "$asset_url_full"
-  curl -fsSL -o "$tmp/$asset" "$asset_url_full" ||
+  curl_retry -fsSL -o "$tmp/$asset" "$asset_url_full" ||
     fail "could not download $asset_url_full"
 
   got="$(sha256_of "$tmp/$asset")"
