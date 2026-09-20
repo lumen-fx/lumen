@@ -102,6 +102,13 @@ parameter that function does not have all fail here. So does markup naming a
 component it cannot instantiate: a name no candela function declares, a name a
 `<template>` already claims, or a component that reaches itself.
 
+In a candela script the check reaches every function body `main` reaches, plus
+the body of every function in the app's own script file that annotates all of
+its parameters. A handler is the second kind, so a body error in one fails the
+check instead of waiting for the event that runs it. See
+[handler annotations](scripting-candela.md#event-handlers) for what a bare
+parameter costs.
+
 Every command that compiles markup from source (`check`, `run`, `build`,
 `package`) prints the parse-time findings to stderr as
 `<severity> <file>:<line>:<col> [<kind>] <message>`, with a `hint:` line when

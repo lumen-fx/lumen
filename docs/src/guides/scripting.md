@@ -19,7 +19,7 @@ fn on_ready() {
     get_by_id("bump").on("click", "on_bump");
 }
 
-fn on_bump(ev) {
+fn on_bump(ev: int) {
     let clicks = signal<int>("clicks");
     clicks.set(clicks.get() + 1);
 }
@@ -113,15 +113,25 @@ There are three ways to receive an event, and they compose.
 **Named callbacks** catch everything of one kind:
 
 ```rust
-fn on_click(id) { ... }
-fn on_double_click(id) { ... }
-fn on_long_press(id) { ... }
-fn on_timer(name) { ... }
+fn on_click(id: string) { ... }
+fn on_double_click(id: string) { ... }
+fn on_long_press(id: string) { ... }
+fn on_timer(name: string) { ... }
 ```
 
 Other callbacks in the same family cover text commits, toggles and sliders,
 file drops and picks, in-app drag and drop, hotkeys, menus, the tray, dialog
 results, HTTP replies, and window close.
+
+In candela, annotate the parameters. Nothing in the script calls a handler, so
+its declared types are all the compiler has to work from: `lumenc check`
+compiles the body of a handler whose parameters are annotated, and a handler
+left bare waits for the first event that reaches it, which is where a mistake
+in it surfaces. A packaged app carries no compiler at all, so a bare handler
+there ships and never fires. `any` counts as an annotation, and
+[the handler table](../reference/scripting-candela.md#event-handlers) gives the
+type of every argument a named callback takes. Rhai and Lua have no
+annotations, so their handlers stay bare.
 
 **Per-id routing** sends one element's events straight to one function, which
 reads better than an `if id == ...` chain:
@@ -130,8 +140,9 @@ reads better than an `if id == ...` chain:
 lumen::on("click", "save", "handle_save");
 ```
 
-Register it from `on_start`. Routing is available for `click`, `long_press`,
-`drop`, `timer`, `hotkey`, `menu`, and `tray`.
+Register it from `on_start`. Any event whose handler opens with an element id
+or a tag can be routed, and the routed function takes the arguments the named
+callback would have taken. Write the event name without the `on_` prefix.
 
 **DOM-style bindings** attach a handler to a node you hold:
 
@@ -341,8 +352,12 @@ fn on_start() {
     archive::extract("themes.zip", "themes", "themes");
 }
 
-fn on_archive_done(tag, dest, count) { signal<string>("status").set("unpacked " + str(count)); }
-fn on_archive_error(tag, message)    { signal<string>("status").set(message); }
+fn on_archive_done(tag: string, dest: string, count: int) {
+    signal<string>("status").set("unpacked " + str(count));
+}
+fn on_archive_error(tag: string, message: string) {
+    signal<string>("status").set(message);
+}
 ```
 
 Both paths resolve against the app directory, the same as everywhere else.

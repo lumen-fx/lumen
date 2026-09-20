@@ -406,6 +406,15 @@ impl ScriptHost for CandelaHost {
     /// [`Self::call_closure`] re-invokes it via [`candela::Program::call`].
     type Closure = String;
 
+    /// What the check reaches: [`candela::Engine::compile`] compiles every
+    /// body `main` reaches and then an entry point for every function in the
+    /// app's own source that annotates all of its parameters, at those
+    /// declared types (a function an imported script library declares is left
+    /// to the call that reaches it, whatever it annotates). A handler is
+    /// the second kind, since nothing in the script calls it, so a body error
+    /// in one fails the check instead of waiting for the event that runs it
+    /// (#191). A function with a bare parameter has no type to compile
+    /// against and stays with the call that reaches it.
     fn compile_check(&self, source: &str, uri: &str) -> Result<(), ScriptError> {
         // Compile against a throwaway engine + registries: candela's `compile`
         // runs `main` once (module instantiation), so checking on the live

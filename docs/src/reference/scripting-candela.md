@@ -173,8 +173,18 @@ fn on_toggle(id: string, checked: bool) { }
 Running from source works either way, because the compiler takes a bare
 parameter's type from the first call. A compiled app has no compiler to do
 that, so it records a call trampoline for each handler at build time and only
-records one where every parameter is annotated. A handler left bare compiles,
-ships, and is then never called.
+records one for a handler in the app's own script file whose parameters are all
+annotated. A handler left bare compiles, ships, and is then never called, and so
+is one an imported script library declares, whatever it annotates: write the
+handlers in the app's own file.
+
+Annotation is also what puts the handler's body in front of `lumenc check`.
+Nothing in the script calls a handler, so the declared types are the only ones
+its body can be compiled at ahead of the event: `check` and `build` compile the
+body of every handler that annotates its parameters and report a mistake in it
+the way they report one in `main`. A bare parameter defers that to the first
+event, which is where the error then appears, as a runtime failure of the
+handler.
 
 | Handler | Arguments |
 | --- | --- |
@@ -222,6 +232,10 @@ Routes one `(event, id)` pair to the script function named `handler`, bypassing
 the global handler for that pair only. `event` is the name without the `on_`
 prefix (`"click"`, `"toggle"`, `"timer"`, `"file_picked"`, ...). A handler
 registered for `save` also matches template-instance ids ending in `:save`.
+
+The routed function takes what the global handler takes, so a `click` route is
+`fn handle_save(id: string)` and a `toggle` route is
+`fn handle_flag(id: string, checked: bool)`. Annotate it the same way.
 
 ```rust
 lumen::local_id(source: string, suffix: string) -> string
@@ -274,7 +288,7 @@ fn on_start() {
     signal<int>("clicks").set(0);
 }
 
-fn bump(ev) {
+fn bump(ev: int) {
     let clicks = signal<int>("clicks");
     clicks.set(clicks.get() + 1);
 }
@@ -479,7 +493,7 @@ compose, see [composition](../guides/composition.md#components).
 The block itself is the surface to write against:
 
 ```rust
-fn Home(name) {
+fn Home(name: string) {
     return lmn!(<label class="home" text="home for $name"/>);
 }
 
@@ -559,7 +573,8 @@ it to `event_off` to unbind.
 | `lumen::event_on_capture(node: int, event_type: string, handler: string)` | `int` | Same, for the capture phase. |
 | `lumen::event_off(token: int)` | | Unbind. |
 
-The handler receives the event id as its only argument and reads the event
+The handler takes one parameter, the event id, for every event type:
+`fn handle_click(ev: int)`. Annotate it the same way, and read the event
 through the accessors below:
 
 | Accessor | Returns | Value |
@@ -611,9 +626,9 @@ fn on_ready() {
     row.on("click", "handle_row");
 }
 
-fn handle_row(id) {
-    let ev = event(id);
-    ev.prevent_default();
+fn handle_row(ev: int) {
+    let e = event(ev);
+    e.prevent_default();
 }
 
 fn main() {}
@@ -815,7 +830,7 @@ The response is a map:
 | `error` | `string` | Transport error text; empty when the request completed. |
 
 ```rust
-fn on_http(tag, response) {
+fn on_http(tag: string, response: any) {
     let r = as_map(response);
     if as_bool(r.get("ok")) {
         lumen::signal_set("status", as_str(r.get("body")));
@@ -1359,7 +1374,7 @@ A native function may fail. It raises where it was called, under the kind
 handles any other runtime error:
 
 ```rust
-fn level(pin) {
+fn level(pin: int) {
     try {
         return gpio::read(pin);
     } catch "host_fn_error" {

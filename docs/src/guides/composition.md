@@ -185,7 +185,7 @@ A component is a candela function that returns markup. Write the markup in an
 ```rust
 import "lumen.cdl";
 
-fn Home(name) {
+fn Home(name: string) {
     return lmn!(<label class="home" text="home for $name"/>);
 }
 
@@ -233,7 +233,7 @@ app runs belongs in a `bind-*` attribute inside the block, exactly as in a
 template body:
 
 ```rust
-fn Counter(label) {
+fn Counter(label: string) {
     return lmn!(<label text="$label" bind-text="count"/>);
 }
 ```
@@ -253,7 +253,7 @@ parameter no prop names is passed the empty string. A prop naming a parameter
 the function does not declare fails the compile, naming the component.
 
 ```rust
-fn Row(title, tone) {
+fn Row(title: string, tone: string) {
     return lmn!(<row class="row row-$tone"><label text="$title"/></row>);
 }
 

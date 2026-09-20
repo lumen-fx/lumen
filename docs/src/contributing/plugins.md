@@ -656,7 +656,7 @@ app.add_script_prelude(
     "gpio",
     r#"
 struct Pin { number: int }
-fn pin(number) { return Pin { number: number }; }
+fn pin(number: int) { return Pin { number: number }; }
 impl Pin {
     fn level(self) { return gpio::level(self.number); }
 }

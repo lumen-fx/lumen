@@ -123,7 +123,7 @@ stylesheet, including the custom-property scopes they inherit:
 // candela
 import "lumen.cdl";
 
-fn on_click(id) {
+fn on_click(id: string) {
     lumen::set_root_class("theme-light");
 }
 
