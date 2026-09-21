@@ -248,6 +248,11 @@ test suite looks for:
 LUMEN_LINK_KIT_DIR=/path/to/kit cargo test -p lumenc --test package_static
 ```
 
+A published kit works too, and is the quickest way to link against what a
+release leg shipped: download `lumen-linkkit-<target>.tar.gz` from
+any release, including the rolling `nightly` one, unpack it, and point the
+variable at the directory holding `manifest.json`.
+
 Without it the tests that need a published kit say so and pass, because the
 alternative is downloading a release kit in the middle of a test run. The
 replay itself still runs: the suite builds a kit of its own, with one
