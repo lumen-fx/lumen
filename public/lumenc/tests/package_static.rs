@@ -79,6 +79,20 @@ const PLAIN: &str = "fn on_start() { print(\"alive\"); }\n";
 const USES_FILES: &str =
     "fn on_start() {\n  print(\"alive\");\n  files::write(\"started.txt\", \"linked\");\n}\n";
 
+/// A string only `lumen-fs` carries, from the doc it registers its data
+/// directory with (`std/fs/src/plugin.rs`). Every module's objects are on the
+/// link line whatever the app declared, and `--gc-sections` decides which of
+/// them survive, so what tells the two executables apart is whether the
+/// module's own data is in the file.
+const FS_MARKER: &str = "The directory this app saves data in, created if missing.";
+
+/// Whether `exe` holds `marker`, false when there is no file to read.
+fn carries(exe: &Path, marker: &str) -> bool {
+    std::fs::read(exe)
+        .map(|image| image.windows(marker.len()).any(|w| w == marker.as_bytes()))
+        .unwrap_or(false)
+}
+
 /// A one-page app with one script.
 fn write_app(dir: &Path, config: &str, script: &str) {
     std::fs::create_dir_all(dir.join("src")).expect("create src dir");
@@ -195,7 +209,8 @@ fn a_static_package_is_one_executable_carrying_its_declared_module() {
 }
 
 /// An app that declares no module links without one, and the module it did
-/// not declare is not in the file: its objects never reached the line.
+/// not declare is not in the file: the link dropped everything nothing asked
+/// for.
 #[test]
 fn an_undeclared_module_is_left_out_of_the_executable() {
     if no_kit() {
@@ -216,12 +231,13 @@ fn an_undeclared_module_is_left_out_of_the_executable() {
     );
     let with_fs = link_app(&app, &root.join("with-fs"), "WithFs");
 
-    let bare_size = std::fs::metadata(&bare).expect("stat").len();
-    let with_size = std::fs::metadata(&with_fs).expect("stat").len();
     assert!(
-        bare_size < with_size,
-        "the module's objects are only in the executable that declared it: \
-         {bare_size} vs {with_size}"
+        carries(&with_fs, FS_MARKER),
+        "the module the app declared is not in the executable"
+    );
+    assert!(
+        !carries(&bare, FS_MARKER),
+        "the module the app did not declare is in the executable anyway"
     );
 
     let run = Command::new(&bare)
@@ -588,11 +604,9 @@ fn a_declared_module_reaches_the_executable_and_an_undeclared_one_does_not() {
             String::from_utf8_lossy(&result.stdout),
             String::from_utf8_lossy(&result.stderr)
         );
-        let image = std::fs::read(out.join(name)).expect("the link wrote the executable");
-        let carries = image.windows(symbol.len()).any(|w| w == symbol.as_bytes());
         (
             String::from_utf8_lossy(&result.stdout).into_owned(),
-            carries,
+            carries(&out.join(name), symbol),
         )
     };
 
@@ -709,10 +723,12 @@ fn a_capability_reaches_the_executable_when_the_app_uses_or_asks_for_it() {
         .expect("run lumenc package");
         let stdout = String::from_utf8_lossy(&result.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
-        let carries = std::fs::read(out.join(name))
-            .map(|image| image.windows(symbol.len()).any(|w| w == symbol.as_bytes()))
-            .unwrap_or(false);
-        (result.status.code(), stdout, stderr, carries)
+        (
+            result.status.code(),
+            stdout,
+            stderr,
+            carries(&out.join(name), symbol),
+        )
     };
 
     let (code, stdout, stderr, carries) = link("", PLAIN, "plain");
