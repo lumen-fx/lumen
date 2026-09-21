@@ -146,14 +146,17 @@ With auto-discovery on, the extension looks for the server in
 
 ### JetBrains plugin
 
-The plugin lives in `tools/jetbrains-lumen`. Build it with `./gradlew
+The plugin is on the
+[JetBrains Marketplace](https://plugins.jetbrains.com/plugin/33856-lumen-ui).
+It also lives in `tools/jetbrains-lumen`: build it with `./gradlew
 buildPlugin`, then install the zip from `build/distributions/` through
 Settings | Plugins | Install Plugin from Disk. It works in every IntelliJ-based
 IDE from 2024.2 on, Community editions included.
 
 It needs [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij), the LSP
 client it talks to `lumen-lsp` through. Install that from the Marketplace
-first.
+first. On IntelliJ 2026.2 and later, LSP4IJ 0.21.0 or newer is required;
+earlier LSP4IJ builds do not load there.
 
 The plugin highlights `.lmn` (with embedded script and CSS) and `.rhai` using
 the same TextMate grammars as the VS Code extension. Every other feature is the

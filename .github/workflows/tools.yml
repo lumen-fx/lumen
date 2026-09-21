@@ -170,6 +170,11 @@ jobs:
           java-version: "21"
           cache: gradle
 
+      # One unpacked IDE per target does not fit next to the runner image's
+      # preinstalled toolchains.
+      - name: make room for the IDE downloads
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+
       - run: ./gradlew --no-daemon verifyPlugin
 
   tree-sitter:
