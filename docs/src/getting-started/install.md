@@ -101,6 +101,21 @@ The installer records every path it writes, so an uninstall removes exactly
 those files and nothing else. A `PATH` line added to a shell startup file stays
 behind; delete it by hand, and so does `lpm`, which sits outside the prefix.
 
+### Homebrew
+
+```sh
+brew tap lumen-fx/lumen
+brew install lumen
+```
+
+The formula unpacks the same release archive the script installs, so `lumenc`,
+the runtime library, the launcher, the candela standard library, and the app
+templates all come with it. `brew upgrade lumen` moves you to a newer release.
+
+A Homebrew install carries no [runtime modules](#runtime-modules) and no shell
+completions, and it never checks for updates on its own, because Homebrew owns
+when the version moves. Use the script installer if you want any of those.
+
 ## Windows
 
 Download and run the per-user installer for your machine:
@@ -124,6 +139,18 @@ A Windows install carries no runtime modules, so an app that declares
 them and says so in one line on stderr.
 [`lumenc package --static`](../guides/packaging.md#one-self-contained-executable)
 compiles them into the executable instead.
+
+### Scoop
+
+```
+scoop bucket add lumen https://github.com/lumen-fx/scoop-lumen
+scoop install lumen
+```
+
+Scoop installs the portable zip rather than the MSI, so the two never end up
+side by side. `scoop update lumen` moves versions and `scoop uninstall lumen`
+removes it. Like the zip, it carries no [runtime modules](#runtime-modules) and
+does not check for updates on its own.
 
 ## Platforms with no build
 
