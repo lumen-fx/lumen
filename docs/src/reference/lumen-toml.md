@@ -345,18 +345,20 @@ Each kind carries its own handshake, verified at load. A runtime module read
 off disk is version-locked to the exact engine build it was compiled against
 and opens only on Linux and macOS, into a dynamically linked engine; a module
 compiled into the executable has nothing to verify and answers on every
-platform. Windows only has the second shape, which is what
-`lumenc package --static` produces, so a Windows package of an app declaring
-this table is that one. A portable plugin is checked against the plugin ABI
-version and the script wire version, and loads on every desktop platform,
-static builds included. Any failure - a missing file, a failed handshake, a
-library exporting neither entry symbol (the banner names both; a compiler
-plugin is pointed at [`[[plugins]]`](#plugins)) - is an unmissable stderr
+platform. Windows only has the second shape. A Windows package with native
+runtime modules must therefore use `lumenc package --static`, which compiles
+declared `bundled = true` modules from the link kit into the executable; `path`
+and `version` modules cannot use that packaging path. A portable plugin is
+checked against the plugin ABI version and the script wire version, and loads
+on every desktop platform, static builds included. Any failure - a missing
+file, a failed handshake, a library exporting neither entry symbol (the banner
+names both; a compiler plugin is pointed at
+[`[[plugins]]`](#plugins)) - is an unmissable stderr
 banner naming the entry and the reason, and the app starts without it. One
 case is quieter: a runtime module a statically linked build neither compiled
 in nor can open is skipped with a single stderr line rather than the banner,
 because that is a property of how the binary was put together; the line
-points at `lumenc package --static`, which compiles the declared modules in.
+points at `lumenc package --static`, which compiles bundled modules in.
 The modules Lumen ships are not in that case: `lumenc run` carries them, so
 an app declaring one runs with it during development on every platform.
 `lumenc bundle --static` says the same thing at build time, naming the
