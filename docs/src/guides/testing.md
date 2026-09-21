@@ -10,10 +10,11 @@ machine with no display, and a way to click through it from a script.
 lumenc run myapp --headless
 ```
 
-This is not a reduced mode. Layout runs, the GPU renders, scripts execute, hot
-reload works, and screenshots come out pixel-identical to the windowed path.
-The only thing missing is the window: no compositor is touched, so this is
-safe on a build machine and safe to run while you are working.
+This is not a reduced rendering mode. Layout runs, the GPU renders, scripts
+execute, and screenshots come out pixel-identical to the windowed path. Hot
+reload is disabled under `--headless`; restart the command after changing an
+app. The window is absent too: no compositor is touched, so this is safe on a
+build machine and safe to run while you are working.
 
 Hardware nobody is there to use is left alone too: an app that declares the
 audio module still gets the `audio_*` functions, the playback state, and the
