@@ -767,7 +767,8 @@ The check runs only for `run`, `check`, `build`, `bundle`, `new`, `fmt`, and
 - `CI` is set.
 - stderr is not a terminal.
 - The copy is not an installed one (a build from source has no install
-  receipt, and neither does the portable Windows zip).
+  receipt, and neither does the portable Windows zip or an install from
+  Homebrew or Scoop).
 - The install is pinned, which `install.sh --version` records. An MSI install
   is never pinned.
 
