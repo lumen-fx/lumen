@@ -1,9 +1,9 @@
 package dev.lumenfx.lumen
 
-import com.intellij.execution.configurations.PathEnvironmentVariableUtil
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.openapi.util.SystemInfo
+import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -39,8 +39,24 @@ object LumenLspBinary {
             }
         }
 
-        val onPath = PathEnvironmentVariableUtil.findInPath(executableName())
-        return if (onPath != null) Resolved(onPath.absolutePath, true) else Resolved(NAME, false)
+        val onPath = findOnPath()
+        return if (onPath != null) Resolved(onPath.toString(), true) else Resolved(NAME, false)
+    }
+
+    /** The first executable named [NAME] in a `PATH` directory. */
+    private fun findOnPath(): Path? {
+        val path = System.getenv("PATH") ?: return null
+        val binary = executableName()
+        for (directory in path.split(File.pathSeparatorChar)) {
+            if (directory.isBlank()) {
+                continue
+            }
+            val candidate = Paths.get(directory, binary)
+            if (Files.isRegularFile(candidate) && Files.isExecutable(candidate)) {
+                return candidate.toAbsolutePath().normalize()
+            }
+        }
+        return null
     }
 
     private fun executableName(): String = if (SystemInfo.isWindows) "$NAME.exe" else NAME

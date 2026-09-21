@@ -1,3 +1,6 @@
+import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
+import org.jetbrains.intellij.platform.gradle.models.ProductRelease
+
 plugins {
     kotlin("jvm") version "2.1.21"
     id("org.jetbrains.intellij.platform") version "2.18.1"
@@ -45,6 +48,17 @@ intellijPlatform {
     pluginVerification {
         ides {
             recommended()
+            // recommended() stops at the last IntelliJ IDEA Community release,
+            // which is 2025.2; the marketplace verifies against the newest
+            // IntelliJ IDEA, so check the current release and EAP too.
+            latest {
+                types = listOf(IntelliJPlatformType.IntellijIdea)
+                channels = listOf(ProductRelease.Channel.RELEASE)
+            }
+            latest {
+                types = listOf(IntelliJPlatformType.IntellijIdea)
+                channels = listOf(ProductRelease.Channel.EAP)
+            }
         }
     }
 

@@ -13,6 +13,11 @@ Use it if you write Lumen apps in a JetBrains IDE. The VS Code extension in
 
 ## Quick start
 
+The plugin is on the
+[JetBrains Marketplace](https://plugins.jetbrains.com/plugin/33856-lumen-ui).
+Install it from Settings | Plugins; you still need `lumen-lsp`, so follow
+steps 1 and 4 below. To build the plugin yourself instead:
+
 1. Build the language server:
 
    ```sh
@@ -29,7 +34,9 @@ Use it if you write Lumen apps in a JetBrains IDE. The VS Code extension in
 
 3. In the IDE, install [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij)
    from the Marketplace, then install the zip with Settings | Plugins |
-   gear icon | Install Plugin from Disk, and restart.
+   gear icon | Install Plugin from Disk, and restart. On IntelliJ 2026.2 and
+   later, LSP4IJ 0.21.0 or newer is required; earlier LSP4IJ builds do not
+   load there.
 
 4. Put `lumen-lsp` on your `PATH`, or set its path in Settings |
    Languages & Frameworks | Lumen. With auto-discovery on, the plugin also
