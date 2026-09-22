@@ -35,6 +35,10 @@ windows = { version = "0.62", features = [
     "Win32_System_Pipes",
     "Win32_Security",
     "Win32_System_IO",
+    # The pipe's own security descriptor: the process token its user SID is
+    # read from (Threading) and the descriptor revision (SystemServices).
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
 ] }
 
 # Unix: resolving and verifying the private per-user directory the
