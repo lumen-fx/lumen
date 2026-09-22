@@ -75,10 +75,12 @@ impl Tick {
 ///    this tick's drain. It empties once drained.
 /// 2. The plugin-event bus still holds events a portable plugin pushed (see
 ///    [`crate::plugin_events`]). It likewise empties once drained.
-/// 3. An animation driver (a hover or press tween, an opacity transition,
-///    scroll inertia) reported motion this tick through [`AnimationsActive`],
-///    which is cleared at the top of every tick and re-raised only while a
-///    value is mid-flight.
+/// 3. A driver reported unfinished work this tick through
+///    [`AnimationsActive`]: a hover or press tween, an opacity transition,
+///    scroll inertia, an element still waiting on content that has not
+///    arrived. The flag is cleared at the top of every tick and re-raised
+///    only while the thing it is keyed on is still outstanding, and every
+///    driver keys its claim on something that settles or leaves the tree.
 /// 4. [`FrameDirty`] is still set, which a system dirtying state after the
 ///    encode leaves behind. The next present clears it.
 ///

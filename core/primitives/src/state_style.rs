@@ -146,6 +146,14 @@ impl Plugin for StateStylePlugin {
 
 /// Swap text color / opacity / shadows / background per interaction
 /// state and restore the captured baseline when idle.
+///
+/// Every component this system attaches goes through `try_insert`. The
+/// entity under the pointer is the one most likely to leave the tree on this
+/// very tick: a click on a nav link runs the handler that swaps the page,
+/// and the `<if>` reconciler despawns the outgoing tree in this same stage
+/// with nothing ordering it against this system. A plain `insert` against an
+/// element the swap already took away fails the whole command buffer rather
+/// than just itself.
 #[allow(clippy::type_complexity)]
 pub fn apply_state_visuals(
     mut commands: Commands,
@@ -258,7 +266,7 @@ pub fn apply_state_visuals(
                     shadows: vis.as_ref().map(|v| v.shadows.clone()).unwrap_or_default(),
                     fill: vis.as_ref().and_then(|v| v.fill.clone()),
                 };
-                commands.entity(entity).insert(b.clone());
+                commands.entity(entity).try_insert(b.clone());
                 b
             }
         };
@@ -271,7 +279,7 @@ pub fn apply_state_visuals(
         match patch.opacity.or(base.opacity) {
             Some(want) => {
                 if opacity.map(|o| o.0) != Some(want) {
-                    commands.entity(entity).insert(Opacity(want));
+                    commands.entity(entity).try_insert(Opacity(want));
                 }
             }
             None => {
@@ -302,7 +310,7 @@ pub fn apply_state_visuals(
         match base.opacity {
             Some(v) => {
                 if opacity.map(|o| o.0) != Some(v) {
-                    commands.entity(entity).insert(Opacity(v));
+                    commands.entity(entity).try_insert(Opacity(v));
                 }
             }
             None => {

@@ -197,9 +197,12 @@ impl Default for FrameDirty {
 /// every tick (`TickStage::Input`, which is chained before
 /// `TickStage::Systems` where the drivers run), and each driver re-raises
 /// it *only while it still has work left* (progress strictly short of its
-/// target, non-zero velocity, a job still outstanding). The moment every
-/// driver settles, none raises it, the flag stays `false`, and the scheduler
-/// parks - so there is no permanent vsync spin.
+/// target, non-zero velocity, an element still without the content it
+/// named). A driver keys its claim on something in the world rather than on
+/// its own bookkeeping, so the claim dies with that thing even when the work
+/// behind it never finishes. The moment every driver settles, none raises
+/// it, the flag stays `false`, and the scheduler parks - so there is no
+/// permanent vsync spin.
 #[derive(Resource, Debug, Default)]
 pub struct AnimationsActive(std::sync::atomic::AtomicBool);
 

@@ -34,11 +34,20 @@ pub(crate) fn apply_script_commands(
                         // re-decodes from scratch. Enqueued is the
                         // marker that prevents duplicate decode jobs;
                         // dropping it forces a fresh enqueue next tick.
-                        ent.remove::<lumen_assets::LoadedImage>();
-                        ent.remove::<lumen_assets::LoadedSvg>();
-                        ent.remove::<lumen_assets::ImageLoadFailed>();
-                        ent.remove::<lumen_assets::Enqueued>();
-                        ent.insert(lumen_assets::ImageSource(resolved.clone()));
+                        //
+                        // `try_`, because the query answers for the world as
+                        // this system runs and nothing orders it against the
+                        // `<if>` reconciler, which despawns a whole page's
+                        // tree in the same stage. One handler calling
+                        // `set_src` and then `page()` queues these writes
+                        // against elements the swap is about to take away,
+                        // and a plain `insert` fails the whole command
+                        // buffer rather than just itself.
+                        ent.try_remove::<lumen_assets::LoadedImage>();
+                        ent.try_remove::<lumen_assets::LoadedSvg>();
+                        ent.try_remove::<lumen_assets::ImageLoadFailed>();
+                        ent.try_remove::<lumen_assets::Enqueued>();
+                        ent.try_insert(lumen_assets::ImageSource(resolved.clone()));
                     }
                 }
             }

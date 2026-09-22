@@ -110,6 +110,14 @@ impl Default for HoverTween {
 /// Plugin: registers [`apply_hover_tint`] then [`apply_press_tint`] in
 /// `TickStage::Systems`. Press runs second so it can stamp over whatever
 /// hover wrote on the same tick.
+///
+/// Every component these systems attach goes through `try_insert`. The
+/// entity under the pointer is the one most likely to leave the tree on this
+/// very tick: a click on a nav link runs the handler that swaps the page,
+/// and the `<if>` reconciler despawns the outgoing tree in this same stage
+/// with nothing ordering it against these systems. A plain `insert` against
+/// an element the swap already took away fails the whole command buffer
+/// rather than just itself.
 pub struct HoverTintPlugin;
 
 impl Plugin for HoverTintPlugin {
@@ -176,7 +184,7 @@ pub fn apply_state_borders(
             (None, None) => continue,
         };
         if base.is_none() {
-            commands.entity(entity).insert(BaseBorder(vis.border));
+            commands.entity(entity).try_insert(BaseBorder(vis.border));
         }
         if vis.border != want {
             vis.border = want;
@@ -388,7 +396,7 @@ pub fn apply_hover_tint(
                 t.progress
             }
             None => {
-                commands.entity(entity).insert(HoverTween {
+                commands.entity(entity).try_insert(HoverTween {
                     progress: 0.0,
                     target: 1.0,
                     last_step: now,
@@ -531,7 +539,7 @@ pub fn apply_press_tint(
                 (Some(h), _) => h.0,
                 (None, Some(p)) => p.0,
                 (None, None) => {
-                    commands.entity(entity).insert(PressBaseColor(current));
+                    commands.entity(entity).try_insert(PressBaseColor(current));
                     current
                 }
             };
@@ -552,7 +560,7 @@ pub fn apply_press_tint(
                     // disengaged branch below animates the fade back down
                     // from 1.0 -> 0.0. Re-entering the captured widget after
                     // a drag-off takes this same instant-on path.
-                    commands.entity(entity).insert(PressTween {
+                    commands.entity(entity).try_insert(PressTween {
                         progress: 1.0,
                         last_step: now,
                     });
