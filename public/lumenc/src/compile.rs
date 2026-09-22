@@ -338,6 +338,11 @@ fn compile_dir(
     ir.script_source = String::new();
     ir.external_scripts.clear();
 
+    // The catalogues travel in the artifact, the same as on the fat path.
+    let i18n =
+        lumen_ir::artifact::CompiledI18n::read_dir(&dir.join("locale"), fallback_locale(dir))
+            .map_err(|e| CompileError::Read(dir.join("locale"), e))?;
+
     Ok(lumen_ir::artifact::CompiledApp {
         ir,
         script_source,
@@ -346,6 +351,7 @@ fn compile_dir(
         // `lumenc build` and `lumenc package` are what compile a page set.
         pages: None,
         fragments,
+        i18n,
     })
 }
 
@@ -513,6 +519,24 @@ fn entry_name(dir: &Path) -> String {
         .and_then(|e| e.as_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| "main.lmn".to_string())
+}
+
+/// The `[app] fallback_locale` the app names, as the one-entry chain the
+/// artifact carries, or no chain when it names none. Read the same raw way
+/// [`entry_name`] reads `[app] entry`, for the same reason.
+fn fallback_locale(dir: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(dir.join("lumen.toml")) else {
+        return Vec::new();
+    };
+    let Ok(value) = toml::from_str::<toml::Value>(&text) else {
+        return Vec::new();
+    };
+    value
+        .get("app")
+        .and_then(|a| a.get("fallback_locale"))
+        .and_then(|l| l.as_str())
+        .map(|l| vec![l.to_string()])
+        .unwrap_or_default()
 }
 
 /// Publish the markup tags the app's `[dependencies]` table declares.

@@ -211,7 +211,12 @@ pub fn build_app(mut opts: RunOptions) -> Result<(App, WindowSetup), RunError> {
         scripts: compiled_scripts,
         pages: compiled_pages,
         fragments,
+        i18n: compiled_i18n,
     } = loaded;
+    // The catalogues a compiled app carries fill in every locale the app
+    // directory has no loose file for, before the tree spawns and before a
+    // script's `on_start` calls `t()`.
+    add_compiled_catalogues(&mut app.world, &cfg, &compiled_i18n)?;
     // The app's declared fragments, reachable by key for the rest of the
     // run: a script instantiates one, and the applier builds it here.
     crate::fragments::install(&mut app.world, fragments);

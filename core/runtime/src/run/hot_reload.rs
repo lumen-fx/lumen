@@ -261,6 +261,7 @@ pub(crate) fn hot_reload(world: &mut World) {
         scripts: _,
         pages: _,
         fragments,
+        i18n: _,
     } = match load_ir(
         &*parser,
         &*compiler_plugins,

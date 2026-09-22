@@ -52,7 +52,9 @@ document: no wasm, no boot script, and nothing that takes it over once it is
 open. Links load the next page, which is another render. The compiled app and
 `lumen.site.json` are still written, because that is what you render from; the
 runtime files, the manifest and the catalogues are not, because nothing in a
-browser loads them.
+browser loads them. The compiled app carries the catalogues itself, so
+`lumen.site.json` names none and `SsrSite::from_build` renders every language
+from the app alone when it is handed no catalogue.
 
 Build with `--render csr` instead when you want documents to fall back to.
 Which of the two answers a request is then yours to decide, and so is

@@ -116,9 +116,11 @@ impl SsrSite {
     /// `artifact` is the compiled app's bytes, the file `spec.web.artifact`
     /// names. `spec` is [`lumen_web::SERVER_SPEC_FILE`], read with
     /// [`ServerSpec::from_json`]. `catalogues` pairs each tag in
-    /// `spec.web.catalogues` with the source of the file it names. Everything
-    /// arrives already read, so where the files live and how they are read
-    /// stays the server's business.
+    /// `spec.web.catalogues` with the source of the file it names; a build
+    /// whose pages carry no runtime names none, and empty takes the
+    /// catalogues the compiled app carries. Everything arrives already read,
+    /// so where the files live and how they are read stays the server's
+    /// business.
     ///
     /// The site this builds is the one `lumenc web --render ssr --serve`
     /// renders: a tree per locale the build emitted, translated from the
@@ -140,6 +142,18 @@ impl SsrSite {
         spec: &ServerSpec,
         catalogues: Vec<(String, String)>,
     ) -> Result<Self, SsrError> {
+        // A build whose pages load no catalogue writes none beside them, and
+        // the compiled app carries its own.
+        let catalogues = if catalogues.is_empty() {
+            compiled.i18n.catalogues.clone()
+        } else {
+            catalogues
+        };
+        let fallback = if spec.fallback.is_empty() {
+            compiled.i18n.fallback.clone()
+        } else {
+            spec.fallback.clone()
+        };
         let mut site = Self::new(compiled, spec.web.clone())?;
         let locales = if spec.locales.is_empty() {
             vec![site.trees[0].locale.locale.clone()]
@@ -153,7 +167,7 @@ impl SsrSite {
             // author wrote, the same tree the build emitted for it.
             let tree_ir = match locale.parse::<LanguageIdentifier>() {
                 Ok(_) if !catalogues.is_empty() => {
-                    let i18n = I18n::from_sources(locale, &catalogues, &spec.fallback)
+                    let i18n = I18n::from_sources(locale, &catalogues, &fallback)
                         .map_err(|error| SsrError::Catalogue(error.to_string()))?;
                     lumen_web::translate_ir(&ir, &SharedI18n::new(i18n))
                 }
@@ -193,7 +207,7 @@ impl SsrSite {
             site = site.with_locale(tree)?;
         }
         let mut site = site
-            .with_catalogues(catalogues, spec.fallback.clone())?
+            .with_catalogues(catalogues, fallback)?
             .with_seed(spec.seed.clone());
         site.policy = spec.policy.clone();
         Ok(site)

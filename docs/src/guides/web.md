@@ -109,7 +109,7 @@ catalogues, the size of every image, the `[web.seed]` values, and the app's
 renders; the browser never loads it. With `runtime = false` beside it, the
 candela program, `lumen.web.json`, the catalogues and the runtime pair go too:
 nothing in a browser loads them. The compiled app stays, because the server
-renders from it.
+renders from it, and it carries the catalogues the server translates with.
 
 ## How a page reaches the browser
 

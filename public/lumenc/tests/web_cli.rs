@@ -1422,6 +1422,9 @@ fn a_rendered_site_is_the_files_a_render_needs_and_no_documents() {
     );
 }
 
+/// A process has one renderer, so the cases that start one take it in turn.
+static ONE_RENDERER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Every `href` and `src` a document names on its own site, without the query
 /// a cache-busting reference carries.
 fn local_references(html: &str) -> Vec<String> {
@@ -1450,6 +1453,7 @@ fn an_embedder_renders_a_site_from_the_files_the_build_wrote() {
 
     use lumen_ssr::{RenderOptions, Renderer, SERVER_SPEC_FILE, ServerSpec, SsrRequest, SsrSite};
 
+    let _turn = ONE_RENDERER.lock().unwrap_or_else(|e| e.into_inner());
     let scratch = scratch("ssr-spec");
     let out = scratch.join("site");
     web("fixtures/ssr-site", &out, &[]);
@@ -1524,6 +1528,65 @@ fn an_embedder_renders_a_site_from_the_files_the_build_wrote() {
         german.contains(r#"<link rel="canonical" href="https://example.com/de-DE/index.html">"#),
         "{german}"
     );
+}
+
+/// A site whose pages load no runtime writes no catalogue beside them, and a
+/// server renders every language from what the compiled app carries.
+#[test]
+fn a_rendered_site_with_no_runtime_renders_its_locales_from_the_artifact() {
+    use std::sync::Arc;
+
+    use lumen_ssr::{RenderOptions, Renderer, SERVER_SPEC_FILE, ServerSpec, SsrRequest, SsrSite};
+
+    let _turn = ONE_RENDERER.lock().unwrap_or_else(|e| e.into_inner());
+    let scratch = scratch("ssr-artifact-catalogues");
+    let out = scratch.join("site");
+    web("fixtures/ssr-site", &out, &["--no-runtime"]);
+
+    let files = files(&out);
+    assert!(
+        !files.iter().any(|path| path.starts_with("locale/")),
+        "{files:?}"
+    );
+    let spec = ServerSpec::from_json(read(&out, SERVER_SPEC_FILE).as_bytes())
+        .expect("the build wrote a spec");
+    assert!(spec.web.catalogues.is_empty(), "{:?}", spec.web.catalogues);
+    let artifact = std::fs::read(out.join(&spec.web.artifact)).expect("the artifact it names");
+    let site = SsrSite::from_build(&artifact, &spec, Vec::new()).expect("the site loads");
+    assert_eq!(site.locales(), ["en-US", "de-DE"]);
+
+    let renderer =
+        Renderer::start(Arc::new(site), RenderOptions::default()).expect("nothing else renders");
+    let german = renderer
+        .render(SsrRequest::get("/de-DE/"))
+        .expect("the document is written")
+        .body;
+    drop(renderer);
+    assert!(
+        german.contains("Hallo") && german.contains("Startklar"),
+        "{german}"
+    );
+}
+
+/// The catalogues and the fallback chain an app names are in what it
+/// compiles to.
+#[test]
+fn a_compiled_app_carries_its_catalogues_and_its_fallback() {
+    let compiled =
+        lumenc::compile_app(&repo().join("fixtures/i18n-fallback")).expect("the fixture compiles");
+    let tags: Vec<&str> = compiled
+        .i18n
+        .catalogues
+        .iter()
+        .map(|(tag, _)| tag.as_str())
+        .collect();
+    assert_eq!(tags, ["de-DE", "en-US", "fr-FR"]);
+    assert_eq!(compiled.i18n.fallback, ["de-DE"]);
+    let back = lumen_ir::artifact::deserialize(
+        &lumen_ir::artifact::serialize(&compiled).expect("serialize"),
+    )
+    .expect("deserialize");
+    assert_eq!(back.i18n, compiled.i18n);
 }
 
 #[test]

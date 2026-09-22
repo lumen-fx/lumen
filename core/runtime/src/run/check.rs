@@ -101,6 +101,17 @@ pub fn compile_app_with_skin(
     let mut ir = loaded.ir;
     ir.script_source = String::new();
     ir.external_scripts.clear();
+    // Every catalogue travels in the artifact, so an app compiled here reads
+    // in its languages with no `locale/` directory beside it. A loose file
+    // still wins where there is one.
+    let fallback = cfg
+        .app
+        .fallback_locale
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    let i18n = lumen_ir::artifact::CompiledI18n::read_dir(&super::locale_dir(dir), fallback)
+        .map_err(|e| RunError::I18n(e.to_string()))?;
     Ok(lumen_ir::artifact::CompiledApp {
         ir,
         script_source,
@@ -110,6 +121,7 @@ pub fn compile_app_with_skin(
         // instantiates it: the artifact carries the declarations, not just
         // their expansions.
         fragments: loaded.fragments,
+        i18n,
     })
 }
 
