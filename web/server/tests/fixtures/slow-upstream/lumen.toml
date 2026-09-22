@@ -1,0 +1,15 @@
+# An app whose render waits on an upstream the test holds, so a render stays
+# in flight for as long as the test needs one to. The page asks the address
+# its query string names.
+[script]
+engine = "candela"
+
+[web]
+render = "ssr"
+
+[web.ssr]
+allow_hosts = ["127.0.0.1"]
+
+# No introspection server, so a headless CI run binds no port.
+[mcp]
+port = 0

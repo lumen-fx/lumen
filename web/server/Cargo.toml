@@ -1,0 +1,48 @@
+[package]
+name = "lumen-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Serves a Lumen site built for per-request rendering, in production."
+keywords = ["ui", "lumen", "web", "ssr", "server"]
+categories = ["web-programming::http-server", "gui"]
+publish = false
+
+[lib]
+name = "lumen_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lumen-server"
+path = "src/main.rs"
+
+[dependencies]
+# The renderer every page comes from, and the spec file a build leaves beside
+# the site it renders from.
+lumen-ssr = { workspace = true }
+# The name of the shell a static build writes, which answers a path with no
+# file when nothing renders it.
+lumen-web = { workspace = true }
+# One access-log line per request, as JSON when asked.
+serde_json.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# Waiting on the listener with a timeout, handing it to worker processes, and
+# signalling them: what std does not reach.
+libc.workspace = true
+# SIGTERM and SIGINT, turned into a drain.
+signal-hook.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# Ctrl-C and a service stop, turned into a drain.
+ctrlc.workspace = true
+
+[dev-dependencies]
+# The unit tests build an app by hand to render.
+lumen-ir = { workspace = true }
+# The integration suite builds the site it serves the way a user does, with
+# `lumenc web --render ssr`, in the test process.
+lumenc = { workspace = true, features = ["runtime-parse", "dev-run", "web"] }

@@ -86,6 +86,9 @@ lumen-prerender = { workspace = true, default-features = true, optional = true }
 # `--render ssr` - the per-request renderer, which is also what an embedder
 # puts inside their own server. `lumenc` gives it a socket and nothing else.
 lumen-ssr = { workspace = true, optional = true }
+# The server behind `lumenc web --serve`, the same one `lumen-server` runs, with
+# development defaults.
+lumen-server = { workspace = true, optional = true }
 # `lumenc web` resolves an app's translations at build time, so a page reads
 # in its language with nothing running.
 lumen-i18n = { workspace = true, optional = true }
@@ -229,6 +232,7 @@ web = [
     "dep:lumen-web",
     "dep:lumen-prerender",
     "dep:lumen-ssr",
+    "dep:lumen-server",
     "dep:lumen-i18n",
     "package",
 ]

@@ -150,6 +150,7 @@ members = [
     "web/portable",
     "web/prerender",
     "web/runtime",
+    "web/server",
     "web/ssr",
     "backends/*",
     "dev/*",
@@ -292,6 +293,7 @@ lumen-script = { path = "core/script/api", default-features = false }
 lumen-script-candela = { path = "core/script/candela", default-features = false }
 lumen-script-lua = { path = "core/script/lua", default-features = false }
 lumen-script-rhai = { path = "core/script/rhai", default-features = false }
+lumen-server = { path = "web/server" }
 lumen-ssr = { path = "web/ssr" }
 lumen-text = { path = "core/text" }
 lumen-text-cosmic = { path = "backends/text-cosmic" }
