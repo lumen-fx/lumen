@@ -289,7 +289,9 @@ A `prebuild` hook runs before `lumenc run`, `build`, `bundle`, and `package`. A
 `lumenc check` never runs hooks, so a check stays free of side effects. A
 candela script that loads a C library a hook builds is still checked: the
 `dylib` block's own declarations are what the calls are checked against, and
-the [check](../reference/cli.md#check) opens no library.
+the check opens no library. The
+[`check` reference](../reference/cli.md#check) lists the forms that do need the
+library built first.
 
 Listing `inputs` and `outputs` makes the hook skippable: when the outputs are
 already newer than the inputs, the command does not run again. Leave either
