@@ -17,6 +17,11 @@
 //! in-memory stack. A site has one history, and it is the browser's: letting
 //! both step would give a visitor two that disagree, one behind the button
 //! in the page and one behind the button in the chrome.
+//!
+//! That is `[web] navigation = "soft"`. Under `"hard"` every page is a
+//! document of its own, so a navigation the app raises loads the target
+//! document the way a link does ([`load_document`]), and the in-place swap
+//! never happens.
 
 use std::collections::BTreeMap;
 
@@ -164,6 +169,28 @@ impl Default for Routes {
     }
 }
 
+/// How a document is left for another under `[web] navigation = "hard"`.
+///
+/// The browser's own `location.assign` unless replaced, which loads the
+/// address as a new history entry, the same as following a link. A test
+/// puts something else here, because loading a document in a test replaces
+/// the page the test runs in.
+#[derive(Clone, Copy, Debug, Resource)]
+pub struct DocumentLoader(pub fn(&str));
+
+impl Default for DocumentLoader {
+    fn default() -> Self {
+        Self(assign)
+    }
+}
+
+/// Load `address` in place of this document, as a new history entry.
+fn assign(address: &str) {
+    if let Some(window) = web_sys::window() {
+        let _ = window.location().assign(address);
+    }
+}
+
 /// What a navigation the app resolved asks of the browser's history.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum HistoryStep {
@@ -249,6 +276,128 @@ pub(crate) fn sync_history(
             store.set_global_str(nav::REQUEST_SIGNAL, "");
         }
     }
+}
+
+/// What a navigation the app raised asks of the browser when every page is a
+/// document of its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LoadStep {
+    /// Load the document at this address.
+    Load(String),
+    /// Step the browser's own history one entry back.
+    Back,
+    /// Step it one entry forward.
+    Forward,
+}
+
+/// What `request` asks of the browser under `[web] navigation = "hard"`, for
+/// a document currently at `here`.
+///
+/// `last` is the sequence number this already acted on, for the reason
+/// [`history_step`] keeps one.
+fn load_step(routes: &Routes, here: &str, request: &str, last: &mut u64) -> Option<LoadStep> {
+    let (seq, op) = nav::parse_request(request)?;
+    if seq <= *last {
+        return None;
+    }
+    *last = seq;
+    match op {
+        // A navigation to the page this document already is has nothing to
+        // load. Loading it anyway would put a script whose `on_start` calls
+        // `page()` for its own page into a reload that never ends.
+        NavOp::Navigate(path) => {
+            (!routes.is_at(here, &path)).then(|| LoadStep::Load(routes.address_of(&path)))
+        }
+        NavOp::Back => Some(LoadStep::Back),
+        NavOp::Forward => Some(LoadStep::Forward),
+    }
+}
+
+/// How many ticks a link the browser follows waits for the navigation the
+/// app raises from the same click: one to take the click in, one for the
+/// request to cross the external bus, and one to spare. A click whose
+/// navigation a handler cancelled raises none, and its link is forgotten
+/// after that.
+const FOLLOW_TICKS: u32 = 3;
+
+/// The Lumen links a visitor clicked that the browser is following on its
+/// own, under hard navigation.
+///
+/// Under hard navigation nothing stops a click on an `<a href>`: the browser
+/// loads the next document, or opens it in a new tab, or downloads it. The
+/// same click still reaches the app, which raises a navigation to the
+/// link's page from it, and loading that too would do the browser's work a
+/// second time, or load the link in this tab when the visitor asked for a
+/// new one. Only a hard-navigating app holds this resource; anywhere else
+/// the click is not recorded at all.
+#[derive(Debug, Default, Resource)]
+pub(crate) struct FollowedLinks(Vec<(String, u32)>);
+
+impl FollowedLinks {
+    /// Record that the browser is following a click on a link to `address`.
+    pub(crate) fn follow(&mut self, address: String) {
+        self.0.push((address, 0));
+    }
+
+    /// Whether the browser is already following a link to `address`,
+    /// forgetting that link once it is answered.
+    fn answered(&mut self, address: &str) -> bool {
+        let found = self.0.iter().position(|(link, _)| link == address);
+        found.map(|at| self.0.remove(at)).is_some()
+    }
+
+    /// Count a tick against every link, and forget the ones no navigation
+    /// arrived for.
+    fn age(&mut self) {
+        self.0.retain_mut(|(_, ticks)| {
+            *ticks += 1;
+            *ticks < FOLLOW_TICKS
+        });
+    }
+}
+
+/// Load the document a navigation the app raised names, and hand back and
+/// forward to the browser.
+///
+/// Runs before the resolver and empties the request once it has acted, so
+/// the page is never swapped in place as well: what arrives is the next
+/// document, with its own run of the app in it. Until it does, this one
+/// keeps showing the page it was loaded as.
+pub(crate) fn load_document(
+    mut store: ResMut<PropertyStore>,
+    routes: Res<Routes>,
+    loader: Res<DocumentLoader>,
+    mut followed: ResMut<FollowedLinks>,
+    mut last: Local<u64>,
+) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let here = window.location().pathname().unwrap_or_default();
+    let request = store
+        .get_global_str(nav::REQUEST_SIGNAL)
+        .unwrap_or_else(|| "".into());
+    if let Some(step) = load_step(&routes, &here, &request, &mut last) {
+        match step {
+            LoadStep::Load(address) => {
+                if !followed.answered(&address) {
+                    (loader.0)(&address);
+                }
+            }
+            LoadStep::Back => {
+                if let Ok(history) = window.history() {
+                    let _ = history.back();
+                }
+            }
+            LoadStep::Forward => {
+                if let Ok(history) = window.history() {
+                    let _ = history.forward();
+                }
+            }
+        }
+        store.set_global_str(nav::REQUEST_SIGNAL, "");
+    }
+    followed.age();
 }
 
 #[cfg(test)]
@@ -604,6 +753,125 @@ mod tests {
             None
         );
         assert_eq!(last, 0, "nothing was acted on, so nothing is remembered");
+    }
+
+    #[test]
+    fn a_page_the_app_navigated_to_is_loaded_under_hard_navigation() {
+        let routes = routes("/");
+        let mut last = 0;
+        let request = nav::encode_request(&NavOp::Navigate("settings".into()));
+        assert_eq!(
+            load_step(&routes, "/index.html", &request, &mut last),
+            Some(LoadStep::Load("/settings.html".to_string()))
+        );
+        // The cell holds its value until the next navigation replaces it,
+        // and one request is one load.
+        assert_eq!(load_step(&routes, "/index.html", &request, &mut last), None);
+    }
+
+    #[test]
+    fn a_deeper_path_is_loaded_as_the_visitor_would_have_asked_for_it() {
+        let routes = routes("/");
+        let mut last = 0;
+        let request = nav::encode_request(&NavOp::Navigate("user/42".into()));
+        assert_eq!(
+            load_step(&routes, "/index.html", &request, &mut last),
+            Some(LoadStep::Load("/user/42".to_string()))
+        );
+    }
+
+    #[test]
+    fn the_page_already_shown_is_not_loaded_again() {
+        // A script whose `on_start` navigates to its own page would reload
+        // for ever otherwise: every load runs `on_start` again.
+        let routes = routes("/");
+        let mut last = 0;
+        for (here, path) in [
+            ("/settings.html", "settings"),
+            ("/", "index"),
+            ("/index.html", ""),
+            ("/user/42", "user/42"),
+        ] {
+            let request = nav::encode_request(&NavOp::Navigate(path.into()));
+            assert_eq!(
+                load_step(&routes, here, &request, &mut last),
+                None,
+                "`{path}` at `{here}`"
+            );
+        }
+    }
+
+    #[test]
+    fn a_load_stays_under_the_base_path_and_the_locale_tree() {
+        let mut last = 0;
+        let request = nav::encode_request(&NavOp::Navigate("settings".into()));
+        assert_eq!(
+            load_step(&routes("/docs"), "/docs/index.html", &request, &mut last),
+            Some(LoadStep::Load("/docs/settings.html".to_string()))
+        );
+        let request = nav::encode_request(&NavOp::Navigate("user/7".into()));
+        assert_eq!(
+            load_step(
+                &Routes::from_manifest(&lumen_web::site::manifest(&spec("/docs")), LOCALES[1]),
+                "/docs/de-DE/index.html",
+                &request,
+                &mut last
+            ),
+            Some(LoadStep::Load("/docs/de-DE/user/7".to_string()))
+        );
+    }
+
+    #[test]
+    fn back_and_forward_step_the_browser_s_history_under_hard_navigation() {
+        let routes = routes("/");
+        let mut last = 0;
+        assert_eq!(
+            load_step(
+                &routes,
+                "/settings.html",
+                &nav::encode_request(&NavOp::Back),
+                &mut last
+            ),
+            Some(LoadStep::Back)
+        );
+        assert_eq!(
+            load_step(
+                &routes,
+                "/settings.html",
+                &nav::encode_request(&NavOp::Forward),
+                &mut last
+            ),
+            Some(LoadStep::Forward)
+        );
+    }
+
+    #[test]
+    fn a_link_the_browser_follows_is_answered_once() {
+        let mut followed = FollowedLinks::default();
+        followed.follow("/settings.html".to_string());
+        assert!(!followed.answered("/user/42"));
+        assert!(followed.answered("/settings.html"));
+        assert!(
+            !followed.answered("/settings.html"),
+            "a later navigation to the same page is the app's own"
+        );
+    }
+
+    #[test]
+    fn a_link_no_navigation_arrives_for_is_forgotten() {
+        // A handler that cancels the click raises no navigation, and a
+        // script's own `page()` to the same page later is its own load.
+        let mut followed = FollowedLinks::default();
+        followed.follow("/user/42".to_string());
+        for _ in 1..FOLLOW_TICKS {
+            followed.age();
+        }
+        assert!(followed.answered("/user/42"), "still waited for");
+        followed.follow("/user/42".to_string());
+        for _ in 0..FOLLOW_TICKS {
+            followed.age();
+        }
+        assert!(!followed.answered("/user/42"), "given up on");
     }
 
     /// Everything an author writes into an `href` on a site of that shape: a

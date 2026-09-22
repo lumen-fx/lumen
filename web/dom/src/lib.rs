@@ -32,9 +32,10 @@ mod project;
 use bevy_ecs::prelude::*;
 use lumen_core::prelude::{App, Plugin, TickStage};
 use lumen_core::property_store::PropertyStore;
+use lumen_html::contract::NavigationMode;
 use web_sys::Element;
 
-pub use navigation::Routes;
+pub use navigation::{DocumentLoader, Routes};
 pub use nodes::{HydrationReport, NodeTable};
 
 /// Install the browser backend on an app whose scene has already been
@@ -57,35 +58,73 @@ pub struct WebDomPlugin {
     /// mounts is written with the address from here, so a link the emitter
     /// never wrote points where the emitter would have pointed it.
     pub routes: Routes,
-    /// `[web] navigation = "soft"`: the app keeps running across a link, so
-    /// the page it swaps to goes in the address bar and the browser's own
-    /// back and forward buttons step the site. Off leaves the address bar to
-    /// the browser, which is what a site whose every link loads the next
-    /// document needs. An in-app navigation still swaps the page in place
-    /// either way.
-    pub soft_navigation: bool,
+    /// How the app moves between pages in this document.
+    pub navigation: Navigation,
+}
+
+/// How an app in a browser moves between pages.
+///
+/// `[web] navigation` names the first two. The third is what a document
+/// with no page set to swap in runs as, whatever the key says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Navigation {
+    /// `navigation = "soft"`: the app keeps running across a link, so the
+    /// page it swaps to goes in the address bar and the browser's own back
+    /// and forward buttons step the site.
+    Soft,
+    /// `navigation = "hard"`: every page is a document of its own. A
+    /// navigation the app raises loads the target document, the same as
+    /// following a link, and the address bar is the browser's.
+    Hard,
+    /// A single-file app, whose document carries no other page. A
+    /// navigation resolves against the one page and swaps it in place,
+    /// leaving the rest of the path on `route.segment`; links and the
+    /// address bar are the browser's.
+    InPlace,
+}
+
+impl From<NavigationMode> for Navigation {
+    fn from(mode: NavigationMode) -> Self {
+        match mode {
+            NavigationMode::Soft => Navigation::Soft,
+            NavigationMode::Hard => Navigation::Hard,
+        }
+    }
 }
 
 impl Plugin for WebDomPlugin {
     fn build(self, app: &mut App) {
         // Soft navigation puts the page the app swapped to in the address
         // bar, so a reload or a copied link lands on the page shown, and the
-        // browser's back and forward buttons step the site. Ordered ahead of
-        // the resolver: it reads the same request, and back and forward are
-        // the browser's to answer rather than the in-memory stack's.
+        // browser's back and forward buttons step the site. Hard navigation
+        // loads the page's document instead of swapping it in. Either is
+        // ordered ahead of the resolver: it reads the same request, and back
+        // and forward are the browser's to answer rather than the in-memory
+        // stack's. In place leaves the request to the resolver alone.
         app.world.insert_resource(self.routes);
-        if self.soft_navigation {
-            app.add_systems(
-                TickStage::Systems,
-                navigation::sync_history.before(lumen_scene::routing::apply_navigation),
-            );
+        match self.navigation {
+            Navigation::Soft => {
+                app.add_systems(
+                    TickStage::Systems,
+                    navigation::sync_history.before(lumen_scene::routing::apply_navigation),
+                );
+            }
+            Navigation::Hard => {
+                app.world.init_resource::<DocumentLoader>();
+                app.world.init_resource::<navigation::FollowedLinks>();
+                app.add_systems(
+                    TickStage::Systems,
+                    navigation::load_document.before(lumen_scene::routing::apply_navigation),
+                );
+            }
+            Navigation::InPlace => {}
         }
         // The head follows the page the app is showing, whichever way it got
-        // there. `[web] navigation` decides what a click on a same-page link
-        // does, not what the document says it is holding: under hard
-        // navigation a script's own `page()` call still swaps in place, and
-        // the tab, the bookmark and the share card name the page that swap
-        // put on the screen. After the resolver, which is what settles it.
+        // there: a soft swap, or an in-place one in a single-file app. Under
+        // hard navigation the resolver never settles on another page, because
+        // the next document is what shows it, so the head is written once
+        // for the page this document opened on. After the resolver, which is
+        // what settles it.
         app.add_systems(
             TickStage::Systems,
             head::sync_head.after(lumen_scene::routing::apply_navigation),
@@ -141,7 +180,9 @@ impl Plugin for WebDomPlugin {
 /// and a `popstate` from the browser's back or forward button opens the page
 /// the new address names. The click half belongs here rather than in
 /// [`WebDomPlugin`] because only a listener has a browser event still in
-/// hand to prevent.
+/// hand to prevent. With `None` the browser follows every link click
+/// itself, and under hard navigation the app notes that it does, so it does
+/// not load the same link a second time.
 ///
 /// The keys are the one set that listens on the document rather than on
 /// `root`: a key pressed while focus sits outside the app never passes the

@@ -342,7 +342,8 @@ impl fmt::Display for Dir {
     }
 }
 
-/// How a link to another page of the same site is followed.
+/// How the app moves to another page of the same site, whether a link or a
+/// script's `page()` call asks it to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NavigationMode {
@@ -465,7 +466,7 @@ pub struct Manifest {
     /// locale's `.ftl` file, relative to the site root. Empty for a site
     /// with no catalogues, and for a locale that has none.
     pub catalogues: BTreeMap<String, String>,
-    /// How same-site links are followed.
+    /// How the app moves between the pages of the site.
     pub navigation: NavigationMode,
     /// Page key to what the emitter wrote for that page.
     pub pages: BTreeMap<String, PageInfo>,

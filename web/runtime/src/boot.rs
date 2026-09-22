@@ -8,10 +8,10 @@
 use std::sync::Once;
 
 use lumen_core::request::RequestContext;
-use lumen_html::contract::{DATA_LM, Manifest, NavigationMode};
+use lumen_html::contract::{DATA_LM, Manifest};
 use lumen_scene::routing::Location;
 use lumen_scene::spawn::SpawnIntoWorld;
-use lumen_web_dom::{Routes, WebDomPlugin};
+use lumen_web_dom::{Navigation, Routes, WebDomPlugin};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use web_sys::Element;
@@ -95,13 +95,13 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
     // one to the other.
     //
     // Installed whichever way `[web] navigation` reads: `route.path` has to
-    // seed correctly for the page this address names, and a script's own
-    // `page()` call always swaps in place. What the setting decides is
-    // narrower - only whether a click on a same-page `<a href>` is one of
-    // those swaps or a real document load, and whether the address bar
-    // follows the swap. `listen` below decides the first, because only there
-    // is a browser event still in hand to prevent, and `WebDomPlugin` the
-    // second.
+    // seed correctly for the page this address names. What the setting
+    // decides is what a navigation does once the app is running. Under soft
+    // navigation a same-page `<a href>` click and a script's `page()` call
+    // both swap the page in place and the address bar follows; under hard
+    // navigation both load the target document. `listen` below decides the
+    // click, because only there is a browser event still in hand to prevent,
+    // and `WebDomPlugin` the rest.
     let address = lumen_core::request::current()
         .map(|request| request.path)
         .unwrap_or_default();
@@ -124,14 +124,14 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
     // those trees it belongs to, and that is what its addresses, and the
     // canonical URL its head names, hang off.
     let routes = Routes::from_manifest(&manifest, &page.locale);
-    let soft_navigation = soft_navigation(&manifest, loaded.artifact.pages.is_some());
-    lumen_web_dom::listen(&root, soft_navigation.then_some(&routes))
-        .map_err(|_| BootError::Listeners)?;
+    let navigation = navigation(&manifest, loaded.artifact.pages.is_some());
+    let soft = navigation == Navigation::Soft;
+    lumen_web_dom::listen(&root, soft.then_some(&routes)).map_err(|_| BootError::Listeners)?;
     app.add_plugin(WebDomPlugin {
         root,
         root_entity,
         routes,
-        soft_navigation,
+        navigation,
     });
 
     let app = LumenWebApp::from_parts(app, loaded.scripts.first().map(|s| s.engine.clone()));
@@ -168,15 +168,21 @@ fn install_location() {
     });
 }
 
-/// Whether `[web] navigation` says a same-page `<a href>` click should be
-/// handled in-app rather than left to the browser.
+/// How this document navigates: `[web] navigation`, unless the document has
+/// nothing to swap in.
 ///
 /// `has_pages` is whether the artifact carries the other pages' trees, which
-/// is what a swap mounts from. Without them there is nothing in this document
-/// to swap to, and intercepting a click would leave a link that does nothing
-/// at all: the browser is stopped and the page it named never arrives.
-fn soft_navigation(manifest: &Manifest, has_pages: bool) -> bool {
-    manifest.navigation == NavigationMode::Soft && has_pages
+/// is what a swap mounts from. Without them the app is a single-file one, and
+/// a navigation swaps the one page in place with the rest of the path on
+/// `route.segment`, whatever the setting says. Intercepting a click there
+/// would leave a link that does nothing at all: the browser is stopped and
+/// the page it named never arrives.
+fn navigation(manifest: &Manifest, has_pages: bool) -> Navigation {
+    if has_pages {
+        manifest.navigation.into()
+    } else {
+        Navigation::InPlace
+    }
 }
 
 /// The element the app's root node is.
@@ -231,43 +237,48 @@ impl std::error::Error for BootError {}
 
 #[cfg(test)]
 mod tests {
-    use super::soft_navigation;
+    use super::navigation;
     use lumen_html::contract::{Manifest, NavigationMode};
+    use lumen_web_dom::Navigation;
+
+    fn manifest(mode: NavigationMode) -> Manifest {
+        Manifest {
+            navigation: mode,
+            ..Manifest::default()
+        }
+    }
 
     /// `navigation = "soft"` (the default) means the runtime intercepts a
-    /// same-page link click; before this was wired up, `start` read the
-    /// manifest and then discarded it (`let _ = manifest;`), so soft and
-    /// hard navigation were indistinguishable no matter what the site
-    /// declared.
+    /// same-page link click and swaps the page in; before this was wired
+    /// up, `start` read the manifest and then discarded it
+    /// (`let _ = manifest;`), so soft and hard navigation were
+    /// indistinguishable no matter what the site declared.
     #[test]
-    fn soft_navigation_asks_to_intercept() {
-        let manifest = Manifest {
-            navigation: NavigationMode::Soft,
-            ..Manifest::default()
-        };
-        assert!(soft_navigation(&manifest, true));
-    }
-
-    #[test]
-    fn hard_navigation_does_not() {
-        let manifest = Manifest {
-            navigation: NavigationMode::Hard,
-            ..Manifest::default()
-        };
-        assert!(!soft_navigation(&manifest, false));
-        assert!(!soft_navigation(&manifest, true));
-    }
-
-    #[test]
-    fn a_site_of_one_page_does_not_either() {
-        let manifest = Manifest {
-            navigation: NavigationMode::Soft,
-            ..Manifest::default()
-        };
-        assert!(
-            !soft_navigation(&manifest, false),
-            "with no page set there is no resolver to swap a page in, so a \
-             prevented click would be a link that does nothing"
+    fn soft_navigation_swaps_pages_in() {
+        assert_eq!(
+            navigation(&manifest(NavigationMode::Soft), true),
+            Navigation::Soft
         );
+    }
+
+    #[test]
+    fn hard_navigation_loads_documents() {
+        assert_eq!(
+            navigation(&manifest(NavigationMode::Hard), true),
+            Navigation::Hard
+        );
+    }
+
+    #[test]
+    fn a_single_file_app_swaps_in_place_whatever_the_key_says() {
+        for mode in [NavigationMode::Soft, NavigationMode::Hard] {
+            assert_eq!(
+                navigation(&manifest(mode), false),
+                Navigation::InPlace,
+                "with no page set there is no other document to load and \
+                 nothing to intercept a click for, so `{mode}` swaps the one \
+                 page in place"
+            );
+        }
     }
 }

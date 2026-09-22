@@ -310,7 +310,7 @@ pub struct WebSpec {
     /// artifact and the runtime pair; the emitter only carries the name into
     /// the manifest.
     pub catalogues: BTreeMap<String, String>,
-    /// How same-site links are followed.
+    /// How the app moves between the pages of the site.
     pub navigation: NavigationMode,
     /// Scripts the runtime loads at boot, in order.
     pub scripts: Vec<ScriptRef>,

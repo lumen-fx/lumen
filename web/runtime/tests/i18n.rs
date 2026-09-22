@@ -19,7 +19,7 @@ use lumen_ir::artifact::CompiledApp;
 use lumen_ir::layout_ir::{Attributes, Element, LayoutIR};
 use lumen_scene::spawn::SpawnIntoWorld;
 use lumen_web::{PageSpec, SiteSpec, WebSpec};
-use lumen_web_dom::{Routes, WebDomPlugin};
+use lumen_web_dom::{Navigation, Routes, WebDomPlugin};
 use lumen_web_runtime::assemble;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::Element as DomElement;
@@ -87,7 +87,7 @@ fn boot(ir: LayoutIR, root: DomElement, catalogues: &[(String, String)]) -> App 
         root,
         root_entity,
         routes: Routes::default(),
-        soft_navigation: false,
+        navigation: Navigation::InPlace,
     });
     app.tick();
     app
