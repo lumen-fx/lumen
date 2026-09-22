@@ -195,8 +195,44 @@ jobs:
       # --no-fail-fast so one red target does not hide the rest of the suite.
       # This matrix doubles as the release parity check and a partial report
       # per OS is worth much less than a complete one.
-      - if: needs.changes.outputs.rust == 'true'
+      #
+      # On Linux and macOS a process that dies on a signal leaves a core file,
+      # and a failed run keeps it together with the standard library the
+      # suite loaded, so a crash in native code arrives with the evidence to
+      # read it. Linux writes cores through a helper unless told otherwise.
+      - name: Keep core files
+        if: needs.changes.outputs.rust == 'true' && runner.os == 'Linux'
+        run: |
+          mkdir -p "$RUNNER_TEMP/cores"
+          sudo sysctl -w kernel.core_pattern="$RUNNER_TEMP/cores/core.%e.%p"
+      - if: needs.changes.outputs.rust == 'true' && runner.os != 'Windows'
+        shell: bash
+        run: |
+          ulimit -c unlimited
+          cargo test --workspace --no-fail-fast
+      - if: needs.changes.outputs.rust == 'true' && runner.os == 'Windows'
         run: cargo test --workspace --no-fail-fast
+      - name: Collect crash evidence
+        if: failure() && needs.changes.outputs.rust == 'true' && runner.os != 'Windows'
+        shell: bash
+        run: |
+          evidence="$RUNNER_TEMP/crash-evidence"
+          mkdir -p "$evidence/cores"
+          find "$RUNNER_TEMP/cores" /cores -maxdepth 1 -type f -name 'core*' \
+            -exec cp {} "$evidence/cores/" \; 2>/dev/null || true
+          for libs in target/debug/libs target/debug/deps/libs; do
+            if [ -d "$libs" ]; then
+              mkdir -p "$evidence/$libs"
+              cp -R "$libs/." "$evidence/$libs/"
+            fi
+          done
+      - if: failure() && needs.changes.outputs.rust == 'true' && runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-evidence-${{ matrix.os }}
+          path: ${{ runner.temp }}/crash-evidence/
+          if-no-files-found: ignore
+          retention-days: 7
 
   # The crates the browser runtime shares with the desktop build must keep
   # compiling for the web. A native-only API reintroduced into any of them

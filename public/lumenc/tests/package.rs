@@ -296,7 +296,11 @@ fn a_packaged_app_reaches_the_script_standard_library() {
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
     );
-    assert!(run.status.success(), "the packaged app failed: {output}");
+    assert!(
+        run.status.success(),
+        "the packaged app failed ({}): {output}",
+        run.status
+    );
     assert!(
         !output.contains("SCRIPT LOAD FAILED"),
         "the script compiled in the package: {output}"

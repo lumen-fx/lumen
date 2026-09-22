@@ -58,3 +58,8 @@ serde_json.workspace = true
 # the command itself, because candela opens the C-backed standard library
 # modules as shared libraries and `cc` builds static archives.
 cc.workspace = true
+
+[dev-dependencies]
+# tests/std_library.rs opens the staged `time` library directly and calls its
+# C entry point, apart from the compiler that normally binds it.
+libloading.workspace = true
