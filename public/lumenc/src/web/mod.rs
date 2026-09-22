@@ -10,12 +10,3 @@ pub mod cli;
 /// in the page a crawler reads. Needs what `cli` needs.
 #[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "web"))]
 pub mod component_fill;
-/// The loopback HTTP server behind `lumenc web --serve`. A browser needs a
-/// real origin and real content types to load a site; this is that, for one
-/// directory on one machine.
-#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "web"))]
-pub mod serve;
-/// `lumenc web --render ssr --serve` - the server's pages come from a render
-/// of the app for the request that asked, through [`lumen_ssr`].
-#[cfg(all(feature = "runtime-parse", feature = "dev-run", feature = "web"))]
-pub mod ssr;

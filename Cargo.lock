@@ -4306,6 +4306,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-server"
+version = "0.0.8"
+dependencies = [
+ "ctrlc",
+ "libc",
+ "lumen-ir",
+ "lumen-ssr",
+ "lumen-web",
+ "lumenc",
+ "serde_json",
+ "signal-hook",
+]
+
+[[package]]
 name = "lumen-ssr"
 version = "0.0.8"
 dependencies = [
@@ -4496,6 +4510,7 @@ dependencies = [
  "lumen-script-candela",
  "lumen-script-lua",
  "lumen-script-rhai",
+ "lumen-server",
  "lumen-ssr",
  "lumen-text",
  "lumen-text-cosmic",

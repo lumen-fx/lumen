@@ -12,7 +12,7 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use lumenc::web::serve::{LOOPBACK, Server};
+use lumen_server::{LOOPBACK, Server};
 
 /// The repository this test is built from.
 fn repo() -> PathBuf {

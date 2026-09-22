@@ -40,8 +40,7 @@ use lumen_web::{
     ServerPolicy, ServerSpec, SignalEnv, SiteSpec, WebSpec, intrinsic_size,
 };
 
-use crate::web::serve::{LOOPBACK, Server};
-use crate::web::ssr::RenderHandler;
+use lumen_server::{LOOPBACK, Log, LogFormat, RenderHandler, RenderSettings, Server, Trust};
 
 /// Where a site is written when `lumen.toml` and `--out` both stay quiet.
 const DEFAULT_OUT_DIR: &str = "dist/web";
@@ -1701,10 +1700,11 @@ fn copy_file(source: &Path, target: &Path) -> Result<(), String> {
 
 /// Serve the emitted site until the process is stopped.
 ///
-/// This is the development and self-hosting path: one directory, one machine,
-/// and one process. A site that answers the public belongs behind a reverse
-/// proxy, and an app that answers it from a render belongs in a server of your
-/// own built on [`lumen_ssr`], which is the same renderer this installs.
+/// This is the development path: one directory, one machine, one process,
+/// and a render that fails says why in the page. It is the server
+/// `lumen-server` runs, with the limits a server facing the public needs
+/// left at their defaults, and a site that answers the public belongs
+/// behind `lumen-server` instead.
 fn serve(report: Report, options: &Options) -> ExitCode {
     let host = match host_address(options.host.as_deref()) {
         Ok(host) => host,
@@ -1716,8 +1716,8 @@ fn serve(report: Report, options: &Options) -> ExitCode {
     if !host.is_loopback() {
         warn_line!(
             "lumenc web: warning: --host {host} makes the site reachable from other machines. \
-             This server is for development and for a site you host yourself; put a reverse proxy \
-             in front of it before anyone else uses it."
+             This server is for development; run the site with lumen-server, behind a reverse \
+             proxy, before anyone else uses it."
         );
     }
     let mut server = match Server::bind(&report.out, &report.base, host, options.port) {
@@ -1727,6 +1727,11 @@ fn serve(report: Report, options: &Options) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // Only this machine reaches the default address, so whatever sits in
+    // front of it and says the visitor arrived over TLS is believed.
+    if host.is_loopback() {
+        server = server.with_trust(Trust::Everybody);
+    }
 
     if let Some(site) = report.site {
         // The app's own policy, then whatever the command line adds to it.
@@ -1735,7 +1740,8 @@ fn serve(report: Report, options: &Options) -> ExitCode {
             render.fetch = render.fetch.allow_host(allowed);
         }
         let reaches_nothing = render.fetch.hosts.is_empty();
-        let handler = match RenderHandler::start(site, render) {
+        let log = Arc::new(Log::new(LogFormat::Text, "lumenc web"));
+        let handler = match RenderHandler::start(site, render, RenderSettings::development(log)) {
             Ok(handler) => handler,
             Err(message) => {
                 warn_line!("lumenc web: {message}");

@@ -1,0 +1,6 @@
+<root>
+  <column id="page">
+    <label id="status" bind-text="status" text="" />
+  </column>
+  <script src="main.cdl" />
+</root>
