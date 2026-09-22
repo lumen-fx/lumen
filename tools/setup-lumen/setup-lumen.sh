@@ -47,8 +47,14 @@
 # declaring [dependencies] with every call into those namespaces failing. This
 # is the shape install.sh installs in, and --no-modules is the same opt-out it
 # offers. A release whose sha256sums.txt has no line for the asset installs
-# the toolchain alone, which is what every Windows target does: the Windows
-# legs publish no modules archive and compile the same capabilities in.
+# the toolchain alone and says which case that is: on a Windows target it is
+# the published shape, because the Windows legs compile the same capabilities
+# in, and anywhere else it is an asset that did not reach the release.
+#
+# install writes .setup-lumen-install at the top of DIR, naming the release,
+# the target, and whether the modules were asked for. The action's cache probe
+# reads it: both shapes of install share one directory, so the presence of
+# lumenc cannot tell the tree this run wants from one a different run left.
 
 set -euo pipefail
 
@@ -91,10 +97,6 @@ detect_target() {
       ;;
     *) fail "unsupported runner architecture: $RUNNER_ARCH" ;;
   esac
-
-  if [ "$os" = windows ] && [ "$arch" != x86_64 ]; then
-    fail "no Lumen build for windows-$arch. Windows releases are x86_64 only; see $GH_URL/releases"
-  fi
 
   printf '%s-%s\n' "$os" "$arch"
 }
@@ -308,26 +310,42 @@ cmd_resolve() {
 cmd_install() {
   local usage='usage: setup-lumen.sh install [--no-modules] TAG TARGET DIR'
   local install_modules=1
+  local tag='' target='' dest=''
+  local seen=0 options_done=0
+  local asset sums sums_url want tmp root inner inner_count
+  local modules modules_want modules_state
 
+  # An option is read wherever it appears, which is how install.sh reads its
+  # own, so `install TAG TARGET DIR --no-modules` turns the modules off
+  # instead of installing them and saying nothing. Everything after `--` is
+  # positional, and a fourth positional is a mistake worth reporting rather
+  # than dropping.
   while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --no-modules)
-        install_modules=0
-        shift
-        ;;
-      --)
-        shift
-        break
-        ;;
-      -*) fail "unknown option: $1 ($usage)" ;;
-      *) break ;;
+    if [ "$options_done" -eq 0 ]; then
+      case "$1" in
+        --no-modules)
+          install_modules=0
+          shift
+          continue
+          ;;
+        --)
+          options_done=1
+          shift
+          continue
+          ;;
+        -*) fail "unknown option: $1 ($usage)" ;;
+      esac
+    fi
+    seen=$((seen + 1))
+    case "$seen" in
+      1) tag="$1" ;;
+      2) target="$1" ;;
+      3) dest="$1" ;;
+      *) fail "unexpected argument: $1 ($usage)" ;;
     esac
+    shift
   done
-
-  local tag="${1:?$usage}"
-  local target="${2:?$usage}"
-  local dest="${3:?$usage}"
-  local asset sums sums_url want tmp root inner inner_count modules modules_want
+  [ "$seen" -eq 3 ] || fail "$usage"
 
   asset="$(asset_for "$target")"
   sums_url="$(asset_url "$tag" sha256sums.txt)"
@@ -380,14 +398,26 @@ cmd_install() {
   # The bundled runtime modules are their own asset beside the toolchain
   # archive, published for the four Unix targets. Unpacking them over the tree
   # above lands them in bin/, beside the engine, so the one copy below installs
-  # both. A release that published no such asset, and every Windows target,
-  # take the toolchain alone; so does --no-modules, on purpose.
+  # both. Three ways to end up without them, each said out loud: --no-modules
+  # asked for that, a Windows release publishes no such asset, and a Unix
+  # release missing one is an upload that did not arrive.
   modules="lumen-modules-$target.tar.gz"
   modules_want="$(sums_sha "$sums" "$modules")"
-  if [ "$install_modules" -eq 1 ] && [ -n "$modules_want" ]; then
+  if [ "$install_modules" -eq 0 ]; then
+    printf 'setup-lumen: --no-modules, installing the toolchain alone\n'
+  elif [ -n "$modules_want" ]; then
     fetch_verified "$tag" "$modules" "$modules_want" "$tmp/$modules"
     tar -xzf "$tmp/$modules" -C "$root" ||
       fail "could not unpack the modules archive"
+  else
+    case "$target" in
+      windows-*)
+        printf 'setup-lumen: %s publishes no runtime modules; the Windows build compiles the same capabilities in\n' "$target"
+        ;;
+      *)
+        printf 'setup-lumen: release %s published no %s, so this install has no runtime modules and an app declaring [dependencies] will not find them\n' "$tag" "$modules" >&2
+        ;;
+    esac
   fi
 
   mkdir -p "$dest"
@@ -397,6 +427,19 @@ cmd_install() {
     [ -f "$exe" ] || continue
     chmod 755 "$exe"
   done
+
+  # A run that wants the modules and a run that does not install into the same
+  # directory, so the presence of lumenc says nothing about which of them was
+  # here. This records the request, not what landed: a Windows release
+  # publishes no modules archive, and a run that asked for them there is
+  # complete, not half-done.
+  modules_state=yes
+  [ "$install_modules" -eq 1 ] || modules_state=no
+  {
+    printf 'tag %s\n' "$tag"
+    printf 'target %s\n' "$target"
+    printf 'modules %s\n' "$modules_state"
+  } > "$dest/.setup-lumen-install"
 
   printf 'setup-lumen: installed into %s\n' "$dest"
 }

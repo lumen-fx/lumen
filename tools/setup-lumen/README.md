@@ -59,14 +59,18 @@ own archive in the same release and land beside the engine, where the runtime
 looks for them. Set `modules: false` for a job that only checks or formats an
 app and has no use for them.
 
-Windows runners get the portable zip, not the MSI. The MSI writes an install
-receipt, and a receipt is what turns `lumenc`'s update check on; a runner has
-no use for either, and the check stays off in CI regardless.
+Windows runners get the portable zip, not the MSI, on both x86_64 and Arm. The
+MSI writes an install receipt, and a receipt is what turns `lumenc`'s update
+check on; a runner has no use for either, and the check stays off in CI
+regardless.
+
+The install directory also gets a `.setup-lumen-install` file naming the
+release, the target, and whether the modules were asked for. A later run reads
+it to tell a tree it can reuse from one an earlier run with different inputs
+left behind.
 
 ## Limitations
 
-- Windows releases are x86_64 only. A Windows Arm runner has no archive to
-  install and the action stops with that message.
 - A Windows runner gets no runtime modules. The Windows releases publish no
   modules archive; there the capabilities are compiled into the binaries, and
   `modules` changes nothing.

@@ -85,6 +85,14 @@ runs:
     # run cancelled mid-save, or a key whose contents were pruned, comes back
     # as a hit over a directory with no lumenc in it, and the download is the
     # cheaper thing to redo.
+    #
+    # lumenc alone is not the question, because a `modules: true` run and a
+    # `modules: false` run install into one directory and the cache key only
+    # keeps the workflow cache apart. A self-hosted runner with a persistent
+    # RUNNER_TOOL_CACHE, or one job calling this action twice, leaves a tree
+    # from the other shape behind, and skipping the install over it is how a
+    # job ends up with no runtime modules. So the probe asks the install what
+    # it was asked for, which is what setup-lumen.sh records beside it.
     - name: Decide whether to download
       id: plan
       shell: bash
@@ -94,14 +102,24 @@ runs:
         if [ "${RUNNER_OS}" = Windows ]; then
           exe="$exe.exe"
         fi
-        if [ -f "$exe" ]; then
+        want=yes
+        if [ "$LUMEN_MODULES" = false ]; then
+          want=no
+        fi
+        receipt="$INSTALL_DIR/.setup-lumen-install"
+        got=""
+        if [ -f "$receipt" ]; then
+          got="$(sed -n 's/^modules //p' "$receipt")"
+        fi
+        if [ -f "$exe" ] && [ "$got" = "$want" ]; then
           echo "needed=false" >> "$GITHUB_OUTPUT"
-          echo "cached toolchain at $INSTALL_DIR"
+          echo "cached toolchain at $INSTALL_DIR (modules: $got)"
         else
           echo "needed=true" >> "$GITHUB_OUTPUT"
         fi
       env:
         INSTALL_DIR: ${{ steps.resolve.outputs.install-dir }}
+        LUMEN_MODULES: ${{ inputs.modules }}
 
     # Only "false" turns the modules off. A misspelled value installs them,
     # because an app that declares a module and cannot find it fails at the
