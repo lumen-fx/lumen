@@ -443,6 +443,17 @@ fn link_in(root: &Element) -> Element {
         .expect("the page carries the link")
 }
 
+/// What the head of the document says under `selector`, if anything.
+fn head_attr(selector: &str, attribute: &str) -> Option<String> {
+    web_sys::window()
+        .unwrap()
+        .document()
+        .unwrap()
+        .query_selector(selector)
+        .unwrap()
+        .and_then(|element| element.get_attribute(attribute))
+}
+
 #[wasm_bindgen_test]
 fn a_link_the_runtime_mounts_points_where_the_build_would_have_pointed_it() {
     let site = link_site();
@@ -535,6 +546,51 @@ fn a_soft_navigation_leaves_the_address_the_link_named() {
         href,
         "a swapped page ends at the address the anchor already named, so \
          reloading or copying it lands on the page being shown"
+    );
+}
+
+#[wasm_bindgen_test]
+fn a_soft_navigation_brings_the_page_s_own_head_with_it() {
+    let _address = AddressGuard::take();
+    let mut site = link_site();
+    site.web.title = "Home".to_string();
+    site.web.url = Some("https://example.com".to_string());
+    site.pages[1].title = Some("Settings".to_string());
+    site.pages[1].description = Some("Everything you can change".to_string());
+
+    let root = prerender_page(&site, 0);
+    let mut app = hydrate_site(&site, link_tree(), root.clone(), true);
+    let document = web_sys::window().unwrap().document().unwrap();
+    assert_eq!(
+        document.title(),
+        "Home",
+        "the page the visitor landed on names itself"
+    );
+
+    click_and_check_prevented(&root, &link_in(&root), false);
+    app.tick();
+    app.tick();
+
+    assert_eq!(
+        document.title(),
+        "Settings",
+        "a tab, a bookmark and a share card are all read out of the head, \
+         and the page they name is the one that was swapped in"
+    );
+    assert_eq!(
+        head_attr("meta[property=\"og:title\"]", "content").as_deref(),
+        Some("Settings")
+    );
+    // The entry page has no description, so the document carried no
+    // description tags at all and the swap has to add them.
+    assert_eq!(
+        head_attr("meta[name=\"description\"]", "content").as_deref(),
+        Some("Everything you can change")
+    );
+    assert_eq!(
+        head_attr("link[rel=\"canonical\"]", "href").as_deref(),
+        Some("https://example.com/settings.html"),
+        "the canonical link names the address the page is now at"
     );
 }
 

@@ -31,8 +31,8 @@ pub use contract::{
     DATA_LM_DRAG_OVER, DATA_LM_HIDDEN, DATA_LM_KEY, DATA_LM_LOCALE, DATA_LM_PAGE, DATA_LM_PART,
     DATA_LM_SELECTED, DATA_LM_WIDGET, DEFAULT_ARTIFACT_FILE, DEFAULT_CSS_FILE, DEFAULT_JS_FILE,
     DEFAULT_MANIFEST_FILE, DEFAULT_WASM_FILE, Dir, LM_CONTRACT_VERSION, Manifest, NavigationMode,
-    NodePath, NodeSeed, PathError, PathStep, SEED_SCRIPT_ID, ScriptFormat, ScriptRef, Seed,
-    SeedValue, UnsupportedSeedValue, web_names,
+    NodePath, NodeSeed, PageInfo, PathError, PathStep, SEED_SCRIPT_ID, ScriptFormat, ScriptRef,
+    Seed, SeedValue, UnsupportedSeedValue, web_names,
 };
 pub use escape::{escape_attr, escape_text};
 pub use paths::{Visit, walk_nodes};

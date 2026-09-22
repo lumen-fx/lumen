@@ -36,7 +36,13 @@ use serde::{Deserialize, Serialize};
 /// with the control the browser draws them by written inside and marked
 /// [`DATA_LM_PART`]. A runtime that does not know the mark would build an
 /// element for the indicator the mark stands for.
-pub const LM_CONTRACT_VERSION: u32 = 4;
+///
+/// 5: the manifest says what the head of each page's document was written
+/// with, as a [`PageInfo`] rather than the document name alone, and what
+/// address the site's absolute URLs are built from. A page swapped in place
+/// carries its own head from there instead of keeping the head of the
+/// document the browser loaded.
+pub const LM_CONTRACT_VERSION: u32 = 5;
 
 /// Node identity: the [`NodePath`] of the IR node this element came from.
 pub const DATA_LM: &str = "data-lm";
@@ -398,6 +404,29 @@ pub struct ScriptRef {
     pub format: ScriptFormat,
 }
 
+/// One page of the site, as the emitter wrote it.
+///
+/// The document name is how an address and a page find each other. The rest
+/// is what the emitter put in that document's head, carried so the runtime
+/// can write it over the head of whatever document the browser loaded: a
+/// page swapped in place under `[web] navigation = "soft"` would otherwise
+/// keep the title, the description and the share card of the page the
+/// visitor arrived on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PageInfo {
+    /// The document this page was emitted as, relative to the site root.
+    pub document: String,
+    /// The page's title: its own, or the site's when it declares none.
+    pub title: String,
+    /// The page's description, its own or the site's. A page with neither
+    /// carries no description tags.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Whether a crawler is invited to index the page. `false` is the
+    /// `<meta name="robots" content="noindex">` its document carries.
+    pub index: bool,
+}
+
 /// `lumen.web.json`: what the runtime needs before it has parsed anything.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
@@ -405,6 +434,12 @@ pub struct Manifest {
     pub contract_version: u32,
     /// URL prefix every path in the site hangs off, with a trailing slash.
     pub base_path: String,
+    /// The address the site's absolute URLs are built from: `[web] canonical`
+    /// when it is set, `[web] url` otherwise. A site that declares neither
+    /// has no absolute address, and its documents carry no canonical link
+    /// and no `og:url`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
     /// Page key the site opens on.
     pub entry: String,
     /// Compiled app artifact, relative to the site root.
@@ -430,8 +465,8 @@ pub struct Manifest {
     pub catalogues: BTreeMap<String, String>,
     /// How same-site links are followed.
     pub navigation: NavigationMode,
-    /// Page key to the document that page was emitted as.
-    pub pages: BTreeMap<String, String>,
+    /// Page key to what the emitter wrote for that page.
+    pub pages: BTreeMap<String, PageInfo>,
     /// Scripts to load at boot, in order.
     pub scripts: Vec<ScriptRef>,
 }
@@ -473,7 +508,7 @@ impl Manifest {
         // The emitter wrote which document each page was emitted as, so the
         // address of a page that has a file is read back off that map rather
         // than by naming documents a second way here.
-        if let Some((key, _)) = self.pages.iter().find(|(_, document)| *document == rest) {
+        if let Some((key, _)) = self.pages.iter().find(|(_, page)| page.document == rest) {
             return (key.clone(), String::new());
         }
         lumen_core::nav::resolve_path(rest, &self.page_keys(), &self.entry)
@@ -485,6 +520,7 @@ impl Default for Manifest {
         Self {
             contract_version: LM_CONTRACT_VERSION,
             base_path: "/".to_string(),
+            origin: None,
             entry: String::new(),
             artifact: DEFAULT_ARTIFACT_FILE.to_string(),
             css: DEFAULT_CSS_FILE.to_string(),
@@ -654,6 +690,17 @@ impl Seed {
 mod tests {
     use super::*;
 
+    /// A page emitted as `document`, with the head a site that says nothing
+    /// about its pages gives them.
+    fn page(document: &str) -> PageInfo {
+        PageInfo {
+            document: document.to_string(),
+            title: String::new(),
+            description: None,
+            index: true,
+        }
+    }
+
     /// A three-page site emitted in two locales, the second under a prefix.
     fn manifest() -> Manifest {
         Manifest {
@@ -666,7 +713,7 @@ mod tests {
                 ("user", "user.html"),
             ]
             .into_iter()
-            .map(|(key, document)| (key.to_string(), document.to_string()))
+            .map(|(key, document)| (key.to_string(), page(document)))
             .collect(),
             ..Manifest::default()
         }
@@ -748,9 +795,7 @@ mod tests {
     #[test]
     fn page_at_still_reads_a_page_named_like_a_locale() {
         let mut manifest = manifest();
-        manifest
-            .pages
-            .insert("de".to_string(), "de.html".to_string());
+        manifest.pages.insert("de".to_string(), page("de.html"));
         assert_eq!(
             manifest.page_at("/de.html"),
             ("de".to_string(), String::new())
@@ -915,11 +960,20 @@ mod tests {
     fn manifest_round_trips() {
         let manifest = Manifest {
             entry: "index".into(),
+            origin: Some("https://example.com".into()),
             locale: "en-US".into(),
             locales: vec!["en-US".into(), "de-DE".into()],
             pages: BTreeMap::from([
-                ("index".to_string(), "index.html".to_string()),
-                ("settings".to_string(), "settings.html".to_string()),
+                ("index".to_string(), page("index.html")),
+                (
+                    "settings".to_string(),
+                    PageInfo {
+                        document: "settings.html".to_string(),
+                        title: "Settings".to_string(),
+                        description: Some("Everything you can change".to_string()),
+                        index: false,
+                    },
+                ),
             ]),
             scripts: vec![ScriptRef {
                 engine: "candela".into(),
@@ -932,6 +986,10 @@ mod tests {
         assert!(json.contains(r#""format":"cdlb""#));
         assert!(json.contains(r#""dir":"ltr""#));
         assert!(json.contains(r#""navigation":"soft""#));
+        assert!(json.contains(r#""document":"settings.html""#));
+        assert!(json.contains(r#""title":"Settings""#));
+        // A page that says nothing extra about itself writes nothing extra.
+        assert!(!json.contains(r#""description":null"#));
         let back: Manifest = serde_json::from_str(&json).expect("deserializes");
         assert_eq!(back, manifest);
         assert_eq!(back.contract_version, LM_CONTRACT_VERSION);

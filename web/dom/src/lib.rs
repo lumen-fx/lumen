@@ -24,6 +24,7 @@
 #![warn(missing_docs)]
 
 mod events;
+mod head;
 mod navigation;
 mod nodes;
 mod project;
@@ -79,6 +80,16 @@ impl Plugin for WebDomPlugin {
                 navigation::sync_history.before(lumen_scene::routing::apply_navigation),
             );
         }
+        // The head follows the page the app is showing, whichever way it got
+        // there. `[web] navigation` decides what a click on a same-page link
+        // does, not what the document says it is holding: under hard
+        // navigation a script's own `page()` call still swaps in place, and
+        // the tab, the bookmark and the share card name the page that swap
+        // put on the screen. After the resolver, which is what settles it.
+        app.add_systems(
+            TickStage::Systems,
+            head::sync_head.after(lumen_scene::routing::apply_navigation),
+        );
         let table = NodeTable::adopting(self.root, self.root_entity);
         app.world.insert_non_send(table);
         // A dialog the browser dismisses writes the signal it hangs off, so

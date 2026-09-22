@@ -596,11 +596,15 @@ none of them means anything without an absolute address.
   lets every link load the next document, the same as an ordinary site. Under
   soft navigation the address becomes the target page's own URL, so reloading
   or copying the link lands on the page being shown, and the browser's back
-  and forward buttons step the site. What stays behind is the head: the
-  `<title>` and the meta tags remain the ones the document that was loaded
-  was emitted with. Under hard navigation a link loads the next document, but
-  a navigation that does not come from one (a script calling `page()`) still
-  swaps in place, and the address stays on the document that was loaded.
+  and forward buttons step the site. The head follows the swap as well: the
+  `<title>`, the description, the canonical link and the Open Graph and
+  Twitter tags become the ones that page's own document was emitted with, so
+  the tab, a bookmark and a share card all name the page being shown. The
+  `hreflang` links are the exception and keep naming the document that was
+  loaded. Under hard navigation a link loads the next document, but a
+  navigation that does not come from one (a script calling `page()`) still
+  swaps in place; the head follows that swap too, and the address stays on
+  the document that was loaded.
 - A `<input>` is edited by the browser, so Lumen's own caret, selection and
   IME handling are not in play; what an app sees is the value after each edit.
 - A `<checkbox indeterminate="true">` shows its dash once the runtime is

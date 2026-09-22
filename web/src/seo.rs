@@ -14,7 +14,7 @@ use lumen_html::{escape_attr, escape_text};
 
 use crate::error::EmitError;
 use crate::names;
-use crate::spec::{PageSpec, SiteSpec};
+use crate::spec::{PageSpec, SiteSpec, WebSpec};
 use crate::urls;
 
 /// The address the site's absolute URLs are built from.
@@ -23,6 +23,24 @@ use crate::urls;
 /// canonical one; without that, it is the address it is served from.
 pub fn origin(spec: &SiteSpec) -> Option<&String> {
     spec.web.canonical.as_ref().or(spec.web.url.as_ref())
+}
+
+/// The title a page's document is written with: its own when it declares
+/// one, the site's otherwise.
+///
+/// The manifest carries the same answer for every page, so the runtime can
+/// put it back when it swaps a page in. Asked here rather than worked out
+/// twice, because a head written one way and a swap that writes another is
+/// the same page with two names.
+pub fn title(page: &PageSpec, web: &WebSpec) -> String {
+    page.title.clone().unwrap_or_else(|| web.title.clone())
+}
+
+/// The description a page's document is written with, on the same rule as
+/// [`title`]. A page whose site declares none either is written without the
+/// description tags.
+pub fn description<'a>(page: &'a PageSpec, web: &'a WebSpec) -> Option<&'a String> {
+    page.description.as_ref().or(web.description.as_ref())
 }
 
 /// Every locale's URL for `document`, as `(hreflang, url)` pairs.
@@ -67,8 +85,8 @@ pub fn open_document(
 ) -> Result<(), EmitError> {
     let web = &spec.web;
     let base = urls::normalize_base(&web.base_path);
-    let title = page.title.clone().unwrap_or_else(|| web.title.clone());
-    let description = page.description.as_ref().or(web.description.as_ref());
+    let title = title(page, web);
+    let description = description(page, web);
     let document = page.document(&web.entry);
     // This tree's documents hang off the locale prefix; the site's shared
     // files do not.
