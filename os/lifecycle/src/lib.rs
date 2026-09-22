@@ -878,7 +878,8 @@ mod windows_pipe {
     use super::{AppId, SecondaryArgsInbox, SingleInstance};
     use std::io::{Read, Write};
     use windows::Win32::Foundation::{
-        CloseHandle, ERROR_ACCESS_DENIED, ERROR_PIPE_CONNECTED, GetLastError, HANDLE,
+        CloseHandle, ERROR_ACCESS_DENIED, ERROR_NO_DATA, ERROR_PIPE_CONNECTED, GetLastError,
+        HANDLE, WIN32_ERROR,
     };
     use windows::Win32::Security::{
         ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAce, GetLengthSid,
@@ -1137,18 +1138,27 @@ mod windows_pipe {
                 let mut current = initial;
                 loop {
                     if !connect(current.0) {
-                        // Drop the failed instance and re-arm.
-                        drop(current);
-                        match create_pipe(&name, Claim::Instance) {
-                            Attempt::Created(handle) => {
-                                current = PrimaryPipe(handle);
-                                continue;
-                            }
+                        // Re-arm before the failed instance goes, for the same
+                        // reason the success path below arms the next one
+                        // first: a name exists only while an instance of it is
+                        // open, so a count that reaches zero hands the lock to
+                        // whichever launch creates the name next. A client
+                        // aborting mid-handshake is enough to land here, and
+                        // the descriptor this process asked for grants its own
+                        // user `FILE_CREATE_PIPE_INSTANCE`, so a create in that
+                        // window would succeed against the other launch's pipe
+                        // and leave two processes each calling itself primary.
+                        let rearmed = match create_pipe(&name, Claim::Instance) {
+                            Attempt::Created(handle) => PrimaryPipe(handle),
                             _ => {
                                 tracing::debug!("lumen-os-lifecycle: re-create pipe failed");
                                 return;
                             }
-                        }
+                        };
+                        // The assignment closes the failed instance, now that
+                        // its replacement is the one holding the name.
+                        current = rearmed;
+                        continue;
                     }
                     // Arm the next instance before servicing this one. A name
                     // exists only while an instance of it is open, so letting
@@ -1185,19 +1195,37 @@ mod windows_pipe {
             .ok();
     }
 
+    /// Wait for a client on this instance, and answer whether there is one to
+    /// read from.
+    ///
+    /// Two of `ConnectNamedPipe`'s failures are a client rather than a fault,
+    /// and both describe a secondary that got there before this thread did:
+    ///
+    /// - `ERROR_PIPE_CONNECTED`: it connected in the window between
+    ///   `CreateNamedPipeW` and this call.
+    /// - `ERROR_NO_DATA`: it connected, wrote, and closed in that window. A
+    ///   secondary launch does precisely that and then exits, so this is the
+    ///   ordinary case whenever the primary's accept thread is still starting,
+    ///   which is where it is when the first secondary of a run arrives. What
+    ///   the client wrote is still in this instance's buffer; the read the
+    ///   caller does next is what collects it, and `DisconnectNamedPipe` on
+    ///   drop is what returns the instance to the loop.
+    ///
+    /// Reading either as a failed connect throws the instance away with the
+    /// argv still buffered in it, which is a secondary's arguments silently
+    /// lost.
     fn connect(handle: HANDLE) -> bool {
-        // A client that connected in the window between `CreateNamedPipeW`
-        // and `ConnectNamedPipe` makes the latter fail with
-        // `ERROR_PIPE_CONNECTED` - that is success, not failure (dropping it
-        // would lose a secondary instance's argv).
-        // SAFETY: `handle` is a live pipe instance the caller owns, and
-        // `GetLastError` reads the value the failed connect just set.
-        unsafe {
-            if ConnectNamedPipe(handle, None).is_ok() {
-                return true;
-            }
-            GetLastError() == ERROR_PIPE_CONNECTED
-        }
+        // SAFETY: `handle` is a live pipe instance the caller owns, and a
+        // `None` overlapped pointer asks for the blocking form of the call.
+        let connected = unsafe { ConnectNamedPipe(handle, None) };
+        let Err(e) = connected else {
+            return true;
+        };
+        // The code comes off the error the call returned, which captured it,
+        // rather than from a second look at this thread's last-error value
+        // after a `Result` has been built and dropped around it.
+        let code = WIN32_ERROR::from_error(&e);
+        code == Some(ERROR_PIPE_CONNECTED) || code == Some(ERROR_NO_DATA)
     }
 
     /// Owned named-pipe handle (closed on drop).
@@ -1359,6 +1387,14 @@ mod tests {
     /// unix. Without `FILE_FLAG_FIRST_PIPE_INSTANCE` the second
     /// `CreateNamedPipeW` succeeds as one more server instance of a name the
     /// first launch still holds, and this returns `Primary` instead.
+    ///
+    /// Both halves matter, and they fail separately. On a runner the secondary
+    /// opens, writes, and closes before the primary's accept thread has
+    /// reached `ConnectNamedPipe`, so that call reports `ERROR_NO_DATA`
+    /// instead of connecting; an accept loop that reads that as a failed
+    /// connect closes the instance with the argv still buffered in it, the
+    /// secondary still says `args_sent: true`, and the argv assertion below is
+    /// the only thing that catches it.
     #[cfg(windows)]
     #[test]
     fn second_launch_on_windows_is_secondary() {
