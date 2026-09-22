@@ -363,7 +363,7 @@ fn link_site() -> SiteSpec {
 /// here, because what makes an address right is that it is the one the
 /// anchor already names.
 fn site_routes(site: &SiteSpec) -> Routes {
-    Routes::from_manifest(&lumen_web::site::manifest(site))
+    Routes::from_manifest(&lumen_web::site::manifest(site), &site.locale.locale)
 }
 
 /// The page keys the resolver answers against, which are the site's.
@@ -374,7 +374,13 @@ fn site_keys(site: &SiteSpec) -> Vec<String> {
 /// An app on the entry page of `site`, assembled the way `boot` assembles
 /// one: the router, the listeners and the browser backend, with `soft`
 /// saying which way `[web] navigation` reads.
-fn hydrate_site(site: &SiteSpec, ir: LayoutIR, root: Element, soft: bool) -> App {
+///
+/// Such an app writes the head of the page it is showing, and the document
+/// it writes is the suite's own page, so the head is handed back as a guard
+/// that puts it back. Hold it for as long as the app: dropping it early
+/// restores the head under a test still reading it.
+fn hydrate_site(site: &SiteSpec, ir: LayoutIR, root: Element, soft: bool) -> (App, HeadGuard) {
+    let head = HeadGuard::take();
     let mut app = App::new();
     app.extract_fns.clear();
     app.world.init_resource::<PropertyStore>();
@@ -395,7 +401,7 @@ fn hydrate_site(site: &SiteSpec, ir: LayoutIR, root: Element, soft: bool) -> App
         soft_navigation: soft,
     });
     app.tick();
-    app
+    (app, head)
 }
 
 /// The address the suite's own page is at, put back on the way out.
@@ -454,6 +460,82 @@ fn head_attr(selector: &str, attribute: &str) -> Option<String> {
         .and_then(|element| element.get_attribute(attribute))
 }
 
+/// Every tag the runtime writes when it puts a page's head in the document:
+/// the element, the attribute and value it is found by, and the attribute it
+/// carries its own value in.
+const HEAD_TAGS: [(&str, &str, &str, &str); 8] = [
+    ("meta", "name", "description", "content"),
+    ("meta", "name", "robots", "content"),
+    ("link", "rel", "canonical", "href"),
+    ("meta", "property", "og:title", "content"),
+    ("meta", "property", "og:description", "content"),
+    ("meta", "property", "og:url", "content"),
+    ("meta", "name", "twitter:title", "content"),
+    ("meta", "name", "twitter:description", "content"),
+];
+
+/// The selector one of those tags is found by.
+fn head_selector(tag: &str, key: &str, id: &str) -> String {
+    format!("{tag}[{key}=\"{id}\"]")
+}
+
+/// The head of the suite's own page, put back on the way out.
+///
+/// The whole suite runs in one document, and an app writes the head of the
+/// page it is showing into it: a title and a set of meta tags left behind
+/// are what every later test reads instead of the head its own page was
+/// emitted with. A tag the page did not carry is taken out again rather
+/// than blanked, because a document that says nothing about itself carries
+/// no tag at all.
+struct HeadGuard {
+    title: String,
+    tags: Vec<Option<String>>,
+}
+
+impl HeadGuard {
+    fn take() -> Self {
+        Self {
+            title: web_sys::window().unwrap().document().unwrap().title(),
+            tags: HEAD_TAGS
+                .iter()
+                .map(|(tag, key, id, attribute)| head_attr(&head_selector(tag, key, id), attribute))
+                .collect(),
+        }
+    }
+}
+
+impl Drop for HeadGuard {
+    fn drop(&mut self) {
+        let document = web_sys::window().unwrap().document().unwrap();
+        document.set_title(&self.title);
+        for ((tag, key, id, attribute), held) in HEAD_TAGS.iter().zip(&self.tags) {
+            let found = document
+                .query_selector(&head_selector(tag, key, id))
+                .unwrap();
+            let put = |element: &Element, value: &str| {
+                element
+                    .set_attribute(attribute, value)
+                    .expect("the tag says again what the suite's page had it say");
+            };
+            match (found, held) {
+                (Some(element), Some(value)) => put(&element, value),
+                (Some(element), None) => element.remove(),
+                (None, Some(value)) => {
+                    let element = document.create_element(tag).unwrap();
+                    element.set_attribute(key, id).unwrap();
+                    put(&element, value);
+                    document
+                        .head()
+                        .expect("the document has a head")
+                        .append_child(&element)
+                        .expect("the tag the suite's page carried goes back in it");
+                }
+                (None, None) => {}
+            }
+        }
+    }
+}
+
 #[wasm_bindgen_test]
 fn a_link_the_runtime_mounts_points_where_the_build_would_have_pointed_it() {
     let site = link_site();
@@ -464,7 +546,7 @@ fn a_link_the_runtime_mounts_points_where_the_build_would_have_pointed_it() {
     // Nothing prerendered this document, so every node is built from its
     // entity: the path a `<for>` row, an `<if mode="render">` branch and a
     // whole page swapped in after a navigation all take.
-    let _app = hydrate_site(&site, link_tree(), root.clone(), false);
+    let (_app, _head) = hydrate_site(&site, link_tree(), root.clone(), false);
 
     let manifest = lumen_web::site::manifest(&site);
     assert_eq!(
@@ -488,7 +570,7 @@ fn a_link_the_runtime_mounts_points_where_the_build_would_have_pointed_it() {
 fn soft_navigation_keeps_the_browser_from_loading_the_next_document() {
     let site = link_site();
     let root = prerender_page(&site, 0);
-    let _app = hydrate_site(&site, link_tree(), root.clone(), true);
+    let (_app, _head) = hydrate_site(&site, link_tree(), root.clone(), true);
 
     assert!(
         click_and_check_prevented(&root, &link_in(&root), false),
@@ -501,7 +583,7 @@ fn soft_navigation_keeps_the_browser_from_loading_the_next_document() {
 fn hard_navigation_leaves_the_browser_s_own_click_alone() {
     let site = link_site();
     let root = prerender_page(&site, 0);
-    let _app = hydrate_site(&site, link_tree(), root.clone(), false);
+    let (_app, _head) = hydrate_site(&site, link_tree(), root.clone(), false);
 
     assert!(
         !click_and_check_prevented(&root, &link_in(&root), false),
@@ -514,7 +596,7 @@ fn hard_navigation_leaves_the_browser_s_own_click_alone() {
 fn a_modifier_click_still_reaches_the_browser_under_soft_navigation() {
     let site = link_site();
     let root = prerender_page(&site, 0);
-    let _app = hydrate_site(&site, link_tree(), root.clone(), true);
+    let (_app, _head) = hydrate_site(&site, link_tree(), root.clone(), true);
 
     assert!(
         !click_and_check_prevented(&root, &link_in(&root), true),
@@ -527,7 +609,7 @@ fn a_soft_navigation_leaves_the_address_the_link_named() {
     let _address = AddressGuard::take();
     let site = link_site();
     let root = prerender_page(&site, 0);
-    let mut app = hydrate_site(&site, link_tree(), root.clone(), true);
+    let (mut app, _head) = hydrate_site(&site, link_tree(), root.clone(), true);
 
     let anchor = link_in(&root);
     let href = anchor
@@ -559,7 +641,7 @@ fn a_soft_navigation_brings_the_page_s_own_head_with_it() {
     site.pages[1].description = Some("Everything you can change".to_string());
 
     let root = prerender_page(&site, 0);
-    let mut app = hydrate_site(&site, link_tree(), root.clone(), true);
+    let (mut app, _head) = hydrate_site(&site, link_tree(), root.clone(), true);
     let document = web_sys::window().unwrap().document().unwrap();
     assert_eq!(
         document.title(),
@@ -599,7 +681,7 @@ fn a_hard_navigation_leaves_the_address_to_the_browser() {
     let _address = AddressGuard::take();
     let site = link_site();
     let root = prerender_page(&site, 0);
-    let mut app = hydrate_site(&site, link_tree(), root.clone(), false);
+    let (mut app, _head) = hydrate_site(&site, link_tree(), root.clone(), false);
 
     let before = address();
     click_and_check_prevented(&root, &link_in(&root), false);
@@ -714,7 +796,7 @@ fn fragment_link_tree() -> LayoutIR {
 #[wasm_bindgen_test]
 fn a_same_document_fragment_link_reaches_the_browser_under_soft_navigation() {
     let root = prerender(fragment_link_tree());
-    let _app = hydrate_site(&link_site(), fragment_link_tree(), root.clone(), true);
+    let (_app, _head) = hydrate_site(&link_site(), fragment_link_tree(), root.clone(), true);
 
     assert!(
         !click_and_check_prevented(&root, &link_in(&root), false),
