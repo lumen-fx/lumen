@@ -259,7 +259,11 @@ pub fn control_attrs(ir_tag: &str, attrs: &Attributes) -> Vec<(&'static str, Str
     if attrs.disabled {
         out.push(("disabled", String::new()));
     }
-    if let Some(index) = attrs.tab_index {
+    // A radio's place in the tab order is its group's, and the browser's
+    // own `name` group is what gives it one: Tab stops once on the group and
+    // the arrow keys move between its members. A `tabindex` on a member
+    // would take that away from the browser, so a radio carries none.
+    if let Some(index) = attrs.tab_index.filter(|_| input_type != "radio") {
         out.push(("tabindex", index.to_string()));
     }
     // A radio's group is the `name` its members share, which is what makes
@@ -604,7 +608,11 @@ mod tests {
 
         let control = control_attrs("radio", &a);
         assert_eq!(find(&control, "disabled"), Some(""));
-        assert_eq!(find(&control, "tabindex"), Some("-1"));
+        // The browser's own radio group decides where a member sits in the
+        // tab order, so the control carries no `tabindex` of its own.
+        assert_eq!(find(&control, "tabindex"), None);
+        // Any other control carries the one the author wrote.
+        assert_eq!(find(&control_attrs("checkbox", &a), "tabindex"), Some("-1"));
         assert_eq!(find(&control, "id"), None);
         // The browser reads these off the control it validates and focuses.
         assert_eq!(find(&control, "required"), Some(""));

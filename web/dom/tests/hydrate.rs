@@ -2228,3 +2228,91 @@ fn a_radio_the_world_selects_checks_its_control() {
         "and not on the row, which is not what a stylesheet reads it from"
     );
 }
+
+/// Three radios of one group, each seeded out of the tab order the way the
+/// parser seeds a `<radio>` for the desktop's roving focus.
+fn radio_group() -> Vec<IrElement> {
+    ["air", "sea", "land"]
+        .into_iter()
+        .map(|value| {
+            let attrs = Attributes {
+                radio_group: Some("ship".to_string()),
+                radio_value: Some(value.to_string()),
+                tab_index: Some(-1),
+                ..Attributes::default()
+            };
+            widget("radio", WidgetPart::RadioDot, attrs, value)
+        })
+        .collect()
+}
+
+/// Every radio control under `root`.
+fn radio_controls(root: &Element) -> Vec<web_sys::HtmlInputElement> {
+    let found = root.query_selector_all(".radio-dot").unwrap();
+    (0..found.length())
+        .map(|i| found.get(i).unwrap().unchecked_into())
+        .collect()
+}
+
+#[wasm_bindgen_test]
+fn a_radio_group_is_one_stop_in_the_browser_s_tab_order() {
+    let tree = || LayoutIR {
+        root: element("root", None, radio_group()),
+        ..LayoutIR::default()
+    };
+    let root = prerender(tree());
+    let _app = hydrate(tree(), root.clone());
+
+    let controls = radio_controls(&root);
+    assert_eq!(controls.len(), 3);
+    for control in controls {
+        // The browser gives a `name` group one stop in the tab order and
+        // moves between its members with the arrow keys. A `tabindex` of
+        // -1 on each member takes every one of them out of it instead.
+        assert!(
+            !control.has_attribute("tabindex"),
+            "a radio leaves its place in the tab order to its group"
+        );
+        assert_eq!(control.tab_index(), 0);
+        assert_eq!(control.name(), "ship");
+    }
+    root.remove();
+}
+
+#[wasm_bindgen_test]
+fn a_radio_group_mounted_at_runtime_is_one_group() {
+    let tree = || {
+        let gate = IrElement {
+            tag: "if".to_string(),
+            attrs: Attributes {
+                if_signal: Some("shown".to_string()),
+                if_mode: IfModeSpec::Render,
+                ..Attributes::default()
+            },
+            children: radio_group(),
+            ..IrElement::default()
+        };
+        LayoutIR {
+            root: element("root", None, vec![gate]),
+            ..LayoutIR::default()
+        }
+    };
+    let root = prerender(tree());
+    let mut app = hydrate_reactive(tree(), root.clone());
+    assert!(radio_controls(&root).is_empty(), "the branch starts off");
+
+    set_signal(&mut app, "shown", "1");
+
+    let controls = radio_controls(&root);
+    assert_eq!(controls.len(), 3, "the branch turning on built the group");
+    let values: Vec<String> = controls.iter().map(|c| c.value()).collect();
+    assert_eq!(values, ["air", "sea", "land"]);
+    for control in &controls {
+        // Built from the entity rather than adopted from the page, so the
+        // group comes off the entity: without a shared `name` each control
+        // is a group of one, and the arrow keys move nowhere.
+        assert_eq!(control.name(), "ship");
+        assert!(!control.has_attribute("tabindex"));
+    }
+    root.remove();
+}

@@ -508,10 +508,11 @@ the dot is the browser's own control under the same class.
 | `label` | text | The caption. |
 | `checked` | `true`, `yes` | Seeds the group signal with this member's value. |
 
-Radios start at `tab-index="-1"`; on the desktop exactly one member of
-each group is promoted at runtime, so Tab enters and leaves the group as
-a unit and arrow keys move within it. Nothing promotes a member on the
-web, where the group is reachable with a pointer only.
+A radio group is one Tab stop, and the arrow keys move within it. On the
+desktop Lumen keeps exactly one member of each group in the Tab order; on
+the web the members share the browser's own `name` group, and the browser
+does the same. A `tab-index` written on a `<radio>` has no effect on either
+target, because the group decides where its members sit in the Tab order.
 
 ### `<progress>`
 

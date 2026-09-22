@@ -623,9 +623,6 @@ none of them means anything without an absolute address.
   a property rather than from anything the markup can carry, so a page built
   with `render = "static"`, or one whose runtime never arrives, shows the box
   unchecked.
-- A `<radio>` group is not in the tab order. Every member carries the
-  `tab-index="-1"` the desktop promotes one of at runtime, and nothing
-  promotes it here, so the group is reachable with a pointer only.
 - `:drag-over` on a `drop-target` lights up while a file is dragged in from
   the desktop, and clears on a drop, matching the desktop. `accept="..."`
   filters it the same way on both: a drag the target does not take leaves it
