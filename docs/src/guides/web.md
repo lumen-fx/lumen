@@ -612,10 +612,14 @@ none of them means anything without an absolute address.
   Twitter tags become the ones that page's own document was emitted with, so
   the tab, a bookmark and a share card all name the page being shown. The
   `hreflang` links are the exception and keep naming the document that was
-  loaded. Under hard navigation a link loads the next document, but a
-  navigation that does not come from one (a script calling `page()`) still
-  swaps in place; the head follows that swap too, and the address stays on
-  the document that was loaded.
+  loaded. Under hard navigation a script's `page()` call loads the target
+  document too, as a new history entry, and `page_back()` and
+  `page_forward()` step the browser's history. The next document starts the
+  app again, so script state does not carry across, and until it arrives
+  `page_current()` still reports the page being left. A single-file app
+  keeps its one page whatever the key says: `page(path)` swaps it in place
+  with the rest of the path on `route.segment`, and the address stays on the
+  document that was loaded.
 - A `<input>` is edited by the browser, so Lumen's own caret, selection and
   IME handling are not in play; what an app sees is the value after each edit.
 - A `<checkbox indeterminate="true">` shows its dash once the runtime is

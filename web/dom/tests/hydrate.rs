@@ -15,7 +15,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use bevy_ecs::prelude::*;
@@ -38,7 +38,7 @@ use lumen_scene::spawn;
 use lumen_scene::spawn::SpawnIntoWorld;
 use lumen_web::urls::page_href;
 use lumen_web::{PageSpec, SignalEnv, SiteSpec, WebSpec};
-use lumen_web_dom::{NodeTable, Routes, WebDomPlugin};
+use lumen_web_dom::{DocumentLoader, Navigation, NodeTable, Routes, WebDomPlugin};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::Closure;
@@ -131,7 +131,7 @@ fn hydrate(ir: LayoutIR, root: Element) -> App {
         root,
         root_entity,
         routes: Routes::default(),
-        soft_navigation: false,
+        navigation: Navigation::InPlace,
     });
     app.tick();
     app
@@ -371,15 +371,37 @@ fn site_keys(site: &SiteSpec) -> Vec<String> {
     site.pages.iter().map(|page| page.key.clone()).collect()
 }
 
+thread_local! {
+    /// Every document a hard navigation asked to load, oldest first.
+    static LOADED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A document load, recorded rather than performed: loading one would
+/// replace the page this suite runs in.
+fn record_load(address: &str) {
+    LOADED.with(|loaded| loaded.borrow_mut().push(address.to_string()));
+}
+
+/// The documents loaded since the last call.
+fn loaded() -> Vec<String> {
+    LOADED.with(RefCell::take)
+}
+
 /// An app on the entry page of `site`, assembled the way `boot` assembles
-/// one: the router, the listeners and the browser backend, with `soft`
-/// saying which way `[web] navigation` reads.
+/// one: the router, the listeners and the browser backend, with
+/// `navigation` saying which way `[web] navigation` reads. A document load
+/// is recorded for [`loaded`] rather than performed.
 ///
 /// Such an app writes the head of the page it is showing, and the document
 /// it writes is the suite's own page, so the head is handed back as a guard
 /// that puts it back. Hold it for as long as the app: dropping it early
 /// restores the head under a test still reading it.
-fn hydrate_site(site: &SiteSpec, ir: LayoutIR, root: Element, soft: bool) -> (App, HeadGuard) {
+fn hydrate_site(
+    site: &SiteSpec,
+    ir: LayoutIR,
+    root: Element,
+    navigation: Navigation,
+) -> (App, HeadGuard) {
     let head = HeadGuard::take();
     let mut app = App::new();
     app.extract_fns.clear();
@@ -393,12 +415,14 @@ fn hydrate_site(site: &SiteSpec, ir: LayoutIR, root: Element, soft: bool) -> (Ap
     app.add_systems(TickStage::Systems, spawn::reconcile_if_blocks);
     let root_entity = ir.spawn_into(&mut app.world);
     let routes = site_routes(site);
+    let soft = navigation == Navigation::Soft;
     lumen_web_dom::listen(&root, soft.then_some(&routes)).expect("the page takes listeners");
+    app.world.insert_resource(DocumentLoader(record_load));
     app.add_plugin(WebDomPlugin {
         root,
         root_entity,
         routes,
-        soft_navigation: soft,
+        navigation,
     });
     app.tick();
     (app, head)
@@ -546,7 +570,7 @@ fn a_link_the_runtime_mounts_points_where_the_build_would_have_pointed_it() {
     // Nothing prerendered this document, so every node is built from its
     // entity: the path a `<for>` row, an `<if mode="render">` branch and a
     // whole page swapped in after a navigation all take.
-    let (_app, _head) = hydrate_site(&site, link_tree(), root.clone(), false);
+    let (_app, _head) = hydrate_site(&site, link_tree(), root.clone(), Navigation::Hard);
 
     let manifest = lumen_web::site::manifest(&site);
     assert_eq!(
@@ -570,7 +594,7 @@ fn a_link_the_runtime_mounts_points_where_the_build_would_have_pointed_it() {
 fn soft_navigation_keeps_the_browser_from_loading_the_next_document() {
     let site = link_site();
     let root = prerender_page(&site, 0);
-    let (_app, _head) = hydrate_site(&site, link_tree(), root.clone(), true);
+    let (_app, _head) = hydrate_site(&site, link_tree(), root.clone(), Navigation::Soft);
 
     assert!(
         click_and_check_prevented(&root, &link_in(&root), false),
@@ -583,12 +607,24 @@ fn soft_navigation_keeps_the_browser_from_loading_the_next_document() {
 fn hard_navigation_leaves_the_browser_s_own_click_alone() {
     let site = link_site();
     let root = prerender_page(&site, 0);
-    let (_app, _head) = hydrate_site(&site, link_tree(), root.clone(), false);
+    let (mut app, _head) = hydrate_site(&site, link_tree(), root.clone(), Navigation::Hard);
+    loaded();
 
     assert!(
         !click_and_check_prevented(&root, &link_in(&root), false),
         "`navigation = \"hard\"` never intercepts; the browser loads the \
          next document exactly as it does for an ordinary site"
+    );
+    // The click reaches the app too, and raises a navigation to the same
+    // page a tick later.
+    app.tick();
+    app.tick();
+    assert_eq!(
+        loaded(),
+        Vec::<String>::new(),
+        "the browser is already loading the link, or opening it wherever the \
+         visitor asked for it; the app loading it again would do the \
+         browser's work twice, or load it in this tab as well"
     );
 }
 
@@ -596,7 +632,7 @@ fn hard_navigation_leaves_the_browser_s_own_click_alone() {
 fn a_modifier_click_still_reaches_the_browser_under_soft_navigation() {
     let site = link_site();
     let root = prerender_page(&site, 0);
-    let (_app, _head) = hydrate_site(&site, link_tree(), root.clone(), true);
+    let (_app, _head) = hydrate_site(&site, link_tree(), root.clone(), Navigation::Soft);
 
     assert!(
         !click_and_check_prevented(&root, &link_in(&root), true),
@@ -609,7 +645,7 @@ fn a_soft_navigation_leaves_the_address_the_link_named() {
     let _address = AddressGuard::take();
     let site = link_site();
     let root = prerender_page(&site, 0);
-    let (mut app, _head) = hydrate_site(&site, link_tree(), root.clone(), true);
+    let (mut app, _head) = hydrate_site(&site, link_tree(), root.clone(), Navigation::Soft);
 
     let anchor = link_in(&root);
     let href = anchor
@@ -641,7 +677,7 @@ fn a_soft_navigation_brings_the_page_s_own_head_with_it() {
     site.pages[1].description = Some("Everything you can change".to_string());
 
     let root = prerender_page(&site, 0);
-    let (mut app, _head) = hydrate_site(&site, link_tree(), root.clone(), true);
+    let (mut app, _head) = hydrate_site(&site, link_tree(), root.clone(), Navigation::Soft);
     let document = web_sys::window().unwrap().document().unwrap();
     assert_eq!(
         document.title(),
@@ -681,7 +717,7 @@ fn a_hard_navigation_leaves_the_address_to_the_browser() {
     let _address = AddressGuard::take();
     let site = link_site();
     let root = prerender_page(&site, 0);
-    let (mut app, _head) = hydrate_site(&site, link_tree(), root.clone(), false);
+    let (mut app, _head) = hydrate_site(&site, link_tree(), root.clone(), Navigation::Hard);
 
     let before = address();
     click_and_check_prevented(&root, &link_in(&root), false);
@@ -694,6 +730,130 @@ fn a_hard_navigation_leaves_the_address_to_the_browser() {
         "under `navigation = \"hard\"` the browser loads the next document \
          and owns the address; nothing here writes it"
     );
+}
+
+/// An app on the entry page of `site` under hard navigation, with the page
+/// gates `keys` name, one label each.
+fn hard_site(site: &SiteSpec, keys: &[&str]) -> (App, Element, HeadGuard) {
+    let document = web_sys::window().unwrap().document().unwrap();
+    let root = document.create_element("div").unwrap();
+    document.body().unwrap().append_child(&root).unwrap();
+    let tree = LayoutIR {
+        root: element(
+            "root",
+            None,
+            keys.iter().map(|key| page_gate(key, key)).collect(),
+        ),
+        ..LayoutIR::default()
+    };
+    let (app, head) = hydrate_site(site, tree, root.clone(), Navigation::Hard);
+    loaded();
+    (app, root, head)
+}
+
+/// The page the router has open.
+fn route_path(app: &App) -> Option<String> {
+    app.world
+        .resource::<PropertyStore>()
+        .get_global_str(lumen_core::nav::PATH_SIGNAL)
+        .map(|path| path.to_string())
+}
+
+#[wasm_bindgen_test]
+fn a_script_s_page_call_loads_the_document_under_hard_navigation() {
+    let (mut app, root, _head) = hard_site(&link_site(), &["index", "settings"]);
+    assert_eq!(root.text_content().as_deref(), Some("index"));
+
+    lumen_core::nav::navigate("settings");
+    app.tick();
+    app.tick();
+
+    assert_eq!(
+        loaded(),
+        ["/settings.html"],
+        "every page is a document of its own, so `page()` loads the one the \
+         page was emitted as, the same as following a link to it"
+    );
+    assert_eq!(
+        root.text_content().as_deref(),
+        Some("index"),
+        "and nothing swaps in place: the next document is what shows the page"
+    );
+    assert_eq!(
+        route_path(&app).as_deref(),
+        Some("index"),
+        "this document reports the page it was loaded as until it is gone"
+    );
+    root.remove();
+}
+
+#[wasm_bindgen_test]
+fn a_deeper_page_call_loads_the_address_it_names() {
+    let (mut app, root, _head) = hard_site(&user_site("/"), &["index", "user"]);
+
+    lumen_core::nav::navigate("user/42");
+    app.tick();
+    app.tick();
+
+    assert_eq!(
+        loaded(),
+        ["/user/42"],
+        "a deep path has no document, so the address is loaded as asked for, \
+         and the host serves the page that answers for it"
+    );
+    assert_eq!(root.text_content().as_deref(), Some("index"));
+    root.remove();
+}
+
+#[wasm_bindgen_test]
+fn a_single_file_app_swaps_its_one_page_in_place() {
+    let _address = AddressGuard::take();
+    let site = SiteSpec {
+        pages: vec![PageSpec::new("index", LayoutIR::default())],
+        web: WebSpec {
+            runtime: false,
+            ..WebSpec::default()
+        },
+        ..SiteSpec::default()
+    };
+    let document = web_sys::window().unwrap().document().unwrap();
+    let root = document.create_element("div").unwrap();
+    document.body().unwrap().append_child(&root).unwrap();
+    let tree = LayoutIR {
+        root: element("root", None, vec![page_gate("index", "index")]),
+        ..LayoutIR::default()
+    };
+    let (mut app, _head) = hydrate_site(&site, tree, root.clone(), Navigation::InPlace);
+    loaded();
+    let before = address();
+
+    lumen_core::nav::navigate("x");
+    app.tick();
+    app.tick();
+
+    assert_eq!(
+        loaded(),
+        Vec::<String>::new(),
+        "a single-file app has no other document to load"
+    );
+    assert_eq!(address(), before, "and the address bar stays the browser's");
+    let store = app.world.resource::<PropertyStore>();
+    assert_eq!(
+        store
+            .get_global_str(lumen_core::nav::PATH_SIGNAL)
+            .as_deref(),
+        Some("index"),
+        "the one page stays open"
+    );
+    assert_eq!(
+        store
+            .get_global_str(lumen_core::nav::SEGMENT_SIGNAL)
+            .as_deref(),
+        Some("/x"),
+        "with the path it was asked for handed to it in place"
+    );
+    assert_eq!(root.text_content().as_deref(), Some("index"));
+    root.remove();
 }
 
 /// One page gate: `<if signal="route.path" eq="<key>">` around a label,
@@ -752,7 +912,7 @@ fn the_browser_s_back_button_opens_the_page_its_address_names() {
         root: root.clone(),
         root_entity,
         routes,
-        soft_navigation: true,
+        navigation: Navigation::Soft,
     });
     app.tick();
     assert_eq!(
@@ -835,11 +995,12 @@ fn open_at(site: &SiteSpec, address: &str) -> (App, Element, HeadGuard) {
         ..LayoutIR::default()
     };
     let root_entity = tree.spawn_into(&mut app.world);
+    app.world.insert_resource(DocumentLoader(record_load));
     app.add_plugin(WebDomPlugin {
         root: root.clone(),
         root_entity,
         routes: Routes::from_manifest(&manifest, &manifest.locale),
-        soft_navigation: false,
+        navigation: Navigation::Hard,
     });
     app.tick();
     (app, root, head)
@@ -887,7 +1048,12 @@ fn fragment_link_tree() -> LayoutIR {
 #[wasm_bindgen_test]
 fn a_same_document_fragment_link_reaches_the_browser_under_soft_navigation() {
     let root = prerender(fragment_link_tree());
-    let (_app, _head) = hydrate_site(&link_site(), fragment_link_tree(), root.clone(), true);
+    let (_app, _head) = hydrate_site(
+        &link_site(),
+        fragment_link_tree(),
+        root.clone(),
+        Navigation::Soft,
+    );
 
     assert!(
         !click_and_check_prevented(&root, &link_in(&root), false),
@@ -1155,7 +1321,7 @@ fn a_bound_element_is_adopted_without_being_corrected() {
         root: root.clone(),
         root_entity,
         routes: Routes::default(),
-        soft_navigation: false,
+        navigation: Navigation::InPlace,
     });
     app.add_systems(TickStage::Systems, lumen_core::signals::apply_text_bindings);
     app.tick();
@@ -1192,7 +1358,7 @@ fn hydrate_reactive(ir: LayoutIR, root: Element) -> App {
         root,
         root_entity,
         routes: Routes::default(),
-        soft_navigation: false,
+        navigation: Navigation::InPlace,
     });
     app.add_systems(TickStage::Systems, spawn::reconcile_if_blocks);
     app.tick();
@@ -1283,7 +1449,7 @@ fn hydrate_interactive(ir: LayoutIR, root: Element) -> App {
         root,
         root_entity,
         routes: Routes::default(),
-        soft_navigation: false,
+        navigation: Navigation::InPlace,
     });
     app.add_plugin(lumen_input::InputPlugin { clipboard: false });
     app.add_plugin(lumen_primitives::ControlsPlugin);
@@ -1769,7 +1935,7 @@ fn hydrate_list(ir: LayoutIR, root: Element, names: &[&str]) -> App {
         root,
         root_entity,
         routes: Routes::default(),
-        soft_navigation: false,
+        navigation: Navigation::InPlace,
     });
     app.add_systems(TickStage::Systems, spawn::reconcile_for_blocks);
     app.tick();

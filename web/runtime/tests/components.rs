@@ -27,7 +27,7 @@ use lumen_ir::fragment::{Fragment, FragmentKind, FragmentParam, FragmentTable};
 use lumen_ir::layout_ir::{Attributes, Element, FragmentUse, InterpolationSlot, LayoutIR};
 use lumen_scene::spawn::SpawnIntoWorld;
 use lumen_web::{PageSpec, SiteSpec, WebSpec};
-use lumen_web_dom::{NodeTable, Routes, WebDomPlugin};
+use lumen_web_dom::{Navigation, NodeTable, Routes, WebDomPlugin};
 use lumen_web_runtime::{assemble, hosts};
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 use web_sys::Element as DomElement;
@@ -172,7 +172,7 @@ fn boot_ir(ir: LayoutIR, root: DomElement) -> App {
         root,
         root_entity,
         routes: Routes::default(),
-        soft_navigation: false,
+        navigation: Navigation::InPlace,
     });
     app.tick();
     app
