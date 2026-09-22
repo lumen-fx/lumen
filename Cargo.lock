@@ -4273,6 +4273,7 @@ dependencies = [
  "candela-lang",
  "candela-vm",
  "cc",
+ "libloading 0.9.0",
  "lumen-core",
  "lumen-script",
  "serde_json",

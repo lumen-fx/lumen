@@ -25,10 +25,12 @@
 //! ship. Both land on stderr, so a run counts as clean only when its stderr
 //! carries nothing but the lines listed in [`ALLOWED_STDERR`].
 
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use lumenc::app_kind::{AppKind, detect};
+use sha2::{Digest, Sha256};
 
 /// Ticks each app runs for. `on_ready` dispatches after the first mount, so
 /// this has to be past it; a handful more covers the timers and derivations
@@ -118,8 +120,9 @@ fn run_clean(dir: &Path, label: &str) -> Result<(), String> {
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     if !out.status.success() {
         return Err(format!(
-            "{label} exits {}\n{}",
+            "{label} exits {}{}\n{}",
             out.status,
+            signal_evidence(&out),
             stderr.trim_end()
         ));
     }
@@ -133,6 +136,35 @@ fn run_clean(dir: &Path, label: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("{label}\n{}", unexpected.join("\n")))
+    }
+}
+
+/// For a run a signal killed, the size and sha256 of the std `time` library
+/// it loaded, so a crash inside a torn or stale copy shows as one. Empty for
+/// any other exit.
+fn signal_evidence(out: &Output) -> String {
+    if out.status.signal().is_none() {
+        return String::new();
+    }
+    // candela reads the library from `CANDELA_LIB_PATH` when it is set and
+    // from `libs/` beside the executable otherwise.
+    let libs = std::env::var_os("CANDELA_LIB_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_BIN_EXE_lumenc"))
+                .parent()
+                .expect("lumenc sits in a directory")
+                .join("libs")
+        });
+    let time = libs.join("std_src").join("time").join("time.so");
+    match std::fs::read(&time) {
+        Ok(bytes) => format!(
+            " ({}: {} bytes, sha256 {:x})",
+            time.display(),
+            bytes.len(),
+            Sha256::digest(&bytes)
+        ),
+        Err(e) => format!(" ({}: {e})", time.display()),
     }
 }
 

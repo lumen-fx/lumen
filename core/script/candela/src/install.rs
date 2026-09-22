@@ -3,8 +3,9 @@
 //! This is the build script's install step. The script includes the file by
 //! path; the library compiles it only under test, because cargo runs a build
 //! script but never tests one. What the tests pin is the contract the script
-//! leans on: an installed file is absent or complete, never half-written, and
-//! a failed install leaves no temporary copy behind.
+//! leans on: an installed file is absent or complete, never half-written, a
+//! file that already holds the same bytes is left alone, and a failed install
+//! leaves no temporary copy behind.
 
 use std::ffi::OsString;
 use std::fs;
@@ -33,12 +34,20 @@ pub fn install_tree(from: &Path, to: &Path) -> Result<(), String> {
 
 /// Put the file at `from` at `to`, replacing whatever is there.
 ///
+/// A file that already holds the same bytes stays as it is. Two runs of the
+/// build script installing the same tree then leave the first one's file in
+/// place instead of each replacing the other's, and a process that has the
+/// library open keeps the file it opened.
+///
 /// A failed rename leaves nothing behind: the temporary copy is removed and
 /// `to` is whatever it was before.
 pub fn install_file(from: &Path, to: &Path) -> Result<(), String> {
     let Some(name) = to.file_name() else {
         return Err(format!("{} names no file", to.display()));
     };
+    if same_contents(from, to) {
+        return Ok(());
+    }
     let mut staging = OsString::from(".");
     staging.push(name);
     staging.push(format!(".{}.tmp", std::process::id()));
@@ -58,6 +67,22 @@ pub fn install_file(from: &Path, to: &Path) -> Result<(), String> {
             to.display()
         )
     })
+}
+
+/// Whether `a` and `b` are both readable files holding the same bytes. Any
+/// failure to read either one answers no, which sends the caller down the
+/// path that reports it.
+fn same_contents(a: &Path, b: &Path) -> bool {
+    let (Ok(a_meta), Ok(b_meta)) = (fs::metadata(a), fs::metadata(b)) else {
+        return false;
+    };
+    if !a_meta.is_file() || !b_meta.is_file() || a_meta.len() != b_meta.len() {
+        return false;
+    }
+    match (fs::read(a), fs::read(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -148,6 +173,47 @@ mod tests {
 
         assert_eq!(read(&to.join("std/list.cdl")), "second");
         assert_eq!(names(&to), ["std", "std/list.cdl"]);
+    }
+
+    #[test]
+    fn a_file_that_already_holds_the_same_bytes_is_left_in_place() {
+        let dir = scratch("identical");
+        let from = dir.join("from");
+        let to = dir.join("to");
+        write(&from, "same");
+        write(&to, "same");
+        // `witness` is a second name for the file at `to`. Had the install
+        // renamed a new file over `to`, an edit through `to` would no longer
+        // reach `witness`.
+        let witness = dir.join("witness");
+        fs::hard_link(&to, &witness).expect("hard link");
+
+        install_file(&from, &to).expect("install");
+        fs::write(&to, "edited").expect("edit the installed file in place");
+
+        assert_eq!(
+            read(&witness),
+            "edited",
+            "the file at the destination is still the one that was there"
+        );
+        assert_eq!(names(&dir), ["from", "to", "witness"]);
+    }
+
+    #[test]
+    fn a_file_of_the_same_length_with_other_bytes_is_replaced() {
+        let dir = scratch("same-length");
+        let from = dir.join("from");
+        let to = dir.join("to");
+        write(&from, "new!");
+        write(&to, "old!");
+        let witness = dir.join("witness");
+        fs::hard_link(&to, &witness).expect("hard link");
+
+        install_file(&from, &to).expect("install");
+
+        assert_eq!(read(&to), "new!");
+        assert_eq!(read(&witness), "old!", "a new file took the name");
+        assert_eq!(names(&dir), ["from", "to", "witness"]);
     }
 
     #[test]

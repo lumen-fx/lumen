@@ -169,6 +169,8 @@ lumen-dylib = { workspace = true, optional = true }
 # driven fully in-process - never a real window. Test-only, so these never
 # reach `lumen-lsp` or the release binary.
 [dev-dependencies]
+# example_apps.rs fingerprints the std library a crashed run loaded.
+sha2 = { workspace = true }
 # The compiler-plugin fixture builder for tests/compiler_plugins.rs.
 lumenc-plugin = { workspace = true, features = ["host", "testing"] }
 lumen-render-wgpu = { workspace = true }

@@ -25,7 +25,9 @@
 //! as a normal one, so a single cargo run executes this script twice, at the
 //! same time, for the same profile directory; two C compilers writing the
 //! same object and library paths at once is a failed compile on Windows, and
-//! a rename is the one write that cannot half-happen.
+//! a rename is the one write that cannot half-happen. A file that already
+//! holds the same bytes is left where it is, so the second run does not
+//! replace the first one's copy under a process that has it loaded.
 
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -230,8 +232,16 @@ fn build_native(
     // call to a function nothing defines and the library will not link; and
     // what they hold is arithmetic an app calls at run time, which has no
     // reason to be slow because the engine around it was built for debugging.
+    //
+    // Without debug information, for the same reason, and so the library is
+    // the same bytes whichever profile asked for it. A build dependency and a
+    // normal one install into the same directory, and the install leaves a
+    // file with identical contents alone; debug information carries build
+    // paths and differs per profile, which would make every such run replace
+    // the other's library again.
     let tool = cc::Build::new()
         .opt_level(2)
+        .debug(false)
         .try_get_compiler()
         .map_err(|e| format!("no C compiler to build the candela {module} module: {e}"))?;
     let mut command = tool.to_command();
@@ -253,6 +263,11 @@ fn build_native(
     }
     for name in sources {
         command.arg(src_dir.join(name));
+    }
+    if tool.is_like_msvc() {
+        // The linker stamps the time of the link into the library unless it
+        // is told not to, and the linker options have to come last.
+        command.args(["-link", "-Brepro"]);
     }
 
     let status = command
