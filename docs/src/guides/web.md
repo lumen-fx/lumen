@@ -62,7 +62,15 @@ lumen-web.<hash>.wasm    the runtime
 lumen-web.<hash>.js      the module that loads it
 locale/<tag>.<hash>.ftl  the catalogue for each locale the site is emitted in
 assets/                  every file the markup or the stylesheet points at
+LICENSE                  the runtime's licence text, and
+NOTICE                   the attribution that goes with it, and
+THIRD-PARTY-LICENSES     the licences of everything the runtime is built from
 ```
+
+The three licence files travel because the runtime carries the engine and
+the libraries it is built from, and some of those ask that whoever receives
+the binary also receives the text. They are written whenever the runtime is;
+a site emitted without a runtime carries none of them.
 
 `<hash>` is sixteen characters taken from the file itself, and it is there
 because a static host is told nothing about how long to keep a file, so it

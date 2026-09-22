@@ -64,6 +64,11 @@ The candela standard library travels too, in a `libs/` folder beside the
 executable. Scripts read it as they compile, so `import "std/..."` and the
 array methods resolve in the folder the same way they do under `lumenc run`.
 
+`LICENSE`, `NOTICE` and `THIRD-PARTY-LICENSES` travel beside the executable as
+well. A packaged app ships the Lumen engine and the libraries the engine is
+built from, and several of those ask that their license text reach whoever
+receives the binary. Keep the three files in the folder when you hand it on.
+
 Packaging a markup app needs no Rust toolchain. It copies a prebuilt launcher
 and appends your compiled app to the copy. On macOS it links the app in
 instead, because a signed Mach-O executable cannot carry trailing data, and

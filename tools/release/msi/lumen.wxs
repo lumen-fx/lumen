@@ -106,6 +106,17 @@
       <Files Include="$(var.StageDir)\bin\templates\**" Directory="BINFOLDER" Subdirectory="templates" />
 
       <!--
+        The engine in this payload links candela, which is Apache-2.0. That
+        license asks whoever distributes the binary to give the recipient the
+        license text and the attribution, so an MSI install puts both beside
+        the program rather than leaving them in the repository. Harvested
+        like the two trees above, so no fixed component GUID is involved.
+      -->
+      <Files Include="$(var.StageDir)\LICENSE" Directory="INSTALLFOLDER" />
+      <Files Include="$(var.StageDir)\NOTICE" Directory="INSTALLFOLDER" />
+      <Files Include="$(var.StageDir)\THIRD-PARTY-LICENSES" Directory="INSTALLFOLDER" />
+
+      <!--
         The receipt marks this as an installed copy, which is what turns the
         daily update check on. It carries no "pinned" line, so an MSI install
         is always offered a newer release.

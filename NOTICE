@@ -1,0 +1,29 @@
+Lumen
+Copyright 2026 Stel Studio Inc.
+
+This product includes software developed as part of the candela language
+(https://github.com/lumen-fx/candela), which Lumen links as its scripting
+engine and ships inside liblumen and inside packaged applications.
+
+candela is a fork of keel (https://github.com/horacehoff/keel) by Horace
+Hoff, licensed under the Apache License, Version 2.0. The following
+attribution is reproduced from candela's NOTICE file:
+
+    candela is a fork of keel (https://github.com/horacehoff/keel) by
+    Horace Hoff.
+
+    Original work licensed under the Apache License, Version 2.0.
+    Renamed and extended for the Lumen UI framework.
+
+    The original keel copyright and Apache-2.0 license terms are retained
+    in full in the LICENSE file. All original authorship by Horace Hoff is
+    preserved. Modifications include a host-embeddable Engine/Program API,
+    variadic host functions, array/map marshalling across the host
+    boundary, structured diagnostics, and the rename of the language and
+    crate to candela (source file extension: .cdl).
+
+Lumen itself is licensed under the Mozilla Public License 2.0; see LICENSE.
+Lumen contains no keel or candela source. It depends on both as libraries.
+
+The full license text of every third-party dependency Lumen redistributes,
+candela and its own dependencies included, is in THIRD-PARTY-LICENSES.
