@@ -279,7 +279,7 @@ pub(crate) fn declares_namespace(source: &str, ns: &str) -> bool {
 }
 
 /// The part of `line` ahead of its `//` comment.
-fn code_of(line: &str) -> &str {
+pub(crate) fn code_of(line: &str) -> &str {
     match line.split_once("//") {
         Some((code, _)) => code,
         None => line,
