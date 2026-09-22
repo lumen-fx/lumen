@@ -7,6 +7,11 @@ candela standard library scripts import, and the app
 [templates](templates.md) `lumenc new` writes. You do not need a Rust toolchain
 to build apps, or to package one for someone else.
 
+Every install also carries `lumen-server`, the server that runs a
+[server-rendered site](../guides/server-rendering.md#running-in-production) in
+production. It is published as a container image too,
+`ghcr.io/lumen-fx/lumen-server`, for Linux on x86_64 and aarch64.
+
 ## Linux and macOS
 
 ```sh
@@ -115,8 +120,9 @@ brew install lumen
 ```
 
 The formula unpacks the same release archive the script installs, so `lumenc`,
-the runtime library, the launcher, the candela standard library, and the app
-templates all come with it. `brew upgrade lumen` moves you to a newer release.
+the runtime library, the launcher, `lumen-server`, the candela standard
+library, and the app templates all come with it. `brew upgrade lumen` moves you
+to a newer release.
 
 A Homebrew install carries no [runtime modules](#runtime-modules) and no shell
 completions, and it never checks for updates on its own, because Homebrew owns
@@ -132,8 +138,9 @@ https://github.com/lumen-fx/lumen/releases/latest/download/lumen-windows-aarch64
 ```
 
 It installs under your user profile, so it needs no administrator rights, and
-it adds `lumenc` to your user `PATH`. Open a new terminal afterwards. Remove it
-from Settings > Installed apps, which also removes the `PATH` entry.
+it adds `lumenc` and `lumen-server` to your user `PATH`. Open a new terminal
+afterwards. Remove it from Settings > Installed apps, which also removes the
+`PATH` entry.
 
 Each release also publishes `lumen-windows-x86_64.zip` and
 `lumen-windows-aarch64.zip`, portable archives you can unpack anywhere. A
@@ -154,9 +161,10 @@ scoop install lumen
 ```
 
 Scoop installs the portable zip rather than the MSI, so the two never end up
-side by side. `scoop update lumen` moves versions and `scoop uninstall lumen`
-removes it. Like the zip, it carries no [runtime modules](#runtime-modules) and
-does not check for updates on its own.
+side by side. It puts `lumenc` and `lumen-server` on your `PATH`.
+`scoop update lumen` moves versions and `scoop uninstall lumen` removes it.
+Like the zip, it carries no [runtime modules](#runtime-modules) and does not
+check for updates on its own.
 
 ## Platforms with no build
 
@@ -198,6 +206,7 @@ https://github.com/lumen-fx/lumen/releases/tag/nightly
 
 Take one to try a fix or a feature before it is released. It carries the same
 archives a release does, and the notes on it name the commit it was built from.
+The same run pushes the server image as `ghcr.io/lumen-fx/lumen-server:nightly`.
 
 Download the archive for your platform and unpack it yourself; on Windows take
 `lumen-windows-x86_64.zip`. Nothing installs a nightly for you. `install.sh`,

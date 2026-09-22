@@ -268,6 +268,18 @@ Each `os-*` crate owns one capability, so an app links only what it uses.
   `lumen-portable`, answers its HTTP calls itself so a page comes out the same
   wherever it is built, and stops when the app's state stops changing rather
   than when its frame loop goes quiet.
+- **lumen-ssr**: renders an app to a document once per request, from the
+  compiled app and the `lumen.site.json` a build writes. It has no transport:
+  a request goes in as a struct and a response comes back as one. One
+  renderer per process, on a thread of its own, behind a queue that can be
+  bounded.
+- **lumen-server** (`web/server`): the HTTP side, and the only HTTP server in
+  the tree. The `lumen-server` binary serves a built site in production with
+  `lumen-ssr` behind it: bounded connections and render queue, deadlines on
+  every read and write, health endpoints, an access log, a graceful stop, and
+  on unix a supervisor that runs worker processes on one inherited listening
+  socket. `lumenc web --serve` runs the same `Server` with development
+  defaults. It is std networking and threads, with no async runtime.
 - **lumen-web-runtime**: the browser runtime, built as a wasm module. One
   prebuilt module serves every app: a page loads it, hands it the app's
   compiled data, and it runs the same tick a desktop app runs. It installs no

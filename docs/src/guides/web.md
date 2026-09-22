@@ -28,8 +28,8 @@ origin.
 
 The server listens on 127.0.0.1, so it answers this machine and nobody else.
 `--host <addr>` widens that, and says so when you use it: this is a server for
-developing against and for hosting a site yourself, and anything the public
-reaches belongs behind a reverse proxy.
+developing against, and anything the public reaches belongs behind a reverse
+proxy.
 
 To watch the app answer per request rather than serve what the build wrote, ask
 for a render:
@@ -40,10 +40,9 @@ lumenc web myapp --render ssr --serve
 
 Every page then comes from the app running for the request that asked for it,
 and everything else still comes from the directory. That is
-[rendering on a server](server-rendering.md) with a socket attached; a
-production deployment embeds `lumen-ssr` in a server of your own, and
-`lumenc web myapp --render ssr` on its own writes the directory that server
-reads.
+[rendering on a server](server-rendering.md) with a socket attached. In
+production, `lumenc web myapp --render ssr` on its own writes the directory,
+and [`lumen-server`](server-rendering.md#running-in-production) serves it.
 
 ## What lands in the output directory
 
