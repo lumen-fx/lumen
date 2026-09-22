@@ -67,6 +67,12 @@ if [ "$reported" != "lumenc $version" ]; then
 fi
 echo "$reported"
 
+# The production server ships beside lumenc in the toolchain archive.
+if [ ! -f "$dest/bin/lumen-server" ] && [ ! -f "$dest/bin/lumen-server.exe" ]; then
+  echo "the unpacked archive carries no bin/lumen-server" >&2
+  exit 1
+fi
+
 bad=0
 
 audit_macho() {

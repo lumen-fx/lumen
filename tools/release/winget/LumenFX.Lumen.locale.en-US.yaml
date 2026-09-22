@@ -23,8 +23,9 @@ Description: |-
   result is a native application on Linux, macOS, and Windows, drawn on the GPU.
 
   This package installs the toolchain: the lumenc command line, the Lumen
-  runtime library it loads, and the launcher a packaged app is built from.
-  Building an app needs no Rust toolchain.
+  runtime library it loads, the launcher a packaged app is built from, and
+  lumen-server, the production server for server-rendered sites. Building an
+  app needs no Rust toolchain.
 Tags:
 - css
 - desktop

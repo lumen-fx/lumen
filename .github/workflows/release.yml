@@ -30,12 +30,14 @@ name: release
 #
 # Once the release exists, this workflow starts everything that follows from
 # it: the language registries, the OS package managers, the editor
-# marketplaces, and the docs site. Each of those lives in its own file and is
-# called from here rather than triggered by the release, because the release is
-# created with the built-in token and GitHub raises no workflow events for
-# anything that token writes; a workflow waiting on `release: published` waits
-# forever. Each file keeps a `workflow_dispatch` trigger, so a leg that failed
-# is re-run on its own without another tag.
+# marketplaces, the docs site, and the lumen-server container image. Each of
+# those lives in its own file and is called from here rather than triggered by
+# the release, because the release is created with the built-in token and
+# GitHub raises no workflow events for anything that token writes; a workflow
+# waiting on `release: published` waits forever. Each file but the image one
+# keeps a `workflow_dispatch` trigger, so a leg that failed is re-run on its
+# own without another tag; the image is re-run from the release run, because
+# it copies that run's binaries.
 #
 # The last job sets the workspace version on `main` to the next patch and
 # pushes it there, so a tag push is the whole release: nothing is left to merge
@@ -46,11 +48,12 @@ on:
     tags:
       - "v*"
 
-# contents: write is granted to the one job whose token writes, the one that
-# publishes the release. The bump job writes to `main` over SSH with a deploy
-# key instead, for the reasons its own comment gives, so its token stays
-# read-only, and build-toolchain.yml declares its own read-only token for the
-# builds.
+# contents: write is granted to the one job whose token writes to the
+# repository, the one that publishes the release, and packages: write to the
+# one that pushes the server image. The bump job writes to `main` over SSH
+# with a deploy key instead, for the reasons its own comment gives, so its
+# token stays read-only, and build-toolchain.yml declares its own read-only
+# token for the builds.
 permissions:
   contents: read
 
@@ -199,6 +202,23 @@ jobs:
     needs: release
     uses: ./.github/workflows/site-rebuild.yml
     secrets: inherit
+
+  # The lumen-server image on GHCR, built from the Linux archives this run
+  # just published. It needs nothing but those two, so a failed macOS or
+  # Windows leg does not hold it back; a failed Linux leg fails it.
+  # server-image.yml decides the tags, and only a plain vX.Y.Z tag moves
+  # :latest.
+  server-image:
+    name: server image
+    needs: [version, release]
+    if: always() && needs.release.result == 'success'
+    uses: ./.github/workflows/server-image.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      channel: release
+      version: ${{ needs.version.outputs.version }}
 
   # Cutting a release is a tag push and nothing else, so the version main
   # carries has to move afterwards on its own. This moves it, by committing

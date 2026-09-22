@@ -55,13 +55,19 @@ regression specific to either one only shows up when a release is cut, not on
 every pull request.
 
 There is one component, `lumen`, meaning `lumenc`, the `liblumen` runtime
-library (the `lumen` crate, built as a shared library), and `lumen-launcher`, the
-stub `lumenc package` copies to make an app executable. Lumen's candela
+library (the `lumen` crate, built as a shared library), `lumen-launcher`, the
+stub `lumenc package` copies to make an app executable, and `lumen-server`, the
+production server for sites `lumenc web --render ssr` builds. Lumen's candela
 scripting support is compiled into `liblumen` directly; there is no separate
 candela binary and nothing here builds or ships one. The standalone candela
 language toolchain is a different product with its own repository
 (`lumen-fx/candela`) and its own release process, and is out of scope for this
 checklist.
+
+`lumen-server` also ships as a container image, `ghcr.io/lumen-fx/lumen-server`,
+for `linux/amd64` and `linux/arm64`. It is the one thing a release publishes
+outside the GitHub release, and it is not an asset: the image carries the same
+binary the two Linux archives do, copied in rather than rebuilt.
 
 ## One-time setup
 
@@ -75,6 +81,11 @@ checklist.
   reason.
 - Publishing to the package managers afterwards does need credentials, one per
   channel; see the section on them below.
+- Pushing the server image needs no secret either: the image job uses the
+  built-in `GITHUB_TOKEN` with `packages: write`, scoped to that job. After the
+  first push, open the `lumen-server` package under the `lumen-fx` organization
+  and check that it is public and linked to this repository; GHCR can create a
+  new package as private, and a private image cannot be pulled without a login.
 
 ## Cutting a release
 
@@ -109,17 +120,17 @@ checklist.
    ```
 
 5. The `release` workflow then, automatically, for each target:
-   - checks out at the tag and builds `lumenc`, `liblumen`, and the launcher
-     stub in release mode (`cargo build --release` with `-p lumenc`,
-     `-p lumen`, and `-p lumen-launcher`; the workspace
-     `[profile.release]` already strips symbols, so there is no separate
-     strip step);
+   - checks out at the tag and builds `lumenc`, `liblumen`, the launcher
+     stub, and `lumen-server` in release mode (`cargo build --release` with
+     `-p lumenc`, `-p lumen`, `-p lumen-launcher`, and `-p lumen-server`; the
+     workspace `[profile.release]` already strips symbols, so there is no
+     separate strip step);
    - downloads the `lumenc new` templates with `tools/fetch-templates.sh`, one
      per template from the repository it is maintained in under `lumen-fx`,
      each from the release tagged `vX.Y.Z` there;
    - packages `bin/lumenc` (`lumenc.exe` on Windows), the liblumen shared
-     library, and `bin/lumen-launcher` into one archive, all in the *same*
-     `bin/` directory, along with the two trees `lumenc` reads from beside
+     library, `bin/lumen-launcher`, and `bin/lumen-server` into one archive,
+     all in the *same* `bin/` directory, along with the two trees `lumenc` reads from beside
      itself: the candela standard library in `bin/libs` and the templates in
      `bin/templates`. See the note on `public/lumenc/src/link/loader.rs` below;
    - on macOS, rewrites the install name of every shared library it packaged,
@@ -169,7 +180,16 @@ checklist.
    raises no workflow events for anything that token writes. A workflow
    triggered by `release: published` never starts here.
 
-   Every one of them keeps a manual trigger in the Actions tab, so a leg that
+   The run also pushes the server image, through `server-image.yml`, once the
+   release is published. It takes `lumen-server` out of the two Linux archives
+   and builds `web/server/Dockerfile` for both architectures, tagged `vX.Y.Z`
+   and `latest`. A tag in any other shape pushes its own tag and leaves
+   `latest` alone. A failed Linux leg fails the image job; a failed macOS or
+   Windows leg does not. It has no manual trigger, because the binaries it
+   copies are artifacts of the release run: re-run the failed job from that run
+   instead.
+
+   Every one of the four keeps a manual trigger in the Actions tab, so a leg that
    failed is re-run on its own rather than by cutting another release, and a
    leg missing its credential verifies instead of uploading. The crates.io leg
    is the exception while the workspace blocks the publish: it fails before it
@@ -267,6 +287,9 @@ belongs in `bin/` too. The archive therefore puts all three files there:
 | Linux    | `lumenc`, `liblumen.so`, `lumen-launcher`       |
 | macOS    | `lumenc`, `liblumen.dylib`, `lumen-launcher`    |
 | Windows  | `lumenc.exe`, `lumen.dll`, `lumen-launcher.exe` |
+
+`lumen-server` sits in the same `bin/` on every platform. It loads nothing
+from beside itself; it is there because `bin/` is the directory on `PATH`.
 
 ## Publishing to the install channel
 
@@ -468,12 +491,31 @@ update itself out from under a package manager that owns the version.
   curl -fsSL https://lumenfx.dev/install.sh |
     sh -s -- --prefix /tmp/lumen-check --no-confirm
   /tmp/lumen-check/bin/lumenc --version
+  test -x /tmp/lumen-check/bin/lumen-server
   curl -fsSL https://lumenfx.dev/install.sh | sh -s -- --prefix /tmp/lumen-check --uninstall --no-confirm
   ```
 
   A checksum mismatch here means the uploaded asset does not match the line
   for it in `sha256sums.txt`: re-run the release workflow for that target,
   which regenerates both.
+
+- The server image is on GHCR for both architectures, and it serves a site:
+
+  ```sh
+  docker buildx imagetools inspect ghcr.io/lumen-fx/lumen-server:vX.Y.Z
+  lumenc new site-check counter
+  lumenc web site-check --render ssr --out /tmp/site-check
+  docker run -d --name server-check -p 8080:8080 \
+    -v /tmp/site-check:/site:ro ghcr.io/lumen-fx/lumen-server:vX.Y.Z
+  curl -fsS http://127.0.0.1:8080/_lumen/healthz
+  curl -fsS http://127.0.0.1:8080/ | head
+  docker inspect --format '{{.State.Health.Status}}' server-check
+  docker rm -f server-check
+  ```
+
+  The inspect lists `linux/amd64` and `linux/arm64`, and `:latest` resolves to
+  the same digest. The health status reads `healthy` once the first check has
+  run, about half a minute after the start.
 
 - An already-installed `lumenc` finds out about this release from the tag
   alone, and so does `install.sh` when no `--version` is given: both follow
@@ -549,6 +591,10 @@ fixed GUIDs, a second entry in Installed apps, and two products appending to
 `PATH`; that is a packaging decision, not something the nightly needs. The
 portable zip carries no receipt, so a nightly unpacked from it never claims to
 be installed and never checks for updates.
+
+The nightly also pushes the server image, tagged `nightly` and nothing else.
+It never moves `latest` and never pushes a `v` tag, for the same reason the
+release is a prerelease.
 
 Start a nightly by hand from the Actions tab when you want one outside the
 schedule.
