@@ -354,6 +354,12 @@ right after it binds. When `$XDG_RUNTIME_DIR` is unset, the app runs without
 the lock rather than falling back to a shared directory another local user
 could reach.
 
+On Windows the pipe is granted to your user alone, and it rejects clients
+from other machines. The first launch claims the name; a later launch finds
+it taken and forwards its arguments there. If the pipe's permissions cannot
+be resolved, the app runs without the lock rather than with permissions it
+did not choose.
+
 ## Drag and drop
 
 ### Files dropped from the desktop

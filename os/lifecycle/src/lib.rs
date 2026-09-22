@@ -8,7 +8,9 @@
 //!   assumed), locked to `0600` right after bind so another local user cannot connect and feed argv
 //!   into a running app. When no such directory can be resolved and verified, the lock fails closed
 //!   (no lock, runs as primary) rather than falling back to a world-writable temp directory a local
-//!   attacker could squat ahead of the real launch. Windows uses a named pipe at `\\.\pipe\<app_id>`. The second
+//!   attacker could squat ahead of the real launch. Windows uses a named pipe at `\\.\pipe\<app_id>`,
+//!   claimed with `FILE_FLAG_FIRST_PIPE_INSTANCE` so the create fails once the name exists, and
+//!   carrying a security descriptor that grants the calling user and nobody else. The second
 //!   launch connects, sends its argv as length-prefixed JSON, and exits. The primary spawns a recv thread
 //!   that reads incoming args and pushes them into [`LifecycleService::take_secondary_args`], which
 //!   [`poll_second_instance`] drains every tick into `lumen_core::input::SecondInstanceLaunched` ECS
@@ -163,11 +165,13 @@ impl LifecycleService {
     ///
     /// On Linux + macOS this binds a Unix domain socket at `<app_id>.sock` under a private, per-user
     /// directory resolved and verified per platform (see the module docs) - never a shared temp
-    /// directory; on Windows it opens a named pipe at `\\.\pipe\<app_id>`. On a successful bind the
-    /// caller becomes the primary and a recv thread spawns. On a bind-already-in-use, the caller connects
-    /// as a secondary, forwards `args` as length-prefixed JSON, and returns
+    /// directory; on Windows it claims the first instance of a named pipe at `\\.\pipe\<app_id>`,
+    /// granted to the calling user alone. On a successful bind or claim the
+    /// caller becomes the primary and a recv thread spawns. When the name is already held, the caller
+    /// connects as a secondary, forwards `args` as length-prefixed JSON, and returns
     /// [`SingleInstance::Secondary`] so the caller can exit. When no private directory can be resolved
-    /// (unix only), the lock is skipped and the caller runs as [`SingleInstance::Primary`] unlocked.
+    /// (unix) or no security descriptor can be built for the pipe (Windows), the lock is skipped and
+    /// the caller runs as [`SingleInstance::Primary`] unlocked.
     pub fn ensure_single_instance(&self, app: &AppId, args: &[String]) -> SingleInstance {
         #[cfg(unix)]
         {
@@ -861,120 +865,333 @@ mod unix {
 mod windows_pipe {
     //! Named-pipe single-instance backend (Windows).
     //!
-    //! Primary creates `\\.\pipe\<app_id>` via `CreateNamedPipeW`; secondaries connect with the standard
-    //! file APIs and write length-prefixed JSON. Uses the `windows` crate's raw Win32 bindings - winit
-    //! already pulls `windows` in transitively, so no extra dep churn.
+    //! The primary claims `\\.\pipe\<app_id>` with `FILE_FLAG_FIRST_PIPE_INSTANCE`, so the create
+    //! fails once the name exists instead of quietly adding another server instance to a name a live
+    //! instance already holds; that failure is what tells a second launch it is the secondary. The
+    //! pipe carries an explicit discretionary ACL granting the user this process runs as and nobody
+    //! else, rather than the default descriptor, which also grants read access to Everyone and to the
+    //! anonymous account, and it rejects remote clients, because the lock is a question about this
+    //! machine. Secondaries connect with the standard file APIs and write length-prefixed JSON. Uses
+    //! the `windows` crate's raw Win32 bindings - winit already pulls `windows` in transitively, so no
+    //! extra dep churn.
 
     use super::{AppId, SecondaryArgsInbox, SingleInstance};
     use std::io::{Read, Write};
+    use windows::Win32::Foundation::{
+        CloseHandle, ERROR_ACCESS_DENIED, ERROR_PIPE_CONNECTED, GetLastError, HANDLE,
+    };
+    use windows::Win32::Security::{
+        ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAce, GetLengthSid,
+        GetTokenInformation, InitializeAcl, InitializeSecurityDescriptor, PSECURITY_DESCRIPTOR,
+        SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SetSecurityDescriptorDacl, TOKEN_QUERY,
+        TOKEN_USER, TokenUser,
+    };
+    use windows::Win32::Storage::FileSystem::{
+        FILE_ALL_ACCESS, FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX, ReadFile,
+    };
+    use windows::Win32::System::Pipes::{
+        ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE,
+        PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
+    };
+    use windows::Win32::System::SystemServices::SECURITY_DESCRIPTOR_REVISION;
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    use windows::core::PCWSTR;
 
     fn pipe_name(app: &AppId) -> String {
         format!("\\\\.\\pipe\\{}", app.0)
     }
 
+    /// What a create call is asking for.
+    enum Claim {
+        /// The name itself: fail if any instance of it already exists.
+        Name,
+        /// One more instance of a name this process already holds.
+        Instance,
+    }
+
+    /// What a create call settled.
+    enum Attempt {
+        /// The instance is ours.
+        Created(HANDLE),
+        /// Another process holds the name.
+        Taken,
+        /// No lock could be attempted: the descriptor could not be built, the
+        /// system refused the name, or it was out of resources. The caller
+        /// runs unlocked rather than exiting, the same way the unix side runs
+        /// unlocked when it cannot resolve a private directory.
+        Unavailable,
+    }
+
     pub fn ensure(app: &AppId, args: &[String], inbox: SecondaryArgsInbox) -> SingleInstance {
         let name = pipe_name(app);
-        if let Some(handle) = create_pipe(&name) {
-            spawn_recv(handle, name.clone(), inbox);
-            SingleInstance::Primary
-        } else {
-            // Couldn't create - assume a primary already exists and try to forward args.
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .read(true)
-                .open(&name)
-            {
-                Ok(mut f) => {
-                    let sent = send_args(&mut f, args).is_ok();
-                    SingleInstance::Secondary { args_sent: sent }
-                }
-                Err(e) => {
-                    tracing::debug!("lumen-os-lifecycle: open pipe {name}: {e}");
-                    SingleInstance::Secondary { args_sent: false }
+        match create_pipe(&name, Claim::Name) {
+            Attempt::Created(handle) => {
+                spawn_recv(handle, name, inbox);
+                SingleInstance::Primary
+            }
+            Attempt::Taken => {
+                // Forward argv to the instance that holds the name.
+                match std::fs::OpenOptions::new()
+                    .write(true)
+                    .read(true)
+                    .open(&name)
+                {
+                    Ok(mut f) => {
+                        let sent = send_args(&mut f, args).is_ok();
+                        SingleInstance::Secondary { args_sent: sent }
+                    }
+                    Err(e) => {
+                        tracing::debug!("lumen-os-lifecycle: open pipe {name}: {e}");
+                        SingleInstance::Secondary { args_sent: false }
+                    }
                 }
             }
+            // No lock was taken, so the app runs as an unlocked primary
+            // rather than exiting over a lock it never acquired.
+            Attempt::Unavailable => SingleInstance::Primary,
         }
     }
 
-    fn create_pipe(name: &str) -> Option<windows::Win32::Foundation::HANDLE> {
-        use windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
-        use windows::Win32::System::Pipes::{
-            CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
+    /// Create one instance of the lock pipe.
+    ///
+    /// [`Claim::Name`] adds `FILE_FLAG_FIRST_PIPE_INSTANCE`, which is what makes the create fail on a
+    /// name someone already holds: without that flag `CreateNamedPipeW` returns another server
+    /// instance of an existing name, so every launch gets a handle and every launch calls itself the
+    /// primary.
+    fn create_pipe(name: &str, claim: Claim) -> Attempt {
+        let Some(mut security) = owner_only_security() else {
+            tracing::debug!(
+                "lumen-os-lifecycle: no owner-only security descriptor for the lock pipe"
+            );
+            return Attempt::Unavailable;
         };
-        use windows::core::PCWSTR;
-
+        let attributes = security.attributes();
+        let open_mode = match claim {
+            Claim::Name => PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+            Claim::Instance => PIPE_ACCESS_DUPLEX,
+        };
         let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: `wide` is a NUL-terminated copy of `name`, and `attributes`
+        // points at a descriptor `security` owns; both outlive the call. The
+        // returned handle is checked before it is used.
         let handle = unsafe {
             CreateNamedPipeW(
                 PCWSTR(wide.as_ptr()),
-                PIPE_ACCESS_DUPLEX,
-                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE,
+                open_mode,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_REJECT_REMOTE_CLIENTS,
                 PIPE_UNLIMITED_INSTANCES,
                 4096,
                 4096,
                 0,
-                None,
+                Some(&raw const attributes),
             )
         };
-        if handle.is_invalid() {
-            None
+        if !handle.is_invalid() {
+            return Attempt::Created(handle);
+        }
+        // SAFETY: `GetLastError` reads this thread's last-error value, which
+        // the failed call above just set.
+        let err = unsafe { GetLastError() };
+        // `ERROR_ACCESS_DENIED` is what the first-instance flag raises on a
+        // name that already exists, and also what an instance whose type or
+        // access mode disagrees with the existing name raises. Either way the
+        // name belongs to someone else.
+        if err == ERROR_ACCESS_DENIED {
+            Attempt::Taken
         } else {
-            Some(handle)
+            tracing::debug!(
+                "lumen-os-lifecycle: CreateNamedPipeW {name}: error {}",
+                err.0
+            );
+            Attempt::Unavailable
         }
     }
 
-    fn spawn_recv(
-        primary_handle: windows::Win32::Foundation::HANDLE,
-        name: String,
-        inbox: SecondaryArgsInbox,
-    ) {
-        // First handle is already open and waiting for the first connection; subsequent connections need
-        // fresh CreateNamedPipeW calls.
+    /// The pipe's security descriptor and the DACL it points into.
+    ///
+    /// An absolute `SECURITY_DESCRIPTOR` stores pointers rather than one flat blob, so the ACL it
+    /// points at has to live as long as it does; one value owning both is what makes that hold. The
+    /// SID is not in here because `AddAccessAllowedAce` copies it into the ACE.
+    struct OwnerOnly {
+        descriptor: Box<SECURITY_DESCRIPTOR>,
+        /// Reached through `descriptor`, never through this field.
+        _dacl: Vec<u32>,
+    }
+
+    impl OwnerOnly {
+        fn attributes(&mut self) -> SECURITY_ATTRIBUTES {
+            SECURITY_ATTRIBUTES {
+                nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+                lpSecurityDescriptor: (&raw mut *self.descriptor).cast(),
+                // The pipe handle is this process's alone; a child has no
+                // business inheriting the lock.
+                bInheritHandle: false.into(),
+            }
+        }
+    }
+
+    /// Build a descriptor granting the pipe to the user this process runs as, and to nobody else.
+    ///
+    /// The alternative is the default descriptor, which grants full control to LocalSystem,
+    /// administrators and the creator owner, and read access to Everyone and to the anonymous
+    /// account. Read access is not enough to push argv at the primary, since a client has to write to
+    /// send anything, but it is enough to connect to the lock and occupy an instance of it, and a
+    /// lock is better off stating who may reach it than inheriting the answer.
+    fn owner_only_security() -> Option<OwnerOnly> {
+        let token_user = current_token_user()?;
+        // SAFETY: `token_user` is a pointer-aligned buffer holding the
+        // `TOKEN_USER` the kernel wrote into it, so the read is aligned, in
+        // bounds, and of the right type. `Sid` points inside that same
+        // buffer, which outlives the calls below that read through it.
+        let sid = unsafe { (*token_user.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+        // SAFETY: `sid` is the SID the kernel wrote into a buffer still alive
+        // here.
+        let sid_len = unsafe { GetLengthSid(sid) } as usize;
+
+        // One access-allowed ACE holding one SID. `ACCESS_ALLOWED_ACE` already
+        // counts four bytes of SID in its `SidStart` field, so adding the
+        // SID's whole length over-reserves by that much rather than
+        // under-reserving. The buffer is `u32`-typed for the DWORD alignment
+        // an `ACL` needs.
+        let dacl_len = size_of::<ACL>() + size_of::<ACCESS_ALLOWED_ACE>() + sid_len;
+        let mut dacl = vec![0u32; dacl_len.div_ceil(size_of::<u32>())];
+        let dacl_ptr = dacl.as_mut_ptr().cast::<ACL>();
+        // SAFETY: `dacl_ptr` points at a zeroed, DWORD-aligned buffer of at
+        // least `dacl_len` bytes, which is the length `InitializeAcl` is told
+        // about and the space the single ACE goes into. Moving the `Vec` into
+        // `OwnerOnly` below does not move its heap buffer, so the pointer the
+        // descriptor keeps on holding stays valid.
+        unsafe {
+            InitializeAcl(dacl_ptr, dacl_len as u32, ACL_REVISION).ok()?;
+            AddAccessAllowedAce(dacl_ptr, ACL_REVISION, FILE_ALL_ACCESS.0, sid).ok()?;
+        }
+
+        let mut descriptor = Box::new(SECURITY_DESCRIPTOR::default());
+        let psd = PSECURITY_DESCRIPTOR((&raw mut *descriptor).cast());
+        // SAFETY: `psd` points at a live `SECURITY_DESCRIPTOR` owned here and
+        // `dacl_ptr` at the ACL initialized just above; both are boxed or
+        // heap-backed, so the values `OwnerOnly` carries away keep them at the
+        // addresses the descriptor records.
+        unsafe {
+            InitializeSecurityDescriptor(psd, SECURITY_DESCRIPTOR_REVISION).ok()?;
+            SetSecurityDescriptorDacl(psd, true, Some(dacl_ptr.cast_const()), false).ok()?;
+        }
+        Some(OwnerOnly {
+            descriptor,
+            _dacl: dacl,
+        })
+    }
+
+    /// The `TOKEN_USER` of this process's token, in a pointer-aligned buffer.
+    ///
+    /// `TOKEN_USER` holds a pointer, so the buffer the kernel writes it into has to be
+    /// pointer-aligned; a `Vec<u8>` is byte-aligned whatever the allocator happens to hand back.
+    fn current_token_user() -> Option<Vec<usize>> {
+        let mut token = HANDLE::default();
+        // SAFETY: `GetCurrentProcess` returns a pseudo-handle that needs no
+        // closing, and `token` is a live local the call writes the opened
+        // handle into.
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }.ok()?;
+        let user = read_token_user(token);
+        // SAFETY: `token` was opened just above, is owned here, and is not
+        // used again.
+        unsafe {
+            let _ = CloseHandle(token);
+        }
+        user
+    }
+
+    fn read_token_user(token: HANDLE) -> Option<Vec<usize>> {
+        let mut needed = 0u32;
+        // The sizing call: with no buffer it fails and writes the length the
+        // token information needs.
+        // SAFETY: a null buffer with a zero length is the documented way to
+        // ask for that length, and `needed` is a live local.
+        let _ = unsafe { GetTokenInformation(token, TokenUser, None, 0, &mut needed) };
+        if needed == 0 {
+            return None;
+        }
+        let mut buf = vec![0usize; (needed as usize).div_ceil(size_of::<usize>())];
+        // SAFETY: `buf` is at least `needed` bytes of writable, pointer-aligned
+        // storage, which is what the length argument promises the call.
+        unsafe {
+            GetTokenInformation(
+                token,
+                TokenUser,
+                Some(buf.as_mut_ptr().cast()),
+                needed,
+                &mut needed,
+            )
+        }
+        .ok()?;
+        Some(buf)
+    }
+
+    fn spawn_recv(primary_handle: HANDLE, name: String, inbox: SecondaryArgsInbox) {
+        // The first instance is already open and waiting for a connection;
+        // every later one comes from a fresh create.
         let initial = PrimaryPipe(primary_handle);
         std::thread::Builder::new()
             .name("lumen-os-lifecycle/pipe".to_string())
             .spawn(move || {
-                let mut current = Some(initial);
+                let mut current = initial;
                 loop {
-                    let p = match current.take() {
-                        Some(p) => p,
-                        None => match create_pipe(&name) {
-                            Some(h) => PrimaryPipe(h),
-                            None => {
+                    if !connect(current.0) {
+                        // Drop the failed instance and re-arm.
+                        drop(current);
+                        match create_pipe(&name, Claim::Instance) {
+                            Attempt::Created(handle) => {
+                                current = PrimaryPipe(handle);
+                                continue;
+                            }
+                            _ => {
                                 tracing::debug!("lumen-os-lifecycle: re-create pipe failed");
                                 return;
                             }
-                        },
-                    };
-                    if !connect(p.0) {
-                        // Drop the failed handle and re-arm.
-                        drop(p);
-                        continue;
+                        }
                     }
+                    // Arm the next instance before servicing this one. A name
+                    // exists only while an instance of it is open, so letting
+                    // the count reach zero would hand the lock to whichever
+                    // launch created it next while this instance is still
+                    // running; it also leaves somewhere to connect for a
+                    // secondary that arrives while this connection is being
+                    // read.
+                    let next = match create_pipe(&name, Claim::Instance) {
+                        Attempt::Created(handle) => Some(PrimaryPipe(handle)),
+                        _ => None,
+                    };
                     // Transfer sole ownership of the handle to `stream`:
                     // `HANDLE` is `Copy`, so we must `forget` the `PrimaryPipe`
                     // wrapper to avoid its `Drop` also `CloseHandle`-ing the
                     // same handle (double-close UB).
-                    let handle = p.0;
-                    std::mem::forget(p);
+                    let handle = current.0;
+                    std::mem::forget(current);
                     let mut stream = PipeStream(handle);
                     if let Some(args) = recv_args(&mut stream) {
                         inbox.push(args);
                     }
                     // Drop disconnects + closes the handle (sole owner now).
                     drop(stream);
+                    match next {
+                        Some(pipe) => current = pipe,
+                        None => {
+                            tracing::debug!("lumen-os-lifecycle: re-arm pipe failed");
+                            return;
+                        }
+                    }
                 }
             })
             .ok();
     }
 
-    fn connect(handle: windows::Win32::Foundation::HANDLE) -> bool {
-        use windows::Win32::Foundation::{ERROR_PIPE_CONNECTED, GetLastError};
-        use windows::Win32::System::Pipes::ConnectNamedPipe;
+    fn connect(handle: HANDLE) -> bool {
         // A client that connected in the window between `CreateNamedPipeW`
         // and `ConnectNamedPipe` makes the latter fail with
         // `ERROR_PIPE_CONNECTED` - that is success, not failure (dropping it
         // would lose a secondary instance's argv).
+        // SAFETY: `handle` is a live pipe instance the caller owns, and
+        // `GetLastError` reads the value the failed connect just set.
         unsafe {
             if ConnectNamedPipe(handle, None).is_ok() {
                 return true;
@@ -984,7 +1201,7 @@ mod windows_pipe {
     }
 
     /// Owned named-pipe handle (closed on drop).
-    struct PrimaryPipe(windows::Win32::Foundation::HANDLE);
+    struct PrimaryPipe(HANDLE);
     // SAFETY: a Win32 `HANDLE` is a process-wide kernel object reference;
     // it is valid on any thread and this wrapper has sole ownership (the
     // handle is created on the caller thread, then moved once into the
@@ -993,18 +1210,19 @@ mod windows_pipe {
     unsafe impl Send for PrimaryPipe {}
     impl Drop for PrimaryPipe {
         fn drop(&mut self) {
-            use windows::Win32::Foundation::CloseHandle;
+            // SAFETY: sole owner of a handle that is not used again.
             unsafe {
                 let _ = CloseHandle(self.0);
             }
         }
     }
 
-    struct PipeStream(windows::Win32::Foundation::HANDLE);
+    struct PipeStream(HANDLE);
     impl Read for PipeStream {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            use windows::Win32::Storage::FileSystem::ReadFile;
             let mut n = 0u32;
+            // SAFETY: `self.0` is a live pipe instance this value owns, and
+            // `buf` and `n` are live for the call.
             unsafe {
                 ReadFile(self.0, Some(buf), Some(&mut n), None)
                     .map_err(|e| std::io::Error::other(format!("ReadFile: {e}")))?;
@@ -1014,8 +1232,7 @@ mod windows_pipe {
     }
     impl Drop for PipeStream {
         fn drop(&mut self) {
-            use windows::Win32::Foundation::CloseHandle;
-            use windows::Win32::System::Pipes::DisconnectNamedPipe;
+            // SAFETY: sole owner of a handle that is not used again.
             unsafe {
                 let _ = DisconnectNamedPipe(self.0);
                 let _ = CloseHandle(self.0);
@@ -1132,6 +1349,49 @@ mod tests {
             "primary should have received argv {args:?}, got {received:?}"
         );
         cleanup_uds(&id);
+    }
+
+    /// A second launch of an id the first launch still holds resolves to
+    /// [`SingleInstance::Secondary`], and its argv reaches the primary.
+    ///
+    /// Windows-only, because it exercises the named-pipe backend;
+    /// `second_launch_forwards_args` covers the same ground over the socket on
+    /// unix. Without `FILE_FLAG_FIRST_PIPE_INSTANCE` the second
+    /// `CreateNamedPipeW` succeeds as one more server instance of a name the
+    /// first launch still holds, and this returns `Primary` instead.
+    #[cfg(windows)]
+    #[test]
+    fn second_launch_on_windows_is_secondary() {
+        let id = AppId::from(format!("test.lumen.pipe.{}", std::process::id()));
+        let svc = LifecycleService::new();
+        assert_eq!(
+            svc.ensure_single_instance(&id, &[]),
+            SingleInstance::Primary
+        );
+
+        let svc2 = LifecycleService::new();
+        let args = vec!["--open".to_string(), "notes.txt".to_string()];
+        assert_eq!(
+            svc2.ensure_single_instance(&id, &args),
+            SingleInstance::Secondary { args_sent: true }
+        );
+
+        // The primary's recv thread pushes on its own schedule, so poll for
+        // the argv rather than sleeping a fixed span on a loaded runner.
+        let mut received = Vec::new();
+        for _ in 0..200 {
+            received.extend(svc.take_secondary_args());
+            if !received.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            received.iter().any(|v| v == &args),
+            "primary should have received argv {args:?}, got {received:?}"
+        );
+        // Nothing to unlink afterwards: a pipe lives as long as a handle to it
+        // does, and the recv thread's handles go when the process does.
     }
 
     #[cfg(unix)]
