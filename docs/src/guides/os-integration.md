@@ -356,9 +356,11 @@ could reach.
 
 On Windows the pipe is granted to your user alone, and it rejects clients
 from other machines. The first launch claims the name; a later launch finds
-it taken and forwards its arguments there. If the pipe's permissions cannot
-be resolved, the app runs without the lock rather than with permissions it
-did not choose.
+it taken and forwards its arguments there. The name is scoped to the machine
+rather than to your user, so a second person signed in to the same machine
+finds the lock held by the first and their launch exits without opening a
+window. If the pipe's permissions cannot be resolved, the app runs without
+the lock rather than with permissions it did not choose.
 
 ## Drag and drop
 
