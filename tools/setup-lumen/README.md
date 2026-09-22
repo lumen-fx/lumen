@@ -32,7 +32,8 @@ version of the action itself.
 | Input | Default | Effect |
 | --- | --- | --- |
 | `version` | `latest` | Release to install. A version number such as `0.0.3`, a tag such as `v0.0.3`, or `latest`. |
-| `cache` | `true` | Keep the unpacked toolchain in the workflow cache, keyed on the release and the runner's target, so later runs skip the download. |
+| `modules` | `true` | Install the bundled runtime modules beside the engine. Set it to `false` for the toolchain alone. |
+| `cache` | `true` | Keep the unpacked toolchain in the workflow cache, keyed on the release, the runner's target, and whether the modules came with it, so later runs skip the download. |
 
 ## Outputs
 
@@ -52,6 +53,12 @@ executable from. Every download is checked against the `sha256sums.txt`
 published with the release before anything is unpacked, and nothing is
 installed if the two disagree.
 
+On Linux and macOS it also installs the bundled runtime modules, the ones an
+app names with `bundled = true` under `[dependencies]`; they come from their
+own archive in the same release and land beside the engine, where the runtime
+looks for them. Set `modules: false` for a job that only checks or formats an
+app and has no use for them.
+
 Windows runners get the portable zip, not the MSI. The MSI writes an install
 receipt, and a receipt is what turns `lumenc`'s update check on; a runner has
 no use for either, and the check stays off in CI regardless.
@@ -60,6 +67,9 @@ no use for either, and the check stays off in CI regardless.
 
 - Windows releases are x86_64 only. A Windows Arm runner has no archive to
   install and the action stops with that message.
+- A Windows runner gets no runtime modules. The Windows releases publish no
+  modules archive; there the capabilities are compiled into the binaries, and
+  `modules` changes nothing.
 - `lumenc run` loads the runtime library, which links GTK, ALSA, X11, and
   Wayland on Linux. Install those in the job before a headless run; see
   [Build Lumen from source](../../docs/src/contributing/building-lumen.md) for

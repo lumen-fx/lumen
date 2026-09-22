@@ -66,6 +66,28 @@ jobs:
           fi
           echo "target ${{ steps.lumen.outputs.target }}, tag ${{ steps.lumen.outputs.tag }}"
 
+      # The bundled runtime modules ship as their own asset on the Unix
+      # targets, and an app that declares one under [dependencies] loads it
+      # from beside the engine. Missing, it boots and fails every call into
+      # that namespace, which no command below would notice.
+      - name: the bundled runtime modules came with the toolchain
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          for lib in "$BIN_PATH"/liblumen_*.so "$BIN_PATH"/liblumen_*.dylib; do
+            [ -f "$lib" ] || continue
+            found=$((found + 1))
+            echo "${lib##*/}"
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "no runtime modules under $BIN_PATH" >&2
+            exit 1
+          fi
+        env:
+          BIN_PATH: ${{ steps.lumen.outputs.bin-path }}
+
       - name: the toolchain builds and checks a scaffolded app
         shell: bash
         run: |
