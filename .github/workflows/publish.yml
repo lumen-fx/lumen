@@ -16,12 +16,15 @@ name: publish
 # caller is release.yml, which fires on `v*` tags while the nightly publishes
 # onto a tag named `nightly`.
 #
-# Owner setup. The two registry credentials are checked separately, and a run
-# without them verifies instead of uploading:
+# Owner setup. The two registry credentials are checked separately, and a leg
+# without its credential verifies instead of uploading. The crates.io leg does
+# not reach that yet: the plan step runs first, in every mode, and refuses for
+# the reason at the end of this block, which takes the job red before either
+# the verify or the publish can run.
 #
 #   CRATES_IO_TOKEN         repository secret. A crates.io API token with
-#                           publish-new and publish-update scope. Without it
-#                           the crates.io job verifies and uploads nothing.
+#                           publish-new and publish-update scope. With it the
+#                           crates.io job publishes; without it, it verifies.
 #   PYPI_PUBLISH_ENABLED    repository variable, set to "true" once the PyPI
 #                           trusted publisher below is registered. Without it
 #                           the PyPI job builds and checks the artifacts and
