@@ -18,6 +18,10 @@
 # macOS reports the path used to launch, not the resolved one, and the library
 # would go missing.
 #
+# lumen-server, the production server for server-rendered sites, needs nothing
+# beside it; it gets the same exec script so both commands are installed the
+# same way.
+#
 # Nothing here installs a receipt under share/lumen. That file is what marks a
 # copy as installed and turns the built-in update check on
 # (public/lumenc/src/package/update_check.rs); without it lumenc never checks for a
@@ -65,6 +69,7 @@ class Lumen < Formula
   def install
     libexec.install Dir["bin/*"]
     bin.write_exec_script libexec/"lumenc"
+    bin.write_exec_script libexec/"lumen-server"
   end
 
   test do

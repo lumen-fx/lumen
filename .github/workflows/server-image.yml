@@ -1,0 +1,143 @@
+name: server-image
+
+# Pushes the lumen-server container image, ghcr.io/lumen-fx/lumen-server, for
+# linux/amd64 and linux/arm64. It is the one thing Lumen publishes outside the
+# GitHub release: the toolchain ships only as release assets, and the server
+# also ships as an image because that is how a server is deployed.
+#
+# Nothing is compiled here. build-toolchain.yml already built lumen-server on
+# both Linux legs and packed it into lumen-linux-<arch>.tar.gz; this takes the
+# binary back out of each archive and web/server/Dockerfile copies it into the
+# image. The Dockerfile runs nothing inside the image, so one runner builds
+# both architectures without emulation.
+#
+# Two callers, and the tags come from which one it is, never from the caller
+# naming them:
+#
+#   release   release.yml, on a vX.Y.Z tag: pushes :vX.Y.Z and moves :latest.
+#             A tag in any other shape, a prerelease among them, pushes its
+#             own tag and leaves :latest where it was, the same line the bump
+#             job in release.yml draws.
+#   nightly   nightly.yml: pushes :nightly and nothing else. Never :latest and
+#             never a v-tag, for the reason nightly.yml gives about its release:
+#             the nightly must not become what "the current version" resolves to.
+#
+# A called workflow runs inside its caller's run, so the artifacts downloaded
+# below are the ones that run's build job uploaded.
+
+on:
+  workflow_call:
+    inputs:
+      channel:
+        description: Which channel is publishing, `release` or `nightly`.
+        type: string
+        required: true
+      version:
+        description: >-
+          The version recorded in the image's OCI version label: the release
+          version without its leading "v", or `nightly`.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: push the server image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # packages: write is what lets the built-in token push to GHCR, and it is
+    # granted to this job alone.
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/lumen-fx/lumen-server
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: lumen-linux-*
+          path: artifacts
+          merge-multiple: true
+
+      # The context directory is laid out by Docker's architecture names,
+      # which is what TARGETARCH in the Dockerfile picks from. A Linux leg that
+      # failed leaves its archive missing, and an image with one architecture
+      # would quietly drop the other for everyone pulling :latest, so that
+      # fails the job.
+      - name: Stage the server binaries
+        run: |
+          set -euo pipefail
+          for pair in x86_64:amd64 aarch64:arm64; do
+            target="${pair%%:*}"
+            arch="${pair##*:}"
+            archive="artifacts/lumen-linux-$target.tar.gz"
+            if [ ! -f "$archive" ]; then
+              echo "::error::no $archive, so the linux-$target build leg failed; the image needs both architectures"
+              exit 1
+            fi
+            rm -rf unpack
+            mkdir -p unpack "image-context/bin/$arch"
+            tar -xzf "$archive" -C unpack ./bin/lumen-server
+            mv unpack/bin/lumen-server "image-context/bin/$arch/lumen-server"
+          done
+          rm -rf unpack
+          ls -l image-context/bin/*
+
+      - name: Choose the tags
+        id: tags
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$CHANNEL" in
+            nightly)
+              tags="$IMAGE:nightly"
+              ;;
+            release)
+              case "$TAG" in
+                v*) ;;
+                *)
+                  echo "::error::a release image needs a v-tag, and this run is on ${TAG}"
+                  exit 1
+                  ;;
+              esac
+              tags="$IMAGE:$TAG"
+              if printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+                tags="$tags,$IMAGE:latest"
+              else
+                echo "::notice::${TAG} is not a plain vX.Y.Z tag, so :latest stays where it is"
+              fi
+              ;;
+            *)
+              echo "::error::unknown channel '${CHANNEL}'; expected release or nightly"
+              exit 1
+              ;;
+          esac
+          echo "tags=$tags" >>"$GITHUB_OUTPUT"
+          echo "pushing $tags"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: image-context
+          file: web/server/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            VERSION=${{ inputs.version }}
+            REVISION=${{ github.sha }}

@@ -4,9 +4,10 @@ name: build-toolchain
 # tools/release/install.sh expects: one lumen-<target>.tar.gz per Unix target
 # and, for Windows, lumen-<target>.zip as the portable archive plus
 # lumen-<target>.msi as the install channel. Every one of them holds
-# bin/lumenc, the liblumen shared library, bin/lumen-launcher, and the two
-# trees lumenc reads from beside itself: the candela standard library in
-# bin/libs and the `lumenc new` templates in bin/templates. The Unix
+# bin/lumenc, the liblumen shared library, bin/lumen-launcher,
+# bin/lumen-server (the production server for server-rendered sites), and
+# the two trees lumenc reads from beside itself: the candela standard library
+# in bin/libs and the `lumenc new` templates in bin/templates. The Unix
 # archives also carry the shared engine (liblumen_engine + the Rust libstd
 # it was built against - see the dynamic-engine build step) and the shell
 # completions under share/. That layout comes from four places, not from
@@ -300,6 +301,18 @@ jobs:
       - name: Build the app launcher stub
         run: cargo build --release -p lumen-launcher
 
+      # The production server for sites `lumenc web --render ssr` builds. It is
+      # a standalone executable that loads no liblumen, so it gets neither the
+      # dynamic-engine flags of the Unix build above nor its --target
+      # directory: like the launcher stub, it links the Rust standard library
+      # statically and lands in target/release. It is not folded into the
+      # launcher's invocation because one invocation unifies features across
+      # its packages, and the stub must stay the thin shape its manifest
+      # describes. The Linux copies are also what release.yml and nightly.yml
+      # put in the container image.
+      - name: Build the production server
+        run: cargo build --release -p lumen-server
+
       # The `lumenc new` templates. Each is maintained in a repository of its
       # own under lumen-fx and published there as an archive of its tree;
       # Lumen keeps no copy of any of them, so the copy the toolchain ships is
@@ -322,6 +335,7 @@ jobs:
           cp "target/$triple/release/lumenc" dist/bin/
           cp "target/$triple/release/${{ matrix.libname }}" dist/bin/
           cp target/release/lumen-launcher dist/bin/
+          cp target/release/lumen-server dist/bin/
           # The shared engine the two binaries above link. cargo writes a
           # dependency's dylib into deps/ (unhashed - a shared library's file
           # name is its identity); tolerate either layout.
@@ -448,6 +462,7 @@ jobs:
           Copy-Item target\release\lumenc.exe dist\bin\
           Copy-Item target\release\${{ matrix.libname }} dist\bin\
           Copy-Item target\release\lumen-launcher.exe dist\bin\
+          Copy-Item target\release\lumen-server.exe dist\bin\
           Copy-Item -Recurse target\release\libs dist\bin\libs
           Copy-Item -Recurse target\templates dist\bin\templates
           Copy-Item LICENSE, NOTICE, THIRD-PARTY-LICENSES dist\

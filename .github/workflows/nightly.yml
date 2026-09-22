@@ -198,3 +198,18 @@ jobs:
                 gh release delete-asset "$TAG" "$name" --repo "$REPO" --yes
               fi
             done
+
+  # The server image under its rolling :nightly tag, and no other.
+  # server-image.yml never gives the nightly channel :latest or a v-tag,
+  # for the same reason this release is a prerelease.
+  server-image:
+    name: server image
+    needs: publish
+    if: always() && needs.publish.result == 'success'
+    uses: ./.github/workflows/server-image.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      channel: nightly
+      version: nightly

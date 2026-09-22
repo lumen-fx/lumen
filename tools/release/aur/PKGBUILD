@@ -50,7 +50,9 @@ package() {
   install -Dm755 "$srcdir/bin/lumenc" "$pkgdir/usr/lib/lumen/lumenc"
   install -Dm755 "$srcdir/bin/liblumen.so" "$pkgdir/usr/lib/lumen/liblumen.so"
   install -Dm755 "$srcdir/bin/lumen-launcher" "$pkgdir/usr/lib/lumen/lumen-launcher"
+  install -Dm755 "$srcdir/bin/lumen-server" "$pkgdir/usr/lib/lumen/lumen-server"
 
   install -d "$pkgdir/usr/bin"
   ln -s ../lib/lumen/lumenc "$pkgdir/usr/bin/lumenc"
+  ln -s ../lib/lumen/lumen-server "$pkgdir/usr/bin/lumen-server"
 }

@@ -9,6 +9,7 @@
         <StageDir>\bin\lumenc.exe
         <StageDir>\bin\lumen.dll
         <StageDir>\bin\lumen-launcher.exe
+        <StageDir>\bin\lumen-server.exe
         <StageDir>\share\lumen\lumen.receipt
 
     Both .github/workflows/build-toolchain.yml and
@@ -68,7 +69,7 @@ if (-not (Test-Path -LiteralPath $StageDir -PathType Container)) {
 }
 $stage = (Resolve-Path -LiteralPath $StageDir).ProviderPath
 
-foreach ($relative in 'bin\lumenc.exe', 'bin\lumen.dll', 'bin\lumen-launcher.exe', 'share\lumen\lumen.receipt') {
+foreach ($relative in 'bin\lumenc.exe', 'bin\lumen.dll', 'bin\lumen-launcher.exe', 'bin\lumen-server.exe', 'share\lumen\lumen.receipt') {
     $payload = Join-Path $stage $relative
     if (-not (Test-Path -LiteralPath $payload -PathType Leaf)) {
         throw "build-msi.ps1: the stage is missing $relative (looked for $payload)."
