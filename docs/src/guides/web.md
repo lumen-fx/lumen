@@ -469,9 +469,12 @@ language, and text carrying a
 reads as `1.234,50` with a trailing euro sign in the German tree and
 `1,234.50` with a leading one in the English tree; `<html lang>` and the
 writing direction follow the locale, and, once the site has an address, every
-document links to its counterparts with `hreflang`. What the whole site
-shares - the stylesheet, the compiled app, the runtime, the assets - is
-written once at the root.
+document links to its counterparts with `hreflang`. A link followed inside a
+tree stays in that tree, whether the next page is loaded or swapped in: the
+address in the bar and the head the page carries are the tree's own, so
+`/de-DE/settings.html` is what a visitor there reloads, copies and shares.
+What the whole site shares - the stylesheet, the compiled app, the runtime,
+the assets - is written once at the root.
 
 Each locale's catalogue travels with the site, and a document loads the one
 for its own tree. What the page builds after it opens reads in the language

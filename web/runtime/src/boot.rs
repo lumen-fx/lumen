@@ -119,7 +119,11 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
     apply_node_seed(&mut app.world, root_entity, &loaded.seed);
 
     let root = page_root(&page)?;
-    let routes = Routes::from_manifest(&manifest);
+    // A site emitted in more than one language holds a tree per language and
+    // one manifest, at the root, for all of them. The document says which of
+    // those trees it belongs to, and that is what its addresses, and the
+    // canonical URL its head names, hang off.
+    let routes = Routes::from_manifest(&manifest, &page.locale);
     let soft_navigation = soft_navigation(&manifest, loaded.artifact.pages.is_some());
     lumen_web_dom::listen(&root, soft_navigation.then_some(&routes))
         .map_err(|_| BootError::Listeners)?;

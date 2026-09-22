@@ -24,7 +24,7 @@ use bevy_ecs::prelude::*;
 use lumen_core::nav::{self, NavOp};
 use lumen_core::property_store::PropertyStore;
 use lumen_html::contract::{Manifest, PageInfo};
-use lumen_html::urls::{is_external, join, normalize_base};
+use lumen_html::urls::{is_external, join};
 use wasm_bindgen::JsValue;
 
 /// The pages of this site as the manifest describes them: where each one is
@@ -33,10 +33,17 @@ use wasm_bindgen::JsValue;
 /// Both come out of the manifest rather than being worked out again here, so
 /// the emitter stays the only thing that decides what a page is written as
 /// and what it is called.
+///
+/// A site emitted in more than one language is one tree per language, and
+/// the answers differ between them: the same page is a different address and
+/// a different canonical URL in each. One manifest describes the whole site,
+/// so which tree these are the addresses of is settled when they are read.
 #[derive(Clone, Debug, Resource)]
 pub struct Routes {
-    /// URL prefix every address hangs off, with a slash at each end.
-    base: String,
+    /// URL prefix every address of this tree hangs off, with a slash at each
+    /// end: the site's base path, and the locale tag under it for a tree the
+    /// site holds under one.
+    tree: String,
     /// The address absolute URLs are built from, when the site has one.
     origin: Option<String>,
     /// Page key the site opens on.
@@ -48,10 +55,16 @@ pub struct Routes {
 }
 
 impl Routes {
-    /// Read the site's pages out of its manifest.
-    pub fn from_manifest(manifest: &Manifest) -> Self {
+    /// Read the site's pages out of its manifest, as the tree emitted in
+    /// `locale` addresses them.
+    ///
+    /// `locale` is what the document says it was emitted in, which is what
+    /// puts the app in one tree of the site rather than another. A document
+    /// that names a locale the site was not emitted in is one of the tree at
+    /// the root, which is what a single-language site is entirely.
+    pub fn from_manifest(manifest: &Manifest, locale: &str) -> Self {
         Self {
-            base: normalize_base(&manifest.base_path),
+            tree: manifest.tree_of(locale),
             origin: manifest.origin.clone(),
             entry: manifest.entry.clone(),
             pages: manifest.pages.clone(),
@@ -104,9 +117,9 @@ impl Routes {
                 .pages
                 .get(&key)
                 .map_or(key.as_str(), |page| page.document.as_str());
-            return join(&self.base, document);
+            return join(&self.tree, document);
         }
-        join(&self.base, path)
+        join(&self.tree, path)
     }
 
     /// The path a navigation to `url_path` asks for: the reverse of
@@ -119,7 +132,7 @@ impl Routes {
     /// the resolver is what turns it into a page and a segment.
     pub fn path_at(&self, url_path: &str) -> String {
         let rest = url_path
-            .strip_prefix(&self.base)
+            .strip_prefix(&self.tree)
             .unwrap_or_else(|| url_path.trim_start_matches('/'));
         for (key, page) in &self.pages {
             if page.document == rest {
@@ -147,7 +160,7 @@ impl Default for Routes {
     /// the root, with no document names to answer with. What a document
     /// assembled by hand, rather than by a build, runs as.
     fn default() -> Self {
-        Self::from_manifest(&Manifest::default())
+        Self::from_manifest(&Manifest::default(), "")
     }
 }
 
@@ -241,28 +254,59 @@ pub(crate) fn sync_history(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lumen_ir::layout_ir::LayoutIR;
+    use lumen_ir::layout_ir::{Element as IrElement, LayoutIR};
     use lumen_web::markup::MarkupSheet;
     use lumen_web::spec::{LocaleSpec, PageSpec, SiteSpec, WebSpec};
     use lumen_web::urls::page_href;
 
-    /// A site of three pages, one of which answers for deeper paths too.
-    fn spec(base: &str) -> SiteSpec {
+    /// The languages the site is held in, the one served from the site root
+    /// first. The rest are held in a tree under a prefix of their own.
+    const LOCALES: [&str; 2] = ["en-US", "de-DE"];
+
+    /// The address the site is published at.
+    const ORIGIN: &str = "https://example.com";
+
+    /// A site of three pages, one of which answers for deeper paths too, as
+    /// the tree emitted in `locale`.
+    fn spec_in(base: &str, locale: &str) -> SiteSpec {
+        // Something for the emitter to write a document around, for the
+        // cases that read one back.
+        let ir = LayoutIR {
+            root: IrElement {
+                tag: "root".to_string(),
+                ..Default::default()
+            },
+            ..LayoutIR::default()
+        };
         SiteSpec {
-            pages: vec![
-                PageSpec::new("index", LayoutIR::default()),
-                PageSpec::new("settings", LayoutIR::default()),
-                PageSpec::new("user", LayoutIR::default()),
-            ],
+            pages: ["index", "settings", "user"]
+                .into_iter()
+                .map(|key| PageSpec::new(key, ir.clone()))
+                .collect(),
             web: WebSpec {
                 base_path: base.into(),
                 entry: "index".into(),
                 ..WebSpec::default()
             },
-            locale: LocaleSpec::new("en-US"),
+            locale: LocaleSpec {
+                alternates: LOCALES
+                    .iter()
+                    .copied()
+                    .filter(|held| *held != locale)
+                    .map(String::from)
+                    .collect(),
+                default_locale: LOCALES[0].to_string(),
+                ..LocaleSpec::new(locale)
+            },
             assets: Vec::new(),
             markup: MarkupSheet::default(),
         }
+    }
+
+    /// That site's tree at the root, which is the one the manifest is
+    /// written from.
+    fn spec(base: &str) -> SiteSpec {
+        spec_in(base, LOCALES[0])
     }
 
     /// The addresses of that site, read out of the manifest the real emitter
@@ -270,7 +314,13 @@ mod tests {
     /// what a build produces, and a copy agrees with itself while the two
     /// halves drift apart.
     fn routes(base: &str) -> Routes {
-        Routes::from_manifest(&lumen_web::site::manifest(&spec(base)))
+        Routes::from_manifest(&lumen_web::site::manifest(&spec(base)), LOCALES[0])
+    }
+
+    /// What the emitter hangs a tree's addresses off: the site's base path,
+    /// with the locale prefix under it for a tree held under one.
+    fn tree_of(site: &SiteSpec) -> String {
+        join(&site.web.base_path, &site.locale.prefix())
     }
 
     #[test]
@@ -330,7 +380,7 @@ mod tests {
         site.web.title = "Notes".into();
         site.pages[1].title = Some("Settings".into());
         site.pages[1].description = Some("Everything you can change".into());
-        let routes = Routes::from_manifest(&lumen_web::site::manifest(&site));
+        let routes = Routes::from_manifest(&lumen_web::site::manifest(&site), LOCALES[0]);
 
         let title = |key: &str| routes.head(key).map(|page| page.title.as_str());
         assert_eq!(title("settings"), Some("Settings"));
@@ -345,27 +395,92 @@ mod tests {
         assert_eq!(routes.head("nowhere"), None);
     }
 
-    /// The two halves that write a page's canonical URL: the emitter puts it
-    /// in the document at build time, and this puts it back when the page is
-    /// swapped in. If they disagree, one page has two canonical addresses.
-    /// Checked for the tree at the site root, which is the tree the manifest
-    /// is written with.
+    /// The site of [`spec_in`] with a head worth carrying: an address it is
+    /// published at, a site title, a page that names itself, and a page
+    /// nobody is invited to index.
+    fn titled(base: &str, locale: &str) -> SiteSpec {
+        let mut site = spec_in(base, locale);
+        site.web.url = Some(ORIGIN.to_string());
+        site.web.title = "Notes".to_string();
+        site.pages[1].title = Some("Settings".to_string());
+        site.pages[1].description = Some("Everything you can change".to_string());
+        site.pages[2].index = false;
+        site
+    }
+
+    /// The document the emitter writes for every page of `tree`, by page
+    /// key. The emitter is run rather than imitated: what the runtime has to
+    /// produce is what is in the file a visitor is served.
+    fn documents(tree: &SiteSpec) -> BTreeMap<String, String> {
+        let site = lumen_web::emit(tree).expect("a site of three pages");
+        tree.pages
+            .iter()
+            .map(|page| {
+                let path = format!("{}{}", tree.locale.prefix(), page.document(&tree.web.entry));
+                let document = site
+                    .files
+                    .iter()
+                    .find(|file| file.path == path)
+                    .unwrap_or_else(|| panic!("the emitter writes `{path}`"));
+                (page.key.clone(), document.contents.clone())
+            })
+            .collect()
+    }
+
+    /// What `document` says after `lead`, up to the quote that closes it.
+    fn value_after(document: &str, lead: &str) -> Option<String> {
+        let (_, rest) = document.split_once(lead)?;
+        rest.split('"').next().map(str::to_string)
+    }
+
+    /// The two halves that write a page's head: the emitter puts it in the
+    /// document at build time, and this puts it back when the page is
+    /// swapped in. What the runtime writes for the page a visitor is on has
+    /// to be what the emitter wrote into that page's own document, or the
+    /// page has two titles and two canonical addresses.
+    ///
+    /// Checked in every tree of the site. A site held in more than one
+    /// language writes one manifest, from the tree at the root, and every
+    /// document of every tree loads that one; a translated page whose head
+    /// is rewritten from the root tree's answers would name the address of
+    /// the page it is a translation of.
     #[test]
-    fn a_swapped_page_keeps_the_canonical_url_its_document_names() {
-        const ORIGIN: &str = "https://example.com";
+    fn a_swapped_page_keeps_the_head_its_own_document_names() {
         for base in ["/", "/docs"] {
-            let mut site = spec(base);
-            site.web.url = Some(ORIGIN.to_string());
-            let manifest = lumen_web::site::manifest(&site);
-            let routes = Routes::from_manifest(&manifest);
-            for (key, page) in &manifest.pages {
-                let emitted =
-                    lumen_web::urls::absolute(ORIGIN, &manifest.base_path, &page.document);
-                assert_eq!(
-                    routes.canonical(key).as_deref(),
-                    Some(emitted.as_str()),
-                    "`{key}` under base `{base}`"
-                );
+            let manifest = lumen_web::site::manifest(&titled(base, LOCALES[0]));
+            for locale in LOCALES {
+                let tree = titled(base, locale);
+                let routes = Routes::from_manifest(&manifest, locale);
+                for (key, document) in documents(&tree) {
+                    let at = format!("`{key}` in the `{locale}` tree under base `{base}`");
+                    let head = routes.head(&key).expect("a page of this site");
+                    assert!(
+                        document.contains(&format!("<title>{}</title>", head.title)),
+                        "{at} is titled `{}`",
+                        head.title
+                    );
+                    assert_eq!(
+                        value_after(&document, "<meta name=\"description\" content=\"").as_deref(),
+                        head.description.as_deref(),
+                        "{at}"
+                    );
+                    let canonical = routes.canonical(&key);
+                    assert_eq!(
+                        value_after(&document, "<link rel=\"canonical\" href=\"").as_deref(),
+                        canonical.as_deref(),
+                        "{at}"
+                    );
+                    assert_eq!(
+                        value_after(&document, "<meta property=\"og:url\" content=\"").as_deref(),
+                        canonical.as_deref(),
+                        "{at}"
+                    );
+                    assert_eq!(
+                        document.contains("<meta name=\"robots\" content=\"noindex\">"),
+                        !head.index,
+                        "{at}"
+                    );
+                }
             }
         }
     }
@@ -519,14 +634,17 @@ mod tests {
         // reloading where it landed are different pages.
         for base in ["/", "/docs"] {
             let manifest = lumen_web::site::manifest(&spec(base));
-            let keys = spec(base).keys();
-            let routes = routes(base);
-            for href in HREFS {
-                assert_eq!(
-                    routes.address_of(href),
-                    page_href(href, &manifest.base_path, &keys, &manifest.entry),
-                    "`{href}` under base `{base}`"
-                );
+            for locale in LOCALES {
+                let tree = spec_in(base, locale);
+                let keys = tree.keys();
+                let routes = Routes::from_manifest(&manifest, locale);
+                for href in HREFS {
+                    assert_eq!(
+                        routes.address_of(href),
+                        page_href(href, &tree_of(&tree), &keys, &manifest.entry),
+                        "`{href}` in the `{locale}` tree under base `{base}`"
+                    );
+                }
             }
         }
     }
@@ -538,11 +656,14 @@ mod tests {
         // page the emitter wrote that document for.
         for base in ["/", "/docs"] {
             let manifest = lumen_web::site::manifest(&spec(base));
-            let routes = routes(base);
-            for (key, page) in &manifest.pages {
-                let address = join(&manifest.base_path, &page.document);
-                assert_eq!(routes.path_at(&address), *key, "{address} is {key}");
-                assert!(routes.is_at(&address, key), "{address} already shows {key}");
+            for locale in LOCALES {
+                let tree = tree_of(&spec_in(base, locale));
+                let routes = Routes::from_manifest(&manifest, locale);
+                for (key, page) in &manifest.pages {
+                    let address = join(&tree, &page.document);
+                    assert_eq!(routes.path_at(&address), *key, "{address} is {key}");
+                    assert!(routes.is_at(&address, key), "{address} already shows {key}");
+                }
             }
         }
     }

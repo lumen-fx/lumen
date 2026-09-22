@@ -16,6 +16,8 @@ use lumen_ir::css::WebNames;
 use lumen_ir::layout_ir::WidgetPart;
 use serde::{Deserialize, Serialize};
 
+use crate::urls::{join, normalize_base};
+
 /// Version of the emitter/runtime contract: node paths, `data-lm-*`
 /// attributes, manifest fields, seed shape.
 ///
@@ -477,6 +479,33 @@ impl Manifest {
         self.pages.keys().cloned().collect()
     }
 
+    /// Whether the site holds the documents of `locale` under a prefix of
+    /// their own.
+    ///
+    /// The tree at the site root is served without one, so its own tag is
+    /// not a prefix, and neither is a tag the site was not emitted in.
+    fn is_prefixed(&self, locale: &str) -> bool {
+        locale != self.locale && self.locales.iter().any(|held| held == locale)
+    }
+
+    /// The URL prefix every document of `locale` hangs off: the site's base
+    /// path, with the locale's tag under it when that tree is not the one at
+    /// the site root.
+    ///
+    /// A site emits one manifest, at the root, and every tree of it loads
+    /// that one; which tree a document belongs to is what the document says
+    /// in [`DATA_LM_LOCALE`]. This is the answer the emitter wrote that
+    /// tree's links, addresses and canonical URLs against, so a runtime
+    /// running inside one of its documents builds the same ones by hanging
+    /// them off this rather than off [`Self::base_path`].
+    pub fn tree_of(&self, locale: &str) -> String {
+        if self.is_prefixed(locale) {
+            join(&self.base_path, &format!("{locale}/"))
+        } else {
+            normalize_base(&self.base_path)
+        }
+    }
+
     /// The page an address opens, and the part of the path that page answers
     /// for.
     ///
@@ -497,11 +526,7 @@ impl Manifest {
         // under one. The tree at the root is served without a prefix, so its
         // own tag is not one, and `/de-DE-notes.html` stays the page it names.
         let (tag, tail) = rest.split_once('/').unwrap_or((rest, ""));
-        let rest = if tag != self.locale && self.locales.iter().any(|held| held == tag) {
-            tail
-        } else {
-            rest
-        };
+        let rest = if self.is_prefixed(tag) { tail } else { rest };
         if rest.is_empty() {
             return (self.entry.clone(), String::new());
         }
@@ -804,6 +829,28 @@ mod tests {
         // and `/de/user/42` is that tree's `user` page.
         assert_eq!(
             manifest.page_at("/de/user/42"),
+            ("user".to_string(), "/42".to_string())
+        );
+    }
+
+    /// The other direction: what a tree's documents hang off, which is what
+    /// the runtime inside one of them builds its addresses from. It has to
+    /// undo exactly what `page_at` takes off, or an address the runtime
+    /// writes reads back as another page.
+    #[test]
+    fn a_tree_hangs_off_the_prefix_its_addresses_are_read_through() {
+        let mut manifest = manifest();
+        assert_eq!(manifest.tree_of("en"), "/");
+        assert_eq!(manifest.tree_of("de"), "/de/");
+        // A tag the site was not emitted in is no tree of it, so its
+        // documents are the ones at the root.
+        assert_eq!(manifest.tree_of("fr"), "/");
+
+        manifest.base_path = "/docs/".to_string();
+        assert_eq!(manifest.tree_of("en"), "/docs/");
+        assert_eq!(manifest.tree_of("de"), "/docs/de/");
+        assert_eq!(
+            manifest.page_at(&format!("{}user/42", manifest.tree_of("de"))),
             ("user".to_string(), "/42".to_string())
         );
     }
