@@ -83,6 +83,9 @@ jobs:
           Copy-Item -Recurse target\templates dist\bin\templates
           Compress-Archive -Path dist\* -DestinationPath lumen-windows-x86_64.zip -Force
           Copy-Item -Recurse dist\bin\* msi-stage\bin\
+          # lumen.wxs harvests these from the stage root, so the smoke's
+          # stage has to hold them too or the build finds nothing to install.
+          Copy-Item LICENSE, NOTICE, THIRD-PARTY-LICENSES msi-stage\
 
       - name: Install WiX
         shell: pwsh

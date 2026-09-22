@@ -79,6 +79,14 @@ checklist.
 ## Cutting a release
 
 1. Make sure `main` is green in the `ci` workflow.
+
+   If the dependency set moved since the last release, regenerate the license
+   report in the same pass: `cargo about generate about.hbs -o
+   THIRD-PARTY-LICENSES`, then commit it. Every archive, the MSI, and every
+   app `lumenc package` writes carries this file, so a stale one ships the
+   wrong license text. If the command stops on a license it does not
+   recognise, read that license and add it to the `accepted` list in
+   `about.toml`, rather than dropping the crate from the report.
 2. Check that `version` in the workspace `Cargo.toml` is the version you are
    about to tag. It usually is already, because the previous release set it
    (step 8). If it is not, run `tools/release/bump-version.py <version>`,

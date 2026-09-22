@@ -491,6 +491,13 @@ fn build(options: &Options) -> Result<Report, String> {
         None
     };
 
+    // Where the runtime came from is kept before the pair is read, because
+    // the license text sits beside it (one level up in an installed
+    // toolchain) and has to travel with the wasm that carries the engine.
+    let runtime_dir = runtime
+        .as_ref()
+        .and_then(|files| files.wasm.parent().map(Path::to_path_buf));
+
     // The runtime pair is read rather than copied straight across, because a
     // file is named here after what is in it and the name has to be in the
     // spec before a document can point at it.
@@ -719,6 +726,9 @@ fn build(options: &Options) -> Result<Report, String> {
     if let Some(runtime) = &runtime {
         write_file(&out.join(&runtime.wasm.path), &runtime.wasm.bytes)?;
         write_file(&out.join(&runtime.js.path), &runtime.js.bytes)?;
+    }
+    if let Some(dir) = &runtime_dir {
+        crate::package::cli::stage_license_files(std::slice::from_ref(dir), &out)?;
     }
     // Which paths a file server has no file for is the build's to say; a
     // render answers every path with the page it names.

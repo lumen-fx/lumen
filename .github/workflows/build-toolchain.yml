@@ -389,6 +389,12 @@ jobs:
           cp public/lumenc/completions/lumenc.bash dist/share/bash-completion/completions/lumenc
           cp public/lumenc/completions/_lumenc dist/share/zsh/site-functions/_lumenc
           cp public/lumenc/completions/lumenc.fish dist/share/fish/vendor_completions.d/lumenc.fish
+
+          # The archive carries the engine, and the engine carries candela,
+          # which is Apache-2.0. That license asks whoever distributes it to
+          # hand the recipient the license text and the attribution, so both
+          # travel in the archive rather than only in the repository.
+          cp LICENSE NOTICE THIRD-PARTY-LICENSES dist/
           tar -czf lumen-${{ matrix.target }}.tar.gz -C dist .
 
       # The bundled runtime modules, as their own archive beside the
@@ -431,6 +437,7 @@ jobs:
           # asking for a path that is not the engine's own install name would
           # load a second copy of the engine or fail outright.
           .github/scripts/macos-install-names.sh modules-dist/bin
+          cp LICENSE NOTICE THIRD-PARTY-LICENSES modules-dist/
           tar -czf lumen-modules-${{ matrix.target }}.tar.gz -C modules-dist .
 
       - name: Package (Windows)
@@ -443,6 +450,7 @@ jobs:
           Copy-Item target\release\lumen-launcher.exe dist\bin\
           Copy-Item -Recurse target\release\libs dist\bin\libs
           Copy-Item -Recurse target\templates dist\bin\templates
+          Copy-Item LICENSE, NOTICE, THIRD-PARTY-LICENSES dist\
           Compress-Archive -Path dist\* -DestinationPath lumen-${{ matrix.target }}.zip
 
       # Nothing here used to launch what it was about to publish, and that is
@@ -615,6 +623,7 @@ jobs:
           done
           echo "kept whole rather than stripped: $kept"
 
+          cp LICENSE NOTICE THIRD-PARTY-LICENSES linkkit/
           tar -czf lumen-linkkit-${{ matrix.target }}.tar.gz -C linkkit .
           du -sh linkkit
           ls -l lumen-linkkit-${{ matrix.target }}.tar.gz
@@ -644,6 +653,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path msi-stage\bin, msi-stage\share\lumen | Out-Null
           Copy-Item -Recurse dist\bin\* msi-stage\bin\
+          Copy-Item LICENSE, NOTICE, THIRD-PARTY-LICENSES msi-stage\
           # LF line endings and no BOM: lumenc reads this with a plain line
           # split, and a BOM would land inside the first key.
           $receipt = "version $env:MSI_VERSION`ntarget ${{ matrix.target }}`ninstaller msi`n"
@@ -719,7 +729,9 @@ jobs:
         run: .github/scripts/build-web-runtime.sh web-dist
 
       - name: Package
-        run: tar -czf lumen-web.tar.gz -C web-dist lumen-web.wasm lumen-web.js
+        run: |
+          cp LICENSE NOTICE THIRD-PARTY-LICENSES web-dist/
+          tar -czf lumen-web.tar.gz -C web-dist lumen-web.wasm lumen-web.js LICENSE NOTICE THIRD-PARTY-LICENSES
 
       - uses: actions/upload-artifact@v4
         with:

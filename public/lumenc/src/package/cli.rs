@@ -68,6 +68,15 @@ const STUB_STEM: &str = "lumen-launcher";
 /// Windows installer stage it under the same name for the same reason.
 const SCRIPT_LIBRARY_DIR: &str = "libs";
 
+/// The license files a package carries, under the names the release archives
+/// and the repository root both use.
+///
+/// A packaged app embeds the engine, and the engine links candela, which is
+/// Apache-2.0. That license asks whoever distributes the binary to give its
+/// recipient the license text and the attribution, so the files travel into
+/// every package the same way the standard library does.
+const LICENSE_FILES: [&str; 3] = ["LICENSE", "NOTICE", "THIRD-PARTY-LICENSES"];
+
 /// The prebuilt wasm runtime a web build serves, and the module that
 /// instantiates it, under the names the release channel and a workspace build
 /// both produce.
@@ -769,6 +778,7 @@ fn package_sdk(
         )
     };
     stage_script_library(&library_dirs, out)?;
+    stage_license_files(&library_dirs, out)?;
 
     let modules = stage_modules(src, out, target, lib_dir, declared)?;
 
@@ -973,6 +983,46 @@ fn stage_script_library(dirs: &[PathBuf], out: &Path) -> Result<(), String> {
         return Ok(());
     };
     copy_tree(&from, &out.join(SCRIPT_LIBRARY_DIR))
+}
+
+/// Stage the license files into the package root.
+///
+/// They sit at the root of an installed toolchain while the binaries sit in
+/// `bin/`, so each search directory is tried with its parent: an installation
+/// finds them one level up from `lumenc`, and a workspace build finds them at
+/// the repository root. The first directory holding all three wins, for the
+/// reason [`first_dir_with`] gives - a partial directory cannot make a
+/// complete package.
+///
+/// This reports rather than fails. A toolchain assembled without them still
+/// builds a working app, and a build that stops here would turn a missing
+/// text file into a broken `lumenc package`.
+pub(crate) fn stage_license_files(dirs: &[PathBuf], out: &Path) -> Result<(), String> {
+    let names: Vec<String> = LICENSE_FILES.map(String::from).to_vec();
+    let candidates: Vec<PathBuf> = dirs
+        .iter()
+        .flat_map(|dir| [Some(dir.clone()), dir.parent().map(Path::to_path_buf)])
+        .flatten()
+        .collect();
+    let Some(from) = first_dir_with(&candidates, &names) else {
+        eprintln!(
+            "lumenc package: warning: no {} in {}, so the package carries no license text for \
+             the engine it ships",
+            LICENSE_FILES.join(", "),
+            searched(&candidates)
+        );
+        return Ok(());
+    };
+    for name in LICENSE_FILES {
+        std::fs::copy(from.join(name), out.join(name)).map_err(|e| {
+            format!(
+                "copy {} -> {}: {e}",
+                from.join(name).display(),
+                out.join(name).display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 /// Whether `dir` is a directory holding at least one entry.
@@ -2659,6 +2709,46 @@ fn file_name_of(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The license files sit at the root of an installed toolchain while the
+    /// binaries sit in `bin/`, so the search has to reach the parent of a
+    /// directory it was handed, and it must take a directory only when all
+    /// three are there.
+    #[test]
+    fn license_files_are_found_one_level_above_the_binaries() {
+        let root = std::env::temp_dir().join(format!("lumenc-license-{}", std::process::id()));
+        let bin = root.join("prefix").join("bin");
+        let out = root.join("out");
+        std::fs::create_dir_all(&bin).expect("make the stage");
+        std::fs::create_dir_all(&out).expect("make the output");
+        for name in LICENSE_FILES {
+            std::fs::write(root.join("prefix").join(name), name).expect("write the license");
+        }
+
+        stage_license_files(std::slice::from_ref(&bin), &out).expect("stage from the parent");
+        for name in LICENSE_FILES {
+            assert_eq!(
+                std::fs::read_to_string(out.join(name)).ok(),
+                Some(name.to_string()),
+                "{name} did not travel into the package"
+            );
+        }
+
+        // A directory holding only some of them is passed over, and a package
+        // that finds none of them is still a package.
+        let half = root.join("half");
+        std::fs::create_dir_all(&half).expect("make the half directory");
+        std::fs::write(half.join("LICENSE"), "LICENSE").expect("write one");
+        let bare = root.join("bare-out");
+        std::fs::create_dir_all(&bare).expect("make the bare output");
+        stage_license_files(&[half], &bare).expect("a missing set reports rather than fails");
+        assert!(
+            !bare.join("LICENSE").exists(),
+            "a partial directory was used"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn target_names_match_the_release_assets() {

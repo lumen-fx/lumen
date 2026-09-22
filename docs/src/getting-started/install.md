@@ -49,6 +49,10 @@ published with the same release, and unpacks them into the same tree, so the
 libraries sit in `~/.lumen/bin` beside the engine, which is where the runtime
 looks for them. `--no-modules` installs the toolchain without them.
 
+`LICENSE`, `NOTICE` and `THIRD-PARTY-LICENSES` land at the root of the prefix,
+carrying the license text of the toolchain and of everything it is built from.
+`lumenc package` copies them into each app you package.
+
 An app whose modules are missing prints one line per module,
 `lumen-runtime: MODULE LOAD FAILED: <name>`, with the paths it probed under
 it, then keeps running with every call into that module's namespace failing.
