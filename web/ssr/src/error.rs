@@ -18,6 +18,12 @@ pub enum SsrError {
     AlreadyRunning,
     /// The renderer has stopped, so it will not answer.
     Stopped,
+    /// A render is in progress and every place in the queue behind it is
+    /// taken. See [`crate::RenderOptions::queue`].
+    Busy,
+    /// The render ran past the limit it was given and has not come back. See
+    /// [`crate::Renderer::try_render`].
+    TimedOut,
     /// The entry page names a page the app does not have.
     UnknownEntry {
         /// The key that was asked for.
@@ -49,6 +55,8 @@ impl fmt::Display for SsrError {
                  time per process",
             ),
             SsrError::Stopped => f.write_str("the renderer has stopped"),
+            SsrError::Busy => f.write_str("every place in the render queue is taken"),
+            SsrError::TimedOut => f.write_str("the render ran past its time limit"),
             SsrError::UnknownEntry { asked, pages } => write!(
                 f,
                 "entry page `{asked}` is not one of the app's pages ({})",
