@@ -33,11 +33,11 @@ use lumen_runtime::config::{
 };
 use lumen_runtime::pages::PagePlan;
 use lumen_runtime::run::locale_dir;
-use lumen_ssr::{FetchPolicy, RenderOptions, SsrSite};
+use lumen_ssr::{RenderOptions, SsrSite};
 use lumen_web::urls::is_external;
 use lumen_web::{
-    AssetRef, CssMode, HostRewrite, LocaleSpec, PageSpec, RowFills, SignalEnv, SiteSpec, WebSpec,
-    intrinsic_size,
+    AssetRef, CssMode, HostRewrite, LocaleSpec, PageHead, PageSpec, RowFills, SERVER_SPEC_FILE,
+    ServerPolicy, ServerSpec, SignalEnv, SiteSpec, WebSpec, intrinsic_size,
 };
 
 use crate::web::serve::{LOOPBACK, Server};
@@ -146,13 +146,13 @@ pub fn cmd_web(args: impl Iterator<Item = String>) -> ExitCode {
                 return serve(report, &options);
             }
             // A rendered site is the files a render needs and no documents, so
-            // there is nothing here for a file server to hand out. The
-            // compiled app is named, because a name carries the hash of the
-            // file and there is no document here to read it out of.
+            // there is nothing here for a file server to hand out. The spec
+            // file names everything else, the compiled app included.
             if report.per_request {
                 say_line!(
                     "lumenc web: pass --serve to render the pages here, or point a server built \
-                     on lumen-ssr at this directory and render from {}",
+                     on lumen-ssr at this directory: {SERVER_SPEC_FILE} names the files it \
+                     renders from, the compiled app {} among them",
                     report.artifact
                 );
             }
@@ -416,8 +416,9 @@ fn build(options: &Options) -> Result<Report, String> {
     if !options.allow_hosts.is_empty() && !(per_request && options.serve) {
         warnings.push(
             "--allow-host names a host a render may ask for data, and nothing here renders a \
-             page; pass --render ssr --serve to render them here, or set the policy in the \
-             server you build on lumen-ssr"
+             page; pass --render ssr --serve to render them here, or list the host in lumen.toml \
+             [web.ssr] allow_hosts, which a build rendered per request writes down for its \
+             server"
                 .to_string(),
         );
     }
@@ -655,7 +656,7 @@ fn build(options: &Options) -> Result<Report, String> {
         WebPrerender::Seeds | WebPrerender::None => BTreeMap::new(),
     };
     let mut pages_written = 0;
-    let mut served: Vec<SiteSpec> = Vec::new();
+    let mut heads: Vec<PageHead> = Vec::new();
     for (index, locale) in locales.iter().enumerate() {
         let mut spec = SiteSpec {
             pages: Vec::new(),
@@ -718,11 +719,7 @@ fn build(options: &Options) -> Result<Report, String> {
         if index == 0 {
             pages_written = spec.pages.len();
             warnings.extend(site.warnings);
-        }
-        // A render answers in whichever of these the request asks for, so it
-        // is handed every one of them.
-        if per_request && options.serve {
-            served.push(spec);
+            heads = spec.pages.iter().map(PageHead::of).collect();
         }
     }
 
@@ -746,19 +743,32 @@ fn build(options: &Options) -> Result<Report, String> {
     // A render starts from the compiled app rather than from the documents on
     // disk: the state a page is written with is what the app settles into for
     // the request asking, which is the whole difference between a rendered
-    // page and a built one. The files beside the documents are still the
-    // build's, and the server sends them from the directory.
-    let site = if served.is_empty() {
-        None
-    } else {
-        let mut site = SsrSite::new(compiled, web).map_err(|e| e.to_string())?;
-        for tree in served {
-            site = site.with_locale(tree).map_err(|e| e.to_string())?;
+    // page and a built one. What the build knew beyond the app goes into the
+    // spec file, so a server of anyone's holds the site this build holds.
+    let site = if per_request {
+        let spec = ServerSpec {
+            locales: locales.clone(),
+            fallback: fallback_tags.clone(),
+            pages: heads,
+            seed: declared_seed(&seed),
+            policy: ServerPolicy {
+                allow_hosts: cfg.web.ssr.allow_hosts.clone(),
+                max_requests: cfg.web.ssr.max_requests,
+                headers: cfg.web.ssr.headers.clone(),
+            },
+            ..ServerSpec::new(web).with_images(&assets)
+        };
+        write_file(&out.join(SERVER_SPEC_FILE), spec.to_json().as_bytes())?;
+        // The server here renders from what any server would. The
+        // catalogues are this build's own, read from the app directory, so
+        // a site whose pages load none still renders in every language.
+        if options.serve {
+            Some(SsrSite::from_spec(compiled, &spec, catalogues).map_err(|e| e.to_string())?)
+        } else {
+            None
         }
-        let site = site
-            .with_catalogues(catalogues, fallback_tags)
-            .map_err(|e| e.to_string())?;
-        Some(site.with_seed(declared_seed(&seed)))
+    } else {
+        None
     };
 
     Ok(Report {
@@ -1712,14 +1722,12 @@ fn serve(report: Report, options: &Options) -> ExitCode {
     };
 
     if let Some(site) = report.site {
-        let mut fetch = FetchPolicy::default();
+        // The app's own policy, then whatever the command line adds to it.
+        let mut render = RenderOptions::default().with_policy(site.policy());
         for allowed in &options.allow_hosts {
-            fetch = fetch.allow_host(allowed);
+            render.fetch = render.fetch.allow_host(allowed);
         }
-        let render = RenderOptions {
-            fetch,
-            ..RenderOptions::default()
-        };
+        let reaches_nothing = render.fetch.hosts.is_empty();
         let handler = match RenderHandler::start(site, render) {
             Ok(handler) => handler,
             Err(message) => {
@@ -1734,10 +1742,10 @@ fn serve(report: Report, options: &Options) -> ExitCode {
         say_line!(
             "lumenc web: rendering every page for the request that asks, one render at a time"
         );
-        if options.allow_hosts.is_empty() {
+        if reaches_nothing {
             say_line!(
-                "lumenc web: a render reaches no host; pass --allow-host to let the app fetch its \
-                 data while the page is rendered"
+                "lumenc web: a render reaches no host; list them in [web.ssr] allow_hosts, or pass \
+                 --allow-host, to let the app fetch its data while the page is rendered"
             );
         }
     }

@@ -13,6 +13,7 @@ use lumen_prerender::{Booted, Budget, Location, Settled};
 use lumen_script::ScriptSet;
 use lumen_script::http::{HttpDispatch, ThreadDispatch};
 use lumen_script::runtime::ScriptCommandEvent;
+use lumen_web::ServerPolicy;
 
 use crate::error::SsrError;
 use crate::fetch::{CountingDispatch, FetchPolicy, Flight};
@@ -68,6 +69,27 @@ impl Default for RenderOptions {
             fetch: FetchPolicy::default(),
             dispatch: default_dispatch(),
         }
+    }
+}
+
+impl RenderOptions {
+    /// Also allow what `policy` allows: its hosts, its request cap and its
+    /// headers, on top of what these options already allow.
+    ///
+    /// The policy is the app's, written down by the build from `lumen.toml`
+    /// `[web.ssr]` and read back with [`SsrSite::policy`]; the rest of the
+    /// options are the server's.
+    pub fn with_policy(mut self, policy: &ServerPolicy) -> Self {
+        for host in &policy.allow_hosts {
+            self.fetch = self.fetch.allow_host(host);
+        }
+        if let Some(max) = policy.max_requests {
+            self.fetch.max_requests = max;
+        }
+        for name in &policy.headers {
+            self.headers = self.headers.allow(name);
+        }
+        self
     }
 }
 

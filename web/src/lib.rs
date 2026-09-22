@@ -25,6 +25,7 @@ pub mod image;
 pub mod markup;
 pub mod names;
 pub mod seo;
+pub mod server;
 pub mod site;
 pub mod snapshot;
 pub mod spec;
@@ -36,6 +37,10 @@ pub use i18n::{translate_element, translate_ir};
 pub use image::intrinsic_size;
 pub use markup::{MarkupSheet, lift as lift_markup_styles};
 pub use names::{build_id, content_name, fnv1a64};
+pub use server::{
+    ImageSize, PageHead, SERVER_SPEC_FILE, SERVER_SPEC_VERSION, ServerPolicy, ServerSpec,
+    ServerSpecError,
+};
 pub use site::{NOT_FOUND_FILE, ROBOTS_FILE, SITEMAP_FILE, document, emit, shell};
 pub use snapshot::{NodeState, State, state_of};
 pub use spec::{

@@ -14,6 +14,7 @@ use lumen_html::contract::{
 use lumen_i18n::LanguageIdentifier;
 use lumen_ir::interpolate::Globals;
 use lumen_ir::layout_ir::{Element, LayoutIR};
+use serde::{Deserialize, Serialize};
 
 use crate::markup::MarkupSheet;
 use crate::snapshot::NodeState;
@@ -241,7 +242,8 @@ pub fn document_key(path: &str, entry: &str) -> Option<String> {
 /// Every site is emitted with a `404.html` holding the app shell, which is
 /// all a plain file server needs. A host that can rewrite instead gets the
 /// file that tells it to, so the visitor's URL is served with a 200.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum HostRewrite {
     /// A plain file server: the `404.html` alone.
     #[default]
@@ -257,7 +259,8 @@ pub enum HostRewrite {
 }
 
 /// How a page's styling reaches the browser.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CssMode {
     /// As a stylesheet, with the selectors, states and media queries the
     /// app was written with. This is how a site ships: the browser runs
@@ -276,7 +279,11 @@ pub enum CssMode {
 
 /// Site-wide settings: where it is served from, what it is called, and which
 /// runtime files the documents point at.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// It serializes, because a site rendered per request carries it to the
+/// server in [`crate::ServerSpec`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct WebSpec {
     /// URL prefix the site is served under, such as `/` or `/docs/`.
     pub base_path: String,

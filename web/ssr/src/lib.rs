@@ -12,20 +12,32 @@
 //! goes inside whatever server you already have.
 //!
 //! ```no_run
+//! use std::path::Path;
 //! use std::sync::Arc;
-//! use lumen_ssr::{RenderOptions, Renderer, SsrRequest, SsrSite};
-//! use lumen_web::WebSpec;
+//! use lumen_ssr::{RenderOptions, Renderer, SERVER_SPEC_FILE, ServerSpec, SsrRequest, SsrSite};
 //!
-//! // Every file a build writes is named after its own contents; the name
-//! // here is the one `dist/web/lumen.web.json` gives as `artifact`.
-//! let compiled = lumen_ir::artifact::read("dist/web/app.f2d1a07c9b3e5648.lmna".as_ref())?;
-//! let site = SsrSite::new(compiled, WebSpec::default())?;
-//! let renderer = Renderer::start(Arc::new(site), RenderOptions::default())?;
+//! // `lumenc web --render ssr` writes the site and, beside it, the file that
+//! // says what the site is: every other file's name, the locales, the page
+//! // titles and the app's render policy.
+//! let dir = Path::new("dist/web");
+//! let spec = ServerSpec::from_json(&std::fs::read(dir.join(SERVER_SPEC_FILE))?)?;
+//! let artifact = std::fs::read(dir.join(&spec.web.artifact))?;
+//! let mut catalogues = Vec::new();
+//! for (tag, path) in &spec.web.catalogues {
+//!     catalogues.push((tag.clone(), std::fs::read_to_string(dir.join(path))?));
+//! }
+//! let site = SsrSite::from_build(&artifact, &spec, catalogues)?;
+//! let options = RenderOptions::default().with_policy(site.policy());
+//! let renderer = Renderer::start(Arc::new(site), options)?;
 //!
 //! let response = renderer.render(SsrRequest::get("/user/42"))?;
 //! println!("{} {}", response.status, response.body.len());
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! [`SsrSite::new`] builds a site by hand instead, from a compiled app and a
+//! [`lumen_web::WebSpec`] of your own, for a server that does not start from a
+//! build's output.
 //!
 //! # One render at a time, per process
 //!
@@ -110,6 +122,12 @@ pub use renderer::{RenderOptions, Renderer};
 pub use request::{HeaderPolicy, SsrRequest};
 pub use response::{ResponseState, SsrResponse};
 pub use site::SsrSite;
+
+/// The file a build rendered per request leaves beside the site, and what is
+/// in it.
+pub use lumen_web::{
+    SERVER_SPEC_FILE, SERVER_SPEC_VERSION, ServerPolicy, ServerSpec, ServerSpecError,
+};
 
 /// How long one render gets, in ticks and in time.
 pub use lumen_prerender::Budget;

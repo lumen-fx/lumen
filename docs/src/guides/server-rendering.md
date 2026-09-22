@@ -24,16 +24,22 @@ lumenc web myapp --render ssr
 ```
 
 That writes the stylesheet, the compiled app, the compiled candela program,
-the browser runtime pair, `lumen.web.json` and `assets/`, and no documents:
-serve those as static files and answer everything else with a render. The
-runtime adopts a rendered document the same way it adopts a built one.
+the browser runtime pair, `lumen.web.json`, the catalogues, `assets/` and
+`lumen.site.json`, and no documents: serve the files as static files and
+answer everything else with a render. The runtime adopts a rendered document
+the same way it adopts a built one.
 
-Every one of those files but the manifest is named after its own contents, so
-the compiled app is `app.<hash>.lmna` rather than `app.lmna`. Read the name
-out of `lumen.web.json`, which lists it as `artifact`, rather than writing it
-into your server: it changes whenever the app does. `lumenc web --render ssr`
-also prints the name it just wrote, since that directory holds no document to
-read it from.
+`lumen.site.json` is the server's file. It names every other file, and it
+carries what the build knew that the compiled app does not: the address and
+canonical URL, each page's title and description, the locales and their
+fallback chain, the size of every image, the `[web.seed]` values, and the
+app's `[web.ssr]` policy. Read it and you hold the site `lumenc web --serve`
+renders. The browser never loads it.
+
+Every other file is named after its own contents, so the compiled app is
+`app.<hash>.lmna` rather than `app.lmna`. Read the names out of
+`lumen.site.json` rather than writing them into your server: they change
+whenever the app does.
 
 Add `--no-runtime` to render pages that carry none:
 
@@ -43,10 +49,10 @@ lumenc web myapp --render ssr --no-runtime
 
 Each page is still produced for the request that asks, and now it is only a
 document: no wasm, no boot script, and nothing that takes it over once it is
-open. Links load the next page, which is another render. The compiled app is
-still written, because that is what you render from; the runtime files and the
-manifest are not, because nothing loads them. Without a manifest to read the
-name out of, the name the build printed is the one to render from.
+open. Links load the next page, which is another render. The compiled app and
+`lumen.site.json` are still written, because that is what you render from; the
+runtime files, the manifest and the catalogues are not, because nothing in a
+browser loads them.
 
 Build with `--render csr` instead when you want documents to fall back to.
 Which of the two answers a request is then yours to decide, and so is
@@ -71,8 +77,9 @@ module are read from the directory the build wrote while a page is being
 rendered, so nothing a page needs waits behind the page. Renders queue, because
 a process renders one at a time.
 
-A render reaches no host unless you name it, the same policy an embedder sets
-in `FetchPolicy`:
+A render reaches the hosts `[web.ssr] allow_hosts` lists and no others, the
+same policy an embedder applies with `with_policy`. `--allow-host` adds one
+for this run:
 
 ```
 lumenc web myapp --render ssr --serve --allow-host api.example.com
@@ -86,17 +93,19 @@ than ending a process in the middle of answering somebody.
 ## Rendering
 
 ```rust
+use std::path::Path;
 use std::sync::Arc;
-use lumen_ssr::{FetchPolicy, RenderOptions, Renderer, SsrRequest, SsrSite};
-use lumen_web::WebSpec;
+use lumen_ssr::{RenderOptions, Renderer, SERVER_SPEC_FILE, ServerSpec, SsrRequest, SsrSite};
 
-// The name is the one `lumen.web.json` gives as `artifact`.
-let compiled = lumen_ir::artifact::read("dist/web/app.f2d1a07c9b3e5648.lmna".as_ref())?;
-let site = SsrSite::new(compiled, WebSpec::default())?;
-let options = RenderOptions {
-    fetch: FetchPolicy::default().allow_host("api.example.com"),
-    ..RenderOptions::default()
-};
+let dir = Path::new("dist/web");
+let spec = ServerSpec::from_json(&std::fs::read(dir.join(SERVER_SPEC_FILE))?)?;
+let artifact = std::fs::read(dir.join(&spec.web.artifact))?;
+let mut catalogues = Vec::new();
+for (tag, path) in &spec.web.catalogues {
+    catalogues.push((tag.clone(), std::fs::read_to_string(dir.join(path))?));
+}
+let site = SsrSite::from_build(&artifact, &spec, catalogues)?;
+let options = RenderOptions::default().with_policy(site.policy());
 let renderer = Renderer::start(Arc::new(site), options)?;
 
 let response = renderer.render(
@@ -105,9 +114,16 @@ let response = renderer.render(
 // response.status, response.headers and response.body are what to send.
 ```
 
-`WebSpec` says where the files above live and what the pages are called. Give
-it the same values `lumenc web` was given, or the documents will point at files
-your server does not have.
+`SsrSite::from_build` takes the files already read, so where they live and
+how they are read stays your server's business. The site it builds is the one
+`lumenc web --serve` renders: a tree per locale, translated from the
+catalogues, with the titles, image sizes and declared state the build wrote
+down. `with_policy` applies the app's `[web.ssr]` policy; add to the options
+after it for anything your deployment allows on top.
+
+A file written by another version of `lumenc` is refused with a message
+naming both versions, rather than read into a site that points at the wrong
+files. Rebuild the site with the `lumenc` that matches your server.
 
 `render` blocks until the document is written, and it is safe to call from any
 thread: calls queue.
@@ -130,8 +146,9 @@ written for the tree's locale as the document is, so a page arrives in its
 language with nothing running.
 
 `lumenc web` builds them from the `locale/*.ftl` catalogues beside your markup,
-one per `[web] locales` entry. An embedder builds one the same way and hands it
-over:
+one per `[web] locales` entry, and `SsrSite::from_build` builds the same trees
+from `lumen.site.json`. A server that builds its site by hand, from
+`SsrSite::new`, builds a tree the same way and hands it over:
 
 ```rust
 use lumen_web::{LocaleSpec, PageSpec, SiteSpec};
@@ -314,6 +331,9 @@ let options = RenderOptions {
 };
 ```
 
+`[web.ssr] headers = ["authorization"]` in `lumen.toml` says the same thing
+from the app's side, and `with_policy` applies it.
+
 A cookie is different: `request_cookie(name)` reads one by name whether or not
 the `Cookie` header itself is allowed, which is the granularity worth having.
 An app that wants the whole jar as a string allows `cookie` like any other
@@ -374,6 +394,15 @@ let options = RenderOptions {
 Nothing is allowed by default. A request to anything else is answered with an
 error the app reads as a failed reply, so the page renders the way it does in a
 browser with no network. Subdomains are not implied; name each one.
+
+An app names its own hosts and cap in `lumen.toml`, and `with_policy` applies
+them:
+
+```toml
+[web.ssr]
+allow_hosts = ["api.example.com"]
+max_requests = 4
+```
 
 The transport is yours if you want it: `RenderOptions::dispatch` takes any
 `HttpDispatch`, so your own client, timeouts and certificates go there. Whatever

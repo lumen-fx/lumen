@@ -1,0 +1,25 @@
+# Proof fixture for a site rendered per request by a server that has only the
+# files the build wrote. Everything the build knows beyond the compiled app
+# has to reach that server: the address, the page titles, the image sizes,
+# the locales and their catalogues, the declared state and the app's policy.
+[script]
+engine = "candela"
+
+[web]
+url = "https://example.com"
+locales = ["en-US", "de-DE"]
+render = "ssr"
+
+[web.pages.main]
+title = "Welcome"
+
+[web.seed]
+visitor = "declared"
+
+[web.ssr]
+allow_hosts = ["api.example.com"]
+headers = ["authorization"]
+
+# No introspection server, so a headless CI run binds no port.
+[mcp]
+port = 0

@@ -269,7 +269,25 @@ to the site's, and `index`, which defaults to true. A page with `index = false`
 carries `<meta name="robots" content="noindex">` and is left out of the
 sitemap; it keeps its canonical, Open Graph and `hreflang` metadata.
 
-See [the web guide](../guides/web.md).
+`[web.ssr]` is what the app allows a render to reach when its pages are
+rendered per request. It is the app's policy, so a build writes it into
+`lumen.site.json` and a server built on `lumen-ssr` applies it; where the
+server listens and how many processes it runs are the server's settings.
+
+| Key | Type | Default | Effect |
+|-----|------|---------|--------|
+| `allow_hosts` | array of strings | empty | Hosts a render may ask for data, by name, without scheme or port. A render reaches no host that is not listed, which is what keeps a visitor's request from making the server fetch an address of the visitor's choosing. |
+| `max_requests` | integer | the renderer's default | How many requests one render may make. |
+| `headers` | array of strings | empty | Request headers the app may read beyond the ones every render allows, such as `authorization` or `cookie`. |
+
+```toml
+[web.ssr]
+allow_hosts = ["api.example.com"]
+headers = ["authorization"]
+```
+
+See [the web guide](../guides/web.md) and
+[rendering on a server](../guides/server-rendering.md).
 
 ## [dependencies]
 

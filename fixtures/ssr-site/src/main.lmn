@@ -1,0 +1,9 @@
+<root>
+  <column id="page">
+    <label id="greeting" translatable="greeting" text="Hello" />
+    <label id="status" bind-text="status" text="" />
+    <label id="visitor" bind-text="visitor" text="" />
+    <image id="logo" src="images/logo.png" alt="Logo" />
+  </column>
+  <script src="main.cdl" />
+</root>
