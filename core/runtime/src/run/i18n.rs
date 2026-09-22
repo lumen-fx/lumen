@@ -109,6 +109,49 @@ pub(crate) fn register_i18n(
     Ok(())
 }
 
+/// Load the catalogues a compiled app carries for every locale that has no
+/// loose file under `locale/`.
+///
+/// A loose file wins: [`register_i18n`] has already loaded every one, and a
+/// locale it loaded is passed over here. That keeps the loose-files rule for
+/// an app's data, so a translator edits the file beside an app and the app
+/// reads the edit, while an app shipped with no `locale/` directory still
+/// reads in every language it was built with. The same goes for the fallback
+/// chain: `[app] fallback_locale` in `lumen.toml` wins over the one the
+/// artifact recorded.
+pub(crate) fn add_compiled_catalogues(
+    world: &mut World,
+    cfg: &crate::config::LumenToml,
+    compiled: &lumen_ir::artifact::CompiledI18n,
+) -> Result<(), RunError> {
+    if compiled.catalogues.is_empty() && compiled.fallback.is_empty() {
+        return Ok(());
+    }
+    let Some(shared) = world.get_resource::<SharedI18n>().cloned() else {
+        return Ok(());
+    };
+    let mut i18n = shared.write();
+    for (tag, source) in &compiled.catalogues {
+        let lang: lumen_i18n::LanguageIdentifier = lumen_i18n::Lang::try_from(tag.as_str())
+            .map_err(|e| RunError::I18n(e.to_string()))?
+            .into();
+        if i18n.bundles.contains_key(&lang) {
+            continue;
+        }
+        i18n.load_ftl(lang, source)
+            .map_err(|e| RunError::I18n(format!("the compiled `{tag}` catalogue: {e}")))?;
+    }
+    if cfg.app.fallback_locale.is_none() && !compiled.fallback.is_empty() {
+        i18n.fallback_chain = compiled
+            .fallback
+            .iter()
+            .map(|tag| lumen_i18n::Lang::try_from(tag.as_str()).map(Into::into))
+            .collect::<Result<_, _>>()
+            .map_err(|e| RunError::I18n(e.to_string()))?;
+    }
+    Ok(())
+}
+
 /// Re-read every catalogue into the live registry. Called by hot reload
 /// after an edit under `locale/`; `load_ftl` replaces a locale's bundle, so
 /// the running app picks the new strings up without a restart.

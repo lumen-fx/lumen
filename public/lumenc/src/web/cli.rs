@@ -24,7 +24,7 @@ use lumen_html::contract::{
     ScriptFormat, ScriptRef, Seed, SeedValue,
 };
 use lumen_i18n::{I18n, I18nPlugin, LanguageIdentifier, SharedI18n};
-use lumen_ir::artifact::CompiledApp;
+use lumen_ir::artifact::{CompiledApp, CompiledI18n};
 use lumen_ir::layout_ir::{Element, LayoutIR, relativize_asset_paths};
 use lumen_prerender::{self as prerender, Budget, Language, Prerendered, Settled};
 use lumen_runtime::app_layout::src_dir;
@@ -537,6 +537,13 @@ fn build(options: &Options) -> Result<Report, String> {
     // points where the emitted markup points. The browser runtime loads it,
     // and so does the server that renders the pages, so a rendered site keeps
     // it whether or not its documents run anything.
+    // The catalogues travel in the artifact only where no catalogue file
+    // travels beside it: a page that loads the runtime reads the files the
+    // manifest names, so a copy inside the artifact would be downloaded for
+    // nobody, and a server reads the same files through the spec.
+    if runtime.is_some() {
+        compiled.i18n = CompiledI18n::default();
+    }
     let artifact = if runtime.is_some() || per_request {
         let bytes = crate::artifact::serialize(&compiled)
             .map_err(|e| format!("serialize the compiled app: {e}"))?;

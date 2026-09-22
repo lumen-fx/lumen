@@ -32,6 +32,9 @@ pub(crate) struct LoadResult {
     /// Every fragment the app declares, for the runtime to instantiate by
     /// key.
     pub(crate) fragments: lumen_ir::fragment::FragmentTable,
+    /// The catalogues a compiled app carries. Empty on the from-source path,
+    /// which reads `locale/` itself.
+    pub(crate) i18n: lumen_ir::artifact::CompiledI18n,
 }
 
 /// Produce a [`LoadResult`] for [`build_app`] from whichever source the
@@ -147,6 +150,7 @@ fn load_result_from_compiled(compiled: lumen_ir::artifact::CompiledApp, dir: &Pa
         css_import_mtimes: Vec::new(),
         scripts,
         pages,
+        i18n: compiled.i18n,
     }
 }
 
@@ -529,6 +533,7 @@ pub(crate) fn load_ir(
         scripts: Vec::new(),
         pages: None,
         fragments: declared,
+        i18n: lumen_ir::artifact::CompiledI18n::default(),
     })
 }
 

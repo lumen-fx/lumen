@@ -449,8 +449,12 @@ A precompiled artifact skips steps 1 through 4 entirely: parsing, cascade, and
 script concatenation all happened at build time, and the artifact carries the
 finished IR. The container is a magic number, a format version, and a bincode
 body holding the IR, the script source, the split of that source by the engine
-that runs each part, and the page set of a multi-page app; a version the
-runtime does not recognise is rejected before decoding. The engine split and
+that runs each part, the page set of a multi-page app, the fragment table, and
+the app's translation catalogues with their fallback chain; a version the
+runtime does not recognise is rejected before decoding. The catalogues travel
+as Fluent source rather than as parsed bundles, and a loose `locale/<tag>.ftl`
+beside the app wins over the copy inside it, so the desktop runtime loads the
+directory first and fills in only the locales it did not find there. The engine split and
 the page set are recorded rather than rediscovered, because a shipped app has
 neither script files nor page files left to read them off. Pages are assembled
 at compile time exactly as the from-source path assembles them, so the IR

@@ -107,11 +107,15 @@ pub const MAGIC: [u8; 4] = *b"LMNA";
 /// cascade does not implement, so a `@keyframes` block an app wrote reaches
 /// the web target instead of being dropped at parse time.
 ///
+/// `11`: [`CompiledApp::i18n`] carries the app's translation catalogues and
+/// the fallback chain, so an app, and a server rendering one, reads in every
+/// language it ships with no `locale/` directory beside it.
+///
 /// A second consumer rides this constant: compiler plugins (`lumenc-plugin`)
 /// bake it into their descriptor and exchange bincode [`LayoutIR`] payloads
 /// with the loader, so a bump obsoletes every built plugin until it is
 /// rebuilt against the new tag.
-pub const FORMAT_VERSION: u16 = 10;
+pub const FORMAT_VERSION: u16 = 11;
 
 /// The navigable page set of a compiled multi-page app.
 ///
@@ -129,6 +133,69 @@ pub struct CompiledPages {
     /// Every navigable page key, longest first, which is the order path
     /// resolution walks them in.
     pub keys: Vec<String>,
+}
+
+/// The app's translations, as baked at build time.
+///
+/// Each catalogue is the Fluent source of one `locale/<tag>.ftl` file, kept as
+/// text: which locale an app runs in is decided when it runs, and every
+/// target parses a catalogue through the same function. A loose file on disk
+/// wins over the copy here, so a translator still edits the file beside an
+/// app and sees the change.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompiledI18n {
+    /// Each locale's catalogue: its BCP-47 tag, and the Fluent source.
+    /// Ordered by tag, so the same catalogues write the same bytes.
+    pub catalogues: Vec<(String, String)>,
+    /// The chain a key missing from the active catalogue falls through, as
+    /// `[app] fallback_locale` names it. Empty when the app names none, which
+    /// takes the default chain.
+    pub fallback: Vec<String>,
+}
+
+impl CompiledI18n {
+    /// Every `<tag>.ftl` catalogue in `locale_dir`, falling through
+    /// `fallback`.
+    ///
+    /// A directory that does not exist holds no catalogues, which is an app
+    /// with no translations.
+    ///
+    /// # Errors
+    ///
+    /// A catalogue that exists cannot be read as text.
+    pub fn read_dir(locale_dir: &Path, fallback: Vec<String>) -> std::io::Result<Self> {
+        let mut catalogues = Vec::new();
+        let entries = match std::fs::read_dir(locale_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self {
+                    catalogues,
+                    fallback,
+                });
+            }
+            Err(error) => return Err(error),
+        };
+        for entry in entries {
+            let path = entry?.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("ftl") {
+                continue;
+            }
+            let Some(tag) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            catalogues.push((tag.to_string(), std::fs::read_to_string(&path)?));
+        }
+        catalogues.sort();
+        Ok(Self {
+            catalogues,
+            fallback,
+        })
+    }
+
+    /// True when the app carries no catalogue.
+    pub fn is_empty(&self) -> bool {
+        self.catalogues.is_empty()
+    }
 }
 
 /// One engine's whole program, as baked at build time.
@@ -185,6 +252,9 @@ pub struct CompiledApp {
     /// its use sites, so the table travels with it. Empty for an app that
     /// declares none.
     pub fragments: FragmentTable,
+    /// The app's translation catalogues and fallback chain. Empty for an app
+    /// with no `locale/` directory.
+    pub i18n: CompiledI18n,
 }
 
 /// Errors from (de)serializing or reading/writing an artifact.
@@ -377,7 +447,44 @@ mod tests {
                 keys: vec!["settings".to_string(), "index".to_string()],
             }),
             fragments: fragments(),
+            i18n: CompiledI18n {
+                catalogues: vec![
+                    ("de-DE".to_string(), "greeting = Hallo\n".to_string()),
+                    ("en-US".to_string(), "greeting = Hello\n".to_string()),
+                ],
+                fallback: vec!["fr-FR".to_string()],
+            },
         }
+    }
+
+    #[test]
+    fn catalogues_and_the_fallback_chain_round_trip() {
+        let app = sample();
+        let back = deserialize(&serialize(&app).expect("serialize")).expect("deserialize");
+        assert_eq!(back.i18n, app.i18n);
+    }
+
+    #[test]
+    fn a_locale_directory_reads_as_its_catalogues_by_tag() {
+        let dir = std::env::temp_dir().join(format!("lumen-ir-locale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the directory");
+        std::fs::write(dir.join("fr-FR.ftl"), "greeting = Bonjour\n").expect("write");
+        std::fs::write(dir.join("de-DE.ftl"), "greeting = Hallo\n").expect("write");
+        std::fs::write(dir.join("notes.txt"), "not a catalogue").expect("write");
+        let read = CompiledI18n::read_dir(&dir, vec!["de-DE".to_string()]).expect("it reads");
+        assert_eq!(
+            read.catalogues,
+            [
+                ("de-DE".to_string(), "greeting = Hallo\n".to_string()),
+                ("fr-FR".to_string(), "greeting = Bonjour\n".to_string()),
+            ]
+        );
+        assert_eq!(read.fallback, ["de-DE"]);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let none = CompiledI18n::read_dir(&dir, Vec::new()).expect("a missing directory is empty");
+        assert!(none.is_empty());
     }
 
     #[test]

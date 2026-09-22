@@ -19,7 +19,7 @@ use lumen_core::components::{
     DefaultLayoutDirection, LayoutDirection, LumenId, ResolvedDirection, TextContent,
 };
 use lumen_core::input::{FocusTracker, Focused};
-use lumen_ir::artifact::{self, CompiledApp};
+use lumen_ir::artifact::{self, CompiledApp, CompiledI18n};
 use lumen_ir::layout_ir::{Attributes, Element, LayoutIR, TooltipSpec};
 use lumen_runtime::{RunOptions, build_headless_app};
 use std::path::{Path, PathBuf};
@@ -117,6 +117,75 @@ fn marked_markup_spawns_translated() {
     assert!(texts.contains(&"Hallo!".to_string()), "{texts:?}");
     assert!(texts.contains(&"Goodbye!".to_string()), "{texts:?}");
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Build the app from an artifact carrying `i18n`.
+fn build_with_catalogues(dir: &Path, root: Element, i18n: CompiledI18n) -> lumen_core::app::App {
+    let bytes = artifact::serialize(&CompiledApp {
+        ir: LayoutIR {
+            root,
+            ..Default::default()
+        },
+        i18n,
+        ..Default::default()
+    })
+    .expect("serialize artifact");
+    let opts = RunOptions::new(dir).with_artifact_bytes(bytes);
+    let (app, _) = build_headless_app(opts).expect("app builds headless");
+    app
+}
+
+/// A compiled app reads in every language it was built with when nothing is
+/// beside it, a loose catalogue on disk wins over the copy the artifact
+/// carries, and so does a fallback `lumen.toml` names.
+#[test]
+fn a_compiled_catalogue_fills_in_where_no_loose_file_is() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let root = || Element {
+        tag: "root".to_string(),
+        attrs: Attributes::default(),
+        children: vec![
+            label(Some("Hello!"), Some("greet")),
+            label(Some("Goodbye!"), Some("bye")),
+        ],
+        ..Default::default()
+    };
+    let compiled = CompiledI18n {
+        catalogues: vec![
+            (
+                "de-DE".to_string(),
+                "greet = Hallo (compiled)\n".to_string(),
+            ),
+            ("fr-FR".to_string(), "bye = Au revoir\n".to_string()),
+        ],
+        fallback: vec!["fr-FR".to_string()],
+    };
+
+    // Nothing on disk: the artifact's catalogues and its chain answer.
+    let dir = app_dir("compiled-only");
+    std::fs::remove_dir_all(dir.join("locale")).unwrap();
+    std::fs::write(dir.join("lumen.toml"), "[app]\nlocale = \"de-DE\"\n").unwrap();
+    let mut app = build_with_catalogues(&dir, root(), compiled.clone());
+    let shown = texts(&mut app);
+    assert!(shown.contains(&"Hallo (compiled)".to_string()), "{shown:?}");
+    assert!(shown.contains(&"Au revoir".to_string()), "{shown:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // A loose German catalogue wins over the compiled one, and a fallback
+    // the app names wins over the compiled chain.
+    let dir = app_dir("loose-wins");
+    std::fs::write(
+        dir.join("lumen.toml"),
+        "[app]\nlocale = \"de-DE\"\nfallback_locale = \"en-US\"\n",
+    )
+    .unwrap();
+    write_catalogue(&dir, "de-DE", "greet = Hallo (loose)\n");
+    write_catalogue(&dir, "en-US", "bye = Goodbye (loose)\n");
+    let mut app = build_with_catalogues(&dir, root(), compiled);
+    let shown = texts(&mut app);
+    assert!(shown.contains(&"Hallo (loose)".to_string()), "{shown:?}");
+    assert!(shown.contains(&"Goodbye (loose)".to_string()), "{shown:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
