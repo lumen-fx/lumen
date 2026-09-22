@@ -19,17 +19,23 @@
 //! the same reason: an instantiation is what the browser builds from the same
 //! table, and a walk back out would have to reconstruct every attribute the
 //! spawner consumed.
+//!
+//! An instantiated body is markup as the author wrote it, so it is resolved
+//! through the app's catalogue here, in whichever locale the app is in when
+//! it is read: a row's card reads in the same language as the entities the
+//! run spawned for it.
 
 use lumen_core::app::App;
 use lumen_core::components::LumenTag;
 use lumen_core::prelude::{Children, Entity};
 use lumen_core::property_store::PropertyStore;
 use lumen_html::paths::walk_nodes;
+use lumen_i18n::SharedI18n;
 use lumen_ir::interpolate::{Scope, substitute_element};
 use lumen_ir::layout_ir::Element;
 use lumen_scene::fragments::{FragmentInstance, FragmentLibrary, instance_body};
 use lumen_scene::spawn::{DocumentRoot, ForMarker};
-use lumen_web::RowFills;
+use lumen_web::{RowFills, translate_element};
 
 /// What the walk carries down to a node's children.
 ///
@@ -52,7 +58,8 @@ struct Row<'a> {
     body: bool,
 }
 
-/// Read every `<for>` row's filled components off `app`.
+/// Read every `<for>` row's filled components off `app`, translated into the
+/// locale the app is in.
 ///
 /// Empty for an app with no component inside a `<for>`, which is most of
 /// them, and for one whose components have not been called yet: this reads a
@@ -70,6 +77,7 @@ pub fn row_fills(app: &mut App) -> RowFills {
         .cloned()
         .unwrap_or_default();
     let world = &app.world;
+    let catalogue = world.get_resource::<SharedI18n>();
     let empty = PropertyStore::default();
     let store = world.get_resource::<PropertyStore>().unwrap_or(&empty);
     walk_nodes(
@@ -115,12 +123,15 @@ pub fn row_fills(app: &mut App) -> RowFills {
             let mut body = false;
             if in_a_row
                 && let Some(instance) = world.get::<FragmentInstance>(visit.entity)
-                && let Some(built) = library.get(&instance.key).and_then(|fragment| {
+                && let Some(mut built) = library.get(&instance.key).and_then(|fragment| {
                     instance_body(fragment).ok().map(|body| {
                         substitute_element(body, &Scope::new(store).with_args(&instance.args))
                     })
                 })
             {
+                if let Some(catalogue) = catalogue {
+                    translate_element(&mut built, catalogue);
+                }
                 fills.with_body(visit.path.to_string(), built);
                 body = true;
             }

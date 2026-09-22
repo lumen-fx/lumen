@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use lumen_core::nav;
 use lumen_html::contract::Seed;
+use lumen_i18n::I18n;
 use lumen_ir::artifact::CompiledApp;
+use lumen_prerender::Language;
 use lumen_web::{PageSpec, SiteSpec, WebSpec};
 
 use crate::error::SsrError;
@@ -24,7 +26,9 @@ const ACCEPT_LANGUAGE: &str = "accept-language";
 /// A site holds one tree per language it answers in. The trees are handed in
 /// already translated, by [`Self::with_locale`], because which strings a tree
 /// carries is decided when it is built rather than when it is rendered;
-/// [`lumen_web::translate_ir`] is what builds one.
+/// [`lumen_web::translate_ir`] is what builds one. The catalogues themselves
+/// go in with [`Self::with_catalogues`], because the app reads them while it
+/// runs: a script's `t()`, and every row it builds.
 ///
 /// The documents a renderer produces point at the stylesheet, the artifact
 /// and the runtime by the paths in [`WebSpec`]. Those files come from
@@ -39,6 +43,10 @@ pub struct SsrSite {
     entry: String,
     keys: Vec<String>,
     seed: Seed,
+    /// Each locale's Fluent source, by tag, which a render's app reads.
+    catalogues: Vec<(String, String)>,
+    /// The chain a key missing from the active catalogue falls through.
+    fallback: Vec<String>,
 }
 
 impl SsrSite {
@@ -95,6 +103,8 @@ impl SsrSite {
             entry,
             keys,
             seed: Seed::new(),
+            catalogues: Vec::new(),
+            fallback: Vec::new(),
         })
     }
 
@@ -156,6 +166,52 @@ impl SsrSite {
     pub fn with_seed(mut self, seed: Seed) -> Self {
         self.seed = seed;
         self
+    }
+
+    /// Run every render with `catalogues`, a BCP-47 tag and that locale's
+    /// Fluent source each, falling through `fallback` on a miss.
+    ///
+    /// The app of a render starts in the locale of the tree the request
+    /// resolved to, so a script's `t()` answers in the language the document
+    /// is written in, and a row the app builds reads in it too. Empty
+    /// `fallback` takes the chain a desktop app gets when `[app]
+    /// fallback_locale` is unset. A site with no catalogues runs its renders
+    /// with no translator, and `t()` answers with the key.
+    ///
+    /// Every catalogue is parsed here, so one that would fail a render fails
+    /// the site instead.
+    pub fn with_catalogues(
+        mut self,
+        catalogues: Vec<(String, String)>,
+        fallback: Vec<String>,
+    ) -> Result<Self, SsrError> {
+        if !catalogues.is_empty() {
+            I18n::from_sources(&self.trees[0].locale.locale, &catalogues, &fallback)
+                .map_err(|error| SsrError::Catalogue(error.to_string()))?;
+        }
+        self.catalogues = catalogues;
+        self.fallback = fallback;
+        Ok(self)
+    }
+
+    /// The language a render in `tree` runs in.
+    pub(crate) fn language(&self, tree: usize) -> Language<'_> {
+        Language {
+            locale: &self.trees[tree].locale.locale,
+            catalogues: &self.catalogues,
+            fallback: &self.fallback,
+        }
+    }
+
+    /// Each locale's Fluent source, by tag, as [`Self::with_catalogues`] took
+    /// them.
+    pub fn catalogues(&self) -> &[(String, String)] {
+        &self.catalogues
+    }
+
+    /// The chain a key missing from the active catalogue falls through.
+    pub fn fallback(&self) -> &[String] {
+        &self.fallback
     }
 
     /// The default locale's tree, as the emitter sees it.

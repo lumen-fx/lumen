@@ -79,8 +79,12 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
     // Translations go in before anything reads a key: a script's `on_start`
     // may call `t()`, and an element's text is resolved as it spawns. A
     // catalogue that will not load is reported and the app starts anyway,
-    // reading in the language its source strings are written in.
-    if let Err(error) = assemble::install_i18n(&mut app.world, &page.locale, &loaded.catalogues) {
+    // reading in the language its source strings are written in. The
+    // manifest names no fallback chain, so a page falls through to the one a
+    // desktop app gets by default.
+    if let Err(error) =
+        assemble::install_i18n(&mut app.world, &page.locale, &loaded.catalogues, &[])
+    {
         web_sys::console::error_1(&JsValue::from_str(&format!("lumen: {error}")));
     }
     // The host goes in before the scene: `on_start` publishes the signals the

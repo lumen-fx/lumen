@@ -77,7 +77,7 @@ fn page_of(ir: LayoutIR) -> DomElement {
 /// catalogues the manifest named, and tick it once.
 fn boot(ir: LayoutIR, root: DomElement, catalogues: &[(String, String)]) -> App {
     let mut app = assemble::portable_app();
-    assemble::install_i18n(&mut app.world, "de-DE", catalogues).expect("a valid catalogue");
+    assemble::install_i18n(&mut app.world, "de-DE", catalogues, &[]).expect("a valid catalogue");
     let compiled = CompiledApp {
         ir,
         ..CompiledApp::default()

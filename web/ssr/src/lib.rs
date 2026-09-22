@@ -46,6 +46,12 @@
 //! language with `Content-Language`, and a site holding more than one tree
 //! also sends `Vary: Accept-Language`.
 //!
+//! The app a render runs reads the catalogues handed in with
+//! [`SsrSite::with_catalogues`], in the language of the tree the request
+//! resolved to: a script's `t()` answers in it, and a row the app builds reads
+//! in it. Every render installs its own translator before the app starts, so
+//! nothing of one visitor's language reaches the next visitor's page.
+//!
 //! # An address no page answers for
 //!
 //! A path that matches no page key, and is no document a build wrote, is

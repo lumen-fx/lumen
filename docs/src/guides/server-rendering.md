@@ -156,6 +156,25 @@ Every tree has to answer for every page the site has, because a request
 resolves to a page before it resolves to a language; a tree missing one is
 refused rather than answered from another language.
 
+The app a render runs reads the catalogues too: a script's `t()` answers in the
+language of the tree the request resolved to, and `locale()` names it. Hand the
+renderer the catalogue sources, and the fallback chain `[app] fallback_locale`
+names, with `with_catalogues`:
+
+```rust
+let site = site.with_catalogues(
+    vec![
+        ("en-US".to_string(), english_ftl),
+        ("de-DE".to_string(), german_ftl),
+    ],
+    Vec::new(), // the default chain, which ends in en-US
+)?;
+```
+
+A catalogue that will not load is refused here rather than on the first
+request. A site with no catalogues renders with no translator, and `t()`
+answers with its key.
+
 Which tree answers is decided in this order:
 
 1. `SsrRequest::with_locale("de-DE")`, for a proxy or a language cookie that
@@ -378,15 +397,12 @@ carries them. An artifact compiled some other way still holds the markers, and
 those reach the document as empty elements for the browser to fill.
 
 A component written inside a `<for>` is rendered per row from the state that
-request settled into, so the rows and their bodies come from one run. Its text
-is the text the artifact's fragment table holds: a render installs no
-translator, so a body written into a locale tree is not translated the way the
-markup around it is.
+request settled into, so the rows and their bodies come from one run, and a
+body reads in the language of the tree the request resolved to.
 
-A script's `t()` returns the key it was given, and its `format_*` calls return
-their argument: a render installs neither a translator nor the formatters.
-Markup `translatable` and `format` are unaffected, because both are resolved
-as the document is written.
+A script's `format_*` calls return their argument: a render installs no
+formatter. Markup `format` is unaffected, because it is resolved as the
+document is written.
 
 The rest of the limits are the emitter's, and a rendered page has the same ones
 [a built page](web.md) has.

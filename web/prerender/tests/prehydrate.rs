@@ -11,7 +11,7 @@ use lumen_html::contract::{Seed, SeedValue};
 use lumen_ir::artifact::{CompiledApp, CompiledScript};
 use lumen_ir::layout_ir::{BindKind, BindSpec, Element, LayoutIR};
 use lumen_portable::portable_app;
-use lumen_prerender::{Budget, Settled, page, settle};
+use lumen_prerender::{Budget, Language, Settled, page, settle};
 
 /// The program the build script compiled: an `on_start` that publishes a
 /// global and a list.
@@ -19,6 +19,17 @@ const SETTLES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/settles.cdlb"))
 
 /// A program that asks for data over the network.
 const FETCHES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fetches.cdlb"));
+
+/// A program that publishes what `t()` and `locale()` answer on start.
+const TRANSLATES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/translates.cdlb"));
+
+/// The catalogues the translating program reads.
+fn catalogues() -> Vec<(String, String)> {
+    vec![
+        ("en-US".to_string(), "greeting = Hello\n".to_string()),
+        ("de-DE".to_string(), "greeting = Hallo\n".to_string()),
+    ]
+}
 
 /// A program that writes onto nodes rather than onto signals.
 const NODES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nodes.cdlb"));
@@ -47,7 +58,13 @@ fn app_with(program: &[u8]) -> CompiledApp {
 #[test]
 fn what_the_app_publishes_is_what_the_page_is_written_with() {
     let _turn = in_turn();
-    let run = page(&app_with(SETTLES), "index", &Seed::new(), Budget::default());
+    let run = page(
+        &app_with(SETTLES),
+        "index",
+        Language::default(),
+        &Seed::new(),
+        Budget::default(),
+    );
 
     assert_eq!(
         run.state.signals.global("greeting"),
@@ -81,6 +98,7 @@ fn the_page_is_written_where_the_run_was_asked_for() {
     let run = page(
         &app_with(SETTLES),
         "settings",
+        Language::default(),
         &Seed::new(),
         Budget::default(),
     );
@@ -99,7 +117,13 @@ fn a_declared_value_starts_the_run_and_the_app_writes_over_it() {
         "subtitle".to_string(),
         SeedValue::Str("declared".to_string()),
     );
-    let run = page(&app_with(SETTLES), "index", &seed, Budget::default());
+    let run = page(
+        &app_with(SETTLES),
+        "index",
+        Language::default(),
+        &seed,
+        Budget::default(),
+    );
 
     assert_eq!(run.state.signals.global("subtitle"), Some("declared"));
     assert_eq!(
@@ -142,7 +166,7 @@ fn a_declared_value_beats_the_fallback_the_markup_shows_beside_a_binding() {
         SeedValue::Str("Ada Lovelace".to_string()),
     );
 
-    let run = page(&app, "index", &seed, Budget::default());
+    let run = page(&app, "index", Language::default(), &seed, Budget::default());
 
     assert_eq!(run.state.signals.global("name"), Some("Ada Lovelace"));
 }
@@ -150,7 +174,13 @@ fn a_declared_value_beats_the_fallback_the_markup_shows_beside_a_binding() {
 #[test]
 fn an_address_the_build_would_not_ask_for_is_reported() {
     let _turn = in_turn();
-    let run = page(&app_with(FETCHES), "index", &Seed::new(), Budget::default());
+    let run = page(
+        &app_with(FETCHES),
+        "index",
+        Language::default(),
+        &Seed::new(),
+        Budget::default(),
+    );
 
     assert_eq!(run.denied, vec!["https://example.invalid/items.json"]);
     // The refusal reached the app on the tick after the request, so it is
@@ -162,8 +192,20 @@ fn an_address_the_build_would_not_ask_for_is_reported() {
 fn two_runs_of_one_page_agree() {
     let _turn = in_turn();
     let compiled = app_with(SETTLES);
-    let first = page(&compiled, "index", &Seed::new(), Budget::default());
-    let second = page(&compiled, "index", &Seed::new(), Budget::default());
+    let first = page(
+        &compiled,
+        "index",
+        Language::default(),
+        &Seed::new(),
+        Budget::default(),
+    );
+    let second = page(
+        &compiled,
+        "index",
+        Language::default(),
+        &Seed::new(),
+        Budget::default(),
+    );
     assert_eq!(first.state, second.state);
     assert_eq!(
         first
@@ -248,7 +290,13 @@ fn a_run_is_bounded_in_time_as_well_as_in_ticks() {
 fn a_run_belongs_to_no_thread() {
     let _turn = in_turn();
     std::thread::spawn(|| {
-        let run = page(&app_with(SETTLES), "index", &Seed::new(), Budget::default());
+        let run = page(
+            &app_with(SETTLES),
+            "index",
+            Language::default(),
+            &Seed::new(),
+            Budget::default(),
+        );
         assert_eq!(run.state.signals.global("count"), Some("2"));
     })
     .join()
@@ -266,7 +314,13 @@ fn an_engine_this_build_cannot_run_is_named() {
         }],
         ..CompiledApp::default()
     };
-    let run = page(&compiled, "index", &Seed::new(), Budget::default());
+    let run = page(
+        &compiled,
+        "index",
+        Language::default(),
+        &Seed::new(),
+        Budget::default(),
+    );
     assert_eq!(run.unsupported_engines, vec!["elvish"]);
 }
 
@@ -294,11 +348,110 @@ fn what_the_app_writes_onto_a_node_is_read_out_of_the_scene() {
         ..app_with(NODES)
     };
 
-    let run = page(&app, "index", &Seed::new(), Budget::default());
+    let run = page(
+        &app,
+        "index",
+        Language::default(),
+        &Seed::new(),
+        Budget::default(),
+    );
 
     assert_eq!(run.state.nodes["0"].classes, ["theme-dark"]);
     let tile = &run.state.nodes["0.0"];
     assert_eq!(tile.tag, "label");
     assert_eq!(tile.classes, ["lit"]);
     assert_eq!(tile.style, [("bg".to_string(), "#ff0000".to_string())]);
+}
+
+/// A script's `t()` answers in the locale the run is in, from `on_start` on,
+/// which is the text a page in that language is written with.
+#[test]
+fn a_run_in_a_locale_translates_what_its_scripts_write() {
+    let _turn = in_turn();
+    let catalogues = catalogues();
+    let german = Language {
+        locale: "de-DE",
+        catalogues: &catalogues,
+        fallback: &[],
+    };
+    let run = page(
+        &app_with(TRANSLATES),
+        "index",
+        german,
+        &Seed::new(),
+        Budget::default(),
+    );
+    assert_eq!(run.language_error, None);
+    assert_eq!(run.state.signals.global("greeting"), Some("Hallo"));
+    assert_eq!(run.state.signals.global("running_in"), Some("de-DE"));
+}
+
+/// The translator a script reads belongs to the process, so a run with no
+/// catalogue after one with a German catalogue must not answer in German.
+#[test]
+fn a_run_without_catalogues_does_not_read_the_last_runs() {
+    let _turn = in_turn();
+    let catalogues = catalogues();
+    let german = Language {
+        locale: "de-DE",
+        catalogues: &catalogues,
+        fallback: &[],
+    };
+    let app = app_with(TRANSLATES);
+    let first = page(&app, "index", german, &Seed::new(), Budget::default());
+    assert_eq!(first.state.signals.global("greeting"), Some("Hallo"));
+
+    let second = page(
+        &app,
+        "index",
+        Language::untranslated("en-US"),
+        &Seed::new(),
+        Budget::default(),
+    );
+    assert_eq!(second.state.signals.global("greeting"), Some("greeting"));
+    assert_eq!(second.state.signals.global("running_in"), Some("en-US"));
+}
+
+/// A key the active locale has no catalogue for falls through the chain the
+/// run was given, the way `[app] fallback_locale` makes a desktop run fall
+/// through it.
+#[test]
+fn a_run_falls_through_the_chain_it_was_given() {
+    let _turn = in_turn();
+    let catalogues = catalogues();
+    let fallback = ["de-DE".to_string()];
+    let french = Language {
+        locale: "fr-FR",
+        catalogues: &catalogues,
+        fallback: &fallback,
+    };
+    let run = page(
+        &app_with(TRANSLATES),
+        "index",
+        french,
+        &Seed::new(),
+        Budget::default(),
+    );
+    assert_eq!(run.state.signals.global("greeting"), Some("Hallo"));
+}
+
+/// A catalogue that will not load is said, and the run goes ahead in the
+/// language the source strings are in.
+#[test]
+fn a_catalogue_that_will_not_load_is_reported_and_the_run_goes_ahead() {
+    let _turn = in_turn();
+    let broken = vec![("de-DE".to_string(), "= no key\n".to_string())];
+    let run = page(
+        &app_with(TRANSLATES),
+        "index",
+        Language {
+            locale: "de-DE",
+            catalogues: &broken,
+            fallback: &[],
+        },
+        &Seed::new(),
+        Budget::default(),
+    );
+    assert!(run.language_error.is_some());
+    assert_eq!(run.state.signals.global("greeting"), Some("greeting"));
 }

@@ -20,6 +20,7 @@ const FIXTURES: &[&str] = &[
     "fetches",
     "components",
     "writes_nodes",
+    "translates",
 ];
 
 fn main() {

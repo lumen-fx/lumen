@@ -28,6 +28,9 @@ const FETCHES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fetches.cdlb"))
 /// A program holding the component the tree below leaves a marker for.
 const COMPONENTS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/components.cdlb"));
 
+/// A program that publishes what `t()` answers on start.
+const TRANSLATES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/translates.cdlb"));
+
 /// The name the renderer's thread carries, which is where every app is built
 /// and dropped.
 const WORKER: &str = "lumen-ssr";
@@ -807,4 +810,94 @@ fn a_site_in_one_language_says_nothing_about_varying() {
     assert!(page.body.contains("Hello"), "{}", page.body);
     assert_eq!(header(&page, "Content-Language"), Some("en-US"));
     assert_eq!(header(&page, "Vary"), None);
+}
+
+/// A site that says which language its script's `t()` answered in, holding
+/// an English and a German tree and both catalogues.
+fn translating() -> Arc<SsrSite> {
+    let app = CompiledApp {
+        ir: LayoutIR {
+            root: element(
+                "root",
+                Attributes::default(),
+                vec![
+                    gate("greeting", "Hello", "t answered in English"),
+                    gate("greeting", "Hallo", "t answered in German"),
+                    gate("greeting", "greeting", "t answered with the key"),
+                ],
+            ),
+            ..LayoutIR::default()
+        },
+        scripts: vec![CompiledScript {
+            engine: "candela".to_string(),
+            source: String::new(),
+            bytecode: Some(TRANSLATES.to_vec()),
+        }],
+        ..CompiledApp::default()
+    };
+    let english = SsrSite::new(app, WebSpec::default()).expect("the entry is the page");
+    let german = SiteSpec {
+        locale: LocaleSpec {
+            default_locale: "en-US".to_string(),
+            ..LocaleSpec::new("de-DE")
+        },
+        ..english.spec().clone()
+    };
+    let site = english
+        .with_locale(german)
+        .expect("it has every page")
+        .with_catalogues(
+            vec![
+                ("en-US".to_string(), "greeting = Hello\n".to_string()),
+                ("de-DE".to_string(), "greeting = Hallo\n".to_string()),
+            ],
+            Vec::new(),
+        )
+        .expect("both catalogues parse");
+    Arc::new(site)
+}
+
+/// A script's `t()` answers in the language of the tree the request
+/// resolved to, and the translator one render installs is gone by the next:
+/// an English visitor after a German one reads English.
+#[test]
+fn a_scripts_translation_follows_each_request_and_leaks_into_none_after_it() {
+    let _turn = in_turn();
+    let renderer =
+        Renderer::start(translating(), options(Arc::new(Silent))).expect("nothing running");
+    let expected = [
+        ("/", "t answered in English"),
+        ("/de-DE/", "t answered in German"),
+        ("/", "t answered in English"),
+    ];
+    for (path, says) in expected {
+        let response = renderer
+            .render(SsrRequest::get(path))
+            .expect("the document is written");
+        assert!(response.body.contains(says), "{path}: {}", response.body);
+        for other in [
+            "t answered in English",
+            "t answered in German",
+            "t answered with the key",
+        ] {
+            if other != says {
+                assert!(!response.body.contains(other), "{path}: {}", response.body);
+            }
+        }
+    }
+}
+
+/// A catalogue that would fail every render fails the site instead, before
+/// any visitor asks.
+#[test]
+fn a_catalogue_that_will_not_load_is_refused_up_front() {
+    let site = SsrSite::new(CompiledApp::default(), WebSpec::default())
+        .expect("the entry stands in for the page set");
+    let error = site
+        .with_catalogues(
+            vec![("de-DE".to_string(), "= no key\n".to_string())],
+            Vec::new(),
+        )
+        .expect_err("the catalogue is not Fluent");
+    assert!(matches!(error, SsrError::Catalogue(_)), "{error}");
 }

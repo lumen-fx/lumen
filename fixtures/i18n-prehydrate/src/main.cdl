@@ -1,0 +1,9 @@
+// Writes the status line through the app's catalogue while it starts, so the
+// text a run settles into says which language it ran in.
+import "lumen.cdl";
+
+fn on_start() {
+    lumen::signal_set("status", lumen::t("status-ready"));
+}
+
+fn main() {}

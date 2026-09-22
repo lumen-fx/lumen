@@ -26,6 +26,8 @@ lumen-html = { workspace = true }
 # Booting an app and settling it is one implementation, shared with the
 # build-time prerenderer.
 lumen-prerender = { workspace = true }
+# The catalogues a render's app reads, checked once when the site is built.
+lumen-i18n = { workspace = true }
 # The emitter the document comes out of.
 lumen-web = { workspace = true }
 # The command stream a script answers a request through, and the HTTP seam the

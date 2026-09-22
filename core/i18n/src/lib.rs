@@ -145,6 +145,37 @@ impl I18n {
         }
     }
 
+    /// Build a registry from catalogue sources already in hand: `locale`
+    /// active, each `(tag, Fluent source)` pair loaded, and a miss falling
+    /// through `fallback`.
+    ///
+    /// For every place that has the catalogues as text rather than as a
+    /// `locale/` directory: a page that fetched them, a run that was handed
+    /// them, an emitter writing a tree in one language. Empty `fallback`
+    /// takes the chain [`I18nPlugin`] starts with, which is the one a
+    /// desktop app gets when `[app] fallback_locale` is unset.
+    pub fn from_sources(
+        locale: &str,
+        catalogues: &[(String, String)],
+        fallback: &[String],
+    ) -> Result<Self, I18nError> {
+        let current: LanguageIdentifier = Lang::try_from(locale)?.into();
+        let fallback: Vec<LanguageIdentifier> = if fallback.is_empty() {
+            I18nPlugin::default().fallback_chain
+        } else {
+            fallback
+                .iter()
+                .map(|tag| Lang::try_from(tag.as_str()).map(LanguageIdentifier::from))
+                .collect::<Result<_, _>>()?
+        };
+        let mut i18n = Self::new(current, fallback);
+        for (tag, source) in catalogues {
+            let tag: LanguageIdentifier = Lang::try_from(tag.as_str())?.into();
+            i18n.load_ftl(tag, source)?;
+        }
+        Ok(i18n)
+    }
+
     /// Parse + register `ftl_source` for `lang`. Idempotent: a second
     /// load for the same `lang` replaces the bundle (so hot-reload of a
     /// `.ftl` file just calls this again with the new bytes).
@@ -544,6 +575,28 @@ mod tests {
 
     fn lang(s: &str) -> LanguageIdentifier {
         s.parse().expect("test lang parses")
+    }
+
+    #[test]
+    fn a_registry_from_sources_falls_through_the_chain_it_was_given() {
+        let catalogues = vec![
+            ("en-US".to_string(), "hello = Hello!\n".to_string()),
+            (
+                "de-DE".to_string(),
+                "hello = Hallo!\nbye = Tschuess\n".to_string(),
+            ),
+        ];
+        let named = SharedI18n::new(
+            I18n::from_sources("fr-FR", &catalogues, &["de-DE".to_string()]).unwrap(),
+        );
+        assert_eq!(named.t("hello"), "Hallo!");
+        assert_eq!(named.read().fallback_chain, vec![lang("de-DE")]);
+        // No chain named is the one a desktop app starts with.
+        let default = SharedI18n::new(I18n::from_sources("fr-FR", &catalogues, &[]).unwrap());
+        assert_eq!(default.t("hello"), "Hello!");
+        assert_eq!(default.t("bye"), "bye");
+        assert!(I18n::from_sources("not a tag", &catalogues, &[]).is_err());
+        assert!(I18n::from_sources("de-DE", &[("de-DE".into(), "= x".into())], &[]).is_err());
     }
 
     #[test]
