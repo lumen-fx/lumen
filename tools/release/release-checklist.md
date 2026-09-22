@@ -162,9 +162,11 @@ checklist.
    triggered by `release: published` never starts here.
 
    Every one of them keeps a manual trigger in the Actions tab, so a leg that
-   failed is re-run on its own rather than by cutting another release, and
-   every one skips the parts it has no credential for. Each of those files
-   lists the credentials it wants at the top.
+   failed is re-run on its own rather than by cutting another release, and a
+   leg missing its credential verifies instead of uploading. The crates.io leg
+   is the exception while the workspace blocks the publish: it fails before it
+   reaches the verify, in every mode. Each of those files lists the credentials
+   it wants at the top.
 
    `publish.yml` and `publish-extensions.yml` both ask their registry what it
    already holds and upload only what is missing, so re-running either one is
@@ -377,9 +379,15 @@ already on the registry.
 
 The setup the workflow needs (a `CRATES_IO_TOKEN` secret, a PyPI trusted
 publisher, a `PYPI_PUBLISH_ENABLED` variable) is listed at the top of
-`.github/workflows/publish.yml`. A missing credential is not a failure: the
-crates.io leg verifies that every crate packages and uploads nothing, and the
-PyPI leg builds and checks the artifacts and uploads nothing.
+`.github/workflows/publish.yml`. Without its credential the PyPI leg builds and
+checks the artifacts and uploads nothing, which is not a failure.
+
+The crates.io leg is red either way today. Its plan step runs before the verify
+and before the publish, in every mode, and it refuses while the crates the
+published set depends on are unpublishable; the steps after it are skipped. So
+running the workflow with `dry_run: true` to check that every crate packages
+tells you nothing yet. Run `tools/release/publish-crates.py --dry-run` on a
+checkout instead. Clearing the block is what lets the workflow verify anything.
 
 The PyPI leg needs one thing settled before `PYPI_PUBLISH_ENABLED` is turned
 on. A trusted publisher is registered against a workflow filename, and PyPI
