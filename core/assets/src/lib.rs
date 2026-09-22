@@ -1841,16 +1841,21 @@ mod tests {
             .id();
 
         fn swap_the_page(mut commands: Commands, images: Query<Entity, With<ImageSource>>) {
-            for e in &images {
-                commands.entity(e).despawn();
-            }
-            // Mounting the incoming page as a command of its own, after the
-            // despawn has been applied, is what hands its element the index
-            // the outgoing one just freed. A `commands.spawn` here would
-            // reserve an index up front instead, before the despawn frees
-            // anything, and miss the collision this test is about.
-            commands.queue(|world: &mut World| {
-                world.spawn(IncomingPage);
+            let outgoing: Vec<Entity> = images.iter().collect();
+            // The allocator holds freed indices back in a batch and hands
+            // them out once the batch fills, so whether the incoming page
+            // lands on a freed index depends on how many despawns preceded
+            // it. Reusing the index by hand makes the collision this test is
+            // about happen on every run instead of on a busy app only.
+            commands.queue(move |world: &mut World| {
+                for e in outgoing {
+                    let freed = world
+                        .despawn_no_free(e)
+                        .expect("the outgoing element is still spawned");
+                    world
+                        .spawn_at(freed, IncomingPage)
+                        .expect("the freed index is valid and not spawned");
+                }
             });
         }
 
