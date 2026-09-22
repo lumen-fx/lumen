@@ -16,12 +16,12 @@ name: publish
 # caller is release.yml, which fires on `v*` tags while the nightly publishes
 # onto a tag named `nightly`.
 #
-# Owner setup, all of it optional and each leg checked separately, so this
-# workflow is safe to run before any of it exists:
+# Owner setup. The two registry credentials are checked separately, and a run
+# without them verifies instead of uploading:
 #
 #   CRATES_IO_TOKEN         repository secret. A crates.io API token with
 #                           publish-new and publish-update scope. Without it
-#                           the crates.io job skips.
+#                           the crates.io job verifies and uploads nothing.
 #   PYPI_PUBLISH_ENABLED    repository variable, set to "true" once the PyPI
 #                           trusted publisher below is registered. Without it
 #                           the PyPI job builds and checks the artifacts and
@@ -42,8 +42,8 @@ name: publish
 #                           `core/script/candela/Cargo.toml` pointing at it
 #                           with `package = "candela-lang"` and a `version`.
 #                           crates.io takes no crate with a git dependency, so
-#                           until that exists the crates.io job reports it and
-#                           skips.
+#                           until that exists the crates.io job fails with that
+#                           reason on the run summary.
 #
 # Both registry jobs are ordinary re-runnable steps: they skip a version that
 # is already published, so a leg that failed halfway is fixed by running the
@@ -54,11 +54,11 @@ name: publish
 # it. Publishing them in separate jobs would only mean computing the same order
 # twice and racing on it.
 #
-# Every other crate in the workspace is `publish = false`, because the engine
-# reaches a `cargo install lumenc` through public/lumenc/build.rs rather than
-# through the registry. `lumenc` still names those crates as dependencies, so
-# the script refuses to start and this job fails until that is unwound; see the
-# registries section of tools/release/release-checklist.md.
+# Every other crate in the workspace is `publish = false` today, and `lumenc`
+# names many of them as dependencies, so the script refuses to start and this
+# job fails until that is unwound. A release that publishes nothing to
+# crates.io says so on the run summary rather than reporting a green publish;
+# see the registries section of tools/release/release-checklist.md.
 
 on:
   # A release publishes, so the call defaults to uploading. A person reaching
@@ -264,37 +264,44 @@ jobs:
           key: publish
 
       # The script exits 2 when something makes the run pointless to start: a
-      # crate name that belongs to another project, a git dependency with no
-      # published release, a version already out. That is a state to report and
-      # skip on, not a failing build, so this workflow can sit on main while
-      # those get sorted out.
+      # crate the published set depends on that is `publish = false`, a crate
+      # name that belongs to another project, a git dependency with no
+      # published release. A green job that uploaded nothing reads as a
+      # successful publish, so the leg fails here instead, with the reason on
+      # the run summary where a release is watched.
       - name: Plan the publish order
         id: plan
         run: |
-          set +e
-          python3 tools/release/publish-crates.py --plan
-          status=$?
-          set -e
-          if [ "$status" = "2" ]; then
-            echo "runnable=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::crates.io publishing is blocked, see the plan above"
-            exit 0
+          set -uo pipefail
+          # Outside the checkout: an untracked file in a package directory is a
+          # dirty working tree to `cargo publish`.
+          log="${RUNNER_TEMP:-/tmp}/crates-plan.log"
+          status=0
+          python3 -u tools/release/publish-crates.py --plan 2>&1 | tee "$log" || status=$?
+          if [ "$status" != "0" ]; then
+            {
+              echo "## crates.io: nothing was published"
+              echo
+              echo "\`publish-crates.py --plan\` exited $status, so this run"
+              echo "uploaded no crates. The end of its output:"
+              echo
+              echo '```'
+              tail -n 40 "$log"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "runnable=true" >> "$GITHUB_OUTPUT"
           exit "$status"
 
       - name: Verify every crate packages
         if: >-
-          steps.plan.outputs.runnable == 'true' &&
-          (needs.preflight.outputs.dry_run == 'true' ||
-           needs.preflight.outputs.crates_io == 'false')
-        run: python3 tools/release/publish-crates.py --dry-run
+          needs.preflight.outputs.dry_run == 'true' ||
+          needs.preflight.outputs.crates_io == 'false'
+        run: python3 -u tools/release/publish-crates.py --dry-run
 
       - name: Publish
         if: >-
-          steps.plan.outputs.runnable == 'true' &&
           needs.preflight.outputs.dry_run == 'false' &&
           needs.preflight.outputs.crates_io == 'true'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: python3 tools/release/publish-crates.py --execute
+        run: python3 -u tools/release/publish-crates.py --execute

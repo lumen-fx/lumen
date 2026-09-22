@@ -341,13 +341,18 @@ That table is the whole list. Every other crate in the workspace is
 the launcher beside the installed binary, so a `cargo install lumenc` gets the
 engine without any of its pieces being registry packages.
 
-Neither crates.io package can go out yet. `lumenc` names eleven `lumen-*`
-crates as dependencies and `lumenui` names the engine, and cargo will not
-publish a crate whose dependency is not on the registry. Closing that means a
-published `lumenc` that carries no engine dependencies; until then
+Neither crates.io package can go out yet. `lumenc` names many `lumen-*` crates
+as dependencies and `lumenui` names the engine, and cargo will not publish a
+crate whose dependency is not on the registry. Until that is unwound,
 `tools/release/publish-crates.py --plan` refuses to start and lists exactly
 which crates are in the way, and `cargo publish -p lumenc --dry-run` names the
 first of them.
+
+The crates.io job fails when the plan refuses, with the list on the run
+summary. A release whose crates.io leg is red uploaded nothing to crates.io;
+the rest of that release still shipped. Once the block is cleared, re-run the
+workflow from the Actions tab and it picks up from whatever is already on the
+registry.
 
 The script computes publish order from `cargo metadata`, reports what state
 each crate is in, and publishes them one at a time:
@@ -364,20 +369,25 @@ crates, then a slower drip), and the script waits out those intervals rather
 than failing on them, which is why a first publish of the whole set takes
 hours while a later release takes minutes.
 
-Two things it refuses to start on, and both are worth knowing before a
-release:
+Three things it refuses to start on, all worth knowing before a release:
 
+- A crate the published set depends on that is `publish = false`. The
+  workspace is in that state today; the paragraphs above describe it.
 - A crate name on crates.io that belongs to another project. The script
   compares the `repository` field of an existing crate against this one.
 - A dependency taken from git with no version. crates.io accepts no such
   dependency, so the crate carrying it, and everything above it, cannot be
   published. `lumen-script-candela` is in that state until candela publishes.
 
+Each of those exits 2 and takes the crates.io job red with it. A publish that
+starts and then fails partway exits 1, and the crates before the failure are
+already on the registry.
+
 The setup the workflow needs (a `CRATES_IO_TOKEN` secret, a PyPI trusted
 publisher, a `PYPI_PUBLISH_ENABLED` variable) is listed at the top of
-`.github/workflows/publish.yml`. Each leg checks its own preconditions and
-skips when one is missing, so running the workflow before the setup exists
-reports what is missing instead of failing.
+`.github/workflows/publish.yml`. A missing credential is not a failure: the
+crates.io leg verifies that every crate packages and uploads nothing, and the
+PyPI leg builds and checks the artifacts and uploads nothing.
 
 The PyPI leg needs one thing settled before `PYPI_PUBLISH_ENABLED` is turned
 on. A trusted publisher is registered against a workflow filename, and PyPI
