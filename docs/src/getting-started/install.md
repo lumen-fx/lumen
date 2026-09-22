@@ -47,7 +47,9 @@ in `lumen.toml`, which lists the modules and their config keys;
 The installer downloads them with the toolchain, from the module archive
 published with the same release, and unpacks them into the same tree, so the
 libraries sit in `~/.lumen/bin` beside the engine, which is where the runtime
-looks for them. `--no-modules` installs the toolchain without them.
+looks for them. `--no-modules` installs the toolchain without them. The
+setup-lumen action installs them the same way on Linux and macOS runners; see
+[Continuous integration](#continuous-integration).
 
 An app whose modules are missing prints one line per module,
 `lumen-runtime: MODULE LOAD FAILED: <name>`, with the paths it probed under
@@ -274,8 +276,21 @@ on `PATH`. Pass `version` to hold a workflow on a release:
       version: "0.1.0"
 ```
 
-The unpacked toolchain is kept in the workflow cache, keyed on the release and
-the runner's platform, so later runs skip the download.
+On a Linux or macOS runner it also installs the
+[runtime modules](#runtime-modules), so a job can run an app that declares them
+under `[dependencies]`. A Windows runner gets none, for the same reason a
+Windows install does. Pass `modules: false` to leave them out of a job that
+only checks or formats an app:
+
+```yaml
+  - uses: lumen-fx/lumen/tools/setup-lumen@main
+    with:
+      modules: false
+```
+
+The unpacked toolchain is kept in the workflow cache, keyed on the release, the
+runner's platform, and whether the modules came with it, so later runs skip the
+download.
 
 Two things behave differently in a workflow than on a workstation. The update
 check never runs: a `CI` environment variable turns it off, and an unpacked

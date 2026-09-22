@@ -27,10 +27,19 @@ inputs:
       v0.0.3, or "latest" for the current release.
     required: false
     default: latest
+  modules:
+    description: >-
+      Install the bundled runtime modules beside the engine, so an app
+      declaring them under [dependencies] finds them. Set it to "false" to
+      install the toolchain alone. Linux and macOS only; Windows releases
+      publish no modules archive and compile the same capabilities in.
+    required: false
+    default: "true"
   cache:
     description: >-
       Keep the unpacked toolchain in the workflow cache, keyed on the resolved
-      release and the runner's target, so later runs skip the download.
+      release, the runner's target, and whether the modules came with it, so
+      later runs skip the download.
     required: false
     default: "true"
 
@@ -61,13 +70,16 @@ runs:
       env:
         LUMEN_VERSION: ${{ inputs.version }}
 
+    # The modules land in the directory the cache holds, so a run that skipped
+    # them and a run that wants them cannot share a key: the second would get
+    # a hit over a tree with no modules in it and install nothing.
     - name: Restore the cached toolchain
       id: restore
       if: inputs.cache == 'true'
       uses: actions/cache/restore@v4
       with:
         path: ${{ steps.resolve.outputs.install-dir }}
-        key: setup-lumen-${{ steps.resolve.outputs.tag }}-${{ steps.resolve.outputs.target }}
+        key: setup-lumen-${{ steps.resolve.outputs.tag }}-${{ steps.resolve.outputs.target }}-${{ inputs.modules == 'false' && 'nomodules' || 'modules' }}
 
     # A restored cache is trusted only as far as the file it is there for. A
     # run cancelled mid-save, or a key whose contents were pruned, comes back
@@ -91,15 +103,24 @@ runs:
       env:
         INSTALL_DIR: ${{ steps.resolve.outputs.install-dir }}
 
+    # Only "false" turns the modules off. A misspelled value installs them,
+    # because an app that declares a module and cannot find it fails at the
+    # call rather than at the install, a long way from the typo.
     - name: Download and verify the toolchain
       if: steps.plan.outputs.needed == 'true'
       shell: bash
       run: |
-        bash "$GITHUB_ACTION_PATH/setup-lumen.sh" install \
+        set -euo pipefail
+        skip=""
+        if [ "$LUMEN_MODULES" = false ]; then
+          skip=--no-modules
+        fi
+        bash "$GITHUB_ACTION_PATH/setup-lumen.sh" install ${skip:+"$skip"} \
           "$LUMEN_TAG" "$LUMEN_TARGET" "$INSTALL_DIR"
       env:
         LUMEN_TAG: ${{ steps.resolve.outputs.tag }}
         LUMEN_TARGET: ${{ steps.resolve.outputs.target }}
+        LUMEN_MODULES: ${{ inputs.modules }}
         INSTALL_DIR: ${{ steps.resolve.outputs.install-dir }}
 
     - name: Cache the toolchain
@@ -107,7 +128,7 @@ runs:
       uses: actions/cache/save@v4
       with:
         path: ${{ steps.resolve.outputs.install-dir }}
-        key: setup-lumen-${{ steps.resolve.outputs.tag }}-${{ steps.resolve.outputs.target }}
+        key: setup-lumen-${{ steps.resolve.outputs.tag }}-${{ steps.resolve.outputs.target }}-${{ inputs.modules == 'false' && 'nomodules' || 'modules' }}
 
     # GITHUB_PATH is read by the runner, not by bash, so on Windows it wants a
     # Windows path. Every later step in the job gets the directory on PATH;

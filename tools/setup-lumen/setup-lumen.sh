@@ -6,9 +6,11 @@
 #   resolve [VERSION]        Work out the release tag, this machine's target,
 #                            and where the toolchain goes. VERSION is a
 #                            release number, a tag, or "latest" (the default).
-#   install TAG TARGET DIR   Download lumen-<TARGET> from release TAG, check
-#                            it against that release's sha256sums.txt, and
-#                            unpack it into DIR.
+#   install [--no-modules] TAG TARGET DIR
+#                            Download lumen-<TARGET> and the bundled runtime
+#                            modules from release TAG, check each against that
+#                            release's sha256sums.txt, and unpack them into
+#                            DIR. --no-modules installs the toolchain alone.
 #
 # resolve prints "key=value" lines on stdout and appends them to $GITHUB_OUTPUT
 # when that is set, so the same script runs in a workflow and in a plain shell.
@@ -25,6 +27,9 @@
 # Assets come out of .github/workflows/build-toolchain.yml:
 #
 #   lumen-<target>.tar.gz     linux and macos, x86_64 and aarch64
+#   lumen-modules-<target>.tar.gz
+#                             the bundled runtime modules for those same four
+#                             Unix targets
 #   lumen-windows-<arch>.zip  the portable Windows archive
 #   sha256sums.txt            one "<hex>  <filename>" line per asset above
 #
@@ -35,6 +40,15 @@
 # Every archive holds bin/, with lumenc, the liblumen shared library, and the
 # lumen-launcher app stub together in it. lumenc loads liblumen from next to
 # its own executable, so bin/ moves as one directory or not at all.
+#
+# The modules archive has the same bin/ layout, so unpacking it over the same
+# tree drops each module beside the engine, which is where the runtime's
+# `bundled = true` probe looks. A job that installs without them runs an app
+# declaring [dependencies] with every call into those namespaces failing. This
+# is the shape install.sh installs in, and --no-modules is the same opt-out it
+# offers. A release whose sha256sums.txt has no line for the asset installs
+# the toolchain alone, which is what every Windows target does: the Windows
+# legs publish no modules archive and compile the same capabilities in.
 
 set -euo pipefail
 
@@ -175,6 +189,37 @@ curl_retry() {
   done
 }
 
+sums_sha() {
+  # sums_sha SUMS NAME -> the sha256 SUMS records for NAME, empty if it has none
+  #
+  # sha256sums.txt is sha256sum's own output: "<hex>  <name>", with a "*"
+  # before the name when it was hashed in binary mode. An asset with no line
+  # is one the release did not publish, which is a question this answers
+  # rather than an error.
+  awk -v want="$2" '
+    NF >= 2 {
+      name = $2
+      sub(/^\*/, "", name)
+      if (name == want) { print $1; exit }
+    }' "$1"
+}
+
+fetch_verified() {
+  # fetch_verified TAG NAME WANT DEST
+  local url got
+  url="$(asset_url "$1" "$2")"
+  printf 'setup-lumen: downloading %s\n' "$url"
+  curl_retry -fsSL -o "$4" "$url" || fail "could not download $url"
+  got="$(sha256_of "$4")"
+  if [ "$got" != "$3" ]; then
+    fail "checksum mismatch for $2
+  expected $3
+  got      $got
+Nothing was installed. The download was corrupted, or the asset does not match the checksum published with release $1."
+  fi
+  printf 'setup-lumen: checksum ok (%s)\n' "$3"
+}
+
 # --- release lookup -----------------------------------------------------------
 
 # A release this script can install is one that published sha256sums.txt.
@@ -261,32 +306,43 @@ cmd_resolve() {
 # --- install ------------------------------------------------------------------
 
 cmd_install() {
-  local tag="${1:?usage: setup-lumen.sh install TAG TARGET DIR}"
-  local target="${2:?usage: setup-lumen.sh install TAG TARGET DIR}"
-  local dest="${3:?usage: setup-lumen.sh install TAG TARGET DIR}"
-  local asset sums_url asset_url_full want got tmp root inner inner_count
+  local usage='usage: setup-lumen.sh install [--no-modules] TAG TARGET DIR'
+  local install_modules=1
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --no-modules)
+        install_modules=0
+        shift
+        ;;
+      --)
+        shift
+        break
+        ;;
+      -*) fail "unknown option: $1 ($usage)" ;;
+      *) break ;;
+    esac
+  done
+
+  local tag="${1:?$usage}"
+  local target="${2:?$usage}"
+  local dest="${3:?$usage}"
+  local asset sums sums_url want tmp root inner inner_count modules modules_want
 
   asset="$(asset_for "$target")"
   sums_url="$(asset_url "$tag" sha256sums.txt)"
-  asset_url_full="$(asset_url "$tag" "$asset")"
 
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/setup-lumen.XXXXXX")"
   # shellcheck disable=SC2064 # $tmp is fixed now; expanding it later is wrong.
   trap "rm -rf '$tmp'" EXIT HUP INT TERM
+  sums="$tmp/sha256sums.txt"
 
   printf 'setup-lumen: release %s, target %s\n' "$tag" "$target"
 
-  curl_retry -fsSL -o "$tmp/sha256sums.txt" "$sums_url" ||
+  curl_retry -fsSL -o "$sums" "$sums_url" ||
     fail "could not download $sums_url"
 
-  # sha256sum's own output: "<hex>  <name>", with a "*" before the name when
-  # it was hashed in binary mode.
-  want="$(awk -v want="$asset" '
-    NF >= 2 {
-      name = $2
-      sub(/^\*/, "", name)
-      if (name == want) { print $1; exit }
-    }' "$tmp/sha256sums.txt")"
+  want="$(sums_sha "$sums" "$asset")"
 
   if [ -z "$want" ]; then
     fail "release $tag has no $asset. Published: $(awk '
@@ -295,21 +351,10 @@ cmd_install() {
         sub(/^\*/, "", name)
         printf "%s%s", sep, name
         sep = ", "
-      }' "$tmp/sha256sums.txt")"
+      }' "$sums")"
   fi
 
-  printf 'setup-lumen: downloading %s\n' "$asset_url_full"
-  curl_retry -fsSL -o "$tmp/$asset" "$asset_url_full" ||
-    fail "could not download $asset_url_full"
-
-  got="$(sha256_of "$tmp/$asset")"
-  if [ "$got" != "$want" ]; then
-    fail "checksum mismatch for $asset
-  expected $want
-  got      $got
-Nothing was installed. The download was corrupted, or the asset does not match the checksum published with release $tag."
-  fi
-  printf 'setup-lumen: checksum ok (%s)\n' "$want"
+  fetch_verified "$tag" "$asset" "$want" "$tmp/$asset"
 
   root="$tmp/x"
   mkdir -p "$root"
@@ -331,6 +376,19 @@ Nothing was installed. The download was corrupted, or the asset does not match t
     fi
   fi
   [ -d "$root/bin" ] || fail "the $asset archive has no bin/ directory"
+
+  # The bundled runtime modules are their own asset beside the toolchain
+  # archive, published for the four Unix targets. Unpacking them over the tree
+  # above lands them in bin/, beside the engine, so the one copy below installs
+  # both. A release that published no such asset, and every Windows target,
+  # take the toolchain alone; so does --no-modules, on purpose.
+  modules="lumen-modules-$target.tar.gz"
+  modules_want="$(sums_sha "$sums" "$modules")"
+  if [ "$install_modules" -eq 1 ] && [ -n "$modules_want" ]; then
+    fetch_verified "$tag" "$modules" "$modules_want" "$tmp/$modules"
+    tar -xzf "$tmp/$modules" -C "$root" ||
+      fail "could not unpack the modules archive"
+  fi
 
   mkdir -p "$dest"
   cp -R "$root/." "$dest/"
@@ -355,6 +413,6 @@ case "${1:-}" in
     cmd_install "$@"
     ;;
   *)
-    fail "usage: setup-lumen.sh resolve [VERSION] | setup-lumen.sh install TAG TARGET DIR"
+    fail "usage: setup-lumen.sh resolve [VERSION] | setup-lumen.sh install [--no-modules] TAG TARGET DIR"
     ;;
 esac
