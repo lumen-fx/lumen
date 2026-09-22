@@ -246,7 +246,10 @@ lumen-module = { workspace = true, features = ["paint"] }
 **A system that raises `FrameDirty`** when your state changes. Nothing else
 will: the dirty roll-up watches the framework's own components, not yours, so
 a tick that only changed your state is a clean tick and extract never runs. If
-the content animates, raise `AnimationsActive` while it is still moving.
+the content animates, or is waiting on something that will arrive on a later
+tick, raise `AnimationsActive` while that is still true. Key the raise on the
+thing being waited for rather than on a queue of your own, so the claim
+retires when that thing settles or leaves the tree and the app can park.
 
 Together:
 
@@ -734,7 +737,9 @@ Four things about that signature are worth knowing before you write one.
 
 Loading is synchronous, and a loader blocks a thread from the decode pool
 rather than awaiting. Do the expensive work there; that is the point of the
-pool.
+pool. Return `Err` for anything you cannot decode; a panic is caught and
+reported as a decode failure, so it costs you the message you would have
+written rather than the waiting element's verdict.
 
 A load is a path plus, optionally, bytes that were already resolved. Call
 `read_bytes` when the decoder wants bytes and it does the right thing either

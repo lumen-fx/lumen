@@ -372,10 +372,13 @@ on render-relevant components, from the property store's notify queue, and by
 content that reaches the tree outside both, such as a decoded asset arriving
 from a worker thread; the window backend clears it once it has presented a
 frame. A separate per-tick flag is raised while a driver still has work in
-flight, an animation mid-tween or a decode that has not landed yet, so the
-window backend schedules a follow-up frame instead of parking on it. Neither
-flag spins at rest: the second is cleared at the start of every tick and only
-re-raised by a driver that still has work left.
+flight, an animation mid-tween or an element still waiting on content that has
+not arrived, so the window backend schedules a follow-up frame instead of
+parking on it. Neither flag spins at rest: the second is cleared at the start
+of every tick and only re-raised by a driver that still has work left, and a
+driver keys its claim on something in the tree rather than on its own
+bookkeeping, so the claim dies with that thing even when the work behind it
+never finishes.
 
 ## The extract step
 

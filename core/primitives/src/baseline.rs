@@ -34,7 +34,11 @@ where
     match stored {
         Some(b) => project(b),
         None => {
-            commands.entity(entity).insert(wrap(current.clone()));
+            // `try_insert`: the callers are interaction-visual systems
+            // with no ordering edge to the `<if>` reconciler, so the entity
+            // they captured a baseline for can be despawned by a page swap
+            // in the same stage, before this buffer is applied.
+            commands.entity(entity).try_insert(wrap(current.clone()));
             current
         }
     }
