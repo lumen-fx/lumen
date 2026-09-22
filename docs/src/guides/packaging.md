@@ -286,7 +286,10 @@ outputs = ["libmd.so"]
 
 A `prebuild` hook runs before `lumenc run`, `build`, `bundle`, and `package`. A
 `prerun` hook runs only before `lumenc run`, after every `prebuild` hook.
-`lumenc check` never runs hooks, so a check stays free of side effects.
+`lumenc check` never runs hooks, so a check stays free of side effects. A
+candela script that loads a C library a hook builds is still checked: the
+`dylib` block's own declarations are what the calls are checked against, and
+the [check](../reference/cli.md#check) opens no library.
 
 Listing `inputs` and `outputs` makes the hook skippable: when the outputs are
 already newer than the inputs, the command does not run again. Leave either

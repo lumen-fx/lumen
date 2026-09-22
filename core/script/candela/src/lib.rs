@@ -125,6 +125,8 @@ mod declare;
 #[cfg(feature = "compiler")]
 mod diagnose;
 #[cfg(feature = "compiler")]
+mod dylib_check;
+#[cfg(feature = "compiler")]
 mod engine_host;
 mod host_fns;
 // The build script's install step. The library compiles it only to test it;

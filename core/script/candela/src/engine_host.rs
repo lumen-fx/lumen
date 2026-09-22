@@ -20,6 +20,7 @@ use lumen_script::{
 
 use crate::declare;
 use crate::diagnose;
+use crate::dylib_check;
 use crate::host_fns::{Registries, register_lumen_host_fns, register_script_fn};
 use crate::library_dir::LibraryDir;
 use crate::lmn;
@@ -436,9 +437,19 @@ impl ScriptHost for CandelaHost {
         // is what the app runs.
         let prepared = self.prepare(source);
         *scratch.fn_index.lock().unwrap() = lmn::FnIndex::scan(&prepared.text);
+        // A check opens no native library: a `dylib "..."` block is read as a
+        // `host` block and its functions are bound to stubs, so an app whose
+        // library a build hook produces checks before that hook has ever run.
+        // The text keeps every byte offset, so `prepared` still resolves a
+        // diagnostic's span. See [`crate::dylib_check`].
+        let (as_host, stubs) = dylib_check::as_host_blocks(&prepared.text);
+        dylib_check::register_stubs(&mut engine, stubs);
+        let text = as_host.as_deref().unwrap_or(&prepared.text);
+        // A block naming its library by path keeps loading it, so the search
+        // path is still named here.
         let _library_dir = self.library_dir();
         engine
-            .compile(&prepared.text, uri)
+            .compile(text, uri)
             .map(|_| ())
             .map_err(|d| self.compile_error(&prepared, &d, uri))
     }

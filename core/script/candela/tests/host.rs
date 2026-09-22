@@ -262,6 +262,22 @@ fn compile_check_is_side_effect_free() {
     );
 }
 
+/// #383: a check runs no build hook, so an app whose native library a hook
+/// produces has none on disk when its script is checked. The block's own
+/// declarations are what the calls are checked against, and a check keeps no
+/// program, so no library is opened for one.
+#[test]
+fn compile_check_needs_no_library_for_a_dylib_block() {
+    let host = CandelaHost::new();
+    let src = "dylib \"lumen_no_such_library\" {\n    \
+               string shout(string);\n}\n\n\
+               fn loud(word: string) -> string {\n    \
+               return lumen_no_such_library::shout(word);\n}\n\n\
+               fn main() {}\n";
+    host.compile_check(src, "dylib.cdl")
+        .expect("a dylib block checks against its own declarations");
+}
+
 /// The body of a handler, as an author writes it: the two lines from #191,
 /// which call a string method on an int.
 const BROKEN_BODY: &str = "    let n = 1;\n    n.uppercase();";

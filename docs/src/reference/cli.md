@@ -109,6 +109,16 @@ check instead of waiting for the event that runs it. See
 [handler annotations](scripting-candela.md#event-handlers) for what a bare
 parameter costs.
 
+Where the app's script loads a native library with a `dylib "name" { ... }`
+block, the calls are checked against the signatures the block declares and the
+library is not opened. So an app whose library a
+[build hook](../guides/packaging.md#build-steps-your-app-needs) produces checks
+before that hook has ever run. Two forms still need the built library at check
+time: a block that names its library by path rather than by bare name, and one
+declaring an argument or return type other than `int`, `float`, `bool`,
+`string`, or `null`. Build the library first, or run `lumenc build`, which runs
+hooks.
+
 Every command that compiles markup from source (`check`, `run`, `build`,
 `package`) prints the parse-time findings to stderr as
 `<severity> <file>:<line>:<col> [<kind>] <message>`, with a `hint:` line when
