@@ -8,6 +8,7 @@
 //! - What a path decodes *into* is decided by the loader registry: each [`AssetLoader`] claims file extensions and produces one [`AssetKind`], and the built-in image and SVG paths are ordinary registered loaders. An app or plugin adds a format by registering another one; see [`register_asset_loader`].
 //! - Where the bytes come from is decided by the [`AssetSource`] list, consulted before the job is queued. [`BundleSource`] (`.lpak` archives, `lumen://app/...` URIs) is installed by default.
 //! - [`drain_completed_decodes`] delivers the resulting `Handle` to every still-valid waiter; failures attach [`ImageLoadFailed`] carrying a typed [`LoadErrorKind`].
+//! - Attaching a decoded payload raises [`lumen_core::render_world::FrameDirty`]. An asset is the one piece of scene content that arrives ticks after the tree it belongs to, and a tick whose frame is not dirty is never extracted, so without the raise the arrival would wait for an unrelated repaint.
 //! - Handles are strong [`Arc`]s to decoded data; the cache holds [`Handle<T>`] entries that share identity across consumers.
 //! - The vello GPU upload cache is keyed by the underlying `peniko::Blob` identity, so identical handles short-circuit the upload.
 //! - A [`notify::RecommendedWatcher`] tracks every loaded file URL. On change the asset cache invalidates the affected entry, the request id of every entity referencing that path is bumped, and an [`AssetReloadRequested`] message fires so consumers (e.g. the markup runtime) can re-enqueue the load.
@@ -946,6 +947,10 @@ impl Plugin for AssetsPlugin {
             TickStage::Systems,
             stamp_image_natural_size.after(drain_completed_decodes),
         );
+        // Late in the tick, so the loop-awake check reads the tree the
+        // reconcilers and the hot reload left behind rather than the one
+        // `spawn_pending_decodes` saw at the top of `Systems`.
+        app.add_systems(TickStage::A11ySync, keep_frame_loop_awake_for_assets);
         app.add_extract_fn(extract_loaded_images);
         app.add_extract_fn(extract_loaded_svgs);
     }
@@ -1149,6 +1154,31 @@ pub fn extract_loaded_images(main: &mut World, render: &mut World) {
     render.resource_mut::<RenderEntityMap>().image = next;
 }
 
+/// Raises [`FrameDirty`] because a decoded payload just landed on an entity.
+///
+/// An asset is the one piece of scene content that arrives out of step with
+/// the tree it belongs to: the tree spawns on one tick, and the decoded
+/// bitmap is attached one or more ticks later, from a worker thread or from
+/// the cache. Nothing else reports that arrival. `LoadedImage` is not one of
+/// the components the frame-dirty roll-up watches, and an image sized by its
+/// style (`width="100%"`) relayouts to the same box, so the write leaves
+/// `Transform` untouched as well.
+///
+/// On a settled app the payload then lands on a tick that raises no other
+/// change signal, and a tick with a clear [`FrameDirty`] is never extracted:
+/// the window keeps showing a frame with a hole where the image is, until
+/// something unrelated repaints. That is what makes an image disappear for
+/// the rest of the session after a hot reload respawns the tree, while every
+/// other element comes back.
+///
+/// The raise is one-shot per arrival: the entity carries its payload
+/// afterwards, so it leaves both attach paths and the app parks again.
+fn mark_frame_dirty(frame_dirty: &mut Option<ResMut<'_, FrameDirty>>) {
+    if let Some(fd) = frame_dirty.as_mut() {
+        fd.dirty = true;
+    }
+}
+
 /// Consults the content cache for each [`ImageSource`] entity lacking a [`LoadedImage`], [`LoadedSvg`], [`ImageLoadFailed`], or [`Enqueued`].
 /// Cache hits attach the cached component synchronously; misses enqueue one decode job and append the entity (with its current `request_id`) to the fan-out list.
 #[allow(clippy::type_complexity)]
@@ -1164,6 +1194,7 @@ pub fn spawn_pending_decodes(
         ),
     >,
     mut commands: Commands,
+    mut frame_dirty: Option<ResMut<FrameDirty>>,
 ) {
     for (entity, source) in &pending {
         // `try_insert` throughout: the query answers for the world as this
@@ -1172,9 +1203,11 @@ pub fn spawn_pending_decodes(
         match server.lookup_or_enqueue(entity, source.0.clone()) {
             CacheLookup::HitImage(img) => {
                 commands.entity(entity).try_insert(img);
+                mark_frame_dirty(&mut frame_dirty);
             }
             CacheLookup::HitSvg(svg) => {
                 commands.entity(entity).try_insert(svg);
+                mark_frame_dirty(&mut frame_dirty);
             }
             CacheLookup::HitFailed(failed) => {
                 commands.entity(entity).try_insert(failed);
@@ -1197,7 +1230,11 @@ pub fn spawn_pending_decodes(
 /// - If *no* waiter survives: the result is dropped entirely (no cache insert). This kills the stale-decode
 ///   race at the cache layer - a SetSrc-storm enqueues N transient decodes whose final results never poison
 ///   the LRU with paths the runtime no longer cares about.
-pub fn drain_completed_decodes(mut server: ResMut<AssetServer>, mut commands: Commands) {
+pub fn drain_completed_decodes(
+    mut server: ResMut<AssetServer>,
+    mut commands: Commands,
+    mut frame_dirty: Option<ResMut<FrameDirty>>,
+) {
     while let Ok(result) = server.result_rx.try_recv() {
         let waiters = server.pending.remove(&result.path).unwrap_or_default();
         let surviving: Vec<PendingWaiter> = waiters
@@ -1218,9 +1255,11 @@ pub fn drain_completed_decodes(mut server: ResMut<AssetServer>, mut commands: Co
         match result.outcome {
             Ok(LoadedAsset::Image(img)) => {
                 dispatch_decoded!(server, commands, result.path, insert_image, img, surviving);
+                mark_frame_dirty(&mut frame_dirty);
             }
             Ok(LoadedAsset::Svg(svg)) => {
                 dispatch_decoded!(server, commands, result.path, insert_svg, svg, surviving);
+                mark_frame_dirty(&mut frame_dirty);
             }
             Err(kind) => {
                 // The failure is cached once under the path and cloned onto
@@ -1241,6 +1280,46 @@ pub fn drain_completed_decodes(mut server: ResMut<AssetServer>, mut commands: Co
                 }
             }
         }
+    }
+}
+
+/// Keeps the frame loop scheduled while the pipeline still owes an entity
+/// its payload.
+///
+/// An event-driven loop parks the moment a tick leaves no work behind, and a
+/// parked loop runs no system. An `<image>` that enters the tree late in a
+/// tick - a hot reload respawning the tree, a page swap mounting a shared
+/// template - is spawned after [`spawn_pending_decodes`] has already run, so
+/// without a scheduled follow-up tick it sits unserviced and the window
+/// keeps showing an empty box until some unrelated event wakes the app.
+///
+/// Runs late in the tick so it sees the tree as the reconcilers left it, and
+/// reports the two states that need another tick: an entity whose source has
+/// not been looked up yet, and a decode still in flight. Both clear
+/// themselves - the next tick looks the entity up, and a decode ends in a
+/// payload or a failure - so the app parks again as soon as every source has
+/// its verdict. An entity the pipeline can no longer answer for is in
+/// neither state and never holds the loop open.
+#[allow(clippy::type_complexity)]
+pub fn keep_frame_loop_awake_for_assets(
+    server: Res<AssetServer>,
+    unresolved: Query<
+        (),
+        (
+            With<ImageSource>,
+            Without<LoadedImage>,
+            Without<LoadedSvg>,
+            Without<ImageLoadFailed>,
+            Without<Enqueued>,
+        ),
+    >,
+    active: Option<Res<AnimationsActive>>,
+) {
+    let Some(active) = active else {
+        return;
+    };
+    if !unresolved.is_empty() || !server.pending.is_empty() {
+        active.request();
     }
 }
 
@@ -1326,9 +1405,17 @@ pub fn stamp_image_natural_size(
                 ic.source = source_str;
             }
         } else {
+            // `try_insert`, like every other write this crate queues: the
+            // query answers for the world as this system runs, and another
+            // system in the same stage can despawn the entity before the
+            // buffer is applied. A page swap is exactly that - the `<if>`
+            // reconciler despawns the outgoing page's tree while an image
+            // in a shared template decodes into it on the same tick - and a
+            // plain `insert` turns that into an "Entity despawned" failure
+            // while applying command buffers.
             commands
                 .entity(entity)
-                .insert(lumen_core::components::ImageComponent {
+                .try_insert(lumen_core::components::ImageComponent {
                     source: source_str,
                     natural_size: Some(natural),
                 });
@@ -1697,5 +1784,106 @@ mod tests {
             "an svg path decodes to an Svg asset off the worker thread"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A page swap despawns the outgoing page's tree in the same stage the
+    /// stamp runs in, so the stamp's write can be applied against an entity
+    /// that is already gone - and whose index the incoming page has already
+    /// reused. The write is dropped; a plain `insert` failed the whole
+    /// command buffer instead, which took the app down on the first
+    /// navigation away from a page holding an `<image>`.
+    #[test]
+    fn stamping_an_image_despawned_in_the_same_stage_is_dropped() {
+        use bevy_ecs::schedule::{Schedule, ScheduleBuildSettings, SingleThreadedExecutor};
+        let mut world = World::new();
+        let e = world
+            .spawn((
+                ImageSource(PathBuf::from("probe.png")),
+                LoadedImage(make_image_data(64).into()),
+            ))
+            .id();
+
+        fn despawn_the_tree(mut commands: Commands, images: Query<Entity, With<ImageSource>>) {
+            for e in &images {
+                commands.entity(e).despawn();
+            }
+        }
+
+        let mut schedule = Schedule::default();
+        schedule.set_executor(SingleThreadedExecutor::new());
+        // No sync point between the two systems: both buffers are applied
+        // together at the end of the schedule, the despawn first. That is
+        // the shape a page swap produces inside `TickStage::Systems`.
+        schedule.set_build_settings(ScheduleBuildSettings {
+            auto_insert_apply_deferred: false,
+            ..ScheduleBuildSettings::default()
+        });
+        schedule.add_systems((despawn_the_tree, stamp_image_natural_size).chain());
+        schedule.run(&mut world);
+
+        assert!(
+            world.get_entity(e).is_err(),
+            "the despawn stands and the late stamp wrote nothing"
+        );
+    }
+
+    /// An asset arrives ticks after the tree it belongs to, and a tick whose
+    /// frame is not dirty is never extracted. Attaching a payload has to
+    /// raise the flag itself or the window keeps showing the frame that was
+    /// painted before the image was there.
+    #[test]
+    fn attaching_a_cached_image_raises_frame_dirty() {
+        use bevy_ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let path = PathBuf::from("/tmp/lumen-cache-hit-dirty.png");
+        let mut server = AssetServer::default();
+        server.insert_image(path.clone(), LoadedImage(make_image_data(64).into()));
+        world.insert_resource(server);
+        world.insert_resource(FrameDirty { dirty: false });
+        let e = world.spawn(ImageSource(path)).id();
+
+        world.run_system_once(spawn_pending_decodes).unwrap();
+
+        assert!(
+            world.get::<LoadedImage>(e).is_some(),
+            "the cached decode is attached synchronously"
+        );
+        assert!(
+            world.resource::<FrameDirty>().dirty,
+            "the frame the image landed on is painted"
+        );
+    }
+
+    /// An `<image>` that enters the tree late in a tick is looked up on the
+    /// next one, and an event-driven loop only runs that next tick if the
+    /// tick it just finished said work was left. The claim retires as soon
+    /// as the entity has its payload, so the app still parks.
+    #[test]
+    fn an_unresolved_image_holds_the_frame_loop_open() {
+        use bevy_ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.insert_resource(AssetServer::default());
+        world.insert_resource(AnimationsActive::default());
+        let e = world.spawn(ImageSource(PathBuf::from("probe.png"))).id();
+
+        world
+            .run_system_once(keep_frame_loop_awake_for_assets)
+            .unwrap();
+        assert!(
+            world.resource::<AnimationsActive>().get(),
+            "a source with no verdict yet needs another tick"
+        );
+
+        world.resource::<AnimationsActive>().clear();
+        world
+            .entity_mut(e)
+            .insert(LoadedImage(make_image_data(64).into()));
+        world
+            .run_system_once(keep_frame_loop_awake_for_assets)
+            .unwrap();
+        assert!(
+            !world.resource::<AnimationsActive>().get(),
+            "every image holds its payload, so the app parks"
+        );
     }
 }

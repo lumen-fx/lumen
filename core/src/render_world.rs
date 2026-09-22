@@ -186,15 +186,20 @@ impl Default for FrameDirty {
 /// Without this, the first tween frame paints and then the loop parks -
 /// the animation freezes mid-way until the next mouse move.
 ///
+/// Any other driver that finishes a tick with work still in flight raises it
+/// the same way, for the same reason: a parked loop runs no system, so work
+/// that completes off the frame (a background decode, a reply a later tick
+/// has to deliver) needs the next tick scheduled or it lands nowhere.
+///
 /// Idle-quiescence contract: the flag is stored in an [`AtomicBool`] so
 /// several parallel animation systems can raise it via `&Res` without
 /// serialising. [`reset_animations_active`] clears it at the *start* of
 /// every tick (`TickStage::Input`, which is chained before
 /// `TickStage::Systems` where the drivers run), and each driver re-raises
-/// it *only while it still has motion left* (progress strictly short of its
-/// target, non-zero velocity). The moment every animation settles, no
-/// driver raises it, the flag stays `false`, and the scheduler parks - so
-/// there is no permanent vsync spin.
+/// it *only while it still has work left* (progress strictly short of its
+/// target, non-zero velocity, a job still outstanding). The moment every
+/// driver settles, none raises it, the flag stays `false`, and the scheduler
+/// parks - so there is no permanent vsync spin.
 #[derive(Resource, Debug, Default)]
 pub struct AnimationsActive(std::sync::atomic::AtomicBool);
 
