@@ -109,15 +109,30 @@ check instead of waiting for the event that runs it. See
 [handler annotations](scripting-candela.md#event-handlers) for what a bare
 parameter costs.
 
-Where the app's script loads a native library with a `dylib "name" { ... }`
+Where the app's own script loads a native library with a `dylib "name" { ... }`
 block, the calls are checked against the signatures the block declares and the
 library is not opened. So an app whose library a
 [build hook](../guides/packaging.md#build-steps-your-app-needs) produces checks
-before that hook has ever run. Two forms still need the built library at check
-time: a block that names its library by path rather than by bare name, and one
-declaring an argument or return type other than `int`, `float`, `bool`,
-`string`, or `null`. Build the library first, or run `lumenc build`, which runs
-hooks.
+before that hook has ever run. Four forms still need the built library at check
+time:
+
+- a block in a file the script imports rather than in the app's own script,
+  including a file a [registry package](lumen-toml.md#registry-packages) brings
+  in;
+- a block that names its library by path rather than by bare name;
+- a block whose library name is a namespace the app already declares, such as
+  the runtime's own `lumen`;
+- a block declaring an argument or return type other than `int`, `float`,
+  `bool`, `string`, or `null`.
+
+Build the library first, or run `lumenc build`, which runs hooks.
+
+In a block read this way, every declared function answers the zero of its
+declared type (`0`, `0.0`, `false`, the empty string, null) for the duration of
+the check. A check runs the script's `main` once, so a verdict can turn on one
+of those zeros: `100 / md_count()` fails a check on a division by zero that a
+run never hits. Call sites are still checked against the types the block
+declares.
 
 Every command that compiles markup from source (`check`, `run`, `build`,
 `package`) prints the parse-time findings to stderr as

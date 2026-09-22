@@ -22,16 +22,31 @@
 //! The rewrite keeps every byte offset, so a diagnostic still points at the
 //! column the author wrote: `dylib` and `host ` are both five bytes.
 //!
-//! Two shapes are left alone, and for them a check still resolves the library
+//! Three shapes are left alone, and for them a check still resolves the library
 //! the way a run does: a block that names its library by path rather than by
 //! bare name (the namespace candela derives from a path is not the text in the
-//! source), and a block declaring a type that does not cross the host boundary
-//! (a C struct, a pointer). Both compile exactly as they did before.
+//! source), a block whose library name is a namespace the text already declares
+//! (binding stubs under it would displace what the app resolves against), and a
+//! block declaring a type that does not cross the host boundary (a C struct, a
+//! pointer). All three compile exactly as they did before.
+//!
+//! Only the text a check hands to `candela::Engine::compile` is read this way,
+//! which is the app's own script. candela resolves `import "..."` by reading the
+//! file from disk while it compiles, and its compiler takes no source from a
+//! caller, so a `dylib` block in an imported file still opens its library.
+//! Closing that needs a check-only compile in candela itself, which is filed as
+//! lumen-fx/candela#177.
+//!
+//! What a stub answers is the zero of its declared type, and
+//! `candela::Engine::compile` runs `main` once, so a program computing with a
+//! value the library would have produced can reach a conclusion a run never
+//! would: `100 / md_count()` divides by zero. The types are still the block's
+//! own, so every call site is checked against what the author declared.
 
 use candela_vm::{HostError, HostType, Value};
 
-use crate::host_fns::HostFnSink;
-use crate::prelude::code_of;
+use crate::host_fns::{HOST_NAMESPACE, HostFnSink};
+use crate::prelude::{code_of, declares_namespace};
 
 /// The keyword a block opens with, and what a check reads it as. Both are five
 /// bytes, which is what keeps the rewrite offset-preserving.
@@ -55,6 +70,7 @@ pub(crate) fn as_host_blocks(source: &str) -> (Option<String>, Vec<Stub>) {
     let lines = lines_with_offsets(source);
     let mut rewritten: Option<String> = None;
     let mut stubs: Vec<Stub> = Vec::new();
+    let mut taken: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < lines.len() {
         let (offset, line) = lines[i];
@@ -62,6 +78,13 @@ pub(crate) fn as_host_blocks(source: &str) -> (Option<String>, Vec<Stub>) {
             i += 1;
             continue;
         };
+        if spoken_for(source, name) || taken.contains(&name) {
+            // The namespace answers for something else already, and a check
+            // that bound stubs under it would resolve the app's own calls
+            // against them. The block stays a `dylib` block.
+            i += 1;
+            continue;
+        }
         let Some((end, declared)) = block(&lines, i + 1, name) else {
             // A declaration this module cannot read leaves the block a `dylib`
             // block, so the check behaves as it did before.
@@ -72,9 +95,21 @@ pub(crate) fn as_host_blocks(source: &str) -> (Option<String>, Vec<Stub>) {
         let keyword = offset + at;
         text.replace_range(keyword..keyword + DYLIB.len(), AS_HOST);
         stubs.extend(declared);
+        taken.push(name);
         i = end + 1;
     }
     (rewritten, stubs)
+}
+
+/// Whether `name` is a namespace something other than this block already
+/// answers for: the prelude's own, one the runtime or an embedder declared, or
+/// one the author wrote a `host` block for.
+///
+/// candela resolves a namespace against its first block of that name, so a
+/// second block under a taken name declares functions no call reaches, and the
+/// stubs bound for it would sit over bindings the app does use.
+fn spoken_for(source: &str, name: &str) -> bool {
+    name == HOST_NAMESPACE || declares_namespace(source, name)
 }
 
 /// Bind `stubs` on `sink`, so the calls a check compiles reach a closure
@@ -179,12 +214,17 @@ fn declaration(code: &str, namespace: &str) -> Option<Stub> {
 
 /// The return type and the function name out of what stands before the
 /// argument list. A declaration with no return type returns `null`.
+///
+/// The name ends where the last character that cannot be in one does, over
+/// every character rather than over the ASCII ones: a name candela will not
+/// accept is carried whole, so the diagnostic names what the author wrote
+/// instead of a tail of it.
 fn head(text: &str) -> Option<(HostType, &str)> {
     let at = text
-        .rfind(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .rfind(|c: char| !c.is_alphanumeric() && c != '_')
         .map_or(0, |i| i + char_width(text, i));
     let name = &text[at..];
-    if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
+    if name.is_empty() || name.starts_with(char::is_numeric) {
         return None;
     }
     let ret = text[..at].trim();
@@ -304,6 +344,45 @@ mod tests {
         assert_eq!(zero_value(&HostType::Int), Value::Int(0));
         assert_eq!(zero_value(&HostType::String), Value::String(String::new()));
         assert_eq!(zero_value(&HostType::Unit), Value::Null);
+    }
+
+    #[test]
+    fn a_namespace_the_text_already_declares_keeps_its_block() {
+        // An embedder's block, the runtime's own, or one the author wrote:
+        // candela resolves a namespace against its first block, so rewriting
+        // this one would bind stubs the app's own calls never reach.
+        let src = "host \"native\" { print(string); }\ndylib \"native\" {\n    int f();\n}\n";
+        let (text, stubs) = as_host_blocks(src);
+        assert!(text.is_none());
+        assert!(stubs.is_empty());
+    }
+
+    #[test]
+    fn the_prelude_namespace_is_never_taken_over() {
+        // Even with no prelude in the text, `lumen` is the namespace the host
+        // binds its own builtins under.
+        let (text, _) = as_host_blocks("dylib \"lumen\" {\n    int f();\n}\n");
+        assert!(text.is_none());
+    }
+
+    #[test]
+    fn a_second_block_of_one_name_keeps_its_block() {
+        let src = "dylib \"a\" {\n    int f();\n}\ndylib \"a\" {\n    int g();\n}\n";
+        let (text, stubs) = as_host_blocks(src);
+        let text = text.expect("the first block is rewritten");
+        assert_eq!(text.matches("host  \"").count(), 1);
+        assert_eq!(stubs.len(), 1);
+    }
+
+    #[test]
+    fn a_name_outside_ascii_is_read_whole() {
+        // candela's identifiers are ASCII, so this declaration is not one it
+        // accepts; what matters is that the name is not cut short, which would
+        // bind a stub under a name nothing declared and report that instead of
+        // the line the author wrote.
+        let stub = declaration("int h\u{e9}llo(string);", "md").expect("reads");
+        assert_eq!(stub.name, "h\u{e9}llo");
+        assert_eq!(stub.ret, HostType::Int);
     }
 
     #[test]

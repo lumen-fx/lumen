@@ -441,12 +441,15 @@ impl ScriptHost for CandelaHost {
         // `host` block and its functions are bound to stubs, so an app whose
         // library a build hook produces checks before that hook has ever run.
         // The text keeps every byte offset, so `prepared` still resolves a
-        // diagnostic's span. See [`crate::dylib_check`].
+        // diagnostic's span. This is the app's own script; candela reads an
+        // imported file from disk itself, so a block in one still loads its
+        // library. See [`crate::dylib_check`].
         let (as_host, stubs) = dylib_check::as_host_blocks(&prepared.text);
         dylib_check::register_stubs(&mut engine, stubs);
         let text = as_host.as_deref().unwrap_or(&prepared.text);
-        // A block naming its library by path keeps loading it, so the search
-        // path is still named here.
+        // A block naming its library by path keeps loading it, and so does one
+        // in a file the script imports, so the search path is still named
+        // here.
         let _library_dir = self.library_dir();
         engine
             .compile(text, uri)
