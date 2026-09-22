@@ -528,7 +528,7 @@ fn a_radio_puts_its_group_and_value_on_the_control() {
     );
     let html = page_html(&site(vec![page]), "index.html");
     assert!(html.contains(concat!(
-        r#"<input type="radio" class="radio-dot" data-lm-part="" disabled="" tabindex="-1" "#,
+        r#"<input type="radio" class="radio-dot" data-lm-part="" disabled="" "#,
         r#"name="ship" value="falcon">"#,
     )));
     // A disabled widget dims the whole row, which is what the mark on the

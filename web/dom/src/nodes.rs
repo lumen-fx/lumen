@@ -33,6 +33,7 @@ use lumen_html::contract::{DATA_LM, DATA_LM_PART, NodePath, PathStep};
 use lumen_html::paths::walk_nodes;
 use lumen_html::style::style_value;
 use lumen_html::tags::{drawn_by_control, html_tag_for, part_from_class};
+use lumen_primitives::RadioButton;
 use lumen_scene::routing::Anchor;
 use lumen_scene::spawn::ForMarker;
 use wasm_bindgen::{JsCast, JsValue};
@@ -159,6 +160,7 @@ type NodeQuery<'w, 's> = Query<
         Option<&'static LumenAttributes>,
         Option<&'static InlineStyle>,
         Option<&'static Anchor>,
+        Option<&'static RadioButton>,
     ),
 >;
 
@@ -403,7 +405,7 @@ fn build(
     routes: &Routes,
     nodes: &NodeQuery<'_, '_>,
 ) -> Option<Element> {
-    let (tag, id, classes, text, attributes, style, anchor) = nodes.get(entity).ok()?;
+    let (tag, id, classes, text, attributes, style, anchor, radio) = nodes.get(entity).ok()?;
     let html = html_tag_for(&tag.0)?;
     let element = table.document.create_element(html.name).ok()?;
     for (name, value) in html.fixed {
@@ -439,6 +441,17 @@ fn build(
     {
         for (name, value) in control.attributes() {
             let _ = node.set_attribute(name, value);
+        }
+        // A radio's group is the `name` its members share, which is what the
+        // browser steps with the arrow keys and lets only one member of be
+        // on. Without it every radio mounted here is a group of its own.
+        if let Some(radio) = radio {
+            if !radio.group.is_empty() {
+                let _ = node.set_attribute("name", &radio.group);
+            }
+            if !radio.value.is_empty() {
+                let _ = node.set_attribute("value", &radio.value);
+            }
         }
         let _ = element.append_child(&node);
     }
