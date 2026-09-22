@@ -26,7 +26,7 @@ use lumen_html::contract::{
 use lumen_i18n::{I18n, I18nPlugin, LanguageIdentifier, SharedI18n};
 use lumen_ir::artifact::CompiledApp;
 use lumen_ir::layout_ir::{Element, LayoutIR, relativize_asset_paths};
-use lumen_prerender::{self as prerender, Budget, Prerendered, Settled};
+use lumen_prerender::{self as prerender, Budget, Language, Prerendered, Settled};
 use lumen_runtime::app_layout::src_dir;
 use lumen_runtime::config::{
     LumenToml, WebCssMode, WebHost, WebNavigation, WebPrerender, WebRender, WebSeedValue,
@@ -635,14 +635,19 @@ fn build(options: &Options) -> Result<Report, String> {
     }
 
     let seed = seed_values(&cfg, &compiled.ir.root, prerender);
-    // The app is run once per page, not once per page per locale: a
-    // translation is resolved in the tree the emitter walks, and a signal is
-    // the same value in every language.
+    let fallback_tags: Vec<String> = fallback.iter().map(ToString::to_string).collect();
+    // The app is run once per page and locale: what a script writes through
+    // `t()` is in the language it ran in, and so is a row it builds.
     let settled = match prerender {
         WebPrerender::Run => run_pages(
             &compiled,
-            &keys,
-            &entry,
+            &Runs {
+                keys: &keys,
+                entry: &entry,
+                locales: &locales,
+                catalogues: &catalogues,
+                fallback: &fallback_tags,
+            },
             &seed,
             options.strict,
             &mut warnings,
@@ -675,7 +680,7 @@ fn build(options: &Options) -> Result<Report, String> {
         };
         // One tree per locale, shared by every page of it: which page a
         // document shows is a signal inside the tree, not a tree of its own.
-        let catalogue = locale_catalogue(&catalogues, locale, &fallback, &mut warnings)?;
+        let catalogue = locale_catalogue(&catalogues, locale, &fallback_tags, &mut warnings)?;
         // Resolving the text is the emitter's, because a server holding a tree
         // per locale builds one the same way.
         let ir = Arc::new(match &catalogue {
@@ -683,23 +688,24 @@ fn build(options: &Options) -> Result<Report, String> {
             None => compiled.ir.clone(),
         });
         for key in &keys {
+            let run = settled.get(&(locale.clone(), key.clone()));
             // A row's component body is markup the tree never held, so it is
             // translated on its own; without that a locale tree reads in its
-            // language everywhere except inside its lists.
+            // language everywhere except inside its lists. A run read its
+            // bodies already translated, in the language it ran in.
             let mut fills = match prerender {
-                WebPrerender::Run => settled
-                    .get(key)
-                    .map(|run| run.fills.clone())
-                    .unwrap_or_default(),
+                WebPrerender::Run => run.map(|run| run.fills.clone()).unwrap_or_default(),
                 WebPrerender::Seeds => seeded_fills.clone(),
                 WebPrerender::None => RowFills::default(),
             };
-            if let Some(i18n) = &catalogue {
+            if prerender != WebPrerender::Run
+                && let Some(i18n) = &catalogue
+            {
                 for body in fills.bodies_mut() {
                     lumen_web::translate_element(body, i18n);
                 }
             }
-            let mut page = page_spec(key, &ir, &cfg, &seed, prerender, settled.get(key), fills);
+            let mut page = page_spec(key, &ir, &cfg, &seed, prerender, run, fills);
             // What a page shows is the app's answer; when it last changed is
             // the sources', so it is put on here rather than rendered.
             page.modified = stamps.get(key).copied();
@@ -749,6 +755,9 @@ fn build(options: &Options) -> Result<Report, String> {
         for tree in served {
             site = site.with_locale(tree).map_err(|e| e.to_string())?;
         }
+        let site = site
+            .with_catalogues(catalogues, fallback_tags)
+            .map_err(|e| e.to_string())?;
         Some(site.with_seed(declared_seed(&seed)))
     };
 
@@ -860,40 +869,69 @@ fn locales(options: &Options, cfg: &LumenToml) -> Vec<String> {
     locales
 }
 
-/// Run the app once for each page and keep the state each one settles into.
+/// What a build runs the app for: every page, in every locale.
+struct Runs<'a> {
+    keys: &'a [String],
+    entry: &'a str,
+    /// The locales the site is emitted in, the root tree's first.
+    locales: &'a [String],
+    catalogues: &'a [(String, String)],
+    fallback: &'a [String],
+}
+
+/// Run the app once for each page in each locale and keep the state each one
+/// settles into, keyed by locale and page.
 ///
 /// A page written from a run has to come out the same on every machine and on
-/// every build, so the entry page is always built twice and compared, and
-/// `--strict` compares every page.
+/// every build, so the entry page of the root tree is always built twice and
+/// compared, and `--strict` compares every page in every locale.
 fn run_pages(
     compiled: &CompiledApp,
-    keys: &[String],
-    entry: &str,
+    runs: &Runs<'_>,
     seed: &BTreeMap<String, WebSeedValue>,
     strict: bool,
     warnings: &mut Vec<String>,
-) -> BTreeMap<String, Prerendered> {
+) -> BTreeMap<(String, String), Prerendered> {
     let declared = declared_seed(seed);
     let mut settled = BTreeMap::new();
-    for key in keys {
-        let run = prerender::page(compiled, key, &declared, Budget::default());
-        report_run(key, &run, warnings);
-        if key == entry || strict {
-            let again = prerender::page(compiled, key, &declared, Budget::default());
-            if again.state != run.state {
-                warnings.push(format!(
-                    "page `{key}` settled differently the second time it was run, so what it \
-                     holds depends on something outside the app"
-                ));
+    for (index, locale) in runs.locales.iter().enumerate() {
+        let language = Language {
+            locale,
+            catalogues: runs.catalogues,
+            fallback: runs.fallback,
+        };
+        // A page is named with its locale only when the site has more than
+        // one, so a one-language build reads the way it always has.
+        let name = if runs.locales.len() > 1 {
+            format!("{locale}/")
+        } else {
+            String::new()
+        };
+        for key in runs.keys {
+            let run = prerender::page(compiled, key, language, &declared, Budget::default());
+            report_run(&format!("{name}{key}"), &run, warnings);
+            if (index == 0 && key == runs.entry) || strict {
+                let again = prerender::page(compiled, key, language, &declared, Budget::default());
+                if again.state != run.state {
+                    warnings.push(format!(
+                        "page `{name}{key}` settled differently the second time it was run, so \
+                         what it holds depends on something outside the app"
+                    ));
+                }
             }
+            settled.insert((locale.clone(), key.clone()), run);
         }
-        settled.insert(key.clone(), run);
     }
     settled
 }
 
 /// What one run leaves a build to say.
 fn report_run(key: &str, run: &Prerendered, warnings: &mut Vec<String>) {
+    if let Some(error) = &run.language_error {
+        warnings.push(format!(
+            "page `{key}` ran untranslated, because its catalogues would not load: {error}"
+        ));
+    }
     if let Settled::Capped(ticks) = run.settled {
         warnings.push(format!(
             "page `{key}` was still changing after {ticks} ticks, so it is written with the \
@@ -1083,31 +1121,17 @@ fn fallback_chain(cfg: &LumenToml) -> Vec<LanguageIdentifier> {
 fn locale_catalogue(
     catalogues: &[(String, String)],
     locale: &str,
-    fallback: &[LanguageIdentifier],
+    fallback: &[String],
     warnings: &mut Vec<String>,
 ) -> Result<Option<SharedI18n>, String> {
-    let lang = match locale.parse::<LanguageIdentifier>() {
-        Ok(lang) => lang,
-        Err(e) => {
-            warnings.push(format!("locale `{locale}` is not a valid BCP-47 tag: {e}"));
-            return Ok(None);
-        }
-    };
-    // A page is written through the chain a desktop run resolves through,
-    // down to dropping a fallback the page is already being written in.
-    let fallback: Vec<LanguageIdentifier> = fallback
-        .iter()
-        .filter(|other| **other != lang)
-        .cloned()
-        .collect();
-    let mut i18n = I18n::new(lang, fallback);
-    for (tag, source) in catalogues {
-        let tag = tag
-            .parse::<LanguageIdentifier>()
-            .map_err(|e| format!("locale `{tag}` is not a valid BCP-47 tag: {e}"))?;
-        i18n.load_ftl(tag, source)
-            .map_err(|e| format!("locale catalogues: {e}"))?;
+    if let Err(e) = locale.parse::<LanguageIdentifier>() {
+        warnings.push(format!("locale `{locale}` is not a valid BCP-47 tag: {e}"));
+        return Ok(None);
     }
+    // A page is written through the chain a desktop run resolves through; a
+    // fallback the page is already being written in is skipped at lookup.
+    let i18n = I18n::from_sources(locale, catalogues, fallback)
+        .map_err(|e| format!("locale catalogues: {e}"))?;
     Ok(Some(SharedI18n::new(i18n)))
 }
 

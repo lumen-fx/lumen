@@ -756,6 +756,23 @@ fn a_named_fallback_locale_writes_the_pages() {
     );
 }
 
+/// Prehydration runs the app once per page and locale, so what a script
+/// writes through `t()` while it starts is written into each tree in that
+/// tree's language.
+#[test]
+fn a_prehydrated_page_carries_what_t_answered_in_its_locale() {
+    let scratch = scratch("prehydrate-locales");
+    let out = scratch.join("site");
+    web("fixtures/i18n-prehydrate", &out, &[]);
+
+    let english = read(&out, "index.html");
+    assert!(english.contains("Ready to go"), "{english}");
+    assert!(!english.contains("Startklar"), "{english}");
+    let german = read(&out, "de-DE/index.html");
+    assert!(german.contains("Startklar"), "{german}");
+    assert!(!german.contains("Ready to go"), "{german}");
+}
+
 /// A static site resolved its text into its documents and loads no runtime,
 /// so nothing on it would ever read a catalogue.
 #[test]

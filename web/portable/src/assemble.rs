@@ -37,7 +37,7 @@ use lumen_core::signals::{
 };
 use lumen_html::contract::{NodePath, NodeSeed, Seed};
 use lumen_html::paths::walk_nodes;
-use lumen_i18n::{I18n, I18nError, Lang, LanguageIdentifier, SharedI18n, switch_locale};
+use lumen_i18n::{I18n, I18nError, SharedI18n, switch_locale};
 use lumen_primitives::{ProgressPlugin, RadioPlugin, TabsPlugin, ValidationPlugin};
 use lumen_scene::spawn;
 use lumen_scene::spawn::ForMarker;
@@ -229,12 +229,8 @@ fn install_bindings(app: &mut App) {
     );
 }
 
-/// The locale every other one falls back to. The desktop's fallback chain
-/// ends here too, and it is the locale an app's source strings are in.
-const FALLBACK_LOCALE: &str = "en-US";
-
 /// Install the app's translations for `locale`, from catalogues that were
-/// fetched rather than read off a disk.
+/// fetched or read rather than found on a disk by the runtime itself.
 ///
 /// `catalogues` pairs a BCP-47 tag with that locale's Fluent source. It is
 /// the same registry the desktop builds, reaching the same two readers: the
@@ -243,15 +239,18 @@ const FALLBACK_LOCALE: &str = "en-US";
 /// arrived already translated still needs both, because a row the app builds
 /// after the page opens was never written into the document.
 ///
+/// `fallback` is the chain a key missing from `locale`'s catalogue falls
+/// through, the value `[app] fallback_locale` names. Empty takes the chain a
+/// desktop app gets when that key is unset, which ends in `en-US`.
+///
 /// No formatter is installed: nothing in this assembly links one, so a
 /// `format` spec leaves its text as it stands, before a locale switch and
 /// after it.
 ///
 /// A script's `set_locale` works here, and switches to any locale whose
-/// catalogue arrived with the page. A page carries the locale it was built
-/// for and the one everything falls back to, so a third locale resolves to
-/// nothing and every message shows the text the author wrote - the same
-/// rule as a desktop app naming a locale with no catalogue file.
+/// catalogue was handed in. A third locale resolves to nothing and every
+/// message shows the text the author wrote, the same rule as a desktop app
+/// naming a locale with no catalogue file.
 ///
 /// # Errors
 ///
@@ -261,17 +260,12 @@ pub fn install_i18n(
     world: &mut World,
     locale: &str,
     catalogues: &[(String, String)],
+    fallback: &[String],
 ) -> Result<(), I18nError> {
-    let current: LanguageIdentifier = Lang::try_from(locale)?.into();
-    let fallback: LanguageIdentifier = Lang::try_from(FALLBACK_LOCALE)?.into();
+    let i18n = I18n::from_sources(locale, catalogues, fallback)?;
     // The parsed spelling, which is what a switch answers with, so
     // `locale()` reads the same string either way.
-    let starting = current.to_string();
-    let mut i18n = I18n::new(current, vec![fallback]);
-    for (tag, source) in catalogues {
-        let tag: LanguageIdentifier = Lang::try_from(tag.as_str())?.into();
-        i18n.load_ftl(tag, source)?;
-    }
+    let starting = i18n.current.to_string();
     let shared = SharedI18n::new(i18n);
     let for_markup = shared.clone();
     let for_switching = shared.clone();
@@ -404,6 +398,7 @@ mod tests {
             &mut world,
             "de-DE",
             &[("de-DE".to_string(), GERMAN.to_string())],
+            &[],
         )
         .expect("a valid tag and a valid catalogue");
 
@@ -425,12 +420,13 @@ mod tests {
     fn a_catalogue_that_will_not_parse_is_reported() {
         let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let mut world = World::new();
-        assert!(install_i18n(&mut world, "not a tag", &[]).is_err());
+        assert!(install_i18n(&mut world, "not a tag", &[], &[]).is_err());
         assert!(
             install_i18n(
                 &mut world,
                 "de-DE",
                 &[("de-DE".to_string(), "= no key\n".to_string())],
+                &[],
             )
             .is_err()
         );

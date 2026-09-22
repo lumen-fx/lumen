@@ -238,15 +238,22 @@ fn render_one(
     let Booted {
         mut app,
         unsupported_engines,
+        language_error,
     } = lumen_prerender::boot(
         site.compiled(),
         &Location {
             path: key.clone(),
             segment,
         },
+        site.language(tree),
         site.seed(),
         dispatch,
     );
+    if let Some(error) = language_error {
+        warnings.push(format!(
+            "the catalogues would not load, so the app ran untranslated: {error}"
+        ));
+    }
     for engine in unsupported_engines {
         warnings.push(format!(
             "the app carries a `{engine}` program, which this renderer has no host for; what it \

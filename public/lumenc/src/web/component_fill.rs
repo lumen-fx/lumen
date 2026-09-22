@@ -40,7 +40,9 @@ use lumen_core::components::LumenTag;
 use lumen_html::contract::Seed;
 use lumen_ir::artifact::CompiledApp;
 use lumen_ir::layout_ir::{Element, FragmentUse};
-use lumen_prerender::{Budget, DenyDispatch, Location, boot, root_entity, row_fills, settle};
+use lumen_prerender::{
+    Budget, DenyDispatch, Language, Location, boot, root_entity, row_fills, settle,
+};
 use lumen_runtime::fragments::FragmentInstance;
 use lumen_web::RowFills;
 
@@ -146,6 +148,7 @@ fn round(
     let mut booted = boot(
         compiled,
         &Location::page(page),
+        Language::default(),
         seed,
         Arc::new(DenyDispatch::default()),
     );

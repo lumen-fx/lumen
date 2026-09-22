@@ -363,6 +363,11 @@ markup declare, so `on_start` sees the route it is being built for and can
 publish something different per page. What the app writes wins over what was
 declared, exactly as it does in a browser.
 
+A site in more than one locale runs each page once per locale, in that locale.
+A script's `t()` answers from that locale's catalogue and `locale()` names it,
+so a status line written through `t()` in `on_start` reads in German in the
+German tree, and so does every row the run built.
+
 Signals are not the whole of what a run finds. `set_class`, `set_root_class`
 and the node API's `set_attr`, `set_style` and `set_text` write onto one
 element rather than onto a signal, and the page carries what they wrote: the

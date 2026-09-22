@@ -10,6 +10,11 @@
 //! document needs: the text the markup is rendered with, and the typed seed
 //! the runtime adopts it with.
 //!
+//! A run is in one language, named by a [`Language`]: the locale it starts
+//! in and the catalogues it can read. A script's `t()` answers from them, and
+//! so does every `translatable` element the app spawns, the same way it does
+//! on the desktop and in the browser.
+//!
 //! Two things bound a run. A build answers the network without leaving the
 //! machine, so a page written on one computer is the page written on any
 //! other, and every address the app asked for is reported; a server answers
@@ -37,7 +42,7 @@ use lumen_core::request;
 use lumen_core::signals::discard_external_signals;
 use lumen_html::contract::Seed;
 use lumen_ir::artifact::CompiledApp;
-use lumen_portable::{apply_node_seed, apply_seed, hosts, portable_app};
+use lumen_portable::{apply_node_seed, apply_seed, hosts, install_i18n, portable_app};
 use lumen_scene::routing::install_routing;
 use lumen_scene::spawn::SpawnIntoWorld;
 use lumen_script::{FetchRegistry, HttpDispatch};
@@ -95,6 +100,37 @@ impl fmt::Display for Settled {
     }
 }
 
+/// The language a run is in.
+///
+/// `locale` is the BCP-47 tag the app starts in, and what a script's
+/// `locale()` answers. `catalogues` pairs a tag with that locale's Fluent
+/// source, every locale the app can switch to; `fallback` is the chain a key
+/// missing from the active catalogue falls through, the value
+/// `[app] fallback_locale` names, and empty takes the default chain.
+///
+/// An app with no catalogues runs with no translator at all, so `t()`
+/// answers with the key, which is what it answers on a desktop app with no
+/// `locale/` directory.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Language<'a> {
+    /// The locale the run starts in.
+    pub locale: &'a str,
+    /// Each locale's Fluent source, by tag.
+    pub catalogues: &'a [(String, String)],
+    /// The chain a missing key falls through.
+    pub fallback: &'a [String],
+}
+
+impl<'a> Language<'a> {
+    /// A run in `locale`, with no catalogue to read.
+    pub fn untranslated(locale: &'a str) -> Self {
+        Self {
+            locale,
+            ..Self::default()
+        }
+    }
+}
+
 /// What one run of one page produced.
 #[derive(Debug, Clone)]
 pub struct Prerendered {
@@ -107,9 +143,13 @@ pub struct Prerendered {
     /// Engines the app carries a program for that this build has no host for.
     /// Their part of the state is missing from [`Self::state`].
     pub unsupported_engines: Vec<String>,
-    /// What the components inside the page's `<for>` rows rendered. The tree
-    /// holds the row template, so this is the only place a row's body is.
+    /// What the components inside the page's `<for>` rows rendered, in the
+    /// run's language. The tree holds the row template, so this is the only
+    /// place a row's body is.
     pub fills: RowFills,
+    /// Why the run's catalogues would not load, when they would not. The run
+    /// went ahead in the language the app's source strings are written in.
+    pub language_error: Option<String>,
 }
 
 /// An app built for one run, before its first tick.
@@ -122,6 +162,9 @@ pub struct Booted {
     pub app: App,
     /// Engines the app carries a program for that this build has no host for.
     pub unsupported_engines: Vec<String>,
+    /// Why the catalogues would not load, when they would not. The app runs
+    /// in the language its source strings are written in.
+    pub language_error: Option<String>,
 }
 
 /// Build `compiled` for the address `at`, ready to tick.
@@ -131,16 +174,19 @@ pub struct Booted {
 /// address, which is [`Location::page`]; a server renders whatever the
 /// request resolved to.
 ///
+/// `language` is the locale the app runs in and the catalogues it reads.
 /// `seed` is the state the app starts from, the values an author declared;
 /// what the app writes over them wins, the same way it does in a browser.
 /// `dispatch` answers what the app asks of the network: a build refuses with
 /// [`DenyDispatch`], a server allows what its policy allows.
 ///
-/// One run at a time in a process: the external buses are shared, and a run
-/// empties them on the way in so it starts from its own state alone.
+/// One run at a time in a process: the external buses and the translator a
+/// script's `t()` reads are shared, and a run resets them on the way in so it
+/// starts from its own state and its own language alone.
 pub fn boot(
     compiled: &CompiledApp,
     at: &Location,
+    language: Language<'_>,
     seed: &Seed,
     dispatch: Arc<dyn HttpDispatch>,
 ) -> Booted {
@@ -152,6 +198,10 @@ pub fn boot(
     discard_plugin_events();
 
     let mut app = portable_app();
+
+    // Ahead of the hosts: `on_start` runs while they go in, and a script may
+    // call `t()` there.
+    let language_error = install_language(&mut app, language);
 
     // A thread that knows which request it is answering starts the app
     // knowing it too, before the first script runs: `on_start` is called
@@ -200,19 +250,52 @@ pub fn boot(
     Booted {
         app,
         unsupported_engines,
+        language_error,
     }
 }
 
-/// Run `compiled` as the page `key` and read the state it settles into, with
-/// the network answered by the run itself.
+/// Put the run's language into `app` and into the process-wide slots a
+/// script host reads it from.
+///
+/// The translator and the active locale belong to the process, like the
+/// buses, so the run before this one left its own in them. Both are reset
+/// first, whatever this run carries: a run with no catalogue that left the
+/// last one's in place would answer `t()` in another visitor's language.
+fn install_language(app: &mut App, language: Language<'_>) -> Option<String> {
+    lumen_core::i18n::clear_translator();
+    lumen_core::i18n::set_active_locale(language.locale);
+    if language.catalogues.is_empty() {
+        return None;
+    }
+    install_i18n(
+        &mut app.world,
+        language.locale,
+        language.catalogues,
+        language.fallback,
+    )
+    .err()
+    .map(|error| error.to_string())
+}
+
+/// Run `compiled` as the page `key` in `language` and read the state it
+/// settles into, with the network answered by the run itself.
 ///
 /// A build serves each page at its own address, so the page is rendered with
-/// nothing left over on `route.segment`.
-pub fn page(compiled: &CompiledApp, key: &str, seed: &Seed, budget: Budget) -> Prerendered {
+/// nothing left over on `route.segment`. A site in more than one language
+/// runs each page once per language, because what a script writes through
+/// `t()` is in the language it ran in.
+pub fn page(
+    compiled: &CompiledApp,
+    key: &str,
+    language: Language<'_>,
+    seed: &Seed,
+    budget: Budget,
+) -> Prerendered {
     let denied = DenyDispatch::default();
     let mut booted = boot(
         compiled,
         &Location::page(key),
+        language,
         seed,
         Arc::new(denied.clone()),
     );
@@ -226,6 +309,7 @@ pub fn page(compiled: &CompiledApp, key: &str, seed: &Seed, budget: Budget) -> P
         denied: denied.take(),
         unsupported_engines: booted.unsupported_engines,
         fills,
+        language_error: booted.language_error,
     }
 }
 

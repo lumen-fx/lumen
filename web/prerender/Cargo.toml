@@ -27,6 +27,8 @@ lumen-ir = { workspace = true }
 lumen-html = { workspace = true }
 # Routing and the IR-to-ECS spawner.
 lumen-scene = { workspace = true }
+# The catalogue a row's component body is translated through.
+lumen-i18n = { workspace = true }
 # Where a run's result is read, in the form a document is written from.
 lumen-web = { workspace = true }
 # The HTTP seam, so a run answers a request without one leaving the machine.

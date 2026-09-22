@@ -21,7 +21,7 @@ use lumen_html::contract::Seed;
 use lumen_ir::artifact::{CompiledApp, CompiledScript};
 use lumen_ir::fragment::{Fragment, FragmentKind, FragmentParam, FragmentTable};
 use lumen_ir::layout_ir::{Attributes, Element, FragmentUse, InterpolationSlot, LayoutIR};
-use lumen_prerender::{Budget, DenyDispatch, Location, boot, row_fills, settle};
+use lumen_prerender::{Budget, DenyDispatch, Language, Location, boot, row_fills, settle};
 
 /// The program the build script compiled: a component that has to run, and an
 /// `on_ready` that mounts a fragment by key.
@@ -165,6 +165,7 @@ fn run_tree(ir: LayoutIR, seed: &Seed) -> App {
     let mut booted = boot(
         &compiled,
         &Location::page("index"),
+        Language::default(),
         seed,
         Arc::new(DenyDispatch::default()),
     );
@@ -262,6 +263,55 @@ fn a_row_component_body_is_read_off_the_world_per_row() {
     assert!(fills.body("0.0.0").is_none());
 }
 
+/// A row's component body is markup as the author wrote it, so it is read out
+/// in the language the run is in, the same as the entities spawned for it.
+#[test]
+fn a_rows_body_is_read_in_the_runs_language() {
+    let _turn = in_turn();
+    let mut compiled = compiled();
+    let mut table = FragmentTable::new();
+    let mut shout = body("shout", "who");
+    shout[0].attrs.translatable = Some("shouted".to_string());
+    for (key, body) in [("shout", shout), ("card", body("card", "title"))] {
+        table
+            .insert(Fragment {
+                key: key.to_string(),
+                params: vec![FragmentParam {
+                    name: if key == "shout" { "who" } else { "title" }.to_string(),
+                    default: None,
+                }],
+                body,
+                origins: Vec::new(),
+                kind: FragmentKind::Markup,
+                components: Vec::new(),
+            })
+            .expect("distinct keys");
+    }
+    compiled.fragments = table;
+    let catalogues = vec![("de-DE".to_string(), "shouted = Laut\n".to_string())];
+    let mut booted = boot(
+        &compiled,
+        &Location::page("index"),
+        Language {
+            locale: "de-DE",
+            catalogues: &catalogues,
+            fallback: &[],
+        },
+        &seeded(),
+        Arc::new(DenyDispatch::default()),
+    );
+    settle(&mut booted.app, Budget::default());
+
+    let fills = row_fills(&mut booted.app);
+    for path in ["0.1::0", "0.1::1"] {
+        assert_eq!(
+            fills.body(path).and_then(|el| el.attrs.text.as_deref()),
+            Some("Laut"),
+            "{path}"
+        );
+    }
+}
+
 /// A block with no rows fills nothing and still records itself, so a page
 /// written from a longer list is caught rather than written with bodies from
 /// a list it does not show.
@@ -332,6 +382,7 @@ fn a_key_the_table_lost_builds_nothing_and_the_run_goes_on() {
         let mut booted = boot(
             &compiled,
             &Location::page("index"),
+            Language::default(),
             &Seed::new(),
             Arc::new(DenyDispatch::default()),
         );
