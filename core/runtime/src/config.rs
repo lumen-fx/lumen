@@ -695,6 +695,35 @@ pub struct WebCfg {
     /// `[web.pages.<key>]` - what each page says about itself. A key naming
     /// a page the app does not have is accepted and reaches nothing.
     pub pages: BTreeMap<String, WebPageCfg>,
+    /// `[web.ssr]` - what a render of the app may reach, when its pages are
+    /// rendered per request.
+    pub ssr: WebSsrCfg,
+}
+
+/// `[web.ssr]` block - what the app allows a render to reach.
+///
+/// This is policy the app owns, so it lives with the app and a build writes
+/// it into the file a server renders from. Where the server listens and how
+/// many processes it runs are the server's settings, not these.
+///
+/// ```toml
+/// [web.ssr]
+/// allow_hosts = ["api.example.com"]  # hosts a render may fetch from
+/// max_requests = 8                   # requests one render may make
+/// headers = ["authorization"]        # credential headers the app may read
+/// ```
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WebSsrCfg {
+    /// Hosts a render may ask for data, by name, without scheme or port.
+    /// Empty lets a render reach nothing.
+    pub allow_hosts: Vec<String>,
+    /// How many requests one render may make. Unset takes the renderer's
+    /// default.
+    pub max_requests: Option<usize>,
+    /// Request headers the app may read beyond the ones every render allows,
+    /// such as `authorization` or `cookie`.
+    pub headers: Vec<String>,
 }
 
 /// `[web.pages.<key>]` block - what one page says about itself.
@@ -1506,6 +1535,22 @@ mod tests {
         let err =
             toml::from_str::<LumenToml>("[app]\nfallback_locale = \"not a tag\"\n").unwrap_err();
         assert!(err.to_string().contains("fallback_locale"), "{err}");
+    }
+
+    #[test]
+    fn web_ssr_names_what_a_render_may_reach() {
+        let cfg: LumenToml = toml::from_str(
+            "[web.ssr]\nallow_hosts = [\"api.example.com\"]\nmax_requests = 3\n\
+             headers = [\"authorization\"]\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.web.ssr.allow_hosts, ["api.example.com"]);
+        assert_eq!(cfg.web.ssr.max_requests, Some(3));
+        assert_eq!(cfg.web.ssr.headers, ["authorization"]);
+        // Absent reaches nothing.
+        let cfg: LumenToml = toml::from_str("").unwrap();
+        assert!(cfg.web.ssr.allow_hosts.is_empty());
+        assert!(toml::from_str::<LumenToml>("[web.ssr]\nport = 80\n").is_err());
     }
 
     #[test]

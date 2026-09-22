@@ -1407,6 +1407,8 @@ fn a_rendered_site_is_the_files_a_render_needs_and_no_documents() {
 
     let files = files(&out);
     assert!(files.contains("lumen.web.json"), "{files:?}");
+    // And what a server needs beyond the app, under a name of its own.
+    assert!(files.contains("lumen.site.json"), "{files:?}");
     for expected in ["styles.css", "app.lmna", "lumen-web.wasm", "lumen-web.js"] {
         assert!(carries(&out, expected), "no `{expected}` in {files:?}");
     }
@@ -1417,6 +1419,110 @@ fn a_rendered_site_is_the_files_a_render_needs_and_no_documents() {
         documents(&out).is_empty(),
         "a rendered site wrote documents: {:?}",
         documents(&out)
+    );
+}
+
+/// Every `href` and `src` a document names on its own site, without the query
+/// a cache-busting reference carries.
+fn local_references(html: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for attr in ["href=\"", "src=\""] {
+        let mut rest = html;
+        while let Some(at) = rest.find(attr) {
+            rest = &rest[at + attr.len()..];
+            let end = rest.find('"').unwrap_or(rest.len());
+            let value = &rest[..end];
+            if value.starts_with('/') && !value.starts_with("//") {
+                found.push(value.split('?').next().unwrap_or(value).to_string());
+            }
+        }
+    }
+    found
+}
+
+/// A server that has only what the build wrote renders the site the build
+/// knew: the spec file names the hashed files, the address, the page titles,
+/// the image sizes, the locales and their catalogues, the declared state and
+/// the app's own policy.
+#[test]
+fn an_embedder_renders_a_site_from_the_files_the_build_wrote() {
+    use std::sync::Arc;
+
+    use lumen_ssr::{RenderOptions, Renderer, SERVER_SPEC_FILE, ServerSpec, SsrRequest, SsrSite};
+
+    let scratch = scratch("ssr-spec");
+    let out = scratch.join("site");
+    web("fixtures/ssr-site", &out, &[]);
+
+    let spec = ServerSpec::from_json(read(&out, SERVER_SPEC_FILE).as_bytes())
+        .expect("the build wrote a spec this build reads");
+    assert_eq!(spec.locales, ["en-US", "de-DE"]);
+    assert_eq!(spec.policy.allow_hosts, ["api.example.com"]);
+    let artifact = std::fs::read(out.join(&spec.web.artifact)).expect("the artifact it names");
+    let catalogues: Vec<(String, String)> = spec
+        .web
+        .catalogues
+        .iter()
+        .map(|(tag, path)| (tag.clone(), read(&out, path)))
+        .collect();
+    assert_eq!(catalogues.len(), 2, "{:?}", spec.web.catalogues);
+    let site = SsrSite::from_build(&artifact, &spec, catalogues).expect("the site loads");
+
+    // The app's policy reaches the options a server renders with.
+    let options = RenderOptions::default().with_policy(site.policy());
+    assert!(options.fetch.hosts.contains("api.example.com"));
+    assert!(options.headers.allows("authorization"));
+
+    let renderer = Renderer::start(Arc::new(site), options).expect("nothing else renders here");
+    let english = renderer
+        .render(SsrRequest::get("/"))
+        .expect("the document is written")
+        .body;
+    let german = renderer
+        .render(SsrRequest::get("/de-DE/"))
+        .expect("the document is written")
+        .body;
+    drop(renderer);
+
+    // Every file a document points at is one the build wrote.
+    for (name, html) in [("/", &english), ("/de-DE/", &german)] {
+        let references = local_references(html);
+        assert!(
+            references.iter().any(|path| path.contains("styles.")),
+            "{name}: {references:?}"
+        );
+        for path in references {
+            assert!(
+                out.join(path.trim_start_matches('/')).is_file(),
+                "{name} points at `{path}`, which the build did not write"
+            );
+        }
+    }
+    assert!(english.contains(&spec.web.css), "{english}");
+
+    // The address, the title and the image size are the build's.
+    assert!(
+        english.contains(r#"<link rel="canonical" href="https://example.com/index.html">"#),
+        "{english}"
+    );
+    assert!(english.contains("<title>Welcome</title>"), "{english}");
+    assert!(english.contains(r#"width="256""#), "{english}");
+    // The declared state is the build's too.
+    assert!(english.contains("declared"), "{english}");
+
+    // And the German tree reads in German, markup and script alike.
+    assert!(
+        english.contains("Hello") && english.contains("Ready to go"),
+        "{english}"
+    );
+    assert!(german.contains(r#"lang="de-DE""#), "{german}");
+    assert!(
+        german.contains("Hallo") && german.contains("Startklar"),
+        "{german}"
+    );
+    assert!(
+        german.contains(r#"<link rel="canonical" href="https://example.com/de-DE/index.html">"#),
+        "{german}"
     );
 }
 
@@ -1437,6 +1543,7 @@ fn a_rendered_site_can_be_asked_for_pages_with_nothing_to_run_them() {
     // What the server renders from stays; what only a browser would load goes.
     assert!(carries(&out, "styles.css"), "{files:?}");
     assert!(carries(&out, "app.lmna"), "{files:?}");
+    assert!(files.contains("lumen.site.json"), "{files:?}");
     assert!(!files.contains("lumen.web.json"), "{files:?}");
     for absent in ["lumen-web.wasm", "lumen-web.js", "app.cdlb"] {
         assert!(!carries(&out, absent), "`{absent}` in {files:?}");

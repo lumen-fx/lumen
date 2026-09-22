@@ -262,10 +262,13 @@ with the markup already in it. Prints how many pages it wrote and where.
   program where there is one, the manifest the browser runtime reads, and the
   runtime itself. The documents load them, and the runtime adopts the markup
   each page arrived with.
-- `ssr` writes what a render needs and no documents: a page is produced when
-  it is asked for, by running the app for that request. `--serve` renders them
-  here; without it the directory is for a server you build on
-  [`lumen-ssr`](../guides/server-rendering.md).
+- `ssr` writes what a render needs and no documents: the stylesheet, the
+  compiled app, the assets, the runtime files the documents load, and
+  `lumen.site.json`, which names all of them and carries the page titles, the
+  locales, the image sizes, the `[web.seed]` values and the `[web.ssr]`
+  policy. A page is produced when it is asked for, by running the app for
+  that request. `--serve` renders them here; without it the directory is for a
+  server you build on [`lumen-ssr`](../guides/server-rendering.md).
 
 Every mode writes the whole markup tree, so a reader and a crawler get the
 same document whichever one is set.
@@ -300,7 +303,7 @@ document of its own.
 | `--serve` | Serve the emitted site on 127.0.0.1 and print the address. Ctrl-C stops it. Under `--render ssr` every page comes from a render. |
 | `--port <n>` | Port to serve on. Default 8787; `0` takes any free port and prints which. |
 | `--host <addr>` | Address to listen on. Default 127.0.0.1. Any other address makes the site reachable from other machines, and the command says so. |
-| `--allow-host <name>` | Let a render ask this host for data; repeat for more. A render reaches nothing that is not named. Applies to `--render ssr --serve`; a build that renders nothing says so and ignores it. |
+| `--allow-host <name>` | Let a render ask this host for data, on top of `[web.ssr] allow_hosts`; repeat for more. A render reaches nothing that is not named. Applies to `--render ssr --serve`; a build that renders nothing says so and ignores it. |
 
 ### Serving
 

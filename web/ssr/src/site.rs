@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use lumen_core::nav;
 use lumen_html::contract::Seed;
-use lumen_i18n::I18n;
+use lumen_i18n::{I18n, LanguageIdentifier, SharedI18n};
 use lumen_ir::artifact::CompiledApp;
 use lumen_prerender::Language;
-use lumen_web::{PageSpec, SiteSpec, WebSpec};
+use lumen_web::{LocaleSpec, PageSpec, ServerPolicy, ServerSpec, SiteSpec, WebSpec};
 
 use crate::error::SsrError;
 use crate::locale::negotiate;
@@ -47,6 +47,8 @@ pub struct SsrSite {
     catalogues: Vec<(String, String)>,
     /// The chain a key missing from the active catalogue falls through.
     fallback: Vec<String>,
+    /// What the app allows a render to reach.
+    policy: ServerPolicy,
 }
 
 impl SsrSite {
@@ -105,7 +107,96 @@ impl SsrSite {
             seed: Seed::new(),
             catalogues: Vec::new(),
             fallback: Vec::new(),
+            policy: ServerPolicy::default(),
         })
+    }
+
+    /// The site a build rendered per request, from the files it wrote.
+    ///
+    /// `artifact` is the compiled app's bytes, the file `spec.web.artifact`
+    /// names. `spec` is [`lumen_web::SERVER_SPEC_FILE`], read with
+    /// [`ServerSpec::from_json`]. `catalogues` pairs each tag in
+    /// `spec.web.catalogues` with the source of the file it names. Everything
+    /// arrives already read, so where the files live and how they are read
+    /// stays the server's business.
+    ///
+    /// The site this builds is the one `lumenc web --render ssr --serve`
+    /// renders: a tree per locale the build emitted, translated from the
+    /// catalogues, with the titles, image sizes, declared state and policy
+    /// the build wrote down.
+    pub fn from_build(
+        artifact: &[u8],
+        spec: &ServerSpec,
+        catalogues: Vec<(String, String)>,
+    ) -> Result<Self, SsrError> {
+        let compiled = lumen_ir::artifact::deserialize(artifact)
+            .map_err(|error| SsrError::Artifact(error.to_string()))?;
+        Self::from_spec(compiled, spec, catalogues)
+    }
+
+    /// [`Self::from_build`], for a caller already holding the compiled app.
+    pub fn from_spec(
+        compiled: CompiledApp,
+        spec: &ServerSpec,
+        catalogues: Vec<(String, String)>,
+    ) -> Result<Self, SsrError> {
+        let mut site = Self::new(compiled, spec.web.clone())?;
+        let locales = if spec.locales.is_empty() {
+            vec![site.trees[0].locale.locale.clone()]
+        } else {
+            spec.locales.clone()
+        };
+        let assets = spec.assets();
+        let ir = site.compiled.ir.clone();
+        for locale in &locales {
+            // A locale that is not a language tag is a tree in the text the
+            // author wrote, the same tree the build emitted for it.
+            let tree_ir = match locale.parse::<LanguageIdentifier>() {
+                Ok(_) if !catalogues.is_empty() => {
+                    let i18n = I18n::from_sources(locale, &catalogues, &spec.fallback)
+                        .map_err(|error| SsrError::Catalogue(error.to_string()))?;
+                    lumen_web::translate_ir(&ir, &SharedI18n::new(i18n))
+                }
+                _ => ir.clone(),
+            };
+            let tree_ir = Arc::new(tree_ir);
+            let pages = site
+                .keys
+                .iter()
+                .map(|key| {
+                    let mut page = PageSpec::new(key.clone(), Arc::clone(&tree_ir));
+                    if let Some(head) = spec.pages.iter().find(|head| &head.key == key) {
+                        head.apply(&mut page);
+                    }
+                    page
+                })
+                .collect();
+            let tree = SiteSpec {
+                pages,
+                web: WebSpec {
+                    entry: site.entry.clone(),
+                    per_request: true,
+                    ..spec.web.clone()
+                },
+                locale: LocaleSpec {
+                    alternates: locales
+                        .iter()
+                        .filter(|other| *other != locale)
+                        .cloned()
+                        .collect(),
+                    default_locale: locales[0].clone(),
+                    ..LocaleSpec::new(locale.clone())
+                },
+                assets: assets.clone(),
+                ..SiteSpec::default()
+            };
+            site = site.with_locale(tree)?;
+        }
+        let mut site = site
+            .with_catalogues(catalogues, spec.fallback.clone())?
+            .with_seed(spec.seed.clone());
+        site.policy = spec.policy.clone();
+        Ok(site)
     }
 
     /// Also answer in `tree`'s locale, from the strings `tree` carries.
@@ -144,7 +235,9 @@ impl SsrSite {
             .position(|held| held.locale.locale == tree.locale.locale)
         {
             Some(index) => self.trees[index] = tree,
-            None if at_root => self.trees.insert(0, tree),
+            // One tree sits at the root, so a root tree in another locale
+            // takes that place rather than standing beside the old one.
+            None if at_root => self.trees[0] = tree,
             None => self.trees.push(tree),
         }
         Ok(self)
@@ -186,12 +279,22 @@ impl SsrSite {
         fallback: Vec<String>,
     ) -> Result<Self, SsrError> {
         if !catalogues.is_empty() {
-            I18n::from_sources(&self.trees[0].locale.locale, &catalogues, &fallback)
+            // `und` stands in for the locale: what is checked is the
+            // catalogues and the chain, whichever tree a render is in.
+            I18n::from_sources("und", &catalogues, &fallback)
                 .map_err(|error| SsrError::Catalogue(error.to_string()))?;
         }
         self.catalogues = catalogues;
         self.fallback = fallback;
         Ok(self)
+    }
+
+    /// What the app allows a render to reach, as the build wrote it down.
+    ///
+    /// [`crate::RenderOptions::with_policy`] applies it. A site built with
+    /// [`Self::new`] carries the empty policy: a render reaches no host.
+    pub fn policy(&self) -> &ServerPolicy {
+        &self.policy
     }
 
     /// The language a render in `tree` runs in.
@@ -388,7 +491,6 @@ pub(crate) struct Route {
 #[cfg(test)]
 mod tests {
     use lumen_ir::artifact::CompiledPages;
-    use lumen_web::LocaleSpec;
 
     use super::*;
 
@@ -477,6 +579,19 @@ mod tests {
         // The tree of the default locale replaces the one the site started
         // with rather than being added beside it.
         assert_eq!(site.locales(), ["en-US", "de-DE"]);
+    }
+
+    #[test]
+    fn a_root_tree_in_another_locale_takes_the_roots_place() {
+        let site = SsrSite::new(app_with_pages(), WebSpec::default()).expect("the entry is a page");
+        let french = SiteSpec {
+            locale: LocaleSpec::new("fr-FR"),
+            ..site.spec().clone()
+        };
+        let site = site.with_locale(french).expect("it answers for every page");
+        // The tree `new` started with was the default locale's stand-in, and a
+        // site has one root.
+        assert_eq!(site.locales(), ["fr-FR"]);
     }
 
     #[test]

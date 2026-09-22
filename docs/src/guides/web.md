@@ -93,12 +93,23 @@ same for every app and every platform, and it loads the compiled app the way
 the desktop runtime loads it. A build never compiles Rust or WebAssembly, so
 it takes about as long as `lumenc build`.
 
-Under `render = "ssr"` that list holds everything except the documents. A page
-is produced when it is asked for, so writing one here would leave a second
-copy of it beside the one a visitor is sent. With `runtime = false` beside it,
-the candela program, `lumen.web.json`, the catalogues and the runtime pair go
-too: nothing loads them. The compiled app stays, because the server renders
-from it, and the build prints the name it wrote it under.
+Under `render = "ssr"` that list holds everything except the documents, plus
+one file of its own:
+
+```
+lumen.site.json          what a server renders the site from
+```
+
+A page is produced when it is asked for, so writing one here would leave a
+second copy of it beside the one a visitor is sent. `lumen.site.json` is what
+the build knew that the compiled app does not carry: the hashed name of every
+other file, the address and the page titles, the locales and their
+catalogues, the size of every image, the `[web.seed]` values, and the app's
+`[web.ssr]` policy. A server reads it and renders the same site `--serve`
+renders; the browser never loads it. With `runtime = false` beside it, the
+candela program, `lumen.web.json`, the catalogues and the runtime pair go too:
+nothing in a browser loads them. The compiled app stays, because the server
+renders from it.
 
 ## How a page reaches the browser
 

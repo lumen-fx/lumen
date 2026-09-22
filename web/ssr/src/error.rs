@@ -32,6 +32,8 @@ pub enum SsrError {
         /// What is wrong with it.
         why: String,
     },
+    /// The compiled app would not decode.
+    Artifact(String),
     /// A translation catalogue would not load: a tag that is not BCP-47, or
     /// a source that is not Fluent.
     Catalogue(String),
@@ -56,6 +58,7 @@ impl fmt::Display for SsrError {
                 f,
                 "the tree for `{locale}` cannot answer for this site's pages: {why}"
             ),
+            SsrError::Artifact(why) => write!(f, "the compiled app will not load: {why}"),
             SsrError::Catalogue(why) => write!(f, "a translation catalogue will not load: {why}"),
             SsrError::Emit(error) => write!(f, "cannot write the document: {error}"),
         }
