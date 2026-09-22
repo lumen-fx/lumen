@@ -782,6 +782,97 @@ fn the_browser_s_back_button_opens_the_page_its_address_names() {
     );
 }
 
+/// A site of an entry page and a `user` page that answers for the paths
+/// under it, hung off `base` and emitted in `en-US` at the root and `de-DE`
+/// under its own tag.
+fn user_site(base: &str) -> SiteSpec {
+    let mut locale = lumen_web::spec::LocaleSpec::new("en-US");
+    locale.alternates = vec!["de-DE".to_string()];
+    SiteSpec {
+        pages: vec![
+            PageSpec::new("index", LayoutIR::default()),
+            PageSpec::new("user", LayoutIR::default()),
+        ],
+        web: WebSpec {
+            base_path: base.to_string(),
+            entry: "index".to_string(),
+            runtime: false,
+            ..WebSpec::default()
+        },
+        locale,
+        ..SiteSpec::default()
+    }
+}
+
+/// An app opened at `address` of `site`, assembled the way `boot` assembles
+/// one: the manifest the build writes says which page the address names,
+/// and the router opens there. The app writes the head of the page it
+/// opened on, so the guard handed back puts the suite's own head back.
+fn open_at(site: &SiteSpec, address: &str) -> (App, Element, HeadGuard) {
+    let head = HeadGuard::take();
+    let document = web_sys::window().unwrap().document().unwrap();
+    let root = document.create_element("div").unwrap();
+    document.body().unwrap().append_child(&root).unwrap();
+
+    let manifest = lumen_web::site::manifest(site);
+    let (path, segment) = manifest.page_at(address);
+    let mut app = App::new();
+    app.extract_fns.clear();
+    app.world.init_resource::<PropertyStore>();
+    lumen_scene::routing::install_routing(
+        &mut app,
+        manifest.entry.clone(),
+        manifest.page_keys(),
+        Location { path, segment },
+    );
+    app.add_systems(TickStage::Systems, spawn::reconcile_if_blocks);
+    let tree = LayoutIR {
+        root: element(
+            "root",
+            None,
+            vec![page_gate("index", "home"), page_gate("user", "user")],
+        ),
+        ..LayoutIR::default()
+    };
+    let root_entity = tree.spawn_into(&mut app.world);
+    app.add_plugin(WebDomPlugin {
+        root: root.clone(),
+        root_entity,
+        routes: Routes::from_manifest(&manifest, &manifest.locale),
+        soft_navigation: false,
+    });
+    app.tick();
+    (app, root, head)
+}
+
+#[wasm_bindgen_test]
+fn a_deep_path_opens_the_page_that_answers_for_it() {
+    // A deep path has no document of its own, so the host serves the shell
+    // for it, and the address is all that says which page to open. Opening
+    // the entry page instead leaves `/user/42` showing the home page.
+    for (base, address) in [
+        ("/", "/user/42"),
+        ("/docs/", "/docs/user/42"),
+        ("/", "/de-DE/user/42"),
+    ] {
+        let (app, root, _head) = open_at(&user_site(base), address);
+        assert_eq!(
+            root.text_content().as_deref(),
+            Some("user"),
+            "`{address}` under base `{base}` opens the user page"
+        );
+        let store = app.world.resource::<PropertyStore>();
+        assert_eq!(
+            store
+                .get_global_str(lumen_core::nav::SEGMENT_SIGNAL)
+                .as_deref(),
+            Some("/42"),
+            "and hands it the rest of `{address}`"
+        );
+        root.remove();
+    }
+}
+
 /// A page whose whole content is a same-page fragment link - a "back to
 /// top" or table-of-contents entry, not a link to another page.
 fn fragment_link_tree() -> LayoutIR {
