@@ -21,8 +21,9 @@ use bevy_ecs::entity::Entity;
 use bevy_ecs::world::World;
 
 /// The event-binding registry is process-global, so the tests that bind
-/// through it run one at a time: one test's `clear_all_bindings` would
-/// otherwise drop a binding another is about to dispatch through.
+/// through it, or clear it through `clear_all_bindings` or a host `reset`,
+/// run one at a time: otherwise one test drops a binding another is about
+/// to dispatch through.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Reaches for the whole builtin surface through the prelude, so the load only
@@ -374,6 +375,9 @@ fn calling_an_export_with_the_wrong_argument_count_is_an_error_not_a_miss() {
 
 #[test]
 fn reset_drops_the_program_and_everything_the_script_registered() {
+    // `reset` clears the process-wide event bindings too, so it takes the
+    // same lock as the tests that bind and dispatch through them.
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let mut host = loaded(SMOKE, "smoke.cdlb");
     host.call("on_start", &[]).expect("on_start runs");
     assert!(host.mirror_get("greeting").is_some());
