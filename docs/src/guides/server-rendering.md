@@ -10,9 +10,11 @@ Reach for it when a page depends on who is asking or on data that changes
 faster than you rebuild. A page whose content is the same for everybody wants
 [a build](web.md) instead, which costs nothing to serve.
 
-There is no transport in the crate. No sockets, no HTTP parsing, no async
-runtime: a request goes in as a struct and a response comes back as one, so it
-goes inside the server you already have, whichever it is.
+Two things ship. `lumen-server` is the server you deploy: point it at the
+directory a build wrote and it serves the site, rendering every page. The
+`lumen-ssr` crate is the renderer inside it, with no transport of its own: a
+request goes in as a struct and a response comes back as one, so it also goes
+inside a server you already have.
 
 ## What you serve
 
@@ -67,12 +69,11 @@ lumenc web myapp --render ssr --serve
 ```
 
 That emits the site, then serves it with every page coming from a render of the
-app for the request that asked. It is the same renderer this page documents,
-with a socket in front of it, and it is for developing against and for hosting
-a site yourself: it listens on 127.0.0.1, `--host <addr>` is what widens that
-and says so, and anything the public reaches belongs behind a reverse proxy
-such as nginx. A production deployment embeds `lumen-ssr` in a server of your
-own, which is what the rest of this page is about.
+app for the request that asked. It is the server `lumen-server` runs, with
+development defaults: it listens on 127.0.0.1, `--host <addr>` is what widens
+that and says so, a render that fails says why in the page, and there are no
+worker processes. Anything the public reaches belongs on
+[`lumen-server`](#running-in-production).
 
 Files keep their own path through it: a stylesheet, an artifact and the wasm
 module are read from the directory the build wrote while a page is being
@@ -91,6 +92,146 @@ Warnings a render comes back with are printed once each, so a page reloaded
 twenty times does not bury a new one. Whether anything is reading them is not
 the server's business: a log line that cannot be written is dropped, rather
 than ending a process in the middle of answering somebody.
+
+## Running in production
+
+`lumen-server` serves a site built with `--render ssr`. It installs beside
+`lumenc`, and it is published as a container image.
+
+```
+lumenc web myapp --render ssr --out dist/web
+lumen-server dist/web
+```
+
+It reads `lumen.site.json` and nothing else about the app: not `lumen.toml`,
+not the app's source. What the app allows a render to do, its fetch hosts,
+its request cap and the headers it reads, is the `[web.ssr]` policy the build
+wrote into that file. How the server runs is yours to say, with flags or with
+the `LUMEN_*` variable beside each one; a flag wins over its variable. The
+[reference](../reference/cli.md#lumen-server) lists them all.
+
+```
+lumen-server dist/web --bind 0.0.0.0 --port 8080 --workers 4 --log-format json
+LUMEN_BIND=0.0.0.0 LUMEN_WORKERS=4 lumen-server dist/web
+```
+
+It listens on 127.0.0.1 unless `--bind` says otherwise. TLS and compression
+are left to the reverse proxy or load balancer in front of it.
+
+### Workers
+
+A process renders one page at a time, so `--workers N` runs N worker
+processes that share the port. A supervisor binds the port, starts the
+workers, and keeps the socket open while it replaces one that exits, so a
+connection that arrives meanwhile waits rather than being refused. Files are
+served while a page renders, on every worker.
+
+Each worker holds a bounded number of connections and a short queue of
+requests waiting for a render. A page asked for when the queue is full is
+answered with a 503 and `Retry-After`, so a balancer sends it elsewhere rather
+than letting it wait behind everyone else.
+
+Windows has no supervisor: `lumen-server` runs as one process there, and
+`--workers` above 1 is refused. Run one per port behind your balancer instead.
+
+### Health
+
+Two endpoints answer on every worker:
+
+| Path | Answers |
+| --- | --- |
+| `/_lumen/healthz` | 200 while the process is running. For liveness. |
+| `/_lumen/readyz` | 200 when a page asked for now would be rendered, and 503 while the server is stopping or its render queue is full. For readiness. |
+
+`--health-path /ops` moves them to `/ops/healthz` and `/ops/readyz`, for an
+app with a page of its own at `/_lumen`. `lumen-server probe` asks the liveness
+endpoint of the server its own flags and variables describe, and exits 0 when
+it answers; that is what the container image checks itself with.
+
+### Logging
+
+Every request is one access line on standard output: the time, the visitor's
+address, the method and target, the status, the body size, and how long it
+took. The server's own messages, and each warning a render comes back with,
+go to standard error; a warning is written once however many renders repeat
+it. `--log-format json` writes both as one JSON object per line for a log
+collector.
+
+No header value is ever written, so a `Cookie`, `Authorization` or
+`Proxy-Authorization` never reaches a log.
+
+A render that fails is logged with what went wrong, and the visitor gets the
+status and nothing else. Only `lumenc web --serve` puts the reason in the page.
+
+### Stopping
+
+On SIGTERM or Ctrl-C the server reports itself not ready, stops accepting,
+closes idle connections, and lets the requests it is answering finish. It
+exits once they have, or when `--shutdown-grace` runs out.
+
+### Recycling and runaway renders
+
+`--max-renders N` retires a worker after about N renders and the supervisor
+starts a fresh one; each worker picks a slightly different number, so they do
+not all restart at once. A process's memory grows slowly over many renders,
+and a fresh process is how to give it back.
+
+A render that ticks past `--render-timeout` cannot be stopped from inside the
+process that is running it. Its visitor gets a 504, and the worker finishes
+what else it is answering and exits so a fresh one takes over. Requests queued
+behind that render are answered with a 503.
+
+### Behind a proxy
+
+Whether a request arrived over TLS, and from where, is what the proxy in
+front says in `X-Forwarded-Proto` and `X-Forwarded-For`. Those headers are
+believed only from the addresses `--trusted-proxy` names, and dropped from
+every other request before the app sees them:
+
+```
+lumen-server dist/web --trusted-proxy 10.0.0.0/8
+```
+
+With a trusted proxy, `request.secure` reads what the proxy said about TLS and
+the access log records the visitor's address rather than the proxy's.
+
+### Caching
+
+A file whose name carries the hash of its contents, which is every file a
+build writes except the documents, `lumen.web.json` and `lumen.site.json`, is
+served with `Cache-Control: public, max-age=31536000, immutable`: a new build
+is a new name, so a browser or CDN never has to ask again. Every other file is served
+with `no-cache`. A rendered page is `no-store` unless the app sets its own
+`Cache-Control` with `response_header`. `lumen.site.json` is never served.
+
+### The container image
+
+`ghcr.io/lumen-fx/lumen-server` carries the same binary for Linux on x86_64
+and aarch64, tagged with each release version and `latest`, plus `nightly`
+for the newest nightly build. It listens on port 8080 on every interface, runs
+as a user without root, checks its own health with `lumen-server probe`, and
+serves the site mounted at `/site`:
+
+```
+lumenc web myapp --render ssr --out dist/web
+docker run --rm -p 8080:8080 -v "$PWD/dist/web:/site:ro" ghcr.io/lumen-fx/lumen-server
+```
+
+Flags go after the image name, and the variables work with `-e`:
+
+```
+docker run --rm -p 8080:8080 -v "$PWD/dist/web:/site:ro" \
+  -e LUMEN_WORKERS=4 -e LUMEN_LOG_FORMAT=json \
+  ghcr.io/lumen-fx/lumen-server --trusted-proxy 10.0.0.0/8
+```
+
+Move the port with `LUMEN_PORT` rather than `--port`, so the health check asks
+the port the server listens on. To ship the site inside an image of your own:
+
+```dockerfile
+FROM ghcr.io/lumen-fx/lumen-server
+COPY dist/web /site
+```
 
 ## Rendering
 
@@ -127,8 +268,16 @@ A file written by another version of `lumenc` is refused with a message
 naming both versions, rather than read into a site that points at the wrong
 files. Rebuild the site with the `lumenc` that matches your server.
 
+This is what `lumen-server` does for every page. Embed it yourself when the
+pages belong inside a server you already run.
+
 `render` blocks until the document is written, and it is safe to call from any
-thread: calls queue.
+thread: calls queue. A server facing the public bounds the queue with
+`RenderOptions::queue` and calls `try_render` with a time limit instead: a
+full queue answers `SsrError::Busy` at once, and a render still running past
+the limit answers `SsrError::TimedOut`. A render past its limit cannot be
+stopped, so the renderer answers nothing after it and `is_stopped` says so;
+the process that owns it is the thing to restart.
 
 A script failure stays inside the render it happened in. A handler that raises,
 and the script engine itself giving up mid-call, both end that one call, are
@@ -227,7 +376,8 @@ writes and one visitor's data lands in another visitor's page. The check turns
 that into an error at startup.
 
 Serve more requests at once by running more processes behind whatever balances
-them. That is the scaling story, and it is the one to plan for.
+them; `lumen-server --workers` does that on one machine. That is the scaling
+story, and it is the one to plan for.
 
 ## A request is a whole life
 

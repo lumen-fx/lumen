@@ -267,8 +267,9 @@ with the markup already in it. Prints how many pages it wrote and where.
   `lumen.site.json`, which names all of them and carries the page titles, the
   locales, the image sizes, the `[web.seed]` values and the `[web.ssr]`
   policy. A page is produced when it is asked for, by running the app for
-  that request. `--serve` renders them here; without it the directory is for a
-  server you build on [`lumen-ssr`](../guides/server-rendering.md).
+  that request. `--serve` renders them here; without it the directory is for
+  [`lumen-server`](#lumen-server), or for a server you build on
+  [`lumen-ssr`](../guides/server-rendering.md).
 
 Every mode writes the whole markup tree, so a reader and a crawler get the
 same document whichever one is set.
@@ -307,11 +308,10 @@ document of its own.
 
 ### Serving
 
-`--serve` is for development and for a site you host yourself: one directory,
-one machine, one process. Put a reverse proxy in front of it before anyone
-else uses it, and build your production server around
-[`lumen-ssr`](../guides/server-rendering.md), which is the renderer
-`--render ssr` installs.
+`--serve` is for development: one directory, one machine, one process. It is
+the server [`lumen-server`](#lumen-server) runs, with development defaults: a
+render that fails says why in the page, and there are no worker processes.
+Run a site anyone else uses with `lumen-server`, behind a reverse proxy.
 
 Under `--render static` and `--render csr` it hands out the documents the
 build wrote, the way a plain file server does. Under `--render ssr` the pages
@@ -323,7 +323,8 @@ page, and a path with no file behind it reaches the render too, so `/user/42`
 is answered by the `user` page with `/42` on `route.segment`.
 
 A process renders one request at a time, and requests for pages queue.
-Serving more at once means more processes behind a proxy; the reason is in
+Serving more at once means more processes, which is what `lumen-server
+--workers` runs; the reason is in
 [Rendering on a server](../guides/server-rendering.md). A site emitted in
 several locales is rendered in whichever of them the request asks for, by a
 `/<tag>/` prefix on the path or by `Accept-Language`.
@@ -840,7 +841,59 @@ Neither one guesses a download address. Set `LUMEN_GH_REPO` to read releases
 from a different repository; it changes both the release these downloads come
 from and the one the update check compares against.
 
+## lumen-server
+
+`lumen-server` is a separate binary, installed beside `lumenc`, that serves a
+site built with `lumenc web --render ssr` in production. The guide is
+[Running in production](../guides/server-rendering.md#running-in-production).
+
+```
+lumen-server [options] <site_dir>
+lumen-server probe [options]
+lumen-server --help
+lumen-server --version
+```
+
+`<site_dir>` is the directory `lumenc web --render ssr` wrote; the server reads
+`lumen.site.json` there and nothing else about the app. Every option can be set
+in the environment with the variable beside it, and a flag wins over its
+variable. A duration is a number with a unit, `500ms`, `10s`, `2m` or `1h`, and
+a bare number is seconds.
+
+| Flag | Variable | Effect |
+|------|----------|--------|
+| `<site_dir>` | `LUMEN_SITE` | The built site. |
+| `--bind <addr>` | `LUMEN_BIND` | Address to listen on. Default 127.0.0.1; `0.0.0.0` listens on every interface. |
+| `--port <n>` | `LUMEN_PORT` | Port to listen on. Default 8080; `0` takes any free port and prints which. |
+| `--workers <n>` | `LUMEN_WORKERS` | Worker processes sharing the port, each rendering one page at a time. Default 1. Above 1 is refused on Windows. |
+| `--max-connections <n>` | `LUMEN_MAX_CONNECTIONS` | Connections a worker serves at once; more wait in the listen backlog. Default 256. |
+| `--queue-depth <n>` | `LUMEN_QUEUE_DEPTH` | Page requests a worker lets wait for a render. Past it a page is answered 503 with `Retry-After`. Default 2. |
+| `--header-timeout <dur>` | `LUMEN_HEADER_TIMEOUT` | Time a client has to send a request's line and headers. Past it the request is answered 408 and the connection closed. Default 10s. |
+| `--body-timeout <dur>` | `LUMEN_BODY_TIMEOUT` | Time a client has to send a request's body. Default 30s. |
+| `--write-timeout <dur>` | `LUMEN_WRITE_TIMEOUT` | Time a client has to take a response. Default 30s. |
+| `--keep-alive <dur>` | `LUMEN_KEEP_ALIVE` | How long an idle connection waits for its next request. `0` closes every connection after one response. Default 5s. |
+| `--render-timeout <dur>` | `LUMEN_RENDER_TIMEOUT` | Time a render gets once it starts. Past it the page is answered 504 and the worker is replaced. Default 30s. |
+| `--max-renders <n>` | `LUMEN_MAX_RENDERS` | Replace a worker after about this many renders. `0` never does. Default 0. |
+| `--shutdown-grace <dur>` | `LUMEN_SHUTDOWN_GRACE` | Time a stopping server gives the requests it is answering. Default 30s. |
+| `--log-format text\|json` | `LUMEN_LOG_FORMAT` | How access lines and messages are written. Default `text`. |
+| `--health-path <prefix>` | `LUMEN_HEALTH_PATH` | Where `<prefix>/healthz` and `<prefix>/readyz` answer. Default `/_lumen`. |
+| `--trusted-proxy <cidr>` | `LUMEN_TRUSTED_PROXIES` | An address or block whose `X-Forwarded-For` and `X-Forwarded-Proto` are believed; repeat for more. The variable takes a comma-separated list, and the flag replaces it rather than adding to it. Default: none. |
+
+`/_lumen/healthz` answers 200 while the process runs. `/_lumen/readyz` answers
+200, or 503 while the server is stopping or its render queue is full.
+
+`lumen-server probe` reads the same `--bind`, `--port` and `--health-path` (or
+their variables), asks that server's liveness endpoint, and exits 0 when it
+answers 200 and 1 otherwise.
+
+`lumen-server` exits 0 after a stop, 1 when the site will not load or the port
+cannot be taken, and 2 for a flag it cannot read. A worker whose render ran
+past `--render-timeout` exits 70, and the supervisor starts another.
+
 ## Environment variables
+
+These are `lumenc`'s. The variables `lumen-server` reads are listed with its
+flags [above](#lumen-server).
 
 | Variable | Effect |
 |----------|--------|

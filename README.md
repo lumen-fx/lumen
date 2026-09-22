@@ -72,8 +72,8 @@ the app runs and the window updates.
   hotkeys, file dialogs, clipboard, drag and drop, audio, and accessibility
   through AccessKit.
 - **The same app at a URL.** `lumenc web` turns the app into a static site of
-  real HTML, CSS, and links, and `lumen-ssr` renders a page per request inside
-  a server you already have.
+  real HTML, CSS, and links. `lumen-server` renders a page per request in
+  production, and `lumen-ssr` does the same inside a server you already have.
 - **Tooling.** One command to create, check, format, run, and package. Press
   F12 during a run from source for docked devtools: the live element tree,
   signal values, and captured network requests. A headless mode runs the full
