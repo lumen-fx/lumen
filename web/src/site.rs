@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use lumen_html::contract::{DEFAULT_MANIFEST_FILE, LM_CONTRACT_VERSION, Manifest, Seed};
+use lumen_html::contract::{DEFAULT_MANIFEST_FILE, LM_CONTRACT_VERSION, Manifest, PageInfo, Seed};
 use lumen_html::{escape_attr, escape_text};
 use lumen_ir::css::Stylesheet;
 
@@ -12,7 +12,9 @@ use crate::css;
 use crate::error::EmitError;
 use crate::html;
 use crate::seo;
-use crate::spec::{HostRewrite, OutputFile, PageSpec, RowFills, SignalEnv, Site, SiteSpec};
+use crate::spec::{
+    HostRewrite, OutputFile, PageSpec, RowFills, SignalEnv, Site, SiteSpec, WebSpec,
+};
 use crate::urls;
 
 /// Emit the site: one document per page, the shell a deep path falls back
@@ -325,12 +327,28 @@ fn stylesheet(spec: &SiteSpec) -> Option<&Stylesheet> {
         .and_then(|page| page.ir.combined_stylesheet.as_ref())
 }
 
+/// What one page of the site is, as the runtime reads it back: the document
+/// it was emitted as, and the head that document was written with.
+///
+/// The head travels because a swapped-in page has to bring its own; see
+/// [`lumen_html::contract::PageInfo`]. It is read off the same two
+/// functions the document itself is written from, so the two cannot drift.
+fn page_info(page: &PageSpec, web: &WebSpec) -> PageInfo {
+    PageInfo {
+        document: page.document(&web.entry),
+        title: seo::title(page, web),
+        description: seo::description(page, web).cloned(),
+        index: page.index,
+    }
+}
+
 /// The manifest the browser runtime reads before it loads anything else.
 pub fn manifest(spec: &SiteSpec) -> Manifest {
     let web = &spec.web;
     Manifest {
         contract_version: LM_CONTRACT_VERSION,
         base_path: urls::normalize_base(&web.base_path),
+        origin: seo::origin(spec).cloned(),
         entry: web.entry.clone(),
         artifact: web.artifact.clone(),
         css: web.css.clone(),
@@ -344,7 +362,7 @@ pub fn manifest(spec: &SiteSpec) -> Manifest {
         pages: spec
             .pages
             .iter()
-            .map(|page| (page.key.clone(), page.document(&web.entry)))
+            .map(|page| (page.key.clone(), page_info(page, web)))
             .collect(),
         scripts: web.scripts.clone(),
     }
@@ -377,21 +395,50 @@ mod tests {
         }
     }
 
+    /// The document of a page, as the manifest gives it.
+    fn document_of<'a>(manifest: &'a Manifest, key: &str) -> Option<&'a str> {
+        manifest.pages.get(key).map(|page| page.document.as_str())
+    }
+
     #[test]
     fn the_manifest_lists_every_page() {
         let manifest = manifest(&spec());
-        assert_eq!(
-            manifest.pages.get("index").map(String::as_str),
-            Some("index.html")
-        );
-        assert_eq!(
-            manifest.pages.get("settings").map(String::as_str),
-            Some("settings.html")
-        );
+        assert_eq!(document_of(&manifest, "index"), Some("index.html"));
+        assert_eq!(document_of(&manifest, "settings"), Some("settings.html"));
         assert_eq!(manifest.base_path, "/docs/");
         assert_eq!(manifest.entry, "index");
         assert_eq!(manifest.contract_version, LM_CONTRACT_VERSION);
         assert_eq!(manifest.navigation, NavigationMode::Hard);
+    }
+
+    /// The runtime writes the head of the page it swaps in out of the
+    /// manifest, so the manifest has to hold what the emitter would have
+    /// written into that page's own document: the page's title where it has
+    /// one, the site's where it does not, and the same for the description.
+    #[test]
+    fn the_manifest_carries_the_head_of_every_page() {
+        let mut spec = spec();
+        spec.web.title = "Notes".into();
+        spec.web.description = Some("Write it down".into());
+        spec.web.url = Some("https://example.com".into());
+        spec.pages[1].title = Some("Settings".into());
+        spec.pages[1].description = Some("Everything you can change".into());
+        spec.pages[1].index = false;
+
+        let manifest = manifest(&spec);
+        let head = |key: &str| manifest.pages.get(key).expect("a page").clone();
+        assert_eq!(head("index").title, "Notes");
+        assert_eq!(head("index").description.as_deref(), Some("Write it down"));
+        assert!(head("index").index);
+        assert_eq!(head("settings").title, "Settings");
+        assert_eq!(
+            head("settings").description.as_deref(),
+            Some("Everything you can change")
+        );
+        assert!(!head("settings").index);
+        // The absolute address a canonical link and an `og:url` are built
+        // from, which the runtime has no other way to know.
+        assert_eq!(manifest.origin.as_deref(), Some("https://example.com"));
     }
 
     /// The manifest is where the browser finds the catalogue for the locale

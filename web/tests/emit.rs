@@ -1295,7 +1295,10 @@ fn the_entry_page_is_the_document_a_server_hands_out_for_the_site() {
         serde_json::from_str(&site.file(DEFAULT_MANIFEST_FILE).expect("manifest").contents)
             .expect("manifest parses");
     assert_eq!(
-        manifest.pages.get("main").map(String::as_str),
+        manifest
+            .pages
+            .get("main")
+            .map(|page| page.document.as_str()),
         Some("index.html")
     );
 

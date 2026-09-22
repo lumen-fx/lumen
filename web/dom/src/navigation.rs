@@ -23,37 +23,65 @@ use std::collections::BTreeMap;
 use bevy_ecs::prelude::*;
 use lumen_core::nav::{self, NavOp};
 use lumen_core::property_store::PropertyStore;
-use lumen_html::contract::Manifest;
+use lumen_html::contract::{Manifest, PageInfo};
 use lumen_html::urls::{is_external, join, normalize_base};
 use wasm_bindgen::JsValue;
 
-/// What the addresses of this site look like, as the manifest describes
-/// them.
+/// The pages of this site as the manifest describes them: where each one is
+/// addressed, and what the emitter wrote into its document's head.
 ///
-/// The document names come out of the manifest rather than being worked out
-/// again here, so the emitter stays the only thing that decides what a page
-/// is written as.
+/// Both come out of the manifest rather than being worked out again here, so
+/// the emitter stays the only thing that decides what a page is written as
+/// and what it is called.
 #[derive(Clone, Debug, Resource)]
 pub struct Routes {
     /// URL prefix every address hangs off, with a slash at each end.
     base: String,
+    /// The address absolute URLs are built from, when the site has one.
+    origin: Option<String>,
     /// Page key the site opens on.
     entry: String,
-    /// Page key to the document that page was emitted as.
-    documents: BTreeMap<String, String>,
+    /// Page key to what the emitter wrote for that page.
+    pages: BTreeMap<String, PageInfo>,
     /// The page keys, which is what a path resolves against.
     keys: Vec<String>,
 }
 
 impl Routes {
-    /// Read the site's addresses out of its manifest.
+    /// Read the site's pages out of its manifest.
     pub fn from_manifest(manifest: &Manifest) -> Self {
         Self {
             base: normalize_base(&manifest.base_path),
+            origin: manifest.origin.clone(),
             entry: manifest.entry.clone(),
-            documents: manifest.pages.clone(),
+            pages: manifest.pages.clone(),
             keys: manifest.pages.keys().cloned().collect(),
         }
+    }
+
+    /// What the emitter wrote into the head of the document it emitted the
+    /// page `key` as.
+    ///
+    /// `None` for anything that is not a page of this site, which is what a
+    /// document assembled by hand rather than by a build runs as: there is
+    /// no head to put back, so the one in the document stays.
+    pub(crate) fn head(&self, key: &str) -> Option<&PageInfo> {
+        self.pages.get(key)
+    }
+
+    /// The absolute URL of the page `path` opens, which is what its
+    /// canonical link and its `og:url` name.
+    ///
+    /// Built from the address the page is at, so it says the same thing the
+    /// bar does after a swap. `None` for a site that declares no address,
+    /// whose documents carry neither tag.
+    pub(crate) fn canonical(&self, path: &str) -> Option<String> {
+        let origin = self.origin.as_ref()?;
+        Some(format!(
+            "{}{}",
+            origin.trim_end_matches('/'),
+            self.address_of(path)
+        ))
     }
 
     /// The address a navigation to `path` leaves in the bar, and the one an
@@ -73,9 +101,9 @@ impl Routes {
         let (key, segment) = nav::resolve_path(path, &self.keys, &self.entry);
         if segment.is_empty() {
             let document = self
-                .documents
+                .pages
                 .get(&key)
-                .map_or(key.as_str(), String::as_str);
+                .map_or(key.as_str(), |page| page.document.as_str());
             return join(&self.base, document);
         }
         join(&self.base, path)
@@ -93,8 +121,8 @@ impl Routes {
         let rest = url_path
             .strip_prefix(&self.base)
             .unwrap_or_else(|| url_path.trim_start_matches('/'));
-        for (key, document) in &self.documents {
-            if document == rest {
+        for (key, page) in &self.pages {
+            if page.document == rest {
                 return key.clone();
             }
         }
@@ -293,6 +321,63 @@ mod tests {
         assert_eq!(routes.path_at("/nowhere"), "nowhere");
     }
 
+    /// A swapped page brings the head its own document was written with, so
+    /// a title falls back to the site's exactly where the emitter falls back
+    /// to it.
+    #[test]
+    fn a_page_carries_the_head_its_own_document_was_written_with() {
+        let mut site = spec("/");
+        site.web.title = "Notes".into();
+        site.pages[1].title = Some("Settings".into());
+        site.pages[1].description = Some("Everything you can change".into());
+        let routes = Routes::from_manifest(&lumen_web::site::manifest(&site));
+
+        let title = |key: &str| routes.head(key).map(|page| page.title.as_str());
+        assert_eq!(title("settings"), Some("Settings"));
+        assert_eq!(title("index"), Some("Notes"));
+        assert_eq!(
+            routes
+                .head("settings")
+                .and_then(|page| page.description.as_deref()),
+            Some("Everything you can change")
+        );
+        // An address that is no page of this site has no head to put back.
+        assert_eq!(routes.head("nowhere"), None);
+    }
+
+    /// The two halves that write a page's canonical URL: the emitter puts it
+    /// in the document at build time, and this puts it back when the page is
+    /// swapped in. If they disagree, one page has two canonical addresses.
+    /// Checked for the tree at the site root, which is the tree the manifest
+    /// is written with.
+    #[test]
+    fn a_swapped_page_keeps_the_canonical_url_its_document_names() {
+        const ORIGIN: &str = "https://example.com";
+        for base in ["/", "/docs"] {
+            let mut site = spec(base);
+            site.web.url = Some(ORIGIN.to_string());
+            let manifest = lumen_web::site::manifest(&site);
+            let routes = Routes::from_manifest(&manifest);
+            for (key, page) in &manifest.pages {
+                let emitted =
+                    lumen_web::urls::absolute(ORIGIN, &manifest.base_path, &page.document);
+                assert_eq!(
+                    routes.canonical(key).as_deref(),
+                    Some(emitted.as_str()),
+                    "`{key}` under base `{base}`"
+                );
+            }
+        }
+    }
+
+    /// A site that declares no address of its own has no absolute URL to
+    /// build, and its documents carry neither a canonical link nor an
+    /// `og:url`; a swap has to leave both off rather than invent one.
+    #[test]
+    fn a_site_with_no_address_has_no_canonical_url() {
+        assert_eq!(routes("/").canonical("settings"), None);
+    }
+
     #[test]
     fn the_site_root_is_the_entry_page_s_own_address() {
         let routes = routes("/");
@@ -454,8 +539,8 @@ mod tests {
         for base in ["/", "/docs"] {
             let manifest = lumen_web::site::manifest(&spec(base));
             let routes = routes(base);
-            for (key, document) in &manifest.pages {
-                let address = join(&manifest.base_path, document);
+            for (key, page) in &manifest.pages {
+                let address = join(&manifest.base_path, &page.document);
                 assert_eq!(routes.path_at(&address), *key, "{address} is {key}");
                 assert!(routes.is_at(&address, key), "{address} already shows {key}");
             }
