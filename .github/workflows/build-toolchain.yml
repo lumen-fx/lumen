@@ -61,7 +61,12 @@ name: build-toolchain
 # Target coverage - every leg here builds natively for its own target, no
 # cross-compilation:
 #
-#   linux-x86_64    ubuntu-latest, same image as ci.yml
+#   linux-x86_64    ubuntu-24.04, the image ci.yml's ubuntu-latest names
+#                   today, pinned: the lumen-server in this leg's archive is
+#                   the one the container image carries, and its base has to
+#                   ship a glibc at least as new as the one it links against
+#                   (see web/server/Dockerfile). ubuntu-latest moving to a
+#                   newer release would break that without a word.
 #   linux-aarch64   ubuntu-24.04-arm, GitHub's hosted Arm64 Linux runner.
 #                   ci.yml's matrix has no aarch64 leg, so this is the only
 #                   place this target gets built at all; unlike x86_64 it is
@@ -135,7 +140,7 @@ jobs:
       matrix:
         include:
           - target: linux-x86_64
-            os: ubuntu-latest
+            os: ubuntu-24.04
             libname: liblumen.so
           - target: linux-aarch64
             os: ubuntu-24.04-arm

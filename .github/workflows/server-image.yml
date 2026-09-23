@@ -14,7 +14,9 @@ name: server-image
 # Two callers, and the tags come from which one it is, never from the caller
 # naming them:
 #
-#   release   release.yml, on a vX.Y.Z tag: pushes :vX.Y.Z and moves :latest.
+#   release   release.yml, on a vX.Y.Z tag: pushes :vX.Y.Z, and moves :latest
+#             when the tag is the newest vX.Y.Z release the repository has,
+#             so re-running an older release's run cannot move :latest back.
 #             A tag in any other shape, a prerelease among them, pushes its
 #             own tag and leaves :latest where it was, the same line the bump
 #             job in release.yml draws.
@@ -94,6 +96,8 @@ jobs:
         env:
           CHANNEL: ${{ inputs.channel }}
           TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           case "$CHANNEL" in
@@ -110,7 +114,20 @@ jobs:
               esac
               tags="$IMAGE:$TAG"
               if printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-                tags="$tags,$IMAGE:latest"
+                # The newest published vX.Y.Z release, by version rather than
+                # by date, so a re-run of an older release's run, or a patch
+                # to an older line, leaves :latest on the newest one.
+                if newest=$(gh api --paginate "repos/$REPO/releases" \
+                    --jq '.[] | select(.draft | not) | select(.prerelease | not) | .tag_name' \
+                    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1); then
+                  if [ "$newest" = "$TAG" ]; then
+                    tags="$tags,$IMAGE:latest"
+                  else
+                    echo "::notice::${TAG} is not the newest release (${newest:-none}), so :latest stays where it is"
+                  fi
+                else
+                  echo "::warning::cannot list the releases to tell whether ${TAG} is the newest, so :latest stays where it is"
+                fi
               else
                 echo "::notice::${TAG} is not a plain vX.Y.Z tag, so :latest stays where it is"
               fi
@@ -130,6 +147,25 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
+
+      # The runner is amd64, so that half of the image is loaded and started
+      # before anything is pushed: a binary the base cannot run, such as one
+      # linked against a newer glibc than the base carries, fails here rather
+      # than for everyone who pulls it.
+      - name: Build the amd64 image to try it
+        uses: docker/build-push-action@v7
+        with:
+          context: image-context
+          file: web/server/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: lumen-server:try
+          build-args: |
+            VERSION=${{ inputs.version }}
+            REVISION=${{ github.sha }}
+
+      - name: Start the amd64 image
+        run: docker run --rm lumen-server:try --version
 
       - uses: docker/build-push-action@v7
         with:

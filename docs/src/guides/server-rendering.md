@@ -220,10 +220,10 @@ with `no-cache`. A rendered page is `no-store` unless the app sets its own
 ### The container image
 
 `ghcr.io/lumen-fx/lumen-server` carries the same binary for Linux on x86_64
-and aarch64, tagged with each release version and `latest`, plus `nightly`
-for the newest nightly build. It listens on port 8080 on every interface, runs
-as a user without root, checks its own health with `lumen-server probe`, and
-serves the site mounted at `/site`:
+and aarch64, tagged with each release version, `latest` for the newest
+release, and `nightly` for the newest nightly build. It listens on port 8080
+on every interface, runs as a user without root, checks its own health with
+`lumen-server probe`, and serves the site mounted at `/site`:
 
 ```
 lumenc web myapp --render ssr --out dist/web
