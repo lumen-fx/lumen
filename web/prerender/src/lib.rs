@@ -30,7 +30,7 @@ pub mod deny;
 pub mod fills;
 
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use lumen_core::app::App;
@@ -41,6 +41,7 @@ use lumen_core::property_store::{
 use lumen_core::request;
 use lumen_core::signals::discard_external_signals;
 use lumen_html::contract::Seed;
+use lumen_i18n::Catalogues;
 use lumen_ir::artifact::CompiledApp;
 use lumen_portable::{apply_node_seed, apply_seed, hosts, install_i18n, portable_app};
 use lumen_scene::routing::install_routing;
@@ -103,30 +104,29 @@ impl fmt::Display for Settled {
 /// The language a run is in.
 ///
 /// `locale` is the BCP-47 tag the app starts in, and what a script's
-/// `locale()` answers. `catalogues` pairs a tag with that locale's Fluent
-/// source, every locale the app can switch to; `fallback` is the chain a key
-/// missing from the active catalogue falls through, the value
-/// `[app] fallback_locale` names, and empty takes the default chain.
+/// `locale()` answers. `catalogues` is every locale the app can switch to,
+/// already parsed, with the chain a key missing from the active catalogue
+/// falls through. A run builds a registry of its own from them, so a
+/// `set_locale` in one run never reaches the next.
 ///
 /// An app with no catalogues runs with no translator at all, so `t()`
 /// answers with the key, which is what it answers on a desktop app with no
 /// `locale/` directory.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct Language<'a> {
     /// The locale the run starts in.
     pub locale: &'a str,
-    /// Each locale's Fluent source, by tag.
-    pub catalogues: &'a [(String, String)],
-    /// The chain a missing key falls through.
-    pub fallback: &'a [String],
+    /// Every locale's catalogue, and the chain a missing key falls through.
+    pub catalogues: &'a Catalogues,
 }
 
 impl<'a> Language<'a> {
     /// A run in `locale`, with no catalogue to read.
     pub fn untranslated(locale: &'a str) -> Self {
+        static NONE: LazyLock<Catalogues> = LazyLock::new(Catalogues::default);
         Self {
             locale,
-            ..Self::default()
+            catalogues: &NONE,
         }
     }
 }
@@ -147,8 +147,9 @@ pub struct Prerendered {
     /// run's language. The tree holds the row template, so this is the only
     /// place a row's body is.
     pub fills: RowFills,
-    /// Why the run's catalogues would not load, when they would not. The run
-    /// went ahead in the language the app's source strings are written in.
+    /// Why the run could not start in its locale, which is a locale that is
+    /// not a language tag. The run went ahead in the language the app's
+    /// source strings are written in.
     pub language_error: Option<String>,
 }
 
@@ -162,8 +163,9 @@ pub struct Booted {
     pub app: App,
     /// Engines the app carries a program for that this build has no host for.
     pub unsupported_engines: Vec<String>,
-    /// Why the catalogues would not load, when they would not. The app runs
-    /// in the language its source strings are written in.
+    /// Why the app could not start in its locale, which is a locale that is
+    /// not a language tag. The app runs in the language its source strings
+    /// are written in.
     pub language_error: Option<String>,
 }
 
@@ -267,14 +269,9 @@ fn install_language(app: &mut App, language: Language<'_>) -> Option<String> {
     if language.catalogues.is_empty() {
         return None;
     }
-    install_i18n(
-        &mut app.world,
-        language.locale,
-        language.catalogues,
-        language.fallback,
-    )
-    .err()
-    .map(|error| error.to_string())
+    install_i18n(&mut app.world, language.locale, language.catalogues)
+        .err()
+        .map(|error| error.to_string())
 }
 
 /// Run `compiled` as the page `key` in `language` and read the state it

@@ -18,6 +18,7 @@ use bevy_ecs::prelude::Without;
 use lumen_core::components::{LumenClasses, LumenTag, TextContent};
 use lumen_core::prelude::App;
 use lumen_html::contract::Seed;
+use lumen_i18n::Catalogues;
 use lumen_ir::artifact::{CompiledApp, CompiledScript};
 use lumen_ir::fragment::{Fragment, FragmentKind, FragmentParam, FragmentTable};
 use lumen_ir::layout_ir::{Attributes, Element, FragmentUse, InterpolationSlot, LayoutIR};
@@ -165,7 +166,7 @@ fn run_tree(ir: LayoutIR, seed: &Seed) -> App {
     let mut booted = boot(
         &compiled,
         &Location::page("index"),
-        Language::default(),
+        Language::untranslated("en-US"),
         seed,
         Arc::new(DenyDispatch::default()),
     );
@@ -288,14 +289,17 @@ fn a_rows_body_is_read_in_the_runs_language() {
             .expect("distinct keys");
     }
     compiled.fragments = table;
-    let catalogues = vec![("de-DE".to_string(), "shouted = Laut\n".to_string())];
+    let catalogues = Catalogues::parse(
+        &[("de-DE".to_string(), "shouted = Laut\n".to_string())],
+        &[],
+    )
+    .expect("the catalogue parses");
     let mut booted = boot(
         &compiled,
         &Location::page("index"),
         Language {
             locale: "de-DE",
             catalogues: &catalogues,
-            fallback: &[],
         },
         &seeded(),
         Arc::new(DenyDispatch::default()),
@@ -382,7 +386,7 @@ fn a_key_the_table_lost_builds_nothing_and_the_run_goes_on() {
         let mut booted = boot(
             &compiled,
             &Location::page("index"),
-            Language::default(),
+            Language::untranslated("en-US"),
             &Seed::new(),
             Arc::new(DenyDispatch::default()),
         );

@@ -8,6 +8,7 @@ use lumen_core::property_store::{PropertyKey, PropertyStore, PropertyValue};
 use lumen_core::render_world::AnimationsActive;
 use lumen_core::tick::{TickStage, work_pending};
 use lumen_html::contract::{Seed, SeedValue};
+use lumen_i18n::Catalogues;
 use lumen_ir::artifact::{CompiledApp, CompiledScript};
 use lumen_ir::layout_ir::{BindKind, BindSpec, Element, LayoutIR};
 use lumen_portable::portable_app;
@@ -24,11 +25,15 @@ const FETCHES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/fetches.cdlb"))
 const TRANSLATES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/translates.cdlb"));
 
 /// The catalogues the translating program reads.
-fn catalogues() -> Vec<(String, String)> {
-    vec![
-        ("en-US".to_string(), "greeting = Hello\n".to_string()),
-        ("de-DE".to_string(), "greeting = Hallo\n".to_string()),
-    ]
+fn catalogues(fallback: &[String]) -> Catalogues {
+    Catalogues::parse(
+        &[
+            ("en-US".to_string(), "greeting = Hello\n".to_string()),
+            ("de-DE".to_string(), "greeting = Hallo\n".to_string()),
+        ],
+        fallback,
+    )
+    .expect("the catalogues parse")
 }
 
 /// A program that writes onto nodes rather than onto signals.
@@ -61,7 +66,7 @@ fn what_the_app_publishes_is_what_the_page_is_written_with() {
     let run = page(
         &app_with(SETTLES),
         "index",
-        Language::default(),
+        Language::untranslated("en-US"),
         &Seed::new(),
         Budget::default(),
     );
@@ -98,7 +103,7 @@ fn the_page_is_written_where_the_run_was_asked_for() {
     let run = page(
         &app_with(SETTLES),
         "settings",
-        Language::default(),
+        Language::untranslated("en-US"),
         &Seed::new(),
         Budget::default(),
     );
@@ -120,7 +125,7 @@ fn a_declared_value_starts_the_run_and_the_app_writes_over_it() {
     let run = page(
         &app_with(SETTLES),
         "index",
-        Language::default(),
+        Language::untranslated("en-US"),
         &seed,
         Budget::default(),
     );
@@ -166,7 +171,13 @@ fn a_declared_value_beats_the_fallback_the_markup_shows_beside_a_binding() {
         SeedValue::Str("Ada Lovelace".to_string()),
     );
 
-    let run = page(&app, "index", Language::default(), &seed, Budget::default());
+    let run = page(
+        &app,
+        "index",
+        Language::untranslated("en-US"),
+        &seed,
+        Budget::default(),
+    );
 
     assert_eq!(run.state.signals.global("name"), Some("Ada Lovelace"));
 }
@@ -177,7 +188,7 @@ fn an_address_the_build_would_not_ask_for_is_reported() {
     let run = page(
         &app_with(FETCHES),
         "index",
-        Language::default(),
+        Language::untranslated("en-US"),
         &Seed::new(),
         Budget::default(),
     );
@@ -195,14 +206,14 @@ fn two_runs_of_one_page_agree() {
     let first = page(
         &compiled,
         "index",
-        Language::default(),
+        Language::untranslated("en-US"),
         &Seed::new(),
         Budget::default(),
     );
     let second = page(
         &compiled,
         "index",
-        Language::default(),
+        Language::untranslated("en-US"),
         &Seed::new(),
         Budget::default(),
     );
@@ -293,7 +304,7 @@ fn a_run_belongs_to_no_thread() {
         let run = page(
             &app_with(SETTLES),
             "index",
-            Language::default(),
+            Language::untranslated("en-US"),
             &Seed::new(),
             Budget::default(),
         );
@@ -317,7 +328,7 @@ fn an_engine_this_build_cannot_run_is_named() {
     let run = page(
         &compiled,
         "index",
-        Language::default(),
+        Language::untranslated("en-US"),
         &Seed::new(),
         Budget::default(),
     );
@@ -351,7 +362,7 @@ fn what_the_app_writes_onto_a_node_is_read_out_of_the_scene() {
     let run = page(
         &app,
         "index",
-        Language::default(),
+        Language::untranslated("en-US"),
         &Seed::new(),
         Budget::default(),
     );
@@ -368,11 +379,10 @@ fn what_the_app_writes_onto_a_node_is_read_out_of_the_scene() {
 #[test]
 fn a_run_in_a_locale_translates_what_its_scripts_write() {
     let _turn = in_turn();
-    let catalogues = catalogues();
+    let catalogues = catalogues(&[]);
     let german = Language {
         locale: "de-DE",
         catalogues: &catalogues,
-        fallback: &[],
     };
     let run = page(
         &app_with(TRANSLATES),
@@ -391,11 +401,10 @@ fn a_run_in_a_locale_translates_what_its_scripts_write() {
 #[test]
 fn a_run_without_catalogues_does_not_read_the_last_runs() {
     let _turn = in_turn();
-    let catalogues = catalogues();
+    let catalogues = catalogues(&[]);
     let german = Language {
         locale: "de-DE",
         catalogues: &catalogues,
-        fallback: &[],
     };
     let app = app_with(TRANSLATES);
     let first = page(&app, "index", german, &Seed::new(), Budget::default());
@@ -418,12 +427,10 @@ fn a_run_without_catalogues_does_not_read_the_last_runs() {
 #[test]
 fn a_run_falls_through_the_chain_it_was_given() {
     let _turn = in_turn();
-    let catalogues = catalogues();
-    let fallback = ["de-DE".to_string()];
+    let catalogues = catalogues(&["de-DE".to_string()]);
     let french = Language {
         locale: "fr-FR",
         catalogues: &catalogues,
-        fallback: &fallback,
     };
     let run = page(
         &app_with(TRANSLATES),
@@ -435,19 +442,18 @@ fn a_run_falls_through_the_chain_it_was_given() {
     assert_eq!(run.state.signals.global("greeting"), Some("Hallo"));
 }
 
-/// A catalogue that will not load is said, and the run goes ahead in the
+/// A locale that is no language tag is said, and the run goes ahead in the
 /// language the source strings are in.
 #[test]
-fn a_catalogue_that_will_not_load_is_reported_and_the_run_goes_ahead() {
+fn a_locale_that_is_no_tag_is_reported_and_the_run_goes_ahead() {
     let _turn = in_turn();
-    let broken = vec![("de-DE".to_string(), "= no key\n".to_string())];
+    let catalogues = catalogues(&[]);
     let run = page(
         &app_with(TRANSLATES),
         "index",
         Language {
-            locale: "de-DE",
-            catalogues: &broken,
-            fallback: &[],
+            locale: "not a tag",
+            catalogues: &catalogues,
         },
         &Seed::new(),
         Budget::default(),

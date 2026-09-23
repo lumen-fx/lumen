@@ -330,7 +330,12 @@ profiling-tracy = ["profiling", "lumen-runtime?/profiling-tracy"]
 # `roxmltree`) AND, when the runtime is present, the runtime's from-source load
 # path (weak forward - a no-op in a thin build). Mirrors Qt's `qmlcachegen`
 # and Slint's compile-.slint-to-Rust model.
-runtime-parse = ["dep:roxmltree", "dep:lumen-script-candela", "lumen-runtime?/runtime-parse"]
+runtime-parse = [
+    "dep:roxmltree",
+    "dep:lumen-script-candela",
+    "dep:lumen-i18n",
+    "lumen-runtime?/runtime-parse",
+]
 
 [build-dependencies]
 # A source install (`cargo install lumenc`) fetches the matching tagged source

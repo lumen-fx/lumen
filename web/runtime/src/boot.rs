@@ -82,8 +82,8 @@ async fn start(manifest_url: Option<String>) -> Result<(), BootError> {
     // reading in the language its source strings are written in. The
     // manifest names no fallback chain, so a page falls through to the one a
     // desktop app gets by default.
-    if let Err(error) =
-        assemble::install_i18n(&mut app.world, &page.locale, &loaded.catalogues, &[])
+    if let Err(error) = assemble::Catalogues::parse(&loaded.catalogues, &[])
+        .and_then(|catalogues| assemble::install_i18n(&mut app.world, &page.locale, &catalogues))
     {
         web_sys::console::error_1(&JsValue::from_str(&format!("lumen: {error}")));
     }

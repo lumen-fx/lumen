@@ -10,6 +10,9 @@
 //!   markup key reaches an element's placeholder and its alternative
 //!   text. Falls through `fallback_chain` in order on a miss, which
 //!   ends with the locale the app's source strings are written in.
+//!   [`read_catalogues`] is the one walker of an app's `locale/`
+//!   directory, and [`Catalogues`] parses a set of catalogues once for
+//!   a caller that builds a registry per locale or per render.
 //! - **Formatting** - [`LocaleFormatter`] wraps ICU4X's decimal,
 //!   date-time, currency and relative-time formatters for the active
 //!   locale. `format_number`, `format_date`, `format_time`,
@@ -72,6 +75,9 @@ pub enum I18nError {
     /// BCP-47 tag failed to parse into a `LanguageIdentifier`.
     #[error("bad locale tag: {0}")]
     BadLocale(String),
+    /// A catalogue, or the directory holding them, could not be read.
+    #[error("read {0}")]
+    Read(String),
 }
 
 impl From<I18nError> for std::fmt::Error {
@@ -126,7 +132,7 @@ impl std::str::FromStr for Lang {
 #[derive(Resource)]
 pub struct I18n {
     /// One [`FluentBundle`] per loaded locale.
-    pub bundles: HashMap<LanguageIdentifier, FluentBundle<FluentResource>>,
+    pub bundles: HashMap<LanguageIdentifier, FluentBundle<Arc<FluentResource>>>,
     /// Active locale used by [`I18n::t`].
     pub current: LanguageIdentifier,
     /// Fallback search order applied when `current` does not resolve a key.
@@ -145,37 +151,6 @@ impl I18n {
         }
     }
 
-    /// Build a registry from catalogue sources already in hand: `locale`
-    /// active, each `(tag, Fluent source)` pair loaded, and a miss falling
-    /// through `fallback`.
-    ///
-    /// For every place that has the catalogues as text rather than as a
-    /// `locale/` directory: a page that fetched them, a run that was handed
-    /// them, an emitter writing a tree in one language. Empty `fallback`
-    /// takes the chain [`I18nPlugin`] starts with, which is the one a
-    /// desktop app gets when `[app] fallback_locale` is unset.
-    pub fn from_sources(
-        locale: &str,
-        catalogues: &[(String, String)],
-        fallback: &[String],
-    ) -> Result<Self, I18nError> {
-        let current: LanguageIdentifier = Lang::try_from(locale)?.into();
-        let fallback: Vec<LanguageIdentifier> = if fallback.is_empty() {
-            I18nPlugin::default().fallback_chain
-        } else {
-            fallback
-                .iter()
-                .map(|tag| Lang::try_from(tag.as_str()).map(LanguageIdentifier::from))
-                .collect::<Result<_, _>>()?
-        };
-        let mut i18n = Self::new(current, fallback);
-        for (tag, source) in catalogues {
-            let tag: LanguageIdentifier = Lang::try_from(tag.as_str())?.into();
-            i18n.load_ftl(tag, source)?;
-        }
-        Ok(i18n)
-    }
-
     /// Parse + register `ftl_source` for `lang`. Idempotent: a second
     /// load for the same `lang` replaces the bundle (so hot-reload of a
     /// `.ftl` file just calls this again with the new bytes).
@@ -185,20 +160,15 @@ impl I18n {
     /// so it cannot reorder the text around it when the two run in
     /// opposite directions. A term or message reference is inlined
     /// without them, since it is catalogue text in the catalogue's own
-    /// language. Every target builds its bundles through this function,
-    /// so a catalogue resolves to the same bytes on the desktop, in a
-    /// browser and on a server.
+    /// language. [`Catalogues`] builds its bundles the same way, so a
+    /// catalogue resolves to the same bytes on the desktop, in a browser
+    /// and on a server.
     pub fn load_ftl(
         &mut self,
         lang: LanguageIdentifier,
         ftl_source: &str,
     ) -> Result<(), I18nError> {
-        let res = FluentResource::try_new(ftl_source.to_string())
-            .map_err(|(_, errs)| I18nError::Parse(format!("{errs:?}")))?;
-        let mut bundle = FluentBundle::new_concurrent(vec![lang.clone()]);
-        bundle
-            .add_resource(res)
-            .map_err(|errs| I18nError::AddResource(format!("{errs:?}")))?;
+        let bundle = bundle(lang.clone(), parse(ftl_source)?)?;
         self.bundles.insert(lang, bundle);
         Ok(())
     }
@@ -219,16 +189,13 @@ impl I18n {
 
     /// Load every `<dir>/*.ftl` file, keying each bundle by the file
     /// stem (`de-DE.ftl` becomes the `de-DE` bundle). Returns the
-    /// locales it loaded, in filesystem order. A missing directory is
-    /// not an error; it just loads nothing.
+    /// locales it loaded, ordered by tag. A missing directory is not an
+    /// error; it just loads nothing.
     ///
-    /// The directory listing comes from the filesystem; each file's
-    /// bytes come through `read`, the same seam the caller reads its
-    /// other app data through. The runtime hands in the app's asset
-    /// source chain, so a catalogue an asset source overlays loads
-    /// from there; a tool reading loose files passes `std::fs::read`.
-    /// This crate takes the function rather than naming an asset type
-    /// to stay independent of the asset stack.
+    /// The files are found and read by [`read_catalogues`], so `read` is
+    /// the seam every byte comes through: the runtime hands in the app's
+    /// asset source chain, so a catalogue an asset source overlays loads
+    /// from there.
     ///
     /// Re-running replaces the bundles it touches, so this doubles as
     /// the catalogue-reload entry point.
@@ -237,24 +204,9 @@ impl I18n {
         dir: &std::path::Path,
         read: impl Fn(&std::path::Path) -> std::io::Result<Vec<u8>>,
     ) -> Result<Vec<LanguageIdentifier>, I18nError> {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return Ok(Vec::new());
-        };
         let mut loaded = Vec::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("ftl") {
-                continue;
-            }
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .ok_or_else(|| I18nError::BadLocale(path.display().to_string()))?;
-            let lang: LanguageIdentifier = Lang::try_from(stem)?.into();
-            let bytes =
-                read(&path).map_err(|e| I18nError::Parse(format!("{}: {e}", path.display())))?;
-            let source = String::from_utf8(bytes)
-                .map_err(|e| I18nError::Parse(format!("{}: {e}", path.display())))?;
+        for (tag, source) in read_catalogues(dir, read)? {
+            let lang: LanguageIdentifier = Lang::try_from(tag.as_str())?.into();
             self.load_ftl(lang.clone(), &source)?;
             loaded.push(lang);
         }
@@ -337,6 +289,174 @@ impl Default for I18n {
     fn default() -> Self {
         let en: LanguageIdentifier = "en-US".parse().expect("en-US is valid");
         Self::new(en.clone(), vec![en])
+    }
+}
+
+/// Parse one catalogue's Fluent source.
+fn parse(source: &str) -> Result<Arc<FluentResource>, I18nError> {
+    FluentResource::try_new(source.to_string())
+        .map(Arc::new)
+        .map_err(|(_, errs)| I18nError::Parse(format!("{errs:?}")))
+}
+
+/// A bundle for `lang` holding `resource`.
+///
+/// A value a placeable substitutes is wrapped in Unicode isolation marks
+/// (the bundle's default), which [`I18n::load_ftl`] describes.
+fn bundle(
+    lang: LanguageIdentifier,
+    resource: Arc<FluentResource>,
+) -> Result<FluentBundle<Arc<FluentResource>>, I18nError> {
+    let mut bundle = FluentBundle::new_concurrent(vec![lang]);
+    bundle
+        .add_resource(resource)
+        .map_err(|errs| I18nError::AddResource(format!("{errs:?}")))?;
+    Ok(bundle)
+}
+
+/// Every `<dir>/<tag>.ftl` catalogue, as its tag and its Fluent source,
+/// ordered by tag.
+///
+/// This is the one place an app's `locale/` directory is walked. The
+/// listing comes from the filesystem; each file's bytes come through
+/// `read`, the seam the caller reads its other app data through. The
+/// runtime hands in the app's asset source chain; a compiler reading the
+/// author's loose files passes `std::fs::read`. This crate takes the
+/// function rather than naming an asset type to stay independent of the
+/// asset stack.
+///
+/// A missing directory holds no catalogues, which is an app with no
+/// translations. The tag is the file stem as written, and a file whose
+/// stem is not a BCP-47 tag is an error rather than a file passed over.
+/// The sources are not parsed here; [`Catalogues::parse`] does that.
+///
+/// # Errors
+///
+/// The directory or a catalogue in it cannot be read, a catalogue is not
+/// UTF-8, or a stem is not a language tag.
+pub fn read_catalogues(
+    dir: &std::path::Path,
+    read: impl Fn(&std::path::Path) -> std::io::Result<Vec<u8>>,
+) -> Result<Vec<(String, String)>, I18nError> {
+    let failed = |path: &std::path::Path, why: &dyn std::fmt::Display| {
+        I18nError::Read(format!("{}: {why}", path.display()))
+    };
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(failed(dir, &e)),
+    };
+    let mut catalogues = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(|e| failed(dir, &e))?.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("ftl") {
+            continue;
+        }
+        let tag = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| I18nError::BadLocale(path.display().to_string()))?;
+        Lang::try_from(tag)?;
+        let bytes = read(&path).map_err(|e| failed(&path, &e))?;
+        let source = String::from_utf8(bytes).map_err(|e| failed(&path, &e))?;
+        catalogues.push((tag.to_string(), source));
+    }
+    catalogues.sort();
+    Ok(catalogues)
+}
+
+/// An app's catalogues, parsed once, and the chain a miss falls through.
+///
+/// Parsing a catalogue is the expensive half of building an [`I18n`], and
+/// it does not depend on the locale an app runs in. This holds the parsed
+/// resources so a caller that builds many registries from the same
+/// catalogues, one per locale tree or one per render, parses each file
+/// once. [`Self::i18n`] builds a registry of its own each time it is
+/// called, so a locale switch in one never reaches another.
+#[derive(Clone)]
+pub struct Catalogues {
+    resources: Vec<(LanguageIdentifier, Arc<FluentResource>)>,
+    fallback: Vec<LanguageIdentifier>,
+}
+
+impl Catalogues {
+    /// Parse `sources`, each a BCP-47 tag and that locale's Fluent source,
+    /// with a miss falling through `fallback`.
+    ///
+    /// Empty `fallback` takes the chain [`I18nPlugin`] starts with, which
+    /// is the one a desktop app gets when `[app] fallback_locale` is unset.
+    ///
+    /// # Errors
+    ///
+    /// A tag is not BCP-47, or a catalogue is not Fluent or declares a
+    /// message twice. Every catalogue is checked, so a registry built from
+    /// the result cannot fail on one.
+    pub fn parse(sources: &[(String, String)], fallback: &[String]) -> Result<Self, I18nError> {
+        let fallback = if fallback.is_empty() {
+            I18nPlugin::default().fallback_chain
+        } else {
+            fallback
+                .iter()
+                .map(|tag| Lang::try_from(tag.as_str()).map(LanguageIdentifier::from))
+                .collect::<Result<_, _>>()?
+        };
+        let mut resources = Vec::with_capacity(sources.len());
+        for (tag, source) in sources {
+            let lang: LanguageIdentifier = Lang::try_from(tag.as_str())?.into();
+            let resource = parse(source)?;
+            bundle(lang.clone(), Arc::clone(&resource))?;
+            resources.push((lang, resource));
+        }
+        Ok(Self {
+            resources,
+            fallback,
+        })
+    }
+
+    /// True when there is no catalogue.
+    pub fn is_empty(&self) -> bool {
+        self.resources.is_empty()
+    }
+
+    /// A registry with `locale` active and every catalogue loaded.
+    ///
+    /// # Errors
+    ///
+    /// `locale` is not a BCP-47 tag.
+    pub fn i18n(&self, locale: &str) -> Result<I18n, I18nError> {
+        let current: LanguageIdentifier = Lang::try_from(locale)?.into();
+        let mut i18n = I18n::new(current, self.fallback.clone());
+        for (lang, resource) in &self.resources {
+            let bundle = bundle(lang.clone(), Arc::clone(resource))?;
+            i18n.bundles.insert(lang.clone(), bundle);
+        }
+        Ok(i18n)
+    }
+}
+
+impl Default for Catalogues {
+    /// No catalogue, with the default chain.
+    fn default() -> Self {
+        Self {
+            resources: Vec::new(),
+            fallback: I18nPlugin::default().fallback_chain,
+        }
+    }
+}
+
+impl std::fmt::Debug for Catalogues {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Catalogues")
+            .field(
+                "locales",
+                &self
+                    .resources
+                    .iter()
+                    .map(|(lang, _)| lang.to_string())
+                    .collect::<Vec<_>>(),
+            )
+            .field("fallback", &self.fallback)
+            .finish()
     }
 }
 
@@ -578,7 +698,7 @@ mod tests {
     }
 
     #[test]
-    fn a_registry_from_sources_falls_through_the_chain_it_was_given() {
+    fn a_registry_from_parsed_catalogues_falls_through_the_chain_it_was_given() {
         let catalogues = vec![
             ("en-US".to_string(), "hello = Hello!\n".to_string()),
             (
@@ -586,17 +706,60 @@ mod tests {
                 "hello = Hallo!\nbye = Tschuess\n".to_string(),
             ),
         ];
-        let named = SharedI18n::new(
-            I18n::from_sources("fr-FR", &catalogues, &["de-DE".to_string()]).unwrap(),
-        );
-        assert_eq!(named.t("hello"), "Hallo!");
-        assert_eq!(named.read().fallback_chain, vec![lang("de-DE")]);
+        let named = Catalogues::parse(&catalogues, &["de-DE".to_string()]).unwrap();
+        let first = SharedI18n::new(named.i18n("fr-FR").unwrap());
+        assert_eq!(first.t("hello"), "Hallo!");
+        assert_eq!(first.read().fallback_chain, vec![lang("de-DE")]);
+        // Each registry is its own: switching one leaves the next as built.
+        first.write().set_current(lang("en-US"));
+        let second = SharedI18n::new(named.i18n("fr-FR").unwrap());
+        assert_eq!(second.read().current, lang("fr-FR"));
         // No chain named is the one a desktop app starts with.
-        let default = SharedI18n::new(I18n::from_sources("fr-FR", &catalogues, &[]).unwrap());
+        let default = SharedI18n::new(
+            Catalogues::parse(&catalogues, &[])
+                .unwrap()
+                .i18n("fr-FR")
+                .unwrap(),
+        );
         assert_eq!(default.t("hello"), "Hello!");
         assert_eq!(default.t("bye"), "bye");
-        assert!(I18n::from_sources("not a tag", &catalogues, &[]).is_err());
-        assert!(I18n::from_sources("de-DE", &[("de-DE".into(), "= x".into())], &[]).is_err());
+        assert!(named.i18n("not a tag").is_err());
+        assert!(Catalogues::parse(&[("de-DE".into(), "= x".into())], &[]).is_err());
+        // A message declared twice fails the parse, not a later registry.
+        assert!(Catalogues::parse(&[("de-DE".into(), "a = 1\na = 2\n".into())], &[]).is_err());
+        assert!(Catalogues::parse(&[("not a tag".into(), "a = 1\n".into())], &[]).is_err());
+    }
+
+    #[test]
+    fn read_catalogues_orders_by_tag_and_refuses_a_stem_that_is_no_tag() {
+        let dir = std::env::temp_dir().join(format!(
+            "lumen-i18n-read-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("en-US.ftl"), "greet = Hello!\n").unwrap();
+        std::fs::write(dir.join("de-DE.ftl"), "greet = Hallo!\n").unwrap();
+        std::fs::write(dir.join("notes.txt"), "not a catalogue").unwrap();
+        let read = read_catalogues(&dir, |p| std::fs::read(p)).unwrap();
+        assert_eq!(
+            read,
+            vec![
+                ("de-DE".to_string(), "greet = Hallo!\n".to_string()),
+                ("en-US".to_string(), "greet = Hello!\n".to_string()),
+            ]
+        );
+        std::fs::write(dir.join("not a tag.ftl"), "greet = x\n").unwrap();
+        assert!(read_catalogues(&dir, |p| std::fs::read(p)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let missing = read_catalogues(std::path::Path::new("/definitely/not/here"), |p| {
+            std::fs::read(p)
+        });
+        assert!(missing.unwrap().is_empty());
     }
 
     #[test]
