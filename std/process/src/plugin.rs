@@ -113,7 +113,7 @@ fn deliver(tag: String) -> child::Emit {
             ),
             child::Event::Exit(code) => ("process_exit", "on_process_exit", ScriptValue::I64(code)),
         };
-        push_plugin_event(&PluginEvent::Call {
+        push_plugin_event(PluginEvent::Call {
             event: name.to_string(),
             key: tag.clone(),
             fallback: fallback.to_string(),

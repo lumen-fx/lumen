@@ -52,7 +52,6 @@ use lumen_core::time::Instant;
 use lumen_core::warn_line;
 use std::sync::Arc;
 
-#[cfg(not(target_arch = "wasm32"))]
 use crate::PluginEvent;
 use crate::dnd;
 use crate::http::{
@@ -300,15 +299,13 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
                 app.world.insert_resource(FetchRegistry::default());
             }
             app.world.insert_resource(PendingFetchReplies::default());
-            // Portable plugins are dlopened native libraries; a browser page
-            // has no way to load one, so the plugin-event pipeline does not
-            // exist on wasm and its decode path stays out of the module a
-            // site downloads.
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                app.world.insert_resource(PendingPluginEvents::default());
-                lumen_core::plugin_events::init_plugin_events();
-            }
+            // Events pushed from outside a script call: a module's worker,
+            // a portable plugin, a browser add-on's settled promise. Only
+            // the encoded form is native-only (a page cannot load a
+            // portable plugin), so the pipeline exists everywhere and the
+            // decoder stays out of the module a site downloads.
+            app.world.insert_resource(PendingPluginEvents::default());
+            lumen_core::plugin_events::init_plugin_events();
             register_script_commands(&mut app.world);
             // Toggle / slider dispatchers below read these messages. In
             // production `lumen-primitives::ControlsPlugin` registers them
@@ -401,17 +398,14 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             );
             // The plugin-event pipeline mirrors the fetch one above: one
             // host-neutral collect, one per-host delivery set, one clear.
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                app.add_systems(
-                    TickStage::Systems,
-                    collect_plugin_events.before(ScriptSet::PluginEvents),
-                );
-                app.add_systems(
-                    TickStage::Systems,
-                    clear_plugin_events.after(ScriptSet::PluginEvents),
-                );
-            }
+            app.add_systems(
+                TickStage::Systems,
+                collect_plugin_events.before(ScriptSet::PluginEvents),
+            );
+            app.add_systems(
+                TickStage::Systems,
+                clear_plugin_events.after(ScriptSet::PluginEvents),
+            );
             app.add_systems(
                 TickStage::Systems,
                 drain_fetch_commands.after(ScriptSet::Tick),
@@ -479,7 +473,6 @@ impl<H: ScriptHost + Resource<Mutability = Mutable>> Plugin for ScriptPlugin<H> 
             TickStage::Systems,
             fire_fetched_responses::<H>.in_set(ScriptSet::Fetch),
         );
-        #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(
             TickStage::Systems,
             fire_plugin_events::<H>.in_set(ScriptSet::PluginEvents),
@@ -1401,41 +1394,66 @@ pub fn fire_fetched_responses<H: ScriptHost + Resource<Mutability = Mutable>>(
 // Plugin events
 // ---------------------------------------------------------------------
 
-/// Handler calls that portable plugins pushed and this tick delivers,
+/// Handler calls pushed from outside a script call and delivered this tick,
 /// mirroring [`PendingFetchReplies`]: filled by [`collect_plugin_events`],
 /// offered to every active host by [`fire_plugin_events`], and emptied by
 /// [`clear_plugin_events`].
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Resource, Default)]
 pub struct PendingPluginEvents(Vec<PluginEvent>);
 
-/// Move the events portable plugins pushed off the cross-thread bus
-/// ([`lumen_core::plugin_events`]) into [`PendingPluginEvents`]. Host-neutral
-/// and registered once, so a handler call is offered to every active host
-/// rather than taken by whichever ran first; a [`PluginEvent::Commands`]
-/// batch goes straight onto the command bus here instead, so it applies once
-/// however many hosts run.
-#[cfg(not(target_arch = "wasm32"))]
+/// Move the events on the cross-thread bus ([`lumen_core::plugin_events`])
+/// into [`PendingPluginEvents`]. Host-neutral and registered once, so a
+/// handler call is offered to every active host rather than taken by
+/// whichever ran first; a [`PluginEvent::Commands`] batch goes straight onto
+/// the command bus here instead, so it applies once however many hosts run.
+///
+/// An event pushed from the engine's own address space arrives as the value;
+/// one a portable plugin pushed arrives encoded, and is decoded here. A page
+/// loads no portable plugin, so the browser build carries no decoder.
 pub fn collect_plugin_events(
     mut pending: ResMut<PendingPluginEvents>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
-    for bytes in lumen_core::plugin_events::drain_plugin_events() {
-        match lumen_plugin_abi::codec::decode::<PluginEvent>(&bytes) {
-            Ok(PluginEvent::Commands(commands)) => {
+    use lumen_core::plugin_events::QueuedEvent;
+
+    for queued in lumen_core::plugin_events::drain_plugin_events() {
+        let event = match queued {
+            QueuedEvent::Value(value) => match value.downcast::<PluginEvent>() {
+                Ok(event) => *event,
+                Err(_) => {
+                    warn_line!("lumen-script: an event on the bus is not a script event");
+                    continue;
+                }
+            },
+            #[cfg(not(target_arch = "wasm32"))]
+            QueuedEvent::Bytes(bytes) => {
+                match lumen_plugin_abi::codec::decode::<PluginEvent>(&bytes) {
+                    Ok(event) => event,
+                    Err(e) => {
+                        warn_line!("lumen-script: a plugin event did not decode: {e}");
+                        continue;
+                    }
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            QueuedEvent::Bytes(_) => {
+                warn_line!("lumen-script: an encoded plugin event reached a page");
+                continue;
+            }
+        };
+        match event {
+            PluginEvent::Commands(commands) => {
                 for command in commands {
                     out.write(ScriptCommandEvent(command));
                 }
             }
-            Ok(event) => pending.0.push(event),
-            Err(e) => warn_line!("lumen-script: a plugin event did not decode: {e}"),
+            event => pending.0.push(event),
         }
     }
 }
 
 /// Drop this tick's delivered plugin events. Runs after every host's
 /// [`fire_plugin_events`].
-#[cfg(not(target_arch = "wasm32"))]
 pub fn clear_plugin_events(mut pending: ResMut<PendingPluginEvents>) {
     pending.0.clear();
 }
@@ -1444,7 +1462,6 @@ pub fn clear_plugin_events(mut pending: ResMut<PendingPluginEvents>) {
 /// gathered. Routing matches the fetch pipeline exactly: a per-key
 /// `on(event, key, fn)` registration wins, else the event's fallback, and the
 /// key rides as the handler's first argument ahead of the event's own.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn fire_plugin_events<H: ScriptHost + Resource<Mutability = Mutable>>(
     mut host: ResMut<H>,
     pending: Res<PendingPluginEvents>,

@@ -730,7 +730,7 @@ fn an_in_process_push_wakes_a_parked_loop() {
         fallback: String::new(),
         args: Vec::new(),
     };
-    assert!(lumen_script::push_plugin_event(&event));
+    assert!(lumen_script::push_plugin_event(event));
     assert_eq!(
         wakes.load(Ordering::SeqCst),
         1,

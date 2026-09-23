@@ -93,9 +93,7 @@ pub use script_fn::{
     ScriptParam, ScriptPrelude, ScriptResult, ScriptRet, ScriptSig, ScriptTy, ScriptType,
     with_call_scratch,
 };
-#[cfg(not(target_arch = "wasm32"))]
-pub use wire::push_plugin_event;
-pub use wire::{PluginEvent, SCRIPT_WIRE_VERSION};
+pub use wire::{PluginEvent, SCRIPT_WIRE_VERSION, push_plugin_event};
 
 /// Errors a [`ScriptHost`] can surface from `load` or `tick`.
 ///
