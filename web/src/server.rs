@@ -27,11 +27,16 @@ pub const SERVER_SPEC_FILE: &str = "lumen.site.json";
 /// The shape of [`ServerSpec`] this build reads and writes.
 ///
 /// A server built against another version refuses the file rather than
-/// guessing at it.
+/// guessing at it. Any change to what the file holds, a field added,
+/// removed, renamed or read differently, moves this: the file refuses a
+/// field it does not know, and a missing one, so two shapes under one
+/// number cannot read each other. The golden file in this crate's tests
+/// fails when the shape moves without it.
 pub const SERVER_SPEC_VERSION: u32 = 1;
 
 /// Everything a server needs to render a built site, beyond the compiled app.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerSpec {
     /// The shape this file is written in. See [`SERVER_SPEC_VERSION`].
     pub version: u32,
@@ -59,6 +64,7 @@ pub struct ServerSpec {
 
 /// What one page says about itself in its `<head>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PageHead {
     /// The page key.
     pub key: String,
@@ -91,6 +97,7 @@ impl PageHead {
 
 /// An image the site carries, by its path from the site root, and its size.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ImageSize {
     /// Where the image is, relative to the site root.
     pub path: String,
@@ -105,7 +112,7 @@ pub struct ImageSize {
 /// This is the app's half of the policy. Where the server listens, how many
 /// workers it runs and anything else about the machine is the server's.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(deny_unknown_fields)]
 pub struct ServerPolicy {
     /// The hosts a render may ask for data, by name.
     pub allow_hosts: Vec<String>,
@@ -255,6 +262,11 @@ mod tests {
             ..ServerSpec::new(WebSpec {
                 url: Some("https://example.com".to_string()),
                 css: "styles.0123456789abcdef.css".to_string(),
+                catalogues: [(
+                    "de-DE".to_string(),
+                    "locale/de-DE.0123456789abcdef.ftl".to_string(),
+                )]
+                .into(),
                 ..WebSpec::default()
             })
             .with_images(&[
@@ -283,6 +295,55 @@ mod tests {
                 height: 128
             })
         );
+    }
+
+    /// The file a build writes, as this version writes it. A change to the
+    /// shape changes these bytes, and a server built against the old shape
+    /// would read the new file wrong, so the version has to move with it.
+    const GOLDEN: &str = "tests/fixtures/lumen.site.json";
+
+    #[test]
+    fn the_spec_file_keeps_the_shape_its_version_names() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(GOLDEN);
+        let written = spec().to_json();
+        if std::env::var_os("UPDATE_GOLDENS").is_some() {
+            std::fs::write(&path, &written).expect("write the golden file");
+        }
+        let golden = std::fs::read_to_string(&path).expect("read the golden file");
+        assert!(
+            written == golden,
+            "{SERVER_SPEC_FILE} no longer has the shape of version {SERVER_SPEC_VERSION}. \
+             Bump SERVER_SPEC_VERSION in web/src/server.rs, then rewrite {GOLDEN} with \
+             UPDATE_GOLDENS=1 cargo test -p lumen-web.\n--- golden\n{golden}\n--- written\n{written}"
+        );
+        assert_eq!(
+            ServerSpec::from_json(golden.as_bytes()).expect("the golden file reads"),
+            spec()
+        );
+    }
+
+    #[test]
+    fn a_field_the_version_does_not_name_is_refused() {
+        let json = spec().to_json();
+        let extra = json.replacen('{', "{\n  \"extra\": true,", 1);
+        assert!(matches!(
+            ServerSpec::from_json(extra.as_bytes()),
+            Err(ServerSpecError::Decode(_))
+        ));
+        let policy = json.replace("\"allow_hosts\"", "\"allowed_hosts\"");
+        assert!(matches!(
+            ServerSpec::from_json(policy.as_bytes()),
+            Err(ServerSpecError::Decode(_))
+        ));
+        let missing = json.replace("\"per_request\": false,", "");
+        assert!(
+            missing != json,
+            "the sample names every field of the site settings"
+        );
+        assert!(matches!(
+            ServerSpec::from_json(missing.as_bytes()),
+            Err(ServerSpecError::Decode(_))
+        ));
     }
 
     #[test]

@@ -281,9 +281,10 @@ pub enum CssMode {
 /// runtime files the documents point at.
 ///
 /// It serializes, because a site rendered per request carries it to the
-/// server in [`crate::ServerSpec`].
+/// server in [`crate::ServerSpec`], and it reads back only in the shape it
+/// was written in, every field present.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(deny_unknown_fields)]
 pub struct WebSpec {
     /// URL prefix the site is served under, such as `/` or `/docs/`.
     pub base_path: String,

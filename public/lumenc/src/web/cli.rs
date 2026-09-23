@@ -428,6 +428,15 @@ fn build(options: &Options) -> Result<Report, String> {
                 .to_string(),
         );
     }
+    // The policy is written into the file a server renders from, and only a
+    // build rendered per request writes one.
+    if !per_request && cfg.raw.get("web").and_then(|web| web.get("ssr")).is_some() {
+        warnings.push(
+            "[web.ssr] says what a render may reach, and these pages are not rendered per \
+             request; it applies once the site is built with render `ssr`"
+                .to_string(),
+        );
+    }
     if per_request && !matches!(cfg.web.host, WebHost::Static) {
         warnings.push(
             "[web] host writes the file that makes a file server send the shell for a deep path, \

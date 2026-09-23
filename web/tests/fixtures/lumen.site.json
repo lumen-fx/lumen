@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "web": {
+    "base_path": "/",
+    "url": "https://example.com",
+    "canonical": null,
+    "entry": "index",
+    "title": "",
+    "description": null,
+    "og_image": null,
+    "artifact": "app.lmna",
+    "css": "styles.0123456789abcdef.css",
+    "css_mode": "sheet",
+    "wasm": "lumen-web.wasm",
+    "js": "lumen-web.js",
+    "catalogues": {
+      "de-DE": "locale/de-DE.0123456789abcdef.ftl"
+    },
+    "navigation": "soft",
+    "scripts": [],
+    "host": "static",
+    "runtime": true,
+    "per_request": false,
+    "sitemap": false,
+    "robots": false
+  },
+  "locales": [
+    "en-US",
+    "de-DE"
+  ],
+  "fallback": [
+    "en-US"
+  ],
+  "pages": [
+    {
+      "key": "index",
+      "title": "Welcome",
+      "description": null,
+      "index": false
+    }
+  ],
+  "images": [
+    {
+      "path": "assets/logo.png",
+      "width": 256,
+      "height": 128
+    }
+  ],
+  "seed": {
+    "contract_version": 5,
+    "globals": {
+      "visitor": {
+        "t": "str",
+        "v": "declared"
+      }
+    },
+    "arrays": {}
+  },
+  "policy": {
+    "allow_hosts": [
+      "api.example.com"
+    ],
+    "max_requests": 3,
+    "headers": [
+      "authorization"
+    ]
+  }
+}

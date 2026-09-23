@@ -716,14 +716,90 @@ pub struct WebCfg {
 #[serde(default, deny_unknown_fields)]
 pub struct WebSsrCfg {
     /// Hosts a render may ask for data, by name, without scheme or port.
-    /// Empty lets a render reach nothing.
+    /// Empty lets a render reach nothing. An entry carrying a scheme, a port,
+    /// a path or user information is a parse error, because the allowlist
+    /// matches the host alone and such an entry would match nothing.
+    #[serde(deserialize_with = "de_allow_hosts")]
     pub allow_hosts: Vec<String>,
     /// How many requests one render may make. Unset takes the renderer's
     /// default.
     pub max_requests: Option<usize>,
     /// Request headers the app may read beyond the ones every render allows,
-    /// such as `authorization` or `cookie`.
+    /// such as `authorization` or `cookie`. A name that is not an HTTP header
+    /// name is a parse error.
+    #[serde(deserialize_with = "de_header_names")]
     pub headers: Vec<String>,
+}
+
+/// Parse `[web.ssr] allow_hosts`, refusing an entry that is more than a host.
+fn de_allow_hosts<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let hosts = Vec::<String>::deserialize(deserializer)?;
+    for host in &hosts {
+        check_allow_host(host).map_err(serde::de::Error::custom)?;
+    }
+    Ok(hosts)
+}
+
+/// Why `entry` cannot be an `allow_hosts` entry, if it cannot.
+///
+/// A render's request is allowed when its URL's host equals an entry, so an
+/// entry is a bare host name or IP address: an IPv6 address is written
+/// without its brackets.
+fn check_allow_host(entry: &str) -> Result<(), String> {
+    let refuse = |what: &str| {
+        Err(format!(
+            "`{entry}` in [web.ssr] allow_hosts {what}; a render is allowed a host by name \
+             alone, such as `api.example.com`"
+        ))
+    };
+    if entry.trim().is_empty() {
+        return refuse("is empty");
+    }
+    if entry.contains("://") {
+        return refuse("carries a scheme");
+    }
+    if entry.contains(['/', '?', '#']) {
+        return refuse("carries a path");
+    }
+    if entry.contains('@') {
+        return refuse("carries user information");
+    }
+    if entry.contains(['[', ']']) {
+        return refuse("is bracketed; write an IPv6 address without its brackets");
+    }
+    if entry.contains(':') && entry.parse::<std::net::Ipv6Addr>().is_err() {
+        return refuse("carries a port");
+    }
+    if entry.contains(char::is_whitespace) {
+        return refuse("holds a space");
+    }
+    Ok(())
+}
+
+/// Parse `[web.ssr] headers`, refusing a name that is not an HTTP header
+/// name.
+fn de_header_names<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let names = Vec::<String>::deserialize(deserializer)?;
+    for name in &names {
+        // RFC 9110 token characters.
+        let valid = !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c));
+        if !valid {
+            return Err(serde::de::Error::custom(format!(
+                "`{name}` in [web.ssr] headers is not a header name; name a request header, \
+                 such as `authorization`"
+            )));
+        }
+    }
+    Ok(names)
 }
 
 /// `[web.pages.<key>]` block - what one page says about itself.
@@ -1551,6 +1627,35 @@ mod tests {
         let cfg: LumenToml = toml::from_str("").unwrap();
         assert!(cfg.web.ssr.allow_hosts.is_empty());
         assert!(toml::from_str::<LumenToml>("[web.ssr]\nport = 80\n").is_err());
+    }
+
+    #[test]
+    fn web_ssr_refuses_an_entry_the_policy_would_never_match() {
+        for host in ["api.example.com", "10.0.0.2", "::1", "localhost"] {
+            let src = format!("[web.ssr]\nallow_hosts = [\"{host}\"]\n");
+            assert!(toml::from_str::<LumenToml>(&src).is_ok(), "{host}");
+        }
+        for (host, why) in [
+            ("https://api.example.com", "scheme"),
+            ("api.example.com:8443", "port"),
+            ("api.example.com/v1", "path"),
+            ("user@api.example.com", "user"),
+            ("[::1]", "bracket"),
+            ("", "empty"),
+        ] {
+            let src = format!("[web.ssr]\nallow_hosts = [\"{host}\"]\n");
+            let err = toml::from_str::<LumenToml>(&src).unwrap_err();
+            assert!(err.to_string().contains(why), "{host}: {err}");
+        }
+        assert!(toml::from_str::<LumenToml>("[web.ssr]\nheaders = [\"x-api-key\"]\n").is_ok());
+        for name in ["", "x api key", "authorization:", "caf\u{e9}"] {
+            let src = format!("[web.ssr]\nheaders = [\"{name}\"]\n");
+            let err = toml::from_str::<LumenToml>(&src).unwrap_err();
+            assert!(
+                err.to_string().contains("not a header name"),
+                "{name}: {err}"
+            );
+        }
     }
 
     #[test]
