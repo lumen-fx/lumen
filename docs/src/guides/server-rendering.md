@@ -128,9 +128,12 @@ connection that arrives meanwhile waits rather than being refused. Files are
 served while a page renders, on every worker.
 
 Each worker holds a bounded number of connections and a short queue of
-requests waiting for a render. A page asked for when the queue is full is
-answered with a 503 and `Retry-After`, so a balancer sends it elsewhere rather
-than letting it wait behind everyone else.
+requests waiting for a render. A worker whose queue is full takes no new
+connection while another worker shares the port, so an idle worker answers it
+instead. A page asked for when the queue is full, on a connection the worker
+already holds or when it is the only worker, is answered with a 503 and
+`Retry-After`, so a balancer sends it elsewhere rather than letting it wait
+behind everyone else.
 
 Windows has no supervisor: `lumen-server` runs as one process there, and
 `--workers` above 1 is refused. Run one per port behind your balancer instead.

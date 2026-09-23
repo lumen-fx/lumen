@@ -24,8 +24,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::http::{
-    self, HTML, Head, Persist, Request, RequestHead, Response, TEXT, Timed, read_body, read_head,
-    write_response,
+    self, FileBody, HTML, Head, Persist, Request, RequestHead, Response, TEXT, Timed, read_body,
+    read_head, write_response,
 };
 use crate::log::{Access, Log};
 use crate::proxy::Trust;
@@ -236,6 +236,8 @@ struct Site {
     health: Option<String>,
     trust: Trust,
     log: Option<Arc<Log>>,
+    /// Whether other processes accept from the same listening socket.
+    siblings: bool,
 }
 
 impl Server {
@@ -277,6 +279,7 @@ impl Server {
                 health: Some(HEALTH_PATH.to_string()),
                 trust: Trust::Nobody,
                 log: None,
+                siblings: false,
             }),
             control: Arc::new(Control {
                 draining: AtomicBool::new(false),
@@ -323,6 +326,18 @@ impl Server {
     /// Believe the forwarding headers from the peers `trust` names.
     pub fn with_trust(mut self, trust: Trust) -> Self {
         self.site_mut().trust = trust;
+        self
+    }
+
+    /// Say that other processes accept from this server's listening socket,
+    /// as the workers a supervisor starts do.
+    ///
+    /// A server with siblings takes no connection while its handler is
+    /// saturated, and leaves it in the socket's queue for a sibling that can
+    /// answer it. A server alone takes it and answers a page with a 503, so a
+    /// balancer in front hears at once that it is full.
+    pub fn with_siblings(mut self, siblings: bool) -> Self {
+        self.site_mut().siblings = siblings;
         self
     }
 
@@ -401,14 +416,23 @@ impl Server {
             if self.control.draining() {
                 return false;
             }
-            if *active < self.site.limits.max_connections.max(1) {
+            let saturated = self.site.siblings
+                && self
+                    .site
+                    .handler
+                    .as_ref()
+                    .is_some_and(|handler| handler.status() == Status::Saturated);
+            if !saturated && *active < self.site.limits.max_connections.max(1) {
                 return true;
             }
-            match self
-                .control
-                .changed
-                .wait_timeout(active, Duration::from_millis(200))
-            {
+            // Saturation clears when a render finishes, which nothing here is
+            // told about, so it is looked at again soon.
+            let wait = if saturated {
+                Duration::from_millis(20)
+            } else {
+                Duration::from_millis(200)
+            };
+            match self.control.changed.wait_timeout(active, wait) {
                 Ok((next, _)) => active = next,
                 Err(_) => return false,
             }
@@ -564,12 +588,12 @@ fn connection(stream: TcpStream, peer: SocketAddr, site: &Site, control: &Contro
             Head::TooLarge => {
                 let refusal =
                     Response::text(431, "the request headers are longer than this server reads");
-                respond(&mut writer, site, &refusal, false, Persist::Close);
+                respond(&mut writer, site, &refusal, None, false, Persist::Close);
                 break;
             }
             Head::TimedOut => {
                 let refusal = Response::text(408, "the request did not arrive in time");
-                respond(&mut writer, site, &refusal, false, Persist::Close);
+                respond(&mut writer, site, &refusal, None, false, Persist::Close);
                 break;
             }
             // Where a malformed request ends is unknown, so nothing after it
@@ -579,6 +603,7 @@ fn connection(stream: TcpStream, peer: SocketAddr, site: &Site, control: &Contro
                     &mut writer,
                     site,
                     &Response::text(400, why),
+                    None,
                     false,
                     Persist::Close,
                 );
@@ -595,14 +620,14 @@ fn connection(stream: TcpStream, peer: SocketAddr, site: &Site, control: &Contro
         reader
             .get_mut()
             .until(Instant::now() + site.limits.body_timeout);
-        let (response, persist, request) = match read_body(&mut reader, &head.headers) {
+        let (response, mut file, persist, request) = match read_body(&mut reader, &head.headers) {
             Ok(body) => {
-                let (response, request) = answer(&head, body, peer.ip(), site);
-                (response, persist, Some(request))
+                let (response, file, request) = answer(&head, body, peer.ip(), site, control);
+                (response, file, persist, Some(request))
             }
             // A body that was not read leaves the connection mid-request, so
             // it cannot carry another.
-            Err(refusal) => (refusal, Persist::Close, None),
+            Err(refusal) => (refusal, None, Persist::Close, None),
         };
         // A handler that has just retired or wedged stops this process from
         // taking more before its answer goes out, so the client's next
@@ -620,7 +645,18 @@ fn connection(stream: TcpStream, peer: SocketAddr, site: &Site, control: &Contro
             persist
         };
         let head_only = head.method == "HEAD";
-        let written = respond(&mut writer, site, &response, head_only, persist);
+        let bytes = match &file {
+            Some(file) => file.len,
+            None => response.body.len() as u64,
+        };
+        let written = respond(
+            &mut writer,
+            site,
+            &response,
+            file.as_mut(),
+            head_only,
+            persist,
+        );
         if let Some(log) = &site.log {
             let target = head.target.split('#').next().unwrap_or_default();
             log.access(&Access {
@@ -631,7 +667,7 @@ fn connection(stream: TcpStream, peer: SocketAddr, site: &Site, control: &Contro
                 method: &head.method,
                 target,
                 status: response.status,
-                bytes: if head_only { 0 } else { response.body.len() },
+                bytes: if head_only { 0 } else { bytes },
                 took: began.elapsed(),
             });
         }
@@ -649,15 +685,23 @@ fn respond(
     writer: &mut Timed,
     site: &Site,
     response: &Response,
+    file: Option<&mut FileBody>,
     head_only: bool,
     persist: Persist,
 ) -> bool {
     writer.until(Instant::now() + site.limits.write_timeout);
-    write_response(writer, response, head_only, persist).is_ok()
+    write_response(writer, response, file, head_only, persist).is_ok()
 }
 
-/// The response to one request, and the request as a handler saw it.
-fn answer(head: &RequestHead, body: String, peer: IpAddr, site: &Site) -> (Response, Request) {
+/// The response to one request, the file that is its body when a file is,
+/// and the request as a handler saw it.
+fn answer(
+    head: &RequestHead,
+    body: String,
+    peer: IpAddr,
+    site: &Site,
+    control: &Control,
+) -> (Response, Option<FileBody>, Request) {
     let mut headers = head.headers.clone();
     let (client, secure) = site.trust.resolve(Some(peer), &mut headers);
 
@@ -679,22 +723,22 @@ fn answer(head: &RequestHead, body: String, peer: IpAddr, site: &Site) -> (Respo
     let reading = head.method == "GET" || head_only;
 
     if let Some(prefix) = &site.health
-        && let Some(response) = health(prefix, target, reading, site)
+        && let Some(response) = health(prefix, target, reading, site, control.draining())
     {
-        return (response, request);
+        return (response, None, request);
     }
 
     // A method the directory has no answer for reaches a handler, and stops
     // here when there is none: a form posts to something that renders it,
     // and a directory of files renders nothing.
     if !reading && site.handler.is_none() {
-        return (method_not_allowed(), request);
+        return (method_not_allowed(), None, request);
     }
 
     // The traversal guard comes first and a handler never sees past it: a
     // path outside the site is refused whatever would have answered it.
     let Some(relative) = site_path(&site.base, target) else {
-        return (Response::text(404, "not found"), request);
+        return (Response::text(404, "not found"), None, request);
     };
     request.path = format!("/{relative}");
     let found = find_file(&site.root, &relative);
@@ -703,44 +747,49 @@ fn answer(head: &RequestHead, body: String, peer: IpAddr, site: &Site) -> (Respo
         && (!reading || matches!(found, Found::Document(_) | Found::Nothing))
     {
         if let Some(response) = handler.handle(&request) {
-            return (response, request);
+            return (response, None, request);
         }
         // The handler is the only thing that answers a method the directory
         // does not, so a request it passed on has nowhere else to go.
         if !reading {
-            return (method_not_allowed(), request);
+            return (method_not_allowed(), None, request);
         }
     }
 
-    let response = match found {
-        Found::File(file) | Found::Document(file) => match std::fs::read(&file) {
-            Ok(bytes) => {
-                let cache = if is_hashed(&file) {
-                    IMMUTABLE
-                } else {
-                    REVALIDATE
-                };
-                Response::new(200, content_type(&file), bytes).with_header("Cache-Control", cache)
-            }
-            Err(_) => Response::text(404, "not found"),
-        },
+    // A file is sent from disk as it is written, never read whole first: the
+    // wasm module alone is megabytes, and a server holding one copy per
+    // connection is a server a few hundred visitors can run out of memory.
+    let (status, path) = match found {
+        Found::File(file) | Found::Document(file) => (200, file),
         // The status a static host sends for a path it has no file for. The
         // document is the app shell, so the page still loads and resolves
         // the path itself; sending 200 here would hide from a browser what
         // it will be told in production.
-        Found::Nothing => {
-            let shell = shell_for(&site.root, &relative);
-            match std::fs::read(&shell) {
-                Ok(bytes) => Response::new(404, content_type(&shell), bytes),
-                Err(_) => Response::text(404, "not found"),
-            }
-        }
+        Found::Nothing => (404, shell_for(&site.root, &relative)),
     };
-    (response, request)
+    let Ok(file) = FileBody::open(&path) else {
+        return (Response::text(404, "not found"), None, request);
+    };
+    let mut response = Response::new(status, content_type(&path), Vec::new());
+    if status == 200 {
+        let cache = if is_hashed(&path) {
+            IMMUTABLE
+        } else {
+            REVALIDATE
+        };
+        response = response.with_header("Cache-Control", cache);
+    }
+    (response, Some(file), request)
 }
 
 /// The answer to a health endpoint, when `target` names one.
-fn health(prefix: &str, target: &str, reading: bool, site: &Site) -> Option<Response> {
+fn health(
+    prefix: &str,
+    target: &str,
+    reading: bool,
+    site: &Site,
+    draining: bool,
+) -> Option<Response> {
     let rest = target.strip_prefix(prefix)?;
     let live = match rest {
         "/healthz" => true,
@@ -761,7 +810,7 @@ fn health(prefix: &str, target: &str, reading: bool, site: &Site) -> Option<Resp
             .map(|handler| handler.status())
             .unwrap_or(Status::Ready);
         match status {
-            Status::Ready => Response::text(200, "ready"),
+            Status::Ready if !draining => Response::text(200, "ready"),
             _ => Response::text(503, "not ready"),
         }
     };
@@ -822,11 +871,6 @@ fn site_path(base: &str, path: &str) -> Option<String> {
 
 /// The file a site-relative path names.
 fn find_file(root: &Path, relative: &str) -> Found {
-    // The spec file is the server's input, not the browser's: it names the
-    // app's policy, which is nobody else's business.
-    if relative == lumen_ssr::SERVER_SPEC_FILE {
-        return Found::Nothing;
-    }
     let mut file = root.to_path_buf();
     for part in relative.split('/').filter(|part| !part.is_empty()) {
         file.push(part);
@@ -835,12 +879,50 @@ fn find_file(root: &Path, relative: &str) -> Found {
     if file.is_dir() {
         file.push("index.html");
     }
-    if !file.is_file() {
+    // The spec file is the server's input, not the browser's: it names the
+    // app's policy, which is nobody else's business.
+    if !file.is_file() || is_spec_file(root, &file) {
         return Found::Nothing;
     }
     match file.extension().and_then(|ext| ext.to_str()) {
         Some("html") => Found::Document(file),
         _ => Found::File(file),
+    }
+}
+
+/// Whether `file` is the site's spec file, under whatever name reached it.
+///
+/// A case-insensitive file system opens `LUMEN.SITE.JSON` as the spec file,
+/// and Windows opens it by its short name or with a trailing dot too, so the
+/// name a request used is not enough to tell. The file is compared with the
+/// spec file itself.
+fn is_spec_file(root: &Path, file: &Path) -> bool {
+    let named = file.parent() == Some(root)
+        && file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case(lumen_ssr::SERVER_SPEC_FILE));
+    named || same_file(file, &root.join(lumen_ssr::SERVER_SPEC_FILE))
+}
+
+/// Whether two paths name one file.
+#[cfg(unix)]
+fn same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+/// Whether two paths name one file. Windows resolves a path to the file's
+/// own full name, in the case it was created with, which is what makes two
+/// names of one file compare equal.
+#[cfg(not(unix))]
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
     }
 }
 

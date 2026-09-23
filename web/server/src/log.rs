@@ -82,7 +82,7 @@ pub struct Access<'a> {
     /// The status sent.
     pub status: u16,
     /// The body bytes sent.
-    pub bytes: usize,
+    pub bytes: u64,
     /// From the first byte of the request to the last byte of the response.
     pub took: Duration,
 }

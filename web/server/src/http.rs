@@ -6,8 +6,10 @@
 //! that stops sending, or sends one byte at a time, holds its connection for
 //! as long as the deadline allows and no longer.
 
+use std::fs::File;
 use std::io::{self, BufRead, Read, Write};
 use std::net::{IpAddr, Shutdown, TcpStream};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::time::http_date;
@@ -416,13 +418,40 @@ pub(crate) enum Persist {
     Close,
 }
 
+/// A file sent as a response's body, copied from disk as it is written
+/// rather than read into memory first.
+#[derive(Debug)]
+pub(crate) struct FileBody {
+    pub(crate) file: File,
+    /// Its length when it was opened, which is the `Content-Length` sent.
+    pub(crate) len: u64,
+}
+
+impl FileBody {
+    /// Open `path` for sending.
+    pub(crate) fn open(path: &Path) -> io::Result<Self> {
+        let file = File::open(path)?;
+        let len = file.metadata()?.len();
+        Ok(Self { file, len })
+    }
+}
+
 /// Write `response`, framed, and say whether the connection stays open.
+///
+/// With `file`, the body is that file rather than `response.body`. A file
+/// that has shrunk since it was opened fails the write, since the length
+/// already sent can no longer be kept to.
 pub(crate) fn write_response<W: Write>(
     out: &mut W,
     response: &Response,
+    file: Option<&mut FileBody>,
     head_only: bool,
     persist: Persist,
 ) -> io::Result<()> {
+    let length = match &file {
+        Some(file) => file.len,
+        None => response.body.len() as u64,
+    };
     let mut head = format!(
         "HTTP/1.1 {} {}\r\n",
         response.status,
@@ -453,7 +482,7 @@ pub(crate) fn write_response<W: Write>(
         "Date: {}\r\n",
         http_date(std::time::SystemTime::now())
     ));
-    head.push_str(&format!("Content-Length: {}\r\n", response.body.len()));
+    head.push_str(&format!("Content-Length: {length}\r\n"));
     match persist {
         Persist::Keep => {}
         Persist::KeepOld => head.push_str("Connection: keep-alive\r\n"),
@@ -462,7 +491,18 @@ pub(crate) fn write_response<W: Write>(
     head.push_str("\r\n");
     out.write_all(head.as_bytes())?;
     if !head_only {
-        out.write_all(&response.body)?;
+        match file {
+            Some(body) => {
+                let sent = io::copy(&mut (&mut body.file).take(body.len), out)?;
+                if sent < body.len {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "the file shrank while it was being sent",
+                    ));
+                }
+            }
+            None => out.write_all(&response.body)?,
+        }
     }
     out.flush()
 }
@@ -671,7 +711,8 @@ mod tests {
             .with_header("Content-Length", "99")
             .with_header("X-Split", "a\r\nSet-Cookie: stolen=1");
         let mut out = Vec::new();
-        write_response(&mut out, &response, false, Persist::Close).expect("writing to memory");
+        write_response(&mut out, &response, None, false, Persist::Close)
+            .expect("writing to memory");
         let text = String::from_utf8(out).expect("a head is text");
         assert!(text.starts_with("HTTP/1.1 302 Found\r\n"), "{text}");
         assert!(text.contains("Location: /elsewhere\r\n"), "{text}");
@@ -686,7 +727,7 @@ mod tests {
     fn a_handlers_own_cache_control_is_the_one_sent() {
         let response = Response::text(200, "ok").with_header("Cache-Control", "max-age=60");
         let mut out = Vec::new();
-        write_response(&mut out, &response, true, Persist::Keep).expect("writing to memory");
+        write_response(&mut out, &response, None, true, Persist::Keep).expect("writing to memory");
         let text = String::from_utf8(out).expect("a head is text");
         assert!(text.contains("Cache-Control: max-age=60\r\n"), "{text}");
         assert!(!text.contains("no-store"), "{text}");
