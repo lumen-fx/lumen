@@ -356,21 +356,15 @@ fn an_access_line_is_written_and_carries_no_credentials() {
     assert_eq!(entry["status"], 200);
     assert_eq!(entry["method"], "GET");
     let stdout = server.stdout();
-    for secret in [
-        "query-secret-value",
-        "cookie-secret-value",
-        "auth-secret-value",
-        "proxy-secret-value",
+    let stderr = server.stderr();
+    for (field, value) in [
+        ("the query string", "query-secret-value"),
+        ("Cookie", "cookie-secret-value"),
+        ("Authorization", "auth-secret-value"),
+        ("Proxy-Authorization", "proxy-secret-value"),
     ] {
-        assert!(
-            !stdout.contains(secret),
-            "{secret} in the access log:\n{stdout}"
-        );
-        assert!(
-            !server.stderr().contains(secret),
-            "{secret} in the server log:\n{}",
-            server.stderr()
-        );
+        assert!(!stdout.contains(value), "{field} reached the access log");
+        assert!(!stderr.contains(value), "{field} reached the server log");
     }
 }
 
