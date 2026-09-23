@@ -25,6 +25,11 @@ pub enum PointerButton {
 pub struct PointerMoved {
     /// New position in logical pixels, top-left origin.
     pub position: Vec2,
+    /// The position relative to the target's border box, when the backend
+    /// measured that box itself: a page asks the browser, which lays it out.
+    /// `None` leaves it to Lumen's own layout, which is what a native window
+    /// backend does.
+    pub local: Option<Vec2>,
 }
 
 /// Pointer button pressed.
@@ -34,6 +39,11 @@ pub struct PointerPressed {
     pub position: Vec2,
     /// Which button.
     pub button: PointerButton,
+    /// The position relative to the target's border box, when the backend
+    /// measured that box itself: a page asks the browser, which lays it out.
+    /// `None` leaves it to Lumen's own layout, which is what a native window
+    /// backend does.
+    pub local: Option<Vec2>,
 }
 
 /// Pointer button released.
@@ -43,6 +53,11 @@ pub struct PointerReleased {
     pub position: Vec2,
     /// Which button.
     pub button: PointerButton,
+    /// The position relative to the target's border box, when the backend
+    /// measured that box itself: a page asks the browser, which lays it out.
+    /// `None` leaves it to Lumen's own layout, which is what a native window
+    /// backend does.
+    pub local: Option<Vec2>,
 }
 
 /// Pointer left the window.
@@ -57,6 +72,11 @@ pub struct MouseWheel {
     pub delta: Vec2,
     /// Cursor position at the moment of the scroll, used for hit-testing.
     pub position: Vec2,
+    /// The position relative to the target's border box, when the backend
+    /// measured that box itself: a page asks the browser, which lays it out.
+    /// `None` leaves it to Lumen's own layout, which is what a native window
+    /// backend does.
+    pub local: Option<Vec2>,
 }
 
 /// Axis (or axes) a scroll container responds to. Used by `lumen-input` for scroll-aware hit-testing and by `lumen-primitives` for the accumulator and extract.
@@ -585,6 +605,11 @@ pub struct ClickEvent {
     pub position: Vec2,
     /// Which button.
     pub button: PointerButton,
+    /// The position relative to the target's border box, when the backend
+    /// measured that box itself: a page asks the browser, which lays it out.
+    /// `None` leaves it to Lumen's own layout, which is what a native window
+    /// backend does.
+    pub local: Option<Vec2>,
 }
 
 /// Emitted by `lumen-primitives::press` when an entity has carried [`Pressed`] continuously past the configured long-press threshold (default 500 ms).

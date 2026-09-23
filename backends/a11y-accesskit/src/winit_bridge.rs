@@ -223,6 +223,7 @@ pub fn handle_action(world: &mut World, req: &ActionRequest) {
                     entity,
                     position: pos,
                     button: PointerButton::Primary,
+                    local: None,
                 });
             }
         }

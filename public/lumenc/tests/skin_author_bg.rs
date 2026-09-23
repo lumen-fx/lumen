@@ -103,7 +103,10 @@ fn the_author_background_survives_a_hover() {
     app.world.resource_mut::<PointerState>().position = Some(p);
     app.world
         .resource_mut::<bevy_ecs::message::Messages<PointerMoved>>()
-        .write(PointerMoved { position: p });
+        .write(PointerMoved {
+            position: p,
+            local: None,
+        });
     app.tick();
     app.tick();
 

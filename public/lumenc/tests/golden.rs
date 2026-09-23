@@ -245,7 +245,10 @@ fn set_pointer(app: &mut App, pos: Vec2) {
 
 fn pointer_move(app: &mut App, pos: Vec2) {
     set_pointer(app, pos);
-    app.world.write_message(PointerMoved { position: pos });
+    app.world.write_message(PointerMoved {
+        position: pos,
+        local: None,
+    });
     tick(app);
 }
 
@@ -253,10 +256,14 @@ fn pointer_move(app: &mut App, pos: Vec2) {
 fn pointer_press(app: &mut App, pos: Vec2) {
     set_pointer(app, pos);
     app.world.resource_mut::<PointerState>().primary_down = true;
-    app.world.write_message(PointerMoved { position: pos });
+    app.world.write_message(PointerMoved {
+        position: pos,
+        local: None,
+    });
     app.world.write_message(PointerPressed {
         position: pos,
         button: PointerButton::Primary,
+        local: None,
     });
     tick(app);
 }
@@ -289,6 +296,7 @@ fn wheel(app: &mut App, pos: Vec2, delta: Vec2) {
     app.world.write_message(MouseWheel {
         delta,
         position: pos,
+        local: None,
     });
     tick(app);
 }

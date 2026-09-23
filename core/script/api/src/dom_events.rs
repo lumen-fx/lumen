@@ -16,9 +16,10 @@
 //!   `pointerenter` / `pointerleave` come from the hover marker transitions.
 //! - `keydown` targets the focused entity (from the input router's
 //!   `FocusedKey`); `keyup` targets the focused entity.
-//! - `input` fires per edit, from the text pipeline's `TextEditApplied`
-//!   signal: one event per keystroke, paste, or IME commit that changes the
-//!   text, at most one per entity per tick, carrying the live buffer. A pure
+//! - `input` fires per edit, from the `TextEditApplied` signal the text
+//!   pipeline raises (or a page, whose fields the browser edits): one event
+//!   per keystroke, paste, or IME commit that changes the text, at most one
+//!   per entity per tick, carrying the field's text after the edit. A pure
 //!   caret move is not an edit and fires nothing.
 //! - `change` and `submit` fire on commit, from the input router's
 //!   `TextInputCommitted` signal; `submit` is the Enter-commit on a
@@ -33,6 +34,7 @@
 use bevy_ecs::component::Mutable;
 use bevy_ecs::message::{MessageReader, MessageWriter};
 use bevy_ecs::prelude::*;
+use glam::Vec2;
 use lumen_core::prelude::*;
 
 use crate::ScriptHost;
@@ -120,6 +122,26 @@ fn deliver<H: ScriptHost + Resource<Mutability = Mutable>>(
     }
 }
 
+/// What a field holds, read by [`field_text`].
+pub(crate) type FieldText = (
+    Option<&'static lumen_core::text_model::TextBuffer>,
+    Option<&'static TextContent>,
+);
+
+/// The text a field holds after an edit: its live buffer where the text
+/// pipeline keeps one, otherwise its text, which is what a backend that edits
+/// the field itself (a page) writes.
+pub(crate) fn field_text(
+    (buffer, text): (
+        Option<&lumen_core::text_model::TextBuffer>,
+        Option<&TextContent>,
+    ),
+) -> Option<String> {
+    buffer
+        .map(ToString::to_string)
+        .or_else(|| text.map(|t| t.0.clone()))
+}
+
 /// Build the base [`EventData`] shell for `entity` and `event_type` with the
 /// packed target handle filled in.
 fn base(entity: Entity, event_type: &str) -> EventData {
@@ -130,19 +152,26 @@ fn base(entity: Entity, event_type: &str) -> EventData {
     }
 }
 
+/// Fill in where the pointer was: `position` in window coordinates, and
+/// relative to `entity`'s box. A backend that measured the box itself hands
+/// the relative position over as `local`; otherwise it comes from the box
+/// Lumen's layout gave the entity.
 fn with_position(
     mut data: EventData,
     transforms: &Query<&Transform>,
     entity: Entity,
-    pos_x: f32,
-    pos_y: f32,
+    position: Vec2,
+    local: Option<Vec2>,
 ) -> EventData {
-    let (ax, ay) = transforms
-        .get(entity)
-        .map(|t| (t.absolute.x, t.absolute.y))
-        .unwrap_or((0.0, 0.0));
-    data.local = ((pos_x - ax) as f64, (pos_y - ay) as f64);
-    data.client = (pos_x as f64, pos_y as f64);
+    let local = local.unwrap_or_else(|| {
+        let origin = transforms
+            .get(entity)
+            .map(|t| t.absolute)
+            .unwrap_or(Vec2::ZERO);
+        position - origin
+    });
+    data.local = (local.x as f64, local.y as f64);
+    data.client = (position.x as f64, position.y as f64);
     data
 }
 
@@ -183,8 +212,8 @@ pub fn dispatch_pointer_and_key_events<H: ScriptHost + Resource<Mutability = Mut
             base(c.entity, "click"),
             &transforms,
             c.entity,
-            c.position.x,
-            c.position.y,
+            c.position,
+            c.local,
         );
         data.button = button_code(c.button);
         deliver(host.as_deref_mut(), &mut out, data, c.entity);
@@ -195,50 +224,32 @@ pub fn dispatch_pointer_and_key_events<H: ScriptHost + Resource<Mutability = Mut
             base(d.entity, "dblclick"),
             &transforms,
             d.entity,
-            d.position.x,
-            d.position.y,
+            d.position,
+            None,
         );
         deliver(host.as_deref_mut(), &mut out, data, d.entity);
     }
     // pointerdown / up / move / wheel target the hovered entity.
     for p in presses.read() {
         let Some(e) = hovered_entity else { continue };
-        let mut data = with_position(
-            base(e, "pointerdown"),
-            &transforms,
-            e,
-            p.position.x,
-            p.position.y,
-        );
+        let mut data = with_position(base(e, "pointerdown"), &transforms, e, p.position, p.local);
         data.button = button_code(p.button);
         deliver(host.as_deref_mut(), &mut out, data, e);
     }
     for p in releases.read() {
         let Some(e) = hovered_entity else { continue };
-        let mut data = with_position(
-            base(e, "pointerup"),
-            &transforms,
-            e,
-            p.position.x,
-            p.position.y,
-        );
+        let mut data = with_position(base(e, "pointerup"), &transforms, e, p.position, p.local);
         data.button = button_code(p.button);
         deliver(host.as_deref_mut(), &mut out, data, e);
     }
     for p in moves.read() {
         let Some(e) = hovered_entity else { continue };
-        let data = with_position(
-            base(e, "pointermove"),
-            &transforms,
-            e,
-            p.position.x,
-            p.position.y,
-        );
+        let data = with_position(base(e, "pointermove"), &transforms, e, p.position, p.local);
         deliver(host.as_deref_mut(), &mut out, data, e);
     }
     for w in wheels.read() {
         let Some(e) = hovered_entity else { continue };
-        let mut data = with_position(base(e, "wheel"), &transforms, e, w.position.x, w.position.y);
+        let mut data = with_position(base(e, "wheel"), &transforms, e, w.position, w.local);
         data.delta = (w.delta.x as f64, w.delta.y as f64);
         deliver(host.as_deref_mut(), &mut out, data, e);
     }
@@ -271,7 +282,7 @@ pub fn dispatch_state_events<H: ScriptHost + Resource<Mutability = Mutable>>(
     gained_hover: Query<Entity, Added<Hovered>>,
     mut lost_hover: RemovedComponents<Hovered>,
     scrolled: Query<Entity, Changed<ScrollOffset>>,
-    buffers: Query<&lumen_core::text_model::TextBuffer>,
+    fields: Query<FieldText>,
 ) {
     // A binding keys on a node's packed handle (entity + generation), so a
     // despawned + recycled entity never matches a live binding; the
@@ -304,12 +315,12 @@ pub fn dispatch_state_events<H: ScriptHost + Resource<Mutability = Mutable>>(
         {
             continue;
         }
-        let Ok(buf) = buffers.get(ev.entity) else {
+        let Some(value) = fields.get(ev.entity).ok().and_then(field_text) else {
             continue;
         };
         fired.push(ev.entity);
         let mut data = base(ev.entity, "input");
-        data.value = buf.to_string();
+        data.value = value;
         deliver(host.as_deref_mut(), &mut out, data, ev.entity);
     }
     // change / submit from the commit signal (Enter on a single-line

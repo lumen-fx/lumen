@@ -2085,7 +2085,7 @@ pub fn dispatch_text_input_to_script<H: ScriptHost + Resource<Mutability = Mutab
     mut edits: MessageReader<lumen_core::text_events::TextEditApplied>,
     mut commits: MessageReader<TextInputCommitted>,
     ids: Query<&LumenId>,
-    buffers: Query<&lumen_core::text_model::TextBuffer>,
+    fields: Query<crate::dom_events::FieldText>,
     mut out: MessageWriter<ScriptCommandEvent>,
 ) {
     use lumen_core::text_events::AppliedKind;
@@ -2106,11 +2106,15 @@ pub fn dispatch_text_input_to_script<H: ScriptHost + Resource<Mutability = Mutab
         if matches!(ev.kind, AppliedKind::CursorMove) || fired.contains(&ev.entity) {
             continue;
         }
-        let Ok(buf) = buffers.get(ev.entity) else {
+        let Some(text) = fields
+            .get(ev.entity)
+            .ok()
+            .and_then(crate::dom_events::field_text)
+        else {
             continue;
         };
         fired.push(ev.entity);
-        fire(&mut host, &mut out, ev.entity, &buf.to_string());
+        fire(&mut host, &mut out, ev.entity, &text);
     }
     for ev in commits.read() {
         if fired.contains(&ev.entity) {

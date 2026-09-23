@@ -558,6 +558,7 @@ mod fsm_tests {
             .write(PointerPressed {
                 position: pos,
                 button: PointerButton::Primary,
+                local: None,
             });
     }
 
@@ -568,6 +569,7 @@ mod fsm_tests {
             .write(PointerReleased {
                 position: pos,
                 button: PointerButton::Primary,
+                local: None,
             });
     }
 

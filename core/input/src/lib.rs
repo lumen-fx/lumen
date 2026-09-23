@@ -759,6 +759,7 @@ pub fn activate_focused_on_enter(
                         entity,
                         position: glam::Vec2::ZERO,
                         button: PointerButton::Primary,
+                        local: None,
                     });
                 } else if is_space {
                     commands.entity(entity).insert(Pressed);
@@ -788,6 +789,7 @@ pub fn activate_focused_on_enter(
                 entity: e,
                 position: glam::Vec2::ZERO,
                 button: PointerButton::Primary,
+                local: None,
             });
         }
     }
@@ -1676,6 +1678,7 @@ pub fn dispatch_clicks(
                     entity: pressed_e,
                     position: release.position,
                     button: release.button,
+                    local: None,
                 });
             }
         }
@@ -1694,6 +1697,7 @@ pub fn dispatch_clicks(
                     entity: pressed_e,
                     position: release.position,
                     button: release.button,
+                    local: None,
                 });
             }
         }
@@ -3137,6 +3141,7 @@ mod focus_visible_tests {
                 entity: b,
                 position: Vec2::ZERO,
                 button: PointerButton::Primary,
+                local: None,
             });
         world.run_system_once(focus_on_click).unwrap();
         assert!(world.get::<Focused>(b).is_some(), "click focuses b");
@@ -3166,6 +3171,7 @@ mod focus_visible_tests {
                 entity: text_child,
                 position: Vec2::ZERO,
                 button: PointerButton::Primary,
+                local: None,
             });
         world.run_system_once(focus_on_click).unwrap();
         assert!(
@@ -3199,6 +3205,7 @@ mod focus_visible_tests {
                 entity: text_child,
                 position: Vec2::ZERO,
                 button: PointerButton::Primary,
+                local: None,
             });
         world.run_system_once(focus_on_click).unwrap();
         assert_eq!(world.resource::<FocusTracker>().0, None);

@@ -5,7 +5,7 @@
 use lumen_core::node::{DomIndex, DomRecord, NodeHandle, publish_dom_index};
 use lumen_core::prelude::{Entity, World};
 use lumen_script::introspect::{
-    FrameInfo, IntrospectSnapshot, NodeGeometry, NodeRect, PointerSnapshot, publish_introspection,
+    FrameInfo, IntrospectSnapshot, NodeGeometry, NodeRect, publish_introspection,
 };
 use lumen_script::{ScriptHost, ScriptValue};
 use lumen_script_candela::CandelaHost;
@@ -87,7 +87,6 @@ fn candela_procedural_introspection_dispatches() {
         geometry,
         components,
         vec!["LayoutBox".to_string()],
-        PointerSnapshot::default(),
         FrameInfo {
             frame: 7,
             dt_ms: 16.0,

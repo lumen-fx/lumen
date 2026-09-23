@@ -72,6 +72,7 @@ fn click_on(app: &mut App, id: &str) {
         entity: target,
         position: glam::Vec2::ZERO,
         button: PointerButton::Primary,
+        local: None,
     });
 }
 

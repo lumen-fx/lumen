@@ -1,0 +1,27 @@
+// A text field whose every edit is counted, and two links: a handler cancels
+// the one with id `stay`, and lets the one with id `go` be followed.
+import "lumen.cdl";
+
+fn main() {}
+
+fn on_ready() {
+    lumen::event_on(lumen::node_get_by_id("field"), "input", "on_input");
+    lumen::event_on(lumen::node_get_by_id("stay"), "click", "on_stay");
+    lumen::event_on(lumen::node_get_by_id("go"), "click", "on_go");
+}
+
+// `input_count` counts the edits, and `input_value` is what the last one
+// left in the field.
+fn on_input(ev: int) {
+    lumen::signal_set_int("input_count", lumen::signal_get_int("input_count") + 1);
+    lumen::signal_set("input_value", lumen::event_value(ev));
+}
+
+fn on_stay(ev: int) {
+    lumen::event_prevent_default(ev);
+    lumen::signal_set_int("stay_count", lumen::signal_get_int("stay_count") + 1);
+}
+
+fn on_go(ev: int) {
+    lumen::signal_set_int("go_count", lumen::signal_get_int("go_count") + 1);
+}

@@ -70,13 +70,17 @@ fn click_at(app: &mut App, x: f32, y: f32) {
     app.world.resource_mut::<PointerState>().position = Some(p);
     app.world
         .resource_mut::<bevy_ecs::message::Messages<PointerMoved>>()
-        .write(PointerMoved { position: p });
+        .write(PointerMoved {
+            position: p,
+            local: None,
+        });
     app.world.resource_mut::<PointerState>().primary_down = true;
     app.world
         .resource_mut::<bevy_ecs::message::Messages<PointerPressed>>()
         .write(PointerPressed {
             position: p,
             button: PointerButton::Primary,
+            local: None,
         });
     app.tick();
     app.world.resource_mut::<PointerState>().primary_down = false;

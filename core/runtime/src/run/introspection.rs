@@ -36,7 +36,7 @@ impl Default for FrameClock {
 
 /// Publish the phase-5 low-level introspection snapshot: post-layout
 /// geometry (rect / content_rect / scroll / visibility / z-index), typed
-/// component field maps, pointer / frame state, and the signal set. Runs
+/// component field maps, frame state, and the signal set. Runs
 /// each tick alongside the [`DomIndex`] publish so a read issued from a
 /// handler sees this tick's tree. Geometry reflects the last committed
 /// layout (this tick's `sync_layout` runs later in `LayoutSync`), matching
@@ -46,10 +46,10 @@ pub(crate) fn publish_introspection(world: &mut World) {
     use lumen_core::components::{
         DirtyLayout, Display, LumenTag, Style, Transform, Visible, Visuals, ZIndex,
     };
-    use lumen_core::input::{ModifiersState, PointerState, ScrollOffset};
+    use lumen_core::input::ScrollOffset;
     use lumen_core::introspect::ComponentIntrospection;
     use lumen_script::introspect::{
-        FrameInfo, IntrospectSnapshot, NodeGeometry, NodeRect, NodeScroll, PointerSnapshot,
+        FrameInfo, IntrospectSnapshot, NodeGeometry, NodeRect, NodeScroll,
         publish_introspection as publish,
     };
     use std::collections::HashMap;
@@ -200,29 +200,6 @@ pub(crate) fn publish_introspection(world: &mut World) {
         }
     }
 
-    // Pointer state.
-    let pointer = {
-        let ps = world
-            .get_resource::<PointerState>()
-            .copied()
-            .unwrap_or_default();
-        let m = world
-            .get_resource::<ModifiersState>()
-            .map(|m| m.0)
-            .unwrap_or_default();
-        let pos = ps.position.unwrap_or(glam::Vec2::ZERO);
-        PointerSnapshot {
-            x: pos.x,
-            y: pos.y,
-            inside: ps.position.is_some(),
-            buttons: u32::from(ps.primary_down),
-            shift: m.shift,
-            ctrl: m.ctrl,
-            alt: m.alt,
-            super_: m.super_,
-        }
-    };
-
     // Signal set (global scalar cells).
     let signals: Vec<(String, String)> = world
         .get_resource::<lumen_core::property_store::PropertyStore>()
@@ -260,7 +237,7 @@ pub(crate) fn publish_introspection(world: &mut World) {
     };
 
     publish(IntrospectSnapshot::new(
-        geometry, components, known, pointer, frame, signals,
+        geometry, components, known, frame, signals,
     ));
 }
 
