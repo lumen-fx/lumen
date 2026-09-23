@@ -1,28 +1,60 @@
-//! Cross-thread event bus for portable runtime plugins.
+//! Cross-thread event bus for plugins, modules and add-ons.
 //!
-//! A portable plugin (see `lumen-plugin`) pushes events at the engine from
-//! whichever thread it likes: a worker delivering what it watched for, or a
-//! call body handing work past its own return. The event crosses the plugin
-//! boundary as encoded bytes, and this bus is where those bytes wait for the
-//! tick that drains them.
+//! Something outside a script call pushes events at the engine from whichever
+//! thread it likes: a worker delivering what it watched for, a call body
+//! handing work past its own return, a promise settling in a page. This bus is
+//! where those events wait for the tick that drains them.
 //!
-//! The core stores bytes rather than decoded events on purpose: the event
-//! shape is built from script-surface types this crate does not know, and the
-//! script layer that does know them registers the per-tick drain
-//! (`lumen-script`'s `collect_plugin_events`). What lives here is the bus
-//! itself, mirroring the external typed-property bus in
-//! [`crate::property_store`], so [`crate::tick::work_pending`] can count
+//! An event arrives in one of two forms. A portable plugin lives across a
+//! serialized boundary, so its event is encoded bytes. Code that shares the
+//! engine's address space (a runtime module, a browser add-on) hands over the
+//! value itself, and nothing is encoded or decoded on its way through.
+//!
+//! The core knows neither shape: the event is built from script-surface types
+//! this crate does not know, and the script layer that does know them
+//! registers the per-tick drain (`lumen-script`'s `collect_plugin_events`).
+//! What lives here is the bus itself, mirroring the external typed-property
+//! bus in [`crate::property_store`], so [`crate::tick::work_pending`] can count
 //! undrained events as pending work and a parked app wakes to take them.
 
+use std::any::Any;
 use std::sync::{Mutex, OnceLock};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 
-static PLUGIN_EVENT_TX: OnceLock<Sender<Vec<u8>>> = OnceLock::new();
-static PLUGIN_EVENT_RX: OnceLock<Mutex<Receiver<Vec<u8>>>> = OnceLock::new();
+/// One event waiting on the bus, in the form it was pushed in.
+pub enum QueuedEvent {
+    /// Encoded by a plugin on the other side of a serialized boundary.
+    Bytes(Vec<u8>),
+    /// Handed over by code in the engine's own address space. The script
+    /// layer that drains the bus knows the type to take it back as.
+    Value(Box<dyn Any + Send>),
+}
+
+impl QueuedEvent {
+    /// The encoded bytes, for an event pushed in that form.
+    pub fn bytes(&self) -> Option<&[u8]> {
+        match self {
+            QueuedEvent::Bytes(bytes) => Some(bytes),
+            QueuedEvent::Value(_) => None,
+        }
+    }
+}
+
+impl std::fmt::Debug for QueuedEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            QueuedEvent::Bytes(bytes) => f.debug_tuple("Bytes").field(bytes).finish(),
+            QueuedEvent::Value(_) => f.write_str("Value(..)"),
+        }
+    }
+}
+
+static PLUGIN_EVENT_TX: OnceLock<Sender<QueuedEvent>> = OnceLock::new();
+static PLUGIN_EVENT_RX: OnceLock<Mutex<Receiver<QueuedEvent>>> = OnceLock::new();
 static PLUGIN_EVENT_WAKER: Mutex<Option<crate::app::EventLoopWaker>> = Mutex::new(None);
 
-fn init_plugin_event_channel() -> &'static Sender<Vec<u8>> {
+fn init_plugin_event_channel() -> &'static Sender<QueuedEvent> {
     PLUGIN_EVENT_TX.get_or_init(|| {
         let (tx, rx) = unbounded();
         let _ = PLUGIN_EVENT_RX.set(Mutex::new(rx));
@@ -54,7 +86,21 @@ pub fn set_plugin_event_waker(waker: crate::app::EventLoopWaker) {
 ///
 /// Returns `false` when the channel has disconnected.
 pub fn push_plugin_event(bytes: Vec<u8>) -> bool {
-    let sent = init_plugin_event_channel().send(bytes).is_ok();
+    push(QueuedEvent::Bytes(bytes))
+}
+
+/// Queue one event as the value itself, from any thread, for code that shares
+/// the engine's address space. Delivered and woken for exactly like
+/// [`push_plugin_event`]; the drain takes it back as the type it was pushed
+/// as.
+///
+/// Returns `false` when the channel has disconnected.
+pub fn push_plugin_value(value: Box<dyn Any + Send>) -> bool {
+    push(QueuedEvent::Value(value))
+}
+
+fn push(event: QueuedEvent) -> bool {
+    let sent = init_plugin_event_channel().send(event).is_ok();
     if sent
         && let Ok(slot) = PLUGIN_EVENT_WAKER.lock()
         && let Some(waker) = slot.as_ref()
@@ -66,7 +112,7 @@ pub fn push_plugin_event(bytes: Vec<u8>) -> bool {
 
 /// Take every queued event, in arrival order. Returns the empty vector when
 /// the channel was never initialised, is empty, or its lock is poisoned.
-pub fn drain_plugin_events() -> Vec<Vec<u8>> {
+pub fn drain_plugin_events() -> Vec<QueuedEvent> {
     let Some(rx_lock) = PLUGIN_EVENT_RX.get() else {
         return Vec::new();
     };
@@ -115,6 +161,42 @@ mod tests {
     /// from draining each other's pushes.
     static SERIAL: Mutex<()> = Mutex::new(());
 
+    /// The encoded events of a drain, in order.
+    fn bytes_of(events: Vec<QueuedEvent>) -> Vec<Vec<u8>> {
+        events
+            .iter()
+            .filter_map(|event| event.bytes().map(<[u8]>::to_vec))
+            .collect()
+    }
+
+    #[test]
+    fn a_value_travels_as_itself_beside_the_bytes() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        discard_plugin_events();
+        assert!(push_plugin_event(vec![1]));
+        assert!(push_plugin_value(Box::new(String::from("typed"))));
+        assert!(plugin_events_pending());
+        let mut drained = drain_plugin_events().into_iter();
+        assert_eq!(
+            drained.next().and_then(|e| e.bytes().map(<[u8]>::to_vec)),
+            Some(vec![1])
+        );
+        match drained.next() {
+            Some(QueuedEvent::Value(value)) => {
+                assert_eq!(
+                    value
+                        .downcast::<String>()
+                        .ok()
+                        .as_deref()
+                        .map(String::as_str),
+                    Some("typed")
+                );
+            }
+            other => panic!("expected the value back, got {other:?}"),
+        }
+        assert!(drained.next().is_none());
+    }
+
     #[test]
     fn events_queue_report_pending_and_drain_in_order() {
         let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
@@ -123,7 +205,7 @@ mod tests {
         assert!(push_plugin_event(vec![1]));
         assert!(push_plugin_event(vec![2, 3]));
         assert!(plugin_events_pending());
-        assert_eq!(drain_plugin_events(), vec![vec![1], vec![2, 3]]);
+        assert_eq!(bytes_of(drain_plugin_events()), vec![vec![1], vec![2, 3]]);
         assert!(!plugin_events_pending());
         assert!(drain_plugin_events().is_empty());
     }
@@ -169,7 +251,7 @@ mod tests {
 
         assert!(push_plugin_event(vec![5]));
         let delivered = parked_loop.join().expect("parked loop");
-        assert_eq!(delivered, vec![vec![5]]);
+        assert_eq!(bytes_of(delivered), vec![vec![5]]);
 
         // Put the slot back so later tests see the uninstalled state.
         if let Ok(mut slot) = PLUGIN_EVENT_WAKER.lock() {

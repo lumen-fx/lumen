@@ -328,7 +328,7 @@ fn tick_audio(
     if snap.ended {
         // The generic delivery every plugin event gets: `on("audio_end",
         // path, fn)` wins per track, else `on_audio_end(path)` fires.
-        push_plugin_event(&PluginEvent::Call {
+        push_plugin_event(PluginEvent::Call {
             event: "audio_end".to_string(),
             key: state.current_path.clone(),
             fallback: "on_audio_end".to_string(),
